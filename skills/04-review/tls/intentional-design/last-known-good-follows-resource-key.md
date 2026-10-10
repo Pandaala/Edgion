@@ -17,6 +17,24 @@ An explicit partial `add` still starts a new generation without a predecessor,
 an absent key in a full snapshot is removed, and an empty full snapshot clears
 the store. Invalid attachment dimensions also revoke old matcher admission.
 
+## Exact failure categories
+
+Server source/reference/material identity failures enter `validate_cert` and
+therefore follow the existing whole-generation LKG policy, including a changed
+UID at the same key. Missing required Mutual/OptionalMutual CA references also
+retain their existing configuration-validation failure behavior.
+
+A **present** CA reference is independent of the server proof. With a valid server
+and successful remaining `validate_cert` checks (including verify depth and allowed
+SAN/CN patterns), an invalid CA target, unresolved material, mismatched identity/provenance or bad
+CA PEM publishes the new matching generation with `client_ca_store` failure.
+It fails closed at handshake; it does not retain old trust or yield to a sibling.
+Terminate mode consumes no client CA. If the server also fails validation, the
+existing server LKG branch takes precedence and retains the whole old generation.
+Attachment-dimension rejection still forbids predecessor admission regardless of
+certificate failure. These categories must not be collapsed into "all invalid
+updates retain LKG."
+
 ## Rationale and evidence
 
 The accepted product priority is continuity of the last usable certificate. If

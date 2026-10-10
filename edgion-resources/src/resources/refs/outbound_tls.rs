@@ -172,6 +172,15 @@ pub enum TlsMaterialIdentityError {
     Provenance,
 }
 impl<'a> BoundTlsMaterial<'a> {
+    pub(super) fn from_edgion_tls(
+        field: &'a super::edgion_tls_fields::EdgionTlsField<'_>,
+        material: Option<&'a Secret>,
+    ) -> Self {
+        Self {
+            reference: TlsReferenceIdentity::authored(field.token()),
+            material,
+        }
+    }
     pub(super) fn from_backend_policy(
         field: &'a super::backend_tls_fields::BackendTlsField<'_>,
         material: Option<&'a Secret>,
@@ -196,6 +205,10 @@ impl<'a> BoundTlsMaterial<'a> {
                         .validated()
                         .map_err(TlsMaterialIdentityError::Reference)?
                         .is_health_tls_material()
+                    || token
+                        .validated()
+                        .map_err(TlsMaterialIdentityError::Reference)?
+                        .is_edgion_tls_material()
             }
             TlsIdentityOrigin::Effective(_) => false,
         };

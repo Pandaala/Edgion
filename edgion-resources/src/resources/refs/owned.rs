@@ -40,6 +40,7 @@ pub(super) enum TopologyLoan<'a> {
     GatewayTls(&'a OwnerSnapshot),
     BackendTls(&'a OwnerSnapshot),
     HealthTls(&'a OwnerSnapshot),
+    EdgionTls(&'a OwnerSnapshot),
 }
 impl<'a> TopologyLoan<'a> {
     fn owner(self) -> &'a OwnerSnapshot {
@@ -50,7 +51,9 @@ impl<'a> TopologyLoan<'a> {
             Self::IpList(snapshot) => &snapshot.owner,
             Self::Egc(snapshot) => &snapshot.owner,
             Self::RouteAuth(snapshot) => &snapshot.owner,
-            Self::GatewayTls(owner) | Self::BackendTls(owner) | Self::HealthTls(owner) => owner,
+            Self::GatewayTls(owner) | Self::BackendTls(owner) | Self::HealthTls(owner) | Self::EdgionTls(owner) => {
+                owner
+            }
         }
     }
     fn freeze(self) -> Result<FrozenTopology, ReferenceError> {
@@ -65,7 +68,8 @@ impl<'a> TopologyLoan<'a> {
             | Self::RouteAuth(_)
             | Self::GatewayTls(_)
             | Self::BackendTls(_)
-            | Self::HealthTls(_) => Err(ReferenceError::UnsupportedTarget),
+            | Self::HealthTls(_)
+            | Self::EdgionTls(_) => Err(ReferenceError::UnsupportedTarget),
         }
     }
 }
@@ -215,6 +219,7 @@ impl OwnerSnapshot {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum FieldContract {
+    StrictSecret,
     NativeSecret,
     NativeCa,
     CustomSecret,
@@ -328,7 +333,11 @@ impl OwnedTarget {
         // Only these private contracts are selected by the finite owning visitors.
         // CredentialInjector's LinkSys branch remains an exact non-core target.
         let native = matches!(contract, FieldContract::NativeSecret | FieldContract::NativeCa);
-        let group = if !native && group == "core" && matches!(kind, "Secret" | "ConfigMap") {
+        let group = if !native
+            && contract != FieldContract::StrictSecret
+            && group == "core"
+            && matches!(kind, "Secret" | "ConfigMap")
+        {
             ""
         } else {
             group
@@ -339,7 +348,7 @@ impl OwnedTarget {
             ObjectIdentity::checked(group, kind, ResourceScope::Namespaced(namespace), name)?;
         }
         let supported = match contract {
-            FieldContract::NativeSecret => group.is_empty() && kind == "Secret",
+            FieldContract::NativeSecret | FieldContract::StrictSecret => group.is_empty() && kind == "Secret",
             FieldContract::NativeCa => group.is_empty() && matches!(kind, "Secret" | "ConfigMap"),
             FieldContract::FixedConfigData => group == "edgion.io" && kind == "EdgionConfigData",
             FieldContract::CustomSecret => group.is_empty() && kind == "Secret",
@@ -415,6 +424,8 @@ impl PreparedTlsTarget {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(super) enum FieldSlot {
+    EdgionTlsServer,
+    EdgionTlsClientCa,
     HealthTls {
         ca: Option<usize>,
     },
@@ -514,7 +525,9 @@ impl FieldSlot {
                     && *current_group == group
                     && *current_reference == reference
             }
-            Self::HealthTls { .. }
+            Self::EdgionTlsServer
+            | Self::EdgionTlsClientCa
+            | Self::HealthTls { .. }
             | Self::BackendTlsCa { .. }
             | Self::BackendTlsClient
             | Self::GatewayBackendTls
@@ -708,6 +721,12 @@ impl<'a> BoundFieldReference<'a> {
         matches!(
             self._position,
             FieldSlot::BackendTlsCa { .. } | FieldSlot::BackendTlsClient
+        )
+    }
+    pub fn is_edgion_tls_material(self) -> bool {
+        matches!(
+            self._position,
+            FieldSlot::EdgionTlsServer | FieldSlot::EdgionTlsClientCa
         )
     }
     pub fn is_health_tls_material(self) -> bool {

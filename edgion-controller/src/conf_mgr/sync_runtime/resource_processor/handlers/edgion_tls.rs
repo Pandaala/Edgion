@@ -19,39 +19,62 @@ use edgion_resources::resources::common::SecretObjectReference;
 use edgion_resources::resources::edgion_tls::EdgionTlsStatus;
 use edgion_resources::ResourceKind;
 
-/// Returns `true` when `secret_ref` points at a different namespace than `owner_ns`,
-/// ReferenceGrant validation is enabled, and no `ReferenceGrant` authorizes the
-/// `EdgionTls` -> `Secret` reference. Mirrors the cross-namespace guard used by
-/// `GatewayHandler` for `certificateRefs`; when validation is disabled this always
-/// returns `false`, keeping behavior consistent with the other handlers.
-fn cross_ns_secret_ref_denied(ctx: &HandlerContext, owner_ns: &str, secret_ref: &SecretObjectReference) -> bool {
-    if !secret_ref.is_cross_namespace(owner_ns) || !crate::config::is_reference_grant_validation_enabled() {
-        return false;
+use super::super::credential::pipeline::{authorize_bound_edgion_tls, fetch_bound_secret_readonly};
+use super::super::credential::{fetch_bound_secret, BoundFetchOutcome};
+use edgion_resources::resources::refs::edgion_tls_fields::{EdgionTlsField, EdgionTlsRefs};
+use edgion_resources::resources::refs::ReferenceError;
+
+fn field_error(field: &EdgionTlsField<'_>, wire: &SecretObjectReference) -> Option<ResolvedRefsError> {
+    match field.token().validated() {
+        Ok(_) => None,
+        Err(ReferenceError::UnsupportedTarget) => Some(ResolvedRefsError::InvalidKind {
+            kind: format!(
+                "{}/{}",
+                wire.group.as_deref().unwrap_or(""),
+                wire.kind.as_deref().unwrap_or("Secret")
+            ),
+            name: wire.name.clone(),
+        }),
+        Err(error) => Some(ResolvedRefsError::InvalidReference { error }),
     }
-    let target_ns = secret_ref.effective_namespace(owner_ns);
-    !ctx.runtime().ref_grant_store.check_reference_allowed(
-        owner_ns,
-        "edgion.io",
-        "EdgionTls",
-        target_ns,
-        "",
-        "Secret",
-        Some(&secret_ref.name),
-    )
 }
-
-fn is_core_secret_ref(secret_ref: &SecretObjectReference) -> bool {
-    secret_ref.group.as_deref().is_none_or(str::is_empty)
-        && secret_ref.kind.as_deref().is_none_or(|kind| kind == "Secret")
-}
-
-fn invalid_secret_ref_warning(field: &str, secret_ref: &SecretObjectReference) -> Option<String> {
-    (!is_core_secret_ref(secret_ref)).then(|| {
-        format!(
-            "{field} must reference the core Secret kind (group='', kind='Secret'); got group='{}', kind='{}'",
-            secret_ref.group.as_deref().unwrap_or(""),
-            secret_ref.kind.as_deref().unwrap_or("Secret")
-        )
+fn field_status(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    field: &EdgionTlsField<'_>,
+    wire: &SecretObjectReference,
+    present: bool,
+) -> Option<ResolvedRefsError> {
+    if let Some(error) = field_error(field, wire) {
+        return Some(error);
+    }
+    match authorize_bound_edgion_tls(ctx, owner, field.token()) {
+        BoundFetchOutcome::Invalid(error) => return Some(ResolvedRefsError::InvalidReference { error }),
+        BoundFetchOutcome::Pending(super::super::credential::PendingReason::ReferenceGrantMissing {
+            from_ns,
+            to_ns,
+            secret_name,
+        }) => {
+            return Some(ResolvedRefsError::RefNotPermitted {
+                from_namespace: from_ns,
+                from_kind: "EdgionTls",
+                target_namespace: to_ns,
+                target_name: secret_name,
+            })
+        }
+        BoundFetchOutcome::Pending(_) => {}
+        BoundFetchOutcome::Ok(()) => {}
+    }
+    if !present {
+        let token = field.token();
+        let target = token.validated().ok()?.target();
+        return Some(ResolvedRefsError::SecretNotFound {
+            namespace: target.scope().namespace().unwrap_or("default").into(),
+            name: target.name().into(),
+        });
+    }
+    field.material().err().map(|_| ResolvedRefsError::CertContentInvalid {
+        detail: "Secret material does not match its declared reference".into(),
     })
 }
 
@@ -105,33 +128,38 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
         // validate_cert() and surfaced as ResolvedRefs/InvalidCertificate so
         // they appear on the per-parent status condition rather than as a generic
         // Accepted/Invalid warning.
-        let secret_ns = tls
-            .spec
-            .secret_ref
-            .namespace
-            .as_ref()
-            .or(tls.metadata.namespace.as_ref());
-
-        if let Some(warning) = invalid_secret_ref_warning("spec.secretRef", &tls.spec.secret_ref) {
-            warnings.push(warning);
-        } else if !cross_ns_secret_ref_denied(ctx, owner_ns, &tls.spec.secret_ref)
-            && ctx
-                .runtime()
-                .secret_store
-                .get(secret_ns.map(|s| s.as_str()), &tls.spec.secret_ref.name)
-                .is_none()
-        {
-            let secret_key = format_secret_key(secret_ns, &tls.spec.secret_ref.name);
-            warnings.push(format!("Secret '{}' not found (may arrive later)", secret_key));
+        let owner = ResourceRef::new(
+            ResourceKind::EdgionTls,
+            tls.metadata.namespace.clone(),
+            tls.metadata.name.clone().unwrap_or_default(),
+        );
+        let refs = EdgionTlsRefs::from_tls(tls);
+        let server = refs.server();
+        if let Some(error) = field_error(&server, &tls.spec.secret_ref) {
+            warnings.push(format!(
+                "spec.secretRef must reference the core Secret kind with a valid source/name/namespace: {error:?}"
+            ));
+        } else if matches!(
+            fetch_bound_secret_readonly(ctx, &owner, server.token()),
+            BoundFetchOutcome::Pending(super::super::credential::PendingReason::SecretNotFound { .. })
+        ) {
+            let ns = tls
+                .spec
+                .secret_ref
+                .namespace
+                .as_ref()
+                .or(tls.metadata.namespace.as_ref());
+            warnings.push(format!(
+                "Secret '{}' not found (may arrive later)",
+                format_secret_key(ns, &tls.spec.secret_ref.name)
+            ));
         }
-        if let Some(ca_secret_ref) = tls
-            .spec
-            .client_auth
-            .as_ref()
-            .and_then(|auth| auth.ca_secret_ref.as_ref())
-        {
-            if let Some(warning) = invalid_secret_ref_warning("spec.clientAuth.caSecretRef", ca_secret_ref) {
-                warnings.push(warning);
+        if let (Some(field), Some(wire)) = (
+            refs.client_ca(),
+            tls.spec.client_auth.as_ref().and_then(|a| a.ca_secret_ref.as_ref()),
+        ) {
+            if let Some(error) = field_error(&field, wire) {
+                warnings.push(format!("spec.clientAuth.caSecretRef must reference the core Secret kind with a valid source/name/namespace: {error:?}"));
             }
         }
 
@@ -200,117 +228,28 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
             ctx.requeue(ResourceKind::Gateway.as_str(), gateway_key).await;
         }
 
-        // 1. Resolve server Secret from global secret store
-        let secret_ns = tls
-            .spec
-            .secret_ref
-            .namespace
-            .as_ref()
-            .or(tls.metadata.namespace.as_ref());
-        let secret_key = format_secret_key(secret_ns, &tls.spec.secret_ref.name);
-
-        // Enforce ReferenceGrant for cross-namespace Secret refs before reading the
-        // Secret, mirroring GatewayHandler's certificateRefs handling (gateway.rs).
-        // The controller ServiceAccount can read Secrets cluster-wide, so this is the
-        // only tenant-isolation boundary preventing a low-privilege EdgionTls writer
-        // from embedding another namespace's TLS private key into spec.secret.
-        let owner_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
-        // Track the cross-namespace dependency so ReferenceGrant changes in the target
-        // namespace requeue this EdgionTls (covers both grant-added and grant-removed).
-        if is_core_secret_ref(&tls.spec.secret_ref) {
-            // Register only a valid typed reference. Source events requeue the
-            // owner, while owner reconciliation is the sole clear-before-add path.
-            ctx.secret_ref_manager()
-                .add_ref(secret_key.clone(), resource_ref.clone());
-        }
-        if is_core_secret_ref(&tls.spec.secret_ref) && tls.spec.secret_ref.is_cross_namespace(owner_ns) {
-            ctx.runtime().cross_ns_ref_mgr.add_ref(
-                tls.spec.secret_ref.effective_namespace(owner_ns).to_string(),
-                resource_ref.clone(),
-            );
-        }
-        if !is_core_secret_ref(&tls.spec.secret_ref) {
-            tracing::info!(
-                edgion_tls = %resource_ref.key(),
-                "Invalid server Secret reference group/kind; leaving secret unresolved"
-            );
-        } else if cross_ns_secret_ref_denied(ctx, owner_ns, &tls.spec.secret_ref) {
-            tracing::info!(
-                edgion_tls = %resource_ref.key(),
-                secret_key = %secret_key,
-                "Cross-namespace Secret reference denied (no ReferenceGrant); leaving secret unresolved"
-            );
-        } else if let Some(secret) = ctx
-            .runtime()
-            .secret_store
-            .get(secret_ns.map(|s| s.as_str()), &tls.spec.secret_ref.name)
-        {
-            tls.spec.secret = Some(super::super::credential::ca_refs::ordinary_secret_material(secret));
-            tracing::debug!(
-                edgion_tls = %resource_ref.key(),
-                secret_key = %secret_key,
-                "Secret resolved and filled into EdgionTls"
-            );
-        } else {
-            // Secret not found yet - this is normal if Secret arrives after EdgionTls
-            // The SecretRefManager reference ensures we'll be requeued when Secret arrives
-            tracing::info!(
-                edgion_tls = %resource_ref.key(),
-                secret_key = %secret_key,
-                "Secret not found yet, will be reprocessed when Secret arrives"
-            );
-        }
-
-        // 2. Resolve CA Secret (if mTLS is configured)
-        if let Some(ref mut client_auth) = tls.spec.client_auth {
-            if let Some(ref ca_secret_ref) = client_auth.ca_secret_ref {
-                let ca_ns = ca_secret_ref.namespace.as_ref().or(tls.metadata.namespace.as_ref());
-                let ca_secret_key = format_secret_key(ca_ns, &ca_secret_ref.name);
-
-                // Same cross-namespace ReferenceGrant guard as the server cert above:
-                // the mTLS CA Secret can also carry private key material.
-                let ca_owner_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
-                if is_core_secret_ref(ca_secret_ref) {
-                    ctx.secret_ref_manager()
-                        .add_ref(ca_secret_key.clone(), resource_ref.clone());
-                }
-                if is_core_secret_ref(ca_secret_ref) && ca_secret_ref.is_cross_namespace(ca_owner_ns) {
-                    ctx.runtime().cross_ns_ref_mgr.add_ref(
-                        ca_secret_ref.effective_namespace(ca_owner_ns).to_string(),
-                        resource_ref.clone(),
-                    );
-                }
-                if !is_core_secret_ref(ca_secret_ref) {
-                    tracing::info!(
-                        edgion_tls = %resource_ref.key(),
-                        "Invalid CA Secret reference group/kind; leaving ca_secret unresolved"
-                    );
-                } else if cross_ns_secret_ref_denied(ctx, ca_owner_ns, ca_secret_ref) {
-                    tracing::info!(
-                        edgion_tls = %resource_ref.key(),
-                        ca_secret_key = %ca_secret_key,
-                        "Cross-namespace CA Secret reference denied (no ReferenceGrant); leaving ca_secret unresolved"
-                    );
-                } else if let Some(ca_secret) = ctx
-                    .runtime()
-                    .secret_store
-                    .get(ca_ns.map(|s| s.as_str()), &ca_secret_ref.name)
-                {
-                    client_auth.ca_secret =
-                        Some(super::super::credential::ca_refs::ordinary_secret_material(ca_secret));
-                    tracing::debug!(
-                        edgion_tls = %resource_ref.key(),
-                        ca_secret_key = %ca_secret_key,
-                        "CA Secret resolved and filled into EdgionTls.client_auth"
-                    );
-                } else {
-                    tracing::info!(
-                        edgion_tls = %resource_ref.key(),
-                        ca_secret_key = %ca_secret_key,
-                        "CA Secret not found yet, mTLS will be enabled when Secret arrives"
-                    );
-                }
-            }
+        // Actual field validation and recovery registration precede authorization and reads.
+        let (server, ca) = {
+            let refs = EdgionTlsRefs::from_tls(&tls);
+            let server = match fetch_bound_secret(ctx, &resource_ref, refs.server().token()) {
+                BoundFetchOutcome::Ok(value) => Some(super::super::credential::ca_refs::ordinary_secret_material(
+                    value.secret,
+                )),
+                _ => None,
+            };
+            let ca = refs
+                .client_ca()
+                .and_then(|field| match fetch_bound_secret(ctx, &resource_ref, field.token()) {
+                    BoundFetchOutcome::Ok(value) => Some(super::super::credential::ca_refs::ordinary_secret_material(
+                        value.secret,
+                    )),
+                    _ => None,
+                });
+            (server, ca)
+        };
+        tls.spec.secret = server;
+        if let Some(auth) = tls.spec.client_auth.as_mut() {
+            auth.ca_secret = ca;
         }
 
         // 3. Resolve listener keys from parentRefs for per-listener route isolation.
@@ -398,74 +337,42 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
 
         let validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
 
-        // parse() already resolved secret_ref -> spec.secret; reuse that result
-        // instead of querying secret_store a second time.
-        let mut resolved_refs_errors: Vec<ResolvedRefsError> = if !is_core_secret_ref(&tls.spec.secret_ref) {
-            vec![ResolvedRefsError::InvalidKind {
-                kind: format!(
-                    "{}/{}",
-                    tls.spec.secret_ref.group.as_deref().unwrap_or(""),
-                    tls.spec.secret_ref.kind.as_deref().unwrap_or("Secret")
-                ),
-                name: tls.spec.secret_ref.name.clone(),
-            }]
-        } else if tls.spec.secret.is_some() {
-            // Secret resolved: run the SAME validation the gateway runs and surface
-            // cert-CONTENT failures on ResolvedRefs. Filter out the not-found variants
-            // (secret/cert/key absent) — those are owned by the secret-absent branch
-            // below; folding them here would double-report. status_message() is
-            // deterministic (no wall-clock) so the message is byte-stable across
-            // reconciles (avoids the status-write hot loop).
+        let owner = ResourceRef::new(
+            ResourceKind::EdgionTls,
+            tls.metadata.namespace.clone(),
+            tls.metadata.name.clone().unwrap_or_default(),
+        );
+        let refs = EdgionTlsRefs::from_tls(tls);
+        let mut resolved_refs_errors: Vec<ResolvedRefsError> = field_status(
+            ctx,
+            &owner,
+            &refs.server(),
+            &tls.spec.secret_ref,
+            tls.spec.secret.is_some(),
+        )
+        .into_iter()
+        .collect();
+        if resolved_refs_errors.is_empty() && tls.spec.secret.is_some() {
             use edgion_common::tls_validation::CertValidationError as CVE;
-            edgion_common::tls_validation::validate_cert(tls)
-                .errors
-                .into_iter()
-                .filter(|e| !matches!(e, CVE::SecretNotFound | CVE::CertNotFound | CVE::KeyNotFound))
-                .map(|e| ResolvedRefsError::CertContentInvalid {
-                    detail: e.status_message(),
-                })
-                .collect()
-        } else {
-            let secret_ns = tls
-                .spec
-                .secret_ref
-                .namespace
-                .as_ref()
-                .or(tls.metadata.namespace.as_ref());
-            let target_ns = secret_ns.map(|s| s.as_str()).unwrap_or("default").to_string();
-            // Distinguish "denied by ReferenceGrant" from "Secret simply absent" so
-            // the K8s ResolvedRefs condition reports RefNotPermitted instead of a
-            // perpetual SecretNotFound wait when the cross-ns ref was rejected in parse().
-            if cross_ns_secret_ref_denied(ctx, resource_ns, &tls.spec.secret_ref) {
-                vec![ResolvedRefsError::RefNotPermitted {
-                    from_namespace: resource_ns.to_string(),
-                    from_kind: "EdgionTls",
-                    target_namespace: target_ns,
-                    target_name: tls.spec.secret_ref.name.clone(),
-                }]
-            } else {
-                vec![ResolvedRefsError::SecretNotFound {
-                    namespace: target_ns,
-                    name: tls.spec.secret_ref.name.clone(),
-                }]
-            }
-        };
-
-        if let Some(ca_secret_ref) = tls
-            .spec
-            .client_auth
-            .as_ref()
-            .and_then(|auth| auth.ca_secret_ref.as_ref())
-        {
-            if !is_core_secret_ref(ca_secret_ref) {
-                resolved_refs_errors.push(ResolvedRefsError::InvalidKind {
-                    kind: format!(
-                        "{}/{}",
-                        ca_secret_ref.group.as_deref().unwrap_or(""),
-                        ca_secret_ref.kind.as_deref().unwrap_or("Secret")
-                    ),
-                    name: ca_secret_ref.name.clone(),
-                });
+            resolved_refs_errors.extend(
+                edgion_common::tls_validation::validate_cert(tls)
+                    .errors
+                    .into_iter()
+                    .filter(|e| !matches!(e, CVE::SecretNotFound | CVE::CertNotFound | CVE::KeyNotFound))
+                    .map(|e| ResolvedRefsError::CertContentInvalid {
+                        detail: e.status_message(),
+                    }),
+            );
+        }
+        if let (Some(field), Some(auth)) = (refs.client_ca(), tls.spec.client_auth.as_ref()) {
+            if let Some(error) = field_status(
+                ctx,
+                &owner,
+                &field,
+                auth.ca_secret_ref.as_ref().unwrap(),
+                auth.ca_secret.is_some(),
+            ) {
+                resolved_refs_errors.push(error);
             }
         }
 

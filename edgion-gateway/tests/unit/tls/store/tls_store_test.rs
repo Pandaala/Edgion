@@ -91,6 +91,11 @@ fn make_valid_tls(ns: &str, name: &str, hosts: &[&str]) -> Arc<EdgionTls> {
             min_tls_version: None,
             ciphers: None,
             secret: Some(Secret {
+                metadata: ObjectMeta {
+                    name: Some(format!("{name}-cert")),
+                    namespace: Some(ns.into()),
+                    ..Default::default()
+                },
                 data: Some(data),
                 ..Default::default()
             }),
@@ -140,6 +145,11 @@ fn make_invalid_tls(ns: &str, name: &str, hosts: &[&str]) -> Arc<EdgionTls> {
             min_tls_version: None,
             ciphers: None,
             secret: Some(Secret {
+                metadata: ObjectMeta {
+                    name: Some(format!("{name}-cert")),
+                    namespace: Some(ns.into()),
+                    ..Default::default()
+                },
                 data: Some(data),
                 ..Default::default()
             }),
@@ -878,6 +888,11 @@ fn uncompilable_ca_keeps_index_position_and_fails_closed_at_handshake() {
         }),
         verify_depth: 1,
         ca_secret: Some(Secret {
+            metadata: ObjectMeta {
+                name: Some("ca".into()),
+                namespace: Some("ns".into()),
+                ..Default::default()
+            },
             data: Some(BTreeMap::from([(
                 "ca.crt".to_string(),
                 ByteString(b"not a pem at all".to_vec()),
@@ -1053,4 +1068,81 @@ fn regex_ignore_case_reconstructs_after_serde_and_updates_published_generations(
         }
         previous = Some((compiled, ignore_case));
     }
+}
+
+#[test]
+fn server_identity_lkg_and_ca_identity_revocation_keep_distinct_generations() {
+    use edgion_resources::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode};
+    let store = TlsStore::new();
+    let mut good = (*make_valid_tls("ns", "bound", &["bound.example.com"])).clone();
+    let mut ca = good.spec.secret.clone().unwrap();
+    ca.metadata.name = Some("ca".into());
+    let pem = ca.data.as_ref().unwrap()["tls.crt"].clone();
+    ca.data.as_mut().unwrap().insert("ca.crt".into(), pem);
+    good.spec.client_auth = Some(ClientAuthConfig {
+        mode: ClientAuthMode::Mutual,
+        ca_secret_ref: Some(SecretObjectReference {
+            name: "ca".into(),
+            namespace: None,
+            group: None,
+            kind: None,
+        }),
+        ca_secret: Some(ca),
+        verify_depth: 1,
+        allowed_sans: None,
+        allowed_cns: None,
+    });
+    let good = Arc::new(good);
+    store.replace_all_tls(HashMap::from([("ns/bound".into(), good.clone())]));
+    let captured = store.snapshot().data.entries["ns/bound"].compiled.clone();
+    assert!(captured.identity.is_ok());
+    assert!(captured.client_ca_store.as_ref().unwrap().is_some());
+    for case in 0..3 {
+        let mut bad = (*good).clone();
+        bad.metadata.uid = Some("recreated-owner".into());
+        match case {
+            0 => bad.spec.secret.as_mut().unwrap().metadata.name = Some("decoy".into()),
+            1 => bad.spec.secret_ref.group = Some("core".into()),
+            _ => bad.spec.client_auth.as_mut().unwrap().ca_secret_ref = None,
+        }
+        publish_update(&store, "bound", Arc::new(bad));
+        assert!(Arc::ptr_eq(
+            &captured,
+            &store.snapshot().data.entries["ns/bound"].compiled
+        ));
+    }
+    for case in 0..3 {
+        let mut bad = (*good).clone();
+        let auth = bad.spec.client_auth.as_mut().unwrap();
+        match case {
+            0 => auth.ca_secret.as_mut().unwrap().metadata.name = Some("decoy".into()),
+            1 => auth.ca_secret = None,
+            _ => auth.ca_secret_ref.as_mut().unwrap().group = Some("core".into()),
+        }
+        let bad = Arc::new(bad);
+        publish_update(&store, "bound", bad.clone());
+        let candidates = store
+            .snapshot()
+            .match_sni_candidates(&listener(443), "bound.example.com");
+        assert_eq!(candidates.len(), 1);
+        assert!(Arc::ptr_eq(&candidates[0].tls, &bad));
+        assert!(candidates[0].identity.is_ok());
+        assert!(candidates[0].client_ca_store.is_err());
+        assert!(captured.client_ca_store.as_ref().unwrap().is_some());
+    }
+    publish_update(&store, "bound", good.clone());
+    assert!(store.snapshot().data.entries["ns/bound"]
+        .compiled
+        .client_ca_store
+        .as_ref()
+        .unwrap()
+        .is_some());
+    let mut dimension_bad = (*good).clone();
+    dimension_bad.spec.hosts.push("BOUND.EXAMPLE.COM".into());
+    dimension_bad.spec.secret.as_mut().unwrap().metadata.name = Some("decoy".into());
+    publish_update(&store, "bound", Arc::new(dimension_bad));
+    assert!(store
+        .snapshot()
+        .match_sni_candidates(&listener(443), "bound.example.com")
+        .is_empty());
 }

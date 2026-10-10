@@ -752,3 +752,34 @@ fn test_validate_passes_matching_cert_key() {
         resolved
     );
 }
+
+#[tokio::test]
+async fn actual_fields_scrub_injection_independently_and_status_is_readonly() {
+    use crate::conf_mgr::sync_runtime::resource_processor::credential::pipeline::observe_bound_reads;
+    let ctx = make_ctx_cross_ns("test-ns", "test-secret", None);
+    let handler = EdgionTlsHandler::default();
+    let mut tls = make_tls(Some(vec![make_parent_ref("my-gw", "test-ns")]), "test-secret");
+    tls.spec.secret = Some(Default::default());
+    tls.spec.client_auth = Some(
+        serde_json::from_value(serde_json::json!({"mode":"Mutual","caSecretRef":{"name":"ca","namespace":"target"}}))
+            .unwrap(),
+    );
+    tls.spec.client_auth.as_mut().unwrap().ca_secret = Some(Default::default());
+    let ProcessResult::Continue(mut parsed) = handler.parse(tls, &ctx).await else {
+        panic!("parse skipped")
+    };
+    assert!(parsed.spec.secret.is_some());
+    assert!(parsed.spec.client_auth.as_ref().unwrap().ca_secret.is_none());
+    let owner = ResourceRef::new(ResourceKind::EdgionTls, Some("test-ns".into()), "test-tls".into());
+    let edges = ctx.secret_ref_manager().get_dependencies(&owner.key());
+    assert!(edges.contains(&"test-ns/test-secret".into()));
+    assert!(edges.contains(&"target/ca".into()));
+    assert!(ctx.runtime().cross_ns_ref_mgr.get_refs("target").contains(&owner));
+    let (_, reads) = observe_bound_reads(|| handler.update_status(&mut parsed, &ctx, &[]));
+    assert!(!reads.contains(&"secret"));
+    assert_eq!(ctx.secret_ref_manager().get_dependencies(&owner.key()), edges);
+    assert!(parsed.status.as_ref().unwrap().parents[0]
+        .conditions
+        .iter()
+        .any(|c| c.type_ == "ResolvedRefs" && c.reason == "RefNotPermitted"));
+}

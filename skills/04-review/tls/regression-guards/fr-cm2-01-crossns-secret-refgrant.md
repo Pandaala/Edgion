@@ -9,32 +9,31 @@ knowledge_type: regression-guards
 **Status:** ✅ fixed · 2026-05-29
 **Severity:** P1 (Security) — cross-tenant TLS private-key exfiltration via missing authorization
 
-## Conclusion
+## Current contract
 
-`EdgionTlsHandler::parse()`
-(`edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_tls.rs`)
-now calls the module-local `cross_ns_secret_ref_denied(ctx, owner_ns, secret_ref)`
-helper immediately before each `secret_store.get()` — once for the server cert
-(`spec.secret_ref`) and once for the mTLS CA (`spec.client_auth.ca_secret_ref`).
-When the ref targets a different namespace, ReferenceGrant validation is enabled
-(`is_reference_grant_validation_enabled()`), and no `ReferenceGrant` authorizes the
-`edgion.io/EdgionTls -> ""/Secret` reference, the Secret is **not** read or embedded:
-`tls.spec.secret` / `client_auth.ca_secret` stays `None`. `update_status()` recomputes
-the same check and reports `ResolvedRefsError::RefNotPermitted` (instead of a perpetual
-`SecretNotFound`) on the `ResolvedRefs` condition.
+The historical 2026-05-29 security fix is now consolidated into canonical bound
+acquisition. `EdgionTlsRefs` borrows the actual resource and independently exposes
+server and client-CA fields. `fetch_bound_secret` validates the actual source,
+strict Secret target and dependency owner before registering pending recovery
+edges, authorizing the cross-namespace reference, and reading any payload.
+Unsupported group/kind, malformed names or explicit empty namespaces have no
+reads or dependency effects. Literal `core` is rejected; omitted group/kind means
+empty core group / Secret. Both material slots are scrubbed before acquisition.
 
-This is the exact guard `GatewayHandler` already applies to `certificateRefs`
-(`gateway.rs:1252`) and that `fetch_secret` (`credential/pipeline.rs:126`) applies for
-the EdgionAcme / LinkSys / plugin resolvers. EdgionTls was the **only** cross-namespace
-Secret resolver missing it.
+Valid denied references retain ordinary Secret and cross-namespace dependencies,
+so Secret and ReferenceGrant changes can retry them. Readonly validation and
+status create no edges; status uses authorization-only bound checks to distinguish
+RefNotPermitted from SecretNotFound without rereading payload. Present material
+must match its actual field identity and ordinary Secret provenance.
 
-Re-reports of the form "EdgionTls embeds an arbitrary other-namespace
-`kubernetes.io/tls` or CA Secret (including `tls.key`) without a ReferenceGrant",
-"a low-privilege EdgionTls writer can point `secretRef.namespace` at a victim namespace
-and exfiltrate the private key via conf_sync", or "EdgionTls is the lone handler skipping
-`check_reference_allowed`" are **not accepted** — none is still true. Verify the
-`cross_ns_secret_ref_denied` call precedes both `secret_store.get()` sites before
-re-reporting.
+The existing disabled-ReferenceGrant-validation exception is finite: EdgionTls
+slots retain that behavior, as do the separately scoped native Gateway TLS slots.
+Do not infer that every other bound credential or TLS consumer honors the flag.
+No disabled authority may be frozen into a detached receipt.
+
+Verify the canonical authorization-before-read call chain and event recovery,
+rather than looking for the removed detached `cross_ns_secret_ref_denied` helper.
+This recorded fix is not proof against new bypasses or stale binding defects.
 
 ## What was wrong (before the fix)
 
@@ -52,26 +51,13 @@ bypass stood on its own.
 "Cross-namespace refs require a Gateway API `ReferenceGrant`" — the bug was a direct
 violation of that documented contract.
 
-## Why the fix is shaped this way
+## Historical design and consolidation
 
-- **Inline guard, not a pipeline rewrite.** The fix mirrors the established `GatewayHandler`
-  pattern rather than rerouting EdgionTls through `fetch_secret` (which would swap the status
-  mapping from `ResolvedRefsError` to `FetchOutcome`/`PendingReason` — a larger refactor). The
-  cleaner long-term consolidation onto `fetch_secret` remains a valid future task but was out
-  of scope for the security fix.
-- **Gated by `is_reference_grant_validation_enabled()`.** When validation is disabled, the
-  helper returns `false` and behavior is unchanged — consistent with every sibling handler
-  (none enforces the grant when the flag is off).
-- **`validate()` left unchanged.** It only reads the Secret to emit a cert/key-mismatch
-  warning string; it does not embed or expose Secret content, so it is not on the exfiltration
-  path. Adding a guard there would be scope creep with no security benefit.
-- **Requeue on ReferenceGrant change.** `parse()` also registers the cross-namespace target
-  namespace into `ctx.runtime().cross_ns_ref_mgr` (and `on_delete()` / re-`parse()` clears it),
-  exactly like `GatewayHandler` (`gateway.rs:256-262, 318-319`). `secret_ref_manager` only
-  requeues on **Secret** change events; the ReferenceGrant dispatcher (`CrossNsRevalidationListener`)
-  requeues from `cross_ns_ref_mgr`. Without this, a denied EdgionTls would stay stuck in
-  `RefNotPermitted` even after the operator adds the authorizing grant. Registration happens for
-  any cross-namespace ref regardless of allow/deny so both grant-added and grant-removed requeue.
+The original fix deliberately used an inline guard to minimize a security patch.
+That historical scope restriction is superseded by actual-owner bound acquisition.
+Its enduring requirement is authorization before both server and CA reads, with
+pending Secret/Grant recovery on both allow and deny. Handler processing remains
+CPU/local-store only, with one existing workqueue per resource kind.
 
 ## Tests guarding this
 
@@ -83,6 +69,6 @@ violation of that documented contract.
 
 - `fr-grt-01` is the separate gateway-side companion (admin API serializing the
   already-resolved `spec.secret`); it is not closed by this fix.
-- The guard is identical in intent to `GatewayHandler::validate_listener_resolved_refs`
-  (cert refs) and `fetch_secret` (credential pipeline); any future cross-namespace Secret
-  resolver MUST carry the same check before `secret_store.get()`.
+- Every cross-namespace Secret consumer must enforce its own canonical field contract
+  and authorization policy before payload access; an unrelated consumer cannot
+  inherit EdgionTls's finite validation-flag exception.

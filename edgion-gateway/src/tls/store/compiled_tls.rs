@@ -83,6 +83,10 @@ impl CompiledEdgionTls {
 /// Gateway Listener path, which collapses the same failure into its generic
 /// compile diagnostic.
 fn compile_identity(tls: &EdgionTls) -> Result<Arc<CompiledServingCertificate>, &'static str> {
+    edgion_resources::resources::refs::edgion_tls_fields::EdgionTlsRefs::from_tls(tls)
+        .server()
+        .material()
+        .map_err(|_| "read certificate failed")?;
     let cert_pem = tls.cert_pem().map_err(|_| "read certificate failed")?;
     let strict_chain = edgion_common::tls_validation::parse_strict_certificate_chain(cert_pem.as_bytes())
         .map_err(|_| "parse certificate failed")?;
@@ -133,6 +137,13 @@ fn compile_client_ca_store(tls: &EdgionTls) -> Result<Option<Arc<X509Store>>, St
         ClientAuthMode::Mutual | ClientAuthMode::OptionalMutual => {}
     }
 
+    let fields = edgion_resources::resources::refs::edgion_tls_fields::EdgionTlsRefs::from_tls(tls);
+    let field = fields
+        .client_ca()
+        .ok_or_else(|| "Invalid mTLS CA Secret reference".to_string())?;
+    field
+        .material()
+        .map_err(|_| "Invalid mTLS CA Secret reference or material identity".to_string())?;
     let ca_pem = tls
         .ca_cert_pem()
         .map_err(|e| format!("Failed to get CA cert PEM for mTLS: {}", e))?;

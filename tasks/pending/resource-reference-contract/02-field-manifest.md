@@ -620,3 +620,19 @@ Health snapshots retain the winning policy Arc through cold task-start transport
 construction and preserve generation fencing. Secret/ConfigMap semantic default
 notifications cover these finite dependencies; ambiguous bare/qualified sources
 fail closed. Live integration and conformance evidence remain separate work.
+
+## R8d actual EdgionTls server and client-CA fields
+
+`EdgionTlsRefs` lends two independent strict Secret fields from the actual owner.
+Controller acquisition, readonly status, Common server admission and Gateway cold
+server/CA compilation reuse canonical source/target and material correspondence.
+Finite default bare/qualified selection and semantic Secret notifications include
+EdgionTls; its existing Grant-validation flag exception remains finite and cannot
+be frozen. Literal core is rejected. No generated-output authority is added.
+
+Server admission/LKG and present-CA fail-closed compilation remain distinct; the
+latter requires all remaining `validate_cert` checks to pass, including mTLS
+configuration validation.
+Attachment-dimension revocation and same-key UID-independent LKG are preserved.
+This batch does not complete ACME/generated output, AI or LinkSys consumers, live
+TLS validation, or Gateway API conformance.

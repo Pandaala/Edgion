@@ -41,3 +41,5 @@ pub use parent_identity::{ParentRefIdentity, ParentStatusIdentity};
 pub use template_fields::TemplateSecretReference;
 
 pub mod health_tls_fields;
+
+pub mod edgion_tls_fields;

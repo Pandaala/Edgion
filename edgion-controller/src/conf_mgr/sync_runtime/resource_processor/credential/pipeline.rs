@@ -359,13 +359,20 @@ fn authorize_bound_object<'a>(
                 .add_ref(namespace.to_string(), dependency_owner.clone());
         }
     }
-    // Preserve the existing controller policy only for these finite native
-    // Gateway fields. Their synchronous loans cannot mint frozen authority.
-    if reference.is_gateway_tls() && !crate::config::is_reference_grant_validation_enabled() {
+    // Preserve the existing controller policy only for these finite Gateway and
+    // EdgionTls fields. Their synchronous loans cannot mint frozen authority.
+    if (reference.is_gateway_tls() || reference.is_edgion_tls_material())
+        && !crate::config::is_reference_grant_validation_enabled()
+    {
         return BoundFetchOutcome::Ok(AuthorizedObject {
             namespace,
             name: target.name(),
-            revision: "gateway-validation-disabled".to_string(),
+            revision: if reference.is_gateway_tls() {
+                "gateway-validation-disabled"
+            } else {
+                "edgion-tls-validation-disabled"
+            }
+            .to_string(),
         });
     }
     let Some(revision) = bound_read!(
@@ -408,6 +415,23 @@ pub(crate) fn authorize_bound_gateway_frontend_ca(
     authorize_bound_object(ctx, owner, reference, true, kind).and_then(|_| BoundFetchOutcome::Ok(()))
 }
 
+/// Readonly authorization for an actual EdgionTls field, without payload acquisition.
+pub(crate) fn authorize_bound_edgion_tls(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    token: ReferenceToken<'_>,
+) -> BoundFetchOutcome<()> {
+    let reference = match token.validated() {
+        Ok(value) => value,
+        Err(error) => return BoundFetchOutcome::Invalid(error),
+    };
+    if !reference.is_edgion_tls_material() {
+        return BoundFetchOutcome::Invalid(ReferenceError::UnsupportedTarget);
+    }
+    authorize_bound_object(ctx, owner, reference, false, CoreMaterialKind::Secret)
+        .and_then(|_| BoundFetchOutcome::Ok(()))
+}
+
 // Default's two cached reads are not an atomic store snapshot. Dependencies are
 // registered before acquisition so later source events reconcile either candidate.
 fn read_bound_material<T: kube::Resource>(
@@ -416,30 +440,33 @@ fn read_bound_material<T: kube::Resource>(
     mut read: impl FnMut(Option<&str>, &str) -> Option<T>,
 ) -> BoundFetchOutcome<T> {
     let qualified = read(Some(object.namespace), object.name);
-    let selected =
-        if reference.is_gateway_tls() || reference.is_backend_tls_material() || reference.is_health_tls_material() {
-            let bare = if object.namespace == "default" {
-                read(None, object.name)
-            } else {
-                None
-            };
-            let (material, raw_namespace) = match (qualified, bare) {
-                (Some(_), Some(_)) => return BoundFetchOutcome::Invalid(ReferenceError::StaleBinding),
-                (Some(material), None) => (Some(material), Some(object.namespace)),
-                (None, Some(material)) => (Some(material), None),
-                (None, None) => (None, None),
-            };
-            if let Some(material) = material.as_ref() {
-                let metadata = material.meta();
-                if metadata.name.as_deref() != Some(object.name) || metadata.namespace.as_deref() != raw_namespace {
-                    return BoundFetchOutcome::Invalid(ReferenceError::StaleBinding);
-                }
-            }
-            material
+    let selected = if reference.is_gateway_tls()
+        || reference.is_backend_tls_material()
+        || reference.is_health_tls_material()
+        || reference.is_edgion_tls_material()
+    {
+        let bare = if object.namespace == "default" {
+            read(None, object.name)
         } else {
-            // Other consumers retain exact-store and frozen-authority semantics.
-            qualified
+            None
         };
+        let (material, raw_namespace) = match (qualified, bare) {
+            (Some(_), Some(_)) => return BoundFetchOutcome::Invalid(ReferenceError::StaleBinding),
+            (Some(material), None) => (Some(material), Some(object.namespace)),
+            (None, Some(material)) => (Some(material), None),
+            (None, None) => (None, None),
+        };
+        if let Some(material) = material.as_ref() {
+            let metadata = material.meta();
+            if metadata.name.as_deref() != Some(object.name) || metadata.namespace.as_deref() != raw_namespace {
+                return BoundFetchOutcome::Invalid(ReferenceError::StaleBinding);
+            }
+        }
+        material
+    } else {
+        // Other consumers retain exact-store and frozen-authority semantics.
+        qualified
+    };
     match selected {
         Some(material) => BoundFetchOutcome::Ok(material),
         None => BoundFetchOutcome::Pending(PendingReason::SecretNotFound {

@@ -975,3 +975,140 @@ fn health_tls_material_selector_is_local_ambiguous_and_has_no_gateway_authority(
         }
     }
 }
+
+#[test]
+fn edgion_tls_material_selector_is_local_ambiguous_and_has_no_gateway_authority() {
+    use edgion_resources::resources::refs::edgion_tls_fields::EdgionTlsRefs;
+    use std::collections::HashSet;
+    for (namespace, qualified, bare, expected) in [
+        (None, false, true, true),
+        (Some("default"), true, false, true),
+        (None, true, true, false),
+        (Some("apps"), false, true, false),
+        (Some("apps"), true, false, true),
+    ] {
+        let ns = namespace.unwrap_or("default");
+        let (ctx, runtime) = make_ctx(HashMap::new());
+        let make = |namespace: Option<&str>| Secret {
+            metadata: kube::api::ObjectMeta {
+                name: Some("ca".into()),
+                namespace: namespace.map(str::to_owned),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut values = HashMap::new();
+        if qualified {
+            values.insert(format!("{ns}/ca"), make(Some(ns)));
+        }
+        if bare {
+            values.insert("ca".into(), make(None));
+        }
+        runtime.secret_store.update(values, &HashSet::new());
+        let policy: edgion_resources::EdgionTls = serde_json::from_value(
+            serde_json::json!({"metadata":{"name":"policy","namespace":namespace},"spec":{
+            "hosts":["edge.example"],"secretRef":{"name":"ca"}}}),
+        )
+        .unwrap();
+        let refs = EdgionTlsRefs::from_tls(&policy);
+        let field = refs.server();
+        let token = field.token();
+        assert!(!token.validated().unwrap().is_gateway_tls());
+        assert!(token.freeze().is_err());
+        let owner = ResourceRef::new(ResourceKind::EdgionTls, namespace.map(str::to_owned), "policy".into());
+        let (outcome, reads) = observe_bound_reads(|| fetch_bound_secret(&ctx, &owner, token));
+        assert_eq!(matches!(outcome, BoundFetchOutcome::Ok(_)), expected);
+        assert!(reads.contains(&"authorization"));
+        assert_eq!(
+            runtime.secret_ref_manager.get_dependencies(&owner.key()),
+            [format!("{ns}/ca")]
+        );
+        assert!(runtime
+            .frontend_ca_ref_manager
+            .get_dependencies(&owner.key())
+            .is_empty());
+        if let BoundFetchOutcome::Ok(material) = outcome {
+            assert_eq!(
+                material.secret.metadata.namespace.as_deref(),
+                if qualified { Some(ns) } else { None }
+            );
+        }
+    }
+}
+
+#[test]
+fn edgion_tls_disabled_grant_policy_is_finite_and_keeps_recovery() {
+    const CHILD: &str = "EDGION_R8D_TLS_DISABLED_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "conf_mgr::sync_runtime::resource_processor::credential::pipeline::tests::edgion_tls_disabled_grant_policy_is_finite_and_keeps_recovery", "--nocapture"])
+            .env(CHILD, "1").output().unwrap();
+        assert!(
+            output.status.success(),
+            "{} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+        return;
+    }
+    let mut config = crate::config::EdgionControllerConfig::default();
+    config.validation.enable_reference_grant_validation = false;
+    crate::config::init_controller_config(config);
+    use edgion_resources::resources::refs::edgion_tls_fields::EdgionTlsRefs;
+    let (key, secret) = make_secret_with_type("target", "key", None, &[("ca.crt", b"material")]);
+    let (ctx, runtime) = make_ctx(HashMap::from([(key, secret)]));
+    let dependency = ResourceRef::new(ResourceKind::EdgionTls, Some("source".into()), "edge".into());
+    let tls: edgion_resources::EdgionTls = serde_json::from_value(serde_json::json!({"metadata":{"name":"edge","namespace":"source"},"spec":{"hosts":["edge.example"],"secretRef":{"name":"key","namespace":"target"}}})).unwrap();
+    let refs = EdgionTlsRefs::from_tls(&tls);
+    let field = refs.server();
+    let (result, reads) = observe_bound_reads(|| fetch_bound_secret(&ctx, &dependency, field.token()));
+    assert!(matches!(result, BoundFetchOutcome::Ok(_)));
+    assert_eq!(reads, ["secret"]);
+    assert!(runtime.cross_ns_ref_mgr.get_refs("target").contains(&dependency));
+    assert_eq!(
+        runtime.secret_ref_manager.get_dependencies(&dependency.key()),
+        ["target/key"]
+    );
+    edgion_tls_invalid_fields_never_authorize_read_or_register_decoys();
+    let plugins = bound_plugins(serde_json::json!({"name":"key","namespace":"target"}));
+    let prepared = PreparedPluginReferences::from_plugins(&plugins);
+    let binding = prepared.bind(&plugins).unwrap();
+    let entry = binding.request_entries().next().unwrap();
+    let references = entry.references().unwrap();
+    let plugin_dependency = ResourceRef::new(ResourceKind::EdgionPlugins, Some("source".into()), "auth".into());
+    assert!(matches!(
+        fetch_bound_secret(&ctx, &plugin_dependency, references.csrf_secret().unwrap()),
+        BoundFetchOutcome::Pending(PendingReason::ReferenceGrantMissing { .. })
+    ));
+}
+
+#[test]
+fn edgion_tls_invalid_fields_never_authorize_read_or_register_decoys() {
+    use edgion_resources::resources::refs::edgion_tls_fields::EdgionTlsRefs;
+    for case in 0..7 {
+        let (key, secret) = make_secret_with_type("source", "key", None, &[("tls.key", b"private")]);
+        let (ctx, runtime) = make_ctx(HashMap::from([(key, secret)]));
+        let mut tls: edgion_resources::EdgionTls = serde_json::from_value(serde_json::json!({"metadata":{"name":"edge","namespace":"source"},"spec":{"hosts":["edge.example"],"secretRef":{"name":"key"}}})).unwrap();
+        match case {
+            0 => tls.metadata.name = None,
+            1 => tls.metadata.namespace = Some(String::new()),
+            2 => tls.spec.secret_ref.name = "bad/name".into(),
+            3 => tls.spec.secret_ref.group = Some("core".into()),
+            4 => tls.spec.secret_ref.kind = Some("ConfigMap".into()),
+            5 => tls.spec.secret_ref.namespace = Some(String::new()),
+            _ => tls.metadata.name = Some("different".into()),
+        }
+        let refs = EdgionTlsRefs::from_tls(&tls);
+        let field = refs.server();
+        let dependency = ResourceRef::new(ResourceKind::EdgionTls, Some("source".into()), "edge".into());
+        let (result, reads) = observe_bound_reads(|| fetch_bound_secret(&ctx, &dependency, field.token()));
+        assert!(matches!(result, BoundFetchOutcome::Invalid(_)), "case {case}");
+        assert!(reads.is_empty());
+        assert!(runtime
+            .secret_ref_manager
+            .get_dependencies(&dependency.key())
+            .is_empty());
+        assert!(runtime.cross_ns_ref_mgr.get_refs("target").is_empty());
+    }
+}

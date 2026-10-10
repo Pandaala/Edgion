@@ -28,7 +28,16 @@
   EBTP Arc replaces the detached active config, preserving generation fencing
   and invalid-check attachment. Verification passes 381 unit and 62 doc tests,
   with ten existing ignored docs; all 9671 old test identities remain among 9681.
-  All fourteen root gates pass with zero warnings; final local commit is pending.
+  All fourteen root gates pass with zero warnings. Committed locally as
+  4322b450532fc91a80d001fc33e85bace1186d7d after both final commit reviews;
+  all twenty-six committed blobs match the frozen manifest. No push occurred.
+- R8d EdgionTls plan r2 passed both independent Astra reviews at 4322b4505.
+  Twenty-two paths plus this ledger now pass both independent static/execution
+  reviews and fourteen root gates, with zero warnings. Server validation/LKG
+  and present client-CA cold failure remain independent; attachment dimension
+  violations still revoke admission. Verification passes 319 unit, 66 doc and 36
+  schema tests, preserving ten ignored docs and all 9681 prior IDs among 9692.
+  Final local commit is pending; live verification is still open.
 - F1 read-only inventory identified two further bounded material-pairing candidates:
   Gateway EdgionBackend credentials and Common LinkSys non-TLS auth. Existing
   Controller guards remain; these are missing consumer proof boundaries, not
@@ -82,6 +91,48 @@ The read-only F1 inventory and F2 execution runbook are saved under
 EdgionTls, ACME/generated output, the bounded AI/LinkSys material-pairing
 candidates, overall simplification/documentation and fresh live verification
 remain open; the original issue must not be closed yet.
+
+## R8d final checkpoint (2026-10-10)
+
+Actual EdgionTls server and client-CA fields independently use shared strict
+identity, ordinary Secret provenance, bound acquisition and readonly status.
+Literal core remains unsupported. Omitted namespace uses the finite default
+source selector and Secret event recovery. The existing disabled-Grant exception
+is limited to EdgionTls; invalid references gain no material dependency or read.
+No wire/schema fields, handler IO, queues or handshake-time checks were added.
+
+Server proof runs before certificate bytes are consumed in Common and direct
+Gateway cold compilation. Present client-CA proof stays in cold CA compilation:
+if all other validate_cert checks succeed, invalid CA material publishes the new
+failing trust state instead of retaining old trust. Existing validate_cert
+failures retain their whole-generation same-key LKG policy, including UID changes,
+while invalid attachment dimensions revoke admission. Terminate ignores CA use.
+
+Both independent Astra reviewers approved final static and execution evidence.
+One preliminary new-test import error was corrected without changing visibility.
+The first Secret event run exposed an incorrect expected UID after a qualified
+source deletion; the corrected test requires the surviving bare source's actual
+UID. The failed log is retained and the corrected thirteen-test suite passes.
+Reviewed documentation corrections identify the true crypto/status owner and
+all prerequisites for new-generation client-CA failure. Final r3 changes only
+one documentation capitalization from r2; explicit unchanged-input reuse is
+recorded, without counting repeat runs as additional distinct tests.
+
+Verification passes 319 unit, 66 doc and 36 schema cases (421 distinct), with ten
+existing ignored docs and zero warnings. All 9681 prior test identities and
+ignored sets remain; eleven additions produce 9692. Actual executable hashes,
+approved old fixture adaptations and positive/intended E0505/E0506/E0502 lifetime
+controls were independently verified. Fourteen root gates pass unchanged source;
+workspace check took 35.592 seconds and Clippy 43.056 seconds. Final evidence is
+`tmp/resource-reference-contract/r8d-verification-20261010/verification-final.json`
+and `tmp/resource-reference-contract/r8d-root-verification-20261010/`.
+
+The final manifest includes exactly twenty-two approved paths plus this ledger.
+No live TLS, live Grant-only reconciliation or conformance acceptance is claimed.
+ACME candidate inventory is saved as
+`tmp/resource-reference-contract/r8e-acme-inventory-4322b450-20261010.md`;
+ACME/generated outputs, AI/LinkSys consumer pairing, overall cleanup and F2 remain
+open. No agent push.
 
 ## Authority and reporting
 

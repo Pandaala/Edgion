@@ -15,7 +15,11 @@ fn create_test_tls(cert_pem: Option<&str>, key_pem: Option<&str>, hosts: Vec<Str
     }
 
     EdgionTls {
-        metadata: Default::default(),
+        metadata: kube::api::ObjectMeta {
+            name: Some("test-tls".into()),
+            namespace: Some("default".into()),
+            ..Default::default()
+        },
         spec: edgion_resources::EdgionTlsSpec {
             current_status: None,
             parent_refs: None,
@@ -30,6 +34,11 @@ fn create_test_tls(cert_pem: Option<&str>, key_pem: Option<&str>, hosts: Vec<Str
             min_tls_version: None,
             ciphers: None,
             secret: Some(Secret {
+                metadata: kube::api::ObjectMeta {
+                    name: Some("test-secret".into()),
+                    namespace: Some("default".into()),
+                    ..Default::default()
+                },
                 data: Some(data),
                 ..Default::default()
             }),
@@ -643,5 +652,51 @@ fn test_deprecated_min_tls_version_is_not_rejected() {
         result.is_valid,
         "deprecated min_tls_version (TLS 1.0) must not be rejected, got: {:?}",
         result.errors
+    );
+}
+
+#[test]
+fn server_identity_proof_precedes_crypto_and_never_validates_sibling_ca() {
+    let (cert, key) = make_cert_with_validity(-1, 30);
+    let good = create_test_tls(Some(&cert), Some(&key), vec!["example.com".into()]);
+    assert!(validate_cert(&good).is_valid);
+    for case in 0..5 {
+        let mut tls = good.clone();
+        match case {
+            0 => tls.spec.secret.as_mut().unwrap().metadata.name = Some("decoy".into()),
+            1 => tls.spec.secret_ref.group = Some("core".into()),
+            2 => tls.metadata.name = None,
+            3 => tls.spec.secret.as_mut().unwrap().metadata.namespace = Some(String::new()),
+            _ => {
+                use edgion_resources::constants::annotations::edgion::{
+                    CONTROLLER_CA_SOURCE, CONTROLLER_CA_SOURCE_CONFIG_MAP,
+                };
+                tls.spec.secret.as_mut().unwrap().metadata.annotations = Some(BTreeMap::from([(
+                    CONTROLLER_CA_SOURCE.into(),
+                    CONTROLLER_CA_SOURCE_CONFIG_MAP.into(),
+                )]));
+            }
+        }
+        let result = validate_cert(&tls);
+        assert!(!result.is_valid);
+        assert_eq!(result.errors.len(), 1);
+        assert!(matches!(result.errors[0], CertValidationError::SecretReferenceInvalid));
+    }
+    let mut tls = good;
+    tls.metadata.namespace = None;
+    tls.spec.secret.as_mut().unwrap().metadata.namespace = None;
+    assert!(validate_cert(&tls).is_valid);
+    tls.spec.client_auth = Some(
+        serde_json::from_value(serde_json::json!({"mode":"Mutual", "caSecretRef":{"name":"ca", "group":"core"}}))
+            .unwrap(),
+    );
+    assert!(
+        validate_cert(&tls).is_valid,
+        "present invalid CA reference belongs to cold CA compilation, not server LKG admission"
+    );
+    tls.spec.client_auth.as_mut().unwrap().ca_secret_ref = None;
+    assert!(
+        !validate_cert(&tls).is_valid,
+        "missing required CA reference keeps the existing validation boundary"
     );
 }

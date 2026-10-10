@@ -119,3 +119,20 @@ Gateway deserialization; the handshake only executes the compiled matcher.
 | Cipher suite control | ❌ | ✅ ciphers |
 
 When using EdgionTls, set the exact case-sensitive value `tls.options.edgion.io/cert-provider: "EdgionTls"` on the Gateway Listener.
+
+## Secret reference defaults and validation
+
+Both `secretRef` and `clientAuth.caSecretRef` default an omitted group to the empty
+core API group and omitted kind to `Secret`. An explicit empty group is accepted;
+the literal group `core` is rejected for these strict references. Omitted namespace
+inherits the EdgionTls namespace (default when the owner namespace is omitted).
+Explicit empty namespaces and malformed Secret names are invalid. Cross-namespace
+references require ReferenceGrant when controller ReferenceGrant validation is enabled.
+
+Resolved server and CA material must correspond to its own declared reference.
+For a valid server, successful remaining certificate/configuration validation, and
+a present mTLS CA reference, missing or invalid CA material
+fails the current handshake generation closed. Server validation failures and an
+absent required CA reference retain the existing same-key last-known-good policy;
+invalid attachment dimensions revoke admission. See the architecture and LKG
+review knowledge for the precise failure ordering.

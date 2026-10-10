@@ -278,6 +278,8 @@ impl CertValidationResult {
 pub enum CertValidationError {
     /// Secret not found in EdgionTls
     SecretNotFound,
+    /// Server material does not belong to the actual declared Secret field.
+    SecretReferenceInvalid,
     /// Certificate (tls.crt) not found in Secret
     CertNotFound,
     /// Private key (tls.key) not found in Secret
@@ -326,6 +328,7 @@ pub enum CertValidationError {
 impl fmt::Display for CertValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::SecretReferenceInvalid => write!(f, "Server Secret reference or material identity is invalid"),
             Self::SecretNotFound => write!(f, "Secret not found in EdgionTls"),
             Self::CertNotFound => write!(f, "Certificate (tls.crt) not found in Secret"),
             Self::KeyNotFound => write!(f, "Private key (tls.key) not found in Secret"),
@@ -398,6 +401,7 @@ impl CertValidationError {
     pub fn status_reason(&self) -> &'static str {
         match self {
             Self::SecretNotFound => "SecretNotFound",
+            Self::SecretReferenceInvalid => "SecretReferenceInvalid",
             Self::CertNotFound => "CertNotFound",
             Self::KeyNotFound => "KeyNotFound",
             Self::CertParseError(_) => "CertParseError",
@@ -495,6 +499,14 @@ pub fn validate_cert(tls: &EdgionTls) -> CertValidationResult {
     if tls.spec.secret.is_none() {
         errors.push(CertValidationError::SecretNotFound);
         return CertValidationResult::invalid(errors);
+    }
+
+    if edgion_resources::resources::refs::edgion_tls_fields::EdgionTlsRefs::from_tls(tls)
+        .server()
+        .material()
+        .is_err()
+    {
+        return CertValidationResult::invalid(vec![CertValidationError::SecretReferenceInvalid]);
     }
 
     let Ok(cert_pem) = tls.cert_pem() else {

@@ -75,6 +75,11 @@ fn edgion_tls_identity(cert_pem: String, key_pem: String) -> Arc<EdgionTls> {
     let (fixture, _) = overlay_fixture("winner", false);
     let mut tls = (*fixture).clone();
     tls.spec.secret = Some(Secret {
+        metadata: kube::api::ObjectMeta {
+            name: Some(tls.spec.secret_ref.name.clone()),
+            namespace: tls.spec.secret_ref.namespace.clone().or(tls.metadata.namespace.clone()),
+            ..Default::default()
+        },
         data: Some(BTreeMap::from([
             (CERT.to_string(), ByteString(cert_pem.into_bytes())),
             (KEY.to_string(), ByteString(key_pem.into_bytes())),
@@ -264,6 +269,11 @@ fn published_regex_san_preserves_attachment_and_rejects_dual_client_auth() {
         .self_signed(&key)
         .unwrap();
     tls.spec.secret = Some(Secret {
+        metadata: kube::api::ObjectMeta {
+            name: Some(tls.spec.secret_ref.name.clone()),
+            namespace: tls.spec.secret_ref.namespace.clone().or(tls.metadata.namespace.clone()),
+            ..Default::default()
+        },
         data: Some(BTreeMap::from([
             (CERT.to_string(), ByteString(cert.pem().into_bytes())),
             (KEY.to_string(), ByteString(key.serialize_pem().into_bytes())),
