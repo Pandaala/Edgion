@@ -9,7 +9,7 @@
 //! - [`CredentialState::Pending`]     — the CRD configures `auth.secretRef`, but
 //!   the Controller has not yet injected the `Secret` object into `auth.secret`.
 //! - [`CredentialState::Invalid`]     — the `Secret` is injected but the
-//!   resolver rejected its `data` (missing keys / decode error / wrong type).
+//!   reference identity or resolver rejected its material (missing keys / decode error / wrong type).
 //! - [`CredentialState::Resolved`]    — material is usable.
 //!
 //! Dispatch gates on [`is_buildable`]; providers receive a
@@ -26,6 +26,7 @@ use edgion_resources::resources::common::TlsConfig;
 use edgion_resources::resources::link_sys::elasticsearch::ElasticsearchAuth;
 use edgion_resources::resources::link_sys::otlp::OtlpBearerResolver;
 use edgion_resources::resources::link_sys::{LinkSys, SystemConfig};
+use edgion_resources::resources::refs::{link_sys_fields::PreparedLinkSysReferences, ReferenceError};
 use k8s_openapi::api::core::v1::Secret;
 
 // ============================================================================
@@ -34,13 +35,14 @@ use k8s_openapi::api::core::v1::Secret;
 
 /// Explicit reason for why a [`CredentialState::Invalid`] was produced.
 ///
-/// Currently only carries the resolver error message; kept as an enum so that
-/// future reasons (e.g. `AuthTypeMismatch`) can be added without churning the
-/// public signature. The string payload is suitable for `tracing` but must not
+/// Reference identity failures have a fixed reason; parsing failures retain the
+/// resolver message. The string payload is suitable for `tracing` but must not
 /// be surfaced in user-visible error responses (may contain key names from
 /// `Secret.data`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InvalidReason {
+    /// Actual reference and carried material do not match. Contains no submitted values.
+    ReferenceIdentity,
     /// The resolver failed to turn `Secret.data` into a valid `Material`.
     ParseFailed(String),
 }
@@ -48,6 +50,7 @@ pub enum InvalidReason {
 impl std::fmt::Display for InvalidReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::ReferenceIdentity => f.write_str("credential reference identity mismatch"),
             Self::ParseFailed(e) => write!(f, "parse failed: {e}"),
         }
     }
@@ -73,7 +76,7 @@ pub enum CredentialState<M> {
     /// CRD configures auth via `secretRef`, but the Controller has not yet
     /// attached the `Secret` object (transient on the happy path).
     Pending,
-    /// `Secret` is attached but the resolver rejected its `data` — a hard
+    /// `Secret` is attached but reference identity or material parsing failed — a hard
     /// error state that will not resolve without an operator fix.
     Invalid(InvalidReason),
     /// Material parsed successfully.
@@ -163,12 +166,17 @@ fn parse_secret<R: SecretMaterialResolver>(secret: &Secret, resolver: &R) -> Res
     resolver.parse(data).map_err(anyhow::Error::new)
 }
 
-fn state_from_optional_secret<R: SecretMaterialResolver>(
-    secret: Option<&Secret>,
-    resolver: &R,
-) -> CredentialState<R::Material> {
-    let Some(secret) = secret else {
-        return CredentialState::Pending;
+/// Check the actual active auth slot on a cold configuration path.
+/// The returned material borrows the supplied owner; no material is copied.
+pub fn checked_auth_secret(ls: &LinkSys) -> Result<Option<&Secret>, ReferenceError> {
+    PreparedLinkSysReferences::from_link_sys(ls).resolved_auth_secret(ls)
+}
+
+fn state_from_auth_secret<R: SecretMaterialResolver>(ls: &LinkSys, resolver: &R) -> CredentialState<R::Material> {
+    let secret = match checked_auth_secret(ls) {
+        Ok(Some(secret)) => secret,
+        Ok(None) => return CredentialState::Pending,
+        Err(_) => return CredentialState::Invalid(InvalidReason::ReferenceIdentity),
     };
     match parse_secret(secret, resolver) {
         Ok(m) => CredentialState::Resolved(m),
@@ -187,15 +195,15 @@ fn state_from_optional_secret<R: SecretMaterialResolver>(
 ///
 /// Non-Redis / non-Etcd `LinkSys` always return [`CredentialState::NotRequired`].
 pub fn basic_state(ls: &LinkSys) -> CredentialState<BasicAuthMaterial> {
-    let (has_auth, secret) = match &ls.spec.config {
-        SystemConfig::Redis(r) => (r.auth.is_some(), r.auth.as_ref().and_then(|a| a.slot.secret.as_ref())),
-        SystemConfig::Etcd(e) => (e.auth.is_some(), e.auth.as_ref().and_then(|a| a.slot.secret.as_ref())),
+    let has_auth = match &ls.spec.config {
+        SystemConfig::Redis(r) => r.auth.is_some(),
+        SystemConfig::Etcd(e) => e.auth.is_some(),
         _ => return CredentialState::NotRequired,
     };
     if !has_auth {
         return CredentialState::NotRequired;
     }
-    state_from_optional_secret(secret, &BasicAuthResolver)
+    state_from_auth_secret(ls, &BasicAuthResolver)
 }
 
 /// Credential state for Elasticsearch / Webhook auth.
@@ -208,26 +216,24 @@ pub fn resolved_state(ls: &LinkSys) -> CredentialState<ResolvedCredential> {
     match &ls.spec.config {
         SystemConfig::Elasticsearch(es) => match es.auth.as_ref() {
             None => CredentialState::NotRequired,
-            Some(ElasticsearchAuth::Basic { slot }) => {
-                state_from_optional_secret(slot.secret.as_ref(), &BasicAuthResolver).map(ResolvedCredential::Basic)
+            Some(ElasticsearchAuth::Basic { .. }) => {
+                state_from_auth_secret(ls, &BasicAuthResolver).map(ResolvedCredential::Basic)
             }
-            Some(ElasticsearchAuth::ApiKey { slot }) => {
-                state_from_optional_secret(slot.secret.as_ref(), &EsApiKeyResolver).map(ResolvedCredential::EsApiKey)
+            Some(ElasticsearchAuth::ApiKey { .. }) => {
+                state_from_auth_secret(ls, &EsApiKeyResolver).map(ResolvedCredential::EsApiKey)
             }
-            Some(ElasticsearchAuth::Bearer { slot }) => {
-                state_from_optional_secret(slot.secret.as_ref(), &BearerResolver).map(ResolvedCredential::Bearer)
+            Some(ElasticsearchAuth::Bearer { .. }) => {
+                state_from_auth_secret(ls, &BearerResolver).map(ResolvedCredential::Bearer)
             }
         },
         SystemConfig::Otlp(otlp) => match &otlp.auth {
             None => CredentialState::NotRequired,
-            Some(auth) => state_from_optional_secret(auth.slot.secret.as_ref(), &OtlpBearerResolver)
-                .map(ResolvedCredential::Bearer),
+            Some(_) => state_from_auth_secret(ls, &OtlpBearerResolver).map(ResolvedCredential::Bearer),
         },
         SystemConfig::Webhook(_) => CredentialState::NotRequired,
         SystemConfig::Kafka(kafka) => match kafka.sasl.as_ref() {
             None => CredentialState::NotRequired,
-            Some(sasl) => state_from_optional_secret(sasl.password.secret.as_ref(), &BasicAuthResolver)
-                .map(ResolvedCredential::Basic),
+            Some(_) => state_from_auth_secret(ls, &BasicAuthResolver).map(ResolvedCredential::Basic),
         },
         _ => CredentialState::NotRequired,
     }

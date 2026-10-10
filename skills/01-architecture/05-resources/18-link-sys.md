@@ -297,3 +297,29 @@ from observed metadata and exact ownership; no live old owner is needed. Cleanup
 rechecks identity after GET, then its original authorization closure, and deletes
 with both Secret UID and resourceVersion preconditions. API namespace is strict: a
 default target requires returned namespace `default`, never omitted metadata.
+
+
+## Non-TLS auth material correspondence
+
+Cold Redis/Etcd Basic, Elasticsearch Basic/API-key/Bearer, Kafka SASL and OTLP
+Bearer consumers validate carried Secret metadata against their actual prepared
+LinkSys auth field before parsing. The finite resolved_auth_secret method returns
+an actual-owner borrow and uses the shared strict metadata comparator; it does not
+copy material or lend TLS/bootstrap/template authority to auth. Common readiness
+and both OTLP direct fingerprint/transport parsers use that same check. Preparation
+runs on configuration/client construction paths, never per request.
+
+No auth stays NotRequired, and absent carried auth stays Pending. Present invalid
+reference or mismatched metadata produces the fixed ReferenceIdentity reason;
+matching malformed payload still produces ParseFailed. OTLP retains its existing
+unresolved-versus-invalid error categories and sensitive authorization headers.
+Default namespace remains qualified-only for non-TLS auth: omitted owner/ref scope
+means default, but material must explicitly match that namespace. FS/etcd bare
+Secret lookup is not extended. No Secret UID or new Grant policy is added.
+
+Ordinary same-type unbuildable updates post NotReady and retain the current client;
+initially unbuildable configurations create none. A newer force_gen is handled
+before NotReady and may retire the old client. Forced replacement, deletion,
+type changes, retry/handover and captured transport lifetimes remain unchanged.
+TLS, OAuth2 bootstrap, global defaults, egress and request behavior retain their
+separate owning proofs and policies.

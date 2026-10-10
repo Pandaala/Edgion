@@ -373,6 +373,11 @@ async fn live_tls_and_auth_delivery() {
                         kind: None,
                     },
                     secret: Some(Secret {
+                        metadata: kube::api::ObjectMeta {
+                            name: Some("auth".into()),
+                            namespace: Some("transport".into()),
+                            ..Default::default()
+                        },
                         data: Some([(String::from("bearerToken"), ByteString(b"approved-token".to_vec()))].into()),
                         ..Default::default()
                     }),
@@ -674,6 +679,11 @@ async fn rejected_candidate_auth_and_mtls_preserve_old_delivery() {
                 kind: None,
             },
             secret: Some(Secret {
+                metadata: kube::api::ObjectMeta {
+                    name: Some("auth".into()),
+                    namespace: Some("transport".into()),
+                    ..Default::default()
+                },
                 data: Some([(String::from("bearerToken"), ByteString(b"approved-token".to_vec()))].into()),
                 ..Default::default()
             }),
@@ -937,6 +947,11 @@ async fn hostile_transport_logging_case() {
                     kind: None,
                 },
                 secret: Some(Secret {
+                    metadata: kube::api::ObjectMeta {
+                        name: Some("auth".into()),
+                        namespace: Some("transport".into()),
+                        ..Default::default()
+                    },
                     data: Some([(String::from("bearerToken"), ByteString(TOKEN.as_bytes().to_vec()))].into()),
                     ..Default::default()
                 }),

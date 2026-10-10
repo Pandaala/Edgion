@@ -171,3 +171,174 @@ fn frozen_link_sys_binding_rejects_tls_reordering_and_wrong_owner_family() {
         .swap(0, 1);
     assert!(!frozen.matches_link_sys(&owner));
 }
+
+fn auth_owner(provider: &str, variant: &str) -> LinkSys {
+    let slot = json!({"secretRef":{"name":"auth","namespace":"credentials","group":"core"},
+        "secret":{"metadata":{"name":"auth","namespace":"credentials"},"data":{"password":"cA=="}}});
+    let config = match provider {
+        "redis" => json!({"endpoints":["redis://redis:6379"],"auth":slot}),
+        "etcd" => json!({"endpoints":["http://etcd:2379"],"auth":slot}),
+        "elasticsearch" => {
+            let mut auth = slot;
+            auth["type"] = json!(variant);
+            json!({"endpoints":["http://es:9200"],"auth":auth})
+        }
+        "kafka" => json!({"brokers":["kafka:9092"],"sasl":{"username":"alice","password":slot}}),
+        "otlp" => json!({"endpoint":"http://collector:4317","auth":slot}),
+        _ => unreachable!(),
+    };
+    link_sys(provider, config)
+}
+
+fn auth_slot_mut(owner: &mut LinkSys) -> &mut crate::resources::common::SecretSlot {
+    match &mut owner.spec.config {
+        SystemConfig::Redis(c) => &mut c.auth.as_mut().unwrap().slot,
+        SystemConfig::Etcd(c) => &mut c.auth.as_mut().unwrap().slot,
+        SystemConfig::Elasticsearch(c) => match c.auth.as_mut().unwrap() {
+            ElasticsearchAuth::Basic { slot }
+            | ElasticsearchAuth::ApiKey { slot }
+            | ElasticsearchAuth::Bearer { slot } => slot,
+        },
+        SystemConfig::Kafka(c) => &mut c.sasl.as_mut().unwrap().password,
+        SystemConfig::Otlp(c) => &mut c.auth.as_mut().unwrap().slot,
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn auth_material_is_an_actual_owner_borrow_with_strict_metadata_for_every_provider() {
+    for (provider, variant) in [
+        ("redis", ""),
+        ("etcd", ""),
+        ("elasticsearch", "basic"),
+        ("elasticsearch", "apiKey"),
+        ("elasticsearch", "bearer"),
+        ("kafka", ""),
+        ("otlp", ""),
+    ] {
+        let mut owner = auth_owner(provider, variant);
+        let expected = auth_slot_mut(&mut owner).secret.as_ref().unwrap() as *const _;
+        let secret = {
+            let prepared = PreparedLinkSysReferences::from_link_sys(&owner);
+            prepared.resolved_auth_secret(&owner).unwrap().unwrap()
+        };
+        assert_eq!(secret as *const _, expected);
+        assert!(secret.metadata.uid.is_none());
+        for dimension in 0..6 {
+            let mut bad = owner.clone();
+            let material = auth_slot_mut(&mut bad).secret.as_mut().unwrap();
+            match dimension {
+                0 => material.metadata.name = None,
+                1 => material.metadata.name = Some(String::new()),
+                2 => material.metadata.name = Some("other".into()),
+                3 => material.metadata.namespace = None,
+                4 => material.metadata.namespace = Some(String::new()),
+                _ => material.metadata.namespace = Some("links".into()),
+            }
+            assert_eq!(
+                PreparedLinkSysReferences::from_link_sys(&bad)
+                    .resolved_auth_secret(&bad)
+                    .unwrap_err(),
+                ReferenceError::StaleBinding
+            );
+        }
+        let prepared = PreparedLinkSysReferences::from_link_sys(&owner);
+        auth_slot_mut(&mut owner).secret_ref.name = "retargeted".into();
+        assert_eq!(
+            prepared.resolved_auth_secret(&owner).unwrap_err(),
+            ReferenceError::StaleBinding
+        );
+        assert_eq!(
+            PreparedLinkSysReferences::from_link_sys(&owner)
+                .resolved_auth_secret(&owner)
+                .unwrap_err(),
+            ReferenceError::StaleBinding
+        );
+        auth_slot_mut(&mut owner).secret = None;
+        auth_slot_mut(&mut owner).secret_ref.group = Some("invalid/group".into());
+        assert!(PreparedLinkSysReferences::from_link_sys(&owner)
+            .resolved_auth_secret(&owner)
+            .unwrap()
+            .is_none());
+    }
+}
+
+#[test]
+fn auth_material_defaults_and_inactive_axes_do_not_borrow_tls_or_bootstrap_authority() {
+    let mut owner = auth_owner("redis", "");
+    owner.metadata.namespace = None;
+    let slot = auth_slot_mut(&mut owner);
+    slot.secret_ref.namespace = None;
+    slot.secret.as_mut().unwrap().metadata.namespace = Some("default".into());
+    for group in [None, Some(""), Some("core")] {
+        auth_slot_mut(&mut owner).secret_ref.group = group.map(str::to_owned);
+        assert!(PreparedLinkSysReferences::from_link_sys(&owner)
+            .resolved_auth_secret(&owner)
+            .unwrap()
+            .is_some());
+    }
+    if let SystemConfig::Redis(c) = &mut owner.spec.config {
+        c.tls =
+            Some(serde_json::from_value(json!({"enabled":true,"clientCertificateRef":{"name":"bad/name"}})).unwrap());
+    }
+    assert!(PreparedLinkSysReferences::from_link_sys(&owner)
+        .resolved_auth_secret(&owner)
+        .unwrap()
+        .is_some());
+    auth_slot_mut(&mut owner).secret.as_mut().unwrap().metadata.namespace = None;
+    assert_eq!(
+        PreparedLinkSysReferences::from_link_sys(&owner)
+            .resolved_auth_secret(&owner)
+            .unwrap_err(),
+        ReferenceError::StaleBinding
+    );
+    auth_slot_mut(&mut owner).secret.as_mut().unwrap().metadata.namespace = Some("default".into());
+    owner.metadata.name = None;
+    assert!(PreparedLinkSysReferences::from_link_sys(&owner)
+        .resolved_auth_secret(&owner)
+        .is_err());
+    if let SystemConfig::Redis(c) = &mut owner.spec.config {
+        c.auth = None;
+    }
+    assert!(PreparedLinkSysReferences::from_link_sys(&owner)
+        .resolved_auth_secret(&owner)
+        .unwrap()
+        .is_none());
+    let webhook = link_sys("webhook", json!({"target":{"name":"svc","port":8080}}));
+    assert!(PreparedLinkSysReferences::from_link_sys(&webhook)
+        .resolved_auth_secret(&webhook)
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn auth_material_stale_owner_and_variant_require_a_fresh_prepared_binding() {
+    let original = auth_owner("elasticsearch", "basic");
+    let prepared = PreparedLinkSysReferences::from_link_sys(&original);
+    assert!(prepared.resolved_auth_secret(&original).unwrap().is_some());
+    for variant_change in [false, true] {
+        let mut changed = original.clone();
+        if variant_change {
+            let SystemConfig::Elasticsearch(config) = &mut changed.spec.config else {
+                unreachable!()
+            };
+            let Some(ElasticsearchAuth::Basic { slot }) = config.auth.take() else {
+                unreachable!()
+            };
+            config.auth = Some(ElasticsearchAuth::Bearer { slot });
+        } else {
+            changed.metadata.uid = Some("replacement-owner-uid".into());
+        }
+        let expected = auth_slot_mut(&mut changed).secret.as_ref().unwrap() as *const _;
+        // Ref and material stay mutually valid: only the prepared owner/topology is stale.
+        assert_eq!(
+            prepared.resolved_auth_secret(&changed).unwrap_err(),
+            ReferenceError::StaleBinding
+        );
+        let fresh = PreparedLinkSysReferences::from_link_sys(&changed);
+        assert_eq!(
+            fresh.resolved_auth_secret(&changed).unwrap().unwrap() as *const _,
+            expected
+        );
+    }
+}

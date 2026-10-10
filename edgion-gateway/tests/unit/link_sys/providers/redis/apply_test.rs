@@ -151,6 +151,11 @@ fn with_auth(mut ls: LinkSys, username: Option<&str>, password: &[u8]) -> LinkSy
                 namespace: None,
             },
             secret: Some(k8s_openapi::api::core::v1::Secret {
+                metadata: kube::api::ObjectMeta {
+                    name: Some("creds".into()),
+                    namespace: Some("fp".into()),
+                    ..Default::default()
+                },
                 data: Some(data),
                 ..Default::default()
             }),

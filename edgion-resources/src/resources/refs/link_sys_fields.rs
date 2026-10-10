@@ -314,6 +314,59 @@ impl PreparedLinkSysReferences {
             snapshot: Arc::new(snapshot),
         }
     }
+    /// Borrow this owner's active non-TLS auth material after exact field validation.
+    /// Missing material stays pending; no other provider or TLS slot supplies auth.
+    /// The returned borrow belongs to the actual owner, not this prepared snapshot.
+    ///
+    /// ```compile_fail
+    /// use edgion_resources::resources::link_sys::LinkSys;
+    /// use edgion_resources::resources::refs::link_sys_fields::PreparedLinkSysReferences;
+    /// fn cannot_drop_owner(owner: LinkSys) {
+    ///     let prepared = PreparedLinkSysReferences::from_link_sys(&owner);
+    ///     let secret = prepared.resolved_auth_secret(&owner).unwrap();
+    ///     drop(owner);
+    ///     let _ = secret.is_some();
+    /// }
+    /// ```
+    /// ```compile_fail
+    /// use edgion_resources::resources::link_sys::LinkSys;
+    /// use edgion_resources::resources::refs::link_sys_fields::PreparedLinkSysReferences;
+    /// fn cannot_replace_owner(mut owner: LinkSys) {
+    ///     let prepared = PreparedLinkSysReferences::from_link_sys(&owner);
+    ///     let secret = prepared.resolved_auth_secret(&owner).unwrap();
+    ///     owner.metadata.name = None;
+    ///     let _ = secret.is_some();
+    /// }
+    /// ```
+    pub fn resolved_auth_secret<'owner>(
+        &self,
+        owner: &'owner LinkSys,
+    ) -> Result<Option<&'owner k8s_openapi::api::core::v1::Secret>, ReferenceError> {
+        let bound = self.bind(owner)?;
+        let secret = match &owner.spec.config {
+            SystemConfig::Redis(config) => config.auth.as_ref().and_then(|auth| auth.slot.secret.as_ref()),
+            SystemConfig::Etcd(config) => config.auth.as_ref().and_then(|auth| auth.slot.secret.as_ref()),
+            SystemConfig::Elasticsearch(config) => config.auth.as_ref().and_then(|auth| match auth {
+                ElasticsearchAuth::Basic { slot }
+                | ElasticsearchAuth::ApiKey { slot }
+                | ElasticsearchAuth::Bearer { slot } => slot.secret.as_ref(),
+            }),
+            SystemConfig::Kafka(config) => config.sasl.as_ref().and_then(|auth| auth.password.secret.as_ref()),
+            SystemConfig::Otlp(config) => config.auth.as_ref().and_then(|auth| auth.slot.secret.as_ref()),
+            SystemConfig::Webhook(_)
+            | SystemConfig::HttpDns(_)
+            | SystemConfig::CredentialSource(_)
+            | SystemConfig::Unsupported => None,
+        };
+        let Some(secret) = secret else {
+            return Ok(None);
+        };
+        let references = bound.references()?;
+        let token = references.auth_secret().ok_or(ReferenceError::StaleBinding)?;
+        let reference = token.validated()?;
+        super::owned::validate_secret_metadata(reference, secret)?;
+        Ok(Some(secret))
+    }
     fn matches(&self, owner: &LinkSys) -> bool {
         self.snapshot.matches(owner)
     }

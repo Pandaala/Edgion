@@ -686,3 +686,18 @@ F1 candidate A consumer boundary, independently of the already-bound Controller
 acquisition and status/Grant behavior. No bare-default selector or wire field is
 added. R9b LinkSys non-TLS auth remains a separate scope. Focused tests and the
 standalone Gateway unary transport target do not establish Gateway API conformance.
+
+
+## R9b LinkSys non-TLS auth material pairing
+
+Common Basic/resolved credential states and OTLP direct fingerprint/transport
+consumers now validate carried Secrets against the actual prepared LinkSys auth
+slot before payload parsing. Only the selected provider's auth field participates;
+TLS, bootstrap and template references remain separate. No auth stays NotRequired,
+missing material stays Pending, and present identity mismatch is fixed Invalid.
+Strict qualified namespace matching adds no raw-default selector or Secret UID
+requirement. Ordinary same-type NotReady retains current clients; forced-generation
+retirement, delete/type-change and captured generations preserve existing policy.
+This closes F1 candidate B's cold auth material boundary without changing Controller
+acquisition/Grant/status or provider IO. Standalone OTLP verification and ignored
+Redis target compilation do not claim a live external Redis or conformance run.

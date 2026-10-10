@@ -8,12 +8,17 @@ use k8s_openapi::ByteString;
 use kube::api::ObjectMeta;
 use std::collections::BTreeMap;
 
-fn mk_secret(data: &[(&str, &[u8])]) -> Secret {
+fn mk_secret(name: &str, data: &[(&str, &[u8])]) -> Secret {
     let mut bmap = BTreeMap::new();
     for (k, v) in data {
         bmap.insert(k.to_string(), ByteString(v.to_vec()));
     }
     Secret {
+        metadata: ObjectMeta {
+            name: Some(name.into()),
+            namespace: Some("default".into()),
+            ..Default::default()
+        },
         data: Some(bmap),
         ..Default::default()
     }
@@ -120,10 +125,10 @@ fn basic_state_pending_when_secret_missing() {
 
 #[test]
 fn basic_state_resolved_when_secret_present() {
-    let ls = mk_redis_linksys(Some(mk_redis_auth(Some(mk_secret(&[
-        ("username", b"u"),
-        ("password", b"p"),
-    ])))));
+    let ls = mk_redis_linksys(Some(mk_redis_auth(Some(mk_secret(
+        "s",
+        &[("username", b"u"), ("password", b"p")],
+    )))));
     let state = basic_state(&ls);
     let m = match state {
         CredentialState::Resolved(m) => m,
@@ -135,7 +140,7 @@ fn basic_state_resolved_when_secret_present() {
 
 #[test]
 fn basic_state_invalid_when_secret_malformed() {
-    let ls = mk_redis_linksys(Some(mk_redis_auth(Some(mk_secret(&[("wrong_key", b"x")])))));
+    let ls = mk_redis_linksys(Some(mk_redis_auth(Some(mk_secret("s", &[("wrong_key", b"x")])))));
     match basic_state(&ls) {
         CredentialState::Invalid(InvalidReason::ParseFailed(msg)) => {
             assert!(msg.contains("missing") || msg.contains("Missing") || msg.contains("password"));
@@ -148,7 +153,7 @@ fn basic_state_invalid_when_secret_malformed() {
 /// conf_sync), Gateway can still materialise.
 #[test]
 fn basic_state_survives_conf_sync_roundtrip() {
-    let ls = mk_redis_linksys(Some(mk_redis_auth(Some(mk_secret(&[("password", b"hunter2")])))));
+    let ls = mk_redis_linksys(Some(mk_redis_auth(Some(mk_secret("s", &[("password", b"hunter2")])))));
     let json = serde_json::to_string(&ls).unwrap();
     let ls2: LinkSys = serde_json::from_str(&json).unwrap();
     match basic_state(&ls2) {
@@ -192,7 +197,7 @@ fn resolved_state_es_basic_resolved() {
                 name: "s".into(),
                 namespace: None,
             },
-            secret: Some(mk_secret(&[("username", b"u"), ("password", b"p")])),
+            secret: Some(mk_secret("s", &[("username", b"u"), ("password", b"p")])),
         },
     }));
     let got = resolved_state(&ls);
@@ -227,7 +232,7 @@ fn resolved_state_es_bearer_invalid_on_missing_key() {
                 name: "s".into(),
                 namespace: None,
             },
-            secret: Some(mk_secret(&[("nope", b"x")])),
+            secret: Some(mk_secret("s", &[("nope", b"x")])),
         },
     }));
     assert!(matches!(
@@ -432,13 +437,13 @@ fn dispatch_gate_blocks_pending_auth() {
 
 #[test]
 fn dispatch_gate_opens_with_resolved_auth() {
-    let ls = mk_redis_linksys(Some(mk_redis_auth(Some(mk_secret(&[("password", b"p")])))));
+    let ls = mk_redis_linksys(Some(mk_redis_auth(Some(mk_secret("s", &[("password", b"p")])))));
     assert!(dispatch_gate(&ls));
 }
 
 #[test]
 fn dispatch_gate_blocks_invalid_auth() {
-    let ls = mk_redis_linksys(Some(mk_redis_auth(Some(mk_secret(&[("wrong", b"x")])))));
+    let ls = mk_redis_linksys(Some(mk_redis_auth(Some(mk_secret("s", &[("wrong", b"x")])))));
     assert!(!dispatch_gate(&ls));
 }
 
@@ -595,7 +600,7 @@ fn resolved_state_kafka_sasl_resolved_when_secret_present() {
                 name: "kafka-secret".into(),
                 namespace: None,
             },
-            secret: Some(mk_secret(&[("password", b"kafka-pass")])),
+            secret: Some(mk_secret("kafka-secret", &[("password", b"kafka-pass")])),
         },
     }));
     assert!(matches!(
@@ -623,10 +628,121 @@ fn otlp_credentials_cover_every_readiness_state() {
         ("a".repeat(8193), false),
     ] {
         if let SystemConfig::Otlp(config) = &mut ls.spec.config {
-            config.auth.as_mut().unwrap().slot.secret = Some(serde_json::from_value(serde_json::json!({"data":{"bearerToken": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, token.as_bytes())}})).unwrap());
+            config.auth.as_mut().unwrap().slot.secret = Some(serde_json::from_value(serde_json::json!({"metadata":{"name":"auth","namespace":"default"},"data":{"bearerToken": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, token.as_bytes())}})).unwrap());
         }
         let state = resolved_state(&ls);
         assert_eq!(state.is_buildable(), valid);
         assert!(!format!("{state:?}").contains(&token));
+    }
+}
+
+#[test]
+fn auth_identity_failure_is_fixed_and_precedes_matching_payload_parsing() {
+    for malformed in [false, true] {
+        let data: &[(&str, &[u8])] = if malformed {
+            &[("wrong", b"private-payload")]
+        } else {
+            &[("password", b"private-payload")]
+        };
+        let baseline = mk_redis_linksys(Some(mk_redis_auth(Some(mk_secret("s", data)))));
+        if malformed {
+            assert!(matches!(
+                basic_state(&baseline),
+                CredentialState::Invalid(InvalidReason::ParseFailed(_))
+            ));
+        } else {
+            assert!(matches!(basic_state(&baseline), CredentialState::Resolved(_)));
+        }
+        for dimension in 0..4 {
+            let mut owner = baseline.clone();
+            let SystemConfig::Redis(c) = &mut owner.spec.config else {
+                unreachable!()
+            };
+            match dimension {
+                0 => {
+                    c.auth.as_mut().unwrap().slot.secret.as_mut().unwrap().metadata.name = Some("private-target".into())
+                }
+                1 => {
+                    c.auth
+                        .as_mut()
+                        .unwrap()
+                        .slot
+                        .secret
+                        .as_mut()
+                        .unwrap()
+                        .metadata
+                        .namespace = None
+                }
+                2 => c.auth.as_mut().unwrap().slot.secret_ref.name = "retargeted".into(),
+                _ => owner.metadata.name = None,
+            }
+            let state = basic_state(&owner);
+            assert!(matches!(
+                state,
+                CredentialState::Invalid(InvalidReason::ReferenceIdentity)
+            ));
+            assert!(!state.is_buildable());
+            for text in [format!("{state}"), format!("{state:?}")] {
+                assert!(!text.contains("private-payload"));
+                assert!(!text.contains("private-target"));
+            }
+        }
+    }
+    let mut missing = mk_redis_linksys(Some(mk_redis_auth(None)));
+    missing.metadata.name = None;
+    assert!(matches!(basic_state(&missing), CredentialState::Pending));
+    let SystemConfig::Redis(c) = &mut missing.spec.config else {
+        unreachable!()
+    };
+    c.auth = None;
+    assert!(matches!(basic_state(&missing), CredentialState::NotRequired));
+}
+
+#[test]
+fn resolved_auth_identity_gate_covers_all_variants_and_preserves_not_required() {
+    let encoded = |value: &[u8]| base64::Engine::encode(&base64::engine::general_purpose::STANDARD, value);
+    for (provider, variant, data) in [
+        (
+            "elasticsearch",
+            "basic",
+            serde_json::json!({"password":encoded(b"password")}),
+        ),
+        (
+            "elasticsearch",
+            "apiKey",
+            serde_json::json!({"apiKeyId":encoded(b"id"),"apiKeySecret":encoded(b"secret")}),
+        ),
+        (
+            "elasticsearch",
+            "bearer",
+            serde_json::json!({"bearerToken":encoded(b"token")}),
+        ),
+        ("kafka", "", serde_json::json!({"password":encoded(b"password")})),
+        ("otlp", "", serde_json::json!({"bearerToken":encoded(b"token")})),
+    ] {
+        let mut auth = serde_json::json!({"secretRef":{"name":"auth","namespace":"shared"},"secret":{"metadata":{"name":"auth","namespace":"shared"},"data":data}});
+        if !variant.is_empty() {
+            auth["type"] = serde_json::json!(variant);
+        }
+        let config = match provider {
+            "elasticsearch" => serde_json::json!({"endpoints":["http://es:9200"],"auth":auth}),
+            "kafka" => serde_json::json!({"brokers":["kafka:9092"],"sasl":{"username":"alice","password":auth}}),
+            _ => serde_json::json!({"endpoint":"http://collector:4317","auth":auth}),
+        };
+        let mut wire = serde_json::json!({"metadata":{"name":"provider","namespace":"tenant"},"spec":{"type":provider,"config":config}});
+        let owner: LinkSys = serde_json::from_value(wire.clone()).unwrap();
+        assert!(resolved_state(&owner).is_buildable(), "{provider}/{variant}");
+        let secret = if provider == "kafka" {
+            &mut wire["spec"]["config"]["sasl"]["password"]["secret"]
+        } else {
+            &mut wire["spec"]["config"]["auth"]["secret"]
+        };
+        secret["metadata"]["namespace"] = serde_json::json!("other");
+        let bad: LinkSys = serde_json::from_value(wire).unwrap();
+        assert!(matches!(
+            resolved_state(&bad),
+            CredentialState::Invalid(InvalidReason::ReferenceIdentity)
+        ));
+        assert!(matches!(basic_state(&bad), CredentialState::NotRequired));
     }
 }

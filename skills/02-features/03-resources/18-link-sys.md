@@ -594,3 +594,14 @@ kind) in the structural CRD subtree so Kubernetes cannot prune unsupported group
 or kind before typed validation. The focused CRD guard compares this subtree to
 SecretObjectReference. Handler apply/delete clear both Secret and cross-namespace
 reference managers; failed references still rebuild their current wakeup edges.
+
+
+For Redis/Etcd auth, Elasticsearch auth, Kafka SASL and OTLP auth, a carried Secret
+must match the configured Secret reference's name and explicit namespace before
+credentials can be used. Omitted reference scope uses the LinkSys namespace
+(default when the owner omits it); a namespace-less raw Secret is not a qualified
+default Secret. Missing material remains pending, and mismatched material is
+invalid. This does not add fields, Secret UID requirements or authorization rules.
+Ordinary same-type invalid updates retain an already-published client under the
+existing provider policy; forced replacements, deletion and type changes keep
+their existing retirement behavior.

@@ -40,8 +40,10 @@ impl PreparedTransport {
         let parsed = input.endpoint();
         let timeout = Duration::from_millis(config.timeout_ms);
         let mut metadata = MetadataMap::new();
-        if let Some(auth) = &config.auth {
-            let secret = auth.slot.secret.as_ref().ok_or("unresolved_auth")?;
+        if config.auth.is_some() {
+            let secret = edgion_common::link_sys_core::credential::checked_auth_secret(input.owner())
+                .map_err(|_| "invalid_auth")?
+                .ok_or("unresolved_auth")?;
             let data = secret.data.as_ref().ok_or("invalid_auth")?;
             let material = OtlpBearerResolver.parse(data).map_err(|_| "invalid_auth")?;
             let mut value =

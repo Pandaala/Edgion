@@ -134,6 +134,11 @@ async fn redis_fixture_at(endpoint: &str) -> RedisFixture {
         panic!("Redis fixture")
     };
     config.auth.as_mut().unwrap().slot.secret = Some(Secret {
+        metadata: kube::api::ObjectMeta {
+            name: Some("redis-test-auth".into()),
+            namespace: Some("overflow-tests".into()),
+            ..Default::default()
+        },
         data: Some(BTreeMap::from([(
             "password".to_string(),
             ByteString(b"edgion-test-pwd".to_vec()),

@@ -49,6 +49,11 @@ fn with_auth(mut ls: LinkSys, token: &[u8]) -> LinkSys {
                 namespace: None,
             },
             secret: Some(Secret {
+                metadata: kube::api::ObjectMeta {
+                    name: Some("auth".into()),
+                    namespace: Some("fp".into()),
+                    ..Default::default()
+                },
                 data: Some(data),
                 ..Default::default()
             }),
@@ -272,5 +277,35 @@ fn proof_and_fingerprint_are_pure_and_cold_capability_failure_keeps_tls_audit() 
         count.load(Ordering::Relaxed),
         1,
         "only cold resolution emits the unsupported verify audit"
+    );
+}
+
+#[test]
+fn auth_identity_is_checked_before_otlp_fingerprinting_even_at_equal_resource_version() {
+    let valid = with_auth(
+        otlp_ls("http://collector.example:4317", 1000, Some("42")),
+        b"stable-token",
+    );
+    let expected = fingerprint_otlp(&valid).unwrap();
+    assert_eq!(expected, fingerprint_otlp(&valid.clone()).unwrap());
+    let mut invalid = valid.clone();
+    let SystemConfig::Otlp(c) = &mut invalid.spec.config else {
+        unreachable!()
+    };
+    c.auth.as_mut().unwrap().slot.secret.as_mut().unwrap().metadata.name = Some("other-secret".into());
+    assert_eq!(invalid.metadata.resource_version, valid.metadata.resource_version);
+    assert_eq!(
+        fingerprint_otlp(&invalid).unwrap_err().to_string(),
+        "OTLP bearer credential is invalid"
+    );
+    assert!(OtlpCandidate::new(Arc::new(invalid)).is_err());
+    let mut missing_data = valid.clone();
+    let SystemConfig::Otlp(c) = &mut missing_data.spec.config else {
+        unreachable!()
+    };
+    c.auth.as_mut().unwrap().slot.secret.as_mut().unwrap().data = None;
+    assert_eq!(
+        fingerprint_otlp(&missing_data).unwrap_err().to_string(),
+        "OTLP bearer credential is unresolved"
     );
 }

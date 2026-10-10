@@ -44,6 +44,11 @@ fn auth_unresolved_invalid_and_resolved_are_distinct_safe_states() {
     });
     assert!(matches!(prepare(&config, ResolverSpec::System), Err("unresolved_auth")));
     config.auth.as_mut().unwrap().slot.secret = Some(Secret {
+        metadata: kube::api::ObjectMeta {
+            name: Some("auth".into()),
+            namespace: Some("test".into()),
+            ..Default::default()
+        },
         data: Some([(String::from("bearerToken"), ByteString(b"wrong value".to_vec()))].into()),
         ..Default::default()
     });
@@ -103,4 +108,42 @@ impl PreparedTransport {
         drop(reconnect);
         assert!(Arc::ptr_eq(&self._input, input));
     }
+}
+
+#[test]
+fn transport_checks_auth_metadata_and_keeps_captured_authorization_generation() {
+    let mut config = config();
+    config.auth = Some(serde_json::from_value(serde_json::json!({
+        "secretRef":{"name":"auth"},"secret":{"metadata":{"name":"auth","namespace":"test"},"data":{"bearerToken":"c3RhYmxlLXRva2Vu"}}
+    })).unwrap());
+    let captured = prepare(&config, ResolverSpec::System).unwrap();
+    assert_eq!(captured.metadata.get("authorization").unwrap(), "Bearer stable-token");
+    assert!(captured.metadata.get("authorization").unwrap().is_sensitive());
+    for dimension in 0..4 {
+        let mut wrong = config.clone();
+        let secret = wrong.auth.as_mut().unwrap().slot.secret.as_mut().unwrap();
+        match dimension {
+            0 => secret.metadata.name = Some("other".into()),
+            1 => secret.metadata.namespace = None,
+            2 => secret.metadata.namespace = Some("other".into()),
+            _ => secret.metadata.name = None,
+        }
+        assert!(matches!(prepare(&wrong, ResolverSpec::System), Err("invalid_auth")));
+        assert_eq!(captured.metadata.get("authorization").unwrap(), "Bearer stable-token");
+    }
+    config.auth.as_mut().unwrap().slot.secret_ref.name = "retargeted".into();
+    assert!(matches!(prepare(&config, ResolverSpec::System), Err("invalid_auth")));
+    config
+        .auth
+        .as_mut()
+        .unwrap()
+        .slot
+        .secret
+        .as_mut()
+        .unwrap()
+        .metadata
+        .name = Some("retargeted".into());
+    assert!(prepare(&config, ResolverSpec::System).is_ok());
+    config.auth.as_mut().unwrap().slot.secret.as_mut().unwrap().data = None;
+    assert!(matches!(prepare(&config, ResolverSpec::System), Err("invalid_auth")));
 }

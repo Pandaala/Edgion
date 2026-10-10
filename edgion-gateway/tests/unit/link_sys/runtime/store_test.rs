@@ -63,6 +63,11 @@ fn create_redis_linksys(namespace: &str, name: &str, inject: InjectedSecret) -> 
             let mut data = BTreeMap::new();
             data.insert("password".to_string(), ByteString(b"pw".to_vec()));
             Some(Secret {
+                metadata: kube::api::ObjectMeta {
+                    name: Some("creds".into()),
+                    namespace: Some(namespace.into()),
+                    ..Default::default()
+                },
                 data: Some(data),
                 ..Default::default()
             })
@@ -71,6 +76,11 @@ fn create_redis_linksys(namespace: &str, name: &str, inject: InjectedSecret) -> 
             let mut data = BTreeMap::new();
             data.insert("not-password".to_string(), ByteString(b"garbage".to_vec()));
             Some(Secret {
+                metadata: kube::api::ObjectMeta {
+                    name: Some("creds".into()),
+                    namespace: Some(namespace.into()),
+                    ..Default::default()
+                },
                 data: Some(data),
                 ..Default::default()
             })
@@ -124,6 +134,11 @@ fn create_etcd_linksys(namespace: &str, name: &str, inject: InjectedSecret) -> L
             let mut data = BTreeMap::new();
             data.insert("password".to_string(), ByteString(b"pw".to_vec()));
             Some(Secret {
+                metadata: kube::api::ObjectMeta {
+                    name: Some("creds".into()),
+                    namespace: Some(namespace.into()),
+                    ..Default::default()
+                },
                 data: Some(data),
                 ..Default::default()
             })
@@ -132,6 +147,11 @@ fn create_etcd_linksys(namespace: &str, name: &str, inject: InjectedSecret) -> L
             let mut data = BTreeMap::new();
             data.insert("not-password".to_string(), ByteString(b"garbage".to_vec()));
             Some(Secret {
+                metadata: kube::api::ObjectMeta {
+                    name: Some("creds".into()),
+                    namespace: Some(namespace.into()),
+                    ..Default::default()
+                },
                 data: Some(data),
                 ..Default::default()
             })
@@ -184,6 +204,11 @@ fn create_es_linksys(namespace: &str, name: &str, inject: InjectedSecret) -> Lin
             let mut data = BTreeMap::new();
             data.insert("password".to_string(), ByteString(b"pw".to_vec()));
             Some(Secret {
+                metadata: kube::api::ObjectMeta {
+                    name: Some("creds".into()),
+                    namespace: Some(namespace.into()),
+                    ..Default::default()
+                },
                 data: Some(data),
                 ..Default::default()
             })
@@ -192,6 +217,11 @@ fn create_es_linksys(namespace: &str, name: &str, inject: InjectedSecret) -> Lin
             let mut data = BTreeMap::new();
             data.insert("not-password".to_string(), ByteString(b"garbage".to_vec()));
             Some(Secret {
+                metadata: kube::api::ObjectMeta {
+                    name: Some("creds".into()),
+                    namespace: Some(namespace.into()),
+                    ..Default::default()
+                },
                 data: Some(data),
                 ..Default::default()
             })
@@ -245,6 +275,11 @@ fn create_kafka_linksys_sasl(namespace: &str, name: &str, inject: InjectedSecret
             let mut data = BTreeMap::new();
             data.insert("password".to_string(), ByteString(b"pw".to_vec()));
             Some(Secret {
+                metadata: kube::api::ObjectMeta {
+                    name: Some("creds".into()),
+                    namespace: Some(namespace.into()),
+                    ..Default::default()
+                },
                 data: Some(data),
                 ..Default::default()
             })
@@ -253,6 +288,11 @@ fn create_kafka_linksys_sasl(namespace: &str, name: &str, inject: InjectedSecret
             let mut data = BTreeMap::new();
             data.insert("not-password".to_string(), ByteString(b"garbage".to_vec()));
             Some(Secret {
+                metadata: kube::api::ObjectMeta {
+                    name: Some("creds".into()),
+                    namespace: Some(namespace.into()),
+                    ..Default::default()
+                },
                 data: Some(data),
                 ..Default::default()
             })
@@ -305,6 +345,11 @@ fn create_otlp_linksys(namespace: &str, name: &str, auth: InjectedSecret) -> Lin
     let secret = match auth {
         InjectedSecret::Missing => None,
         InjectedSecret::Valid => Some(Secret {
+            metadata: kube::api::ObjectMeta {
+                name: Some("auth".into()),
+                namespace: Some(namespace.into()),
+                ..Default::default()
+            },
             data: Some(BTreeMap::from([(
                 "bearerToken".to_string(),
                 ByteString(b"token".to_vec()),
@@ -312,6 +357,11 @@ fn create_otlp_linksys(namespace: &str, name: &str, auth: InjectedSecret) -> Lin
             ..Default::default()
         }),
         InjectedSecret::MalformedForInvalid => Some(Secret {
+            metadata: kube::api::ObjectMeta {
+                name: Some("auth".into()),
+                namespace: Some(namespace.into()),
+                ..Default::default()
+            },
             data: Some(BTreeMap::from([("wrong".to_string(), ByteString(b"value".to_vec()))])),
             ..Default::default()
         }),
@@ -1655,4 +1705,48 @@ async fn webhook_same_rv_active_reference_failure_obeys_ordinary_and_forced_poli
         assert_eq!(registry.count(ProviderKind::Webhook), 1);
         assert!(!Arc::ptr_eq(&old, &registry.get("test/link").unwrap()));
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn mismatched_auth_blocks_initial_activation_and_ordinary_updates_retain_current_clients() {
+    macro_rules! check {
+        ($make:ident, $apply:ty, $variant:ident) => {{
+            let valid = $make("test", "link", InjectedSecret::Valid);
+            let mut wrong = valid.clone();
+            let slot = match &mut wrong.spec.config {
+                SystemConfig::Redis(c) => &mut c.auth.as_mut().unwrap().slot,
+                SystemConfig::Etcd(c) => &mut c.auth.as_mut().unwrap().slot,
+                SystemConfig::Elasticsearch(c) => match c.auth.as_mut().unwrap() {
+                    edgion_resources::resources::link_sys::elasticsearch::ElasticsearchAuth::Basic { slot } => slot,
+                    _ => unreachable!(),
+                },
+                SystemConfig::Kafka(c) => &mut c.sasl.as_mut().unwrap().password,
+                SystemConfig::Otlp(c) => &mut c.auth.as_mut().unwrap().slot,
+                _ => unreachable!(),
+            };
+            slot.secret.as_mut().unwrap().metadata.namespace = Some("wrong-tenant".into());
+            let bad = one(wrong);
+            let empty = RuntimeRegistry::new();
+            empty.apply(&bad, &HashSet::new(), &bad, false, false);
+            assert!(empty.get("test/link").is_none());
+            let client = <$apply>::build("test/link", &<$apply>::prepare(Arc::new(valid)).unwrap()).unwrap();
+            let runner = PersistentRunner::<$apply>::spawn_with_published("test/link".into(), client.clone());
+            let registry = RuntimeRegistry::new();
+            registry.install(
+                "test/link",
+                Some(RuntimeEntry::new(ProviderRuntime::$variant(runner.clone()))),
+            );
+            registry.apply(&bad, &HashSet::new(), &bad, false, false);
+            tokio::task::yield_now().await;
+            assert!(Arc::ptr_eq(&client, &runner.current().unwrap()));
+            drop(registry);
+            assert!(runner.current().is_none());
+            runner.await_join().await;
+        }};
+    }
+    check!(create_redis_linksys, RedisApply, Redis);
+    check!(create_etcd_linksys, EtcdApply, Etcd);
+    check!(create_es_linksys, EsApply, Elasticsearch);
+    check!(create_kafka_linksys_sasl, KafkaApply, Kafka);
+    check!(create_otlp_linksys, OtlpApply, Otlp);
 }

@@ -186,3 +186,24 @@ Pure preparation/hash checks do not parse PEM or emit TLS audit. Cold TLS
 construction uses the audited canonical resolver. Live transport evidence must
 come from the current `otlp_transport` target; historical results above do not
 verify the reference migration by themselves.
+
+
+## Actual auth material boundary (R9b)
+
+The earlier Controller reference correction does not alone establish carried
+Secret identity at every cold consumer. OTLP readiness, fingerprinting and
+PreparedTransport now use Common checked_auth_secret, backed by the actual
+PreparedLinkSysReferences auth slot and shared strict name/namespace comparison.
+Valid payload bytes or unchanged resourceVersion cannot substitute for that field.
+Matching material retains existing fingerprint encoding and header sensitivity.
+Absent Secret stays unresolved; missing data remains fingerprint-unresolved but
+transport-invalid; present identity mismatch is a fixed invalid-auth failure.
+No submitted names or credential bytes enter the new error reason.
+
+This does not change ownership or egress policy. Ordinary same-type NotReady
+updates retain the current client; forced-generation retirement precedes NotReady,
+and deletion/type changes still retire normally. Existing and new in-process
+readiness/retention tests and the standalone OTLP transport suite are verification
+controls, not proof of Gateway API conformance or all external provider services.
+Raw default Secret aliases remain restricted to their existing finite consumers;
+LinkSys non-TLS auth requires qualified material metadata.

@@ -263,7 +263,10 @@ fn producer_health_single_winner_under_contention() {
 
 #[test]
 fn owning_constructor_rejects_pending_and_invalid_sasl_instead_of_anonymous_connection() {
-    for secret in [serde_json::Value::Null, serde_json::json!({"data":{}})] {
+    for secret in [
+        serde_json::Value::Null,
+        serde_json::json!({"metadata":{"name":"password","namespace":"default"},"data":{}}),
+    ] {
         let owner = serde_json::from_value(serde_json::json!({
             "metadata":{"name":"kafka"},"spec":{"type":"kafka","config":{
                 "brokers":["kafka.example:9092"],"sasl":{"username":"alice",

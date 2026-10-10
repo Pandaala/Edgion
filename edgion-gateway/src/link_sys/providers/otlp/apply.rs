@@ -105,12 +105,10 @@ fn fingerprint_otlp_fields(
     let mut secret = FingerprintHasher::new();
     match config.auth.as_ref() {
         None => secret.tag(0),
-        Some(auth) => {
+        Some(_) => {
             secret.tag(1);
-            let resolved = auth
-                .slot
-                .secret
-                .as_ref()
+            let resolved = edgion_common::link_sys_core::credential::checked_auth_secret(ls)
+                .map_err(|_| anyhow::anyhow!("OTLP bearer credential is invalid"))?
                 .and_then(|value| value.data.as_ref())
                 .ok_or_else(|| anyhow::anyhow!("OTLP bearer credential is unresolved"))?;
             let material = OtlpBearerResolver
