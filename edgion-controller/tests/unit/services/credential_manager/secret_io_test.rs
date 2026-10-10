@@ -3,7 +3,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::ManagedFieldsEntry;
 
 type CapturedRequests = std::sync::Arc<parking_lot::Mutex<Vec<(http::Method, serde_json::Value)>>>;
 
-fn cleanup_api() -> (Api<Secret>, CapturedRequests) {
+fn cleanup_api() -> (Client, CapturedRequests) {
     let requests = CapturedRequests::default();
     let captured = requests.clone();
     let transport = tower::service_fn(move |request: http::Request<kube::client::Body>| {
@@ -34,10 +34,7 @@ fn cleanup_api() -> (Api<Secret>, CapturedRequests) {
             )
         }
     });
-    (
-        Api::namespaced(kube::Client::new(transport, "default"), "tenant-a"),
-        requests,
-    )
+    (kube::Client::new(transport, "default"), requests)
 }
 
 #[tokio::test]
@@ -231,4 +228,335 @@ fn delete_expectation_captures_object_and_publication_identity() {
     assert_eq!(expected.publication_generation, "publication-old");
     assert_eq!(expected.source_input_revision, "input-revision");
     assert_eq!(expected.leader_term, "leader-old");
+}
+
+#[derive(Debug)]
+struct IoRequest {
+    method: http::Method,
+    path: String,
+    query: String,
+    content_type: String,
+    body: Value,
+}
+
+type IoRequests = std::sync::Arc<parking_lot::Mutex<Vec<IoRequest>>>;
+
+fn response_client(responses: Vec<(u16, Value)>) -> (Client, IoRequests) {
+    let responses = std::sync::Arc::new(parking_lot::Mutex::new(std::collections::VecDeque::from(responses)));
+    let requests = IoRequests::default();
+    let captured = requests.clone();
+    let transport = tower::service_fn(move |request: http::Request<kube::client::Body>| {
+        let responses = responses.clone();
+        let captured = captured.clone();
+        async move {
+            let (parts, body) = request.into_parts();
+            let bytes = body.collect_bytes().await.unwrap();
+            captured.lock().push(IoRequest {
+                method: parts.method,
+                path: parts.uri.path().to_string(),
+                query: parts.uri.query().unwrap_or_default().to_string(),
+                content_type: parts
+                    .headers
+                    .get(http::header::CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or_default()
+                    .to_string(),
+                body: if bytes.is_empty() {
+                    Value::Null
+                } else {
+                    serde_json::from_slice(&bytes).unwrap()
+                },
+            });
+            let (status, body) = responses.lock().pop_front().expect("unexpected extra API request");
+            Ok::<_, std::convert::Infallible>(
+                http::Response::builder()
+                    .status(status)
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(kube::client::Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+        }
+    });
+    (Client::new(transport, "wrong-client-default"), requests)
+}
+
+fn assert_io_order(requests: &IoRequests, expected: &[(&str, &str)]) {
+    let requests = requests.lock();
+    let actual: Vec<_> = requests.iter().map(|r| (r.method.as_str(), r.path.as_str())).collect();
+    assert_eq!(actual, expected);
+}
+
+fn status_response(code: u16) -> Value {
+    json!({"apiVersion":"v1", "kind":"Status", "status":"Failure", "reason": if code == 404 { "NotFound" } else { "Conflict" }, "message":"test status", "code":code})
+}
+
+#[tokio::test]
+async fn checked_api_responses_reject_each_raw_target_dimension_before_reuse() {
+    const OBJECT: &str = "/api/v1/namespaces/tenant-a/secrets/provider-plugin";
+    const COLLECTION: &str = "/api/v1/namespaces/tenant-a/secrets";
+    for variant in 0..6 {
+        let mut wrong = managed_secret();
+        match variant {
+            0 => wrong.metadata.name = None,
+            1 => wrong.metadata.name = Some(String::new()),
+            2 => wrong.metadata.name = Some("other-plugin".to_string()),
+            3 => wrong.metadata.namespace = None,
+            4 => wrong.metadata.namespace = Some(String::new()),
+            _ => wrong.metadata.namespace = Some("ops".to_string()),
+        }
+        let identity = identity();
+        assert!(!is_owned_by_consumer(&wrong, &identity));
+        assert!(!can_adopt_create_race(&wrong, &identity));
+        assert!(capture_publication_cas(&wrong, &identity).is_err());
+        assert!(capture_delete_expectation(&wrong, identity.clone(), "binding-revision".into()).is_err());
+        for operation in 0..6 {
+            let (client, calls) = response_client(vec![(200, serde_json::to_value(&wrong).unwrap())]);
+            let metadata = metadata();
+            let publication = Publication {
+                identity: &identity,
+                metadata: &metadata,
+                bearer_token: b"new-token",
+            };
+            let expected =
+                capture_delete_expectation(&managed_secret(), identity.clone(), "binding-revision".into()).unwrap();
+            let cas = capture_publication_cas(&managed_secret(), &identity).unwrap();
+            let failed = match operation {
+                0 => get_optional(&client, &identity).await.is_err(),
+                1 => get_required(&client, &identity).await.is_err(),
+                2 => create(&publication, &client).await.is_err(),
+                3 => publish(&client, &cas, &publication).await.is_err(),
+                4 => repair_and_publish_owned_consumer(&client, &managed_secret(), &publication)
+                    .await
+                    .is_err(),
+                _ => delete_if_matches(&client, &expected, || async {
+                    panic!("wrong target must not reach authorization")
+                })
+                .await
+                .is_err(),
+            };
+            assert!(failed, "operation {operation}, dimension {variant}");
+            let method = match operation {
+                2 => "POST",
+                3 | 4 => "PATCH",
+                _ => "GET",
+            };
+            assert_io_order(&calls, &[(method, if operation == 2 { COLLECTION } else { OBJECT })]);
+        }
+        let (client, calls) = response_client(vec![]);
+        let metadata = metadata();
+        let publication = Publication {
+            identity: &identity,
+            metadata: &metadata,
+            bearer_token: b"new-token",
+        };
+        assert!(repair_and_publish_owned_consumer(&client, &wrong, &publication)
+            .await
+            .is_err());
+        assert!(delete_owned_consumer_object(&client, &wrong, &identity).await.is_err());
+        assert_io_order(&calls, &[]);
+    }
+}
+
+#[tokio::test]
+async fn checked_publication_protocol_preserves_post_race_manager_and_json_cas() {
+    const OBJECT: &str = "/api/v1/namespaces/tenant-a/secrets/provider-plugin";
+    const COLLECTION: &str = "/api/v1/namespaces/tenant-a/secrets";
+    let identity = identity();
+    let metadata = metadata();
+    let publication = Publication {
+        identity: &identity,
+        metadata: &metadata,
+        bearer_token: b"new-token",
+    };
+    let mut winner = managed_secret();
+    winner.metadata.managed_fields = Some(vec![ManagedFieldsEntry {
+        manager: Some(FIELD_MANAGER.into()),
+        ..Default::default()
+    }]);
+    for race in [false, true] {
+        let mut responses = vec![(404, status_response(404))];
+        if race {
+            responses.extend([
+                (409, status_response(409)),
+                (200, serde_json::to_value(&winner).unwrap()),
+            ]);
+        }
+        responses.push((200, serde_json::to_value(&winner).unwrap()));
+        let (client, calls) = response_client(responses);
+        assert!(get_optional(&client, &identity).await.unwrap().is_none());
+        let result = match create(&publication, &client).await {
+            Ok(secret) => secret,
+            Err(SecretIoError::Kubernetes(kube::Error::Api(error))) if error.code == 409 => {
+                let winner = get_required(&client, &identity).await.unwrap();
+                assert!(can_adopt_create_race(&winner, &identity));
+                let cas = capture_publication_cas(&winner, &identity).unwrap();
+                publish(&client, &cas, &publication).await.unwrap()
+            }
+            Err(error) => panic!("unexpected protocol error: {error}"),
+        };
+        assert!(capture_delete_expectation(&result, identity.clone(), "binding-revision".into()).is_ok());
+        let mut expected = vec![("GET", OBJECT), ("POST", COLLECTION)];
+        if race {
+            expected.extend([("GET", OBJECT), ("PATCH", OBJECT)]);
+        }
+        assert_io_order(&calls, &expected);
+        let calls = calls.lock();
+        assert!(calls[1].query.contains(&format!("fieldManager={FIELD_MANAGER}")));
+        assert_eq!(calls[1].body["metadata"]["namespace"], "tenant-a");
+        assert_eq!(calls[1].body["metadata"]["name"], "provider-plugin");
+        assert_eq!(calls[1].body["metadata"]["ownerReferences"][0]["uid"], "consumer-uid");
+        assert_eq!(
+            calls[1].body["metadata"]["annotations"][ANNOTATION_SOURCE_NAME],
+            "ops/provider-a"
+        );
+        assert_eq!(
+            calls[1].body["data"][DATA_BEARER_TOKEN],
+            base64::engine::general_purpose::STANDARD.encode(b"new-token")
+        );
+        if race {
+            assert_eq!(calls[3].content_type, "application/json-patch+json");
+            assert_eq!(
+                calls[3].body,
+                serde_json::to_value(
+                    build_publication_patch(&capture_publication_cas(&winner, &identity).unwrap(), &publication)
+                        .unwrap()
+                )
+                .unwrap()
+            );
+        }
+    }
+    winner.metadata.managed_fields = None;
+    let (client, calls) = response_client(vec![
+        (409, status_response(409)),
+        (200, serde_json::to_value(winner).unwrap()),
+    ]);
+    assert!(
+        matches!(create(&publication, &client).await, Err(SecretIoError::Kubernetes(kube::Error::Api(error))) if error.code == 409)
+    );
+    assert!(!can_adopt_create_race(
+        &get_required(&client, &identity).await.unwrap(),
+        &identity
+    ));
+    assert_io_order(&calls, &[("POST", COLLECTION), ("GET", OBJECT)]);
+}
+
+#[tokio::test]
+async fn historical_cleanup_and_repair_use_exact_target_without_live_owner() {
+    const OBJECT: &str = "/api/v1/namespaces/tenant-a/secrets/provider-plugin";
+    let original = managed_secret();
+    let expected = delete_expectation_from_secret(&original).unwrap();
+    for old_source in [false, true] {
+        let mut historical = original.clone();
+        if old_source {
+            historical
+                .metadata
+                .annotations
+                .as_mut()
+                .unwrap()
+                .insert(ANNOTATION_SOURCE_NAME.into(), "old-ops/removed-source".into());
+        }
+        let expected = delete_expectation_from_secret(&historical).unwrap();
+        for dimension in 0..3 {
+            let mut response = historical.clone();
+            if dimension == 1 {
+                response.metadata.name = Some("replacement".into());
+            }
+            if dimension == 2 {
+                response.metadata.namespace = Some("other-tenant".into());
+            }
+            let mut responses = vec![(200, serde_json::to_value(response).unwrap())];
+            if dimension == 0 {
+                responses.push((
+                    200,
+                    json!({"apiVersion":"v1","kind":"Status","status":"Success","code":200}),
+                ));
+            }
+            let (client, calls) = response_client(responses);
+            let result = delete_if_matches(&client, &expected, || async { Ok(true) }).await;
+            if dimension == 0 {
+                assert!(result.unwrap());
+                assert_io_order(&calls, &[("GET", OBJECT), ("DELETE", OBJECT)]);
+                assert_eq!(
+                    calls.lock()[1].body["preconditions"],
+                    json!({"uid":"secret-uid","resourceVersion":"42"})
+                );
+            } else {
+                assert!(result.is_err());
+                assert_io_order(&calls, &[("GET", OBJECT)]);
+            }
+        }
+    }
+    let metadata = metadata();
+    let publication = Publication {
+        identity: &expected.identity,
+        metadata: &metadata,
+        bearer_token: b"repaired-token",
+    };
+    let (client, calls) = response_client(vec![(200, serde_json::to_value(&original).unwrap())]);
+    let mut repairable = original.clone();
+    repairable.metadata.annotations = None;
+    repair_and_publish_owned_consumer(&client, &repairable, &publication)
+        .await
+        .unwrap();
+    assert_io_order(&calls, &[("PATCH", OBJECT)]);
+    assert_eq!(
+        calls.lock()[0].body[0],
+        json!({"op":"test","path":"/metadata/resourceVersion","value":"42"})
+    );
+    assert_eq!(calls.lock()[0].body[1]["path"], "/metadata/ownerReferences");
+    let (client, calls) = response_client(vec![
+        (
+            200,
+            json!({"apiVersion":"v1","kind":"Status","status":"Success","code":200}),
+        ),
+        (200, serde_json::to_value(&original).unwrap()),
+    ]);
+    let mut immutable = original.clone();
+    immutable.immutable = Some(true);
+    delete_owned_consumer_object(&client, &immutable, &expected.identity)
+        .await
+        .unwrap();
+    create(&publication, &client).await.unwrap();
+    assert_io_order(
+        &calls,
+        &[("DELETE", OBJECT), ("POST", "/api/v1/namespaces/tenant-a/secrets")],
+    );
+    assert_eq!(
+        calls.lock()[0].body["preconditions"],
+        json!({"uid":"secret-uid","resourceVersion":"42"})
+    );
+}
+
+#[test]
+fn historical_identity_requires_observed_metadata_and_exact_markers() {
+    for dimension in 0..7 {
+        let mut secret = managed_secret();
+        match dimension {
+            0 => secret.metadata.namespace = None,
+            1 => secret.metadata.namespace = Some(String::new()),
+            2 => secret.metadata.name = None,
+            3 => secret.metadata.name = Some("other".into()),
+            4 => secret.metadata.owner_references = None,
+            5 => {
+                secret
+                    .metadata
+                    .annotations
+                    .as_mut()
+                    .unwrap()
+                    .remove(ANNOTATION_SOURCE_UID);
+            }
+            _ => {
+                secret
+                    .metadata
+                    .annotations
+                    .as_mut()
+                    .unwrap()
+                    .insert(ANNOTATION_CONSUMER_GENERATION.into(), "invalid".into());
+            }
+        }
+        assert!(
+            delete_expectation_from_secret(&secret).is_none(),
+            "dimension {dimension}"
+        );
+    }
 }

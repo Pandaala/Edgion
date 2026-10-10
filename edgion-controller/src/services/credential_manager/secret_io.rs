@@ -11,13 +11,14 @@ use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference;
 use k8s_openapi::ByteString;
 use kube::api::{Api, DeleteParams, Patch, PatchParams, PostParams, Preconditions};
+use kube::Client;
 use serde_json::{json, Value};
 use thiserror::Error;
 
 use crate::conf_mgr::sync_runtime::resource_processor::credential_source_state::{
-    BINDING_REVISION_ANNOTATION, CONSUMER_UID_ANNOTATION, MANAGED_BY_LABEL,
-    MANAGED_BY_VALUE as REGISTRY_MANAGED_BY_VALUE, SOURCE_GENERATION_ANNOTATION, SOURCE_UID_ANNOTATION,
-    VALID_UNTIL_ANNOTATION,
+    DesiredCredentialConsumer, DesiredCredentialSource, BINDING_REVISION_ANNOTATION, CONSUMER_UID_ANNOTATION,
+    MANAGED_BY_LABEL, MANAGED_BY_VALUE as REGISTRY_MANAGED_BY_VALUE, SOURCE_GENERATION_ANNOTATION,
+    SOURCE_UID_ANNOTATION, VALID_UNTIL_ANNOTATION,
 };
 
 pub const FIELD_MANAGER: &str = "edgion-oauth2-credential-controller";
@@ -57,8 +58,68 @@ pub struct SourceIdentity {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ManagedSecretIdentity {
-    pub consumer: ConsumerIdentity,
-    pub source: SourceIdentity,
+    consumer: ConsumerIdentity,
+    source: SourceIdentity,
+}
+
+impl ManagedSecretIdentity {
+    pub fn from_current_pair(
+        consumer: &DesiredCredentialConsumer,
+        source: &DesiredCredentialSource,
+    ) -> Result<Self, SecretIoError> {
+        if !consumer.matches_source(source) {
+            return Err(SecretIoError::StaleOperation);
+        }
+        let target = consumer.output_target().map_err(|_| SecretIoError::StaleOperation)?;
+        let namespace = target.scope().namespace().ok_or(SecretIoError::MissingMetadata)?;
+        Ok(Self {
+            consumer: ConsumerIdentity {
+                namespace: namespace.to_string(),
+                name: target.name().to_string(),
+                uid: consumer.uid.clone(),
+                generation: consumer.generation,
+            },
+            source: SourceIdentity {
+                name: source.logical_key(),
+                uid: source.uid.clone(),
+                generation: source.generation,
+            },
+        })
+    }
+
+    pub fn consumer(&self) -> &ConsumerIdentity {
+        &self.consumer
+    }
+    pub fn source(&self) -> &SourceIdentity {
+        &self.source
+    }
+
+    fn validate_secret(&self, secret: &Secret) -> Result<(), SecretIoError> {
+        if secret.metadata.name.as_deref() != Some(self.consumer.name.as_str())
+            || secret.metadata.namespace.as_deref() != Some(self.consumer.namespace.as_str())
+        {
+            return Err(SecretIoError::TargetIdentityMismatch);
+        }
+        Ok(())
+    }
+
+    fn api(&self, client: &Client) -> Api<Secret> {
+        Api::namespaced(client.clone(), &self.consumer.namespace)
+    }
+}
+
+pub async fn get_optional(client: &Client, identity: &ManagedSecretIdentity) -> Result<Option<Secret>, SecretIoError> {
+    let secret = identity.api(client).get_opt(&identity.consumer.name).await?;
+    if let Some(secret) = &secret {
+        identity.validate_secret(secret)?;
+    }
+    Ok(secret)
+}
+
+pub async fn get_required(client: &Client, identity: &ManagedSecretIdentity) -> Result<Secret, SecretIoError> {
+    let secret = identity.api(client).get(&identity.consumer.name).await?;
+    identity.validate_secret(&secret)?;
+    Ok(secret)
 }
 
 /// All non-secret publication metadata written atomically with the token.
@@ -112,6 +173,8 @@ pub enum Ownership {
 pub enum SecretIoError {
     #[error("managed credential operation is no longer authorized")]
     StaleOperation,
+    #[error("managed credential Secret target identity does not match")]
+    TargetIdentityMismatch,
     #[error("managed credential Secret target is owned by another actor")]
     TargetSecretConflict,
     #[error("managed credential Secret is missing required Kubernetes metadata")]
@@ -149,11 +212,17 @@ fn is_exact_owner(owner: &OwnerReference, identity: &ManagedSecretIdentity) -> b
 }
 
 pub fn is_owned_by_consumer(secret: &Secret, identity: &ManagedSecretIdentity) -> bool {
+    if identity.validate_secret(secret).is_err() {
+        return false;
+    }
     let owners = secret.metadata.owner_references.as_deref().unwrap_or_default();
     owners.len() == 1 && owners.first().is_some_and(|owner| is_exact_owner(owner, identity))
 }
 
 pub fn classify_ownership(secret: &Secret, identity: &ManagedSecretIdentity) -> Ownership {
+    if identity.validate_secret(secret).is_err() {
+        return Ownership::Conflict;
+    }
     let labels = secret.metadata.labels.as_ref();
     let annotations = secret.metadata.annotations.as_ref();
 
@@ -312,14 +381,18 @@ fn build_secret(publication: &Publication<'_>) -> Secret {
 }
 
 /// POST a complete initial publication using the stable field manager.
-pub async fn create(publication: &Publication<'_>, api: &Api<Secret>) -> Result<Secret, SecretIoError> {
+pub async fn create(publication: &Publication<'_>, client: &Client) -> Result<Secret, SecretIoError> {
     let params = PostParams {
         field_manager: Some(FIELD_MANAGER.to_string()),
         ..PostParams::default()
     };
-    api.create(&params, &build_secret(publication))
-        .await
-        .map_err(Into::into)
+    let secret = publication
+        .identity
+        .api(client)
+        .create(&params, &build_secret(publication))
+        .await?;
+    publication.identity.validate_secret(&secret)?;
+    Ok(secret)
 }
 
 fn annotation_test(path: &str, value: &str) -> Value {
@@ -365,7 +438,7 @@ pub fn build_publication_patch(
 }
 
 pub async fn publish(
-    api: &Api<Secret>,
+    client: &Client,
     cas: &PublicationCas,
     publication: &Publication<'_>,
 ) -> Result<Secret, SecretIoError> {
@@ -374,9 +447,13 @@ pub async fn publish(
         field_manager: Some(FIELD_MANAGER.to_string()),
         ..PatchParams::default()
     };
-    api.patch(&publication.identity.consumer.name, &params, &Patch::Json::<()>(patch))
-        .await
-        .map_err(Into::into)
+    let secret = publication
+        .identity
+        .api(client)
+        .patch(&publication.identity.consumer.name, &params, &Patch::Json::<()>(patch))
+        .await?;
+    publication.identity.validate_secret(&secret)?;
+    Ok(secret)
 }
 
 /// Atomically restore all managed metadata and publish data when the exact
@@ -384,7 +461,7 @@ pub async fn publish(
 /// removed. The caller must validate the live leader fence immediately before
 /// invoking this RV/owner-fenced patch.
 pub async fn repair_and_publish_owned_consumer(
-    api: &Api<Secret>,
+    client: &Client,
     current: &Secret,
     publication: &Publication<'_>,
 ) -> Result<Secret, SecretIoError> {
@@ -422,9 +499,13 @@ pub async fn repair_and_publish_owned_consumer(
         field_manager: Some(FIELD_MANAGER.to_string()),
         ..PatchParams::default()
     };
-    api.patch(&publication.identity.consumer.name, &params, &Patch::Json::<()>(patch))
-        .await
-        .map_err(Into::into)
+    let secret = publication
+        .identity
+        .api(client)
+        .patch(&publication.identity.consumer.name, &params, &Patch::Json::<()>(patch))
+        .await?;
+    publication.identity.validate_secret(&secret)?;
+    Ok(secret)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -455,6 +536,31 @@ pub fn capture_delete_expectation(
     })
 }
 
+pub fn delete_expectation_from_secret(secret: &Secret) -> Option<DeleteExpectation> {
+    let namespace = secret.metadata.namespace.clone().filter(|value| !value.is_empty())?;
+    secret.metadata.name.as_deref().filter(|value| !value.is_empty())?;
+    let annotations = secret.metadata.annotations.as_ref()?;
+    let value = |key: &str| annotations.get(key).cloned();
+    let consumer_name = value(ANNOTATION_CONSUMER_NAME)?;
+    if secret.metadata.name.as_deref() != Some(consumer_name.as_str()) {
+        return None;
+    }
+    let identity = ManagedSecretIdentity {
+        consumer: ConsumerIdentity {
+            namespace,
+            name: consumer_name,
+            uid: value(ANNOTATION_CONSUMER_UID)?,
+            generation: value(ANNOTATION_CONSUMER_GENERATION)?.parse().ok()?,
+        },
+        source: SourceIdentity {
+            name: value(ANNOTATION_SOURCE_NAME)?,
+            uid: value(ANNOTATION_SOURCE_UID)?,
+            generation: value(ANNOTATION_SOURCE_GENERATION)?.parse().ok()?,
+        },
+    };
+    capture_delete_expectation(secret, identity, value(ANNOTATION_BINDING_REVISION)?).ok()
+}
+
 fn delete_params(secret: &Secret) -> Result<DeleteParams, SecretIoError> {
     let uid = secret.metadata.uid.clone().ok_or(SecretIoError::MissingMetadata)?;
     let resource_version = secret
@@ -472,7 +578,7 @@ fn delete_params(secret: &Secret) -> Result<DeleteParams, SecretIoError> {
 }
 
 pub async fn delete_owned_consumer_object(
-    api: &Api<Secret>,
+    client: &Client,
     secret: &Secret,
     identity: &ManagedSecretIdentity,
 ) -> Result<(), SecretIoError> {
@@ -480,14 +586,14 @@ pub async fn delete_owned_consumer_object(
         return Err(SecretIoError::TargetSecretConflict);
     }
     let params = delete_params(secret)?;
-    api.delete(&identity.consumer.name, &params).await?;
+    identity.api(client).delete(&identity.consumer.name, &params).await?;
     Ok(())
 }
 
 /// Re-GET, recheck exact old markers, then delete with Secret UID and RV
 /// preconditions. Returns `false` when cleanup is obsolete or the object is gone.
 pub async fn delete_if_matches<F, Fut>(
-    api: &Api<Secret>,
+    client: &Client,
     expected: &DeleteExpectation,
     authorize: F,
 ) -> Result<bool, SecretIoError>
@@ -495,7 +601,7 @@ where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<bool, SecretIoError>>,
 {
-    let Some(secret) = api.get_opt(&expected.identity.consumer.name).await? else {
+    let Some(secret) = get_optional(client, &expected.identity).await? else {
         return Ok(false);
     };
     if classify_ownership(&secret, &expected.identity) != Ownership::Owned {
@@ -521,7 +627,11 @@ where
     if !authorize().await? {
         return Ok(false);
     }
-    api.delete(&expected.identity.consumer.name, &params).await?;
+    expected
+        .identity
+        .api(client)
+        .delete(&expected.identity.consumer.name, &params)
+        .await?;
     Ok(true)
 }
 

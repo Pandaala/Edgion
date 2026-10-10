@@ -27,10 +27,7 @@ use crate::conf_mgr::{ControllerRuntime, LeaderHandle};
 use super::memory::GeneratedSecretEntry;
 use super::providers::oauth2::{BootstrapCredentials, OAuth2FailureKind, OAuth2Provider, OAuth2ProviderError};
 use super::scheduler::{refresh_delay, retry_delay, usable_lifetime, EXPIRY_MARGIN, MIN_USABILITY};
-use super::secret_io::{
-    self, ConsumerIdentity, DeleteExpectation, ManagedSecretIdentity, Ownership, Publication, PublicationMetadata,
-    SourceIdentity,
-};
+use super::secret_io::{self, DeleteExpectation, ManagedSecretIdentity, Ownership, Publication, PublicationMetadata};
 use edgion_resources::credentials::{BearerResolver, SecretMaterialResolver};
 use edgion_resources::duration::parse_duration;
 use edgion_resources::resources::link_sys::CredentialSourceState;
@@ -778,8 +775,7 @@ async fn acquire_and_publish(
     // Kube-less workers skip Secret I/O entirely (no leftover Secrets exist).
     if let (Some(client), Some(leader), Some(fence)) = (kube_client, kube_leader, fence.as_ref()) {
         for (consumer_key, expectation) in previous_publications {
-            let api = Api::<Secret>::namespaced(client.clone(), &expectation.identity.consumer.namespace);
-            if secret_io::delete_if_matches(&api, &expectation, || async {
+            if secret_io::delete_if_matches(client, &expectation, || async {
                 if !generation_and_fence_hold(generation, Some(leader), Some(fence)).await
                     || !source_is_current(runtime, source)
                 {
@@ -1012,14 +1008,14 @@ fn recover_source_state(
         let Some(secret) = runtime.secret_store.get(Some(target_namespace), target.name()) else {
             continue;
         };
-        let Some(expected) = delete_expectation_from_secret(&secret) else {
+        let Some(expected) = secret_io::delete_expectation_from_secret(&secret) else {
             continue;
         };
-        if expected.identity.consumer.namespace == target_namespace
-            && expected.identity.consumer.name == target.name()
-            && expected.identity.consumer.uid == consumer.uid
-            && expected.identity.source.name == source.logical_key()
-            && expected.identity.source.uid == source.uid
+        if expected.identity.consumer().namespace == target_namespace
+            && expected.identity.consumer().name == target.name()
+            && expected.identity.consumer().uid == consumer.uid
+            && expected.identity.source().name == source.logical_key()
+            && expected.identity.source().uid == source.uid
         {
             publications.insert(consumer.logical_key(), expected);
         }
@@ -1052,18 +1048,8 @@ fn recover_source_state(
         if consumer.reference.validate_managed_credential_secret(&secret).is_err() {
             continue;
         }
-        let identity = ManagedSecretIdentity {
-            consumer: ConsumerIdentity {
-                namespace: target_namespace.to_string(),
-                name: target.name().to_string(),
-                uid: consumer.uid.clone(),
-                generation: consumer.generation,
-            },
-            source: SourceIdentity {
-                name: source.logical_key(),
-                uid: source.uid.clone(),
-                generation: source.generation,
-            },
+        let Ok(identity) = ManagedSecretIdentity::from_current_pair(consumer, source) else {
+            continue;
         };
         if secret_io::classify_ownership(&secret, &identity) != Ownership::Owned {
             continue;
@@ -1276,15 +1262,14 @@ async fn startup_sweep(
         return false;
     };
     for secret in secrets {
-        let Some(expectation) = delete_expectation_from_secret(&secret) else {
+        let Some(expectation) = secret_io::delete_expectation_from_secret(&secret) else {
             continue;
         };
         let still_desired = publication_is_desired(runtime, &expectation);
         if still_desired {
             continue;
         }
-        let api = Api::<Secret>::namespaced(client.clone(), &expectation.identity.consumer.namespace);
-        if secret_io::delete_if_matches(&api, &expectation, || async {
+        if secret_io::delete_if_matches(client, &expectation, || async {
             if !generation_and_fence_hold(generation, Some(leader), Some(&fence)).await {
                 return Err(secret_io::SecretIoError::StaleOperation);
             }
@@ -1303,34 +1288,11 @@ async fn startup_sweep(
     true
 }
 
-fn delete_expectation_from_secret(secret: &Secret) -> Option<DeleteExpectation> {
-    let namespace = secret.metadata.namespace.clone()?;
-    let annotations = secret.metadata.annotations.as_ref()?;
-    let value = |key: &str| annotations.get(key).cloned();
-    let consumer_name = value(secret_io::ANNOTATION_CONSUMER_NAME)?;
-    if secret.metadata.name.as_deref() != Some(consumer_name.as_str()) {
-        return None;
-    }
-    let identity = ManagedSecretIdentity {
-        consumer: ConsumerIdentity {
-            namespace,
-            name: consumer_name,
-            uid: value(secret_io::ANNOTATION_CONSUMER_UID)?,
-            generation: value(secret_io::ANNOTATION_CONSUMER_GENERATION)?.parse().ok()?,
-        },
-        source: SourceIdentity {
-            name: value(secret_io::ANNOTATION_SOURCE_NAME)?,
-            uid: value(secret_io::ANNOTATION_SOURCE_UID)?,
-            generation: value(secret_io::ANNOTATION_SOURCE_GENERATION)?.parse().ok()?,
-        },
-    };
-    secret_io::capture_delete_expectation(secret, identity, value(secret_io::ANNOTATION_BINDING_REVISION)?).ok()
-}
-
 fn publication_is_desired(runtime: &ControllerRuntime, expected: &DeleteExpectation) -> bool {
     let key = format!(
         "{}/{}",
-        expected.identity.consumer.namespace, expected.identity.consumer.name
+        expected.identity.consumer().namespace,
+        expected.identity.consumer().name
     );
     let Some(consumer) = runtime.credential_source_registry.consumer(&key) else {
         return false;
@@ -1342,11 +1304,11 @@ fn publication_is_desired(runtime: &ControllerRuntime, expected: &DeleteExpectat
         && source_is_current(runtime, &source)
         && consumer_is_current(runtime, &consumer)
         && consumer.matches_source(&source)
-        && consumer.uid == expected.identity.consumer.uid
-        && consumer.generation == expected.identity.consumer.generation
-        && consumer.source_key == expected.identity.source.name
-        && consumer.source_uid == expected.identity.source.uid
-        && consumer.source_generation == expected.identity.source.generation
+        && consumer.uid == expected.identity.consumer().uid
+        && consumer.generation == expected.identity.consumer().generation
+        && consumer.source_key == expected.identity.source().name
+        && consumer.source_uid == expected.identity.source().uid
+        && consumer.source_generation == expected.identity.source().generation
         && consumer.binding_revision() == expected.binding_revision
         && source_input_revision(&source) == expected.source_input_revision
 }
@@ -1411,26 +1373,7 @@ async fn publish_consumer(
     if !consumer.matches_source(source) {
         return Err(ReconcileFailure::transient(None));
     }
-    let target = consumer
-        .output_target()
-        .map_err(|_| ReconcileFailure::transient(None))?;
-    let namespace = target
-        .scope()
-        .namespace()
-        .ok_or_else(|| ReconcileFailure::transient(None))?;
-    let identity = ManagedSecretIdentity {
-        consumer: ConsumerIdentity {
-            namespace: namespace.to_string(),
-            name: target.name().to_string(),
-            uid: consumer.uid.clone(),
-            generation: consumer.generation,
-        },
-        source: SourceIdentity {
-            name: source.logical_key(),
-            uid: source.uid.clone(),
-            generation: source.generation,
-        },
-    };
+    let identity = ManagedSecretIdentity::from_current_pair(consumer, source).map_err(secret_io_failure)?;
     let binding_revision = consumer.binding_revision();
     let metadata = PublicationMetadata {
         publication_generation: publication_generation.to_string(),
@@ -1445,11 +1388,8 @@ async fn publish_consumer(
         metadata: &metadata,
         bearer_token: access_token.as_bytes(),
     };
-    let api = Api::<Secret>::namespaced(client.clone(), namespace);
-    let current = api
-        .get_opt(target.name())
+    let current = secret_io::get_optional(client, &identity)
         .await
-        .map_err(secret_io::SecretIoError::from)
         .map_err(secret_io_failure)?;
     let still_current = || {
         is_current_generation(generation)
@@ -1462,13 +1402,11 @@ async fn publish_consumer(
             if !leader.validate_fence(fence).await || !still_current() {
                 return Err(ReconcileFailure::transient(None));
             }
-            match secret_io::create(&publication, &api).await {
+            match secret_io::create(&publication, client).await {
                 Ok(secret) => secret,
                 Err(secret_io::SecretIoError::Kubernetes(kube::Error::Api(response))) if response.code == 409 => {
-                    let winner = api
-                        .get(target.name())
+                    let winner = secret_io::get_required(client, &identity)
                         .await
-                        .map_err(secret_io::SecretIoError::from)
                         .map_err(secret_io_failure)?;
                     if !secret_io::can_adopt_create_race(&winner, &identity) {
                         return Err(ReconcileFailure::rotation());
@@ -1477,7 +1415,7 @@ async fn publish_consumer(
                     if !leader.validate_fence(fence).await || !still_current() {
                         return Err(ReconcileFailure::transient(None));
                     }
-                    secret_io::publish(&api, &cas, &publication)
+                    secret_io::publish(client, &cas, &publication)
                         .await
                         .map_err(secret_io_failure)?
                 }
@@ -1492,13 +1430,15 @@ async fn publish_consumer(
                 if !leader.validate_fence(fence).await || !still_current() {
                     return Err(ReconcileFailure::transient(None));
                 }
-                secret_io::delete_owned_consumer_object(&api, &current, &identity)
+                secret_io::delete_owned_consumer_object(client, &current, &identity)
                     .await
                     .map_err(secret_io_failure)?;
                 if !leader.validate_fence(fence).await || !still_current() {
                     return Err(ReconcileFailure::transient(None));
                 }
-                let recreated = secret_io::create(&publication, &api).await.map_err(secret_io_failure)?;
+                let recreated = secret_io::create(&publication, client)
+                    .await
+                    .map_err(secret_io_failure)?;
                 return secret_io::capture_delete_expectation(&recreated, identity, binding_revision)
                     .map_err(secret_io_failure);
             }
@@ -1509,7 +1449,7 @@ async fn publish_consumer(
                 if !leader.validate_fence(fence).await || !still_current() {
                     return Err(ReconcileFailure::transient(None));
                 }
-                return secret_io::repair_and_publish_owned_consumer(&api, &current, &publication)
+                return secret_io::repair_and_publish_owned_consumer(client, &current, &publication)
                     .await
                     .map_err(secret_io_failure)
                     .and_then(|published| {
@@ -1521,7 +1461,7 @@ async fn publish_consumer(
             if !leader.validate_fence(fence).await || !still_current() {
                 return Err(ReconcileFailure::transient(None));
             }
-            secret_io::publish(&api, &cas, &publication)
+            secret_io::publish(client, &cas, &publication)
                 .await
                 .map_err(secret_io_failure)?
         }
@@ -1545,8 +1485,7 @@ async fn cleanup_removed_source(
                 remaining.extend(entries);
                 break;
             }
-            let api = Api::<Secret>::namespaced(client.clone(), &expectation.identity.consumer.namespace);
-            if secret_io::delete_if_matches(&api, &expectation, || async {
+            if secret_io::delete_if_matches(&client, &expectation, || async {
                 if !generation_and_fence_hold(generation, Some(&leader), Some(&fence)).await {
                     return Err(secret_io::SecretIoError::StaleOperation);
                 }
@@ -1582,8 +1521,8 @@ async fn publish_manager_result(runtime: &ControllerRuntime, source: &DesiredCre
                     .get(&consumer.logical_key())
                     .is_some_and(|expectation| {
                         consumer.matches_source(source)
-                            && expectation.identity.consumer.uid == consumer.uid
-                            && expectation.identity.source.uid == source.uid
+                            && expectation.identity.consumer().uid == consumer.uid
+                            && expectation.identity.source().uid == source.uid
                             && expectation.binding_revision == consumer.binding_revision()
                     })
             })

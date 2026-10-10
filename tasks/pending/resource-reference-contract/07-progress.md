@@ -67,13 +67,25 @@
   unit, 74 doc and 36 schema cases (433 distinct), retaining ten ignored docs
   and all 9704 old identities among 9709. The added generation-only negative
   control passes; the initial count regression and its correction remain in the
-  evidence. Local commit is pending the final manifest review. R8f.2 private IO
-  identity, API responses and orphan cleanup require a separate reviewed batch.
+  evidence. Committed locally as dc9be9a7fc8c1ee7fdd910a98d3a5e6e9552e19c
+  after both final commit reviews; all sixteen committed blobs match the manifest.
+  No push occurred.
+- R8f.2 managed Secret API identity at dc9be9a7f passes both independent Astra
+  static/execution reviews and all fourteen root gates with zero warnings. Eight
+  technical paths plus this ledger derive API coordinates from checked current
+  pairs or observed historical cleanup identity and validate returned metadata
+  before reuse. POST/409, CAS, UID/RV deletion and late authorization remain.
+  Verification passes 254 unit and 74 doc tests (328 distinct), with sixteen
+  existing ignored docs; all 9709 old identities remain among 9714. The runner's
+  nonzero-pass assertion after successful ignored-only Controller docs is retained
+  transparently; remaining Resources docs passed separately. Local commit awaits
+  the final manifest gate. Live API and conformance verification remain open.
 - F1 read-only inventory identified two further bounded material-pairing candidates:
   Gateway EdgionBackend credentials and Common LinkSys non-TLS auth. Existing
   Controller guards remain; these are missing consumer proof boundaries, not
   demonstrated ingress exploits. Generated CredentialSource operation identity
-  remains explicit backlog; ACME output identity is closed by R8e.2. Plan each separately.
+  is closed by R8f.1/R8f.2 and ACME output identity by R8e.2. Plan the two remaining
+  material-pairing candidates separately.
 - Native Gateway material selection preserves omitted raw namespaces without
   relaxing native group/kind or Grant semantics. Default's candidate reads are not
   atomic; registered dependencies and subsequent source events reconcile changes.

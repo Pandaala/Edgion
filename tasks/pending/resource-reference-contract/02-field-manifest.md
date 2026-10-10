@@ -666,7 +666,9 @@ Injector/recovery require qualified raw Secret metadata correspondence before
 bearer parsing; no generic default/bare selector is added. Historical cleanup
 expectation harvesting remains independent of current pair/token eligibility.
 
-R8f.2 remains open: private ManagedSecretIdentity construction, derived IO APIs,
-GET/409/create/patch/repair response identity, and old-source/orphan cleanup
-correspondence with post-GET authorization and UID/RV deletion preconditions.
+R8f.2 closes private ManagedSecretIdentity construction, internally derived IO
+coordinates, and GET/409/create/patch/repair response identity. Historical
+old-source/orphan cleanup derives its expectation from observed exact ownership,
+without a live old owner, and retains post-GET authorization plus UID/RV deletion
+preconditions. Explicit API namespace matching does not widen local store aliases.
 No live API/issuer or Gateway API conformance verification is claimed here.

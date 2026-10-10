@@ -470,6 +470,11 @@ of the LinkSys source namespace. The current consumer/source binding and acquire
 Secret metadata must match before a generated token is embedded. Local generated
 Secret lookup remains qualified by namespace; it does not add a bare `default`
 lookup alias. Publication ownership and token validity remain separate checks.
+Managed output API reads and write results also require the exact name and explicit
+namespace before ownership or concurrency metadata is reused. Creation remains
+POST with controlled 409 adoption, and updates use fenced JSONPatch. Cleanup of
+old publications does not require the original live source, but retains exact
+managed ownership, post-read authorization, and UID/resourceVersion preconditions.
 
 The active-entry map is **Controller-only**. It is never a LinkSys spec field, never on
 LinkSys conf_sync, never on LinkSys status, and never on Admin LinkSys

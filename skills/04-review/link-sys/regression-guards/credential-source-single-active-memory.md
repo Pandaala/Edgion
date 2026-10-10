@@ -113,6 +113,16 @@ Qualified local generated Secret reads validate raw name/namespace before bearer
 bytes are parsed; no TLS bare-default selection is added. Existing expiry, active
 entry replacement and independent retained publication owners stay unchanged.
 Cleanup expectations remain recoverable independently of token adoption and do
-not require a live old source/consumer. API-returned output identity and orphan
-cleanup IO are explicitly deferred to the next bounded output-IO batch; this
-change does not strengthen their existing POST/409/CAS/delete protocol by itself.
+not require a live old source/consumer. The subsequent R8f.2 change binds API
+coordinates to the private ManagedSecretIdentity and rejects mismatched response
+name/namespace before markers, material or UID/resourceVersion are reused. Its
+finite historical constructor returns a deletion expectation from the observed
+object and exact owner/markers, independently of current-pair token eligibility.
+Strict API metadata does not introduce a local bare-default lookup.
+
+Regression controls in secret_io_test cover ordered POST/409/GET/JSONPatch, repair,
+immutable delete/recreate and historical cleanup, including raw identity mismatches
+and stable-field-manager adoption. These are in-process IO controls, not a live
+API-server or scheduler claim. Preserve the existing post-GET authorization test,
+all CAS operations, UID plus resourceVersion deletion, and each manager cleanup
+closure: historical cleanup must not require a vanished old owner.

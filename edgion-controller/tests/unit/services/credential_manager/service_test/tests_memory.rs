@@ -124,25 +124,7 @@ fn recoverable_secret(
     consumer: &DesiredCredentialConsumer,
     input_revision: &str,
 ) -> Secret {
-    let identity = ManagedSecretIdentity {
-        consumer: ConsumerIdentity {
-            namespace: consumer
-                .output_target()
-                .unwrap()
-                .scope()
-                .namespace()
-                .unwrap()
-                .to_string(),
-            name: consumer.output_target().unwrap().name().to_string(),
-            uid: consumer.uid.clone(),
-            generation: consumer.generation,
-        },
-        source: SourceIdentity {
-            name: source.logical_key(),
-            uid: source.uid.clone(),
-            generation: source.generation,
-        },
-    };
+    let identity = ManagedSecretIdentity::from_current_pair(consumer, source).unwrap();
     let issued_at = SystemTime::now();
     let valid_until = issued_at + Duration::from_secs(3_600);
     Secret {
@@ -786,19 +768,7 @@ fn stale_success_and_partial_failure_keep_cleanup_only_metadata() {
 
 fn leftover_delete_expectation() -> DeleteExpectation {
     DeleteExpectation {
-        identity: ManagedSecretIdentity {
-            consumer: ConsumerIdentity {
-                namespace: "apps".to_string(),
-                name: "plugin".to_string(),
-                uid: "uid-plugin".to_string(),
-                generation: 1,
-            },
-            source: SourceIdentity {
-                name: "ops/source".to_string(),
-                uid: "source-uid".to_string(),
-                generation: 2,
-            },
-        },
+        identity: ManagedSecretIdentity::from_current_pair(&memory_consumer("plugin"), &persist_source(true)).unwrap(),
         binding_revision: "binding-rev".to_string(),
         secret_uid: "secret-uid".to_string(),
         publication_generation: "pub-old".to_string(),
@@ -1032,7 +1002,7 @@ async fn actual_pair_gates_recovery_completion_counts_and_memory_clear() {
         &consumer_revision(std::slice::from_ref(&generation_mismatch), 0)
     ));
     runtime.credential_source_registry.replace_consumer(consumer.clone());
-    let expectation = delete_expectation_from_secret(&valid).unwrap();
+    let expectation = secret_io::delete_expectation_from_secret(&valid).unwrap();
     assert!(publication_is_desired(&runtime, &expectation));
     assert!(reconciled_consumers_current(
         &runtime,
@@ -1095,4 +1065,24 @@ async fn actual_pair_gates_recovery_completion_counts_and_memory_clear() {
         0
     );
     assert!(runtime.credential_memory.active(&source.identity_key()).is_some());
+}
+
+#[test]
+fn managed_api_identity_comes_from_actual_pair_and_canonical_default() {
+    let source = persist_source(true);
+    let consumer = memory_consumer("plugin");
+    let identity = ManagedSecretIdentity::from_current_pair(&consumer, &source).unwrap();
+    assert_eq!(identity.consumer().namespace, "apps");
+    assert_eq!(identity.consumer().name, "plugin");
+    assert_eq!(identity.source().name, "ops/source");
+    let mut mismatch = consumer.clone();
+    mismatch.source_generation += 1;
+    assert!(ManagedSecretIdentity::from_current_pair(&mismatch, &source).is_err());
+    let mut default_consumer = consumer.clone();
+    default_consumer.resource.namespace = None;
+    default_consumer.reference = crate::reference_test_support::injector_reference(
+        &crate::reference_test_support::injector_owner("default", "plugin", "uid-plugin", 1, "ops/source"),
+    );
+    let identity = ManagedSecretIdentity::from_current_pair(&default_consumer, &source).unwrap();
+    assert_eq!(identity.consumer().namespace, "default");
 }

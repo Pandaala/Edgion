@@ -288,5 +288,12 @@ bare-default fallback. Managed markers, expiry and single-active memory remain
 independent. Pair validation also gates fan-out, completion acceptance, publication
 desirability, published counts and memory clearing. Historical cleanup expectation
 recovery remains independent of current token adoptability or live owner existence.
-The subsequent generated-output IO batch still owns API/409/write-response and
-old-orphan cleanup correspondence; this local-read migration does not close it.
+Managed Secret IO derives API coordinates from the private checked identity.
+Initial GET, 409 winner, POST and JSONPatch results require explicit matching
+name/namespace before markers or concurrency metadata are reused. POST creation,
+field-manager-qualified 409 adoption, all JSONPatch CAS tests, and fenced immutable
+recreation remain unchanged. Historical cleanup reconstructs only an expectation
+from observed metadata and exact ownership; no live old owner is needed. Cleanup
+rechecks identity after GET, then its original authorization closure, and deletes
+with both Secret UID and resourceVersion preconditions. API namespace is strict: a
+default target requires returned namespace `default`, never omitted metadata.
