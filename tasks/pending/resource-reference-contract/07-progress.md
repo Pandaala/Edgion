@@ -144,8 +144,26 @@
   controls prove retarget/restoration, CA rotation and schema-error priority.
   E0505/E0506 diagnostics verify owner loans; the standalone negative drop probe's
   unused-mut warning is separate from warning-free Cargo/root phases. Initial
-  E0597 and runner-path startup errors remain documented. Final commit review is
-  pending. C2 local TLS consumers and broad live/conformance verification remain.
+  E0597 and runner-path startup errors remain documented. Committed locally as
+  6aee23ed423e1d89989b519b4d3c026fe5c77446 after both final commit reviews;
+  all ten blobs match the manifest. No push occurred. C2 local TLS consumers and
+  broad live/conformance verification remain.
+- R11c.1 OIDC actual local TLS binding at 6aee23ed passes both independent
+  Astra static and execution reviews. The seven technical paths plus this ledger
+  bind ordinary/SAN construction to the actual entry and one captured global
+  snapshot before cache reuse, preserving error precedence and transport policy.
+  Focused verification passes 711 distinct cases (613 unit and 98 doctests),
+  retaining ten ignored docs and sixteen ignored OIDC cases. All 9734 baseline
+  IDs remain among 9738; exactly eight reviewed old fixture migrations preserve
+  assertions. Initial compile and detached-dye-fixture failures remain recorded.
+  All fourteen root gates pass with zero warnings (workspace check 26.379 seconds,
+  Clippy 37.195 seconds). Source/log/binary evidence is under
+  `tmp/resource-reference-contract/r11c1-verification-20261010/` and root gates
+  under `tmp/resource-reference-contract/r11c1-root-verification-20261010/`.
+  Local commit gate is next; no push or live/conformance acceptance is claimed.
+  LDAP, ExtProc and Wasm remain separate serial batches; Wasm must explicitly
+  fix disabled-custom-TLS behavior while preserving HTTPS. Whole-contract review,
+  documentation/task cleanup and fresh live/conformance verification remain open.
 - F1's Gateway EdgionBackend and Common LinkSys non-TLS auth material-pairing
   candidates are closed by R9a/R9b. Existing Controller guards remain; these are
   consumer proof boundaries, not demonstrated ingress exploits. Generated CredentialSource operation identity is closed by R8f.1/R8f.2

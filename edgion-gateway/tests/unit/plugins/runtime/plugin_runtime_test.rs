@@ -2882,3 +2882,125 @@ async fn header_ca_owner_preflight_precedes_cache_and_new_generations_recover() 
         };
     }
 }
+
+#[test]
+fn oidc_actual_tls_preflight_precedes_cache_and_fresh_generations_recover() {
+    use edgion_common::link_sys_core::outbound_tls::{
+        outbound_global_default, resolve_validated_outbound_tls, EffectiveCa,
+    };
+    use edgion_resources::EdgionPlugins;
+    let certificate = rcgen::generate_simple_self_signed(vec!["idp.example.com".into()]).unwrap();
+    let pem = certificate.cert.pem();
+    let secret = k8s_openapi::api::core::v1::Secret {
+        metadata: kube::core::ObjectMeta {
+            name: Some("ca".into()),
+            namespace: Some("apps".into()),
+            resource_version: Some("7".into()),
+            ..Default::default()
+        },
+        data: Some(std::collections::BTreeMap::from([(
+            "ca.crt".into(),
+            k8s_openapi::ByteString(pem.as_bytes().to_vec()),
+        )])),
+        ..Default::default()
+    };
+    let base = serde_json::json!({"metadata":{"name":"oidc","namespace":"apps","uid":"first"},"spec":{
+        "requestPlugins":[{"type":"OpenidConnect","config":{"discovery":"https://idp.example.com/discovery","clientId":"client","bearerOnly":true,
+            "tls":{"verify":true,"validation":{"caCertificateRefs":[{"kind":"Secret","name":"ca"}]}},"resolvedCaCertificates":[secret]}}]
+    }});
+    let owner: EdgionPlugins = serde_json::from_value(base.clone()).unwrap();
+    let mut cache = EntryCache::default();
+    let mut first = PluginRuntime::new();
+    assert!(first.add_from_request_filters_with_cache(&owner, &mut cache).is_empty());
+    let first_filter = first.request_plugins_iter().next().unwrap().clone();
+    let mut repeat = PluginRuntime::new();
+    assert!(repeat
+        .add_from_request_filters_with_cache(&owner, &mut cache)
+        .is_empty());
+    assert!(Arc::ptr_eq(
+        &first_filter,
+        repeat.request_plugins_iter().next().unwrap()
+    ));
+    for case in ["owner", "material", "retarget", "missing", "schema-owner"] {
+        let mut candidate = base.clone();
+        match case {
+            "owner" | "schema-owner" => candidate["metadata"]["name"] = serde_json::json!("bad/name"),
+            "material" => {
+                candidate["spec"]["requestPlugins"][0]["config"]["resolvedCaCertificates"][0]["metadata"]["namespace"] =
+                    serde_json::json!("other")
+            }
+            "retarget" => {
+                candidate["spec"]["requestPlugins"][0]["config"]["tls"]["validation"]["caCertificateRefs"][0]["name"] =
+                    serde_json::json!("next")
+            }
+            "missing" => {
+                candidate["spec"]["requestPlugins"][0]["config"]["resolvedCaCertificates"] = serde_json::Value::Null
+            }
+            _ => {}
+        }
+        if case == "schema-owner" {
+            candidate["spec"]["requestPlugins"][0]["config"]["claimsToHeaders"] =
+                serde_json::json!({"sub":"bad header"});
+        }
+        let candidate: EdgionPlugins = serde_json::from_value(candidate).unwrap();
+        let mut invalid = PluginRuntime::new();
+        let errors = invalid.add_from_request_filters_with_cache(&candidate, &mut cache);
+        assert!(!errors.is_empty(), "{case}");
+        assert_eq!(invalid.request_plugins_iter().count(), 0, "{case}");
+        if case == "schema-owner" {
+            assert_eq!(
+                errors,
+                vec!["requestPlugins[0] (OpenidConnect): claim-to-header destination must be a valid HTTP header name"]
+            );
+        }
+    }
+    for case in ["retarget", "rotation", "restoration", "disabled"] {
+        let mut candidate = base.clone();
+        let mut expected = pem.as_bytes().to_vec();
+        if case == "retarget" {
+            candidate["spec"]["requestPlugins"][0]["config"]["tls"]["validation"]["caCertificateRefs"][0]["name"] =
+                serde_json::json!("next");
+            candidate["spec"]["requestPlugins"][0]["config"]["resolvedCaCertificates"][0]["metadata"]["name"] =
+                serde_json::json!("next");
+        }
+        if case == "rotation" {
+            expected = rcgen::generate_simple_self_signed(vec!["next.example.com".into()])
+                .unwrap()
+                .cert
+                .pem()
+                .into_bytes();
+            candidate["spec"]["requestPlugins"][0]["config"]["resolvedCaCertificates"][0]["data"]["ca.crt"] =
+                serde_json::to_value(k8s_openapi::ByteString(expected.clone())).unwrap();
+        }
+        if case == "disabled" {
+            candidate["spec"]["requestPlugins"][0]["enable"] = serde_json::json!(false);
+            candidate["metadata"]["name"] = serde_json::json!("bad/name");
+        }
+        let candidate: EdgionPlugins = serde_json::from_value(candidate).unwrap();
+        let mut fresh = PluginRuntime::new();
+        assert!(
+            fresh
+                .add_from_request_filters_with_cache(&candidate, &mut EntryCache::default())
+                .is_empty(),
+            "{case}"
+        );
+        assert_eq!(fresh.request_plugins_iter().count(), usize::from(case != "disabled"));
+        if case != "disabled" {
+            assert!(!Arc::ptr_eq(
+                &first_filter,
+                fresh.request_plugins_iter().next().unwrap()
+            ));
+            let prepared = PreparedPluginReferences::from_plugins(&candidate);
+            let binding = prepared.bind(&candidate).unwrap();
+            let entry = binding.request_entries().next().unwrap();
+            let defaults = outbound_global_default();
+            let proof = OpenidConnect::validate_tls_entry(&entry, &defaults).unwrap();
+            let resolved = resolve_validated_outbound_tls(&proof, true, &defaults).unwrap();
+            let EffectiveCa::Custom(bundles) = resolved.ca else {
+                panic!("actual CA must remain selected")
+            };
+            assert_eq!(bundles, vec![expected]);
+        }
+    }
+    assert_eq!(first_filter.name(), "OpenidConnect");
+}

@@ -17,6 +17,28 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+fn actual_oidc(config: &OpenidConnectConfig, namespace: String) -> Result<OpenidConnect, String> {
+    use edgion_resources::resources::refs::plugin_fields::PreparedPluginReferences;
+    let owner: edgion_resources::EdgionPlugins = serde_json::from_value(json!({
+        "metadata":{"name":"oidc-test","namespace":namespace},
+        "spec":{"requestPlugins":[{"type":"OpenidConnect","config":config}]}
+    }))
+    .unwrap();
+    let prepared = PreparedPluginReferences::from_plugins(&owner);
+    let binding = prepared.bind(&owner).unwrap();
+    let entry = binding.request_entries().next().unwrap();
+    OpenidConnect::try_new(
+        &entry,
+        &edgion_common::link_sys_core::outbound_tls::outbound_global_default(),
+    )
+}
+
+impl OpenidConnect {
+    pub(super) fn new(config: &OpenidConnectConfig, namespace: String) -> Self {
+        actual_oidc(config, namespace).expect("test OIDC configuration must build")
+    }
+}
+
 #[test]
 fn credential_dto_debug_omits_all_fields_and_preserves_transport() {
     let state: super::AuthorizationStateCookie = serde_json::from_value(json!({
@@ -171,6 +193,11 @@ fn prepared_generation_clears_carriers_without_mutating_caller_and_uses_static_n
     });
     config.tls.client_certificate_ref = Some(secret_ref("idp-client"));
     config.resolved_ca_certificates = Some(vec![k8s_openapi::api::core::v1::Secret {
+        metadata: kube::core::ObjectMeta {
+            name: Some("idp-ca".into()),
+            namespace: Some("default".into()),
+            ..Default::default()
+        },
         data: Some(BTreeMap::from([(
             "ca.crt".to_string(),
             ByteString(certificate.as_bytes().to_vec()),
@@ -178,6 +205,11 @@ fn prepared_generation_clears_carriers_without_mutating_caller_and_uses_static_n
         ..Default::default()
     }]);
     config.resolved_client_certificate = Some(k8s_openapi::api::core::v1::Secret {
+        metadata: kube::core::ObjectMeta {
+            name: Some("idp-client".into()),
+            namespace: Some("default".into()),
+            ..Default::default()
+        },
         data: Some(BTreeMap::from([
             ("tls.crt".to_string(), ByteString(certificate.into_bytes())),
             ("tls.key".to_string(), ByteString(private_key.into_bytes())),
@@ -1495,9 +1527,18 @@ async fn session_refresh_timeout_dye_reaches_jwks_without_bearer_jwks_or_nonce()
                 .unwrap(),
             );
             assert_eq!(entry.validate_dye(), None);
+            let mut owner: edgion_resources::EdgionPlugins = serde_json::from_value(json!({
+                "metadata": {"name": "oidc-dye", "namespace": "default"},
+                "spec": {}
+            }))
+            .unwrap();
+            owner.spec.request_plugins = Some(vec![entry]);
             let mut runtime = PluginRuntime::new();
             assert!(runtime
-                .add_from_request_filters(&[entry], "default", "default/oidc-dye")
+                .add_resource_filters_with_cache(
+                    &owner,
+                    &mut crate::plugins::runtime::entry_bundle::EntryCache::default(),
+                )
                 .is_empty());
             let plan = runtime
                 .request_plugins_iter()
@@ -2519,7 +2560,7 @@ fn oidc_construction_fails_closed_when_custom_ca_is_unresolved() {
         ..Default::default()
     });
 
-    let error = OpenidConnect::try_new(&config, "default".to_string())
+    let error = actual_oidc(&config, "default".to_string())
         .err()
         .expect("unresolved custom CA must reject plugin construction");
     assert_eq!(error, "openid_connect outbound HTTP client build failed");
@@ -2544,6 +2585,11 @@ fn oidc_construction_fails_closed_when_custom_ca_contains_no_certificate() {
         ..Default::default()
     });
     config.resolved_ca_certificates = Some(vec![k8s_openapi::api::core::v1::Secret {
+        metadata: kube::core::ObjectMeta {
+            name: Some("idp-ca".into()),
+            namespace: Some("default".into()),
+            ..Default::default()
+        },
         data: Some(BTreeMap::from([(
             "ca.crt".to_string(),
             ByteString(b"not-a-pem".to_vec()),
@@ -2551,7 +2597,7 @@ fn oidc_construction_fails_closed_when_custom_ca_contains_no_certificate() {
         ..Default::default()
     }]);
 
-    let error = OpenidConnect::try_new(&config, "default".to_string())
+    let error = actual_oidc(&config, "default".to_string())
         .err()
         .expect("custom CA without a certificate must reject plugin construction");
     assert_eq!(error, "openid_connect outbound HTTP client build failed");
@@ -2566,7 +2612,12 @@ fn oidc_construction_rejects_mixed_custom_ca_with_and_without_san() {
 
     let certificate =
         rcgen::generate_simple_self_signed(vec!["idp.example.com".to_string()]).expect("generate OIDC CA certificate");
-    let ca_secret = |pem: &[u8]| k8s_openapi::api::core::v1::Secret {
+    let ca_secret = |name: &str, pem: &[u8]| k8s_openapi::api::core::v1::Secret {
+        metadata: kube::core::ObjectMeta {
+            name: Some(name.into()),
+            namespace: Some("default".into()),
+            ..Default::default()
+        },
         data: Some(BTreeMap::from([("ca.crt".to_string(), ByteString(pem.to_vec()))])),
         ..Default::default()
     };
@@ -2594,9 +2645,12 @@ fn oidc_construction_rejects_mixed_custom_ca_with_and_without_san() {
             }),
             ..Default::default()
         });
-        config.resolved_ca_certificates = Some(vec![ca_secret(certificate.cert.pem().as_bytes()), ca_secret(b"")]);
+        config.resolved_ca_certificates = Some(vec![
+            ca_secret("idp-ca-valid", certificate.cert.pem().as_bytes()),
+            ca_secret("idp-ca-empty", b""),
+        ]);
 
-        let error = OpenidConnect::try_new(&config, "default".to_string())
+        let error = actual_oidc(&config, "default".to_string())
             .err()
             .expect("a mixed valid and empty CA list must reject OIDC construction");
         let expected = if with_san {
@@ -2620,7 +2674,7 @@ fn oidc_construction_fails_closed_when_mtls_secret_is_unresolved() {
         namespace: None,
     });
 
-    let error = OpenidConnect::try_new(&config, "default".to_string())
+    let error = actual_oidc(&config, "default".to_string())
         .err()
         .expect("unresolved mTLS Secret must reject plugin construction");
     assert_eq!(error, "openid_connect outbound HTTP client build failed");
@@ -2650,6 +2704,11 @@ fn oidc_san_construction_fails_closed_when_custom_ca_is_invalid() {
         ..Default::default()
     });
     config.resolved_ca_certificates = Some(vec![k8s_openapi::api::core::v1::Secret {
+        metadata: kube::core::ObjectMeta {
+            name: Some("idp-ca".into()),
+            namespace: Some("default".into()),
+            ..Default::default()
+        },
         data: Some(BTreeMap::from([(
             "ca.crt".to_string(),
             ByteString(b"not-a-pem".to_vec()),
@@ -2657,7 +2716,7 @@ fn oidc_san_construction_fails_closed_when_custom_ca_is_invalid() {
         ..Default::default()
     }]);
 
-    let error = OpenidConnect::try_new(&config, "default".to_string())
+    let error = actual_oidc(&config, "default".to_string())
         .err()
         .expect("invalid SAN-pinning CA must reject plugin construction");
     assert_eq!(error, "openid_connect SAN-pinning TLS config build failed");
@@ -2665,7 +2724,7 @@ fn oidc_san_construction_fails_closed_when_custom_ca_is_invalid() {
 
 #[test]
 fn oidc_default_client_construction_succeeds_with_egress_resolver() {
-    OpenidConnect::try_new(&base_config(), "default".to_string())
+    actual_oidc(&base_config(), "default".to_string())
         .expect("default OIDC client must build with dial-time egress policy");
 }
 
@@ -2863,5 +2922,268 @@ async fn test_get_or_fetch_jwks_unreachable_no_cache_records_fail_close() {
     assert!(
         err.to_string().contains("503") || err.to_string().contains("status"),
         "expected status error, got: {err}"
+    );
+}
+
+fn oidc_tls_owner(with_san: bool) -> (edgion_resources::EdgionPlugins, String, String) {
+    use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType};
+    use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+    let cert = rcgen::generate_simple_self_signed(vec!["idp.example.com".into()]).unwrap();
+    let pem = cert.cert.pem();
+    let key = cert.signing_key.serialize_pem();
+    let mut config = base_config();
+    config.tls.verify = Some(true);
+    config.tls.validation = Some(OutboundTlsValidation {
+        ca_certificate_refs: Some(vec![serde_json::from_value(
+            json!({"name":"ca","kind":"Secret","group":"core"}),
+        )
+        .unwrap()]),
+        subject_alt_names: with_san.then(|| {
+            vec![SubjectAltName {
+                san_type: SubjectAltNameType::Hostname,
+                hostname: Some("idp.example.com".into()),
+                uri: None,
+            }]
+        }),
+        ..Default::default()
+    });
+    config.tls.client_certificate_ref = Some(serde_json::from_value(json!({"name":"client","group":"core"})).unwrap());
+    let secret = |name: &str, fields: &[(&str, &[u8])]| k8s_openapi::api::core::v1::Secret {
+        metadata: kube::core::ObjectMeta {
+            name: Some(name.into()),
+            namespace: Some("default".into()),
+            resource_version: Some("7".into()),
+            ..Default::default()
+        },
+        data: Some(
+            fields
+                .iter()
+                .map(|(k, v)| (k.to_string(), k8s_openapi::ByteString(v.to_vec())))
+                .collect(),
+        ),
+        ..Default::default()
+    };
+    config.resolved_ca_certificates = Some(vec![secret("ca", &[("ca.crt", pem.as_bytes())])]);
+    config.resolved_client_certificate = Some(secret(
+        "client",
+        &[("tls.crt", pem.as_bytes()), ("tls.key", key.as_bytes())],
+    ));
+    let owner = serde_json::from_value(json!({"metadata":{"name":"oidc","uid":"first"},"spec":{
+        "requestPlugins":[{"type":"OpenidConnect","config":config}]}}))
+    .unwrap();
+    (owner, pem, key)
+}
+
+#[test]
+fn oidc_actual_tls_identity_precedes_both_crypto_branches() {
+    use edgion_common::link_sys_core::outbound_tls::{resolve_validated_outbound_tls, EffectiveCa};
+    use edgion_resources::resources::refs::plugin_fields::PreparedPluginReferences;
+    use edgion_resources::EdgionPlugin;
+    let defaults = edgion_common::link_sys_core::outbound_tls::test_util::snapshot(Default::default());
+    for with_san in [false, true] {
+        let (owner, pem, key) = oidc_tls_owner(with_san);
+        for case in [
+            "matching",
+            "configmap",
+            "ca-name",
+            "ca-no-name",
+            "ca-ns",
+            "ca-no-ns",
+            "ca-empty-ns",
+            "client-name",
+            "client-no-name",
+            "client-ns",
+            "client-no-ns",
+            "marker",
+            "client-marker",
+            "retarget",
+            "no-ref",
+            "no-ca",
+            "no-client",
+            "owner",
+            "no-owner",
+            "owner-ns",
+            "claim-priority",
+        ] {
+            let mut candidate = owner.clone();
+            let EdgionPlugin::OpenidConnect(config) = &mut candidate.spec.request_plugins.as_mut().unwrap()[0].plugin
+            else {
+                panic!()
+            };
+            match case {
+                "configmap" => {
+                    config
+                        .tls
+                        .validation
+                        .as_mut()
+                        .unwrap()
+                        .ca_certificate_refs
+                        .as_mut()
+                        .unwrap()[0]
+                        .kind = "ConfigMap".into();
+                    config.resolved_ca_certificates.as_mut().unwrap()[0]
+                        .metadata
+                        .annotations = Some(std::collections::BTreeMap::from([(
+                        edgion_resources::constants::annotations::edgion::CONTROLLER_CA_SOURCE.into(),
+                        edgion_resources::constants::annotations::edgion::CONTROLLER_CA_SOURCE_CONFIG_MAP.into(),
+                    )]));
+                }
+                "ca-name" => config.resolved_ca_certificates.as_mut().unwrap()[0].metadata.name = Some("other".into()),
+                "ca-no-name" => config.resolved_ca_certificates.as_mut().unwrap()[0].metadata.name = None,
+                "ca-ns" => {
+                    config.resolved_ca_certificates.as_mut().unwrap()[0].metadata.namespace = Some("other".into())
+                }
+                "ca-no-ns" => config.resolved_ca_certificates.as_mut().unwrap()[0].metadata.namespace = None,
+                "ca-empty-ns" => {
+                    config.resolved_ca_certificates.as_mut().unwrap()[0].metadata.namespace = Some("".into())
+                }
+                "client-name" => {
+                    config.resolved_client_certificate.as_mut().unwrap().metadata.name = Some("other".into())
+                }
+                "client-no-name" => config.resolved_client_certificate.as_mut().unwrap().metadata.name = None,
+                "client-ns" => {
+                    config.resolved_client_certificate.as_mut().unwrap().metadata.namespace = Some("other".into())
+                }
+                "client-no-ns" => config.resolved_client_certificate.as_mut().unwrap().metadata.namespace = None,
+                "marker" | "client-marker" => {
+                    let secret = if case == "marker" {
+                        &mut config.resolved_ca_certificates.as_mut().unwrap()[0]
+                    } else {
+                        config.resolved_client_certificate.as_mut().unwrap()
+                    };
+                    secret.metadata.annotations = Some(std::collections::BTreeMap::from([(
+                        edgion_resources::constants::annotations::edgion::CONTROLLER_CA_SOURCE.into(),
+                        "ConfigMap".into(),
+                    )]));
+                }
+                "retarget" => {
+                    config
+                        .tls
+                        .validation
+                        .as_mut()
+                        .unwrap()
+                        .ca_certificate_refs
+                        .as_mut()
+                        .unwrap()[0]
+                        .name = "other".into()
+                }
+                "no-ref" => config.tls.validation.as_mut().unwrap().ca_certificate_refs = None,
+                "no-ca" => config.resolved_ca_certificates = None,
+                "no-client" => config.resolved_client_certificate = None,
+                "claim-priority" => {
+                    config.claims_to_headers = Some(HashMap::from([("sub".into(), "bad header".into())]))
+                }
+                _ => {}
+            }
+            match case {
+                "owner" | "claim-priority" => candidate.metadata.name = Some("bad/name".into()),
+                "no-owner" => candidate.metadata.name = None,
+                "owner-ns" => candidate.metadata.namespace = Some("Bad_NS".into()),
+                _ => {}
+            }
+            let prepared = PreparedPluginReferences::from_plugins(&candidate);
+            let binding = prepared.bind(&candidate).unwrap();
+            let entry = binding.request_entries().next().unwrap();
+            let proof = OpenidConnect::validate_tls_entry(&entry, &defaults);
+            if matches!(case, "matching" | "configmap") {
+                let resolved = resolve_validated_outbound_tls(&proof.unwrap(), true, &defaults).unwrap();
+                let EffectiveCa::Custom(bundles) = resolved.ca else {
+                    panic!("actual custom CA must survive")
+                };
+                assert_eq!(bundles, vec![pem.as_bytes().to_vec()]);
+                let (cert, private) = resolved.client_identity.unwrap();
+                assert_eq!(cert, pem.as_bytes());
+                assert_eq!(private.as_slice(), key.as_bytes());
+                let plugin = OpenidConnect::try_new(&entry, &defaults).unwrap();
+                assert!(plugin.config.resolved_ca_certificates.is_none());
+                assert!(plugin.config.resolved_client_certificate.is_none());
+            } else {
+                assert!(proof.is_err(), "{case}");
+                let error = OpenidConnect::try_new(&entry, &defaults)
+                    .err()
+                    .expect("actual identity must reject before parsing");
+                if case == "claim-priority" {
+                    assert_eq!(error, "claim-to-header destination must be a valid HTTP header name");
+                } else {
+                    assert_eq!(
+                        error,
+                        if with_san {
+                            "openid_connect outbound TLS resolution failed"
+                        } else {
+                            "openid_connect outbound HTTP client build failed"
+                        },
+                        "{case}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn oidc_both_tls_branches_use_the_captured_global_generation() {
+    crate::test_subprocess::assert_in_subprocess(
+        "plugins::http::openid_connect::plugin::tests",
+        "oidc_both_tls_branches_use_the_captured_global_generation",
+        "EDGION_OIDC_CAPTURED_TLS_TEST",
+        "captured",
+        || {
+            use edgion_common::link_sys_core::outbound_tls::{
+                outbound_global_default, resolve_validated_outbound_tls, set_outbound_global_default, EffectiveCa,
+            };
+            use edgion_resources::resources::common::OutboundTlsConfig;
+            use edgion_resources::resources::refs::plugin_fields::PreparedPluginReferences;
+            use edgion_resources::EdgionPlugin;
+            let previous = outbound_global_default();
+            for with_san in [false, true] {
+                let (mut owner, pem, key) = oidc_tls_owner(with_san);
+                let EdgionPlugin::OpenidConnect(config) = &mut owner.spec.request_plugins.as_mut().unwrap()[0].plugin
+                else {
+                    panic!()
+                };
+                let mut global = OutboundTlsConfig {
+                    verify: true,
+                    client_certificate_ref: config.tls.client_certificate_ref.take(),
+                    resolved_client_certificate: config.resolved_client_certificate.take(),
+                    ..Default::default()
+                };
+                // Local SAN replaces the CA axis; mTLS still inherits in both branches.
+                global.client_certificate_ref.as_mut().unwrap().namespace = Some("default".into());
+                if !with_san {
+                    global.validation = config.tls.validation.take();
+                    for reference in global
+                        .validation
+                        .as_mut()
+                        .unwrap()
+                        .ca_certificate_refs
+                        .as_mut()
+                        .unwrap()
+                    {
+                        reference.namespace = Some("default".into());
+                    }
+                    global.resolved_ca_certificates = config.resolved_ca_certificates.take();
+                }
+                let captured = edgion_common::link_sys_core::outbound_tls::test_util::snapshot(global.clone());
+                global.resolved_client_certificate.as_mut().unwrap().metadata.name = Some("wrong".into());
+                let invalid = edgion_common::link_sys_core::outbound_tls::test_util::snapshot(global);
+                set_outbound_global_default(invalid.clone());
+                let prepared = PreparedPluginReferences::from_plugins(&owner);
+                let binding = prepared.bind(&owner).unwrap();
+                let entry = binding.request_entries().next().unwrap();
+                let proof = OpenidConnect::validate_tls_entry(&entry, &captured).unwrap();
+                let resolved = resolve_validated_outbound_tls(&proof, true, &captured).unwrap();
+                let EffectiveCa::Custom(bundles) = resolved.ca else {
+                    panic!("captured/local CA must survive")
+                };
+                assert_eq!(bundles, vec![pem.as_bytes().to_vec()]);
+                let (cert, private) = resolved.client_identity.unwrap();
+                assert_eq!(cert, pem.as_bytes());
+                assert_eq!(private.as_slice(), key.as_bytes());
+                assert!(OpenidConnect::try_new(&entry, &captured).is_ok());
+                set_outbound_global_default(captured.clone());
+                assert!(OpenidConnect::try_new(&entry, &invalid).is_err());
+            }
+            set_outbound_global_default(previous);
+        },
     );
 }

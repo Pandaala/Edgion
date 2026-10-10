@@ -941,6 +941,14 @@ macro_rules! entry_access {
         pub fn config(&self) -> &EdgionPlugin {
             self.plugin
         }
+        /// Borrow the canonical namespace of the actual current entry owner.
+        pub fn owner_namespace(&self) -> Result<&str, ReferenceError> {
+            self.references()?.validate_source()?;
+            self.topology
+                .owner
+                .namespace()
+                .ok_or(ReferenceError::InvalidNamespace)
+        }
         /// Lend actual fixed LinkSys configuration after current topology/source checks.
         ///
         /// ```compile_fail

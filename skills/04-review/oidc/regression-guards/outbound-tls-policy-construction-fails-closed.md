@@ -33,6 +33,28 @@ actually effective and no SAN policy raises verification, client identity is
 intentionally omitted. Do not reinterpret that accepted limitation as
 authorization for construction-time fallback.
 
+## Actual owner and captured inheritance
+
+OIDC construction accepts the actual `BoundPluginEntry`, validates its existing
+local TLS selection and inherited axes through Common, and derives its namespace
+from that owner. Exact metadata/provenance, CA cardinality and client presence
+are checked before parsing or entry-cache reuse. Missing material namespace is
+not an alias for default; omitted owner/reference namespaces retain canonical
+defaults. Disabled entries remain inert. Claim-projection errors retain direct
+constructor priority, and schema errors retain runtime priority.
+
+The runtime captures one global-default snapshot for preflight and construction.
+The ordinary client uses `build_outbound_client_with_tls_selection`; local SAN
+construction uses `resolve_validated_outbound_tls` against the same snapshot and
+passes the verified rustls configuration to the canonical HTTP factory. Neither
+branch reloads ambient defaults. Existing egress, prewarm, crypto and non-TLS
+Secret/session fallback behavior remains separate and unchanged.
+
+EntryCache belongs to one immutable PluginGeneration. Valid source replacement
+uses a new generation/cache; occupied-cache invalid candidates only test the
+preflight boundary. Unit checks of effective CA/client bytes and constructor
+success are not live TLS handshake or Gateway API conformance evidence.
+
 ## Review checks
 
 1. Search OIDC construction for any fallback to the default shared client
@@ -46,9 +68,11 @@ authorization for construction-time fallback.
 4. Keep OIDC constructor diagnostics and returned errors static and operator-safe;
    do not format TLS dependency errors or endpoint URLs even on the cold path.
    See [dependency error projection](dependency-error-projection.md).
-5. Tests that mutate the process-wide outbound TLS default must use the shared
-   RAII test guard, which installs a clean default and restores the previous
-   value on normal return or unwind.
+5. Common tests that mutate the process-wide outbound TLS default use the shared
+   RAII test guard, restoring the previous value on return or unwind. Gateway
+   tests, where that Common cfg(test) guard is inaccessible, use the existing
+   exact-child subprocess helper, restore the previous value on normal return,
+   and rely on child process teardown on panic.
 
 ## Regression evidence
 

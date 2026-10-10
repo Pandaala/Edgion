@@ -948,3 +948,37 @@ fn header_ca_compressed_material_is_bound_to_actual_targets_and_active_owner() {
         assert!(std::ptr::eq(field.config(), actual));
     }
 }
+
+#[test]
+fn checked_entry_namespace_comes_from_current_canonical_owner() {
+    let owner: EdgionPlugins = serde_json::from_value(json!({"metadata":{"name":"oidc","uid":"first"},"spec":{
+        "requestPlugins":[{"type":"OpenidConnect","config":{"discovery":"https://idp.example/discovery","clientId":"client"}}]
+    }})).unwrap();
+    for (namespace, valid) in [
+        (None, true),
+        (Some("apps"), true),
+        (Some(""), false),
+        (Some("Bad_NS"), false),
+    ] {
+        let mut owner = owner.clone();
+        owner.metadata.namespace = namespace.map(str::to_owned);
+        let prepared = PreparedPluginReferences::from_plugins(&owner);
+        let binding = prepared.bind(&owner).unwrap();
+        let entry = binding.request_entries().next().unwrap();
+        if valid {
+            assert_eq!(entry.owner_namespace().unwrap(), namespace.unwrap_or("default"));
+        } else {
+            assert_eq!(entry.owner_namespace().unwrap_err(), ReferenceError::InvalidNamespace);
+        }
+    }
+    let prepared = PreparedPluginReferences::from_plugins(&owner);
+    let mut changed = owner.clone();
+    changed.metadata.uid = Some("second".into());
+    assert!(matches!(prepared.bind(&changed), Err(ReferenceError::StaleBinding)));
+    for name in [None, Some("bad/name")] {
+        changed.metadata.name = name.map(str::to_owned);
+        let fresh = PreparedPluginReferences::from_plugins(&changed);
+        let binding = fresh.bind(&changed).unwrap();
+        assert!(binding.request_entries().next().unwrap().owner_namespace().is_err());
+    }
+}

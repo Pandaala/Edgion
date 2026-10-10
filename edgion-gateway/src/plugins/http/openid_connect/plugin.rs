@@ -43,13 +43,18 @@ use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilte
 use crate::tls::validation::build_verified_outbound_tls;
 use edgion_algo::cache::ShardedLruCache;
 use edgion_common::dns::ResolverSpec;
-use edgion_common::link_sys_core::outbound_tls::resolve_outbound_tls;
+use edgion_common::link_sys_core::http_client::build_outbound_client_with_tls_selection;
+use edgion_common::link_sys_core::outbound_tls::{
+    resolve_validated_outbound_tls, validate_active_tls_inheritance, validate_local_tls_selection,
+    GlobalOutboundTlsSnapshot, ValidatedLocalTlsSelection,
+};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::path_normalization::normalize_config_path;
 use edgion_resources::resources::backend_tls_policy::SubjectAltName;
-use edgion_resources::resources::common::TlsConfig;
+use edgion_resources::resources::refs::plugin_fields::BoundPluginEntry;
+
 use edgion_resources::resources::edgion_plugins::{
-    ClaimHeaderProjectionPlan, EndpointAuthMethod, OpenidConnectConfig, UnauthAction, VerificationMode,
+    ClaimHeaderProjectionPlan, EdgionPlugin, EndpointAuthMethod, OpenidConnectConfig, UnauthAction, VerificationMode,
 };
 
 type OidcError = Box<dyn std::error::Error + Send + Sync>;
@@ -92,7 +97,6 @@ pub(super) fn admit_oidc_outbound_url(url: &str) -> Result<(), OidcDependencyFai
 
 fn oidc_outbound_client_config(
     timeout_secs: u64,
-    tls: Option<TlsConfig>,
     dns_resolver: Arc<dyn reqwest::dns::Resolve>,
 ) -> OutboundClientConfig {
     OutboundClientConfig {
@@ -101,7 +105,6 @@ fn oidc_outbound_client_config(
         total_timeout: Some(Duration::from_secs(timeout_secs)),
         redirect: OutboundRedirect::Deny,
         disable_proxy: true,
-        tls,
         tls_context: Some("OpenidConnect"),
         dns_resolver: Some(dns_resolver),
         ..Default::default()
@@ -285,19 +288,53 @@ pub struct OpenidConnect {
 }
 
 impl OpenidConnect {
-    #[cfg(test)]
-    pub fn new(config: &OpenidConnectConfig, plugin_namespace: String) -> Self {
-        Self::try_new(config, plugin_namespace).expect("test OIDC configuration must build")
+    /// Check the actual local field before a generation-local cache can reuse it.
+    pub(crate) fn validate_tls_entry<'a>(
+        entry: &'a BoundPluginEntry<'_>,
+        defaults: &GlobalOutboundTlsSnapshot,
+    ) -> Result<ValidatedLocalTlsSelection<'a>, String> {
+        let EdgionPlugin::OpenidConnect(config) = entry.config() else {
+            return Err("openid_connect outbound HTTP client build failed".into());
+        };
+        let error = || {
+            if config
+                .tls
+                .validation
+                .as_ref()
+                .and_then(|v| v.subject_alt_names.as_ref())
+                .is_some_and(|sans| !sans.is_empty())
+            {
+                "openid_connect outbound TLS resolution failed".to_string()
+            } else {
+                "openid_connect outbound HTTP client build failed".to_string()
+            }
+        };
+        let selection = entry.outbound_tls_selection().map_err(|_| error())?;
+        let proof = validate_local_tls_selection(selection).map_err(|_| error())?;
+        if proof.active_field().is_none() {
+            return Err(error());
+        }
+        validate_active_tls_inheritance(&proof, defaults).map_err(|_| error())?;
+        Ok(proof)
     }
 
-    pub fn try_new(config: &OpenidConnectConfig, plugin_namespace: String) -> Result<Self, String> {
+    pub fn try_new(entry: &BoundPluginEntry<'_>, defaults: &GlobalOutboundTlsSnapshot) -> Result<Self, String> {
+        let EdgionPlugin::OpenidConnect(config) = entry.config() else {
+            return Err("openid_connect outbound HTTP client build failed".into());
+        };
         #[cfg(not(test))]
         let config_valid = config.get_validation_error().is_none();
         // Normalize request-path-matched config fields at construction time so that
         // config-side and request-side paths inhabit the same normalized space.
         // See docs/superpowers/specs/2026-04-26-uri-normalization-design.md §3.5.
-        let mut config = config.clone();
+        let mut config = config.as_ref().clone();
         let claim_header_projection = config.compile_claim_header_projection().map_err(str::to_owned)?;
+        // Preserve direct-constructor claim validation priority before TLS identity.
+        let proof = Self::validate_tls_entry(entry, defaults)?;
+        let plugin_namespace = entry
+            .owner_namespace()
+            .map_err(|_| "openid_connect outbound HTTP client build failed".to_string())?;
+
         let path_cfg = edgion_resources::path_normalization::get_path_normalization_config();
         let normalized_logout_path = normalize_config_path(&config.logout_path, path_cfg);
         if normalized_logout_path != config.logout_path {
@@ -317,7 +354,7 @@ impl OpenidConnect {
             "/.edgion/oidc/callback".to_string()
         };
         let callback_path = normalize_config_path(&raw_callback_path, path_cfg);
-        let prepared_secrets = Self::prepare_secrets(&mut config, &plugin_namespace);
+        let prepared_secrets = Self::prepare_secrets(&mut config, plugin_namespace);
 
         let introspection_limits = resolve_tiny_ufo_ttl_cache_limits(&config.introspection.tiny_ufo_ttl_cache)?;
         let (access_token_capacity, access_token_shards) = resolve_lru_cache_limits(&config.access_token.lru_cache)?;
@@ -327,18 +364,14 @@ impl OpenidConnect {
         // Build the per-instance outbound client before the jwks_provider block so the
         // client Arc can be cloned into both the provider and stored on Self.
         let outbound_client: Arc<reqwest::Client> = {
-            let tls_for_client = TlsConfig {
-                enabled: true,
-                outbound: config.tls.clone(),
-                resolved_ca_certificates: config.resolved_ca_certificates.take(),
-                resolved_client_certificate: config.resolved_client_certificate.take(),
-            };
+            config.resolved_ca_certificates = None;
+            config.resolved_client_certificate = None;
 
             // Phase 2: if SAN pinning is configured (validation.subjectAltNames),
             // supply the shared verified rustls config through the canonical factory.
             // Both branches retain the same proxy, redirect, timeout and egress policy.
-            let san_policy: Vec<SubjectAltName> = tls_for_client
-                .outbound
+            let san_policy: Vec<SubjectAltName> = config
+                .tls
                 .validation
                 .as_ref()
                 .and_then(|v| v.subject_alt_names.clone())
@@ -346,14 +379,7 @@ impl OpenidConnect {
             let dns_resolver: Arc<dyn reqwest::dns::Resolve> = Arc::new(oidc_egress_resolver());
 
             if !san_policy.is_empty() {
-                let resolved = resolve_outbound_tls(
-                    &tls_for_client.outbound,
-                    tls_for_client.resolved_ca_certificates.as_deref(),
-                    tls_for_client.resolved_client_certificate.as_ref(),
-                    true,
-                    "OpenidConnect",
-                )
-                .map_err(|_| {
+                let resolved = resolve_validated_outbound_tls(&proof, true, defaults).map_err(|_| {
                     tracing::warn!(
                         component = "openid_connect",
                         "outbound TLS resolution failed; OIDC plugin construction rejected"
@@ -368,7 +394,7 @@ impl OpenidConnect {
                         );
                         "openid_connect SAN-pinning TLS config build failed".to_string()
                     })?;
-                let mut transport = oidc_outbound_client_config(config.timeout, None, dns_resolver);
+                let mut transport = oidc_outbound_client_config(config.timeout, dns_resolver);
                 transport.preconfigured_tls = Some(rustls_config);
                 let client = build_outbound_client(transport).map_err(|_| {
                     tracing::warn!(
@@ -379,11 +405,11 @@ impl OpenidConnect {
                 })?;
                 Arc::new(client)
             } else {
-                let client = build_outbound_client(oidc_outbound_client_config(
-                    config.timeout,
-                    Some(tls_for_client),
-                    dns_resolver,
-                ))
+                let client = build_outbound_client_with_tls_selection(
+                    oidc_outbound_client_config(config.timeout, dns_resolver),
+                    &proof,
+                    defaults,
+                )
                 .map_err(|_| {
                     tracing::warn!(
                         component = "openid_connect",

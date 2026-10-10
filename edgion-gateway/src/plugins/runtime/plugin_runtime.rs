@@ -1145,6 +1145,22 @@ impl PluginRuntime {
                 } else {
                     None
                 };
+                let oidc_defaults = matches!(entry.plugin, EdgionPlugin::OpenidConnect(_))
+                    .then(edgion_common::link_sys_core::outbound_tls::outbound_global_default);
+                if let Some(defaults) = oidc_defaults.as_deref() {
+                    let result = descriptor_entries
+                        .get(index)
+                        .ok_or_else(|| "openid_connect outbound HTTP client build failed".to_string())
+                        .and_then(|entry| OpenidConnect::validate_tls_entry(entry, defaults));
+                    if let Err(error) = result {
+                        self.invalid_plugins.record_non_retainable("OpenidConnect");
+                        errors.push(format!(
+                            "requestPlugins[{index}] (OpenidConnect): {}",
+                            config_validation_errors[index].as_deref().unwrap_or(&error)
+                        ));
+                        continue;
+                    }
+                }
                 let header_ca_field = if matches!(entry.plugin, EdgionPlugin::HeaderCertAuth(_)) {
                     match descriptor_entries
                         .get(index)
@@ -1487,6 +1503,13 @@ impl PluginRuntime {
                     }
 
                     let created = match &entry.plugin {
+                        EdgionPlugin::OpenidConnect(_) => CreateResult::Ok(
+                            descriptor_entries
+                                .get(index)
+                                .zip(oidc_defaults.as_deref())
+                                .and_then(|(entry, defaults)| OpenidConnect::try_new(entry, defaults).ok())
+                                .map(|plugin| Box::new(plugin) as Box<dyn RequestFilter>),
+                        ),
                         EdgionPlugin::HeaderCertAuth(_) => CreateResult::Ok(
                             header_ca_field
                                 .as_ref()
@@ -2331,10 +2354,7 @@ impl PluginRuntime {
             EdgionPlugin::Guardrail(_) => CreateResult::WrongStage,
             EdgionPlugin::ForwardAuth(_) => CreateResult::WrongStage,
             EdgionPlugin::AllEndpointStatus(config) => CreateResult::Ok(Some(Box::new(AllEndpointStatus::new(config)))),
-            EdgionPlugin::OpenidConnect(config) => match OpenidConnect::try_new(config, namespace.to_string()) {
-                Ok(plugin) => CreateResult::Ok(Some(Box::new(plugin))),
-                Err(_) => CreateResult::Ok(None),
-            },
+            EdgionPlugin::OpenidConnect(_) => CreateResult::WrongStage,
             EdgionPlugin::Dsl(config) => CreateResult::Ok(DslPlugin::from_config(config)),
             EdgionPlugin::RegionRoute(config) => CreateResult::Ok(RegionRoute::create_inline(config)),
             EdgionPlugin::Wasm(config) => CreateResult::Ok(WasmPlugin::create_request(config)),
