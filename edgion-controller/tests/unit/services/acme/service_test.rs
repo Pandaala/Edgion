@@ -1454,3 +1454,274 @@ async fn actual_account_persistence_rejects_initial_and_refreshed_target_mismatc
         assert_eq!(patches.load(Ordering::Relaxed), u64::from(refreshed_mismatch));
     }
 }
+
+#[tokio::test]
+async fn actual_generated_outputs_preserve_destinations_preflight_and_partial_write_boundaries() {
+    let _guard = ACME_TEST_MUTEX.lock().await;
+    for scenario in [
+        "absent",
+        "existing",
+        "defaults",
+        "disabled",
+        "invalid-cert",
+        "invalid-tls",
+        "secret-name",
+        "secret-namespace",
+        "secret-missing-name",
+        "secret-missing-namespace",
+        "tls-name",
+        "tls-namespace",
+        "tls-missing-name",
+        "tls-missing-namespace",
+    ] {
+        let capture = NotificationCapture::install();
+        let mut acme = test_acme();
+        acme.metadata.name = Some("issuer".into());
+        acme.metadata.namespace = (scenario != "defaults").then(|| "source-ns".into());
+        acme.metadata.resource_version = Some("source-rv".into());
+        acme.spec.private_key_secret_ref.name = "account-key".into();
+        acme.spec.external_account_binding = Some(
+            serde_json::from_value(json!({"keyId":"kid","keySecretRef":{"name":"eab-key","namespace":"eab-ns"}}))
+                .unwrap(),
+        );
+        acme.spec.storage.secret_name = "certificate-output".into();
+        acme.spec.storage.secret_namespace = (scenario != "defaults").then(|| "cert-ns".into());
+        acme.spec.auto_edgion_tls.name = (scenario != "defaults").then(|| "tls-output".into());
+        acme.spec.auto_edgion_tls.enabled = scenario != "disabled";
+        acme.spec.auto_edgion_tls.parent_refs =
+            Some(serde_json::from_value(json!([{"name":"https-edge","sectionName":"https","port":443}])).unwrap());
+        if scenario == "invalid-cert" {
+            acme.spec.storage.secret_name = "bad/name".into();
+        }
+        if matches!(scenario, "invalid-tls" | "disabled") {
+            acme.spec.auto_edgion_tls.name = Some("bad/name".into());
+        }
+        let namespace = acme.metadata.namespace.as_deref().unwrap_or("default").to_string();
+        let runtime = Arc::new(ControllerRuntime::default());
+        let gateways = Arc::new(ResourceProcessor::<Gateway>::new(
+            "Gateway",
+            8,
+            Arc::new(NoopGatewayHandler),
+            runtime.clone(),
+        ));
+        let mut gateway = test_gateway("1");
+        gateway.metadata.namespace = Some(namespace.clone());
+        gateways.save(gateway, None);
+        runtime.processor_registry.register(gateways);
+        let mut processed = acme.clone();
+        processed.spec.resolved_listener_attachments =
+            Some(resolve_acme_listener_attachments(&processed, &runtime).unwrap());
+        processed
+            .spec
+            .current_status
+            .get_or_insert_with(Default::default)
+            .conditions = vec![
+            condition_true(
+                condition_types::ACCEPTED,
+                condition_reasons::ACCEPTED,
+                "Accepted",
+                acme.metadata.generation,
+            ),
+            condition_true(
+                condition_types::RESOLVED_REFS,
+                condition_reasons::RESOLVED_REFS,
+                "Resolved",
+                acme.metadata.generation,
+            ),
+        ];
+        let owners = Arc::new(ResourceProcessor::<EdgionAcme>::new(
+            "EdgionAcme",
+            8,
+            Arc::new(NoopAcmeHandler),
+            runtime.clone(),
+        ));
+        // API reads carry explicit namespaces even when the immutable input defaulted it.
+        processed.metadata.namespace = Some(namespace.clone());
+        owners.save(processed, None);
+        runtime.processor_registry.register(owners);
+        let output_calls = Arc::new(Mutex::new(Vec::new()));
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let observed = output_calls.clone();
+        let recorded = writes.clone();
+        let mut current = acme.clone();
+        current.metadata.namespace = Some(namespace.clone());
+        let client = Client::new(
+            service_fn(move |request: http::Request<Body>| {
+                let current = current.clone();
+                let observed = observed.clone();
+                let recorded = recorded.clone();
+                async move {
+                    let (parts, body) = request.into_parts();
+                    let path = parts.uri.path().to_string();
+                    let source = path.contains("/edgionacmes/");
+                    if !source {
+                        observed.lock().push((parts.method.clone(), path.clone()));
+                    }
+                    let value = if parts.method == http::Method::GET && source {
+                        serde_json::to_value(&current).unwrap()
+                    } else if parts.method == http::Method::GET {
+                        if matches!(scenario, "absent" | "defaults" | "disabled") {
+                            return Ok::<_,Infallible>(Response::builder().status(404).body(Body::from(json!({"apiVersion":"v1","kind":"Status","status":"Failure","message":"missing","reason":"NotFound","code":404}).to_string().into_bytes())).unwrap());
+                        }
+                        let tls = path.contains("/edgiontls/");
+                        let mut metadata = json!({"name":if tls {"tls-output"} else {"certificate-output"},"namespace":if tls {"source-ns"} else {"cert-ns"},"uid":if tls {"tls-uid"} else {"secret-uid"},"resourceVersion":if tls {"tls-rv"} else {"secret-rv"}});
+                        let prefix = if tls { "tls" } else { "secret" };
+                        if scenario == format!("{prefix}-name") {
+                            metadata["name"] = json!("decoy");
+                        }
+                        if scenario == format!("{prefix}-namespace") {
+                            metadata["namespace"] = json!("decoy-ns");
+                        }
+                        if scenario == format!("{prefix}-missing-name") {
+                            metadata.as_object_mut().unwrap().remove("name");
+                        }
+                        if scenario == format!("{prefix}-missing-namespace") {
+                            metadata.as_object_mut().unwrap().remove("namespace");
+                        }
+                        json!({"apiVersion":if tls {"edgion.io/v1"} else {"v1"},"kind":if tls {"EdgionTls"} else {"Secret"},"metadata":metadata})
+                    } else {
+                        assert_eq!(parts.method, http::Method::PATCH);
+                        assert_eq!(
+                            parts.headers[http::header::CONTENT_TYPE],
+                            "application/apply-patch+yaml"
+                        );
+                        let query = parts.uri.query().unwrap();
+                        assert!(query.contains("fieldManager=edgion-acme-controller"));
+                        assert!(query.contains("force=true"));
+                        let value: serde_json::Value =
+                            serde_json::from_slice(&body.collect_bytes().await.unwrap()).unwrap();
+                        recorded.lock().push((path, value.clone()));
+                        if source {
+                            let mut response = serde_json::to_value(current).unwrap();
+                            response["status"] = value["status"].clone();
+                            response
+                        } else {
+                            value
+                        }
+                    };
+                    Ok::<_, Infallible>(Response::new(Body::from(value.to_string().into_bytes())))
+                }
+            }),
+            "unused-default",
+        );
+        let api = Api::namespaced(client.clone(), &namespace);
+        let key = format!("{namespace}/issuer");
+        let mut attempt = test_attempt(client.clone(), acme, runtime.clone(), capture.generation);
+        attempt.serving_attachments = admitted_serving_attachments(&key, &runtime).unwrap();
+        attempt.certificate_issued.store(true, Ordering::Release);
+        let result = publish_certificate(
+            &client,
+            &api,
+            &attempt,
+            &AcmeCertificateResult {
+                certificate_pem: "certificate-sentinel".into(),
+                private_key_pem: Zeroizing::new("private-sentinel".into()),
+            },
+            "account-uri",
+        )
+        .await;
+        let successful = matches!(scenario, "absent" | "existing" | "defaults" | "disabled");
+        assert_eq!(result.is_ok(), successful, "{scenario}: {result:?}");
+        let secret_namespace = if scenario == "defaults" { "default" } else { "cert-ns" };
+        let tls_name = if scenario == "defaults" {
+            "acme-issuer"
+        } else {
+            "tls-output"
+        };
+        let secret_path = format!("/api/v1/namespaces/{secret_namespace}/secrets/certificate-output");
+        let tls_path = format!("/apis/edgion.io/v1/namespaces/{namespace}/edgiontls/{tls_name}");
+        let mut expected_calls = Vec::new();
+        if !scenario.starts_with("invalid-") {
+            expected_calls.push((http::Method::GET, secret_path.clone()));
+            if !scenario.starts_with("secret-") {
+                expected_calls.push((http::Method::PATCH, secret_path));
+                if scenario != "disabled" {
+                    expected_calls.push((http::Method::GET, tls_path.clone()));
+                    if !scenario.starts_with("tls-") {
+                        expected_calls.push((http::Method::PATCH, tls_path));
+                    }
+                }
+            }
+        }
+        assert_eq!(*output_calls.lock(), expected_calls, "{scenario}");
+        let writes = writes.lock();
+        if scenario.starts_with("invalid-") {
+            assert!(output_calls.lock().is_empty());
+            assert!(writes.is_empty());
+            continue;
+        }
+        if scenario.starts_with("secret-") {
+            assert_eq!(output_calls.lock().len(), 1);
+            assert!(writes.is_empty());
+            continue;
+        }
+        if scenario.starts_with("tls-") {
+            assert_eq!(writes.len(), 1);
+            assert!(writes[0].0.ends_with("/secrets/certificate-output"));
+            assert_eq!(output_calls.lock().len(), 3);
+            continue;
+        }
+        assert_eq!(writes.len(), if scenario == "disabled" { 2 } else { 3 });
+        assert_eq!(
+            writes[0].0,
+            format!("/api/v1/namespaces/{secret_namespace}/secrets/certificate-output")
+        );
+        let secret: Secret = serde_json::from_value(writes[0].1.clone()).unwrap();
+        assert_eq!(secret.metadata.name.as_deref(), Some("certificate-output"));
+        assert_eq!(secret.metadata.namespace.as_deref(), Some(secret_namespace));
+        assert_eq!(secret.type_.as_deref(), Some("kubernetes.io/tls"));
+        assert_eq!(
+            secret.data.unwrap(),
+            BTreeMap::from([
+                ("tls.crt".into(), ByteString(b"certificate-sentinel".to_vec())),
+                ("tls.key".into(), ByteString(b"private-sentinel".to_vec()))
+            ])
+        );
+        assert_eq!(
+            secret.metadata.labels.unwrap(),
+            BTreeMap::from([
+                ("edgion.io/managed-by".into(), "acme".into()),
+                ("edgion.io/acme-resource".into(), "issuer".into())
+            ])
+        );
+        if scenario == "existing" {
+            assert_eq!(secret.metadata.uid.as_deref(), Some("secret-uid"));
+            assert_eq!(secret.metadata.resource_version.as_deref(), Some("secret-rv"));
+        }
+        if scenario != "disabled" {
+            assert_eq!(
+                writes[1].0,
+                format!("/apis/edgion.io/v1/namespaces/{namespace}/edgiontls/{tls_name}")
+            );
+            let tls = &writes[1].1;
+            assert_eq!(tls["metadata"]["name"], tls_name);
+            assert_eq!(tls["metadata"]["namespace"], namespace);
+            assert_eq!(tls["metadata"]["labels"]["edgion.io/acme-resource"], "issuer");
+            assert_eq!(
+                tls["spec"]["secretRef"],
+                json!({"name":"certificate-output","namespace":secret_namespace})
+            );
+            assert_eq!(tls["spec"]["hosts"], json!(["example.com"]));
+            assert_eq!(
+                tls["spec"]["parentRefs"],
+                json!([{"name":"https-edge","sectionName":"https","port":443}])
+            );
+            if scenario == "existing" {
+                assert_eq!(tls["metadata"]["uid"], "tls-uid");
+                assert_eq!(tls["metadata"]["resourceVersion"], "tls-rv");
+            }
+        }
+        let status = &writes.last().unwrap().1["status"];
+        assert_eq!(
+            writes.last().unwrap().0,
+            format!("/apis/edgion.io/v1/namespaces/{namespace}/edgionacmes/issuer/status")
+        );
+        assert_eq!(status["phase"], "Ready");
+        assert_eq!(status["secretName"], "certificate-output");
+        if scenario == "disabled" {
+            assert!(status.get("edgionTlsName").is_none());
+        } else {
+            assert_eq!(status["edgionTlsName"], tls_name);
+        }
+    }
+}

@@ -1327,23 +1327,19 @@ async fn publish_certificate(
     let name = acme.metadata.name.as_deref().context("EdgionAcme has no name")?;
     let key = format!("{}/{}", namespace, name);
 
+    // Preflight every active destination before either output can be written.
+    let refs = AcmeRefs::from_acme(acme);
+    let outputs = refs.outputs()?;
+    let certificate_target = outputs.certificate()?;
+    let tls_target = outputs.tls()?;
     // 4. Store certificate in K8s Secret
-    let secret_ns = acme.get_secret_namespace();
     attempt.current_resource(api).await?;
-    create_or_update_cert_secret(
-        client,
-        attempt,
-        &secret_ns,
-        &acme.spec.storage.secret_name,
-        cert_result,
-        name,
-    )
-    .await?;
+    create_or_update_cert_secret(client, attempt, cert_result).await?;
 
     // 5. Create/update EdgionTls if enabled
     if acme.spec.auto_edgion_tls.enabled {
         attempt.current_resource(api).await?;
-        create_or_update_edgion_tls(client, attempt, acme).await?;
+        create_or_update_edgion_tls(client, attempt).await?;
     }
 
     // 6. Parse certificate info for status
@@ -1356,9 +1352,9 @@ async fn publish_certificate(
         status.last_renewal_time = Some(now_rfc3339());
         status.last_failure_reason = None;
         status.last_failure_time = None;
-        status.secret_name = Some(acme.spec.storage.secret_name.clone());
+        status.secret_name = Some(certificate_target.name().to_string());
         if acme.spec.auto_edgion_tls.enabled {
-            status.edgion_tls_name = Some(acme.get_edgion_tls_name());
+            status.edgion_tls_name = tls_target.map(|target| target.name().to_string());
         }
         status.account_uri = Some(account_uri.to_string());
     })
@@ -1817,17 +1813,31 @@ where
 async fn create_or_update_cert_secret(
     client: &Client,
     attempt: &AcmeAttempt,
-    namespace: &str,
-    name: &str,
     cert: &AcmeCertificateResult,
-    acme_resource_name: &str,
 ) -> Result<()> {
+    let refs = AcmeRefs::from_acme(&attempt.acme);
+    let outputs = refs.outputs()?;
+    let target = outputs.certificate()?;
+    let namespace = target
+        .scope()
+        .namespace()
+        .context("Certificate target namespace is missing")?;
+    let name = target.name();
+    let acme_resource_name = attempt
+        .acme
+        .metadata
+        .name
+        .as_deref()
+        .context("EdgionAcme has no name")?;
     let api: Api<Secret> = Api::namespaced(client.clone(), namespace);
     let current = api
         .get_opt(name)
         .await
         .context("Failed to read TLS certificate Secret")?;
     attempt.check("publish TLS certificate Secret").await?;
+    if let Some(current) = &current {
+        outputs.validate_certificate_metadata(&current.metadata)?;
+    }
 
     // Zeroize the intermediate key bytes when this variable goes out of scope.
     // Note: `ByteString` takes ownership of a `Vec<u8>`; after `clone()` below
@@ -1880,10 +1890,21 @@ async fn create_or_update_cert_secret(
 }
 
 /// Create or update the EdgionTls resource for the issued certificate
-async fn create_or_update_edgion_tls(client: &Client, attempt: &AcmeAttempt, acme: &EdgionAcme) -> Result<()> {
-    let namespace = acme.metadata.namespace.as_deref().unwrap_or("default");
-    let tls_name = acme.get_edgion_tls_name();
-    let secret_ns = acme.get_secret_namespace();
+async fn create_or_update_edgion_tls(client: &Client, attempt: &AcmeAttempt) -> Result<()> {
+    let acme = &attempt.acme;
+    let refs = AcmeRefs::from_acme(acme);
+    let outputs = refs.outputs()?;
+    let tls = outputs.tls()?.context("Automatic EdgionTls is disabled")?;
+    let namespace = tls
+        .scope()
+        .namespace()
+        .context("EdgionTls target namespace is missing")?;
+    let tls_name = tls.name();
+    let certificate = outputs.certificate()?;
+    let secret_ns = certificate
+        .scope()
+        .namespace()
+        .context("Certificate target namespace is missing")?;
 
     // Build parent_refs
     let parent_refs = acme.spec.auto_edgion_tls.parent_refs.clone();
@@ -1897,7 +1918,7 @@ async fn create_or_update_edgion_tls(client: &Client, attempt: &AcmeAttempt, acm
             "namespace": namespace,
             "labels": {
                 "edgion.io/managed-by": "acme",
-                "edgion.io/acme-resource": acme.metadata.name.as_deref().unwrap_or("unknown"),
+                "edgion.io/acme-resource": acme.metadata.name.as_deref().context("EdgionAcme has no name")?,
             }
         },
         "spec": {
@@ -1913,8 +1934,11 @@ async fn create_or_update_edgion_tls(client: &Client, attempt: &AcmeAttempt, acm
     // Erase the typed resource so the dynamic API retains its declared plural.
     let ar = ApiResource::erase::<EdgionTls>(&());
     let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), namespace, &ar);
-    let current = api.get_opt(&tls_name).await.context("Failed to read EdgionTls")?;
+    let current = api.get_opt(tls_name).await.context("Failed to read EdgionTls")?;
     attempt.check("publish EdgionTls").await?;
+    if let Some(current) = &current {
+        outputs.validate_tls_metadata(&current.metadata)?;
+    }
 
     let metadata = edgion_tls
         .get_mut("metadata")
@@ -1938,7 +1962,7 @@ async fn create_or_update_edgion_tls(client: &Client, attempt: &AcmeAttempt, acm
     // writes — operator edits to other fields survive. Mirrors the forced `patch_status`
     // calls above. (Guard: cicd/checks/check_ssa_force.py)
     let pp = PatchParams::apply("edgion-acme-controller").force();
-    api.patch(&tls_name, &pp, &Patch::Apply(edgion_tls))
+    api.patch(tls_name, &pp, &Patch::Apply(edgion_tls))
         .await
         .context("Failed to create/update EdgionTls")?;
 

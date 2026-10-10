@@ -162,3 +162,12 @@ status:
 - The ACME service only runs on the **Leader** Controller.
 - HTTP-01 challenges require port 80 of the Gateway to be reachable.
 - Built-in ACME rejects wildcard domains. For DNS-01/wildcard issuance, use cert-manager or another external issuer and reference its TLS Secret through Gateway/EdgionTls. Edgion hot-reloads those Secret updates.
+
+
+Generated certificate and enabled auto-EdgionTls destination names/namespaces must
+pass canonical Kubernetes identity validation. Omitted source namespace defaults
+to `default`; explicit empty values are invalid. Every active destination is
+validated before output publication. The auto resource stays in the EdgionAcme
+namespace even when `storage.secretNamespace` differs. Its `parentRefs` are the
+auto resource's attachments, not the HTTP-01 challenge attachment. When automatic
+TLS is disabled its unused name does not block certificate storage.

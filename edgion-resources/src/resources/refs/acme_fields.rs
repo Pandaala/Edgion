@@ -84,6 +84,24 @@ impl<'a> AcmeRefs<'a> {
             eab,
         }
     }
+    /// Validate all active generated destinations before publication starts.
+    pub fn outputs(&self) -> Result<AcmeOutputRefs<'_>, ReferenceError> {
+        self.owner.source()?;
+        let outputs = AcmeOutputRefs {
+            refs: self,
+            tls_name: self.acme.spec.auto_edgion_tls.enabled.then(|| {
+                self.acme
+                    .spec
+                    .auto_edgion_tls
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("acme-{}", self.acme.metadata.name.as_deref().unwrap_or_default()))
+            }),
+        };
+        outputs.certificate()?;
+        outputs.tls()?;
+        Ok(outputs)
+    }
     pub fn account(&self) -> AcmeAccountField<'_> {
         AcmeAccountField { refs: self }
     }
@@ -114,17 +132,90 @@ impl AcmeEabField<'_> {
 // belong to the finite acquisition selector, not this API-response boundary.
 fn validate_api_secret(token: ReferenceToken<'_>, secret: &Secret) -> Result<(), ReferenceError> {
     let expected = token.validated()?.target();
-    let name = secret.metadata.name.as_deref().ok_or(ReferenceError::StaleBinding)?;
-    let namespace = secret
-        .metadata
-        .namespace
-        .as_deref()
-        .ok_or(ReferenceError::StaleBinding)?;
-    let actual = ObjectIdentity::checked("", "Secret", ResourceScope::Namespaced(namespace), name)?;
+    validate_api_metadata(expected, &secret.metadata)
+}
+fn validate_api_metadata(expected: ObjectIdentity<'_>, metadata: &kube::api::ObjectMeta) -> Result<(), ReferenceError> {
+    let name = metadata.name.as_deref().ok_or(ReferenceError::StaleBinding)?;
+    let namespace = metadata.namespace.as_deref().ok_or(ReferenceError::StaleBinding)?;
+    let actual = ObjectIdentity::checked(
+        expected.group_kind().group(),
+        expected.group_kind().kind(),
+        ResourceScope::Namespaced(namespace),
+        name,
+    )?;
     if actual == expected {
         Ok(())
     } else {
         Err(ReferenceError::StaleBinding)
+    }
+}
+
+/// Finite generated destinations borrowed from the actual ACME owner.
+/// ```
+/// use edgion_resources::resources::refs::acme_fields::AcmeRefs;
+/// fn valid(owner: &edgion_resources::EdgionAcme) {
+///     let refs = AcmeRefs::from_acme(owner);
+///     let outputs = refs.outputs().unwrap();
+///     let _ = outputs.certificate();
+/// }
+/// ```
+/// ```compile_fail
+/// use edgion_resources::resources::refs::acme_fields::AcmeRefs;
+/// fn invalid(owner: edgion_resources::EdgionAcme) {
+///     let refs = AcmeRefs::from_acme(&owner);
+///     let outputs = refs.outputs().unwrap();
+///     drop(owner);
+///     let _ = outputs.certificate();
+/// }
+/// ```
+/// ```compile_fail
+/// use edgion_resources::resources::refs::acme_fields::AcmeRefs;
+/// fn invalid(owner: &mut edgion_resources::EdgionAcme) {
+///     let refs = AcmeRefs::from_acme(owner);
+///     let outputs = refs.outputs().unwrap();
+///     owner.spec.storage.secret_name.clear();
+///     let _ = outputs.certificate();
+/// }
+/// ```
+pub struct AcmeOutputRefs<'a> {
+    refs: &'a AcmeRefs<'a>,
+    tls_name: Option<String>,
+}
+impl AcmeOutputRefs<'_> {
+    pub fn certificate(&self) -> Result<ObjectIdentity<'_>, ReferenceError> {
+        let owner = self.refs.acme;
+        let namespace = owner
+            .spec
+            .storage
+            .secret_namespace
+            .as_deref()
+            .or(owner.metadata.namespace.as_deref())
+            .unwrap_or("default");
+        ObjectIdentity::checked(
+            "",
+            "Secret",
+            ResourceScope::Namespaced(namespace),
+            &owner.spec.storage.secret_name,
+        )
+    }
+    pub fn tls(&self) -> Result<Option<ObjectIdentity<'_>>, ReferenceError> {
+        self.tls_name
+            .as_deref()
+            .map(|name| {
+                ObjectIdentity::checked(
+                    "edgion.io",
+                    "EdgionTls",
+                    ResourceScope::Namespaced(self.refs.acme.metadata.namespace.as_deref().unwrap_or("default")),
+                    name,
+                )
+            })
+            .transpose()
+    }
+    pub fn validate_certificate_metadata(&self, metadata: &kube::api::ObjectMeta) -> Result<(), ReferenceError> {
+        validate_api_metadata(self.certificate()?, metadata)
+    }
+    pub fn validate_tls_metadata(&self, metadata: &kube::api::ObjectMeta) -> Result<(), ReferenceError> {
+        validate_api_metadata(self.tls()?.ok_or(ReferenceError::UnsupportedTarget)?, metadata)
     }
 }
 

@@ -83,8 +83,11 @@ or prove a credential disclosure or cross-namespace bypass. It also does not
 change Gateway token serving: active challenge status remains governed by the
 existing listener-proof and expiry rules, while the Controller denies new work.
 The shared custom core alias does not override these strict ACME fields. Generated
-certificate Secret and auto-EdgionTls output identity remains separately tracked;
-account read/persistence closure does not establish generated-output write authority.
+certificate Secret and auto-EdgionTls outputs now have a separate finite checked
+view of the actual attempt owner. Both active identities are preflighted before
+output IO; disabled TLS has no target. Returned target metadata must match before
+optional UID/resourceVersion reuse. Output identity does not replace the existing
+Lease/source/attempt fences or grant new ReferenceGrant authority.
 
 ## Verification and re-evaluation
 

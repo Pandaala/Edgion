@@ -396,25 +396,6 @@ impl EdgionAcme {
         self.spec.domains.iter().any(|d| d.starts_with("*."))
     }
 
-    /// Get the effective secret namespace
-    pub fn get_secret_namespace(&self) -> String {
-        self.spec
-            .storage
-            .secret_namespace
-            .clone()
-            .or_else(|| self.metadata.namespace.clone())
-            .unwrap_or_else(|| "default".to_string())
-    }
-
-    /// Get the effective EdgionTls name
-    pub fn get_edgion_tls_name(&self) -> String {
-        self.spec
-            .auto_edgion_tls
-            .name
-            .clone()
-            .unwrap_or_else(|| format!("acme-{}", self.metadata.name.as_deref().unwrap_or("unknown")))
-    }
-
     /// Get this deployment's current challenges (empty when not published).
     pub fn active_challenges(&self) -> &[ActiveHttpChallenge] {
         self.spec

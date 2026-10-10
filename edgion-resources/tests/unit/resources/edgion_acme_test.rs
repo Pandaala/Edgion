@@ -152,8 +152,27 @@ spec:
 "#;
 
     let acme: EdgionAcme = serde_yaml::from_str(yaml).unwrap();
-    assert_eq!(acme.get_edgion_tls_name(), "acme-my-cert");
-    assert_eq!(acme.get_secret_namespace(), "default");
+    assert_eq!(
+        crate::resources::refs::acme_fields::AcmeRefs::from_acme(&acme)
+            .outputs()
+            .unwrap()
+            .tls()
+            .unwrap()
+            .unwrap()
+            .name(),
+        "acme-my-cert"
+    );
+    assert_eq!(
+        crate::resources::refs::acme_fields::AcmeRefs::from_acme(&acme)
+            .outputs()
+            .unwrap()
+            .certificate()
+            .unwrap()
+            .scope()
+            .namespace()
+            .unwrap(),
+        "default"
+    );
 }
 
 #[test]

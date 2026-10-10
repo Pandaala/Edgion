@@ -46,10 +46,17 @@
   warnings. Actual account/EAB reads, account-slot persistence/CAS identity and
   canonical HTTP-01 parent projection preserve existing operation fences and EAB
   authorization policy. Verification passes 328 unit, 71 doc and 36 schema cases;
-  ten existing ignored docs and all 9692 prior IDs remain among 9702. Local commit
-  is pending.
-  R8e.2 generated certificate/EdgionTls destinations require a separate plan after
-  this batch commits; neither batch closes CredentialSource generated operations.
+  ten existing ignored docs and all 9692 prior IDs remain among 9702. Committed
+  locally as 2aad70cdfc6eecf6e9d65daac90718c01f7b354f after both final reviews;
+  all twenty-two committed blobs match the manifest. No push occurred.
+  Neither ACME batch closes CredentialSource generated operations.
+- R8e.2 generated certificate/EdgionTls destination plan passed both independent
+  Astra reviews at 2aad70cdf. Twelve technical paths plus this ledger now pass both
+  independent static/execution reviews and all fourteen root gates, zero warnings;
+  all active output identities are checked before output IO, and existing attempt
+  fences, adoption, forced SSA and nontransactional publication remain unchanged.
+  Verification passes 259 unit, 74 doc and 36 schema cases, preserving ten ignored
+  docs and all 9702 prior identities among 9704. Final local commit is pending.
 - F1 read-only inventory identified two further bounded material-pairing candidates:
   Gateway EdgionBackend credentials and Common LinkSys non-TLS auth. Existing
   Controller guards remain; these are missing consumer proof boundaries, not
@@ -173,6 +180,32 @@ results). Final scope is the twenty-one approved paths plus this ledger. No live
 API-server, CA or Gateway API conformance acceptance is implied; no agent push.
 The separate generated-credential inventory is preserved under
 `tmp/resource-reference-contract/generated-credential-inventory-700c29fb-20261010.md`.
+
+## R8e.2 final checkpoint (2026-10-10)
+
+The actual ACME output view validates all active destinations before output IO;
+helpers derive only from the retained attempt owner. Explicit returned target
+metadata is checked before optional UID/RV reuse. Source/storage namespaces,
+independent auto-TLS parents, forced SSA, adoption, operation fences and existing
+nontransactional publication remain. Unchecked output helper methods are removed.
+
+Both Astra reviewers approved r2 static/execution evidence. Review strengthened
+the new transport matrix to assert exact ordered GET/PATCH paths; production
+remained unchanged. All prior assertions are preserved except the approved two
+Resources helper expressions, with expected values and test identity unchanged.
+Verification passes 369 distinct cases (259 unit, 74 doc, 36 schema), ten ignored
+docs and zero warnings. All 9702 old test IDs remain among 9704. Matching executable
+and log hashes, prior baseline provenance, explicit unchanged-input reuse, and
+positive/E0505/E0506 output lifetime controls were independently checked.
+
+All fourteen root gates pass unchanged source, including workspace check
+24.516 seconds and Clippy 34.182 seconds. Evidence is under
+`tmp/resource-reference-contract/r8e2-verification-20261010/verification-final.json`
+and `tmp/resource-reference-contract/r8e2-root-verification-20261010/`.
+Final scope is twelve approved paths plus this ledger. No live CA/API-server or
+conformance acceptance is implied. Generated CredentialSource operations,
+AI/LinkSys consumer pairing, overall simplification/documentation and F2 remain
+open. No agent push.
 
 ## Authority and reporting
 

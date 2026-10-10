@@ -138,7 +138,11 @@ explicit matching response metadata before decoding. Account CAS validates both
 initial and refreshed snapshots before using their UID/resourceVersion; current
 attempt/LeaderFence checks, concurrent credential adoption, empty-secret bootstrap
 and corrupt-data rejection stay independent. Credentials are not transported on
-EdgionAcme. Generated certificate/EdgionTls output identity is a separate batch.
+EdgionAcme. Generated certificate/EdgionTls identities use the same actual-owner adapter
+through a separate finite output view; all active outputs are checked before
+publication begins. API response metadata must match before target UID/version
+reuse. EdgionTls remains in the source namespace, its Secret reference uses the
+storage namespace, and auto parentRefs remain distinct from HTTP-01 gatewayRef.
 
 HTTP-01 resolution receives the actual owner and uses canonical parent defaults;
 it does not add name grammar, change sectionName/port conjunction, allowedRoutes,

@@ -647,6 +647,10 @@ UID/RV consumption. Existing bootstrap, conflict/adoption and operation fences
 remain. EAB adds no handler edge or new Grant policy. HTTP-01 parent resolution
 uses canonical defaults from the actual owner without new parent name grammar.
 
-R8e.2 generated certificate Secret and auto-EdgionTls output identity is still
-pending separately. This migration does not establish live CA/API-server or
+R8e.2 generated certificate Secret and auto-EdgionTls output identities now derive
+from the actual attempt owner and preflight all active destinations; returned API
+metadata is checked before optional target UID/resourceVersion reuse. Source and
+storage namespaces remain distinct, and auto parentRefs do not replace the HTTP-01
+attachment. Existing adoption, forced SSA, LeaderFence and between-write checks
+remain authoritative. This migration does not establish live CA/API-server or
 Gateway API conformance verification.

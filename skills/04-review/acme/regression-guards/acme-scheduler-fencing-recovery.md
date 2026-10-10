@@ -77,8 +77,11 @@ test run was performed for this documentation-only correction.
 The attempt guard runs before account registration/persistence, order creation,
 each challenge activation, finalization, challenge/lifecycle status writes, and
 Secret/EdgionTls publication. Long CA polling and propagation waits select on
-the same cancellation token. Existing target objects carry UID/resourceVersion
-into their forced SSA update. The Lease and source resource are re-read around
+the same cancellation token. Existing target objects carry optional UID/resourceVersion
+into their forced SSA update only after explicit API name/namespace match the
+checked destination derived from the actual attempt. All active generated output
+identities are validated before the first output IO. These identity checks do not
+replace the fences or change adoption policy. The Lease and source resource are re-read around
 the authority decision; transient reads fail closed and wait inside the guard,
 without discarding an order or registered credentials. Existing account Secrets
 use the original UID/resourceVersion for merge-patch; after a conflict, valid

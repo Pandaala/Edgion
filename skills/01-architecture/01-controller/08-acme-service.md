@@ -166,5 +166,22 @@ not grant authority or change the create/merge protocol and absent-target race.
 The handler's account cache supports the finite default bare/qualified selector
 and semantic Secret event recovery. That raw-storage projection does not apply
 to API responses. EAB remains direct API retrieval under its existing semantics;
-no account/EAB authorization parity or new Grant policy is claimed. Account
-binding does not close generated certificate/auto-EdgionTls output identity.
+no account/EAB authorization parity or new Grant policy is claimed. Generated outputs use the separate finite output view described below.
+
+
+### Actual generated destinations
+
+The actual attempt owner supplies both certificate Secret and optional EdgionTls
+destinations through the canonical ACME field adapter. All active identities are
+validated before the first output read/write. Missing source namespace means
+`default`; omitted storage namespace inherits it. Explicit empty/invalid values
+fail. Enabled TLS uses its explicit name or `acme-{source name}`; disabled TLS
+ignores its unused name. No missing source name becomes `unknown`.
+
+EdgionTls remains in the source namespace and references the certificate in the
+storage namespace. Its `autoEdgionTls.parentRefs` are copied independently of the
+HTTP-01 challenge Gateway. Existing targets require explicit matching API name
+and namespace before their optional UID/resourceVersion are reused. Forced SSA,
+adoption, current-attempt/Lease and between-write checks remain independent.
+This is not a multi-object transaction: a TLS response mismatch after successful
+Secret publication prevents TLS/status writes but does not roll back the Secret.
