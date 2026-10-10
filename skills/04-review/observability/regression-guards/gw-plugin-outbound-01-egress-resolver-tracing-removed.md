@@ -26,7 +26,7 @@ accepted**. They still put a `tracing::*` call on a request/connection path.
 
 **1. DNS rejection is request-path work, not a cold diagnostic callback.**
 
-`ManagedOutboundClient::from_parts` installs `EgressResolver` for URL targets.
+The actual-owner managed client builder installs `EgressResolver` for URL targets.
 `ForwardAuth::run_request` and Webhook outbound calls execute the resulting
 `reqwest::Client`; on a resolver-cache miss, `Resolve::resolve` calls
 `filter_addrs` before allowing the connection. A blocked DNS answer therefore

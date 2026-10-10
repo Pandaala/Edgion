@@ -1,4 +1,5 @@
 use super::*;
+use crate::link_sys_core::outbound_tls::ResolvedOutboundTls;
 use edgion_resources::constants::secret_keys::tls as tls_keys;
 use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
 use edgion_resources::resources::common::CustomCACertificateRef;
@@ -140,7 +141,7 @@ fn outbound_with_ca_refs(names: &[&str]) -> OutboundTlsLocal {
 }
 
 // ------------------------------------------------------------------
-// build_rustls_client_config
+// build_effective_rustls_client_config
 // ------------------------------------------------------------------
 
 fn install_test_crypto_provider() {
@@ -161,13 +162,13 @@ fn rustls_config_none_without_material() {
     let _guard = outbound_tls::outbound_tls_test_guard();
     install_test_crypto_provider();
     // No CA, no client identity → None (caller uses default connector)
-    let tls = TlsConfig {
-        enabled: true,
-        outbound: OutboundTlsLocal::default(),
-        resolved_ca_certificates: None,
-        resolved_client_certificate: None,
+    let tls = ResolvedOutboundTls {
+        verify: true,
+        ca: EffectiveCa::System,
+        client_identity: None,
+        san: None,
     };
-    assert!(build_rustls_client_config(&tls).unwrap().is_none());
+    assert!(build_effective_rustls_client_config(&tls).unwrap().is_none());
 }
 
 #[test]
@@ -175,13 +176,13 @@ fn rustls_config_with_inline_ca() {
     let _guard = outbound_tls::outbound_tls_test_guard();
     install_test_crypto_provider();
     let (ca_pem, _cert_pem, _key_pem) = gen_ca_and_leaf();
-    let tls = TlsConfig {
-        enabled: true,
-        outbound: outbound_with_ca_ref("my-ca"),
-        resolved_ca_certificates: Some(vec![ca_secret(ca_pem.as_bytes())]),
-        resolved_client_certificate: None,
+    let tls = ResolvedOutboundTls {
+        verify: true,
+        ca: EffectiveCa::Custom(vec![ca_pem.as_bytes().to_vec()]),
+        client_identity: None,
+        san: None,
     };
-    let cfg = build_rustls_client_config(&tls).unwrap();
+    let cfg = build_effective_rustls_client_config(&tls).unwrap();
     assert!(cfg.is_some(), "expected a ClientConfig when CA is provided");
 }
 
@@ -190,16 +191,13 @@ fn rustls_config_with_ca_and_client_mtls() {
     let _guard = outbound_tls::outbound_tls_test_guard();
     install_test_crypto_provider();
     let (ca_pem, cert_pem, key_pem) = gen_ca_and_leaf();
-    let tls = TlsConfig {
-        enabled: true,
-        outbound: outbound_with_ca_ref("my-ca"),
-        resolved_ca_certificates: Some(vec![ca_secret(ca_pem.as_bytes())]),
-        resolved_client_certificate: Some(secret_with(&[
-            ("tls.crt", cert_pem.as_bytes()),
-            ("tls.key", key_pem.as_bytes()),
-        ])),
+    let tls = ResolvedOutboundTls {
+        verify: true,
+        ca: EffectiveCa::Custom(vec![ca_pem.as_bytes().to_vec()]),
+        client_identity: Some((cert_pem.into_bytes(), Zeroizing::new(key_pem.into_bytes()))),
+        san: None,
     };
-    let cfg = build_rustls_client_config(&tls)
+    let cfg = build_effective_rustls_client_config(&tls)
         .expect("should build ClientConfig")
         .expect("config present");
     assert!(cfg.client_auth_cert_resolver.has_certs());
@@ -209,15 +207,15 @@ fn rustls_config_with_ca_and_client_mtls() {
 fn rustls_config_invalid_ca_pem_errors() {
     let _guard = outbound_tls::outbound_tls_test_guard();
     install_test_crypto_provider();
-    let tls = TlsConfig {
-        enabled: true,
-        outbound: outbound_with_ca_ref("bad-ca"),
-        resolved_ca_certificates: Some(vec![ca_secret(
-            b"-----BEGIN CERTIFICATE-----\nnot-a-real-pem\n-----END CERTIFICATE-----\n",
-        )]),
-        resolved_client_certificate: None,
+    let tls = ResolvedOutboundTls {
+        verify: true,
+        ca: EffectiveCa::Custom(vec![
+            b"-----BEGIN CERTIFICATE-----\nnot-a-real-pem\n-----END CERTIFICATE-----\n".to_vec(),
+        ]),
+        client_identity: None,
+        san: None,
     };
-    assert!(build_rustls_client_config(&tls).is_err());
+    assert!(build_effective_rustls_client_config(&tls).is_err());
 }
 
 #[test]
@@ -228,18 +226,19 @@ fn rustls_config_rejects_each_zero_certificate_ca_bundle() {
 
     for invalid in [b"".as_slice(), b" \n\t".as_slice(), b"not-a-pem".as_slice()] {
         for invalid_first in [false, true] {
-            let mut bundles = vec![ca_secret(ca_pem.as_bytes()), ca_secret(invalid)];
+            let mut bundles = vec![ca_pem.as_bytes().to_vec(), invalid.to_vec()];
             if invalid_first {
                 bundles.swap(0, 1);
             }
-            let tls = TlsConfig {
-                enabled: true,
-                outbound: outbound_with_ca_refs(&["ca-a", "ca-b"]),
-                resolved_ca_certificates: Some(bundles),
-                resolved_client_certificate: None,
+            let tls = ResolvedOutboundTls {
+                verify: true,
+                ca: EffectiveCa::Custom(bundles),
+                client_identity: None,
+                san: None,
             };
 
-            build_rustls_client_config(&tls).expect_err("every declared rustls CA bundle must contain a certificate");
+            build_effective_rustls_client_config(&tls)
+                .expect_err("every declared rustls CA bundle must contain a certificate");
         }
     }
 }
@@ -250,22 +249,22 @@ fn rustls_config_accepts_multiple_valid_bundles_and_certificates() {
     install_test_crypto_provider();
     let (ca_pem_a, _cert_pem, _key_pem) = gen_ca_and_leaf();
     let (ca_pem_b, _cert_pem, _key_pem) = gen_ca_and_leaf();
-    let multiple_bundles = TlsConfig {
-        enabled: true,
-        outbound: outbound_with_ca_refs(&["ca-a", "ca-b"]),
-        resolved_ca_certificates: Some(vec![ca_secret(ca_pem_a.as_bytes()), ca_secret(ca_pem_b.as_bytes())]),
-        resolved_client_certificate: None,
+    let multiple_bundles = ResolvedOutboundTls {
+        verify: true,
+        ca: EffectiveCa::Custom(vec![ca_pem_a.as_bytes().to_vec(), ca_pem_b.as_bytes().to_vec()]),
+        client_identity: None,
+        san: None,
     };
-    assert!(build_rustls_client_config(&multiple_bundles).is_ok());
+    assert!(build_effective_rustls_client_config(&multiple_bundles).is_ok());
 
     let combined_pem = format!("{ca_pem_a}\n{ca_pem_b}\n");
-    let multiple_certificates = TlsConfig {
-        enabled: true,
-        outbound: outbound_with_ca_ref("ca-chain"),
-        resolved_ca_certificates: Some(vec![ca_secret(combined_pem.as_bytes())]),
-        resolved_client_certificate: None,
+    let multiple_certificates = ResolvedOutboundTls {
+        verify: true,
+        ca: EffectiveCa::Custom(vec![combined_pem.as_bytes().to_vec()]),
+        client_identity: None,
+        san: None,
     };
-    assert!(build_rustls_client_config(&multiple_certificates).is_ok());
+    assert!(build_effective_rustls_client_config(&multiple_certificates).is_ok());
 }
 
 /// `apply_resolved_outbound_tls` must return `Ok` and apply
@@ -311,17 +310,14 @@ fn rustls_config_system_roots_when_ca_absent() {
     // for the server chain. The webpki roots are always present (compiled in),
     // so construction must always succeed.
     let (_ca_pem, cert_pem, key_pem) = gen_ca_and_leaf();
-    let tls = TlsConfig {
-        enabled: true,
-        outbound: OutboundTlsLocal::default(),
-        resolved_ca_certificates: None,
-        resolved_client_certificate: Some(secret_with(&[
-            ("tls.crt", cert_pem.as_bytes()),
-            ("tls.key", key_pem.as_bytes()),
-        ])),
+    let tls = ResolvedOutboundTls {
+        verify: true,
+        ca: EffectiveCa::System,
+        client_identity: Some((cert_pem.into_bytes(), Zeroizing::new(key_pem.into_bytes()))),
+        san: None,
     };
     assert!(
-        build_rustls_client_config(&tls).unwrap().is_some(),
+        build_effective_rustls_client_config(&tls).unwrap().is_some(),
         "expected Ok(Some(_)) with built-in webpki roots"
     );
 }
@@ -568,11 +564,16 @@ fn incapable_builders_reject_local_and_inherited_identity_policy() {
                 resolved_ca_certificates: None,
                 resolved_client_certificate: None,
             };
-            assert!(build_rustls_client_config(&tls).is_err());
+            assert!(redis_input(&tls)
+                .and_then(|input| input.rustls_client_config())
+                .is_err());
             assert!(apply_resolved_outbound_tls(reqwest::Client::builder(), &tls, "Test").is_err());
             // A local empty validation block shadows inherited identity constraints.
             tls.outbound.validation = Some(OutboundTlsValidation::default());
-            assert!(build_rustls_client_config(&tls).unwrap().is_none());
+            assert!(redis_input(&tls)
+                .and_then(|input| input.rustls_client_config())
+                .unwrap()
+                .is_none());
             assert!(apply_resolved_outbound_tls(reqwest::Client::builder(), &tls, "Test").is_ok());
         }
     }
@@ -583,4 +584,13 @@ fn custom_ca_rejects_truncated_trailing_certificate() {
     let (pem, _, _) = gen_ca_and_leaf();
     let bundle = format!("{pem}-----BEGIN CERTIFICATE-----\nYWJj\n").into_bytes();
     assert!(apply_custom_ca_pem(reqwest::Client::builder(), &[bundle]).is_err());
+}
+
+fn redis_input(tls: &TlsConfig) -> anyhow::Result<outbound_tls::PreparedRedisTls> {
+    let owner = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"redis","namespace":"apps"},
+        "spec":{"type":"redis","config":{"endpoints":["redis://redis.example:6379"],"tls":tls}}
+    }))
+    .unwrap();
+    outbound_tls::PreparedRedisTls::with_snapshot(std::sync::Arc::new(owner), outbound_tls::outbound_global_default())
 }

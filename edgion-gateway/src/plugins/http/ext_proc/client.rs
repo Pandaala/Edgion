@@ -449,7 +449,7 @@ fn build_rustls_config(
 
     // Verifier / roots stage.
     let builder = if !resolved.verify {
-        // Reachable only because resolve_outbound_tls honored the operator's verify=false (provider_can_disable=true).
+        // Reachable only because canonical outbound TLS resolution honored the operator's verify=false (provider_can_disable=true).
         builder
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(AcceptAllVerifier::new()))

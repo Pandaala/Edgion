@@ -1,7 +1,7 @@
 //! One bounded external evaluator over the canonical outbound stack.
 //!
 //! Everything transport-shaped is reused: the managed outbound client (which
-//! wires the canonical builder, `EgressResolver`, and `resolve_outbound_tls`),
+//! wires the canonical builder, `EgressResolver`, and the canonical outbound TLS resolver),
 //! `outbound_call_with_body`, and the permit-inside-one-absolute-deadline idiom
 //! proven by the response-side Guardrail. Nothing here is a second HTTP client,
 //! egress resolver, TLS resolver, or failure-policy vocabulary.

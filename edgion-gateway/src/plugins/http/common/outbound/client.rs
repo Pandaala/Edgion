@@ -27,9 +27,7 @@ use edgion_common::dns::ResolverSpec;
 use crate::backends::service_kind::ServiceBackendKind;
 use crate::backends::validate_endpoint_backend_addr;
 use crate::observe::metrics::record_egress_blocked;
-use crate::plugins::http::common::http_client::{
-    build_webhook_client, build_webhook_client_with_tls_selection, get_http_client_arc,
-};
+use crate::plugins::http::common::http_client::{build_webhook_client_with_tls_selection, get_http_client_arc};
 use crate::util::net::IpClass;
 use edgion_common::link_sys_core::outbound_tls::{
     validate_active_tls_inheritance, validate_local_tls_selection, GlobalOutboundTlsSnapshot,
@@ -110,7 +108,7 @@ impl std::fmt::Display for ManagedOutboundDialError {
 
 /// Compiled, owned outbound HTTP client with active-health management and SSRF guard.
 ///
-/// Created via [`ManagedOutboundClient::from_parts`] at resource-load time.
+/// Created from actual bound plugin, route, or Webhook owners at resource-load time.
 /// The active-health task (if configured) is aborted when this struct is dropped.
 pub struct ManagedOutboundClient {
     /// HTTP client for outbound requests (may be custom TLS or the shared default).
@@ -148,13 +146,6 @@ pub struct ManagedOutboundClient {
     /// Carried here so that `build_request` can resolve secret templates at
     /// call time without a separate per-call argument.
     pub resolved_secrets: Option<edgion_resources::resources::common::external_http::ResolvedSecrets>,
-}
-
-// The raw branch remains only for consumers awaiting their owning migration.
-// Webhook always enters through its actual LinkSys binding.
-enum ClientTls<'a, 'owner> {
-    Raw,
-    Owned(&'a ValidatedLocalTlsSelection<'owner>, &'a GlobalOutboundTlsSnapshot),
 }
 
 // Cold readiness only: actual owning adapters supply both fields. Presence is
@@ -216,7 +207,7 @@ impl<'a> PreparedManagedHttp<'a> {
             label,
             retry_timeout,
             Some(self.field.owner_namespace()),
-            ClientTls::Owned(&self.proof, self.defaults),
+            (&self.proof, self.defaults),
         )
     }
 }
@@ -256,7 +247,7 @@ impl<'a> PreparedRouteAuth<'a> {
             "ForwardAuth",
             true,
             Some(self.field.namespace()),
-            ClientTls::Owned(&self.proof, self.defaults),
+            (&self.proof, self.defaults),
         )
     }
 }
@@ -287,45 +278,6 @@ impl ManagedOutboundClient {
         }
     }
 
-    // ============================================================
-    // from_parts — primary constructor
-    // ============================================================
-
-    /// Build a [`ManagedOutboundClient`] from an [`ExternalHttpConnection`] and an
-    /// [`OutboundRequestSpec`].
-    ///
-    /// * Validates the target via [`validate_connection_target`].
-    /// * Builds a `reqwest::Client` from `conn.tls` (falls back to the shared
-    ///   global client when TLS is absent).
-    /// * Resolves the backend reference into a [`ResolvedTarget`].
-    /// * Compiles the request spec via [`CompiledRequest::from_spec`].
-    /// * Spawns an active-health probe task when `conn.health_check.active` is set.
-    /// * Initialises a rate counter when `conn.rate_limit` is set.
-    ///
-    /// `timeout_retry_default` is the consumer's default for `retry_on_timeout`
-    /// when the operator leaves it unset (`None`) on the resource: webhook
-    /// callers pass `false` (non-idempotent POSTs), forward_auth callers pass
-    /// `true` (idempotent auth checks).
-    ///
-    /// Returns `Err` with a human-readable message on any validation or compile failure.
-    pub fn from_parts(
-        conn: &ExternalHttpConnection,
-        request: &OutboundRequestSpec,
-        secrets: Option<&ResolvedSecrets>,
-        ref_label: &str,
-        timeout_retry_default: bool,
-    ) -> Result<Self, String> {
-        Self::build(
-            conn,
-            request,
-            secrets,
-            ref_label,
-            timeout_retry_default,
-            None,
-            ClientTls::Raw,
-        )
-    }
-
     /// Prepare only the Webhook variant borrowed from its actual LinkSys.
     pub(crate) fn from_webhook(
         binding: &BoundLinkSysConfig<'_>,
@@ -346,7 +298,7 @@ impl ManagedOutboundClient {
             ref_label,
             false,
             source.scope().namespace(),
-            ClientTls::Owned(&proof, defaults),
+            (&proof, defaults),
         )
     }
 
@@ -357,7 +309,7 @@ impl ManagedOutboundClient {
         ref_label: &str,
         timeout_retry_default: bool,
         owner_namespace: Option<&str>,
-        tls: ClientTls<'_, '_>,
+        (proof, defaults): (&ValidatedLocalTlsSelection<'_>, &GlobalOutboundTlsSnapshot),
     ) -> Result<Self, String> {
         // ── 1. Validate target ─────────────────────────────────────────────
         if let Some(e) = validate_connection_target(conn) {
@@ -382,10 +334,7 @@ impl ManagedOutboundClient {
         // Resolved before the DNS resolver / client are built so that resolver
         // selection (step 4) can key off `ResolvedTarget` itself rather than a
         // second, independently-derived classification of the target kind.
-        let tls_active = match &tls {
-            ClientTls::Raw => conn.tls.is_some(),
-            ClientTls::Owned(proof, _) => proof.active_field().is_some(),
-        };
+        let tls_active = proof.active_field().is_some();
         let resolved_target = build_resolved_target_in_namespace(&conn.target, tls_active, owner_namespace)?;
 
         // ── 4. Build the DNS resolver: EgressResolver for URL targets, or the
@@ -439,14 +388,11 @@ impl ManagedOutboundClient {
         };
 
         // ── 5. Build HTTP client ───────────────────────────────────────────
-        // `build_webhook_client` returns None only when neither TLS nor a resolver
+        // The owning factory returns None only when neither active TLS nor a resolver
         // is needed; a URL target and a Service-pool target both always supply a
         // resolver (steps 2-4 above), so only a `ServiceClusterIp` (`Static`)
-        // target with no TLS block falls back to the shared global client.
-        let prepared_client = match tls {
-            ClientTls::Raw => build_webhook_client(&conn.tls, dns_resolver),
-            ClientTls::Owned(proof, defaults) => build_webhook_client_with_tls_selection(proof, defaults, dns_resolver),
-        };
+        // target with no active TLS falls back to the shared global client.
+        let prepared_client = build_webhook_client_with_tls_selection(proof, defaults, dns_resolver);
         let http_client = match prepared_client {
             None => get_http_client_arc(),
             Some(Ok(client)) => Arc::new(client),
@@ -460,8 +406,7 @@ impl ManagedOutboundClient {
             .map_err(|e| format!("failed to compile request spec for '{}': {}", ref_label, e))?;
 
         // ── 6b. Compile the timeout template (admission already validated syntax
-        //        via `validate_connection_target`, but from_parts is also reachable
-        //        directly in tests, so compile again defensively) ────────────────
+        //        via `validate_connection_target`; compile the runtime template here) ─
         let timeout_template = conn
             .timeout_ms_template
             .as_deref()

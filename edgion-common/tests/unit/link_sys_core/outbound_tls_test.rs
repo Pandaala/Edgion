@@ -401,7 +401,8 @@ fn verify_false_is_honored_when_provider_can_disable() {
         verify: Some(false),
         ..Default::default()
     };
-    let r = resolve_outbound_tls(&local, None, None, true, "Test").expect("verify=false must be honored");
+    let r = resolve_outbound_tls_audited_with_defaults(&local, None, None, true, "Test", &outbound_global_default())
+        .expect("verify=false must be honored");
     assert!(
         !r.verify,
         "resolved verify must be false when operator sets verify=false"
@@ -415,7 +416,10 @@ fn gate_rejects_skip_when_provider_cannot_disable() {
         verify: Some(false),
         ..Default::default()
     };
-    assert!(resolve_outbound_tls(&local, None, None, false, "Redis").is_err());
+    assert!(
+        resolve_outbound_tls_audited_with_defaults(&local, None, None, false, "Redis", &outbound_global_default())
+            .is_err()
+    );
 }
 
 #[test]
@@ -427,7 +431,15 @@ fn inherits_global_verify_true_when_local_none() {
             ..Default::default()
         },
     ));
-    let r = resolve_outbound_tls(&OutboundTlsLocal::default(), None, None, true, "Test").unwrap();
+    let r = resolve_outbound_tls_audited_with_defaults(
+        &OutboundTlsLocal::default(),
+        None,
+        None,
+        true,
+        "Test",
+        &outbound_global_default(),
+    )
+    .unwrap();
     assert!(r.verify);
 }
 
@@ -446,7 +458,15 @@ fn ca_refs_present_yields_multi_bundle_custom() {
         }),
         ..Default::default()
     };
-    let r = resolve_outbound_tls(&local, Some(&[s1, s2]), None, true, "Test").unwrap();
+    let r = resolve_outbound_tls_audited_with_defaults(
+        &local,
+        Some(&[s1, s2]),
+        None,
+        true,
+        "Test",
+        &outbound_global_default(),
+    )
+    .unwrap();
     match r.ca {
         EffectiveCa::Custom(b) => assert_eq!(b.len(), 2),
         _ => panic!("expected multi-bundle Custom"),
@@ -466,7 +486,8 @@ fn well_known_system_yields_system() {
         }),
         ..Default::default()
     };
-    let r = resolve_outbound_tls(&local, None, None, true, "Test").unwrap();
+    let r = resolve_outbound_tls_audited_with_defaults(&local, None, None, true, "Test", &outbound_global_default())
+        .unwrap();
     assert!(matches!(r.ca, EffectiveCa::System));
 }
 
@@ -489,7 +510,15 @@ fn both_absent_defaults_to_system_public_roots() {
     set_outbound_global_default(crate::link_sys_core::outbound_tls::test_util::snapshot(
         OutboundTlsConfig::default(),
     ));
-    let r = resolve_outbound_tls(&OutboundTlsLocal::default(), None, None, true, "Test").unwrap();
+    let r = resolve_outbound_tls_audited_with_defaults(
+        &OutboundTlsLocal::default(),
+        None,
+        None,
+        true,
+        "Test",
+        &outbound_global_default(),
+    )
+    .unwrap();
     assert!(matches!(r.ca, EffectiveCa::System));
 }
 
@@ -510,7 +539,15 @@ fn san_policy_overrides_verify_false_and_keeps_client_identity() {
         }),
         ..Default::default()
     };
-    let r = resolve_outbound_tls(&local, None, Some(&client_secret()), true, "Test").unwrap();
+    let r = resolve_outbound_tls_audited_with_defaults(
+        &local,
+        None,
+        Some(&client_secret()),
+        true,
+        "Test",
+        &outbound_global_default(),
+    )
+    .unwrap();
     assert!(r.verify, "SAN policy must force verify=true (fail-secure)");
     assert!(
         r.client_identity.is_some(),
@@ -530,7 +567,15 @@ fn verify_false_without_san_drops_client_identity() {
         verify: Some(false),
         ..Default::default()
     };
-    let r = resolve_outbound_tls(&local, None, Some(&client_secret()), true, "Test").unwrap();
+    let r = resolve_outbound_tls_audited_with_defaults(
+        &local,
+        None,
+        Some(&client_secret()),
+        true,
+        "Test",
+        &outbound_global_default(),
+    )
+    .unwrap();
     assert!(!r.verify);
     assert!(
         r.client_identity.is_none(),
@@ -564,7 +609,7 @@ fn local_ca_refs_without_resolved_bytes_errors_no_global_fallback() {
         }),
         ..Default::default()
     };
-    let r = resolve_outbound_tls(&local, None, None, true, "Test");
+    let r = resolve_outbound_tls_audited_with_defaults(&local, None, None, true, "Test", &outbound_global_default());
     assert!(
         matches!(r, Err(EdgionErrorCode::OutboundTlsCaMissing)),
         "local CA refs with no resolved bytes must error, got: {:?}",
@@ -589,7 +634,14 @@ fn partially_resolved_ca_refs_fail_closed() {
         b"-----BEGIN CERTIFICATE-----\nA\n-----END CERTIFICATE-----\n",
     )];
 
-    let result = resolve_outbound_tls(&local, Some(&only_one_secret), None, true, "Test");
+    let result = resolve_outbound_tls_audited_with_defaults(
+        &local,
+        Some(&only_one_secret),
+        None,
+        true,
+        "Test",
+        &outbound_global_default(),
+    );
     assert!(matches!(result, Err(EdgionErrorCode::OutboundTlsCaMissing)));
 }
 
@@ -610,7 +662,15 @@ fn inherits_global_ca_when_local_validation_absent() {
             ..Default::default()
         },
     ));
-    let r = resolve_outbound_tls(&OutboundTlsLocal::default(), None, None, true, "Test").unwrap();
+    let r = resolve_outbound_tls_audited_with_defaults(
+        &OutboundTlsLocal::default(),
+        None,
+        None,
+        true,
+        "Test",
+        &outbound_global_default(),
+    )
+    .unwrap();
     match r.ca {
         EffectiveCa::Custom(b) => assert_eq!(b.len(), 1),
         _ => panic!("expected global resolved CA to be inherited as Custom"),
@@ -628,7 +688,8 @@ fn local_client_ref_without_resolved_secret_fails_closed() {
         ..Default::default()
     };
 
-    let result = resolve_outbound_tls(&local, None, None, true, "Test");
+    let result =
+        resolve_outbound_tls_audited_with_defaults(&local, None, None, true, "Test", &outbound_global_default());
     assert!(matches!(result, Err(EdgionErrorCode::OutboundTlsClientCertInvalid)));
 }
 
@@ -642,7 +703,14 @@ fn global_client_ref_without_resolved_secret_fails_closed() {
         },
     ));
 
-    let result = resolve_outbound_tls(&OutboundTlsLocal::default(), None, None, true, "Test");
+    let result = resolve_outbound_tls_audited_with_defaults(
+        &OutboundTlsLocal::default(),
+        None,
+        None,
+        true,
+        "Test",
+        &outbound_global_default(),
+    );
     assert!(matches!(result, Err(EdgionErrorCode::OutboundTlsClientCertInvalid)));
     set_outbound_global_default(crate::link_sys_core::outbound_tls::test_util::snapshot(
         OutboundTlsConfig::default(),
@@ -683,8 +751,15 @@ fn global_client_identity_is_inherited_when_local_ref_is_absent() {
         },
     ));
 
-    let resolved = resolve_outbound_tls(&OutboundTlsLocal::default(), None, None, true, "Test")
-        .expect("global client identity must resolve");
+    let resolved = resolve_outbound_tls_audited_with_defaults(
+        &OutboundTlsLocal::default(),
+        None,
+        None,
+        true,
+        "Test",
+        &outbound_global_default(),
+    )
+    .expect("global client identity must resolve");
     assert!(resolved.client_identity.is_some());
     set_outbound_global_default(crate::link_sys_core::outbound_tls::test_util::snapshot(
         OutboundTlsConfig::default(),
@@ -706,7 +781,8 @@ fn local_client_ref_does_not_borrow_global_resolved_identity() {
         ..Default::default()
     };
 
-    let result = resolve_outbound_tls(&local, None, None, true, "Test");
+    let result =
+        resolve_outbound_tls_audited_with_defaults(&local, None, None, true, "Test", &outbound_global_default());
     assert!(matches!(result, Err(EdgionErrorCode::OutboundTlsClientCertInvalid)));
     set_outbound_global_default(crate::link_sys_core::outbound_tls::test_util::snapshot(
         OutboundTlsConfig::default(),

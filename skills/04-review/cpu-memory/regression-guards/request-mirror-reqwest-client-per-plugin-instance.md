@@ -88,8 +88,9 @@ Re-open only if:
 
 - A future feature requires per-plugin TLS configuration (client cert, custom CA, SNI override),
   per-plugin proxy, or per-plugin `danger_accept_invalid_certs` — in which case the answer is
-  not a per-plugin client but a small **pool of clients keyed on the differentiator**, the
-  same shape `build_webhook_client` already uses in `common::http_client.rs`.
+  a separately reviewed client-reuse policy keyed on the differentiator.
+  The canonical `build_webhook_client_with_tls_selection` factory in
+  `common::http_client.rs` constructs a dedicated client; it is not a keyed reuse pool.
 - The mirror metric label band described above is shown to mislead operations in production.
 
 ## Reference Cases

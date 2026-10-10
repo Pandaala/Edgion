@@ -18,7 +18,7 @@ outbound TLS, dial/request timeout, HTTP/2 keepalive and namespace. Resources
 owns pure endpoint, timeout and keepalive validation; Common construction and
 Gateway fingerprints validate the same fields. Admin validation reuses
 `LinkSys::validate_config`. TLS verification remains enabled and resolved through
-`resolve_outbound_tls`; dedicated election connections omit unary request timeout.
+the canonical `outbound_tls` resolver; dedicated election connections omit unary request timeout.
 
 The former `autoSyncInterval`, `maxCallSendSize`, `maxCallRecvSize`, `userAgent`,
 `rejectOldCluster`, `minClusterVersion`, `observability` and `timeout.keepAlive`

@@ -1,8 +1,8 @@
 //! Shared outbound TLS resolver for all outbound callers (LinkSys providers,
 //! plugins, etc.).
 //!
-//! Provides a single entry point [`resolve_outbound_tls`] that:
-//! - inherits the cluster-wide default from [`outbound_global_default`]
+//! Provides canonical pure and audited resolution from one captured snapshot:
+//! - inherits the cluster-wide default captured from [`outbound_global_default`]
 //! - applies per-call overrides from [`OutboundTlsLocal`]
 //! - resolves CA material from resolved Kubernetes Secrets (one per ref)
 
@@ -360,7 +360,7 @@ pub fn set_outbound_global_default(cfg: Arc<GlobalOutboundTlsSnapshot>) -> bool 
 // Resolver
 // ============================================================================
 
-/// The one resolver every outbound caller uses.
+/// Cold preparation against one inherited-policy snapshot, retaining canonical audit.
 ///
 /// # Arguments
 ///
@@ -375,6 +375,7 @@ pub fn set_outbound_global_default(cfg: Arc<GlobalOutboundTlsSnapshot>) -> bool 
 /// - `provider_can_disable` — whether this provider exposes a skip-verify knob.
 ///   Pass `false` for providers like Etcd whose TLS stack always verifies.
 /// - `context` — short provider name embedded in log messages.
+/// - `global` — the inherited-policy snapshot captured for this preparation.
 ///
 /// # CA source determination
 ///
@@ -437,25 +438,6 @@ pub fn set_outbound_global_default(cfg: Arc<GlobalOutboundTlsSnapshot>) -> bool 
 /// - [`EdgionErrorCode::OutboundTlsClientCertInvalid`] — a declared client ref
 ///   has no matching resolved Secret, or the effective Secret is missing
 ///   `tls.crt` or `tls.key`.
-pub fn resolve_outbound_tls(
-    local: &OutboundTlsLocal,
-    resolved_ca: Option<&[Secret]>,
-    resolved_client: Option<&Secret>,
-    provider_can_disable: bool,
-    context: &str,
-) -> Result<ResolvedOutboundTls, EdgionErrorCode> {
-    let global = outbound_global_default();
-    resolve_outbound_tls_audited_with_defaults(
-        local,
-        resolved_ca,
-        resolved_client,
-        provider_can_disable,
-        context,
-        &global,
-    )
-}
-
-/// Cold preparation against one inherited-policy snapshot, retaining canonical audit.
 pub(crate) fn resolve_outbound_tls_audited_with_defaults(
     local: &OutboundTlsLocal,
     resolved_ca: Option<&[Secret]>,
@@ -512,7 +494,7 @@ fn audit_resolution(result: &Result<ResolvedOutboundTls, EdgionErrorCode>, reque
 ///
 /// Backend-policy consumers pass empty defaults to avoid inheriting unrelated
 /// LinkSys trust or client credentials. Ordinary outbound clients use
-/// `resolve_outbound_tls` to retain process-default inheritance.
+/// canonical audited resolution with captured process defaults to retain inheritance.
 /// This pure resolver emits no logs; request-path callers own their diagnostics.
 pub fn resolve_outbound_tls_with_defaults(
     local: &OutboundTlsLocal,

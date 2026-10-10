@@ -575,7 +575,7 @@ optional root slash; omitted ports mean 80/443, and collectors normally use :431
 IPv6 must be bracketed; userinfo, query, fragment, non-root path, escapes and
 whitespace are rejected without echoing input.
 
-HTTPS always uses resolve_outbound_tls: public webpki roots or replacement custom
+HTTPS always uses the canonical outbound TLS resolver: public webpki roots or replacement custom
 CA, optional mTLS identity, original-host verification. Enabled verify=false,
 hostname and SAN overrides are rejected. Disabled local TLS is inert and does not
 disable HTTPS. HTTP cannot enable a local TLS policy. All credential/certificate

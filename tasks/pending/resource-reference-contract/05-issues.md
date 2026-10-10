@@ -84,8 +84,10 @@ record design-phase history and are not a current runtime acceptance verdict.
   R12a now passes two independent final reviews, 2321 distinct focused tests,
   and fourteen warning-free workspace gates. Its canonical predicate correction
   preserves namespace, actual DNS-host, native ObjectName and field-specific
-  contracts; the BTP local Secret option reuses that predicate. Local commit
-  review remains pending. Fresh long-name API admission and traffic remain F2.
+  contracts; the BTP local Secret option reuses that predicate. Committed as
+  f6b71a5217ce868e198b315ced6b8cff4c6f1b45 after both scoped commit reviews;
+  all thirteen blobs match the reviewed manifest. Fresh long-name API admission
+  and traffic remain F2.
 - **F1-COV-R1-01:** ManagedOutboundClient::from_parts and Common
   build_rustls_client_config retain obsolete detached transport entry points
   after their product callers migrated. Their exclusive raw branches and test
@@ -93,6 +95,11 @@ record design-phase history and are not a current runtime acceptance verdict.
   an API-completion gap, not a demonstrated ordinary-ingress Grant bypass.
   Round-1 coverage and independent round-2 source inspection confirm the residual;
   preserve live canonical HTTP/TLS conversion and process/bootstrap boundaries.
+  R12b now removes the four obsolete entries and migrates all 34 test calls.
+  Two fresh independent Astra final reviews pass the frozen twenty-path scope;
+  803 distinct focused tests and fourteen warning-free root gates pass. Live
+  canonical cores and original test assertions remain. The exact local commit
+  is the remaining batch gate; fresh F2 acceptance is separate.
 
 Grant semantic inspection has found no additional confirmed authorization bug;
 source review does not prove live revocation or conformance. Documentation also

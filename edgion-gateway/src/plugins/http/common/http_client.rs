@@ -106,23 +106,10 @@ pub(crate) fn get_mirror_http_client() -> &'static Client {
     })
 }
 
-/// Build a dedicated outbound client for a webhook / forward_auth connection.
+/// Build a dedicated outbound client from an actual owner's TLS selection.
 ///
-/// Returns `None` only when neither a TLS block nor a DNS resolver is supplied —
-/// i.e. when the shared global client is safe to use. A URL target always supplies
-/// a resolver, so it always gets a dedicated client (design spec 2.6).
-pub fn build_webhook_client(
-    tls_config: &Option<edgion_resources::resources::common::TlsConfig>,
-    dns_resolver: Option<std::sync::Arc<dyn reqwest::dns::Resolve>>,
-) -> Option<anyhow::Result<Client>> {
-    if tls_config.is_none() && dns_resolver.is_none() {
-        return None;
-    }
-    let mut config = webhook_client_config(dns_resolver);
-    config.tls = tls_config.clone();
-    Some(build_outbound_client(config))
-}
-
+/// Returns `None` only when neither active TLS nor a DNS resolver is needed.
+/// URL and Service-pool targets supply a resolver and receive a dedicated client.
 pub(crate) fn build_webhook_client_with_tls_selection(
     proof: &ValidatedLocalTlsSelection<'_>,
     defaults: &GlobalOutboundTlsSnapshot,

@@ -83,7 +83,7 @@ providers/webhook/
 > either a flat Kubernetes Service reference or an origin-only URL. The outbound
 > request shape (path / method / allow-listed
 > args / headers / cookies, with `origin` / `custom` split and `presence` policy) is owned
-> entirely by the webhook resource. `ManagedOutboundClient::from_parts` compiles it during
+> entirely by the webhook resource. `ManagedOutboundClient::from_webhook` compiles it during
 > ordered LinkSys publication. Consumers pass only `session` + optional `path_override` (no more
 > `forwardHeaders` / `pathSuffix`). Full architecture:
 > [03-controller-gateway-link/webhook.md](../03-controller-gateway-link/webhook.md).

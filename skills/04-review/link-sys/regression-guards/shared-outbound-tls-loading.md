@@ -43,7 +43,7 @@ inert through the canonical owning selection.
   Fred mapping receives that connector without resolving TLS again;
   other providers keep their existing transport-selection and TLS-loading paths.
   HTTP providers use `build_outbound_client` and `apply_resolved_outbound_tls`;
-  active TLS policy continues through `resolve_outbound_tls`, as required by
+  active TLS policy continues through the canonical `outbound_tls` resolver, as required by
   [the unification rules](../../../00-design-rules.md#d-cross-cutting-unification--one-canonical-implementation-per-mechanism).
 - `edgion-gateway/src/link_sys/providers/webhook/client.rs`:
   WebhookCandidate retains the actual owner and captured snapshot. Its owning
@@ -71,6 +71,17 @@ inert through the canonical owning selection.
   construction error, without claiming auth-reference authority. Ordinary custom
   failure can retain prior callable publication; forced refresh withdraws it.
   Pure preparation/connector tests do not establish a live Kafka TLS handshake.
+
+
+The detached `ManagedOutboundClient::from_parts`, its raw Webhook HTTP factory,
+and Common's raw rustls constructor have been retired after all production
+consumers migrated. Managed construction requires an actual bound owner and its
+proved TLS selection. The obsolete global-loading resolver convenience wrapper
+is also removed; snapshot, audited, actual-owner and effective conversion cores
+remain canonical. Generic HTTP construction, preconfigured TLS, process bootstrap,
+and `apply_resolved_outbound_tls` remain live supported boundaries. Unit tests use
+actual Webhook/ForwardAuth/Redis owners or the existing private effective crypto
+converter, preserving certificate parsing and policy failures without a raw API shim.
 
 The original defect was before provider mapping: the Controller resolved unused
 references, and Gateway readiness returned false for unresolved inactive refs.

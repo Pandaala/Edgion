@@ -1,11 +1,10 @@
 //! Canonical TLS conversion helpers for `LinkSys` resources.
 //!
 //! All outbound TLS flows through the shared resolver
-//! ([`crate::link_sys_core::outbound_tls::resolve_outbound_tls`]):
+//! ([`crate::link_sys_core::outbound_tls`]):
 //! - `apply_resolved_outbound_tls` — reqwest path (ES, webhook)
 //! - `build_validated_rustls_client_config` — actual-owner Redis/Fred path
 //! - `build_kafka_rustls_client_config` — actual-owner Kafka/rskafka path
-//! - `build_rustls_client_config` — raw adapters pending their owning migration
 //!
 //! The resolver handles global-default inheritance and CA material resolution.
 //! `verify=false` is honored when the provider supports it (operator responsibility)
@@ -20,23 +19,17 @@ use edgion_resources::resources::common::TlsConfig;
 
 use crate::link_sys_core::outbound_tls::{self, EffectiveCa};
 
-/// Build a rustls [`ClientConfig`] from a CRD-level [`TlsConfig`].
-///
-/// Used by remaining raw adapters whose SDK consumes `rustls::ClientConfig`
-/// directly. Redis's actual-owner adapter uses the validated entry and the same
-/// conversion core. Providers that
-/// accept raw PEM (etcd-client / reqwest) should use
-/// `apply_resolved_outbound_tls` instead.
+/// Build from an actual owning selection and one captured inherited generation.
 ///
 /// Returns `Ok(None)` when there is nothing to configure — no custom CA and no
 /// client identity (callers can then fall back to the library's default TLS
 /// connector).
 ///
 /// **Skip-verify is not supported**: `verify=false` is always rejected
-/// (`provider_can_disable=false`). rustls has no skip-verify path — a
+/// (`provider_can_disable=false`). The supported connector has no skip-verify path — a
 /// `verify=false` config would silently fall through to a verifying connector,
-/// so this function rejects it upfront with
-/// [`EdgionErrorCode::OutboundTlsVerifyUnsupported`] instead.
+/// so canonical resolution rejects it upfront with
+/// `OutboundTlsVerifyUnsupported` instead.
 ///
 /// Root certificate selection:
 /// - [`EffectiveCa::Custom`] → the CA PEM is the **only** trust root (private
@@ -47,20 +40,6 @@ use crate::link_sys_core::outbound_tls::{self, EffectiveCa};
 ///
 /// Client authentication: applied only when **both** `client_cert_pem` and
 /// `client_key_pem` are present; otherwise `.with_no_client_auth()`.
-pub fn build_rustls_client_config(tls: &TlsConfig) -> Result<Option<ClientConfig>> {
-    let resolved = outbound_tls::resolve_outbound_tls(
-        &tls.outbound,
-        tls.resolved_ca_certificates.as_deref(),
-        tls.resolved_client_certificate.as_ref(),
-        false,
-        "LinkSys",
-    )
-    .map_err(|e| anyhow::anyhow!("LinkSys TLS configuration error: {e:?}"))?;
-
-    build_effective_rustls_client_config(&resolved)
-}
-
-/// Build from an actual owning selection and one captured inherited generation.
 pub(crate) fn build_validated_rustls_client_config(
     proof: &outbound_tls::ValidatedLocalTlsSelection<'_>,
     defaults: &outbound_tls::GlobalOutboundTlsSnapshot,
@@ -183,7 +162,7 @@ pub fn apply_custom_ca_pem(
 /// Resolve `tls` through the shared outbound resolver and apply the result
 /// (verify flag, custom-CA REPLACE, mTLS identity) to a reqwest builder.
 /// This is the ONLY reqwest TLS path: `verify` always flows through
-/// `resolve_outbound_tls`, so global-default inheritance is enforced uniformly.
+/// the canonical snapshot resolver, so global-default inheritance is enforced uniformly.
 /// `verify=false` is honored when the operator sets it explicitly (provider
 /// must support skip-verify); a WARN is emitted at configuration-load time.
 pub fn apply_resolved_outbound_tls(

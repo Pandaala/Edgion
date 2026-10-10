@@ -116,7 +116,7 @@ policy. TLS/client construction failure must never select an unconfigured client
 ### 3. Outbound TLS resolution — Unified
 
 - **Canon**: `edgion-common/src/link_sys_core/outbound_tls.rs`
-  (`resolve_outbound_tls`), applied inside the client factory via
+  (the snapshot-based `resolve_outbound_tls_with_snapshot` and actual-owner resolver family), applied inside the client factory via
   `edgion-common/src/link_sys_core/tls.rs`.
 - **Rule**: every outbound TLS configuration (CA bundle, client cert/mTLS,
   verification toggles) MUST resolve through it — including non-reqwest
@@ -124,7 +124,8 @@ policy. TLS/client construction failure must never select an unconfigured client
 - Backend policy consumers use its pure `resolve_outbound_tls_with_defaults`
   entry with explicit defaults, so LinkSys global trust or client credentials
   cannot override backend identity. Configuration audit logging remains in
-  `resolve_outbound_tls`; request-time callers use the pure entry and access logs.
+  `resolve_outbound_tls_audited_with_defaults` and `resolve_validated_outbound_tls_audited`;
+  request-time callers use the pure entry and access logs.
 - The reference migration adds an actual-owner `ValidatedLocalTlsSelection` entry
   for canonical resolution. HTTPDNS uses `HttpDnsCandidate` and Webhook uses its
   `WebhookCandidate` plus the fixed-variant managed owning entry. Both use the canonical

@@ -3169,3 +3169,43 @@ Final scope is eleven technical/documentation paths plus coordinator-owned
 Obsolete detached transport cleanup, documentation reconciliation, affected final
 cross-checks and fresh admission/dynamic/full Standard conformance remain open.
 This scoped source correction does not establish successful live long-name traffic.
+
+R12a committed locally as f6b71a5217ce868e198b315ced6b8cff4c6f1b45 after both
+independent scoped commit reviews; all thirteen blobs match the final manifest.
+No push. The source-name false negative is corrected under scoped verification;
+live long-name admission and traffic remain F2. R12b enters plan-only to retire
+the confirmed obsolete detached transport constructors and migrate their existing
+tests through current owning/conversion entries. Preserve live canonical cores,
+crypto assertions, error policy and unrelated protected paths. No R12b production
+change or test execution is authorized before its independent plan reviews.
+
+## R12b obsolete TLS entry retirement: verification checkpoint
+
+The approved twenty-path implementation removes detached ManagedOutboundClient
+construction, its exclusive raw Webhook factory, the unused raw rustls builder,
+and the now-unused global-loading resolver wrapper. Live prepared-owner, audited,
+snapshot and effective conversion cores remain. All 34 obsolete test calls were
+migrated through owning fixtures or the existing crypto conversion core, with
+old test identities and substantive assertions preserved. Two independent Astra
+plan reviews passed before implementation.
+
+Frozen revision 2 passes 803 distinct tests: 789 unit tests and 14 Common
+doctests; four existing Common etcd tests remain ignored. There were no failures
+or warnings. Common/Gateway test inventories were freshly compiled and listed;
+unchanged Resources/Controller inventory provenance is carried forward, yielding
+9758 preserved identities, not 9758 executed tests. Revision 2 only corrected
+two stale documentation references after revision 1; both compilation records
+are retained. Evidence: tmp/resource-reference-contract/r12b-verification-20261010/.
+
+All fourteen root gates pass with zero warnings and unchanged source. Workspace
+check took 21.942 seconds and Clippy 29.165 seconds. Evidence:
+tmp/resource-reference-contract/r12b-root-verification-20261010/. Fresh independent
+final reviews and the exact local commit remain pending at this checkpoint.
+No push. Documentation reconciliation, affected final cross-checks and fresh
+admission/dynamic/full Standard conformance remain open.
+
+Both fresh independent Astra final reviewers pass the frozen R12b implementation
+and independently recomputed verification evidence. They confirmed retained
+canonical cores, all 34 migrations, crypto fixtures, substantive assertions and
+the limited inventory provenance. Exact local commit review follows; no live
+acceptance claim or push is authorized by these source verdicts.

@@ -188,7 +188,7 @@ fn from_parts_rejects_missing_port() {
         },
         ..Default::default()
     };
-    let result = ManagedOutboundClient::from_parts(&conn, &OutboundRequestSpec::default(), None, "test", false);
+    let result = owned_webhook_client(&conn, &OutboundRequestSpec::default(), "default");
     assert!(result.is_err(), "from_parts must reject missing port");
     let msg = result.unwrap_err();
     assert!(msg.contains("port"), "error should mention port, got: {msg}");
@@ -379,8 +379,7 @@ fn url_target_without_tls_gets_a_dedicated_client() {
         ..Default::default()
     };
     let client =
-        ManagedOutboundClient::from_parts(&conn, &OutboundRequestSpec::default(), None, "test/url-hook", false)
-            .expect("url target must build");
+        owned_webhook_client(&conn, &OutboundRequestSpec::default(), "default").expect("url target must build");
 
     // The shared global client is a distinct Arc allocation; a dedicated client
     // must not alias it.
@@ -397,7 +396,7 @@ fn url_target_without_tls_gets_a_dedicated_client() {
 /// of closing the build-time/request-time split-brain SSRF: resolver
 /// installation must not depend on whether a policy exists yet, so it is
 /// unconditional for every target that can become the host-rewrite target
-/// in `outbound_call` (see `ManagedOutboundClient::from_parts` step 4).
+/// in `outbound_call` (see the actual-owner managed client builder).
 #[test]
 fn service_pool_target_without_tls_gets_a_dedicated_client() {
     let conn = ExternalHttpConnection {
@@ -413,8 +412,7 @@ fn service_pool_target_without_tls_gets_a_dedicated_client() {
         ..Default::default()
     };
     let client =
-        ManagedOutboundClient::from_parts(&conn, &OutboundRequestSpec::default(), None, "test/svc-hook", false)
-            .expect("service target must build");
+        owned_webhook_client(&conn, &OutboundRequestSpec::default(), "default").expect("service target must build");
     assert!(
         !Arc::ptr_eq(&client.http_client, &get_http_client_arc()),
         "a Service-pool target must carry its own client with the pinned resolver, \
@@ -441,14 +439,8 @@ fn service_cluster_ip_target_without_tls_reuses_global_client() {
         tls: None,
         ..Default::default()
     };
-    let client = ManagedOutboundClient::from_parts(
-        &conn,
-        &OutboundRequestSpec::default(),
-        None,
-        "test/cluster-ip-hook",
-        false,
-    )
-    .expect("ServiceClusterIp target must build");
+    let client = owned_webhook_client(&conn, &OutboundRequestSpec::default(), "default")
+        .expect("ServiceClusterIp target must build");
     assert!(
         Arc::ptr_eq(&client.http_client, &get_http_client_arc()),
         "ServiceClusterIp must keep reusing the shared global client, unchanged"
@@ -542,14 +534,7 @@ fn service_pool_client_gets_pinned_resolver_before_authority_policy_exists() {
         tls: None,
         ..Default::default()
     };
-    let client = ManagedOutboundClient::from_parts(
-        &conn,
-        &OutboundRequestSpec::default(),
-        None,
-        "test/pinned-resolver-order",
-        false,
-    )
-    .expect("service target must build");
+    let client = owned_webhook_client(&conn, &OutboundRequestSpec::default(), ns).expect("service target must build");
 
     // ── Step 2: attach an upstreamAuthority policy AFTER the client exists. ──
     let policy_key = format!("{ns}/authtest");
@@ -733,39 +718,38 @@ fn conn_with_retry(retry: WebhookRetry) -> ExternalHttpConnection {
     }
 }
 
-/// `from_parts(..., true)` fills an unset `retry_on_timeout` with `Some(true)` —
+/// The actual ForwardAuth variant fills an unset `retry_on_timeout` with `Some(true)` —
 /// this is the forward_auth call-site default (idempotent auth checks).
 #[test]
 fn from_parts_resolves_unset_retry_on_timeout_to_true_default() {
     let conn = conn_with_retry(retry_block(None));
-    let client =
-        ManagedOutboundClient::from_parts(&conn, &OutboundRequestSpec::default(), None, "test/forward-auth", true)
-            .expect("valid URL-target config must build");
+    let client = owned_managed_client("ForwardAuth", serde_json::to_value(&conn).unwrap(), Some("default"))
+        .expect("valid URL-target config must build");
 
     let retry = client.retry.as_ref().expect("retry block must survive from_parts");
     assert_eq!(retry.retry_on_timeout, Some(true));
 }
 
-/// `from_parts(..., false)` fills an unset `retry_on_timeout` with `Some(false)` —
+/// The actual Webhook variant fills an unset `retry_on_timeout` with `Some(false)` —
 /// this is the webhook call-site default (non-idempotent POSTs).
 #[test]
 fn from_parts_resolves_unset_retry_on_timeout_to_false_default() {
     let conn = conn_with_retry(retry_block(None));
-    let client = ManagedOutboundClient::from_parts(&conn, &OutboundRequestSpec::default(), None, "test/webhook", false)
+    let client = owned_webhook_client(&conn, &OutboundRequestSpec::default(), "default")
         .expect("valid URL-target config must build");
 
     let retry = client.retry.as_ref().expect("retry block must survive from_parts");
     assert_eq!(retry.retry_on_timeout, Some(false));
 }
 
-/// An operator's explicit `retry_on_timeout` must survive `from_parts` unchanged —
+/// An operator's explicit `retry_on_timeout` must survive client construction unchanged —
 /// the per-consumer default only fills the gap when the operator leaves it unset.
 #[test]
 fn from_parts_does_not_clobber_explicit_retry_on_timeout() {
     let conn = conn_with_retry(retry_block(Some(true)));
     // Consumer default is `false`; the explicit `Some(true)` on the resource
     // must win regardless.
-    let client = ManagedOutboundClient::from_parts(&conn, &OutboundRequestSpec::default(), None, "test/webhook", false)
+    let client = owned_webhook_client(&conn, &OutboundRequestSpec::default(), "default")
         .expect("valid URL-target config must build");
 
     let retry = client.retry.as_ref().expect("retry block must survive from_parts");
@@ -773,7 +757,7 @@ fn from_parts_does_not_clobber_explicit_retry_on_timeout() {
 }
 
 /// Helper: build a ManagedOutboundClient with an active health check config so
-/// that from_parts spawns a long-running health task.
+/// that actual Webhook construction spawns a long-running health task.
 async fn test_client_with_active_health() -> ManagedOutboundClient {
     use edgion_resources::resources::common::external_http::{
         ActiveHealthCheck, ExternalHttpConnection, WebhookHealthCheck, WebhookServiceRef, WebhookTarget,
@@ -805,8 +789,7 @@ async fn test_client_with_active_health() -> ManagedOutboundClient {
     };
     let request = OutboundRequestSpec::default();
 
-    ManagedOutboundClient::from_parts(&conn, &request, None, "test/client", false)
-        .expect("from_parts must succeed for valid config")
+    owned_webhook_client(&conn, &request, "default").expect("from_parts must succeed for valid config")
 }
 
 fn owned_managed_client(
@@ -1178,4 +1161,23 @@ fn managed_template_gate_covers_canonical_surfaces_without_scanning_literal_fiel
         let client = owned_managed_client(kind, literal, Some("tenant")).unwrap();
         assert!(client.resolved_secrets.is_none());
     }
+}
+
+fn owned_webhook_client(
+    conn: &ExternalHttpConnection,
+    request: &OutboundRequestSpec,
+    namespace: &str,
+) -> Result<ManagedOutboundClient, String> {
+    use edgion_resources::resources::refs::link_sys_fields::PreparedLinkSysReferences;
+    let mut config = serde_json::to_value(conn).unwrap();
+    config["request"] = serde_json::to_value(request).unwrap();
+    let owner = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"webhook","namespace":namespace},
+        "spec":{"type":"webhook","config":config}
+    }))
+    .unwrap();
+    let prepared = PreparedLinkSysReferences::from_link_sys(&owner);
+    let binding = prepared.bind(&owner).map_err(|error| error.to_string())?;
+    let defaults = GlobalOutboundTlsSnapshot::from_configs([]);
+    ManagedOutboundClient::from_webhook(&binding, &defaults, "test/webhook")
 }

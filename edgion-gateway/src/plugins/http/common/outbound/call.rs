@@ -258,7 +258,7 @@ async fn outbound_call_with_body_using<T: OutboundTransport>(
     // `upstreamAuthority` policy, swap the IP-based host for the composed
     // authority. Resolution of that authority is pinned to the same Service's
     // ready endpoints by `AnchorPinnedResolver` (installed in
-    // `ManagedOutboundClient::from_parts`), so the dial destination is
+    // the actual-owner managed client builder), so the dial destination is
     // unchanged — only Host/SNI move. This is never a fallback path: a
     // rejected authority aborts the call rather than silently dialing the
     // static/IP-based base URL.
@@ -354,9 +354,9 @@ async fn outbound_call_with_body_using<T: OutboundTransport>(
             Err(_elapsed) => {
                 // tokio timeout fired
                 // `retry_on_timeout` is resolved to a per-consumer default (webhook:
-                // false, forward_auth: true) in `ManagedOutboundClient::from_parts`;
+                // false, forward_auth: true) in the actual-owner managed client builder;
                 // the `unwrap_or(false)` here is a defensive fallback for a `client`
-                // built outside `from_parts` (e.g. constructed directly in tests).
+                // constructed directly in tests.
                 let retry_on_timeout = client.retry.as_ref().and_then(|r| r.retry_on_timeout).unwrap_or(false);
                 let should_retry = client.retry.is_some() && retry_on_timeout;
                 if !should_retry || attempt + 1 >= max_attempts {
@@ -367,9 +367,9 @@ async fn outbound_call_with_body_using<T: OutboundTransport>(
             Ok(Err(e)) => {
                 // Transport / connect error from reqwest
                 // `retry_on_timeout` is resolved to a per-consumer default (webhook:
-                // false, forward_auth: true) in `ManagedOutboundClient::from_parts`;
+                // false, forward_auth: true) in the actual-owner managed client builder;
                 // the `unwrap_or(false)` here is a defensive fallback for a `client`
-                // built outside `from_parts` (e.g. constructed directly in tests).
+                // constructed directly in tests.
                 let retry_on_timeout = client.retry.as_ref().and_then(|r| r.retry_on_timeout).unwrap_or(false);
                 let should_retry = client.retry.as_ref().is_some_and(|r| {
                     (retry_on_timeout && e.is_timeout()) || (r.retry_on_connect_error && e.is_connect())

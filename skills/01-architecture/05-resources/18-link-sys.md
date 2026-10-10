@@ -224,11 +224,12 @@ Constraints:
 
 ### TLS assembly
 
-The Webhook provider removes disabled `conn.tls` before calling
-`ManagedOutboundClient::from_parts`. The shared engine uses block presence to
-select the Service target's scheme and construct its HTTP client. This boundary
-keeps disabled LinkSys TLS inert for both business calls and active health checks,
-while URL targets retain their explicit `http` or `https` scheme.
+The Webhook provider calls `ManagedOutboundClient::from_webhook` with its actual
+LinkSys binding and captured inherited TLS snapshot. The shared engine uses the
+proved active TLS field to select the Service target's scheme and construct its
+HTTP client. Disabled TLS remains in the owner but is inert for business calls
+and active health checks; construction neither clones nor removes the block.
+URL targets retain their explicit `http` or `https` scheme.
 
 `edgion-common/src/link_sys_core/tls.rs` plugs `TlsConfig` + the resolved `TlsMaterial` into each provider's TLS configuration:
 - `ca_pem`: derived from the resolved `validation.caCertificateRefs` Secret(s) carrying a `ca.crt` key. The old inline `TlsCerts.caCert` field has been removed. A custom CA replaces the public roots entirely.
