@@ -35,8 +35,9 @@ serialized only so the Gateway can enforce serving ownership.
 2. **domains**: at least one domain
 3. **Wildcard domain check**: wildcard domains are rejected because built-in ACME supports HTTP-01 only.
 4. **Credential targets**: both account and EAB references require an omitted/empty
-   group and an omitted/`Secret` kind. The shared ACME target validator is also
-   called before handler resolution and background Secret consumption.
+   group and an omitted/`Secret` kind. The actual-owner AcmeRefs field facade is consumed through a shared diagnostic
+   adapter before handler resolution and background Secret consumption. Strict
+   source/name/namespace validation also rejects malformed local identities.
 
 ### parse
 
@@ -49,7 +50,7 @@ Resolved Secret bytes are **not** written back to the in-memory `EdgionAcme` —
    Secret dependency registration, and still publishes denial/notification.
    Previous Secret/cross-namespace dependencies were already cleared.
 4. **Resolve ACME account Secret** (`spec.privateKeySecretRef`, required):
-   - Goes through the credential pipeline (`resource_processor::credential::pipeline::resolve_secret` + `AcmeAccountResolver`)
+   - Goes through the credential pipeline (`resource_processor::credential::pipeline::resolve_bound_acme_account` + `AcmeAccountResolver`)
    - The Secret is allowed to be `Opaque` type, with the required key `accountCredentials` (JSON, i.e., `instant_acme::AccountCredentials`)
    - If the Secret does not yet exist (first-time install / waiting for `AcmeService` write-back), `ResolvedRefs=Unknown/NeedsRegistration` is recorded; once `AcmeService` generates the account it writes the Secret and triggers requeue
 5. **Prepare notification**: compare UID/generation, ResolvedRefs status/reason,
@@ -122,3 +123,23 @@ ACME certificate issuance is handled by an independent background Service:
 | EdgionAcme → Gateway | Gateway | `GatewayRouteIndex` + resolved attachment proof | Reprocess on listener, ownership, publication-proof, or deletion changes |
 | EdgionAcme → ReferenceGrant | ReferenceGrant | `CrossNsRefManager` | Required for a cross-namespace `gatewayRef`; changes re-resolve the attachment |
 | EdgionAcme → Gateway/EdgionTls | indirect | via the certificate Secret | The issued certificate Secret is referenced by Gateway/EdgionTls |
+
+## Actual credential ownership
+
+Account and EAB fields use distinct immutable loans from the actual EdgionAcme.
+Only the account field enters handler acquisition and account persistence; an EAB
+loan cannot be substituted for it. Account cache lookup has finite default
+bare/qualified selection, exact raw metadata checks and ambiguity rejection.
+Secret semantic notifications preserve missing/deleted/repair recovery for that
+consumer. EAB gains no handler dependency or new ReferenceGrant policy.
+
+Background API calls derive canonical namespace/name from the field and require
+explicit matching response metadata before decoding. Account CAS validates both
+initial and refreshed snapshots before using their UID/resourceVersion; current
+attempt/LeaderFence checks, concurrent credential adoption, empty-secret bootstrap
+and corrupt-data rejection stay independent. Credentials are not transported on
+EdgionAcme. Generated certificate/EdgionTls output identity is a separate batch.
+
+HTTP-01 resolution receives the actual owner and uses canonical parent defaults;
+it does not add name grammar, change sectionName/port conjunction, allowedRoutes,
+Grant policy or live Controller-published Gateway proof requirements.

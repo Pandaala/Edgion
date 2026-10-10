@@ -202,6 +202,25 @@ pub fn resolve_bound_secret<R: SecretMaterialResolver>(
     resolve_bound_outcome(fetch_bound_secret(ctx, owner, token), owner, resolver)
 }
 
+/// Preserve ACME's bootstrap and credential diagnostics while binding acquisition.
+pub(crate) fn resolve_bound_acme_account(
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    field: &edgion_resources::resources::refs::acme_fields::AcmeAccountField<'_>,
+) -> Result<ResolveOutcome<Secret>, ReferenceError> {
+    let authorized = match fetch_bound_secret(ctx, owner, field.token()) {
+        BoundFetchOutcome::Invalid(error) => return Err(error),
+        BoundFetchOutcome::Pending(reason) => return Ok(ResolveOutcome::Pending(reason)),
+        BoundFetchOutcome::Ok(value) => value,
+    };
+    Ok(
+        match validate_secret(&authorized.secret, &edgion_resources::credentials::AcmeAccountResolver) {
+            Ok(_) => ResolveOutcome::Ok(authorized.secret),
+            Err(error) => ResolveOutcome::Invalid(error),
+        },
+    )
+}
+
 /// Resolve an actual Backend credential field through the shared identity,
 /// dependency, authorization and material-validation pipeline.
 pub(crate) fn resolve_backend_secret(
@@ -444,6 +463,7 @@ fn read_bound_material<T: kube::Resource>(
         || reference.is_backend_tls_material()
         || reference.is_health_tls_material()
         || reference.is_edgion_tls_material()
+        || reference.is_acme_account()
     {
         let bare = if object.namespace == "default" {
             read(None, object.name)

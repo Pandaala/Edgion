@@ -1131,3 +1131,56 @@ async fn parse_unresolvable_gateway_ref_clears_stale_attachments_and_keeps_activ
     assert_eq!(resolved.status, "False");
     assert_eq!(resolved.reason, condition_reasons::NO_MATCHING_PARENT);
 }
+
+#[tokio::test]
+async fn actual_acme_fields_keep_eab_out_of_handler_dependencies_and_parent_defaults_canonical() {
+    let _guard = ACME_TEST_MUTEX.lock().await;
+    let (key, secret) = make_secret("default", "account", &[("accountCredentials", b"{}")]);
+    let (ctx, runtime) = make_ctx(HashMap::from([(key, secret)]));
+    let mut acme = make_acme("default", "issuer", "account");
+    acme.spec.external_account_binding = Some(AcmeExternalAccountBinding {
+        key_id: "id".into(),
+        key_secret_ref: SecretObjectReference {
+            name: "eab".into(),
+            namespace: Some("other".into()),
+            group: None,
+            kind: None,
+        },
+    });
+    let baseline = resolve_acme_listener_attachments(&acme, &runtime).unwrap();
+    let AcmeChallenge::Http01 { gateway_ref } = &mut acme.spec.challenge;
+    gateway_ref.group = Some("gateway.networking.k8s.io".into());
+    gateway_ref.kind = Some("Gateway".into());
+    gateway_ref.namespace = Some("default".into());
+    assert_eq!(resolve_acme_listener_attachments(&acme, &runtime).unwrap(), baseline);
+    let ProcessResult::Continue(parsed) = EdgionAcmeHandler::new().parse(acme.clone(), &ctx).await else {
+        panic!("unexpected skip")
+    };
+    let owner = ResourceRef::new(ResourceKind::EdgionAcme, Some("default".into()), "issuer".into());
+    assert_eq!(
+        runtime.secret_ref_manager.get_dependencies(&owner.key()),
+        ["default/account"]
+    );
+    assert!(runtime.cross_ns_ref_mgr.get_refs("other").is_empty());
+    assert!(parsed
+        .status
+        .as_ref()
+        .unwrap()
+        .conditions
+        .iter()
+        .any(|c| c.type_ == "ResolvedRefs" && c.status == "True"));
+    let AcmeChallenge::Http01 { gateway_ref } = &mut acme.spec.challenge;
+    gateway_ref.group = Some(String::new());
+    assert!(matches!(
+        resolve_acme_listener_attachments(&acme, &runtime),
+        Err(AcmeGatewayRefError::InvalidKind { .. })
+    ));
+    let AcmeChallenge::Http01 { gateway_ref } = &mut acme.spec.challenge;
+    gateway_ref.group = None;
+    gateway_ref.section_name = Some("http".into());
+    gateway_ref.port = Some(81);
+    assert!(matches!(
+        resolve_acme_listener_attachments(&acme, &runtime),
+        Err(AcmeGatewayRefError::NoMatchingListener)
+    ));
+}

@@ -53,10 +53,11 @@ use crate::conf_mgr::{ControllerRuntime, LeaderFence, LeaderFenceValidation, Lea
 use edgion_common::time::now_rfc3339;
 use edgion_resources::duration::parse_duration;
 use edgion_resources::resources::edgion_acme::{
-    AcmeCertPhase, AcmeChallenge, AcmeSchedulerStatus, ActiveHttpChallenge, EdgionAcme, EdgionAcmeStatus,
+    AcmeCertPhase, AcmeSchedulerStatus, ActiveHttpChallenge, EdgionAcme, EdgionAcmeStatus,
     MAX_ACME_RESOLVED_ATTACHMENTS,
 };
 use edgion_resources::resources::edgion_tls::{EdgionTls, ResolvedListenerAttachment};
+use edgion_resources::resources::refs::acme_fields::AcmeRefs;
 
 // ============================================================================
 // Global singleton (re-initializable for controller re-election)
@@ -1035,14 +1036,7 @@ fn evaluate_issuance_eligibility(raw: &EdgionAcme, key: &str, runtime: &Controll
         return EligibilityDecision::AuthoritativelyIneligible;
     }
 
-    let gateway_ref = match &raw.spec.challenge {
-        AcmeChallenge::Http01 { gateway_ref } => gateway_ref,
-    };
-    let live_attachments = match resolve_acme_listener_attachments(
-        gateway_ref,
-        raw.metadata.namespace.as_deref().unwrap_or("default"),
-        runtime,
-    ) {
+    let live_attachments = match resolve_acme_listener_attachments(raw, runtime) {
         Ok(attachments) => attachments,
         // A projected Gateway can disappear briefly while a publication epoch
         // changes. Resource notifications and all other trigger sources retain
@@ -1311,7 +1305,7 @@ async fn issue_acme_resource(
     update_acme_status(api, attempt, name, phase, |_| {}).await?;
 
     // 2. Create or restore ACME account
-    let acme_client = get_or_create_acme_account(attempt, acme).await?;
+    let acme_client = get_or_create_acme_account(attempt).await?;
 
     // 3. Execute HTTP-01 and obtain the certificate
     let cert_result = execute_http01_flow(attempt, api, name, &acme_client, acme).await?;
@@ -1500,18 +1494,20 @@ async fn execute_http01_flow(
 /// Returns `Ok(None)` when no EAB is configured, `Ok(Some(key))` when present,
 /// and `Err` when configured but the Secret / `hmacKey` entry is missing or
 /// malformed (which blocks registration — EAB is a CA-side precondition).
-async fn fetch_eab_hmac(client: &Client, acme: &EdgionAcme, owner_ns: &str) -> Result<Option<String>> {
+async fn fetch_eab_hmac(client: &Client, acme: &EdgionAcme) -> Result<Option<String>> {
     validate_secret_references(acme).map_err(anyhow::Error::msg)?;
-    let Some(eab) = acme.spec.external_account_binding.as_ref() else {
+    let refs = AcmeRefs::from_acme(acme);
+    let Some(field) = refs.eab() else {
         return Ok(None);
     };
-    let sref = &eab.key_secret_ref;
-    let ns = sref.effective_namespace(owner_ns);
+    let token = field.token();
+    let target = token.validated()?.target();
+    let ns = target.scope().namespace().context("EAB Secret namespace is missing")?;
     let api: Api<Secret> = Api::namespaced(client.clone(), ns);
-    let secret = api
-        .get(&sref.name)
-        .await
-        .with_context(|| format!("Failed to fetch EAB key Secret {}/{}", ns, sref.name))?;
+    let secret = api.get(target.name()).await.context("Failed to fetch EAB key Secret")?;
+    field
+        .validate_api_secret(&secret)
+        .context("EAB Secret does not match its declared reference")?;
     let data = secret.data.as_ref().context("EAB key Secret has no data")?;
     let bytes = data.get("hmacKey").context("EAB key Secret missing 'hmacKey' entry")?;
     let hmac = String::from_utf8(bytes.0.clone()).context("EAB hmacKey is not valid UTF-8")?;
@@ -1531,21 +1527,29 @@ async fn fetch_eab_hmac(client: &Client, acme: &EdgionAcme, owner_ns: &str) -> R
 /// - Secret exists but missing that key: register, then **merge-patch** `accountCredentials` only
 ///   (self-managed empty Secret).
 /// - Key present but JSON invalid: **error** (operator must fix; we do not re-register over it).
-async fn get_or_create_acme_account(attempt: &AcmeAttempt, acme: &EdgionAcme) -> Result<AcmeClient> {
+async fn get_or_create_acme_account(attempt: &AcmeAttempt) -> Result<AcmeClient> {
+    let acme = &attempt.acme;
     validate_secret_references(acme).map_err(anyhow::Error::msg)?;
     let client = attempt.client_ref();
-    let owner_ns = acme.metadata.namespace.as_deref().unwrap_or("default");
+    let refs = AcmeRefs::from_acme(acme);
+    let field = refs.account();
+    let token = field.token();
+    let target = token.validated()?.target();
     let acme_name = acme.metadata.name.as_deref().context("EdgionAcme has no name")?;
-    let acme_uid = acme.metadata.uid.as_deref();
-
-    let secret_name = &acme.spec.private_key_secret_ref.name;
-    let secret_ns = acme.spec.private_key_secret_ref.effective_namespace(owner_ns);
+    let secret_name = target.name();
+    let secret_ns = target
+        .scope()
+        .namespace()
+        .context("ACME account Secret namespace is missing")?;
     let secret_api: Api<Secret> = Api::namespaced(client.clone(), secret_ns);
 
     let eab_kid = acme.spec.external_account_binding.as_ref().map(|e| e.key_id.as_str());
 
     match secret_api.get(secret_name).await {
         Ok(secret) => {
+            field
+                .validate_api_secret(&secret)
+                .context("ACME account Secret does not match its declared reference")?;
             let data = secret.data.as_ref();
             if let Some(map) = data {
                 if let Some(zjson) = extract_account_json_string(map)? {
@@ -1560,7 +1564,7 @@ async fn get_or_create_acme_account(attempt: &AcmeAttempt, acme: &EdgionAcme) ->
                 }
             }
             // Secret object exists, but no account key yet — pre-created empty (self-managed)
-            let eab_hmac = fetch_eab_hmac(client, acme, owner_ns).await?;
+            let eab_hmac = fetch_eab_hmac(client, acme).await?;
             let (acme_client, credentials) = AcmeClient::new(
                 &acme.spec.server,
                 &acme.spec.email,
@@ -1573,9 +1577,7 @@ async fn get_or_create_acme_account(attempt: &AcmeAttempt, acme: &EdgionAcme) ->
 
             let creds_json =
                 Zeroizing::new(serde_json::to_string(&credentials).context("Failed to serialize account credentials")?);
-            if let Some(existing) =
-                persist_registered_account(attempt, &secret_api, secret_name, secret, &creds_json).await?
-            {
+            if let Some(existing) = persist_registered_account(attempt, secret, &creds_json).await? {
                 attempt.check("restore concurrently persisted ACME account").await?;
                 return AcmeClient::from_credentials(existing).await;
             }
@@ -1594,7 +1596,7 @@ async fn get_or_create_acme_account(attempt: &AcmeAttempt, acme: &EdgionAcme) ->
                 name = %acme_name,
                 "No account Secret yet; creating ACME account and Secret"
             );
-            let eab_hmac = fetch_eab_hmac(client, acme, owner_ns).await?;
+            let eab_hmac = fetch_eab_hmac(client, acme).await?;
             let (acme_client, credentials) = AcmeClient::new(
                 &acme.spec.server,
                 &acme.spec.email,
@@ -1608,7 +1610,7 @@ async fn get_or_create_acme_account(attempt: &AcmeAttempt, acme: &EdgionAcme) ->
             let creds_json =
                 Zeroizing::new(serde_json::to_string(&credentials).context("Failed to serialize account credentials")?);
             attempt.check("persist ACME account credentials").await?;
-            create_account_secret(&secret_api, secret_name, secret_ns, acme_name, acme_uid, &creds_json).await?;
+            create_account_secret(client, &field, &creds_json).await?;
 
             tracing::info!(
                 component = "acme_service",
@@ -1626,14 +1628,28 @@ async fn get_or_create_acme_account(attempt: &AcmeAttempt, acme: &EdgionAcme) ->
 /// existing valid account always wins a CAS conflict; never overwrite it.
 async fn persist_registered_account(
     attempt: &AcmeAttempt,
-    api: &Api<Secret>,
-    name: &str,
     mut snapshot: Secret,
     credentials: &Zeroizing<String>,
 ) -> Result<Option<instant_acme::AccountCredentials>> {
+    let refs = AcmeRefs::from_acme(&attempt.acme);
+    let field = refs.account();
+    let token = field.token();
+    let target = token.validated()?.target();
+    let namespace = target
+        .scope()
+        .namespace()
+        .context("ACME account Secret namespace is missing")?;
+    let name = target.name();
+    let api: Api<Secret> = Api::namespaced(attempt.client_ref().clone(), namespace);
+    field
+        .validate_api_secret(&snapshot)
+        .context("ACME account Secret does not match its declared reference")?;
     let original_uid = snapshot.metadata.uid.clone();
     loop {
         attempt.check("persist ACME account credentials").await?;
+        field
+            .validate_api_secret(&snapshot)
+            .context("ACME account Secret does not match its declared reference")?;
         if snapshot.metadata.uid != original_uid || snapshot.metadata.deletion_timestamp.is_some() {
             anyhow::bail!("ACME account Secret was replaced or is being deleted; retry with its current identity");
         }
@@ -1646,7 +1662,7 @@ async fn persist_registered_account(
         {
             return account_credentials_from_json(&json).map(Some);
         }
-        match patch_account_key_into_existing_secret(api, name, &snapshot, credentials).await {
+        match patch_account_key_into_existing_secret(attempt.client_ref(), &field, &snapshot, credentials).await {
             Ok(()) => return Ok(None),
             Err(error) => match error.downcast_ref::<kube::Error>() {
                 Some(kube::Error::Api(response)) if response.code == 409 || response.code >= 500 => {}

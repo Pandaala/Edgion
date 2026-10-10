@@ -113,8 +113,10 @@ terminal state schedules a control-plane retry without another CA request.
 Account and EAB references follow Gateway API SecretObjectReference defaults:
 group absent/empty means the core API group, kind absent means `Secret`, and
 namespace absent means the EdgionAcme namespace. Other groups/kinds are unsupported.
-One ACME target validator runs in handler validation/resolution, source eligibility,
-account restoration/registration, and EAB retrieval. Invalid targets report
+Actual-owner AcmeRefs fields back one diagnostic adapter used in handler
+validation/resolution, source eligibility, account restoration/registration and
+EAB retrieval. Account and EAB have distinct loan types; only the account loan
+can enter account persistence. Invalid targets report
 `ResolvedRefs=False/InvalidKind` and cannot reach a credential Secret API call.
 See the [target identity guard](../../04-review/acme/regression-guards/secret-reference-target-identity.md).
 
@@ -151,3 +153,18 @@ Resource changes cancel a pre-issuance attempt and leave one coalesced follow-up
 after issuance, the retained certificate continues only under the publication
 authority rules above.
 Admin triggers take priority and reset the budget.
+
+### Credential identity and operation authority
+
+Secret API paths come from the actual field, and explicit returned name/namespace
+must match before payload or target UID/resourceVersion is consumed. Account
+persistence derives its destination from the retained attempt owner. Initial and
+refreshed snapshots are checked before adopting concurrent credentials or issuing
+CAS. These checks supplement the existing source/leader/attempt fences; they do
+not grant authority or change the create/merge protocol and absent-target race.
+
+The handler's account cache supports the finite default bare/qualified selector
+and semantic Secret event recovery. That raw-storage projection does not apply
+to API responses. EAB remains direct API retrieval under its existing semantics;
+no account/EAB authorization parity or new Grant policy is claimed. Account
+binding does not close generated certificate/auto-EdgionTls output identity.

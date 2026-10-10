@@ -12,22 +12,23 @@
 //! purely validation/observability + cache wiring.
 
 use crate::conf_mgr::sync_runtime::resource_processor::credential::{
-    resolve_secret, InvalidCredentialError, PendingReason, ResolveOutcome,
+    InvalidCredentialError, PendingReason, ResolveOutcome,
 };
 
 use super::route_utils::{resolve_acme_listener_attachments, AcmeGatewayRefError};
 use super::{remove_from_gateway_route_index, update_gateway_route_index};
+use crate::conf_mgr::sync_runtime::resource_processor::credential::pipeline::resolve_bound_acme_account;
 use crate::conf_mgr::sync_runtime::resource_processor::status_ownership::acme_is_owned;
 use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
     condition_false, condition_reasons, condition_true, condition_types, condition_unknown, update_condition,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ProcessResult, ProcessorHandler, ResourceRef};
 use crate::services::acme::{notify_resource_changed, validate_secret_references};
-use edgion_resources::credentials::resolvers::AcmeAccountResolver;
 use edgion_resources::duration::parse_duration;
 use edgion_resources::prelude_resources::EdgionAcme;
 use edgion_resources::resources::common::Condition;
 use edgion_resources::resources::edgion_acme::{AcmeChallenge, EdgionAcmeStatus};
+use edgion_resources::resources::refs::acme_fields::AcmeRefs;
 use edgion_resources::ResourceKind;
 
 /// EdgionAcme handler
@@ -151,19 +152,14 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
             ctx.requeue(ResourceKind::Gateway.as_str(), gateway_key).await;
         }
 
-        let gateway_group = gateway_ref.group.as_deref().unwrap_or("gateway.networking.k8s.io");
-        let gateway_kind = gateway_ref.kind.as_deref().unwrap_or("Gateway");
-        let gateway_namespace = gateway_ref.namespace.as_deref().unwrap_or(resource_namespace);
-        if gateway_group == "gateway.networking.k8s.io"
-            && gateway_kind == "Gateway"
-            && gateway_namespace != resource_namespace
-        {
+        let gateway_identity = gateway_ref.canonical_identity(acme.metadata.namespace.as_deref());
+        if gateway_identity.is_gateway() && gateway_identity.namespace != resource_namespace {
             ctx.runtime()
                 .cross_ns_ref_mgr
-                .add_ref(gateway_namespace.to_string(), resource_ref.clone());
+                .add_ref(gateway_identity.namespace.to_string(), resource_ref.clone());
         }
 
-        let gateway_outcome = resolve_acme_listener_attachments(&gateway_ref, resource_namespace, ctx.runtime());
+        let gateway_outcome = resolve_acme_listener_attachments(&acme, ctx.runtime());
         let gateway_resolved = gateway_outcome.is_ok();
         if let Ok(attachments) = &gateway_outcome {
             acme.spec.resolved_listener_attachments = Some(attachments.clone());
@@ -192,16 +188,16 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
                 generation,
             )),
             None => {
-                let outcome = resolve_secret(
-                    ctx,
-                    &resource_ref,
-                    "edgion.io",
-                    "EdgionAcme",
-                    &acme.spec.private_key_secret_ref,
-                    &AcmeAccountResolver,
-                )
-                .await;
-                outcome_to_resolved_refs_action(&outcome, &resource_ref.key(), generation)
+                let refs = AcmeRefs::from_acme(&acme);
+                match resolve_bound_acme_account(ctx, &resource_ref, &refs.account()) {
+                    Ok(outcome) => outcome_to_resolved_refs_action(&outcome, &resource_ref.key(), generation),
+                    Err(_) => AcmeResolveAction::Abort(condition_false(
+                        condition_types::RESOLVED_REFS,
+                        condition_reasons::INVALID,
+                        "Account Secret does not match its declared reference",
+                        generation,
+                    )),
+                }
             }
         };
         let status = acme.status.get_or_insert_with(EdgionAcmeStatus::default);

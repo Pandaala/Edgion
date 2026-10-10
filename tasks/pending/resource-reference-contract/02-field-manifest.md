@@ -636,3 +636,17 @@ configuration validation.
 Attachment-dimension revocation and same-key UID-independent LKG are preserved.
 This batch does not complete ACME/generated output, AI or LinkSys consumers, live
 TLS validation, or Gateway API conformance.
+
+## R8e.1 actual ACME account/EAB fields
+
+AcmeRefs binds account and EAB credentials to the actual owner using strict Secret
+semantics. Only the distinct account loan enters persistence. Handler acquisition,
+finite default cache selection and semantic Secret recovery cover the account;
+service API responses require explicit matching metadata before credential or
+UID/RV consumption. Existing bootstrap, conflict/adoption and operation fences
+remain. EAB adds no handler edge or new Grant policy. HTTP-01 parent resolution
+uses canonical defaults from the actual owner without new parent name grammar.
+
+R8e.2 generated certificate Secret and auto-EdgionTls output identity is still
+pending separately. This migration does not establish live CA/API-server or
+Gateway API conformance verification.

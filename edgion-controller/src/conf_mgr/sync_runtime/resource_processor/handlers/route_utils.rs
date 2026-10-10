@@ -53,20 +53,19 @@ pub(crate) enum AcmeGatewayRefError {
 /// not a Route. Only the projected Gateway cache is authoritative here: raw
 /// Gateways have no resolved attachment proof and cannot mint serving rights.
 pub(crate) fn resolve_acme_listener_attachments(
-    parent_ref: &ParentReference,
-    owner_namespace: &str,
+    acme: &edgion_resources::EdgionAcme,
     runtime: &ControllerRuntime,
 ) -> Result<Vec<ResolvedListenerAttachment>, AcmeGatewayRefError> {
-    let group = parent_ref.group.as_deref().unwrap_or("gateway.networking.k8s.io");
-    let kind = parent_ref.kind.as_deref().unwrap_or("Gateway");
-    if group != "gateway.networking.k8s.io" || kind != "Gateway" {
+    let edgion_resources::resources::edgion_acme::AcmeChallenge::Http01 { gateway_ref } = &acme.spec.challenge;
+    let parent = gateway_ref.canonical_identity(acme.metadata.namespace.as_deref());
+    if !parent.is_gateway() {
         return Err(AcmeGatewayRefError::InvalidKind {
-            group: group.to_string(),
-            kind: kind.to_string(),
+            group: parent.group.to_string(),
+            kind: parent.kind.to_string(),
         });
     }
-
-    let gateway_namespace = parent_ref.namespace.as_deref().unwrap_or(owner_namespace);
+    let owner_namespace = acme.metadata.namespace.as_deref().unwrap_or("default");
+    let gateway_namespace = parent.namespace;
     if gateway_namespace != owner_namespace
         && crate::config::is_reference_grant_validation_enabled()
         && !runtime.ref_grant_store.check_reference_allowed(
@@ -74,21 +73,20 @@ pub(crate) fn resolve_acme_listener_attachments(
             "edgion.io",
             "EdgionAcme",
             gateway_namespace,
-            "gateway.networking.k8s.io",
-            "Gateway",
-            Some(&parent_ref.name),
+            parent.group,
+            parent.kind,
+            Some(parent.name),
         )
     {
         return Err(AcmeGatewayRefError::RefNotPermitted {
             namespace: gateway_namespace.to_string(),
-            name: parent_ref.name.clone(),
+            name: parent.name.to_string(),
         });
     }
-
-    let gateway = serving_gateway(gateway_namespace, &parent_ref.name, runtime).ok_or_else(|| {
+    let gateway = serving_gateway(gateway_namespace, parent.name, runtime).ok_or_else(|| {
         AcmeGatewayRefError::ParentNotFound {
             namespace: gateway_namespace.to_string(),
-            name: parent_ref.name.clone(),
+            name: parent.name.to_string(),
         }
     })?;
     let proof = edgion_resources::resources::gateway::gateway_attachment_proof(&gateway);
@@ -104,11 +102,10 @@ pub(crate) fn resolve_acme_listener_attachments(
     let selected: Vec<_> = listeners
         .iter()
         .filter(|listener| {
-            parent_ref
+            parent
                 .section_name
-                .as_ref()
-                .is_none_or(|section_name| listener.name == *section_name)
-                && parent_ref.port.is_none_or(|port| listener.port == port)
+                .is_none_or(|section_name| listener.name == section_name)
+                && parent.port.is_none_or(|port| listener.port == port)
                 && !edgion_resources::resources::gateway::gateway_listener_is_explicitly_ineligible(
                     &gateway,
                     &listener.name,
@@ -124,7 +121,7 @@ pub(crate) fn resolve_acme_listener_attachments(
         .filter(|listener| listener.protocol == "HTTP")
         .map(|listener| ResolvedListenerAttachment {
             gateway_namespace: gateway_namespace.to_string(),
-            gateway_name: parent_ref.name.clone(),
+            gateway_name: parent.name.to_string(),
             listener_name: listener.name.clone(),
             listener_key: ListenerKey::new(resolve_listener_addr(&gateway, listener.port), &listener.protocol),
             gateway_proof: proof.clone(),

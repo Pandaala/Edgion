@@ -41,6 +41,7 @@ pub(super) enum TopologyLoan<'a> {
     BackendTls(&'a OwnerSnapshot),
     HealthTls(&'a OwnerSnapshot),
     EdgionTls(&'a OwnerSnapshot),
+    Acme(&'a OwnerSnapshot),
 }
 impl<'a> TopologyLoan<'a> {
     fn owner(self) -> &'a OwnerSnapshot {
@@ -51,9 +52,11 @@ impl<'a> TopologyLoan<'a> {
             Self::IpList(snapshot) => &snapshot.owner,
             Self::Egc(snapshot) => &snapshot.owner,
             Self::RouteAuth(snapshot) => &snapshot.owner,
-            Self::GatewayTls(owner) | Self::BackendTls(owner) | Self::HealthTls(owner) | Self::EdgionTls(owner) => {
-                owner
-            }
+            Self::GatewayTls(owner)
+            | Self::BackendTls(owner)
+            | Self::HealthTls(owner)
+            | Self::EdgionTls(owner)
+            | Self::Acme(owner) => owner,
         }
     }
     fn freeze(self) -> Result<FrozenTopology, ReferenceError> {
@@ -69,7 +72,8 @@ impl<'a> TopologyLoan<'a> {
             | Self::GatewayTls(_)
             | Self::BackendTls(_)
             | Self::HealthTls(_)
-            | Self::EdgionTls(_) => Err(ReferenceError::UnsupportedTarget),
+            | Self::EdgionTls(_)
+            | Self::Acme(_) => Err(ReferenceError::UnsupportedTarget),
         }
     }
 }
@@ -424,6 +428,8 @@ impl PreparedTlsTarget {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(super) enum FieldSlot {
+    AcmeAccount,
+    AcmeEab,
     EdgionTlsServer,
     EdgionTlsClientCa,
     HealthTls {
@@ -525,7 +531,9 @@ impl FieldSlot {
                     && *current_group == group
                     && *current_reference == reference
             }
-            Self::EdgionTlsServer
+            Self::AcmeAccount
+            | Self::AcmeEab
+            | Self::EdgionTlsServer
             | Self::EdgionTlsClientCa
             | Self::HealthTls { .. }
             | Self::BackendTlsCa { .. }
@@ -722,6 +730,9 @@ impl<'a> BoundFieldReference<'a> {
             self._position,
             FieldSlot::BackendTlsCa { .. } | FieldSlot::BackendTlsClient
         )
+    }
+    pub fn is_acme_account(self) -> bool {
+        matches!(self._position, FieldSlot::AcmeAccount)
     }
     pub fn is_edgion_tls_material(self) -> bool {
         matches!(

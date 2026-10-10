@@ -43,7 +43,7 @@ impl SecretHandler {
         if let Some(name) = source.metadata.name.as_deref() {
             let namespace = source.metadata.namespace.as_deref().unwrap_or("default");
             if source.metadata.namespace.is_none() {
-                // Preserve all raw-key consumers; the semantic alias is limited to actual Gateway/BTP/EBTP/EdgionTls material consumers.
+                // Preserve all raw-key consumers; the semantic alias is limited to actual Gateway/BTP/EBTP/EdgionTls material and ACME account consumers.
                 refs.extend(
                     ctx.secret_ref_manager()
                         .get_refs(&format!("default/{name}"))
@@ -55,6 +55,7 @@ impl SecretHandler {
                                     | edgion_resources::ResourceKind::BackendTLSPolicy
                                     | edgion_resources::ResourceKind::EdgionBackendTrafficPolicy
                                     | edgion_resources::ResourceKind::EdgionTls
+                                    | edgion_resources::ResourceKind::EdgionAcme
                             )
                         }),
                 );

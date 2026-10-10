@@ -37,7 +37,19 @@
   and present client-CA cold failure remain independent; attachment dimension
   violations still revoke admission. Verification passes 319 unit, 66 doc and 36
   schema tests, preserving ten ignored docs and all 9681 prior IDs among 9692.
-  Final local commit is pending; live verification is still open.
+  Committed locally as 700c29fba4adb43fd547d794c68654104e0193b0 after both
+  final commit reviews; all twenty-three blobs match the frozen manifest.
+  No push occurred; live verification is still open.
+- R8e.1 ACME plan passed both independent Astra reviews at 700c29fba.
+  Twenty-one technical paths plus this ledger now pass both independent static
+  and execution reviews, with all fourteen refreshed root gates passing without
+  warnings. Actual account/EAB reads, account-slot persistence/CAS identity and
+  canonical HTTP-01 parent projection preserve existing operation fences and EAB
+  authorization policy. Verification passes 328 unit, 71 doc and 36 schema cases;
+  ten existing ignored docs and all 9692 prior IDs remain among 9702. Local commit
+  is pending.
+  R8e.2 generated certificate/EdgionTls destinations require a separate plan after
+  this batch commits; neither batch closes CredentialSource generated operations.
 - F1 read-only inventory identified two further bounded material-pairing candidates:
   Gateway EdgionBackend credentials and Common LinkSys non-TLS auth. Existing
   Controller guards remain; these are missing consumer proof boundaries, not
@@ -133,6 +145,34 @@ ACME candidate inventory is saved as
 `tmp/resource-reference-contract/r8e-acme-inventory-4322b450-20261010.md`;
 ACME/generated outputs, AI/LinkSys consumer pairing, overall cleanup and F2 remain
 open. No agent push.
+
+## R8e.1 final checkpoint (2026-10-10)
+
+Actual ACME account/EAB field types enforce strict identity and prevent EAB from
+entering account persistence. API responses require explicit target metadata
+before bytes or UID/RV reuse; raw default cache projection remains finite and
+separate. Account conflict/adoption/CAS, attempt/leader fences, EAB authority and
+HTTP-01 selection are preserved. Generated certificate/EdgionTls outputs remain
+R8e.2 work; CredentialSource output identity is a separate backlog.
+
+Both Astra reviewers approved final r4 static/execution evidence: 435 distinct
+passes (328 unit, 71 doc, 36 schema), ten ignored docs, zero warnings, all 9692
+prior identities preserved with ten additions. Positive lifetime and intended
+E0505/E0506/E0502/E0308 failures prove borrowing and account/EAB role separation.
+Review strengthened actual processed account-status event transitions and the
+positive forced-SSA account-create transport control. The initial new Gateway
+fixture failure, preliminary compile diagnostics and two Clippy test warnings
+are retained; corrected service 35 and Secret 14 reruns pass. Reuse follows exact
+unchanged production/test inputs, not a claim that every phase ran at r4.
+
+All fourteen root checks were rerun after the mechanical lint fixes and pass on
+unchanged source; workspace check took 8.883 seconds, Clippy 12.537 seconds.
+Evidence: `tmp/resource-reference-contract/r8e-verification-20261010/verification-final.json`
+and `tmp/resource-reference-contract/r8e-root-verification-20261010/` (r2 root
+results). Final scope is the twenty-one approved paths plus this ledger. No live
+API-server, CA or Gateway API conformance acceptance is implied; no agent push.
+The separate generated-credential inventory is preserved under
+`tmp/resource-reference-contract/generated-credential-inventory-700c29fb-20261010.md`.
 
 ## Authority and reporting
 

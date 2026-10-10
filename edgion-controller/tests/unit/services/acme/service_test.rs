@@ -103,13 +103,8 @@ fn eligibility_runtime(processed: &mut EdgionAcme) -> Arc<ControllerRuntime> {
     gateway_processor.save(test_gateway("1"), None);
     runtime.processor_registry.register(gateway_processor);
 
-    let gateway_ref = match &processed.spec.challenge {
-        AcmeChallenge::Http01 { gateway_ref } => gateway_ref,
-    };
-    processed.spec.resolved_listener_attachments = Some(
-        resolve_acme_listener_attachments(gateway_ref, "default", &runtime)
-            .expect("test Gateway attachment must resolve"),
-    );
+    processed.spec.resolved_listener_attachments =
+        Some(resolve_acme_listener_attachments(processed, &runtime).expect("test Gateway attachment must resolve"));
     let generation = processed.metadata.generation;
     let status = processed.spec.current_status.get_or_insert_with(Default::default);
     status.conditions = vec![
@@ -363,9 +358,8 @@ fn refresh_test_serving_proof(runtime: &Arc<ControllerRuntime>) {
         .unwrap()
         .as_ref()
         .clone();
-    let AcmeChallenge::Http01 { gateway_ref } = &processed.spec.challenge;
     processed.spec.resolved_listener_attachments =
-        Some(resolve_acme_listener_attachments(gateway_ref, "default", runtime).unwrap());
+        Some(resolve_acme_listener_attachments(&processed, runtime).unwrap());
     let processor = Arc::new(ResourceProcessor::<EdgionAcme>::new(
         "EdgionAcme",
         8,
@@ -500,12 +494,9 @@ async fn account_secret_conflict_adopts_concurrent_credentials_or_retries_empty_
             }),
             "default",
         );
-        let api = Api::namespaced(client.clone(), "default");
         let attempt = test_attempt(client, acme, runtime, capture.generation);
         let result = persist_registered_account(
             &attempt,
-            &api,
-            "account",
             snapshot,
             &Zeroizing::new("newly registered credentials".into()),
         )
@@ -712,12 +703,8 @@ async fn admitted_attempt_rejects_a_new_serving_proof() {
     ));
     replacement_gateway.save(test_gateway("2"), None);
     runtime.processor_registry.register(replacement_gateway);
-    let gateway_ref = match &processed.spec.challenge {
-        AcmeChallenge::Http01 { gateway_ref } => gateway_ref,
-    };
-    processed.spec.resolved_listener_attachments = Some(
-        resolve_acme_listener_attachments(gateway_ref, "default", &runtime).expect("replacement proof must resolve"),
-    );
+    processed.spec.resolved_listener_attachments =
+        Some(resolve_acme_listener_attachments(&processed, &runtime).expect("replacement proof must resolve"));
     let replacement_acme = Arc::new(ResourceProcessor::<EdgionAcme>::new(
         "EdgionAcme",
         8,
@@ -1020,9 +1007,9 @@ async fn unsupported_secret_targets_block_eligibility_and_all_secret_api_calls()
             } else {
                 "privateKeySecretRef"
             };
-            let error = get_or_create_acme_account(&attempt, &raw).await.err().unwrap();
+            let error = get_or_create_acme_account(&attempt).await.err().unwrap();
             assert!(error.to_string().starts_with(expected_field));
-            let error = fetch_eab_hmac(&client, &raw, "default").await.unwrap_err();
+            let error = fetch_eab_hmac(&client, &raw).await.unwrap_err();
             assert!(error.to_string().starts_with(expected_field));
             assert_eq!(
                 calls.load(Ordering::Relaxed),
@@ -1069,7 +1056,7 @@ async fn eab_secret_defaults_and_explicit_core_targets_keep_the_secret_lookup() 
                     Ok::<_, Infallible>(test_api_response(
                         200,
                         json!({
-                            "apiVersion": "v1", "kind": "Secret", "metadata": {"name": "eab"},
+                            "apiVersion": "v1", "kind": "Secret", "metadata": {"name": "eab", "namespace": "default"},
                             "data": {"hmacKey": "dGVzdC1rZXk="}
                         }),
                     ))
@@ -1078,12 +1065,12 @@ async fn eab_secret_defaults_and_explicit_core_targets_keep_the_secret_lookup() 
             "default",
         );
         assert_eq!(
-            fetch_eab_hmac(&client, &raw, "default").await.unwrap().as_deref(),
+            fetch_eab_hmac(&client, &raw).await.unwrap().as_deref(),
             Some("test-key")
         );
         assert_eq!(calls.load(Ordering::Relaxed), 1);
         raw.spec.external_account_binding = None;
-        assert_eq!(fetch_eab_hmac(&client, &raw, "default").await.unwrap(), None);
+        assert_eq!(fetch_eab_hmac(&client, &raw).await.unwrap(), None);
         assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
 }
@@ -1370,4 +1357,100 @@ fn test_parse_cert_info_valid_self_signed() {
         "not_after should be valid RFC 3339, got: {}",
         not_after_str
     );
+}
+
+#[tokio::test]
+async fn actual_acme_api_fields_reject_wrong_material_before_decoding_or_registration() {
+    for eab in [false, true] {
+        for (name, namespace) in [
+            (Some("decoy"), Some("default")),
+            (None, Some("default")),
+            (Some("account"), None),
+            (Some("account"), Some("other")),
+        ] {
+            let mut raw = test_acme();
+            raw.spec.external_account_binding = Some(AcmeExternalAccountBinding {
+                key_id: "id".into(),
+                key_secret_ref: SecretObjectReference {
+                    name: "account".into(),
+                    namespace: None,
+                    group: None,
+                    kind: None,
+                },
+            });
+            let runtime = eligibility_runtime(&mut raw.clone());
+            let calls = Arc::new(AtomicU64::new(0));
+            let captured = calls.clone();
+            let client = Client::new(
+                service_fn(move |request: http::Request<Body>| {
+                    assert_eq!(request.method(), http::Method::GET);
+                    assert_eq!(request.uri().path(), "/api/v1/namespaces/default/secrets/account");
+                    captured.fetch_add(1, Ordering::Relaxed);
+                    async move {
+                        Ok::<_, Infallible>(test_api_response(
+                            200,
+                            json!({"apiVersion":"v1","kind":"Secret","metadata":{"name":name,"namespace":namespace},"data":{"accountCredentials":"aW52YWxpZA==","hmacKey":"aW52YWxpZA=="}}),
+                        ))
+                    }
+                }),
+                "default",
+            );
+            let error = if eab {
+                fetch_eab_hmac(&client, &raw).await.unwrap_err()
+            } else {
+                let attempt = test_attempt(client, raw, runtime, 0);
+                get_or_create_acme_account(&attempt).await.err().unwrap()
+            };
+            assert!(error.to_string().contains("does not match its declared reference"));
+            assert_eq!(calls.load(Ordering::Relaxed), 1);
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn actual_account_persistence_rejects_initial_and_refreshed_target_mismatch() {
+    let _lock = ACME_TEST_MUTEX.lock().await;
+    let capture = NotificationCapture::install();
+    for refreshed_mismatch in [false, true] {
+        let acme = test_acme();
+        let runtime = eligibility_runtime(&mut acme.clone());
+        let patches = Arc::new(AtomicU64::new(0));
+        let captured = patches.clone();
+        let response_acme = acme.clone();
+        let client = Client::new(
+            service_fn(move |request: http::Request<Body>| {
+                let captured = captured.clone();
+                let response_acme = response_acme.clone();
+                async move {
+                    if request.uri().path().contains("/edgionacmes/") {
+                        return Ok::<_, Infallible>(test_api_response(
+                            200,
+                            serde_json::to_value(response_acme).unwrap(),
+                        ));
+                    }
+                    assert_eq!(request.uri().path(), "/api/v1/namespaces/default/secrets/account");
+                    if request.method() == http::Method::PATCH {
+                        captured.fetch_add(1, Ordering::Relaxed);
+                        return Ok(test_api_response(
+                            409,
+                            json!({"apiVersion":"v1","kind":"Status","status":"Failure","reason":"Conflict","code":409}),
+                        ));
+                    }
+                    Ok(test_api_response(
+                        200,
+                        json!({"apiVersion":"v1","kind":"Secret","metadata":{"name":"decoy","namespace":"default","uid":"account-uid","resourceVersion":"11"},"data":{"accountCredentials":"aW52YWxpZA=="}}),
+                    ))
+                }
+            }),
+            "default",
+        );
+        let attempt = test_attempt(client, acme, runtime, capture.generation);
+        let snapshot: Secret = serde_json::from_value(json!({"metadata":{"name":if refreshed_mismatch {"account"} else {"decoy"},"namespace":"default","uid":"account-uid","resourceVersion":"10"}})).unwrap();
+        let error = persist_registered_account(&attempt, snapshot, &Zeroizing::new("new credentials".into()))
+            .await
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("does not match its declared reference"));
+        assert_eq!(patches.load(Ordering::Relaxed), u64::from(refreshed_mismatch));
+    }
 }

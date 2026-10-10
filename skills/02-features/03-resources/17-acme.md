@@ -83,7 +83,11 @@ group; omitted `kind` defaults to `Secret`. An explicit non-empty group
 `namespace` selects the EdgionAcme namespace. Unsupported targets report
 `Accepted=False` and `ResolvedRefs=False/InvalidKind`; they never select a
 same-name Secret or permit account registration/restoration. The handler and
-background service share this target check across all ingest modes.
+background service share actual-owner fields for this target check across all
+ingest modes. Source/target names and namespaces must pass canonical strict
+identity validation; explicit empty namespace is invalid. Omitted owner namespace
+means default. Returned API Secret metadata must match the declared identity
+before credentials are consumed. These rules add no EAB Grant policy.
 
 `challenge` accepts only `type: http-01` and a required `gatewayRef`. Unknown fields and other challenge types are rejected.
 

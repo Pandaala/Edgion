@@ -2,11 +2,13 @@
 
 use anyhow::{Context, Result};
 use base64::Engine as _;
+use edgion_resources::resources::refs::acme_fields::AcmeAccountField;
 use instant_acme::AccountCredentials;
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference;
 use k8s_openapi::ByteString;
 use kube::api::{Api, Patch, PatchParams};
+use kube::Client;
 use std::collections::BTreeMap;
 use zeroize::Zeroizing;
 
@@ -38,13 +40,21 @@ pub fn extract_account_json_string(data: &BTreeMap<String, ByteString>) -> Resul
 
 /// Create the account Secret (server-side apply) with optional owner reference to the EdgionAcme.
 pub async fn create_account_secret(
-    secret_api: &Api<Secret>,
-    secret_name: &str,
-    namespace: &str,
-    acme_resource_name: &str,
-    acme_uid: Option<&str>,
+    client: &Client,
+    field: &AcmeAccountField<'_>,
     creds_json: &Zeroizing<String>,
 ) -> Result<()> {
+    let token = field.token();
+    let target = token.validated()?.target();
+    let secret_name = target.name();
+    let namespace = target
+        .scope()
+        .namespace()
+        .context("ACME account Secret namespace is missing")?;
+    let secret_api: Api<Secret> = Api::namespaced(client.clone(), namespace);
+    let source = field.owner();
+    let acme_resource_name = source.metadata.name.as_deref().context("EdgionAcme has no name")?;
+    let acme_uid = source.metadata.uid.as_deref();
     let mut meta = kube::api::ObjectMeta {
         name: Some(secret_name.to_string()),
         namespace: Some(namespace.to_string()),
@@ -95,11 +105,22 @@ pub async fn create_account_secret(
 
 /// Merge-patch only the `ACME_ACCOUNT_KEY` entry, leaving other data keys and metadata intact (self-managed Secret).
 pub async fn patch_account_key_into_existing_secret(
-    secret_api: &Api<Secret>,
-    secret_name: &str,
+    client: &Client,
+    field: &AcmeAccountField<'_>,
     snapshot: &Secret,
     creds_json: &Zeroizing<String>,
 ) -> Result<()> {
+    field
+        .validate_api_secret(snapshot)
+        .context("ACME account Secret does not match its declared reference")?;
+    let token = field.token();
+    let target = token.validated()?.target();
+    let secret_name = target.name();
+    let namespace = target
+        .scope()
+        .namespace()
+        .context("ACME account Secret namespace is missing")?;
+    let secret_api: Api<Secret> = Api::namespaced(client.clone(), namespace);
     let uid = snapshot
         .metadata
         .uid

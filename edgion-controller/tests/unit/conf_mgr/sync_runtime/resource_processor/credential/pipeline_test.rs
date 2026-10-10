@@ -1112,3 +1112,137 @@ fn edgion_tls_invalid_fields_never_authorize_read_or_register_decoys() {
         assert!(runtime.cross_ns_ref_mgr.get_refs("target").is_empty());
     }
 }
+
+#[test]
+fn acme_account_material_selector_is_local_ambiguous_and_has_no_gateway_authority() {
+    use edgion_resources::resources::refs::acme_fields::AcmeRefs;
+    use std::collections::HashSet;
+    for (namespace, qualified, bare, expected) in [
+        (None, false, true, true),
+        (Some("default"), true, false, true),
+        (None, true, true, false),
+        (Some("apps"), false, true, false),
+        (Some("apps"), true, false, true),
+    ] {
+        let ns = namespace.unwrap_or("default");
+        let (ctx, runtime) = make_ctx(HashMap::new());
+        let make = |namespace: Option<&str>| Secret {
+            metadata: kube::api::ObjectMeta {
+                name: Some("ca".into()),
+                namespace: namespace.map(str::to_owned),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut values = HashMap::new();
+        if qualified {
+            values.insert(format!("{ns}/ca"), make(Some(ns)));
+        }
+        if bare {
+            values.insert("ca".into(), make(None));
+        }
+        runtime.secret_store.update(values, &HashSet::new());
+        let policy: edgion_resources::EdgionAcme = serde_json::from_value(serde_json::json!({"metadata":{"name":"policy","namespace":namespace},"spec":{"email":"ops@example.com","domains":["edge.example"],"privateKeySecretRef":{"name":"ca"},"challenge":{"type":"http-01","gatewayRef":{"name":"edge"}},"storage":{"secretName":"cert"}}})).unwrap();
+        let refs = AcmeRefs::from_acme(&policy);
+        let field = refs.account();
+        let token = field.token();
+        assert!(!token.validated().unwrap().is_gateway_tls());
+        assert!(token.freeze().is_err());
+        let owner = ResourceRef::new(ResourceKind::EdgionAcme, namespace.map(str::to_owned), "policy".into());
+        let (outcome, reads) = observe_bound_reads(|| fetch_bound_secret(&ctx, &owner, token));
+        assert_eq!(matches!(outcome, BoundFetchOutcome::Ok(_)), expected);
+        assert!(reads.contains(&"authorization"));
+        assert_eq!(
+            runtime.secret_ref_manager.get_dependencies(&owner.key()),
+            [format!("{ns}/ca")]
+        );
+        assert!(runtime
+            .frontend_ca_ref_manager
+            .get_dependencies(&owner.key())
+            .is_empty());
+        if let BoundFetchOutcome::Ok(material) = outcome {
+            assert_eq!(
+                material.secret.metadata.namespace.as_deref(),
+                if qualified { Some(ns) } else { None }
+            );
+        }
+    }
+}
+
+fn actual_acme_owner() -> edgion_resources::EdgionAcme {
+    serde_json::from_value(serde_json::json!({"metadata":{"name":"issuer","namespace":"source"},"spec":{"email":"ops@example.com","domains":["edge.example"],"privateKeySecretRef":{"name":"key","namespace":"target"},"externalAccountBinding":{"keyId":"id","keySecretRef":{"name":"eab"}},"challenge":{"type":"http-01","gatewayRef":{"name":"edge"}},"storage":{"secretName":"cert"}}})).unwrap()
+}
+#[test]
+fn actual_acme_account_invalid_fields_have_no_credential_effects_and_grants_revoke() {
+    use edgion_resources::resources::refs::acme_fields::AcmeRefs;
+    let (key, secret) = make_secret_with_type("target", "key", None, &[("accountCredentials", b"{}")]);
+    let dependency = ResourceRef::new(ResourceKind::EdgionAcme, Some("source".into()), "issuer".into());
+    for case in 0..6 {
+        let (ctx, runtime) = make_ctx(HashMap::from([(key.clone(), secret.clone())]));
+        let mut owner = actual_acme_owner();
+        match case {
+            0 => owner.metadata.name = None,
+            1 => owner.spec.private_key_secret_ref.group = Some("core".into()),
+            2 => owner.spec.private_key_secret_ref.kind = Some("ConfigMap".into()),
+            3 => owner.spec.private_key_secret_ref.namespace = Some(String::new()),
+            4 => owner.spec.private_key_secret_ref.name = "bad/name".into(),
+            _ => owner.metadata.name = Some("different".into()),
+        }
+        let refs = AcmeRefs::from_acme(&owner);
+        let (outcome, reads) = observe_bound_reads(|| resolve_bound_acme_account(&ctx, &dependency, &refs.account()));
+        assert!(outcome.is_err());
+        assert!(reads.is_empty());
+        assert!(runtime
+            .secret_ref_manager
+            .get_dependencies(&dependency.key())
+            .is_empty());
+        assert!(runtime.cross_ns_ref_mgr.get_refs("target").is_empty());
+    }
+    let (ctx, runtime) = make_ctx(HashMap::from([(key, secret)]));
+    let owner = actual_acme_owner();
+    let refs = AcmeRefs::from_acme(&owner);
+    for allowed in [false, true, false] {
+        if allowed {
+            let grant = serde_json::from_value(serde_json::json!({"metadata":{"name":"allow","namespace":"target"},"spec":{"from":[{"group":"edgion.io","kind":"EdgionAcme","namespace":"source"}],"to":[{"group":"","kind":"Secret","name":"key"}]}})).unwrap();
+            runtime.ref_grant_store.upsert("target/allow".into(), Arc::new(grant));
+        } else {
+            runtime.ref_grant_store.remove("target/allow");
+        }
+        let (outcome, reads) = observe_bound_reads(|| resolve_bound_acme_account(&ctx, &dependency, &refs.account()));
+        assert_eq!(matches!(outcome, Ok(ResolveOutcome::Ok(_))), allowed);
+        assert_eq!(
+            reads,
+            if allowed {
+                vec!["authorization", "secret"]
+            } else {
+                vec!["authorization"]
+            }
+        );
+        assert_eq!(
+            runtime.secret_ref_manager.get_dependencies(&dependency.key()),
+            ["target/key"]
+        );
+        assert!(runtime.cross_ns_ref_mgr.get_refs("target").contains(&dependency));
+    }
+}
+#[test]
+fn actual_acme_account_does_not_inherit_disabled_grant_exception() {
+    const CHILD: &str = "EDGION_R8E_ACME_DISABLED_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact","conf_mgr::sync_runtime::resource_processor::credential::pipeline::tests::actual_acme_account_does_not_inherit_disabled_grant_exception","--nocapture"]).env(CHILD,"1").output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stdout));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+        return;
+    }
+    let mut config = crate::config::EdgionControllerConfig::default();
+    config.validation.enable_reference_grant_validation = false;
+    crate::config::init_controller_config(config);
+    let (ctx, _) = make_ctx(HashMap::new());
+    let owner = actual_acme_owner();
+    let refs = edgion_resources::resources::refs::acme_fields::AcmeRefs::from_acme(&owner);
+    let dependency = ResourceRef::new(ResourceKind::EdgionAcme, Some("source".into()), "issuer".into());
+    assert!(matches!(
+        resolve_bound_acme_account(&ctx, &dependency, &refs.account()),
+        Ok(ResolveOutcome::Pending(PendingReason::ReferenceGrantMissing { .. }))
+    ));
+}
