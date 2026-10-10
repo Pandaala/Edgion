@@ -26,8 +26,22 @@ pub struct HealthCheckConfigStore {
 }
 
 pub(crate) struct ResolvedActiveHealthPolicy {
-    pub config: ActiveHealthCheckConfig,
+    owner: Arc<edgion_resources::EdgionBackendTrafficPolicy>,
     pub identity: Arc<HealthPolicyIdentity>,
+}
+
+impl ResolvedActiveHealthPolicy {
+    pub fn owner(&self) -> &edgion_resources::EdgionBackendTrafficPolicy {
+        &self.owner
+    }
+    pub fn config(&self) -> &ActiveHealthCheckConfig {
+        self.owner
+            .spec
+            .health_check
+            .as_ref()
+            .and_then(|h| h.active.as_ref())
+            .expect("health policy publication requires an active config")
+    }
 }
 
 impl Default for HealthCheckConfigStore {
@@ -44,22 +58,34 @@ impl HealthCheckConfigStore {
         }
     }
 
-    /// Resolve the active health check config for a Service key, if any.
-    pub fn resolve(&self, service_key: &str) -> Option<ActiveHealthCheckConfig> {
-        self.configs.load().get(service_key).map(|policy| policy.config.clone())
-    }
-
     pub(crate) fn resolve_policy(&self, service_key: &str) -> Option<Arc<ResolvedActiveHealthPolicy>> {
         self.configs.load().get(service_key).cloned()
     }
 
     /// Set or clear the config for a Service key. `None` removes any entry.
-    pub fn set_service_config(&self, service_key: &str, config: Option<ActiveHealthCheckConfig>) {
+    pub fn set_service_config(
+        &self,
+        service_key: &str,
+        owner: Option<Arc<edgion_resources::EdgionBackendTrafficPolicy>>,
+    ) {
         let _publication = self.publication.write();
         let mut new_map = (**self.configs.load()).clone();
-        match config {
-            Some(cfg) => {
-                if new_map.get(service_key).is_some_and(|current| current.config == cfg) {
+        match owner.filter(|owner| {
+            owner
+                .spec
+                .health_check
+                .as_ref()
+                .and_then(|h| h.active.as_ref())
+                .is_some()
+        }) {
+            Some(owner) => {
+                if new_map.get(service_key).is_some_and(|current| {
+                    current.owner.metadata.name == owner.metadata.name
+                        && current.owner.metadata.namespace == owner.metadata.namespace
+                        && current.owner.metadata.uid == owner.metadata.uid
+                        && current.owner.spec.health_check.as_ref().and_then(|h| h.active.as_ref())
+                            == owner.spec.health_check.as_ref().and_then(|h| h.active.as_ref())
+                }) {
                     return;
                 }
                 let Some(generation) = NEXT_HEALTH_POLICY_GENERATION
@@ -73,7 +99,7 @@ impl HealthCheckConfigStore {
                 new_map.insert(
                     service_key.to_string(),
                     Arc::new(ResolvedActiveHealthPolicy {
-                        config: cfg,
+                        owner,
                         identity: Arc::new(HealthPolicyIdentity { generation }),
                     }),
                 );

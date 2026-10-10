@@ -57,7 +57,7 @@ fn partial_update_retarget_clears_old_and_populates_new() {
     add.insert("bt6h/p".to_string(), policy("p", "a", LoadBalancerType::LeastConn));
     store.partial_update(add, HashMap::new(), HashSet::new());
     assert_eq!(store.get_lb_policy(key_a), Some(ParsedLBPolicy::LeastConn));
-    assert!(get_hc_config_store().resolve(key_a).is_some());
+    assert!(get_hc_config_store().resolve_policy(key_a).is_some());
 
     // Retarget the same policy to Service "b".
     let mut update = HashMap::new();
@@ -65,13 +65,16 @@ fn partial_update_retarget_clears_old_and_populates_new() {
     store.partial_update(HashMap::new(), update, HashSet::new());
 
     assert_eq!(store.get_lb_policy(key_a), None, "old target cleared");
-    assert!(get_hc_config_store().resolve(key_a).is_none(), "old HC cleared");
+    assert!(get_hc_config_store().resolve_policy(key_a).is_none(), "old HC cleared");
     assert_eq!(
         store.get_lb_policy(key_b),
         Some(ParsedLBPolicy::Ewma),
         "new target populated"
     );
-    assert!(get_hc_config_store().resolve(key_b).is_some(), "new HC populated");
+    assert!(
+        get_hc_config_store().resolve_policy(key_b).is_some(),
+        "new HC populated"
+    );
 
     // Cleanup shared global stores.
     store.partial_update(HashMap::new(), HashMap::new(), HashSet::from(["bt6h/p".to_string()]));

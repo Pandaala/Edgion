@@ -14,6 +14,7 @@ enum Origin<'a> {
     Plugin(PluginTlsField<'a>),
     LinkSys(LinkSysTlsField<'a>),
     RouteAuth(RouteAuthTlsField<'a>),
+    Health(super::health_tls_fields::HealthTlsField<'a>),
 }
 
 enum Selection<'a> {
@@ -186,10 +187,16 @@ impl<'a> BoundTlsMaterial<'a> {
         let target = self.target().map_err(TlsMaterialIdentityError::Reference)?;
         let material = self.material.ok_or(TlsMaterialIdentityError::Identity)?;
         let local_default = match &self.reference.origin {
-            TlsIdentityOrigin::Authored(token) => token
-                .validated()
-                .map_err(TlsMaterialIdentityError::Reference)?
-                .is_backend_tls_material(),
+            TlsIdentityOrigin::Authored(token) => {
+                token
+                    .validated()
+                    .map_err(TlsMaterialIdentityError::Reference)?
+                    .is_backend_tls_material()
+                    || token
+                        .validated()
+                        .map_err(TlsMaterialIdentityError::Reference)?
+                        .is_health_tls_material()
+            }
             TlsIdentityOrigin::Effective(_) => false,
         };
         let namespace = if local_default {
@@ -275,6 +282,11 @@ impl BoundGlobalOutboundTls<'_> {
 }
 
 impl<'a> BoundOutboundTls<'a> {
+    pub(super) fn from_health(field: super::health_tls_fields::HealthTlsField<'a>) -> Self {
+        Self {
+            origin: Origin::Health(field),
+        }
+    }
     pub(super) fn from_route_auth(field: RouteAuthTlsField<'a>) -> Self {
         Self {
             origin: Origin::RouteAuth(field),
@@ -295,6 +307,7 @@ impl<'a> BoundOutboundTls<'a> {
             Origin::Plugin(field) => field.validate_source(),
             Origin::LinkSys(field) => field.validate_source(),
             Origin::RouteAuth(field) => field.validate_source(),
+            Origin::Health(field) => field.validate_source(),
         }
     }
     pub fn policy(&self) -> &OutboundTlsLocal {
@@ -302,6 +315,7 @@ impl<'a> BoundOutboundTls<'a> {
             Origin::Plugin(field) => field.policy(),
             Origin::LinkSys(field) => field.policy(),
             Origin::RouteAuth(field) => field.policy(),
+            Origin::Health(field) => field.policy(),
         }
     }
     pub fn ca_material(&self) -> Option<&[Secret]> {
@@ -309,6 +323,7 @@ impl<'a> BoundOutboundTls<'a> {
             Origin::Plugin(field) => field.ca_material(),
             Origin::LinkSys(field) => field.ca_material(),
             Origin::RouteAuth(field) => field.ca_material(),
+            Origin::Health(field) => field.ca_material(),
         }
     }
     pub fn client_material(&self) -> Option<&Secret> {
@@ -316,6 +331,7 @@ impl<'a> BoundOutboundTls<'a> {
             Origin::Plugin(field) => field.client_material(),
             Origin::LinkSys(field) => field.client_material(),
             Origin::RouteAuth(field) => field.client_material(),
+            Origin::Health(field) => field.client_material(),
         }
     }
     pub fn ca_reference_count(&self) -> usize {
@@ -338,6 +354,7 @@ impl<'a> BoundOutboundTls<'a> {
             ordinal += 1;
         };
         match &self.origin {
+            Origin::Health(field) => field.visit_ca(|reference| pair(TlsReferenceIdentity::authored(reference))),
             Origin::Plugin(field) => field.visit_ca(|reference| pair(TlsReferenceIdentity::authored(reference))),
             Origin::LinkSys(field) => field.visit_ca(|reference| pair(TlsReferenceIdentity::authored(reference))),
             Origin::RouteAuth(field) => field.visit_ca(|slot| {
@@ -349,6 +366,7 @@ impl<'a> BoundOutboundTls<'a> {
     }
     pub fn client_certificate(&self) -> Option<BoundTlsMaterial<'_>> {
         let reference = match &self.origin {
+            Origin::Health(field) => field.client_reference().map(TlsReferenceIdentity::authored),
             Origin::Plugin(field) => field.client_reference().map(TlsReferenceIdentity::authored),
             Origin::LinkSys(field) => field.client_reference().map(TlsReferenceIdentity::authored),
             Origin::RouteAuth(field) => field.client_reference().map(|slot| TlsReferenceIdentity {

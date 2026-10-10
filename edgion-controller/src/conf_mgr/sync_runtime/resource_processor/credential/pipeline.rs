@@ -416,29 +416,30 @@ fn read_bound_material<T: kube::Resource>(
     mut read: impl FnMut(Option<&str>, &str) -> Option<T>,
 ) -> BoundFetchOutcome<T> {
     let qualified = read(Some(object.namespace), object.name);
-    let selected = if reference.is_gateway_tls() || reference.is_backend_tls_material() {
-        let bare = if object.namespace == "default" {
-            read(None, object.name)
-        } else {
-            None
-        };
-        let (material, raw_namespace) = match (qualified, bare) {
-            (Some(_), Some(_)) => return BoundFetchOutcome::Invalid(ReferenceError::StaleBinding),
-            (Some(material), None) => (Some(material), Some(object.namespace)),
-            (None, Some(material)) => (Some(material), None),
-            (None, None) => (None, None),
-        };
-        if let Some(material) = material.as_ref() {
-            let metadata = material.meta();
-            if metadata.name.as_deref() != Some(object.name) || metadata.namespace.as_deref() != raw_namespace {
-                return BoundFetchOutcome::Invalid(ReferenceError::StaleBinding);
+    let selected =
+        if reference.is_gateway_tls() || reference.is_backend_tls_material() || reference.is_health_tls_material() {
+            let bare = if object.namespace == "default" {
+                read(None, object.name)
+            } else {
+                None
+            };
+            let (material, raw_namespace) = match (qualified, bare) {
+                (Some(_), Some(_)) => return BoundFetchOutcome::Invalid(ReferenceError::StaleBinding),
+                (Some(material), None) => (Some(material), Some(object.namespace)),
+                (None, Some(material)) => (Some(material), None),
+                (None, None) => (None, None),
+            };
+            if let Some(material) = material.as_ref() {
+                let metadata = material.meta();
+                if metadata.name.as_deref() != Some(object.name) || metadata.namespace.as_deref() != raw_namespace {
+                    return BoundFetchOutcome::Invalid(ReferenceError::StaleBinding);
+                }
             }
-        }
-        material
-    } else {
-        // Other consumers retain exact-store and frozen-authority semantics.
-        qualified
-    };
+            material
+        } else {
+            // Other consumers retain exact-store and frozen-authority semantics.
+            qualified
+        };
     match selected {
         Some(material) => BoundFetchOutcome::Ok(material),
         None => BoundFetchOutcome::Pending(PendingReason::SecretNotFound {

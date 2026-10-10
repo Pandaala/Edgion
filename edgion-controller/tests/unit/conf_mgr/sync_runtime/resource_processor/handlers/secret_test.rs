@@ -697,3 +697,254 @@ async fn backend_tls_secret_events_recover_bare_material_and_ambiguity_without_t
         assert!(runtime.secret_ref_manager.get_dependencies(&dependent.key()).is_empty());
     }
 }
+
+#[tokio::test]
+async fn health_tls_secret_events_recover_bare_material_and_ambiguity_without_typed_ca_edges() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionBackendTrafficPolicyHandler;
+    use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, RawStore};
+    use edgion_resources::{EdgionBackendTrafficPolicy, EdgionPlugins};
+    use std::collections::BTreeMap;
+    struct Observer;
+    #[async_trait::async_trait]
+    impl ProcessorHandler<EdgionPlugins> for Observer {}
+    macro_rules! work {
+        ($processor:expr,$raw:expr,$key:expr) => {{
+            let queue = $processor.workqueue();
+            let item = tokio::time::timeout(std::time::Duration::from_secs(3), queue.dequeue())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(item.key, $key);
+            let value = $raw.get(&item.key).map(|v| (*v).clone());
+            $processor
+                .process_work_item(&item.key, value, None, item.trigger_chain)
+                .await;
+            queue.done(&item.key);
+        }};
+    }
+    for namespace in [None, Some("default")] {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let sources = Arc::new(ResourceProcessor::<Secret>::new(
+            "Secret",
+            32,
+            Arc::new(SecretHandler::new()),
+            runtime.clone(),
+        ));
+        let raw = Arc::new(LocalRawStore::new());
+        sources.set_raw_store(raw.clone());
+        runtime.processor_registry.register(sources.clone());
+        let policies = Arc::new(ResourceProcessor::<EdgionBackendTrafficPolicy>::new(
+            "EdgionBackendTrafficPolicy",
+            32,
+            Arc::new(EdgionBackendTrafficPolicyHandler::new(
+                "test.edgion.io/controller".into(),
+            )),
+            runtime.clone(),
+        ));
+        let owners = Arc::new(LocalRawStore::new());
+        policies.set_raw_store(owners.clone());
+        runtime.processor_registry.register(policies.clone());
+        let observers = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
+            "EdgionPlugins",
+            32,
+            Arc::new(Observer),
+            runtime.clone(),
+        ));
+        runtime.processor_registry.register(observers.clone());
+        let key = if namespace.is_some() {
+            "default/policy"
+        } else {
+            "policy"
+        };
+        let mut policy: EdgionBackendTrafficPolicy = serde_json::from_value(serde_json::json!({"metadata":{"name":"policy","namespace":namespace},"spec":{
+            "targetRefs":[{"group":"","kind":"Service","name":"backend"}],"healthCheck":{"active":{"type":"https","tls":{"validation":{"hostname":"backend.example","caCertificateRefs":[{"kind":"Secret","name":"ca"}]}}}}}})).unwrap();
+        let pair = rcgen::generate_simple_self_signed(vec!["backend.example".into()]).unwrap();
+        let pem = pair.cert.pem();
+        policy
+            .spec
+            .health_check
+            .as_mut()
+            .unwrap()
+            .active
+            .as_mut()
+            .unwrap()
+            .tls
+            .as_mut()
+            .unwrap()
+            .client_certificate_ref = Some(serde_json::from_value(serde_json::json!({"name":"ca"})).unwrap());
+        owners.upsert(key.into(), Arc::new(policy.clone()));
+        policies.on_event_key(key.into()).await;
+        work!(policies, owners, key);
+        let dependent = ResourceRef::new(
+            ResourceKind::EdgionBackendTrafficPolicy,
+            namespace.map(str::to_owned),
+            "policy".into(),
+        );
+        assert_eq!(
+            runtime.secret_ref_manager.get_dependencies(&dependent.key()),
+            ["default/ca"]
+        );
+        assert!(runtime
+            .frontend_ca_ref_manager
+            .get_dependencies(&dependent.key())
+            .is_empty());
+        for (generation, (source_key, present, resolved)) in [
+            ("ca", true, true),
+            ("ca", false, false),
+            ("ca", true, true),
+            ("default/ca", true, false),
+            ("default/ca", false, true),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if present {
+                raw.upsert(
+                    source_key.into(),
+                    Arc::new(Secret {
+                        type_: Some("kubernetes.io/tls".into()),
+                        metadata: ObjectMeta {
+                            name: Some("ca".into()),
+                            namespace: source_key.contains('/').then(|| "default".into()),
+                            uid: Some(format!("actual-{generation}")),
+                            ..Default::default()
+                        },
+                        data: Some(BTreeMap::from([
+                            ("ca.crt".into(), k8s_openapi::ByteString(pem.as_bytes().to_vec())),
+                            ("tls.crt".into(), k8s_openapi::ByteString(pem.as_bytes().to_vec())),
+                            (
+                                "tls.key".into(),
+                                k8s_openapi::ByteString(pair.signing_key.serialize_pem().into_bytes()),
+                            ),
+                        ])),
+                        ..Default::default()
+                    }),
+                );
+            } else {
+                raw.remove(source_key);
+            }
+            let raw_observer = ResourceRef::new(ResourceKind::EdgionPlugins, Some("default".into()), "raw".into());
+            let semantic_observer =
+                ResourceRef::new(ResourceKind::EdgionPlugins, Some("default".into()), "semantic".into());
+            runtime
+                .secret_ref_manager
+                .add_ref(source_key.to_string(), raw_observer.clone());
+            if source_key == "ca" {
+                runtime
+                    .secret_ref_manager
+                    .add_ref("default/ca".into(), semantic_observer.clone());
+            }
+            sources.on_event_key(source_key.into()).await;
+            work!(sources, raw, source_key);
+            // This work item must originate from the ordinary material notification.
+            work!(policies, owners, key);
+            let actual = policies.get(key).unwrap();
+            assert_eq!(
+                actual
+                    .spec
+                    .health_check
+                    .as_ref()
+                    .unwrap()
+                    .active
+                    .as_ref()
+                    .unwrap()
+                    .resolved_ca_certificates
+                    .is_some(),
+                resolved
+            );
+            assert_eq!(
+                actual
+                    .spec
+                    .health_check
+                    .as_ref()
+                    .unwrap()
+                    .active
+                    .as_ref()
+                    .unwrap()
+                    .resolved_tls_error
+                    .is_none(),
+                resolved
+            );
+            assert_eq!(
+                actual
+                    .spec
+                    .health_check
+                    .as_ref()
+                    .unwrap()
+                    .active
+                    .as_ref()
+                    .unwrap()
+                    .resolved_client_certificate
+                    .is_some(),
+                resolved
+            );
+            if let Some(material) = actual
+                .spec
+                .health_check
+                .as_ref()
+                .unwrap()
+                .active
+                .as_ref()
+                .unwrap()
+                .resolved_ca_certificates
+                .as_ref()
+                .and_then(|m| m.first())
+            {
+                assert!(material.metadata.namespace.is_none());
+            }
+            assert!(runtime
+                .frontend_ca_ref_manager
+                .get_dependencies(&dependent.key())
+                .is_empty());
+            let queue = observers.workqueue();
+            let item = tokio::time::timeout(std::time::Duration::from_secs(3), queue.dequeue())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(item.key, "default/raw");
+            queue.done(&item.key);
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(100), queue.dequeue())
+                    .await
+                    .is_err()
+            );
+            runtime.secret_ref_manager.clear_value_refs(&raw_observer);
+            runtime.secret_ref_manager.clear_value_refs(&semantic_observer);
+        }
+        let active = policy.spec.health_check.as_mut().unwrap().active.as_mut().unwrap();
+        active
+            .tls
+            .as_mut()
+            .unwrap()
+            .validation
+            .as_mut()
+            .unwrap()
+            .ca_certificate_refs
+            .as_mut()
+            .unwrap()[0]
+            .name = "replacement".into();
+        active.tls.as_mut().unwrap().client_certificate_ref = None;
+        owners.upsert(key.into(), Arc::new(policy));
+        policies.on_event_key(key.into()).await;
+        work!(policies, owners, key);
+        assert_eq!(
+            runtime.secret_ref_manager.get_dependencies(&dependent.key()),
+            ["default/replacement"]
+        );
+        raw.remove("ca");
+        sources.on_event_key("ca".into()).await;
+        work!(sources, raw, "ca");
+        // Observe beyond the configured coalescing delay before any owner delete can mask it.
+        let quiet_window = std::time::Duration::from_secs(3);
+        assert!(
+            quiet_window > crate::conf_mgr::sync_runtime::workqueue::WorkqueueConfig::default().default_requeue_delay
+        );
+        assert!(tokio::time::timeout(quiet_window, policies.workqueue().dequeue())
+            .await
+            .is_err());
+        owners.remove(key);
+        policies.on_event_key(key.into()).await;
+        work!(policies, owners, key);
+        assert!(runtime.secret_ref_manager.get_dependencies(&dependent.key()).is_empty());
+    }
+}

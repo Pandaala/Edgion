@@ -296,80 +296,108 @@ fn health_tls_shape_error(p: &EdgionBackendTrafficPolicy) -> Option<&'static str
 }
 
 fn resolve_health_tls(p: &mut EdgionBackendTrafficPolicy, ctx: &HandlerContext, owner: &ResourceRef) {
-    use crate::conf_mgr::sync_runtime::resource_processor::credential::{
-        fetch_secret, resolve_ca_certificate_refs, CaFetchStrategy, FetchOutcome,
-    };
+    use super::super::credential::ca_refs::{configmap_ca_material, ordinary_secret_material};
+    use super::super::credential::pipeline::fetch_bound_configmap;
+    use crate::conf_mgr::sync_runtime::resource_processor::credential::{fetch_bound_secret, BoundFetchOutcome};
     use edgion_common::tls_validation::{check_key_matches_cert, parse_canonical_ca_bundle};
-    use edgion_resources::resources::health_check::HealthCheckType;
+    use edgion_resources::resources::refs::health_tls_fields::HealthTlsRefs;
 
     ctx.secret_ref_manager().clear_value_refs(owner);
-    let Some(active) = p.spec.health_check.as_mut().and_then(|health| health.active.as_mut()) else {
+    let Some(active) = p.spec.health_check.as_mut().and_then(|h| h.active.as_mut()) else {
         return;
     };
     active.resolved_ca_certificates = None;
     active.resolved_client_certificate = None;
     active.resolved_tls_error = None;
-    if !matches!(active.r#type, HealthCheckType::Https | HealthCheckType::Grpcs) {
-        return;
-    }
     let namespace = p.metadata.namespace.as_deref().unwrap_or("default");
     if let Some(error) = active.tls_namespace_validation_error(namespace) {
-        active.resolved_tls_error = Some(error.to_string());
+        active.resolved_tls_error = Some(error.into());
         return;
     }
     if active.tls_validation_error().is_some() {
         return;
     }
-    let Some(tls) = &active.tls else {
-        return;
-    };
-    let refs = tls
-        .validation
-        .as_ref()
-        .and_then(|validation| validation.ca_certificate_refs.as_deref())
-        .unwrap_or_default();
-    if !refs.is_empty() {
-        let secrets = resolve_ca_certificate_refs(ctx, owner, Some(namespace), refs, CaFetchStrategy::DirectSameNs);
-        if secrets.len() != refs.len() {
-            active.resolved_tls_error = Some("health check CA reference is unresolved".to_string());
-        } else if secrets.iter().any(|secret| {
-            secret
-                .data
-                .as_ref()
-                .and_then(|data| data.get("ca.crt"))
-                .is_none_or(|pem| parse_canonical_ca_bundle(&pem.0).is_err())
-        }) {
-            active.resolved_tls_error = Some("health check CA certificate material is invalid".to_string());
-        }
-        active.resolved_ca_certificates = (!secrets.is_empty()).then_some(secrets);
-    }
-    if let Some(reference) = &tls.client_certificate_ref {
-        match fetch_secret(ctx, owner, "edgion.io", "EdgionBackendTrafficPolicy", reference) {
-            FetchOutcome::Ok(secret) => {
-                let identity_valid = secret.type_.as_deref() == Some("kubernetes.io/tls")
-                    && secret.data.as_ref().is_some_and(|data| {
-                        let Some(cert) = data.get("tls.crt").and_then(|pem| std::str::from_utf8(&pem.0).ok()) else {
-                            return false;
-                        };
-                        let Some(key) = data.get("tls.key").and_then(|pem| std::str::from_utf8(&pem.0).ok()) else {
-                            return false;
-                        };
-                        check_key_matches_cert(cert, key).is_ok()
-                    });
-                if !identity_valid {
-                    active
-                        .resolved_tls_error
-                        .get_or_insert_with(|| "health check client certificate material is invalid".to_string());
+    let (ca, client, error) = {
+        let refs = HealthTlsRefs::from_policy(p);
+        let field = match refs.field() {
+            Ok(Some(field)) => field,
+            Ok(None) => return,
+            Err(_) => {
+                p.spec
+                    .health_check
+                    .as_mut()
+                    .and_then(|h| h.active.as_mut())
+                    .unwrap()
+                    .resolved_tls_error = Some("health check TLS reference is invalid".into());
+                return;
+            }
+        };
+        let mut ca = Vec::new();
+        let mut error = None;
+        let mut missing_ca = false;
+        field.visit_ca(|token| {
+            let material = match token.validated().map(|r| r.target().group_kind().kind()) {
+                Ok("Secret") => match fetch_bound_secret(ctx, owner, token) {
+                    BoundFetchOutcome::Ok(value) => Some(ordinary_secret_material(value.secret)),
+                    _ => None,
+                },
+                Ok("ConfigMap") => match fetch_bound_configmap(ctx, owner, token) {
+                    BoundFetchOutcome::Ok(value) => configmap_ca_material(&value),
+                    _ => None,
+                },
+                _ => None,
+            };
+            match material {
+                Some(secret) => {
+                    if secret
+                        .data
+                        .as_ref()
+                        .and_then(|d| d.get("ca.crt"))
+                        .is_none_or(|pem| parse_canonical_ca_bundle(&pem.0).is_err())
+                    {
+                        error.get_or_insert_with(|| "health check CA certificate material is invalid".to_string());
+                    }
+                    ca.push(secret);
                 }
-                active.resolved_client_certificate = Some(secret);
+                None => {
+                    missing_ca = true;
+                }
             }
-            FetchOutcome::Pending(_) => {
-                active
-                    .resolved_tls_error
-                    .get_or_insert_with(|| "health check client certificate reference is unresolved".to_string());
-            }
+        });
+        if missing_ca {
+            error = Some("health check CA reference is unresolved".to_string());
         }
-    }
+        let client = field
+            .client_reference()
+            .and_then(|token| match fetch_bound_secret(ctx, owner, token) {
+                BoundFetchOutcome::Ok(value) => {
+                    let secret = ordinary_secret_material(value.secret);
+                    let valid = secret.type_.as_deref() == Some("kubernetes.io/tls")
+                        && secret.data.as_ref().is_some_and(|data| {
+                            let Some(cert) = data.get("tls.crt").and_then(|p| std::str::from_utf8(&p.0).ok()) else {
+                                return false;
+                            };
+                            let Some(key) = data.get("tls.key").and_then(|p| std::str::from_utf8(&p.0).ok()) else {
+                                return false;
+                            };
+                            check_key_matches_cert(cert, key).is_ok()
+                        });
+                    if !valid {
+                        error.get_or_insert_with(|| "health check client certificate material is invalid".to_string());
+                    }
+                    Some(secret)
+                }
+                _ => {
+                    error.get_or_insert_with(|| "health check client certificate reference is unresolved".to_string());
+                    None
+                }
+            });
+        (ca, client, error)
+    };
+    let active = p.spec.health_check.as_mut().and_then(|h| h.active.as_mut()).unwrap();
+    active.resolved_ca_certificates = (!ca.is_empty()).then_some(ca);
+    active.resolved_client_certificate = client;
+    active.resolved_tls_error = error;
 }
 
 /// EdgionBackendTrafficPolicy handler.

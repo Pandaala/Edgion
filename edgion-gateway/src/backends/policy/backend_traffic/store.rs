@@ -520,8 +520,7 @@ impl BackendTrafficPolicyStore {
                             let hc = next
                                 .policies
                                 .get(&effective.winning_policy_key)
-                                .and_then(|prepared| prepared.policy.spec.health_check.as_ref())
-                                .and_then(|h| h.active.clone());
+                                .map(|prepared| Arc::clone(&prepared.policy));
                             hc_store.set_service_config(&service_key, hc);
                             hc_manager.reconcile_service(&service_key);
                             cb_store.set_service_config(&service_key, effective.outlier_detection.clone());

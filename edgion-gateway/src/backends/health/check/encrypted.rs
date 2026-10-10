@@ -8,7 +8,9 @@ use edgion_common::link_sys_core::outbound_tls::resolve_outbound_tls_with_defaul
 use edgion_common::tls_validation::{check_key_matches_cert, parse_canonical_ca_bundle};
 use edgion_resources::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
 use edgion_resources::resources::common::OutboundTlsConfig;
+#[cfg(test)]
 use edgion_resources::resources::health_check::ActiveHealthCheckConfig;
+use edgion_resources::resources::refs::health_tls_fields::HealthTlsRefs;
 use hyper_util::rt::TokioIo;
 
 use super::probes::grpc_health_proto::{HealthCheckRequest, HealthCheckResponse, SERVING};
@@ -24,14 +26,28 @@ pub(super) struct EncryptedProbeTransport {
 }
 
 impl EncryptedProbeTransport {
-    pub(super) fn build(config: &ActiveHealthCheckConfig, namespace: &str) -> Result<Self, ProbeError> {
+    pub(super) fn build(owner: &edgion_resources::EdgionBackendTrafficPolicy) -> Result<Self, ProbeError> {
+        let config = owner
+            .spec
+            .health_check
+            .as_ref()
+            .and_then(|h| h.active.as_ref())
+            .ok_or(ProbeError::InvalidTlsConfig)?;
+        let namespace = owner.metadata.namespace.as_deref().unwrap_or("default");
+        let references = HealthTlsRefs::from_policy(owner);
+        let field = references
+            .field()
+            .map_err(|_| ProbeError::InvalidTlsConfig)?
+            .ok_or(ProbeError::InvalidTlsConfig)?;
+        let proof = edgion_common::link_sys_core::outbound_tls::validate_outbound_tls_field(field.outbound())
+            .map_err(|_| ProbeError::InvalidTlsConfig)?;
         if config.tls_validation_error().is_some()
             || config.tls_namespace_validation_error(namespace).is_some()
             || config.resolved_tls_error.is_some()
         {
             return Err(ProbeError::InvalidTlsConfig);
         }
-        let local = config.tls.as_ref().ok_or(ProbeError::InvalidTlsConfig)?;
+        let local = proof.field().policy();
         // Revalidate every bundle after conf_sync. A valid sibling bundle must
         // not hide an empty or malformed CA from another configured reference.
         for secret in config.resolved_ca_certificates.as_deref().unwrap_or_default() {
@@ -56,8 +72,8 @@ impl EncryptedProbeTransport {
         }
         let resolved = resolve_outbound_tls_with_defaults(
             local,
-            config.resolved_ca_certificates.as_deref(),
-            config.resolved_client_certificate.as_ref(),
+            proof.field().ca_material(),
+            proof.field().client_material(),
             false,
             &OutboundTlsConfig::default(),
         )

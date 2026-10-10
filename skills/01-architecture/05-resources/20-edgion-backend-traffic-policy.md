@@ -46,3 +46,21 @@ counter buckets. Budget and minimum-rate windows share one elapsed sample per
 operation but retain their independent intervals. See
 [retry-budget epochs](../../12-algorithms/retry-budget-epoch-buckets.md) for
 publication, saturation, delayed-operation, and lock-free platform boundaries.
+
+## Actual health TLS ownership
+
+`HealthTlsRefs` borrows the actual EBTP active HTTPS/GRPCS field. Custom Secret/CA
+contracts, same-namespace validation, bound material acquisition and the canonical
+outbound TLS proof apply before cold transport construction. Native Gateway API
+CA bounds and grammar are not inherited. Default-namespace file/etcd material may
+be a unique bare or qualified source; both candidates fail closed as ambiguous.
+Original material metadata stays intact, and ordinary typed dependencies drive
+reconciliation after Secret/ConfigMap events. The two store reads are not atomic.
+
+Health publication retains the existing winning EBTP Arc instead of copying its
+active config. Active config/material/error equality plus source name, raw
+namespace and UID control generation reuse; a source replacement rotates it.
+The probe task borrows that owner and constructs TLS once at startup using
+explicit empty defaults. Existing poll fencing prevents superseded tasks from
+continuing. Invalid TLS keeps the winning check attached and failing; no sibling
+policy or global/backend trust supplies a fallback.

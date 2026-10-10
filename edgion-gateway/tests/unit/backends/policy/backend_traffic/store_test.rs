@@ -147,7 +147,7 @@ fn single_policy_populates_all_stores() {
 
     assert_eq!(store.get_lb_policy(key), Some(ParsedLBPolicy::LeastConn));
     assert_eq!(resolve_degrade_threshold(key), 40);
-    assert!(get_hc_config_store().resolve(key).is_some(), "HC config present");
+    assert!(get_hc_config_store().resolve_policy(key).is_some(), "HC config present");
     assert!(
         get_outlier_detection_store().keys().contains(&key.to_string()),
         "CB config present"
@@ -237,7 +237,7 @@ fn last_removal_clears_all_stores() {
         0,
         "degrade override cleared to global default"
     );
-    assert!(get_hc_config_store().resolve(key).is_none(), "HC config cleared");
+    assert!(get_hc_config_store().resolve_policy(key).is_none(), "HC config cleared");
     assert!(
         !get_outlier_detection_store().keys().contains(&key.to_string()),
         "CB config cleared"
@@ -330,7 +330,7 @@ fn invalid_policy_is_skipped() {
     );
     store.full_set_policies(HashMap::from([("bt6d/bad".to_string(), invalid)]));
     assert_eq!(store.get_lb_policy(key), None, "invalid policy contributes nothing");
-    assert!(get_hc_config_store().resolve(key).is_none());
+    assert!(get_hc_config_store().resolve_policy(key).is_none());
     assert!(
         store.snapshot().candidates(&service_target("bt6d", "svc")).is_empty(),
         "invalid policy is absent from reverse_index"
@@ -365,7 +365,7 @@ fn health_check_zero_port_is_ineligible_and_clears_previous_runtime_config() {
     // Keep a forged valid target marker: the Gateway must independently reject zero.
     store.full_set_policies(HashMap::from([(policy_key.clone(), check.clone())]));
     assert!(store.get_effective(&service_target("health-port", "svc")).is_none());
-    assert!(get_hc_config_store().resolve(service_key).is_none());
+    assert!(get_hc_config_store().resolve_policy(service_key).is_none());
 
     for port in [Some(1), Some(0), None, Some(65535)] {
         Arc::make_mut(&mut check)
@@ -391,10 +391,10 @@ fn health_check_zero_port_is_ineligible_and_clears_previous_runtime_config() {
                 .is_empty(),
             !valid
         );
-        let health = get_hc_config_store().resolve(service_key);
+        let health = get_hc_config_store().resolve_policy(service_key);
         assert_eq!(health.is_some(), valid);
         if let Some(health) = health {
-            assert_eq!(health.port, port);
+            assert_eq!(health.config().port, port);
         }
     }
     store.full_set_policies(HashMap::new());
@@ -501,7 +501,7 @@ fn full_set_policies_clears_stale_and_populates_new() {
 
     assert_eq!(store.get_lb_policy(key_a), Some(ParsedLBPolicy::LeastConn));
     assert_eq!(resolve_degrade_threshold(key_a), 40);
-    assert!(get_hc_config_store().resolve(key_a).is_some(), "A HC present");
+    assert!(get_hc_config_store().resolve_policy(key_a).is_some(), "A HC present");
     assert!(
         get_outlier_detection_store().keys().contains(&key_a.to_string()),
         "A CB present"
@@ -525,7 +525,7 @@ fn full_set_policies_clears_stale_and_populates_new() {
 
     assert_eq!(store.get_lb_policy(key_a), None, "stale A LB cleared");
     assert_eq!(resolve_degrade_threshold(key_a), 0, "falls back to global default");
-    assert!(get_hc_config_store().resolve(key_a).is_none(), "A HC cleared");
+    assert!(get_hc_config_store().resolve_policy(key_a).is_none(), "A HC cleared");
     assert!(
         !get_outlier_detection_store().keys().contains(&key_a.to_string()),
         "A CB cleared"
@@ -533,7 +533,7 @@ fn full_set_policies_clears_stale_and_populates_new() {
 
     assert_eq!(store.get_lb_policy(key_b), Some(ParsedLBPolicy::Ewma), "B LB set");
     assert_eq!(resolve_degrade_threshold(key_b), 60);
-    assert!(get_hc_config_store().resolve(key_b).is_some(), "B HC present");
+    assert!(get_hc_config_store().resolve_policy(key_b).is_some(), "B HC present");
     assert!(
         get_outlier_detection_store().keys().contains(&key_b.to_string()),
         "B CB present"
@@ -542,7 +542,7 @@ fn full_set_policies_clears_stale_and_populates_new() {
     store.full_set_policies(HashMap::new());
     assert_eq!(store.get_lb_policy(key_b), None, "B LB cleared on empty resync");
     assert_eq!(resolve_degrade_threshold(key_b), 0, "B falls back to global default");
-    assert!(get_hc_config_store().resolve(key_b).is_none(), "B HC cleared");
+    assert!(get_hc_config_store().resolve_policy(key_b).is_none(), "B HC cleared");
     assert!(
         !get_outlier_detection_store().keys().contains(&key_b.to_string()),
         "B CB cleared"
@@ -1190,7 +1190,7 @@ fn retarget_clears_reverse_index_and_side_effects() {
     );
     assert!(store.snapshot().candidates(&service_target("rt", "a")).is_empty());
     assert_eq!(store.get_lb_policy("rt/a"), None);
-    assert!(get_hc_config_store().resolve("rt/a").is_none());
+    assert!(get_hc_config_store().resolve_policy("rt/a").is_none());
     assert_eq!(store.get_lb_policy("rt/b"), Some(ParsedLBPolicy::Ewma));
     assert!(!store.snapshot().candidates(&service_target("rt", "b")).is_empty());
     store.full_set_policies(HashMap::new());
@@ -1394,4 +1394,73 @@ fn bare_policy_target_repair_preserves_raw_owner_and_atomic_eligibility() {
         store.partial_update_policies(HashMap::new(), HashMap::new(), HashSet::from(["bare".into()]));
         assert!(store.snapshot().get_effective(&target).is_none());
     }
+}
+
+#[test]
+fn health_snapshot_keeps_actual_invalid_winner_and_repairs_without_policy_fallback() {
+    let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+    let store = BackendTrafficPolicyStore::new();
+    let mut winner = (*policy(
+        "health-owned",
+        "first",
+        "svc",
+        Some(ts("2026-01-01T00:00:00Z")),
+        None,
+        None,
+        true,
+        false,
+    ))
+    .clone();
+    winner.spec.health_check.as_mut().unwrap().active = Some(
+        serde_json::from_value(serde_json::json!({
+            "type": "https", "tls": {"validation": {"hostname": "probe.example"}}
+        }))
+        .unwrap(),
+    );
+    winner
+        .spec
+        .health_check
+        .as_mut()
+        .unwrap()
+        .active
+        .as_mut()
+        .unwrap()
+        .resolved_tls_error = Some("missing material".into());
+    let sibling = policy(
+        "health-owned",
+        "second",
+        "svc",
+        Some(ts("2026-02-01T00:00:00Z")),
+        None,
+        None,
+        true,
+        false,
+    );
+    let first = Arc::new(winner.clone());
+    store.full_set_policies(HashMap::from([
+        ("health-owned/first".into(), first.clone()),
+        ("health-owned/second".into(), sibling.clone()),
+    ]));
+    let snapshot = get_hc_config_store().resolve_policy("health-owned/svc").unwrap();
+    assert!(std::ptr::eq(snapshot.owner(), first.as_ref()));
+    assert!(snapshot.config().resolved_tls_error.is_some());
+    winner
+        .spec
+        .health_check
+        .as_mut()
+        .unwrap()
+        .active
+        .as_mut()
+        .unwrap()
+        .resolved_tls_error = None;
+    store.full_set_policies(HashMap::from([
+        ("health-owned/first".into(), Arc::new(winner)),
+        ("health-owned/second".into(), sibling),
+    ]));
+    let repaired = get_hc_config_store().resolve_policy("health-owned/svc").unwrap();
+    assert_eq!(repaired.owner().metadata.name.as_deref(), Some("first"));
+    assert!(repaired.config().resolved_tls_error.is_none());
+    assert!(!Arc::ptr_eq(&snapshot.identity, &repaired.identity));
+    assert!(snapshot.config().resolved_tls_error.is_some());
+    store.full_set_policies(HashMap::new());
 }

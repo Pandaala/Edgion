@@ -116,3 +116,20 @@ produce a concrete need for handshake-only TLS probes.
   identified that encrypted probes were unavailable, but its proposed
   `BackendTLSPolicy` relationship was rejected. The capability gap is retained
   under an independent health-check contract.
+
+## Actual reference and generation ownership
+
+The health snapshot retains the actual winning EBTP Arc; the active config is a
+borrowed view. `HealthTlsRefs` binds custom CA ordinals and the client Secret to
+that owner's same-namespace fields. Cold encrypted transport construction uses
+the canonical outbound material proof before PEM/keypair validation and explicit
+empty defaults. Valid bytes with wrong identity or ConfigMap provenance cannot
+satisfy a declaration. Source name/raw namespace/UID changes rotate the health
+generation even when active configs compare equal. This preserves the existing
+per-poll generation fence and does not create request-path validation, BTP
+inheritance, or a global TLS policy dependency.
+
+Default-namespace raw source support is confined to these finite bound slots and
+ordinary EBTP dependency notifications; it does not grant cross-namespace access
+or change frozen credential authority. Re-evaluate if health config publication
+again detaches material from its actual declaring policy.

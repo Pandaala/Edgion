@@ -168,7 +168,7 @@ TlsConfig flattens OutboundTlsLocal; there is no intermediate outbound key.
 | Exact prefix T | Supported CA kinds | Source, namespace and access policy |
 | --- | --- | --- |
 | EdgionGatewayConfig.spec.outboundTls | Secret/ConfigMap | True Cluster source; required explicit material namespace; approved exact administrative selection, scoped implementation underway under section 4.7 and 00-context |
-| EdgionBackendTrafficPolicy.spec.healthCheck.active.tls | Secret/ConfigMap | Policy source; omitted or explicit policy namespace only; cross-namespace rejected before lookup regardless of grants; existing DirectSameNs resolution |
+| EdgionBackendTrafficPolicy.spec.healthCheck.active.tls | Secret/ConfigMap | Policy source; omitted or explicit policy namespace only; cross-namespace rejected before lookup regardless of grants; actual HealthTlsRefs field loan and bound same-namespace material acquisition |
 | LinkSys.spec.config.tls, type redis/etcd/elasticsearch/kafka/otlp/webhook | Secret only | LinkSys namespace when omitted; existing cross-namespace Secret ReferenceGrant checks |
 | LinkSys.spec.config.connection.tls, type httpdns | Secret only | LinkSys namespace when omitted; existing cross-namespace Secret ReferenceGrant checks |
 | LinkSys.spec.config.provider.tls, type credentialSource/provider oauth2ClientCredentials | Secret only | LinkSys namespace when omitted; existing cross-namespace Secret ReferenceGrant checks |
@@ -609,3 +609,14 @@ uses the finite qualified/bare selector and ordinary Gateway/BTP semantic event
 notification; it does not extend Grant bypass or frozen credential authority.
 TargetRefs, EBTP, peer hot paths, winner selection and pool behavior are outside
 this batch. Unit verification and live/conformance evidence remain distinct.
+
+## R8c actual EBTP health TLS fields
+
+HealthTlsRefs owns active HTTPS/GRPCS CA ordinals and client reference selection
+from the actual EBTP. It preserves custom core aliases/defaults and same-namespace
+policy, with no native CA-list bound or Gateway Grant exception. Controller bound
+acquisition and Gateway canonical outbound material proof share these slots.
+Health snapshots retain the winning policy Arc through cold task-start transport
+construction and preserve generation fencing. Secret/ConfigMap semantic default
+notifications cover these finite dependencies; ambiguous bare/qualified sources
+fail closed. Live integration and conformance evidence remain separate work.

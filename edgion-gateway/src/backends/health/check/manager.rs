@@ -7,7 +7,9 @@ use crate::backends::discovery::get_service_discovery_coordinator;
 use crate::backends::policy::backend_traffic::store::get_backend_traffic_policy_store;
 use crate::lb::LbBackend;
 use edgion_resources::duration::parse_duration;
-use edgion_resources::resources::health_check::{ActiveHealthCheckConfig, HealthCheckType};
+#[cfg(test)]
+use edgion_resources::resources::health_check::ActiveHealthCheckConfig;
+use edgion_resources::resources::health_check::HealthCheckType;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use parking_lot::{Mutex, RwLock};
@@ -92,8 +94,6 @@ impl HealthCheckManager {
         };
 
         let task_service_key = service_key.clone();
-        let config = policy.config.clone();
-        let policy_identity = Arc::clone(&policy.identity);
         // Reconciliation is serialized; retire the old task before admitting its replacement.
         self.cancel_task(&service_key);
         // Status-marker ownership stays in the serialized reconciliation path.
@@ -101,7 +101,7 @@ impl HealthCheckManager {
         // marker after removal.
         self.health_store.register_service(&service_key, Vec::new());
         let handle = runtime_handle.spawn(async move {
-            health_check_loop(task_service_key, config, policy_identity).await;
+            health_check_loop(task_service_key, policy).await;
         });
 
         // Atomically swap the per-service handle: the single write-locked insert
@@ -139,11 +139,9 @@ fn resolve_probe_host(service_key: &str, config_host: Option<String>) -> Option<
         .or(config_host)
 }
 
-async fn health_check_loop(
-    service_key: String,
-    config: ActiveHealthCheckConfig,
-    policy_identity: Arc<crate::backends::discovery::HealthPolicyIdentity>,
-) {
+async fn health_check_loop(service_key: String, policy: Arc<super::config_store::ResolvedActiveHealthPolicy>) {
+    let config = policy.config();
+    let policy_identity = Arc::clone(&policy.identity);
     let interval = parse_probe_duration(&config.interval, Duration::from_secs(10)).max(Duration::from_secs(1));
     let timeout = parse_probe_duration(&config.timeout, Duration::from_secs(3)).max(Duration::from_millis(100));
     let http_path = config.path.clone().unwrap_or_else(|| "/".to_string());
@@ -163,10 +161,8 @@ async fn health_check_loop(
     // `HealthCheckManager::reconcile_service`.
     let http_host = resolve_probe_host(&service_key, config.host.clone());
     let grpc_service_name = config.grpc_service_name.clone().unwrap_or_default();
-    let encrypted = matches!(config.r#type, HealthCheckType::Https | HealthCheckType::Grpcs).then(|| {
-        let namespace = service_key.split_once('/').map_or("", |(namespace, _)| namespace);
-        EncryptedProbeTransport::build(&config, namespace)
-    });
+    let encrypted = matches!(config.r#type, HealthCheckType::Https | HealthCheckType::Grpcs)
+        .then(|| EncryptedProbeTransport::build(policy.owner()));
 
     let mut http_client = if matches!(config.r#type, HealthCheckType::Http) {
         match build_http_probe_client(timeout) {

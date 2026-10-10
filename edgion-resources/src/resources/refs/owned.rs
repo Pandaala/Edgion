@@ -39,6 +39,7 @@ pub(super) enum TopologyLoan<'a> {
     RouteAuth(&'a super::route_auth_fields::RouteAuthSnapshot),
     GatewayTls(&'a OwnerSnapshot),
     BackendTls(&'a OwnerSnapshot),
+    HealthTls(&'a OwnerSnapshot),
 }
 impl<'a> TopologyLoan<'a> {
     fn owner(self) -> &'a OwnerSnapshot {
@@ -49,7 +50,7 @@ impl<'a> TopologyLoan<'a> {
             Self::IpList(snapshot) => &snapshot.owner,
             Self::Egc(snapshot) => &snapshot.owner,
             Self::RouteAuth(snapshot) => &snapshot.owner,
-            Self::GatewayTls(owner) | Self::BackendTls(owner) => owner,
+            Self::GatewayTls(owner) | Self::BackendTls(owner) | Self::HealthTls(owner) => owner,
         }
     }
     fn freeze(self) -> Result<FrozenTopology, ReferenceError> {
@@ -63,7 +64,8 @@ impl<'a> TopologyLoan<'a> {
             | Self::Egc(_)
             | Self::RouteAuth(_)
             | Self::GatewayTls(_)
-            | Self::BackendTls(_) => Err(ReferenceError::UnsupportedTarget),
+            | Self::BackendTls(_)
+            | Self::HealthTls(_) => Err(ReferenceError::UnsupportedTarget),
         }
     }
 }
@@ -413,6 +415,9 @@ impl PreparedTlsTarget {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(super) enum FieldSlot {
+    HealthTls {
+        ca: Option<usize>,
+    },
     BackendTlsCa {
         reference: usize,
     },
@@ -509,7 +514,8 @@ impl FieldSlot {
                     && *current_group == group
                     && *current_reference == reference
             }
-            Self::BackendTlsCa { .. }
+            Self::HealthTls { .. }
+            | Self::BackendTlsCa { .. }
             | Self::BackendTlsClient
             | Self::GatewayBackendTls
             | Self::GatewayServing { .. }
@@ -703,6 +709,9 @@ impl<'a> BoundFieldReference<'a> {
             self._position,
             FieldSlot::BackendTlsCa { .. } | FieldSlot::BackendTlsClient
         )
+    }
+    pub fn is_health_tls_material(self) -> bool {
+        matches!(self._position, FieldSlot::HealthTls { .. })
     }
     pub fn is_gateway_frontend_ca(self) -> bool {
         matches!(self._position, FieldSlot::GatewayFrontendCa { .. })

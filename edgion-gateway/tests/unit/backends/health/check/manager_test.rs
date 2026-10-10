@@ -12,7 +12,7 @@ async fn reconciliation_owns_status_marker_lifecycle() {
     };
     let service_key = "health-status-owner/service";
 
-    config_store.set_service_config(service_key, Some(ActiveHealthCheckConfig::default()));
+    config_store.set_service_config(service_key, Some(test_owner(ActiveHealthCheckConfig::default())));
     manager.reconcile_service(service_key);
     assert!(health_store.has_service(service_key));
 
@@ -231,4 +231,15 @@ mod resolve_probe_host_tests {
         let resolved = resolve_probe_host(&service_key, Some("configured-host".to_string()));
         assert_eq!(resolved, Some("configured-host".to_string()));
     }
+}
+
+fn test_owner(config: ActiveHealthCheckConfig) -> Arc<edgion_resources::EdgionBackendTrafficPolicy> {
+    let mut owner: edgion_resources::EdgionBackendTrafficPolicy = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "health", "namespace": "default"},
+        "spec": {"targetRefs": [{"kind": "Service", "name": "svc"}]}
+    }))
+    .unwrap();
+    owner.spec.health_check =
+        Some(edgion_resources::resources::health_check::ServiceHealthCheck { active: Some(config) });
+    Arc::new(owner)
 }

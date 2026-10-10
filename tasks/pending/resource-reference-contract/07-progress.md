@@ -19,7 +19,21 @@
   eight reused with unchanged scope). There are 280 unit and 58 doc passes,
   ten existing ignored doctests, and 9671 identities with all 9656 baseline IDs
   preserved. Twenty-three technical/documentation paths plus this ledger are
-  ready for the final local commit gate; no live/conformance claim is made.
+  committed locally as e4cdf4c4e59195ee70af1a092487b2dcd0cf1abe after both
+  independent Astra final reviews passed. All twenty-four committed blobs match
+  the frozen manifest; no push or live/conformance claim is made.
+- R8c health-local TLS plan r2 passed two independent Astra reviews at e4cdf4c4e.
+  Twenty-five technical/documentation paths plus this coordinator-owned ledger
+  now pass both independent static and execution reviews. The actual winning
+  EBTP Arc replaces the detached active config, preserving generation fencing
+  and invalid-check attachment. Verification passes 381 unit and 62 doc tests,
+  with ten existing ignored docs; all 9671 old test identities remain among 9681.
+  All fourteen root gates pass with zero warnings; final local commit is pending.
+- F1 read-only inventory identified two further bounded material-pairing candidates:
+  Gateway EdgionBackend credentials and Common LinkSys non-TLS auth. Existing
+  Controller guards remain; these are missing consumer proof boundaries, not
+  demonstrated ingress exploits. Generated CredentialSource operation identity
+  remains explicit backlog alongside ACME output identity. Plan each separately.
 - Native Gateway material selection preserves omitted raw namespaces without
   relaxing native group/kind or Grant semantics. Default's candidate reads are not
   atomic; registered dependencies and subsequent source events reconcile changes.
@@ -33,6 +47,41 @@
 
 The entries below retain historical checkpoints; older pending labels describe
 those checkpoints and are superseded by later accepted batch records.
+
+## R8c final checkpoint (2026-10-10)
+
+The reviewed twenty-five-path r2 plan binds actual EBTP active TLS fields through
+the existing canonical reference, material and acquisition mechanisms. Default
+bare/qualified source recovery extends only to the finite health consumer;
+same-namespace restrictions and ordinary Secret/ConfigMap provenance remain.
+The winning policy Arc replaces the detached health configuration. TLS material
+is proved once at task startup; endpoint pinning, independent TLS defaults,
+invalid-winner attachment and per-poll generation fencing remain unchanged.
+
+Both Astra reviewers approved production and final execution. One new test was
+strengthened after review to isolate name, namespace and UID generation changes;
+only that test file changed from r1 to r2. Its 45-test health suite passed again.
+Other results retain their explicit unchanged-input r1 evidence: 381 distinct
+unit and 62 doc passes in total, ten existing doc ignores, zero warnings. The
+9671 baseline identities and ignored sets are preserved, with ten additions.
+Lifetime positive control and intended E0505/E0506/E0502 negatives passed.
+Old fixture adaptations are limited to the approved actual-owner construction
+and borrowed accessor changes; Controller old test files remain exact prefixes.
+
+Root format, workspace check (40.354 seconds), Clippy (48.954 seconds), docs,
+SSA, metrics, Pingora source, transform/reference contracts, test layout,
+Gateway tracing, English and diff checks all pass on unchanged source. Evidence:
+`tmp/resource-reference-contract/r8c-verification-20261010/verification-final.json`
+and `tmp/resource-reference-contract/r8c-root-verification-20261010/`.
+The final commit manifest adds only this ledger to the twenty-five approved paths.
+No live TLS, integration or conformance acceptance is implied. No agent push.
+
+The read-only F1 inventory and F2 execution runbook are saved under
+`tmp/resource-reference-contract/f1-coverage-e4cdf4c4-20261010.md` and
+`tmp/resource-reference-contract/f2-preflight-20261010/F2-RUNBOOK.md`.
+EdgionTls, ACME/generated output, the bounded AI/LinkSys material-pairing
+candidates, overall simplification/documentation and fresh live verification
+remain open; the original issue must not be closed yet.
 
 ## Authority and reporting
 

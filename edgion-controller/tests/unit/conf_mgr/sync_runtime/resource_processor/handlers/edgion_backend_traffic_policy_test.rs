@@ -1387,3 +1387,38 @@ fn bare_tls_owner_participates_in_default_service_authority_validation() {
     );
     assert!(backend_tls_hostnames_for_service("other", "backend", &records).is_empty());
 }
+
+#[tokio::test]
+async fn actual_health_invalid_owner_and_inactive_protocol_scrub_without_material_effects() {
+    use edgion_resources::resources::health_check::HealthCheckType;
+    for missing_owner in [false, true] {
+        let (ctx, runtime) = make_ctx();
+        install_health_material(&runtime, "Secret");
+        let handler = make_handler();
+        let mut policy = parse_health_policy(&handler, encrypted_policy("Secret"), &ctx).await;
+        assert!(health_active(&policy).resolved_client_certificate.is_some());
+        if missing_owner {
+            policy.metadata.name = None;
+        } else {
+            policy
+                .spec
+                .health_check
+                .as_mut()
+                .unwrap()
+                .active
+                .as_mut()
+                .unwrap()
+                .r#type = HealthCheckType::Http;
+        }
+        let owner = EdgionBackendTrafficPolicyHandler::resource_ref(&policy);
+        let (parsed, reads) = super::super::super::credential::pipeline::observe_bound_reads(|| {
+            resolve_health_tls(&mut policy, &ctx, &owner);
+            policy
+        });
+        assert!(reads.is_empty());
+        assert!(health_active(&parsed).resolved_ca_certificates.is_none());
+        assert!(health_active(&parsed).resolved_client_certificate.is_none());
+        assert_eq!(health_active(&parsed).resolved_tls_error.is_some(), missing_owner);
+        assert!(runtime.secret_ref_manager.get_dependencies(&owner.key()).is_empty());
+    }
+}

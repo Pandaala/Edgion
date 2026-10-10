@@ -21,19 +21,24 @@ fn every_resolved_ca_bundle_must_be_valid_without_controller_error_marker() {
         "-----BEGIN CERTIFICATE-----\ninvalid\n-----END CERTIFICATE-----".to_owned(),
     ] {
         config.resolved_ca_certificates = Some(vec![
-            secret(&[("ca.crt", ca.cert.pem())]),
-            secret(&[("ca.crt", invalid)]),
+            secret("probe-ca", &[("ca.crt", ca.cert.pem())]),
+            secret("second-ca", &[("ca.crt", invalid)]),
         ]);
         assert!(config.resolved_tls_error.is_none());
         assert!(matches!(
-            EncryptedProbeTransport::build(&config, "default"),
+            EncryptedProbeTransport::build(&test_owner(config.clone())),
             Err(ProbeError::InvalidTlsConfig)
         ));
     }
 }
 
-fn secret(entries: &[(&str, String)]) -> k8s_openapi::api::core::v1::Secret {
+fn secret(name: &str, entries: &[(&str, String)]) -> k8s_openapi::api::core::v1::Secret {
     k8s_openapi::api::core::v1::Secret {
+        metadata: kube::api::ObjectMeta {
+            name: Some(name.into()),
+            namespace: Some("default".into()),
+            ..Default::default()
+        },
         type_: Some("kubernetes.io/tls".to_string()),
         data: Some(
             entries
@@ -54,7 +59,7 @@ fn config(ca: &rcgen::Certificate) -> ActiveHealthCheckConfig {
         }}
     }))
     .unwrap();
-    config.resolved_ca_certificates = Some(vec![secret(&[("ca.crt", ca.pem())])]);
+    config.resolved_ca_certificates = Some(vec![secret("probe-ca", &[("ca.crt", ca.pem())])]);
     config
 }
 
@@ -114,7 +119,7 @@ fn health_tls_rejects_expired_peer_even_with_trusted_certificate() {
     let mut params = rcgen::CertificateParams::new(vec!["probe.example.com".to_string()]).unwrap();
     let valid = params.self_signed(&key).unwrap();
     assert!(handshake(
-        EncryptedProbeTransport::build(&config(&valid), "default").unwrap(),
+        EncryptedProbeTransport::build(&test_owner(config(&valid))).unwrap(),
         &valid,
         &key,
         None
@@ -125,7 +130,7 @@ fn health_tls_rejects_expired_peer_even_with_trusted_certificate() {
     let expired = params.self_signed(&key).unwrap();
     assert!(matches!(
         handshake(
-            EncryptedProbeTransport::build(&config(&expired), "default").unwrap(),
+            EncryptedProbeTransport::build(&test_owner(config(&expired))).unwrap(),
             &expired,
             &key,
             None
@@ -150,7 +155,7 @@ fn health_tls_requires_valid_client_identity_for_mtls() {
     let client = client_params.signed_by(&client_key, &issuer).unwrap();
     let mut config = config(&server.cert);
     assert!(handshake(
-        EncryptedProbeTransport::build(&config, "default").unwrap(),
+        EncryptedProbeTransport::build(&test_owner(config.clone())).unwrap(),
         &server.cert,
         &server.signing_key,
         Some(&client_ca)
@@ -159,20 +164,20 @@ fn health_tls_requires_valid_client_identity_for_mtls() {
     config.tls.as_mut().unwrap().client_certificate_ref =
         Some(serde_json::from_value(serde_json::json!({"name": "probe-client"})).unwrap());
     assert!(matches!(
-        EncryptedProbeTransport::build(&config, "default"),
+        EncryptedProbeTransport::build(&test_owner(config.clone())),
         Err(ProbeError::InvalidTlsConfig)
     ));
-    config.resolved_client_certificate = Some(secret(&[
-        ("tls.crt", client.pem()),
-        ("tls.key", client_key.serialize_pem()),
-    ]));
+    config.resolved_client_certificate = Some(secret(
+        "probe-client",
+        &[("tls.crt", client.pem()), ("tls.key", client_key.serialize_pem())],
+    ));
     for protocol in [
         edgion_resources::resources::health_check::HealthCheckType::Https,
         edgion_resources::resources::health_check::HealthCheckType::Grpcs,
     ] {
         config.r#type = protocol;
         assert!(handshake(
-            EncryptedProbeTransport::build(&config, "default").unwrap(),
+            EncryptedProbeTransport::build(&test_owner(config.clone())).unwrap(),
             &server.cert,
             &server.signing_key,
             Some(&client_ca)
@@ -189,20 +194,23 @@ fn health_tls_requires_valid_client_identity_for_mtls() {
             format!("{}\ninvalid trailing material", client_key.serialize_pem()),
         ),
     ] {
-        config.resolved_client_certificate = Some(secret(&[("tls.crt", certificate), ("tls.key", private_key)]));
+        config.resolved_client_certificate = Some(secret(
+            "probe-client",
+            &[("tls.crt", certificate), ("tls.key", private_key)],
+        ));
         assert!(config.resolved_tls_error.is_none());
         assert!(matches!(
-            EncryptedProbeTransport::build(&config, "default"),
+            EncryptedProbeTransport::build(&test_owner(config.clone())),
             Err(ProbeError::InvalidTlsConfig)
         ));
     }
     let wrong_key = rcgen::KeyPair::generate().unwrap();
-    config.resolved_client_certificate = Some(secret(&[
-        ("tls.crt", client.pem()),
-        ("tls.key", wrong_key.serialize_pem()),
-    ]));
+    config.resolved_client_certificate = Some(secret(
+        "probe-client",
+        &[("tls.crt", client.pem()), ("tls.key", wrong_key.serialize_pem())],
+    ));
     assert!(matches!(
-        EncryptedProbeTransport::build(&config, "default"),
+        EncryptedProbeTransport::build(&test_owner(config.clone())),
         Err(ProbeError::InvalidTlsConfig)
     ));
 }
@@ -236,7 +244,78 @@ fn missing_tls_material_fails_closed_without_building_plaintext() {
         ..Default::default()
     };
     assert!(matches!(
-        EncryptedProbeTransport::build(&config, "default"),
+        EncryptedProbeTransport::build(&test_owner(config.clone())),
+        Err(ProbeError::InvalidTlsConfig)
+    ));
+}
+
+fn test_owner(config: ActiveHealthCheckConfig) -> edgion_resources::EdgionBackendTrafficPolicy {
+    let mut owner: edgion_resources::EdgionBackendTrafficPolicy = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "health", "namespace": "default"},
+        "spec": {"targetRefs": [{"kind": "Service", "name": "svc"}]}
+    }))
+    .unwrap();
+    owner.spec.health_check =
+        Some(edgion_resources::resources::health_check::ServiceHealthCheck { active: Some(config) });
+    owner
+}
+
+#[test]
+fn actual_health_material_identity_rejects_valid_payload_decoys() {
+    let ca = rcgen::generate_simple_self_signed(vec!["probe.example.com".into()]).unwrap();
+    let valid = test_owner(config(&ca.cert));
+    assert!(EncryptedProbeTransport::build(&valid).is_ok());
+    for case in 0..7 {
+        let mut owner = valid.clone();
+        let active = owner.spec.health_check.as_mut().unwrap().active.as_mut().unwrap();
+        let material = &mut active.resolved_ca_certificates.as_mut().unwrap()[0];
+        match case {
+            0 => material.metadata.name = Some("decoy".into()),
+            1 => material.metadata.namespace = Some("other".into()),
+            2 => material.metadata.namespace = Some(String::new()),
+            3 => {
+                use edgion_resources::constants::annotations::edgion::{
+                    CONTROLLER_CA_SOURCE, CONTROLLER_CA_SOURCE_CONFIG_MAP,
+                };
+                material.metadata.annotations = Some(std::collections::BTreeMap::from([(
+                    CONTROLLER_CA_SOURCE.into(),
+                    CONTROLLER_CA_SOURCE_CONFIG_MAP.into(),
+                )]));
+            }
+            4 => active.resolved_ca_certificates = None,
+            5 => active
+                .resolved_ca_certificates
+                .as_mut()
+                .unwrap()
+                .push(secret("surplus", &[("ca.crt", ca.cert.pem())])),
+            _ => owner.metadata.name = None,
+        }
+        assert!(
+            matches!(
+                EncryptedProbeTransport::build(&owner),
+                Err(ProbeError::InvalidTlsConfig)
+            ),
+            "case {case}"
+        );
+    }
+    let mut bare = valid.clone();
+    bare.metadata.namespace = None;
+    bare.spec
+        .health_check
+        .as_mut()
+        .unwrap()
+        .active
+        .as_mut()
+        .unwrap()
+        .resolved_ca_certificates
+        .as_mut()
+        .unwrap()[0]
+        .metadata
+        .namespace = None;
+    assert!(EncryptedProbeTransport::build(&bare).is_ok());
+    bare.metadata.namespace = Some("other".into());
+    assert!(matches!(
+        EncryptedProbeTransport::build(&bare),
         Err(ProbeError::InvalidTlsConfig)
     ));
 }
