@@ -1,6 +1,22 @@
 #![allow(clippy::field_reassign_with_default)]
 
 use super::*;
+use edgion_resources::plugin_configs::ExtProcConfig;
+
+impl ExtProc {
+    fn build(config: &ExtProcConfig) -> Option<Self> {
+        let owner = super::super::client::tests::actual_owner(config);
+        let prepared = edgion_resources::resources::refs::plugin_fields::PreparedPluginReferences::from_plugins(&owner);
+        let binding = prepared.bind(&owner).unwrap();
+        let entry = binding.request_entries().next().unwrap();
+        Self::build_with_identity(
+            &entry,
+            &edgion_common::link_sys_core::outbound_tls::outbound_global_default(),
+            "test/requestPlugins/#0".to_string(),
+        )
+    }
+}
+
 use crate::plugins::runtime::traits::session::MockPluginSession;
 use edgion_common::ext_proc::proto::external_processor_server::{ExternalProcessor, ExternalProcessorServer};
 use edgion_common::ext_proc::proto::{HeadersResponse, ProcessingMode as WireProcessingMode, ProcessingResponse};

@@ -1177,6 +1177,24 @@ impl PluginRuntime {
                         continue;
                     }
                 }
+                let ext_proc_defaults = matches!(entry.plugin, EdgionPlugin::ExtProc(_))
+                    .then(edgion_common::link_sys_core::outbound_tls::outbound_global_default);
+                if let Some(defaults) = ext_proc_defaults.as_deref() {
+                    let result = descriptor_entries
+                        .get(index)
+                        .ok_or_else(|| "ext_proc TLS configuration is invalid".to_string())
+                        .and_then(|entry| ExtProc::validate_tls_entry(entry, defaults));
+                    if result.is_err() {
+                        self.invalid_plugins.record_non_retainable("ExtProc");
+                        errors.push(format!(
+                            "requestPlugins[{index}] (ExtProc): {}",
+                            config_validation_errors[index]
+                                .as_deref()
+                                .unwrap_or("plugin construction failed")
+                        ));
+                        continue;
+                    }
+                }
                 let header_ca_field = if matches!(entry.plugin, EdgionPlugin::HeaderCertAuth(_)) {
                     match descriptor_entries
                         .get(index)
@@ -1434,14 +1452,18 @@ impl PluginRuntime {
 
                     let entry_scope = crate::plugins::common::entry_scope(resource_key, entry_alias.as_deref(), index);
 
-                    if let EdgionPlugin::ExtProc(config) = &entry.plugin {
+                    if let EdgionPlugin::ExtProc(_) = &entry.plugin {
                         let identity = format!(
                             "{resource_key}/requestPlugins/{}",
                             entry_alias
                                 .as_deref()
                                 .map_or_else(|| format!("#{index}"), str::to_string)
                         );
-                        match ExtProc::create_attached(config, identity) {
+                        match descriptor_entries
+                            .get(index)
+                            .zip(ext_proc_defaults.as_deref())
+                            .and_then(|(entry, defaults)| ExtProc::create_attached(entry, defaults, identity))
+                        {
                             Some((request, response)) => {
                                 let gated: Box<dyn RequestFilter> = match body_req {
                                     Some(req) => Box::new(BodyGatedRequestFilter::new(request, req)),

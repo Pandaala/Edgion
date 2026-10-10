@@ -1,4 +1,26 @@
 use super::*;
+use edgion_resources::plugin_configs::ExtProcConfig;
+use edgion_resources::resources::refs::plugin_fields::PreparedPluginReferences;
+
+pub(in super::super) fn actual_owner(config: &ExtProcConfig) -> edgion_resources::EdgionPlugins {
+    serde_json::from_value(
+        serde_json::json!({"metadata":{"name":"ext-proc-test","namespace":"default"},
+        "spec":{"requestPlugins":[{"type":"ExtProc","config":config}]}}),
+    )
+    .unwrap()
+}
+
+pub(in super::super) fn actual_client(config: &ExtProcConfig) -> Result<ExtProcClient, String> {
+    let owner = actual_owner(config);
+    let prepared = PreparedPluginReferences::from_plugins(&owner);
+    let binding = prepared.bind(&owner).unwrap();
+    let entry = binding.request_entries().next().unwrap();
+    ExtProcClient::new(
+        &entry,
+        &edgion_common::link_sys_core::outbound_tls::outbound_global_default(),
+    )
+}
+
 use edgion_common::ext_proc::proto::common_response::ResponseStatus;
 use edgion_common::ext_proc::proto::CommonResponse;
 use edgion_common::ext_proc::proto::{
@@ -80,7 +102,7 @@ fn unsupported_tls_identity_is_rejected_during_construction() {
             ..Default::default()
         };
         assert_eq!(
-            ExtProcClient::new(&config).err().expect("identity policy must fail"),
+            actual_client(&config).err().expect("identity policy must fail"),
             expected
         );
     }
@@ -243,7 +265,11 @@ async fn unsupported_tls_identity_compilation_seals_generic_rejection_for_both_f
                 ..Default::default()
             };
             let resource = EdgionPlugins {
-                metadata: Default::default(),
+                metadata: kube::core::ObjectMeta {
+                    name: Some("unsupported-identity".into()),
+                    namespace: Some("default".into()),
+                    ..Default::default()
+                },
                 spec: EdgionPluginsSpec {
                     current_status: None,
                     request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::ExtProc(config))]),
@@ -346,8 +372,8 @@ async fn equivalent_authorities_and_message_timeouts_share_target_runtime() {
     let mut second = first.clone();
     second.grpc_service.target = "example.COM:9000".to_string();
     second.grpc_service.timeout_ms = 500;
-    let first = ExtProcClient::new(&first).unwrap();
-    let second = ExtProcClient::new(&second).unwrap();
+    let first = actual_client(&first).unwrap();
+    let second = actual_client(&second).unwrap();
     assert!(Arc::ptr_eq(&first.runtime, &second.runtime));
 }
 
@@ -358,8 +384,8 @@ async fn distinct_effective_tls_policy_does_not_share_target_runtime() {
     verified.grpc_service.tls.outbound.verify = Some(true);
     let mut unverified = verified.clone();
     unverified.grpc_service.tls.outbound.verify = Some(false);
-    let verified = ExtProcClient::new(&verified).unwrap();
-    let unverified = ExtProcClient::new(&unverified).unwrap();
+    let verified = actual_client(&verified).unwrap();
+    let unverified = actual_client(&unverified).unwrap();
     assert!(!Arc::ptr_eq(&verified.runtime, &unverified.runtime));
 }
 
@@ -375,14 +401,14 @@ async fn inherited_tls_hot_change_changes_target_runtime_identity() {
     set_outbound_global_default(edgion_common::link_sys_core::outbound_tls::test_util::snapshot(
         OutboundTlsConfig::default(),
     ));
-    let inherited_verified = ExtProcClient::new(&tls_cfg()).unwrap();
+    let inherited_verified = actual_client(&tls_cfg()).unwrap();
     set_outbound_global_default(edgion_common::link_sys_core::outbound_tls::test_util::snapshot(
         OutboundTlsConfig {
             verify: false,
             ..Default::default()
         },
     ));
-    let inherited_unverified = ExtProcClient::new(&tls_cfg()).unwrap();
+    let inherited_unverified = actual_client(&tls_cfg()).unwrap();
     set_outbound_global_default(original);
     assert!(!Arc::ptr_eq(&inherited_verified.runtime, &inherited_unverified.runtime));
 }
@@ -392,7 +418,7 @@ async fn session_limit_is_bounded_and_raii_release_reopens_capacity() {
     let mut cfg = ExtProcConfig::default();
     cfg.grpc_service.target = "session-cap.example:9000".to_string();
     cfg.grpc_service.timeout_ms = 5;
-    let client = ExtProcClient::new(&cfg).unwrap();
+    let client = actual_client(&cfg).unwrap();
     let mut streams = Vec::new();
     for _ in 0..TARGET_SESSION_CAP {
         streams.push(client.open_stream().await.unwrap());
@@ -820,7 +846,7 @@ async fn final_phase_half_closes_request_stream() {
 async fn extproc_connector_built_for_system_verify() {
     install_test_crypto_provider();
     let cfg = tls_cfg();
-    assert!(ExtProcClient::new(&cfg).is_ok());
+    assert!(actual_client(&cfg).is_ok());
 }
 
 /// The plain-HTTP path (tls=false) must keep building a lazy channel exactly
@@ -829,7 +855,7 @@ async fn extproc_connector_built_for_system_verify() {
 async fn extproc_plain_http_channel_builds() {
     let mut cfg = tls_cfg();
     cfg.grpc_service.tls.enabled = false;
-    assert!(ExtProcClient::new(&cfg).is_ok());
+    assert!(actual_client(&cfg).is_ok());
 }
 
 /// verify=false must build the AcceptAllVerifier branch without error —
@@ -843,7 +869,7 @@ async fn extproc_verify_false_builds() {
         verify: Some(false),
         ..Default::default()
     };
-    let result = ExtProcClient::new(&cfg);
+    let result = actual_client(&cfg);
 
     assert!(
         result.is_ok(),
@@ -865,6 +891,11 @@ async fn extproc_custom_inline_ca_builds() {
     let mut data = std::collections::BTreeMap::new();
     data.insert("ca.crt".to_string(), k8s_openapi::ByteString(ca_pem));
     let ca_secret = k8s_openapi::api::core::v1::Secret {
+        metadata: kube::core::ObjectMeta {
+            name: Some("test-ca-secret".into()),
+            namespace: Some("default".into()),
+            ..Default::default()
+        },
         data: Some(data),
         type_: Some("kubernetes.io/tls".to_string()),
         ..Default::default()
@@ -887,7 +918,252 @@ async fn extproc_custom_inline_ca_builds() {
     cfg.grpc_service.tls.resolved_ca_certificates = Some(vec![ca_secret]);
 
     assert!(
-        ExtProcClient::new(&cfg).is_ok(),
+        actual_client(&cfg).is_ok(),
         "Custom CA via resolved_ca_certificates must build the REPLACE-root channel without error"
     );
+}
+
+fn bound_tls_owner() -> (edgion_resources::EdgionPlugins, Vec<u8>, Vec<u8>) {
+    let generated = rcgen::generate_simple_self_signed(vec!["processor.example".into()]).unwrap();
+    let pem = generated.cert.pem().into_bytes();
+    let key = generated.signing_key.serialize_pem().into_bytes();
+    let secret = |name: &str, data: Vec<(&str, Vec<u8>)>| k8s_openapi::api::core::v1::Secret {
+        metadata: kube::core::ObjectMeta {
+            name: Some(name.into()),
+            namespace: Some("default".into()),
+            resource_version: Some("7".into()),
+            ..Default::default()
+        },
+        data: Some(
+            data.into_iter()
+                .map(|(k, v)| (k.into(), k8s_openapi::ByteString(v)))
+                .collect(),
+        ),
+        ..Default::default()
+    };
+    let owner = serde_json::from_value(serde_json::json!({"metadata":{"name":"processor","uid":"owner"},"spec":{"requestPlugins":[{"type":"ExtProc","config":{
+        "grpcService":{"target":"bound-processor.example:9000","timeoutMs":200,"tls":{"enabled":true,"verify":true,
+        "validation":{"caCertificateRefs":[{"kind":"Secret","group":"core","name":"ca"}]},"clientCertificateRef":{"group":"core","name":"client"},
+        "resolvedCaCertificates":[secret("ca",vec![("ca.crt",pem.clone())])],"resolvedClientCertificate":secret("client",vec![("tls.crt",pem.clone()),("tls.key",key.clone())])}}
+    }}]}})).unwrap();
+    (owner, pem, key)
+}
+
+#[tokio::test]
+async fn actual_tls_identity_is_checked_before_target_cache_and_valid_reuse_is_preserved() {
+    use edgion_resources::constants::annotations::edgion::CONTROLLER_CA_SOURCE;
+    let defaults = edgion_common::link_sys_core::outbound_tls::test_util::snapshot(Default::default());
+    let (owner, pem, key) = bound_tls_owner();
+    let prepared = PreparedPluginReferences::from_plugins(&owner);
+    let binding = prepared.bind(&owner).unwrap();
+    let entry = binding.request_entries().next().unwrap();
+    let first = ExtProcClient::new(&entry, &defaults).unwrap();
+    let base = serde_json::to_value(&owner).unwrap();
+    for case in [
+        "matching",
+        "configmap",
+        "owner",
+        "owner-missing",
+        "owner-ns",
+        "ca-name",
+        "ca-missing-name",
+        "ca-ns",
+        "ca-missing-ns",
+        "ca-empty-ns",
+        "client-name",
+        "client-missing-name",
+        "client-ns",
+        "client-missing-ns",
+        "client-empty-ns",
+        "source",
+        "client-source",
+        "retarget",
+        "no-ref",
+        "no-ca",
+        "no-client",
+    ] {
+        let mut candidate = base.clone();
+        match case {
+            "owner" => candidate["metadata"]["name"] = serde_json::json!("bad/name"),
+            "owner-missing" => candidate["metadata"]["name"] = serde_json::Value::Null,
+            "owner-ns" => candidate["metadata"]["namespace"] = serde_json::json!(""),
+            _ => {}
+        }
+        let tls = &mut candidate["spec"]["requestPlugins"][0]["config"]["grpcService"]["tls"];
+        match case {
+            "configmap" => {
+                tls["validation"]["caCertificateRefs"][0]["kind"] = serde_json::json!("ConfigMap");
+                tls["resolvedCaCertificates"][0]["metadata"]["annotations"] =
+                    serde_json::json!({(CONTROLLER_CA_SOURCE):"ConfigMap"});
+            }
+            "ca-name" => tls["resolvedCaCertificates"][0]["metadata"]["name"] = serde_json::json!("other"),
+            "ca-missing-name" => tls["resolvedCaCertificates"][0]["metadata"]["name"] = serde_json::Value::Null,
+            "ca-ns" => tls["resolvedCaCertificates"][0]["metadata"]["namespace"] = serde_json::json!("other"),
+            "ca-missing-ns" => tls["resolvedCaCertificates"][0]["metadata"]["namespace"] = serde_json::Value::Null,
+            "ca-empty-ns" => tls["resolvedCaCertificates"][0]["metadata"]["namespace"] = serde_json::json!(""),
+            "client-name" => tls["resolvedClientCertificate"]["metadata"]["name"] = serde_json::json!("other"),
+            "client-missing-name" => tls["resolvedClientCertificate"]["metadata"]["name"] = serde_json::Value::Null,
+            "client-ns" => tls["resolvedClientCertificate"]["metadata"]["namespace"] = serde_json::json!("other"),
+            "client-missing-ns" => tls["resolvedClientCertificate"]["metadata"]["namespace"] = serde_json::Value::Null,
+            "client-empty-ns" => tls["resolvedClientCertificate"]["metadata"]["namespace"] = serde_json::json!(""),
+            "source" => {
+                tls["resolvedCaCertificates"][0]["metadata"]["annotations"] =
+                    serde_json::json!({(CONTROLLER_CA_SOURCE):"ConfigMap"})
+            }
+            "client-source" => {
+                tls["resolvedClientCertificate"]["metadata"]["annotations"] =
+                    serde_json::json!({(CONTROLLER_CA_SOURCE):"ConfigMap"})
+            }
+            "retarget" => tls["validation"]["caCertificateRefs"][0]["name"] = serde_json::json!("next"),
+            "no-ref" => tls["validation"]["caCertificateRefs"] = serde_json::Value::Null,
+            "no-ca" => tls["resolvedCaCertificates"] = serde_json::Value::Null,
+            "no-client" => tls["resolvedClientCertificate"] = serde_json::Value::Null,
+            _ => {}
+        }
+        let candidate: edgion_resources::EdgionPlugins = serde_json::from_value(candidate).unwrap();
+        let prepared = PreparedPluginReferences::from_plugins(&candidate);
+        let binding = prepared.bind(&candidate).unwrap();
+        let entry = binding.request_entries().next().unwrap();
+        if matches!(case, "matching" | "configmap") {
+            let proof = ExtProcClient::validate_tls_entry(&entry, &defaults).unwrap().unwrap();
+            let resolved = resolve_validated_outbound_tls(&proof, true, &defaults).unwrap();
+            let EffectiveCa::Custom(bundles) = resolved.ca else {
+                panic!("actual CA required")
+            };
+            assert_eq!(bundles, vec![pem.clone()]);
+            let (cert, private_key) = resolved.client_identity.unwrap();
+            assert_eq!(cert, pem);
+            assert_eq!(private_key.as_slice(), key.as_slice());
+            let next = ExtProcClient::new(&entry, &defaults).unwrap();
+            assert_eq!(Arc::ptr_eq(&first.runtime, &next.runtime), case == "matching");
+        } else {
+            assert_eq!(
+                ExtProcClient::validate_tls_entry(&entry, &defaults).err().as_deref(),
+                Some("ext_proc TLS configuration is invalid"),
+                "{case}"
+            );
+            assert_eq!(
+                ExtProcClient::new(&entry, &defaults).err().as_deref(),
+                Some("ext_proc TLS configuration is invalid"),
+                "{case}"
+            );
+        }
+    }
+    for case in ["owner-only", "retarget", "rotation", "restoration"] {
+        let mut candidate = base.clone();
+        candidate["metadata"]["name"] = serde_json::json!("another-owner");
+        candidate["spec"]["requestPlugins"][0]["config"]["grpcService"]["timeoutMs"] = serde_json::json!(901);
+        let tls = &mut candidate["spec"]["requestPlugins"][0]["config"]["grpcService"]["tls"];
+        if case == "retarget" {
+            tls["validation"]["caCertificateRefs"][0]["name"] = serde_json::json!("next");
+            tls["resolvedCaCertificates"][0]["metadata"]["name"] = serde_json::json!("next");
+        }
+        if case == "rotation" {
+            let next = rcgen::generate_simple_self_signed(vec!["rotated.example".into()]).unwrap();
+            tls["resolvedCaCertificates"][0]["data"]["ca.crt"] =
+                serde_json::to_value(k8s_openapi::ByteString(next.cert.pem().into_bytes())).unwrap();
+        }
+        let candidate: edgion_resources::EdgionPlugins = serde_json::from_value(candidate).unwrap();
+        let prepared = PreparedPluginReferences::from_plugins(&candidate);
+        let binding = prepared.bind(&candidate).unwrap();
+        let entry = binding.request_entries().next().unwrap();
+        let next = ExtProcClient::new(&entry, &defaults).unwrap();
+        assert_eq!(
+            Arc::ptr_eq(&first.runtime, &next.runtime),
+            matches!(case, "owner-only" | "restoration")
+        );
+        assert_eq!(next.timeout, Duration::from_millis(901));
+    }
+    assert_eq!(first.timeout, Duration::from_millis(200));
+}
+
+#[tokio::test]
+async fn captured_tls_generation_and_plaintext_inactivity_are_process_isolated() {
+    crate::test_subprocess::assert_in_subprocess_async(
+        "plugins::http::ext_proc::client::tests",
+        "captured_tls_generation_and_plaintext_inactivity_are_process_isolated",
+        "EDGION_EXTPROC_TLS_CAPTURE_CHILD",
+        "captured",
+        || async {
+            use edgion_common::link_sys_core::outbound_tls::{
+                outbound_global_default, set_outbound_global_default, test_util::snapshot,
+            };
+            use edgion_resources::resources::common::OutboundTlsConfig;
+            let previous = outbound_global_default();
+            let (mut owner, pem, key) = bound_tls_owner();
+            let EdgionPlugin::ExtProc(config) = &mut owner.spec.request_plugins.as_mut().unwrap()[0].plugin else {
+                panic!()
+            };
+            let tls = &mut config.grpc_service.tls;
+            let mut global = OutboundTlsConfig {
+                verify: true,
+                validation: tls.outbound.validation.take(),
+                client_certificate_ref: tls.outbound.client_certificate_ref.take(),
+                resolved_ca_certificates: tls.resolved_ca_certificates.take(),
+                resolved_client_certificate: tls.resolved_client_certificate.take(),
+            };
+            global.client_certificate_ref.as_mut().unwrap().namespace = Some("default".into());
+            for ca in global
+                .validation
+                .as_mut()
+                .unwrap()
+                .ca_certificate_refs
+                .as_mut()
+                .unwrap()
+            {
+                ca.namespace = Some("default".into());
+            }
+            let captured = snapshot(global.clone());
+            global.resolved_client_certificate.as_mut().unwrap().metadata.name = Some("wrong".into());
+            let invalid = snapshot(global);
+            set_outbound_global_default(invalid.clone());
+            let prepared = PreparedPluginReferences::from_plugins(&owner);
+            let binding = prepared.bind(&owner).unwrap();
+            let entry = binding.request_entries().next().unwrap();
+            let proof = ExtProcClient::validate_tls_entry(&entry, &captured).unwrap().unwrap();
+            let resolved = resolve_validated_outbound_tls(&proof, true, &captured).unwrap();
+            let EffectiveCa::Custom(bundles) = resolved.ca else {
+                panic!("captured CA")
+            };
+            assert_eq!(bundles, vec![pem.clone()]);
+            let (cert, private_key) = resolved.client_identity.unwrap();
+            assert_eq!(cert, pem);
+            assert_eq!(private_key.as_slice(), key.as_slice());
+            assert!(ExtProcClient::new(&entry, &captured).is_ok());
+            set_outbound_global_default(captured);
+            assert!(ExtProcClient::new(&entry, &invalid).is_err());
+            let (mut local, _, _) = bound_tls_owner();
+            {
+                let prepared = PreparedPluginReferences::from_plugins(&local);
+                let binding = prepared.bind(&local).unwrap();
+                assert!(ExtProcClient::new(&binding.request_entries().next().unwrap(), &invalid).is_ok());
+            }
+            let EdgionPlugin::ExtProc(config) = &mut local.spec.request_plugins.as_mut().unwrap()[0].plugin else {
+                panic!()
+            };
+            config.grpc_service.tls.enabled = false;
+            config.grpc_service.tls.outbound.validation.as_mut().unwrap().hostname = Some("unsupported.example".into());
+            config
+                .grpc_service
+                .tls
+                .resolved_client_certificate
+                .as_mut()
+                .unwrap()
+                .metadata
+                .name = None;
+            {
+                let prepared = PreparedPluginReferences::from_plugins(&local);
+                let binding = prepared.bind(&local).unwrap();
+                let entry = binding.request_entries().next().unwrap();
+                assert!(ExtProcClient::validate_tls_entry(&entry, &invalid).unwrap().is_none());
+                assert!(ExtProcClient::new(&entry, &invalid).is_ok());
+            }
+            local.metadata.name = None;
+            let prepared = PreparedPluginReferences::from_plugins(&local);
+            let binding = prepared.bind(&local).unwrap();
+            assert!(ExtProcClient::new(&binding.request_entries().next().unwrap(), &invalid).is_err());
+            set_outbound_global_default(previous);
+        },
+    )
+    .await;
 }

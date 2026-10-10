@@ -77,20 +77,6 @@ impl AttachedExtProc {
     }
 
     #[cfg(test)]
-    pub(crate) fn test_lazy() -> Self {
-        use edgion_resources::plugin_configs::ExtProcConfig;
-
-        let mut config = ExtProcConfig::default();
-        config.grpc_service.target = "logging.example:9000".to_string();
-        Self::new(
-            ExtProcClient::new(&config).expect("test target must build lazily"),
-            config.processing_mode,
-            false,
-            Arc::from([]),
-        )
-    }
-
-    #[cfg(test)]
     pub(crate) fn test_state(&self) -> (&'static str, &'static str, bool) {
         let summary = self.summary.lock();
         let finished = matches!(*self.state.lock(), StreamState::Finished);

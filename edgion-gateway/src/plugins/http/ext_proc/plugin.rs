@@ -21,9 +21,12 @@ use edgion_common::ext_proc::proto::{
     body_mutation, common_response::ResponseStatus, processing_request, processing_response, CommonResponse, HttpBody,
     HttpHeaders, ImmediateResponse, ProcessingRequest,
 };
+use edgion_common::link_sys_core::outbound_tls::{GlobalOutboundTlsSnapshot, ValidatedLocalTlsSelection};
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::plugin_configs::{ExtProcConfig, ProcessingMode};
+use edgion_resources::plugin_configs::ProcessingMode;
+use edgion_resources::resources::refs::plugin_fields::BoundPluginEntry;
 use edgion_resources::EdgionErrorCode;
+use edgion_resources::EdgionPlugin;
 
 const PLUGIN_NAME: &str = "ExtProc";
 
@@ -71,8 +74,22 @@ pub struct ExtProc {
 }
 
 impl ExtProc {
-    fn build_with_identity(config: &ExtProcConfig, identity: String) -> Option<Self> {
-        match ExtProcClient::new(config) {
+    pub(crate) fn validate_tls_entry<'a>(
+        entry: &'a BoundPluginEntry<'_>,
+        defaults: &GlobalOutboundTlsSnapshot,
+    ) -> Result<Option<ValidatedLocalTlsSelection<'a>>, String> {
+        ExtProcClient::validate_tls_entry(entry, defaults)
+    }
+
+    fn build_with_identity(
+        entry: &BoundPluginEntry<'_>,
+        defaults: &GlobalOutboundTlsSnapshot,
+        identity: String,
+    ) -> Option<Self> {
+        let EdgionPlugin::ExtProc(config) = entry.config() else {
+            return None;
+        };
+        match ExtProcClient::new(entry, defaults) {
             Ok(client) => Some(ExtProc {
                 name: PLUGIN_NAME.to_string(),
                 identity,
@@ -96,18 +113,14 @@ impl ExtProc {
         }
     }
 
-    #[cfg(test)]
-    fn build(config: &ExtProcConfig) -> Option<Self> {
-        Self::build_with_identity(config, "test/requestPlugins/#0".to_string())
-    }
-
     /// Compile one request entry into its request owner and internal response
     /// companion. Both carry the same immutable identity and target runtime.
     pub fn create_attached(
-        config: &ExtProcConfig,
+        entry: &BoundPluginEntry<'_>,
+        defaults: &GlobalOutboundTlsSnapshot,
         identity: String,
     ) -> Option<(Box<dyn RequestFilter>, Box<dyn UpstreamResponse>)> {
-        Self::build_with_identity(config, identity).map(|plugin| {
+        Self::build_with_identity(entry, defaults, identity).map(|plugin| {
             let companion = plugin.clone();
             (
                 Box::new(plugin) as Box<dyn RequestFilter>,

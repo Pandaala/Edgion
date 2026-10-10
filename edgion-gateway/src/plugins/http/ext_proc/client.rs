@@ -5,7 +5,7 @@
 //! entry retains one logical stream across its request and response phases.
 //!
 //! TLS is routed through the shared outbound resolver
-//! ([`edgion_common::link_sys_core::outbound_tls::resolve_outbound_tls`]) so the
+//! ([`edgion_common::link_sys_core::outbound_tls::resolve_validated_outbound_tls`]) so the
 //! ext_proc dial has full parity with the other outbound callers: verify toggle
 //! (gated), custom-CA REPLACE, and client mTLS identity. Because tonic's
 //! `ClientTlsConfig` exposes none of those knobs, the TLS path is built as a
@@ -18,8 +18,12 @@ use std::time::Duration;
 
 use edgion_common::ext_proc::proto::external_processor_client::ExternalProcessorClient;
 use edgion_common::ext_proc::proto::{processing_response, ProcessingRequest, ProcessingResponse};
-use edgion_common::link_sys_core::outbound_tls::{resolve_outbound_tls, EffectiveCa, ResolvedOutboundTls};
-use edgion_resources::plugin_configs::ExtProcConfig;
+use edgion_common::link_sys_core::outbound_tls::{
+    resolve_validated_outbound_tls, validate_active_tls_inheritance, validate_local_tls_selection, EffectiveCa,
+    GlobalOutboundTlsSnapshot, ResolvedOutboundTls, ValidatedLocalTlsSelection,
+};
+use edgion_resources::resources::refs::plugin_fields::BoundPluginEntry;
+use edgion_resources::EdgionPlugin;
 use hyper_util::rt::TokioIo;
 use parking_lot::Mutex;
 use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer, ServerName};
@@ -121,35 +125,53 @@ pub struct ExtProcClient {
 }
 
 impl ExtProcClient {
-    /// Build a lazily-connecting client from the plugin's full config.
+    /// Check the actual source and active TLS material before either cache is used.
+    pub(super) fn validate_tls_entry<'a>(
+        entry: &'a BoundPluginEntry<'_>,
+        defaults: &GlobalOutboundTlsSnapshot,
+    ) -> Result<Option<ValidatedLocalTlsSelection<'a>>, String> {
+        let error = || "ext_proc TLS configuration is invalid".to_string();
+        let EdgionPlugin::ExtProc(config) = entry.config() else {
+            return Err(error());
+        };
+        entry.owner_namespace().map_err(|_| error())?;
+        if !config.grpc_service.tls.enabled {
+            return Ok(None);
+        }
+        let selection = entry.outbound_tls_selection().map_err(|_| error())?;
+        let proof = validate_local_tls_selection(selection).map_err(|_| error())?;
+        if proof.active_field().is_none() {
+            return Err(error());
+        }
+        validate_active_tls_inheritance(&proof, defaults).map_err(|_| error())?;
+        Ok(Some(proof))
+    }
+
+    /// Build a lazily-connecting client from the actual plugin entry and captured TLS defaults.
     ///
     /// Returns `Err` for a structurally invalid target or for any TLS
     /// configuration error surfaced by the shared outbound resolver (missing CA,
     /// invalid client identity, provider-cannot-disable-verify, ...). It never
     /// blocks on the network — the actual connection is established on first use.
     /// The config-layer `validation_error` already gates target/timeout, so a
-    /// build failure here is unexpected and `ExtProc::build` fails the plugin
+    /// build failure here is unexpected and `ExtProc::create_attached` fails the plugin
     /// closed (drops it). That fail-closed behavior is intentional for ext_proc;
     /// do NOT add a secure fallback.
-    pub fn new(cfg: &ExtProcConfig) -> Result<Self, String> {
+    pub fn new(entry: &BoundPluginEntry<'_>, defaults: &GlobalOutboundTlsSnapshot) -> Result<Self, String> {
+        let EdgionPlugin::ExtProc(cfg) = entry.config() else {
+            return Err("ext_proc TLS configuration is invalid".into());
+        };
         let grpc = &cfg.grpc_service;
         let timeout = Duration::from_millis(grpc.timeout_ms);
         let (host, port) = split_authority(&grpc.target)?;
         let normalized_authority = normalized_authority(&host, port);
-        let resolved_tls = if grpc.tls.enabled {
-            Some(
-                resolve_outbound_tls(
-                    &grpc.tls.outbound,
-                    grpc.tls.resolved_ca_certificates.as_deref(),
-                    grpc.tls.resolved_client_certificate.as_ref(),
-                    true,
-                    "ExtProc",
-                )
-                .map_err(|_| "ext_proc TLS configuration is invalid".to_string())?,
-            )
-        } else {
-            None
-        };
+        let resolved_tls = Self::validate_tls_entry(entry, defaults)?
+            .as_ref()
+            .map(|proof| {
+                resolve_validated_outbound_tls(proof, true, defaults)
+                    .map_err(|_| "ext_proc TLS configuration is invalid".to_string())
+            })
+            .transpose()?;
         if let Some(resolved) = resolved_tls.as_ref() {
             validate_effective_tls_capabilities(resolved)?;
         }
@@ -674,4 +696,4 @@ impl rustls::client::danger::ServerCertVerifier for AcceptAllVerifier {
 
 #[cfg(test)]
 #[path = "../../../../tests/unit/plugins/http/ext_proc/client_test.rs"]
-mod tests;
+pub(super) mod tests;

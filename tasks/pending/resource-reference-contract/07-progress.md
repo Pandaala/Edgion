@@ -179,8 +179,27 @@
   passes LDAP 28/28; unchanged-phase reuse is explicit in verification-final.json
   under `tmp/resource-reference-contract/r11c2-verification-20261010/`.
   All fourteen refreshed root gates pass without warnings (check 14.468 seconds,
-  Clippy 21.788 seconds); exact six-file commit verification is pending. No push
-  or fresh live/conformance acceptance is claimed. ExtProc and Wasm remain.
+  Clippy 21.788 seconds). Committed locally as
+  f8ea3897cd42be879154a4285b66e12b3ab76e81 after both final reviews; all six
+  committed blobs match the manifest. No push or fresh live/conformance acceptance
+  is claimed. ExtProc and Wasm remain.
+- R11c.3 ExtProc actual-entry TLS binding at f8ea3897 passes dual independent
+  Astra plan, final static and execution review. Source/material checks precede
+  both entry and target-cache reuse, and request/response companions share one
+  captured global snapshot. TLS-disabled transport ignores inactive TLS policy;
+  capability checks, fingerprints, lazy dial and streaming semantics remain intact.
+  Focused verification passes 724 distinct cases (626 unit and 98 doctests),
+  retaining ten ignored docs, all 9741 prior IDs among 9744, and 127 scoped old
+  identities/attributes. The approved caller/helper migrations and two metadata
+  fixtures preserve old assertions. The initial new-test fingerprint expectation
+  failure remains recorded; r2 preserves the existing full validation fingerprint
+  and distinguishes owner/timeout reuse from CA kind/name retarget or rotation.
+  Both new companion assertions use the async collection. Evidence and explicit
+  unchanged Resources/Common reuse are under
+  `tmp/resource-reference-contract/r11c3-verification-20261010/`.
+  All fourteen root gates pass without warnings (check 57.583 seconds, Clippy
+  60.761 seconds); exact ten-file commit verification is pending. No push or
+  fresh live/conformance acceptance is claimed. Wasm is the remaining C2 family.
 - F1's Gateway EdgionBackend and Common LinkSys non-TLS auth material-pairing
   candidates are closed by R9a/R9b. Existing Controller guards remain; these are
   consumer proof boundaries, not demonstrated ingress exploits. Generated CredentialSource operation identity is closed by R8f.1/R8f.2

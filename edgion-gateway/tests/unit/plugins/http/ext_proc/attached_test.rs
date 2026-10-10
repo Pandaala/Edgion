@@ -22,14 +22,19 @@ fn override_owner(base: ConfigProcessingMode, enabled: bool, allowed: Vec<Config
     let mut config = ExtProcConfig::default();
     config.grpc_service.target = "override.example:9000".to_string();
     let allowed = allowed.iter().map(ConfigProcessingMode::normalized_override).collect();
-    AttachedExtProc::new(ExtProcClient::new(&config).unwrap(), base, enabled, allowed)
+    AttachedExtProc::new(
+        super::super::client::tests::actual_client(&config).unwrap(),
+        base,
+        enabled,
+        allowed,
+    )
 }
 
 #[tokio::test]
 async fn shared_override_modes_keep_request_state_independent() {
     let mut config = ExtProcConfig::default();
     config.grpc_service.target = "shared-override.example:9000".to_string();
-    let client = ExtProcClient::new(&config).unwrap();
+    let client = super::super::client::tests::actual_client(&config).unwrap();
     let base = ConfigProcessingMode {
         response_body_mode: BodySendMode::Streamed,
         ..Default::default()
@@ -73,7 +78,7 @@ async fn response_only_owner_stays_lazy_until_a_phase_exchange() {
     let mut config = ExtProcConfig::default();
     config.grpc_service.target = "lazy.example:9000".to_string();
     let owner = AttachedExtProc::new(
-        ExtProcClient::new(&config).unwrap(),
+        super::super::client::tests::actual_client(&config).unwrap(),
         config.processing_mode,
         false,
         Arc::from([]),
@@ -94,7 +99,7 @@ async fn duplicate_and_regressed_phases_are_rejected_before_network_work() {
     let mut config = ExtProcConfig::default();
     config.grpc_service.target = "phase.example:9000".to_string();
     let owner = AttachedExtProc::new(
-        ExtProcClient::new(&config).unwrap(),
+        super::super::client::tests::actual_client(&config).unwrap(),
         config.processing_mode,
         false,
         Arc::from([]),
@@ -413,4 +418,19 @@ pub(crate) fn test_body_owner(response_body: bool) -> AttachedExtProc {
         ..Default::default()
     };
     override_owner(base, false, vec![])
+}
+
+impl AttachedExtProc {
+    pub(crate) fn test_lazy() -> Self {
+        use edgion_resources::plugin_configs::ExtProcConfig;
+
+        let mut config = ExtProcConfig::default();
+        config.grpc_service.target = "logging.example:9000".to_string();
+        Self::new(
+            super::super::client::tests::actual_client(&config).expect("test target must build lazily"),
+            config.processing_mode,
+            false,
+            Arc::from([]),
+        )
+    }
 }
