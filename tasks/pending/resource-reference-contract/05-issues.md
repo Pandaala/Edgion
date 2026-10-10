@@ -1,22 +1,26 @@
 # Design and verification issues
 
-## Current disposition (2026-10-10)
+## Current disposition (2026-10-11)
 
-- S-R1-01 is source-closed by R12a, committed as
-  `f6b71a5217ce868e198b315ced6b8cff4c6f1b45` after independent reviews and gates.
-- F1-COV-R1-01 is source/API-closed by R12b, committed as
-  `6b5adb0ae6ef40b890c4ff95247c762d13697a62`; all twenty-two committed blobs match
-  `tmp/resource-reference-contract/r12b-root-verification-20261010/committed-blobs.json`.
-- R13 documentation reconciliation and affected final whole-contract cross-checks
-  remain in progress. Fresh F2 admission (including long object names), dynamic
-  traffic/revocation and full Standard conformance remain open. Source/unit PASS
-  does not close those gates or the original alias issue.
-- EndpointSlice Controller/Gateway fallbacks remain deliberately distinct. No
-  harmonization or native-conformance claim follows from their preservation.
+- S-R1-01 is source-closed by R12a (`f6b71a52`); F1-COV-R1-01 is
+  source/API-closed by R12b (`6b5adb0a`). R13 documentation reconciliation
+  committed as `0fdd67f4`, with both affected final cross-checks passed.
+- A Redis integration run exposed mixed route/policy generations during local
+  publication, not a demonstrated counter reset. The uncommitted r6 correction
+  has dual static/execution approval, 635 distinct executed passes and fourteen
+  warning-free root checks. Existing physical manager reachability is preserved;
+  independent resource updates retain eventual convergence.
+- Original Redis live verification passed 5/5, and RetainedListenerHandles
+  passed with fresh binaries; both runners exited zero and completed cleanup.
+  The correction's local commit, fresh F2 admission, traffic/revocation and full
+  Standard conformance remain open. Registry connectivity blocked previous
+  image builds before compilation; historical images are not current evidence.
+- EndpointSlice Controller/Gateway fallbacks remain deliberately distinct.
+  Keep the original alias issue until full acceptance; source/unit PASS alone
+  does not close live gates.
 
-See [07-progress.md](07-progress.md) for current evidence and limits. Earlier
-capacity/design decisions and failed checks below are historical; accepted choices
-in [00-context.md](00-context.md) supersede their former implementation gates.
+See [07-progress.md](07-progress.md) for current evidence and limits. Historical
+records below retain their original revision scope.
 
 ## Historical design and verification record
 

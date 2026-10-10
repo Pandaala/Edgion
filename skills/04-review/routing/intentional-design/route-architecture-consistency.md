@@ -79,25 +79,32 @@ types to ensure architectural alignment.
 
 ## Proxy Route Loading (Hot Path)
 
-All five protocols follow the same pattern: load per-listener route table → match.
+All five protocols match per-listener tables. HTTP/gRPC capture tables with
+policy and index in one publication; L4 loads its retained manager snapshot.
 
 | Protocol | Proxy struct | Route load | Match call |
 |----------|-------------|------------|------------|
 | **TCP** | `EdgionTcpProxy` | `self.tcp_route_manager.load_route_table()` | `route_table.match_route()` → first |
 | **UDP** | `EdgionUdpProxy` | `self.udp_route_manager.load_route_table()` for a new client session | `route_table.match_route()` → first; established sessions use their pinned upstream |
 | **TLS** | `EdgionTlsTcpProxy` | `self.tls_route_manager.load_route_table()` | `route_table.match_route(sni)` |
-| **HTTP** | `EdgionHttpProxy` | `self.http_route_manager.load_route_table()` | `port_routes.match_route(session, ctx, &gateway_infos)` |
-| **gRPC** | `EdgionHttpProxy` (shared) | `self.grpc_route_manager.load_route_table()` | `try_match_grpc_route(&grpc_routes, session, ctx, &gateway_infos)` |
+| **HTTP** | `EdgionHttpProxy` | captured publication `http_routes(&self.http_route_manager)` | `port_routes.match_route(session, ctx, &gateway_infos)` |
+| **gRPC** | `EdgionHttpProxy` (shared) | captured publication `grpc_routes(&self.grpc_route_manager)` | `try_match_grpc_route(&grpc_routes, session, ctx, &gateway_infos)` |
 
 All proxy instances hold an `Arc` to the per-listener manager selected during
 listener construction. HTTP and gRPC share `EdgionHttpProxy`, which retains both
-manager handles. The request path only loads the current inner `ArcSwap` snapshot;
-it does not resolve a manager through the global `DashMap`.
+manager handles as immutable identities. Each HTTP/gRPC accessor compares its
+captured Weak manager token with the physical handle and exposes the captured
+table, or the prebuilt empty table for that family on mismatch. HTTP/gRPC never
+reload the manager table during a request. L4 loads the current inner `ArcSwap`
+snapshot. No proxy resolves a manager through the global `DashMap` on its hot path.
 
 When a listener registry entry is removed, rebuild clears the old manager before
 dropping it from `by_listener`. A proxy that still retains that `Arc` therefore sees
-an empty snapshot. Later recreation installs a distinct manager, so it cannot revive
-the removed generation through the old handle.
+an empty snapshot on later L4 loads. HTTP/gRPC captures after retirement cannot
+borrow the new manager's table through the old handle. Already captured HTTP/gRPC
+requests may finish with their coherent old tables and scopes. Later recreation
+installs a distinct manager, so it cannot revive the retired family through the
+old handle; another family that remains referenced retains its own reachability.
 
 Live recovery after Gateway deletion/recreation is outside the
 [supported lifecycle](../../listeners/intentional-design/gateway-recreation-requires-restart.md)
@@ -169,7 +176,7 @@ These differences exist by design and do not need unification:
 
 1. **TLS has hostname (SNI) matching within per-listener tables** — combines listener + hostname dimension; TCP/UDP have no hostname dimension
 2. **HTTP and gRPC have multi-level hostname matching** — exact → wildcard → catch-all within per-listener tables; gRPC continues through broader groups after full-predicate failures. See [the gRPC regression guard](../regression-guards/grpc-method-matching-and-precedence.md).
-3. **HTTP and gRPC share one proxy** — `EdgionHttpProxy` retains separate HTTP and gRPC per-listener manager handles; the three L4 proxies each retain their own family-specific handle
+3. **HTTP and gRPC share one proxy** — `EdgionHttpProxy` retains separate manager identities and reads tables from its captured coherent publication; the three L4 proxies load their retained family-specific manager snapshots
 4. **TLS has dual logging (global + per-listener)** — historical compatibility
 5. **gRPC has `route_units_cache` with `Mutex`** — needed because gRPC pre-parses routes into `GrpcRouteRuleUnit` units; HTTP parses inline during route table build
 6. **HTTP has adaptive AI contribution publication** in addition to the plugin-admission publication shared with gRPC. Backend traffic and load-balancing policy are independently owned by typed `EdgionBackendTrafficPolicy` through `BackendTrafficPolicyStore`; no route family owns an LB-policy synchronization lifecycle.

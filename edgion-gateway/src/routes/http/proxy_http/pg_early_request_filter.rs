@@ -27,28 +27,19 @@ async fn initialize_request_ids_with_publisher(
     ctx: &mut EdgionHttpContext,
     publisher: &crate::plugins::publication::PluginPublisher,
 ) -> pingora_core::Result<()> {
+    if ctx.listener_publication().is_none() {
+        ctx.capture_listener_publication(publisher.snapshot().http_listener(&proxy.listener_key));
+    }
     if ctx.global_request_ids_initialized {
         return Ok(());
     }
     ctx.request_info.trace_id.initialize(&session.req_header().headers);
     ctx.request_info.trace_id.reconcile_request(session.req_header_mut());
     super::pg_request_filter::capture_tls_metadata(session, ctx);
-    if ctx.plugin_scope().is_none() {
-        if let Some(scope) = publisher.snapshot().unique_gateway(&proxy.listener_key) {
-            ctx.capture_plugin_scope(scope);
-        }
-    }
     initialize_scoped_request_ids(session, ctx).await
 }
 
 pub(super) fn capture_matched_scope(ctx: &mut EdgionHttpContext) -> pingora_core::Result<()> {
-    capture_matched_scope_with_publisher(ctx, crate::plugins::publication::global_publisher())
-}
-
-fn capture_matched_scope_with_publisher(
-    ctx: &mut EdgionHttpContext,
-    publisher: &crate::plugins::publication::PluginPublisher,
-) -> pingora_core::Result<()> {
     let gateway = ctx.gateway_info.as_ref().ok_or_else(invalid_request_id_attachment)?;
     let key = gateway.gateway_key();
     if let Some(scope) = ctx.plugin_scope() {
@@ -57,9 +48,9 @@ fn capture_matched_scope_with_publisher(
         }
         return Ok(());
     }
-    let scope = publisher.snapshot().gateway(key).ok_or_else(unavailable_policy)?;
-    ctx.capture_plugin_scope(scope);
-    Ok(())
+    ctx.capture_matched_plugin_scope()
+        .then_some(())
+        .ok_or_else(unavailable_policy)
 }
 
 fn unavailable_policy() -> Box<pingora_core::Error> {

@@ -6,7 +6,8 @@ mod views;
 
 pub(crate) use publisher::{global_publisher, same_source, PluginPublisher};
 pub(crate) use views::{
-    ConnectionView, GatewayScope, PluginPublication, PluginScope, PublicationInventory, PublicationStats,
+    ConnectionView, GatewayScope, HttpListenerPublication, PluginPublication, PluginScope, PublicationInventory,
+    PublicationStats,
 };
 
 #[cfg(test)]

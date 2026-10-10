@@ -1,4 +1,5 @@
 use super::*;
+use edgion_resources::ResourceMeta;
 use http::header::CONTENT_LENGTH;
 use http::StatusCode;
 use pingora_core::apps::{HttpPersistentSettings, ReusedHttpStream};
@@ -472,7 +473,7 @@ async fn deferred_gateway_owner_pins_hits_and_misses_when_first_known() {
     assert!(ctx.plugin_scope().is_none());
     assert!(!session.req_header().headers.contains_key("x-gateway-first-id"));
     ctx.gateway_info = Some(id_gateway(&keys));
-    capture_matched_scope_with_publisher(&mut ctx, store.publisher()).unwrap();
+    capture_matched_scope(&mut ctx).unwrap();
     initialize_gateway_request_ids(&mut session, &mut ctx).await.unwrap();
     let first = ctx.resolved_gateway_plugins().unwrap()[0].clone();
     assert!(session.req_header().headers.contains_key("x-gateway-first-id"));
@@ -503,7 +504,534 @@ async fn deferred_gateway_owner_pins_hits_and_misses_when_first_known() {
         None,
     )));
     assert!(
-        capture_matched_scope_with_publisher(&mut ctx, store.publisher()).is_err(),
+        capture_matched_scope(&mut ctx).is_err(),
         "a different matched Gateway cannot inherit the captured policy"
     );
+}
+
+fn coherent_grpc_route(generation: &str) -> Arc<edgion_resources::GRPCRoute> {
+    let mut route: edgion_resources::GRPCRoute = crate::test_current_status::from_value(serde_json::json!({
+                    "metadata":{"namespace":"coherent","name":"grpc","annotations":{"edgion.io/sync-version":generation}},
+                    "spec":{"resolvedStatusController":"edgion.io/gateway-controller","parentRefs":[{"name":"gateway"}],
+                        "resolvedListeners":["0.0.0.0:18089/HTTP"],"hostnames":["coherent.example.com"],
+                        "rules":[{"matches":[{"method":{"service":"svc","method":"Call"}}],"backendRefs":[{"name":"backend","port":8080}]}]}
+                })).unwrap();
+    route.pre_parse();
+    Arc::new(route)
+}
+
+fn coherent_gateway() -> edgion_resources::Gateway {
+    crate::test_current_status::from_value(serde_json::json!({
+        "metadata":{"namespace":"coherent", "name":"gateway"},
+        "spec":{"gatewayClassName":"coherent", "listeners":[{"name":"web", "protocol":"HTTP", "port":18089}]}
+    }))
+    .unwrap()
+}
+
+fn coherent_route(generation: &str) -> Arc<edgion_resources::HTTPRoute> {
+    let mut route: edgion_resources::HTTPRoute = crate::test_current_status::from_value(serde_json::json!({
+        "metadata":{"namespace":"coherent", "name":"route", "annotations":{"edgion.io/sync-version":generation}},
+        "spec":{"resolvedStatusController":"edgion.io/gateway-controller", "parentRefs":[{"name":"gateway"}],
+            "resolvedListeners":["0.0.0.0:18089/HTTP"], "hostnames":["coherent.example.com"],
+            "rules":[{"matches":[{"path":{"type":"PathPrefix","value":"/"}}],"filters":[{"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"policy"}}],"backendRefs":[{"name":"backend","port":8080}]}]}
+    })).unwrap();
+    route.pre_parse();
+    Arc::new(route)
+}
+
+fn coherent_plugin(generation: &str) -> Arc<edgion_resources::EdgionPlugins> {
+    Arc::new(serde_json::from_value(serde_json::json!({
+        "metadata":{"namespace":"coherent","name":"policy"},
+        "spec":{"requestPlugins":[{"type":"RequestHeaderModifier","config":{"set":[{"name":"x-generation","value":generation}]}}]}
+    })).unwrap())
+}
+
+fn install_coherent_gateway() {
+    use std::collections::HashMap;
+    crate::runtime::store::get_listener_gateway_info_store().rebuild(&[coherent_gateway()]);
+    let publisher = crate::plugins::publication::global_publisher();
+    publisher.replace_http_plugins(HashMap::from([("coherent/policy".into(), coherent_plugin("1"))]));
+    let class = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"coherent"}, "spec":{"controllerName":"edgion.io/gateway-controller"}
+    }))
+    .unwrap();
+    publisher.replace_gateway_classes(HashMap::from([("coherent".into(), Arc::new(class))]));
+    publisher.replace_gateways(HashMap::from([(
+        "coherent/gateway".into(),
+        crate::plugins::publication::inputs::GatewayInput::from_gateway(&coherent_gateway()),
+    )]));
+}
+
+#[tokio::test]
+async fn early_capture_and_real_route_commits_keep_exact_admission_generation() {
+    const NAME: &str = "early_capture_and_real_route_commits_keep_exact_admission_generation";
+    crate::test_subprocess::assert_in_subprocess_async(
+        "routes::http::proxy_http::pg_early_request_filter::tests",
+        NAME,
+        "EDGION_COHERENT_ROUTE_CHILD",
+        NAME,
+        || async {
+            use edgion_common::conf_sync::traits::ConfHandler;
+            use std::collections::{HashMap, HashSet};
+            let publisher = crate::plugins::publication::global_publisher();
+            let manager = crate::routes::http::GlobalHttpRouteManagers::new();
+            install_coherent_gateway();
+            let first = coherent_route("1");
+            manager.full_set(&HashMap::from([("coherent/route".into(), first.clone())]));
+            let mut proxy = id_proxy();
+            proxy.http_route_manager = manager.get_or_create_listener_manager(&proxy.listener_key);
+            let mut session = session_from_request(b"GET / HTTP/1.1\r\nHost: coherent.example.com\r\n\r\n").await;
+            let mut old = EdgionHttpContext::default();
+            initialize_request_ids(&proxy, &mut session, &mut old).await.unwrap();
+            old.request_info.hostname = crate::ctx::NormalizedHostname::new("coherent.example.com");
+            old.request_info.normalized_current_path = "/".into();
+            let view = old.listener_publication().unwrap().clone();
+            let before = view
+                .http_routes(&proxy.http_route_manager)
+                .match_route(&mut session, &old, &view.index)
+                .unwrap();
+            let owner = view.gateway("coherent/gateway").unwrap();
+            assert!(Arc::ptr_eq(before.route_unit.route.as_ref().unwrap(), &first));
+            assert!(owner.scope.ai_rule(&first, 0) && owner.scope.graphql_rule(&first, 0));
+
+            // Plugin publication precedes the dependent Route, as in the live failure.
+            publisher.update_http_plugins(
+                HashMap::new(),
+                HashMap::from([("coherent/policy".into(), coherent_plugin("2"))]),
+                &HashSet::new(),
+            );
+            let intermediate = publisher.snapshot().http_listener(&proxy.listener_key);
+            let intermediate_owner = intermediate.gateway("coherent/gateway").unwrap();
+            let intermediate_match = intermediate
+                .http_routes(&proxy.http_route_manager)
+                .match_route(&mut session, &old, &intermediate.index)
+                .unwrap();
+            assert!(Arc::ptr_eq(
+                intermediate_match.route_unit.route.as_ref().unwrap(),
+                &first
+            ));
+            assert!(intermediate_owner.scope.ai_rule(&first, 0) && intermediate_owner.scope.graphql_rule(&first, 0));
+            assert!(!Arc::ptr_eq(
+                &owner.scope.http("coherent/policy").unwrap(),
+                &intermediate_owner.scope.http("coherent/policy").unwrap()
+            ));
+            drop(intermediate);
+            let second = coherent_route("2");
+            manager.partial_update(
+                HashMap::new(),
+                HashMap::from([("coherent/route".into(), second.clone())]),
+                HashSet::new(),
+            );
+            initialize_request_ids(&proxy, &mut session, &mut old).await.unwrap();
+            assert!(Arc::ptr_eq(old.listener_publication().unwrap(), &view));
+            let retained = view
+                .http_routes(&proxy.http_route_manager)
+                .match_route(&mut session, &old, &view.index)
+                .unwrap();
+            assert!(Arc::ptr_eq(retained.route_unit.route.as_ref().unwrap(), &first));
+            let fresh = publisher.snapshot().http_listener(&proxy.listener_key);
+            let selected = fresh
+                .http_routes(&proxy.http_route_manager)
+                .match_route(&mut session, &old, &fresh.index)
+                .unwrap();
+            assert!(Arc::ptr_eq(selected.route_unit.route.as_ref().unwrap(), &second));
+            let next_owner = fresh.gateway("coherent/gateway").unwrap();
+            assert!(next_owner.scope.ai_rule(&second, 0) && next_owner.scope.graphql_rule(&second, 0));
+            assert!(!owner.scope.ai_rule(&second, 0) && !owner.scope.graphql_rule(&second, 0));
+            assert!(!next_owner.scope.ai_rule(&first, 0) && !next_owner.scope.graphql_rule(&first, 0));
+
+            // Gateway-driven rebuilding commits the existing source with its new tables.
+            manager.rebuild_all_listener_managers();
+            let rebuilt = publisher.snapshot().http_listener(&proxy.listener_key);
+            let selected = rebuilt
+                .http_routes(&proxy.http_route_manager)
+                .match_route(&mut session, &old, &rebuilt.index)
+                .unwrap();
+            assert!(rebuilt
+                .gateway("coherent/gateway")
+                .unwrap()
+                .scope
+                .ai_rule(selected.route_unit.route.as_ref().unwrap(), 0));
+            manager.partial_update(HashMap::new(), HashMap::new(), HashSet::from(["coherent/route".into()]));
+            let removed = publisher.snapshot().http_listener(&proxy.listener_key);
+            assert!(removed
+                .http_routes(&proxy.http_route_manager)
+                .match_route(&mut session, &old, &removed.index)
+                .is_err());
+            assert!(view
+                .http_routes(&proxy.http_route_manager)
+                .match_route(&mut session, &old, &view.index)
+                .is_ok());
+            manager.full_set(&HashMap::from([("coherent/route".into(), coherent_route("3"))]));
+            let recreated = publisher.snapshot().http_listener(&proxy.listener_key);
+            let selected = recreated
+                .http_routes(&proxy.http_route_manager)
+                .match_route(&mut session, &old, &recreated.index)
+                .unwrap();
+            assert!(recreated
+                .gateway("coherent/gateway")
+                .unwrap()
+                .scope
+                .graphql_rule(selected.route_unit.route.as_ref().unwrap(), 0));
+            let weak = Arc::downgrade(&view);
+            drop(old);
+            drop(view);
+            assert!(
+                weak.upgrade().is_none(),
+                "retired listener view is released after its request"
+            );
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn captured_absence_survives_listener_creation_before_matching() {
+    const NAME: &str = "captured_absence_survives_listener_creation_before_matching";
+    crate::test_subprocess::assert_in_subprocess_async(
+        "routes::http::proxy_http::pg_early_request_filter::tests",
+        NAME,
+        "EDGION_COHERENT_ABSENCE_CHILD",
+        NAME,
+        || async {
+            use edgion_common::conf_sync::traits::ConfHandler;
+            use std::collections::HashMap;
+            let manager = crate::routes::http::GlobalHttpRouteManagers::new();
+            let mut proxy = id_proxy();
+            proxy.http_route_manager = manager.get_or_create_listener_manager(&proxy.listener_key);
+            let mut session = session_from_request(b"GET / HTTP/1.1\r\nHost: coherent.example.com\r\n\r\n").await;
+            let mut old = EdgionHttpContext::default();
+            initialize_request_ids(&proxy, &mut session, &mut old).await.unwrap();
+            let missing = old.listener_publication().unwrap().clone();
+            assert!(missing.index.is_empty());
+            install_coherent_gateway();
+            manager.full_set(&HashMap::from([("coherent/route".into(), coherent_route("1"))]));
+            initialize_request_ids(&proxy, &mut session, &mut old).await.unwrap();
+            assert!(Arc::ptr_eq(old.listener_publication().unwrap(), &missing));
+            assert!(old.plugin_scope().is_none());
+            old.request_info.hostname = crate::ctx::NormalizedHostname::new("coherent.example.com");
+            old.request_info.normalized_current_path = "/".into();
+            assert!(missing
+                .http_routes(&proxy.http_route_manager)
+                .match_route(&mut session, &old, &missing.index)
+                .is_err());
+            let mut next = EdgionHttpContext::default();
+            initialize_request_ids(&proxy, &mut session, &mut next).await.unwrap();
+            assert!(next.plugin_scope().is_some());
+            let fresh = next.listener_publication().unwrap();
+            assert!(fresh
+                .http_routes(&proxy.http_route_manager)
+                .match_route(&mut session, &old, &fresh.index)
+                .is_ok());
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn shared_listener_captures_owner_policy_before_owner_is_selected() {
+    let store = crate::plugins::http::PluginStore::new();
+    store.replace_all(std::collections::HashMap::from([(
+        "early-id-test/gateway-present".into(),
+        id_plugin("x-pinned-id"),
+    )]));
+    let keys = ["early-id-test/gateway-present"];
+    configure_owners(&store, &[], true, &keys);
+    let proxy = id_proxy();
+    let mut session = session_from_request(b"GET / HTTP/1.1\r\nHost: test\r\n\r\n").await;
+    let mut ctx = EdgionHttpContext::default();
+    initialize_request_ids_with_publisher(&proxy, &mut session, &mut ctx, store.publisher())
+        .await
+        .unwrap();
+    let pinned = ctx.listener_publication().unwrap().clone();
+    assert!(ctx.plugin_scope().is_none());
+    store.replace_all(std::collections::HashMap::from([(
+        "early-id-test/gateway-present".into(),
+        id_plugin("x-new-id"),
+    )]));
+    configure_owners(&store, &[], true, &keys);
+    ctx.gateway_info = Some(id_gateway(&keys));
+    capture_matched_scope(&mut ctx).unwrap();
+    initialize_gateway_request_ids(&mut session, &mut ctx).await.unwrap();
+    assert!(session.req_header().headers.contains_key("x-pinned-id"));
+    assert!(!session.req_header().headers.contains_key("x-new-id"));
+    assert!(Arc::ptr_eq(
+        ctx.plugin_scope().unwrap(),
+        &pinned.gateway("early-id-test/gateway").unwrap()
+    ));
+    let selected = ctx.listener_publication().unwrap();
+    assert!(Arc::ptr_eq(
+        &selected.http_routes(&proxy.http_route_manager),
+        &pinned.http_routes(&proxy.http_route_manager)
+    ));
+    assert!(Arc::ptr_eq(
+        &selected.grpc_routes(&proxy.grpc_route_manager),
+        &pinned.grpc_routes(&proxy.grpc_route_manager)
+    ));
+    assert!(Arc::ptr_eq(&selected.index, &pinned.index));
+    let weak_child = Arc::downgrade(selected);
+    let weak_entry = Arc::downgrade(&pinned);
+    drop(pinned);
+    assert!(
+        weak_entry.upgrade().is_none(),
+        "selected child does not retain the shared entry or siblings"
+    );
+    assert!(weak_child.upgrade().is_some());
+    ctx.gateway_info = Some(Arc::new(crate::runtime::GatewayInfo::new(
+        Some("early-id-test".into()),
+        "other".into(),
+        Some("http".into()),
+        None,
+        None,
+        None,
+        Vec::new(),
+        None,
+    )));
+    assert!(
+        capture_matched_scope(&mut ctx).is_err(),
+        "selected owner is first-writer-wins"
+    );
+    drop(ctx);
+    assert!(
+        weak_child.upgrade().is_none(),
+        "selected child is released with its request"
+    );
+    let mut fresh = EdgionHttpContext::default();
+    initialize_request_ids_with_publisher(&proxy, &mut session, &mut fresh, store.publisher())
+        .await
+        .unwrap();
+    fresh.gateway_info = Some(id_gateway(&keys));
+    capture_matched_scope(&mut fresh).unwrap();
+    initialize_gateway_request_ids(&mut session, &mut fresh).await.unwrap();
+    assert!(session.req_header().headers.contains_key("x-new-id"));
+}
+
+#[tokio::test]
+async fn grpc_commits_and_http_fallback_share_captured_listener_generation() {
+    const NAME: &str = "grpc_commits_and_http_fallback_share_captured_listener_generation";
+    crate::test_subprocess::assert_in_subprocess_async(
+        "routes::http::proxy_http::pg_early_request_filter::tests", NAME, "EDGION_COHERENT_GRPC_CHILD", NAME, || async {
+            use edgion_common::conf_sync::traits::ConfHandler;
+            use std::collections::{HashMap, HashSet};
+            install_coherent_gateway();
+            let http = crate::routes::http::GlobalHttpRouteManagers::new();
+            http.full_set(&HashMap::from([("coherent/route".into(), coherent_route("1"))]));
+            let grpc = crate::routes::grpc::GlobalGrpcRouteManagers::new();
+            let first = coherent_grpc_route("1");
+            grpc.full_set(&HashMap::from([("coherent/grpc".into(), first.clone())]));
+            let mut proxy = id_proxy();
+            proxy.http_route_manager = http.get_or_create_listener_manager(&proxy.listener_key);
+            proxy.grpc_route_manager = grpc.get_or_create_listener_manager(&proxy.listener_key);
+            let mut session = session_from_request(b"POST /svc/Call HTTP/1.1\r\nHost: coherent.example.com\r\nContent-Type: application/grpc\r\nContent-Length: 0\r\n\r\n").await;
+            let mut ctx = EdgionHttpContext::default();
+            initialize_request_ids(&proxy, &mut session, &mut ctx).await.unwrap();
+            ctx.request_info.hostname = crate::ctx::NormalizedHostname::new("coherent.example.com");
+            ctx.request_info.normalized_current_path = "/svc/Call".into();
+            let old = ctx.listener_publication().unwrap().clone();
+            let matched = old.grpc_routes(&proxy.grpc_route_manager).match_route(&mut session, &ctx, &old.index, "coherent.example.com").unwrap().0;
+            assert!(Arc::ptr_eq(matched.route.as_ref().unwrap(), &first));
+            let second = coherent_grpc_route("2");
+            grpc.partial_update(HashMap::new(), HashMap::from([("coherent/grpc".into(), second.clone())]), HashSet::new());
+            let fresh = crate::plugins::publication::global_publisher().snapshot().http_listener(&proxy.listener_key);
+            assert!(Arc::ptr_eq(&old.http_routes(&proxy.http_route_manager), &fresh.http_routes(&proxy.http_route_manager)), "a GRPC commit retains the HTTP table");
+            assert!(Arc::ptr_eq(fresh.grpc_routes(&proxy.grpc_route_manager).match_route(&mut session, &ctx, &fresh.index, "coherent.example.com").unwrap().0.route.as_ref().unwrap(), &second));
+            assert!(Arc::ptr_eq(old.grpc_routes(&proxy.grpc_route_manager).match_route(&mut session, &ctx, &old.index, "coherent.example.com").unwrap().0.route.as_ref().unwrap(), &first));
+            grpc.rebuild_all_listener_managers();
+            grpc.partial_update(HashMap::new(), HashMap::new(), HashSet::from(["coherent/grpc".into()]));
+            let removed = crate::plugins::publication::global_publisher().snapshot().http_listener(&proxy.listener_key);
+            assert!(!removed.grpc_routes(&proxy.grpc_route_manager).has_routes());
+            assert!(old.grpc_routes(&proxy.grpc_route_manager).has_routes());
+            let fallback = removed.http_routes(&proxy.http_route_manager).match_route(&mut session, &ctx, &removed.index).unwrap();
+            assert!(removed.gateway("coherent/gateway").unwrap().scope.ai_rule(fallback.route_unit.route.as_ref().unwrap(), 0));
+            grpc.full_set(&HashMap::from([("coherent/grpc".into(), coherent_grpc_route("3"))]));
+            assert!(crate::plugins::publication::global_publisher().snapshot().http_listener(&proxy.listener_key).grpc_routes(&proxy.grpc_route_manager).has_routes());
+        }
+    ).await;
+}
+
+async fn coherent_entry(proxy: &EdgionHttpProxy, grpc: bool) -> (EdgionHttpContext, Session, bool) {
+    use pingora_proxy::ProxyHttp;
+    let (mut client, server) = tokio::io::duplex(16384);
+    let mut session = Session::new_h1(Box::new(server));
+    let content_type = if grpc { "application/grpc" } else { "application/json" };
+    client.write_all(format!("POST /svc/Call HTTP/1.1\r\nHost: coherent.example.com\r\nContent-Type: {content_type}\r\nContent-Length: 0\r\n\r\n").as_bytes()).await.unwrap();
+    assert!(session.read_request().await.unwrap());
+    let mut ctx = proxy.new_ctx();
+    early_request_filter(proxy, &mut session, &mut ctx).await.unwrap();
+    let ended = super::super::pg_request_filter::request_filter(proxy, &mut session, &mut ctx)
+        .await
+        .unwrap();
+    (ctx, session, ended)
+}
+
+#[tokio::test]
+async fn retired_manager_identity_preserves_physical_listener_boundary() {
+    const NAME: &str = "retired_manager_identity_preserves_physical_listener_boundary";
+    crate::test_subprocess::assert_in_subprocess_async(
+        "routes::http::proxy_http::pg_early_request_filter::tests",
+        NAME,
+        "EDGION_COHERENT_RETIRE_CHILD",
+        NAME,
+        || async {
+            use edgion_common::conf_sync::traits::ConfHandler;
+            use std::collections::HashMap;
+            let publisher = crate::plugins::publication::global_publisher();
+            let http = crate::routes::http::GlobalHttpRouteManagers::new();
+            let grpc = crate::routes::grpc::GlobalGrpcRouteManagers::new();
+            install_coherent_gateway();
+            // Public Gateway-triggered commit paths precreate active, empty managers.
+            http.rebuild_all_listener_managers();
+            grpc.rebuild_all_listener_managers();
+            let mut proxy = id_proxy();
+            proxy.enable_http2 = true;
+            proxy.http_route_manager = http.get_or_create_listener_manager(&proxy.listener_key);
+            proxy.grpc_route_manager = grpc.get_or_create_listener_manager(&proxy.listener_key);
+            let (_, session, ended) = coherent_entry(&proxy, false).await;
+            assert!(ended);
+            assert_eq!(session.response_written().unwrap().status, StatusCode::NOT_FOUND);
+            http.full_set(&HashMap::from([("coherent/route".into(), coherent_route("1"))]));
+            grpc.full_set(&HashMap::from([("coherent/grpc".into(), coherent_grpc_route("1"))]));
+            assert!(Arc::ptr_eq(
+                &proxy.http_route_manager,
+                &http.get_or_create_listener_manager(&proxy.listener_key)
+            ));
+            assert!(Arc::ptr_eq(
+                &proxy.grpc_route_manager,
+                &grpc.get_or_create_listener_manager(&proxy.listener_key)
+            ));
+            let (old, mut session, ended) = coherent_entry(&proxy, false).await;
+            assert!(!ended);
+            let pinned = old.listener_publication().unwrap().clone();
+            assert!(old.route_unit.is_some());
+            let (old_grpc, _, ended) = coherent_entry(&proxy, true).await;
+            assert!(!ended && old_grpc.is_grpc_route_matched);
+            // Remove routes, then the logical owner; drive the same public family
+            // rebuild/commit methods called by GatewayHandler on key removal.
+            http.full_set(&HashMap::new());
+            grpc.full_set(&HashMap::new());
+            crate::runtime::store::get_listener_gateway_info_store().rebuild(&[]);
+            http.rebuild_all_listener_managers();
+            grpc.rebuild_all_listener_managers();
+            publisher.replace_gateways(HashMap::new());
+            assert_eq!(http.stats().listener_count, 0);
+            assert_eq!(grpc.stats().listener_count, 0);
+            install_coherent_gateway();
+            http.rebuild_all_listener_managers();
+            grpc.rebuild_all_listener_managers();
+            http.full_set(&HashMap::from([("coherent/route".into(), coherent_route("2"))]));
+            grpc.full_set(&HashMap::from([("coherent/grpc".into(), coherent_grpc_route("2"))]));
+            let new_http = http.get_or_create_listener_manager(&proxy.listener_key);
+            let new_grpc = grpc.get_or_create_listener_manager(&proxy.listener_key);
+            assert!(!Arc::ptr_eq(&proxy.http_route_manager, &new_http));
+            assert!(!Arc::ptr_eq(&proxy.grpc_route_manager, &new_grpc));
+            for request_grpc in [false, true] {
+                let (ctx, response, ended) = coherent_entry(&proxy, request_grpc).await;
+                assert!(ended);
+                let response = response.response_written().unwrap();
+                if request_grpc {
+                    assert_eq!(response.status, StatusCode::OK);
+                    assert_eq!(response.headers.get("grpc-status").unwrap(), "5");
+                    assert_eq!(ctx.request_info.grpc_status(), Some(5));
+                } else {
+                    assert_eq!(response.status, StatusCode::NOT_FOUND);
+                }
+                assert!(ctx
+                    .diagnostics
+                    .contains_error(edgion_resources::EdgionErrorCode::RouteNotFound));
+                assert!(!ctx.is_grpc_route_matched && ctx.route_unit.is_none());
+            }
+            let retained = pinned
+                .http_routes(&proxy.http_route_manager)
+                .match_route(&mut session, &old, &pinned.index)
+                .unwrap();
+            assert!(pinned
+                .gateway("coherent/gateway")
+                .unwrap()
+                .scope
+                .ai_rule(retained.route_unit.route.as_ref().unwrap(), 0));
+            proxy.http_route_manager = new_http;
+            proxy.grpc_route_manager = new_grpc;
+            let (ctx, _, ended) = coherent_entry(&proxy, false).await;
+            assert!(!ended && ctx.route_unit.is_some());
+            let (ctx, _, ended) = coherent_entry(&proxy, true).await;
+            assert!(!ended && ctx.is_grpc_route_matched);
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn family_retirement_preserves_other_family_and_grpc_http_fallback() {
+    const NAME: &str = "family_retirement_preserves_other_family_and_grpc_http_fallback";
+    crate::test_subprocess::assert_in_subprocess_async(
+        "routes::http::proxy_http::pg_early_request_filter::tests",
+        NAME,
+        "EDGION_COHERENT_FAMILY_CHILD",
+        NAME,
+        || async {
+            use edgion_common::conf_sync::traits::ConfHandler;
+            use std::collections::HashMap;
+            for retire_grpc in [true, false] {
+                let publisher = crate::plugins::publication::global_publisher();
+                let http = crate::routes::http::GlobalHttpRouteManagers::new();
+                let grpc = crate::routes::grpc::GlobalGrpcRouteManagers::new();
+                install_coherent_gateway();
+                http.full_set(&HashMap::from([("coherent/route".into(), coherent_route("1"))]));
+                grpc.full_set(&HashMap::from([("coherent/grpc".into(), coherent_grpc_route("1"))]));
+                let mut proxy = id_proxy();
+                proxy.enable_http2 = true;
+                proxy.http_route_manager = http.get_or_create_listener_manager(&proxy.listener_key);
+                proxy.grpc_route_manager = grpc.get_or_create_listener_manager(&proxy.listener_key);
+                let (ctx, _, ended) = coherent_entry(&proxy, true).await;
+                assert!(!ended && ctx.is_grpc_route_matched);
+                if retire_grpc {
+                    grpc.full_set(&HashMap::new());
+                } else {
+                    http.full_set(&HashMap::new());
+                }
+                crate::runtime::store::get_listener_gateway_info_store().rebuild(&[]);
+                http.rebuild_all_listener_managers();
+                grpc.rebuild_all_listener_managers();
+                publisher.replace_gateways(HashMap::new());
+                assert_eq!(http.stats().listener_count, usize::from(retire_grpc));
+                assert_eq!(grpc.stats().listener_count, usize::from(!retire_grpc));
+                install_coherent_gateway();
+                http.rebuild_all_listener_managers();
+                grpc.rebuild_all_listener_managers();
+                if retire_grpc {
+                    grpc.full_set(&HashMap::from([("coherent/grpc".into(), coherent_grpc_route("2"))]));
+                } else {
+                    http.full_set(&HashMap::from([("coherent/route".into(), coherent_route("2"))]));
+                }
+                let new_http = http.get_or_create_listener_manager(&proxy.listener_key);
+                let new_grpc = grpc.get_or_create_listener_manager(&proxy.listener_key);
+                assert_eq!(Arc::ptr_eq(&proxy.http_route_manager, &new_http), retire_grpc);
+                assert_eq!(Arc::ptr_eq(&proxy.grpc_route_manager, &new_grpc), !retire_grpc);
+                let (ctx, response, ended) = coherent_entry(&proxy, true).await;
+                assert!(!ended, "retiring one family cannot reject the surviving family's route");
+                assert!(
+                    response.response_written().is_none(),
+                    "inaccessible new gRPC routes cannot emit UNIMPLEMENTED"
+                );
+                assert_eq!(ctx.is_grpc_route_matched, !retire_grpc);
+                if retire_grpc {
+                    assert_eq!(ctx.route_unit.as_ref().unwrap().resource_key, "coherent/route");
+                    let source = ctx.route_unit.as_ref().unwrap().route.as_ref().unwrap();
+                    assert!(ctx.plugin_scope().unwrap().scope.ai_rule(source, 0));
+                    assert!(ctx.plugin_scope().unwrap().scope.graphql_rule(source, 0));
+                } else {
+                    assert_eq!(ctx.grpc_route_unit.as_ref().unwrap().resource_key, "coherent/grpc");
+                    let (_, response, ended) = coherent_entry(&proxy, false).await;
+                    assert!(ended);
+                    assert_eq!(response.response_written().unwrap().status, StatusCode::NOT_FOUND);
+                }
+                // A fresh physical handle can reach the newly created family.
+                proxy.http_route_manager = new_http;
+                proxy.grpc_route_manager = new_grpc;
+                let (ctx, _, ended) = coherent_entry(&proxy, true).await;
+                assert!(!ended && ctx.is_grpc_route_matched);
+            }
+        },
+    )
+    .await;
 }

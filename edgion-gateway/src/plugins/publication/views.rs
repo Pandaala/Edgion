@@ -1,13 +1,135 @@
 //! Immutable, request-readable output of one complete publication transaction.
 
+use crate::routes::grpc::{DomainGrpcRouteRules, GrpcPortRouteManager};
+use crate::routes::http::routes_mgr::{DomainRouteRules, HttpPortRouteManager};
 use std::collections::HashMap;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, LazyLock, Weak};
 
 use edgion_resources::{EdgionGatewayConfig, EdgionPlugins, EdgionStreamPlugins, HTTPRoute, ListenerKey};
 
 use crate::plugins::http::CompiledPlugins;
 use crate::plugins::stream::CompiledStreamPlugins;
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
+
+/// One listener's routing and policy generation, retained before early plugins.
+/// Tables and scopes retain no publisher or manager ownership. Weak manager
+/// identities preserve each physical listener handle's reachability boundary.
+pub(crate) struct HttpListenerPublication {
+    pub(super) http: Arc<DomainRouteRules>,
+    pub(super) grpc: Arc<DomainGrpcRouteRules>,
+    pub(super) http_manager: Weak<HttpPortRouteManager>,
+    pub(super) grpc_manager: Weak<GrpcPortRouteManager>,
+    pub index: Arc<GatewayInfoIndex>,
+    owners: ListenerOwners,
+}
+
+enum ListenerOwners {
+    Empty,
+    Unique(Arc<GatewayScope>),
+    // Children always have Unique owners and no link to this map or siblings.
+    Shared(HashMap<String, Arc<HttpListenerPublication>>),
+}
+
+impl HttpListenerPublication {
+    pub fn empty() -> Arc<Self> {
+        static EMPTY: LazyLock<Arc<HttpListenerPublication>> = LazyLock::new(|| {
+            Arc::new(HttpListenerPublication {
+                http_manager: Weak::new(),
+                grpc_manager: Weak::new(),
+                http: Arc::new(DomainRouteRules::new()),
+                grpc: Arc::new(DomainGrpcRouteRules::new()),
+                index: Arc::new(GatewayInfoIndex::from_entries(Vec::new())),
+                owners: ListenerOwners::Empty,
+            })
+        });
+        Arc::clone(&EMPTY)
+    }
+
+    /// Cold construction; shared listeners have exactly one level of owner views.
+    pub(super) fn new(
+        (http_manager, http): (Weak<HttpPortRouteManager>, Arc<DomainRouteRules>),
+        (grpc_manager, grpc): (Weak<GrpcPortRouteManager>, Arc<DomainGrpcRouteRules>),
+        index: Arc<GatewayInfoIndex>,
+        gateways: HashMap<String, Arc<GatewayScope>>,
+    ) -> Arc<Self> {
+        let owners = match gateways.len() {
+            0 => ListenerOwners::Empty,
+            1 => ListenerOwners::Unique(gateways.into_values().next().expect("one gateway")),
+            _ => ListenerOwners::Shared(
+                gateways
+                    .into_iter()
+                    .map(|(key, scope)| {
+                        let child = Arc::new(Self {
+                            http_manager: http_manager.clone(),
+                            grpc_manager: grpc_manager.clone(),
+                            http: Arc::clone(&http),
+                            grpc: Arc::clone(&grpc),
+                            index: Arc::clone(&index),
+                            owners: ListenerOwners::Unique(scope),
+                        });
+                        (key, child)
+                    })
+                    .collect(),
+            ),
+        };
+        Arc::new(Self {
+            http_manager,
+            grpc_manager,
+            http,
+            grpc,
+            index,
+            owners,
+        })
+    }
+
+    /// Compare stable manager identity, never the manager's mutable table.
+    pub fn http_routes(&self, manager: &Arc<HttpPortRouteManager>) -> Arc<DomainRouteRules> {
+        if std::ptr::eq(self.http_manager.as_ptr(), Arc::as_ptr(manager)) {
+            Arc::clone(&self.http)
+        } else {
+            Arc::clone(&Self::empty().http)
+        }
+    }
+
+    pub fn grpc_routes(&self, manager: &Arc<GrpcPortRouteManager>) -> Arc<DomainGrpcRouteRules> {
+        if std::ptr::eq(self.grpc_manager.as_ptr(), Arc::as_ptr(manager)) {
+            Arc::clone(&self.grpc)
+        } else {
+            Arc::clone(&Self::empty().grpc)
+        }
+    }
+
+    pub fn gateway(&self, key: &str) -> Option<Arc<GatewayScope>> {
+        match &self.owners {
+            ListenerOwners::Empty => None,
+            ListenerOwners::Unique(scope) => (scope.gateway_key == key).then(|| Arc::clone(scope)),
+            ListenerOwners::Shared(owners) => owners.get(key).and_then(|view| view.unique_gateway()).cloned(),
+        }
+    }
+
+    pub fn unique_gateway(&self) -> Option<&Arc<GatewayScope>> {
+        match &self.owners {
+            ListenerOwners::Unique(scope) => Some(scope),
+            _ => None,
+        }
+    }
+
+    pub(super) fn gateway_count(&self) -> usize {
+        match &self.owners {
+            ListenerOwners::Empty => 0,
+            ListenerOwners::Unique(_) => 1,
+            ListenerOwners::Shared(owners) => owners.len(),
+        }
+    }
+
+    pub fn select_gateway(self: &Arc<Self>, key: &str) -> Option<Arc<Self>> {
+        match &self.owners {
+            ListenerOwners::Empty => None,
+            ListenerOwners::Unique(scope) => (scope.gateway_key == key).then(|| Arc::clone(self)),
+            ListenerOwners::Shared(owners) => owners.get(key).cloned(),
+        }
+    }
+}
 
 pub(crate) struct GatewayScope {
     pub gateway_key: String,
@@ -88,6 +210,7 @@ pub(crate) struct PublicationInventory {
 #[derive(Default)]
 pub(crate) struct PluginPublication {
     pub(super) gateways: HashMap<String, Arc<GatewayScope>>,
+    pub(super) http_listeners: HashMap<ListenerKey, Arc<HttpListenerPublication>>,
     pub(super) scopes: HashMap<String, Arc<PluginScope>>,
     pub(super) listeners: HashMap<ListenerKey, Vec<String>>,
     pub(super) indices: HashMap<ListenerKey, Arc<GatewayInfoIndex>>,
@@ -100,15 +223,15 @@ pub(crate) struct PluginPublication {
 }
 
 impl PluginPublication {
-    pub fn gateway(&self, key: &str) -> Option<Arc<GatewayScope>> {
-        self.gateways.get(key).cloned()
+    pub fn http_listener(&self, key: &ListenerKey) -> Arc<HttpListenerPublication> {
+        self.http_listeners
+            .get(key)
+            .cloned()
+            .unwrap_or_else(HttpListenerPublication::empty)
     }
 
-    pub fn unique_gateway(&self, key: &ListenerKey) -> Option<Arc<GatewayScope>> {
-        match self.listeners.get(key)?.as_slice() {
-            [key] => self.gateway(key),
-            _ => None,
-        }
+    pub fn gateway(&self, key: &str) -> Option<Arc<GatewayScope>> {
+        self.gateways.get(key).cloned()
     }
 
     pub fn connection(&self, key: &ListenerKey) -> ConnectionView {

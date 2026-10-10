@@ -2,7 +2,6 @@ use super::{resolve_route_ext_refs, select_waf_owner, EdgionHttpProxy};
 use crate::ctx::NormalizedHostname;
 use crate::routes::grpc::{parse_grpc_timeout, try_match_grpc_route};
 use crate::runtime::hostname_matches_listener;
-use crate::runtime::store::get_listener_gateway_info_store;
 use crate::runtime::store::listener_gateway_info::format_gateway_key;
 use crate::services::acme::challenge_store::get_global_challenge_store;
 use crate::util::net::host_without_port;
@@ -113,11 +112,14 @@ pub async fn request_filter(
         return Ok(true); // Response already sent (XFF too long or hostname missing)
     }
 
-    // Step 1: Route matching — single lookup against the global route table.
-    // Load the pre-built GatewayInfoIndex for O(1) gateway/listener lookups.
-    let gateway_index = get_listener_gateway_info_store().get_index(&edgion_http.listener_key);
+    // Match using the tables and full Gateway index captured before early plugins.
+    let publication = Arc::clone(
+        ctx.listener_publication()
+            .expect("early hook captures listener publication"),
+    );
+    let gateway_index = &publication.index;
 
-    if try_serve_acme_challenge(edgion_http, session, ctx, &gateway_index).await? {
+    if try_serve_acme_challenge(edgion_http, session, ctx, gateway_index).await? {
         return Ok(true);
     }
 
@@ -160,8 +162,8 @@ pub async fn request_filter(
             return Ok(true);
         }
 
-        let grpc_routes = edgion_http.grpc_route_manager.load_route_table();
-        let _ = try_match_grpc_route(&grpc_routes, session, ctx, &gateway_index).await;
+        let grpc_routes = publication.grpc_routes(&edgion_http.grpc_route_manager);
+        let _ = try_match_grpc_route(&grpc_routes, session, ctx, gateway_index).await;
 
         // If GRPCRoutes exist on this port but none matched, return UNIMPLEMENTED
         // per Gateway API spec. Only fall through to HTTP routes when no GRPCRoutes
@@ -181,8 +183,8 @@ pub async fn request_filter(
     }
 
     if !ctx.is_grpc_route_matched {
-        let port_routes = edgion_http.http_route_manager.load_route_table();
-        match port_routes.match_route(session, ctx, &gateway_index) {
+        let port_routes = publication.http_routes(&edgion_http.http_route_manager);
+        match port_routes.match_route(session, ctx, gateway_index) {
             Ok(result) => {
                 ctx.gateway_info = Some(result.matched_gateway);
                 ctx.capture_matched_path_params(&result.route_unit.matched_info.m);

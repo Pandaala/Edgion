@@ -58,8 +58,10 @@ Gateway slice in the same rebuild call, but between the two stores a reader coul
 
 At the original review, no caller cross-read both fields under a joint invariant;
 the defect was classified as latent. The current per-request `pg_request_filter`
-loads `get_index()`; `all_listener_keys()` and `stats()` each inspect the flat view
-from one snapshot load. The dual-`ArcSwap` shape was a
+uses the full index from its captured PluginPublisher listener publication, paired
+with HTTP/GRPC tables and owner scopes. Both publishers reuse the canonical
+per-Gateway listener-entry projection. `all_listener_keys()` and `stats()` each
+inspect the flat view from one store snapshot load. The dual-`ArcSwap` shape was a
 maintenance trap: a future caller assuming "every key in `flat_data` has a matching entry in
 `index_data`" would silently fail during Gateway change events with no log or panic.
 

@@ -3,7 +3,7 @@ use dashmap::DashMap;
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, Weak};
 
 use crate::ctx::EdgionHttpContext;
 use crate::routes::grpc::{GrpcMatchEngine, GrpcRouteRuleUnit};
@@ -128,7 +128,8 @@ impl GrpcPortRouteManager {
         }
     }
 
-    /// Load the current route table snapshot (hot path, per-request).
+    /// Load a compiled table for cold rebuilding and inspection.
+    /// Serving requests use their captured listener publication.
     pub fn load_route_table(&self) -> arc_swap::Guard<Arc<DomainGrpcRouteRules>> {
         self.route_table.load()
     }
@@ -186,6 +187,24 @@ impl GlobalGrpcRouteManagers {
         self.rebuild_lock.lock()
     }
 
+    /// Capture table Arcs while the caller holds the family rebuild mutex.
+    pub(crate) fn publication_tables(
+        &self,
+    ) -> HashMap<ListenerKey, (Weak<GrpcPortRouteManager>, Arc<DomainGrpcRouteRules>)> {
+        self.by_listener
+            .iter()
+            .map(|entry| {
+                (
+                    entry.key().clone(),
+                    (
+                        Arc::downgrade(entry.value()),
+                        Arc::clone(&entry.value().load_route_table()),
+                    ),
+                )
+            })
+            .collect()
+    }
+
     /// Get or create a per-listener `GrpcPortRouteManager`.
     pub fn get_or_create_listener_manager(&self, key: &ListenerKey) -> Arc<GrpcPortRouteManager> {
         self.by_listener
@@ -202,6 +221,11 @@ impl GlobalGrpcRouteManagers {
     pub fn rebuild_all_listener_managers(&self) {
         let _guard = self.rebuild_lock.lock();
         self.rebuild_all_listener_managers_locked();
+        crate::plugins::publication::global_publisher().update_grpc_routes(
+            HashMap::new(),
+            &HashSet::new(),
+            self.publication_tables(),
+        );
     }
 
     /// Rebuild body. The caller MUST hold `rebuild_lock`.

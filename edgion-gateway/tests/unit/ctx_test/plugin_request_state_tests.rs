@@ -159,3 +159,37 @@ fn backend_hits_and_misses_stay_pinned_through_stage_and_retry_reentry() {
     });
     assert_eq!(allocations.calls, 0);
 }
+
+#[test]
+fn listener_capture_is_inline_allocation_free_and_preserves_captured_absence() {
+    let empty = crate::plugins::publication::HttpListenerPublication::empty();
+    let mut ctx = EdgionHttpContext::new();
+    let (_, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+        assert!(ctx.listener_publication().is_none());
+        ctx.capture_listener_publication(empty.clone());
+        ctx.capture_listener_publication(empty.clone());
+        assert!(Arc::ptr_eq(ctx.listener_publication().unwrap(), &empty));
+        assert!(!ctx.has_plugin_aux());
+    });
+    assert_eq!(allocations.calls, 0);
+    assert_eq!(allocations.requested_bytes, 0);
+}
+
+impl EdgionHttpContext {
+    /// Existing policy-only fixtures supply their owner before request entry.
+    pub(crate) fn capture_plugin_scope(&mut self, scope: Arc<crate::plugins::publication::GatewayScope>) -> bool {
+        if let Some(current) = self.plugin_scope() {
+            return current.gateway_key == scope.gateway_key;
+        }
+        let view = if let Some(view) = self.listener_publication() {
+            let Some(selected) = view.select_gateway(&scope.gateway_key) else {
+                return false;
+            };
+            selected
+        } else {
+            crate::plugins::publication::HttpListenerPublication::fixture_for_scope(scope)
+        };
+        self.plugin_execution.publication = Some(view);
+        true
+    }
+}

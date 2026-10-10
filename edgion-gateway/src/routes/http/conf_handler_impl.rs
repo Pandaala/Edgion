@@ -112,7 +112,8 @@ impl HttpRouteChanges {
 impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
     // Update order across all ConfHandler entry points:
     //   1. mutate route_cache         — canonical store reflecting the new state.
-    //   2. rebuild listener managers  — readers off match engines see the fresh cache.
+    //   2. rebuild listener managers  — prepare compiled tables under the rebuild lock.
+    //   3. commit tables and admissions together before releasing that lock.
     // LB policies are no longer sourced from routes: selection reads the per-service
     // EdgionBackendTrafficPolicy store (see `backends::policy::backend_traffic`).
     // Regression tests in this file pin the end-state for full_set / partial_update /
@@ -123,9 +124,8 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
 
         let mut canonical = data.clone();
 
+        let guard = self.lock_rebuild();
         {
-            let _guard = self.lock_rebuild();
-
             // A conf-sync replay may deserialize an unchanged Route into a new
             // Arc. Keep the canonical source identity shared by the route table
             // and plugin publisher so the replay does not create a false
@@ -148,8 +148,7 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
             ms = elapsed.as_millis(),
             "full set done"
         );
-        crate::plugins::publication::global_publisher().replace_routes(
-            crate::plugins::publication::inputs::RouteKind::Http,
+        crate::plugins::publication::global_publisher().replace_http_routes(
             canonical
                 .iter()
                 .map(|(key, route)| {
@@ -159,7 +158,9 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
                     )
                 })
                 .collect(),
+            self.publication_tables(),
         );
+        drop(guard);
         if std::ptr::eq(self, get_global_http_route_managers()) {
             crate::ai::replace_adaptive_route_contributions(data);
         }
@@ -186,8 +187,8 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
             "partial update start"
         );
 
+        let guard = self.lock_rebuild();
         {
-            let _guard = self.lock_rebuild();
             canonicalize_unchanged_routes(&self.route_cache, &mut add_or_update);
 
             // Compute affected listeners BEFORE updating cache.
@@ -249,11 +250,12 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
                 )
             })
             .collect();
-        crate::plugins::publication::global_publisher().update_routes(
-            crate::plugins::publication::inputs::RouteKind::Http,
+        crate::plugins::publication::global_publisher().update_http_routes(
             policy_inputs,
             &policy_removed,
+            self.publication_tables(),
         );
+        drop(guard);
         if std::ptr::eq(self, get_global_http_route_managers()) {
             crate::ai::update_adaptive_route_contributions(&add_or_update, &remove);
         }

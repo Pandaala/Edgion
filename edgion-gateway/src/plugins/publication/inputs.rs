@@ -8,7 +8,6 @@ use std::sync::Arc;
 use crate::plugins::runtime::gateway_api_filters::extension_ref::extension_ref_key;
 #[cfg(test)]
 use edgion_resources::constants::annotations::edgion as annotations;
-use edgion_resources::listener_key::resolve_listener_addr;
 use edgion_resources::resources::common::ParentReference;
 use edgion_resources::resources::gateway::AllowedRoutes;
 use edgion_resources::resources::http_route::RouteParentStatus;
@@ -20,7 +19,7 @@ use kube::api::ObjectMeta;
 use crate::plugins::stream::plugin_generation::StreamStages;
 use crate::routes::common::{filter_accepted_parent_refs, resolve_parent_refs, resolve_stream_plugin_store_key};
 use crate::runtime::matching::route::{check_allowed_routes, ResolvedParentRef};
-use crate::runtime::store::listener_gateway_info::{is_listener_conflicted, is_listener_not_programmed};
+use crate::runtime::store::listener_gateway_info::{gateway_listener_entries, ListenerEntry};
 
 #[derive(Clone, Debug)]
 pub(crate) struct GatewayListener {
@@ -29,6 +28,7 @@ pub(crate) struct GatewayListener {
     pub name: String,
     pub hostname: Option<String>,
     pub allowed_routes: Option<AllowedRoutes>,
+    pub entry: ListenerEntry,
 }
 
 #[derive(Clone, Debug)]
@@ -48,20 +48,15 @@ impl GatewayInput {
             .map(|reference| reference.into_key())
             .collect();
         let connection_key = resolve_stream_plugin_store_key(StreamPluginAttachment::Gateway(gateway));
-        let listeners = gateway
-            .spec
-            .listeners
-            .iter()
-            .flatten()
-            .filter(|listener| {
-                !is_listener_conflicted(gateway, &listener.name) && !is_listener_not_programmed(gateway, &listener.name)
-            })
-            .map(|listener| GatewayListener {
-                port: listener.port,
-                key: ListenerKey::new(resolve_listener_addr(gateway, listener.port), &listener.protocol),
-                name: listener.name.clone(),
-                hostname: listener.hostname.clone(),
-                allowed_routes: listener.allowed_routes.clone(),
+        let listeners = gateway_listener_entries(gateway)
+            .into_iter()
+            .map(|(key, entry)| GatewayListener {
+                port: entry.port,
+                name: entry.info.listener_name.clone().expect("projected listener has a name"),
+                hostname: entry.hostname.clone(),
+                allowed_routes: entry.allowed_routes.clone(),
+                key,
+                entry,
             })
             .collect();
         Self {

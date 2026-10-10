@@ -1,40 +1,50 @@
-> **Current resume status — 2026-10-10, committed HEAD 6b5adb0a.**
-> This block is the current authority for progress. The complete historical ledger
-> below is preserved verbatim; its old "current", "pending", pause and no-commit
-> labels describe their recorded checkpoints, not instructions for this HEAD.
+> **Current resume status — 2026-10-11, committed HEAD 0fdd67f4.**
+> This block is the current authority for progress. The historical ledger below
+> remains evidence for its recorded revisions, not current execution instructions.
 
 ## Current source closure and remaining acceptance
 
-- Implementation batches through R11c.4 (including LDAP, ExtProc and Wasm) are
-  committed. The earlier R8/C1/C2 pending labels are superseded by later results.
-- R12a committed as `f6b71a5217ce868e198b315ced6b8cff4c6f1b45`: canonical object-name
-  correction closes source blocker S-R1-01. Scoped verification passed 2321
-  distinct cases, with ten existing ignored doctests. All thirteen committed
-  blobs matched the reviewed manifest; fresh long-name admission/traffic is F2.
-- R12b committed as `6b5adb0ae6ef40b890c4ff95247c762d13697a62`: four obsolete
-  detached transport/resolver entries retired and all 34 test calls migrated,
-  closing source/API blocker F1-COV-R1-01. Scoped verification passed 803 distinct
-  cases (789 unit +14 Common doctests); four existing Common etcd tests remained
-  ignored. Two independent final reviews, scoped commit reviews and fourteen
-  warning-free root gates passed; all twenty-two committed blobs were verified.
-- The retained four-crate inventory is 9758 test IDs, not 9758 executed tests.
-  R12b freshly compiled/listed Common and Gateway; unchanged Resources/Controller
-  inventory provenance was carried forward. Exact limits remain in the evidence.
-- R13 is documentation reconciliation within fourteen approved paths. Affected
-  final whole-contract cross-checks and F2 fresh admission, dynamic traffic and
-  full Standard conformance remain open. Preserve the existing final-closure
-  checklist below; old live reports and source/unit PASS are not fresh acceptance.
-- Keep the original alias issue until FULL acceptance. Continue the authorized
-  serial IMPL workflow with independent reviews and root-owned local commits;
-  never push. Preserve unrelated review-results/ and the abstraction task.
+- R12a (`f6b71a52`) closed the native object-name source blocker; R12b
+  (`6b5adb0a`) removed obsolete detached reference/transport entry points.
+  Their earlier verification remains revision-scoped evidence.
+- R13 documentation reconciliation committed as `0fdd67f4`. Both affected
+  whole-contract final cross-checks passed at that revision. Fresh F2 admission,
+  dynamic traffic and Standard conformance remain open.
+- The user's Redis integration failure exposed a route-table/policy publication
+  race: a request could combine different route generations and fail admission.
+  No Redis counter reset was established. The bounded correction captures one
+  coherent request publication and preserves existing physical manager identity.
+  Independent resource updates still converge separately; arbitrary physical
+  listener rebinding and immediate cross-resource revocation are not promised.
+- Current uncommitted correction is frozen r6, patch SHA-256
+  `0c3966062fa41f303b839bb476963cf8519fd9cb28d8f466a2448881c4688b0b`.
+  Both independent static and execution reviews passed. Fresh execution passed
+  634 unique unit tests and one actual feature-enabled AI transport matrix;
+  one existing benchmark remains ignored. All 5398 baseline Gateway test IDs
+  remain among 5408 IDs; identities are not execution counts.
+- Fourteen root checks passed without warnings, with all 43 reviewed source
+  hashes unchanged. Original Redis and retained-listener suites/fixtures remain
+  unchanged; nine mechanical test-file modifications were removed.
+- Fresh integration binaries passed the unchanged Redis suite (5/5) and
+  RetainedListenerHandles wire scenario. Both canonical runners exited zero,
+  passed cache-residue checks and cleaned their owned services. Runs are
+  `testing_20261011_002145` and `testing_20261011_002228`; binary hashes and
+  raw logs are recorded. Local commit and new-image conformance remain pending.
+- Previous conformance image builds at `0fdd67f4` failed before compilation
+  on Docker Hub connectivity. A new read-only registry check can read Debian's
+  manifest but Rust's manifest still encounters a CDN TLS handshake timeout.
+  No fresh conformance PASS or cluster deployment is claimed.
+- Preserve the original alias issue until FULL acceptance. Continue serial IMPL,
+  commit completed batches locally, and never push. Preserve unrelated
+  `review-results/` and the abstraction-simplification task.
 
 Current evidence:
 
-- `tmp/resource-reference-contract/r12a-verification-20261010/verification-final.json`
-- `tmp/resource-reference-contract/r12a-root-verification-20261010/`
-- `tmp/resource-reference-contract/r12b-verification-20261010/verification-final.json`
-- `tmp/resource-reference-contract/r12b-root-verification-20261010/committed-blobs.json`
-- `tmp/resource-reference-contract/r13-plan-6b5adb0a-20261010/PLAN.md`
+- `tmp/resource-reference-contract/ratelimit-reload-500-verification-20261010/verification-final.json`
+- `tmp/resource-reference-contract/ratelimit-reload-500-verification-20261010/final-execution-review-a-r6.md`
+- `tmp/resource-reference-contract/ratelimit-reload-500-verification-20261010/final-execution-review-b-r6.md`
+- `tmp/resource-reference-contract/ratelimit-reload-500-root-verification-20261010/`
+- `tmp/resource-reference-contract/f2-run-0fdd67f4b5467811306883887b9f98f0f32ba436/CHECKPOINT.md`
 
 > **Historical checkpoint body follows unchanged.** Its commit IDs, failed runs,
 > corrections, exclusions and verification limits remain evidence; later accepted

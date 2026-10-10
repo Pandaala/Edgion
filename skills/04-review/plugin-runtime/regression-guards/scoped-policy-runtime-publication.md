@@ -15,8 +15,11 @@ decides a shared plugin's execution policy. The removed Controller startup key
 is rejected without an alias or fallback.
 
 The canonical Gateway `PluginPublisher` builds immutable class scopes from typed
-source, attachment and binding inputs. HTTP requests capture the selected scope;
-global, Gateway, route and delayed backend references use that same scope.
+source, attachment and binding inputs. Before early RequestId execution, HTTP
+requests capture one immutable listener publication containing the HTTP and GRPC
+tables, full Gateway index and per-Gateway scopes. Shared listeners capture it
+before owner selection. Global, Gateway, route and delayed backend references
+use the selected scope from that same publication.
 A backend ExtensionRef executes only on first use of the selected backend; a
 restricted entry on an unselected candidate does not preempt backend selection.
 Stream connection and TCP/UDP/TLS-route admissions use their corresponding
@@ -35,6 +38,47 @@ union of allowed slots in active scopes. One source generation owns each entry's
 constructor result and companion filters; policy views share permitted instances.
 An entry denied in every scope is not constructed. Unneeded slots and unreferenced
 source generations are released; in-flight Arcs may extend their lifetime.
+
+## Route and request publication lifetime
+
+HTTP and GRPC writers capture typed manager Weak identities with their exact
+compiled table Arcs and commit these pairs with source admission facts together. Their rebuild mutex remains held through the publisher commit;
+DashMap entry and route-unit cache guards are released first. The only nested
+order is family rebuild mutex -> publisher mutex. Publisher composition never
+loads managers or other stores, and no writer holds both family rebuild mutexes.
+Gateway-driven rebuilds follow the same order. Complete Gateway entries use the
+canonical listener projection, including metrics, SNI, DNS and attachment proof;
+same-key metadata changes participate in cold equality and index reuse.
+
+A request retains one publication Arc in its existing plugin-state pointer slot,
+without request-time map construction or locks. Unique listeners expose their
+scope directly. A shared listener prebuilds one level of selected-owner views;
+matching chooses one child with the same table/index Arcs. Children retain no
+parent or sibling map. Cold publisher construction initializes the shared empty
+view. Route-family deltas copy the complete listener-to-table Arc map on the
+cold path (O(listener count)); this accepted simplicity tradeoff adds no route
+or table recompilation and no separate incremental publication protocol. Captured absence is a shared empty view, distinct from
+not-yet-captured state; later hooks cannot acquire a newly created listener.
+Ordinary no-route behavior remains 404 after earlier metadata validation; unique
+unavailable owners retain early 503, shared owners retain matched-owner 503, and
+native gRPC keeps its existing UNIMPLEMENTED/fallback priority. Strict Weak route
+Arc/index gates remain unchanged. Retired views are released with their requests.
+
+The physical HTTP proxy retains its original HTTP and GRPC manager Arcs solely
+as construction identities. Each family accessor compares that stable identity
+with its captured Weak token and returns either the captured table or the cold
+empty table for that family. It never reloads a manager table. gRPC matching and
+`has_routes()` use the same gated table, so an inaccessible recreated gRPC manager
+cannot suppress surviving HTTP fallback. Ordinary updates keep manager identity;
+old captured requests may finish. Retirement of one family does not hide the
+other. This preserves existing manager reachability, not arbitrary EGC/UID
+rebinding safety; unsupported Gateway recreation still requires restart.
+
+This closes a route-table/admission publication race exposed by a RateLimitRedis
+reload test; independent resource kinds still arrive eventually. Namespace
+Selector eligibility continues to rely on Controller accepted parents. Ordinary
+HTTP/GRPC does not gain Gateway UID revocation. TLS handshake publication remains
+separate; the request's SNI/Host checks use its captured full Gateway index.
 
 ## Invalid-generation regression boundary
 

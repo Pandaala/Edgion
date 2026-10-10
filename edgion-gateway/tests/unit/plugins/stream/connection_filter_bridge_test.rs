@@ -136,10 +136,7 @@ fn stream_parent_ports_preserve_scope_across_gateway_publications() {
 
 #[test]
 fn logical_owner_and_policy_are_selected_from_one_publication() {
-    use crate::plugins::publication::{
-        inputs::{GatewayInput, GatewayListener},
-        PluginPublisher,
-    };
+    use crate::plugins::publication::{inputs::GatewayInput, PluginPublisher};
     use std::collections::{HashMap, HashSet};
     let publisher = PluginPublisher::new();
     let class = Arc::new(serde_yaml::from_str(
@@ -147,21 +144,16 @@ fn logical_owner_and_policy_are_selected_from_one_publication() {
         ).unwrap());
     publisher.replace_gateway_classes(HashMap::from([("ready".into(), class)]));
     let listener = ListenerKey::new("0.0.0.0:18443".parse().unwrap(), "TLS");
-    let input = |class: &str| GatewayInput {
-        class_name: class.into(),
-        http_keys: vec![],
-        connection_key: None,
-        listeners: vec![GatewayListener {
-            key: listener.clone(),
-            port: 18443,
-            name: "tls".into(),
-            hostname: Some("owner.example.com".into()),
-            allowed_routes: None,
-        }],
+    let input = |name: &str, class: &str| {
+        let gateway = crate::test_current_status::from_value(serde_json::json!({
+            "metadata": {"namespace":"default", "name":name},
+            "spec": {"gatewayClassName":class,"listeners":[{"name":"tls","port":18443,"protocol":"TLS","hostname":"owner.example.com"}]}
+        })).unwrap();
+        GatewayInput::from_gateway(&gateway)
     };
     publisher.replace_gateways(HashMap::from([
-        ("default/a".into(), input("missing")),
-        ("default/b".into(), input("ready")),
+        ("default/a".into(), input("a", "missing")),
+        ("default/b".into(), input("b", "ready")),
     ]));
     let parent = |key: &str| ResolvedParentRef {
         gateway_key: key.into(),
@@ -195,7 +187,10 @@ fn logical_owner_and_policy_are_selected_from_one_publication() {
     )
     .is_none());
     // A class rebind invalidates new admissions; the old admission remains pinned.
-    publisher.update_gateways(HashMap::from([("default/b".into(), input("missing"))]), &HashSet::new());
+    publisher.update_gateways(
+        HashMap::from([("default/b".into(), input("b", "missing"))]),
+        &HashSet::new(),
+    );
     assert!(resolve_route_scope(
         &publisher.snapshot(),
         &listener,

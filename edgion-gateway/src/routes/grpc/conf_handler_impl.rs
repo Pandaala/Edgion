@@ -37,9 +37,7 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
             ms = Instant::now().saturating_duration_since(start_time).as_millis(),
             "full set done"
         );
-        drop(_guard);
-        crate::plugins::publication::global_publisher().replace_routes(
-            crate::plugins::publication::inputs::RouteKind::Grpc,
+        crate::plugins::publication::global_publisher().replace_grpc_routes(
             data.iter()
                 .map(|(key, route)| {
                     (
@@ -48,6 +46,7 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
                     )
                 })
                 .collect(),
+            self.publication_tables(),
         );
     }
 
@@ -130,11 +129,10 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
             ms = Instant::now().saturating_duration_since(start_time).as_millis(),
             "partial update done"
         );
-        drop(_guard);
-        crate::plugins::publication::global_publisher().update_routes(
-            crate::plugins::publication::inputs::RouteKind::Grpc,
+        crate::plugins::publication::global_publisher().update_grpc_routes(
             policy_inputs,
             &policy_removed,
+            self.publication_tables(),
         );
     }
 }

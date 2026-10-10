@@ -3,7 +3,7 @@
 use edgion_resources::resources::refs::gateway_class_fields::GatewayClassParametersRef;
 use edgion_resources::resources::refs::plugin_attachment_fields::HttpPluginAttachments;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, Weak};
 
 use arc_swap::ArcSwap;
 use parking_lot::Mutex;
@@ -11,6 +11,8 @@ use serde::Serialize;
 
 use crate::plugins::http::CompiledPlugins;
 use crate::plugins::runtime::gateway_api_filters::extension_ref::extension_ref_key;
+use crate::routes::grpc::GrpcPortRouteManager;
+use crate::routes::http::routes_mgr::HttpPortRouteManager;
 use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 use edgion_resources::resources::http_route_ai_admission::{ai_rule_invalid_reason, AiProxyAdmission};
 use edgion_resources::resources::plugin_policy::{CompiledPluginPolicy, PluginFamily, PluginPolicyAction};
@@ -20,11 +22,15 @@ use edgion_resources::resources::refs::route_fields::HttpRouteExtensionRefs;
 use edgion_resources::{EdgionGatewayConfig, EdgionPlugins, EdgionStreamPlugins, GatewayClass, HTTPRoute, ListenerKey};
 
 use super::inputs::{effective_http_rules, GatewayInput, RouteInput, RouteKind};
-use super::views::{ConnectionView, GatewayScope, PluginPublication, PluginScope, PublicationStats, RuleAdmission};
+use super::views::{
+    ConnectionView, GatewayScope, HttpListenerPublication, PluginPublication, PluginScope, PublicationStats,
+    RuleAdmission,
+};
 use crate::plugins::http::plugin_generation::PluginGeneration;
 use crate::plugins::runtime::entry_bundle::EntryDemand;
 use crate::plugins::stream::plugin_generation::{StreamEntryDemand, StreamPluginGeneration, StreamStages};
-use crate::runtime::gateway_info::GatewayInfo;
+use crate::routes::grpc::DomainGrpcRouteRules;
+use crate::routes::http::routes_mgr::DomainRouteRules;
 use crate::runtime::store::listener_gateway_info::{GatewayInfoIndex, ListenerEntry};
 
 static PUBLISHER: LazyLock<PluginPublisher> = LazyLock::new(PluginPublisher::new);
@@ -54,6 +60,8 @@ struct Inputs {
     gateways: HashMap<String, GatewayInput>,
     gateway_versions: HashMap<String, u64>,
     routes: HashMap<(RouteKind, String), RouteInput>,
+    http_tables: HashMap<ListenerKey, (Weak<HttpPortRouteManager>, Arc<DomainRouteRules>)>,
+    grpc_tables: HashMap<ListenerKey, (Weak<GrpcPortRouteManager>, Arc<DomainGrpcRouteRules>)>,
     http_sources: HashMap<String, Arc<EdgionPlugins>>,
     stream_sources: HashMap<String, Arc<EdgionStreamPlugins>>,
     http_latest: HashMap<String, u64>,
@@ -128,6 +136,8 @@ impl Default for PluginPublisher {
 
 impl PluginPublisher {
     pub fn new() -> Self {
+        // Initialize empty tables on the cold path, including an initially empty publisher.
+        drop(HttpListenerPublication::empty());
         Self {
             state: Mutex::new(Inputs::default()),
             publication: ArcSwap::from_pointee(PluginPublication::default()),
@@ -138,8 +148,10 @@ impl PluginPublisher {
         self.publication.load_full()
     }
 
-    /// Callers pass owned facts after releasing their own rebuild/store locks.
-    /// Nothing below reads ClientCache, a route manager or another runtime store.
+    /// Callers pass owned facts. HTTP/GRPC writers retain their rebuild mutex
+    /// through commit; all other store/entry guards must be released first.
+    /// Lock order is route rebuild -> publisher, never the reverse. Nothing
+    /// below reads ClientCache, a route manager or another runtime store.
     fn change(&self, edit: impl FnOnce(&mut Inputs)) {
         let mut state = self.state.lock();
         edit(&mut state);
@@ -177,7 +189,69 @@ impl PluginPublisher {
         });
     }
 
-    pub fn replace_routes(&self, kind: RouteKind, incoming: HashMap<String, RouteInput>) {
+    pub fn replace_http_routes(
+        &self,
+        incoming: HashMap<String, RouteInput>,
+        tables: HashMap<ListenerKey, (Weak<HttpPortRouteManager>, Arc<DomainRouteRules>)>,
+    ) {
+        self.change(|state| {
+            state.routes.retain(|(kind, _), _| *kind != RouteKind::Http);
+            state
+                .routes
+                .extend(incoming.into_iter().map(|(key, route)| ((RouteKind::Http, key), route)));
+            state.http_tables = tables;
+        });
+    }
+
+    pub fn update_http_routes(
+        &self,
+        incoming: HashMap<String, RouteInput>,
+        removed: &HashSet<String>,
+        tables: HashMap<ListenerKey, (Weak<HttpPortRouteManager>, Arc<DomainRouteRules>)>,
+    ) {
+        self.change(|state| {
+            state
+                .routes
+                .retain(|(kind, key), _| *kind != RouteKind::Http || !removed.contains(key));
+            state
+                .routes
+                .extend(incoming.into_iter().map(|(key, route)| ((RouteKind::Http, key), route)));
+            state.http_tables = tables;
+        });
+    }
+
+    pub fn replace_grpc_routes(
+        &self,
+        incoming: HashMap<String, RouteInput>,
+        tables: HashMap<ListenerKey, (Weak<GrpcPortRouteManager>, Arc<DomainGrpcRouteRules>)>,
+    ) {
+        self.change(|state| {
+            state.routes.retain(|(kind, _), _| *kind != RouteKind::Grpc);
+            state
+                .routes
+                .extend(incoming.into_iter().map(|(key, route)| ((RouteKind::Grpc, key), route)));
+            state.grpc_tables = tables;
+        });
+    }
+
+    pub fn update_grpc_routes(
+        &self,
+        incoming: HashMap<String, RouteInput>,
+        removed: &HashSet<String>,
+        tables: HashMap<ListenerKey, (Weak<GrpcPortRouteManager>, Arc<DomainGrpcRouteRules>)>,
+    ) {
+        self.change(|state| {
+            state
+                .routes
+                .retain(|(kind, key), _| *kind != RouteKind::Grpc || !removed.contains(key));
+            state
+                .routes
+                .extend(incoming.into_iter().map(|(key, route)| ((RouteKind::Grpc, key), route)));
+            state.grpc_tables = tables;
+        });
+    }
+
+    pub fn replace_stream_routes(&self, kind: RouteKind, incoming: HashMap<String, RouteInput>) {
         self.change(|state| {
             state.routes.retain(|(current_kind, _), _| *current_kind != kind);
             state
@@ -186,7 +260,12 @@ impl PluginPublisher {
         });
     }
 
-    pub fn update_routes(&self, kind: RouteKind, incoming: HashMap<String, RouteInput>, removed: &HashSet<String>) {
+    pub fn update_stream_routes(
+        &self,
+        kind: RouteKind,
+        incoming: HashMap<String, RouteInput>,
+        removed: &HashSet<String>,
+    ) {
         self.change(|state| {
             state
                 .routes
@@ -308,6 +387,15 @@ impl Inputs {
                     && old.listeners.len() == gateway.listeners.len()
                     && old.listeners.iter().zip(&gateway.listeners).all(|(a, b)| {
                         a.key == b.key
+                            && a.port == b.port
+                            && a.entry.gateway_proof == b.entry.gateway_proof
+                            && a.entry.info.namespace() == b.entry.info.namespace()
+                            && a.entry.info.gateway_name() == b.entry.info.gateway_name()
+                            && a.entry.info.metrics_test_key == b.entry.info.metrics_test_key
+                            && a.entry.info.metrics_test_type == b.entry.info.metrics_test_type
+                            && a.entry.info.require_sni_host_match == b.entry.info.require_sni_host_match
+                            && a.entry.info.dns_resolver_candidate == b.entry.info.dns_resolver_candidate
+                            && a.entry.info.plugin_store_keys == b.entry.info.plugin_store_keys
                             && a.name == b.name
                             && a.hostname == b.hostname
                             && serde_json::to_vec(&a.allowed_routes).ok() == serde_json::to_vec(&b.allowed_routes).ok()
@@ -653,7 +741,6 @@ impl Inputs {
                 }),
             };
             next.gateways.insert(key.clone(), gateway_scope);
-            let (namespace, name) = key.split_once('/').unwrap_or(("default", key.as_str()));
             for listener in &gateway.listeners {
                 next.listeners
                     .entry(listener.key.clone())
@@ -663,28 +750,10 @@ impl Inputs {
                     .entry(listener.key.clone())
                     .or_default()
                     .push((key.clone(), self.gateway_versions.get(key).copied().unwrap_or_default()));
-                // This index resolves ownership only. The existing route context
-                // continues to own Gateway metrics, SNI policy and DNS metadata.
-                let info = Arc::new(GatewayInfo::new(
-                    Some(namespace.to_owned()),
-                    name.to_owned(),
-                    Some(listener.name.clone()),
-                    None,
-                    None,
-                    None,
-                    gateway.http_keys.clone(),
-                    None,
-                ));
-                entries.entry(listener.key.clone()).or_default().push((
-                    key.clone(),
-                    ListenerEntry {
-                        port: listener.port,
-                        info,
-                        gateway_proof: None,
-                        hostname: listener.hostname.clone(),
-                        allowed_routes: listener.allowed_routes.clone(),
-                    },
-                ));
+                entries
+                    .entry(listener.key.clone())
+                    .or_default()
+                    .push((key.clone(), listener.entry.clone()));
             }
         }
         for keys in next.listeners.values_mut() {
@@ -702,6 +771,44 @@ impl Inputs {
                 None => Arc::new(GatewayInfoIndex::from_entries(entries.remove(key).unwrap_or_default())),
             };
             next.indices.insert(key.clone(), index);
+        }
+        let empty = HttpListenerPublication::empty();
+        for (listener, keys) in &next.listeners {
+            let (http_manager, http) = self
+                .http_tables
+                .get(listener)
+                .map(|pair| (&pair.0, &pair.1))
+                .unwrap_or((&empty.http_manager, &empty.http));
+            let (grpc_manager, grpc) = self
+                .grpc_tables
+                .get(listener)
+                .map(|pair| (&pair.0, &pair.1))
+                .unwrap_or((&empty.grpc_manager, &empty.grpc));
+            let index = next.indices.get(listener).expect("listener has an index");
+            let old = previous.http_listeners.get(listener).filter(|old| {
+                old.http_manager.ptr_eq(http_manager)
+                    && old.grpc_manager.ptr_eq(grpc_manager)
+                    && Arc::ptr_eq(&old.http, http)
+                    && Arc::ptr_eq(&old.grpc, grpc)
+                    && Arc::ptr_eq(&old.index, index)
+                    && old.gateway_count() == keys.len()
+                    && keys.iter().all(|key| {
+                        old.gateway(key)
+                            .zip(next.gateways.get(key))
+                            .is_some_and(|(a, b)| Arc::ptr_eq(&a, b))
+                    })
+            });
+            let view = old.cloned().unwrap_or_else(|| {
+                HttpListenerPublication::new(
+                    (http_manager.clone(), Arc::clone(http)),
+                    (grpc_manager.clone(), Arc::clone(grpc)),
+                    Arc::clone(index),
+                    keys.iter()
+                        .filter_map(|key| next.gateways.get(key).map(|view| (key.clone(), Arc::clone(view))))
+                        .collect(),
+                )
+            });
+            next.http_listeners.insert(listener.clone(), view);
         }
         for (listener, keys) in &next.listeners {
             next.connections

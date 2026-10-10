@@ -87,11 +87,8 @@ pub struct EdgionHttpProxy {
     /// Preflight request handler
     pub preflight_handler: PreflightHandler,
 
-    /// Cached per-listener HTTP route manager. The outer `Arc` is stable for the
-    /// lifetime of a serving listener (route hot-reload only swaps the inner
-    /// `ArcSwap<DomainRouteRules>`), so resolving it once at construction
-    /// removes a `DashMap` shard write-lock and a `ListenerKey(String)` clone
-    /// from every request.
+    /// Construction-time listener identity. Request matching uses the captured
+    /// publication table only when its manager token matches this handle.
     pub http_route_manager: Arc<HttpPortRouteManager>,
 
     /// Cached per-listener gRPC route manager. Same stability rationale as

@@ -34,9 +34,15 @@ inspection confirms the following ownership chain:
 - HTTP/gRPC `routes_mgr.rs` and shared `routes/l4_rebuild.rs` clear and remove a
   `by_listener` entry when both logical owners and route references disappear.
   An existing proxy still owns the cleared manager.
-- Recreating the same `ListenerKey` allocates a distinct manager. Restored routes
-  update that new manager, while the old proxy continues loading its empty
-  `route_table`. Waiting for additional synchronization cannot reconnect them.
+- Recreating the same `ListenerKey` after manager retirement allocates a distinct
+  manager. Restored routes update that new manager. L4 proxies keep loading the
+  old empty `route_table`; HTTP/gRPC compare their physical handle with a Weak
+  identity paired with the captured publication table, and use an empty table
+  when that family differs. They never reload a manager table during a request.
+  Waiting for additional synchronization cannot reconnect a retired handle.
+  Already captured HTTP/gRPC requests may finish with their coherent old views.
+  Each family retires independently; this identity check preserves existing
+  reachability, not arbitrary Gateway UID or EGC rebinding safety.
 
 Historical HTTP evidence recorded 404/`RouteNotFound` after a successful TLS
 handshake; terminated TLS evidence recorded no selected TLSRoute after Gateway

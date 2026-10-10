@@ -1,11 +1,12 @@
 use super::*;
-use crate::plugins::publication::inputs::{GatewayInput, RouteInput, RouteKind};
+use crate::plugins::publication::inputs::{GatewayInput, RouteInput};
 use crate::plugins::publication::{GatewayScope, PluginPublisher};
 use crate::routes::grpc::{
     parse_route_to_units_for_test, DomainGrpcRouteRules, GrpcMatchEngine, GrpcPortRouteManager, GrpcRouteRules,
 };
 use crate::routes::http::conf_handler_impl::build_domain_route_rules_from_routes;
 use crate::routes::http::routes_mgr::{DomainRouteRules, HttpPortRouteManager};
+use crate::runtime::get_listener_gateway_info_store;
 use crate::runtime::store::listener_gateway_info::{ListenerGatewayInfoStore, TestListenerIndexGuard};
 use edgion_resources::{EdgionGatewayConfig, GRPCRoute, Gateway, GatewayClass, HTTPRoute, ListenerKey, ResourceMeta};
 use pingora_core::modules::http::grpc_web::GrpcWeb;
@@ -23,6 +24,7 @@ const HTTP_ROUTE: &str = "request-entry-test/http-fallback";
 struct Fixture {
     proxy: EdgionHttpProxy,
     owner: Arc<GatewayScope>,
+    publication: Arc<crate::plugins::publication::HttpListenerPublication>,
     egc: Arc<crate::config::ResolvedGatewayConfig>,
     _index: TestListenerIndexGuard,
 }
@@ -76,9 +78,9 @@ impl Fixture {
         publisher.replace_gateway_classes(HashMap::from([("request-entry-class".into(), Arc::new(class))]));
         publisher.replace_gateway_configs(HashMap::from([("request-entry-config".into(), config.clone())]));
         publisher.replace_gateways(HashMap::from([(OWNER.into(), GatewayInput::from_gateway(&gateway))]));
-        publisher.replace_routes(
-            RouteKind::Http,
+        publisher.replace_http_routes(
             HashMap::from([(HTTP_ROUTE.into(), RouteInput::from_http(route.clone()))]),
+            HashMap::new(),
         );
         let owner = publisher.snapshot().gateway(OWNER).unwrap();
         assert!(owner.scope.available && owner.scope.ai_rule(&route, 0));
@@ -113,6 +115,29 @@ impl Fixture {
                 grpc_routes: Arc::new(rules),
             });
         }
+        publisher.update_http_routes(
+            HashMap::new(),
+            &std::collections::HashSet::new(),
+            HashMap::from([(
+                listener_key.clone(),
+                (
+                    Arc::downgrade(&http_route_manager),
+                    Arc::clone(&http_route_manager.load_route_table()),
+                ),
+            )]),
+        );
+        publisher.update_grpc_routes(
+            HashMap::new(),
+            &std::collections::HashSet::new(),
+            HashMap::from([(
+                listener_key.clone(),
+                (
+                    Arc::downgrade(&grpc_route_manager),
+                    Arc::clone(&grpc_route_manager.load_route_table()),
+                ),
+            )]),
+        );
+        let publication = publisher.snapshot().http_listener(&listener_key);
         let store = ListenerGatewayInfoStore::new();
         store.rebuild(&[gateway]);
         let index = store.get_index(&listener_key);
@@ -134,6 +159,7 @@ impl Fixture {
             egc: Arc::new(crate::config::ResolvedGatewayConfig::resolve(&config)),
             proxy,
             owner,
+            publication,
             _index: index,
         }
     }
@@ -143,6 +169,7 @@ impl Fixture {
         // The actual early hook still initializes IDs. Only its owner input
         // is local, so parallel tests cannot replace this policy generation.
         ctx.egc = self.egc.clone();
+        ctx.capture_listener_publication(self.publication.clone());
         ctx.capture_plugin_scope(self.owner.clone());
         ctx
     }
@@ -315,4 +342,84 @@ fn request_entry_index_override_restores_nested_state_on_unwind() {
     assert!(Arc::ptr_eq(&outer, &store.get_index(&key)));
     drop(fixture);
     assert_eq!(store.get_index(&key).is_empty(), baseline_empty);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn captured_empty_entry_keeps_404_and_metadata_400_precedence() {
+    for (known_owner, malformed_host) in [(false, false), (true, false), (false, true)] {
+        let fixture = Fixture::new(false, true, false, false, false);
+        let publisher = PluginPublisher::new();
+        if known_owner {
+            let gateway: Gateway = crate::test_current_status::from_value(json!({
+                "metadata":{"namespace":NAMESPACE,"name":"empty"},
+                "spec":{"gatewayClassName":"empty","listeners":[{"name":"web","port":18479,"protocol":"HTTP"}]}
+            }))
+            .unwrap();
+            let class: GatewayClass = serde_json::from_value(json!({
+                "metadata":{"name":"empty"},"spec":{"controllerName":"edgion.io/gateway-controller"}
+            }))
+            .unwrap();
+            publisher.replace_gateway_classes(HashMap::from([("empty".into(), Arc::new(class))]));
+            publisher.replace_gateways(HashMap::from([(
+                format!("{NAMESPACE}/empty"),
+                GatewayInput::from_gateway(&gateway),
+            )]));
+        }
+        let mut ctx = EdgionHttpContext::new();
+        ctx.egc = fixture.egc.clone();
+        ctx.capture_listener_publication(publisher.snapshot().http_listener(&fixture.proxy.listener_key));
+        let (mut session, _client) = session("application/json").await;
+        if malformed_host {
+            session.req_header_mut().remove_header("host");
+        }
+        assert!(run_entry(&fixture, &mut session, &mut ctx).await);
+        assert_eq!(
+            session.response_written().unwrap().status.as_u16(),
+            if malformed_host { 400 } else { 404 }
+        );
+        assert!(ctx.route_unit.is_none());
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn unavailable_owner_keeps_unique_early_and_shared_matched_503() {
+    for shared in [false, true] {
+        let fixture = Fixture::new(false, true, false, false, false);
+        let publisher = PluginPublisher::new();
+        let mut sources = HashMap::new();
+        for name in if shared { vec!["one", "two"] } else { vec!["one"] } {
+            let gateway: Gateway = crate::test_current_status::from_value(json!({
+                "metadata":{"namespace":NAMESPACE,"name":name},
+                "spec":{"gatewayClassName":"missing","listeners":[{"name":"web","port":18479,"protocol":"HTTP"}]}
+            }))
+            .unwrap();
+            sources.insert(format!("{NAMESPACE}/{name}"), GatewayInput::from_gateway(&gateway));
+        }
+        publisher.replace_gateways(sources);
+        let mut ctx = EdgionHttpContext::new();
+        ctx.capture_listener_publication(publisher.snapshot().http_listener(&fixture.proxy.listener_key));
+        let (mut session, _client) = session("application/json").await;
+        let early =
+            super::super::pg_early_request_filter::initialize_request_ids(&fixture.proxy, &mut session, &mut ctx).await;
+        if shared {
+            assert!(early.is_ok());
+            assert!(ctx.plugin_scope().is_none());
+            ctx.gateway_info = Some(
+                ctx.listener_publication()
+                    .unwrap()
+                    .index
+                    .get(&format!("{NAMESPACE}/one"), "web")
+                    .unwrap()
+                    .info
+                    .clone(),
+            );
+            super::super::pg_early_request_filter::capture_matched_scope(&mut ctx).unwrap();
+            let error = super::super::pg_early_request_filter::initialize_gateway_request_ids(&mut session, &mut ctx)
+                .await
+                .unwrap_err();
+            assert_eq!(error.etype(), &pingora_core::ErrorType::HTTPStatus(503));
+        } else {
+            assert_eq!(early.unwrap_err().etype(), &pingora_core::ErrorType::HTTPStatus(503));
+        }
+    }
 }

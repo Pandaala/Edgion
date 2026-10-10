@@ -155,6 +155,8 @@ impl ConfHandler<Gateway> for GatewayHandler {
             get_global_tls_route_managers().rebuild_all_listener_managers();
             get_global_udp_route_managers().rebuild_all_listener_managers();
         }
+        // Full listener entries and scoped policy publish together, including
+        // same-key SNI/DNS/proof changes that do not rebuild route tables.
         crate::plugins::publication::global_publisher().replace_gateways(
             data.iter()
                 .map(|(key, gateway)| {
@@ -360,6 +362,8 @@ impl ConfHandler<Gateway> for GatewayHandler {
                 get_global_udp_route_managers().rebuild_all_listener_managers();
             }
         }
+        // GatewayInput carries the canonical full listener entries; index and
+        // scope change in one publication even when physical keys are unchanged.
         crate::plugins::publication::global_publisher().update_gateways(policy_inputs, &policy_removed);
         crate::ai::reconcile_all_adaptive_plugin_dependents();
         if self.gateway_scope.is_none() {

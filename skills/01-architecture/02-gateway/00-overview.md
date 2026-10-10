@@ -302,7 +302,13 @@ Resources separates raw source-enabled structural binding from effective chain
 composition. Controller only invalidates structurally illegal attachments through
 existing rule status/requeue paths. PluginPublisher::rule_admission validates
 current raw sources and effective scoped views together and publishes its decision
-with the existing Weak route Arc/index token. Conditions and Bypass cannot repair
+with the existing Weak route Arc/index token. Before early RequestId processing,
+each HTTP request pins one listener publication with the HTTP/GRPC tables, full
+Gateway index and owner scopes. Matching, fallback and AI/GraphQL admission use
+that same generation; a missing listener is pinned as an empty view. HTTP/GRPC
+writers hold their family rebuild mutex through the atomic table/facts commit
+to PluginPublisher. Existing requests may finish on their captured generation.
+Conditions and Bypass cannot repair
 undeclared mappings/defaults; effective masks can remove conflicting publishers.
 
 The request gate checks the captured token after policy Block preflight. The

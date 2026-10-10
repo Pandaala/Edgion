@@ -1772,7 +1772,7 @@ pub(crate) struct DeferredCredentialMutations {
 /// extra branch and heap indirection at every plugin callback.
 #[derive(Default)]
 struct PluginExecutionState {
-    scope: Option<Arc<crate::plugins::publication::GatewayScope>>,
+    publication: Option<Arc<crate::plugins::publication::HttpListenerPublication>>,
     stage_logs: Vec<StageLogs>,
     pending_edgion_plugins_logs: Vec<EdgionPluginsLog>,
     terminated: bool,
@@ -2525,17 +2525,40 @@ impl EdgionHttpContext {
         }
     }
 
-    #[inline]
-    pub(crate) fn plugin_scope(&self) -> Option<&Arc<crate::plugins::publication::GatewayScope>> {
-        self.plugin_execution.scope.as_ref()
+    /// None means not captured; an absent listener is pinned as the cold empty view.
+    pub(crate) fn listener_publication(&self) -> Option<&Arc<crate::plugins::publication::HttpListenerPublication>> {
+        self.plugin_execution.publication.as_ref()
     }
 
-    /// Capture one logical Gateway and keep its policy for this request.
-    pub(crate) fn capture_plugin_scope(&mut self, scope: Arc<crate::plugins::publication::GatewayScope>) -> bool {
-        if let Some(current) = self.plugin_execution.scope.as_ref() {
-            return current.gateway_key == scope.gateway_key;
+    pub(crate) fn capture_listener_publication(
+        &mut self,
+        view: Arc<crate::plugins::publication::HttpListenerPublication>,
+    ) {
+        if self.plugin_execution.publication.is_none() {
+            self.plugin_execution.publication = Some(view);
         }
-        self.plugin_execution.scope = Some(scope);
+    }
+
+    #[inline]
+    pub(crate) fn plugin_scope(&self) -> Option<&Arc<crate::plugins::publication::GatewayScope>> {
+        self.plugin_execution
+            .publication
+            .as_ref()
+            .and_then(|view| view.unique_gateway())
+    }
+
+    /// Select only an owner prebuilt in this request's captured listener view.
+    pub(crate) fn capture_matched_plugin_scope(&mut self) -> bool {
+        let Some(view) = self.plugin_execution.publication.as_ref() else {
+            return false;
+        };
+        let Some(gateway) = self.gateway_info.as_ref() else {
+            return false;
+        };
+        let Some(selected) = view.select_gateway(gateway.gateway_key()) else {
+            return false;
+        };
+        self.plugin_execution.publication = Some(selected);
         true
     }
 

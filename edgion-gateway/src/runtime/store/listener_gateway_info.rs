@@ -217,6 +217,72 @@ pub struct ListenerGatewayInfoStore {
     snapshot: ArcSwap<ListenerGatewayInfoSnapshot>,
 }
 
+/// Canonical cold projection used by listener inventory and request publication.
+pub(crate) fn gateway_listener_entries(gateway: &Gateway) -> Vec<(ListenerKey, ListenerEntry)> {
+    let mut entries = Vec::new();
+    let gateway_namespace = gateway.metadata.namespace.clone();
+    let gateway_name = gateway.name_any();
+
+    let Some(listeners) = &gateway.spec.listeners else {
+        return entries;
+    };
+
+    let gateway_annotations = gateway.metadata.annotations.as_ref();
+
+    let metrics_test_key = gateway_annotations
+        .and_then(|map| map.get(annotations::METRICS_TEST_KEY))
+        .cloned();
+    let metrics_test_type = gateway_annotations
+        .and_then(|map| map.get(annotations::METRICS_TEST_TYPE))
+        .map(|s| TestType::from_str(s));
+
+    let require_sni_host_match = gateway_annotations
+        .and_then(|map| map.get(annotations::REQUIRE_SNI_HOST_MATCH))
+        .map(|v| v == "true");
+
+    let plugin_store_keys: Vec<String> = HttpPluginAttachments::Gateway(gateway)
+        .entries()
+        .into_iter()
+        .flatten()
+        .map(|reference| reference.into_key())
+        .collect();
+
+    // Precompute the gateway-layer DNS resolver candidate from the two
+    // `edgion.io/dns-resolver{,-ref}` annotations, so the hot ExternalName
+    // self-resolution path reads it off GatewayInfo without re-parsing.
+    let dns_resolver_candidate = candidate_from_dns_owner(DnsResolverOwner::Gateway(gateway));
+
+    for listener in listeners {
+        if gateway_listener_is_explicitly_ineligible(gateway, &listener.name) {
+            continue;
+        }
+
+        let addr = resolve_listener_addr(gateway, listener.port);
+        let key = ListenerKey::new(addr, &listener.protocol);
+        let gi = Arc::new(GatewayInfo::new(
+            gateway_namespace.clone(),
+            gateway_name.clone(),
+            Some(listener.name.clone()),
+            metrics_test_key.clone(),
+            metrics_test_type.clone(),
+            require_sni_host_match,
+            plugin_store_keys.clone(),
+            dns_resolver_candidate.clone(),
+        ));
+
+        let entry = ListenerEntry {
+            port: listener.port,
+            info: Arc::clone(&gi),
+            gateway_proof: Some(gateway_attachment_proof(gateway)),
+            hostname: listener.hostname.clone(),
+            allowed_routes: listener.allowed_routes.clone(),
+        };
+
+        entries.push((key, entry));
+    }
+    entries
+}
+
 impl ListenerGatewayInfoStore {
     pub fn new() -> Self {
         Self {
@@ -228,7 +294,7 @@ impl ListenerGatewayInfoStore {
     ///
     /// Returns an empty Vec (behind Arc) if the key has no registered Gateways.
     /// Listener construction and diagnostics use this flat view; request route
-    /// matching uses `get_index` below.
+    /// matching uses the full index in its captured listener publication.
     #[inline]
     pub fn get(&self, key: &ListenerKey) -> Arc<[Arc<GatewayInfo>]> {
         let snap = self.snapshot.load();
@@ -268,74 +334,15 @@ impl ListenerGatewayInfoStore {
         let mut index_map: HashMap<ListenerKey, GatewayInfoIndex> = HashMap::new();
 
         for gateway in gateways {
-            let gateway_namespace = gateway.metadata.namespace.clone();
-            let gateway_name = gateway.name_any();
-
-            let Some(listeners) = &gateway.spec.listeners else {
-                continue;
-            };
-
-            let gateway_annotations = gateway.metadata.annotations.as_ref();
-
-            let metrics_test_key = gateway_annotations
-                .and_then(|map| map.get(annotations::METRICS_TEST_KEY))
-                .cloned();
-            let metrics_test_type = gateway_annotations
-                .and_then(|map| map.get(annotations::METRICS_TEST_TYPE))
-                .map(|s| TestType::from_str(s));
-
-            let require_sni_host_match = gateway_annotations
-                .and_then(|map| map.get(annotations::REQUIRE_SNI_HOST_MATCH))
-                .map(|v| v == "true");
-
-            let plugin_store_keys: Vec<String> = HttpPluginAttachments::Gateway(gateway)
-                .entries()
-                .into_iter()
-                .flatten()
-                .map(|reference| reference.into_key())
-                .collect();
-
-            // Precompute the gateway-layer DNS resolver candidate from the two
-            // `edgion.io/dns-resolver{,-ref}` annotations, so the hot ExternalName
-            // self-resolution path reads it off GatewayInfo without re-parsing.
-            let dns_resolver_candidate = candidate_from_dns_owner(DnsResolverOwner::Gateway(gateway));
-
-            for listener in listeners {
-                if gateway_listener_is_explicitly_ineligible(gateway, &listener.name) {
-                    continue;
-                }
-
-                let addr = resolve_listener_addr(gateway, listener.port);
-                let key = ListenerKey::new(addr, &listener.protocol);
-                let gi = Arc::new(GatewayInfo::new(
-                    gateway_namespace.clone(),
-                    gateway_name.clone(),
-                    Some(listener.name.clone()),
-                    metrics_test_key.clone(),
-                    metrics_test_type.clone(),
-                    require_sni_host_match,
-                    plugin_store_keys.clone(),
-                    dns_resolver_candidate.clone(),
-                ));
-
-                let gateway_key = gi.gateway_key().to_owned();
-                let entry = ListenerEntry {
-                    port: listener.port,
-                    info: Arc::clone(&gi),
-                    gateway_proof: Some(gateway_attachment_proof(gateway)),
-                    hostname: listener.hostname.clone(),
-                    allowed_routes: listener.allowed_routes.clone(),
-                };
-
+            for (key, entry) in gateway_listener_entries(gateway) {
+                port_map.entry(key.clone()).or_default().push(Arc::clone(&entry.info));
                 index_map
-                    .entry(key.clone())
+                    .entry(key)
                     .or_insert_with(GatewayInfoIndex::new)
                     .gateways
-                    .entry(gateway_key)
+                    .entry(entry.info.gateway_key().to_owned())
                     .or_insert_with(GatewayListeners::new)
                     .add(entry);
-
-                port_map.entry(key).or_default().push(gi);
             }
         }
 
@@ -414,10 +421,6 @@ pub fn format_gateway_key(namespace: &str, name: &str) -> String {
 
 pub(crate) fn is_listener_conflicted(gateway: &Gateway, listener_name: &str) -> bool {
     edgion_resources::resources::gateway::gateway_listener_is_conflicted(gateway, listener_name)
-}
-
-pub(crate) fn is_listener_not_programmed(gateway: &Gateway, listener_name: &str) -> bool {
-    edgion_resources::resources::gateway::gateway_listener_is_not_programmed(gateway, listener_name)
 }
 
 static GLOBAL_LISTENER_GATEWAY_INFO_STORE: LazyLock<ListenerGatewayInfoStore> =

@@ -193,7 +193,7 @@ fn masking_decision_table() {
 #[tokio::test]
 async fn invalid_route_reference_cannot_consume_same_name_log_declaration() {
     use crate::plugins::publication::{
-        inputs::{GatewayInput, RouteInput, RouteKind},
+        inputs::{GatewayInput, RouteInput},
         PluginPublisher,
     };
     use crate::routes::http::{conf_handler_impl::build_domain_route_rules_from_routes, routes_mgr::DomainRouteRules};
@@ -217,9 +217,9 @@ async fn invalid_route_reference_cannot_consume_same_name_log_declaration() {
         "metadata":{"name":"route","namespace":"default"}, "spec":{"resolvedStatusController":"edgion.io/gateway-controller","parentRefs":[{"name":"gateway"}],"resolvedListeners":["0.0.0.0:8080/HTTP"],"rules":[{"filters":[{"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"decoy"}}]}]}
     })).unwrap();
     let route = Arc::new(route);
-    publisher.replace_routes(
-        RouteKind::Http,
+    publisher.replace_http_routes(
         HashMap::from([("default/route".into(), RouteInput::from_http(route.clone()))]),
+        HashMap::new(),
     );
     let owner = publisher.snapshot().gateway("default/gateway").unwrap();
     assert!(owner.scope.http("default/decoy").is_some());

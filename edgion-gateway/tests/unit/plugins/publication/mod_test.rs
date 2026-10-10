@@ -752,7 +752,7 @@ fn shared_listener_requires_equivalent_connection_views_but_not_equal_http_polic
         &HashSet::new(),
     );
     let listener = ListenerKey::new("0.0.0.0:18080".parse().unwrap(), "HTTP");
-    assert!(publisher.snapshot().unique_gateway(&listener).is_none());
+    assert!(publisher.snapshot().http_listener(&listener).unique_gateway().is_none());
     assert!(matches!(
         publisher.snapshot().connection(&listener),
         ConnectionView::Empty
@@ -1676,5 +1676,95 @@ fn invalid_l4_owner_has_no_executable_decoy_demand_and_valid_lexical_key_recover
         assert!(pinned.stream("apps/stream").is_some());
         publisher.replace_routes(route_kind, HashMap::from([("apps/r".into(), make_input(false))]));
         assert!(scope(&publisher, "apps/a").stream("apps/stream").is_some());
+    }
+}
+
+// Existing policy-only fixtures submit empty compiled tables. Request-lifetime
+// regressions below use the actual route manager commit and matching paths.
+trait PolicyRouteFixture {
+    fn replace_routes(&self, kind: RouteKind, incoming: HashMap<String, RouteInput>);
+    fn update_routes(&self, kind: RouteKind, incoming: HashMap<String, RouteInput>, removed: &HashSet<String>);
+}
+
+impl PolicyRouteFixture for PluginPublisher {
+    fn replace_routes(&self, kind: RouteKind, incoming: HashMap<String, RouteInput>) {
+        match kind {
+            RouteKind::Http => self.replace_http_routes(incoming, HashMap::new()),
+            RouteKind::Grpc => self.replace_grpc_routes(incoming, HashMap::new()),
+            _ => self.replace_stream_routes(kind, incoming),
+        }
+    }
+    fn update_routes(&self, kind: RouteKind, incoming: HashMap<String, RouteInput>, removed: &HashSet<String>) {
+        match kind {
+            RouteKind::Http => self.update_http_routes(incoming, removed, HashMap::new()),
+            RouteKind::Grpc => self.update_grpc_routes(incoming, removed, HashMap::new()),
+            _ => self.update_stream_routes(kind, incoming, removed),
+        }
+    }
+}
+
+#[test]
+fn same_listener_key_updates_complete_gateway_entry_and_reuses_unchanged_view() {
+    let publisher = publisher();
+    let key = ListenerKey("0.0.0.0:18080/HTTP".into());
+    let before = publisher.snapshot().http_listener(&key);
+    let old = before.index.get("apps/a", "web").unwrap();
+    assert!(old.info.metrics_test_key.is_none());
+    let mut source: Gateway = crate::test_current_status::from_value(json!({
+        "metadata":{"namespace":"apps","name":"a","uid":"replacement","annotations":{
+            "edgion.io/metrics-test-key":"coherent-metrics",
+            "edgion.io/metrics-test-type":"integration",
+            "edgion.io/require-sni-host-match":"true",
+            "edgion.io/dns-resolver":"127.0.0.1:53"}},
+        "spec":{"gatewayClassName":"a","listeners":[{"name":"web","protocol":"HTTP","port":18080}]}
+    }))
+    .unwrap();
+    source.spec.resolved_attachment_proof = Some(edgion_resources::GatewayAttachmentProof {
+        instance: "controller-a".into(),
+        generation: 7,
+        epoch: "epoch-a".into(),
+        attachment_digest: "a".repeat(64),
+    });
+    publisher.update_gateways(
+        HashMap::from([("apps/a".into(), GatewayInput::from_gateway(&source))]),
+        &HashSet::new(),
+    );
+    let after = publisher.snapshot().http_listener(&key);
+    let entry = after.index.get("apps/a", "web").unwrap();
+    assert!(!Arc::ptr_eq(&before, &after));
+    assert_eq!(entry.info.metrics_test_key.as_deref(), Some("coherent-metrics"));
+    assert_eq!(entry.info.require_sni_host_match, Some(true));
+    assert!(entry.info.metrics_test_type.is_some());
+    assert!(entry.info.dns_resolver_candidate.is_some());
+    assert_ne!(entry.gateway_proof, old.gateway_proof);
+    assert!(
+        old.info.metrics_test_key.is_none(),
+        "the captured index remains immutable"
+    );
+    publisher.update_gateways(
+        HashMap::from([("apps/a".into(), GatewayInput::from_gateway(&source))]),
+        &HashSet::new(),
+    );
+    assert!(Arc::ptr_eq(&after, &publisher.snapshot().http_listener(&key)));
+    source.spec.listeners.as_mut().unwrap()[0].port = 18081;
+    publisher.replace_gateways(HashMap::from([("apps/a".into(), GatewayInput::from_gateway(&source))]));
+    assert!(publisher.snapshot().http_listener(&key).index.is_empty());
+    let moved = publisher
+        .snapshot()
+        .http_listener(&ListenerKey("0.0.0.0:18081/HTTP".into()));
+    assert_eq!(moved.index.get("apps/a", "web").unwrap().port, 18081);
+    assert_eq!(after.index.get("apps/a", "web").unwrap().port, 18080);
+}
+
+impl super::HttpListenerPublication {
+    /// A cold fixture for policy-only tests that do not enter route matching.
+    pub(crate) fn fixture_for_scope(scope: Arc<super::GatewayScope>) -> Arc<Self> {
+        let empty = Self::empty();
+        Self::new(
+            (empty.http_manager.clone(), empty.http.clone()),
+            (empty.grpc_manager.clone(), empty.grpc.clone()),
+            empty.index.clone(),
+            HashMap::from([(scope.gateway_key.clone(), scope)]),
+        )
     }
 }

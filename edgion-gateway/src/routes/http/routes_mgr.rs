@@ -15,7 +15,7 @@ use edgion_resources::err::EdError;
 use edgion_resources::HTTPRoute;
 use edgion_resources::ListenerKey;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, Weak};
 
 pub struct RouteRules {
     /// All resource keys (HTTPRoute) that apply to this hostname
@@ -251,7 +251,7 @@ impl DomainRouteRules {
 /// Per-port HTTP route manager.
 ///
 /// Each instance owns an atomically-swappable `DomainRouteRules` snapshot.
-/// `pg_request_filter` loads the per-port table via `load_route_table()`
+/// Cold publication captures the per-port table via `load_route_table()`
 /// for lock-free lookups.
 pub struct HttpPortRouteManager {
     route_table: ArcSwap<DomainRouteRules>,
@@ -270,7 +270,8 @@ impl HttpPortRouteManager {
         }
     }
 
-    /// Load the current route table snapshot (hot path, per-request).
+    /// Load a compiled table for cold rebuilding and inspection.
+    /// Serving requests use their captured listener publication.
     pub fn load_route_table(&self) -> arc_swap::Guard<Arc<DomainRouteRules>> {
         self.route_table.load()
     }
@@ -334,6 +335,24 @@ impl GlobalHttpRouteManagers {
         self.rebuild_lock.lock()
     }
 
+    /// Capture table Arcs while the caller holds the family rebuild mutex.
+    pub(crate) fn publication_tables(
+        &self,
+    ) -> HashMap<ListenerKey, (Weak<HttpPortRouteManager>, Arc<DomainRouteRules>)> {
+        self.by_listener
+            .iter()
+            .map(|entry| {
+                (
+                    entry.key().clone(),
+                    (
+                        Arc::downgrade(entry.value()),
+                        Arc::clone(&entry.value().load_route_table()),
+                    ),
+                )
+            })
+            .collect()
+    }
+
     /// Get or create a per-listener `HttpPortRouteManager`.
     ///
     /// The returned `Arc` is stable; route updates only swap the inner
@@ -354,6 +373,11 @@ impl GlobalHttpRouteManagers {
     pub fn rebuild_all_listener_managers(&self) {
         let _guard = self.rebuild_lock.lock();
         self.rebuild_all_listener_managers_locked();
+        crate::plugins::publication::global_publisher().update_http_routes(
+            HashMap::new(),
+            &HashSet::new(),
+            self.publication_tables(),
+        );
     }
 
     /// Rebuild body. The caller MUST hold `rebuild_lock`.

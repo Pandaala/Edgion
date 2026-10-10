@@ -66,7 +66,7 @@ impl GlobalTcpRouteManagers {
             "full set done"
         );
         drop(_guard);
-        publisher.replace_routes(RouteKind::Tcp, policy_inputs);
+        publisher.replace_stream_routes(RouteKind::Tcp, policy_inputs);
     }
 
     fn partial_update_with_publisher(
@@ -113,7 +113,7 @@ impl GlobalTcpRouteManagers {
             })
             .collect();
         drop(_guard);
-        publisher.update_routes(RouteKind::Tcp, policy_inputs, &policy_removed);
+        publisher.update_stream_routes(RouteKind::Tcp, policy_inputs, &policy_removed);
     }
 }
 
