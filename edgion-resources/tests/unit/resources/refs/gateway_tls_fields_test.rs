@@ -155,3 +155,116 @@ fn native_frontend_selection_uses_declaration_and_authoritative_port() {
     let gateway: Gateway = serde_json::from_value(raw).unwrap();
     assert!(GatewayTlsRefs::from_gateway(&gateway).frontend_validation(0).is_none());
 }
+
+#[test]
+fn backend_client_material_pairs_only_actual_native_field_and_finite_default_namespace() {
+    let mut base = wire();
+    base["spec"]["tls"]["backend"]["resolvedClientCertificate"] =
+        json!({"metadata":{"name":"client","namespace":"apps","resourceVersion":"same"}});
+    let owner: Gateway = serde_json::from_value(base.clone()).unwrap();
+    let fields = GatewayTlsRefs::from_gateway(&owner);
+    let field = fields.backend_client().unwrap();
+    let pair = field.backend_client_material().unwrap();
+    assert!(std::ptr::eq(
+        pair.material().unwrap(),
+        owner
+            .spec
+            .tls
+            .as_ref()
+            .unwrap()
+            .backend
+            .as_ref()
+            .unwrap()
+            .resolved_client_certificate
+            .as_ref()
+            .unwrap()
+    ));
+    assert!(fields.serving(0, 0).unwrap().backend_client_material().is_err());
+    assert!(fields.frontend_ca(0, 0).unwrap().backend_client_material().is_err());
+
+    for (path, value) in [
+        ("/metadata/name", json!(null)),
+        ("/metadata/name", json!("bad/name")),
+        ("/metadata/namespace", json!("")),
+        ("/metadata/namespace", json!("UPPER")),
+        ("/spec/tls/backend/clientCertificateRef/group", json!("core")),
+        ("/spec/tls/backend/clientCertificateRef/group", json!("other.example")),
+        ("/spec/tls/backend/clientCertificateRef/kind", json!("")),
+        ("/spec/tls/backend/clientCertificateRef/kind", json!("ConfigMap")),
+        ("/spec/tls/backend/clientCertificateRef/name", json!("retargeted")),
+        ("/spec/tls/backend/resolvedClientCertificate/metadata/name", json!(null)),
+        ("/spec/tls/backend/resolvedClientCertificate/metadata/name", json!("")),
+        (
+            "/spec/tls/backend/resolvedClientCertificate/metadata/name",
+            json!("other"),
+        ),
+        (
+            "/spec/tls/backend/resolvedClientCertificate/metadata/namespace",
+            json!(null),
+        ),
+        (
+            "/spec/tls/backend/resolvedClientCertificate/metadata/namespace",
+            json!(""),
+        ),
+        (
+            "/spec/tls/backend/resolvedClientCertificate/metadata/namespace",
+            json!("other"),
+        ),
+    ] {
+        let mut value_owner = base.clone();
+        let (parent, key) = path.rsplit_once('/').unwrap();
+        value_owner
+            .pointer_mut(parent)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert(key.into(), value);
+        let owner: Gateway = serde_json::from_value(value_owner).unwrap();
+        assert!(
+            GatewayTlsRefs::from_gateway(&owner)
+                .backend_client()
+                .unwrap()
+                .backend_client_material()
+                .is_err(),
+            "accepted {path}"
+        );
+    }
+    for material_namespace in [None, Some("default")] {
+        for group in [None, Some("")] {
+            let mut value = base.clone();
+            value["metadata"].as_object_mut().unwrap().remove("namespace");
+            let reference = value["spec"]["tls"]["backend"]["clientCertificateRef"]
+                .as_object_mut()
+                .unwrap();
+            if let Some(group) = group {
+                reference.insert("group".into(), json!(group));
+            }
+            value["spec"]["tls"]["backend"]["resolvedClientCertificate"]["metadata"]["namespace"] =
+                json!(material_namespace);
+            let owner: Gateway = serde_json::from_value(value).unwrap();
+            assert!(GatewayTlsRefs::from_gateway(&owner)
+                .backend_client()
+                .unwrap()
+                .backend_client_material()
+                .is_ok());
+        }
+    }
+    let mut marked = base.clone();
+    marked["spec"]["tls"]["backend"]["resolvedClientCertificate"]["metadata"]["annotations"] = json!({
+        (crate::constants::annotations::edgion::CONTROLLER_CA_SOURCE): "ConfigMap"
+    });
+    let owner: Gateway = serde_json::from_value(marked).unwrap();
+    assert!(GatewayTlsRefs::from_gateway(&owner)
+        .backend_client()
+        .unwrap()
+        .backend_client_material()
+        .is_err());
+    base["spec"]["tls"]["backend"]["clientCertificateRef"]["name"] = json!("replacement");
+    base["spec"]["tls"]["backend"]["resolvedClientCertificate"]["metadata"]["name"] = json!("replacement");
+    let owner: Gateway = serde_json::from_value(base).unwrap();
+    assert!(GatewayTlsRefs::from_gateway(&owner)
+        .backend_client()
+        .unwrap()
+        .backend_client_material()
+        .is_ok());
+}

@@ -6,6 +6,8 @@
 //! its own client certificate.
 
 use arc_swap::ArcSwap;
+use edgion_resources::resources::refs::gateway_tls_fields::GatewayTlsRefs;
+use edgion_resources::{Gateway, ResourceMeta};
 use k8s_openapi::api::core::v1::Secret;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
@@ -33,11 +35,27 @@ impl GatewayBackendTlsStore {
         self.store.load().get(gateway_key).cloned()
     }
 
-    /// Set the resolved client certificate Secret for a gateway.
-    pub fn set(&self, gateway_key: String, secret: Arc<Secret>) {
+    /// Publish only material paired with the actual Gateway backend client field.
+    /// The transport slot preserves raw key semantics and is never reference authority.
+    pub fn update_from_gateway(&self, gateway_key: &str, gateway: &Gateway) {
+        if gateway_key != gateway.key_name() {
+            self.remove(gateway_key);
+            return;
+        }
+        let references = GatewayTlsRefs::from_gateway(gateway);
+        let secret = references.backend_client().and_then(|field| {
+            field
+                .backend_client_material()
+                .ok()
+                .and_then(|pair| pair.material().cloned())
+        });
+        let Some(secret) = secret else {
+            self.remove(gateway_key);
+            return;
+        };
         let current = self.store.load();
         let mut new_map = (**current).clone();
-        new_map.insert(gateway_key, secret);
+        new_map.insert(gateway_key.to_string(), Arc::new(secret));
         self.store.store(Arc::new(new_map));
     }
 

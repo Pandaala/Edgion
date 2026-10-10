@@ -403,19 +403,7 @@ fn prospective_gateway_snapshot(
 
 /// Update GatewayBackendTlsStore from a Gateway's resolved client certificate.
 fn update_gateway_backend_tls_store(gateway_key: &str, gateway: &Gateway) {
-    let store = get_global_gateway_backend_tls_store();
-    let has_cert = gateway
-        .spec
-        .tls
-        .as_ref()
-        .and_then(|t| t.backend.as_ref())
-        .and_then(|b| b.resolved_client_certificate.as_ref());
-
-    if let Some(secret) = has_cert {
-        store.set(gateway_key.to_string(), Arc::new(secret.clone()));
-    } else {
-        store.remove(gateway_key);
-    }
+    get_global_gateway_backend_tls_store().update_from_gateway(gateway_key, gateway);
 }
 
 /// Check whether the set of listener keys changed between two snapshots.

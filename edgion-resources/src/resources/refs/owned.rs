@@ -762,6 +762,9 @@ impl<'a> BoundFieldReference<'a> {
             FieldSlot::GatewayBackendTls | FieldSlot::GatewayServing { .. } | FieldSlot::GatewayFrontendCa { .. }
         )
     }
+    pub(super) fn is_gateway_backend_tls_material(self) -> bool {
+        matches!(self._position, FieldSlot::GatewayBackendTls)
+    }
     /// Actual BackendTLSPolicy material fields, never an arbitrary caller profile.
     pub fn is_backend_tls_material(self) -> bool {
         matches!(

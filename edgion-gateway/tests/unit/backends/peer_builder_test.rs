@@ -176,7 +176,12 @@ fn client_identity_rejects_missing_empty_and_malformed_material() {
 fn gateway_identity_does_not_enable_tls_without_policy() {
     let gateway_key = "test/gateway-identity-without-policy";
     let store = get_global_gateway_backend_tls_store();
-    store.set(gateway_key.to_string(), Arc::new(Secret::default()));
+    let gateway = gateway_identity_owner("test", "gateway-identity-without-policy", Secret::default());
+    store.update_from_gateway(gateway_key, &gateway);
+    assert!(
+        store.get(gateway_key).is_some(),
+        "the no-policy control must carry an actual stored identity"
+    );
 
     let result = peer_from_backend_tls_lookup(
         SocketAddr::Inet("127.0.0.1:443".parse().unwrap()),
@@ -242,4 +247,69 @@ fn effective_peer_sets_profile_group_key_without_sans() {
         .expect("system-CA policy must build a TLS peer");
     assert!(peer.is_tls());
     assert_eq!(peer.group_key, effective.profile.group_key());
+}
+
+pub(super) fn gateway_identity_owner(namespace: &str, name: &str, mut secret: Secret) -> edgion_resources::Gateway {
+    secret.metadata.name = Some("client".into());
+    secret.metadata.namespace = Some(namespace.into());
+    serde_json::from_value(serde_json::json!({
+        "metadata":{"name":name,"namespace":namespace},"spec":{"gatewayClassName":"public",
+        "tls":{"backend":{"clientCertificateRef":{"name":"client"},"resolvedClientCertificate":secret}}}
+    }))
+    .unwrap()
+}
+
+#[test]
+fn gateway_identity_pairing_gates_actual_peer_fallback_without_changing_policy_precedence() {
+    crate::test_subprocess::assert_in_subprocess(
+        "backends::peer_builder::tests",
+        "gateway_identity_pairing_gates_actual_peer_fallback_without_changing_policy_precedence",
+        "EDGION_R11_GATEWAY_PEER_CHILD",
+        "publication",
+        || {
+            let key = "r11-peer/edge";
+            let store = get_global_gateway_backend_tls_store();
+            let (cert, private_key) = generated_cert_and_key("client.example");
+            let mut identity = client_identity_secret(Some(&cert), Some(&private_key));
+            identity.metadata.resource_version = Some("same".into());
+            let owner = gateway_identity_owner("r11-peer", "edge", identity.clone());
+            let mut policy: BackendTLSPolicy = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"policy","namespace":"r11-peer"},"spec":{"targetRefs":[{"group":"","kind":"Service","name":"backend"}],
+        "validation":{"hostname":"backend.example"},"useSystemCa":true}
+    })).unwrap();
+            let make_peer = |policy: BackendTLSPolicy| {
+                create_tls_peer(
+                    SocketAddr::Inet("127.0.0.1:443".parse().unwrap()),
+                    &EffectiveBackendTlsPolicy::from_policy(Arc::new(policy)),
+                    Some(key),
+                )
+                .unwrap()
+            };
+            store.update_from_gateway(key, &owner);
+            assert!(make_peer(policy.clone()).client_cert_key.is_some());
+            let mut mismatch = owner.clone();
+            mismatch
+                .spec
+                .tls
+                .as_mut()
+                .unwrap()
+                .backend
+                .as_mut()
+                .unwrap()
+                .resolved_client_certificate
+                .as_mut()
+                .unwrap()
+                .metadata
+                .name = Some("other".into());
+            store.update_from_gateway(key, &mismatch);
+            let anonymous = make_peer(policy.clone());
+            assert!(anonymous.is_tls());
+            assert!(anonymous.client_cert_key.is_none());
+            policy.spec.resolved_client_certificate = Some(identity);
+            assert!(make_peer(policy.clone()).client_cert_key.is_some());
+            store.update_from_gateway(key, &owner);
+            assert!(make_peer(policy).client_cert_key.is_some());
+            store.remove(key);
+        },
+    );
 }

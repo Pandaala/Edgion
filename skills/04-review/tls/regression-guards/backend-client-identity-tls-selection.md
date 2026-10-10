@@ -31,8 +31,8 @@ policy still selects TLS, without a client certificate.
   `resolved_client_certificate`. The latter is schema-hidden and redacted
   for admin serialization while remaining available for conf_sync.
 - The Controller Gateway handler resolves the Secret; Gateway
-  `runtime/handler.rs::update_gateway_backend_tls_store` publishes it under
-  the Gateway namespace/name, or removes the entry when identity is absent.
+  `runtime/handler.rs::update_gateway_backend_tls_store` publishes only actual-field-paired material under
+  the unchanged raw Gateway key, or removes the slot when declaration/material is absent or invalid.
 - `backends/peer_builder.rs::peer_from_backend_tls_lookup` matches
   `BackendTlsPolicyLookup::{Absent, Effective, Invalid}`. Only `Effective`
   calls `create_tls_peer`, whose argument requires an effective policy.
@@ -120,3 +120,24 @@ publication, identity precedence, or supported TLS backends change.
   fixed, with fresh regression verification and no production change. Final
   closure verification on 2026-09-09 confirms the unrelated agent-doc blocker
   is resolved.
+
+## Actual Gateway backend client material publication
+
+GatewayBackendTlsStore::update_from_gateway accepts the actual Gateway and its
+transport slot, never a detached Secret writer. GatewayTlsRefs selects the native
+backend client field; its material accessor shares BoundTlsMaterial identity and
+provenance checks before cold publication. Unsupported native group/kind, invalid
+owner, mismatched name/namespace, absent declaration or missing material withdraws
+the existing slot. Omitted material namespace is default only for this finite
+Gateway backend field, matching Controller acquisition; explicit empty namespace
+is invalid. Raw publication keys retain their existing key_name form.
+
+Both ordinary peers and AllEndpointStatus probes read the resulting Arc<Secret>.
+No request-path owner lookup or new Grant policy is introduced. Withdrawal leaves
+the existing fallback behavior: BTP still selects TLS and its own identity takes
+precedence; without either identity it uses TLS without a client certificate.
+Pairing does not replace independent cryptographic validation. Existing probe
+Arc freshness rejects a replaced/withdrawn generation while its captured bytes
+remain immutable. Focused owner/store/peer/probe and full/partial handler tests
+cover these boundaries; historical network results above are not a fresh live
+conformance or handshake claim for this change.

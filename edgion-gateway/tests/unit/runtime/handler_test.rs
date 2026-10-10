@@ -52,3 +52,55 @@ fn repeated_add_replaces_gateway_used_for_rebuild() {
     );
     assert_eq!(store.count(), 1);
 }
+
+#[tokio::test]
+async fn backend_client_publication_full_and_partial_updates_withdraw_and_recover() {
+    crate::test_subprocess::assert_in_subprocess_async("runtime::handler::tests", "backend_client_publication_full_and_partial_updates_withdraw_and_recover", "EDGION_R11_GATEWAY_HANDLER_CHILD", "publication", || async {
+    let handler = GatewayHandler::new_scoped(Some("r11-handler/edge".into()));
+    let key = "r11-handler/edge".to_string();
+    let store = get_global_gateway_backend_tls_store();
+    let owner: Gateway = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"edge","namespace":"r11-handler"},"spec":{"gatewayClassName":"public","listeners":[],
+        "tls":{"backend":{"clientCertificateRef":{"name":"client"},"resolvedClientCertificate":{"metadata":{"name":"client","namespace":"r11-handler"}}}}}
+    })).unwrap();
+    let mut invalid = owner.clone();
+    invalid
+        .spec
+        .tls
+        .as_mut()
+        .unwrap()
+        .backend
+        .as_mut()
+        .unwrap()
+        .client_certificate_ref
+        .as_mut()
+        .unwrap()
+        .name = "retargeted".into();
+    for candidate in [&owner, &invalid, &owner] {
+        handler.full_set(&HashMap::from([(key.clone(), Arc::new(candidate.clone()))]));
+        assert_eq!(store.get(&key).is_some(), std::ptr::eq(candidate, &owner));
+    }
+    handler.full_set(&HashMap::new());
+    assert!(store.get(&key).is_none());
+    handler.partial_update(
+        HashMap::from([(key.clone(), Arc::new(owner.clone()))]),
+        HashMap::new(),
+        HashSet::new(),
+    );
+    assert!(store.get(&key).is_some());
+    handler.partial_update(
+        HashMap::new(),
+        HashMap::from([(key.clone(), Arc::new(invalid))]),
+        HashSet::new(),
+    );
+    assert!(store.get(&key).is_none());
+    handler.partial_update(
+        HashMap::new(),
+        HashMap::from([(key.clone(), Arc::new(owner))]),
+        HashSet::new(),
+    );
+    assert!(store.get(&key).is_some());
+    handler.partial_update(HashMap::new(), HashMap::new(), HashSet::from([key.clone()]));
+    assert!(store.get(&key).is_none());
+    }).await;
+}

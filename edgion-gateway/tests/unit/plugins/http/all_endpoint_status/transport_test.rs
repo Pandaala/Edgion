@@ -79,3 +79,114 @@ fn mixed_valid_and_empty_ca_maps_to_generic_probe_configuration_error() {
 
     assert_eq!(transport.build_tls().unwrap_err(), "probe configuration unavailable");
 }
+
+#[test]
+fn gateway_client_pairing_and_probe_capture_share_checked_publication() {
+    crate::test_subprocess::assert_in_subprocess(
+        "plugins::http::all_endpoint_status::transport::tests",
+        "gateway_client_pairing_and_probe_capture_share_checked_publication",
+        "EDGION_R11_GATEWAY_PROBE_CHILD",
+        "publication",
+        || {
+            let key = "r11-probe/edge";
+            let store = get_global_gateway_backend_tls_store();
+            let cert = rcgen::generate_simple_self_signed(vec!["client.example".into()]).unwrap();
+            let secret = Secret {
+                metadata: kube::api::ObjectMeta {
+                    name: Some("client".into()),
+                    namespace: Some("r11-probe".into()),
+                    resource_version: Some("same".into()),
+                    ..Default::default()
+                },
+                data: Some(BTreeMap::from([
+                    ("tls.crt".into(), ByteString(cert.cert.pem().into_bytes())),
+                    (
+                        "tls.key".into(),
+                        ByteString(cert.signing_key.serialize_pem().into_bytes()),
+                    ),
+                ])),
+                ..Default::default()
+            };
+            let owner: edgion_resources::Gateway = serde_json::from_value(serde_json::json!({
+                "metadata":{"name":"edge","namespace":"r11-probe"},"spec":{"gatewayClassName":"public",
+                "tls":{"backend":{"clientCertificateRef":{"name":"client"},"resolvedClientCertificate":secret}}}
+            }))
+            .unwrap();
+            let policy: BackendTLSPolicy = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"policy","namespace":"r11-probe"},"spec":{"targetRefs":[{"group":"","kind":"Service","name":"backend"}],
+        "validation":{"hostname":"backend.example","wellKnownCACertificates":"System"},"useSystemCa":true}
+    })).unwrap();
+            let probe = |policy: BackendTLSPolicy| {
+                ProbeTransport::new(
+                    BackendTlsPolicyLookup::effective_from_policy(Arc::new(policy)),
+                    get_service_discovery_coordinator().load_generation(),
+                    get_global_backend_tls_policy_store().snapshot().generation(),
+                    Some(key),
+                )
+            };
+            store.update_from_gateway(key, &owner);
+            let captured = probe(policy.clone());
+            assert!(captured.is_current());
+            assert!(captured
+                .build_tls()
+                .unwrap()
+                .unwrap()
+                .client_auth_cert_resolver
+                .has_certs());
+            let mut mismatch = owner.clone();
+            mismatch
+                .spec
+                .tls
+                .as_mut()
+                .unwrap()
+                .backend
+                .as_mut()
+                .unwrap()
+                .resolved_client_certificate
+                .as_mut()
+                .unwrap()
+                .metadata
+                .name = Some("other".into());
+            store.update_from_gateway(key, &mismatch);
+            assert!(!captured.is_current());
+            assert_eq!(
+                captured.gateway_identity.as_ref().unwrap().metadata.name.as_deref(),
+                Some("client")
+            );
+            assert!(captured
+                .build_tls()
+                .unwrap()
+                .unwrap()
+                .client_auth_cert_resolver
+                .has_certs());
+            let fresh = probe(policy.clone());
+            assert!(fresh.is_current());
+            assert!(!fresh
+                .build_tls()
+                .unwrap()
+                .unwrap()
+                .client_auth_cert_resolver
+                .has_certs());
+            let mut explicit = policy.clone();
+            explicit.spec.resolved_client_certificate = Some(secret);
+            let preferred = probe(explicit);
+            assert!(preferred.gateway_key.is_none());
+            assert!(preferred
+                .build_tls()
+                .unwrap()
+                .unwrap()
+                .client_auth_cert_resolver
+                .has_certs());
+            store.update_from_gateway(key, &owner);
+            assert!(!fresh.is_current());
+            assert!(preferred.is_current());
+            assert!(probe(policy)
+                .build_tls()
+                .unwrap()
+                .unwrap()
+                .client_auth_cert_resolver
+                .has_certs());
+            store.remove(key);
+        },
+    );
+}

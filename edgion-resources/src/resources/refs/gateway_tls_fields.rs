@@ -112,6 +112,62 @@ impl<'a> GatewayTlsRefs<'a> {
     }
 }
 impl GatewayTlsField<'_> {
+    /// Pair only the actual native backend client declaration with its carried Secret.
+    /// Serving and frontend fields cannot use this backend-only material accessor.
+    ///
+    /// A matching owner's material remains borrowed through the actual field.
+    /// ```
+    /// use edgion_resources::{Gateway, resources::refs::gateway_tls_fields::GatewayTlsRefs};
+    /// fn inspect(owner: Gateway) {
+    ///     let fields = GatewayTlsRefs::from_gateway(&owner);
+    ///     let field = fields.backend_client().unwrap();
+    ///     let pair = field.backend_client_material().unwrap();
+    ///     assert!(pair.material().is_some());
+    /// }
+    /// ```
+    /// The owner cannot be dropped while its material loan remains in use.
+    /// ```compile_fail,E0505
+    /// use edgion_resources::{Gateway, resources::refs::gateway_tls_fields::GatewayTlsRefs};
+    /// fn inspect(owner: Gateway) {
+    ///     let fields = GatewayTlsRefs::from_gateway(&owner);
+    ///     let field = fields.backend_client().unwrap();
+    ///     let pair = field.backend_client_material().unwrap();
+    ///     drop(owner);
+    ///     assert!(pair.material().is_some());
+    /// }
+    /// ```
+    /// The actual owner cannot be retargeted while its material loan is in use.
+    /// ```compile_fail,E0506
+    /// use edgion_resources::{Gateway, resources::refs::gateway_tls_fields::GatewayTlsRefs};
+    /// fn inspect(mut owner: Gateway) {
+    ///     let fields = GatewayTlsRefs::from_gateway(&owner);
+    ///     let field = fields.backend_client().unwrap();
+    ///     let pair = field.backend_client_material().unwrap();
+    ///     owner.metadata.name = Some("replacement".into());
+    ///     assert!(pair.material().is_some());
+    /// }
+    /// ```
+    pub fn backend_client_material(
+        &self,
+    ) -> Result<super::outbound_tls::BoundTlsMaterial<'_>, super::outbound_tls::TlsMaterialIdentityError> {
+        use super::outbound_tls::{BoundTlsMaterial, TlsMaterialIdentityError};
+        if !matches!(self.slot.position(), FieldSlot::GatewayBackendTls) {
+            return Err(TlsMaterialIdentityError::Reference(
+                super::ReferenceError::UnsupportedTarget,
+            ));
+        }
+        let material = self
+            ._gateway
+            .spec
+            .tls
+            .as_ref()
+            .and_then(|tls| tls.backend.as_ref())
+            .and_then(|backend| backend.resolved_client_certificate.as_ref());
+        let pair = BoundTlsMaterial::from_gateway_backend(self, material);
+        pair.validate_identity()?;
+        Ok(pair)
+    }
+
     pub fn token(&self) -> ReferenceToken<'_> {
         self.slot.token(TopologyLoan::GatewayTls(self.owner))
     }

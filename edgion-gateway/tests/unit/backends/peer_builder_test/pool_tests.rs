@@ -162,7 +162,10 @@ fn pool_isolation_composes_gateway_rotation_and_policy_precedence() {
     let identity = secret(&[(CERT, &chain), (KEY, &key.serialize_pem())]);
     let base = policy();
     let anonymous = peer(base.clone(), Some(gateway.0));
-    store.set(gateway.0.to_string(), Arc::new(identity.clone()));
+    store.update_from_gateway(
+        gateway.0,
+        &super::tests::gateway_identity_owner("test", "pool-isolation-gateway", identity.clone()),
+    );
     let fallback = peer(base.clone(), Some(gateway.0));
     assert_ne!(anonymous.reuse_hash(), fallback.reuse_hash());
     assert_eq!(fallback.reuse_hash(), peer(base.clone(), Some(gateway.0)).reuse_hash());
@@ -189,7 +192,10 @@ fn pool_isolation_composes_gateway_rotation_and_policy_precedence() {
             (KEY, &rcgen::KeyPair::generate().unwrap().serialize_pem()),
         ]),
     ] {
-        store.set(gateway.0.to_string(), Arc::new(rotated));
+        store.update_from_gateway(
+            gateway.0,
+            &super::tests::gateway_identity_owner("test", "pool-isolation-gateway", rotated),
+        );
         assert_isolated(&fallback, &peer(base.clone(), Some(gateway.0)));
         assert_eq!(
             explicit.reuse_hash(),

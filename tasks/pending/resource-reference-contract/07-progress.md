@@ -115,7 +115,21 @@
   Verification passes 542 unit and 78 doc tests (620 distinct), with ten ignored
   docs and 31 duplicate executions excluded. All 9726 prior test identities remain;
   204 old tests retain only their approved canonical migrations and key fixtures.
-  Final commit review is pending. C1/C2/C3 and live/conformance remain open.
+  Committed locally as e52229052acc79331fced0e0dd0c3eaf43792f2f after both
+  final commit reviews; all twenty-three blobs match the frozen manifest.
+  No push occurred. C1/C2/C3 and live/conformance remain open.
+- R11a native Gateway backend client pairing at e52229052 passes both independent
+  Astra static/execution reviews and all fourteen root gates with zero warnings.
+  Twelve technical paths plus this ledger bind the actual declaration and carried
+  material before cold store publication. Ordinary peers and AllEndpointStatus
+  probes retain their readers, BTP precedence, native defaults and finite raw-default
+  handling; no request-path owner lookup or Grant policy change was introduced.
+  Verification passes 250 unit and 81 doc tests (331 distinct), ten ignored docs;
+  all 9726 prior identities remain among 9731. Twenty-five old scoped tests retain
+  only the two approved fixture migrations. Three new global-state tests use the
+  existing exact-child isolation helper. Positive compilation and raw E0505/E0506
+  diagnostics verify the material loan. Initial test-only compiler failures remain
+  in evidence. Final commit review is pending; C1/C2 and live verification remain.
 - F1's Gateway EdgionBackend and Common LinkSys non-TLS auth material-pairing
   candidates are closed by R9a/R9b. Existing Controller guards remain; these are
   consumer proof boundaries, not demonstrated ingress exploits. Generated CredentialSource operation identity is closed by R8f.1/R8f.2
@@ -125,6 +139,7 @@
   and AllEndpointStatus probes), HeaderCertAuth carried CA material, and local
   TLS in OIDC/LDAP/ExtProc/Wasm artifact fetch. Normal bound Controller acquisition
   remains a positive guard; these are not reproduced ordinary Grant bypasses.
+  R11a closes the Gateway backend client consumer gap after scoped verification.
   Independent cross-direction review confirmed the Gateway and HeaderCertAuth
   paths. Grant/native source checks found no additional confirmed matcher/default
   defect; broader live verification remains open. Close each consumer family
