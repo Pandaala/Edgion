@@ -268,3 +268,38 @@ fn backend_client_material_pairs_only_actual_native_field_and_finite_default_nam
         .backend_client_material()
         .is_ok());
 }
+
+#[test]
+fn long_gateway_owner_keeps_native_client_material_bound_to_its_actual_field() {
+    for (name_length, namespace_length, accepted) in [(64, 4, true), (253, 4, true), (254, 4, false), (64, 64, false)] {
+        let name = "a".repeat(name_length);
+        let namespace = "n".repeat(namespace_length);
+        let mut value = wire();
+        value["metadata"]["name"] = json!(name);
+        value["metadata"]["namespace"] = json!(namespace);
+        value["spec"]["tls"]["backend"]["resolvedClientCertificate"] =
+            json!({"metadata":{"name":"client","namespace":namespace}});
+        let owner: Gateway = serde_json::from_value(value).unwrap();
+        let fields = GatewayTlsRefs::from_gateway(&owner);
+        let field = fields.backend_client().unwrap();
+        let result = field.backend_client_material();
+        assert_eq!(result.is_ok(), accepted);
+        if accepted {
+            assert_eq!(field.token().validated().unwrap().owner().name(), name);
+            assert!(std::ptr::eq(
+                result.unwrap().material().unwrap(),
+                owner
+                    .spec
+                    .tls
+                    .as_ref()
+                    .unwrap()
+                    .backend
+                    .as_ref()
+                    .unwrap()
+                    .resolved_client_certificate
+                    .as_ref()
+                    .unwrap()
+            ));
+        }
+    }
+}

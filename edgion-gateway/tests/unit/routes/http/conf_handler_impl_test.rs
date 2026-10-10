@@ -1823,3 +1823,29 @@ fn test_built_unit_carries_route_arc() {
         "unit.route must share the cache Arc (zero-copy)"
     );
 }
+
+#[test]
+fn long_kubernetes_route_owner_compiles_backend_rules_without_losing_attribution() {
+    for length in [64, 253, 254] {
+        let name = "a".repeat(length);
+        let route = build_route_with_two_rules("route-ns", &name);
+        let key = format!("route-ns/{name}");
+        let domain_rules = parse_http_routes_to_domain_rules(&HashMap::from([(key.clone(), Arc::new(route))]));
+        if length > 253 {
+            assert!(domain_rules.is_empty());
+            continue;
+        }
+        let (normal, regex) = domain_rules
+            .get("test.example.com")
+            .expect("valid long owner must compile");
+        let units: Vec<_> = normal.iter().chain(regex.iter()).collect();
+        assert_eq!(units.len(), 2);
+        for unit in units {
+            assert_eq!(unit.resource_key, key);
+            assert_eq!(unit.matched_info.rsc.name, name);
+            assert_eq!(unit.backends.len(), 1);
+            assert!(unit.backends[0].is_service());
+            assert_eq!(unit.backends[0].schema().name, "svc");
+        }
+    }
+}

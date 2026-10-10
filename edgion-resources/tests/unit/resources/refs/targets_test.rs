@@ -125,3 +125,33 @@ fn managed_http_service_identity_keeps_custom_modes_out_of_native_profiles() {
     assert!(!is_standard_service(Some("core"), None));
     assert!(!is_standard_service(None, Some("ServiceClusterIp")));
 }
+
+#[test]
+fn service_reference_names_use_subdomains_without_claiming_service_metadata_admission() {
+    use crate::resources::common::external_http::WebhookServiceRef;
+    for name in [
+        "a".repeat(64),
+        "a".repeat(253),
+        "backend.example".into(),
+        "a".repeat(254),
+    ] {
+        let accepted = name.len() <= 253;
+        let native: HTTPBackendRef = serde_json::from_value(serde_json::json!({"name":name,"port":80})).unwrap();
+        assert_eq!(native.validated_target("apps").is_ok(), accepted);
+        let managed = WebhookServiceRef {
+            name: Some(name.clone()),
+            port: Some(80),
+            ..Default::default()
+        };
+        assert_eq!(managed_http_service_target(&managed, "apps").is_ok(), accepted);
+        assert_eq!(policy_key("", "Service", "apps", &name).is_ok(), accepted);
+        let backend: HTTPBackendRef = serde_json::from_value(serde_json::json!({
+            "group":"edgion.io", "kind":"EdgionBackend", "name":name
+        }))
+        .unwrap();
+        assert_eq!(backend.validated_target("apps").is_ok(), accepted);
+    }
+    let name = "a".repeat(64);
+    assert!(policy_key("core", "Service", "apps", &name).is_err());
+    assert!(policy_key("", "Service", &"a".repeat(64), &name).is_err());
+}

@@ -219,8 +219,10 @@
   All fourteen refreshed root gates pass with zero warnings (check 15.645 seconds,
   Clippy 22.535 seconds), with unchanged frozen source. Root evidence is under
   `tmp/resource-reference-contract/r11c4-root-verification-20261010/`.
-  Local commit review is pending. Whole-contract review, documentation/task
-  cleanup and fresh live/admission/conformance acceptance remain open; no push.
+  Committed locally as 3cd8d681c75a4bdbb67d68b37eeb461bbf2c266b after both
+  final commit reviews; all nine blobs match the manifest. Whole-contract review,
+  documentation/task cleanup and fresh live/admission/conformance acceptance
+  remain open; no push.
 - F1's Gateway EdgionBackend and Common LinkSys non-TLS auth material-pairing
   candidates are closed by R9a/R9b. Existing Controller guards remain; these are
   consumer proof boundaries, not demonstrated ingress exploits. Generated CredentialSource operation identity is closed by R8f.1/R8f.2
@@ -3118,3 +3120,52 @@ BTP client_certificate_secret_ref wrapper is an F1 inventory candidate, not
 authorized for opportunistic deletion here. Original issue closure remains open.
 Only the frozen twenty-three paths plus this ledger enter the local commit.
 Protected unrelated untracked paths remain excluded; never push.
+
+## Fresh F1 audit after R11c.4
+
+At 3cd8d681, three independent Astra directions inspect Grant consistency,
+consumer coverage and Standard impact; the second round exchanges directions.
+Source inspection confirms a remaining valid-object-name rejection (S-R1-01)
+and obsolete detached transport constructors (F1-COV-R1-01). See 05-issues.md
+for exact scope. Grant semantic inspection has no new confirmed blocker, but
+whole-task source and live acceptance remain open. R12a enters plan-only for
+canonical name grammar; obsolete transport cleanup follows as a separate batch.
+Protected unrelated untracked paths remain excluded. Never push.
+
+R12a's eleven-path plan passed two independent Astra reviews at 3cd8d681.
+Canonical Kubernetes resource-name validation removes only the incorrect
+per-component bound; Namespace, actual DNS-host and native ObjectName rules
+remain separate. The exact BTP same-namespace Secret option delegates to that
+canonical predicate while preserving trim and no-slash behavior. Source evidence
+classifies Service reference grammar explicitly without claiming Service metadata
+admission changed. Appended tests cover actual HTTP compilation and Gateway/BTP
+material acquisition, readonly behavior and dependency identity. Implementation
+is authorized; static review, focused execution, root gates and local commit
+remain required. No live/admission/conformance claim is made.
+
+## R12a final verification and local commit gate
+
+The two production edits now use canonical Kubernetes object-name total-length
+semantics, including the BTP same-namespace Secret option. Two fresh Astra
+reviewers independently pass the complete static diff and execution evidence.
+The plan's GraphQL caller row was corrected to declared Service backend targets;
+its original version remains recorded, and no technical source changed for that
+classification correction. All seven existing test files retain exact original
+byte prefixes, with nine appended tests and no assertion/identity reduction.
+
+Fresh verification passes 2321 distinct tests: Resources 2095, Controller pipeline
+28, Gateway HTTP compilation 46, Gateway gRPC 68 and Resources doctests 84.
+Ten existing doctests remain ignored. All 9749 old ordinary identities survive
+among 9758; all nine additions were executed. Common was compiled/listed against
+the changed dependency for inventory only, never counted as execution. All eleven
+technical hashes stayed frozen throughout; there were no failed runs or warnings.
+Evidence is under tmp/resource-reference-contract/r12a-verification-20261010/.
+
+All fourteen root gates pass with zero warnings and unchanged source; workspace
+check took 29.412 seconds and Clippy 38.925 seconds. Root evidence is under
+ tmp/resource-reference-contract/r12a-root-verification-20261010/.
+Final scope is eleven technical/documentation paths plus coordinator-owned
+05-issues.md and this ledger. Local commit review remains pending; no push.
+Obsolete detached transport cleanup, documentation reconciliation, affected final
+cross-checks and fresh admission/dynamic/full Standard conformance remain open.
+This scoped source correction does not establish successful live long-name traffic.

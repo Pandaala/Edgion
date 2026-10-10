@@ -69,3 +69,33 @@ prevents a clean repository-wide document-gate claim; it is not evidence of a
 runtime reference defect. Targeted new-document link/structure/language checks
 are separate verification. Repair the owning page and rerun the check before
 claiming the repository gate passed; no finding is closed in this design phase.
+
+## Current F1 implementation audit (2026-10-10)
+
+At committed HEAD 3cd8d681c75a4bdbb67d68b37eeb461bbf2c266b, fresh Astra
+rounds found two remaining source/API acceptance blockers. Earlier sections
+record design-phase history and are not a current runtime acceptance verdict.
+
+- **S-R1-01, P2:** actual Route/Gateway/BackendTLSPolicy owner validation adds a
+  63-byte per-component limit absent from Kubernetes DNS1123 object-name
+  admission. Valid 64..253-byte CR names can fail before routing or TLS
+  acquisition. Independently confirmed in the Standard round-1/round-2 reports
+  under tmp/resource-reference-contract/f1-final-standard-round[12]-3cd8d681-20261010.md.
+  R12a now passes two independent final reviews, 2321 distinct focused tests,
+  and fourteen warning-free workspace gates. Its canonical predicate correction
+  preserves namespace, actual DNS-host, native ObjectName and field-specific
+  contracts; the BTP local Secret option reuses that predicate. Local commit
+  review remains pending. Fresh long-name API admission and traffic remain F2.
+- **F1-COV-R1-01:** ManagedOutboundClient::from_parts and Common
+  build_rustls_client_config retain obsolete detached transport entry points
+  after their product callers migrated. Their exclusive raw branches and test
+  callers require an independently reviewed removal/migration batch. This is
+  an API-completion gap, not a demonstrated ordinary-ingress Grant bypass.
+  Round-1 coverage and independent round-2 source inspection confirm the residual;
+  preserve live canonical HTTP/TLS conversion and process/bootstrap boundaries.
+
+Grant semantic inspection has found no additional confirmed authorization bug;
+source review does not prove live revocation or conformance. Documentation also
+needs current/historical reconciliation and precise ConfigData Cluster wording:
+a matching Grant is unnecessary, while some readers still consult its store.
+Fresh admission, dynamic traffic and full Standard conformance remain open.

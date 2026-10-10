@@ -13,5 +13,6 @@ pub(crate) fn is_dns_label(value: &str, max_len: usize) -> bool {
 }
 
 pub(crate) fn is_dns_subdomain(value: &str, max_len: usize) -> bool {
-    !value.is_empty() && value.len() <= max_len && value.split('.').all(|label| is_dns_label(label, 63))
+    // Kubernetes resource subdomains bound the total length, not each DNS wire label.
+    !value.is_empty() && value.len() <= max_len && value.split('.').all(|label| is_dns_label(label, max_len))
 }

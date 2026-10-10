@@ -1385,3 +1385,84 @@ fn generated_output_rejects_mismatched_raw_material_before_bearer_decode() {
         );
     }
 }
+
+fn assert_long_owner_native_tls_acquisition(
+    ctx: &HandlerContext,
+    runtime: &ControllerRuntime,
+    owner: &ResourceRef,
+    token: edgion_resources::resources::refs::ReferenceToken<'_>,
+    accepted: bool,
+) {
+    let (readonly, readonly_reads) = observe_bound_reads(|| fetch_bound_secret_readonly(ctx, owner, token));
+    assert!(runtime.secret_ref_manager.get_dependencies(&owner.key()).is_empty());
+    assert!(runtime
+        .frontend_ca_ref_manager
+        .get_dependencies(&owner.key())
+        .is_empty());
+    let (acquired, acquired_reads) = observe_bound_reads(|| fetch_bound_secret(ctx, owner, token));
+    for (outcome, reads) in [(readonly, readonly_reads), (acquired, acquired_reads)] {
+        if accepted {
+            assert_eq!(reads, ["authorization", "secret"]);
+            let BoundFetchOutcome::Ok(material) = outcome else {
+                panic!("valid long native owner must acquire its short target");
+            };
+            assert_eq!(material.secret.metadata.name.as_deref(), Some("ca"));
+            assert_eq!(material.secret.metadata.namespace.as_deref(), Some("source"));
+            assert_eq!(material.secret.data.as_ref().unwrap()["ca.crt"].0, b"fixture-ca");
+        } else {
+            assert!(matches!(outcome, BoundFetchOutcome::Invalid(_)));
+            assert!(reads.is_empty());
+        }
+    }
+    if accepted {
+        assert_eq!(token.validated().unwrap().owner().name(), owner.name);
+        assert_eq!(runtime.secret_ref_manager.get_dependencies(&owner.key()), ["source/ca"]);
+    } else {
+        assert!(runtime.secret_ref_manager.get_dependencies(&owner.key()).is_empty());
+    }
+    assert!(runtime
+        .frontend_ca_ref_manager
+        .get_dependencies(&owner.key())
+        .is_empty());
+    assert!(runtime.cross_ns_ref_mgr.get_refs("source").is_empty());
+    for short_name in ["edge", "policy"] {
+        let decoy = ResourceRef::new(owner.kind, Some("source".into()), short_name.into());
+        assert!(runtime.secret_ref_manager.get_dependencies(&decoy.key()).is_empty());
+    }
+}
+
+#[test]
+fn native_tls_long_owners_acquire_readonly_and_register_only_the_actual_owner() {
+    use edgion_resources::resources::refs::{backend_tls_fields::BackendTlsRefs, gateway_tls_fields::GatewayTlsRefs};
+    for (name_length, namespace, accepted) in [
+        (64, "source".to_string(), true),
+        (253, "source".to_string(), true),
+        (254, "source".to_string(), false),
+        (64, "a".repeat(64), false),
+    ] {
+        for kind in [ResourceKind::Gateway, ResourceKind::BackendTLSPolicy] {
+            let name = "a".repeat(name_length);
+            let owner = ResourceRef::new(kind, Some(namespace.clone()), name.clone());
+            let (key, secret) = make_secret("source", "ca", &[("ca.crt", b"fixture-ca")]);
+            let (ctx, runtime) = make_ctx(HashMap::from([(key, secret)]));
+            if kind == ResourceKind::Gateway {
+                let mut gateway = gateway_tls_owner(serde_json::json!({"name":"ca"}), false);
+                gateway.metadata.name = Some(name);
+                gateway.metadata.namespace = Some(namespace.clone());
+                let fields = GatewayTlsRefs::from_gateway(&gateway);
+                let field = fields.serving(0, 0).unwrap();
+                assert_long_owner_native_tls_acquisition(&ctx, &runtime, &owner, field.token(), accepted);
+            } else {
+                let policy: edgion_resources::BackendTLSPolicy = serde_json::from_value(serde_json::json!({
+                    "metadata":{"name":name,"namespace":namespace}, "spec":{
+                        "targetRefs":[{"group":"","kind":"Service","name":"backend"}],
+                        "validation":{"hostname":"backend.example","caCertificateRefs":[{"group":"","kind":"Secret","name":"ca"}]}
+                    }
+                })).unwrap();
+                let fields = BackendTlsRefs::from_policy(&policy);
+                let field = fields.ca(0).unwrap();
+                assert_long_owner_native_tls_acquisition(&ctx, &runtime, &owner, field.token(), accepted);
+            }
+        }
+    }
+}

@@ -2,7 +2,7 @@
 //!
 //! BackendTLSPolicy provides a way to configure how a Gateway connects to a backend via TLS.
 
-use super::common::PolicyAncestorStatus;
+use super::common::{kubernetes_name::is_dns_subdomain, PolicyAncestorStatus};
 
 crate::redact::impl_redacted_debug!(BackendTLSPolicySpec);
 use super::edgion_backend_traffic_policy::ResolvedPolicyTargetClass;
@@ -276,7 +276,7 @@ pub fn parse_client_certificate_option(
     };
     let raw = raw.trim();
 
-    if !valid_kube_name(raw) {
+    if !is_dns_subdomain(raw, 253) {
         let msg = format!(
             "Option {} must be a valid same-namespace Secret name",
             OPTION_CLIENT_CERTIFICATE_REF
@@ -290,20 +290,6 @@ pub fn parse_client_certificate_option(
         name: raw.to_string(),
         namespace: None,
     }))
-}
-
-fn valid_kube_name(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 253
-        && value.split('.').all(|label| {
-            !label.is_empty()
-                && label.len() <= 63
-                && label
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-                && label.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
-                && label.as_bytes().last().is_some_and(u8::is_ascii_alphanumeric)
-        })
 }
 
 impl BackendTLSPolicy {

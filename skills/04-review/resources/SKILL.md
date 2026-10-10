@@ -27,6 +27,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Kubernetes resource-name subdomain semantics and native reference boundaries](regression-guards/kubernetes-resource-name-subdomain-semantics.md)
 - [GrpcJsonTranscoder ConfigMap descriptor ownership and status](regression-guards/grpc-descriptor-configmap-ownership.md)
 - [Fixed spec/status property coverage and explicit open CRD boundaries](regression-guards/fixed-crd-field-coverage.md)
 - [Gateway LRU cache configuration has one key](regression-guards/gateway-cache-config-single-name.md)

@@ -71,3 +71,17 @@ fn required_target_name_uses_canonical_kubernetes_syntax() {
         assert!(validate_extension_ref_filter(true, Some(&target)).unwrap().is_some());
     }
 }
+
+#[test]
+fn plugin_extension_accepts_long_kubernetes_resource_names() {
+    for length in [64, 253, 254] {
+        let mut target = reference("edgion.io", "EdgionPlugins");
+        target.name = "a".repeat(length);
+        let result = validate_extension_ref_filter(true, Some(&target));
+        if length <= 253 {
+            assert!(std::ptr::eq(result.unwrap().unwrap(), &target));
+        } else {
+            assert_eq!(result.unwrap_err(), ExtensionRefValidationError::UnsupportedTarget);
+        }
+    }
+}

@@ -259,3 +259,82 @@ fn backend_tls_native_references_and_custom_option_keep_distinct_grammar() {
         );
     }
 }
+
+#[test]
+fn long_backend_tls_owner_retains_short_local_material_pairs() {
+    for (name_length, namespace, accepted) in [
+        (64, "apps".to_string(), true),
+        (253, "apps".to_string(), true),
+        (254, "apps".to_string(), false),
+        (64, "a".repeat(64), false),
+    ] {
+        let mut owner = policy();
+        owner.metadata.name = Some("a".repeat(name_length));
+        owner.metadata.namespace = Some(namespace.clone());
+        for ca in owner.spec.resolved_ca_certificates.as_mut().unwrap() {
+            ca.metadata.namespace = Some(namespace.clone());
+        }
+        owner
+            .spec
+            .resolved_client_certificate
+            .as_mut()
+            .unwrap()
+            .metadata
+            .namespace = Some(namespace);
+        let fields = BackendTlsRefs::from_policy(&owner);
+        assert_eq!(fields.all_materials_resolved(), accepted);
+        if accepted {
+            assert_eq!(
+                fields.ca(0).unwrap().token().validated().unwrap().owner().name(),
+                owner.metadata.name.as_deref().unwrap()
+            );
+            assert_eq!(
+                fields
+                    .client()
+                    .unwrap()
+                    .unwrap()
+                    .token()
+                    .validated()
+                    .unwrap()
+                    .target()
+                    .name(),
+                "client"
+            );
+        }
+    }
+}
+
+#[test]
+fn custom_backend_tls_client_option_accepts_trimmed_long_local_secret_names() {
+    for (name, accepted) in [
+        ("a".repeat(64), true),
+        ("a".repeat(253), true),
+        ("a".repeat(254), false),
+        ("other/client".into(), false),
+        ("bad..name".into(), false),
+        ("Capital_Name".into(), false),
+    ] {
+        let mut owner = policy();
+        owner
+            .spec
+            .options
+            .as_mut()
+            .unwrap()
+            .insert("edgion.io/client-certificate-ref".into(), format!("  {name}  "));
+        owner.spec.resolved_client_certificate.as_mut().unwrap().metadata.name = Some(name.clone());
+        let fields = BackendTlsRefs::from_policy(&owner);
+        let client = fields.client();
+        assert_eq!(client.is_ok(), accepted);
+        if accepted {
+            let client = client.unwrap().unwrap();
+            let token = client.token();
+            let bound = token.validated().unwrap();
+            assert_eq!(bound.target().name(), name);
+            assert_eq!(bound.target().scope().namespace(), Some("apps"));
+            assert_eq!(bound.target().group_kind().group(), "");
+            assert_eq!(bound.target().group_kind().kind(), "Secret");
+            assert!(client.resolved());
+            assert!(fields.all_materials_resolved());
+        }
+    }
+}
