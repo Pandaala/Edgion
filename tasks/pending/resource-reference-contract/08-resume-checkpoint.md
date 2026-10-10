@@ -1,3 +1,10 @@
+> **Historical, superseded merge checkpoint.** The 2026-10-09 merge pause and
+> merge-specific no-commit instructions below no longer govern current work.
+> See [00-context.md](00-context.md) for current authority and
+> [07-progress.md](07-progress.md) for committed batches and remaining acceptance.
+> The pre-merge R6 plan and residual inventory are preserved as historical evidence;
+> their old pending labels are superseded by later reviewed commits.
+
 # Reference contract merge checkpoint
 
 The user paused implementation on 2026-10-09 to merge the tracking remote branch

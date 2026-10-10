@@ -5,7 +5,7 @@ description: Quick reference for inter-resource dependencies — spec references
 
 # Inter-resource dependencies
 
-> Detailed analysis (planned, not yet created): `tasks/references/resource-dependency-map.md`
+> Field identity and permission contracts are documented in [ReferenceGrant](11-reference-grant.md) and the owning resource pages. This index distinguishes material dependencies from authorization.
 
 ## Dependency relationship index
 
@@ -64,13 +64,14 @@ flowchart LR
 
 | Store | Writer | Reader |
 |-------|--------|--------|
-| **SecretStore** | SecretHandler | Gateway, EdgionTls, EdgionPlugins, BackendTLSPolicy, EdgionAcme, EdgionBackend |
-| **ConfigMapStore** | ConfigMapHandler | Gateway (frontend CA), BackendTLSPolicy (backend CA), EdgionGatewayConfig and EdgionPlugins (grant-gated outbound CA) |
+| **SecretStore** | SecretHandler | Gateway, EdgionTls, EdgionPlugins, BackendTLSPolicy, EdgionAcme, EdgionBackend, LinkSys, and EdgionGatewayConfig material acquisition |
+| **ConfigMapStore** | ConfigMapHandler | Gateway (frontend CA), BackendTLSPolicy (policy-local backend CA), EdgionPlugins (field-specific outbound CA), and EdgionGatewayConfig (explicit cluster-administrative selection) |
 | **NamespaceStore** | K8s Namespace informer | Route family (allowedRoutes Selector) |
-| **ReferenceGrantStore** | ReferenceGrantHandler | Gateway, Route family, Service, EdgionAcme, EdgionGatewayConfig, and EdgionPlugins (cross-ns authorization) |
-| **SecretRefManager** | Gateway/EdgionTls/EdgionPlugins/BackendTLSPolicy/EdgionAcme/EdgionBackend (register during parse; ConfigMap material uses `ConfigMap/ns/name` keys to preserve kind) | SecretHandler/ConfigMapHandler (look up dependents on on_change using their kind-specific key) |
+| **ReferenceGrantStore** | ReferenceGrantHandler | Gateway, Route family, Service, EdgionAcme, LinkSys, EdgionPlugins and EdgionStreamPlugins under their finite cross-namespace policies; EdgionGatewayConfig material selection does not derive authority from this store |
+| **SecretRefManager** | Gateway certificate/EdgionTls/EdgionPlugins/BackendTLSPolicy/EdgionAcme/EdgionBackend/LinkSys/EdgionGatewayConfig (register material dependencies during parse; ConfigMap material uses `ConfigMap/ns/name` keys to preserve kind; Gateway frontend CA uses the separate manager below) | SecretHandler/ConfigMapHandler (look up dependents on on_change using their kind-specific key) |
+| **FrontendCaRefManager** (`frontend_ca_ref_manager`) | Gateway frontend CA acquisition (kind-qualified Secret/ConfigMap keys) | SecretHandler/ConfigMapHandler requeue registered Gateways on source changes/deletes |
 | **ServiceRefManager** | Route family (register forwarding and mirror targets during parse), EdgionPlugins (register enabled mirror targets during parse) | ServiceHandler and EndpointSliceHandler (look up dependents on apply/delete), BackendTLSPolicy (read forwarding-only keys in resolve_ancestor_gateways) |
-| **CrossNsRefManager** | Gateway / Route family / Service / EdgionAcme / EdgionGatewayConfig / EdgionPlugins / EdgionStreamPlugins (clear-before-add and register cross-ns references during parse) | ReferenceGrantHandler (look up dependents on on_change) |
+| **CrossNsRefManager** | Gateway / Route family / Service / EdgionAcme / LinkSys / EdgionPlugins / EdgionStreamPlugins (clear-before-add and register applicable cross-ns references during parse; EGC clears obsolete registrations but its administrative material selection adds no Grant source) | ReferenceGrantHandler (look up dependents on on_change) |
 | **EdgionConfigDataRefManager** | Gateway and plugin resources (clear-before-add during parse) | EdgionConfigData handler (requeue dependents on apply/delete) |
 | **ProxyProtocolListenerPolicyManager** | Gateway (atomic whole-Gateway contribution replacement) | Gateway handler (requeue only peers affected by a net physical-listener declaration change) |
 | **GatewayRouteIndex** | Route family / EdgionTls / EdgionAcme (write on reconcile) | GatewayHandler (requeue route and attachment-proof consumers), BackendTLSPolicy (read in resolve_ancestor_gateways) |
@@ -80,6 +81,15 @@ flowchart LR
 | **BackendRefManager** (`backend_ref_mgr`) | HTTPRoute, BackendTLSPolicy, and EdgionBackendTrafficPolicy (clear-before-add typed refs during parse) | EdgionBackend handler (requeue typed dependents on apply/delete); HTTPRoute recomputes current AI capability semantics |
 | **PluginRefManager** | Gateway, HTTPRoute, and GRPCRoute (register rule- and backend-level EdgionPlugins ExtensionRefs during parse) | EdgionPlugins handler (requeue typed dependents on apply/delete) |
 | **AiBackendStore** (Gateway ArcSwap runtime store) | EdgionBackend ConfigClient handler | AI attempt planner (single-snapshot typed backend lookup) |
+
+Material registration follows successful field/source and dependency-owner validation,
+and precedes authorization/lookup for valid missing or denied targets. Clearing old
+registrations and material happens earlier where required for generation replacement.
+Grant authorization remains field-specific: same-namespace needs no Grant, BTP
+material is policy-local, EGC requires explicit administrative targets, and
+Cluster-visible ConfigData needs no matching Grant even if a reader consults the
+store. Apply/delete events requeue through existing per-kind workers; this adds no
+queue or direct handler invocation.
 
 `HTTPRoute.backendRefs` is the only typed EdgionBackend destination graph. Route reconcile validates
 supported kind, object existence, cross-namespace authorization, and current variant semantics.
@@ -96,5 +106,6 @@ credential.
 
 ConfigMap, EndpointSlice, Namespace
 
-EdgionConfigData is a provider for Gateway inbound PROXY protocol `resourceRef` policies and is
-therefore no longer dependency-free. Provider changes and deletes requeue registered Gateways.
+EdgionConfigData provides Gateway inbound PROXY protocol `resourceRef` policies and plugin data.
+Provider changes/deletes requeue its registered consumers. Those incoming dependencies do not
+by themselves establish whether a particular ConfigData variant has outgoing references.

@@ -1,3 +1,45 @@
+> **Current resume status — 2026-10-10, committed HEAD 6b5adb0a.**
+> This block is the current authority for progress. The complete historical ledger
+> below is preserved verbatim; its old "current", "pending", pause and no-commit
+> labels describe their recorded checkpoints, not instructions for this HEAD.
+
+## Current source closure and remaining acceptance
+
+- Implementation batches through R11c.4 (including LDAP, ExtProc and Wasm) are
+  committed. The earlier R8/C1/C2 pending labels are superseded by later results.
+- R12a committed as `f6b71a5217ce868e198b315ced6b8cff4c6f1b45`: canonical object-name
+  correction closes source blocker S-R1-01. Scoped verification passed 2321
+  distinct cases, with ten existing ignored doctests. All thirteen committed
+  blobs matched the reviewed manifest; fresh long-name admission/traffic is F2.
+- R12b committed as `6b5adb0ae6ef40b890c4ff95247c762d13697a62`: four obsolete
+  detached transport/resolver entries retired and all 34 test calls migrated,
+  closing source/API blocker F1-COV-R1-01. Scoped verification passed 803 distinct
+  cases (789 unit +14 Common doctests); four existing Common etcd tests remained
+  ignored. Two independent final reviews, scoped commit reviews and fourteen
+  warning-free root gates passed; all twenty-two committed blobs were verified.
+- The retained four-crate inventory is 9758 test IDs, not 9758 executed tests.
+  R12b freshly compiled/listed Common and Gateway; unchanged Resources/Controller
+  inventory provenance was carried forward. Exact limits remain in the evidence.
+- R13 is documentation reconciliation within fourteen approved paths. Affected
+  final whole-contract cross-checks and F2 fresh admission, dynamic traffic and
+  full Standard conformance remain open. Preserve the existing final-closure
+  checklist below; old live reports and source/unit PASS are not fresh acceptance.
+- Keep the original alias issue until FULL acceptance. Continue the authorized
+  serial IMPL workflow with independent reviews and root-owned local commits;
+  never push. Preserve unrelated review-results/ and the abstraction task.
+
+Current evidence:
+
+- `tmp/resource-reference-contract/r12a-verification-20261010/verification-final.json`
+- `tmp/resource-reference-contract/r12a-root-verification-20261010/`
+- `tmp/resource-reference-contract/r12b-verification-20261010/verification-final.json`
+- `tmp/resource-reference-contract/r12b-root-verification-20261010/committed-blobs.json`
+- `tmp/resource-reference-contract/r13-plan-6b5adb0a-20261010/PLAN.md`
+
+> **Historical checkpoint body follows unchanged.** Its commit IDs, failed runs,
+> corrections, exclusions and verification limits remain evidence; later accepted
+> records and the current summary above supersede earlier intermediate status.
+
 # Execution and closure ledger
 
 ## Current resume snapshot (2026-10-10)

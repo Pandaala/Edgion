@@ -66,8 +66,8 @@ requestPlugins:
 |-------|------|---------|-------------|
 | `credentialRef.name` | String | none | Required Secret or LinkSys name. |
 | `credentialRef.namespace` | String | plugin namespace | Referenced object namespace. A cross-namespace reference requires a matching `ReferenceGrant`. |
-| `credentialRef.group` | String | core API group | Omit, empty, or the Kubernetes core group to select a Secret. `edgion.io` selects a `LinkSys` credential source. |
-| `credentialRef.kind` | String | `Secret` | `Secret` (core group) or `LinkSys` (group `edgion.io`). |
+| `credentialRef.group` | String | empty core API group | Omitted or empty selects the empty Kubernetes core API group; this group supports kind `Secret`. This Edgion field also accepts literal `core` for Secrets. A LinkSys credential source requires exact group `edgion.io` and kind `LinkSys`. |
+| `credentialRef.kind` | String | `Secret` | `Secret` (core group) or explicit `LinkSys` (group `edgion.io`). Omitting kind still means `Secret`; group alone never infers `LinkSys`. |
 | `target.type` | `Bearer` or `Header` | `Bearer` | Selects the upstream header shape. |
 | `target.name` | String | none | Required only for `Header`. Header names used for routing, framing, forwarding, cookies, or hop-by-hop behavior are rejected. |
 | `target.valuePrefix` | String | empty | Static prefix for `Header`, limited to 256 bytes. |

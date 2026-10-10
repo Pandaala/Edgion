@@ -93,7 +93,7 @@ for grant-change revalidation. See the
 `spec.visibility` field:
 
 - `Namespace` (default): cross-ns refs require a matching `ReferenceGrant` in the target namespace.
-- `Cluster`: any namespace may reference without a grant (no grant is consulted).
+- `Cluster`: any namespace may reference without a matching grant. Some readers still consult the Grant store before applying this visibility rule; permission does not depend on finding a match.
 - Same-namespace refs are always allowed regardless of `visibility`.
 
 See [15-edgion-config-data.md — Cross-Namespace Reference Grants](15-edgion-config-data.md#cross-namespace-reference-grants) for the full mechanism, data-plane fail semantics, and status reason strings.

@@ -1,5 +1,25 @@
 # Design and verification issues
 
+## Current disposition (2026-10-10)
+
+- S-R1-01 is source-closed by R12a, committed as
+  `f6b71a5217ce868e198b315ced6b8cff4c6f1b45` after independent reviews and gates.
+- F1-COV-R1-01 is source/API-closed by R12b, committed as
+  `6b5adb0ae6ef40b890c4ff95247c762d13697a62`; all twenty-two committed blobs match
+  `tmp/resource-reference-contract/r12b-root-verification-20261010/committed-blobs.json`.
+- R13 documentation reconciliation and affected final whole-contract cross-checks
+  remain in progress. Fresh F2 admission (including long object names), dynamic
+  traffic/revocation and full Standard conformance remain open. Source/unit PASS
+  does not close those gates or the original alias issue.
+- EndpointSlice Controller/Gateway fallbacks remain deliberately distinct. No
+  harmonization or native-conformance claim follows from their preservation.
+
+See [07-progress.md](07-progress.md) for current evidence and limits. Earlier
+capacity/design decisions and failed checks below are historical; accepted choices
+in [00-context.md](00-context.md) supersede their former implementation gates.
+
+## Historical design and verification record
+
 ## Astra reviewer capacity
 
 Initial creation attempts from the primary agent and an inventory agent returned
@@ -21,12 +41,14 @@ reviews. Two Astra reviewers exchanged directions for independent second-round
 checks. Grant consistency, reference coverage and conformance impact all reached
 final LGTM after nine first-round amendments and two second-round precision
 corrections. See [03-specialized-checks.md](03-specialized-checks.md).
-No remaining focused design blocker was found; this does not close the product
-decision gates or establish implementation/admission/conformance verification.
+No remaining focused design blocker was found. Those reviews did not themselves
+close implementation or live acceptance; the later accepted decisions and scoped
+implementation results are summarized in the current disposition above.
 
 ## EndpointSlice fallback policy
 
-Status: explicit implementation-impact gate if harmonization is proposed.
+Retained policy: separate fallback behavior is preserved. A future harmonization
+would require an explicit implementation-impact review.
 Current Controller and Gateway absent Service-label/namespace fallbacks differ.
 The manifest inventories the actual behavior and preserves both policies during
 identity extraction. An intentional behavior correction requires separate
@@ -34,26 +56,29 @@ impact review before implementation; no implicit change is approved here.
 
 ## Standard backend kinds versus connection modes
 
-Status: explicit implementation decision gate, revised after Astra round 1.
+Historical decision gate, revised after Astra round 1 and subsequently resolved
+by the approved recommendations in 00-context.md.
 Current ServiceClusterIp/ServiceExternalName/
 ServiceEndpointSlice/EndpointSlice routing spellings are not registered resource
 kinds. Mapping their actual target to Service fixes lookup authorization but
 does not make their use in standard backendRef.kind conformant. The strict
-shared module must not silently legitimize that behavior. The specification must
-gate the separate Edgion connection-mode surface or strict rejection before a
-routing migration is implemented; spec section 4.5 now does so. Ordinary
+shared module must not silently legitimize that behavior. The design required
+a decision between a separate connection-mode surface and strict rejection. The
+accepted implementation chose strict rejection; no new mode carrier was added. Ordinary
 omitted/Service references stay supported. No mode carrier is approved here.
 
 ## Cluster-scoped material authorization
 
-Status: explicit implementation decision gate, revised after Astra round 1.
+Historical decision gate, revised after Astra round 1 and subsequently resolved
+by the approved recommendations in 00-context.md.
 EdgionGatewayConfig has no source namespace, while
-standard ReferenceGrant.from.namespace requires a namespace. Current Secret
-fetch invents default and ConfigMap fetch invents empty. An actual Cluster
-identity must not inherit either authorization identity. Spec section 4.7
-proposes administrative authority for exactly the EGC outbound CA/client fields.
-Approval must explicitly include the material-selection authority of EGC writers;
-current runtime behavior is unchanged until that decision and implementation.
+standard ReferenceGrant.from.namespace requires a namespace. At the design
+baseline, Secret fetch invented default and ConfigMap fetch invented empty.
+An actual Cluster identity must not inherit either authorization identity. Spec
+section 4.7 proposed administrative authority for exactly the EGC outbound CA/client fields.
+The later approved implementation uses that exact administrative selection with
+explicit target namespaces. The invented default/empty source identities described
+here are historical defects, not the current EGC authorization contract.
 
 ## Existing repository agent-document check failure
 
@@ -64,13 +89,14 @@ stale src/ ref in skills/04-review/ai-routing/regression-guards/ai-cost-weighted
 -> edgion-gateway/src/ai/protocols/openai/request.rs
 ~~~
 
-This is an unchanged knowledge page outside the reference task. The failure
-prevents a clean repository-wide document-gate claim; it is not evidence of a
-runtime reference defect. Targeted new-document link/structure/language checks
-are separate verification. Repair the owning page and rerun the check before
-claiming the repository gate passed; no finding is closed in this design phase.
+This historical failure prevented a clean document-gate claim at the design
+checkpoint; it was not a runtime reference defect. The owning link was later
+repaired, and R12a/R12b root document checks passed. Keep the diagnostic as
+provenance without treating it as a current blocker or fresh verification.
 
-## Current F1 implementation audit (2026-10-10)
+<a id="current-f1-implementation-audit-2026-10-10"></a>
+
+## F1 source audit and subsequent scoped closure (2026-10-10)
 
 At committed HEAD 3cd8d681c75a4bdbb67d68b37eeb461bbf2c266b, fresh Astra
 rounds found two remaining source/API acceptance blockers. Earlier sections
@@ -98,8 +124,9 @@ record design-phase history and are not a current runtime acceptance verdict.
   R12b now removes the four obsolete entries and migrates all 34 test calls.
   Two fresh independent Astra final reviews pass the frozen twenty-path scope;
   803 distinct focused tests and fourteen warning-free root gates pass. Live
-  canonical cores and original test assertions remain. The exact local commit
-  is the remaining batch gate; fresh F2 acceptance is separate.
+  canonical cores and original test assertions remain. Committed locally as
+  6b5adb0ae6ef40b890c4ff95247c762d13697a62 after both scoped commit reviews;
+  all twenty-two blobs match the frozen manifest. Fresh F2 acceptance is separate.
 
 Grant semantic inspection has found no additional confirmed authorization bug;
 source review does not prove live revocation or conformance. Documentation also

@@ -1,5 +1,16 @@
 # Implementation context
 
+## Current authority and status (2026-10-10)
+
+Implementation through R12a `f6b71a5217ce868e198b315ced6b8cff4c6f1b45` and R12b
+`6b5adb0ae6ef40b890c4ff95247c762d13697a62` is committed locally.
+R13 is documentation reconciliation; affected final whole-contract cross-checks
+and F2 fresh admission/dynamic/full Standard conformance remain open. The original
+alias issue stays intact until FULL acceptance. The current ledger is
+[07-progress.md](07-progress.md); historical environment failures below do not
+supersede its current checks or the authorized serial IMPL workflow.
+
+
 The user authorized IMPL implementation on 2026-10-07 after three general Astra
 reviews and two focused rounds in three directions. This supersedes the earlier
 design-only authority. The latest user instruction authorizes committing the
@@ -10,9 +21,10 @@ lane. Reviewers remain independent and read-only. Deployment and unrelated clean
 are not authorized. This instruction supersedes earlier no-commit statements;
 those statements remain historical evidence of the earlier authority.
 
-Baseline HEAD: 73c1d7e81. No tracked changes initially; the original source task and
-five design documents are untracked task artifacts. Retain the original issue until
-implementation, independent final review and required checks pass.
+Historical implementation-start baseline: 73c1d7e81. There were no tracked changes;
+the original source task and five design documents were then untracked artifacts.
+That initial state is preserved as history, not a description of the current tree.
+Retain the original issue until the complete authorized task passes FULL acceptance.
 
 ## Approved recommendations
 
@@ -28,8 +40,11 @@ implementation, independent final review and required checks pass.
 
 ## Baseline and execution
 
-The document guard has the pre-existing stale OpenAI request.rs source link recorded
-in 05-issues.md. Repair that owning reference narrowly after verifying current code.
+The following environment notes describe the implementation-start checkpoint.
+
+The initial document guard failed on the stale OpenAI request.rs source link
+recorded in 05-issues.md. That owning link was repaired; subsequent R12a/R12b root
+document gates passed. The old failure is provenance, not a current blocker.
 Saved conformance reports are historical, not verification of this implementation.
 
 The unified shell runner initially failed with OS error 24. Node fs/promises and

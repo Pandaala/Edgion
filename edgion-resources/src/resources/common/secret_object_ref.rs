@@ -1,8 +1,10 @@
 //! Generic Kubernetes object reference for Secret-bearing CRD fields.
 //!
-//! Schema follows Gateway API `SecretObjectReference` (group/kind defaulted to
-//! `core/Secret`). The `group` and `kind` slots are reserved for future
-//! non-Secret credential sources (Vault CRD, ExternalSecret, ...).
+//! Owning fields interpret omitted group as the empty Kubernetes core group and
+//! omitted kind as `Secret`. Literal `core` is accepted only by the finite Edgion
+//! custom-field contracts, not as a native Gateway API or ACME default.
+//! CredentialInjector also supports exact `edgion.io/LinkSys`; other owning
+//! fields retain their own supported targets and namespace/authorization policy.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -22,7 +24,7 @@ pub struct SecretObjectReference {
     pub name: String,
 
     /// Namespace is the namespace of the referent.
-    /// Cross-namespace refs require a Gateway API `ReferenceGrant`.
+    /// Defaulting and cross-namespace authorization follow the owning field contract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
 }

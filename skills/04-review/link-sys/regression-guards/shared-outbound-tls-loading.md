@@ -27,8 +27,9 @@ inert through the canonical owning selection.
 - `edgion-resources/src/resources/common/tls.rs` documents `enabled` as the
   on/off gate for local TLS policy, while secure endpoint schemes still select TLS.
 - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/auth_spec.rs`:
-  `TlsSpec for TlsConfig::resolve` clears resolved fields, checks enablement, then
-  runs the existing Secret/ReferenceGrant resolution pipeline.
+  `resolve_tls` consumes the actual LinkSys TLS field tokens; disabled selections
+  expose no active references. LinkSys `resolve_for_spec` clears old material
+  before validation and applies only the complete resolved TLS block.
 - `handlers/link_sys.rs`: `parse` clears old dependency edges;
   `resolve_credential_source` collects only enabled TLS inputs.
 - `handlers/san_guard.rs`: `check_link_sys_san` checks only enabled blocks across
@@ -93,7 +94,9 @@ Independent review additionally traced the former Webhook manager's downstream
 consumer: fixing only the front-end gates left it consuming inactive policy.
 Historical filtering at LinkSys preparation fixed that defect. The current owning
 selection preserves that gate and proves actual source/material before replay;
-other shared plugin-client migrations remain in progress in the reference task.
+the scoped plugin-client migrations through R11 and obsolete-entry retirement in
+R12b are complete. Fresh live/admission/conformance acceptance remains open in the
+reference task; these source results do not establish it.
 
 ### Controller OAuth2 owning transport
 

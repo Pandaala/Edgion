@@ -1,14 +1,23 @@
 # Reference field manifest
 
-This finite proposed registry supplements [01-spec.md](01-spec.md). Paths are
-operator JSON/YAML paths unless explicitly labeled as Rust symbols. None of the
-custom core conveniences are enabled by this document. Before implementation,
-freeze this registry with exact source versions, CRD constraints, and consumers.
-An unlisted field does not inherit a convenience from its wire type.
-Implementation authority is now recorded in 00-context.md; proposal wording below
-is historical and does not override its approved finite contracts.
+## Current contract and acceptance (2026-10-10)
+
+The finite contracts were approved in [00-context.md](00-context.md) and implemented
+through the scoped batches recorded in [07-progress.md](07-progress.md), including
+committed R12a/R12b. An unlisted field never inherits a convenience from its wire
+type. Native Gateway API and strict ACME fields retain their own defaults and
+constraints; literal `core` remains a finite custom-field extension.
+
+The original proposal terminology below records the design baseline; it does not
+mean the accepted fields are still unimplemented. Later owning-boundary sections
+record implementation details and explicit exclusions. R13 documentation/affected
+final cross-checks and F2 fresh admission, dynamic traffic and full Standard
+conformance remain open; this manifest alone is not execution or live acceptance.
+Paths are operator JSON/YAML paths unless explicitly labeled as Rust symbols.
 
 ### Current-HEAD inventory addition
+
+**Historical inventory at 4dbcc5495; later completed batches supersede its pending labels.**
 
 External HEAD 4dbcc5495 adds EdgionPlugins request-stage GrpcJsonTranscoder
 config.descriptor, when type=configMapRef: fixed core ConfigMap in the actual
@@ -16,8 +25,10 @@ plugin owner namespace (omitted owner namespace defaults to default), exact
 binaryData[key], no data fallback, no cross-namespace or ReferenceGrant capability.
 Inline descriptors create no resource edge. Enabled request entries acquire;
 disabled or unsupported stages clear material/error without acquisition. The
-prepared owning adapter and bound resolver are implemented and scoped-reviewed;
-generic dependency status and runtime attachment migration remain unfinished.
+prepared owning adapter and bound resolver were implemented and scoped-reviewed
+at that checkpoint; generic dependency/status and runtime attachment work was
+then unfinished. The later completed descriptor, dependency and actual HTTP
+attachment batches in the current ledger supersede that pending status.
 services[] names protobuf services, not Kubernetes Service resources.
 Its HTTPRoute rule ExtensionRef attachment remains the only permitted attachment.
 New route_utils::contains_grpc_transcoder and changed backend_request_scope_violation
@@ -50,8 +61,9 @@ select them.
 | FixedConfigData/LinkSys/GlobalPlugin/Template/InstanceBinding/WriteDestination | Target type fixed by actual field or parsed grammar | Field-specific locality/default/explicit rules and operation intent | No group input |
 | BackendSelector/LogicalSlot | Selector dimensions, not an object defaulting profile | Preserve wildcard/exact occurrence dimensions | No inferred alias |
 
-Standard pseudo-kind inputs are not registered resource targets. Their old
-behavior is subject to the separate routing decision gate in spec section 4.5.
+Standard pseudo-kind inputs are not registered resource targets. The former
+decision gate in spec section 4.5 was resolved by strict rejection, as approved
+in 00-context.md; this does not harmonize the retained EndpointSlice fallback policies.
 Custom Webhook mode grammar does not authorize pseudo-kind resource reads;
 the actual authorized lookup target is core Service.
 

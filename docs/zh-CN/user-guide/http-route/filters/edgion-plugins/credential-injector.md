@@ -60,8 +60,8 @@ requestPlugins:
 |------|------|---------|-------------|
 | `credentialRef.name` | String | 无 | Secret 或 LinkSys 名称，必填。 |
 | `credentialRef.namespace` | String | 插件所在 Namespace | 被引用对象的 Namespace。跨 Namespace 引用需要匹配的 `ReferenceGrant`。 |
-| `credentialRef.group` | String | Kubernetes core API group | 省略、空字符串或 Kubernetes core group 表示 Secret；`edgion.io` 表示 LinkSys 凭据源。 |
-| `credentialRef.kind` | String | `Secret` | core group 下的 `Secret` 或 `edgion.io` group 下的 `LinkSys`。 |
+| `credentialRef.group` | String | 空字符串（core API group） | 省略或空字符串表示空的 Kubernetes core API group；该 group 支持 kind `Secret`。此 Edgion 字段还允许使用字面值 `core` 引用 Secret。LinkSys 凭据源必须同时指定精确的 group `edgion.io` 和 kind `LinkSys`。 |
+| `credentialRef.kind` | String | `Secret` | core group 下的 `Secret`，或在 group 为 `edgion.io` 时显式指定 `LinkSys`。省略 kind 仍表示 `Secret`；不会仅根据 group 推断为 `LinkSys`。 |
 | `target.type` | `Bearer` 或 `Header` | `Bearer` | 选择上游 Header 形式。 |
 | `target.name` | String | 无 | 仅 `Header` 类型必填。用于路由、分帧、转发、Cookie 或 hop-by-hop 行为的 Header 名称会被拒绝。 |
 | `target.valuePrefix` | String | 空 | `Header` 的静态前缀，最长 256 字节。 |

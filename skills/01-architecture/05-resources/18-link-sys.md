@@ -71,7 +71,7 @@ The LinkSys CRD and the log-output / rotation configuration (used by link_sys ru
 - `config` is selected by `type`: Redis, Etcd, Elasticsearch, Webhook, Kafka, OTLP, HttpDns, or CredentialSource
 - The legacy nested `spec.config.type` / `spec.config.config` form is no longer accepted
 
-`SecretObjectReference` (`edgion-resources/src/resources/common/secret_object_ref.rs`), `SecretSlot` (`edgion-resources/src/resources/common/secret_slot.rs`), and `TlsConfig` / `TlsCerts` (`edgion-resources/src/resources/common/tls.rs`) have been extracted from each provider module into a shared common module to avoid multiple near-duplicate copies. `SecretObjectReference` carries `group / kind / name / namespace` (the first two are optional, defaulting to `core/Secret`), reserving room for non-Secret credential sources (Vault / ExternalSecret) in the future. `SecretSlot` is the `{ secret_ref: SecretObjectReference, secret: Option<Secret> }` slot, embedded into each `*Auth` via `#[serde(flatten)]`, with no change in YAML form. The LinkSys subcrates keep stable paths via `pub use`.
+`SecretObjectReference` (`edgion-resources/src/resources/common/secret_object_ref.rs`), `SecretSlot` (`edgion-resources/src/resources/common/secret_slot.rs`), and `TlsConfig` / `TlsCerts` (`edgion-resources/src/resources/common/tls.rs`) have been extracted from each provider module into a shared common module to avoid multiple near-duplicate copies. `SecretObjectReference` carries `group / kind / name / namespace`: omitted group means the empty Kubernetes core group and omitted kind means `Secret`. Literal `core` is a finite Edgion custom-field convenience, not a native Gateway API or ACME default. The shared wire type already supports CredentialInjector's exact `edgion.io/LinkSys` branch; LinkSys provider auth/TLS fields retain their own Secret-only target contracts. `SecretSlot` is the `{ secret_ref: SecretObjectReference, secret: Option<Secret> }` slot, embedded into each `*Auth` via `#[serde(flatten)]`, with no change in YAML form. The LinkSys subcrates keep stable paths via `pub use`.
 
 ## Controller-side processing
 
@@ -101,38 +101,45 @@ The LinkSys CRD and the log-output / rotation configuration (used by link_sys ru
 
 ### parse — credential resolution
 
-`TlsSpec::resolve` first clears `resolved_ca_certificates` and
-`resolved_client_certificate`, then returns immediately for `enabled: false`.
-Since `parse` clears the owner's previous Secret dependencies before rebuilding
-them, disabling TLS also removes its old dependency edges. SAN/hostname admission
-and `credential::tls_ready` apply only to enabled TLS blocks. The credential-source
-resolver likewise excludes disabled TLS from its manager config and input revision
-list. Auth references continue through their independent resolution path.
+LinkSys parsing first clears the owner's previous Secret/cross-namespace dependencies
+and credential-source registry contribution, then binds `PreparedLinkSysReferences`
+to the actual resource. `resolve_for_spec` clears old material before validating
+its field references. These cleanup steps preserve delete/recreate coalescing;
+they intentionally precede new acquisition and must not be treated as forbidden
+side effects of an invalid incoming reference.
 
-Unlike the older "pass through directly", the new parse goes through the full **credential pipeline** (`resource_processor/credential/pipeline.rs`):
+The bound credential pipeline (`resource_processor/credential/pipeline.rs`) then
+handles actual provider fields:
 
-1. Via `AuthSpec` / `TlsSpec` traits + the generic `drive_standard`, walks every `SecretObjectReference` in the spec uniformly:
-   - The `AuthSpec` trait binds "declaration → resolver selection → material extraction" to a concrete `*Auth` type (Redis/Etcd's `RedisAuth`/`EtcdAuth`; Elasticsearch's tagged-enum variants). **Webhook no longer participates here:** its handler resolves only TLS; outbound credentials are `request.headers.custom` entries using `template: "... ${secretRef:ns/name:key} ..."` — the handler scans `collect_secret_ref_names`, fetches each Secret via `fetch_secret` (ReferenceGrant enforced for cross-namespace), and embeds resolved values in `spec.resolved_secrets`, which rides the normal conf_sync path to the gateway. The ignored top-level `auth` field still present in code is removal debt, not a supported compatibility contract; see [webhook.md](../03-controller-gateway-link/webhook.md).
-   - The `TlsSpec` trait handles enabled `TlsConfig` CA and client-certificate references (`validation.caCertificateRefs` and `clientCertificateRef`); disabled blocks contribute no references.
-   - `resolve_for_spec` calls `drive_standard::<A: AuthSpec, T: TlsSpec>` to fold over all ref handling
-   - Adding a new backend just needs: (1) impl `AuthSpec`; (2) add a `SystemConfig` variant; (3) add one line of `drive_standard(...)` in `resolve_for_spec`; (4) if it has TLS, `TlsConfig` already impls `TlsSpec` and can be reused directly
-2. For each ref, run the seven-step pipeline:
-   1. Compute the effective namespace (default = LinkSys's namespace)
-   2. Register the `owner→secret` dependency in `SecretRefManager` (register even if subsequent steps fail, so that when the Secret appears/changes a self-healing requeue is possible)
-   3. Cross-namespace goes through `ReferenceGrantStore` for authorization
-   4. Look up the `Secret` in `runtime.secret_store`
-   5. Validate `Secret.type` is in the resolver's allowlist
-   6. Extract `Secret.data`
-   7. Call the corresponding `SecretMaterialResolver::parse` for missing-key / decoding validation (Material is discarded; the Gateway recomputes it)
-3. On success, write the resolved Secret into the transport slot. `#[schemars(skip)]` keeps the
-   field out of the CRD, serde keeps it in conf_sync, and the redaction adapter hides it from Admin
-   config output. `skip_serializing_if` only omits `None`; it is not a schema control. See
+1. `drive_standard<A: AuthSpec>` selects auth parsing from the actual provider
+   variant and its bound auth token. `resolve_provider_tls` calls
+   `auth_spec::resolve_tls` with the actual `LinkSysTlsReferences`; the removed
+   `TlsSpec` trait is not an extension point. Disabled TLS supplies no active
+   references or material, while auth references remain independent.
+   Webhook credentials use its actual request-template Secret references, rather
+   than a provider auth field; resolved values enter its schema-hidden transport slot.
+2. Before any new dependency registration, Grant authorization or material read,
+   the pipeline validates field/source identity and the exact dependency owner.
+   Invalid identity creates no new dependency or lookup. A valid missing or denied
+   reference registers its recovery dependency before authorization and lookup.
+   Namespace defaults and cross-namespace permission come from the owning field;
+   status-only shared entry points do not register dependencies.
+3. Authorized Secret material is checked for the provider's accepted Secret type,
+   required keys and decode rules, then embedded in the corresponding transport
+   slot. `#[schemars(skip)]` excludes that slot from the CRD, serde carries it in
+   conf_sync, and the redaction adapter masks Admin output. See
    [00-schema-transport-contract.md](00-schema-transport-contract.md).
-4. Pipeline three-state `ResolveOutcome` (applies only to **the current ref** and does not stop other refs in the same LinkSys from continuing the pipeline — see "ResolvedRefs multi-error collection" in [10-secret.md](10-secret.md)):
-   - `Ok(Secret)` → embed Secret into spec
-   - `Pending(SecretNotFound | ReferenceGrantMissing)` → leave `secret: None` on the current ref, accumulate errors; auto-requeue once the Secret / Grant arrives
-   - `Invalid(MissingKeys | DecodeError | InvalidSecretType)` → leave `secret: None` on the current ref, accumulate errors; wait for an operator to fix the Secret content
-   - Regardless of which branch is hit, `resolve_for_spec` continues processing the next ref (auth failure does not short-circuit tls, and vice versa); all results are written into `ResolvedRefs.message` together; `reason` is selected as the most severe according to the `pick_resolved_refs_reason` priority table.
+4. Parse aggregates reference errors and maintains `ResolvedRefs`, preserving
+   missing/denied recovery and malformed-material diagnostics. Auth failure does
+   not suppress independent TLS processing. Enabled TLS publishes its complete
+   resolved block only when its resolution has no error; material cleanup keeps
+   disabled or failed selections from retaining the previous generation's bytes.
+   CredentialSource retains its separate manager/publication fences and excludes
+   disabled TLS inputs from the active selection.
+
+`update_status` preserves the `ResolvedRefs` condition maintained by parse. It
+updates Accepted/unknown-field and CredentialSource projections; it does not
+re-read the reference pipeline or create dependency registrations.
 
 ### update_status
 
@@ -231,7 +238,7 @@ HTTP client. Disabled TLS remains in the owner but is inert for business calls
 and active health checks; construction neither clones nor removes the block.
 URL targets retain their explicit `http` or `https` scheme.
 
-`edgion-common/src/link_sys_core/tls.rs` plugs `TlsConfig` + the resolved `TlsMaterial` into each provider's TLS configuration:
+`edgion-common/src/link_sys_core/tls.rs` converts canonical effective TLS resolution into provider configuration. Actual-owner provider paths supply their proved field selection and captured inherited snapshot; the shared conversion cores retain the provider capability checks:
 - `ca_pem`: derived from the resolved `validation.caCertificateRefs` Secret(s) carrying a `ca.crt` key. The old inline `TlsCerts.caCert` field has been removed. A custom CA replaces the public roots entirely.
 - `client_cert_pem` / `client_key_pem`: from the Secret referenced by `clientCertificateRef`; the private key is `Zeroizing<Vec<u8>>`.
 - `verify` is enforced per provider: Redis and Etcd always verify (`verify: false` is rejected at startup — the SDK has no skip-verify API); ES, Webhook, and other connectors honor `verify: false` as an operator decision (a WARN is emitted at config-load time). Trust anchors come from `validation.caCertificateRefs` (for LinkSys, only `kind: Secret` is supported in this release) or `validation.wellKnownCACertificates: System` (built-in webpki roots).

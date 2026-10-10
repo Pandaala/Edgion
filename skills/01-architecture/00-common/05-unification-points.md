@@ -139,8 +139,8 @@ policy. TLS/client construction failure must never select an unconfigured client
   captured snapshot and inherited encoder before persistent reuse. Enabled local
   TLS or implicit rediss selects transport; disabled refs stay inert. One resolved
   result feeds the shared rustls conversion core and Fred retains its connector
-  across reconnect. Other transports and replay gates
-  remain tracked in `tasks/pending/resource-reference-contract/`.
+  across reconnect. The reference task has completed the scoped owning transport
+  and replay migrations through R12b; fresh live acceptance remains open.
   Redis and Elasticsearch now share PreparedLinkSysTls's immutable actual-owner,
   reference-topology, captured-default and whole-selection orchestration; their
   closed adapters retain distinct transport/inheritance decisions. ES uses the
@@ -151,7 +151,14 @@ policy. TLS/client construction failure must never select an unconfigured client
   including explicit System TLS (rskafka None means plaintext). Absent/disabled
   local TLS consumes no globals. Init and probe recovery retain the constructed
   connector Arc and actual owner; no TLS config/Secret clones or global rereads.
-  SASL readiness remains fail-fast; auth-reference authority remains outstanding.
+  SASL readiness remains fail-fast. R9b added actual provider auth-field/material
+  pairing before runtime replay without changing Controller acquisition authority.
+  OIDC, LDAP, ExtProc and Wasm now bind their actual local TLS fields before cache
+  reuse or construction, retaining their distinct transport/inactivity rules.
+  R12b retired the obsolete detached managed-client and raw rustls constructors
+  and the unused global-loading resolver wrapper. Generic HTTP construction,
+  preconfigured TLS, process bootstrap and live canonical conversion cores remain.
+  Scoped source and unit verification does not establish live revocation or conformance.
 - **Verified consumers**: the reqwest factory, ext_proc (tonic channel with a
   custom hyper connector), ldap_auth (ldap3), the redis provider (fred), the
   kafka provider (rskafka), the etcd link provider, the OTLP LinkSys tonic014 transport, openid_connect token

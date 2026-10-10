@@ -9,7 +9,17 @@
 | Type | refactor |
 | Priority | P2 |
 | Source | [Core API group alias investigation](../../todo/core-api-group-alias-contract.md) |
-| Current phase | User approved IMPL implementation; implementation in progress; independent plan review passed |
+| Current phase | Implementation batches through R12b committed; R13 documentation reconciliation and final acceptance remain in progress |
+
+## Current status (2026-10-10)
+
+The design is accepted and implementation batches through R12b are committed
+locally. R12a fixes valid Kubernetes object-name rejection; R12b retires obsolete
+detached TLS constructors. [07-progress.md](07-progress.md) records exact commits,
+scoped reviews/tests and their limits. R13 reconciles current documentation with
+historical checkpoints. Affected final whole-contract cross-checks and F2 fresh
+admission, dynamic traffic and full Standard conformance remain open. The original
+alias investigation is retained until FULL acceptance; no push has occurred.
 
 ## AI guide summary
 
@@ -45,10 +55,8 @@ review gates production changes; final review and required checks gate closure.
 | [03-specialized-checks.md](03-specialized-checks.md) | Two additional rounds in three directions: Grant consistency, reference coverage and conformance impact |
 | [05-issues.md](05-issues.md) | Current design and verification blockers with resume conditions |
 
-The source investigation remains open. Approval of this specification and a
-reviewed implementation plan are separate from completion of the design work.
-The general review and the subsequent two focused rounds found no remaining
-design blocker in the final revision. Grant consistency, reference coverage and
-conformance impact each received independent final LGTM after correction.
-This does not establish runtime or live conformance results. Recommended choices are approved as recorded in 00-context.md; independent
-implementation-plan review remains a gate.
+The general design reviews and two focused rounds found no remaining design
+blocker after correction. Their LGTM is design evidence, not runtime or live
+conformance acceptance. Approved choices remain in [00-context.md](00-context.md);
+each implementation batch required independent plan/result review and checks.
+The source investigation remains open until the final acceptance gates pass.
