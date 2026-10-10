@@ -90,3 +90,12 @@ status plus native `spec.currentStatus`. See the shared 32-entry
 
 Secret rotation is hot-reloadable. The Gateway atomically publishes a new immutable backend
 generation and in-flight requests keep their captured generation.
+
+
+The Gateway checks each carried credential Secret against its actual declared
+Secret reference before parsing the API key. Name and explicit namespace must
+match; an omitted Backend namespace defaults to `default`, while missing Secret
+namespace is not a qualified default Secret. Invalid or unresolved credentials
+are omitted from the usable pool; a valid subset remains active, and no usable
+credentials deactivates the runtime entry. This adds no configuration fields,
+Secret UID requirement, or additional reference authorization policy.

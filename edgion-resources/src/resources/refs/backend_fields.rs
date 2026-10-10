@@ -87,6 +87,49 @@ impl BackendSecretField<'_> {
     pub fn validated(&self) -> Result<BoundFieldReference<'_>, ReferenceError> {
         BoundFieldReference::backend_secret(self.owner, &self.position)
     }
+
+    /// Borrow only this actual slot's material after checking its reference identity.
+    /// A missing raw namespace is not a qualified default-namespace Secret.
+    ///
+    /// ```compile_fail
+    /// use edgion_resources::EdgionBackend;
+    /// use edgion_resources::resources::refs::backend_fields::BackendCredentialPoolField;
+    /// fn cannot_drop_material_owner(owner: EdgionBackend) {
+    ///     let field = BackendCredentialPoolField::from_backend(&owner).secret_reference(0);
+    ///     let secret = field.resolved_secret().unwrap();
+    ///     drop(owner);
+    ///     let _ = secret.is_some();
+    /// }
+    /// ```
+    /// ```compile_fail
+    /// use edgion_resources::EdgionBackend;
+    /// use edgion_resources::resources::refs::backend_fields::BackendCredentialPoolField;
+    /// fn cannot_replace_material(mut owner: EdgionBackend) {
+    ///     let field = BackendCredentialPoolField::from_backend(&owner).secret_reference(0);
+    ///     let secret = field.resolved_secret().unwrap();
+    ///     owner.spec.ai.credential_pool.credentials.clear();
+    ///     let _ = secret.is_some();
+    /// }
+    /// ```
+    pub fn resolved_secret(&self) -> Result<Option<&k8s_openapi::api::core::v1::Secret>, ReferenceError> {
+        let reference = self.validated()?;
+        let FieldSlot::BackendCredential { index } = self.position else {
+            return Err(ReferenceError::UnsupportedTarget);
+        };
+        let slot = self
+            .owner
+            .spec
+            .ai
+            .credential_pool
+            .credentials
+            .get(index)
+            .ok_or(ReferenceError::StaleBinding)?;
+        let Some(secret) = slot.credential.secret.as_ref() else {
+            return Ok(None);
+        };
+        super::owned::validate_secret_metadata(reference, secret)?;
+        Ok(Some(secret))
+    }
 }
 
 #[cfg(test)]

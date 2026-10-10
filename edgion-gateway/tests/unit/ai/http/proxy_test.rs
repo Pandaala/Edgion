@@ -513,6 +513,11 @@ fn captured_backend_skew_cannot_hide_unresolved_tpm_or_provider_changes() {
         "spec":{"ai":{"provider":"OpenAICompatible","endpoint":"https://provider.example.com","credentialPool":{"credentials":[{"name":"usable","secretRef":{"name":"key"}}]},"models":[{"name":"model"}],"defaults":{"maxOutputTokens":64}}}
     })).unwrap();
     declared.spec.ai.credential_pool.credentials[0].credential.secret = Some(k8s_openapi::api::core::v1::Secret {
+        metadata: kube::api::ObjectMeta {
+            name: Some("key".into()),
+            namespace: Some("tenant-b".into()),
+            ..Default::default()
+        },
         data: Some(std::collections::BTreeMap::from([(
             "api-key".to_string(),
             ByteString(b"usable-key".to_vec()),
@@ -598,6 +603,11 @@ fn responses_continuation_uses_raw_slots_and_bindings_before_filtering() {
         "spec":{"ai":{"provider":"OpenAI","endpoint":"https://provider.example.com","credentialPool":{"credentials":[{"name":"usable","secretRef":{"name":"key"}}]},"models":[{"name":"model","aliases":["alias"]}]}}
     })).unwrap();
     declared.spec.ai.credential_pool.credentials[0].credential.secret = Some(k8s_openapi::api::core::v1::Secret {
+        metadata: kube::api::ObjectMeta {
+            name: Some("key".into()),
+            namespace: Some("tenant-b".into()),
+            ..Default::default()
+        },
         data: Some(std::collections::BTreeMap::from([(
             "api-key".into(),
             k8s_openapi::ByteString(b"fixed-test-key".to_vec()),

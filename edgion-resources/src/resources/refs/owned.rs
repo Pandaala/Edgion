@@ -138,7 +138,7 @@ impl FrozenFieldReference {
         &self,
         secret: &k8s_openapi::api::core::v1::Secret,
     ) -> Result<(), ReferenceError> {
-        validate_managed_output_metadata(self.managed_credential_output()?, secret)
+        validate_secret_metadata(self.managed_credential_output()?, secret)
     }
 
     pub fn grant_query(&self) -> Result<GrantQuery<'_>, ReferenceError> {
@@ -637,7 +637,7 @@ fn managed_credential_output<'a>(
         _position: &slot.position,
     })
 }
-fn validate_managed_output_metadata(
+pub(super) fn validate_secret_metadata(
     reference: BoundFieldReference<'_>,
     secret: &k8s_openapi::api::core::v1::Secret,
 ) -> Result<(), ReferenceError> {
@@ -669,7 +669,7 @@ impl ReferenceToken<'_> {
         &self,
         secret: &k8s_openapi::api::core::v1::Secret,
     ) -> Result<(), ReferenceError> {
-        validate_managed_output_metadata(self.managed_credential_output()?, secret)
+        validate_secret_metadata(self.managed_credential_output()?, secret)
     }
 
     /// Freeze only a validated descriptor for async work. Runtime consumers

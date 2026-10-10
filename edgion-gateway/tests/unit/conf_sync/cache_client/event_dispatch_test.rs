@@ -522,6 +522,7 @@ fn runtime_backend_json(name: &str) -> serde_json::Value {
     let mut backend = valid_backend_json();
     backend["metadata"]["name"] = serde_json::json!(name);
     backend["spec"]["ai"]["credentialPool"]["credentials"][0]["secret"] = serde_json::json!({
+        "metadata": {"name": "key", "namespace": "ns-1"},
         "data": {"api-key": "c2VjcmV0"},
         "type": "Opaque"
     });

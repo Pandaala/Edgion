@@ -11,6 +11,11 @@ use std::collections::BTreeMap;
 
 fn ai_backend(name: &str, endpoint: &str, credential: Option<&[u8]>) -> EdgionBackend {
     let secret = credential.map(|value| Secret {
+        metadata: kube::api::ObjectMeta {
+            name: Some("provider-key".into()),
+            namespace: Some("ai-admin-test".into()),
+            ..Default::default()
+        },
         data: Some(BTreeMap::from([("api-key".to_string(), ByteString(value.to_vec()))])),
         ..Default::default()
     });
@@ -63,6 +68,11 @@ fn configclient_redacts_ai_credential_and_retains_inactive_resources() {
     let mut secondary = active.spec.ai.credential_pool.credentials[0].clone();
     secondary.name = "secondary".to_string();
     secondary.credential.secret = Some(Secret {
+        metadata: kube::api::ObjectMeta {
+            name: Some("provider-key".into()),
+            namespace: Some("ai-admin-test".into()),
+            ..Default::default()
+        },
         data: Some(BTreeMap::from([(
             "api-key".to_string(),
             ByteString(b"secondary-private-key".to_vec()),

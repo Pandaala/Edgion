@@ -9,6 +9,11 @@ use std::collections::BTreeMap;
 
 fn resource(name: &str, endpoint: &str, credential: Option<&[u8]>) -> Arc<EdgionBackend> {
     let secret = credential.map(|value| Secret {
+        metadata: kube::api::ObjectMeta {
+            name: Some("provider-key".into()),
+            namespace: Some("default".into()),
+            ..Default::default()
+        },
         data: Some(BTreeMap::from([("api-key".to_string(), ByteString(value.to_vec()))])),
         ..Default::default()
     });
@@ -692,9 +697,9 @@ fn backend_redis_actual_owner_gate_precedes_uid_and_preserves_schema_error_order
     owner.metadata.namespace = Some(String::new());
     owner.spec.ai.credential_pool.redis_ref = None;
     owner.spec.ai.credential_pool.credentials[0].limits = None;
-    assert!(
-        try_compile_edgion_backend("default/provider", &owner).is_ok(),
-        "no Redis adds no new owner gate"
+    assert_eq!(
+        try_compile_edgion_backend("default/provider", &owner).unwrap_err(),
+        "no usable credentials"
     );
 }
 
@@ -794,4 +799,144 @@ fn backend_redis_source_tracks_configured_limits_before_partial_pool_filtering()
         try_compile_edgion_backend("default/provider", &owner).unwrap_err(),
         "invalid owning LinkSys reference"
     );
+}
+
+#[test]
+fn backend_material_pairing_preserves_partial_good_and_error_priority() {
+    let base = (*resource("provider", "https://provider.example.com", Some(b"first-key"))).clone();
+    for dimension in 0..8 {
+        let mut owner = base.clone();
+        let mut second = owner.spec.ai.credential_pool.credentials[0].clone();
+        second.name = "second".into();
+        second.credential.secret_ref.name = "second-key".into();
+        second.credential.secret.as_mut().unwrap().metadata.name = Some("second-key".into());
+        second
+            .credential
+            .secret
+            .as_mut()
+            .unwrap()
+            .data
+            .as_mut()
+            .unwrap()
+            .get_mut("api-key")
+            .unwrap()
+            .0 = b"second-value".to_vec();
+        owner.spec.ai.credential_pool.credentials.push(second);
+        let slot = &mut owner.spec.ai.credential_pool.credentials[0].credential;
+        match dimension {
+            0 => slot.secret.as_mut().unwrap().metadata.name = None,
+            1 => slot.secret.as_mut().unwrap().metadata.name = Some(String::new()),
+            2 => slot.secret.as_mut().unwrap().metadata.name = Some("other".into()),
+            3 => slot.secret.as_mut().unwrap().metadata.namespace = None,
+            4 => slot.secret.as_mut().unwrap().metadata.namespace = Some(String::new()),
+            5 => slot.secret.as_mut().unwrap().metadata.namespace = Some("other".into()),
+            6 => slot.secret_ref.name = "retargeted".into(),
+            _ => slot.secret_ref.group = Some("wrong.example".into()),
+        }
+        let compiled = try_compile_backend("default/provider", &owner).unwrap();
+        assert_eq!(compiled.credential_pool.credentials.len(), 1);
+        assert_eq!(compiled.credential_pool.credentials[0].name, "second");
+        assert_eq!(compiled.credential_pool.credentials[0].credential, "second-value");
+        assert_eq!(compiled.declared_credential_count, 2);
+        owner.spec.ai.credential_pool.credentials.pop();
+        assert_eq!(
+            try_compile_backend("default/provider", &owner).unwrap_err(),
+            "no usable credentials"
+        );
+    }
+    let mut invalid = base.clone();
+    invalid.spec.ai.credential_pool.credentials[0]
+        .credential
+        .secret
+        .as_mut()
+        .unwrap()
+        .metadata
+        .name = None;
+    invalid.spec.ai.endpoint = Some("not-an-endpoint".into());
+    assert_eq!(
+        try_compile_backend("default/provider", &invalid).unwrap_err(),
+        "invalid endpoint"
+    );
+    assert_eq!(
+        try_compile_backend("invalid-key", &invalid).unwrap_err(),
+        "invalid resource key"
+    );
+    assert_eq!(
+        try_compile_edgion_backend("invalid-key", &invalid).unwrap_err(),
+        "invalid configuration"
+    );
+    for group in [None, Some(""), Some("core")] {
+        let mut owner = base.clone();
+        owner.metadata.namespace = None;
+        owner.spec.ai.credential_pool.credentials[0].credential.secret_ref.group = group.map(str::to_owned);
+        assert!(try_compile_edgion_backend("default/provider", &owner).is_ok());
+    }
+    let mut swapped = base.clone();
+    let mut second = swapped.spec.ai.credential_pool.credentials[0].clone();
+    second.name = "second".into();
+    second.credential.secret_ref.name = "second-key".into();
+    // Both carry provider-key, so the second ordinal cannot borrow the first's proof.
+    swapped.spec.ai.credential_pool.credentials.push(second);
+    assert_eq!(
+        try_compile_backend("default/provider", &swapped)
+            .unwrap()
+            .credential_pool
+            .credentials
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn backend_material_retarget_withdraws_before_reuse_and_preserves_captured_generation() {
+    for full in [false, true] {
+        let store = AiBackendStore::new();
+        let key = "default/provider".to_string();
+        let mut owner = (*resource("provider", "https://provider.example.com", Some(b"stable-key"))).clone();
+        owner.metadata.uid = Some("same-backend-uid".into());
+        store.full_set(&HashMap::from([(key.clone(), Arc::new(owner.clone()))]));
+        let captured = store.snapshot();
+        let old = captured.get_by_key(&key).unwrap();
+        owner.spec.ai.credential_pool.credentials[0].credential.secret_ref.name = "retargeted".into();
+        if full {
+            store.full_set(&HashMap::from([(key.clone(), Arc::new(owner.clone()))]));
+        } else {
+            store.partial_update(
+                HashMap::new(),
+                HashMap::from([(key.clone(), Arc::new(owner.clone()))]),
+                HashSet::new(),
+            );
+        }
+        assert!(store.get_by_key(&key).is_none());
+        assert!(Arc::ptr_eq(&old, &captured.get_by_key(&key).unwrap()));
+        assert_eq!(old.credential_pool.credentials[0].credential, "stable-key");
+        owner.spec.ai.credential_pool.credentials[0]
+            .credential
+            .secret
+            .as_mut()
+            .unwrap()
+            .metadata
+            .name = Some("retargeted".into());
+        store.partial_update(
+            HashMap::new(),
+            HashMap::from([(key.clone(), Arc::new(owner.clone()))]),
+            HashSet::new(),
+        );
+        let recovered = store.get_by_key(&key).unwrap();
+        assert_eq!(recovered.uid, "same-backend-uid");
+        store.full_set(&HashMap::from([(key.clone(), Arc::new(owner.clone()))]));
+        assert!(Arc::ptr_eq(&recovered, &store.get_by_key(&key).unwrap()));
+        owner.spec.ai.models[0].aliases.push("new-alias".into());
+        store.partial_update(
+            HashMap::new(),
+            HashMap::from([(key.clone(), Arc::new(owner))]),
+            HashSet::new(),
+        );
+        let changed = store.get_by_key(&key).unwrap();
+        assert!(!Arc::ptr_eq(&recovered, &changed));
+        assert!(Arc::ptr_eq(
+            &recovered.credential_pool.limiter_core,
+            &changed.credential_pool.limiter_core
+        ));
+    }
 }

@@ -78,5 +78,31 @@ acquisition preserves ordinary material sanitization, AiApiKeyResolver validatio
 partial-good credentials and structural status precedence. Invalid reference
 outcomes use the bounded `InvalidReference` class, independently of Secret decoding
 errors. This class is Controller-only status input; Secret transport/redaction is
-unchanged. Other generic credential consumers and Gateway trust of arbitrary
-pre-resolved material are separate review boundaries.
+unchanged. Other generic credential consumers remain separate review boundaries.
+
+
+## Gateway credential material correspondence
+
+The cold compiler enumerates actual credential ordinals through
+BackendCredentialPoolField::secret_reference. Its borrowed resolved_secret
+accessor validates the actual source/reference and returns only that slot's
+carried Secret after exact name/namespace comparison. The shared private metadata
+comparator also serves managed credential outputs without changing their policy.
+Identity is checked before Secret type and API-key parsing and before runtime/pool
+reuse. An invalid slot is omitted; a usable sibling keeps the backend active,
+while zero usable credentials retains the fixed no-usable-credentials rejection.
+
+Backend acquisition remains qualified-only. An omitted owner namespace means
+`default`, but carried Secret metadata must explicitly match `default`; a raw
+namespace-less Secret is not a TLS-style fallback. FS/etcd bare Secret storage and
+its existing unresolved Backend outcome are unchanged. Custom core aliases remain
+confined to the actual Secret reference profile. No Secret UID is required.
+
+Schema validation, Redis-owner validation, runtime UID/key and endpoint checks
+retain their existing priority before credential filtering. A malformed source
+without Redis still makes its actual Secret slots unusable; no new top-level
+schema owner requirement is introduced. Same-UID material mismatches cannot reuse
+an old active pool. Equivalent valid inputs reuse their Arc/limiter as before,
+and requests holding an older snapshot retain its immutable material. Controller
+acquisition and Grant/status behavior were already bound and are not changed by
+this additional cold consumer check.

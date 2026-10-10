@@ -78,14 +78,23 @@
   Verification passes 254 unit and 74 doc tests (328 distinct), with sixteen
   existing ignored docs; all 9709 old identities remain among 9714. The runner's
   nonzero-pass assertion after successful ignored-only Controller docs is retained
-  transparently; remaining Resources docs passed separately. Local commit awaits
-  the final manifest gate. Live API and conformance verification remain open.
-- F1 read-only inventory identified two further bounded material-pairing candidates:
-  Gateway EdgionBackend credentials and Common LinkSys non-TLS auth. Existing
-  Controller guards remain; these are missing consumer proof boundaries, not
-  demonstrated ingress exploits. Generated CredentialSource operation identity
-  is closed by R8f.1/R8f.2 and ACME output identity by R8e.2. Plan the two remaining
-  material-pairing candidates separately.
+  transparently; remaining Resources docs passed separately. Committed locally as
+  4b920e3c3e448b60c59e6c6cad608c1e7d97f94e after both final commit reviews;
+  all nine blobs match the frozen manifest. No push occurred. Live API and
+  conformance verification remain open.
+- R9a Backend carried Secret pairing at 4b920e3c3 passes both independent Astra
+  static/execution reviews and all fourteen root gates, zero warnings. Twelve
+  technical paths plus this ledger include six metadata-only fixture additions
+  identified during plan review and one explicitly approved malformed-owner test
+  expectation change. Verification passes 265 unit, 76 doc and one feature-enabled
+  H1/H2 standalone transport test (342 distinct), preserving ten ignored docs and
+  all 9714 old ordinary test identities among 9718. Transport is excluded from
+  that ordinary identity count. Local commit awaits the final manifest gate.
+- F1's Gateway EdgionBackend material-pairing candidate is closed by R9a; Common
+  LinkSys non-TLS auth remains to be planned separately. Existing Controller
+  guards remain; these are consumer proof boundaries, not demonstrated ingress
+  exploits. Generated CredentialSource operation identity is closed by R8f.1/R8f.2
+  and ACME output identity by R8e.2.
 - Native Gateway material selection preserves omitted raw namespaces without
   relaxing native group/kind or Grant semantics. Default's candidate reads are not
   atomic; registered dependencies and subsequent source events reconcile changes.

@@ -365,6 +365,11 @@ fn publish(port: u16, origin: u16) {
     for (name, provider) in [("anthropic", "Anthropic"), ("native", "OpenAICompatible")] {
         let mut backend:EdgionBackend=serde_json::from_value(json!({"metadata":{"name":name,"namespace":"default"},"spec":{"ai":{"provider":provider,"endpoint":format!("http://127.0.0.1:{origin}"),"allowInsecureHttp":true,"credentialPool":{"credentials":[{"name":"primary","secretRef":{"name":"fixture"}}]},"models":[{"name":"claude-fixture"}],"defaults":{"streaming":true,"maxOutputTokens":64}}}})).unwrap();
         backend.spec.ai.credential_pool.credentials[0].credential.secret = Some(k8s_openapi::api::core::v1::Secret {
+            metadata: kube::api::ObjectMeta {
+                name: Some("fixture".into()),
+                namespace: Some("default".into()),
+                ..Default::default()
+            },
             data: Some(BTreeMap::from([(
                 "api-key".into(),
                 k8s_openapi::ByteString(b"fixture-only".to_vec()),

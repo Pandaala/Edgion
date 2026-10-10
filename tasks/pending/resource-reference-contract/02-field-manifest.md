@@ -672,3 +672,17 @@ old-source/orphan cleanup derives its expectation from observed exact ownership,
 without a live old owner, and retains post-GET authorization plus UID/RV deletion
 preconditions. Explicit API namespace matching does not widen local store aliases.
 No live API/issuer or Gateway API conformance verification is claimed here.
+
+
+## R9a Backend carried credential pairing
+
+Gateway cold compilation now binds each actual Backend credential ordinal to its
+own carried Secret through the existing field adapter and shared strict metadata
+comparison. Identity validation precedes parsing and runtime/pool reuse; partial
+good pools remain active, zero usable credentials withdraws the current entry,
+and captured old snapshots retain their lifetimes. Equivalent valid runtime and
+limiter reuse, runtime UID and error priority remain unchanged. This closes the
+F1 candidate A consumer boundary, independently of the already-bound Controller
+acquisition and status/Grant behavior. No bare-default selector or wire field is
+added. R9b LinkSys non-TLS auth remains a separate scope. Focused tests and the
+standalone Gateway unary transport target do not establish Gateway API conformance.

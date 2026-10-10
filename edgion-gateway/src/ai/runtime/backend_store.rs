@@ -535,8 +535,10 @@ fn try_compile_backend(key: &str, resource: &EdgionBackend) -> Result<RuntimeAiB
         .credential_pool
         .credentials
         .iter()
-        .filter_map(|configured| {
-            let secret = configured.credential.secret.as_ref()?;
+        .enumerate()
+        .filter_map(|(index, configured)| {
+            let field = BackendCredentialPoolField::from_backend(resource).secret_reference(index);
+            let secret = field.resolved_secret().ok()??;
             let secret_type = secret.type_.as_deref().unwrap_or("");
             if !resolver.allowed_secret_types().contains(&secret_type) {
                 return None;
