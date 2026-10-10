@@ -823,3 +823,128 @@ fn frozen_managed_output_preserves_actual_projection_and_checks_raw_material() {
         .managed_credential_output()
         .is_err());
 }
+
+#[test]
+fn header_ca_compressed_material_is_bound_to_actual_targets_and_active_owner() {
+    use crate::constants::annotations::edgion::CONTROLLER_CA_SOURCE;
+    let base = json!({"metadata":{"name":"auth","namespace":"default","uid":"first"},"spec":{
+        "requestPlugins":[{"type":"HeaderCertAuth","config":{"mode":"Header",
+        "caSecretRefs":[{"name":"missing"},{"name":"ca","group":"core"}],
+        "resolvedCaSecrets":[{"metadata":{"name":"ca","namespace":"default","resourceVersion":"7"},"stringData":{"ca.crt":"not parsed here"}}]}}]
+    }});
+    for case in [
+        "matching",
+        "default-owner",
+        "invalid-first",
+        "wrong-name",
+        "no-name",
+        "empty-name",
+        "wrong-ns",
+        "no-ns",
+        "empty-ns",
+        "marker",
+        "no-ref",
+        "retarget",
+        "invalid-owner",
+        "invalid-owner-ns",
+        "partial",
+        "connection",
+        "disabled",
+    ] {
+        let mut value = base.clone();
+        let config = &mut value["spec"]["requestPlugins"][0]["config"];
+        match case {
+            "wrong-name" => config["resolvedCaSecrets"][0]["metadata"]["name"] = json!("other"),
+            "no-name" => {
+                config["resolvedCaSecrets"][0]["metadata"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("name");
+            }
+            "empty-name" => config["resolvedCaSecrets"][0]["metadata"]["name"] = json!(""),
+            "wrong-ns" => config["resolvedCaSecrets"][0]["metadata"]["namespace"] = json!("other"),
+            "no-ns" => {
+                config["resolvedCaSecrets"][0]["metadata"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("namespace");
+            }
+            "empty-ns" => config["resolvedCaSecrets"][0]["metadata"]["namespace"] = json!(""),
+            "marker" => {
+                config["resolvedCaSecrets"][0]["metadata"]["annotations"] = json!({(CONTROLLER_CA_SOURCE):"ConfigMap"})
+            }
+            "no-ref" => config["caSecretRefs"] = json!([]),
+            "retarget" => config["caSecretRefs"][1]["name"] = json!("other"),
+            "invalid-first" => config["caSecretRefs"][0]["name"] = json!("bad/name"),
+            "partial" => {
+                let mut bad = config["resolvedCaSecrets"][0].clone();
+                bad["metadata"]["name"] = json!("other");
+                config["resolvedCaSecrets"].as_array_mut().unwrap().insert(0, bad);
+            }
+            "connection" => {
+                config["mode"] = json!("Connection");
+                config["caSecretRefs"][1]["name"] = json!("bad/name");
+            }
+            _ => {}
+        }
+        match case {
+            "default-owner" => {
+                value["metadata"].as_object_mut().unwrap().remove("namespace");
+            }
+            "invalid-owner" => value["metadata"]["name"] = json!("bad/name"),
+            "invalid-owner-ns" => value["metadata"]["namespace"] = json!("Bad_NS"),
+            "disabled" => value["spec"]["requestPlugins"][0]["enable"] = json!(false),
+            _ => {}
+        }
+        let owner: EdgionPlugins = serde_json::from_value(value).unwrap();
+        let prepared = PreparedPluginReferences::from_plugins(&owner);
+        let binding = prepared.bind(&owner).unwrap();
+        let entry = binding.request_entries().next().unwrap();
+        let result = entry.header_cert_auth();
+        if matches!(case, "invalid-owner" | "invalid-owner-ns") {
+            assert!(result.is_err(), "{case}");
+            continue;
+        }
+        if case == "disabled" {
+            assert!(result.unwrap().is_none());
+            continue;
+        }
+        let field = result.unwrap().unwrap();
+        let pairs: Vec<_> = field.ca_materials().collect();
+        let good = matches!(case, "matching" | "default-owner" | "invalid-first" | "partial");
+        assert_eq!(pairs.len(), usize::from(good), "{case}");
+        assert_eq!(
+            field.cache_reusable(),
+            matches!(case, "matching" | "default-owner" | "invalid-first" | "connection"),
+            "{case}"
+        );
+        if good {
+            let actual = field.config().resolved_ca_secrets.as_ref().unwrap().last().unwrap();
+            assert!(std::ptr::eq(pairs[0].material().unwrap(), actual));
+            assert_eq!(pairs[0].target().unwrap().name(), "ca");
+        }
+    }
+    let owner: EdgionPlugins = serde_json::from_value(base).unwrap();
+    let prepared = PreparedPluginReferences::from_plugins(&owner);
+    for mode in [false, true] {
+        let mut changed = owner.clone();
+        if mode {
+            let EdgionPlugin::HeaderCertAuth(config) = &mut changed.spec.request_plugins.as_mut().unwrap()[0].plugin
+            else {
+                panic!()
+            };
+            config.mode = crate::resources::edgion_plugins::CertSourceMode::Connection;
+        } else {
+            changed.metadata.uid = Some("second".into());
+        }
+        assert!(matches!(prepared.bind(&changed), Err(ReferenceError::StaleBinding)));
+        let fresh = PreparedPluginReferences::from_plugins(&changed);
+        let binding = fresh.bind(&changed).unwrap();
+        let entry = binding.request_entries().next().unwrap();
+        let field = entry.header_cert_auth().unwrap().unwrap();
+        let EdgionPlugin::HeaderCertAuth(actual) = &changed.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+            panic!()
+        };
+        assert!(std::ptr::eq(field.config(), actual));
+    }
+}

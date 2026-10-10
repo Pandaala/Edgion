@@ -4,6 +4,19 @@ use bytes::Bytes;
 use mockall::Sequence;
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
 
+fn actual_plugin(config: &HeaderCertAuthConfig) -> HeaderCertAuth {
+    use edgion_resources::resources::refs::plugin_fields::PreparedPluginReferences;
+    let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"header-auth","namespace":"default"},
+        "spec":{"requestPlugins":[{"type":"HeaderCertAuth","config":config}]}
+    }))
+    .unwrap();
+    let prepared = PreparedPluginReferences::from_plugins(&owner);
+    let binding = prepared.bind(&owner).unwrap();
+    let entry = binding.request_entries().next().unwrap();
+    HeaderCertAuth::new(&entry.header_cert_auth().unwrap().unwrap())
+}
+
 fn sample_cert_info() -> ClientCertInfo {
     ClientCertInfo {
         subject: "CN=alice, O=edgion".to_string(),
@@ -39,7 +52,7 @@ fn connection_plugin(consumer_by: ConsumerBy, allow_anonymous: bool) -> HeaderCe
         auth_failure_delay_ms: 0,
         ..Default::default()
     };
-    HeaderCertAuth::new(&config, "default".to_string())
+    actual_plugin(&config)
 }
 
 #[test]
@@ -173,7 +186,7 @@ async fn test_connection_mode_success() {
         mode: CertSourceMode::Connection,
         ..Default::default()
     };
-    let plugin = HeaderCertAuth::new(&config, "default".to_string());
+    let plugin = actual_plugin(&config);
 
     let mut session = MockPluginSession::new();
     let mut log = PluginLog::new("HeaderCertAuth");
@@ -202,7 +215,7 @@ async fn test_connection_mode_anonymous_on_missing_cert() {
         allow_anonymous: true,
         ..Default::default()
     };
-    let plugin = HeaderCertAuth::new(&config, "default".to_string());
+    let plugin = actual_plugin(&config);
 
     let mut session = MockPluginSession::new();
     let mut log = PluginLog::new("HeaderCertAuth");
@@ -256,18 +269,34 @@ fn make_ca_secret(ca_pem: &str) -> k8s_openapi::api::core::v1::Secret {
         k8s_openapi::ByteString(ca_pem.as_bytes().to_vec()),
     );
     k8s_openapi::api::core::v1::Secret {
+        metadata: kube::core::ObjectMeta {
+            name: Some("ca".into()),
+            namespace: Some("default".into()),
+            ..Default::default()
+        },
         data: Some(data),
         ..Default::default()
     }
 }
 
-fn header_mode_plugin_with_ca(secrets: Vec<k8s_openapi::api::core::v1::Secret>) -> HeaderCertAuth {
+fn header_mode_plugin_with_ca(mut secrets: Vec<k8s_openapi::api::core::v1::Secret>) -> HeaderCertAuth {
+    let refs = secrets
+        .iter_mut()
+        .enumerate()
+        .map(|(index, secret)| {
+            let name = format!("ca-{index}");
+            secret.metadata.name = Some(name.clone());
+            secret.metadata.namespace = Some("default".into());
+            serde_json::from_value(serde_json::json!({"name":name})).unwrap()
+        })
+        .collect();
     let config = HeaderCertAuthConfig {
         mode: CertSourceMode::Header,
+        ca_secret_refs: refs,
         resolved_ca_secrets: Some(secrets),
         ..Default::default()
     };
-    HeaderCertAuth::new(&config, "default".to_string())
+    actual_plugin(&config)
 }
 
 #[test]
@@ -288,10 +317,11 @@ fn prepared_ca_pool_drops_runtime_secrets_and_borrows_pem() {
     );
     let config = HeaderCertAuthConfig {
         mode: CertSourceMode::Header,
+        ca_secret_refs: vec![serde_json::from_value(serde_json::json!({"name":"ca"})).unwrap()],
         resolved_ca_secrets: Some(vec![secret]),
         ..Default::default()
     };
-    let plugin = HeaderCertAuth::new(&config, "default".to_string());
+    let plugin = actual_plugin(&config);
     assert_eq!(plugin.ca_pool.len(), 1);
     assert!(plugin.config.resolved_ca_secrets.is_none());
     assert_eq!(config.resolved_ca_secrets.as_ref().unwrap().len(), 1);
@@ -333,7 +363,7 @@ fn test_verify_against_ca_no_ca_when_pool_empty() {
         mode: CertSourceMode::Header,
         ..Default::default()
     };
-    let plugin = HeaderCertAuth::new(&config, "default".to_string());
+    let plugin = actual_plugin(&config);
     assert_eq!(
         plugin.verify_against_ca(leaf_pem.as_bytes()).unwrap_err(),
         "no-ca-configured"
@@ -359,4 +389,71 @@ fn test_load_ca_certs_drops_expired_ca_at_init() {
         plugin.verify_against_ca(leaf_pem.as_bytes()).unwrap_err(),
         "no-ca-configured"
     );
+}
+
+#[test]
+fn actual_ca_identity_filters_before_crypto_and_preserves_partial_success() {
+    let (pem, leaf) = make_ca_and_leaf(-1, 30, -1, 30);
+    let mut secret = make_ca_secret(&pem);
+    secret.metadata.resource_version = Some("7".into());
+    let base = HeaderCertAuthConfig {
+        mode: CertSourceMode::Header,
+        ca_secret_refs: vec![
+            serde_json::from_value(serde_json::json!({"name":"missing"})).unwrap(),
+            serde_json::from_value(serde_json::json!({"name":"ca"})).unwrap(),
+        ],
+        resolved_ca_secrets: Some(vec![secret]),
+        ..Default::default()
+    };
+    for case in [
+        "matching",
+        "invalid-first",
+        "partial",
+        "name",
+        "no-name",
+        "namespace",
+        "no-namespace",
+        "marker",
+        "retarget",
+        "no-ref",
+        "connection",
+    ] {
+        let mut config = base.clone();
+        let material = &mut config.resolved_ca_secrets.as_mut().unwrap()[0];
+        match case {
+            "name" => material.metadata.name = Some("other".into()),
+            "no-name" => material.metadata.name = None,
+            "namespace" => material.metadata.namespace = Some("other".into()),
+            "no-namespace" => material.metadata.namespace = None,
+            "marker" => {
+                material.metadata.annotations = Some(std::collections::BTreeMap::from([(
+                    edgion_resources::constants::annotations::edgion::CONTROLLER_CA_SOURCE.into(),
+                    "ConfigMap".into(),
+                )]))
+            }
+            "retarget" => config.ca_secret_refs[1].name = "other".into(),
+            "no-ref" => config.ca_secret_refs.clear(),
+            "invalid-first" => config.ca_secret_refs[0].name = "bad/name".into(),
+            "partial" => {
+                let mut bad = material.clone();
+                bad.metadata.name = None;
+                config.resolved_ca_secrets.as_mut().unwrap().insert(0, bad);
+            }
+            "connection" => config.mode = CertSourceMode::Connection,
+            _ => {}
+        }
+        let plugin = actual_plugin(&config);
+        let good = matches!(case, "matching" | "invalid-first" | "partial");
+        assert_eq!(plugin.ca_pool.len(), usize::from(good), "{case}");
+        if good {
+            assert!(plugin.verify_against_ca(leaf.as_bytes()).is_ok(), "{case}");
+        } else {
+            assert_eq!(
+                plugin.verify_against_ca(leaf.as_bytes()).unwrap_err(),
+                "no-ca-configured",
+                "{case}"
+            );
+        }
+        assert!(plugin.config.resolved_ca_secrets.is_none());
+    }
 }

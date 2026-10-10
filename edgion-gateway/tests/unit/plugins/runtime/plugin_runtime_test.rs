@@ -2711,3 +2711,174 @@ async fn managed_template_publication_replaces_missing_material_repairs_and_pres
         assert_eq!(captured_filter.name(), kind);
     }
 }
+
+#[tokio::test]
+async fn header_ca_owner_preflight_precedes_cache_and_new_generations_recover() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use base64::Engine;
+    use edgion_resources::EdgionPlugins;
+    let cert = rcgen::generate_simple_self_signed(vec!["client.example".into()]).unwrap();
+    let encoded = base64::engine::general_purpose::STANDARD.encode(cert.cert.der());
+    let base = serde_json::json!({"metadata":{"name":"auth","namespace":"apps","uid":"first"},"spec":{
+        "requestPlugins":[{"type":"HeaderCertAuth","config":{"mode":"Header","allowAnonymous":true,
+            "hideCredentials":false,"certificateHeaderName":"x-client-cert","authFailureDelayMs":0,
+            "caSecretRefs":[{"name":"missing"},{"name":"ca"}],
+            "resolvedCaSecrets":[{"metadata":{"name":"ca","namespace":"apps","resourceVersion":"7"},"stringData":{"ca.crt":cert.cert.pem()}}]}}]
+    }});
+    let owner: EdgionPlugins = serde_json::from_value(base.clone()).unwrap();
+    let mut cache = EntryCache::default();
+    let mut first = PluginRuntime::new();
+    assert!(first.add_from_request_filters_with_cache(&owner, &mut cache).is_empty());
+    let first_filter = first.request_plugins_iter().next().unwrap().clone();
+    let mut repeated = PluginRuntime::new();
+    assert!(repeated
+        .add_from_request_filters_with_cache(&owner, &mut cache)
+        .is_empty());
+    assert!(Arc::ptr_eq(
+        &first_filter,
+        repeated.request_plugins_iter().next().unwrap()
+    ));
+
+    // Deliberately rejected candidates test the preflight before an occupied slot.
+    // Valid source changes below receive a fresh generation-local cache.
+    for case in [
+        "owner",
+        "schema-owner",
+        "name",
+        "namespace",
+        "no-ref",
+        "no-material",
+        "partial",
+    ] {
+        let mut candidate = base.clone();
+        let config = &mut candidate["spec"]["requestPlugins"][0]["config"];
+        match case {
+            "name" => config["resolvedCaSecrets"][0]["metadata"]["name"] = serde_json::json!("other"),
+            "namespace" => config["resolvedCaSecrets"][0]["metadata"]["namespace"] = serde_json::json!("other"),
+            "no-ref" => config["caSecretRefs"] = serde_json::json!([]),
+            "no-material" => config["resolvedCaSecrets"] = serde_json::json!([]),
+            "partial" => {
+                let mut bad = config["resolvedCaSecrets"][0].clone();
+                bad["metadata"]["name"] = serde_json::json!("other");
+                config["resolvedCaSecrets"].as_array_mut().unwrap().insert(0, bad);
+            }
+            _ => {}
+        }
+        if case == "schema-owner" {
+            candidate["spec"]["requestPlugins"][0]["config"]["errorStatus"] = serde_json::json!(200);
+        }
+        if matches!(case, "owner" | "schema-owner") {
+            candidate["metadata"]["name"] = serde_json::json!("bad/name");
+        }
+        let candidate: EdgionPlugins = serde_json::from_value(candidate).unwrap();
+        // Seed each independent negative with the same valid original source.
+        let mut cache = EntryCache::default();
+        let mut valid = PluginRuntime::new();
+        assert!(valid.add_from_request_filters_with_cache(&owner, &mut cache).is_empty());
+        let previous = valid.request_plugins_iter().next().unwrap().clone();
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters_with_cache(&candidate, &mut cache);
+        if matches!(case, "owner" | "schema-owner") {
+            assert!(!errors.is_empty());
+            if case == "schema-owner" {
+                assert_eq!(
+                    errors,
+                    vec!["requestPlugins[0] (HeaderCertAuth): errorStatus must be within 400..=599"]
+                );
+            }
+            assert_eq!(runtime.request_plugins_iter().count(), 0);
+            continue;
+        }
+        assert!(errors.is_empty(), "{case}: {errors:?}");
+        let filter = runtime.request_plugins_iter().next().unwrap();
+        assert!(!Arc::ptr_eq(&previous, filter), "{case}");
+        let mut session = MockPluginSession::new();
+        let mut headers = http::HeaderMap::new();
+        headers.insert("x-client-cert", http::HeaderValue::from_str(&encoded).unwrap());
+        session.expect_request_header_map().return_const(headers);
+        session
+            .expect_set_request_header_value()
+            .times(2)
+            .returning(|_, _| Ok(()));
+        let mut log = PluginLog::new("HeaderCertAuth");
+        assert_eq!(
+            filter.run_request(&mut session, &mut log).await,
+            edgion_resources::filters::PluginRunningResult::GoodNext
+        );
+        assert_eq!(
+            log.contains("cert verify:ok"),
+            case == "partial",
+            "{case}: {}",
+            log.render_for_test()
+        );
+        assert_eq!(log.contains("Allow anonymous"), case != "partial", "{case}");
+    }
+    for case in ["retarget", "rotation", "restoration", "connection", "disabled"] {
+        let mut candidate = base.clone();
+        let mut active_encoded = encoded.clone();
+        let config = &mut candidate["spec"]["requestPlugins"][0]["config"];
+        match case {
+            "retarget" => {
+                config["caSecretRefs"][1]["name"] = serde_json::json!("next");
+                config["resolvedCaSecrets"][0]["metadata"]["name"] = serde_json::json!("next");
+            }
+            "rotation" => {
+                let next = rcgen::generate_simple_self_signed(vec!["next.example".into()]).unwrap();
+                active_encoded = base64::engine::general_purpose::STANDARD.encode(next.cert.der());
+                config["resolvedCaSecrets"][0]["stringData"]["ca.crt"] = serde_json::json!(next.cert.pem());
+            }
+            "connection" => {
+                config["mode"] = serde_json::json!("Connection");
+                config["caSecretRefs"][0]["name"] = serde_json::json!("bad/name");
+                config["resolvedCaSecrets"][0]["metadata"]["name"] = serde_json::json!("other");
+            }
+            _ => {}
+        }
+        if case == "disabled" {
+            candidate["spec"]["requestPlugins"][0]["enable"] = serde_json::json!(false);
+            candidate["metadata"]["name"] = serde_json::json!("bad/name");
+        }
+        let owner: EdgionPlugins = serde_json::from_value(candidate).unwrap();
+        let mut runtime = PluginRuntime::new();
+        assert!(
+            runtime
+                .add_from_request_filters_with_cache(&owner, &mut EntryCache::default())
+                .is_empty(),
+            "{case}"
+        );
+        assert_eq!(
+            runtime.request_plugins_iter().count(),
+            usize::from(case != "disabled"),
+            "{case}"
+        );
+        if let Some(filter) = runtime.request_plugins_iter().next() {
+            assert!(!Arc::ptr_eq(&first_filter, filter));
+            if matches!(case, "retarget" | "rotation" | "restoration") {
+                for (certificate, trusted) in
+                    std::iter::once((&active_encoded, true)).chain((case == "rotation").then_some((&encoded, false)))
+                {
+                    let mut session = MockPluginSession::new();
+                    let mut headers = http::HeaderMap::new();
+                    headers.insert("x-client-cert", http::HeaderValue::from_str(certificate).unwrap());
+                    session.expect_request_header_map().return_const(headers);
+                    session
+                        .expect_set_request_header_value()
+                        .times(2)
+                        .returning(|_, _| Ok(()));
+                    let mut log = PluginLog::new("HeaderCertAuth");
+                    assert_eq!(
+                        filter.run_request(&mut session, &mut log).await,
+                        edgion_resources::filters::PluginRunningResult::GoodNext
+                    );
+                    assert_eq!(
+                        log.contains("cert verify:ok"),
+                        trusted,
+                        "{case}: {}",
+                        log.render_for_test()
+                    );
+                    assert_eq!(log.contains("Allow anonymous"), !trusted, "{case}");
+                }
+            }
+        };
+    }
+}

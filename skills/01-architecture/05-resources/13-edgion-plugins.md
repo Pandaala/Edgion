@@ -29,7 +29,7 @@ The EdgionPluginsHandler parse stage performs extensive Secret-reference resolut
 5. **HMAC Secret resolution**: one resolver consumes the canonical `HmacMatchConfig` for both standalone `HmacAuth` and nested `RequestAccessPolicy.hmacAuth`, reads credentials from each Secret, and populates `resolved_credentials`. Standalone resolution retains only metadata headers named by `upstreamHeaderFields`; policy resolution discards credential metadata because matching must not mutate the request.
 6. **KeyAuth Secret resolution**: read API keys from each Secret, populate `resolved_keys`
 7. **OIDC Secret resolution**: read client_secret and session_secret from the Secret
-8. **CertAuth certificate resolution**: based on `cert_source` mode (Inline/Secret/SecretCa), read the CA certificate from a Secret
+8. **HeaderCertAuth CA resolution**: active Header mode resolves actual `caSecretRefs` and carries only successful Secret siblings containing `ca.crt`; Connection mode clears and ignores CA material. Gateway compilation matches each carried sibling to a valid declared target before CA parsing and entry-cache reuse
 9. **Valid active Secret references** are registered before authorization/material acquisition so changes can requeue this resource; invalid references create no dependency or material read
 10. **Enabled RequestMirror Service references** are registered under mirror-qualified ServiceRefManager keys so Service and EndpointSlice changes requeue this resource without treating the mirror as a forwarding backend-policy ancestor
 

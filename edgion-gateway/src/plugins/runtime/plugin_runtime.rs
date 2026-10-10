@@ -1145,6 +1145,27 @@ impl PluginRuntime {
                 } else {
                     None
                 };
+                let header_ca_field = if matches!(entry.plugin, EdgionPlugin::HeaderCertAuth(_)) {
+                    match descriptor_entries
+                        .get(index)
+                        .and_then(|entry| entry.header_cert_auth().ok())
+                        .flatten()
+                    {
+                        Some(field) => Some(field),
+                        None => {
+                            self.invalid_plugins.record_non_retainable("HeaderCertAuth");
+                            errors.push(format!(
+                                "requestPlugins[{index}] (HeaderCertAuth): {}",
+                                config_validation_errors[index]
+                                    .as_deref()
+                                    .unwrap_or("invalid owning CA reference")
+                            ));
+                            continue;
+                        }
+                    }
+                } else {
+                    None
+                };
                 let managed_field = if BoundManagedHttpConfig::is_reference_bearing(&entry.plugin) {
                     match descriptor_entries
                         .get(index)
@@ -1243,7 +1264,7 @@ impl PluginRuntime {
                 let data_cache_reusable = data_entry
                     .and_then(|entry| entry.field())
                     .is_none_or(|field| matches!(field.runtime_key(), Ok(Some(_))));
-                if data_cache_reusable {
+                if data_cache_reusable && header_ca_field.as_ref().is_none_or(|field| field.cache_reusable()) {
                     if let Some(outcome) = cache.get(slot) {
                         self.append_entry_bundle(outcome.bundle());
                         errors.extend(outcome.bundle().errors.iter().cloned());
@@ -1466,6 +1487,11 @@ impl PluginRuntime {
                     }
 
                     let created = match &entry.plugin {
+                        EdgionPlugin::HeaderCertAuth(_) => CreateResult::Ok(
+                            header_ca_field
+                                .as_ref()
+                                .map(|field| Box::new(HeaderCertAuth::new(field)) as Box<dyn RequestFilter>),
+                        ),
                         EdgionPlugin::ForwardAuth(_) => CreateResult::Ok(
                             managed_input
                                 .as_ref()
@@ -2276,9 +2302,7 @@ impl PluginRuntime {
                 CreateResult::Ok(FormJsonTransform::create(config, body_requirement))
             }
             EdgionPlugin::HmacAuth(config) => CreateResult::Ok(Some(HmacAuth::create(config, body_requirement))),
-            EdgionPlugin::HeaderCertAuth(config) => {
-                CreateResult::Ok(Some(Box::new(HeaderCertAuth::new(config, namespace.to_string()))))
-            }
+            EdgionPlugin::HeaderCertAuth(_) => CreateResult::WrongStage,
             EdgionPlugin::KeyAuth(config) => CreateResult::Ok(Some(KeyAuth::create(config))),
             EdgionPlugin::LdapAuth(config) => CreateResult::Ok(LdapAuth::create(config)),
             EdgionPlugin::FaultInjection(config) => CreateResult::Ok(Some(Box::new(FaultInjection::new(config)))),

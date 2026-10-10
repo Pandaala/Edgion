@@ -17,9 +17,9 @@ use crate::ctx::ClientCertInfo;
 use crate::plugins::http::common::auth_common::{apply_auth_failure_delay, send_gateway_auth_error_response};
 use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
 use crate::tls::runtime::backend::cert_extractor::extract_client_cert_info_from_cert;
-use edgion_common::secret::get_secret;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{CertHeaderFormat, CertSourceMode, ConsumerBy, HeaderCertAuthConfig};
+use edgion_resources::resources::refs::plugin_fields::BoundHeaderCertAuth;
 
 /// Pre-parsed CA entry kept in the trust pool.
 ///
@@ -41,8 +41,9 @@ pub struct HeaderCertAuth {
 
 impl HeaderCertAuth {
     /// Create plugin instance.
-    pub fn new(config: &HeaderCertAuthConfig, plugin_namespace: String) -> Self {
-        let ca_pool = Self::load_ca_certs(config, &plugin_namespace);
+    pub fn new(field: &BoundHeaderCertAuth<'_>) -> Self {
+        let ca_pool = Self::load_ca_certs(field);
+        let config = field.config();
         let mut config = config.clone();
         config.resolved_ca_secrets = None;
         Self {
@@ -52,24 +53,12 @@ impl HeaderCertAuth {
         }
     }
 
-    fn load_ca_certs(config: &HeaderCertAuthConfig, plugin_namespace: &str) -> Vec<ParsedCa> {
+    fn load_ca_certs(field: &BoundHeaderCertAuth<'_>) -> Vec<ParsedCa> {
+        let plugin_namespace = field.owner_namespace();
         let mut raw_ders: Vec<Vec<u8>> = Vec::new();
-
-        if let Some(secrets) = &config.resolved_ca_secrets {
-            for secret in secrets {
-                if let Some(raw) = Self::read_ca_pem_from_secret(secret) {
-                    raw_ders.extend(Self::parse_ca_bundle_to_der(raw));
-                }
-            }
-        } else {
-            for secret_ref in &config.ca_secret_refs {
-                let ns = secret_ref.namespace.as_deref().unwrap_or(plugin_namespace);
-                let Some(secret) = get_secret(Some(ns), &secret_ref.name) else {
-                    continue;
-                };
-                if let Some(raw) = Self::read_ca_pem_from_secret(&secret) {
-                    raw_ders.extend(Self::parse_ca_bundle_to_der(raw));
-                }
+        for pair in field.ca_materials() {
+            if let Some(raw) = pair.material().and_then(Self::read_ca_pem_from_secret) {
+                raw_ders.extend(Self::parse_ca_bundle_to_der(raw));
             }
         }
 

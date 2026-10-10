@@ -41,3 +41,22 @@ The actual security risk is whether the proxy strips the cert header from extern
 ## Note: Connection Mode is Unaffected
 
 The `mode=Connection` path performs full chain verification at the Pingora/BoringSSL TLS handshake layer, without going through `verify_against_ca()`; naturally correct.
+
+## Actual CA reference boundary
+
+The chain-verification rationale does not authorize detached carried CA material.
+`BoundPluginEntry::header_cert_auth` binds the actual active Header configuration;
+its compressed material selection matches each Secret to a valid declared target
+through the canonical TLS metadata/provenance checker. Missing/invalid siblings
+do not poison later valid CAs. Material namespace is explicit and exact; omitted
+owner/reference namespace still follows canonical defaulting. Connection mode is
+inert with respect to CA fields. The Gateway constructor consumes this loan and
+has no HeaderCertAuth global Secret-store fallback.
+
+Runtime preflight precedes entry-cache access. Rejected or absent carried material
+rebuilds the existing partial/empty pool; invalid active source fails construction.
+The cache belongs to one immutable PluginGeneration, so valid source replacement
+uses a fresh cache. No per-request owner lookup or new trust-path validation is added.
+The existing direct signature, certificate validity, anonymous and error behavior
+remain independent. Identity/crypto/cache unit controls are scoped evidence, not
+live TLS deployment or Gateway API conformance evidence.

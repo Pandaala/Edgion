@@ -106,7 +106,7 @@ pub struct BoundOutboundTls<'a> {
     origin: Origin<'a>,
 }
 
-/// A declared reference and the material at the same author-ordered position.
+/// A declared reference and the material selected for its actual field.
 pub struct BoundTlsMaterial<'a> {
     reference: TlsReferenceIdentity<'a>,
     material: Option<&'a Secret>,
@@ -172,6 +172,13 @@ pub enum TlsMaterialIdentityError {
     Provenance,
 }
 impl<'a> BoundTlsMaterial<'a> {
+    pub(super) fn from_header_ca(token: ReferenceToken<'a>, material: &'a Secret) -> Self {
+        Self {
+            reference: TlsReferenceIdentity::authored(token),
+            material: Some(material),
+        }
+    }
+
     pub(super) fn from_gateway_backend(
         field: &'a super::gateway_tls_fields::GatewayTlsField<'_>,
         material: Option<&'a Secret>,

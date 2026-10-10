@@ -129,7 +129,23 @@
   only the two approved fixture migrations. Three new global-state tests use the
   existing exact-child isolation helper. Positive compilation and raw E0505/E0506
   diagnostics verify the material loan. Initial test-only compiler failures remain
-  in evidence. Final commit review is pending; C1/C2 and live verification remain.
+  in evidence. Committed locally as 42251846dfa782817b9b1b479e34f9f818486cf3
+  after both final commit reviews; all thirteen blobs match the frozen manifest.
+  No push occurred. C1/C2 and live verification remain.
+- R11b HeaderCertAuth CA pairing at 42251846 passes both independent Astra
+  static/execution reviews and all fourteen root gates with zero warnings. Nine
+  technical paths plus this ledger pair compressed material with actual declared
+  targets before parsing/cache reuse, preserving partial-good CAs, Connection
+  inactivity and existing crypto/auth outcomes. Reference changes still create a
+  fresh generation-owned cache; no second cache identity mechanism was added.
+  Verification passes 367 unit and 84 doc tests (451 distinct), ten ignored docs;
+  all 9731 old identities remain among 9734. All 102 old scoped tests remain with
+  four approved body fixture migrations and two helper adaptations. Actual request
+  controls prove retarget/restoration, CA rotation and schema-error priority.
+  E0505/E0506 diagnostics verify owner loans; the standalone negative drop probe's
+  unused-mut warning is separate from warning-free Cargo/root phases. Initial
+  E0597 and runner-path startup errors remain documented. Final commit review is
+  pending. C2 local TLS consumers and broad live/conformance verification remain.
 - F1's Gateway EdgionBackend and Common LinkSys non-TLS auth material-pairing
   candidates are closed by R9a/R9b. Existing Controller guards remain; these are
   consumer proof boundaries, not demonstrated ingress exploits. Generated CredentialSource operation identity is closed by R8f.1/R8f.2
@@ -139,7 +155,8 @@
   and AllEndpointStatus probes), HeaderCertAuth carried CA material, and local
   TLS in OIDC/LDAP/ExtProc/Wasm artifact fetch. Normal bound Controller acquisition
   remains a positive guard; these are not reproduced ordinary Grant bypasses.
-  R11a closes the Gateway backend client consumer gap after scoped verification.
+  R11a/R11b close the Gateway backend client and HeaderCertAuth consumer gaps
+  after scoped verification.
   Independent cross-direction review confirmed the Gateway and HeaderCertAuth
   paths. Grant/native source checks found no additional confirmed matcher/default
   defect; broader live verification remains open. Close each consumer family

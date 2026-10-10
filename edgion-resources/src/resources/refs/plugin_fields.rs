@@ -861,6 +861,81 @@ pub struct BoundPluginEntryMut<'a> {
     prepared: &'a PreparedEntry,
     topology: &'a Arc<PluginSnapshot>,
 }
+/// Actual HeaderCertAuth configuration and its compressed successful CA inputs.
+///
+/// ```
+/// use edgion_resources::{EdgionPlugins, resources::refs::plugin_fields::PreparedPluginReferences};
+/// fn inspect(owner: EdgionPlugins) {
+///     let prepared = PreparedPluginReferences::from_plugins(&owner);
+///     let binding = prepared.bind(&owner).unwrap();
+///     let entry = binding.request_entries().next().unwrap();
+///     let field = entry.header_cert_auth().unwrap().unwrap();
+///     let _ = field.ca_materials().count();
+/// }
+/// ```
+/// ```compile_fail,E0505
+/// use edgion_resources::{EdgionPlugins, resources::refs::plugin_fields::PreparedPluginReferences};
+/// fn cannot_drop(owner: EdgionPlugins) {
+///     let prepared = PreparedPluginReferences::from_plugins(&owner);
+///     let binding = prepared.bind(&owner).unwrap();
+///     let entry = binding.request_entries().next().unwrap();
+///     let field = entry.header_cert_auth().unwrap().unwrap();
+///     drop(owner);
+///     let _ = field.ca_materials().count();
+/// }
+/// ```
+/// ```compile_fail,E0506
+/// use edgion_resources::{EdgionPlugins, resources::refs::plugin_fields::PreparedPluginReferences};
+/// fn cannot_mutate(mut owner: EdgionPlugins) {
+///     let prepared = PreparedPluginReferences::from_plugins(&owner);
+///     let binding = prepared.bind(&owner).unwrap();
+///     let entry = binding.request_entries().next().unwrap();
+///     let field = entry.header_cert_auth().unwrap().unwrap();
+///     owner.metadata.name = None;
+///     let _ = field.ca_materials().count();
+/// }
+/// ```
+pub struct BoundHeaderCertAuth<'a> {
+    config: &'a crate::resources::edgion_plugins::HeaderCertAuthConfig,
+    references: EntryReferences<'a>,
+}
+
+impl BoundHeaderCertAuth<'_> {
+    pub fn config(&self) -> &crate::resources::edgion_plugins::HeaderCertAuthConfig {
+        self.config
+    }
+
+    pub fn owner_namespace(&self) -> &str {
+        self.references.topology.owner.namespace().unwrap_or("default")
+    }
+
+    /// Each carried sibling independently matches an actual declared CA target.
+    /// The Controller omits failed references, so material ordinals are not slots.
+    pub fn ca_materials(&self) -> impl Iterator<Item = super::outbound_tls::BoundTlsMaterial<'_>> {
+        self.config
+            .resolved_ca_secrets
+            .iter()
+            .flatten()
+            .filter_map(move |secret| {
+                self.references.header_ca_secrets().find_map(|token| {
+                    let pair = super::outbound_tls::BoundTlsMaterial::from_header_ca(token, secret);
+                    pair.validate_identity().is_ok().then_some(pair)
+                })
+            })
+    }
+
+    /// EntryCache is generation-local. Rejected/absent material must rebuild a
+    /// partial or empty pool instead of hiding behind a populated cache slot.
+    pub fn cache_reusable(&self) -> bool {
+        self.config.mode == crate::resources::edgion_plugins::CertSourceMode::Connection
+            || self
+                .config
+                .resolved_ca_secrets
+                .as_ref()
+                .is_some_and(|secrets| !secrets.is_empty() && self.ca_materials().count() == secrets.len())
+    }
+}
+
 macro_rules! entry_access {
     () => {
         pub fn config(&self) -> &EdgionPlugin {
@@ -942,6 +1017,19 @@ macro_rules! entry_access {
                 super::targets::managed_http_service_target(wire, field.owner_namespace())?;
             }
             Ok(Some(field))
+        }
+        pub fn header_cert_auth(&self) -> Result<Option<BoundHeaderCertAuth<'_>>, ReferenceError> {
+            let references = self.references()?;
+            if !self.prepared.supported || !self.enabled {
+                return Ok(None);
+            }
+            let EdgionPlugin::HeaderCertAuth(config) = &*self.plugin else {
+                return Ok(None);
+            };
+            if config.mode == crate::resources::edgion_plugins::CertSourceMode::Header {
+                references.validate_source()?;
+            }
+            Ok(Some(BoundHeaderCertAuth { config, references }))
         }
         pub fn is_enabled(&self) -> bool {
             self.enabled
