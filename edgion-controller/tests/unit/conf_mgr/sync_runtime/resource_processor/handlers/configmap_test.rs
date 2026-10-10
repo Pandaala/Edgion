@@ -1,6 +1,5 @@
 use super::*;
 use crate::conf_mgr::sync_runtime::resource_processor::{
-    format_configmap_ref_key,
     frontend_ca_ref::{FrontendCaSourceKey, FrontendCaSourceKind},
     HandlerContext, ProcessorHandler, ResourceProcessor, ResourceRef,
 };
@@ -32,10 +31,9 @@ async fn configmap_change_requeues_typed_material_dependent() {
         Some("default".to_string()),
         "gateway".to_string(),
     );
-    let namespace = "default".to_string();
     runtime
         .secret_ref_manager
-        .add_ref(format_configmap_ref_key(Some(&namespace), "ca-bundle"), dependent);
+        .add_ref("ConfigMap/default/ca-bundle".to_string(), dependent);
     let configmap = ConfigMap {
         metadata: ObjectMeta {
             namespace: Some("default".to_string()),

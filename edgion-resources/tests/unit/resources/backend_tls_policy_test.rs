@@ -36,7 +36,9 @@ fn make_policy(options: Option<HashMap<String, String>>) -> BackendTLSPolicy {
 #[test]
 fn test_client_certificate_secret_ref_none() {
     let policy = make_policy(None);
-    assert!(policy.client_certificate_secret_ref().unwrap().is_none());
+    assert!(parse_client_certificate_option(policy.spec.options.as_ref())
+        .unwrap()
+        .is_none());
 }
 
 #[test]
@@ -47,7 +49,9 @@ fn test_client_certificate_secret_ref_valid() {
         "client-cert-secret".to_string(),
     );
     let policy = make_policy(Some(options));
-    let ref_ = policy.client_certificate_secret_ref().unwrap().unwrap();
+    let ref_ = parse_client_certificate_option(policy.spec.options.as_ref())
+        .unwrap()
+        .unwrap();
     assert_eq!(ref_.name, "client-cert-secret");
     assert!(ref_.namespace.is_none());
 }
@@ -60,7 +64,7 @@ fn test_client_certificate_secret_ref_invalid_namespace_value() {
         "default/client-cert-secret".to_string(),
     );
     let policy = make_policy(Some(options));
-    assert!(policy.client_certificate_secret_ref().is_err());
+    assert!(parse_client_certificate_option(policy.spec.options.as_ref()).is_err());
 }
 
 #[test]
@@ -70,7 +74,10 @@ fn test_client_certificate_secret_ref_rejects_empty_and_invalid_names() {
             OPTION_CLIENT_CERTIFICATE_REF.to_string(),
             value.to_string(),
         )])));
-        assert!(policy.client_certificate_secret_ref().is_err(), "accepted {value:?}");
+        assert!(
+            parse_client_certificate_option(policy.spec.options.as_ref()).is_err(),
+            "accepted {value:?}"
+        );
     }
 }
 

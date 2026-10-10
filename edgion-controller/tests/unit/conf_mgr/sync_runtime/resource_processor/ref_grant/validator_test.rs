@@ -1,5 +1,11 @@
+use super::super::ReferenceGrantStore;
 use super::*;
+use edgion_resources::resources::refs::gateway_tls_fields::GatewayTlsRefs;
+use edgion_resources::resources::refs::route_fields::{AuthoredRouteTarget, HttpRouteBackendRefs};
+use edgion_resources::resources::refs::{GrantQuery, ReferenceError};
+use edgion_resources::resources::{gateway::SecretObjectReference, http_route::BackendObjectReference};
 use edgion_resources::resources::{ReferenceGrant, ReferenceGrantFrom, ReferenceGrantSpec, ReferenceGrantTo};
+use std::sync::Arc;
 
 #[test]
 fn tcp_and_udp_multi_rule_routes_are_invalid_after_api_server_conversion() {
@@ -142,16 +148,78 @@ fn cert_ref(group: Option<&str>, kind: Option<&str>, name: &str, namespace: Opti
     }
 }
 
+#[derive(Debug)]
+struct DeniedQuery {
+    source_namespace: String,
+    source_group: String,
+    source_kind: String,
+    target_namespace: String,
+    target_group: String,
+    target_kind: String,
+    target_name: String,
+}
+fn denied_query(store: &ReferenceGrantStore, query: GrantQuery<'_>) -> Option<DeniedQuery> {
+    (!store.check_query(query)).then(|| DeniedQuery {
+        source_namespace: query.source().scope().namespace().unwrap().into(),
+        source_group: query.source().group_kind().group().into(),
+        source_kind: query.source().group_kind().kind().into(),
+        target_namespace: query.target().scope().namespace().unwrap().into(),
+        target_group: query.target().group_kind().group().into(),
+        target_kind: query.target().group_kind().kind().into(),
+        target_name: query.target().name().into(),
+    })
+}
+fn route_owner(namespace: &str, refs: &[BackendObjectReference]) -> edgion_resources::HTTPRoute {
+    serde_json::from_value(serde_json::json!({"metadata":{"name":"route","namespace":namespace},
+        "spec":{"rules":[{"backendRefs":refs}]}}))
+    .unwrap()
+}
+fn denied_route_targets(
+    store: &ReferenceGrantStore,
+    namespace: &str,
+    refs: &[BackendObjectReference],
+) -> Vec<DeniedQuery> {
+    let owner = route_owner(namespace, refs);
+    let fields = HttpRouteBackendRefs::from_route(&owner).unwrap();
+    fields
+        .authored()
+        .filter_map(|field| {
+            let AuthoredRouteTarget::Terminal(terminal) = field.validated().unwrap() else {
+                panic!("expected terminal")
+            };
+            denied_query(store, terminal.grant_query())
+        })
+        .collect()
+}
+fn denied_gateway_targets(
+    store: &ReferenceGrantStore,
+    namespace: &str,
+    refs: &[SecretObjectReference],
+) -> Vec<DeniedQuery> {
+    let owner: edgion_resources::Gateway = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"gateway","namespace":namespace},"spec":{"gatewayClassName":"public",
+        "listeners":[{"name":"https","port":443,"protocol":"HTTPS","tls":{"certificateRefs":refs}}]}
+    }))
+    .unwrap();
+    let fields = GatewayTlsRefs::from_gateway(&owner);
+    (0..refs.len())
+        .filter_map(|index| {
+            let field = fields.serving(0, index).unwrap();
+            let token = field.token();
+            denied_query(store, token.validated().unwrap().grant_query())
+        })
+        .collect()
+}
+
 // ---- Route backend ref tests --------------------------------------------
 
 #[test]
 fn test_route_backend_same_namespace_is_always_allowed() {
     // No grants in store, but same-namespace refs must always pass.
     let store = store_with(vec![]);
-    let validator = CrossNamespaceValidator::from_store(store);
 
     let refs = vec![backend_ref("", Some("Service"), "svc-a", Some("ns-route"))];
-    let errors = validator.validate_route_backend_refs("ns-route", "HTTPRoute", &refs);
+    let errors = denied_route_targets(&store, "ns-route", &refs);
 
     assert!(
         errors.is_empty(),
@@ -164,10 +232,9 @@ fn test_route_backend_same_namespace_is_always_allowed() {
 fn test_route_backend_no_namespace_field_is_allowed() {
     // namespace=None means "same namespace as the route", which is always allowed.
     let store = store_with(vec![]);
-    let validator = CrossNamespaceValidator::from_store(store);
 
     let refs = vec![backend_ref("", Some("Service"), "svc-a", None)];
-    let errors = validator.validate_route_backend_refs("ns-route", "HTTPRoute", &refs);
+    let errors = denied_route_targets(&store, "ns-route", &refs);
 
     assert!(errors.is_empty());
 }
@@ -185,10 +252,9 @@ fn test_route_backend_cross_ns_allowed_by_exact_grant() {
         None,
     );
     let store = store_with(vec![("ns-target/g1".to_string(), grant)]);
-    let validator = CrossNamespaceValidator::from_store(store);
 
     let refs = vec![backend_ref("", Some("Service"), "any-svc", Some("ns-target"))];
-    let errors = validator.validate_route_backend_refs("ns-route", "HTTPRoute", &refs);
+    let errors = denied_route_targets(&store, "ns-route", &refs);
 
     assert!(errors.is_empty(), "exact grant should allow ref, got: {:?}", errors);
 }
@@ -197,16 +263,19 @@ fn test_route_backend_cross_ns_allowed_by_exact_grant() {
 fn test_route_backend_cross_ns_rejected_when_no_store_entries() {
     // Empty store: every cross-namespace ref must be rejected.
     let store = store_with(vec![]);
-    let validator = CrossNamespaceValidator::from_store(store);
 
     let refs = vec![backend_ref("", Some("Service"), "svc-a", Some("ns-target"))];
-    let errors = validator.validate_route_backend_refs("ns-route", "HTTPRoute", &refs);
+    let errors = denied_route_targets(&store, "ns-route", &refs);
 
     assert_eq!(errors.len(), 1);
-    assert!(errors[0].contains("Cross-namespace reference not allowed"));
-    assert!(errors[0].contains("ns-route"));
-    assert!(errors[0].contains("ns-target"));
-    assert!(errors[0].contains("svc-a"));
+
+    assert_eq!(errors[0].source_namespace, "ns-route");
+    assert_eq!(errors[0].target_namespace, "ns-target");
+    assert_eq!(errors[0].target_name, "svc-a");
+    assert_eq!(errors[0].source_group, "gateway.networking.k8s.io");
+    assert_eq!(errors[0].target_group, "");
+    assert_eq!(errors[0].source_kind, "HTTPRoute");
+    assert_eq!(errors[0].target_kind, "Service");
 }
 
 #[test]
@@ -223,10 +292,9 @@ fn test_route_backend_rejected_when_from_namespace_mismatch() {
         None,
     );
     let store = store_with(vec![("ns-target/g1".to_string(), grant)]);
-    let validator = CrossNamespaceValidator::from_store(store);
 
     let refs = vec![backend_ref("", Some("Service"), "svc-a", Some("ns-target"))];
-    let errors = validator.validate_route_backend_refs("ns-route", "HTTPRoute", &refs);
+    let errors = denied_route_targets(&store, "ns-route", &refs);
 
     assert_eq!(errors.len(), 1);
 }
@@ -245,10 +313,9 @@ fn test_route_backend_rejected_when_from_kind_mismatch() {
         None,
     );
     let store = store_with(vec![("ns-target/g1".to_string(), grant)]);
-    let validator = CrossNamespaceValidator::from_store(store);
 
     let refs = vec![backend_ref("", Some("Service"), "svc-a", Some("ns-target"))];
-    let errors = validator.validate_route_backend_refs("ns-route", "HTTPRoute", &refs);
+    let errors = denied_route_targets(&store, "ns-route", &refs);
 
     assert_eq!(errors.len(), 1);
 }
@@ -267,10 +334,9 @@ fn test_route_backend_rejected_when_to_kind_mismatch() {
         None,
     );
     let store = store_with(vec![("ns-target/g1".to_string(), grant)]);
-    let validator = CrossNamespaceValidator::from_store(store);
 
     let refs = vec![backend_ref("", Some("Service"), "svc-a", Some("ns-target"))];
-    let errors = validator.validate_route_backend_refs("ns-route", "HTTPRoute", &refs);
+    let errors = denied_route_targets(&store, "ns-route", &refs);
 
     assert_eq!(errors.len(), 1);
 }
@@ -289,10 +355,9 @@ fn test_route_backend_rejected_when_to_name_mismatch() {
         Some("allowed-svc"),
     );
     let store = store_with(vec![("ns-target/g1".to_string(), grant)]);
-    let validator = CrossNamespaceValidator::from_store(store);
 
     let refs = vec![backend_ref("", Some("Service"), "other-svc", Some("ns-target"))];
-    let errors = validator.validate_route_backend_refs("ns-route", "HTTPRoute", &refs);
+    let errors = denied_route_targets(&store, "ns-route", &refs);
 
     assert_eq!(errors.len(), 1);
 }
@@ -311,10 +376,9 @@ fn test_route_backend_allowed_when_to_name_matches_explicit() {
         Some("allowed-svc"),
     );
     let store = store_with(vec![("ns-target/g1".to_string(), grant)]);
-    let validator = CrossNamespaceValidator::from_store(store);
 
     let refs = vec![backend_ref("", Some("Service"), "allowed-svc", Some("ns-target"))];
-    let errors = validator.validate_route_backend_refs("ns-route", "HTTPRoute", &refs);
+    let errors = denied_route_targets(&store, "ns-route", &refs);
 
     assert!(
         errors.is_empty(),
@@ -338,10 +402,9 @@ fn test_route_backend_kind_default_is_service_when_none() {
         None,
     );
     let store = store_with(vec![("ns-target/g1".to_string(), grant)]);
-    let validator = CrossNamespaceValidator::from_store(store);
 
     let refs = vec![backend_ref("", None, "svc-a", Some("ns-target"))];
-    let errors = validator.validate_route_backend_refs("ns-route", "HTTPRoute", &refs);
+    let errors = denied_route_targets(&store, "ns-route", &refs);
 
     assert!(
         errors.is_empty(),
@@ -377,10 +440,9 @@ fn test_route_backend_multiple_grants_one_match_is_enough() {
         ("ns-target/g1".to_string(), grant_no_match),
         ("ns-target/g2".to_string(), grant_match),
     ]);
-    let validator = CrossNamespaceValidator::from_store(store);
 
     let refs = vec![backend_ref("", Some("Service"), "svc-a", Some("ns-target"))];
-    let errors = validator.validate_route_backend_refs("ns-route", "HTTPRoute", &refs);
+    let errors = denied_route_targets(&store, "ns-route", &refs);
 
     assert!(errors.is_empty());
 }
@@ -400,18 +462,22 @@ fn test_route_backend_mixed_refs_only_disallowed_reported() {
         None,
     );
     let store = store_with(vec![("ns-target/g1".to_string(), grant)]);
-    let validator = CrossNamespaceValidator::from_store(store);
 
     let refs = vec![
         backend_ref("", Some("Service"), "svc-local", Some("ns-route")),
         backend_ref("", Some("Service"), "svc-allowed", Some("ns-target")),
         backend_ref("", Some("Service"), "svc-blocked", Some("ns-forbidden")),
     ];
-    let errors = validator.validate_route_backend_refs("ns-route", "HTTPRoute", &refs);
+    let errors = denied_route_targets(&store, "ns-route", &refs);
 
     assert_eq!(errors.len(), 1, "only the third ref should fail, got: {:?}", errors);
-    assert!(errors[0].contains("svc-blocked"));
-    assert!(errors[0].contains("ns-forbidden"));
+    assert_eq!(errors[0].target_name, "svc-blocked");
+    assert_eq!(errors[0].target_namespace, "ns-forbidden");
+    assert_eq!(errors[0].source_group, "gateway.networking.k8s.io");
+    assert_eq!(errors[0].target_group, "");
+    assert_eq!(errors[0].source_kind, "HTTPRoute");
+    assert_eq!(errors[0].target_kind, "Service");
+    assert_eq!(errors[0].source_namespace, "ns-route");
 }
 
 #[test]
@@ -428,10 +494,9 @@ fn test_route_backend_grant_in_wrong_namespace_does_not_help() {
         None,
     );
     let store = store_with(vec![("ns-other/g1".to_string(), grant)]);
-    let validator = CrossNamespaceValidator::from_store(store);
 
     let refs = vec![backend_ref("", Some("Service"), "svc-a", Some("ns-target"))];
-    let errors = validator.validate_route_backend_refs("ns-route", "HTTPRoute", &refs);
+    let errors = denied_route_targets(&store, "ns-route", &refs);
 
     assert_eq!(errors.len(), 1);
 }
@@ -441,10 +506,9 @@ fn test_route_backend_grant_in_wrong_namespace_does_not_help() {
 #[test]
 fn test_gateway_cert_same_namespace_is_always_allowed() {
     let store = store_with(vec![]);
-    let validator = CrossNamespaceValidator::from_store(store);
 
     let refs = vec![cert_ref(Some(""), Some("Secret"), "tls-cert", Some("ns-gw"))];
-    let errors = validator.validate_gateway_certificate_refs("ns-gw", &refs);
+    let errors = denied_gateway_targets(&store, "ns-gw", &refs);
 
     assert!(errors.is_empty());
 }
@@ -462,10 +526,9 @@ fn test_gateway_cert_cross_ns_allowed_by_grant() {
         None,
     );
     let store = store_with(vec![("ns-certs/g1".to_string(), grant)]);
-    let validator = CrossNamespaceValidator::from_store(store);
 
     let refs = vec![cert_ref(Some(""), Some("Secret"), "tls-cert", Some("ns-certs"))];
-    let errors = validator.validate_gateway_certificate_refs("ns-gw", &refs);
+    let errors = denied_gateway_targets(&store, "ns-gw", &refs);
 
     assert!(
         errors.is_empty(),
@@ -477,17 +540,18 @@ fn test_gateway_cert_cross_ns_allowed_by_grant() {
 #[test]
 fn test_gateway_cert_cross_ns_rejected_without_grant() {
     let store = store_with(vec![]);
-    let validator = CrossNamespaceValidator::from_store(store);
 
     let refs = vec![cert_ref(Some(""), Some("Secret"), "tls-cert", Some("ns-certs"))];
-    let errors = validator.validate_gateway_certificate_refs("ns-gw", &refs);
+    let errors = denied_gateway_targets(&store, "ns-gw", &refs);
 
     assert_eq!(errors.len(), 1);
-    assert!(errors[0].contains("Gateway"));
-    assert!(errors[0].contains("Secret"));
-    assert!(errors[0].contains("tls-cert"));
-    assert!(errors[0].contains("ns-certs"));
-    assert!(errors[0].contains("ns-gw"));
+    assert_eq!(errors[0].source_kind, "Gateway");
+    assert_eq!(errors[0].target_kind, "Secret");
+    assert_eq!(errors[0].target_name, "tls-cert");
+    assert_eq!(errors[0].target_namespace, "ns-certs");
+    assert_eq!(errors[0].source_namespace, "ns-gw");
+    assert_eq!(errors[0].source_group, "gateway.networking.k8s.io");
+    assert_eq!(errors[0].target_group, "");
 }
 
 #[test]
@@ -504,10 +568,9 @@ fn test_gateway_cert_rejected_when_to_name_mismatch() {
         Some("allowed-cert"),
     );
     let store = store_with(vec![("ns-certs/g1".to_string(), grant)]);
-    let validator = CrossNamespaceValidator::from_store(store);
 
     let refs = vec![cert_ref(Some(""), Some("Secret"), "other-cert", Some("ns-certs"))];
-    let errors = validator.validate_gateway_certificate_refs("ns-gw", &refs);
+    let errors = denied_gateway_targets(&store, "ns-gw", &refs);
 
     assert_eq!(errors.len(), 1);
 }
@@ -526,10 +589,9 @@ fn test_gateway_cert_group_and_kind_default_to_core_secret() {
         None,
     );
     let store = store_with(vec![("ns-certs/g1".to_string(), grant)]);
-    let validator = CrossNamespaceValidator::from_store(store);
 
     let refs = vec![cert_ref(None, None, "tls-cert", Some("ns-certs"))];
-    let errors = validator.validate_gateway_certificate_refs("ns-gw", &refs);
+    let errors = denied_gateway_targets(&store, "ns-gw", &refs);
 
     assert!(
         errors.is_empty(),
@@ -552,23 +614,37 @@ fn test_route_backend_grant_for_gateway_does_not_authorize_route() {
         None,
     );
     let store = store_with(vec![("ns-target/g1".to_string(), grant)]);
-    let validator = CrossNamespaceValidator::from_store(store);
 
     let refs = vec![backend_ref("", Some("Service"), "svc-a", Some("ns-target"))];
-    let errors = validator.validate_route_backend_refs("ns-route", "HTTPRoute", &refs);
+    let errors = denied_route_targets(&store, "ns-route", &refs);
 
     assert_eq!(errors.len(), 1);
 }
 
 #[test]
 fn test_normalize_helpers_defaults() {
-    // Direct coverage of the small helpers used by is_cross_ns_ref_allowed.
-    assert_eq!(normalize_group(None), "");
-    assert_eq!(normalize_group(Some(&"".to_string())), "");
-    assert_eq!(normalize_group(Some(&"my.group".to_string())), "my.group");
-
-    assert_eq!(normalize_kind(None), "Service");
-    assert_eq!(normalize_kind(Some(&"Secret".to_string())), "Secret");
+    for group in [None, Some("")] {
+        let mut reference = backend_ref("", None, "service", None);
+        reference.group = group.map(str::to_owned);
+        let owner = route_owner("source", &[reference]);
+        let fields = HttpRouteBackendRefs::from_route(&owner).unwrap();
+        let AuthoredRouteTarget::Terminal(terminal) = fields.authored().next().unwrap().validated().unwrap() else {
+            panic!("expected terminal")
+        };
+        assert_eq!(terminal.grant_query().target().group_kind().group(), "");
+        assert_eq!(terminal.grant_query().target().group_kind().kind(), "Service");
+    }
+    for reference in [
+        backend_ref("my.group", None, "service", None),
+        backend_ref("", Some("Secret"), "service", None),
+    ] {
+        let owner = route_owner("source", &[reference]);
+        let fields = HttpRouteBackendRefs::from_route(&owner).unwrap();
+        assert!(matches!(
+            fields.authored().next().unwrap().validated(),
+            Err(ReferenceError::UnsupportedTarget)
+        ));
+    }
 }
 
 #[test]

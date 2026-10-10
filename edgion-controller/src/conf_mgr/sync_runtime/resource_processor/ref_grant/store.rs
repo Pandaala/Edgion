@@ -153,39 +153,6 @@ impl ReferenceGrantStore {
             .any(|grant| grant.allows_reference(from_namespace, from_group, from_kind, to_group, to_kind, to_name))
     }
 
-    /// Stable non-secret identity of all grants currently authorizing a
-    /// cross-namespace reference. Callers include it in async-work revisions
-    /// so grant replacement invalidates already captured authority.
-    #[allow(clippy::too_many_arguments)]
-    pub fn authorization_revision(
-        &self,
-        from_namespace: &str,
-        from_group: &str,
-        from_kind: &str,
-        to_namespace: &str,
-        to_group: &str,
-        to_kind: &str,
-        to_name: Option<&str>,
-    ) -> String {
-        if from_namespace == to_namespace {
-            return "same-namespace".to_string();
-        }
-        let mut revisions = self
-            .get_by_to_namespace(to_namespace)
-            .into_iter()
-            .filter(|grant| grant.allows_reference(from_namespace, from_group, from_kind, to_group, to_kind, to_name))
-            .map(|grant| {
-                format!(
-                    "{}:{}",
-                    grant.metadata.uid.as_deref().unwrap_or_default(),
-                    grant.metadata.resource_version.as_deref().unwrap_or_default()
-                )
-            })
-            .collect::<Vec<_>>();
-        revisions.sort();
-        revisions.join(",")
-    }
-
     /// Add or update a single grant
     pub fn upsert(&self, key: String, grant: Arc<ReferenceGrant>) {
         let to_namespace = grant.namespace().map(|s| s.to_string());

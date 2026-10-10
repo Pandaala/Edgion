@@ -1,4 +1,7 @@
+use super::super::pipeline::fetch_bound_configmap;
 use super::*;
+use edgion_resources::resources::common::CustomCACertificateRef;
+use edgion_resources::resources::refs::plugin_fields::PreparedPluginReferences;
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -109,12 +112,23 @@ fn secret_ref(kind: &str, name: &str, namespace: Option<&str>) -> CustomCACertif
 }
 
 fn owner_ref(ns: &str, name: &str) -> ResourceRef {
-    ResourceRef::new(ResourceKind::LinkSys, Some(ns.to_string()), name.to_string())
+    ResourceRef::new(ResourceKind::EdgionPlugins, Some(ns.to_string()), name.to_string())
+}
+
+fn tls_owner(owner: &ResourceRef, references: &[CustomCACertificateRef]) -> edgion_resources::EdgionPlugins {
+    serde_json::from_value(serde_json::json!({
+        "metadata":{"name":owner.name,"namespace":owner.namespace},
+        "spec":{"requestPlugins":[{"type":"LdapAuth","config":{
+            "ldapHost":"ldap.example","baseDn":"dc=example","attribute":"uid",
+            "tls":{"validation":{"caCertificateRefs":references}}
+        }}]}
+    }))
+    .unwrap()
 }
 
 // ── Table tests ──────────────────────────────────────────────────────────
 
-/// (a) DirectSameNs + two Secret refs in the same namespace resolve to two
+/// (a) Owning same-namespace TLS fields + two Secret refs in the same namespace resolve to two
 /// Secrets with the expected CA PEM data.
 #[test]
 fn resolve_ca_refs_two_secrets_same_ns_direct() {
@@ -129,13 +143,14 @@ fn resolve_ca_refs_two_secrets_same_ns_direct() {
         secret_ref("Secret", "ca-secret-b", None),
     ];
 
-    let result = resolve_ca_certificate_refs(
-        &ctx,
-        &resource_ref,
-        Some("default"),
-        &refs,
-        CaFetchStrategy::DirectSameNs,
-    );
+    let resource = tls_owner(&resource_ref, &refs);
+    let prepared = PreparedPluginReferences::from_plugins(&resource);
+    let bound = prepared.bind(&resource).unwrap();
+    let entry = bound.request_entries().next().unwrap();
+    let references = entry.references().unwrap();
+    let result = resolve_bound_tls(&ctx, &resource_ref, references.tls().unwrap())
+        .ca_certificates
+        .unwrap_or_default();
 
     assert_eq!(result.len(), 2, "expected 2 resolved CA secrets, got {}", result.len());
 
@@ -163,7 +178,7 @@ fn resolve_ca_refs_two_secrets_same_ns_direct() {
     assert!(refs_b.contains(&resource_ref), "ca-secret-b ref must be registered");
 }
 
-/// (b) DirectSameNs + one ConfigMap ref resolves to a single synthetic Secret
+/// (b) Owning same-namespace TLS fields + one ConfigMap ref resolves to a single synthetic Secret
 /// carrying the ConfigMap's `ca.crt` PEM.
 #[test]
 fn resolve_ca_refs_configmap_synthetic_secret() {
@@ -173,13 +188,14 @@ fn resolve_ca_refs_configmap_synthetic_secret() {
     let resource_ref = owner_ref("default", "my-btp");
     let refs = vec![secret_ref("ConfigMap", "corp-ca-cm", None)];
 
-    let result = resolve_ca_certificate_refs(
-        &ctx,
-        &resource_ref,
-        Some("default"),
-        &refs,
-        CaFetchStrategy::DirectSameNs,
-    );
+    let resource = tls_owner(&resource_ref, &refs);
+    let prepared = PreparedPluginReferences::from_plugins(&resource);
+    let bound = prepared.bind(&resource).unwrap();
+    let entry = bound.request_entries().next().unwrap();
+    let references = entry.references().unwrap();
+    let result = resolve_bound_tls(&ctx, &resource_ref, references.tls().unwrap())
+        .ca_certificates
+        .unwrap_or_default();
 
     assert_eq!(result.len(), 1, "expected 1 synthetic CA secret, got {}", result.len());
 
@@ -210,7 +226,7 @@ fn resolve_ca_refs_configmap_synthetic_secret() {
     );
 }
 
-/// (c) GrantGated + one cross-namespace Secret ref with no ReferenceGrant
+/// (c) Owning grant-gated TLS field + one cross-namespace Secret ref with no ReferenceGrant
 /// configured → empty result, and the Secret is NOT accessed directly
 /// (verified by confirming the Secret genuinely exists in the store but
 /// the grant-check path returns empty).
@@ -232,16 +248,14 @@ fn resolve_ca_refs_cross_ns_no_grant_returns_empty() {
     // Ref explicitly targets "other-ns" — cross-namespace from "default".
     let refs = vec![secret_ref("Secret", "cross-ns-ca", Some("other-ns"))];
 
-    let result = resolve_ca_certificate_refs(
-        &ctx,
-        &resource_ref,
-        Some("default"),
-        &refs,
-        CaFetchStrategy::GrantGated {
-            group: "edgion.io",
-            kind: "EdgionPlugin",
-        },
-    );
+    let resource = tls_owner(&resource_ref, &refs);
+    let prepared = PreparedPluginReferences::from_plugins(&resource);
+    let bound = prepared.bind(&resource).unwrap();
+    let entry = bound.request_entries().next().unwrap();
+    let references = entry.references().unwrap();
+    let result = resolve_bound_tls(&ctx, &resource_ref, references.tls().unwrap())
+        .ca_certificates
+        .unwrap_or_default();
 
     // No ReferenceGrant in "other-ns" → ReferenceGrantMissing → skipped.
     assert_eq!(
@@ -257,23 +271,21 @@ fn resolve_ca_refs_cross_ns_no_grant_returns_empty() {
 /// fetch_configmap returns Pending(SecretNotFound) when the ConfigMap is absent.
 #[test]
 fn fetch_configmap_returns_pending_when_missing() {
-    use super::super::pipeline::{FetchOutcome, PendingReason};
+    use super::super::pipeline::{BoundFetchOutcome, PendingReason};
 
     let (ctx, _rt) = make_ctx(HashMap::new(), HashMap::new());
     let resource_ref = owner_ref("default", "my-resource");
 
-    let outcome = fetch_configmap(
-        &ctx,
-        &resource_ref,
-        "edgion.io",
-        "EdgionPlugin",
-        "missing-cm",
-        None,
-        Some("default"),
-    );
+    let resource = tls_owner(&resource_ref, &[secret_ref("ConfigMap", "missing-cm", None)]);
+    let prepared = PreparedPluginReferences::from_plugins(&resource);
+    let bound = prepared.bind(&resource).unwrap();
+    let entry = bound.request_entries().next().unwrap();
+    let references = entry.references().unwrap();
+    let tls = references.tls().unwrap();
+    let outcome = fetch_bound_configmap(&ctx, &resource_ref, tls.ca_certificates().next().unwrap());
 
     match outcome {
-        FetchOutcome::Pending(PendingReason::SecretNotFound { namespace, name }) => {
+        BoundFetchOutcome::Pending(PendingReason::SecretNotFound { namespace, name }) => {
             assert_eq!(namespace, "default");
             assert_eq!(name, "missing-cm");
         }
@@ -285,25 +297,23 @@ fn fetch_configmap_returns_pending_when_missing() {
 /// is in a different namespace and no ReferenceGrant is present.
 #[test]
 fn fetch_configmap_cross_ns_no_grant_returns_pending() {
-    use super::super::pipeline::{FetchOutcome, PendingReason};
+    use super::super::pipeline::{BoundFetchOutcome, PendingReason};
 
     let ca_pem = "PEM";
     let (cm_key, cm) = make_configmap("other-ns", "ca-cm", ca_pem);
     let (ctx, _rt) = make_ctx(HashMap::new(), HashMap::from([(cm_key, cm)]));
     let resource_ref = owner_ref("default", "my-resource");
 
-    let outcome = fetch_configmap(
-        &ctx,
-        &resource_ref,
-        "edgion.io",
-        "EdgionPlugin",
-        "ca-cm",
-        Some("other-ns"), // explicit cross-ns
-        Some("default"),  // owner ns
-    );
+    let resource = tls_owner(&resource_ref, &[secret_ref("ConfigMap", "ca-cm", Some("other-ns"))]);
+    let prepared = PreparedPluginReferences::from_plugins(&resource);
+    let bound = prepared.bind(&resource).unwrap();
+    let entry = bound.request_entries().next().unwrap();
+    let references = entry.references().unwrap();
+    let tls = references.tls().unwrap();
+    let outcome = fetch_bound_configmap(&ctx, &resource_ref, tls.ca_certificates().next().unwrap());
 
     match outcome {
-        FetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
+        BoundFetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
             from_ns,
             to_ns,
             secret_name,

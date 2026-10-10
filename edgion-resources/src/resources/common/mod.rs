@@ -46,7 +46,8 @@ pub fn is_false(v: &bool) -> bool {
     !*v
 }
 
-/// Per Gateway API spec, `""` and `"core"` both represent the Kubernetes core API group.
+/// Accept the empty Kubernetes core group and the finite Edgion custom `core` alias.
+/// Native Gateway API fields do not use this convenience profile.
 #[inline]
 pub fn is_core_api_group(group: &str) -> bool {
     group.is_empty() || group == "core"

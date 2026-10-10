@@ -7292,7 +7292,6 @@ fn unsupported_plugin_reports_invalid_status_even_when_disabled() {
 
 #[tokio::test]
 async fn grpc_descriptor_replacement_and_deletion_clear_prior_generation() {
-    use crate::conf_mgr::sync_runtime::resource_processor::format_configmap_ref_key;
     use edgion_resources::grpc_transcoding::GrpcJsonTranscoderConfig;
     let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
     let config: GrpcJsonTranscoderConfig = serde_json::from_value(serde_json::json!({
@@ -7345,7 +7344,7 @@ async fn grpc_descriptor_replacement_and_deletion_clear_prior_generation() {
         assert_eq!(config.compile().is_ok(), valid);
         assert!(runtime
             .secret_ref_manager
-            .get_refs(&format_configmap_ref_key(Some("tenant".into()).as_ref(), "grpc-schema"))
+            .get_refs("ConfigMap/tenant/grpc-schema")
             .contains(&owner));
         let accepted = ep
             .status
@@ -7371,7 +7370,7 @@ async fn grpc_descriptor_replacement_and_deletion_clear_prior_generation() {
     assert!(config.descriptor_error.is_none());
     assert!(runtime
         .secret_ref_manager
-        .get_refs(&format_configmap_ref_key(Some("tenant".into()).as_ref(), "grpc-schema"))
+        .get_refs("ConfigMap/tenant/grpc-schema")
         .is_empty());
 }
 

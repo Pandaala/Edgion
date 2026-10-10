@@ -307,11 +307,6 @@ fn valid_kube_name(value: &str) -> bool {
 }
 
 impl BackendTLSPolicy {
-    /// Parse implementation-specific client certificate Secret reference from options.
-    pub fn client_certificate_secret_ref(&self) -> Result<Option<SecretObjectReference>, String> {
-        parse_client_certificate_option(self.spec.options.as_ref())
-    }
-
     /// Get the namespace of this resource
     pub fn namespace(&self) -> Option<&str> {
         self.metadata.namespace.as_deref()

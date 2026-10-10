@@ -13,10 +13,9 @@ pub(crate) mod egc_tls;
 pub mod pipeline;
 pub mod request_secrets;
 
-pub use ca_refs::{resolve_ca_certificate_refs, CaFetchStrategy};
 pub use pipeline::{
-    fetch_bound_secret, fetch_configmap, fetch_secret, resolve_bound_secret, resolve_credential, resolve_secret,
-    AuthorizedSecret, BoundFetchOutcome, FetchOutcome, InvalidCredentialError, PendingReason, ResolveOutcome,
+    fetch_bound_secret, resolve_bound_secret, AuthorizedSecret, BoundFetchOutcome, InvalidCredentialError,
+    PendingReason, ResolveOutcome,
 };
 pub use request_secrets::{request_secret_errors_readonly, resolve_request_secrets};
 

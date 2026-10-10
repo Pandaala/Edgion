@@ -70,11 +70,11 @@ pub use ref_manager::{BidirectionalRefManager, RefManagerStats, RefValue, Resour
 pub use secret_utils::{get_global_secret_store, get_secret, get_secret_by_name, SecretRefManager, SecretStore};
 
 pub use ref_grant::{
-    is_cross_ns_ref_allowed, run_post_cache_ready_revalidations, trigger_full_cross_ns_revalidation,
-    trigger_gateway_route_revalidation, trigger_gateway_secret_revalidation, validate_grpc_route_if_enabled,
-    validate_http_route_if_enabled, validate_tcp_route_if_enabled, validate_tls_route_if_enabled,
-    validate_udp_route_if_enabled, CrossNamespaceRefManager, CrossNamespaceValidator, CrossNsRevalidationListener,
-    ReferenceGrantChangedEvent, ReferenceGrantStore, RevalidationListener,
+    run_post_cache_ready_revalidations, trigger_full_cross_ns_revalidation, trigger_gateway_route_revalidation,
+    trigger_gateway_secret_revalidation, validate_grpc_route_if_enabled, validate_http_route_if_enabled,
+    validate_tcp_route_if_enabled, validate_tls_route_if_enabled, validate_udp_route_if_enabled,
+    CrossNamespaceRefManager, CrossNsRevalidationListener, ReferenceGrantChangedEvent, ReferenceGrantStore,
+    RevalidationListener,
 };
 
 pub use listener_port_manager::{make_conflict_key, ConflictKey, ListenerPortManager, ListenerRef, PortKey};
@@ -114,11 +114,6 @@ pub fn format_secret_key(namespace: Option<&String>, name: &str) -> String {
 
 /// Prefix that distinguishes ConfigMap material dependencies from Secrets.
 pub(crate) const CONFIG_MAP_REF_KEY_PREFIX: &str = "ConfigMap/";
-
-/// Format a ConfigMap dependency key without colliding with a same-name Secret.
-pub(crate) fn format_configmap_ref_key(namespace: Option<&String>, name: &str) -> String {
-    format!("{CONFIG_MAP_REF_KEY_PREFIX}{}", format_secret_key(namespace, name))
-}
 
 /// Create a resource key from object: "namespace/name" or "name" for cluster-scoped
 pub fn make_resource_key<K>(obj: &K) -> String

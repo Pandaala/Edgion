@@ -16,9 +16,6 @@ mod store;
 mod validator;
 pub use cross_ns_ref_manager::CrossNamespaceRefManager;
 pub(crate) use edgion_config_data_grant::decide_edgion_config_data_ref;
-pub use edgion_config_data_grant::{
-    is_edgion_config_data_ref_allowed, is_edgion_config_data_ref_allowed_from, EDGION_GROUP,
-};
 pub use events::{ReferenceGrantChangedEvent, RevalidationListener};
 pub use revalidation_listener::{
     run_post_cache_ready_revalidations, trigger_full_cross_ns_revalidation, trigger_gateway_route_revalidation,
@@ -27,7 +24,6 @@ pub use revalidation_listener::{
 pub use store::ReferenceGrantStore;
 pub(crate) use validator::read_after_registering_cross_ns_dependency;
 pub use validator::{
-    is_cross_ns_ref_allowed, validate_grpc_route_if_enabled, validate_http_route_if_enabled,
-    validate_tcp_route_if_enabled, validate_tls_route_if_enabled, validate_udp_route_if_enabled,
-    CrossNamespaceValidator,
+    validate_grpc_route_if_enabled, validate_http_route_if_enabled, validate_tcp_route_if_enabled,
+    validate_tls_route_if_enabled, validate_udp_route_if_enabled,
 };

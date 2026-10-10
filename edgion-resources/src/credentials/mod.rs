@@ -9,7 +9,7 @@
 //! - [`resolver`] — [`SecretMaterialResolver`] trait + [`ResolveError`]
 //! - [`resolvers`] — concrete implementations (Basic/Bearer/Hmac/EsApiKey/Acme)
 //!
-//! The Controller still owns the top-level `resolve_credential` pipeline
+//! The Controller still owns the top-level owning-field credential pipeline
 //! (cross-namespace `ReferenceGrant` enforcement, `SecretRefManager`
 //! registration, status mapping). That orchestration lives under
 //! `core::controller::conf_mgr::sync_runtime::resource_processor::credential`.

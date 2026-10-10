@@ -2,7 +2,7 @@
 //!
 //! Handles LinkSys resources with:
 //! - Validation (preparse hook)
-//! - SecretRef resolution via `resolve_secret` pipeline (attaches Secret to spec)
+//! - SecretRef resolution via the bound credential pipeline (attaches Secret to spec)
 //! - SecretRefManager registration for cascading updates
 //! - Gateway API standard status management
 //!

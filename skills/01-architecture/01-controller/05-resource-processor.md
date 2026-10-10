@@ -172,7 +172,7 @@ Core operations: `add_ref`, `remove_ref`, `clear_value_refs` (clear-then-add on 
 ### ReferenceGrant System
 
 - `ReferenceGrantStore` — stores all ReferenceGrant resources
-- `CrossNamespaceValidator` — validates whether a cross-namespace reference is authorized
+- `ReferenceGrantStore::check_query` — checks exact queries from actual owning reference fields; handlers retain field-specific policy and dependency registration
 - `CrossNsRevalidationListener` — listens for ReferenceGrant changes and requeues affected resources
 
 ## Status Utilities

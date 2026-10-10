@@ -102,12 +102,33 @@
   compile/list-only: three ignored, zero executed. All 9718 old ordinary identities
   remain among 9726; 126 old bodies retain approved fixture adaptations only.
   The r1 token-lifetime compiler failure and r3 isolated stale-binding controls
-  remain in evidence; unaffected r2 reuse is explicit. Local commit awaits the
-  final manifest gate. Broad live/admission/conformance verification remains open.
+  remain in evidence; unaffected r2 reuse is explicit. Committed locally as
+  eac49a77bb1e6d7e0cf65139dd0d26dac929f009 after both final commit reviews;
+  all eighteen blobs match the frozen manifest. No push occurred. Broad live,
+  admission and conformance verification remain open.
+- R10 obsolete detached reference API cleanup at eac49a77b passes both independent
+  Astra static/execution reviews and all fourteen refreshed root gates, zero
+  warnings. Twenty-two technical paths plus this ledger remove unused detached
+  entry points while preserving live canonical consumers and dependency ordering.
+  The warning correction includes two independently approved test-only paths;
+  initial fixture failures and workspace warning logs remain in the evidence.
+  Verification passes 542 unit and 78 doc tests (620 distinct), with ten ignored
+  docs and 31 duplicate executions excluded. All 9726 prior test identities remain;
+  204 old tests retain only their approved canonical migrations and key fixtures.
+  Final commit review is pending. C1/C2/C3 and live/conformance remain open.
 - F1's Gateway EdgionBackend and Common LinkSys non-TLS auth material-pairing
   candidates are closed by R9a/R9b. Existing Controller guards remain; these are
   consumer proof boundaries, not demonstrated ingress exploits. Generated CredentialSource operation identity is closed by R8f.1/R8f.2
   and ACME output identity by R8e.2.
+- Final whole-contract audit at eac49a77 found three additional finite cold
+  consumer proof gaps: native Gateway backend client material (ordinary peers
+  and AllEndpointStatus probes), HeaderCertAuth carried CA material, and local
+  TLS in OIDC/LDAP/ExtProc/Wasm artifact fetch. Normal bound Controller acquisition
+  remains a positive guard; these are not reproduced ordinary Grant bypasses.
+  Independent cross-direction review confirmed the Gateway and HeaderCertAuth
+  paths. Grant/native source checks found no additional confirmed matcher/default
+  defect; broader live verification remains open. Close each consumer family
+  through its own reviewed batch after the independently scoped R10 cleanup.
 - Native Gateway material selection preserves omitted raw namespaces without
   relaxing native group/kind or Grant semantics. Default's candidate reads are not
   atomic; registered dependencies and subsequent source events reconcile changes.

@@ -1,4 +1,6 @@
 use super::*;
+use crate::conf_mgr::sync_runtime::resource_processor::ResolvedRefsError;
+use edgion_resources::resources::common::SecretObjectReference;
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -288,7 +290,16 @@ async fn test_secret_ref_manager_registration() {
     let owner = owner_ref("default", "my-linksys");
     let sref = secret_ref("my-secret", None);
 
-    let _ = resolve_credential(&ctx, &owner, "edgion.io", "LinkSys", &sref, &BasicAuthResolver).await;
+    let resource: edgion_resources::LinkSys = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":owner.name,"namespace":owner.namespace},
+        "spec":{"type":"redis","config":{"endpoints":["redis://localhost:6379"],"auth":{"secretRef":sref}}}
+    }))
+    .unwrap();
+    let prepared =
+        edgion_resources::resources::refs::link_sys_fields::PreparedLinkSysReferences::from_link_sys(&resource);
+    let bound = prepared.bind(&resource).unwrap();
+    let references = bound.references().unwrap();
+    let _ = resolve_bound_secret(&ctx, &owner, references.auth_secret().unwrap(), &BasicAuthResolver);
 
     let refs = ctx.secret_ref_manager().get_refs("default/my-secret");
     assert!(refs.contains(&owner), "owner must be registered, got {refs:?}");
@@ -300,10 +311,19 @@ async fn test_secret_not_found_returns_pending() {
     let owner = owner_ref("default", "my-linksys");
     let sref = secret_ref("missing-secret", None);
 
-    let outcome = resolve_credential(&ctx, &owner, "edgion.io", "LinkSys", &sref, &BasicAuthResolver).await;
+    let resource: edgion_resources::LinkSys = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":owner.name,"namespace":owner.namespace},
+        "spec":{"type":"redis","config":{"endpoints":["redis://localhost:6379"],"auth":{"secretRef":sref}}}
+    }))
+    .unwrap();
+    let prepared =
+        edgion_resources::resources::refs::link_sys_fields::PreparedLinkSysReferences::from_link_sys(&resource);
+    let bound = prepared.bind(&resource).unwrap();
+    let references = bound.references().unwrap();
+    let outcome = resolve_bound_secret(&ctx, &owner, references.auth_secret().unwrap(), &BasicAuthResolver);
 
     match outcome {
-        ResolveOutcome::Pending(PendingReason::SecretNotFound { namespace, name }) => {
+        Err(ResolvedRefsError::SecretNotFound { namespace, name }) => {
             assert_eq!(namespace, "default");
             assert_eq!(name, "missing-secret");
         }
@@ -318,10 +338,19 @@ async fn test_missing_keys_invalid() {
     let owner = owner_ref("default", "my-linksys");
     let sref = secret_ref("my-secret", None);
 
-    let outcome = resolve_credential(&ctx, &owner, "edgion.io", "LinkSys", &sref, &BasicAuthResolver).await;
+    let resource: edgion_resources::LinkSys = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":owner.name,"namespace":owner.namespace},
+        "spec":{"type":"redis","config":{"endpoints":["redis://localhost:6379"],"auth":{"secretRef":sref}}}
+    }))
+    .unwrap();
+    let prepared =
+        edgion_resources::resources::refs::link_sys_fields::PreparedLinkSysReferences::from_link_sys(&resource);
+    let bound = prepared.bind(&resource).unwrap();
+    let references = bound.references().unwrap();
+    let outcome = resolve_bound_secret(&ctx, &owner, references.auth_secret().unwrap(), &BasicAuthResolver);
 
     match outcome {
-        ResolveOutcome::Invalid(InvalidCredentialError::MissingKeys(keys)) => {
+        Err(ResolvedRefsError::MissingKeys { keys }) => {
             assert!(keys.contains(&"password"), "got {keys:?}");
         }
         other => panic!("expected Invalid(MissingKeys), got {other:?}"),
@@ -339,10 +368,20 @@ async fn test_happy_path_returns_ok() {
     let owner = owner_ref("default", "my-linksys");
     let sref = secret_ref("my-secret", None);
 
-    let outcome = resolve_credential(&ctx, &owner, "edgion.io", "LinkSys", &sref, &BasicAuthResolver).await;
+    let resource: edgion_resources::LinkSys = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":owner.name,"namespace":owner.namespace},
+        "spec":{"type":"redis","config":{"endpoints":["redis://localhost:6379"],"auth":{"secretRef":sref}}}
+    }))
+    .unwrap();
+    let prepared =
+        edgion_resources::resources::refs::link_sys_fields::PreparedLinkSysReferences::from_link_sys(&resource);
+    let bound = prepared.bind(&resource).unwrap();
+    let references = bound.references().unwrap();
+    let outcome = resolve_bound_secret(&ctx, &owner, references.auth_secret().unwrap(), &BasicAuthResolver);
 
     match outcome {
-        ResolveOutcome::Ok(m) => {
+        Ok(authorized) => {
+            let m = validate_secret(&authorized.secret, &BasicAuthResolver).unwrap();
             assert_eq!(m.username.as_deref(), Some("alice"));
             assert_eq!(m.password, "s3cr3t");
         }
@@ -357,10 +396,20 @@ async fn test_resolve_secret_returns_secret_object() {
     let owner = owner_ref("default", "my-linksys");
     let sref = secret_ref("my-secret", None);
 
-    let outcome = resolve_secret(&ctx, &owner, "edgion.io", "LinkSys", &sref, &BasicAuthResolver).await;
+    let resource: edgion_resources::LinkSys = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":owner.name,"namespace":owner.namespace},
+        "spec":{"type":"redis","config":{"endpoints":["redis://localhost:6379"],"auth":{"secretRef":sref}}}
+    }))
+    .unwrap();
+    let prepared =
+        edgion_resources::resources::refs::link_sys_fields::PreparedLinkSysReferences::from_link_sys(&resource);
+    let bound = prepared.bind(&resource).unwrap();
+    let references = bound.references().unwrap();
+    let outcome = resolve_bound_secret(&ctx, &owner, references.auth_secret().unwrap(), &BasicAuthResolver);
 
     match outcome {
-        ResolveOutcome::Ok(s) => {
+        Ok(authorized) => {
+            let s = authorized.secret;
             assert_eq!(s.metadata.name.as_deref(), Some("my-secret"));
             let data = s.data.expect("data");
             assert!(data.contains_key("password"));
@@ -381,11 +430,17 @@ async fn test_basic_auth_accepts_k8s_basic_auth_type() {
     let owner = owner_ref("default", "my-linksys");
     let sref = secret_ref("my-secret", None);
 
-    let outcome = resolve_secret(&ctx, &owner, "edgion.io", "LinkSys", &sref, &BasicAuthResolver).await;
-    assert!(
-        matches!(outcome, ResolveOutcome::Ok(_)),
-        "basic-auth type must be accepted, got {outcome:?}"
-    );
+    let resource: edgion_resources::LinkSys = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":owner.name,"namespace":owner.namespace},
+        "spec":{"type":"redis","config":{"endpoints":["redis://localhost:6379"],"auth":{"secretRef":sref}}}
+    }))
+    .unwrap();
+    let prepared =
+        edgion_resources::resources::refs::link_sys_fields::PreparedLinkSysReferences::from_link_sys(&resource);
+    let bound = prepared.bind(&resource).unwrap();
+    let references = bound.references().unwrap();
+    let outcome = resolve_bound_secret(&ctx, &owner, references.auth_secret().unwrap(), &BasicAuthResolver);
+    assert!(outcome.is_ok(), "basic-auth type must be accepted, got {outcome:?}");
 }
 
 #[tokio::test]
@@ -400,9 +455,18 @@ async fn test_basic_auth_rejects_tls_type() {
     let owner = owner_ref("default", "my-linksys");
     let sref = secret_ref("my-secret", None);
 
-    let outcome = resolve_secret(&ctx, &owner, "edgion.io", "LinkSys", &sref, &BasicAuthResolver).await;
+    let resource: edgion_resources::LinkSys = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":owner.name,"namespace":owner.namespace},
+        "spec":{"type":"redis","config":{"endpoints":["redis://localhost:6379"],"auth":{"secretRef":sref}}}
+    }))
+    .unwrap();
+    let prepared =
+        edgion_resources::resources::refs::link_sys_fields::PreparedLinkSysReferences::from_link_sys(&resource);
+    let bound = prepared.bind(&resource).unwrap();
+    let references = bound.references().unwrap();
+    let outcome = resolve_bound_secret(&ctx, &owner, references.auth_secret().unwrap(), &BasicAuthResolver);
     match outcome {
-        ResolveOutcome::Invalid(InvalidCredentialError::InvalidSecretType { got, .. }) => {
+        Err(ResolvedRefsError::InvalidSecretType { got, .. }) => {
             assert_eq!(got, "kubernetes.io/tls");
         }
         other => panic!("expected InvalidSecretType, got {other:?}"),
@@ -416,13 +480,23 @@ async fn test_cross_ns_no_grant_returns_pending() {
     let owner = owner_ref("default", "my-linksys");
     let sref = secret_ref("my-secret", Some("other-ns"));
 
-    let outcome = resolve_credential(&ctx, &owner, "edgion.io", "LinkSys", &sref, &BasicAuthResolver).await;
+    let resource: edgion_resources::LinkSys = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":owner.name,"namespace":owner.namespace},
+        "spec":{"type":"redis","config":{"endpoints":["redis://localhost:6379"],"auth":{"secretRef":sref}}}
+    }))
+    .unwrap();
+    let prepared =
+        edgion_resources::resources::refs::link_sys_fields::PreparedLinkSysReferences::from_link_sys(&resource);
+    let bound = prepared.bind(&resource).unwrap();
+    let references = bound.references().unwrap();
+    let outcome = resolve_bound_secret(&ctx, &owner, references.auth_secret().unwrap(), &BasicAuthResolver);
 
     match outcome {
-        ResolveOutcome::Pending(PendingReason::ReferenceGrantMissing {
-            from_ns,
-            to_ns,
-            secret_name,
+        Err(ResolvedRefsError::RefNotPermitted {
+            from_namespace: from_ns,
+            target_namespace: to_ns,
+            target_name: secret_name,
+            ..
         }) => {
             assert_eq!(from_ns, "default");
             assert_eq!(to_ns, "other-ns");
@@ -438,10 +512,19 @@ async fn test_secret_ref_manager_registered_when_cross_ns_grant_missing() {
     let owner = owner_ref("default", "my-linksys");
     let sref = secret_ref("creds", Some("other-ns"));
 
-    let outcome = resolve_credential(&ctx, &owner, "edgion.io", "LinkSys", &sref, &BasicAuthResolver).await;
+    let resource: edgion_resources::LinkSys = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":owner.name,"namespace":owner.namespace},
+        "spec":{"type":"redis","config":{"endpoints":["redis://localhost:6379"],"auth":{"secretRef":sref}}}
+    }))
+    .unwrap();
+    let prepared =
+        edgion_resources::resources::refs::link_sys_fields::PreparedLinkSysReferences::from_link_sys(&resource);
+    let bound = prepared.bind(&resource).unwrap();
+    let references = bound.references().unwrap();
+    let outcome = resolve_bound_secret(&ctx, &owner, references.auth_secret().unwrap(), &BasicAuthResolver);
 
     match outcome {
-        ResolveOutcome::Pending(PendingReason::ReferenceGrantMissing { .. }) => {}
+        Err(ResolvedRefsError::RefNotPermitted { .. }) => {}
         other => panic!("expected Pending(ReferenceGrantMissing), got {other:?}"),
     }
 

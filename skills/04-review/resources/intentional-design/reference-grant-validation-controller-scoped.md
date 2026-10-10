@@ -28,7 +28,7 @@ that per-config scoping is actually wanted.
 
 **1. Every enforcement site is controller-global**
 
-`ref_grant/validator.rs`, `ref_grant/edgion_config_data_grant.rs`,
+`handlers/route_backend_refs.rs`, the owning ConfigData handlers,
 `handlers/dns_resolver_guard.rs`, `handlers/edgion_tls.rs` and
 `handlers/gateway.rs` use `is_reference_grant_validation_enabled()` directly or,
 for native Gateway TLS fields, through `credential/pipeline.rs`, which

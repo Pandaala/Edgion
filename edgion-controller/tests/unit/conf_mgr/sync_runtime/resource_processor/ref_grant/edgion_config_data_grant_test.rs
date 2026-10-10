@@ -1,4 +1,6 @@
 use super::*;
+use crate::conf_mgr::ControllerRuntime;
+const EDGION_GROUP: &str = "edgion.io";
 use edgion_resources::resources::{ReferenceGrant, ReferenceGrantFrom, ReferenceGrantSpec, ReferenceGrantTo};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use std::sync::Arc;
@@ -48,23 +50,29 @@ fn gateway_grant_requires_exact_gateway_api_group() {
         Arc::new(grant(GATEWAY_GROUP, "Gateway")),
     );
 
-    assert!(is_edgion_config_data_ref_allowed_from(
-        &runtime,
-        "source",
-        GATEWAY_GROUP,
-        "Gateway",
-        "target",
-        "policy",
+    let owner: edgion_resources::Gateway = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"gateway","namespace":"source","annotations":{
+            "edgion.io/inbound-proxy-protocol": r#"{"source":"resourceRef","resourceRef":{"name":"policy","namespace":"target"}}"#
+        }},"spec":{"gatewayClassName":"public"}
+    })).unwrap();
+    let field = edgion_resources::resources::refs::proxy_protocol_fields::GatewayProxyProtocolField::parse(&owner)
+        .unwrap()
+        .unwrap();
+    let query = field.query().unwrap().unwrap();
+    assert!(decide_edgion_config_data_ref(
+        true,
+        false,
         Namespace,
+        runtime.ref_grant_store.check_query(query)
     ));
-    assert!(!is_edgion_config_data_ref_allowed_from(
-        &runtime,
-        "source",
-        EDGION_GROUP,
-        "Gateway",
-        "target",
-        "policy",
+    runtime
+        .ref_grant_store
+        .upsert("target/allow-policy".into(), Arc::new(grant(EDGION_GROUP, "Gateway")));
+    assert!(!decide_edgion_config_data_ref(
+        true,
+        false,
         Namespace,
+        runtime.ref_grant_store.check_query(query)
     ));
 }
 
@@ -76,12 +84,19 @@ fn existing_plugin_helper_keeps_edgion_group() {
         Arc::new(grant(EDGION_GROUP, "EdgionPlugins")),
     );
 
-    assert!(is_edgion_config_data_ref_allowed(
-        &runtime,
-        "source",
-        "EdgionPlugins",
-        "target",
-        "policy",
+    let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"plugins","namespace":"source"},"spec":{"requestPlugins":[{
+            "type":"Canary","config":{"enable":true,"activeProfile":"base","profiles":{"base":{"name":"backend"}},"activeProfileRef":{"name":"policy","namespace":"target"}}
+        }]}
+    }))
+    .unwrap();
+    let entry =
+        edgion_resources::resources::refs::config_data_fields::HttpConfigDataEntry::from_plugins(&owner, 0).unwrap();
+    let field = entry.field().unwrap();
+    assert!(decide_edgion_config_data_ref(
+        true,
+        false,
         Namespace,
+        runtime.ref_grant_store.check_query(field.query().unwrap())
     ));
 }

@@ -55,11 +55,11 @@ When other resources' Handlers check cross-namespace references during the parse
 
 1. Detect that the namespace of the backendRef or secretRef differs from the resource's own namespace
 2. Register the owner under the target namespace before reading authorization, so a concurrent grant change cannot miss the dependency
-3. Call `is_cross_ns_ref_allowed()` → `ReferenceGrantStore.check_reference_allowed()`
+3. Pass the actual owning field's canonical `GrantQuery` to `ReferenceGrantStore::check_query()` (bound material acquisition uses `query_authorization_revision()` to retain the same authorization snapshot)
 4. Check parameters: from_namespace, from_group, from_kind, to_namespace, to_group, to_kind, to_name
 5. If not allowed: set the `ref_denied` field on the backendRef (HTTP/gRPC return 500; TCP/UDP/TLS fail the connection closed before Service lookup), or set a RefNotPermitted error on the Gateway TLS reference
 
-ReferenceGrant validation can be disabled by configuration (`is_reference_grant_validation_enabled()`), in which case all cross-namespace references are allowed by default.
+ReferenceGrant validation configuration (`is_reference_grant_validation_enabled()`) affects explicit field policies, not every cross-namespace reference. Gateway and EdgionTls have finite bypass policies inside bound material acquisition; this is not an exhaustive list of flag consumers. Route/backend/mirror, ConfigData and DNS retain their existing policies. BackendTLSPolicy CA and client-certificate targets are strictly policy-local: cross-namespace targets are rejected regardless of grants, and same-namespace targets need no grant. Disabling validation never relaxes target syntax or removes required recovery dependencies.
 
 RequestMirror backend references use the same `RefDenied` transport contract.
 Native HTTPRoute filters authorize with the declaring route's identity, including
@@ -82,7 +82,7 @@ for grant-change revalidation. See the
 | ReferenceGrant → Gateway | Gateway | CrossNsRefManager + event dispatch | On change, requeue Gateways with cross-namespace certificateRefs |
 | ReferenceGrant → Service | Service | CrossNsRefManager + event dispatch | Authorizes cross-namespace `edgion.io/dns-resolver-ref` targets and requeues the Service when grants change |
 | ReferenceGrant → EdgionAcme | EdgionAcme | CrossNsRefManager + event dispatch | Authorizes `edgion.io/EdgionAcme` to select a cross-namespace `gateway.networking.k8s.io/Gateway`; changes re-resolve HTTP-01 serving attachments |
-| ReferenceGrant → EdgionGatewayConfig / EdgionPlugins | EdgionGatewayConfig, EdgionPlugins | CrossNsRefManager + event dispatch | Authorizes grant-gated cross-namespace ConfigMap CA references. Cluster-scoped EdgionGatewayConfig uses an empty declaring namespace and requires an explicit target namespace. |
+| ReferenceGrant → EdgionPlugins | EdgionPlugins | CrossNsRefManager + event dispatch | Authorizes grant-gated cross-namespace Secret/ConfigMap TLS references. Cluster-scoped EdgionGatewayConfig instead uses exclusive administrative field selection with an explicit target namespace; it does not fabricate an empty source namespace or use ReferenceGrant authority. |
 | ReferenceGrant → Gateway inbound PROXY policy | Gateway | EdgionConfigDataRefManager + CrossNsRefManager + workqueue requeue | For a cross-namespace `ProxyProtocolTrust` target with `visibility: Namespace`, require `from {group: gateway.networking.k8s.io, kind: Gateway}` to `to {group: edgion.io, kind: EdgionConfigData}`. Cluster-visible and same-namespace targets need no grant. Denial is transported as explicit Invalid and fails Gateway startup closed. |
 | ReferenceGrant → EdgionPlugins | EdgionPlugins | CrossNsRefManager + event dispatch | On change, requeue EdgionPlugins with cross-namespace EdgionConfigData refs (`allowRefs`/`denyRefs`, `overrideRef`, selectors, and RequestAccessPolicy IP/URL data refs). Optional RequestAccessPolicy IP/URL denials are `PartiallyInvalid` and omit only that data source. Grant shape: `from {group: edgion.io, kind: EdgionPlugins}`, `to {group: edgion.io, kind: EdgionConfigData}`. |
 | ReferenceGrant → EdgionStreamPlugins | EdgionStreamPlugins | CrossNsRefManager + event dispatch | On change, requeue EdgionStreamPlugins with cross-namespace EdgionConfigData refs (`allowRefs`/`denyRefs`, `activeProfileRef`). Grant shape: `from {group: edgion.io, kind: EdgionStreamPlugins}`, `to {group: edgion.io, kind: EdgionConfigData}`. |
