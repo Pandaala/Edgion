@@ -1,7 +1,7 @@
 //! PluginSession trait - shared across all filter stages
 
+use super::ai_session::AiSessionCapability;
 use super::waf_session::WafSessionCapability;
-use crate::ai::{AiAttemptPlan, AiRequestContext};
 use crate::ctx::ClientCertInfo;
 use crate::plugins::runtime::dye_plan::CompiledDyePlan;
 use crate::plugins::runtime::log::{EdgionPluginsLogToken, PluginLog};
@@ -554,6 +554,9 @@ pub trait PluginSession: Send + Sync {
     /// using another session operation or awaiting body capture.
     fn waf(&mut self) -> &mut dyn WafSessionCapability;
 
+    /// Borrow AI integration operations without creating exchange state.
+    fn ai(&mut self) -> &mut dyn AiSessionCapability;
+
     /// Capture a soft window plus one proof byte, then feed one bounded reader.
     #[allow(unused_parens)]
     async fn capture_request_body_inspection<'consumer>(
@@ -574,25 +577,6 @@ pub trait PluginSession: Send + Sync {
     /// access-log diagnostics array. Narrow interface — plugins cannot mutate other
     /// ctx fields; only the error list.
     fn record_error(&mut self, status: EdgionErrorCode);
-
-    /// Capture the configured client API before any local AI rejection.
-    /// Alternate adapters without mutable request state fail closed.
-    fn capture_ai_client_api(&mut self, _api: edgion_resources::resources::edgion_plugins::AiApi) -> bool {
-        false
-    }
-
-    /// Claim the request-wide AI context. The first writer wins; alternate
-    /// adapters without a mutable Edgion context fail closed by default.
-    fn set_ai_request_context(&mut self, context: AiRequestContext) -> bool {
-        drop(context);
-        false
-    }
-
-    /// Claim the immutable request-wide AI attempt plan. The first writer wins.
-    fn set_ai_attempt_plan(&mut self, plan: AiAttemptPlan) -> bool {
-        drop(plan);
-        false
-    }
 
     /// Only a rule-scoped HTTPRoute REST request may claim this conversion.
     fn grpc_transcoding_allowed(&self) -> bool {
@@ -615,26 +599,6 @@ pub trait PluginSession: Send + Sync {
         drop(processor);
     }
 
-    /// Whether one request-scoped guard currently owns canonical semantic AI
-    /// output. Alternate adapters are inert by default.
-    fn semantic_guard_active(&self) -> bool {
-        false
-    }
-
-    /// Publish one owned canonical record batch for the current response-body
-    /// callback. Failure returns ownership to the source so bytes cannot vanish.
-    fn publish_canonical_records(
-        &mut self,
-        batch: crate::ai::protocols::openai::canonical_sse::CanonicalRecordBatch,
-    ) -> Result<(), crate::ai::protocols::openai::canonical_sse::CanonicalRecordBatch> {
-        Err(batch)
-    }
-
-    /// Consume the current canonical batch exactly once.
-    fn take_canonical_records(&mut self) -> Option<crate::ai::protocols::openai::canonical_sse::CanonicalRecordBatch> {
-        None
-    }
-
     /// Claim the request's first irreversible response terminal for the active
     /// processor instance. Alternate adapters cannot claim by default.
     fn try_claim_response_terminal(&mut self, _cause: crate::response::terminal::ResponseTerminalCause) -> bool {
@@ -643,30 +607,6 @@ pub trait PluginSession: Send + Sync {
 
     /// Record whether the claimed terminal produced a client-visible event.
     fn mark_response_terminal_emission(&mut self, _emission: crate::response::terminal::TerminalEmission) {}
-
-    /// Return the client dialect and final response eligibility used by the
-    /// bounded terminal renderer.
-    fn ai_terminal_render_context(
-        &self,
-    ) -> Option<(
-        crate::ai::protocols::openai::terminal::AiClientStreamDialect,
-        crate::response::terminal::FinalResponseEligibility,
-    )> {
-        None
-    }
-
-    /// Disable canonical semantic withholding before response-body processing
-    /// begins. This is used only by an attached Guardrail that has selected its
-    /// configured pre-commit fail-open path.
-    fn disable_semantic_guard(&mut self) {}
-
-    fn install_semantic_response_processor(
-        &mut self,
-        processor: Box<dyn crate::plugins::runtime::traits::StreamingResponseProcessor>,
-    ) -> bool {
-        drop(processor);
-        false
-    }
 
     /// Install one request-scoped attached ExtProc owner. Duplicate identity is
     /// a configuration/runtime error and never overwrites the first owner.
@@ -683,24 +623,6 @@ pub trait PluginSession: Send + Sync {
         &self,
         _identity: &str,
     ) -> Option<std::sync::Arc<crate::plugins::http::ext_proc::AttachedExtProc>> {
-        None
-    }
-
-    /// Install the one request-scoped semantic Guardrail owner. A duplicate
-    /// claim is a configuration/runtime error, independent of fail-open.
-    fn install_attached_guardrail(
-        &mut self,
-        _identity: String,
-        _owner: std::sync::Arc<crate::ai::guards::semantic::AttachedGuardrail>,
-        _head_limits: Option<pingora_proxy::ResponseHeadHoldLimits>,
-    ) -> bool {
-        false
-    }
-
-    fn attached_guardrail(
-        &self,
-        _identity: &str,
-    ) -> Option<std::sync::Arc<crate::ai::guards::semantic::AttachedGuardrail>> {
         None
     }
 
@@ -912,10 +834,6 @@ pub trait PluginSession: Send + Sync {
     ) -> Result<u64, BodyReadError> {
         Err(BodyReadError::Unimplemented)
     }
-
-    /// Record that an `AiGuard` entry settled a decision, with the body
-    /// generation it settled on.
-    fn record_ai_guard_decision(&mut self, _identity: String, _generation: Option<u64>) {}
 
     /// Replace the complete buffered request body used for every upstream
     /// attempt.

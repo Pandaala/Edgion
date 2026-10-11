@@ -95,11 +95,15 @@ async fn semantic_only_source_preserves_split_raw_records_without_usage_counting
     let records = Arc::new(Mutex::new(Vec::new()));
     let captured = Arc::clone(&records);
     let mut session = MockPluginSession::new();
-    session.expect_semantic_guard_active().return_const(true);
-    session.expect_publish_canonical_records().returning(move |batch| {
+    let mut ai = crate::plugins::runtime::traits::ai_session::MockAiSessionCapability::new();
+    ai.expect_semantic_guard_active().return_const(true);
+    ai.expect_publish_canonical_records().returning(move |batch| {
         captured.lock().push(batch);
         Ok(())
     });
+    session
+        .expect_ai()
+        .return_var(Box::new(ai) as Box<dyn crate::plugins::runtime::traits::AiSessionCapability>);
     let mut source = SemanticSseSource::new();
     let mut sink = ResponseBodySink::new();
     let raw = b"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"}}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":11}}\n\n";

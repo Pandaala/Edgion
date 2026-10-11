@@ -134,6 +134,7 @@ async fn an_unavailable_body_is_refused_without_latching_even_when_fail_open() {
     for (mode, expected_status) in [("error", 403), ("contentFilter", 200)] {
         let guard = guard(reject_rule(), &format!("rejectionMode: {mode}\nfailOpen: true\n"));
         let mut session = MockPluginSession::new();
+        let mut ai = crate::plugins::runtime::traits::ai_session::MockAiSessionCapability::new();
         session.expect_ctx().return_const(ctx_with_body());
         session.expect_get_method().return_const("POST".to_string());
         session
@@ -143,7 +144,10 @@ async fn an_unavailable_body_is_refused_without_latching_even_when_fail_open() {
             .expect_read_request_body()
             .returning(|_| Err(BodyReadError::Unimplemented));
         session.expect_set_response_header().returning(|_, _| Ok(()));
-        session.expect_record_ai_guard_decision().never();
+        ai.expect_record_ai_guard_decision().never();
+        session
+            .expect_ai()
+            .return_var(Box::new(ai) as Box<dyn crate::plugins::runtime::traits::AiSessionCapability>);
 
         let mut log = PluginLog::new("AiGuard");
         assert!(matches!(
@@ -157,6 +161,7 @@ async fn an_unavailable_body_is_refused_without_latching_even_when_fail_open() {
 async fn a_local_reject_renders_the_fixed_error_envelope() {
     let guard = guard(reject_rule(), "");
     let mut session = MockPluginSession::new();
+    let mut ai = crate::plugins::runtime::traits::ai_session::MockAiSessionCapability::new();
     session.expect_ctx().return_const(ctx_with_body());
     session.expect_get_method().return_const("POST".to_string());
     session
@@ -164,7 +169,10 @@ async fn a_local_reject_renders_the_fixed_error_envelope() {
         .return_const("/v1/chat/completions".to_string());
     session.expect_read_request_body().returning(|_| Ok(body(PROMPT)));
     session.expect_set_response_header().returning(|_, _| Ok(()));
-    session.expect_record_ai_guard_decision().returning(|_, _| ());
+    ai.expect_record_ai_guard_decision().returning(|_, _| ());
+    session
+        .expect_ai()
+        .return_var(Box::new(ai) as Box<dyn crate::plugins::runtime::traits::AiSessionCapability>);
 
     let mut log = PluginLog::new("AiGuard");
     match guard.run_request(&mut session, &mut log).await {
@@ -190,6 +198,7 @@ async fn content_filter_mode_renders_a_valid_completion_for_both_request_shapes(
             r#"{{"model":"gpt-x","stream":{streaming},"messages":[{{"role":"user","content":"a forbidden thing"}}]}}"#
         );
         let mut session = MockPluginSession::new();
+        let mut ai = crate::plugins::runtime::traits::ai_session::MockAiSessionCapability::new();
         session.expect_ctx().return_const(ctx_with_body());
         session.expect_get_method().return_const("POST".to_string());
         session
@@ -197,7 +206,10 @@ async fn content_filter_mode_renders_a_valid_completion_for_both_request_shapes(
             .return_const("/v1/chat/completions".to_string());
         session.expect_read_request_body().returning(move |_| Ok(body(&prompt)));
         session.expect_set_response_header().returning(|_, _| Ok(()));
-        session.expect_record_ai_guard_decision().returning(|_, _| ());
+        ai.expect_record_ai_guard_decision().returning(|_, _| ());
+        session
+            .expect_ai()
+            .return_var(Box::new(ai) as Box<dyn crate::plugins::runtime::traits::AiSessionCapability>);
 
         let mut log = PluginLog::new("AiGuard");
         match guard.run_request(&mut session, &mut log).await {
@@ -223,6 +235,7 @@ async fn content_filter_mode_renders_a_valid_completion_for_both_request_shapes(
 async fn a_mask_publishes_one_batch_of_whole_json_string_tokens() {
     let guard = guard(mask_rule(), "");
     let mut session = MockPluginSession::new();
+    let mut ai = crate::plugins::runtime::traits::ai_session::MockAiSessionCapability::new();
     session.expect_ctx().return_const(ctx_with_body());
     session.expect_get_method().return_const("POST".to_string());
     session
@@ -248,7 +261,10 @@ async fn a_mask_publishes_one_batch_of_whole_json_string_tokens() {
             }
         })
         .returning(|_, _| Ok(1));
-    session.expect_record_ai_guard_decision().returning(|_, _| ());
+    ai.expect_record_ai_guard_decision().returning(|_, _| ());
+    session
+        .expect_ai()
+        .return_var(Box::new(ai) as Box<dyn crate::plugins::runtime::traits::AiSessionCapability>);
 
     let mut log = PluginLog::new("AiGuard");
     assert_eq!(
@@ -291,6 +307,7 @@ async fn an_unguardable_body_follows_the_failure_policy() {
 
     let closed = guard(reject_rule(), "");
     let mut session = MockPluginSession::new();
+    let mut ai = crate::plugins::runtime::traits::ai_session::MockAiSessionCapability::new();
     session.expect_ctx().return_const(ctx_with_body());
     session.expect_get_method().return_const("POST".to_string());
     session
@@ -301,7 +318,10 @@ async fn an_unguardable_body_follows_the_failure_policy() {
         .returning(move |_| Ok(body(malformed)));
     session.expect_set_response_header().returning(|_, _| Ok(()));
     // Even a failure latches, so an upstream retry does not repeat the work.
-    session.expect_record_ai_guard_decision().times(1).returning(|_, _| ());
+    ai.expect_record_ai_guard_decision().times(1).returning(|_, _| ());
+    session
+        .expect_ai()
+        .return_var(Box::new(ai) as Box<dyn crate::plugins::runtime::traits::AiSessionCapability>);
     let mut log = PluginLog::new("AiGuard");
     assert!(matches!(
         closed.run_request(&mut session, &mut log).await,
@@ -310,6 +330,7 @@ async fn an_unguardable_body_follows_the_failure_policy() {
 
     let open = guard(reject_rule(), "failOpen: true\n");
     let mut session = MockPluginSession::new();
+    let mut ai = crate::plugins::runtime::traits::ai_session::MockAiSessionCapability::new();
     session.expect_ctx().return_const(ctx_with_body());
     session.expect_get_method().return_const("POST".to_string());
     session
@@ -318,7 +339,10 @@ async fn an_unguardable_body_follows_the_failure_policy() {
     session
         .expect_read_request_body()
         .returning(move |_| Ok(body(malformed)));
-    session.expect_record_ai_guard_decision().times(1).returning(|_, _| ());
+    ai.expect_record_ai_guard_decision().times(1).returning(|_, _| ());
+    session
+        .expect_ai()
+        .return_var(Box::new(ai) as Box<dyn crate::plugins::runtime::traits::AiSessionCapability>);
     let mut log = PluginLog::new("AiGuard");
     assert_eq!(
         open.run_request(&mut session, &mut log).await,
@@ -331,6 +355,7 @@ async fn a_clean_prompt_passes_without_touching_the_body() {
     let guard = guard(reject_rule(), "");
     let clean = r#"{"model":"m","messages":[{"role":"user","content":"hello"}]}"#;
     let mut session = MockPluginSession::new();
+    let mut ai = crate::plugins::runtime::traits::ai_session::MockAiSessionCapability::new();
     session.expect_ctx().return_const(ctx_with_body());
     session.expect_get_method().return_const("POST".to_string());
     session
@@ -338,7 +363,10 @@ async fn a_clean_prompt_passes_without_touching_the_body() {
         .return_const("/v1/chat/completions".to_string());
     session.expect_read_request_body().returning(move |_| Ok(body(clean)));
     session.expect_replace_request_body_spans().never();
-    session.expect_record_ai_guard_decision().returning(|_, _| ());
+    ai.expect_record_ai_guard_decision().returning(|_, _| ());
+    session
+        .expect_ai()
+        .return_var(Box::new(ai) as Box<dyn crate::plugins::runtime::traits::AiSessionCapability>);
 
     let mut log = PluginLog::new("AiGuard");
     assert_eq!(

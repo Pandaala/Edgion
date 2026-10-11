@@ -74,7 +74,7 @@ impl Guardrail {
         _log: &mut PluginLog,
     ) -> PluginRunningResult {
         if self.fail_open {
-            session.disable_semantic_guard();
+            session.ai().disable_semantic_guard();
             owner.publish(GuardrailSummary {
                 outcome: "fail-open",
                 reason,
@@ -110,7 +110,10 @@ impl RequestFilter for Guardrail {
             );
         }
         let owner = Arc::new(AttachedGuardrail::new());
-        if !session.install_attached_guardrail(self.identity.clone(), owner, self.head_limits) {
+        if !session
+            .ai()
+            .install_attached_guardrail(self.identity.clone(), owner, self.head_limits)
+        {
             // Duplicate claims are structural ambiguity, not dependency
             // availability, and are never softened by either fail-open flag.
             if let Some((_, existing)) = session
@@ -145,7 +148,7 @@ impl UpstreamResponse for Guardrail {
     }
 
     async fn run_upstream_response(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
-        let Some(owner) = session.attached_guardrail(&self.identity) else {
+        let Some(owner) = session.ai().attached_guardrail(&self.identity) else {
             return PluginRunningResult::GoodNext;
         };
         let status = session.get_response_status().unwrap_or(0);
@@ -174,7 +177,7 @@ impl UpstreamResponse for Guardrail {
         ) else {
             return self.precommit_failure(session, &owner, "window-config", log);
         };
-        if !session.install_semantic_response_processor(Box::new(processor)) {
+        if !session.ai().install_semantic_response_processor(Box::new(processor)) {
             return self.precommit_failure(session, &owner, "late-response-processor", log);
         }
         PluginRunningResult::GoodNext

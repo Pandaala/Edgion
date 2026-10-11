@@ -11,6 +11,8 @@ before applying a decision to current code.
 
 ## Intentional design
 
+- [HTTP request context layout budget](intentional-design/http-request-context-layout-budget.md)
+
 - [AccessLogEntry::from_context Per-Request request_uri String Alloc (include_raw_uri=true) is Not Worth Fixing](intentional-design/access-log-request-uri-include-raw-uri-alloc.md)
 - [`AdminState::cache_get_resource` Full-List + Linear-Scan is Not a Performance Issue](intentional-design/admin-state-cache-get-resource-full-list-scan.md)
 - [Async response-body hook no-work gate requires production profiling](intentional-design/async-response-body-hook-profile-before-gate.md)

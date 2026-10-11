@@ -532,6 +532,24 @@ Transaction installation consumes rejected offers; the existing conflict path
 terminates and keeps the resident transaction. See the
 [canonical integration boundary](05-plugin-system.md#selected-waf-session-capability).
 
+### AI session operations
+
+Use `session.ai().capture_ai_client_api(...)`, plan/guard operations and canonical
+record transfer through `AiSessionCapability` in `plugins/runtime/traits/ai_session.rs`.
+Extend the feature contract for new AI operations. The real adapter returns itself;
+obtaining it does not initialize the lazy exchange. Keep each borrow short before
+common session access or awaits. Generic processors and terminal arbitration
+remain common operations.
+
+For AI tests, configure one `MockAiSessionCapability` per common mock, then attach
+it once with `session.expect_ai().return_var(Box::new(ai) as Box<dyn AiSessionCapability>)`.
+Shared reads and mutable publication/take use that same instance. Preserve the
+canonical publication `Result`: rejection returns the original offered batch and
+keeps any resident batch; take consumes once. Context/plan/processor rejection
+consumes its offer. Required capability methods supply no permissive production
+fallback. A manual adapter without AI use should reject unexpected access
+explicitly. See the [integration boundary](05-plugin-system.md#ai-session-capability).
+
 ## `PluginLog` rules
 
 Entry point:

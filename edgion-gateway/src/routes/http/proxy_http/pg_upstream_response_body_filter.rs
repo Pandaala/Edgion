@@ -206,7 +206,7 @@ pub(crate) async fn run_stream_processors_event(
                 winner = adapter.response_terminal_winner();
             }
         }
-        let semantic_is_withholding = adapter.semantic_guard_active()
+        let semantic_is_withholding = adapter.ai().semantic_guard_active()
             && body.is_none()
             && matches!(event, StreamingResponseEvent::Data { end_of_stream: false });
         if winner.is_none() && !sink.is_terminated() && !semantic_is_withholding {

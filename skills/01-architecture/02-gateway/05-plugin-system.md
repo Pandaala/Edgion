@@ -105,6 +105,32 @@ configure a feature mock, then attach it through the common accessor. See the
 [design decision](../../04-review/plugin-runtime/intentional-design/selected-waf-session-capability.md)
 for alternatives, transfer contracts and verification limits.
 
+### AI session capability
+
+`PluginSession::ai()` returns a short mutable borrow of `AiSessionCapability`
+in `runtime/traits/ai_session.rs`. Twelve request-plan, guard and canonical
+handoff operations extend this feature contract instead of the shared operation
+list. `PingoraSessionAdapter` implements it directly and returns itself; the
+existing lazy `ai::context::AiHttpState` remains the sole exchange state owner.
+The accessor and absent-state reads/take create no state or wrapper.
+
+Release each synchronous borrow before ordinary session operations or awaits.
+First-writer context/plan and processor offers are consumed even when rejected.
+Canonical publication instead returns the original rejected batch and preserves
+any resident batch; take transfers that batch exactly once. Publication still
+initializes AI state before its existing semantic-ownership check. Guard identity,
+body generation, duplicate/frozen/transcoder conflicts and Guardrail head-hold
+admission retain their adapter checks and existing failure contracts.
+
+Generic body capture/mutation, stream and ordinary processor installation,
+ExtProc/transcoding, response terminal claims/emission and transport facts stay
+on the common boundary. The response driver retains AI -> semantic -> ordinary
+ordering, canonical drain checks and cancellation leases. Bounded response streams,
+RawWindow and the reviewed unary converter retain their independent owners and
+limits. Capability methods are required; tests configure one feature mock and
+attach it through the common accessor. No throughput improvement is claimed.
+See the [AI boundary decision](../../04-review/plugin-runtime/intentional-design/ai-session-capability.md).
+
 ### Streamed request admission
 
 Installed request-body handlers own a monotonic source bit in the optional
@@ -507,6 +533,7 @@ edgion-gateway/src/plugins/
     │   ├── upstream_response_body_filter.rs
     │   ├── upstream_response.rs
     │   ├── session.rs             # PluginSession trait (unified session abstraction)
+    │   ├── ai_session.rs          # AI session integration capability
     │   └── waf_session.rs         # Selected-WAF session integration capability
     └── gateway_api_filters/       # Gateway API standard filter implementations
         ├── request_header_modifier.rs

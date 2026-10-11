@@ -1603,20 +1603,12 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self
     }
 
+    fn ai(&mut self) -> &mut dyn crate::plugins::runtime::traits::AiSessionCapability {
+        self
+    }
+
     fn record_error(&mut self, status: edgion_resources::EdgionErrorCode) {
         self.ctx.record_error(status);
-    }
-
-    fn capture_ai_client_api(&mut self, api: edgion_resources::resources::edgion_plugins::AiApi) -> bool {
-        self.ctx.capture_ai_client_api(api)
-    }
-
-    fn set_ai_request_context(&mut self, context: AiRequestContext) -> bool {
-        self.ctx.try_set_ai_request_context(context)
-    }
-
-    fn set_ai_attempt_plan(&mut self, plan: AiAttemptPlan) -> bool {
-        self.ctx.try_set_ai_attempt_plan(plan)
     }
 
     fn grpc_transcoding_allowed(&self) -> bool {
@@ -1666,28 +1658,6 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx.push_response_stream_processor(processor);
     }
 
-    fn semantic_guard_active(&self) -> bool {
-        self.ctx.ai_state().is_some_and(|state| state.semantic_guard_claimed)
-    }
-
-    fn publish_canonical_records(
-        &mut self,
-        batch: crate::ai::protocols::openai::canonical_sse::CanonicalRecordBatch,
-    ) -> Result<(), crate::ai::protocols::openai::canonical_sse::CanonicalRecordBatch> {
-        let state = self.ctx.ensure_ai_state();
-        if !state.semantic_guard_claimed || state.canonical_record_batch.is_some() {
-            return Err(batch);
-        }
-        state.canonical_record_batch = Some(batch);
-        Ok(())
-    }
-
-    fn take_canonical_records(&mut self) -> Option<crate::ai::protocols::openai::canonical_sse::CanonicalRecordBatch> {
-        self.ctx
-            .ai_state_mut()
-            .and_then(|state| state.canonical_record_batch.take())
-    }
-
     fn try_claim_response_terminal(&mut self, cause: crate::response::terminal::ResponseTerminalCause) -> bool {
         self.response_processor_slot
             .is_some_and(|slot| self.ctx.response_terminal_state.try_claim(slot, cause))
@@ -1695,58 +1665,6 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
 
     fn mark_response_terminal_emission(&mut self, emission: crate::response::terminal::TerminalEmission) {
         self.ctx.response_terminal_state.mark_emission(emission);
-    }
-
-    fn ai_terminal_render_context(
-        &self,
-    ) -> Option<(
-        crate::ai::protocols::openai::terminal::AiClientStreamDialect,
-        crate::response::terminal::FinalResponseEligibility,
-    )> {
-        let state = self.ctx.ai_state()?;
-        Some((state.client_stream_dialect?, state.final_response_eligibility?))
-    }
-
-    fn disable_semantic_guard(&mut self) {
-        if !self.ctx.response_body_processing_started {
-            if let Some(state) = self.ctx.ai_state_mut() {
-                state.semantic_guard_claimed = false;
-                state.canonical_record_batch = None;
-                state.semantic_processor = None;
-                if state
-                    .response_head_hold_claim
-                    .is_some_and(|claim| claim.owner == crate::ctx::ResponseHeadHoldOwner::Guardrail)
-                {
-                    state.response_head_hold_claim = None;
-                }
-            }
-        }
-    }
-
-    fn install_semantic_response_processor(
-        &mut self,
-        processor: Box<dyn crate::plugins::runtime::traits::StreamingResponseProcessor>,
-    ) -> bool {
-        if let Some(plan) = &self.ctx.grpc_transcoding {
-            plan.reject_mutation();
-            return false;
-        }
-        if self.ctx.response_processors_frozen()
-            || self
-                .ctx
-                .ai_state()
-                .is_some_and(|state| state.semantic_processor.is_some())
-        {
-            return false;
-        }
-        let state = self.ctx.ensure_ai_state();
-        state.semantic_processor = Some(processor);
-        if let Some(claim) = state.response_head_hold_claim.as_mut() {
-            if claim.owner == crate::ctx::ResponseHeadHoldOwner::Guardrail {
-                claim.active = true;
-            }
-        }
-        true
     }
 
     fn install_attached_ext_proc(
@@ -1763,49 +1681,6 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         identity: &str,
     ) -> Option<std::sync::Arc<crate::plugins::http::ext_proc::AttachedExtProc>> {
         self.ctx.attached_ext_proc(identity)
-    }
-
-    fn install_attached_guardrail(
-        &mut self,
-        identity: String,
-        owner: std::sync::Arc<crate::ai::guards::semantic::AttachedGuardrail>,
-        head_limits: Option<pingora_proxy::ResponseHeadHoldLimits>,
-    ) -> bool {
-        if let Some(plan) = &self.ctx.grpc_transcoding {
-            plan.reject_mutation();
-            return false;
-        }
-        if self.ctx.ai_state().is_some_and(|state| {
-            state.attached_guardrail.is_some()
-                || state.semantic_guard_claimed
-                || (head_limits.is_some() && state.response_head_hold_claim.is_some())
-        }) {
-            return false;
-        }
-        let state = self.ctx.ensure_ai_state();
-        state.attached_guardrail = Some((identity, owner));
-        state.semantic_guard_claimed = true;
-        if let Some(limits) = head_limits {
-            state.response_head_hold_claim = Some(crate::ctx::ResponseHeadHoldClaim {
-                owner: crate::ctx::ResponseHeadHoldOwner::Guardrail,
-                limits,
-                active: false,
-            });
-        }
-        self.ctx.reserve_response_framing();
-        true
-    }
-
-    fn attached_guardrail(
-        &self,
-        identity: &str,
-    ) -> Option<std::sync::Arc<crate::ai::guards::semantic::AttachedGuardrail>> {
-        self.ctx
-            .ai_state()?
-            .attached_guardrail
-            .as_ref()
-            .filter(|(installed, _)| installed == identity)
-            .map(|(_, owner)| std::sync::Arc::clone(owner))
     }
 
     fn install_attached_response_processor(
@@ -2108,16 +1983,6 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                 crate::request_body::BodyOperationError::Body(error) => error,
                 _ => BodyReadError::Incomplete,
             })
-    }
-
-    fn record_ai_guard_decision(&mut self, identity: String, generation: Option<u64>) {
-        let state = self.ctx.ensure_ai_state();
-        if !state.guard_decided.iter().any(|existing| existing == &identity) {
-            state.guard_decided.push(identity);
-        }
-        if generation.is_some() {
-            state.guard_body_generation = generation;
-        }
     }
 
     async fn overwrite_request_body(&mut self, body: bytes::Bytes) -> Result<(), BodyReadError> {
@@ -2587,5 +2452,146 @@ impl WafSessionCapability for PingoraSessionAdapter<'_> {
             self.ctx.activate_waf_request_body_streaming();
         }
         enabled
+    }
+}
+
+impl crate::plugins::runtime::traits::AiSessionCapability for PingoraSessionAdapter<'_> {
+    fn capture_ai_client_api(&mut self, api: edgion_resources::resources::edgion_plugins::AiApi) -> bool {
+        self.ctx.capture_ai_client_api(api)
+    }
+
+    fn set_ai_request_context(&mut self, context: AiRequestContext) -> bool {
+        self.ctx.try_set_ai_request_context(context)
+    }
+
+    fn set_ai_attempt_plan(&mut self, plan: AiAttemptPlan) -> bool {
+        self.ctx.try_set_ai_attempt_plan(plan)
+    }
+
+    fn record_ai_guard_decision(&mut self, identity: String, generation: Option<u64>) {
+        let state = self.ctx.ensure_ai_state();
+        if !state.guard_decided.iter().any(|existing| existing == &identity) {
+            state.guard_decided.push(identity);
+        }
+        if generation.is_some() {
+            state.guard_body_generation = generation;
+        }
+    }
+
+    fn semantic_guard_active(&self) -> bool {
+        self.ctx.ai_state().is_some_and(|state| state.semantic_guard_claimed)
+    }
+
+    fn publish_canonical_records(
+        &mut self,
+        batch: crate::ai::protocols::openai::canonical_sse::CanonicalRecordBatch,
+    ) -> Result<(), crate::ai::protocols::openai::canonical_sse::CanonicalRecordBatch> {
+        let state = self.ctx.ensure_ai_state();
+        if !state.semantic_guard_claimed || state.canonical_record_batch.is_some() {
+            return Err(batch);
+        }
+        state.canonical_record_batch = Some(batch);
+        Ok(())
+    }
+
+    fn take_canonical_records(&mut self) -> Option<crate::ai::protocols::openai::canonical_sse::CanonicalRecordBatch> {
+        self.ctx
+            .ai_state_mut()
+            .and_then(|state| state.canonical_record_batch.take())
+    }
+
+    fn ai_terminal_render_context(
+        &self,
+    ) -> Option<(
+        crate::ai::protocols::openai::terminal::AiClientStreamDialect,
+        crate::response::terminal::FinalResponseEligibility,
+    )> {
+        let state = self.ctx.ai_state()?;
+        Some((state.client_stream_dialect?, state.final_response_eligibility?))
+    }
+
+    fn disable_semantic_guard(&mut self) {
+        if !self.ctx.response_body_processing_started {
+            if let Some(state) = self.ctx.ai_state_mut() {
+                state.semantic_guard_claimed = false;
+                state.canonical_record_batch = None;
+                state.semantic_processor = None;
+                if state
+                    .response_head_hold_claim
+                    .is_some_and(|claim| claim.owner == crate::ctx::ResponseHeadHoldOwner::Guardrail)
+                {
+                    state.response_head_hold_claim = None;
+                }
+            }
+        }
+    }
+
+    fn install_semantic_response_processor(
+        &mut self,
+        processor: Box<dyn crate::plugins::runtime::traits::StreamingResponseProcessor>,
+    ) -> bool {
+        if let Some(plan) = &self.ctx.grpc_transcoding {
+            plan.reject_mutation();
+            return false;
+        }
+        if self.ctx.response_processors_frozen()
+            || self
+                .ctx
+                .ai_state()
+                .is_some_and(|state| state.semantic_processor.is_some())
+        {
+            return false;
+        }
+        let state = self.ctx.ensure_ai_state();
+        state.semantic_processor = Some(processor);
+        if let Some(claim) = state.response_head_hold_claim.as_mut() {
+            if claim.owner == crate::ctx::ResponseHeadHoldOwner::Guardrail {
+                claim.active = true;
+            }
+        }
+        true
+    }
+
+    fn install_attached_guardrail(
+        &mut self,
+        identity: String,
+        owner: std::sync::Arc<crate::ai::guards::semantic::AttachedGuardrail>,
+        head_limits: Option<pingora_proxy::ResponseHeadHoldLimits>,
+    ) -> bool {
+        if let Some(plan) = &self.ctx.grpc_transcoding {
+            plan.reject_mutation();
+            return false;
+        }
+        if self.ctx.ai_state().is_some_and(|state| {
+            state.attached_guardrail.is_some()
+                || state.semantic_guard_claimed
+                || (head_limits.is_some() && state.response_head_hold_claim.is_some())
+        }) {
+            return false;
+        }
+        let state = self.ctx.ensure_ai_state();
+        state.attached_guardrail = Some((identity, owner));
+        state.semantic_guard_claimed = true;
+        if let Some(limits) = head_limits {
+            state.response_head_hold_claim = Some(crate::ctx::ResponseHeadHoldClaim {
+                owner: crate::ctx::ResponseHeadHoldOwner::Guardrail,
+                limits,
+                active: false,
+            });
+        }
+        self.ctx.reserve_response_framing();
+        true
+    }
+
+    fn attached_guardrail(
+        &self,
+        identity: &str,
+    ) -> Option<std::sync::Arc<crate::ai::guards::semantic::AttachedGuardrail>> {
+        self.ctx
+            .ai_state()?
+            .attached_guardrail
+            .as_ref()
+            .filter(|(installed, _)| installed == identity)
+            .map(|(_, owner)| std::sync::Arc::clone(owner))
     }
 }

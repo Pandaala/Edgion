@@ -133,7 +133,7 @@ impl AiGuard {
         // Latch even here: a backendRef-scoped guard is re-entered on every
         // upstream attempt, and repeating a failed evaluator call would
         // multiply off-box egress under retry.
-        session.record_ai_guard_decision(self.identity.clone(), None);
+        session.ai().record_ai_guard_decision(self.identity.clone(), None);
         if self.fail_open {
             PluginRunningResult::GoodNext
         } else {
@@ -332,7 +332,7 @@ impl RequestFilter for AiGuard {
         let settled = session.ctx().request_body.generation();
         {
             let identity = self.identity.clone();
-            session.record_ai_guard_decision(identity, settled);
+            session.ai().record_ai_guard_decision(identity, settled);
         }
 
         match outcome {

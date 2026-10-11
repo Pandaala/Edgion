@@ -959,8 +959,12 @@ async fn raw_encoding_survives_anthropic_header_replacement_and_fixed_error_body
     let mut body = Some(Bytes::from_static(b"encoded upstream bytes"));
     let mut sink = ResponseBodySink::new();
     let mut session = MockPluginSession::new();
+    let mut ai = crate::plugins::runtime::traits::ai_session::MockAiSessionCapability::new();
     session.expect_record_error().return_const(());
-    session.expect_semantic_guard_active().return_const(false);
+    ai.expect_semantic_guard_active().return_const(false);
+    session
+        .expect_ai()
+        .return_var(Box::new(ai) as Box<dyn crate::plugins::runtime::traits::AiSessionCapability>);
     composite
         .on_chunk(
             &mut body,

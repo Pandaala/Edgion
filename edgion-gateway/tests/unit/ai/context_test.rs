@@ -81,9 +81,14 @@ fn ai_baseline_captures_once_and_clears_attempt_local_deferred_headers() {
 
 #[test]
 fn ordinary_context_size_stays_within_budget() {
+    // The audited 64-bit layout includes immutable body declaration, storage
+    // policy, transcoder ownership and aligned hot flags. See the context
+    // layout ledger in skills/04-review/cpu-memory/intentional-design/.
+    let budget = if cfg!(target_pointer_width = "64") { 1304 } else { 1280 };
+    let actual = std::mem::size_of::<EdgionHttpContext>();
     assert!(
-        std::mem::size_of::<EdgionHttpContext>() <= 1280,
-        "EdgionHttpContext grew beyond the ordinary-request hot-path size budget"
+        actual <= budget,
+        "EdgionHttpContext size {actual} exceeds the audited hot-path budget {budget}"
     );
 }
 
@@ -113,4 +118,15 @@ fn client_api_capture_is_first_writer_and_survives_a_rejected_plan() {
     assert_eq!(body["type"], "error");
     assert_eq!(body["error"]["type"], "overloaded_error");
     assert!(ctx.ai_state().unwrap().request.is_none());
+}
+
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn inline_request_body_policy_stays_within_audited_layout() {
+    let actual = std::mem::size_of::<crate::request_body::ResolvedRequestBodyConfig>();
+    // Keep the logical body cap and independently resolved storage cap inline.
+    assert!(
+        actual <= 48,
+        "ResolvedRequestBodyConfig size {actual} exceeds the audited budget 48"
+    );
 }

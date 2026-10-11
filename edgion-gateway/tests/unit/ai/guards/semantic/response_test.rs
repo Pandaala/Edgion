@@ -53,11 +53,12 @@ fn semantic_record(text: &str) -> WindowRecord {
 
 fn mock_request_session() -> MockPluginSession {
     let mut session = MockPluginSession::new();
+    let mut ai = crate::plugins::runtime::traits::ai_session::MockAiSessionCapability::new();
     session.expect_get_method().return_const("GET".to_string());
     session.expect_get_request_path().return_const("/".to_string());
     session.expect_try_claim_response_terminal().return_const(true);
     session.expect_mark_response_terminal_emission().return_const(());
-    session.expect_ai_terminal_render_context().return_const(Some((
+    ai.expect_ai_terminal_render_context().return_const(Some((
         crate::ai::protocols::openai::terminal::AiClientStreamDialect::OpenAiCompatibleSse,
         crate::response::terminal::FinalResponseEligibility {
             method_allows_body: true,
@@ -65,6 +66,9 @@ fn mock_request_session() -> MockPluginSession {
             stream_kind: ResponseStreamKind::Sse,
         },
     )));
+    session
+        .expect_ai()
+        .return_var(Box::new(ai) as Box<dyn crate::plugins::runtime::traits::AiSessionCapability>);
     session
 }
 
@@ -308,7 +312,11 @@ async fn non_sse_and_missing_eos_source_fail_open_byte_identically() {
     let mut chunk = Some(tail.clone());
     let mut sink = ResponseBodySink::new();
     let mut session = MockPluginSession::new();
-    session.expect_take_canonical_records().once().return_once(|| None);
+    let mut ai = crate::plugins::runtime::traits::ai_session::MockAiSessionCapability::new();
+    ai.expect_take_canonical_records().once().return_once(|| None);
+    session
+        .expect_ai()
+        .return_var(Box::new(ai) as Box<dyn crate::plugins::runtime::traits::AiSessionCapability>);
     missing_eos
         .on_chunk(&mut chunk, true, ResponseStreamKind::Sse, &mut sink, &mut session)
         .await;

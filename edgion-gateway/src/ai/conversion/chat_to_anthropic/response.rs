@@ -795,7 +795,7 @@ impl StreamingResponseProcessor for AnthropicResponseProcessor {
             return;
         }
         self.pending_output_chars = 0;
-        self.semantic_records = (session.semantic_guard_active() && matches!(self.mode, BodyMode::Streaming))
+        self.semantic_records = (session.ai().semantic_guard_active() && matches!(self.mode, BodyMode::Streaming))
             .then(CanonicalRecordBatch::new);
         match self.mode {
             BodyMode::AwaitingHeader => self.fail_non_streaming(chunk, session, RESPONSE_TRANSLATION_FAILED),
@@ -854,7 +854,7 @@ impl StreamingResponseProcessor for AnthropicResponseProcessor {
             // Publish an empty active batch at EOS as an explicit semantic
             // source boundary for a window retained by an earlier callback.
             if (!batch.is_empty() || end_of_stream)
-                && session.publish_canonical_records(batch).is_err()
+                && session.ai().publish_canonical_records(batch).is_err()
                 && session
                     .try_claim_response_terminal(crate::response::terminal::ResponseTerminalCause::ProcessorFailure)
             {

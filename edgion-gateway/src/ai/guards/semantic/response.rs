@@ -429,6 +429,7 @@ impl GuardrailResponseProcessor {
             return;
         }
         let emission = session
+            .ai()
             .ai_terminal_render_context()
             .map_or(TerminalEmission::NoEvent, |(dialect, eligibility)| {
                 emit_guardrail_rejection(Some(dialect), Some(eligibility), sink)
@@ -788,7 +789,7 @@ impl StreamingResponseProcessor for GuardrailResponseProcessor {
             *chunk = (!output.is_empty()).then(|| output.freeze());
             return;
         }
-        let Some(batch) = session.take_canonical_records() else {
+        let Some(batch) = session.ai().take_canonical_records() else {
             // A split event legitimately produces no record until a later
             // callback. The canonical source already owns and cleared bytes.
             if end_of_stream {

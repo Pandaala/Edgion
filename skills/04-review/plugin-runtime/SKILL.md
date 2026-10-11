@@ -11,6 +11,8 @@ before applying a decision to current code.
 
 ## Intentional design
 
+- [AI session capability](intentional-design/ai-session-capability.md)
+
 - [Selected-WAF session capability](intentional-design/selected-waf-session-capability.md)
 
 - [EdgionPlugins last-known-good is scoped by logical resource key](intentional-design/edgionplugins-key-scoped-last-known-good.md)

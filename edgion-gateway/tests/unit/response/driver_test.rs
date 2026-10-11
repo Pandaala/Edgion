@@ -149,7 +149,11 @@ async fn cancelled_unary_callback_releases_its_branch_promptly() {
         let mut chunk = Some(bytes::Bytes::from_static(b"{\"partial\":"));
         let mut sink = pingora_proxy::ResponseBodySink::new();
         let mut session = MockPluginSession::new();
-        session.expect_semantic_guard_active().return_const(false);
+        let mut ai = crate::plugins::runtime::traits::ai_session::MockAiSessionCapability::new();
+        ai.expect_semantic_guard_active().return_const(false);
+        session
+            .expect_ai()
+            .return_var(Box::new(ai) as Box<dyn crate::plugins::runtime::traits::AiSessionCapability>);
         lease
             .processors()
             .ai

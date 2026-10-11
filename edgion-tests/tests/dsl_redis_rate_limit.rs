@@ -49,6 +49,10 @@ impl PluginSession for ResultSession {
         panic!("unexpected session operation")
     }
 
+    fn ai(&mut self) -> &mut dyn edgion_gateway::plugins::runtime::traits::AiSessionCapability {
+        panic!("unexpected AI access in Redis ResultSession")
+    }
+
     fn request_uri(&self) -> &http::Uri {
         panic!("unexpected session operation")
     }

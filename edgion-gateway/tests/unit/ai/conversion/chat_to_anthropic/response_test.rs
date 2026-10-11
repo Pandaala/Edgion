@@ -32,7 +32,11 @@ use crate::plugins::runtime::traits::session::MockPluginSession;
 
 fn mock_session() -> MockPluginSession {
     let mut session = MockPluginSession::new();
-    session.expect_semantic_guard_active().return_const(false);
+    let mut ai = crate::plugins::runtime::traits::ai_session::MockAiSessionCapability::new();
+    ai.expect_semantic_guard_active().return_const(false);
+    session
+        .expect_ai()
+        .return_var(Box::new(ai) as Box<dyn crate::plugins::runtime::traits::AiSessionCapability>);
     session.expect_try_claim_response_terminal().return_const(true);
     session.expect_mark_response_terminal_emission().return_const(());
     session

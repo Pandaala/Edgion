@@ -838,7 +838,9 @@ async fn disabling_guard_preserves_another_owner_and_pending_unary_possibility()
             limits,
             active: false,
         });
-        PingoraSessionAdapter::new(&mut session, &mut ctx).disable_semantic_guard();
+        PingoraSessionAdapter::new(&mut session, &mut ctx)
+            .ai()
+            .disable_semantic_guard();
         assert!(ctx.ai_state().unwrap().unary_possible);
         assert!(std::sync::Arc::ptr_eq(
             ctx.ai_state().unwrap().unary_owner.as_ref().unwrap(),
@@ -888,4 +890,195 @@ async fn inspection_window_skips_only_proven_tail_and_keeps_complete_eof_validat
         assert_eq!(reads.load(std::sync::atomic::Ordering::Relaxed), expected_reads);
         assert!(consumer.bytes.len() as u64 <= window);
     }
+}
+
+async fn ai_capability_session() -> Session {
+    use tokio::io::AsyncWriteExt;
+    let (mut client, server) = tokio::io::duplex(1024);
+    client.write_all(b"GET / HTTP/1.1\r\nHost: test\r\n\r\n").await.unwrap();
+    let mut session = Session::new_h1(Box::new(server));
+    session.read_request().await.unwrap();
+    session
+}
+
+fn ai_capability_batch(raw: Bytes) -> crate::ai::protocols::openai::canonical_sse::CanonicalRecordBatch {
+    let mut batch = crate::ai::protocols::openai::canonical_sse::CanonicalRecordBatch::new();
+    batch.push(crate::sse::window::WindowRecord::raw(vec![raw])).unwrap();
+    batch
+}
+
+#[tokio::test]
+async fn ai_capability_absent_reads_and_accessor_do_not_allocate() {
+    let mut session = ai_capability_session().await;
+    let mut ctx = EdgionHttpContext::new();
+    let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+    let ((), allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+        assert!(!adapter.ai().semantic_guard_active());
+        assert!(adapter.ai().ai_terminal_render_context().is_none());
+        assert!(adapter.ai().attached_guardrail("missing").is_none());
+        assert!(adapter.ai().take_canonical_records().is_none());
+        adapter.ai().disable_semantic_guard();
+    });
+    assert!(ctx.ai_state().is_none());
+    assert_eq!(allocations.calls, 0);
+}
+
+#[tokio::test]
+async fn ai_capability_first_writers_and_guard_generation_remain_request_owned() {
+    use crate::ai::{AiPlanError, AiProviderLabel, AiUsageShared};
+    use edgion_resources::resources::edgion_plugins::AiApi;
+    let mut session = ai_capability_session().await;
+    let mut ctx = EdgionHttpContext::new();
+    let context = |model: &str| AiRequestContext {
+        provider: AiProviderLabel::OpenAi,
+        model: model.to_owned(),
+        pricing: None,
+        requested_streaming: false,
+        usage: Arc::new(AiUsageShared::default()),
+        quota: None,
+        quota_status: None,
+    };
+    let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+    assert!(adapter.ai().capture_ai_client_api(AiApi::OpenaiChat));
+    assert!(!adapter.ai().capture_ai_client_api(AiApi::AnthropicMessages));
+    assert!(adapter.ai().set_ai_request_context(context("first")));
+    assert!(!adapter.ai().set_ai_request_context(context("second")));
+    assert!(adapter
+        .ai()
+        .set_ai_attempt_plan(AiAttemptPlan::Rejected(AiPlanError::InvalidBackend)));
+    assert!(!adapter
+        .ai()
+        .set_ai_attempt_plan(AiAttemptPlan::Rejected(AiPlanError::InvalidRouteConfiguration)));
+    adapter.ai().record_ai_guard_decision("guard".to_owned(), Some(7));
+    adapter.ai().record_ai_guard_decision("guard".to_owned(), None);
+    adapter.ai().record_ai_guard_decision("other".to_owned(), Some(8));
+    let state = ctx.ai_state().unwrap();
+    assert_eq!(state.client_api, Some(AiApi::OpenaiChat));
+    assert_eq!(state.request.as_ref().unwrap().model, "first");
+    assert!(matches!(
+        state.attempt_plan,
+        Some(AiAttemptPlan::Rejected(AiPlanError::InvalidBackend))
+    ));
+    assert_eq!(state.guard_decided, ["guard", "other"]);
+    assert_eq!(state.guard_body_generation, Some(8));
+}
+
+#[tokio::test]
+async fn ai_capability_returns_original_rejected_batch_and_preserves_resident() {
+    let mut session = ai_capability_session().await;
+    let mut ctx = EdgionHttpContext::new();
+    let offered = Bytes::from(vec![b'r'; 3]);
+    let pointer = offered.as_ptr();
+    let returned = PingoraSessionAdapter::new(&mut session, &mut ctx)
+        .ai()
+        .publish_canonical_records(ai_capability_batch(offered))
+        .unwrap_err();
+    assert!(ctx.ai_state().is_some());
+    let raw = returned.into_records().pop().unwrap().into_raw_slices();
+    assert_eq!(raw[0].as_ptr(), pointer);
+    assert_eq!(raw[0].as_ref(), b"rrr");
+    ctx.ensure_ai_state().semantic_guard_claimed = true;
+    let accepted = Bytes::from(vec![b'a'; 3]);
+    let accepted_pointer = accepted.as_ptr();
+    let rejected = Bytes::from(vec![b'b'; 4]);
+    let rejected_pointer = rejected.as_ptr();
+    let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+    assert!(adapter
+        .ai()
+        .publish_canonical_records(ai_capability_batch(accepted))
+        .is_ok());
+    let returned = adapter
+        .ai()
+        .publish_canonical_records(ai_capability_batch(rejected))
+        .unwrap_err();
+    let raw = returned.into_records().pop().unwrap().into_raw_slices();
+    assert_eq!(raw[0].as_ptr(), rejected_pointer);
+    assert_eq!(raw[0].as_ref(), b"bbbb");
+    let raw = adapter
+        .ai()
+        .take_canonical_records()
+        .unwrap()
+        .into_records()
+        .pop()
+        .unwrap()
+        .into_raw_slices();
+    assert_eq!(raw[0].as_ptr(), accepted_pointer);
+    assert_eq!(raw[0].as_ref(), b"aaa");
+    assert!(adapter.ai().take_canonical_records().is_none());
+}
+
+struct AiCapabilityProcessor(Arc<std::sync::atomic::AtomicUsize>);
+impl Drop for AiCapabilityProcessor {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+#[async_trait]
+impl crate::plugins::runtime::traits::StreamingResponseProcessor for AiCapabilityProcessor {
+    async fn on_chunk(
+        &mut self,
+        _chunk: &mut Option<Bytes>,
+        _eos: bool,
+        _kind: crate::ctx::ResponseStreamKind,
+        _sink: &mut pingora_proxy::ResponseBodySink,
+        _session: &mut dyn PluginSession,
+    ) {
+    }
+}
+
+#[tokio::test]
+async fn ai_capability_guard_claim_processor_rejection_and_disable_keep_owners() {
+    use crate::ai::guards::semantic::AttachedGuardrail;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut session = ai_capability_session().await;
+    let mut ctx = EdgionHttpContext::new();
+    let owner = Arc::new(AttachedGuardrail::new());
+    let limits = pingora_proxy::ResponseHeadHoldLimits::new(1, 1, 1, 1, 1, 1, std::time::Duration::from_secs(1));
+    let accepted_drops = Arc::new(AtomicUsize::new(0));
+    let rejected_drops = Arc::new(AtomicUsize::new(0));
+    let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+    assert!(adapter
+        .ai()
+        .install_attached_guardrail("first".to_owned(), Arc::clone(&owner), Some(limits)));
+    assert!(!adapter
+        .ai()
+        .install_attached_guardrail("second".to_owned(), Arc::new(AttachedGuardrail::new()), None));
+    assert!(Arc::ptr_eq(&adapter.ai().attached_guardrail("first").unwrap(), &owner));
+    assert!(adapter.ai().attached_guardrail("second").is_none());
+    assert!(adapter
+        .ai()
+        .install_semantic_response_processor(Box::new(AiCapabilityProcessor(Arc::clone(&accepted_drops)))));
+    assert!(!adapter
+        .ai()
+        .install_semantic_response_processor(Box::new(AiCapabilityProcessor(Arc::clone(&rejected_drops)))));
+    assert_eq!(accepted_drops.load(Ordering::Relaxed), 0);
+    assert_eq!(rejected_drops.load(Ordering::Relaxed), 1);
+    assert!(adapter.ctx.ai_state().unwrap().response_head_hold_claim.unwrap().active);
+    adapter.ctx.response_body_processing_started = true;
+    adapter.ai().disable_semantic_guard();
+    assert!(adapter.ai().semantic_guard_active());
+    assert!(!adapter
+        .ai()
+        .install_semantic_response_processor(Box::new(AiCapabilityProcessor(Arc::clone(&rejected_drops)))));
+    assert_eq!(rejected_drops.load(Ordering::Relaxed), 2);
+    adapter.ctx.response_body_processing_started = false;
+    adapter.ai().disable_semantic_guard();
+    assert!(!adapter.ai().semantic_guard_active());
+    assert!(adapter.ctx.ai_state().unwrap().response_head_hold_claim.is_none());
+    assert_eq!(accepted_drops.load(Ordering::Relaxed), 1);
+    assert!(Arc::ptr_eq(&adapter.ai().attached_guardrail("first").unwrap(), &owner));
+}
+
+#[tokio::test]
+async fn ai_capability_frozen_empty_processor_slot_rejects_without_state_allocation() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut session = ai_capability_session().await;
+    let mut ctx = EdgionHttpContext::new();
+    ctx.response_body_processing_started = true;
+    let drops = Arc::new(AtomicUsize::new(0));
+    assert!(!PingoraSessionAdapter::new(&mut session, &mut ctx)
+        .ai()
+        .install_semantic_response_processor(Box::new(AiCapabilityProcessor(Arc::clone(&drops)))));
+    assert_eq!(drops.load(Ordering::Relaxed), 1);
+    assert!(ctx.ai_state().is_none());
 }

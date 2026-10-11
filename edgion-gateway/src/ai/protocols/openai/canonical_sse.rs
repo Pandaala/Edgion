@@ -525,7 +525,7 @@ impl StreamingResponseProcessor for SemanticSseSource {
         sink: &mut ResponseBodySink,
         session: &mut dyn PluginSession,
     ) {
-        if stream_kind != ResponseStreamKind::Sse || !session.semantic_guard_active() {
+        if stream_kind != ResponseStreamKind::Sse || !session.ai().semantic_guard_active() {
             return;
         }
         let mut batch = CanonicalRecordBatch::new();
@@ -558,7 +558,7 @@ impl StreamingResponseProcessor for SemanticSseSource {
         if self.decoder.degraded() {
             batch.mark_unavailable();
         }
-        if (overflowed || session.publish_canonical_records(batch).is_err())
+        if (overflowed || session.ai().publish_canonical_records(batch).is_err())
             && session.try_claim_response_terminal(ResponseTerminalCause::ProcessorFailure)
         {
             session.mark_response_terminal_emission(TerminalEmission::NoEvent);

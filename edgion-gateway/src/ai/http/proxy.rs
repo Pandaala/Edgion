@@ -213,7 +213,7 @@ impl AiProxy {
         log: &mut PluginLog,
         error: AiPlanError,
     ) -> PluginRunningResult {
-        if session.set_ai_attempt_plan(AiAttemptPlan::Rejected(error)) {
+        if session.ai().set_ai_attempt_plan(AiAttemptPlan::Rejected(error)) {
             log.push("planned");
             PluginRunningResult::GoodNext
         } else {
@@ -266,7 +266,7 @@ impl AiProxy {
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> PluginRunningResult {
-        if !session.capture_ai_client_api(self.config.api) {
+        if !session.ai().capture_ai_client_api(self.config.api) {
             return Self::reject(session, log, "client-api-conflict", AiProxyError::BackendUnavailable);
         }
         if session.ctx().has_ai_attempt_plan() {
@@ -743,7 +743,7 @@ impl AiProxy {
                 .as_ref()
                 .is_some_and(|quota| matches!(quota.on_exceeded(), QuotaExceededAction::Reject)),
         });
-        if !session.set_ai_attempt_plan(plan) {
+        if !session.ai().set_ai_attempt_plan(plan) {
             return Self::reject(session, log, "plan-locked", AiProxyError::BackendUnavailable);
         }
         log.push("planned");

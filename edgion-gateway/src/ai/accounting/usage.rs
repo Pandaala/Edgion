@@ -1030,7 +1030,7 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
             }
             return;
         }
-        let semantic_guard_active = session.semantic_guard_active() && stream_kind == ResponseStreamKind::Sse;
+        let semantic_guard_active = session.ai().semantic_guard_active() && stream_kind == ResponseStreamKind::Sse;
         let mut canonical_batch = None;
         if let Some(bytes) = chunk.take() {
             let original = bytes.clone();
@@ -1092,7 +1092,7 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
                 });
                 // An empty batch is the explicit EOS signal that makes the
                 // guard resolve a below-threshold window retained earlier.
-                if (finish_overflowed || session.publish_canonical_records(batch).is_err())
+                if (finish_overflowed || session.ai().publish_canonical_records(batch).is_err())
                     && session.try_claim_response_terminal(ResponseTerminalCause::ProcessorFailure)
                 {
                     session.mark_response_terminal_emission(TerminalEmission::NoEvent);
@@ -1110,7 +1110,7 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
             return;
         }
         if let Some(batch) = canonical_batch {
-            if session.publish_canonical_records(batch).is_err()
+            if session.ai().publish_canonical_records(batch).is_err()
                 && session.try_claim_response_terminal(ResponseTerminalCause::ProcessorFailure)
             {
                 session.mark_response_terminal_emission(TerminalEmission::NoEvent);
@@ -1208,6 +1208,7 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
         // established current-chunk-before-terminal-event wire contract.
         if sink.is_terminated() && semantic_guard_active && chunk.is_none() {
             *chunk = session
+                .ai()
                 .take_canonical_records()
                 .and_then(|batch| batch.into_raw_bytes().ok());
         }

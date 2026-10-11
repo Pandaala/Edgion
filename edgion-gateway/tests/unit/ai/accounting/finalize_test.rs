@@ -30,7 +30,11 @@ async fn observe_response(ctx: &EdgionHttpContext, body: &[u8], eos: bool, kind:
     let mut processor = UsageExtractionProcessor::new(shared);
     let mut chunk = Some(Bytes::copy_from_slice(body));
     let mut session = MockPluginSession::new();
-    session.expect_semantic_guard_active().return_const(false);
+    let mut ai = crate::plugins::runtime::traits::ai_session::MockAiSessionCapability::new();
+    ai.expect_semantic_guard_active().return_const(false);
+    session
+        .expect_ai()
+        .return_var(Box::new(ai) as Box<dyn crate::plugins::runtime::traits::AiSessionCapability>);
     session.expect_record_error().return_const(());
     let mut sink = pingora_proxy::ResponseBodySink::new();
     processor.on_chunk(&mut chunk, eos, kind, &mut sink, &mut session).await;
