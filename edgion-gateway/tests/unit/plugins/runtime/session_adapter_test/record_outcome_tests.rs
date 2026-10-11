@@ -1028,7 +1028,7 @@ async fn backend_mirror_permission_keeps_other_body_capabilities_frozen() {
         Err(BodyReadError::NotBuffered)
     ));
     assert!(!adapter.install_request_body_stream_handler(Box::new(NoopStreamHandler)));
-    assert!(!adapter.enable_waf_request_body_streaming(&Arc::new(()), 1024));
+    assert!(!adapter.waf().enable_request_body_streaming(&Arc::new(()), 1024));
     adapter.replace_plugin_entry_identity(crate::ctx::CurrentPluginEntryIdentity::new("AiGuard", Some("entry")));
     assert!(!adapter.install_request_body_observer(
         Box::new(|| panic!("a frozen observer factory must not run")),
@@ -2369,4 +2369,117 @@ async fn streamed_handler_refuses_uncached_transport_preread() {
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     assert!(!adapter.install_request_body_stream_handler(Box::new(NoopStreamHandler)));
     assert!(!ctx.request_body_handlers_selected());
+}
+
+#[tokio::test]
+async fn waf_capability_preserves_election_stage_and_freeze_before_native_rejection() {
+    use crate::ctx::{WafLogMode, WafLogSource, WafPhase, WafPhaseClaim, WafSelection};
+
+    let mut session = test_session_with_body(b"12345678").await;
+    let mut ctx = EdgionHttpContext::default();
+    ctx.request_info.body_declared = Some(true);
+    let owner = Arc::new(());
+    {
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        assert_eq!(
+            adapter.waf().claim_phase(&owner, WafPhase::Request),
+            WafPhaseClaim::Pending
+        );
+        assert_eq!(
+            adapter.waf().install_body_limit(&owner, 4),
+            Err(BodyReadError::NotBuffered)
+        );
+    }
+    assert!(ctx.select_waf(Some(WafSelection::new(
+        Arc::clone(&owner),
+        WafLogSource::Route,
+        0,
+        WafLogMode::On,
+    ))));
+    ctx.request_body_config.max_body_size_bytes = 32;
+    {
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        assert_eq!(
+            adapter.waf().install_body_limit(&owner, 4),
+            Err(BodyReadError::NotBuffered)
+        );
+        assert!(adapter.ctx.waf_body_hard_limit().is_none());
+    }
+    ctx.request_info.in_request_body_stage = true;
+    // Capture and mutate through the canonical adapter first so this valid
+    // snapshot below the cap can distinguish a later mutation freeze.
+    let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+    assert_eq!(adapter.ensure_request_body(None).await, Ok(8));
+    assert_eq!(adapter.overwrite_request_body(Bytes::from_static(b"ok")).await, Ok(()));
+    assert_eq!(
+        adapter.waf().install_body_limit(&Arc::new(()), 4),
+        Err(BodyReadError::NotBuffered)
+    );
+    assert!(adapter.ctx.waf_body_hard_limit().is_none());
+    assert_eq!(
+        adapter.waf().install_body_limit(&owner, 4),
+        Err(BodyReadError::BufferLimitExceeded { limit: 4 })
+    );
+    assert_eq!(adapter.ctx.request_body_hard_limit(), 4);
+    assert_eq!(
+        adapter.ctx.overwrite_request_body(Bytes::from_static(b"new")),
+        Err(BodyReadError::NotBuffered)
+    );
+    assert!(adapter.waf().take_transaction(&owner).is_none());
+    assert_eq!(adapter.ctx.request_body_hard_limit(), 4);
+}
+
+#[tokio::test]
+async fn waf_capability_rejected_install_keeps_resident_transaction() {
+    use crate::ctx::{WafLogMode, WafLogSource, WafSelection};
+    use edgion_waf::seclang::{EvaluationMode, RequestHead, RuleEngineMode, RuntimeLimits, Transaction};
+
+    let transaction = |status| {
+        let config =
+            crate::plugins::http::waf::fixture::config(&format!("SecAction \"id:1,phase:1,deny,status:{status}\"\n"));
+        let generation = Arc::new(config.compile_generation().expect("test WAF compiles"));
+        Transaction::new_shared_with_modes(
+            generation,
+            RequestHead::new(
+                b"GET / HTTP/1.1",
+                b"GET",
+                b"/",
+                b"/",
+                b"HTTP/1.1",
+                b"192.0.2.1",
+                b"request-1",
+                &[],
+            ),
+            RuntimeLimits::default(),
+            EvaluationMode::Accelerated,
+            RuleEngineMode::On,
+        )
+        .expect("test transaction is valid")
+    };
+    let mut session = test_session_with_body(b"").await;
+    let mut ctx = EdgionHttpContext::default();
+    let owner = Arc::new(());
+    assert!(ctx.select_waf(Some(WafSelection::new(
+        Arc::clone(&owner),
+        WafLogSource::Route,
+        0,
+        WafLogMode::On,
+    ))));
+    let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+    assert!(adapter.waf().install_transaction(Arc::clone(&owner), transaction(403)));
+    assert!(!adapter.waf().install_transaction(Arc::clone(&owner), transaction(409)));
+    assert!(adapter.waf().take_transaction(&Arc::new(())).is_none());
+    let mut resident = adapter
+        .waf()
+        .take_transaction(&owner)
+        .expect("resident remains installed");
+    assert_eq!(
+        resident
+            .execute_request_headers()
+            .unwrap()
+            .intervention()
+            .unwrap()
+            .status(),
+        403
+    );
 }

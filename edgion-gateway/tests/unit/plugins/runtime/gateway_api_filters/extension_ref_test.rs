@@ -1,6 +1,7 @@
 use super::*;
 use crate::plugins::http::compile_plugins;
 use crate::plugins::runtime::traits::session::MockPluginSession;
+use crate::plugins::runtime::traits::waf_session::{MockWafSessionCapability, WafSessionCapability};
 use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 use edgion_resources::resources::edgion_plugins::{EdgionPlugins, EdgionPluginsSpec, RequestFilterEntry};
 use edgion_resources::resources::http_route::HTTPHeaderFilter;
@@ -129,6 +130,7 @@ async fn request_extension_suppresses_inner_waf_plugin_log() {
     let inner_for_resolve = Arc::clone(&inner);
 
     let mut session = MockPluginSession::new();
+    let mut waf = MockWafSessionCapability::new();
     session.expect_ctx().return_const(crate::EdgionHttpContext::default());
     session
         .expect_resolved_route_ext_ref()
@@ -145,8 +147,7 @@ async fn request_extension_suppresses_inner_waf_plugin_log() {
         .times(1)
         .returning(|_| None);
     session.expect_restore_plugin_entry_identity().times(1).return_const(());
-    session
-        .expect_claim_waf_phase()
+    waf.expect_claim_phase()
         .returning(|_, _| crate::ctx::WafPhaseClaim::Execute);
     session.expect_request_header_map().return_const(http::HeaderMap::new());
     session.expect_get_method().times(1).return_const("GET".to_string());
@@ -155,11 +156,14 @@ async fn request_extension_suppresses_inner_waf_plugin_log() {
     session.expect_get_http_protocol().return_const("HTTP/1.1".to_string());
     session.expect_remote_ip().return_const("192.0.2.1".to_string());
     session.expect_get_request_id().return_const("request-1".to_string());
-    session.expect_record_waf_phase_outcome().returning(|_, _, _, _| ());
-    session.expect_install_waf_transaction().return_once(|_, transaction| {
+    waf.expect_record_phase_outcome().returning(|_, _, _, _| ());
+    waf.expect_install_transaction().return_once(|_, transaction| {
         drop(transaction);
         true
     });
+    session
+        .expect_waf()
+        .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
     session.expect_push_to_edgion_plugins_log().times(0);
 
     let mut filter = owned_rule_extension_filter(

@@ -147,11 +147,14 @@ impl WafPlugin {
         session: &mut dyn PluginSession,
         policy: json_capture::InspectionPolicy,
     ) -> PluginRunningResult {
-        if !session.stop_waf_inspection(&self.shared.owner, policy.window, policy.storage_limit) {
+        if !session
+            .waf()
+            .stop_inspection(&self.shared.owner, policy.window, policy.storage_limit)
+        {
             return self.runtime_failure(session, WafLogPhase::RequestBody, &RuntimeError::GenerationInvariant);
         }
         if self.shared.on_inspection_limit == WafInspectionLimitAction::Reject {
-            session.record_waf_terminal_error(
+            session.waf().record_terminal_error(
                 &self.shared.owner,
                 WafLogPhase::RequestBody,
                 WafErrorCode::BodyLimit,
@@ -294,7 +297,7 @@ impl WafPlugin {
             PluginRunningResult::ErrResponse { status, .. } => *status,
             _ => 500,
         };
-        session.record_waf_terminal_error(
+        session.waf().record_terminal_error(
             &self.shared.owner,
             WafLogPhase::RequestBody,
             WafErrorCode::RequestBodyReadFailed,
@@ -310,7 +313,9 @@ impl WafPlugin {
         error: &RuntimeError,
     ) -> PluginRunningResult {
         let status = Self::runtime_error_status(error);
-        session.record_waf_terminal_error(&self.shared.owner, phase, Self::runtime_error_code(error), status);
+        session
+            .waf()
+            .record_terminal_error(&self.shared.owner, phase, Self::runtime_error_code(error), status);
         PluginRunningResult::ErrResponse { status, body: None }
     }
 
@@ -321,7 +326,9 @@ impl WafPlugin {
         execution_us: u64,
         outcome: &PhaseOutcome,
     ) -> Option<(u64, u16)> {
-        session.record_waf_phase_outcome(&self.shared.owner, phase, execution_us, outcome);
+        session
+            .waf()
+            .record_phase_outcome(&self.shared.owner, phase, execution_us, outcome);
         outcome
             .intervention()
             .map(|intervention| (intervention.rule_id(), intervention.status()))
@@ -340,10 +347,15 @@ impl WafPlugin {
         transaction: Transaction<'static>,
         phase: WafLogPhase,
     ) -> PluginRunningResult {
-        if session.install_waf_transaction(Arc::clone(&self.shared.owner), transaction) {
+        if session
+            .waf()
+            .install_transaction(Arc::clone(&self.shared.owner), transaction)
+        {
             PluginRunningResult::GoodNext
         } else {
-            session.record_waf_terminal_error(&self.shared.owner, phase, WafErrorCode::TransactionOwnerConflict, 500);
+            session
+                .waf()
+                .record_terminal_error(&self.shared.owner, phase, WafErrorCode::TransactionOwnerConflict, 500);
             PluginRunningResult::ErrResponse {
                 status: 500,
                 body: None,
@@ -357,11 +369,16 @@ impl WafPlugin {
         phase: WafPhase,
         log_phase: WafLogPhase,
     ) -> Option<PluginRunningResult> {
-        match session.claim_waf_phase(&self.shared.owner, phase) {
+        match session.waf().claim_phase(&self.shared.owner, phase) {
             WafPhaseClaim::Execute => None,
             WafPhaseClaim::Skip => Some(PluginRunningResult::GoodNext),
             WafPhaseClaim::Pending => {
-                session.record_waf_terminal_error(&self.shared.owner, log_phase, WafErrorCode::WinnerNotSelected, 500);
+                session.waf().record_terminal_error(
+                    &self.shared.owner,
+                    log_phase,
+                    WafErrorCode::WinnerNotSelected,
+                    500,
+                );
                 Some(PluginRunningResult::ErrResponse {
                     status: 500,
                     body: None,
@@ -464,9 +481,9 @@ impl RequestFilter for WafPlugin {
             _ => None,
         };
         if let Some(limit) = format_limit {
-            if let Err(error) = session.install_waf_body_limit(&self.shared.owner, limit) {
+            if let Err(error) = session.waf().install_body_limit(&self.shared.owner, limit) {
                 if matches!(error, BodyReadError::BufferLimitExceeded { .. }) {
-                    session.record_waf_terminal_error(
+                    session.waf().record_terminal_error(
                         &self.shared.owner,
                         WafLogPhase::RequestBody,
                         WafErrorCode::BodyLimit,
@@ -698,8 +715,8 @@ impl UpstreamResponseFilter for WafPlugin {
         if let Some(result) = self.claim_phase(session, WafPhase::ResponseHeaders, WafLogPhase::ResponseHeaders) {
             return result;
         }
-        let Some(mut transaction) = session.take_waf_transaction(&self.shared.owner) else {
-            session.record_waf_terminal_error(
+        let Some(mut transaction) = session.waf().take_transaction(&self.shared.owner) else {
+            session.waf().record_terminal_error(
                 &self.shared.owner,
                 WafLogPhase::ResponseHeaders,
                 WafErrorCode::TransactionMissing,
@@ -754,8 +771,8 @@ impl UpstreamResponse for WafPlugin {
         if let Some(result) = self.claim_phase(session, WafPhase::ResponseComplete, WafLogPhase::ResponseBody) {
             return result;
         }
-        let Some(mut transaction) = session.take_waf_transaction(&self.shared.owner) else {
-            session.record_waf_terminal_error(
+        let Some(mut transaction) = session.waf().take_transaction(&self.shared.owner) else {
+            session.waf().record_terminal_error(
                 &self.shared.owner,
                 WafLogPhase::ResponseBody,
                 WafErrorCode::TransactionMissing,

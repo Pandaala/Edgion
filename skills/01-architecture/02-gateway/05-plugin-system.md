@@ -79,6 +79,32 @@ registration/mutation conflicts are checked through replacement consumption, and
 one final PluginLog outcome is added at universal logging. See the
 [transcoder regression boundary](../../04-review/h2-grpc/regression-guards/grpc-json-transcoder-admission-and-outcomes.md).
 
+### Selected-WAF session capability
+
+`PluginSession::waf()` returns a short mutable borrow of
+`WafSessionCapability`, defined in `runtime/traits/waf_session.rs`. This
+integration contract contains selected transaction transfer, phase claims,
+bounded summary writes, inspection stops and native body admission. The real
+`PingoraSessionAdapter` implements it directly and returns itself. The sole
+request state owner remains `ctx::WafRequestContext`; obtaining the capability
+creates no state wrapper or request allocation.
+
+Release the capability borrow after each operation, before another session call
+or body-capture await. Transaction installation consumes its offer on success
+and rejection: rejection drops the offered transaction, retains any resident
+transaction, and the WAF caller returns its existing terminal conflict failure.
+Body-limit installation still freezes mutation before checking native/cached
+lengths, and admission outlives transaction take or inspection stop. Election,
+phase-once execution, pinned generations, BodyStorage and access-log ownership
+remain unchanged.
+
+A new WAF operation extends this trait, its adapter implementation and feature
+consumers/tests; it does not extend the common session operation list or common
+mock. Capability methods have no production defaults. Isolated tests explicitly
+configure a feature mock, then attach it through the common accessor. See the
+[design decision](../../04-review/plugin-runtime/intentional-design/selected-waf-session-capability.md)
+for alternatives, transfer contracts and verification limits.
+
 ### Streamed request admission
 
 Installed request-body handlers own a monotonic source bit in the optional
@@ -480,7 +506,8 @@ edgion-gateway/src/plugins/
     │   ├── upstream_response_filter.rs
     │   ├── upstream_response_body_filter.rs
     │   ├── upstream_response.rs
-    │   └── session.rs             # PluginSession trait (unified session abstraction)
+    │   ├── session.rs             # PluginSession trait (unified session abstraction)
+    │   └── waf_session.rs         # Selected-WAF session integration capability
     └── gateway_api_filters/       # Gateway API standard filter implementations
         ├── request_header_modifier.rs
         ├── response_header_modifier.rs

@@ -45,6 +45,10 @@ struct ResultSession {
 }
 #[async_trait]
 impl PluginSession for ResultSession {
+    fn waf(&mut self) -> &mut dyn edgion_gateway::plugins::runtime::traits::WafSessionCapability {
+        panic!("unexpected session operation")
+    }
+
     fn request_uri(&self) -> &http::Uri {
         panic!("unexpected session operation")
     }

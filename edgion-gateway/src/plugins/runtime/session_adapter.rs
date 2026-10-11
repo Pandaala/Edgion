@@ -15,7 +15,7 @@ use super::traits::session::{
     empty_response_header_map, BodyReadError, BodyReadResult, RequestBodyChunkConsumer, RequestBodyInspectionCapture,
     RequestBodySnapshotReader, RouteProto,
 };
-use super::traits::{DyeOutcome, PluginSession, PluginSessionError, PluginSessionResult};
+use super::traits::{DyeOutcome, PluginSession, PluginSessionError, PluginSessionResult, WafSessionCapability};
 use crate::ai::{AiAttemptPlan, AiRequestContext};
 use crate::link_sys::template::evaluate_template;
 use crate::request_body::{BodyOperationError, BodyScanResult};
@@ -1599,84 +1599,8 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx
     }
 
-    fn stop_waf_inspection(&mut self, owner: &Arc<()>, bytes: u64, storage_limit: bool) -> bool {
-        self.ctx.stop_waf_inspection(owner, bytes, storage_limit)
-    }
-
-    fn install_waf_body_limit(&mut self, owner: &Arc<()>, limit: u64) -> Result<(), BodyReadError> {
-        if !self.ctx.request_info.in_request_body_stage || !self.ctx.install_waf_body_hard_limit(owner, limit) {
-            return Err(BodyReadError::NotBuffered);
-        }
-        let cap = self.ctx.request_body_hard_limit();
-        let declared = self
-            .inner
-            .req_header()
-            .headers
-            .get(http::header::CONTENT_LENGTH)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<u64>().ok());
-        let cached = self.ctx.request_body.cached_len()?;
-        if declared.is_some_and(|len| len > cap)
-            || cached.is_some_and(|len| len > cap)
-            || self.inner.body_bytes_read() as u64 > cap
-        {
-            return Err(reject_over_limit_request_body(self.inner.as_mut(), cap));
-        }
-        Ok(())
-    }
-
-    fn install_waf_transaction(
-        &mut self,
-        owner: Arc<()>,
-        transaction: edgion_waf::seclang::Transaction<'static>,
-    ) -> bool {
-        self.ctx
-            .waf
-            .as_deref_mut()
-            .is_some_and(|waf| waf.install(owner, transaction))
-    }
-
-    fn take_waf_transaction(&mut self, owner: &Arc<()>) -> Option<edgion_waf::seclang::Transaction<'static>> {
-        self.ctx.waf.as_deref_mut()?.take(owner)
-    }
-
-    fn claim_waf_phase(&mut self, owner: &Arc<()>, phase: crate::ctx::WafPhase) -> crate::ctx::WafPhaseClaim {
-        self.ctx.claim_waf_phase(owner, phase)
-    }
-
-    fn record_waf_phase_outcome(
-        &mut self,
-        owner: &Arc<()>,
-        phase: crate::ctx::WafLogPhase,
-        execution_us: u64,
-        outcome: &edgion_waf::seclang::PhaseOutcome,
-    ) {
-        self.ctx.record_waf_phase_outcome(owner, phase, execution_us, outcome);
-    }
-
-    fn record_waf_terminal_error(
-        &mut self,
-        owner: &Arc<()>,
-        phase: crate::ctx::WafLogPhase,
-        code: crate::ctx::WafErrorCode,
-        status: u16,
-    ) {
-        self.ctx.record_waf_terminal_error(owner, phase, code, status);
-    }
-
-    fn enable_waf_request_body_streaming(&mut self, owner: &Arc<()>, body_limit: u64) -> bool {
-        if !self.ctx.request_info.in_request_body_stage {
-            return false;
-        }
-        let enabled = self
-            .ctx
-            .waf
-            .as_deref_mut()
-            .is_some_and(|waf| waf.enable_request_body_streaming(owner, body_limit));
-        if enabled {
-            self.ctx.activate_waf_request_body_streaming();
-        }
-        enabled
+    fn waf(&mut self) -> &mut dyn WafSessionCapability {
+        self
     }
 
     fn record_error(&mut self, status: edgion_resources::EdgionErrorCode) {
@@ -2587,3 +2511,81 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../tests/unit/plugins/runtime/session_adapter_test/record_outcome_tests.rs"]
 pub(crate) mod record_outcome_tests;
+
+impl WafSessionCapability for PingoraSessionAdapter<'_> {
+    fn stop_inspection(&mut self, owner: &Arc<()>, bytes: u64, storage_limit: bool) -> bool {
+        self.ctx.stop_waf_inspection(owner, bytes, storage_limit)
+    }
+
+    fn install_body_limit(&mut self, owner: &Arc<()>, limit: u64) -> Result<(), BodyReadError> {
+        if !self.ctx.request_info.in_request_body_stage || !self.ctx.install_waf_body_hard_limit(owner, limit) {
+            return Err(BodyReadError::NotBuffered);
+        }
+        let cap = self.ctx.request_body_hard_limit();
+        let declared = self
+            .inner
+            .req_header()
+            .headers
+            .get(http::header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok());
+        let cached = self.ctx.request_body.cached_len()?;
+        if declared.is_some_and(|len| len > cap)
+            || cached.is_some_and(|len| len > cap)
+            || self.inner.body_bytes_read() as u64 > cap
+        {
+            return Err(reject_over_limit_request_body(self.inner.as_mut(), cap));
+        }
+        Ok(())
+    }
+
+    fn install_transaction(&mut self, owner: Arc<()>, transaction: edgion_waf::seclang::Transaction<'static>) -> bool {
+        self.ctx
+            .waf
+            .as_deref_mut()
+            .is_some_and(|waf| waf.install(owner, transaction))
+    }
+
+    fn take_transaction(&mut self, owner: &Arc<()>) -> Option<edgion_waf::seclang::Transaction<'static>> {
+        self.ctx.waf.as_deref_mut()?.take(owner)
+    }
+
+    fn claim_phase(&mut self, owner: &Arc<()>, phase: crate::ctx::WafPhase) -> crate::ctx::WafPhaseClaim {
+        self.ctx.claim_waf_phase(owner, phase)
+    }
+
+    fn record_phase_outcome(
+        &mut self,
+        owner: &Arc<()>,
+        phase: crate::ctx::WafLogPhase,
+        execution_us: u64,
+        outcome: &edgion_waf::seclang::PhaseOutcome,
+    ) {
+        self.ctx.record_waf_phase_outcome(owner, phase, execution_us, outcome);
+    }
+
+    fn record_terminal_error(
+        &mut self,
+        owner: &Arc<()>,
+        phase: crate::ctx::WafLogPhase,
+        code: crate::ctx::WafErrorCode,
+        status: u16,
+    ) {
+        self.ctx.record_waf_terminal_error(owner, phase, code, status);
+    }
+
+    fn enable_request_body_streaming(&mut self, owner: &Arc<()>, body_limit: u64) -> bool {
+        if !self.ctx.request_info.in_request_body_stage {
+            return false;
+        }
+        let enabled = self
+            .ctx
+            .waf
+            .as_deref_mut()
+            .is_some_and(|waf| waf.enable_request_body_streaming(owner, body_limit));
+        if enabled {
+            self.ctx.activate_waf_request_body_streaming();
+        }
+        enabled
+    }
+}

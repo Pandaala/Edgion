@@ -12,6 +12,7 @@ pub mod upstream_response;
 pub mod upstream_response_body_filter;
 pub mod upstream_response_filter;
 pub mod upstream_response_trailer;
+pub mod waf_session;
 
 pub use header_ext::PluginSessionHeaderExt;
 pub use request_body_stream::{ChunkVerdict, RequestBodyStreamHandler};
@@ -22,3 +23,5 @@ pub use upstream_response::UpstreamResponse;
 pub use upstream_response_body_filter::UpstreamResponseBodyFilter;
 pub use upstream_response_filter::UpstreamResponseFilter;
 pub use upstream_response_trailer::{UpstreamResponseTrailer, UpstreamTrailerResult};
+
+pub use waf_session::WafSessionCapability;

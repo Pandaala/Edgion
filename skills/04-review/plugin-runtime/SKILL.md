@@ -11,6 +11,8 @@ before applying a decision to current code.
 
 ## Intentional design
 
+- [Selected-WAF session capability](intentional-design/selected-waf-session-capability.md)
+
 - [EdgionPlugins last-known-good is scoped by logical resource key](intentional-design/edgionplugins-key-scoped-last-known-good.md)
 - [plugin_runtime `add_from_*` Builder Duplication — Extract-Helper — DESIGN-TRADEOFF](intentional-design/add-from-builders-duplication.md)
 - [No Per-Route Override or Exclusion of Global Plugins (Envoy typed_per_filter_config) — DESIGN-TRADEOFF (accepted)](intentional-design/no-per-route-global-plugin-override-or-exclude.md)

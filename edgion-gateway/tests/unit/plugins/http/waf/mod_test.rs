@@ -5,6 +5,7 @@ use edgion_waf::seclang::Phase;
 use pingora_core::protocols::http::RequestBodyBuffer;
 
 use crate::plugins::runtime::traits::session::MockPluginSession;
+use crate::plugins::runtime::traits::waf_session::{MockWafSessionCapability, WafSessionCapability};
 use crate::EdgionHttpContext;
 
 fn plugin(rules: &str, mode: WafMode) -> WafPlugin {
@@ -41,26 +42,30 @@ fn missing_policy_ref_is_rejected_by_the_gateway_constructor() {
     );
 }
 
-fn expect_request_head(session: &mut MockPluginSession, uri: &str) {
-    expect_request_head_with_headers(session, uri, Vec::new());
+fn expect_request_head(session: &mut MockPluginSession, waf: &mut MockWafSessionCapability, uri: &str) {
+    expect_request_head_with_headers(session, waf, uri, Vec::new());
 }
 
-fn expect_request_head_with_headers(session: &mut MockPluginSession, uri: &str, headers: Vec<(Vec<u8>, Vec<u8>)>) {
-    expect_request_head_with_context(session, uri, headers, EdgionHttpContext::default());
+fn expect_request_head_with_headers(
+    session: &mut MockPluginSession,
+    waf: &mut MockWafSessionCapability,
+    uri: &str,
+    headers: Vec<(Vec<u8>, Vec<u8>)>,
+) {
+    expect_request_head_with_context(session, waf, uri, headers, EdgionHttpContext::default());
 }
 
 fn expect_request_head_with_context(
     session: &mut MockPluginSession,
+    waf: &mut MockWafSessionCapability,
     uri: &str,
     headers: Vec<(Vec<u8>, Vec<u8>)>,
     ctx: EdgionHttpContext,
 ) {
     session.expect_ctx().times(1).return_const(ctx);
-    session
-        .expect_claim_waf_phase()
-        .returning(|_, _| WafPhaseClaim::Execute);
-    session.expect_record_waf_phase_outcome().returning(|_, _, _, _| ());
-    session.expect_record_waf_terminal_error().returning(|_, _, _, _| ());
+    waf.expect_claim_phase().returning(|_, _| WafPhaseClaim::Execute);
+    waf.expect_record_phase_outcome().returning(|_, _, _, _| ());
+    waf.expect_record_terminal_error().returning(|_, _, _, _| ());
     // Serve the borrowed map the plugin now reads, built from the same raw
     // bytes so a non-UTF-8 header stays visible to the WAF.
     let mut map = http::HeaderMap::new();
@@ -86,9 +91,13 @@ async fn phase_one_denial_happens_before_request_body_read() {
         WafMode::On,
     );
     let mut session = MockPluginSession::new();
-    expect_request_head(&mut session, "/blocked");
+    let mut waf = MockWafSessionCapability::new();
+    expect_request_head(&mut session, &mut waf, "/blocked");
     let mut log = PluginLog::new(NAME);
 
+    session
+        .expect_waf()
+        .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
     let result = RequestFilter::run_request(&plugin, &mut session, &mut log).await;
 
     assert_eq!(
@@ -108,13 +117,17 @@ async fn header_only_generation_does_not_capture_an_unused_body() {
         WafMode::On,
     );
     let mut session = MockPluginSession::new();
-    expect_request_head(&mut session, "/allowed");
-    session.expect_install_waf_transaction().return_once(|_, transaction| {
+    let mut waf = MockWafSessionCapability::new();
+    expect_request_head(&mut session, &mut waf, "/allowed");
+    waf.expect_install_transaction().return_once(|_, transaction| {
         drop(transaction);
         true
     });
     let mut log = PluginLog::new(NAME);
 
+    session
+        .expect_waf()
+        .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
     assert_eq!(
         RequestFilter::run_request(&plugin, &mut session, &mut log).await,
         PluginRunningResult::GoodNext
@@ -132,8 +145,10 @@ async fn phase_two_headers_do_not_read_body_in_either_inspection_mode() {
             );
             assert!(!plugin.shared.requires_request_body);
             let mut session = MockPluginSession::new();
+            let mut waf = MockWafSessionCapability::new();
             expect_request_head_with_headers(
                 &mut session,
+                &mut waf,
                 "/",
                 vec![(
                     b"X-Test".to_vec(),
@@ -147,14 +162,14 @@ async fn phase_two_headers_do_not_read_body_in_either_inspection_mode() {
             session.expect_read_request_body().times(0);
             session.expect_read_request_body_prefix().times(0);
             if !blocked {
-                session
-                    .expect_install_waf_transaction()
-                    .times(1)
-                    .return_once(|_, transaction| {
-                        assert_eq!(transaction.next_phase(), Some(Phase::ResponseHeaders));
-                        true
-                    });
+                waf.expect_install_transaction().times(1).return_once(|_, transaction| {
+                    assert_eq!(transaction.next_phase(), Some(Phase::ResponseHeaders));
+                    true
+                });
             }
+            session
+                .expect_waf()
+                .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
             let result = RequestFilter::run_request(&plugin, &mut session, &mut PluginLog::new(NAME)).await;
             assert_eq!(
                 result,
@@ -179,8 +194,9 @@ async fn raw_phrase_prefix_is_decided_before_returning_to_dispatch() {
         WafRequestBodyInspection::Prefix,
     );
     let mut session = MockPluginSession::new();
-    expect_request_head(&mut session, "/stream");
-    session.expect_install_waf_transaction().return_once(|_, transaction| {
+    let mut waf = MockWafSessionCapability::new();
+    expect_request_head(&mut session, &mut waf, "/stream");
+    waf.expect_install_transaction().return_once(|_, transaction| {
         assert_eq!(transaction.next_phase(), Some(Phase::ResponseHeaders));
         drop(transaction);
         true
@@ -191,6 +207,9 @@ async fn raw_phrase_prefix_is_decided_before_returning_to_dispatch() {
         .return_once(|_| Ok((Bytes::from_static(b"allowed"), true)));
     let mut log = PluginLog::new(NAME);
 
+    session
+        .expect_waf()
+        .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
     assert_eq!(
         RequestFilter::run_request(&plugin, &mut session, &mut log).await,
         PluginRunningResult::GoodNext
@@ -209,7 +228,8 @@ async fn configured_prefix_size_reaches_capture_and_engine() {
     })
     .unwrap();
     let mut session = MockPluginSession::new();
-    expect_request_head(&mut session, "/prefix");
+    let mut waf = MockWafSessionCapability::new();
+    expect_request_head(&mut session, &mut waf, "/prefix");
     session
         .expect_read_request_body_prefix()
         .withf(|limit| *limit == 1024 * 1024)
@@ -220,6 +240,9 @@ async fn configured_prefix_size_reaches_capture_and_engine() {
             Ok((Bytes::from(body), false))
         });
     let mut log = PluginLog::new(NAME);
+    session
+        .expect_waf()
+        .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
     assert!(matches!(
         RequestFilter::run_request(&plugin, &mut session, &mut log).await,
         PluginRunningResult::ErrResponse { status: 409, .. }
@@ -235,17 +258,21 @@ async fn prefix_match_blocks_before_dispatch_and_detection_only_records() {
             WafRequestBodyInspection::Prefix,
         );
         let mut session = MockPluginSession::new();
-        expect_request_head(&mut session, "/prefix");
+        let mut waf = MockWafSessionCapability::new();
+        expect_request_head(&mut session, &mut waf, "/prefix");
         session
             .expect_read_request_body_prefix()
             .times(1)
             .return_once(|_| Ok((Bytes::from_static(b"blocked"), true)));
         if mode == WafMode::DetectionOnly {
-            session.expect_install_waf_transaction().return_once(|_, transaction| {
+            waf.expect_install_transaction().return_once(|_, transaction| {
                 assert_eq!(transaction.next_phase(), Some(Phase::ResponseHeaders));
                 true
             });
         }
+        session
+            .expect_waf()
+            .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
         let result = RequestFilter::run_request(&plugin, &mut session, &mut PluginLog::new(NAME)).await;
         assert_eq!(
             result,
@@ -268,7 +295,8 @@ async fn full_mode_captures_body_for_later_phase_only_dependency() {
         WafMode::On,
     );
     let mut session = MockPluginSession::new();
-    expect_request_head(&mut session, "/full");
+    let mut waf = MockWafSessionCapability::new();
+    expect_request_head(&mut session, &mut waf, "/full");
     session.expect_ctx().return_const(EdgionHttpContext::default());
     session.expect_ensure_request_body().times(1).return_once(|_| Ok(7));
     session
@@ -279,21 +307,22 @@ async fn full_mode_captures_body_for_later_phase_only_dependency() {
         .expect_read_request_body()
         .times(1)
         .return_once(|_| Ok(Bytes::from_static(b"blocked")));
+    waf.expect_install_transaction().return_once(|_, mut transaction| {
+        transaction.publish_response_head(ResponseHead::new(200, &[])).unwrap();
+        assert_eq!(
+            transaction
+                .execute_response_headers()
+                .unwrap()
+                .intervention()
+                .unwrap()
+                .status(),
+            409
+        );
+        true
+    });
     session
-        .expect_install_waf_transaction()
-        .return_once(|_, mut transaction| {
-            transaction.publish_response_head(ResponseHead::new(200, &[])).unwrap();
-            assert_eq!(
-                transaction
-                    .execute_response_headers()
-                    .unwrap()
-                    .intervention()
-                    .unwrap()
-                    .status(),
-                409
-            );
-            true
-        });
+        .expect_waf()
+        .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
     assert_eq!(
         RequestFilter::run_request(&plugin, &mut session, &mut PluginLog::new(NAME)).await,
         PluginRunningResult::GoodNext
@@ -307,8 +336,10 @@ async fn duplicate_request_headers_are_preserved_for_phase_one() {
         WafMode::On,
     );
     let mut session = MockPluginSession::new();
+    let mut waf = MockWafSessionCapability::new();
     expect_request_head_with_headers(
         &mut session,
+        &mut waf,
         "/headers",
         vec![
             (b"x-test".to_vec(), b"allowed".to_vec()),
@@ -317,6 +348,9 @@ async fn duplicate_request_headers_are_preserved_for_phase_one() {
     );
     let mut log = PluginLog::new(NAME);
 
+    session
+        .expect_waf()
+        .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
     assert_eq!(
         RequestFilter::run_request(&plugin, &mut session, &mut log).await,
         PluginRunningResult::ErrResponse {
@@ -334,17 +368,15 @@ async fn duplicate_response_headers_are_preserved_for_phase_three() {
     );
     let slot = Arc::new(parking_lot::Mutex::new(None));
     let mut session = MockPluginSession::new();
-    expect_request_head(&mut session, "/headers");
+    let mut waf = MockWafSessionCapability::new();
+    expect_request_head(&mut session, &mut waf, "/headers");
     let install_slot = Arc::clone(&slot);
-    session
-        .expect_install_waf_transaction()
-        .return_once(move |_, transaction| {
-            *install_slot.lock() = Some(transaction);
-            true
-        });
+    waf.expect_install_transaction().return_once(move |_, transaction| {
+        *install_slot.lock() = Some(transaction);
+        true
+    });
     let take_slot = Arc::clone(&slot);
-    session
-        .expect_take_waf_transaction()
+    waf.expect_take_transaction()
         .return_once(move |_| take_slot.lock().take());
     let mut response_headers = http::HeaderMap::new();
     response_headers.append("x-test", http::HeaderValue::from_static("allowed"));
@@ -353,6 +385,9 @@ async fn duplicate_response_headers_are_preserved_for_phase_three() {
     session.expect_get_response_status().return_const(Some(200_u16));
 
     let mut request_log = PluginLog::new(NAME);
+    session
+        .expect_waf()
+        .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
     assert_eq!(
         RequestFilter::run_request(&plugin, &mut session, &mut request_log).await,
         PluginRunningResult::GoodNext
@@ -372,8 +407,10 @@ async fn duplicate_response_headers_are_preserved_for_phase_three() {
 async fn malformed_structured_body_fails_closed_without_payload_logging() {
     let plugin = plugin("SecRule ARGS \"@contains value\" \"id:4,phase:2,pass\"\n", WafMode::On);
     let mut session = MockPluginSession::new();
+    let mut waf = MockWafSessionCapability::new();
     expect_request_head_with_headers(
         &mut session,
+        &mut waf,
         "/json",
         vec![(b"content-type".to_vec(), b"application/json".to_vec())],
     );
@@ -394,6 +431,9 @@ async fn malformed_structured_body_fails_closed_without_payload_logging() {
     session.expect_read_request_body().times(0);
     let mut log = PluginLog::new(NAME);
 
+    session
+        .expect_waf()
+        .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
     assert_eq!(
         RequestFilter::run_request(&plugin, &mut session, &mut log).await,
         PluginRunningResult::ErrResponse {
@@ -413,7 +453,8 @@ async fn gateway_body_cap_failure_maps_to_413() {
         WafMode::On,
     );
     let mut session = MockPluginSession::new();
-    expect_request_head(&mut session, "/large");
+    let mut waf = MockWafSessionCapability::new();
+    expect_request_head(&mut session, &mut waf, "/large");
     let mut ctx = EdgionHttpContext::new();
     ctx.request_body_config.max_body_size_bytes = 8;
     session.expect_ctx().return_const(ctx);
@@ -423,6 +464,9 @@ async fn gateway_body_cap_failure_maps_to_413() {
     session.expect_record_error().returning(|_| ());
     let mut log = PluginLog::new(NAME);
 
+    session
+        .expect_waf()
+        .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
     assert_eq!(
         RequestFilter::run_request(&plugin, &mut session, &mut log).await,
         PluginRunningResult::ErrResponse {
@@ -439,7 +483,8 @@ async fn detection_only_records_body_match_and_keeps_the_transaction() {
         WafMode::DetectionOnly,
     );
     let mut session = MockPluginSession::new();
-    expect_request_head(&mut session, "/submit");
+    let mut waf = MockWafSessionCapability::new();
+    expect_request_head(&mut session, &mut waf, "/submit");
     let mut ctx = EdgionHttpContext::new();
     ctx.request_body_config.max_body_size_bytes = 1024;
     session.expect_ctx().return_const(ctx);
@@ -452,15 +497,15 @@ async fn detection_only_records_body_match_and_keeps_the_transaction() {
         .expect_read_request_body()
         .withf(|limit| *limit == Some(1024))
         .return_once(|_| Ok(Bytes::from_static(b"blocked")));
-    session
-        .expect_install_waf_transaction()
-        .times(1)
-        .return_once(|_, transaction| {
-            drop(transaction);
-            true
-        });
+    waf.expect_install_transaction().times(1).return_once(|_, transaction| {
+        drop(transaction);
+        true
+    });
     let mut log = PluginLog::new(NAME);
 
+    session
+        .expect_waf()
+        .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
     let result = RequestFilter::run_request(&plugin, &mut session, &mut log).await;
 
     assert_eq!(result, PluginRunningResult::GoodNext);
@@ -481,7 +526,8 @@ async fn one_transaction_advances_through_all_gateway_phase_hooks() {
     );
     let slot = Arc::new(parking_lot::Mutex::new(None));
     let mut session = MockPluginSession::new();
-    expect_request_head(&mut session, "/submit");
+    let mut waf = MockWafSessionCapability::new();
+    expect_request_head(&mut session, &mut waf, "/submit");
     let mut ctx = EdgionHttpContext::new();
     ctx.request_body_config.max_body_size_bytes = 1024;
     session.expect_ctx().return_const(ctx);
@@ -494,8 +540,7 @@ async fn one_transaction_advances_through_all_gateway_phase_hooks() {
         .expect_read_request_body()
         .return_once(|_| Ok(Bytes::from_static(b"allowed")));
     let install_slot = Arc::clone(&slot);
-    session
-        .expect_install_waf_transaction()
+    waf.expect_install_transaction()
         .times(2)
         .returning(move |_, transaction| {
             let mut guard = install_slot.lock();
@@ -506,8 +551,7 @@ async fn one_transaction_advances_through_all_gateway_phase_hooks() {
             true
         });
     let take_slot = Arc::clone(&slot);
-    session
-        .expect_take_waf_transaction()
+    waf.expect_take_transaction()
         .times(2)
         .returning(move |_| take_slot.lock().take());
     session
@@ -516,6 +560,9 @@ async fn one_transaction_advances_through_all_gateway_phase_hooks() {
     session.expect_get_response_status().return_const(Some(201_u16));
 
     let mut request_log = PluginLog::new(NAME);
+    session
+        .expect_waf()
+        .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
     assert_eq!(
         RequestFilter::run_request(&plugin, &mut session, &mut request_log).await,
         PluginRunningResult::GoodNext
@@ -553,8 +600,10 @@ async fn full_json_default_and_explicit_limits_use_chunk_capture_without_materia
         config.request_body.json = explicit.then(explicit_json_config);
         let plugin = WafPlugin::try_new(&config).unwrap();
         let mut session = MockPluginSession::new();
+        let mut waf = MockWafSessionCapability::new();
         expect_request_head_with_headers(
             &mut session,
+            &mut waf,
             "/json",
             vec![(b"content-type".to_vec(), b"application/json".to_vec())],
         );
@@ -579,13 +628,13 @@ async fn full_json_default_and_explicit_limits_use_chunk_capture_without_materia
             .in_sequence(&mut sequence)
             .return_once(move |_| Ok(len));
         session.expect_read_request_body().times(0);
+        waf.expect_install_transaction().times(1).return_once(|_, transaction| {
+            assert_eq!(transaction.next_phase(), Some(Phase::ResponseHeaders));
+            true
+        });
         session
-            .expect_install_waf_transaction()
-            .times(1)
-            .return_once(|_, transaction| {
-                assert_eq!(transaction.next_phase(), Some(Phase::ResponseHeaders));
-                true
-            });
+            .expect_waf()
+            .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
         assert_eq!(
             plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
             PluginRunningResult::GoodNext
@@ -601,8 +650,10 @@ async fn body_independent_json_forced_raw_publishes_empty_without_capture() {
     config.request_body.inspection = WafRequestBodyInspection::Full;
     let plugin = WafPlugin::try_new(&config).unwrap();
     let mut session = MockPluginSession::new();
+    let mut waf = MockWafSessionCapability::new();
     expect_request_head_with_headers(
         &mut session,
+        &mut waf,
         "/json",
         vec![(b"content-type".to_vec(), b"application/json".to_vec())],
     );
@@ -613,14 +664,14 @@ async fn body_independent_json_forced_raw_publishes_empty_without_capture() {
     session.expect_ensure_request_body().times(0);
     session.expect_read_request_body().times(0);
     session.expect_request_body_available_len().times(0);
+    waf.expect_install_transaction().times(1).return_once(|_, transaction| {
+        assert_eq!(transaction.next_phase(), Some(Phase::ResponseHeaders));
+        assert_eq!(transaction.request_body_error(), None);
+        true
+    });
     session
-        .expect_install_waf_transaction()
-        .times(1)
-        .return_once(|_, transaction| {
-            assert_eq!(transaction.next_phase(), Some(Phase::ResponseHeaders));
-            assert_eq!(transaction.request_body_error(), None);
-            true
-        });
+        .expect_waf()
+        .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
     assert_eq!(
         plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
         PluginRunningResult::GoodNext
@@ -635,8 +686,10 @@ async fn full_capture_proof_and_all_caps_precede_materialization() {
         config.request_body.json = Some(explicit_json_config());
         let plugin = WafPlugin::try_new(&config).unwrap();
         let mut session = MockPluginSession::new();
+        let mut waf = MockWafSessionCapability::new();
         expect_request_head_with_headers(
             &mut session,
+            &mut waf,
             "/json",
             vec![(b"content-type".to_vec(), b"application/json".to_vec())],
         );
@@ -661,6 +714,9 @@ async fn full_capture_proof_and_all_caps_precede_materialization() {
             });
         session.expect_read_request_body().times(0);
         session.expect_record_error().returning(|_| ());
+        session
+            .expect_waf()
+            .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
         assert_eq!(
             plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
             PluginRunningResult::ErrResponse {
@@ -683,8 +739,10 @@ async fn processor_override_precedes_json_only_caps_and_raw_reads() {
     config.request_body.json = Some(limits);
     let plugin = WafPlugin::try_new(&config).unwrap();
     let mut session = MockPluginSession::new();
+    let mut waf = MockWafSessionCapability::new();
     expect_request_head_with_headers(
         &mut session,
+        &mut waf,
         "/json",
         vec![(b"content-type".to_vec(), b"application/json".to_vec())],
     );
@@ -698,10 +756,10 @@ async fn processor_override_precedes_json_only_caps_and_raw_reads() {
         .expect_read_request_body()
         .times(1)
         .return_once(|_| Ok(Bytes::from_static(b"a=hit")));
+    waf.expect_install_transaction().times(1).return_once(|_, _| true);
     session
-        .expect_install_waf_transaction()
-        .times(1)
-        .return_once(|_, _| true);
+        .expect_waf()
+        .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
     assert_eq!(
         plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
         PluginRunningResult::GoodNext
@@ -712,7 +770,8 @@ async fn processor_override_precedes_json_only_caps_and_raw_reads() {
 async fn shared_read_length_mismatch_fails_closed() {
     let plugin = plugin("SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass\"\n", WafMode::On);
     let mut session = MockPluginSession::new();
-    expect_request_head(&mut session, "/");
+    let mut waf = MockWafSessionCapability::new();
+    expect_request_head(&mut session, &mut waf, "/");
     session.expect_ctx().return_const(EdgionHttpContext::new());
     session.expect_ensure_request_body().times(1).return_once(|_| Ok(3));
     session
@@ -724,6 +783,9 @@ async fn shared_read_length_mismatch_fails_closed() {
         .times(1)
         .return_once(|_| Ok(Bytes::new()));
     session.expect_record_error().returning(|_| ());
+    session
+        .expect_waf()
+        .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
     assert_eq!(
         plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
         PluginRunningResult::ErrResponse {
@@ -762,8 +824,10 @@ async fn canonical_resident_spilled_and_edited_bodies_keep_the_inspected_source(
         );
         let plugin = plugin(&rules, WafMode::On);
         let mut session = MockPluginSession::new();
+        let mut waf = MockWafSessionCapability::new();
         expect_request_head_with_headers(
             &mut session,
+            &mut waf,
             "/",
             vec![(b"content-type".to_vec(), b"application/json".to_vec())],
         );
@@ -785,19 +849,19 @@ async fn canonical_resident_spilled_and_edited_bodies_keep_the_inspected_source(
             .expect_read_request_body()
             .times(1)
             .return_once(move |_| Ok(body));
+        waf.expect_install_transaction().times(1).return_once(move |_, mut tx| {
+            view.replace_spans(view.generation(), &[(0..len, Bytes::from_static(b"changed"))])
+                .unwrap();
+            tx.publish_response_head(ResponseHead::new(200, &[])).unwrap();
+            assert_eq!(
+                tx.execute_response_headers().unwrap().intervention().unwrap().status(),
+                409
+            );
+            true
+        });
         session
-            .expect_install_waf_transaction()
-            .times(1)
-            .return_once(move |_, mut tx| {
-                view.replace_spans(view.generation(), &[(0..len, Bytes::from_static(b"changed"))])
-                    .unwrap();
-                tx.publish_response_head(ResponseHead::new(200, &[])).unwrap();
-                assert_eq!(
-                    tx.execute_response_headers().unwrap().intervention().unwrap().status(),
-                    409
-                );
-                true
-            });
+            .expect_waf()
+            .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
         assert_eq!(
             plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
             PluginRunningResult::GoodNext
@@ -810,7 +874,8 @@ async fn only_transport_proven_empty_capture_can_be_materialized() {
     for declared in [Some(false), Some(true), None] {
         let plugin = plugin("SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass\"\n", WafMode::On);
         let mut session = MockPluginSession::new();
-        expect_request_head(&mut session, "/");
+        let mut waf = MockWafSessionCapability::new();
+        expect_request_head(&mut session, &mut waf, "/");
         let mut ctx = EdgionHttpContext::new();
         ctx.request_info.body_declared = declared;
         session.expect_ctx().return_const(ctx);
@@ -831,14 +896,14 @@ async fn only_transport_proven_empty_capture_can_be_materialized() {
                 .expect_read_request_body()
                 .times(1)
                 .return_once(|_| Ok(Bytes::new()));
-            session
-                .expect_install_waf_transaction()
-                .times(1)
-                .return_once(|_, _| true);
+            waf.expect_install_transaction().times(1).return_once(|_, _| true);
         } else {
             session.expect_read_request_body().times(0);
             session.expect_record_error().returning(|_| ());
         }
+        session
+            .expect_waf()
+            .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
         assert_eq!(
             plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
             if declared == Some(false) {
@@ -863,15 +928,16 @@ async fn default_json_body_independent_rules_and_phase_one_denial_do_not_capture
         };
         let plugin = plugin(rules, WafMode::On);
         let mut session = MockPluginSession::new();
-        expect_request_head(&mut session, "/allowed");
+        let mut waf = MockWafSessionCapability::new();
+        expect_request_head(&mut session, &mut waf, "/allowed");
         session.expect_ensure_request_body().times(0);
         session.expect_read_request_body().times(0);
         if !deny {
-            session
-                .expect_install_waf_transaction()
-                .times(1)
-                .return_once(|_, _| true);
+            waf.expect_install_transaction().times(1).return_once(|_, _| true);
         }
+        session
+            .expect_waf()
+            .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
         assert_eq!(
             plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
             if deny {
@@ -896,8 +962,10 @@ async fn json_physical_failure_still_rejects_detection_only() {
     config.request_body.json = Some(limits);
     let plugin = WafPlugin::try_new(&config).unwrap();
     let mut session = MockPluginSession::new();
+    let mut waf = MockWafSessionCapability::new();
     expect_request_head_with_headers(
         &mut session,
+        &mut waf,
         "/",
         vec![(b"content-type".to_vec(), b"application/json".to_vec())],
     );
@@ -914,7 +982,10 @@ async fn json_physical_failure_still_rejects_detection_only() {
         .times(1)
         .return_once(|_| Ok(11));
     session.expect_read_request_body().times(0);
-    session.expect_install_waf_transaction().times(0);
+    waf.expect_install_transaction().times(0);
+    session
+        .expect_waf()
+        .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
     assert_eq!(
         plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
         PluginRunningResult::ErrResponse {
@@ -1043,10 +1114,11 @@ fn json_error_categories_preserve_status_without_exposing_payloads() {
             std::mem::discriminant(&code)
         );
         let mut session = MockPluginSession::new();
+        let mut waf = MockWafSessionCapability::new();
+        waf.expect_record_terminal_error().times(1).returning(|_, _, _, _| ());
         session
-            .expect_record_waf_terminal_error()
-            .times(1)
-            .returning(|_, _, _, _| ());
+            .expect_waf()
+            .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
         assert_eq!(
             plugin.runtime_failure(&mut session, WafLogPhase::RequestBody, &error),
             PluginRunningResult::ErrResponse { status, body: None }
@@ -1147,12 +1219,14 @@ async fn waf_expensive_checks_use_the_request_gateway_snapshot() {
     let plugin = plugin(rules, WafMode::On);
     for enabled in [false, true] {
         let mut session = MockPluginSession::new();
+        let mut waf = MockWafSessionCapability::new();
         let runtime = crate::config::ResolvedGatewayConfig {
             waf_expensive_checks: enabled,
             ..Default::default()
         };
         expect_request_head_with_context(
             &mut session,
+            &mut waf,
             "/?a=one&a=two",
             vec![],
             EdgionHttpContext::with_gateway_config(Arc::new(runtime)),
@@ -1161,7 +1235,7 @@ async fn waf_expensive_checks_use_the_request_gateway_snapshot() {
         session.expect_ensure_request_body().return_once(|_| Ok(0));
         session.expect_request_body_available_len().return_once(|_| Ok(0));
         session.expect_read_request_body().return_once(|_| Ok(Bytes::new()));
-        session.expect_install_waf_transaction().return_once(move |_, tx| {
+        waf.expect_install_transaction().return_once(move |_, tx| {
             assert_eq!(
                 tx.tx_value(b"paramcounter_ARGS_NAMES:a"),
                 enabled.then_some(b"2".as_slice())
@@ -1172,6 +1246,9 @@ async fn waf_expensive_checks_use_the_request_gateway_snapshot() {
             );
             true
         });
+        session
+            .expect_waf()
+            .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
         assert_eq!(
             RequestFilter::run_request(&plugin, &mut session, &mut PluginLog::new(NAME)).await,
             PluginRunningResult::GoodNext
@@ -1194,14 +1271,15 @@ async fn format_hard_limit_uses_selected_processor_without_body_rule_or_capture(
             config.request_body.max_xml_body_size = Some("1KiB".into());
             let plugin = WafPlugin::try_new(&config).unwrap();
             let mut session = MockPluginSession::new();
+            let mut waf = MockWafSessionCapability::new();
             expect_request_head_with_headers(
                 &mut session,
+                &mut waf,
                 "/",
                 vec![(b"content-type".to_vec(), content_type.as_bytes().to_vec())],
             );
             session.expect_ctx().return_const(EdgionHttpContext::default());
-            session
-                .expect_install_waf_body_limit()
+            waf.expect_install_body_limit()
                 .times(usize::from(expected.is_some()))
                 .returning(move |_, limit| {
                     assert_eq!(Some(limit), expected);
@@ -1209,8 +1287,11 @@ async fn format_hard_limit_uses_selected_processor_without_body_rule_or_capture(
                 });
             session.expect_capture_request_body_with_consumer().times(0);
             session.expect_read_request_body_prefix().times(0);
-            session.expect_install_waf_transaction().times(1).returning(|_, _| true);
+            waf.expect_install_transaction().times(1).returning(|_, _| true);
             let mut log = PluginLog::new("Waf");
+            session
+                .expect_waf()
+                .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
             assert!(matches!(
                 plugin.run_request(&mut session, &mut log).await,
                 PluginRunningResult::GoodNext
@@ -1227,17 +1308,22 @@ async fn format_hard_limit_respects_phase_one_processor_and_cannot_be_detection_
     config.request_body.max_json_body_size = Some("8".into());
     let plugin = WafPlugin::try_new(&config).unwrap();
     let mut session = MockPluginSession::new();
+    let mut waf = MockWafSessionCapability::new();
     expect_request_head_with_headers(
         &mut session,
+        &mut waf,
         "/",
         vec![(b"content-type".to_vec(), b"text/plain".to_vec())],
     );
-    session.expect_install_waf_body_limit().times(1).returning(|_, limit| {
+    waf.expect_install_body_limit().times(1).returning(|_, limit| {
         assert_eq!(limit, 8);
         Err(BodyReadError::BufferLimitExceeded { limit })
     });
-    session.expect_install_waf_transaction().times(0);
+    waf.expect_install_transaction().times(0);
     let mut log = PluginLog::new("Waf");
+    session
+        .expect_waf()
+        .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
     assert!(matches!(
         plugin.run_request(&mut session, &mut log).await,
         PluginRunningResult::ErrResponse {
@@ -1256,23 +1342,23 @@ fn explicit_policy_stop_continue_and_reject_apply_in_detection_only() {
         config.request_body.on_limit = Some(action);
         let plugin = WafPlugin::try_new(&config).unwrap();
         let mut session = MockPluginSession::new();
-        session
-            .expect_stop_waf_inspection()
-            .times(1)
-            .returning(|_, bytes, storage| {
-                assert_eq!(bytes, 32);
-                assert!(storage);
-                true
-            });
+        let mut waf = MockWafSessionCapability::new();
+        waf.expect_stop_inspection().times(1).returning(|_, bytes, storage| {
+            assert_eq!(bytes, 32);
+            assert!(storage);
+            true
+        });
         if action == WafInspectionLimitAction::Reject {
-            session
-                .expect_record_waf_terminal_error()
+            waf.expect_record_terminal_error()
                 .times(1)
                 .returning(|_, _, code, status| {
                     assert!(matches!(code, WafErrorCode::BodyLimit));
                     assert_eq!(status, 413);
                 });
         }
+        session
+            .expect_waf()
+            .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
         let result = plugin.inspection_stop(
             &mut session,
             json_capture::InspectionPolicy {
@@ -1304,7 +1390,8 @@ async fn request_orchestration_uses_storage_window_only_for_fresh_waf_only_captu
         config.request_body.max_inspect_size = (case != 3).then(|| "64".to_owned());
         let plugin = WafPlugin::try_new(&config).unwrap();
         let mut session = MockPluginSession::new();
-        expect_request_head(&mut session, "/");
+        let mut waf = MockWafSessionCapability::new();
+        expect_request_head(&mut session, &mut waf, "/");
         let mut ctx = EdgionHttpContext::new();
         ctx.request_body_config.max_body_size_bytes = 128;
         ctx.request_body_config.max_buffered_size_bytes = 32;
@@ -1344,8 +1431,7 @@ async fn request_orchestration_uses_storage_window_only_for_fresh_waf_only_captu
                         })
                     });
             }
-            session
-                .expect_stop_waf_inspection()
+            waf.expect_stop_inspection()
                 .times(1)
                 .returning(move |_, bytes, storage| {
                     assert_eq!(bytes, if case == 2 { 64 } else { 32 });
@@ -1353,6 +1439,9 @@ async fn request_orchestration_uses_storage_window_only_for_fresh_waf_only_captu
                     true
                 });
         }
+        session
+            .expect_waf()
+            .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
         assert_eq!(
             plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
             if case == 1 {
@@ -1390,8 +1479,10 @@ async fn default_full_json_and_xml_sources_can_exceed_the_former_sixteen_mib_cap
         });
         let len = source.len() as u64;
         let mut session = MockPluginSession::new();
+        let mut waf = MockWafSessionCapability::new();
         expect_request_head_with_headers(
             &mut session,
+            &mut waf,
             "/large",
             vec![(
                 b"content-type".to_vec(),
@@ -1418,10 +1509,10 @@ async fn default_full_json_and_xml_sources_can_exceed_the_former_sixteen_mib_cap
             .times(1)
             .return_once(move |_| Ok(len));
         session.expect_read_request_body().times(0);
+        waf.expect_install_transaction().times(1).return_once(|_, _| true);
         session
-            .expect_install_waf_transaction()
-            .times(1)
-            .return_once(|_, _| true);
+            .expect_waf()
+            .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
         assert_eq!(
             plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
             PluginRunningResult::GoodNext
@@ -1436,8 +1527,8 @@ async fn incompatible_inspection_window_rejects_before_waf_body_reads_even_in_de
     config.request_body.max_inspect_size = Some("129".to_owned());
     let plugin = WafPlugin::try_new(&config).unwrap();
     let mut session = MockPluginSession::new();
-    session
-        .expect_record_waf_terminal_error()
+    let mut waf = MockWafSessionCapability::new();
+    waf.expect_record_terminal_error()
         .times(1)
         .returning(|_, phase, code, status| {
             assert_eq!(phase, WafLogPhase::RequestBody);
@@ -1450,14 +1541,17 @@ async fn incompatible_inspection_window_rejects_before_waf_body_reads_even_in_de
     let mut initial_ctx = EdgionHttpContext::new();
     initial_ctx.request_body_config = ctx.request_body_config;
     initial_ctx.waf_partial_capture_allowed = ctx.waf_partial_capture_allowed;
-    expect_request_head_with_context(&mut session, "/", Vec::new(), initial_ctx);
+    expect_request_head_with_context(&mut session, &mut waf, "/", Vec::new(), initial_ctx);
     session.expect_ctx().return_const(ctx);
     session.expect_ensure_request_body().times(0);
     session.expect_capture_request_body_inspection().times(0);
     session.expect_capture_request_body_with_consumer().times(0);
     session.expect_read_request_body().times(0);
-    session.expect_stop_waf_inspection().times(0);
-    session.expect_install_waf_transaction().times(0);
+    waf.expect_stop_inspection().times(0);
+    waf.expect_install_transaction().times(0);
+    session
+        .expect_waf()
+        .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
     assert_eq!(
         plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
         PluginRunningResult::ErrResponse {

@@ -1,6 +1,7 @@
 use super::*;
 use crate::plugins::runtime::log::PluginLog;
 use crate::plugins::runtime::traits::session::MockPluginSession;
+use crate::plugins::runtime::traits::waf_session::{MockWafSessionCapability, WafSessionCapability};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::conditions::PluginConditions;
 use edgion_resources::resources::edgion_plugins::plugin_configs::access_log_extern::{
@@ -2674,12 +2675,11 @@ async fn waf_selection_only_update_keeps_sources_and_in_flight_filter_behavior()
     // Both filters run after replacement, making immutable old-generation behavior observable.
     for (runtime, expected) in [(&old, 403), (&new, 409)] {
         let mut session = MockPluginSession::new();
+        let mut waf = MockWafSessionCapability::new();
         session.expect_ctx().times(1).return_const(EdgionHttpContext::default());
-        session
-            .expect_claim_waf_phase()
-            .returning(|_, _| WafPhaseClaim::Execute);
-        session.expect_record_waf_phase_outcome().returning(|_, _, _, _| ());
-        session.expect_record_waf_terminal_error().returning(|_, _, _, _| ());
+        waf.expect_claim_phase().returning(|_, _| WafPhaseClaim::Execute);
+        waf.expect_record_phase_outcome().returning(|_, _, _, _| ());
+        waf.expect_record_terminal_error().returning(|_, _, _, _| ());
         session.expect_request_header_map().return_const(http::HeaderMap::new());
         session.expect_get_method().times(1).return_const("POST".to_string());
         session.expect_get_uri().return_const("/probe".to_string());
@@ -2687,6 +2687,9 @@ async fn waf_selection_only_update_keeps_sources_and_in_flight_filter_behavior()
         session.expect_get_http_protocol().return_const("HTTP/1.1".to_string());
         session.expect_remote_ip().return_const("192.0.2.1".to_string());
         session.expect_get_request_id().return_const("request-1".to_string());
+        session
+            .expect_waf()
+            .return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
         let result = first_filter(runtime)
             .run_request(&mut session, &mut PluginLog::new("Waf"))
             .await;

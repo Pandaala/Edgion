@@ -507,6 +507,31 @@ If the plugin will call external HTTP services, prefer reusing:
 - `edgion-gateway/src/plugins/http/common/http_client.rs`
 - `edgion-gateway/src/plugins/http/common/auth_common.rs`
 
+### Feature-specific WAF session operations
+
+Use `session.waf().claim_phase(...)`, transaction transfer, summary and admission
+operations for selected-WAF behavior. The required `WafSessionCapability` trait
+lives under `plugins/runtime/traits/waf_session.rs`. Extend that feature contract
+rather than adding another WAF operation to `PluginSession`. The real adapter
+returns itself; `WafRequestContext` retains all selected request state. Keep each
+capability borrow short and release it before ordinary session access or awaits.
+
+For WAF unit tests, configure `MockWafSessionCapability` before attaching it:
+
+```rust
+let mut waf = MockWafSessionCapability::new();
+waf.expect_claim_phase().returning(|_, _| WafPhaseClaim::Execute);
+session.expect_waf().return_var(Box::new(waf) as Box<dyn WafSessionCapability>);
+```
+
+Set transaction, limit, stop and summary expectations explicitly for the tested
+path. `Execute` and ignored summary writes are isolated-test choices, not default
+production semantics. Non-WAF mocks need no accessor expectation. A manual test
+adapter that cannot use WAF should reject unexpected accessor use explicitly.
+Transaction installation consumes rejected offers; the existing conflict path
+terminates and keeps the resident transaction. See the
+[canonical integration boundary](05-plugin-system.md#selected-waf-session-capability).
+
 ## `PluginLog` rules
 
 Entry point:

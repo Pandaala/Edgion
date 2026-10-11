@@ -1,5 +1,6 @@
 //! PluginSession trait - shared across all filter stages
 
+use super::waf_session::WafSessionCapability;
 use crate::ai::{AiAttemptPlan, AiRequestContext};
 use crate::ctx::ClientCertInfo;
 use crate::plugins::runtime::dye_plan::CompiledDyePlan;
@@ -548,64 +549,10 @@ pub trait PluginSession: Send + Sync {
     /// Get reference to EdgionHttpContext (for access log generation)
     fn ctx(&self) -> &EdgionHttpContext;
 
-    /// Stop all remaining phases while retaining independent hard admission.
-    fn stop_waf_inspection(&mut self, _owner: &Arc<()>, _bytes: u64, _storage_limit: bool) -> bool {
-        false
-    }
-
-    /// Install selected-WAF hard admission against native and logical bytes.
-    /// The guard remains active through forwarding even without a body parser.
-    fn install_waf_body_limit(&mut self, _owner: &Arc<()>, _limit: u64) -> Result<(), BodyReadError> {
-        Err(BodyReadError::Unimplemented)
-    }
-
-    /// Install the first native WAF transaction for this request.
-    fn install_waf_transaction(
-        &mut self,
-        _owner: Arc<()>,
-        transaction: edgion_waf::seclang::Transaction<'static>,
-    ) -> bool {
-        drop(transaction);
-        false
-    }
-
-    /// Temporarily take this compiled WAF runtime's transaction.
-    fn take_waf_transaction(&mut self, _owner: &Arc<()>) -> Option<edgion_waf::seclang::Transaction<'static>> {
-        None
-    }
-
-    /// Claim one request-wide WAF phase. The real Gateway adapter requires a
-    /// completed winner election; the default supports isolated plugin tests
-    /// and alternate adapters that do not own an Edgion request context.
-    fn claim_waf_phase(&mut self, _owner: &Arc<()>, _phase: crate::ctx::WafPhase) -> crate::ctx::WafPhaseClaim {
-        crate::ctx::WafPhaseClaim::Execute
-    }
-
-    /// Record one completed WAF phase into the request-owned bounded summary.
-    fn record_waf_phase_outcome(
-        &mut self,
-        _owner: &Arc<()>,
-        _phase: crate::ctx::WafLogPhase,
-        _execution_us: u64,
-        _outcome: &edgion_waf::seclang::PhaseOutcome,
-    ) {
-    }
-
-    /// Record the first terminal WAF error using a closed, non-sensitive code.
-    fn record_waf_terminal_error(
-        &mut self,
-        _owner: &Arc<()>,
-        _phase: crate::ctx::WafLogPhase,
-        _code: crate::ctx::WafErrorCode,
-        _status: u16,
-    ) {
-    }
-
-    /// Mark the selected WAF transaction as a direct Pingora body-stream
-    /// consumer. The real adapter also makes retry eligibility monotonic false.
-    fn enable_waf_request_body_streaming(&mut self, _owner: &Arc<()>, _body_limit: u64) -> bool {
-        true
-    }
+    /// Borrow the selected-WAF integration capability for one operation.
+    /// The adapter retains ownership; callers must release this borrow before
+    /// using another session operation or awaiting body capture.
+    fn waf(&mut self) -> &mut dyn WafSessionCapability;
 
     /// Capture a soft window plus one proof byte, then feed one bounded reader.
     #[allow(unused_parens)]
