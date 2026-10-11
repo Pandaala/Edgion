@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use super::super::operation::{
@@ -13,10 +14,12 @@ pub(super) struct Backend {
     view: Option<Arc<BodyStorageView>>,
     modified_len: Option<u64>,
     known_empty: bool,
+    mutation_frozen: AtomicBool,
 }
 
 impl Backend {
     pub(super) fn freeze_mutation(&self) {
+        self.mutation_frozen.store(true, Ordering::Relaxed);
         if let Some(view) = &self.view {
             view.freeze_mutation();
         }
@@ -246,6 +249,9 @@ impl Backend {
     }
 
     pub(super) fn install(&mut self, view: Arc<BodyStorageView>) {
+        if self.mutation_frozen.load(Ordering::Relaxed) {
+            view.freeze_mutation();
+        }
         self.view = Some(view);
         self.known_empty = false;
     }

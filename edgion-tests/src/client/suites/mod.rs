@@ -112,13 +112,14 @@ pub use edgion_plugins::{
     RequestAccessPolicyTestSuite, RequestIdPluginTestSuite, RequestMirrorTestSuite, RequestRestrictionTestSuite,
     ResolvedRefsTestSuite, ResponseRewriteTestSuite, WafDynamicBundleV1TestSuite, WafDynamicBundleV2TestSuite,
     WafDynamicConfiguredPrefixTestSuite, WafDynamicControlTestSuite, WafDynamicDeletedTestSuite,
-    WafDynamicDetectionTestSuite, WafDynamicInitialTestSuite, WafDynamicInjectionTestSuite,
-    WafDynamicJsonDetectionTestSuite, WafDynamicJsonV1TestSuite, WafDynamicJsonV2TestSuite,
-    WafDynamicJsonZeroSourceTestSuite, WafDynamicOriginalDetectionTestSuite, WafDynamicOriginalOnTestSuite,
-    WafDynamicRecoveredTestSuite, WafDynamicSelectorHighTestSuite, WafDynamicStaticSelectionTestSuite,
-    WafDynamicSupportedDetectionTestSuite, WafDynamicSupportedOnTestSuite, WafDynamicSupportedRetainedTestSuite,
-    WafDynamicSupportedStandardTestSuite, WafDynamicUpdatedTestSuite, WafDynamicXmlDetectionTestSuite,
-    WafDynamicXmlV1TestSuite, WafDynamicXmlV2TestSuite, WasmPluginTestSuite, WebhookKeyGetTestSuite,
+    WafDynamicDetectionTestSuite, WafDynamicFormatLimitTestSuite, WafDynamicInitialTestSuite,
+    WafDynamicInjectionTestSuite, WafDynamicInspectionLimitTestSuite, WafDynamicJsonDetectionTestSuite,
+    WafDynamicJsonV1TestSuite, WafDynamicJsonV2TestSuite, WafDynamicJsonZeroWorkTestSuite,
+    WafDynamicOriginalDetectionTestSuite, WafDynamicOriginalOnTestSuite, WafDynamicRecoveredTestSuite,
+    WafDynamicSelectorHighTestSuite, WafDynamicStaticSelectionTestSuite, WafDynamicSupportedDetectionTestSuite,
+    WafDynamicSupportedOnTestSuite, WafDynamicSupportedRetainedTestSuite, WafDynamicSupportedStandardTestSuite,
+    WafDynamicUpdatedTestSuite, WafDynamicXmlDetectionTestSuite, WafDynamicXmlV1TestSuite, WafDynamicXmlV2TestSuite,
+    WasmPluginTestSuite, WebhookKeyGetTestSuite,
 };
 
 // LinkSys tests

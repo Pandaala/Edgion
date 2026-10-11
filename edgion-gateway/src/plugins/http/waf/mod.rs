@@ -5,7 +5,9 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::edgion_plugins::{BodyRequirement, WafConfig, WafMode, WafRequestBodyInspection};
+use edgion_resources::resources::edgion_plugins::{
+    BodyRequirement, WafConfig, WafInspectionLimitAction, WafMode, WafRequestBodyInspection,
+};
 use edgion_waf::seclang::{
     BodyError, BodyProcessorSelection, JsonCheckerError, JsonInspectionLimits, JsonStreamError, JsonStreamLimit,
     PhaseOutcome, RequestBody, RequestBodyPrefixCompletion, RequestHead, RequestHeader, ResponseHead, ResponseHeader,
@@ -80,7 +82,11 @@ struct SharedWaf {
     requires_request_body: bool,
     request_body_inspection: WafRequestBodyInspection,
     request_body_prefix_bytes: usize,
+    max_inspect_bytes: Option<u64>,
+    on_inspection_limit: WafInspectionLimitAction,
     json_limits: JsonInspectionLimits,
+    max_json_body_bytes: Option<u64>,
+    max_xml_body_bytes: Option<u64>,
     priority: u16,
     _generation_metric: WafGenerationMetricLease,
 }
@@ -109,6 +115,7 @@ impl WafPlugin {
             WafMode::On => RuleEngineMode::On,
             WafMode::DetectionOnly => RuleEngineMode::DetectionOnly,
         };
+        let (max_json_body_bytes, max_xml_body_bytes) = config.request_body.format_body_limits()?;
         let requires_request_body = generation.requires_complete_request_body();
         let generation_bytes = generation.retained_bytes();
         Ok(Self {
@@ -119,16 +126,44 @@ impl WafPlugin {
                 requires_request_body,
                 request_body_inspection: config.request_body.inspection,
                 request_body_prefix_bytes: config.request_body.prefix_size_bytes()?,
+                max_inspect_bytes: config.request_body.inspection_limit_bytes()?,
+                on_inspection_limit: config.request_body.on_limit.unwrap_or_default(),
+                max_json_body_bytes,
+                max_xml_body_bytes,
                 json_limits: config
                     .request_body
                     .json
                     .as_ref()
-                    .map(|json| json.inspection_limits())
+                    .map(|json| json.inspection_limits(0))
                     .unwrap_or_default(),
                 priority: config.priority,
                 _generation_metric: WafGenerationMetricLease::new(generation_bytes),
             }),
         })
+    }
+
+    fn inspection_stop(
+        &self,
+        session: &mut dyn PluginSession,
+        policy: json_capture::InspectionPolicy,
+    ) -> PluginRunningResult {
+        if !session.stop_waf_inspection(&self.shared.owner, policy.window, policy.storage_limit) {
+            return self.runtime_failure(session, WafLogPhase::RequestBody, &RuntimeError::GenerationInvariant);
+        }
+        if self.shared.on_inspection_limit == WafInspectionLimitAction::Reject {
+            session.record_waf_terminal_error(
+                &self.shared.owner,
+                WafLogPhase::RequestBody,
+                WafErrorCode::BodyLimit,
+                413,
+            );
+            PluginRunningResult::ErrResponse {
+                status: 413,
+                body: None,
+            }
+        } else {
+            PluginRunningResult::GoodNext
+        }
     }
 
     pub(crate) fn owner(&self) -> Arc<()> {
@@ -375,16 +410,25 @@ impl RequestFilter for WafPlugin {
             request_id.as_bytes(),
             &headers,
         );
-        let runtime_limits = RuntimeLimits::default();
+        let (physical_limit, expensive_checks) = {
+            let ctx = session.ctx();
+            (
+                ctx.request_body_config.max_body_size_bytes,
+                ctx.egc.waf_expensive_checks,
+            )
+        };
+        let Ok(physical_limit) = usize::try_from(physical_limit) else {
+            return self.runtime_failure(session, WafLogPhase::RequestHeaders, &RuntimeError::Arithmetic);
+        };
+        let mut runtime_limits = RuntimeLimits::default();
+        runtime_limits.body.max_body_bytes = physical_limit;
         let mut transaction = match Transaction::new_shared_with_policy(
             Arc::clone(&self.shared.generation),
             request,
             runtime_limits,
             edgion_waf::seclang::EvaluationMode::Accelerated,
             self.shared.engine_mode,
-            RuleCheckPolicy {
-                expensive_checks: session.ctx().egc.waf_expensive_checks,
-            },
+            RuleCheckPolicy { expensive_checks },
         ) {
             Ok(transaction) => transaction,
             Err(error) => return self.runtime_failure(session, WafLogPhase::RequestHeaders, &error),
@@ -402,7 +446,10 @@ impl RequestFilter for WafPlugin {
             return Self::intervention_result(phase_one);
         }
 
-        let processor = if self.shared.request_body_inspection == WafRequestBodyInspection::Full {
+        let processor = if self.shared.request_body_inspection == WafRequestBodyInspection::Full
+            || self.shared.max_json_body_bytes.is_some()
+            || self.shared.max_xml_body_bytes.is_some()
+        {
             match transaction.preflight_request_body(BodyProcessorSelection::Auto) {
                 Ok(processor) => processor,
                 Err(error) => return self.runtime_failure(session, WafLogPhase::RequestBody, &error),
@@ -411,20 +458,86 @@ impl RequestFilter for WafPlugin {
             BodyProcessorSelection::Auto
         };
 
+        let format_limit = match processor {
+            BodyProcessorSelection::Json => self.shared.max_json_body_bytes,
+            BodyProcessorSelection::Xml => self.shared.max_xml_body_bytes,
+            _ => None,
+        };
+        if let Some(limit) = format_limit {
+            if let Err(error) = session.install_waf_body_limit(&self.shared.owner, limit) {
+                if matches!(error, BodyReadError::BufferLimitExceeded { .. }) {
+                    session.record_waf_terminal_error(
+                        &self.shared.owner,
+                        WafLogPhase::RequestBody,
+                        WafErrorCode::BodyLimit,
+                        413,
+                    );
+                    return PluginRunningResult::ErrResponse {
+                        status: 413,
+                        body: None,
+                    };
+                }
+                return self.body_read_failure(session, log, &error);
+            }
+        }
+
+        let policy = if self.shared.request_body_inspection == WafRequestBodyInspection::Full
+            && (self.shared.requires_request_body || self.shared.max_inspect_bytes.is_some())
+        {
+            let ctx = session.ctx();
+            let physical = ctx.request_body_config.max_body_size_bytes;
+            if self.shared.max_inspect_bytes.is_some_and(|limit| limit > physical) {
+                return self.runtime_failure(session, WafLogPhase::RequestBody, &RuntimeError::GenerationInvariant);
+            }
+            let cap = ctx.request_body_hard_limit();
+            let window = self.shared.max_inspect_bytes.unwrap_or(physical).min(cap);
+            let cached = match ctx.request_body.cached_len() {
+                Ok(value) => value.is_some(),
+                Err(error) => return self.body_read_failure(session, log, &error),
+            };
+            let partial_allowed = ctx.waf_partial_capture_allowed && !cached;
+            let storage = ctx.request_body_config.capture_limit();
+            let effective = if partial_allowed { window.min(storage) } else { window };
+            json_capture::InspectionPolicy {
+                cap,
+                window: effective,
+                native_prefix: partial_allowed && effective < cap,
+                storage_limit: partial_allowed && storage < window,
+            }
+        } else {
+            json_capture::InspectionPolicy::complete(u64::MAX)
+        };
+        let source_limit = if self.shared.request_body_inspection == WafRequestBodyInspection::Full
+            && self.shared.requires_request_body
+        {
+            match usize::try_from(policy.window) {
+                Ok(limit) => limit,
+                Err(_) => return self.runtime_failure(session, WafLogPhase::RequestBody, &RuntimeError::Arithmetic),
+            }
+        } else {
+            physical_limit
+        };
+        if let Err(error) = transaction.constrain_request_body_bytes(source_limit) {
+            return self.runtime_failure(session, WafLogPhase::RequestBody, &error);
+        }
+        runtime_limits.body.max_body_bytes = source_limit;
+        let mut json_limits = self.shared.json_limits;
+        json_limits.lexical.max_source_bytes = source_limit;
+        let mut xml_limits = XmlInspectionLimits::default();
+        xml_limits.parser.max_source_bytes = source_limit;
         let prefix_mode = self.shared.request_body_inspection == WafRequestBodyInspection::Prefix
             && self.shared.requires_request_body;
         let mut prefix_complete = false;
         let structured_published = self.shared.request_body_inspection == WafRequestBodyInspection::Full
             && matches!(processor, BodyProcessorSelection::Json | BodyProcessorSelection::Xml);
         if structured_published {
-            let cap = session.ctx().request_body_config.max_body_size_bytes;
             let inspection = if processor == BodyProcessorSelection::Xml {
                 json_capture::inspect_xml(
                     session,
                     &mut transaction,
-                    XmlInspectionLimits::default(),
+                    xml_limits,
                     runtime_limits,
-                    cap,
+                    policy,
                     self.shared.requires_request_body,
                 )
                 .await
@@ -432,15 +545,16 @@ impl RequestFilter for WafPlugin {
                 json_capture::inspect(
                     session,
                     &mut transaction,
-                    self.shared.json_limits,
+                    json_limits,
                     runtime_limits,
-                    cap,
+                    policy,
                     self.shared.requires_request_body,
                 )
                 .await
             };
             match inspection {
-                Ok(()) => {}
+                Ok(json_capture::InspectionOutcome::Complete) => {}
+                Ok(json_capture::InspectionOutcome::Limited) => return self.inspection_stop(session, policy),
                 Err(json_capture::JsonCaptureError::Body(error)) => {
                     return self.body_read_failure(session, log, &error)
                 }
@@ -458,8 +572,22 @@ impl RequestFilter for WafPlugin {
                         prefix_complete = complete;
                         body
                     })
+            } else if policy.native_prefix {
+                let mut observer = RawInspectionWindow(policy.window);
+                match session
+                    .capture_request_body_inspection(policy.window, &mut observer)
+                    .await
+                {
+                    Ok(capture) if capture.complete => match capture.storage {
+                        Some(view) => view.read_all().await,
+                        None if capture.captured_len == 0 => Ok(bytes::Bytes::new()),
+                        None => Err(BodyReadError::Incomplete),
+                    },
+                    Ok(_) => return self.inspection_stop(session, policy),
+                    Err(error) => Err(error),
+                }
             } else {
-                let cap = session.ctx().request_body_config.max_body_size_bytes;
+                let cap = policy.cap;
                 let captured = match session.ensure_request_body(Some(cap)).await {
                     Ok(len) => len,
                     Err(error) => return self.body_read_failure(session, log, &error),
@@ -472,6 +600,9 @@ impl RequestFilter for WafPlugin {
                 };
                 if available > cap {
                     return self.body_read_failure(session, log, &BodyReadError::BufferLimitExceeded { limit: cap });
+                }
+                if available > policy.window {
+                    return self.inspection_stop(session, policy);
                 }
                 let Ok(actual) = usize::try_from(available) else {
                     return self.runtime_failure(session, WafLogPhase::RequestBody, &RuntimeError::Arithmetic);
@@ -488,16 +619,14 @@ impl RequestFilter for WafPlugin {
                         },
                     );
                 }
-                if processor == BodyProcessorSelection::Json
-                    && actual > self.shared.json_limits.lexical.max_source_bytes
-                {
+                if processor == BodyProcessorSelection::Json && actual > json_limits.lexical.max_source_bytes {
                     return self.runtime_failure(
                         session,
                         WafLogPhase::RequestBody,
                         &RuntimeError::JsonChecker {
                             kind: JsonCheckerError::Lexical(JsonStreamError::Limit {
                                 kind: JsonStreamLimit::SourceBytes,
-                                limit: self.shared.json_limits.lexical.max_source_bytes,
+                                limit: json_limits.lexical.max_source_bytes,
                             }),
                         },
                     );
@@ -519,7 +648,7 @@ impl RequestFilter for WafPlugin {
             crate::observe::metrics::record_waf_body_bytes_inspected("request", body.len());
             if let Err(error) = transaction.publish_request_body_with_json_limits(
                 RequestBody::new(std::mem::take(&mut body), processor),
-                self.shared.json_limits,
+                json_limits,
             ) {
                 return self.runtime_failure(session, WafLogPhase::RequestBody, &error);
             }
@@ -665,3 +794,11 @@ mod tests;
 #[cfg(test)]
 #[path = "../../../../tests/unit/plugins/http/waf/mod_test/fixture.rs"]
 pub(crate) mod fixture;
+
+struct RawInspectionWindow(u64);
+impl crate::plugins::runtime::traits::session::RequestBodyChunkConsumer for RawInspectionWindow {
+    fn source_window(&self) -> Option<u64> {
+        Some(self.0)
+    }
+    fn consume(&mut self, _chunk: &[u8]) {}
+}

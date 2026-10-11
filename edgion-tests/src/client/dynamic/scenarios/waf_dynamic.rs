@@ -26,6 +26,23 @@ fn deleted() -> Box<dyn TestSuite> {
     Box::new(suites::WafDynamicDeletedTestSuite)
 }
 
+fn ordinary_body_limit() -> Box<dyn TestSuite> {
+    Box::new(suites::WafDynamicInspectionLimitTestSuite("ordinary"))
+}
+
+fn inspection_continue() -> Box<dyn TestSuite> {
+    Box::new(suites::WafDynamicInspectionLimitTestSuite("continue"))
+}
+fn inspection_reject() -> Box<dyn TestSuite> {
+    Box::new(suites::WafDynamicInspectionLimitTestSuite("reject"))
+}
+fn format_prefix() -> Box<dyn TestSuite> {
+    Box::new(suites::WafDynamicFormatLimitTestSuite("prefix"))
+}
+fn format_head() -> Box<dyn TestSuite> {
+    Box::new(suites::WafDynamicFormatLimitTestSuite("head"))
+}
+
 fn configured_prefix() -> Box<dyn TestSuite> {
     Box::new(suites::WafDynamicConfiguredPrefixTestSuite)
 }
@@ -271,8 +288,8 @@ fn json_detection() -> Box<dyn TestSuite> {
     Box::new(suites::WafDynamicJsonDetectionTestSuite)
 }
 
-fn json_zero_source() -> Box<dyn TestSuite> {
-    Box::new(suites::WafDynamicJsonZeroSourceTestSuite)
+fn json_zero_work() -> Box<dyn TestSuite> {
+    Box::new(suites::WafDynamicJsonZeroWorkTestSuite)
 }
 
 fn bundle_v1() -> Box<dyn TestSuite> {
@@ -520,12 +537,32 @@ static PHASES: &[PhaseSuite] = &[
         factory: json_detection,
     },
     PhaseSuite {
-        name: "json-zero-source",
-        factory: json_zero_source,
+        name: "json-zero-work",
+        factory: json_zero_work,
     },
     PhaseSuite {
         name: "json-recreated",
         factory: json_v1,
+    },
+    PhaseSuite {
+        name: "ordinary-body-limit",
+        factory: ordinary_body_limit,
+    },
+    PhaseSuite {
+        name: "inspection-continue",
+        factory: inspection_continue,
+    },
+    PhaseSuite {
+        name: "inspection-reject",
+        factory: inspection_reject,
+    },
+    PhaseSuite {
+        name: "format-prefix",
+        factory: format_prefix,
+    },
+    PhaseSuite {
+        name: "format-head",
+        factory: format_head,
     },
     PhaseSuite {
         name: "configured-prefix",
@@ -611,6 +648,12 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
         ctx.apply_dir("updates/to_prefix_1m").await?;
         ctx.wait_phase(scenario, "configured-prefix", Duration::from_secs(15))
             .await?;
+        ctx.apply_dir("updates/to_format_prefix").await?;
+        ctx.wait_phase(scenario, "format-prefix", Duration::from_secs(20))
+            .await?;
+        run_inspection_policy_updates(&ctx, scenario).await?;
+        ctx.apply_dir("updates/to_format_head").await?;
+        ctx.wait_phase(scenario, "format-head", Duration::from_secs(20)).await?;
         ctx.apply_dir("updates/to_detection").await?;
         ctx.wait_phase(scenario, "detection", Duration::from_secs(15)).await?;
         ctx.apply_dir("updates/to_injection").await?;
@@ -641,10 +684,10 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
         let paused_budget = suites::edgion_plugins::PausedJsonUpload::start(&ctx.test_ctx)
             .await
             .map_err(anyhow::Error::msg)?;
-        ctx.apply_dir("updates/to_json_zero_source").await?;
-        ctx.wait_phase(scenario, "json-zero-source", Duration::from_secs(20))
+        ctx.apply_dir("updates/to_json_zero_work").await?;
+        ctx.wait_phase(scenario, "json-zero-work", Duration::from_secs(20))
             .await?;
-        // Fresh requests prove the new zero-byte budget is enforced even in
+        // Fresh requests prove the new zero-work budget is enforced even in
         // DetectionOnly. The open V1 request keeps its nonzero budget and On mode.
         paused_budget.finish().await.map_err(anyhow::Error::msg)?;
         ctx.apply_dir("updates/to_json_v1").await?;
@@ -943,3 +986,91 @@ pub static EXPENSIVE_SCENARIO: &Scenario = &Scenario {
         },
     ],
 };
+
+async fn run_inspection_policy_updates(ctx: &ScenarioCtx, scenario: &'static Scenario) -> Result<()> {
+    let client = crate::dynamic::apply::build_client(&ctx.controller_url)?;
+    let mut baseline: Value = client
+        .get("EdgionGatewayConfig", None, "example-gateway")
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    ensure!(
+        baseline["kind"] == "EdgionGatewayConfig",
+        "baseline EGC resource missing"
+    );
+    baseline
+        .as_object_mut()
+        .context("EGC must be an object")?
+        .remove("status");
+    if let Some(metadata) = baseline["metadata"].as_object_mut() {
+        metadata.remove("resourceVersion");
+        metadata.remove("managedFields");
+    }
+    baseline["spec"]
+        .as_object_mut()
+        .context("EGC spec must be an object")?
+        .remove("currentStatus");
+    let apply = |resource: Value| {
+        let client = &client;
+        async move {
+            crate::dynamic::apply::apply_yaml_documents(
+                client,
+                &ctx.resolve("inspection-storage-policy"),
+                &serde_yaml::to_string(&resource)?,
+            )
+            .await?;
+            let expected = &resource["spec"]["requestBody"];
+            tokio::time::timeout(Duration::from_secs(30), async {
+                loop {
+                    let url = format!(
+                        "{}/configclient/EdgionGatewayConfig?name=example-gateway",
+                        ctx.gateway_url.trim_end_matches('/')
+                    );
+                    let mut request = ctx.test_ctx.http_client.get(url).timeout(Duration::from_secs(3));
+                    if let Ok(token) = std::env::var("EDGION_GATEWAY_ADMIN_TOKEN") {
+                        request = request.bearer_auth(token);
+                    }
+                    let value: Value = request.send().await?.error_for_status()?.json().await?;
+                    if value["success"] == true && value["data"]["spec"]["requestBody"] == *expected {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Ok::<(), anyhow::Error>(())
+            })
+            .await
+            .context("request body policy publication timed out")??;
+            Ok::<(), anyhow::Error>(())
+        }
+    };
+    let result = async {
+        let mut disk = baseline.clone();
+        disk["spec"]["requestBody"] = serde_json::json!({
+            "enabled": true, "maxBodySize": "1MiB",
+            "storage": { "memoryLimit": "1", "spillToDisk": true, "maxBufferedSize": "32", "operationTimeout": "5s" }
+        });
+        apply(disk).await?;
+        for action in ["continue", "reject"] {
+            ctx.apply_dir(&format!("updates/to_inspection_{action}")).await?;
+            ctx.wait_phase(scenario, &format!("inspection-{action}"), Duration::from_secs(30))
+                .await?;
+        }
+        let mut ordinary = baseline.clone();
+        ordinary["spec"]["requestBody"] = serde_json::json!({
+            "enabled": false, "maxBodySize": "128",
+            "storage": { "memoryLimit": "128", "spillToDisk": false, "maxBufferedSize": "128", "operationTimeout": "5s" }
+        });
+        apply(ordinary).await?;
+        ctx.wait_phase(scenario, "ordinary-body-limit", Duration::from_secs(30)).await?;
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+    let restoration = apply(baseline).await;
+    match (result, restoration) {
+        (Ok(()), Ok(())) => Ok(()),
+        (result, restoration) => {
+            anyhow::bail!("WAF inspection storage update: result={result:?}; restoration={restoration:?}")
+        }
+    }
+}

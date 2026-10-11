@@ -68,11 +68,12 @@ spec:
 
   requestBody:
     enabled: true
-    defaultMemoryBufferSize: "128KiB"
-    # maxMemoryBufferSize: "1MiB"
-    defaultMaxBodySize: "32MiB"
-    # maxBodySize: "64MiB"
-    storageOperationTimeout: "5s"
+    maxBodySize: "32MiB"
+    storage:
+      memoryLimit: "128KiB"
+      spillToDisk: true
+      # maxBufferedSize: "32MiB"
+      operationTimeout: "5s"
 
   globalPluginsRef:
     - name: "global-cors"
@@ -217,15 +218,19 @@ Pingora 在协议解析阶段拒绝包含多个 `Host` 头部字段的 HTTP/1.1 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `enabled` | `Boolean` | `true` | 运行时请求体捕获开关；关闭后，需要请求体的插件按正常的 body 不可用结果执行 fail-close |
-| `defaultMemoryBufferSize` | `String` | `128KiB` | 落盘前默认保留在内存中的字节数 |
-| `maxMemoryBufferSize` | `String` | 未设置 | 内存溢写阈值的业务覆盖值；未设置时使用 `defaultMemoryBufferSize` |
-| `defaultMaxBodySize` | `String` | `32MiB` | 完整请求体的默认上限 |
-| `maxBodySize` | `String` | 未设置 | 请求体物理上限的业务覆盖值；未设置时使用 `defaultMaxBodySize` |
-| `storageOperationTimeout` | `String` | `5s` | 单次落盘请求体操作的非零时限，同时覆盖等待存储 I/O 准入和执行文件操作 |
+| `maxBodySize` | `String` | `32MiB` | 请求体硬上限 |
+| `storage.memoryLimit` | `String` | `128KiB` | 落盘前的内存 payload 阈值 |
+| `storage.spillToDisk` | `Boolean` | `true` | 超过内存阈值后允许落盘 |
+| `storage.maxBufferedSize` | `String` | 继承 maxBodySize | 新缓存 owner 的保留容量上限 |
+| `storage.operationTimeout` | `String` | `5s` | 单次存储操作的准入及执行时限 |
+
+必须满足 `memoryLimit <= maxBufferedSize <= maxBodySize`，省略缓存上限时继承请求体上限。关闭落盘后，新完整缓存的容量还受内存阈值约束；超过容量会失败，不会返回不完整的 body。新 owner 的容量也约束后续正文修改；已有完整缓存保留原 owner 的容量。显式 WAF raw-prefix 使用独立的至多 1MiB 内存窗口。只有 WAF 需要正文时，full 检查可以在配置的检查或存储边界停止，由 `onLimit` 选择继续或拒绝；继续转发不会截断正文。其他需要完整正文的插件仍要求完整缓存。
+
+普通 HTTP 即使没有 WAF 或正文插件、或关闭捕获，也执行物理上限。已知 Content-Length 超限时在转发前拒绝；未知长度则按实际接收字节计数终止上传。已经选定的响应保留原有响应权，不再替换为 413。gRPC、CONNECT 和成功升级后的隧道除外，仅携带 Upgrade 请求头不能绕过限制。
 
 所有大小都必须是正数可读字节值，有效内存阈值不能超过有效请求体上限。Gateway 在发布配置更新时解析这些值；每个新请求从不可变快照复制已解析策略，不会解析大小字符串或获取阻塞锁。插件的 `body.maxBodySize` 可以进一步收紧该插件的限制。
 
-`storageOperationTimeout` 使用共享的 GEP-2257 duration 格式（如 `500ms`、`5s`、`1m`），且必须大于零。超过该时限会报告为 Gateway 本地存储故障，而不是下游请求体读取超时。捕获失败且仍可能存在未读 body 时，HTTP/1 连接不可复用；HTTP/2 只重置受影响的 stream。
+`storage.operationTimeout` 使用共享的 GEP-2257 duration 格式（如 `500ms`、`5s`、`1m`），且必须大于零。超过该时限会报告为 Gateway 本地存储故障，而不是下游请求体读取超时。捕获失败且仍可能存在未读 body 时，HTTP/1 连接不可复用；HTTP/2 只重置受影响的 stream。
 
 ### spec.globalPluginsRef
 

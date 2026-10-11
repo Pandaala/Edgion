@@ -708,3 +708,38 @@ fn xml_capture_hit_batches_share_detection_and_preserve_aliases_and_negation() {
     }
     assert_eq!(results[0], results[1]);
 }
+
+#[test]
+fn policy_stop_discards_partial_xml_without_eof_or_abandonment() {
+    let g = compile(
+        r#"SecRule XML:/* "@contains attack" "id:1,phase:2,deny,status:403"
+"#,
+    );
+    for prefix in [b"<r>attack".as_slice(), b"<r a='", b"<r>&am", b"<r>\xc3"] {
+        let mut tx = transaction(&g, RuleEngineMode::On, RuntimeLimits::default());
+        let mut session = tx.start_xml_inspection(XmlInspectionLimits::default(), None).unwrap();
+        session.feed(prefix).unwrap();
+        session.stop_by_policy().unwrap();
+        assert!(tx.request.body.is_none());
+        assert!(tx.json_failure.is_none());
+    }
+}
+
+#[test]
+fn policy_stop_preserves_deferred_detection_only_xml_error() {
+    let g = compile(
+        r#"SecRule XML:/* "@contains attack" "id:1,phase:2,deny,status:403"
+"#,
+    );
+    let mut tx = transaction(&g, RuleEngineMode::DetectionOnly, RuntimeLimits::default());
+    let mut session = tx.start_xml_inspection(XmlInspectionLimits::default(), None).unwrap();
+    session.feed(b"<r></wrong>").unwrap();
+    assert!(matches!(
+        session.stop_by_policy(),
+        Err(RuntimeError::Body {
+            kind: BodyError::Malformed { .. }
+        })
+    ));
+    assert!(tx.request.body.is_none());
+    assert!(tx.json_failure.is_some());
+}

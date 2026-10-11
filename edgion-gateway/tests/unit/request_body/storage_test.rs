@@ -1295,3 +1295,42 @@ async fn dropping_storage_releases_its_anonymous_spill_while_snapshot_view_stays
         Bytes::from_static(b"persistent-body")
     );
 }
+
+#[tokio::test]
+async fn resolved_memory_only_capacity_refuses_spill_and_bounds_mutation() {
+    let policy = crate::request_body::ResolvedRequestBodyConfig {
+        memory_buffer_bytes: 4,
+        max_buffered_size_bytes: 8,
+        max_body_size_bytes: 16,
+        spill_to_disk: false,
+        ..Default::default()
+    };
+    let (mut storage, view) = BodyStorage::with_storage_timeout(
+        policy.memory_buffer_bytes,
+        policy.capture_limit(),
+        policy.storage_operation_timeout,
+    );
+    storage.write(&Bytes::from_static(b"four")).await.unwrap();
+    let error = storage.write(&Bytes::from_static(b"!")).await.unwrap_err();
+    assert!(matches!(error.etype(), ErrorType::HTTPStatus(413)));
+    assert!(matches!(storage.storage, CaptureStorage::Memory(_)));
+    storage.finish().await.unwrap();
+    assert!(view.overwrite_body(Bytes::from_static(b"longer")).is_err());
+    assert_eq!(replay_all(&mut storage, 2).await, Bytes::from_static(b"four"));
+    // A separately created complete owner is not retroactively constrained.
+    let (mut existing, existing_view) = BodyStorage::with_limits(1, 16);
+    capture(&mut existing, &[b"existing"]).await;
+    existing_view
+        .overwrite_body(Bytes::from_static(b"still-longer"))
+        .unwrap();
+    assert_eq!(replay_all(&mut existing, 3).await, Bytes::from_static(b"still-longer"));
+}
+
+#[tokio::test]
+async fn owner_capacity_allows_mutation_beyond_initial_capture_length() {
+    let (mut storage, view) = BodyStorage::with_limits(2, 8);
+    capture(&mut storage, &[b"tiny"]).await;
+    view.overwrite_body(Bytes::from_static(b"expanded")).unwrap();
+    assert!(view.overwrite_body(Bytes::from_static(b"oversized")).is_err());
+    assert_eq!(replay_all(&mut storage, 2).await, Bytes::from_static(b"expanded"));
+}

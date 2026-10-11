@@ -1,0 +1,19 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: waf-rules-format-prefix
+  namespace: edgion-default
+spec:
+  data:
+    type: WafRuleBundle
+    config:
+      version: "1"
+      profile: format_prefix
+      provenance: edgion-tests/waf-dynamic
+      digest: 5f857766307a4969af8013503b4089748927f84a78c1e750806d996264fced07
+      roots: [main.conf]
+      rules:
+        - name: main.conf
+          content: |
+            SecRule REQUEST_HEADERS:X-Waf-Hard-Phase "!@streq prefix" "id:2450,phase:1,deny,status:409"
+            SecRule REQUEST_BODY "@contains blocked" "id:2451,phase:2,deny,status:406"

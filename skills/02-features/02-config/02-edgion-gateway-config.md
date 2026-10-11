@@ -111,11 +111,12 @@ spec:
   # ─── Request-body buffering policy ───
   requestBody:
     enabled: true
-    defaultMemoryBufferSize: "128KiB"
-    # maxMemoryBufferSize: "1MiB"            # optional effective override
-    defaultMaxBodySize: "32MiB"
-    # maxBodySize: "64MiB"                   # optional effective override
-    storageOperationTimeout: "5s"            # admission + one file operation
+    maxBodySize: "32MiB"
+    storage:
+      memoryLimit: "128KiB"
+      spillToDisk: true
+      # maxBufferedSize: "32MiB"
+      operationTimeout: "5s"
 
   # ─── Global plugins ───
   globalPluginsRef:                         # Vec<PluginReference>, applied to all routes
@@ -266,11 +267,14 @@ and fallback SNI applies to new handshakes.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | `bool` | `true` | Runtime capture switch. When false, body-aware plugins receive the normal unimplemented read error; bodyless reads remain empty. |
-| `defaultMemoryBufferSize` | `String` | `128KiB` | Default bytes retained in memory before disk spill. |
-| `maxMemoryBufferSize` | `String?` | unset | Effective business override for the memory spill threshold. Falls back to `defaultMemoryBufferSize`. |
-| `defaultMaxBodySize` | `String` | `32MiB` | Default physical complete-body cap. |
-| `maxBodySize` | `String?` | unset | Effective business override for the physical body cap. Falls back to `defaultMaxBodySize`; per-plugin `body.maxBodySize` may tighten it further for that plugin only. |
-| `storageOperationTimeout` | `String` | `5s` | Non-zero GEP-2257 duration bounding storage-I/O admission plus one spill, replay, materialization, or snapshot file operation. |
+| `maxBodySize` | `String` | `32MiB` | Hard request-body ceiling |
+| `storage.memoryLimit` | `String` | `128KiB` | Resident payload threshold before optional spill |
+| `storage.spillToDisk` | `Boolean` | `true` | Allow disk spill above the memory threshold |
+| `storage.maxBufferedSize` | `String` | inherit maxBodySize | New capture owner retention capacity |
+| `storage.operationTimeout` | `String` | `5s` | Deadline for admission plus execution of one storage operation |
+
+Require `memoryLimit <= maxBufferedSize <= maxBodySize`, with omitted buffer capacity inherited from the body ceiling. Disabling spill additionally bounds new complete captures by the memory threshold. Required complete consumers fail when capacity is exceeded; they never receive a truncated snapshot. A new owner's capacity also bounds subsequent logical mutations. Existing complete snapshots retain their original owner's capacity. Explicit WAF raw-prefix capture currently retains its independent at-most-1MiB memory window; general inspection cutoff is a subsequent implementation stage.
+
 
 All sizes must be positive human-readable byte sizes. The effective memory
 threshold must not exceed the effective body cap. The Gateway resolves these

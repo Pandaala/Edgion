@@ -32,5 +32,6 @@ spec:
     idleTimeout: 2s
   requestBody:
     enabled: true
-    defaultMemoryBufferSize: 128KiB
-    defaultMaxBodySize: 32MiB
+    maxBodySize: 32MiB
+    storage:
+      memoryLimit: 128KiB

@@ -8,7 +8,7 @@ knowledge_type: regression-guards
 
 ## Conclusion and scope
 
-`WafConfig.request_body.inspection` selects default `prefix` or explicit `full`.
+`WafConfig.request_body.inspection` selects default `full` or explicit `prefix`.
 Prefix mode evaluates a configurable raw payload window before upstream selection
 or connection: `prefixSize` defaults to 64 KiB and is bounded to 1 byte through
 1 MiB. The shared size parser resolves it at configuration load, never per request. Admission says only that no eligible rule blocked that window.
@@ -17,7 +17,7 @@ independent and may fail after upstream exposure.
 
 The user amended the original task's native-retry-buffer-only proposal: reuse
 the canonical registered `RequestBodyBuffer` seam and Edgion `BodyStorage`.
-WAF-only capture capacity equals its inspection window and stays entirely in
+Explicit-prefix WAF-only capture capacity equals its inspection window and stays entirely in
 memory, including 1 MiB windows. This user-requested policy supersedes the
 earlier spill-threshold proposal. Full capture retains its memory/disk policy;
 `prefixSize` with `full` is rejected.
@@ -54,7 +54,11 @@ registered request-body buffer and request relay contracts.
   `full`. Later phases cannot depend on an unavailable full request body.
 - Prefix completion is explicit (`NotRequired`, `EndOfStream`, `WindowFilled`);
   the engine does not publish an empty or truncated body as a complete document.
-- Full mode uses complete `BodyStorage` capture for body consumers, including raw phrase rules.
+- Full mode publishes only complete documents. When its effective inspection
+  window is below the hard cap and the selected WAF is the sole body consumer,
+  it may use the canonical native N+1 capture lane. A policy cutoff discards
+  provisional JSON/XML state and stops all remaining WAF phases; it does not
+  publish a partial document. Other complete consumers retain complete capture.
 - Phase two alone does not imply body consumption. Compiler target and macro
   dependency analysis is shared by prefix eligibility, execution, and capture
   planning. Body-independent phase-two rules use ordinary evaluation and may
@@ -67,8 +71,12 @@ registered request-body buffer and request relay contracts.
   complete cache keeps its existing replay policy.
 - Transport overrun is distinct from cached inspection bytes. Its backing must be
   bounded and released, not hidden behind a small `Bytes::slice` length.
-- Physical limits count transport bytes once, including pre-read/overrun, and
-  remain active when no body plugins are installed. Replay never double-counts.
+- Prefix physical limits count transport bytes once, including pre-read/overrun,
+  and remain active when no per-chunk body plugins are installed. Ordinary HTTP
+  also enforces the pinned physical cap without WAF or storage capture. Original
+  CONNECT and canonical gRPC are excluded, and only an accepted native upgrade
+  disables admission for tunnel bytes. Replay never double-counts. Selected-WAF optional
+  JSON/XML hard limits additionally remain active without body-dependent rules.
 - `detectionOnly` suppresses rule interventions, not transport or storage failures.
 
 ## Verification and re-evaluation
@@ -151,7 +159,81 @@ This historical wire result does not prove trailer preservation.
 Re-evaluate when adding rule shapes, changing the prefix window, enabling prefix
 retry, changing body source ownership, or allowing post-inspection body mutation.
 
+## Optional format body admission (2026-10-09)
+
+The selected WAF may install `maxJsonBodySize` / `maxXmlBodySize` after Phase 1
+processor selection, independently of prefix/full coverage and body dependency.
+DetectionOnly does not disable an explicit admission ceiling. The effective
+limit is the tighter Gateway/format bound. Installation checks known native and
+logical sizes and freezes canonical body mutation, including later snapshot
+publication; mutating stream handlers conflict in both installation orders.
+The native relay guard survives transaction removal and counts received bytes,
+not replayed bytes. It retains the existing already-selected-response contract.
+
+Fresh unit, workspace check/Clippy and CRD checks passed. The new WafDynamic
+format phases passed in the shared topology across all four H1/H2 combinations,
+including N-1/N/N+1, unknown lengths and paused post-dispatch overflow with
+body-independent DetectionOnly. The first full rerun subsequently failed during
+fixture deletion because its cleanup list retained an old invalid resource name;
+that list is corrected. Fresh full WafDynamic then passed, including resource
+cleanup, under `tmp/integration_testing/testing_20261009_225253` (exit 0).
+Those historical results alone did not establish the subsequent
+default-full/storage-cutoff policy; its fresh acceptance is recorded below.
+
 ## Resolution references
 
 - `waf-request-verdict-before-forwarding` — confirmed missing admission contract;
-  implementation and verification tracked in the active task until closure gates pass.
+  implemented through the canonical admission seam; subsequent policy acceptance
+  and its boundaries are recorded below.
+
+
+### Explicit full-mode policy cutoff
+
+`json_capture::InspectionPolicy` separates the hard source cap from the soft
+inspection window. The cached reader admits total logical length before a short
+read and retains real EOF/parity checking for complete sources. Fresh WAF-only
+capture uses the same canonical BodyStorage with native N+1 proof and replay.
+The sealed view remains available through parser completion: DetectionOnly can
+require raw fallback only after feed-time or EOF-only syntax failure. Materialize
+that source only after completion requires it. Never eagerly copy a JSON-only
+source or expose partial storage as a complete request snapshot.
+
+`stop_by_policy` does not feed EOF, publish results or poison the transaction as
+abandoned. Genuine latched and deferred syntax errors remain failures. The
+request context claims all remaining phases, records bounded inspection-stop
+metadata and retains the independently installed hard body guard. A policy stop
+must not be labeled a complete clean result. Re-evaluate this contract whenever
+consumer composition, capture admission, parser fallback or phase ownership changes.
+
+## Unified policy acceptance (2026-10-10)
+
+Default Full now shares one effective source-byte ceiling across transaction
+BodyLimits, JSON lexical accounting and XML parser accounting. It starts from
+the pinned EGC physical cap and may narrow before publication. The removed
+operator `json.lexical.maxSourceBytes` has no alias. Token, decoded, depth,
+heap, node and work limits remain independent; a larger source allowance does
+not promise successful inspection of an arbitrarily complex document.
+
+Cross-resource maxInspectSize compatibility is checked on the actual pinned
+request pair before WAF initiates body reads/inspection, including when another
+consumer already captured a complete snapshot. An incompatible pair fails with
+the fixed runtime configuration error; it is never clamped or treated as a
+policy cutoff. No publication-time cross-resource diagnostic is implemented.
+One WAF generation may be attached to independently updated EGC scopes.
+
+The full shared WafDynamic run at `testing_20261010_001631` passed all four H1/H2
+directions, format and inspection boundaries, disk N+1 replay digests, dynamic
+configuration, ordinary HTTP admission with capture disabled, and early-response
+preservation; 16 checks passed, zero failed, two setup checks were expected skips.
+A native callback test separately proves a real overflow after response selection
+keeps the selected 200; wire early responses may cancel before tail reads.
+Source-byte tests admit whitespace/comment-heavy JSON/XML above 16 MiB under the
+default 32 MiB cap while independent zero-work budgets still reject.
+
+Supplemental acceptance exercised canonical storage deadlines/admission/poisoning,
+reader EOF/parity, cancellation, replay and owner-capacity atomicity, plus engine
+partial-document stop, duplicate-key and sticky-error regressions. These are
+per-request bounds, not process RSS/disk quotas. The process-wide byte ledger
+remains deferred. No new trailer forwarding contract or Kubernetes cluster test
+is established by the local shared topology; existing trailer/discard and
+protocol-specific replay contracts remain unchanged.

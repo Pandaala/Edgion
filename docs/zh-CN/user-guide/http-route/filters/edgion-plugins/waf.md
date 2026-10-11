@@ -57,11 +57,15 @@ spec:
 | `WafPolicy.profiles.<name>.bundleRefs[].optional` | 否 | `false` | 独立附加包缺失或无效时跳过并报告 `PartiallyInvalid`；基础包不可设为可选 |
 | `mode` | 否 | `on` | `on` 执行规则阻断；`detectionOnly` 仅记录规则命中 |
 | `priority` | 否 | `0` | 0–65535，仅在同一挂载范围内按较大值优先 |
-| `requestBody.inspection` | 否 | `prefix` | `prefix` 提前检查指定窗口；`full` 检查完整有界请求体 |
+| `requestBody.inspection` | 否 | `full` | `prefix` 提前检查指定窗口；`full` 检查完整有界请求体 |
 | `requestBody.prefixSize` | 否 | `64KiB` | 前缀窗口，1 字节至 `1MiB`，支持 `16KiB`、`100k`、`1m` 等大小字符串；仅用于 `prefix` |
+| `requestBody.maxInspectSize` | 否 | 网关物理上限 | 正数大小字符串；仅用于 `full`，限制检查窗口 |
+| `requestBody.onLimit` | 否 | `continue` | 达到检查／存储策略上限时停止后续 WAF 阶段；`reject` 则返回 413 |
 | `requestBody.json` | no | engine defaults | Complete JSON checker limit overrides; only valid with `full` |
 
 规则源码不会写入错误响应、日志或指标，网关管理接口将其脱敏。
+
+默认使用 `full` 检查。JSON/XML 的源字节上限统一取有效检查窗口，未配置时继承网关物理上限（默认 32 MiB）；不再提供 `json.lexical.maxSourceBytes`。独立的 token、堆内存和工作量预算仍然生效。普通 HTTP 即使没有 WAF 或关闭正文缓存，也执行物理上限；gRPC、CONNECT 和成功升级后的隧道流量除外，仅发送 Upgrade 请求头不能豁免。
 
 ## 静态规则选择
 
@@ -321,7 +325,7 @@ SecRule REQUEST_HEADERS:X-Waf-Exempt "@streq yes" "id:1201,phase:1,pass,ctl:rule
 SecRule ARGS "@contains blocked" "id:1202,phase:2,deny,status:403,tag:managed-check"
 ```
 
-Phase 1 在读取正文前检查请求头等信息。默认的 `prefix` 模式在选择或连接后端前，
+Phase 1 在读取正文前检查请求头等信息。显式配置的 `prefix` 模式在选择或连接后端前，
 检查最多 `prefixSize` 字节正文，默认 64 KiB、最大 1 MiB；移除传输分帧，但不解压 `Content-Encoding`。
 规则阻断时，后端收到零请求头、零正文。通过只表示检查窗口未被规则阻断，
 窗口之后的内容不会继续接受 WAF 正文检查。
@@ -338,7 +342,13 @@ Phase 2 中仅检查头部、URI 或查询参数集合（`ARGS_GET`、`ARGS_GET_
 前缀检查后的正文修改及不兼容流式处理器会失败关闭。原生前缀捕获禁用上游重试，
 短正文也相同；复用完整缓存时沿用已有重试策略。
 
-规则消费正文时，`full` 在 phase 2 前等待完整有界捕获，复用现有内存／磁盘存储；原始字节规则也按此执行。
+`full` 只在完整文档检查完成后执行正文规则。可通过 `maxInspectSize` 设置更小的检查窗口；
+仅 WAF 消费正文且尚无完整缓存时，新存储容量也会限制窗口。第 N+1 字节用于证明截断，
+恰好 N 字节则必须确认真实 EOF。截断时丢弃未完成的 JSON/XML 结果，并停止所有剩余 WAF 阶段。
+默认 `onLimit: continue` 原样转发正文；`reject` 返回 413，在 `detectionOnly` 下也生效。
+Phase 1 结果保留，访问日志以 `inspection_stop.admitted_bytes` 和 `inspection`／`storage` 原因记录
+窗口截断，不能把它当成完整检查通过。其他完整正文消费者仍要求完整捕获，其存储失败不会被此策略忽略。
+已有完整缓存保留原容量。真实解析、传输和存储失败仍按错误处理；显式窗口大于请求固定的网关物理上限时拒绝执行。
 全量模式不配置 `prefixSize`。网关物理正文上限和 WAF 执行预算始终独立生效。前缀放行后才发现超限时，后端可能已收到数据。
 `detectionOnly` 不会忽略传输、存储或物理上限错误。
 
@@ -370,7 +380,7 @@ runtime aggregate retained-byte limit, including while evaluating a chain branch
 
 | Domain | Default limits |
 |---|---|
-| lexical | source/raw token 16 MiB; decoded/retained 32 MiB; events 131072; depth 64; work 128 MiB |
+| lexical | source: effective inspection ceiling; raw token 16 MiB; decoded/retained 32 MiB; events 131072; depth 64; work 128 MiB |
 | structure | retained 8 MiB; keys 4 MiB; members 65536; path 16 KiB; depth 64; work 128 MiB |
 | results | candidates 65536; facts 1000000; retained 32 MiB; work 128 MiB; deferred entries 4096; deferred bytes 4 MiB |
 
@@ -379,7 +389,6 @@ requestBody:
   inspection: full
   json:
     lexical:
-      maxSourceBytes: 16777216
       maxRawTokenBytes: 16777216
       maxDecodedBytes: 33554432
       maxEvents: 131072
@@ -468,7 +477,7 @@ XML 不增加 ARGS 条目，combined-size 元数据只计算 query 参数。
 
 | 范围 | 固定默认限制 |
 |---|---|
-| parser | source/raw token 16 MiB；name 16 KiB；decoded bytes 32 MiB；events 262144；depth 64 |
+| parser | source: effective inspection ceiling; raw token 16 MiB；name 16 KiB；decoded bytes 32 MiB；events 262144；depth 64 |
 | structure | 每个 tag 的属性 65536；活动 namespace binding 65536；活动 name/namespace 字节 8 MiB |
 | storage/work | parser heap 32 MiB、work 128 MiB；selected-result 限制与 JSON result 默认值相同 |
 
@@ -524,3 +533,12 @@ strict PL4 可在响应头提交前通过响应状态规则拦截后端 500；st
 使用 `cargo run -p edgion-resources --example generate_supported_crs -- --check`
 从仓库内的来源复核生成结果。规则包 README 和 `generated/acceptance.json`
 记录排除项、来源 pin、profile 设置及输出 digest。
+
+
+### JSON/XML 正文硬上限
+
+可选配置 `requestBody.maxJsonBodySize` 和 `requestBody.maxXmlBodySize` 接受正数字节大小字符串，例如 `2MiB`。不配置表示没有额外格式限制，仍受网关正文上限约束。它们根据 Phase 1 后的实际正文处理器生效，不进行额外内容探测或解压；仅选中的 WAF 配置生效。
+
+这两个上限适用于 `prefix`、`full` 和 `detectionOnly`，即使规则不读取正文，也会持续执行大小限制。它们同时检查已接收的原始正文和已有逻辑缓存，启用后禁止后续正文改写，并与修改正文的流式处理器互斥。前缀检查结束后仍继续计数，重放不重复计数。
+
+超过上限时，尚未选定最终响应则返回 413；已选定响应时，沿用现有响应管线终止剩余上传，不替换已选定的响应。已发送到后端的字节无法撤回；需要保证后端零暴露时，应先完整缓存。格式硬上限与检查窗口不同，不能通过停止检查来绕过。

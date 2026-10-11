@@ -156,9 +156,10 @@ pub(crate) use waf::original_wire::ORIGINAL_DIGEST;
 pub(crate) use waf::xml_wire::paused as paused_xml_upload;
 pub use waf::{
     WafDynamicBundleV1TestSuite, WafDynamicBundleV2TestSuite, WafDynamicConfiguredPrefixTestSuite,
-    WafDynamicControlTestSuite, WafDynamicDeletedTestSuite, WafDynamicDetectionTestSuite, WafDynamicInitialTestSuite,
-    WafDynamicInjectionTestSuite, WafDynamicJsonDetectionTestSuite, WafDynamicJsonV1TestSuite,
-    WafDynamicJsonV2TestSuite, WafDynamicJsonZeroSourceTestSuite, WafDynamicOriginalDetectionTestSuite,
+    WafDynamicControlTestSuite, WafDynamicDeletedTestSuite, WafDynamicDetectionTestSuite,
+    WafDynamicFormatLimitTestSuite, WafDynamicInitialTestSuite, WafDynamicInjectionTestSuite,
+    WafDynamicInspectionLimitTestSuite, WafDynamicJsonDetectionTestSuite, WafDynamicJsonV1TestSuite,
+    WafDynamicJsonV2TestSuite, WafDynamicJsonZeroWorkTestSuite, WafDynamicOriginalDetectionTestSuite,
     WafDynamicOriginalOnTestSuite, WafDynamicRecoveredTestSuite, WafDynamicSelectorHighTestSuite,
     WafDynamicStaticSelectionTestSuite, WafDynamicSupportedDetectionTestSuite, WafDynamicSupportedOnTestSuite,
     WafDynamicSupportedRetainedTestSuite, WafDynamicSupportedStandardTestSuite, WafDynamicUpdatedTestSuite,

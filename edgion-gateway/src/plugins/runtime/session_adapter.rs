@@ -12,14 +12,14 @@ use super::conditions::EvaluationResult;
 use super::dye_plan::{CompiledDyePlan, CompiledDyeRule};
 use super::log::{EdgionPluginsLogToken, PluginLog};
 use super::traits::session::{
-    empty_response_header_map, BodyReadError, BodyReadResult, RequestBodyChunkConsumer, RequestBodySnapshotReader,
-    RouteProto,
+    empty_response_header_map, BodyReadError, BodyReadResult, RequestBodyChunkConsumer, RequestBodyInspectionCapture,
+    RequestBodySnapshotReader, RouteProto,
 };
 use super::traits::{DyeOutcome, PluginSession, PluginSessionError, PluginSessionResult};
 use crate::ai::{AiAttemptPlan, AiRequestContext};
 use crate::link_sys::template::evaluate_template;
-use crate::request_body::BodyStorage;
 use crate::request_body::{BodyOperationError, BodyScanResult};
+use crate::request_body::{BodyStorage, BodyStorageView};
 use crate::runtime::server::{http_to_grpc_status, send_grpc_trailers_only_frame};
 use crate::{EdgionHttpContext, MirrorState, PendingHeaderOp, ResponseStageDenial, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::common::{KeyGet, KeySet};
@@ -77,7 +77,10 @@ async fn capture_request_body_core_with_consumer(
         return Err(BodyReadError::Unimplemented);
     }
 
-    let cap = resolve_cap(max_bytes, ctx.request_body_config.max_body_size_bytes);
+    let owner_cap = ctx
+        .request_body_hard_limit()
+        .min(ctx.request_body_config.capture_limit());
+    let cap = resolve_cap(max_bytes, owner_cap);
     if downstream
         .req_header()
         .headers
@@ -107,7 +110,7 @@ async fn capture_request_body_core_with_consumer(
 
     let (storage, view) = BodyStorage::with_storage_timeout(
         ctx.request_body_config.memory_buffer_bytes,
-        ctx.request_body_config.max_body_size_bytes,
+        owner_cap,
         ctx.request_body_config.storage_operation_timeout,
     );
     downstream
@@ -151,6 +154,89 @@ async fn capture_request_body_core_with_consumer(
     Ok(len)
 }
 
+/// One canonical native prefix seam for explicit raw-prefix and policy windows.
+async fn capture_request_body_prefix_core(
+    downstream: &mut pingora_core::protocols::http::server::Session,
+    ctx: &mut EdgionHttpContext,
+    limit: usize,
+    memory_limit: usize,
+) -> Result<Option<(Arc<BodyStorageView>, bool)>, BodyReadError> {
+    if !ctx.request_info.in_request_body_stage
+        || ctx.request_body_handlers_selected()
+        || downstream.request_body_prefix_active()
+        || ctx.request_body.has_cached_body()
+    {
+        return Err(BodyReadError::NotBuffered);
+    }
+    match request_admission(ctx, false) {
+        RequestAdmission::PassThrough => {
+            ctx.waf_prefix_inspected = true;
+            return Ok(None);
+        }
+        RequestAdmission::Refuse(code) => {
+            ctx.record_error(code);
+            return Err(BodyReadError::NotBuffered);
+        }
+        RequestAdmission::Buffer => {}
+    }
+    if !ctx.request_body_config.enabled {
+        return Err(BodyReadError::Unimplemented);
+    }
+    let cap = ctx.request_body_hard_limit();
+    if downstream
+        .req_header()
+        .headers
+        .get(http::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some_and(|len| len > cap)
+    {
+        return Err(reject_over_limit_request_body(downstream, cap));
+    }
+    let expect_continue = downstream.req_header().version == http::Version::HTTP_11
+        && downstream
+            .req_header()
+            .headers
+            .get(http::header::EXPECT)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.eq_ignore_ascii_case("100-continue"));
+    if expect_continue {
+        downstream
+            .write_continue_response()
+            .await
+            .map_err(|_| BodyReadError::Incomplete)?;
+        downstream.req_header_mut().remove_header(&http::header::EXPECT);
+    }
+    // A smaller physical cap needs at most one additional byte to prove
+    // overflow. This is a capture budget, not the whole-request size cap.
+    let capture_limit = limit.min(usize::try_from(cap.saturating_add(1)).unwrap_or(usize::MAX));
+    let (storage, view) = BodyStorage::with_storage_timeout(
+        memory_limit,
+        capture_limit as u64,
+        ctx.request_body_config.storage_operation_timeout,
+    );
+    if let Err(error) = downstream
+        .capture_request_body_prefix(Box::new(storage), capture_limit)
+        .await
+    {
+        disable_h1_reuse_after_capture_failure(downstream);
+        return Err(match error.etype() {
+            pingora_core::ErrorType::ReadTimedout => BodyReadError::Timeout,
+            pingora_core::ErrorType::HTTPStatus(413) => BodyReadError::BufferLimitExceeded { limit: cap },
+            pingora_core::ErrorType::InternalError => BodyReadError::StorageFailure,
+            _ => BodyReadError::Incomplete,
+        });
+    }
+    if downstream.body_bytes_read() as u64 > cap {
+        return Err(reject_over_limit_request_body(downstream, cap));
+    }
+    let complete =
+        downstream.request_body_prefix_transport_complete() && downstream.body_bytes_read() as u64 == view.len()?;
+
+    ctx.waf_prefix_inspected = true;
+    Ok(Some((view, complete)))
+}
+
 async fn consume_request_body_snapshot(
     mut reader: Box<dyn RequestBodySnapshotReader>,
     cap: u64,
@@ -173,6 +259,10 @@ async fn consume_request_body_snapshot(
         }
         _ => None,
     };
+    let window = consumer.source_window().unwrap_or(expected).min(expected);
+    if window == 0 && expected != 0 {
+        return Ok(expected);
+    }
     let mut total = 0_u64;
     loop {
         let chunk = match contiguous.take() {
@@ -191,7 +281,12 @@ async fn consume_request_body_snapshot(
         if total > expected {
             return Err(BodyReadError::Incomplete);
         }
-        consumer.consume(&chunk);
+        let previous = total - chunk.len() as u64;
+        let admitted = window.saturating_sub(previous).min(chunk.len() as u64) as usize;
+        consumer.consume(&chunk[..admitted]);
+        if expected > window && total >= window {
+            return Ok(expected);
+        }
     }
     if total != expected {
         return Err(BodyReadError::Incomplete);
@@ -441,7 +536,10 @@ impl<'a> PingoraSessionAdapter<'a> {
     }
 
     async fn ensure_bodyless_request_replay_owner(&mut self) -> Result<(), BodyReadError> {
-        if self.ctx.waf_prefix_inspected || self.ctx.request_body_handlers_selected() {
+        if self.ctx.waf_prefix_inspected
+            || self.ctx.waf_body_hard_limit().is_some()
+            || self.ctx.request_body_handlers_selected()
+        {
             return Err(BodyReadError::NotBuffered);
         }
         if !self.ctx.request_body_config.enabled {
@@ -470,7 +568,9 @@ impl<'a> PingoraSessionAdapter<'a> {
 
         let (mut storage, view) = BodyStorage::with_storage_timeout(
             self.ctx.request_body_config.memory_buffer_bytes,
-            self.ctx.request_body_config.max_body_size_bytes,
+            self.ctx
+                .request_body_hard_limit()
+                .min(self.ctx.request_body_config.capture_limit()),
             self.ctx.request_body_config.storage_operation_timeout,
         );
         storage.finish().await.map_err(|_| BodyReadError::Incomplete)?;
@@ -1499,6 +1599,32 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx
     }
 
+    fn stop_waf_inspection(&mut self, owner: &Arc<()>, bytes: u64, storage_limit: bool) -> bool {
+        self.ctx.stop_waf_inspection(owner, bytes, storage_limit)
+    }
+
+    fn install_waf_body_limit(&mut self, owner: &Arc<()>, limit: u64) -> Result<(), BodyReadError> {
+        if !self.ctx.request_info.in_request_body_stage || !self.ctx.install_waf_body_hard_limit(owner, limit) {
+            return Err(BodyReadError::NotBuffered);
+        }
+        let cap = self.ctx.request_body_hard_limit();
+        let declared = self
+            .inner
+            .req_header()
+            .headers
+            .get(http::header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok());
+        let cached = self.ctx.request_body.cached_len()?;
+        if declared.is_some_and(|len| len > cap)
+            || cached.is_some_and(|len| len > cap)
+            || self.inner.body_bytes_read() as u64 > cap
+        {
+            return Err(reject_over_limit_request_body(self.inner.as_mut(), cap));
+        }
+        Ok(())
+    }
+
     fn install_waf_transaction(
         &mut self,
         owner: Arc<()>,
@@ -1869,7 +1995,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         {
             return Err(BodyReadError::NotBuffered);
         }
-        let cap = resolve_cap(max_bytes, self.ctx.request_body_config.max_body_size_bytes);
+        let cap = resolve_cap(max_bytes, self.ctx.request_body_hard_limit());
         if self.ctx.request_body.cached_len()?.is_some() {
             self.ctx.request_body.freeze_mutation();
             let reader = self.ctx.request_body.snapshot_reader(false)?;
@@ -1899,6 +2025,46 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         Ok(bytes::Bytes::new())
     }
 
+    async fn capture_request_body_inspection<'consumer>(
+        &mut self,
+        window: u64,
+        consumer: &'consumer mut (dyn RequestBodyChunkConsumer + 'consumer),
+    ) -> Result<RequestBodyInspectionCapture, BodyReadError> {
+        if consumer.source_window() != Some(window)
+            || window == 0
+            || window >= self.ctx.request_body_hard_limit()
+            || window > self.ctx.request_body_config.capture_limit()
+        {
+            return Err(BodyReadError::NotBuffered);
+        }
+        let capture_limit = usize::try_from(window.checked_add(1).ok_or(BodyReadError::Incomplete)?)
+            .map_err(|_| BodyReadError::Incomplete)?;
+        let memory_limit = if self.ctx.request_body_config.spill_to_disk {
+            self.ctx.request_body_config.memory_buffer_bytes
+        } else {
+            // Exactly one proof byte may exceed the soft memory window.
+            capture_limit
+        };
+        let Some((view, transport_complete)) =
+            capture_request_body_prefix_core(self.inner.as_mut(), self.ctx, capture_limit, memory_limit).await?
+        else {
+            return Ok(RequestBodyInspectionCapture {
+                captured_len: 0,
+                complete: true,
+                storage: None,
+            });
+        };
+        let captured_len = view.len()?;
+        let complete = transport_complete && captured_len <= window;
+        let reader = view.snapshot_reader()?;
+        consume_request_body_snapshot(reader, self.ctx.request_body_hard_limit(), consumer).await?;
+        Ok(RequestBodyInspectionCapture {
+            captured_len,
+            complete,
+            storage: Some(view),
+        })
+    }
+
     async fn read_request_body_prefix(&mut self, limit: usize) -> Result<(Bytes, bool), BodyReadError> {
         if limit == 0
             || limit > edgion_waf::seclang::MAX_REQUEST_BODY_PREFIX_BYTES
@@ -1924,80 +2090,11 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             self.ctx.waf_prefix_inspected = true;
             return Ok((prefix, len <= limit as u64));
         }
-        match request_admission(self.ctx, false) {
-            RequestAdmission::PassThrough => {
-                self.ctx.waf_prefix_inspected = true;
-                return Ok((Bytes::new(), true));
-            }
-            RequestAdmission::Refuse(code) => {
-                self.ctx.record_error(code);
-                return Err(BodyReadError::NotBuffered);
-            }
-            RequestAdmission::Buffer => {}
+        let captured = capture_request_body_prefix_core(self.inner.as_mut(), self.ctx, limit, limit).await?;
+        match captured {
+            Some((view, complete)) => Ok((view.read_all().await?, complete)),
+            None => Ok((Bytes::new(), true)),
         }
-        if !self.ctx.request_body_config.enabled {
-            return Err(BodyReadError::Unimplemented);
-        }
-        let cap = self.ctx.request_body_config.max_body_size_bytes;
-        if self
-            .inner
-            .req_header()
-            .headers
-            .get(http::header::CONTENT_LENGTH)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<u64>().ok())
-            .is_some_and(|len| len > cap)
-        {
-            return Err(reject_over_limit_request_body(self.inner.as_mut(), cap));
-        }
-        let expect_continue = self.inner.req_header().version == http::Version::HTTP_11
-            && self
-                .inner
-                .req_header()
-                .headers
-                .get(http::header::EXPECT)
-                .and_then(|value| value.to_str().ok())
-                .is_some_and(|value| value.eq_ignore_ascii_case("100-continue"));
-        if expect_continue {
-            self.inner
-                .write_continue_response()
-                .await
-                .map_err(|_| BodyReadError::Incomplete)?;
-            self.inner.req_header_mut().remove_header(&http::header::EXPECT);
-        }
-        // A smaller physical cap needs at most one additional byte to prove
-        // overflow. This is a capture budget, not the whole-request size cap.
-        let capture_limit = limit.min(usize::try_from(cap.saturating_add(1)).unwrap_or(usize::MAX));
-        // WAF prefixes are capped at 1 MiB and stay in memory independently
-        // of the spill threshold used by complete-body consumers.
-        let (storage, view) = BodyStorage::with_storage_timeout(
-            capture_limit,
-            capture_limit as u64,
-            self.ctx.request_body_config.storage_operation_timeout,
-        );
-        if let Err(error) = self
-            .inner
-            .capture_request_body_prefix(Box::new(storage), capture_limit)
-            .await
-        {
-            disable_h1_reuse_after_capture_failure(self.inner.as_mut());
-            return Err(match error.etype() {
-                pingora_core::ErrorType::ReadTimedout => BodyReadError::Timeout,
-                pingora_core::ErrorType::HTTPStatus(413) => BodyReadError::BufferLimitExceeded { limit: cap },
-                pingora_core::ErrorType::InternalError => BodyReadError::StorageFailure,
-                _ => BodyReadError::Incomplete,
-            });
-        }
-        if self.inner.body_bytes_read() as u64 > cap {
-            return Err(reject_over_limit_request_body(self.inner.as_mut(), cap));
-        }
-        let complete =
-            self.inner.request_body_prefix_transport_complete() && self.inner.body_bytes_read() <= capture_limit;
-        let prefix = view.read_all().await?;
-        // The storage remains owned by Pingora for first-attempt delivery.
-        // Never install this view as a complete request-body cache.
-        self.ctx.waf_prefix_inspected = true;
-        Ok((prefix, complete))
     }
 
     async fn read_response_body(&mut self, max_bytes: Option<u64>) -> BodyReadResult {
@@ -2049,7 +2146,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                 // the main response must never be accumulated and replayed.
                 // Response processing uses current chunks or the bounded
                 // semantic-window streaming path.
-                let _cap = resolve_cap(max_bytes, self.ctx.request_body_config.max_body_size_bytes);
+                let _cap = resolve_cap(max_bytes, self.ctx.request_body_hard_limit());
                 Err(BodyReadError::Unimplemented)
             }
         }

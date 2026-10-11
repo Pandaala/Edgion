@@ -3736,3 +3736,85 @@ fn split_capture_batch_does_not_scan_inactive_half_and_admits_exact_scratch() {
         Err(RuntimeError::MatcherScratchByteLimit { .. })
     ));
 }
+
+#[test]
+fn policy_stop_discards_partial_document_without_eof_or_abandonment() {
+    let g = compile(
+        r#"SecRule ARGS "@contains attack" "id:1,phase:2,deny,status:403"
+"#,
+    );
+    for prefix in [
+        br#"{"a":"attack","b":""#.as_slice(),
+        br#"{"a":"escape\u0"#,
+        b"{\"a\":\"\xc3",
+        b"{\"a\":[1,",
+    ] {
+        let mut tx = Transaction::new(&g, head(b"/"), RuntimeLimits::default()).unwrap();
+        tx.execute_request_headers().unwrap();
+        let mut session = tx.start_json_inspection(JsonInspectionLimits::default(), None).unwrap();
+        session.feed(prefix).unwrap();
+        session.stop_by_policy().unwrap();
+        assert!(tx.request.body.is_none());
+        assert!(tx.json_failure.is_none());
+    }
+}
+
+#[test]
+fn policy_stop_preserves_deferred_detection_only_syntax_error() {
+    let g = compile(
+        r#"SecRule ARGS "@contains attack" "id:1,phase:2,deny,status:403"
+"#,
+    );
+    let mut tx = Transaction::new(&g, head(b"/"), RuntimeLimits::default()).unwrap();
+    tx.rule_engine_mode = RuleEngineMode::DetectionOnly;
+    tx.execute_request_headers().unwrap();
+    let mut session = tx.start_json_inspection(JsonInspectionLimits::default(), None).unwrap();
+    session.feed(b"{invalid").unwrap();
+    assert!(matches!(
+        session.stop_by_policy(),
+        Err(RuntimeError::Body {
+            kind: BodyError::Malformed { .. }
+        })
+    ));
+    assert!(tx.request.body.is_none());
+    assert!(tx.json_failure.is_some());
+}
+
+#[test]
+fn body_source_limit_can_only_narrow_before_publication_and_preserves_errors() {
+    let g = compile(r#"SecRule ARGS "@contains blocked" "id:1,phase:2,deny""#);
+    let mut tx = Transaction::new(&g, head(b"/"), RuntimeLimits::default()).unwrap();
+    assert!(matches!(
+        tx.constrain_request_body_bytes(8),
+        Err(RuntimeError::PhaseOrder { .. })
+    ));
+    tx.execute_request_headers().unwrap();
+    let retained = tx.limits.max_retained_bytes;
+    tx.constrain_request_body_bytes(8).unwrap();
+    assert_eq!(tx.limits.body.max_body_bytes, 8);
+    assert_eq!(tx.limits.max_retained_bytes, retained);
+    assert_eq!(
+        tx.constrain_request_body_bytes(9),
+        Err(RuntimeError::GenerationInvariant)
+    );
+    tx.publish_request_body(RequestBody::new(
+        Bytes::from_static(br#"{"a":1}"#),
+        BodyProcessorSelection::Json,
+    ))
+    .unwrap();
+    assert_eq!(
+        tx.constrain_request_body_bytes(4),
+        Err(RuntimeError::RequestBodyAlreadyPublished)
+    );
+    tx.execute_request_body().unwrap();
+    assert!(matches!(
+        tx.constrain_request_body_bytes(4),
+        Err(RuntimeError::PhaseOrder { .. })
+    ));
+
+    let mut tx = Transaction::new(&g, head(b"/"), RuntimeLimits::default()).unwrap();
+    tx.execute_request_headers().unwrap();
+    tx.json_failure = Some(RuntimeError::Arithmetic);
+    assert_eq!(tx.constrain_request_body_bytes(8), Err(RuntimeError::Arithmetic));
+    assert_eq!(tx.json_failure, Some(RuntimeError::Arithmetic));
+}

@@ -1469,6 +1469,21 @@ impl<'generation> Transaction<'generation> {
         self.request_body_error
     }
 
+    /// Narrow source admission after header controls and before body publication.
+    /// Independent parsing, retained-state and execution budgets are unchanged.
+    pub fn constrain_request_body_bytes(&mut self, limit: usize) -> Result<(), RuntimeError> {
+        self.preflight_request_body(crate::seclang::BodyProcessorSelection::Auto)?;
+        if self.request_body_stream.is_some() || self.request_prefix_completion.is_some() || self.json_budget.is_some()
+        {
+            return Err(RuntimeError::RequestBodyAlreadyPublished);
+        }
+        if limit > self.limits.body.max_body_bytes {
+            return Err(RuntimeError::GenerationInvariant);
+        }
+        self.limits.body.max_body_bytes = limit;
+        Ok(())
+    }
+
     pub fn execute_request_headers(&mut self) -> Result<PhaseOutcome, RuntimeError> {
         self.execute_phase(Phase::RequestHeaders)
     }

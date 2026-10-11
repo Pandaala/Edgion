@@ -1,7 +1,7 @@
 apiVersion: edgion.io/v1
 kind: EdgionConfigData
 metadata:
-  name: waf-rules-prefix_1m
+  name: waf-rules-prefix-1m
   namespace: edgion-default
 spec:
   data:

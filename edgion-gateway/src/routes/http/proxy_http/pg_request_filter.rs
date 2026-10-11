@@ -1,5 +1,6 @@
 use super::{resolve_route_ext_refs, select_waf_owner, EdgionHttpProxy};
 use crate::ctx::NormalizedHostname;
+use crate::plugins::PluginRuntime;
 use crate::routes::grpc::{parse_grpc_timeout, try_match_grpc_route};
 use crate::runtime::hostname_matches_listener;
 use crate::runtime::store::listener_gateway_info::format_gateway_key;
@@ -19,6 +20,34 @@ use edgion_resources::{EdgionErrorCode, EdgionInfoCode};
 use pingora_http::{RequestHeader, ResponseHeader};
 use pingora_proxy::Session;
 use std::sync::Arc;
+
+/// Unknown consumers require complete capture. Native route ExtensionRefs are
+/// transparent only when every corresponding pinned runtime is available.
+fn allows_partial_body_capture<'a>(
+    global: &[Arc<PluginRuntime>],
+    gateway: &[Arc<PluginRuntime>],
+    route_refs: &[Option<Arc<PluginRuntime>>],
+    route: &PluginRuntime,
+    backends: impl Iterator<Item = &'a PluginRuntime>,
+) -> bool {
+    !route.requires_complete_request_body()
+        && route.ext_ref_keys().len() == route_refs.len()
+        && global
+            .iter()
+            .chain(gateway)
+            .all(|runtime| !runtime.requires_complete_request_body())
+        && route_refs.iter().all(|runtime| {
+            runtime
+                .as_ref()
+                .is_some_and(|runtime| !runtime.requires_complete_request_body())
+        })
+        && !backends.into_iter().any(PluginRuntime::requires_complete_backend_body)
+}
+
+/// An Upgrade request remains an HTTP entity until an actual 101 is written.
+fn finite_http_request_body(ctx: &EdgionHttpContext) -> bool {
+    !ctx.request_info.method_is_connect && !ctx.request_info.is_grpc_request && !ctx.is_grpc_route_matched
+}
 
 /// ACME HTTP-01 challenge path prefix
 const ACME_CHALLENGE_PREFIX: &str = "/.well-known/acme-challenge/";
@@ -347,10 +376,33 @@ pub async fn request_filter(
         gateway_plugins.as_deref().unwrap_or_default(),
         route_ext_refs.as_deref().unwrap_or_default(),
     );
+    let plan_waf_body = selected_waf.is_some() && !ctx.request_info.is_grpc_request && !ctx.is_grpc_route_matched;
     if !ctx.select_waf(selected_waf) {
         end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
         return Ok(true);
     }
+
+    ctx.enforce_request_body_limit = finite_http_request_body(ctx);
+    if ctx.enforce_request_body_limit
+        && ctx
+            .request_info
+            .declared_content_length
+            .is_some_and(|length| length > ctx.request_body_config.max_body_size_bytes)
+    {
+        super::pg_request_body_filter_action::reject_request_body_limit(session, ctx).await?;
+        return Ok(true);
+    }
+
+    ctx.waf_partial_capture_allowed = plan_waf_body
+        && ctx.route_unit.as_ref().is_some_and(|route| {
+            allows_partial_body_capture(
+                global_plugins.as_deref().unwrap_or_default(),
+                gateway_plugins.as_deref().unwrap_or_default(),
+                route_ext_refs.as_deref().unwrap_or_default(),
+                &route.plugin_runtime,
+                route.backends.iter().map(|backend| backend.plugin_runtime.as_ref()),
+            )
+        });
 
     // Step 2: Run global plugins from EdgionGatewayConfig (executed before route-level plugins)
     // Reads the per-request snapshot populated above (zero format!/store cost).
@@ -536,12 +588,20 @@ async fn build_request_metadata(
 /// matching exit write lives -- and snapshots whether the DOWNSTREAM method was
 /// `HEAD` (`method_is_head`), which the response-side admission predicate reads
 /// instead of the live request header a request-stage plugin can rewrite via
-/// `set_upstream_method`. All three writes belong here for the same reason:
+/// `set_upstream_method`. Original CONNECT identity and declared length likewise
+/// belong here for physical admission. These writes share the same reason:
 /// this is the one point that runs before any plugin can mutate the request.
 fn snapshot_body_declared(session: &mut Session, ctx: &mut EdgionHttpContext) {
     ctx.request_info.body_declared = Some(!session.is_body_empty());
     ctx.request_info.in_request_body_stage = true;
     ctx.request_info.method_is_head = session.req_header().method == http::Method::HEAD;
+    ctx.request_info.method_is_connect = session.req_header().method == http::Method::CONNECT;
+    ctx.request_info.declared_content_length = session
+        .req_header()
+        .headers
+        .get(http::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse().ok());
 }
 
 /// Detect WebSocket / gRPC / gRPC-Web from the request's `Upgrade` and

@@ -11,7 +11,7 @@ knowledge_type: regression-guards
 Every ordinary disk-backed `BodyStorage` file operation is admitted through a
 fixed process-wide semaphore before it is submitted to Tokio's blocking pool.
 Admission and execution share the request's resolved non-zero
-`storageOperationTimeout` deadline. Explicit plugin scan jobs retain their
+`storage.operationTimeout` deadline. Explicit plugin scan jobs retain their
 separate scan semaphore because their CPU/scanner lifetime is not a single
 storage operation.
 

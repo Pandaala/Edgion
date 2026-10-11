@@ -1,0 +1,20 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: waf-rules-inspection-reject
+  namespace: edgion-default
+spec:
+  data:
+    type: WafRuleBundle
+    config:
+      version: "1"
+      profile: inspection_reject
+      provenance: edgion-tests/waf-dynamic
+      digest: 28eda97c19d215409a86565a9f7f2eec5d82159b3076d764cb276fc492a58757
+      roots: [main.conf]
+      rules:
+        - name: main.conf
+          content: |
+            SecRule REQUEST_HEADERS:X-Waf-Inspection-Phase "!@streq reject" "id:2460,phase:1,deny,status:409"
+            SecRule ARGS|XML:/*|REQUEST_BODY "@contains blocked" "id:2461,phase:2,deny,status:406"
+            SecAction "id:2462,phase:3,deny,status:407"

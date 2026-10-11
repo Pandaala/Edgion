@@ -203,9 +203,9 @@ fn invalid_remote_ip_header_preserves_valid_body_policy() {
     let mut invalid = make_config("foo");
     invalid.spec.forwarded_headers.remote_ip_header = "Host".to_string();
     invalid.spec.request_body.enabled = false;
-    invalid.spec.request_body.max_memory_buffer_size = Some("384KiB".to_string());
-    invalid.spec.request_body.max_body_size = Some("3MiB".to_string());
-    invalid.spec.request_body.storage_operation_timeout = "3s".to_string();
+    invalid.spec.request_body.storage.memory_limit = "384KiB".to_string();
+    invalid.spec.request_body.max_body_size = "3MiB".to_string();
+    invalid.spec.request_body.storage.operation_timeout = "3s".to_string();
     handler.partial_update(
         HashMap::from([("foo".to_string(), Arc::new(invalid))]),
         HashMap::new(),
@@ -220,6 +220,8 @@ fn invalid_remote_ip_header_preserves_valid_body_policy() {
             enabled: false,
             memory_buffer_bytes: 384 * 1024,
             max_body_size_bytes: 3 * 1024 * 1024,
+            max_buffered_size_bytes: 3 * 1024 * 1024,
+            spill_to_disk: true,
             storage_operation_timeout: Duration::from_secs(3),
         }
     );
@@ -298,9 +300,11 @@ fn http_request_config_updates_joint_pair_and_pins_in_flight_value() {
     let mut initial = make_config("http-request-policy");
     initial.spec.forwarded_headers.remote_ip_header = "X-Initial-Remote-IP".to_string();
     initial.spec.request_body.enabled = false;
-    initial.spec.request_body.max_memory_buffer_size = Some("256KiB".to_string());
-    initial.spec.request_body.max_body_size = Some("1MiB".to_string());
-    initial.spec.request_body.storage_operation_timeout = "750ms".to_string();
+    initial.spec.request_body.storage.memory_limit = "256KiB".to_string();
+    initial.spec.request_body.max_body_size = "1MiB".to_string();
+    initial.spec.request_body.storage.spill_to_disk = false;
+    initial.spec.request_body.storage.max_buffered_size = Some("512KiB".to_string());
+    initial.spec.request_body.storage.operation_timeout = "750ms".to_string();
     initial.spec.preflight_policy = Some(PreflightPolicy {
         mode: PreflightMode::AllOptions,
         status_code: 299,
@@ -328,9 +332,10 @@ fn http_request_config_updates_joint_pair_and_pins_in_flight_value() {
 
     let mut updated = make_config("http-request-policy");
     updated.spec.forwarded_headers.remote_ip_header = "X-Updated-Remote-IP".to_string();
-    updated.spec.request_body.max_memory_buffer_size = Some("512KiB".to_string());
-    updated.spec.request_body.max_body_size = Some("2MiB".to_string());
-    updated.spec.request_body.storage_operation_timeout = "2s".to_string();
+    updated.spec.request_body.storage.memory_limit = "512KiB".to_string();
+    updated.spec.request_body.max_body_size = "2MiB".to_string();
+    updated.spec.request_body.storage.max_buffered_size = Some("1MiB".to_string());
+    updated.spec.request_body.storage.operation_timeout = "2s".to_string();
     updated.spec.preflight_policy = Some(PreflightPolicy {
         mode: PreflightMode::CorsStandard,
         status_code: 205,
@@ -344,6 +349,11 @@ fn http_request_config_updates_joint_pair_and_pins_in_flight_value() {
     assert!(next.request_body.enabled);
     assert_eq!(next.request_body.memory_buffer_bytes, 512 * 1024);
     assert_eq!(next.request_body.max_body_size_bytes, 2 * 1024 * 1024);
+    assert!(next.request_body.spill_to_disk);
+    assert_eq!(next.request_body.capture_limit(), 1024 * 1024);
+    assert!(!in_flight.request_body.spill_to_disk);
+    assert_eq!(in_flight.request_body.max_buffered_size_bytes, 512 * 1024);
+    assert_eq!(in_flight.request_body.capture_limit(), 256 * 1024);
     assert_eq!(next.request_body.storage_operation_timeout, Duration::from_secs(2));
     assert_eq!(
         next.preflight_policy,
@@ -530,11 +540,9 @@ fn invalid_body_fields_preserve_valid_remote_ip_header() {
     let mut config = make_config("invalid-body-policy");
     config.spec.forwarded_headers.remote_ip_header = "X-Valid-Remote-IP".to_string();
     config.spec.request_body.enabled = false;
-    config.spec.request_body.default_memory_buffer_size = "384KiB".to_string();
-    config.spec.request_body.max_memory_buffer_size = Some("invalid".to_string());
-    config.spec.request_body.default_max_body_size = "3MiB".to_string();
-    config.spec.request_body.max_body_size = Some("0".to_string());
-    config.spec.request_body.storage_operation_timeout = "invalid".to_string();
+    config.spec.request_body.storage.memory_limit = "invalid".to_string();
+    config.spec.request_body.max_body_size = "0".to_string();
+    config.spec.request_body.storage.operation_timeout = "invalid".to_string();
     let mut data = HashMap::new();
     data.insert("invalid-body-policy".to_string(), Arc::new(config));
     handler.full_set(&data);
@@ -545,9 +553,7 @@ fn invalid_body_fields_preserve_valid_remote_ip_header() {
         resolved.request_body,
         ResolvedRequestBodyConfig {
             enabled: false,
-            memory_buffer_bytes: 384 * 1024,
-            max_body_size_bytes: 3 * 1024 * 1024,
-            storage_operation_timeout: ResolvedRequestBodyConfig::default().storage_operation_timeout,
+            ..ResolvedRequestBodyConfig::default()
         }
     );
 }

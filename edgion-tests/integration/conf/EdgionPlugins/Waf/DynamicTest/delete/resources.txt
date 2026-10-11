@@ -6,7 +6,9 @@ EdgionConfigData/edgion-default/waf-rules-v2
 EdgionConfigData/edgion-default/waf-rules-detection
 EdgionConfigData/edgion-default/waf-rules-injection
 EdgionConfigData/edgion-default/waf-rules-control
-EdgionConfigData/edgion-default/waf-rules-prefix_1m
+EdgionConfigData/edgion-default/waf-rules-prefix-1m
 EdgionConfigData/edgion-default/waf-rules-recovered
 EdgionConfigData/edgion-default/waf-bundle-v1
 EdgionConfigData/edgion-default/waf-bundle-v2
+EdgionConfigData/edgion-default/waf-rules-inspection-continue
+EdgionConfigData/edgion-default/waf-rules-inspection-reject

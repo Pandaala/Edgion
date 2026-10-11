@@ -67,3 +67,29 @@ async fn non_head_request_snapshots_method_is_head_false() {
 
     assert!(!ctx.request_info.method_is_head);
 }
+
+#[tokio::test]
+async fn physical_admission_uses_original_method_length_and_canonical_grpc_facts() {
+    for upgrade in ["websocket", "foo"] {
+        let request = format!("POST / HTTP/1.1\r\nHost: test\r\nContent-Length: 5\r\nUpgrade: {upgrade}\r\n\r\nhello");
+        let mut session = session_from_request(request.as_bytes()).await;
+        let mut ctx = EdgionHttpContext::default();
+        snapshot_body_declared(&mut session, &mut ctx);
+        detect_request_protocol(session.req_header(), &mut ctx);
+        assert!(finite_http_request_body(&ctx));
+        session.req_header_mut().set_method(http::Method::CONNECT);
+        session.req_header_mut().remove_header("content-length");
+        assert_eq!(ctx.request_info.declared_content_length, Some(5));
+        assert!(finite_http_request_body(&ctx));
+        ctx.request_info.is_grpc_request = true;
+        assert!(!finite_http_request_body(&ctx));
+        ctx.request_info.is_grpc_request = false;
+        ctx.is_grpc_route_matched = true;
+        assert!(!finite_http_request_body(&ctx));
+    }
+    let mut session = session_from_request(b"CONNECT test:443 HTTP/1.1\r\nHost: test\r\n\r\n").await;
+    let mut ctx = EdgionHttpContext::default();
+    snapshot_body_declared(&mut session, &mut ctx);
+    session.req_header_mut().set_method(http::Method::POST);
+    assert!(!finite_http_request_body(&ctx));
+}

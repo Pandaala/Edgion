@@ -102,7 +102,7 @@ permits are held. A sustained value of `32` together with growth in
 `edgion_request_body_storage_io_failures_total{reason="admission_timeout"}`
 means disk-backed request-body work is saturated before submission to the
 blocking pool. `reason="execution_timeout"` instead means an admitted file
-operation exceeded `requestBody.storageOperationTimeout`.
+operation exceeded `requestBody.storage.operationTimeout`.
 
 ### Optional GenAI token counter
 

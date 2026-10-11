@@ -298,10 +298,10 @@ async fn duplicate_replacement_across_chunks(ctx: &TestContext) -> Result<(), St
     Ok(())
 }
 
-pub(super) fn matrix(version: &'static str, detection: bool, zero_source: bool) -> TestCase {
+pub(super) fn matrix(version: &'static str, detection: bool, zero_work: bool) -> TestCase {
     TestCase::new(
-        match (version, detection, zero_source) {
-            (_, _, true) => "waf_json_zero_source_wire",
+        match (version, detection, zero_work) {
+            (_, _, true) => "waf_json_zero_work_wire",
             (_, true, _) => "waf_json_detection_wire",
             ("json-v1", _, _) => "waf_json_v1_wire",
             _ => "waf_json_v2_wire",
@@ -321,9 +321,9 @@ pub(super) fn matrix(version: &'static str, detection: bool, zero_source: bool) 
                     large.extend_from_slice(br#""}"#);
                     for downstream_h2 in [false, true] {
                         for upstream_h2 in [false, true] {
-                            let allowed = if zero_source { 413 } else { 200 };
-                            let denied = if zero_source {
-                                413
+                            let allowed = if zero_work { 500 } else { 200 };
+                            let denied = if zero_work {
+                                500
                             } else if detection {
                                 200
                             } else {
@@ -349,7 +349,7 @@ pub(super) fn matrix(version: &'static str, detection: bool, zero_source: bool) 
                                 denied,
                             )
                             .await?;
-                            if zero_source {
+                            if zero_work {
                                 continue;
                             }
                             verify(
@@ -431,7 +431,7 @@ pub(super) fn matrix(version: &'static str, detection: bool, zero_source: bool) 
                             }
                         }
                     }
-                    if version == "json-v1" && !detection && !zero_source {
+                    if version == "json-v1" && !detection && !zero_work {
                         duplicate_replacement_across_chunks(&ctx).await?;
                         PausedJsonUpload::start(&ctx).await?.finish().await?;
                         PausedJsonUpload::start(&ctx).await?.abort().await?;

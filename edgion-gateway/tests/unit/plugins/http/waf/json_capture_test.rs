@@ -183,7 +183,7 @@ async fn fresh_spilled(xml: bool) {
                 InspectionLimits::Json(JsonInspectionLimits::default())
             },
             RuntimeLimits::default(),
-            1 << 20,
+            InspectionPolicy::complete(1 << 20),
             true,
         );
         let mut inspection = Box::pin(STORAGE_IO_TEST_HOOK.scope(hook, inspection));
@@ -269,7 +269,15 @@ async fn cached_contiguous_json_preserves_long_value_and_completion_semantics() 
                 },
                 ..JsonInspectionLimits::default()
             };
-            let result = inspect(&mut adapter, &mut tx, limits, RuntimeLimits::default(), len, true).await;
+            let result = inspect(
+                &mut adapter,
+                &mut tx,
+                limits,
+                RuntimeLimits::default(),
+                InspectionPolicy::complete(len),
+                true,
+            )
+            .await;
             if malformed {
                 assert!(matches!(
                     result,
@@ -320,7 +328,7 @@ async fn cached_json_contiguous_ceiling_preserves_bounded_fallback() {
             &mut tx,
             limits,
             RuntimeLimits::default(),
-            len as u64,
+            InspectionPolicy::complete(len as u64),
             true,
         )
         .await;
@@ -400,7 +408,7 @@ async fn cached_spilled(xml: bool) {
                         InspectionLimits::Json(limits)
                     },
                     RuntimeLimits::default(),
-                    1024,
+                    InspectionPolicy::complete(1024),
                     true,
                 ),
             )
@@ -482,7 +490,7 @@ async fn cancelled(xml: bool) {
                 InspectionLimits::Json(JsonInspectionLimits::default())
             },
             RuntimeLimits::default(),
-            1024,
+            InspectionPolicy::complete(1024),
             true,
         );
         let mut inspection = Box::pin(inspection);
@@ -571,7 +579,7 @@ async fn latched(xml: bool) {
                 InspectionLimits::Json(JsonInspectionLimits::default())
             },
             RuntimeLimits::default(),
-            4,
+            InspectionPolicy::complete(4),
             true,
         )
         .await;
@@ -647,7 +655,7 @@ async fn raw_visibility(xml: bool) {
                         InspectionLimits::Json(JsonInspectionLimits::default())
                     },
                     RuntimeLimits::default(),
-                    1024,
+                    InspectionPolicy::complete(1024),
                     true
                 )
             )
@@ -657,5 +665,183 @@ async fn raw_visibility(xml: bool) {
         tx.execute_request_body().unwrap();
         assert_eq!(tx.tx_value(b"raw"), Some(b"yes".as_slice()));
         assert_eq!(tx.tx_value(b"length"), Some(b"yes".as_slice()));
+    }
+}
+
+#[tokio::test]
+async fn cached_policy_window_distinguishes_complete_and_limited_in_memory_and_disk() {
+    for xml in [false, true] {
+        let body = if xml {
+            b"<r>blocked</r>".as_slice()
+        } else {
+            br#"{"a":"blocked"}"#.as_slice()
+        };
+        for memory in [1, 1024] {
+            for delta in [-1_i64, 0, 1] {
+                let window = (body.len() as i64 + delta) as u64;
+                let (mut storage, view) = BodyStorage::new(memory, 1024);
+                storage.write(&Bytes::copy_from_slice(body)).await.unwrap();
+                storage.finish().await.unwrap();
+                let mut ctx = context();
+                ctx.request_body.install(Arc::clone(&view));
+                let (_, server) = tokio::io::duplex(64);
+                let mut downstream = pingora_proxy::Session::new_h1(Box::new(server));
+                let mut tx = transaction(
+                    if xml {
+                        r#"SecRule XML "@contains blocked" "id:1,phase:2,deny,status:403""#
+                    } else {
+                        r#"SecRule ARGS "@contains blocked" "id:1,phase:2,deny,status:403""#
+                    },
+                    RuleEngineMode::On,
+                );
+                let mut adapter = PingoraSessionAdapter::new(&mut downstream, &mut ctx);
+                let result = inspect_structured(
+                    &mut adapter,
+                    &mut tx,
+                    if xml {
+                        InspectionLimits::Xml(XmlInspectionLimits::default())
+                    } else {
+                        InspectionLimits::Json(JsonInspectionLimits::default())
+                    },
+                    RuntimeLimits::default(),
+                    InspectionPolicy {
+                        cap: 1024,
+                        window,
+                        native_prefix: false,
+                        storage_limit: false,
+                    },
+                    true,
+                )
+                .await;
+                assert!(matches!(result, Ok(outcome) if outcome == if delta < 0 {
+                    InspectionOutcome::Limited
+                } else { InspectionOutcome::Complete }));
+                if delta >= 0 {
+                    assert_eq!(tx.execute_request_body().unwrap().intervention().unwrap().status(), 403);
+                }
+                assert_eq!(view.read_all().await.unwrap().as_ref(), body);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn native_complete_detection_only_retains_lazy_raw_fallback() {
+    for (xml, body) in [
+        (false, b"{invalid".as_slice()),
+        (false, b"{\"a\":\"unfinished".as_slice()),
+        (true, b"<r></wrong>".as_slice()),
+        (true, b"<r>unfinished".as_slice()),
+    ] {
+        let (mut client, server) = tokio::io::duplex(4096);
+        client
+            .write_all(
+                format!(
+                    "POST / HTTP/1.1\r\nHost: test\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        client.write_all(body).await.unwrap();
+        client.shutdown().await.unwrap();
+        let mut downstream = pingora_proxy::Session::new_h1(Box::new(server));
+        downstream.read_request().await.unwrap();
+        let mut ctx = context();
+        let mut tx = transaction(
+            if xml {
+                r#"SecRule XML "@contains blocked" "id:1,phase:2,pass""#
+            } else {
+                r#"SecRule ARGS "@contains blocked" "id:1,phase:2,pass""#
+            },
+            RuleEngineMode::DetectionOnly,
+        );
+        let mut adapter = PingoraSessionAdapter::new(&mut downstream, &mut ctx);
+        let result = inspect_structured(
+            &mut adapter,
+            &mut tx,
+            if xml {
+                InspectionLimits::Xml(XmlInspectionLimits::default())
+            } else {
+                InspectionLimits::Json(JsonInspectionLimits::default())
+            },
+            RuntimeLimits::default(),
+            InspectionPolicy {
+                cap: 1 << 20,
+                window: 64,
+                native_prefix: true,
+                storage_limit: false,
+            },
+            true,
+        )
+        .await;
+        assert!(matches!(result, Ok(InspectionOutcome::Complete)));
+        assert!(tx.execute_request_body().is_ok());
+        assert!(ctx.request_body.cached_len().unwrap().is_none());
+    }
+}
+
+#[tokio::test]
+async fn native_policy_window_uses_real_eof_and_never_publishes_partial_cache() {
+    for memory in [1, 1024] {
+        for (xml, body) in [
+            (false, br#"{"a":"blocked"}"#.as_slice()),
+            (true, b"<r>blocked</r>".as_slice()),
+        ] {
+            for delta in [-1_i64, 0, 1] {
+                let (mut client, server) = tokio::io::duplex(4096);
+                client
+                    .write_all(
+                        format!(
+                            "POST / HTTP/1.1\r\nHost: test\r\nContent-Length: {}\r\n\r\n",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                client.write_all(body).await.unwrap();
+                client.shutdown().await.unwrap();
+                let mut downstream = pingora_proxy::Session::new_h1(Box::new(server));
+                downstream.read_request().await.unwrap();
+                let mut ctx = context();
+                ctx.request_body_config.memory_buffer_bytes = memory;
+                let mut tx = transaction(
+                    if xml {
+                        r#"SecRule XML "@contains blocked" "id:1,phase:2,deny,status:403""#
+                    } else {
+                        r#"SecRule ARGS "@contains blocked" "id:1,phase:2,deny,status:403""#
+                    },
+                    RuleEngineMode::On,
+                );
+                let mut adapter = PingoraSessionAdapter::new(&mut downstream, &mut ctx);
+                let result = inspect_structured(
+                    &mut adapter,
+                    &mut tx,
+                    if xml {
+                        InspectionLimits::Xml(XmlInspectionLimits::default())
+                    } else {
+                        InspectionLimits::Json(JsonInspectionLimits::default())
+                    },
+                    RuntimeLimits::default(),
+                    InspectionPolicy {
+                        cap: 1 << 20,
+                        window: (body.len() as i64 + delta) as u64,
+                        native_prefix: true,
+                        storage_limit: false,
+                    },
+                    true,
+                )
+                .await;
+                assert!(
+                    matches!(result, Ok(outcome) if outcome == if delta < 0 { InspectionOutcome::Limited } else { InspectionOutcome::Complete })
+                );
+                if delta >= 0 {
+                    assert_eq!(tx.execute_request_body().unwrap().intervention().unwrap().status(), 403);
+                }
+                assert!(ctx.request_body.cached_len().unwrap().is_none());
+            }
+        }
     }
 }

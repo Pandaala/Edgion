@@ -207,69 +207,66 @@ fn default_dns_cache_ttl() -> String {
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestBodyConfig {
-    /// Runtime switch. A body-capable binary still refuses capture when false.
+    /// Runtime capture switch; admission limits remain independent.
     #[serde(default = "default_request_body_enabled")]
     pub enabled: bool,
-
-    /// Default in-memory bytes retained before spilling to disk.
-    #[serde(default = "default_memory_buffer_size")]
-    pub default_memory_buffer_size: String,
-
-    /// Optional business override for the in-memory spill threshold.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_memory_buffer_size: Option<String>,
-
-    /// Default complete request-body cap.
+    /// Hard ceiling on the original request entity payload.
     #[serde(default = "default_request_body_max_size")]
-    pub default_max_body_size: String,
+    pub max_body_size: String,
+    #[serde(default)]
+    pub storage: RequestBodyStorageConfig,
+}
 
-    /// Optional business override for the complete request-body cap.
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestBodyStorageConfig {
+    /// Resident payload threshold before optional disk spill.
+    #[serde(default = "default_memory_buffer_size")]
+    pub memory_limit: String,
+    #[serde(default = "default_request_body_enabled")]
+    pub spill_to_disk: bool,
+    /// New owner retention capacity; omission inherits maxBodySize.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_body_size: Option<String>,
-
-    /// Wall-clock deadline shared by admission and execution of one
-    /// request-body storage file operation.
+    pub max_buffered_size: Option<String>,
+    /// Admission plus execution deadline for one storage file operation.
     #[serde(default = "default_request_body_storage_operation_timeout")]
     #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
-    pub storage_operation_timeout: String,
+    pub operation_timeout: String,
 }
 
 impl RequestBodyConfig {
     pub fn validate(&self) -> Vec<String> {
         let mut errors = Vec::new();
-        let default_memory = validate_positive_byte_size(
-            Some(self.default_memory_buffer_size.as_str()),
-            "requestBody.defaultMemoryBufferSize",
+        let body = validate_positive_byte_size(Some(&self.max_body_size), "requestBody.maxBodySize", &mut errors);
+        let memory = validate_positive_byte_size(
+            Some(&self.storage.memory_limit),
+            "requestBody.storage.memoryLimit",
             &mut errors,
         );
-        let memory = match self.max_memory_buffer_size.as_deref() {
-            Some(value) => validate_positive_byte_size(Some(value), "requestBody.maxMemoryBufferSize", &mut errors),
-            None => default_memory,
+        let buffered = match self.storage.max_buffered_size.as_deref() {
+            Some(value) => validate_positive_byte_size(Some(value), "requestBody.storage.maxBufferedSize", &mut errors),
+            None => body,
         };
-        let default_body = validate_positive_byte_size(
-            Some(self.default_max_body_size.as_str()),
-            "requestBody.defaultMaxBodySize",
-            &mut errors,
-        );
-        let body = match self.max_body_size.as_deref() {
-            Some(value) => validate_positive_byte_size(Some(value), "requestBody.maxBodySize", &mut errors),
-            None => default_body,
-        };
-        if let (Some(memory), Some(body)) = (memory, body) {
-            if memory > body {
+        if let (Some(memory), Some(buffered)) = (memory, buffered) {
+            if memory > buffered {
                 errors.push(
-                    "effective requestBody memory buffer size must not exceed the effective requestBody max body size"
+                    "requestBody.storage.memoryLimit must not exceed maxBufferedSize (or inherited maxBodySize)"
                         .to_string(),
                 );
             }
         }
-        match crate::duration::parse_duration(&self.storage_operation_timeout) {
+        if let (Some(buffered), Some(body)) = (buffered, body) {
+            if buffered > body {
+                errors.push("requestBody.storage.maxBufferedSize must not exceed requestBody.maxBodySize".to_string());
+            }
+        }
+        match crate::duration::parse_duration(&self.storage.operation_timeout) {
             Ok(timeout) if timeout.is_zero() => {
-                errors.push("requestBody.storageOperationTimeout must be greater than zero".to_string());
+                errors.push("requestBody.storage.operationTimeout must be greater than zero".to_string())
             }
             Ok(_) => {}
             Err(error) => errors.push(format!(
-                "requestBody.storageOperationTimeout must be a valid duration: {error}"
+                "requestBody.storage.operationTimeout must be a valid duration: {error}"
             )),
         }
         errors
@@ -279,12 +276,20 @@ impl RequestBodyConfig {
 impl Default for RequestBodyConfig {
     fn default() -> Self {
         Self {
-            enabled: default_request_body_enabled(),
-            default_memory_buffer_size: default_memory_buffer_size(),
-            max_memory_buffer_size: None,
-            default_max_body_size: default_request_body_max_size(),
-            max_body_size: None,
-            storage_operation_timeout: default_request_body_storage_operation_timeout(),
+            enabled: true,
+            max_body_size: default_request_body_max_size(),
+            storage: RequestBodyStorageConfig::default(),
+        }
+    }
+}
+
+impl Default for RequestBodyStorageConfig {
+    fn default() -> Self {
+        Self {
+            memory_limit: default_memory_buffer_size(),
+            spill_to_disk: true,
+            max_buffered_size: None,
+            operation_timeout: default_request_body_storage_operation_timeout(),
         }
     }
 }

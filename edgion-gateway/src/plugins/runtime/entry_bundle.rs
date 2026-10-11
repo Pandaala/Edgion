@@ -28,6 +28,7 @@ pub(crate) type EntryDemand = HashSet<EntrySlot>;
 /// A request entry may also own a response companion. These filters are always
 /// cached and selected together; no extra dispatch wrapper is introduced.
 pub(crate) struct EntryBundle {
+    pub requires_complete_request_body: bool,
     pub request: Vec<Arc<dyn RequestFilter>>,
     pub response_filter: Vec<Arc<dyn UpstreamResponseFilter>>,
     pub response_body: Vec<Arc<dyn UpstreamResponseBodyFilter>>,

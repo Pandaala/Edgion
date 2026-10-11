@@ -148,6 +148,7 @@ pub(crate) struct WafRequestContext {
     request_body_streaming: bool,
     request_body_streamed_bytes: u64,
     request_body_stream_limit: u64,
+    body_hard_limit: Option<u64>,
     request_body_execution_micros: u64,
     charged_runtime_bytes: i64,
 }
@@ -162,6 +163,7 @@ impl WafRequestContext {
             request_body_streaming: false,
             request_body_streamed_bytes: 0,
             request_body_stream_limit: 0,
+            body_hard_limit: None,
             request_body_execution_micros: 0,
             charged_runtime_bytes: 0,
         }
@@ -466,6 +468,12 @@ pub struct WafPhaseLogs {
 }
 
 #[derive(Debug, Serialize)]
+struct WafInspectionStopLog {
+    admitted_bytes: u64,
+    reason: &'static str,
+}
+
+#[derive(Debug, Serialize)]
 pub struct WafAccessLog {
     source: WafLogSource,
     priority: u16,
@@ -480,6 +488,8 @@ pub struct WafAccessLog {
     intervention: Option<WafInterventionLog>,
     #[serde(skip_serializing_if = "Option::is_none")]
     terminal_error: Option<WafTerminalErrorLog>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    inspection_stop: Option<WafInspectionStopLog>,
 }
 
 fn is_zero_u64(value: &u64) -> bool {
@@ -502,6 +512,7 @@ impl WafAccessLog {
             findings_omitted: 0,
             intervention: None,
             terminal_error: None,
+            inspection_stop: None,
         }
     }
 
@@ -1123,6 +1134,12 @@ pub struct RequestInfo {
     /// `PassThrough`. A genuine HEAD response has no body to buffer either way.
     #[serde(skip)]
     pub method_is_head: bool,
+    /// Original CONNECT identity, before request plugins can change the method.
+    #[serde(skip)]
+    pub(crate) method_is_connect: bool,
+    /// Original parsed Content-Length, before request header mutation.
+    #[serde(skip)]
+    pub(crate) declared_content_length: Option<u64>,
     /// Listener port that received this request (set at context creation, always available)
     #[serde(rename = "listener-port")]
     pub listener_port: u16,
@@ -2170,6 +2187,8 @@ pub struct EdgionHttpContext {
     /// Loaded from the current immutable EGC snapshot when the request context
     /// is created; later request processing only reads these numeric values.
     pub request_body_config: crate::request_body::ResolvedRequestBodyConfig,
+    /// Ordinary HTTP entity admission, resolved before ordinary request plugins.
+    pub(crate) enforce_request_body_limit: bool,
 
     /// Validated upstream header carrying the final RemoteIp. Captured from the
     /// immutable EGC runtime snapshot when this request context is created, so
@@ -2186,6 +2205,8 @@ pub struct EdgionHttpContext {
     pub request_body: RequestBodyState,
     /// The admitted WAF prefix pins the body representation against mutation.
     pub(crate) waf_prefix_inspected: bool,
+    /// Set once before ordinary plugin dispatch from the pinned consumer graph.
+    pub(crate) waf_partial_capture_allowed: bool,
 
     /// Lazily allocated request-body callback drivers. The outer state is
     /// small; the fixed-capacity observer registry remains independently boxed
@@ -2707,6 +2728,9 @@ impl EdgionHttpContext {
             plan.reject_mutation();
             return false;
         }
+        if self.waf_body_hard_limit().is_some() {
+            return false;
+        }
         let state = self.ensure_request_body_plugins();
         state.handlers.push(sync_wrapper::SyncWrapper::new(handler));
         state.active_sources |= REQUEST_BODY_SOURCE_HANDLER;
@@ -3086,6 +3110,54 @@ impl EdgionHttpContext {
         true
     }
 
+    /// Hard format admission outlives the selected transaction and parser.
+    pub(crate) fn waf_body_hard_limit(&self) -> Option<u64> {
+        self.waf.as_deref().and_then(|waf| waf.body_hard_limit)
+    }
+
+    pub(crate) fn request_body_hard_limit(&self) -> u64 {
+        self.waf_body_hard_limit()
+            .map_or(self.request_body_config.max_body_size_bytes, |limit| {
+                limit.min(self.request_body_config.max_body_size_bytes)
+            })
+    }
+
+    pub(crate) fn install_waf_body_hard_limit(&mut self, owner: &Arc<()>, limit: u64) -> bool {
+        if limit == 0 || self.request_body_handlers_selected() {
+            return false;
+        }
+        let Some(waf) = self.waf.as_deref_mut() else {
+            return false;
+        };
+        if !Arc::ptr_eq(&waf.owner, owner) || waf.body_hard_limit.is_some() {
+            return false;
+        }
+        waf.body_hard_limit = Some(limit);
+        self.request_body.freeze_mutation();
+        true
+    }
+
+    pub(crate) fn stop_waf_inspection(&mut self, owner: &Arc<()>, bytes: u64, storage_limit: bool) -> bool {
+        let Some(waf) = self.waf.as_deref_mut() else {
+            return false;
+        };
+        if !Arc::ptr_eq(&waf.owner, owner)
+            || waf.access_log.terminal_error.is_some()
+            || waf.access_log.intervention.is_some()
+        {
+            return false;
+        }
+        waf.claimed_phases = u8::MAX;
+        waf.transaction = None;
+        waf.refresh_runtime_charge();
+        waf.access_log.outcome = WafLogOutcome::Incomplete;
+        waf.access_log.inspection_stop = Some(WafInspectionStopLog {
+            admitted_bytes: bytes,
+            reason: if storage_limit { "storage" } else { "inspection" },
+        });
+        true
+    }
+
     pub(crate) fn claim_waf_phase(&mut self, owner: &Arc<()>, phase: WafPhase) -> WafPhaseClaim {
         // No selected box means no WAF callback should run. Report `Pending`
         // so an ordering/wiring bug fails closed instead of silently skipping.
@@ -3222,6 +3294,8 @@ impl EdgionHttpContext {
             preflight_policy: ResolvedPreflightPolicy::default(),
             request_body: RequestBodyState::default(),
             waf_prefix_inspected: false,
+            waf_partial_capture_allowed: false,
+            enforce_request_body_limit: false,
             request_body_plugins: None,
             ai_state: None,
             ai_request_guard_invoked: AtomicBool::new(false),

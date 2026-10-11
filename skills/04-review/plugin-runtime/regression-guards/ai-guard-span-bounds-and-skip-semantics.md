@@ -42,7 +42,7 @@ a 64 KiB maximum) is wrong and inverts the intended behavior.
 - `edgion-gateway/src/ai/guards/request/plugin.rs` — both caps resolve via
   `unwrap_or(body_cap)` from `request_body_config.max_body_size_bytes`.
 - `edgion-resources/src/resources/edgion_gateway_config.rs` —
-  `RequestBodyConfig::default_max_body_size` is `"32MiB"`; the parse-failure
+  `RequestBodyConfig::max_body_size` is `"32MiB"`; the parse-failure
   fallback `DEFAULT_MAX_BODY_SIZE_BYTES` in
   `edgion-gateway/src/request_body/config.rs` is the same 32 MiB. An operator may
   raise or lower the cap through `requestBody.maxBodySize`.

@@ -36,16 +36,21 @@ and the [Gateway response driver](../../../edgion-gateway/src/routes/http/proxy_
 Execution flow notes:
 
 - Native WAF request-body admission uses `spec.waf.requestBody.inspection`.
-  Default `prefix` reads up to `prefixSize` (64 KiB by default, at most 1 MiB)
+  Default `full` inspects complete documents under the effective policy window.
+  Explicit `prefix` reads up to `prefixSize` (64 KiB by default, at most 1 MiB)
   into in-memory `BodyStorage` before upstream dispatch through the
   canonical `BodyStorage` / Pingora registered-buffer seam, then drains the
   prefix and resumes live forwarding. Prefix sealing is not transport EOS and
-  never publishes a partial complete-body cache. Explicit `full` retains the
-  complete capture path. Existing complete caches are reused and their logical
+  never publishes a partial complete-body cache. Default `full` requires complete inspection before rule publication; a
+  WAF-only request may use bounded native N+1 capture when its inspection or
+  storage window is below the hard cap. A proven policy cutoff discards
+  provisional facts and skips remaining WAF phases; `onLimit` selects continue
+  or reject. Other complete consumers retain complete capture. Existing complete caches are reused and their logical
   body is frozen after prefix inspection. See the
   [prefix admission contract](../../04-review/http-body/regression-guards/waf-prefix-before-dispatch.md).
   Optional full-only `requestBody.json` supplies lexical/structure/results limits;
-  omission selects bounded engine defaults. Both inline and resolved Full
+  omission selects bounded complexity defaults. Source-byte limits inherit the
+  pinned physical cap and narrow to the effective full inspection window. Both inline and resolved Full
   configurations reject JSON dependencies requiring a complete field-value map.
   After phase-one controls, processor preflight precedes capture at the EGC cap.
   Gateway feeds real capture chunks into one persistent inspection session;

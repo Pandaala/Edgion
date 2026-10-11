@@ -2,12 +2,13 @@ use super::*;
 use bytes::Bytes;
 use edgion_resources::resources::edgion_plugins::{WafJsonConfig, WafMode};
 use edgion_waf::seclang::Phase;
+use pingora_core::protocols::http::RequestBodyBuffer;
 
 use crate::plugins::runtime::traits::session::MockPluginSession;
 use crate::EdgionHttpContext;
 
 fn plugin(rules: &str, mode: WafMode) -> WafPlugin {
-    plugin_with_inspection(rules, mode, WafRequestBodyInspection::Full)
+    plugin_with_inspection(rules, mode, WafRequestBodyInspection::default())
 }
 
 fn plugin_with_inspection(rules: &str, mode: WafMode, inspection: WafRequestBodyInspection) -> WafPlugin {
@@ -200,6 +201,7 @@ async fn raw_phrase_prefix_is_decided_before_returning_to_dispatch() {
 async fn configured_prefix_size_reaches_capture_and_engine() {
     let plugin = WafPlugin::try_new(&WafConfig {
         request_body: edgion_resources::resources::edgion_plugins::WafRequestBodyConfig {
+            inspection: WafRequestBodyInspection::Prefix,
             prefix_size: Some("1m".to_string()),
             ..Default::default()
         },
@@ -533,7 +535,7 @@ async fn one_transaction_advances_through_all_gateway_phase_hooks() {
 
 fn explicit_json_config() -> WafJsonConfig {
     serde_json::from_value(serde_json::json!({
-        "lexical": {"maxSourceBytes": 1048576, "maxRawTokenBytes": 65536, "maxDecodedBytes": 1048576,
+        "lexical": {"maxRawTokenBytes": 65536, "maxDecodedBytes": 1048576,
             "maxEvents": 65536, "maxDepth": 64, "maxRetainedBytes": 1048576, "maxWork": 16777216},
         "structure": {"maxRetainedBytes": 1048576, "maxKeyBytes": 65536, "maxMembers": 65536,
             "maxPathBytes": 16384, "maxDepth": 64, "maxWork": 16777216},
@@ -627,7 +629,7 @@ async fn body_independent_json_forced_raw_publishes_empty_without_capture() {
 
 #[tokio::test]
 async fn full_capture_proof_and_all_caps_precede_materialization() {
-    for case in 0..5 {
+    for case in 0..3 {
         let mut config = super::fixture::config("SecRule ARGS \"@contains hit\" \"id:1,phase:2,pass\"\n");
         config.request_body.inspection = WafRequestBodyInspection::Full;
         config.request_body.json = Some(explicit_json_config());
@@ -643,9 +645,7 @@ async fn full_capture_proof_and_all_caps_precede_materialization() {
         session.expect_ctx().return_const(ctx);
         let len = match case {
             0 | 1 => 0,
-            2 => 9,
-            3 => (16 << 20) + 1,
-            _ => (1 << 20) + 1,
+            _ => 9,
         };
         session
             .expect_capture_request_body_with_consumer()
@@ -679,7 +679,7 @@ async fn processor_override_precedes_json_only_caps_and_raw_reads() {
     ));
     config.request_body.inspection = WafRequestBodyInspection::Full;
     let mut limits = explicit_json_config();
-    limits.lexical.max_source_bytes = 0;
+    limits.lexical.max_work = 0;
     config.request_body.json = Some(limits);
     let plugin = WafPlugin::try_new(&config).unwrap();
     let mut session = MockPluginSession::new();
@@ -1177,4 +1177,292 @@ async fn waf_expensive_checks_use_the_request_gateway_snapshot() {
             PluginRunningResult::GoodNext
         );
     }
+}
+
+#[tokio::test]
+async fn format_hard_limit_uses_selected_processor_without_body_rule_or_capture() {
+    for inspection in [WafRequestBodyInspection::Prefix, WafRequestBodyInspection::Full] {
+        for (content_type, expected) in [
+            ("application/json", Some(2048)),
+            ("application/xml", Some(1024)),
+            ("text/plain", None),
+        ] {
+            let mut config = super::fixture::config("SecAction \"id:1,phase:1,pass\"\n");
+            config.mode = WafMode::DetectionOnly;
+            config.request_body.inspection = inspection;
+            config.request_body.max_json_body_size = Some("2KiB".into());
+            config.request_body.max_xml_body_size = Some("1KiB".into());
+            let plugin = WafPlugin::try_new(&config).unwrap();
+            let mut session = MockPluginSession::new();
+            expect_request_head_with_headers(
+                &mut session,
+                "/",
+                vec![(b"content-type".to_vec(), content_type.as_bytes().to_vec())],
+            );
+            session.expect_ctx().return_const(EdgionHttpContext::default());
+            session
+                .expect_install_waf_body_limit()
+                .times(usize::from(expected.is_some()))
+                .returning(move |_, limit| {
+                    assert_eq!(Some(limit), expected);
+                    Ok(())
+                });
+            session.expect_capture_request_body_with_consumer().times(0);
+            session.expect_read_request_body_prefix().times(0);
+            session.expect_install_waf_transaction().times(1).returning(|_, _| true);
+            let mut log = PluginLog::new("Waf");
+            assert!(matches!(
+                plugin.run_request(&mut session, &mut log).await,
+                PluginRunningResult::GoodNext
+            ));
+        }
+    }
+}
+
+#[tokio::test]
+async fn format_hard_limit_respects_phase_one_processor_and_cannot_be_detection_only_bypassed() {
+    let mut config = super::fixture::config("SecAction \"id:1,phase:1,pass,ctl:requestBodyProcessor=JSON\"\n");
+    config.mode = WafMode::DetectionOnly;
+    config.request_body.inspection = WafRequestBodyInspection::Full;
+    config.request_body.max_json_body_size = Some("8".into());
+    let plugin = WafPlugin::try_new(&config).unwrap();
+    let mut session = MockPluginSession::new();
+    expect_request_head_with_headers(
+        &mut session,
+        "/",
+        vec![(b"content-type".to_vec(), b"text/plain".to_vec())],
+    );
+    session.expect_install_waf_body_limit().times(1).returning(|_, limit| {
+        assert_eq!(limit, 8);
+        Err(BodyReadError::BufferLimitExceeded { limit })
+    });
+    session.expect_install_waf_transaction().times(0);
+    let mut log = PluginLog::new("Waf");
+    assert!(matches!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrResponse {
+            status: 413,
+            body: None
+        }
+    ));
+}
+
+#[test]
+fn explicit_policy_stop_continue_and_reject_apply_in_detection_only() {
+    for action in [WafInspectionLimitAction::Continue, WafInspectionLimitAction::Reject] {
+        let mut config = super::fixture::config("SecAction \"id:1,phase:1,pass\"\n");
+        config.mode = WafMode::DetectionOnly;
+        config.request_body.inspection = WafRequestBodyInspection::Full;
+        config.request_body.on_limit = Some(action);
+        let plugin = WafPlugin::try_new(&config).unwrap();
+        let mut session = MockPluginSession::new();
+        session
+            .expect_stop_waf_inspection()
+            .times(1)
+            .returning(|_, bytes, storage| {
+                assert_eq!(bytes, 32);
+                assert!(storage);
+                true
+            });
+        if action == WafInspectionLimitAction::Reject {
+            session
+                .expect_record_waf_terminal_error()
+                .times(1)
+                .returning(|_, _, code, status| {
+                    assert!(matches!(code, WafErrorCode::BodyLimit));
+                    assert_eq!(status, 413);
+                });
+        }
+        let result = plugin.inspection_stop(
+            &mut session,
+            json_capture::InspectionPolicy {
+                cap: 128,
+                window: 32,
+                native_prefix: true,
+                storage_limit: true,
+            },
+        );
+        assert_eq!(
+            result,
+            if action == WafInspectionLimitAction::Reject {
+                PluginRunningResult::ErrResponse {
+                    status: 413,
+                    body: None,
+                }
+            } else {
+                PluginRunningResult::GoodNext
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn request_orchestration_uses_storage_window_only_for_fresh_waf_only_capture() {
+    for case in 0..4 {
+        let mut config = super::fixture::config("SecRule REQUEST_BODY \"@contains blocked\" \"id:1,phase:2,deny\"\n");
+        config.request_body.inspection = WafRequestBodyInspection::Full;
+        config.request_body.max_inspect_size = (case != 3).then(|| "64".to_owned());
+        let plugin = WafPlugin::try_new(&config).unwrap();
+        let mut session = MockPluginSession::new();
+        expect_request_head(&mut session, "/");
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_body_config.max_body_size_bytes = 128;
+        ctx.request_body_config.max_buffered_size_bytes = 32;
+        ctx.request_body_config.memory_buffer_bytes = 16;
+        ctx.waf_partial_capture_allowed = case != 1;
+        if case == 2 {
+            let (mut storage, view) = crate::request_body::BodyStorage::new(128, 128);
+            storage.write(&Bytes::from(vec![b'x'; 65])).await.unwrap();
+            storage.finish().await.unwrap();
+            ctx.request_body.install(view);
+        }
+        session.expect_ctx().return_const(ctx);
+        if case == 1 {
+            session.expect_ensure_request_body().times(1).return_once(|cap| {
+                assert_eq!(cap, Some(128));
+                Err(BodyReadError::BufferLimitExceeded { limit: 32 })
+            });
+            session.expect_record_error().returning(|_| ());
+        } else {
+            if case == 2 {
+                session.expect_ensure_request_body().times(1).return_once(|_| Ok(65));
+                session
+                    .expect_request_body_available_len()
+                    .times(1)
+                    .return_once(|_| Ok(65));
+            } else {
+                session
+                    .expect_capture_request_body_inspection()
+                    .times(1)
+                    .return_once(|window, consumer| {
+                        assert_eq!(window, 32);
+                        assert_eq!(consumer.source_window(), Some(32));
+                        Ok(crate::plugins::runtime::traits::session::RequestBodyInspectionCapture {
+                            captured_len: 33,
+                            complete: false,
+                            storage: None,
+                        })
+                    });
+            }
+            session
+                .expect_stop_waf_inspection()
+                .times(1)
+                .returning(move |_, bytes, storage| {
+                    assert_eq!(bytes, if case == 2 { 64 } else { 32 });
+                    assert_eq!(storage, case != 2);
+                    true
+                });
+        }
+        assert_eq!(
+            plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
+            if case == 1 {
+                PluginRunningResult::ErrResponse {
+                    status: 413,
+                    body: None,
+                }
+            } else {
+                PluginRunningResult::GoodNext
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn default_full_json_and_xml_sources_can_exceed_the_former_sixteen_mib_cap() {
+    for xml in [false, true] {
+        let plugin = plugin(
+            if xml {
+                r#"SecRule XML:/* "@contains blocked" "id:1,phase:2,deny""#
+            } else {
+                r#"SecRule ARGS "@contains blocked" "id:1,phase:2,deny""#
+            },
+            WafMode::On,
+        );
+        let mut source = if xml {
+            format!("<!--{}-->", " ".repeat(64 * 1024)).repeat(257).into_bytes()
+        } else {
+            vec![b' '; (16 << 20) + 1]
+        };
+        source.extend_from_slice(if xml {
+            b"<r>safe</r>".as_slice()
+        } else {
+            br#"{"a":"safe"}"#.as_slice()
+        });
+        let len = source.len() as u64;
+        let mut session = MockPluginSession::new();
+        expect_request_head_with_headers(
+            &mut session,
+            "/large",
+            vec![(
+                b"content-type".to_vec(),
+                if xml {
+                    b"application/xml".to_vec()
+                } else {
+                    b"application/json".to_vec()
+                },
+            )],
+        );
+        session.expect_ctx().return_const(EdgionHttpContext::new());
+        session
+            .expect_capture_request_body_with_consumer()
+            .times(1)
+            .return_once(move |cap, consumer| {
+                assert_eq!(cap, Some(32 << 20));
+                for part in source.chunks(64 * 1024) {
+                    consumer.consume(part);
+                }
+                Ok(len)
+            });
+        session
+            .expect_request_body_available_len()
+            .times(1)
+            .return_once(move |_| Ok(len));
+        session.expect_read_request_body().times(0);
+        session
+            .expect_install_waf_transaction()
+            .times(1)
+            .return_once(|_, _| true);
+        assert_eq!(
+            plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
+            PluginRunningResult::GoodNext
+        );
+    }
+}
+
+#[tokio::test]
+async fn incompatible_inspection_window_rejects_before_waf_body_reads_even_in_detection_only() {
+    let mut config = super::fixture::config("SecRule REQUEST_BODY \"@contains blocked\" \"id:1,phase:2,deny\"\n");
+    config.mode = WafMode::DetectionOnly;
+    config.request_body.max_inspect_size = Some("129".to_owned());
+    let plugin = WafPlugin::try_new(&config).unwrap();
+    let mut session = MockPluginSession::new();
+    session
+        .expect_record_waf_terminal_error()
+        .times(1)
+        .returning(|_, phase, code, status| {
+            assert_eq!(phase, WafLogPhase::RequestBody);
+            assert!(matches!(code, WafErrorCode::RuntimeInvariant));
+            assert_eq!(status, 500);
+        });
+    let mut ctx = EdgionHttpContext::new();
+    ctx.request_body_config.max_body_size_bytes = 128;
+    ctx.waf_partial_capture_allowed = true;
+    let mut initial_ctx = EdgionHttpContext::new();
+    initial_ctx.request_body_config = ctx.request_body_config;
+    initial_ctx.waf_partial_capture_allowed = ctx.waf_partial_capture_allowed;
+    expect_request_head_with_context(&mut session, "/", Vec::new(), initial_ctx);
+    session.expect_ctx().return_const(ctx);
+    session.expect_ensure_request_body().times(0);
+    session.expect_capture_request_body_inspection().times(0);
+    session.expect_capture_request_body_with_consumer().times(0);
+    session.expect_read_request_body().times(0);
+    session.expect_stop_waf_inspection().times(0);
+    session.expect_install_waf_transaction().times(0);
+    assert_eq!(
+        plugin.run_request(&mut session, &mut PluginLog::new(NAME)).await,
+        PluginRunningResult::ErrResponse {
+            status: 500,
+            body: None
+        }
+    );
 }

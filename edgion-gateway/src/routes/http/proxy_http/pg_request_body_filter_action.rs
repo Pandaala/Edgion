@@ -1,8 +1,8 @@
 //! Per-chunk request-body hook: drives installed streamed handlers, then the
 //! request-mirror tee.
 //!
-//! The fast path is one nullable-state test shared by streamed handlers, native
-//! WAF, observers, and the mirror tee.
+//! Native byte admission precedes the nullable-state test shared by streamed
+//! handlers, native WAF, observers, and the mirror tee.
 //!
 //! Handler chunks are post-mutation for the mirror: the tee runs after the
 //! handlers so the mirror backend receives exactly what the primary upstream
@@ -25,6 +25,12 @@ fn is_canonical_grpc(ctx: &EdgionHttpContext) -> bool {
     ctx.request_info.is_grpc_request || ctx.is_grpc_route_matched
 }
 
+fn request_body_exceeds_hard_limit(session: &Session, ctx: &EdgionHttpContext) -> bool {
+    (ctx.enforce_request_body_limit || session.request_body_prefix_active() || ctx.waf_body_hard_limit().is_some())
+        && session.body_bytes_read() as u64 > ctx.request_body_hard_limit()
+        && !session.was_upgraded()
+}
+
 pub async fn request_body_filter_action(
     edgion_http: &EdgionHttpProxy,
     session: &mut Session,
@@ -32,19 +38,10 @@ pub async fn request_body_filter_action(
     event: RequestBodyEvent,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<RequestBodyAction> {
-    // Prefix admission only bounds WAF inspection. The physical body cap
-    // continues to apply to transport reads after admission, including a
-    // cross-window overread. Replay must not charge these bytes twice.
-    if session.request_body_prefix_active()
-        && session.body_bytes_read() as u64 > ctx.request_body_config.max_body_size_bytes
-    {
-        ctx.record_selected_waf_terminal_error(WafLogPhase::RequestBody, WafErrorCode::BodyLimit, 413);
-        session.set_keepalive(None);
-        pg_request_body_filter::abandon_request_mirror(ctx, MirrorAbandonReason::BodyAbandoned);
-        if request_body_should_write_terminate_reply(session.response_head_selected_by_pipeline()) {
-            write_terminate_reply(session, ctx, 413, None, None, Vec::new()).await;
-        }
-        return Ok(RequestBodyAction::Terminate);
+    // Native transport counts original bytes exactly once, including captured
+    // bytes; replay and streaming mutations cannot inflate this admission count.
+    if request_body_exceeds_hard_limit(session, ctx) {
+        return reject_request_body_limit(session, ctx).await;
     }
     // Every per-chunk consumer activates the same optional state at install
     // time. Requests without a handler, WAF stream, observer, or mirror pay one
@@ -164,6 +161,15 @@ async fn abandon_handlers(handlers: &mut Handlers) {
         // Completed handlers preserve their already-selected terminal outcome.
         let _ = handler.get_mut().on_chunk(&mut None, RequestBodyEvent::Abandoned).await;
     }
+}
+
+/// Shared early and per-chunk hard admission, with one response owner.
+pub(super) async fn reject_request_body_limit(
+    session: &mut Session,
+    ctx: &mut EdgionHttpContext,
+) -> pingora_core::Result<RequestBodyAction> {
+    ctx.record_selected_waf_terminal_error(WafLogPhase::RequestBody, WafErrorCode::BodyLimit, 413);
+    reject_streamed_request(session, ctx, 413, EdgionErrorCode::BodyReadTooLarge).await
 }
 
 async fn reject_streamed_request(

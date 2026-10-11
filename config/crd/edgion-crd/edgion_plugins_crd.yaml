@@ -68,8 +68,21 @@ spec:
                         inspection:
                           type: string
                           enum: [prefix, full]
-                          default: prefix
-                          description: "Inspect a bounded prefix before forwarding, or explicitly inspect the complete bounded request body"
+                          default: full
+                          description: "Inspect complete bounded request bodies by default; prefix explicitly selects restricted raw-prefix semantics."
+                        maxInspectSize:
+                          type: string
+                          description: "Full-mode inspection window; omission inherits the Gateway body ceiling."
+                        onLimit:
+                          type: string
+                          enum: [continue, reject]
+                          description: "Full-mode policy cutoff disposition; omission continues forwarding."
+                        maxJsonBodySize:
+                          type: string
+                          description: "Optional positive hard JSON body limit; excess rejects with 413 independently of inspection mode. Omission adds no format limit."
+                        maxXmlBodySize:
+                          type: string
+                          description: "Optional positive hard XML body limit; excess rejects with 413 independently of inspection mode. Omission adds no format limit."
                         prefixSize:
                           type: string
                           description: "Prefix window from 1 byte through 1 MiB; defaults to 64KiB when omitted. Only valid with prefix inspection."
@@ -80,11 +93,8 @@ spec:
                           properties:
                             lexical:
                               type: object
-                              required: [maxSourceBytes, maxRawTokenBytes, maxDecodedBytes, maxEvents, maxDepth, maxRetainedBytes, maxWork]
+                              required: [maxRawTokenBytes, maxDecodedBytes, maxEvents, maxDepth, maxRetainedBytes, maxWork]
                               properties:
-                                maxSourceBytes:
-                                  type: integer
-                                  minimum: 0
                                 maxRawTokenBytes:
                                   type: integer
                                   minimum: 0

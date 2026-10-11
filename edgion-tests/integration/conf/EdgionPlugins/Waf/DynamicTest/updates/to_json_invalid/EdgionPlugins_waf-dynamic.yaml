@@ -10,7 +10,6 @@ spec:
       inspection: prefix
       json:
         lexical:
-          maxSourceBytes: 1048576
           maxRawTokenBytes: 524288
           maxDecodedBytes: 2097152
           maxEvents: 8192

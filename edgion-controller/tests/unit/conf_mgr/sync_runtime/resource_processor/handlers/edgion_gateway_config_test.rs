@@ -512,7 +512,7 @@ async fn egc_bad_max_body_size_rejected() {
     let spec = EdgionGatewayConfigSpec {
         current_status: None,
         request_body: edgion_resources::resources::edgion_gateway_config::RequestBodyConfig {
-            max_body_size: Some("garbage".to_string()),
+            max_body_size: "garbage".to_string(),
             ..Default::default()
         },
         ..Default::default()

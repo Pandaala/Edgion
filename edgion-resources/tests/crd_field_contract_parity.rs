@@ -115,11 +115,11 @@ fn selected_field_types_match_every_served_crd_version() {
                 "linkSys.maxInstancesPerKind",
                 "waf.expensiveChecks",
                 "requestBody.enabled",
-                "requestBody.defaultMemoryBufferSize",
-                "requestBody.maxMemoryBufferSize",
-                "requestBody.defaultMaxBodySize",
+                "requestBody.storage.memoryLimit",
+                "requestBody.storage.maxBufferedSize",
+                "requestBody.storage.spillToDisk",
                 "requestBody.maxBodySize",
-                "requestBody.storageOperationTimeout",
+                "requestBody.storage.operationTimeout",
             ],
             &version,
         );
@@ -165,21 +165,22 @@ fn gateway_scalar_defaults_match_deserialization_and_preserve_overrides() {
                 "linkSys.maxInstancesPerKind",
                 "waf.expensiveChecks",
                 "requestBody.enabled",
-                "requestBody.defaultMemoryBufferSize",
-                "requestBody.defaultMaxBodySize",
-                "requestBody.storageOperationTimeout",
+                "requestBody.storage.memoryLimit",
+                "requestBody.storage.spillToDisk",
+                "requestBody.maxBodySize",
+                "requestBody.storage.operationTimeout",
             ],
             &version,
         );
         for section in ["retry", "requestBody", "linkSys"] {
             assert!(field(&spec, section).get("default").is_none(), "{version}: {section}");
         }
-        for path in ["requestBody.maxMemoryBufferSize", "requestBody.maxBodySize"] {
-            assert!(
-                field(&spec, path).get("default").is_none(),
-                "{version}: override at {path}"
-            );
-        }
+        assert!(
+            field(&spec, "requestBody.storage.maxBufferedSize")
+                .get("default")
+                .is_none(),
+            "{version}: buffer capacity must inherit when omitted"
+        );
         let explicit: EdgionGatewayConfigSpec = serde_json::from_value(json!({
             "waf": explicit_defaults(field(&spec, "waf")),
             "retry": explicit_defaults(field(&spec, "retry")),
@@ -196,9 +197,9 @@ fn gateway_scalar_defaults_match_deserialization_and_preserve_overrides() {
     let override_values = json!({
         "retry": {"attempts": 0},
         "linkSys": {"webhookMaxResponseBytes": 1024, "maxInstancesPerKind": 1},
-        "requestBody": {"enabled": false, "defaultMemoryBufferSize": "64KiB",
-            "maxMemoryBufferSize": "256KiB", "defaultMaxBodySize": "1MiB",
-            "maxBodySize": "2MiB", "storageOperationTimeout": "750ms"}
+        "requestBody": {"enabled": false, "maxBodySize": "2MiB", "storage": {
+            "memoryLimit": "256KiB", "spillToDisk": false,
+            "maxBufferedSize": "1MiB", "operationTimeout": "750ms"}}
     });
     let explicit: EdgionGatewayConfigSpec = serde_json::from_value(override_values.clone()).expect("valid overrides");
     assert!(explicit.validate_retry().is_empty());
@@ -252,11 +253,11 @@ fn retry_and_link_sys_capacity_bounds_match_semantic_validation() {
 #[test]
 fn request_body_duration_and_sizes_keep_semantic_validation_boundaries() {
     for (version, spec) in served_specs(GATEWAY_CRD) {
-        let timeout = field(&spec, "requestBody.storageOperationTimeout");
+        let timeout = field(&spec, "requestBody.storage.operationTimeout");
         assert_eq!(timeout["pattern"], GEP2257_PATTERN, "{version}");
         for value in [json!("1ms"), json!("750ms"), json!("5s"), json!("invalid"), json!(5)] {
             let valid = serde_json::from_value::<EdgionGatewayConfigSpec>(json!({
-                "requestBody": {"storageOperationTimeout": value}
+                "requestBody": {"storage": {"operationTimeout": value}}
             }))
             .is_ok_and(|config| config.validate_request_body().is_empty());
             assert_eq!(admits(timeout, &value), valid, "{version}: timeout = {value}");
@@ -265,15 +266,18 @@ fn request_body_duration_and_sizes_keep_semantic_validation_boundaries() {
         // positive deadline. Keep this semantic rule out of the shared regex.
         assert!(admits(timeout, &json!("0s")));
         let zero: EdgionGatewayConfigSpec = serde_json::from_value(json!({
-            "requestBody": {"storageOperationTimeout": "0s"}
+            "requestBody": {"storage": {"operationTimeout": "0s"}}
         }))
         .expect("zero is representable before semantic validation");
         assert!(!zero.validate_request_body().is_empty());
         for (values, expected) in [
-            (json!({"maxMemoryBufferSize": "1KiB", "maxBodySize": "1KiB"}), true),
-            (json!({"maxMemoryBufferSize": "2KiB", "maxBodySize": "1KiB"}), false),
+            (json!({"storage": {"memoryLimit": "1KiB"}, "maxBodySize": "1KiB"}), true),
+            (
+                json!({"storage": {"memoryLimit": "2KiB"}, "maxBodySize": "1KiB"}),
+                false,
+            ),
             (json!({"maxBodySize": "0"}), false),
-            (json!({"maxMemoryBufferSize": "invalid"}), false),
+            (json!({"storage": {"memoryLimit": "invalid"}}), false),
         ] {
             assert!(
                 admits(field(&spec, "requestBody"), &values),
@@ -454,7 +458,7 @@ fn explicit_null_is_distinct_from_serde_omission() {
     for (section, name) in [
         ("retry", "attempts"),
         ("requestBody", "enabled"),
-        ("requestBody", "storageOperationTimeout"),
+        ("requestBody", "maxBodySize"),
         ("linkSys", "maxInstancesPerKind"),
     ] {
         assert!(
@@ -463,12 +467,11 @@ fn explicit_null_is_distinct_from_serde_omission() {
         );
     }
     let optional: EdgionGatewayConfigSpec = serde_json::from_value(json!({
-        "linkSys": null, "requestBody": {"maxMemoryBufferSize": null, "maxBodySize": null}
+        "linkSys": null, "requestBody": {"storage": {"maxBufferedSize": null}}
     }))
     .expect("optional serde values accept null");
     assert!(optional.link_sys.is_none());
-    assert!(optional.request_body.max_memory_buffer_size.is_none());
-    assert!(optional.request_body.max_body_size.is_none());
+    assert!(optional.request_body.storage.max_buffered_size.is_none());
     // JSON Schema validation does not apply Kubernetes null pruning/defaults.
     for (_, spec) in served_specs(GATEWAY_CRD) {
         for path in [

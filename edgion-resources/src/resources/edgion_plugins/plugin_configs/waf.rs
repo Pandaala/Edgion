@@ -88,8 +88,8 @@ pub enum WafMode {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum WafRequestBodyInspection {
-    #[default]
     Prefix,
+    #[default]
     Full,
 }
 
@@ -97,7 +97,6 @@ pub enum WafRequestBodyInspection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WafJsonLexicalLimits {
-    pub max_source_bytes: usize,
     pub max_raw_token_bytes: usize,
     pub max_decoded_bytes: usize,
     pub max_events: usize,
@@ -141,10 +140,10 @@ pub struct WafJsonConfig {
 }
 impl WafJsonConfig {
     /// Copy explicit budgets without normalizing restrictive zero values.
-    pub fn inspection_limits(&self) -> JsonInspectionLimits {
+    pub fn inspection_limits(&self, source_limit: usize) -> JsonInspectionLimits {
         JsonInspectionLimits {
             lexical: JsonStreamLimits {
-                max_source_bytes: self.lexical.max_source_bytes,
+                max_source_bytes: source_limit,
                 max_raw_token_bytes: self.lexical.max_raw_token_bytes,
                 max_decoded_bytes: self.lexical.max_decoded_bytes,
                 max_events: self.lexical.max_events,
@@ -172,22 +171,77 @@ impl WafJsonConfig {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum WafInspectionLimitAction {
+    #[default]
+    Continue,
+    Reject,
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WafRequestBodyConfig {
     #[serde(default)]
     pub inspection: WafRequestBodyInspection,
+    /// Full inspection window; omission inherits the Gateway hard ceiling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_inspect_size: Option<String>,
+    /// Disposition of an explicit inspection/storage cutoff, not real failures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_limit: Option<WafInspectionLimitAction>,
     /// Prefix window, default 64 KiB, at most 1 MiB. Only valid in prefix mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefix_size: Option<String>,
+    /// Additional hard JSON request-body ceiling; omission adds no format limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_json_body_size: Option<String>,
+    /// Additional hard XML request-body ceiling; omission adds no format limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_xml_body_size: Option<String>,
     /// JSON checker limit overrides; full mode uses engine defaults when omitted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub json: Option<WafJsonConfig>,
 }
 
 impl WafRequestBodyConfig {
+    pub fn inspection_limit_bytes(&self) -> Result<Option<u64>, String> {
+        if self.inspection != WafRequestBodyInspection::Full
+            && (self.max_inspect_size.is_some() || self.on_limit.is_some())
+        {
+            return Err("requestBody.maxInspectSize and onLimit require full inspection".to_string());
+        }
+        self.max_inspect_size
+            .as_deref()
+            .map(|value| {
+                crate::resources::common::parse_byte_size(value)
+                    .filter(|bytes| *bytes > 0)
+                    .ok_or_else(|| "requestBody.maxInspectSize must be a positive byte size".to_string())
+            })
+            .transpose()
+    }
+
+    /// Resolve hard format ceilings once during validation and construction.
+    pub fn format_body_limits(&self) -> Result<(Option<u64>, Option<u64>), String> {
+        fn parse(value: Option<&str>, field: &str) -> Result<Option<u64>, String> {
+            value
+                .map(|value| {
+                    crate::resources::common::parse_byte_size(value)
+                        .filter(|bytes| *bytes > 0)
+                        .ok_or_else(|| format!("requestBody.{field} must be a positive byte size"))
+                })
+                .transpose()
+        }
+        Ok((
+            parse(self.max_json_body_size.as_deref(), "maxJsonBodySize")?,
+            parse(self.max_xml_body_size.as_deref(), "maxXmlBodySize")?,
+        ))
+    }
+
     /// Resolve once during configuration validation and plugin construction.
     pub fn prefix_size_bytes(&self) -> Result<usize, String> {
+        self.format_body_limits()?;
+        self.inspection_limit_bytes()?;
         if self.json.is_some() && self.inspection != WafRequestBodyInspection::Full {
             return Err("requestBody.json is only valid with full inspection".to_string());
         }

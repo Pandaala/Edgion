@@ -66,8 +66,10 @@ Reference this resource from an `HTTPRoute` with the usual Gateway API
 | `WafPolicy.profiles.<name>.bundleRefs[].optional` | no | `false` | Skip a missing or invalid independent addition and report `PartiallyInvalid`; never mark the base bundle optional |
 | `mode` | no | `on` | `on` enforces disruptive actions; `detectionOnly` records matches without blocking |
 | `priority` | no | `0` | Tie breaker within one attachment scope from `0` through `65535`; a larger value wins |
-| `requestBody.inspection` | no | `prefix` | Inspect a bounded prefix before backend dispatch, or use `full` for complete-body inspection |
+| `requestBody.inspection` | no | `full` | Inspect a bounded prefix before backend dispatch, or use `full` for complete-body inspection |
 | `requestBody.prefixSize` | no | `64KiB` | Prefix window from 1 byte through `1MiB`, using size strings such as `16KiB`, `100k`, or `1m`; only valid with `prefix` |
+| `requestBody.maxInspectSize` | no | Gateway physical cap | Positive source-byte window; full mode only |
+| `requestBody.onLimit` | no | `continue` | Stop remaining WAF phases on inspection/storage policy cutoff, or `reject` with 413; full mode only |
 | `requestBody.json` | no | engine defaults | Complete JSON checker limit overrides; only valid with `full` |
 
 For a disruptive `deny` or `block` action, `status` must be a final HTTP status
@@ -407,9 +409,9 @@ SecRule ARGS "@contains blocked" "id:1202,phase:2,deny,status:403,tag:managed-ch
   reading the body. If no rule consumes body values, neither inspection mode
   captures it. Mixed header/body rules retain their configured order.
   Negated body matches, structured body targets, chains, control flow, and
-  whole-body-dependent rules require explicit `inspection: full`. Validation
+  whole-body-dependent rules require `inspection: full` (the default). Validation
   checks the entire generation, including later-phase body dependencies.
-- WAF alone captures only its inspection window in the shared request-body
+- In explicit prefix mode, WAF alone captures only its inspection window in the shared request-body
   storage, entirely in memory, including a 1 MiB window. This bounded prefix
   uses its window as both memory and total capacity, independently of the
   complete-body spill threshold.
@@ -418,11 +420,24 @@ SecRule ARGS "@contains blocked" "id:1202,phase:2,deny,status:403,tag:managed-ch
   Body mutation after prefix inspection and incompatible streaming processors
   fail closed. Native prefix captures disable upstream retries, including short
   bodies; complete shared captures retain their existing retry policy.
-- When rules consume body values, `inspection: full` waits for complete bounded capture and uses the existing
-  shared memory/disk storage before phase 2. Choose it when rules need complete
-  body semantics; omit `prefixSize` in this mode. Physical body and execution
-  limits still apply. It also applies to raw rules that previously ran while forwarding.
+- Full-mode rules run only after a complete document has been inspected. An
+  optional `maxInspectSize` sets a smaller inspection window. With no other
+  complete-body consumer, the new storage capacity can also bound this window.
+  One additional byte proves truncation; exactly the window size requires real
+  EOF to count as complete. Incomplete JSON/XML results are discarded, and all
+  remaining WAF phases stop. `onLimit: continue` forwards the original body;
+  `onLimit: reject` returns 413 even in `detectionOnly`. Phase 1 findings remain.
+  The access log records `inspection_stop` with the admitted byte count and
+  `inspection` or `storage` reason. A cutoff is not a complete clean verdict.
+  Complete-body co-consumers still require complete shared capture; their storage
+  failures cannot be softened by this WAF policy. Existing complete caches retain
+  their original capacity. Real parser, transport and storage failures remain
+  failures. An explicit window above the pinned Gateway physical cap is rejected
+  at runtime. Omit `prefixSize` in full mode.
 - The gateway physical body cap remains independent of the inspection window.
+  It also bounds ordinary HTTP without WAF or body capture, even when capture
+  is disabled. Canonical gRPC, CONNECT and successfully upgraded tunnel traffic
+  are excluded; an Upgrade request header alone is not an exemption.
   Overflow detected after prefix admission can happen after backend exposure;
   it is not a pre-dispatch WAF rejection. `detectionOnly` suppresses rule-based
   blocking, but does not suppress transport, storage, or physical-limit failures.
@@ -435,6 +450,24 @@ SecRule ARGS "@contains blocked" "id:1202,phase:2,deny,status:403,tag:managed-ch
 - Phase 5 runs once for a normally completed response transaction. Findings
   expose bounded counts and rule IDs only; payloads and matched values are not
   logged.
+
+Optional `requestBody.maxJsonBodySize` and `requestBody.maxXmlBodySize` impose
+hard request-size ceilings for the effective processor selected after Phase 1.
+Both accept positive byte-size strings, for example `2MiB`. Omission adds no
+format-specific restriction; the Gateway body ceiling remains independent.
+These limits apply in both `prefix` and `full` mode, in `detectionOnly`, and even
+when no rule reads the body. They do not change the inspection window or enable
+content sniffing/decompression. Only the selected WAF configuration applies.
+
+A format hard limit checks native received bytes and any current logical cached
+body, prevents later body mutation, and is incompatible with mutating streamed
+body handlers in either installation order. It continues counting native input
+after prefix admission without counting replay twice. Overflow returns 413 when
+no final response has been selected; otherwise the existing response pipeline
+terminates the remaining upload without replacing an already-selected response.
+Earlier backend exposure cannot be undone. Complete prebuffering is needed for
+zero upstream exposure. General inspection-window continuation is a separate
+policy; format hard limits always reject excess.
 
 The engine has fixed limits for source size, rule counts, regex automata,
 matcher scratch, transaction collections, transformations, body decoding,
@@ -467,7 +500,7 @@ runtime aggregate retained-byte limit, including while evaluating a chain branch
 
 | Domain | Default limits |
 |---|---|
-| lexical | source/raw token 16 MiB; decoded/retained 32 MiB; events 131072; depth 64; work 128 MiB |
+| lexical | source: effective inspection ceiling; raw token 16 MiB; decoded/retained 32 MiB; events 131072; depth 64; work 128 MiB |
 | structure | retained 8 MiB; keys 4 MiB; members 65536; path 16 KiB; depth 64; work 128 MiB |
 | results | candidates 65536; facts 1000000; retained 32 MiB; work 128 MiB; deferred entries 4096; deferred bytes 4 MiB |
 
@@ -476,7 +509,6 @@ requestBody:
   inspection: full
   json:
     lexical:
-      maxSourceBytes: 16777216
       maxRawTokenBytes: 16777216
       maxDecodedBytes: 33554432
       maxEvents: 131072
@@ -571,11 +603,14 @@ supported. Existing CRS attribute exclusions still apply in rule order.
 
 | Domain | Fixed default limits |
 |---|---|
-| parser | source/raw token 16 MiB; name 16 KiB; decoded bytes 32 MiB; events 262144; depth 64 |
+| parser | source: effective inspection ceiling; raw token 16 MiB; name 16 KiB; decoded bytes 32 MiB; events 262144; depth 64 |
 | structure | attributes per tag 65536; active namespace bindings 65536; active names/namespaces 8 MiB |
 | storage/work | parser heap 32 MiB and work 128 MiB; selected-result limits match the JSON result defaults |
 
-There is no `requestBody.xml` configuration field. Parser safeguards remain
+JSON and XML source-byte ceilings come from the effective inspection window,
+which inherits the Gateway physical cap (32 MiB by default). There is no
+`json.lexical.maxSourceBytes` operator field. Independent token, heap and work
+budgets still apply. There is no `requestBody.xml` configuration field. Parser safeguards remain
 independent of logical WAF and Gateway body limits. Contiguous ordinary values
 are borrowed; cross-chunk or normalized values use reusable inline scratch with
 bounded growth. The engine keeps no complete XML tree or extracted value map.

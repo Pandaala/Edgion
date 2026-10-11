@@ -128,6 +128,8 @@ impl WafCandidate {
 }
 
 pub struct PluginRuntime {
+    /// Conservative construction-time capability, including conditional/nested consumers.
+    requires_complete_request_body: bool,
     rate_limit_local_outcome_slots: usize,
     has_upstream_jump_plugin: bool,
     has_grpc_transcoder: bool,
@@ -302,6 +304,7 @@ impl PluginRuntime {
             invalid_config_sealed: false,
             policy_blocks: Vec::new(),
             policy_bypassed: Vec::new(),
+            requires_complete_request_body: false,
             waf_candidate: None,
             has_request_id: false,
             invalid_early_request_id: false,
@@ -312,6 +315,7 @@ impl PluginRuntime {
     fn into_entry_outcome(self, errors: Vec<String>) -> EntryOutcome {
         let failed = !self.invalid_plugins.is_empty();
         let bundle = EntryBundle {
+            requires_complete_request_body: self.requires_complete_request_body,
             request: self.request_plugins,
             response_filter: self.upstream_response_plugins,
             response_body: self.upstream_response_body_plugins,
@@ -329,6 +333,7 @@ impl PluginRuntime {
     }
 
     fn append_entry_bundle(&mut self, bundle: &EntryBundle) {
+        self.requires_complete_request_body |= bundle.requires_complete_request_body;
         self.has_graphql_operation_router |= bundle.request.iter().any(|f| f.name() == "GraphqlOperationRouter");
         self.has_grpc_transcoder |= bundle
             .request
@@ -419,9 +424,11 @@ impl PluginRuntime {
                         }
                     },
                 });
-                self.add_request_filter(Box::new(plugin.clone()));
-                self.add_upstream_response_filter(Box::new(plugin.clone()));
-                self.add_upstream_response(Box::new(plugin));
+                // The selected WAF owns its inspection policy; these hooks are
+                // not an independent complete-body consumer.
+                self.request_plugins.push(Arc::new(plugin.clone()));
+                self.upstream_response_plugins.push(Arc::new(plugin.clone()));
+                self.upstream_response_async_plugins.push(Arc::new(plugin));
                 Ok(())
             }
             Err(error) => {
@@ -738,6 +745,7 @@ impl PluginRuntime {
                                 if !assign_indices {
                                     self.backend_request_header_modifier = Some(Arc::clone(&filter));
                                 }
+                                self.requires_complete_request_body = true;
                                 self.request_plugins.push(filter);
                             }
                             Err(_) => self.invalid_plugins.record_non_retainable("RequestHeaderModifier"),
@@ -2795,21 +2803,39 @@ impl PluginRuntime {
     }
 
     fn add_request_filter(&mut self, filter: Box<dyn RequestFilter>) {
+        self.requires_complete_request_body = true;
         self.has_upstream_jump_plugin |=
             edgion_resources::resources::edgion_plugins::edgion_plugin::is_upstream_jump_plugin_type(filter.name());
         self.request_plugins.push(Arc::from(filter));
     }
 
     fn add_upstream_response_filter(&mut self, filter: Box<dyn UpstreamResponseFilter>) {
+        self.requires_complete_request_body = true;
         self.upstream_response_plugins.push(Arc::from(filter));
     }
 
     fn add_upstream_response_body_filter(&mut self, filter: Box<dyn UpstreamResponseBodyFilter>) {
+        self.requires_complete_request_body = true;
         self.upstream_response_body_plugins.push(Arc::from(filter));
     }
 
     fn add_upstream_response(&mut self, filter: Box<dyn UpstreamResponse>) {
+        self.requires_complete_request_body = true;
         self.upstream_response_async_plugins.push(Arc::from(filter));
+    }
+
+    pub(crate) fn requires_complete_request_body(&self) -> bool {
+        self.requires_complete_request_body
+    }
+
+    /// Backend dispatch occurs later; any candidate with filters or references
+    /// must conservatively preserve complete-body availability.
+    pub(crate) fn requires_complete_backend_body(&self) -> bool {
+        !self.request_plugins.is_empty()
+            || !self.upstream_response_plugins.is_empty()
+            || !self.upstream_response_body_plugins.is_empty()
+            || !self.upstream_response_async_plugins.is_empty()
+            || !self.backend_ext_ref_keys.is_empty()
     }
 
     /// Get request stage plugin count

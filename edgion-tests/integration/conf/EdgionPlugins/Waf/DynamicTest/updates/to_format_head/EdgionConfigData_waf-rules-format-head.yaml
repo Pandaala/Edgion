@@ -1,0 +1,19 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: waf-rules-format-head
+  namespace: edgion-default
+spec:
+  data:
+    type: WafRuleBundle
+    config:
+      version: "1"
+      profile: format_head
+      provenance: edgion-tests/waf-dynamic
+      digest: e6a6bcab06258b09f776fde86bd86544226ed5b9efa1d18210d64910f3b9920c
+      roots: [main.conf]
+      rules:
+        - name: main.conf
+          content: |
+            SecRule REQUEST_HEADERS:X-Waf-Hard-Phase "!@streq head" "id:2450,phase:1,deny,status:409"
+            SecAction "id:2452,phase:1,pass"

@@ -194,3 +194,56 @@ fn finalization_distinguishes_not_run_incomplete_and_allowed() {
     fully_detected.finalize();
     assert_eq!(serde_json::to_value(&fully_detected).unwrap()["outcome"], "detected");
 }
+
+#[test]
+fn format_limit_is_owned_by_selected_waf_and_outlives_transaction() {
+    let owner = Arc::new(());
+    let other = Arc::new(());
+    let mut ctx = EdgionHttpContext::new();
+    ctx.request_body_config.max_body_size_bytes = 32;
+    assert!(!ctx.install_waf_body_hard_limit(&owner, 8));
+    assert!(ctx.select_waf(Some(WafSelection::new(
+        Arc::clone(&owner),
+        WafLogSource::Route,
+        0,
+        WafLogMode::DetectionOnly
+    ))));
+    assert!(!ctx.install_waf_body_hard_limit(&other, 4));
+    assert!(!ctx.install_waf_body_hard_limit(&owner, 0));
+    assert!(ctx.install_waf_body_hard_limit(&owner, 8));
+    assert!(!ctx.install_waf_body_hard_limit(&owner, 64));
+    assert_eq!(ctx.request_body_hard_limit(), 8);
+    assert!(ctx.waf.as_mut().unwrap().take(&owner).is_none());
+    assert_eq!(ctx.request_body_hard_limit(), 8);
+    assert!(!ctx.has_request_body_plugins());
+    ctx.request_body_config.max_body_size_bytes = 4;
+    assert_eq!(ctx.request_body_hard_limit(), 4);
+}
+
+#[test]
+fn inspection_stop_claims_remaining_phases_and_keeps_hard_admission() {
+    for storage in [false, true] {
+        let owner = Arc::new(());
+        let mut ctx = EdgionHttpContext::new();
+        assert!(ctx.select_waf(Some(WafSelection::new(
+            Arc::clone(&owner),
+            WafLogSource::Route,
+            0,
+            WafLogMode::On
+        ))));
+        assert!(ctx.install_waf_body_hard_limit(&owner, 64));
+        assert!(!ctx.stop_waf_inspection(&Arc::new(()), 32, storage));
+        assert!(ctx.stop_waf_inspection(&owner, 32, storage));
+        assert_eq!(ctx.request_body_hard_limit(), 64);
+        for phase in [WafPhase::Request, WafPhase::ResponseHeaders, WafPhase::ResponseComplete] {
+            assert_eq!(ctx.claim_waf_phase(&owner, phase), WafPhaseClaim::Skip);
+        }
+        let summary = serde_json::to_value(&ctx.waf.as_ref().unwrap().access_log).unwrap();
+        assert_eq!(summary["outcome"], "incomplete");
+        assert_eq!(summary["inspection_stop"]["admitted_bytes"], 32);
+        assert_eq!(
+            summary["inspection_stop"]["reason"],
+            if storage { "storage" } else { "inspection" }
+        );
+    }
+}

@@ -75,12 +75,41 @@ impl InspectionSession<'_, '_> {
             Self::Xml(session) => session.usage().parser.source_bytes,
         }
     }
+    fn stop_by_policy(self) -> Result<(), RuntimeError> {
+        match self {
+            Self::Json(session) => session.stop_by_policy(),
+            Self::Xml(session) => session.stop_by_policy(),
+        }
+    }
     fn finish(self, source: Option<Bytes>) -> Result<(), RuntimeError> {
         match self {
             Self::Json(session) => session.finish(source),
             Self::Xml(session) => session.finish(source),
         }
     }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct InspectionPolicy {
+    pub cap: u64,
+    pub window: u64,
+    pub native_prefix: bool,
+    pub storage_limit: bool,
+}
+impl InspectionPolicy {
+    pub fn complete(cap: u64) -> Self {
+        Self {
+            cap,
+            window: cap,
+            native_prefix: false,
+            storage_limit: false,
+        }
+    }
+}
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum InspectionOutcome {
+    Complete,
+    Limited,
 }
 
 pub(super) enum JsonCaptureError {
@@ -116,6 +145,8 @@ struct JsonCapture<'call, 'generation> {
     charge: RuntimeCharge,
     inspected: usize,
     failure: Option<RuntimeError>,
+    window: u64,
+    supplied: u64,
 }
 impl JsonCapture<'_, '_> {
     fn refresh(&mut self) {
@@ -133,6 +164,9 @@ impl JsonCapture<'_, '_> {
     }
 }
 impl RequestBodyChunkConsumer for JsonCapture<'_, '_> {
+    fn source_window(&self) -> Option<u64> {
+        Some(self.window)
+    }
     fn cached_contiguous_limit(&self) -> Option<usize> {
         match self.inspection {
             InspectionSession::Json(_) => Some(CACHED_JSON_CONTIGUOUS_LIMIT),
@@ -141,6 +175,12 @@ impl RequestBodyChunkConsumer for JsonCapture<'_, '_> {
     }
 
     fn consume(&mut self, chunk: &[u8]) {
+        let len = self.window.saturating_sub(self.supplied).min(chunk.len() as u64) as usize;
+        let chunk = &chunk[..len];
+        self.supplied += len as u64;
+        if chunk.is_empty() {
+            return;
+        }
         if self.failure.is_none() {
             if let Err(error) = self.inspection.feed(chunk) {
                 self.failure = Some(error);
@@ -181,15 +221,15 @@ pub(super) async fn inspect(
     transaction: &mut Transaction<'static>,
     limits: JsonInspectionLimits,
     runtime: RuntimeLimits,
-    capture_cap: u64,
+    policy: InspectionPolicy,
     requires_body: bool,
-) -> Result<(), JsonCaptureError> {
+) -> Result<InspectionOutcome, JsonCaptureError> {
     inspect_structured(
         session,
         transaction,
         InspectionLimits::Json(limits),
         runtime,
-        capture_cap,
+        policy,
         requires_body,
     )
     .await
@@ -199,15 +239,15 @@ pub(super) async fn inspect_xml(
     transaction: &mut Transaction<'static>,
     limits: XmlInspectionLimits,
     runtime: RuntimeLimits,
-    capture_cap: u64,
+    policy: InspectionPolicy,
     requires_body: bool,
-) -> Result<(), JsonCaptureError> {
+) -> Result<InspectionOutcome, JsonCaptureError> {
     inspect_structured(
         session,
         transaction,
         InspectionLimits::Xml(limits),
         runtime,
-        capture_cap,
+        policy,
         requires_body,
     )
     .await
@@ -217,9 +257,10 @@ async fn inspect_structured(
     transaction: &mut Transaction<'static>,
     limits: InspectionLimits,
     runtime: RuntimeLimits,
-    capture_cap: u64,
+    policy: InspectionPolicy,
     requires_body: bool,
-) -> Result<(), JsonCaptureError> {
+) -> Result<InspectionOutcome, JsonCaptureError> {
+    let capture_cap = policy.cap;
     // Cached size admission precedes reader IO, matching the complete adapter.
     let hint = if requires_body {
         session
@@ -227,7 +268,14 @@ async fn inspect_structured(
             .request_body
             .cached_len()
             .map_err(JsonCaptureError::Body)?
-            .map(|len| admitted_len(len, runtime, limits, capture_cap))
+            .map(|len| {
+                if len > capture_cap {
+                    return Err(JsonCaptureError::Body(BodyReadError::BufferLimitExceeded {
+                        limit: capture_cap,
+                    }));
+                }
+                admitted_len(len.min(policy.window), runtime, limits, capture_cap)
+            })
             .transpose()?
     } else {
         None
@@ -249,9 +297,21 @@ async fn inspect_structured(
         charge: RuntimeCharge { bytes: 0 },
         inspected: 0,
         failure: None,
+        window: policy.window,
+        supplied: 0,
     };
     capture.refresh();
-    let captured = if requires_body {
+    let mut native_source = None;
+    let mut native_complete = true;
+    let captured = if requires_body && policy.native_prefix {
+        let result = session
+            .capture_request_body_inspection(policy.window, &mut capture)
+            .await
+            .map_err(JsonCaptureError::Body)?;
+        native_complete = result.complete;
+        native_source = result.storage;
+        result.captured_len
+    } else if requires_body {
         session
             .capture_request_body_with_consumer(Some(capture_cap), &mut capture)
             .await
@@ -260,15 +320,29 @@ async fn inspect_structured(
         0
     };
     let known_bodyless = session.ctx().request_info.body_declared == Some(false);
-    let available = if requires_body {
+    let available = if requires_body && !policy.native_prefix {
         session
             .request_body_available_len(known_bodyless)
             .map_err(JsonCaptureError::Body)?
     } else {
-        0
+        captured
     };
     if available != captured {
         return Err(JsonCaptureError::Body(BodyReadError::Incomplete));
+    }
+    if captured > capture_cap {
+        return Err(JsonCaptureError::Body(BodyReadError::BufferLimitExceeded {
+            limit: capture_cap,
+        }));
+    }
+    if captured > policy.window || !native_complete {
+        if let Some(error) = capture.failure {
+            return Err(JsonCaptureError::Runtime(error));
+        }
+        let JsonCapture { inspection, charge, .. } = capture;
+        drop(charge);
+        inspection.stop_by_policy().map_err(JsonCaptureError::Runtime)?;
+        return Ok(InspectionOutcome::Limited);
     }
     let len = admitted_len(captured, runtime, limits, capture_cap)?;
     let completed = capture.inspection.complete(len);
@@ -277,6 +351,16 @@ async fn inspect_structured(
     // JSON-only rules never materialize the captured source.
     let source = if capture.inspection.requires_raw_source() && !requires_body {
         Some(Bytes::new())
+    } else if capture.inspection.requires_raw_source() && policy.native_prefix {
+        let source = match native_source {
+            Some(view) => view.read_all().await.map_err(JsonCaptureError::Body)?,
+            None if len == 0 => Bytes::new(),
+            None => return Err(JsonCaptureError::Body(BodyReadError::Incomplete)),
+        };
+        if source.len() != len {
+            return Err(JsonCaptureError::Body(BodyReadError::Incomplete));
+        }
+        Some(source)
     } else if capture.inspection.requires_raw_source() {
         let body = session
             .read_request_body(Some(capture_cap))
@@ -295,7 +379,8 @@ async fn inspect_structured(
     }
     let JsonCapture { inspection, charge, .. } = capture;
     drop(charge);
-    inspection.finish(source).map_err(JsonCaptureError::Runtime)
+    inspection.finish(source).map_err(JsonCaptureError::Runtime)?;
+    Ok(InspectionOutcome::Complete)
 }
 
 #[cfg(test)]

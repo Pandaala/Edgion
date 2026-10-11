@@ -10,13 +10,12 @@ spec:
       inspection: full
       json:
         lexical:
-          maxSourceBytes: 0
           maxRawTokenBytes: 524288
           maxDecodedBytes: 2097152
           maxEvents: 8192
           maxDepth: 32
           maxRetainedBytes: 1048576
-          maxWork: 16777216
+          maxWork: 0
         structure:
           maxRetainedBytes: 1048576
           maxKeyBytes: 65536

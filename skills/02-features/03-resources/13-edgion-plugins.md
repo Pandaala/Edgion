@@ -71,7 +71,15 @@ from that shared policy. These fields are mutually exclusive; omitting both uses
 the policy default.
 Only one compiled generation is active per request. Bundle sources are strictly
 compiled and admin-redacted; invalid required updates retain the last activatable
-generation. See
+generation. `requestBody.inspection` defaults to `full`; optional `maxInspectSize`
+bounds source inspection, while `onLimit` defaults to `continue` without
+publishing partial structured results or truncating forwarding. Optional
+`maxJsonBodySize` / `maxXmlBodySize` are hard admission limits on the canonical
+post-Phase-1 processor and still apply in DetectionOnly and after inspection
+stops. EGC owns physical and shared-storage limits. JSON/XML source ceilings
+inherit the effective inspection policy; independent parsing budgets remain.
+An explicit inspection window above the pinned EGC physical cap fails at WAF
+runtime before its body reads, not at cross-resource publication. See
 `docs/en/user-guide/http-route/filters/edgion-plugins/waf.md`.
 
 | Type | Description |

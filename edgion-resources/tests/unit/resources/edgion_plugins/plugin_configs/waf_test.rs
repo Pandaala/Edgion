@@ -342,7 +342,7 @@ fn prefix_size_is_bounded_and_round_trips_without_changing_full_defaults() {
     for (size, bytes) in [("1", 1), ("16KiB", 16384), ("100k", 102400), ("1m", 1048576)] {
         let mut config: WafConfig = serde_json::from_value(serde_json::json!({
             "policyRef": {"name": "policy"},
-            "requestBody": {"prefixSize": size}
+            "requestBody": {"inspection": "prefix", "prefixSize": size}
         }))
         .unwrap();
         config.rules = "SecRule REQUEST_BODY \"@contains forbidden\" \"id:1,phase:2,deny\"".into();
@@ -357,6 +357,7 @@ fn prefix_size_is_bounded_and_round_trips_without_changing_full_defaults() {
         let config = WafConfig {
             rules: "SecAction \"id:1,phase:1,pass\"".to_string(),
             request_body: WafRequestBodyConfig {
+                inspection: WafRequestBodyInspection::Prefix,
                 prefix_size: Some(size.to_string()),
                 ..Default::default()
             },
@@ -378,19 +379,25 @@ fn prefix_size_is_bounded_and_round_trips_without_changing_full_defaults() {
 }
 
 #[test]
-fn prefix_defaults_and_full_validation_share_the_same_compiler() {
+fn full_default_and_explicit_prefix_share_the_same_compiler() {
     let mut config = WafConfig {
         rules: "SecRule REQUEST_BODY \"@contains forbidden\" \"id:1,phase:2,deny\"".into(),
         ..WafConfig::default()
     };
-    assert_eq!(config.request_body.inspection, WafRequestBodyInspection::Prefix);
+    assert_eq!(config.request_body.inspection, WafRequestBodyInspection::Full);
+    assert_eq!(config.validation_error(), None);
+    config.request_body.inspection = WafRequestBodyInspection::Prefix;
     assert_eq!(config.validation_error(), None);
     config.request_body.inspection = WafRequestBodyInspection::Full;
     let serialized = serde_json::to_value(&config).unwrap();
     assert_eq!(serialized["requestBody"]["inspection"], "full");
     let restored: WafConfig = serde_json::from_value(serialized).unwrap();
     assert_eq!(restored.request_body.inspection, WafRequestBodyInspection::Full);
-    assert!(restored.validation_error().is_some());
+    // Test-only inline rules are deliberately absent from serialized resources.
+    assert_eq!(
+        restored.validation_error().as_deref(),
+        Some("policyRef requires a valid name")
+    );
 }
 
 #[test]
@@ -468,7 +475,7 @@ fn prefix_rejects_whole_body_and_control_dependencies_across_generation() {
             "SecRule REQUEST_URI \"@contains private\" \"id:1,phase:1,pass,skip:1\"\nSecRule REQUEST_BODY \"@contains forbidden\" \"id:2,phase:2,deny\"",
             "SecRule REQUEST_BODY \"@contains forbidden\" \"id:1,phase:2,deny,chain\"\nSecRule REQUEST_BODY \"@contains secret\" \"t:none\"",
         ] {
-            let mut config = WafConfig { rules: rules.to_owned(), ..WafConfig::default() };
+            let mut config = WafConfig { rules: rules.to_owned(), request_body: WafRequestBodyConfig { inspection: WafRequestBodyInspection::Prefix, ..Default::default() }, ..WafConfig::default() };
             let error = config.validation_error().expect("prefix must reject unsupported semantics");
             assert!(error.contains("inspection prefix"), "{error}");
             config.request_body.inspection = WafRequestBodyInspection::Full;
@@ -648,7 +655,7 @@ fn plugin_requires_one_policy_reference_and_accepts_one_profile_selector() {
 
 fn json_budget_value() -> serde_json::Value {
     serde_json::json!({
-        "lexical": {"maxSourceBytes": 1, "maxRawTokenBytes": 2, "maxDecodedBytes": 3,
+        "lexical": {"maxRawTokenBytes": 2, "maxDecodedBytes": 3,
             "maxEvents": 4, "maxDepth": 5, "maxRetainedBytes": 6, "maxWork": 7},
         "structure": {"maxRetainedBytes": 8, "maxKeyBytes": 9, "maxMembers": 10,
             "maxPathBytes": 12, "maxDepth": 13, "maxWork": 14},
@@ -691,11 +698,11 @@ fn json_budgets_map_exactly_and_preserve_restrictive_zero_limits() {
     let value = json_budget_value();
     let config: WafJsonConfig = serde_json::from_value(value.clone()).unwrap();
     assert_eq!(serde_json::to_value(config).unwrap(), value);
-    let limits = config.inspection_limits();
+    let limits = config.inspection_limits(64);
     assert_eq!(
         limits.lexical,
         edgion_waf::seclang::JsonStreamLimits {
-            max_source_bytes: 1,
+            max_source_bytes: 64,
             max_raw_token_bytes: 2,
             max_decoded_bytes: 3,
             max_events: 4,
@@ -738,8 +745,9 @@ fn json_budgets_map_exactly_and_preserve_restrictive_zero_limits() {
         }
     }
     let zero: WafJsonConfig = serde_json::from_value(zero).unwrap();
-    let limits = zero.inspection_limits();
-    assert_eq!(limits.lexical.max_source_bytes, 0);
+    let limits = zero.inspection_limits(64);
+    assert_eq!(limits.lexical.max_source_bytes, 64);
+    assert_eq!(limits.lexical.max_work, 0);
     assert_eq!(limits.structure.max_members, 0);
     assert_eq!(limits.results.candidates, 0);
     assert_eq!(limits.results.work, 0);
@@ -755,6 +763,7 @@ fn json_full_only_validation_agrees_for_shape_inline_resolved_and_support() {
             ..Default::default()
         },
         request_body: WafRequestBodyConfig {
+            inspection: WafRequestBodyInspection::Prefix,
             json: Some(json),
             ..Default::default()
         },
@@ -792,6 +801,7 @@ fn json_full_only_validation_agrees_for_shape_inline_resolved_and_support() {
         resolved_bundles: Some(vec![bundle]),
         owner_namespace: Some("default".into()),
         request_body: WafRequestBodyConfig {
+            inspection: WafRequestBodyInspection::Prefix,
             json: Some(json),
             ..Default::default()
         },
@@ -864,7 +874,7 @@ fn obsolete_json_budget_groups_are_rejected() {
 #[test]
 fn dynamic_json_fixture_profiles_keep_valid_invalid_and_zero_limit_purposes() {
     for tree in ["integration", "k8s"] {
-        for phase in ["v1", "v2", "detection", "invalid", "zero_source"] {
+        for phase in ["v1", "v2", "detection", "invalid", "zero_work"] {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
                 "../edgion-tests/{tree}/conf/EdgionPlugins/Waf/DynamicTest/updates/to_json_{phase}/EdgionPlugins_waf-dynamic.yaml"
             ));
@@ -872,15 +882,8 @@ fn dynamic_json_fixture_profiles_keep_valid_invalid_and_zero_limit_purposes() {
             let config: WafConfig = serde_yaml::from_value(document["spec"]["waf"].clone()).unwrap();
             assert_eq!(config.request_body.prefix_size_bytes().is_err(), phase == "invalid");
             assert_eq!(
-                config
-                    .request_body
-                    .json
-                    .unwrap()
-                    .inspection_limits()
-                    .lexical
-                    .max_source_bytes
-                    == 0,
-                phase == "zero_source"
+                config.request_body.json.unwrap().inspection_limits(64).lexical.max_work == 0,
+                phase == "zero_work"
             );
         }
     }
@@ -1039,4 +1042,62 @@ fn selected_bundle_transport_identity_is_lexical_and_optional_slots_stay_optiona
             "matching transport strings cannot legitimize invalid identity"
         );
     }
+}
+
+#[test]
+fn format_hard_limits_are_optional_positive_and_independent_of_inspection_mode() {
+    for inspection in ["prefix", "full"] {
+        let body: WafRequestBodyConfig = serde_json::from_value(serde_json::json!({
+            "inspection": inspection, "maxJsonBodySize": "2MiB", "maxXmlBodySize": "1KiB"
+        }))
+        .unwrap();
+        assert_eq!(body.format_body_limits().unwrap(), (Some(2 << 20), Some(1024)));
+        assert!(body.prefix_size_bytes().is_ok());
+        let encoded = serde_json::to_value(&body).unwrap();
+        assert_eq!(encoded["maxJsonBodySize"], "2MiB");
+        assert_eq!(encoded["maxXmlBodySize"], "1KiB");
+    }
+    let omitted = WafRequestBodyConfig::default();
+    assert_eq!(omitted.format_body_limits().unwrap(), (None, None));
+    let encoded = serde_json::to_value(&omitted).unwrap();
+    assert!(encoded.get("maxJsonBodySize").is_none());
+    for field in ["maxJsonBodySize", "maxXmlBodySize"] {
+        for invalid in ["0", "-1", "invalid", "inf", "NaN"] {
+            let body: WafRequestBodyConfig = serde_json::from_value(serde_json::json!({field: invalid})).unwrap();
+            assert!(body.prefix_size_bytes().unwrap_err().contains(field));
+        }
+    }
+    assert!(serde_json::from_value::<WafRequestBodyConfig>(serde_json::json!({"maxJsonSize": "1MiB"})).is_err());
+}
+
+#[test]
+fn inspection_window_is_positive_full_only_and_default_continue() {
+    let body: WafRequestBodyConfig = serde_json::from_value(serde_json::json!({
+        "inspection": "full", "maxInspectSize": "2MiB"
+    }))
+    .unwrap();
+    assert_eq!(body.inspection_limit_bytes().unwrap(), Some(2 << 20));
+    assert_eq!(body.on_limit.unwrap_or_default(), WafInspectionLimitAction::Continue);
+    for value in [
+        serde_json::json!({"inspection":"full", "maxInspectSize":"0"}),
+        serde_json::json!({"inspection":"full", "maxInspectSize":"invalid"}),
+        serde_json::json!({"inspection":"prefix", "maxInspectSize":"1MiB"}),
+        serde_json::json!({"inspection":"prefix", "onLimit":"continue"}),
+    ] {
+        let body: WafRequestBodyConfig = serde_json::from_value(value).unwrap();
+        assert!(body.prefix_size_bytes().is_err());
+    }
+    assert!(serde_json::from_value::<WafRequestBodyConfig>(serde_json::json!({
+        "inspection":"full", "onLimit":"ignore"
+    }))
+    .is_err());
+}
+
+#[test]
+fn removed_json_source_knob_is_rejected_and_full_is_default() {
+    let mut budgets = json_budget_value();
+    budgets["lexical"]["maxSourceBytes"] = serde_json::json!(1024);
+    assert!(serde_json::from_value::<WafJsonConfig>(budgets).is_err());
+    let body: WafRequestBodyConfig = serde_json::from_str("{}").unwrap();
+    assert_eq!(body.inspection, WafRequestBodyInspection::Full);
 }

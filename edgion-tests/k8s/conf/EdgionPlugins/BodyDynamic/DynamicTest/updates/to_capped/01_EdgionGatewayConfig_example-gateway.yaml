@@ -33,8 +33,9 @@ spec:
     idleTimeout: 2s
   requestBody:
     enabled: true
-    defaultMemoryBufferSize: 8B
-    defaultMaxBodySize: 16B
+    maxBodySize: 16B
+    storage:
+      memoryLimit: 8B
   globalPluginsRef:
     - name: als-global
       namespace: edgion-default

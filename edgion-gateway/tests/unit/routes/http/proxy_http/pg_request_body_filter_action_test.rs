@@ -686,3 +686,60 @@ async fn eos_output_rejection_closes_future_response_transaction_before_reply() 
     assert!(facts.lock().terminal.is_empty());
     assert_eq!(session.response_written().unwrap().status.as_u16(), 413);
 }
+
+#[tokio::test]
+async fn ordinary_hard_admission_counts_native_bytes_and_exempts_only_written_101() {
+    for response_status in [None, Some(200), Some(101)] {
+        let (mut client, server) = tokio::io::duplex(4096);
+        client
+            .write_all(b"POST / HTTP/1.1\r\nHost: test\r\nContent-Length: 9\r\nConnection: upgrade\r\nUpgrade: websocket\r\n\r\n123456789")
+            .await
+            .unwrap();
+        let mut session = Session::new_h1(Box::new(server));
+        session.read_request().await.unwrap();
+        let mut ctx = EdgionHttpContext::default();
+        ctx.enforce_request_body_limit = true;
+        ctx.request_body_config.enabled = false;
+        ctx.request_body_config.max_body_size_bytes = 8;
+        assert!(!request_body_exceeds_hard_limit(&session, &ctx));
+        session.read_request_body().await.unwrap();
+        assert!(request_body_exceeds_hard_limit(&session, &ctx));
+        ctx.request_body_config.max_body_size_bytes = 9;
+        assert!(!request_body_exceeds_hard_limit(&session, &ctx));
+        ctx.request_body_config.max_body_size_bytes = 8;
+        if let Some(status) = response_status {
+            let mut header = ResponseHeader::build(status, None).unwrap();
+            if status == 101 {
+                header.insert_header("connection", "upgrade").unwrap();
+                header.insert_header("upgrade", "websocket").unwrap();
+            }
+            session.write_response_header(Box::new(header), false).await.unwrap();
+        }
+        assert_eq!(
+            request_body_exceeds_hard_limit(&session, &ctx),
+            response_status != Some(101)
+        );
+        if response_status == Some(200) {
+            let mut chunk = Some(Bytes::from_static(b"123456789"));
+            assert_eq!(
+                request_body_filter_action(
+                    &body_proxy(),
+                    &mut session,
+                    &mut chunk,
+                    RequestBodyEvent::Data,
+                    &mut ctx
+                )
+                .await
+                .unwrap(),
+                RequestBodyAction::Terminate
+            );
+            assert_eq!(session.response_written().unwrap().status.as_u16(), 200);
+            assert_eq!(ctx.final_downstream_status(), None);
+            assert!(ctx
+                .diagnostics
+                .entries()
+                .contains(&RequestDiagnostic::Error(EdgionErrorCode::BodyReadTooLarge)));
+        }
+        assert!(ctx.request_body.cached_len().unwrap().is_none());
+    }
+}

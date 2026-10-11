@@ -133,3 +133,26 @@ fn streamed_accounting_accepts_inclusive_cap_and_rejects_overflow_without_public
     assert!(ctx.admit_streamed_request_body_bytes(3, true));
     assert_eq!(ctx.request_body_plugins.as_deref().unwrap().streamed_output_bytes, 3);
 }
+
+#[test]
+fn format_hard_guard_and_mutating_handlers_are_mutually_exclusive_in_both_orders() {
+    for handler_first in [false, true] {
+        let owner = Arc::new(());
+        let mut ctx = EdgionHttpContext::new();
+        assert!(ctx.select_waf(Some(WafSelection::new(
+            Arc::clone(&owner),
+            WafLogSource::Route,
+            0,
+            WafLogMode::On
+        ))));
+        if handler_first {
+            assert!(ctx.push_request_body_stream_handler(Box::new(NoopStreamHandler)));
+            assert!(!ctx.install_waf_body_hard_limit(&owner, 1024));
+            assert_eq!(ctx.waf_body_hard_limit(), None);
+        } else {
+            assert!(ctx.install_waf_body_hard_limit(&owner, 1024));
+            assert!(!ctx.push_request_body_stream_handler(Box::new(NoopStreamHandler)));
+            assert!(!ctx.request_body_handlers_selected());
+        }
+    }
+}

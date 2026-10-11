@@ -461,7 +461,7 @@ impl TestSuite for WafDynamicUpdatedTestSuite {
 pub struct WafDynamicJsonV1TestSuite;
 pub struct WafDynamicJsonV2TestSuite;
 pub struct WafDynamicJsonDetectionTestSuite;
-pub struct WafDynamicJsonZeroSourceTestSuite;
+pub struct WafDynamicJsonZeroWorkTestSuite;
 
 macro_rules! json_phase_suite {
     ($type:ident, $title:literal, $version:literal, $detection:literal, $zero:literal) => {
@@ -507,8 +507,8 @@ json_phase_suite!(
     false
 );
 json_phase_suite!(
-    WafDynamicJsonZeroSourceTestSuite,
-    "Native WAF Dynamic - JSON Zero Source",
+    WafDynamicJsonZeroWorkTestSuite,
+    "Native WAF Dynamic - JSON Zero Work",
     "json-v1",
     false,
     true
@@ -698,3 +698,27 @@ supported_phase_suite!(
     false,
     false
 );
+
+pub struct WafDynamicFormatLimitTestSuite(pub &'static str);
+impl TestSuite for WafDynamicFormatLimitTestSuite {
+    fn name(&self) -> &str {
+        "Native WAF Format Hard Limits"
+    }
+    fn test_cases(&self) -> Vec<TestCase> {
+        vec![wire::format_limit_case(self.0)]
+    }
+}
+
+pub struct WafDynamicInspectionLimitTestSuite(pub &'static str);
+impl TestSuite for WafDynamicInspectionLimitTestSuite {
+    fn name(&self) -> &str {
+        "Native WAF Inspection Limits"
+    }
+    fn test_cases(&self) -> Vec<TestCase> {
+        if self.0 == "ordinary" {
+            vec![wire::ordinary_body_limit_case()]
+        } else {
+            vec![wire::inspection_limit_case(self.0)]
+        }
+    }
+}

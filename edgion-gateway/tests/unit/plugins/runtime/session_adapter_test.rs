@@ -851,3 +851,41 @@ async fn disabling_guard_preserves_another_owner_and_pending_unary_possibility()
         );
     }
 }
+
+#[tokio::test]
+async fn inspection_window_skips_only_proven_tail_and_keeps_complete_eof_validation() {
+    struct WindowConsumer {
+        bytes: Vec<u8>,
+        window: u64,
+    }
+    impl RequestBodyChunkConsumer for WindowConsumer {
+        fn source_window(&self) -> Option<u64> {
+            Some(self.window)
+        }
+        fn consume(&mut self, bytes: &[u8]) {
+            self.bytes.extend_from_slice(bytes);
+        }
+    }
+    for (len, cap, window, expected, expected_reads) in [
+        (6, 6, 2, Ok(6), 1),
+        (3, 6, 3, Err(BodyReadError::Timeout), 2),
+        (6, 5, 2, Err(BodyReadError::BufferLimitExceeded { limit: 5 }), 0),
+    ] {
+        let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let reader = ConsumerSnapshot {
+            len,
+            chunks: vec![Ok(Bytes::from_static(b"abc")), Err(BodyReadError::Timeout)].into(),
+            reads: Arc::clone(&reads),
+        };
+        let mut consumer = WindowConsumer {
+            bytes: Vec::new(),
+            window,
+        };
+        assert_eq!(
+            consume_request_body_snapshot(Box::new(reader), cap, &mut consumer).await,
+            expected
+        );
+        assert_eq!(reads.load(std::sync::atomic::Ordering::Relaxed), expected_reads);
+        assert!(consumer.bytes.len() as u64 <= window);
+    }
+}

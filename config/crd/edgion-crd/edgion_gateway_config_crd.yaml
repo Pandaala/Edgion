@@ -201,25 +201,29 @@ spec:
                       type: boolean
                       default: true
                       description: "Runtime capture switch. A body-capable binary still refuses capture when false."
-                    defaultMemoryBufferSize:
-                      type: string
-                      default: "128KiB"
-                      description: "Default request-body bytes retained in memory before spilling to disk."
-                    maxMemoryBufferSize:
-                      type: string
-                      description: "Optional business override for the in-memory spill threshold."
-                    defaultMaxBodySize:
-                      type: string
-                      default: "32MiB"
-                      description: "Default complete request-body cap."
                     maxBodySize:
                       type: string
-                      description: "Optional business override for the complete request-body cap."
-                    storageOperationTimeout:
-                      type: string
-                      default: "5s"
-                      pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
-                      description: "Non-zero wall-clock deadline shared by admission and execution of one request-body storage file operation."
+                      default: "32MiB"
+                      description: "Hard ceiling on the original request entity payload."
+                    storage:
+                      type: object
+                      properties:
+                        memoryLimit:
+                          type: string
+                          default: "128KiB"
+                          description: "Resident payload threshold before optional disk spill."
+                        spillToDisk:
+                          type: boolean
+                          default: true
+                          description: "Allow disk spill above memoryLimit."
+                        maxBufferedSize:
+                          type: string
+                          description: "New capture owner capacity; omission inherits maxBodySize."
+                        operationTimeout:
+                          type: string
+                          default: "5s"
+                          pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
+                          description: "Non-zero deadline for admission plus execution of one storage operation."
 
                 # ============================================
                 # Plugin Execution Policy

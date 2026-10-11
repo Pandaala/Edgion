@@ -200,3 +200,72 @@ fn invalid_same_name_cold_key_cannot_select_cors_or_waf_decoy() {
         assert_eq!(select_waf_owner(&[], &[], &resolved).is_some(), present);
     }
 }
+
+#[test]
+fn body_composition_covers_route_refs_and_unselected_backends() {
+    fn native(filters: serde_json::Value) -> PluginRuntime {
+        let route: edgion_resources::HTTPRoute = serde_json::from_value(serde_json::json!({
+            "metadata":{"name":"route","namespace":"apps"},"spec":{"rules":[{"filters":filters}]}
+        }))
+        .unwrap();
+        PluginRuntime::from_httproute_filters_for_rule(&route, 0, &Default::default())
+    }
+    let mut waf = PluginRuntime::new();
+    waf.add_waf(&crate::plugins::http::waf::fixture::config(
+        "SecAction \"id:1,phase:1,pass\"\n",
+    ))
+    .unwrap();
+    let waf = Arc::new(waf);
+    let route = native(
+        serde_json::json!([{"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":"waf"}}]),
+    );
+    let refs = [Some(Arc::clone(&waf))];
+    let empty_backend = PluginRuntime::new();
+    assert!(allows_partial_body_capture(
+        &[],
+        &[],
+        &refs,
+        &route,
+        [&empty_backend].into_iter()
+    ));
+    assert!(!allows_partial_body_capture(
+        &[],
+        &[],
+        &[None],
+        &route,
+        std::iter::empty()
+    ));
+    assert!(!allows_partial_body_capture(&[], &[], &[], &route, std::iter::empty()));
+    let modifier = Arc::new(native(
+        serde_json::json!([{"type":"RequestHeaderModifier","requestHeaderModifier":{"set":[{"name":"x-check","value":"1"}]}}]),
+    ));
+    assert!(!allows_partial_body_capture(
+        &[Arc::clone(&modifier)],
+        &[],
+        &refs,
+        &route,
+        std::iter::empty()
+    ));
+    assert!(!allows_partial_body_capture(
+        &[],
+        &[Arc::clone(&modifier)],
+        &refs,
+        &route,
+        std::iter::empty()
+    ));
+    assert!(!allows_partial_body_capture(
+        &[],
+        &[],
+        &refs,
+        &route,
+        [&empty_backend, modifier.as_ref()].into_iter()
+    ));
+    assert!(!allows_partial_body_capture(
+        &[],
+        &[],
+        &[],
+        &modifier,
+        std::iter::empty()
+    ));
+    assert!(!EdgionHttpContext::default().waf_partial_capture_allowed);
+}

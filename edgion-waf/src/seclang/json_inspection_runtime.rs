@@ -545,6 +545,24 @@ impl JsonInspectionSession<'_, '_> {
             |value| value == super::super::OnOff::On,
         )
     }
+    /// End an explicitly bounded inspection without fabricating EOF or publishing
+    /// provisional body facts. Genuine errors retain precedence over policy stop.
+    pub fn stop_by_policy(mut self) -> Result<(), RuntimeError> {
+        let error = self.failure.or_else(|| {
+            self.parse_error.map(|_| RuntimeError::Body {
+                kind: BodyError::Malformed {
+                    processor: BodyProcessorSelection::Json,
+                },
+            })
+        });
+        self.finished = true;
+        if let Some(error) = error {
+            self.transaction.json_failure.get_or_insert(error);
+            return Err(error);
+        }
+        Ok(())
+    }
+
     /// Publish once after completion, borrowing no bytes from supplied chunks.
     pub fn finish(mut self, source: Option<Bytes>) -> Result<(), RuntimeError> {
         let result = self.finish_inner(source);

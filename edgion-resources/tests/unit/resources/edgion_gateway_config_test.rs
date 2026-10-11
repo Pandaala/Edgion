@@ -75,67 +75,46 @@ fn egc_outbound_tls_roundtrips() {
 fn request_body_defaults_are_gateway_class_policy() {
     let s: EdgionGatewayConfigSpec = serde_json::from_str("{}").unwrap();
     assert!(s.request_body.enabled);
-    assert_eq!(s.request_body.default_memory_buffer_size, "128KiB");
-    assert_eq!(s.request_body.default_max_body_size, "32MiB");
-    assert_eq!(s.request_body.storage_operation_timeout, "5s");
+    assert_eq!(s.request_body.storage.memory_limit, "128KiB");
+    assert!(s.request_body.storage.spill_to_disk);
+    assert!(s.request_body.storage.max_buffered_size.is_none());
+    assert_eq!(s.request_body.max_body_size, "32MiB");
+    assert_eq!(s.request_body.storage.operation_timeout, "5s");
     assert!(s.validate_request_body().is_empty());
 }
 
 #[test]
 fn request_body_overrides_parse_and_validate() {
     let s: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
-        "requestBody": {
-            "maxMemoryBufferSize": "256KiB",
-            "maxBodySize": "8MiB",
-            "storageOperationTimeout": "750ms"
-        }
+        "requestBody": {"maxBodySize": "8MiB", "storage": {
+            "memoryLimit": "256KiB", "spillToDisk": false,
+            "maxBufferedSize": "2MiB", "operationTimeout": "750ms"
+        }}
     }))
     .unwrap();
-    let request_body = s.request_body;
-    assert_eq!(request_body.max_memory_buffer_size.as_deref(), Some("256KiB"));
-    assert_eq!(request_body.max_body_size.as_deref(), Some("8MiB"));
-    assert_eq!(request_body.storage_operation_timeout, "750ms");
-    assert!(request_body.validate().is_empty());
+    assert_eq!(s.request_body.storage.memory_limit, "256KiB");
+    assert_eq!(s.request_body.max_body_size, "8MiB");
+    assert_eq!(s.request_body.storage.operation_timeout, "750ms");
+    assert!(!s.request_body.storage.spill_to_disk);
+    assert!(s.validate_request_body().is_empty());
 }
 
 #[test]
 fn request_body_rejects_invalid_and_inverted_limits() {
-    let invalid: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
-        "requestBody": {
-            "maxMemoryBufferSize": "garbage",
-            "maxBodySize": "0"
-        }
-    }))
-    .unwrap();
-    assert_eq!(invalid.validate_request_body().len(), 2);
-
-    let invalid_override: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
-        "requestBody": {
-            "maxMemoryBufferSize": "garbage",
-            "maxBodySize": "1"
-        }
-    }))
-    .unwrap();
-    assert_eq!(invalid_override.validate_request_body().len(), 1);
-
-    let inverted: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
-        "requestBody": {
-            "maxMemoryBufferSize": "2MiB",
-            "maxBodySize": "1MiB"
-        }
-    }))
-    .unwrap();
-    assert_eq!(
-        inverted.validate_request_body(),
-        vec!["effective requestBody memory buffer size must not exceed the effective requestBody max body size"]
-    );
-
-    for timeout in ["0s", "invalid"] {
-        let invalid_timeout: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
-            "requestBody": { "storageOperationTimeout": timeout }
-        }))
-        .unwrap();
-        assert_eq!(invalid_timeout.validate_request_body().len(), 1, "{timeout}");
+    for body in [
+        serde_json::json!({"maxBodySize": "0"}),
+        serde_json::json!({"storage": {"memoryLimit": "garbage"}}),
+        serde_json::json!({"storage": {"memoryLimit": "0"}}),
+        serde_json::json!({"storage": {"maxBufferedSize": "0"}}),
+        serde_json::json!({"storage": {"maxBufferedSize": "garbage"}}),
+        serde_json::json!({"maxBodySize": "1MiB", "storage": {"memoryLimit": "2MiB"}}),
+        serde_json::json!({"storage": {"maxBufferedSize": "64KiB"}}),
+        serde_json::json!({"storage": {"maxBufferedSize": "64MiB"}}),
+        serde_json::json!({"storage": {"operationTimeout": "0s"}}),
+        serde_json::json!({"storage": {"operationTimeout": "invalid"}}),
+    ] {
+        let config: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({"requestBody": body})).unwrap();
+        assert!(!config.validate_request_body().is_empty(), "{body}");
     }
 }
 

@@ -10,6 +10,6 @@ spec:
       profiles:
         baseline:
           bundleRefs:
-            - name: waf-rules-prefix_1m
+            - name: waf-rules-prefix-1m
               expectedDigest: 958abde2f6f58ebd0a4151f408b263e546ac2832073c44e1fdce9a22da4312cd
       defaultProfile: baseline

@@ -3374,3 +3374,66 @@ fn wasm_actual_tls_precedes_all_three_stage_caches() {
     assert!(!errors.is_empty());
     assert_eq!(unsupported.upstream_response_async_plugins.len(), 0);
 }
+
+#[test]
+fn waf_hooks_are_not_an_independent_complete_consumer() {
+    let config = crate::plugins::http::waf::fixture::config("SecAction \"id:1,phase:1,pass\"\n");
+    let mut runtime = PluginRuntime::new();
+    runtime.add_waf(&config).unwrap();
+    assert!(!runtime.requires_complete_request_body());
+    assert!(runtime.requires_complete_backend_body());
+    // Classification is explicit installation metadata, never the filter name.
+    for stage in 0..3 {
+        let mut ordinary = PluginRuntime::new();
+        let plugin = WafPlugin::try_new(&config).unwrap();
+        match stage {
+            0 => ordinary.add_request_filter(Box::new(plugin)),
+            1 => ordinary.add_upstream_response_filter(Box::new(plugin)),
+            _ => ordinary.add_upstream_response(Box::new(plugin)),
+        }
+        assert!(ordinary.requires_complete_request_body());
+        let outcome = ordinary.into_entry_outcome(vec![]);
+        let mut rebuilt = PluginRuntime::new();
+        rebuilt.append_entry_bundle(outcome.bundle());
+        assert!(rebuilt.requires_complete_request_body());
+    }
+}
+
+#[test]
+fn conditional_consumers_keep_capability_through_entry_cache() {
+    for stage in [
+        "requestPlugins",
+        "upstreamResponseFilterPlugins",
+        "upstreamResponseBodyFilterPlugins",
+    ] {
+        let plugin = if stage == "upstreamResponseBodyFilterPlugins" {
+            serde_json::json!({"type":"BandwidthLimit","config":{"rate":"1mb"}})
+        } else {
+            serde_json::json!({"type":"Dsl","config":{"name":"reader","source":"return next()"}})
+        };
+        let mut owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+            "metadata":{"name":"consumer","namespace":"apps"},"spec":{stage:[plugin]}
+        }))
+        .unwrap();
+        let mut wire = serde_json::to_value(&owner).unwrap();
+        wire["spec"][stage][0]["conditions"] =
+            serde_json::json!({"run":{"allOf":[{"type":"keyExist","key":{"type":"header","name":"x-run"}}]}});
+        owner = serde_json::from_value(wire).unwrap();
+        let mut cache = EntryCache::default();
+        for _ in 0..2 {
+            let mut runtime = PluginRuntime::new();
+            let errors = if stage == "upstreamResponseBodyFilterPlugins" {
+                runtime.add_from_upstream_response_body_filters_with_cache(
+                    owner.spec.upstream_response_body_filter_plugins.as_deref().unwrap(),
+                    "apps",
+                    &mut cache,
+                    None,
+                )
+            } else {
+                runtime.add_resource_filters_with_cache(&owner, &mut cache)
+            };
+            assert!(errors.is_empty(), "{stage}: {errors:?}");
+            assert!(runtime.requires_complete_request_body(), "{stage}");
+        }
+    }
+}

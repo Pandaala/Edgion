@@ -16,6 +16,15 @@ plugin-created body version. `BodyStorageView` stores the immutable cap and
 atomically rejects overwrite or slice replacement before publishing a version
 whose final checked length exceeds it.
 
+The shared storage policy additionally bounds new owners by maxBufferedSize,
+and by memoryLimit when spillToDisk is false. Their immutable owner cap is the
+minimum of these storage bounds and the applicable physical/format hard limit.
+This tighter retained-byte bound persists through logical mutations; an existing
+complete owner retains its original capacity. A caller-specific read max_bytes
+limits that read only, never permanently changes the shared owner cap. This
+storage-capacity refinement preserves the physical invariant and transactional
+mutation failure policy below.
+
 Fix suggestions that validate independently in each mutating plugin or let each
 mutation caller supply its own cap are **not accepted**.
 
@@ -64,8 +73,7 @@ complete-body mutation's recoverable failure. See
 Re-open this decision only if:
 
 - Body versions can be generated outside `BodyStorageView`.
-- The gateway introduces a separately configured output/mutation cap with
-  semantics distinct from the physical request-body cap.
+- A distinct output/mutation policy replaces the effective shared owner capacity.
 - Mutations become concurrent instead of phase-ordered and serial.
 
 ## Reference Cases

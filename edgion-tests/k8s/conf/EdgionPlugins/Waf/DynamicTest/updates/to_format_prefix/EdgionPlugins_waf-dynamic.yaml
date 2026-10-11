@@ -1,0 +1,15 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: waf-dynamic
+  namespace: edgion-default
+spec:
+  waf:
+    mode: on
+    requestBody:
+      inspection: prefix
+      prefixSize: "32"
+      maxJsonBodySize: "128"
+      maxXmlBodySize: "64"
+    policyRef:
+      name: waf-policy

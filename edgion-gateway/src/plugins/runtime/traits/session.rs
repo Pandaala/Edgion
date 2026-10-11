@@ -99,6 +99,12 @@ pub type BodyReadResult = Result<Bytes, BodyReadError>;
 /// Inspection failures are latched by the consumer; capture still proves EOF and
 /// preserves transport/storage error priority. Chunks cannot escape this call.
 pub trait RequestBodyChunkConsumer: Send {
+    /// Optional observation window. A canonical complete snapshot may skip its
+    /// remaining bytes after proving its full length fits the hard read cap.
+    fn source_window(&self) -> Option<u64> {
+        None
+    }
+
     /// Opt in to one bounded, already-resident contiguous snapshot chunk.
     /// Live capture remains chunked. This is an input bound, not a yield guarantee.
     fn cached_contiguous_limit(&self) -> Option<usize> {
@@ -153,6 +159,14 @@ pub trait RequestBodySnapshotReader: Send {
 
     /// Read the next raw byte chunk, or `None` after the complete snapshot.
     async fn next_chunk(&mut self) -> Result<Option<Bytes>, BodyReadError>;
+}
+
+/// Result of a canonical policy-bounded native capture. A partial source remains
+/// owned by native first-attempt replay and is never a complete request cache.
+pub struct RequestBodyInspectionCapture {
+    pub captured_len: u64,
+    pub complete: bool,
+    pub storage: Option<Arc<crate::request_body::BodyStorageView>>,
 }
 
 /// Which matched route a `matched_route_meta` lookup targets.
@@ -534,6 +548,17 @@ pub trait PluginSession: Send + Sync {
     /// Get reference to EdgionHttpContext (for access log generation)
     fn ctx(&self) -> &EdgionHttpContext;
 
+    /// Stop all remaining phases while retaining independent hard admission.
+    fn stop_waf_inspection(&mut self, _owner: &Arc<()>, _bytes: u64, _storage_limit: bool) -> bool {
+        false
+    }
+
+    /// Install selected-WAF hard admission against native and logical bytes.
+    /// The guard remains active through forwarding even without a body parser.
+    fn install_waf_body_limit(&mut self, _owner: &Arc<()>, _limit: u64) -> Result<(), BodyReadError> {
+        Err(BodyReadError::Unimplemented)
+    }
+
     /// Install the first native WAF transaction for this request.
     fn install_waf_transaction(
         &mut self,
@@ -582,9 +607,18 @@ pub trait PluginSession: Send + Sync {
         true
     }
 
-    /// Capture an inspection prefix before upstream dispatch. The boolean is
-    /// true only when the captured bytes represent the complete logical body.
-    /// A prefix must never be exposed through the complete-body read API.
+    /// Capture a soft window plus one proof byte, then feed one bounded reader.
+    #[allow(unused_parens)]
+    async fn capture_request_body_inspection<'consumer>(
+        &mut self,
+        _window: u64,
+        _consumer: &'consumer mut (dyn RequestBodyChunkConsumer + 'consumer),
+    ) -> Result<RequestBodyInspectionCapture, BodyReadError> {
+        Err(BodyReadError::Unimplemented)
+    }
+
+    /// Capture a prefix separately from the complete-body API. The boolean
+    /// proves that the captured bytes represent the complete logical body.
     async fn read_request_body_prefix(&mut self, _limit: usize) -> Result<(bytes::Bytes, bool), BodyReadError> {
         Err(BodyReadError::Unimplemented)
     }

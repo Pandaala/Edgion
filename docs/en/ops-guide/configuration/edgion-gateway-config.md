@@ -101,11 +101,12 @@ spec:
 
   requestBody:
     enabled: true
-    defaultMemoryBufferSize: "128KiB"
-    # maxMemoryBufferSize: "1MiB"
-    defaultMaxBodySize: "32MiB"
-    # maxBodySize: "64MiB"
-    storageOperationTimeout: "5s"
+    maxBodySize: "32MiB"
+    storage:
+      memoryLimit: "128KiB"
+      spillToDisk: true
+      # maxBufferedSize: "32MiB"
+      operationTimeout: "5s"
 
   globalPluginsRef:
     - name: "global-cors"
@@ -266,18 +267,27 @@ If the block is present and `xForwardedForLimit` is omitted, its default is 200.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `enabled` | `Boolean` | `true` | Runtime capture switch. When disabled, body-aware plugins fail closed with the normal body-unavailable result |
-| `defaultMemoryBufferSize` | `String` | `128KiB` | Default in-memory bytes before disk spill |
-| `maxMemoryBufferSize` | `String` | unset | Effective business override for the memory spill threshold; falls back to `defaultMemoryBufferSize` |
-| `defaultMaxBodySize` | `String` | `32MiB` | Default complete request-body cap |
-| `maxBodySize` | `String` | unset | Effective business override for the body cap; falls back to `defaultMaxBodySize` |
-| `storageOperationTimeout` | `String` | `5s` | Non-zero deadline for one disk-backed request-body operation, including waiting for storage-I/O admission and executing the file operation |
+| `maxBodySize` | `String` | `32MiB` | Hard request-body ceiling |
+| `storage.memoryLimit` | `String` | `128KiB` | Resident payload threshold before optional spill |
+| `storage.spillToDisk` | `Boolean` | `true` | Allow disk spill above the memory threshold |
+| `storage.maxBufferedSize` | `String` | inherit maxBodySize | New capture owner retention capacity |
+| `storage.operationTimeout` | `String` | `5s` | Deadline for admission plus execution of one storage operation |
+
+Require `memoryLimit <= maxBufferedSize <= maxBodySize`, with omitted buffer capacity inherited from the body ceiling. Disabling spill additionally bounds new complete captures by the memory threshold. Required complete consumers fail when capacity is exceeded; they never receive a truncated snapshot. A new owner's capacity also bounds subsequent logical mutations. Existing complete snapshots retain their original owner's capacity. Explicit WAF raw-prefix capture retains its independent at-most-1MiB memory window. Full WAF-only inspection can stop at a configured inspection or storage boundary without truncating forwarding; its `onLimit` selects continue or reject. Other complete-body consumers still require complete capture.
+
+The physical ceiling also applies to ordinary HTTP without WAF or body plugins,
+even when capture is disabled. Known Content-Length overflow rejects before
+forwarding; unknown-length overflow stops the upload when native received bytes
+exceed the cap. An already-selected response keeps ownership instead of being
+replaced by 413. Canonical gRPC, CONNECT and successfully upgraded tunnels are
+excluded; an Upgrade request header alone does not bypass admission.
 
 All sizes must be positive human-readable byte sizes. The effective memory
 threshold must not exceed the effective body cap. Values are parsed when the
 configuration update is published. Each new request copies the resolved policy
 from an immutable snapshot without parsing sizes or taking a blocking lock. A
 plugin's `body.maxBodySize` may further tighten the limit for that plugin.
-`storageOperationTimeout` uses the shared GEP-2257 duration syntax (`500ms`,
+`storage.operationTimeout` uses the shared GEP-2257 duration syntax (`500ms`,
 `5s`, `1m`) and must be greater than zero. A storage deadline is reported as a
 gateway-local storage failure, not as a downstream body-read timeout. Capture
 failure disables HTTP/1 connection reuse when unread body bytes may remain;

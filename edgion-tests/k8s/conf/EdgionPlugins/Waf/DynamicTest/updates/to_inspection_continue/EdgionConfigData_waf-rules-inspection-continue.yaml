@@ -1,0 +1,20 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: waf-rules-inspection-continue
+  namespace: edgion-default
+spec:
+  data:
+    type: WafRuleBundle
+    config:
+      version: "1"
+      profile: inspection_continue
+      provenance: edgion-tests/waf-dynamic
+      digest: aad3b8788f7b3e45e738bc0b81b9d72a71f85e32d006d8d45bc258d56db3c8c5
+      roots: [main.conf]
+      rules:
+        - name: main.conf
+          content: |
+            SecRule REQUEST_HEADERS:X-Waf-Inspection-Phase "!@streq continue" "id:2460,phase:1,deny,status:409"
+            SecRule ARGS|XML:/*|REQUEST_BODY "@contains blocked" "id:2461,phase:2,deny,status:406"
+            SecAction "id:2462,phase:3,deny,status:407"

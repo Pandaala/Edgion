@@ -38,3 +38,23 @@ async fn known_empty_blocking_scanner_finishes_off_the_runtime_thread() {
     assert!(result.value);
     assert_eq!(result.bytes_scanned, 0);
 }
+
+#[tokio::test]
+async fn mutation_freeze_survives_empty_state_late_capture_and_view_release() {
+    use crate::request_body::BodyStorage;
+    use pingora_core::protocols::http::RequestBodyBuffer;
+
+    let mut backend = Backend::default();
+    backend.mark_known_empty();
+    backend.freeze_mutation();
+    for memory_limit in [1, 128] {
+        let (mut storage, view) = BodyStorage::new(memory_limit, 1024);
+        storage.write(&Bytes::from_static(b"original")).await.unwrap();
+        storage.finish().await.unwrap();
+        backend.install(Arc::clone(&view));
+        assert!(backend.overwrite(Bytes::from_static(b"changed")).is_err());
+        assert!(view.overwrite_body(Bytes::from_static(b"changed")).is_err());
+        assert_eq!(backend.read_all().await.unwrap().unwrap(), "original");
+        backend.release_view();
+    }
+}
