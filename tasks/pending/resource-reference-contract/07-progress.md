@@ -1,4 +1,4 @@
-> **Current resume status — 2026-10-11, product commit 6f566a8ae.**
+> **Current resume status — 2026-10-11, product commit 6f566a8ae; test addition 65d461d4f.**
 > This block is the current authority for progress. Historical records below
 > retain their original revision scope, including prior failures and limitations.
 
@@ -35,11 +35,28 @@
   dedicated instances. The suite removed five passthrough Gateways itself;
   existing backends, Secrets, runner and two adopted TLS fixture names remain.
   No additional deletion or restart was needed.
-- Still open: task-specific F2 native/custom group/default/admission matrices,
-  long-name traffic/TLS, Grant and ConfigData dynamic reference cases, remaining
-  source-mode parity and final whole-task review. Existing conformance does not
-  establish those separate requirements. The pending CredentialInjectorDynamic
-  addition needs its previously identified generation/traffic-oracle amendment.
+- F2-B CredentialInjectorDynamic committed as
+  `65d461d4fba0b3b97dbf7b6d34b3dd30dca62a8a`. Fresh local FS execution passed
+  all four omitted/empty/literal-core/omitted group phases with generation-sensitive
+  conditions and same-request execution markers, then verified original plugin
+  restoration and the unchanged Secret update/delete/recovery sequence.
+  Both independent final reviews accepted the source and FS evidence. Fourteen
+  root checks passed without warnings; the fresh test-client listing preserved
+  68 scenario identities, not 68 executed passes. Original fixtures/assertions
+  and the Secret lifecycle were preserved.
+- The FS run used `testing_20261011_102631`; scenario, residue check and owned
+  cleanup exited zero (34 resources wiped, zero wipe errors). Failure-restoration
+  branches were source-reviewed, not live fault-injected. The preserved first
+  startup attempt failed on an invalid handoff path before services or scenario
+  execution; correcting the launch path changed no reviewed source.
+- This current-summary update changes documentation only. Source is unchanged
+  from `65d461d4f`, so its compilation, workspace gates and focused FS evidence
+  are reused with that provenance; no new Rust or live execution is claimed.
+- Still open: Kubernetes live execution of this addition, remaining task-specific
+  F2 native/custom group/default/admission matrices, long-name traffic/TLS, Grant
+  and ConfigData dynamic reference cases, source-mode parity and final whole-task
+  review. The bounded FS result and existing conformance do not establish those
+  separate requirements.
 - Preserve the original alias issue until FULL acceptance. Continue serial IMPL,
   commit completed batches locally, and never push. Preserve unrelated
   `review-results/` and the abstraction-simplification task.
@@ -50,6 +67,9 @@ Current evidence:
 - `tmp/resource-reference-contract/ratelimit-reload-500-root-verification-20261010/committed-blobs.json`
 - `tmp/resource-reference-contract/f2-run-6f566a8ae5e066a9b780f19022143db64a3eb2b4/`
 - `tmp/resource-reference-contract/f2-plan-0fdd67f4-20261010/PLAN.md` (remaining F2 scope; historical execution status superseded above)
+- `tmp/resource-reference-contract/f2b-root-verification-20261011/committed-blobs.json`
+- `tmp/resource-reference-contract/f2b-root-verification-20261011/` (live results, fourteen gates, binary provenance and preserved `attempt1-*` startup failure)
+- `tmp/resource-reference-contract/f2b-verification-20261011/` (dual final reviews, source freeze, fresh build and 68-identity listing)
 
 > **Historical checkpoint body follows unchanged.** Its commit IDs, failed runs,
 > corrections, exclusions and verification limits remain evidence; later accepted

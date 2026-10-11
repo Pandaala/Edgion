@@ -15,10 +15,16 @@
   full declared features and the shared fresh runner. Historical network and
   Standard failures remain evidence for their earlier revisions, not blockers
   for this completed phase. Exact scope is in the dated reports and progress.
-- The task-specific F2 admission, compatibility, dynamic reference/Grant traffic,
-  long-name TLS and source-mode parity matrices remain open. Conformance does
-  not replace them. Amend the pending CredentialInjectorDynamic test plan with
-  its generation-sensitive status and actual runtime phase marker before coding.
+- F2-B CredentialInjectorDynamic committed as `65d461d4f`: fresh local FS
+  execution passed omitted/empty/literal-core/omitted group phases with current
+  generation conditions and actual request markers, original plugin restoration,
+  and the unchanged Secret update/delete/recovery sequence. Both independent
+  final reviews and fourteen warning-free root checks passed; fixtures/assertions
+  were preserved, and residue/owned cleanup succeeded.
+- Kubernetes live execution of this addition remains pending, along with the
+  other task-specific F2 admission, compatibility, dynamic reference/Grant traffic,
+  long-name TLS and source-mode parity matrices. Neither this bounded FS result
+  nor conformance closes whole-task acceptance.
 - EndpointSlice Controller/Gateway fallbacks remain deliberately distinct.
   Keep the original alias issue until full acceptance and final whole-task review.
 
