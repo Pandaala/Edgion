@@ -5,22 +5,25 @@
 - S-R1-01 is source-closed by R12a (`f6b71a52`); F1-COV-R1-01 is
   source/API-closed by R12b (`6b5adb0a`). R13 documentation reconciliation
   committed as `0fdd67f4`, with both affected final cross-checks passed.
-- A Redis integration run exposed mixed route/policy generations during local
-  publication, not a demonstrated counter reset. The uncommitted r6 correction
-  has dual static/execution approval, 635 distinct executed passes and fourteen
-  warning-free root checks. Existing physical manager reachability is preserved;
-  independent resource updates retain eventual convergence.
-- Original Redis live verification passed 5/5, and RetainedListenerHandles
-  passed with fresh binaries; both runners exited zero and completed cleanup.
-  The correction's local commit, fresh F2 admission, traffic/revocation and full
-  Standard conformance remain open. Registry connectivity blocked previous
-  image builds before compilation; historical images are not current evidence.
+- The mixed route/policy generation correction committed as `6f566a8ae` after
+  dual static/execution reviews, 635 distinct executed passes, fourteen root
+  checks and unchanged Redis/retained-listener live scenarios. Existing manager
+  reachability and eventual convergence across independent resources remain.
+- F2-A conformance passed with fresh images from `6f566a8ae` on Standard v1.6.2:
+  HTTP Core 37/Extended 30, GRPC Core 15, TLS Core 20, all with zero reported
+  failures/skips. Independent evidence reviews verified schemas, images,
+  full declared features and the shared fresh runner. Historical network and
+  Standard failures remain evidence for their earlier revisions, not blockers
+  for this completed phase. Exact scope is in the dated reports and progress.
+- The task-specific F2 admission, compatibility, dynamic reference/Grant traffic,
+  long-name TLS and source-mode parity matrices remain open. Conformance does
+  not replace them. Amend the pending CredentialInjectorDynamic test plan with
+  its generation-sensitive status and actual runtime phase marker before coding.
 - EndpointSlice Controller/Gateway fallbacks remain deliberately distinct.
-  Keep the original alias issue until full acceptance; source/unit PASS alone
-  does not close live gates.
+  Keep the original alias issue until full acceptance and final whole-task review.
 
-See [07-progress.md](07-progress.md) for current evidence and limits. Historical
-records below retain their original revision scope.
+See [07-progress.md](07-progress.md) for current evidence and remaining work.
+Historical records below retain their original revision scope.
 
 ## Historical design and verification record
 

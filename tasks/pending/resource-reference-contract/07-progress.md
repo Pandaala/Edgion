@@ -1,50 +1,55 @@
-> **Current resume status — 2026-10-11, committed HEAD 0fdd67f4.**
-> This block is the current authority for progress. The historical ledger below
-> remains evidence for its recorded revisions, not current execution instructions.
+> **Current resume status — 2026-10-11, product commit 6f566a8ae.**
+> This block is the current authority for progress. Historical records below
+> retain their original revision scope, including prior failures and limitations.
 
 ## Current source closure and remaining acceptance
 
 - R12a (`f6b71a52`) closed the native object-name source blocker; R12b
   (`6b5adb0a`) removed obsolete detached reference/transport entry points.
-  Their earlier verification remains revision-scoped evidence.
-- R13 documentation reconciliation committed as `0fdd67f4`. Both affected
-  whole-contract final cross-checks passed at that revision. Fresh F2 admission,
-  dynamic traffic and Standard conformance remain open.
-- The user's Redis integration failure exposed a route-table/policy publication
-  race: a request could combine different route generations and fail admission.
-  No Redis counter reset was established. The bounded correction captures one
-  coherent request publication and preserves existing physical manager identity.
-  Independent resource updates still converge separately; arbitrary physical
-  listener rebinding and immediate cross-resource revocation are not promised.
-- Current uncommitted correction is frozen r6, patch SHA-256
-  `0c3966062fa41f303b839bb476963cf8519fd9cb28d8f466a2448881c4688b0b`.
-  Both independent static and execution reviews passed. Fresh execution passed
-  634 unique unit tests and one actual feature-enabled AI transport matrix;
-  one existing benchmark remains ignored. All 5398 baseline Gateway test IDs
-  remain among 5408 IDs; identities are not execution counts.
-- Fourteen root checks passed without warnings, with all 43 reviewed source
-  hashes unchanged. Original Redis and retained-listener suites/fixtures remain
-  unchanged; nine mechanical test-file modifications were removed.
-- Fresh integration binaries passed the unchanged Redis suite (5/5) and
-  RetainedListenerHandles wire scenario. Both canonical runners exited zero,
-  passed cache-residue checks and cleaned their owned services. Runs are
-  `testing_20261011_002145` and `testing_20261011_002228`; binary hashes and
-  raw logs are recorded. Local commit and new-image conformance remain pending.
-- Previous conformance image builds at `0fdd67f4` failed before compilation
-  on Docker Hub connectivity. A new read-only registry check can read Debian's
-  manifest but Rust's manifest still encounters a CDN TLS handshake timeout.
-  No fresh conformance PASS or cluster deployment is claimed.
+  R13 documentation reconciliation committed as `0fdd67f4`, with both affected
+  whole-contract final cross-checks passed at that revision.
+- The bounded route/policy publication correction committed as
+  `6f566a8ae5e066a9b780f19022143db64a3eb2b4`. It captures one coherent request
+  publication and preserves physical manager identity. Independent resources
+  still converge separately; arbitrary physical listener rebinding and immediate
+  cross-resource revocation are not promised. No Redis counter reset was found.
+- That correction passed both independent static/execution reviews, 634 unique
+  unit tests and one real feature-enabled AI transport matrix. One existing
+  benchmark remains ignored. All 5398 baseline Gateway test IDs remain among
+  5408 IDs; identities are not execution counts. Fourteen root checks passed
+  without warnings. Original fixtures/assertions were preserved.
+- Fresh local Redis integration passed 5/5, and RetainedListenerHandles passed.
+  Both canonical runners exited zero, passed residue checks and cleaned owned
+  services (`testing_20261011_002145`, `testing_20261011_002228`).
+- F2-A split-profile conformance now passed on product commit `6f566a8ae` with
+  fresh Linux arm64 release images, Standard v1.6.2 and current Edgion CRDs.
+  HTTP Core 37 and Extended 30, GRPC Core 15, and TLS Core 20 all passed with
+  zero profile failures/skips. Raw logs contain 71 unique HTTP/GRPC passes and
+  20 TLS passes; framework skips outside supported/profile scope are recorded.
+  Do not sum overlapping profile counts or claim unsupported feature coverage.
+- Both independent conformance evidence reviews passed. The same fresh runner
+  served both profiles; image config/layer identity and all 19 semantic CRD
+  schema projections were verified. Historical registry failures were overcome
+  by the successful new builds and remain preserved as earlier evidence.
+- End inventory has no test Routes, ReferenceGrants, BackendTLSPolicies or
+  dedicated instances. The suite removed five passthrough Gateways itself;
+  existing backends, Secrets, runner and two adopted TLS fixture names remain.
+  No additional deletion or restart was needed.
+- Still open: task-specific F2 native/custom group/default/admission matrices,
+  long-name traffic/TLS, Grant and ConfigData dynamic reference cases, remaining
+  source-mode parity and final whole-task review. Existing conformance does not
+  establish those separate requirements. The pending CredentialInjectorDynamic
+  addition needs its previously identified generation/traffic-oracle amendment.
 - Preserve the original alias issue until FULL acceptance. Continue serial IMPL,
   commit completed batches locally, and never push. Preserve unrelated
   `review-results/` and the abstraction-simplification task.
 
 Current evidence:
 
-- `tmp/resource-reference-contract/ratelimit-reload-500-verification-20261010/verification-final.json`
-- `tmp/resource-reference-contract/ratelimit-reload-500-verification-20261010/final-execution-review-a-r6.md`
-- `tmp/resource-reference-contract/ratelimit-reload-500-verification-20261010/final-execution-review-b-r6.md`
-- `tmp/resource-reference-contract/ratelimit-reload-500-root-verification-20261010/`
-- `tmp/resource-reference-contract/f2-run-0fdd67f4b5467811306883887b9f98f0f32ba436/CHECKPOINT.md`
+- [Fresh conformance reports and boundaries](../../../edgion-tests/conformance/reports/README.md)
+- `tmp/resource-reference-contract/ratelimit-reload-500-root-verification-20261010/committed-blobs.json`
+- `tmp/resource-reference-contract/f2-run-6f566a8ae5e066a9b780f19022143db64a3eb2b4/`
+- `tmp/resource-reference-contract/f2-plan-0fdd67f4-20261010/PLAN.md` (remaining F2 scope; historical execution status superseded above)
 
 > **Historical checkpoint body follows unchanged.** Its commit IDs, failed runs,
 > corrections, exclusions and verification limits remain evidence; later accepted
