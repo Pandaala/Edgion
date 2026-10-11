@@ -35,6 +35,16 @@
   dedicated instances. The suite removed five passthrough Gateways itself;
   existing backends, Secrets, runner and two adopted TLS fixture names remain.
   No additional deletion or restart was needed.
+- A requested full Standard conformance rerun at checkout `20cfc93e3` reused
+  the verified `6f566a8ae` product images and unchanged runner, with no rebuild.
+  Fresh reports at 2026-10-11 03:21:34Z and 03:23:53Z passed HTTP Core 37,
+  Extended 30, GRPC Core 15 and TLS Core 20, with zero profile failures/skips.
+  Both stage and report-copy exits were zero. Raw results were 71/20 passes
+  and 82/133 unsupported or out-of-profile skips; overlapping counts are not
+  additive. All 19 CRD identities/spec hashes stayed unchanged, 28 backend
+  UIDs were preserved and no Route/Grant/policy/dedicated-pair residue remained.
+  The initial readiness retry was a naturally terminating old Controller Pod,
+  preserved as pre-test evidence; it was not a conformance failure.
 - F2-B CredentialInjectorDynamic committed as
   `65d461d4fba0b3b97dbf7b6d34b3dd30dca62a8a`. Fresh local FS execution passed
   all four omitted/empty/literal-core/omitted group phases with generation-sensitive
@@ -49,9 +59,13 @@
   branches were source-reviewed, not live fault-injected. The preserved first
   startup attempt failed on an invalid handoff path before services or scenario
   execution; correcting the launch path changed no reviewed source.
-- This current-summary update changes documentation only. Source is unchanged
-  from `65d461d4f`, so its compilation, workspace gates and focused FS evidence
-  are reused with that provenance; no new Rust or live execution is claimed.
+- This report promotion changes documentation/raw reports only. Product and
+  test source are unchanged from their recorded commits; existing compilation,
+  workspace gates and focused FS evidence are reused with that provenance.
+  No new Rust checks are claimed; the fresh conformance execution is recorded
+  separately above. F2-B Kubernetes image packaging and live execution remain
+  pending; the preserved packaging failure was not fixed by this rerun. No
+  Kubernetes dynamic/ACK coverage or whole-task acceptance is claimed.
 - Still open: Kubernetes live execution of this addition, remaining task-specific
   F2 native/custom group/default/admission matrices, long-name traffic/TLS, Grant
   and ConfigData dynamic reference cases, source-mode parity and final whole-task
@@ -64,6 +78,7 @@
 Current evidence:
 
 - [Fresh conformance reports and boundaries](../../../edgion-tests/conformance/reports/README.md)
+- `tmp/resource-reference-contract/conformance-repeat-20cfc93e-20261011/execution-manifest.json` (fresh rerun reports, exits, image/schema provenance and cleanup)
 - `tmp/resource-reference-contract/ratelimit-reload-500-root-verification-20261010/committed-blobs.json`
 - `tmp/resource-reference-contract/f2-run-6f566a8ae5e066a9b780f19022143db64a3eb2b4/`
 - `tmp/resource-reference-contract/f2-plan-0fdd67f4-20261010/PLAN.md` (remaining F2 scope; historical execution status superseded above)

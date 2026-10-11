@@ -1,0 +1,22 @@
+apiVersion: gateway.networking.k8s.io/v1
+date: "2026-10-11T03:23:53Z"
+gatewayAPIChannel: standard
+gatewayAPIVersion: v1.6.2
+implementation:
+  contact:
+  - '@edgion'
+  organization: Edgion
+  project: Edgion
+  url: https://github.com/edgion/edgion
+  version: dev
+kind: ConformanceReport
+mode: default
+profiles:
+- core:
+    result: success
+    statistics:
+      Failed: 0
+      Passed: 20
+      Skipped: 0
+  name: GATEWAY-TLS
+  summary: Core tests succeeded.

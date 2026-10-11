@@ -7,7 +7,39 @@ The current Go module pins both `sigs.k8s.io/gateway-api` and
 `sigs.k8s.io/gateway-api/conformance` at v1.6.2. These updated dependencies do
 not recover the missing bundle/channel metadata from an old run.
 
-## Current Standard v1.6.2 run — 2026-10-11
+## Latest Standard v1.6.2 rerun — 2026-10-11
+
+A fresh full-profile rerun used checkout `20cfc93e391f4b29a2466a6ad9afe5adae1c3a93`
+on `kind-edgion-standard-162`. Product source remains `6f566a8ae5e066a9b780f19022143db64a3eb2b4`;
+the verified Linux arm64 images and unchanged runner from the initial run below
+were reused, with no new build or feature narrowing.
+
+| Profile | Core | Extended | Fresh report (UTC) |
+| --- | --- | --- | --- |
+| HTTP | 37 passed | 30 passed | [HTTP/GRPC, 03:21:34](gateway-http-grpc-v1.6.2-standard-kind-2026-10-11-rerun.yaml) |
+| GRPC | 15 passed | Not reported | [HTTP/GRPC, 03:21:34](gateway-http-grpc-v1.6.2-standard-kind-2026-10-11-rerun.yaml) |
+| TLS | 20 passed | Not reported | [TLS, 03:23:53](gateway-tls-v1.6.2-standard-kind-2026-10-11-rerun.yaml) |
+
+Each reported profile has zero failures/skips. Both stage exits and explicit
+report-copy exits were zero. Raw top-level results were 71 HTTP/GRPC passes and
+20 TLS passes, with respectively 82 and 133 unsupported or out-of-profile skips.
+Eleven passing identities overlap between stages: 80 distinct identities passed;
+profile counts must not be added as unique test counts.
+
+Actual image config/layer identities matched the verified builds; all 19 CRD
+identities/spec hashes stayed unchanged. All 28 backend Deployment/Service UIDs
+were retained. No test Route, Grant, policy or dedicated pair remained; the two
+adopted TLS fixture names, Secrets and runner were preserved. Final cleanup
+needed no mutation. An initial readiness check observed an old Controller Pod
+still terminating; fresh verification passed after normal deletion, before tests.
+
+The raw reports are copied byte for byte. Logs, hashes and provenance are in
+`tmp/resource-reference-contract/conformance-repeat-20cfc93e-20261011/execution-manifest.json`.
+This result supplies no Kubernetes CredentialInjector dynamic/ACK evidence or
+broader custom-reference acceptance. The separate F2-B Kubernetes image-packaging
+attempt remains pending, with its failure evidence preserved.
+
+## Initial Standard v1.6.2 run — 2026-10-11
 
 Product source: `6f566a8ae5e066a9b780f19022143db64a3eb2b4`. Fresh canonical
 Linux arm64 release Controller and default-BoringSSL Gateway images ran on
@@ -72,6 +104,8 @@ with its own base manifest set and gateway startup configuration:
 | `gateway-tls-v1.6.2-standard-kind-2026-09-24.yaml` | GATEWAY-TLS | 2026-09-24 | v1.6.2 Standard; TLS Core 20/20 |
 | `gateway-http-grpc-v1.6.2-standard-kind-2026-10-11.yaml` | GATEWAY-HTTP, GATEWAY-GRPC | 2026-10-11 | Current source run; HTTP Core 37/37, Extended 30/30, GRPC Core 15/15 |
 | `gateway-tls-v1.6.2-standard-kind-2026-10-11.yaml` | GATEWAY-TLS | 2026-10-11 | Current source run; TLS Core 20/20 |
+| `gateway-http-grpc-v1.6.2-standard-kind-2026-10-11-rerun.yaml` | GATEWAY-HTTP, GATEWAY-GRPC | 2026-10-11 03:21:34 UTC | Fresh rerun with verified existing binaries; HTTP Core 37/37, Extended 30/30, GRPC Core 15/15 |
+| `gateway-tls-v1.6.2-standard-kind-2026-10-11-rerun.yaml` | GATEWAY-TLS | 2026-10-11 03:23:53 UTC | Fresh rerun with the same verified runner; TLS Core 20/20 |
 
 ## Historical Standard v1.6.2 result boundary — 2026-09-24
 
