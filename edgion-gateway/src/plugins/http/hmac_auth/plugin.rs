@@ -24,8 +24,8 @@ use crate::plugins::runtime::body_gate::{
     body_read_failure_result, over_plugin_limit_len, record_body_read_error_status,
 };
 use crate::plugins::runtime::log::{la, sensitive};
-use crate::plugins::runtime::traits::session::BodyReadError;
 use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
+use crate::request_body::BodyReadError;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{
     BodyRequirement, HmacAlgorithm, HmacAuthConfig, HmacCredential, HmacMatchConfig,

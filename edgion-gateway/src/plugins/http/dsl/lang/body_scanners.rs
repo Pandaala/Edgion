@@ -15,7 +15,7 @@ use regex_automata::Input;
 use serde::de::{DeserializeSeed, Error as _, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-use crate::plugins::runtime::traits::session::BodyReadError;
+use crate::request_body::BodyReadError;
 use crate::request_body::{BodyOperationError, RawBodyScanner, ScanControl, TextBodyScanner};
 
 use edgion_dsl::value::Value;

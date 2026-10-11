@@ -6,6 +6,7 @@
 
 mod body_scanners;
 pub mod config;
+mod contracts;
 pub(crate) mod observer;
 mod operation;
 mod state;
@@ -13,6 +14,7 @@ mod storage;
 
 pub(crate) use body_scanners::{HmacSha256Scanner, Md5Scanner};
 pub use config::{ResolvedRequestBodyConfig, DEFAULT_MEMORY_BUFFER_BYTES};
+pub use contracts::{BodyReadError, BodyReadResult, RequestBodyChunkConsumer, RequestBodySnapshotReader};
 pub use operation::{
     BodyOperationError, BodyScanResult, BodyTextOperation, BodyTextResult, BoundedTextResult, LossyTextScanner,
     RawBodyScanner, ScanControl, TextBodyScanner, MAX_BODY_SEGMENTS,

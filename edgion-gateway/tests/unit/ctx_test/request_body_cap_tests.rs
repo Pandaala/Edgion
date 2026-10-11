@@ -1,5 +1,5 @@
 use super::*;
-use crate::plugins::runtime::traits::session::BodyReadError;
+use crate::request_body::BodyReadError;
 use crate::request_body::BodyStorage;
 use pingora_core::protocols::http::RequestBodyBuffer;
 

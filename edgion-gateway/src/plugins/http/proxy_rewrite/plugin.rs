@@ -14,8 +14,8 @@ use crate::link_sys::template::{evaluate_template_bounded, TemplateEvaluationErr
 use crate::plugins::http::common::{json_request_headers_are_supported, CappedWriter};
 use crate::plugins::runtime::body_gate::record_body_read_error_status;
 use crate::plugins::runtime::log::{la, sensitive};
-use crate::plugins::runtime::traits::session::BodyReadError;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use crate::request_body::BodyReadError;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{
     profile_json_value, BodyRequirement, CompiledJsonPatchOperation, CompiledJsonPatchValue, ProxyRewriteConfig,

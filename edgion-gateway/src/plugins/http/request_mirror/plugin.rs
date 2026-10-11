@@ -48,12 +48,12 @@ struct CompiledMirrorTarget {
 
 struct PreparedSnapshot {
     // Release memory before returning the admission charge.
-    reader: Box<dyn crate::plugins::runtime::traits::session::RequestBodySnapshotReader>,
+    reader: Box<dyn crate::request_body::RequestBodySnapshotReader>,
     _memory_permit: tokio::sync::OwnedSemaphorePermit,
 }
 
 fn prepare_snapshot(
-    mut reader: Box<dyn crate::plugins::runtime::traits::session::RequestBodySnapshotReader>,
+    mut reader: Box<dyn crate::request_body::RequestBodySnapshotReader>,
     budget: &MirrorBudget,
 ) -> Result<PreparedSnapshot, &'static str> {
     let bytes = reader.memory_bytes_to_isolate().ok_or("mirror snapshot unavailable")?;

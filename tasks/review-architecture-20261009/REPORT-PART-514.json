@@ -1,0 +1,55 @@
+{
+  "partition": "PART-514",
+  "analyst": "/root/analyze_outbound",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/request_restriction/mod.rs",
+      "sha256": "74837e144e64a6febd23d1cf7c73b12e778b944e4d862ace773d9a61221bfddf",
+      "fully_read": true,
+      "disposition": "Full1-5; Export accepted."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/request_restriction/request_restriction.rs",
+      "sha256": "30ace02e529f28c5e56c2f651a3abe04c65f350b491604e0a71c1b8fca3daa70",
+      "fully_read": true,
+      "disposition": "Full1-1102 five bounded chunks; All30 DNF/query/claims/referenced IP/HMAC/unresolved-seal cases read with real helpers. Positive error-body predicate rejects empty read default; no348 extension."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "skills/04-review/request-restriction/regression-guards/mode-is-required-no-default-polarity.md": {
+      "sha256": "9e008bb06661e78c2005db84564e33e72c8c87a1e367273b35d02b989a4b7517",
+      "scope": "Full1-89 explicit polarity/original historical grammar."
+    },
+    "skills/04-review/plugin-metadata/regression-guards/unresolved-condition-references-need-consumer-policy.md": {
+      "sha256": "7ab1f93edfe43a06239c7ecd65df25f4f9376f57ee9a87376d6b679d7cdee9db",
+      "scope": "Full1-70 canonical consumer-specific unresolved policy."
+    },
+    "edgion-gateway/src/plugins/http/request_restriction/plugin.rs": {
+      "sha256": "4df0c3288a662ebbac75f114eb361fa43fff00b5d26ef40cf98e76b8aa8028fb",
+      "scope": "Full1-171 compiled set/prepared response/polarity."
+    },
+    "edgion-gateway/tests/unit/plugins/http/request_restriction/plugin_test.rs": {
+      "sha256": "344ee9c0ef0e870b0419d74d90446a5e6663bf416a9970c91a3a78c899b2f29d",
+      "scope": "182-248/357-438/510-628 actual path/DNF/polarity/unresolved/HMAC units."
+    },
+    "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": {
+      "sha256": "d80096aa53f493497d34dfba80f21f7089bf1ad3086f3b5ab3ff6f1689018c9d",
+      "scope": "1350-1385 construction rejects unresolved Deny before conditions."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/RequestRestriction/HTTPRoute_default_request-restriction.yaml": {
+      "sha256": "894ba25d6d615a4796e05adc6ef7925b7d698a2f6356b8216ccf5e29c963656e",
+      "scope": "Full1-268 local bindings."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/RequestRestriction/HTTPRoute_default_request-restriction.yaml": {
+      "sha256": "8904b7da83b8d5cd5613cafb8a17fc5adb576d56bc6f2c7d509e62e3122568bb",
+      "scope": "Full1-268 K8s bindings."
+    },
+    "edgion-tests/k8s/scripts/common/test_client_peer_identity.sh": {
+      "sha256": "e0034731a4c284260279d10e14ce252d243cb689df71d3e407f3a5c1c914c9ad",
+      "scope": "Full1-156 Ready Pod exact address fixture owner."
+    }
+  },
+  "limits": "Personal original rules/topics fresh unchanged/no nested. All20local/19K8s top-level YAMLs full; HMAC helper full/JWT843-900/RejectFilter full/registry2754-2760/K8s2575/historical test coverage original read. No execution/mutation/support credit/new candidate."
+}

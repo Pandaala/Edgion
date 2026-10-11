@@ -389,6 +389,26 @@ Current behavior:
 
 If you are debugging "ExtensionRef does not take effect / plugin logs are missing", start tracing from here.
 
+## Complete request-body readers and borrowed consumers
+
+Import `BodyReadError`, `BodyReadResult`, `RequestBodyChunkConsumer`, and
+`RequestBodySnapshotReader` from `crate::request_body`, their canonical owner.
+`PluginSession` still provides stage- and policy-bounded capture/read operations;
+feature code must obtain snapshots through those operations rather than bypassing
+admission. Define new storage/read capabilities beside their implementation in
+`request_body/contracts.rs`, then update the adapter and affected consumers.
+
+An owned snapshot reader pins one immutable logical body version and its backing
+storage across awaits and subsequent mutations. Detached consumers must preserve
+existing isolation reservation and returned-chunk lifetime accounting. A borrowed
+chunk consumer cannot retain its input; cached contiguous slices still require
+real EOF and byte-count parity before publishing inspection results. Physical
+capture limits, logical inspection limits, proven-empty versus uncaptured state,
+and prefix/stage refusal semantics are unchanged. Use the canonical request-only
+BodyStorage; these contracts provide no full-response aggregation API. See the
+[architecture boundary](05-plugin-system.md#request-body-read-contract-ownership)
+and [ownership decision](../../04-review/http-body/intentional-design/request-body-read-contract-ownership.md).
+
 ## Optional read-only request-body observation
 
 The Gateway has one internal, request-scoped observer seam for protocol

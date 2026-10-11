@@ -21,7 +21,7 @@ use super::operation::{
     BodyOperationError, BodyScanResult, BodyTextOperation, BodyTextResult, BoundedTextCollector, BoundedTextResult,
     BytesScanner, LossyTextScanner, RawBodyScanner, ScanControl, TextOperationScanner, MAX_BODY_SEGMENTS,
 };
-use crate::plugins::runtime::traits::session::{BodyReadError, BodyReadResult, RequestBodySnapshotReader};
+use crate::request_body::{BodyReadError, BodyReadResult, RequestBodySnapshotReader};
 
 const SCAN_CHUNK_SIZE: usize = 64 * 1024;
 const SCAN_CONCURRENCY: usize = 32;

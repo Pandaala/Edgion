@@ -33,9 +33,9 @@
 use async_trait::async_trait;
 
 use super::log::PluginLog;
-use super::traits::session::BodyReadError;
 use super::traits::{PluginSession, RequestFilter, UpstreamResponse};
 use crate::plugins::runtime::conditions::{CompiledPluginConditions, EvaluationResult};
+use crate::request_body::BodyReadError;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{BodyReadFailureMode, BodyRequirement};
 use edgion_resources::EdgionErrorCode;

@@ -1,6 +1,6 @@
 ---
 id: ARCH-383
-status: candidate
+status: confirmed
 kind: behavior-defect
 priority: P3
 partition: PART-504
@@ -19,4 +19,4 @@ Give the existing fixture entries stable aliases and select the target request-s
 
 Exact response-header markers are an alternative for positive execution, but absence alone cannot prove a skipped entry existed. The unused header-log helper is unsuitable: current non-terminating Mock logs say only `mock headers set`. Add no request diagnostic payloads to identify fixtures.
 
-Preserve case identities, request vectors, transport/log-read failures, deadlines and canonical log ownership. Do not change condition, negation, short-circuit, body-phase or descriptor-threshold semantics. Stronger assertions expose the exclusion-fixture polarity mismatch; resolve its intended configuration explicitly rather than weakening evaluation. Listener selection is the separately tracked ARCH296 cause. No generic registry, runtime framework or performance claim is proposed.
+Preserve case identities, request vectors, transport/log-read failures, deadlines and canonical log ownership. Do not change condition, negation, short-circuit, body-phase or descriptor-threshold semantics. Stronger assertions expose the exclusion-fixture polarity mismatch; resolve its intended configuration explicitly rather than weakening evaluation. Listener selection is outside this correction. No generic registry, runtime framework or performance claim is proposed.

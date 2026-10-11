@@ -14,7 +14,7 @@ use std::sync::Arc;
 use crate::plugins::http::dsl::lang::builtins::{complete_http_call_response, MAX_DSL_HOST_RESULT_BYTES};
 use crate::plugins::http::dsl::lang::value::Value;
 use crate::plugins::http::dsl::runtime::dsl_http_client;
-use crate::plugins::runtime::traits::session::{BodyReadError, RequestBodySnapshotReader};
+use crate::request_body::{BodyReadError, RequestBodySnapshotReader};
 
 fn finish_response(
     send_result: Result<reqwest::Response, reqwest::Error>,

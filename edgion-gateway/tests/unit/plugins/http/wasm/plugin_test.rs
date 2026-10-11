@@ -216,7 +216,7 @@ fn base_mock() -> MockPluginSession {
     // that need an actual buffered body use `body_mock` instead.
     s.expect_ctx().return_const(crate::EdgionHttpContext::new());
     s.expect_read_request_body()
-        .returning(|_| Err(crate::plugins::runtime::traits::session::BodyReadError::Unimplemented));
+        .returning(|_| Err(crate::request_body::BodyReadError::Unimplemented));
     s
 }
 
@@ -873,7 +873,7 @@ fn ref_mock(headers: Vec<(&str, &str)>) -> MockPluginSession {
     // true` (with its own comment) so the phase stays a no-op GoodNext.
     s.expect_ctx().return_const(crate::EdgionHttpContext::new());
     s.expect_read_request_body()
-        .returning(|_| Err(crate::plugins::runtime::traits::session::BodyReadError::Unimplemented));
+        .returning(|_| Err(crate::request_body::BodyReadError::Unimplemented));
     s
 }
 
@@ -1197,7 +1197,7 @@ const GUEST_REQUEST_BODY_REWRITE_THEN_TRAP: &str = r#"
 /// single scripted `read_request_body` outcome. Built standalone rather
 /// than on `base_mock` so this is the only `read_request_body` expectation
 /// (mockall matches FIFO; `base_mock`'s unlimited stub would otherwise win).
-fn body_mock(read: crate::plugins::runtime::traits::session::BodyReadResult) -> MockPluginSession {
+fn body_mock(read: crate::request_body::BodyReadResult) -> MockPluginSession {
     let mut s = MockPluginSession::new();
     s.expect_request_headers()
         .returning(|| vec![("host".to_string(), "t.example.com".to_string())]);
@@ -1354,7 +1354,7 @@ async fn request_body_publication_fail_open_leaks_no_partial_header_commit() {
 /// `fail_open: true` override of this same read error.
 #[tokio::test]
 async fn request_body_read_failure_fails_closed_by_default() {
-    use crate::plugins::runtime::traits::session::BodyReadError;
+    use crate::request_body::BodyReadError;
     let f = write_temp_wasm(GUEST_REQUEST_BODY_DENY);
     let plugin = actual_request(&config_for(f.path(), false)).expect("plugin");
     let mut session = body_mock(Err(BodyReadError::Unimplemented));
@@ -1400,7 +1400,7 @@ async fn ungated_body_read_unimplemented_records_error_diagnostic() {
 /// even though this plugin is configured fail-open.
 #[tokio::test]
 async fn wasm_refusal_is_fail_close_even_with_fail_open_configured() {
-    use crate::plugins::runtime::traits::session::BodyReadError;
+    use crate::request_body::BodyReadError;
     let f = write_temp_wasm(GUEST_REQUEST_BODY_DENY);
     let plugin = actual_request(&config_for(f.path(), true)).expect("plugin");
     let mut session = body_mock(Err(BodyReadError::NotBuffered));
@@ -1419,7 +1419,7 @@ async fn wasm_refusal_is_fail_close_even_with_fail_open_configured() {
 /// `request_body_read_failure_fails_closed_by_default`.
 #[tokio::test]
 async fn wasm_read_failure_honors_fail_open() {
-    use crate::plugins::runtime::traits::session::BodyReadError;
+    use crate::request_body::BodyReadError;
     let f = write_temp_wasm(GUEST_REQUEST_BODY_DENY);
     let plugin = actual_request(&config_for(f.path(), true)).expect("plugin");
     let mut session = body_mock(Err(BodyReadError::Unimplemented));

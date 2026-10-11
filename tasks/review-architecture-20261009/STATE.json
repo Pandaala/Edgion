@@ -17412,9 +17412,10 @@
       "crate": "edgion-tests",
       "present": true,
       "partition": "PART-510",
-      "status": "pending",
-      "evidence": [],
-      "reviewer": null
+      "status": "reviewed",
+      "evidence": "REPORT-PART-510.json",
+      "reviewer": "/root/analyze_outbound",
+      "disposition": "Full1-2; Suite export accepted."
     },
     "edgion-tests/src/client/suites/edgion_plugins/region_route/region_route.rs": {
       "sha256": "ea34f6fb76f8eb1b8f16f6252f323ac88547d5904bd63a62ea50248dd20756f7",
@@ -17422,9 +17423,10 @@
       "crate": "edgion-tests",
       "present": true,
       "partition": "PART-510",
-      "status": "pending",
-      "evidence": [],
-      "reviewer": null
+      "status": "reviewed",
+      "evidence": "REPORT-PART-510.json",
+      "reviewer": "/root/analyze_outbound",
+      "disposition": "Full1-1089 five bounded chunks without gaps; All19 route/hash/direct/map/passthrough/one-hop/dye/writeback cases reviewed;390 dependent jump predicate omits endpoint/security attribution."
     },
     "edgion-tests/src/client/suites/edgion_plugins/request_access_policy/dynamic.rs": {
       "sha256": "27390a4df5dce3096a4bdf36eaf287849e118b894e21416a4e68e2a16bcbf198",
@@ -17432,9 +17434,10 @@
       "crate": "edgion-tests",
       "present": true,
       "partition": "PART-511",
-      "status": "pending",
-      "evidence": [],
-      "reviewer": null
+      "status": "reviewed",
+      "evidence": "REPORT-PART-511.json",
+      "reviewer": "/root/analyze_conversion",
+      "disposition": "Full1-116; Initial/rotated/deleted key and fallback checks strict; literal listener uses extend pending296 only; restoration is present."
     },
     "edgion-tests/src/client/suites/edgion_plugins/request_access_policy/mod.rs": {
       "sha256": "17c6087f8708e8331f85963dade50ede0cda8579916dd6dc68d6dd478683676b",
@@ -17442,9 +17445,10 @@
       "crate": "edgion-tests",
       "present": true,
       "partition": "PART-511",
-      "status": "pending",
-      "evidence": [],
-      "reviewer": null
+      "status": "reviewed",
+      "evidence": "REPORT-PART-511.json",
+      "reviewer": "/root/analyze_conversion",
+      "disposition": "Full1-10; Exports and factories accepted."
     },
     "edgion-tests/src/client/suites/edgion_plugins/request_access_policy/request_access_policy.rs": {
       "sha256": "7d7b47a4bbe5420c3fcf94b77f1ca35ca717463e3aa755944c253a39e45631e0",
@@ -17452,9 +17456,10 @@
       "crate": "edgion-tests",
       "present": true,
       "partition": "PART-511",
-      "status": "pending",
-      "evidence": [],
-      "reviewer": null
+      "status": "reviewed",
+      "evidence": "REPORT-PART-511.json",
+      "reviewer": "/root/analyze_conversion",
+      "disposition": "Full1-760; All15 static cases and actual dependency/decision/HMAC/digest contracts reviewed. Canonical Controller status projection; authority port input intentional."
     },
     "edgion-tests/src/client/suites/edgion_plugins/request_id/mod.rs": {
       "sha256": "4afb67dd3dd2703cf9aef72384032b1e597543efa8b465367328d1e39a81b886",
@@ -17462,9 +17467,10 @@
       "crate": "edgion-tests",
       "present": true,
       "partition": "PART-512",
-      "status": "pending",
-      "evidence": [],
-      "reviewer": null
+      "status": "reviewed",
+      "evidence": "REPORT-PART-512.json",
+      "reviewer": "/root/analyze_conversion",
+      "disposition": "Full1-3; Explicit suite export accepted."
     },
     "edgion-tests/src/client/suites/edgion_plugins/request_id/request_id.rs": {
       "sha256": "78ce8449c58dc78f88f3e3e0357fc4dc2c38410cf2d9366c27f9ac47263c61b7",
@@ -17472,9 +17478,10 @@
       "crate": "edgion-tests",
       "present": true,
       "partition": "PART-512",
-      "status": "pending",
-      "evidence": [],
-      "reviewer": null
+      "status": "reviewed",
+      "evidence": "REPORT-PART-512.json",
+      "reviewer": "/root/analyze_conversion",
+      "disposition": "Full1-210; All nine W3C/duplicate/default/source/flags/suppression/early404 identity cases strictly observe wire and canonical logs. No new cause."
     },
     "edgion-tests/src/client/suites/edgion_plugins/request_mirror/mod.rs": {
       "sha256": "a15360c6959ad3214aa40930d17d1351efca224404f60996244820dadba3ac32",
@@ -17482,9 +17489,10 @@
       "crate": "edgion-tests",
       "present": true,
       "partition": "PART-513",
-      "status": "pending",
-      "evidence": [],
-      "reviewer": null
+      "status": "reviewed",
+      "evidence": "REPORT-PART-513.json",
+      "reviewer": "/root/analyze_conversion",
+      "disposition": "Full1-2; Actual export accepted."
     },
     "edgion-tests/src/client/suites/edgion_plugins/request_mirror/request_mirror.rs": {
       "sha256": "87eff33e87429f292ffe7b1b70f8b3addd6bbf13917ee6c111bf14a7d29805b7",
@@ -17492,9 +17500,10 @@
       "crate": "edgion-tests",
       "present": true,
       "partition": "PART-513",
-      "status": "pending",
-      "evidence": [],
-      "reviewer": null
+      "status": "reviewed",
+      "evidence": "REPORT-PART-513.json",
+      "reviewer": "/root/analyze_conversion",
+      "disposition": "Full1-927 five bounded chunks; All11 registered cases/poll/reset/selectors read.393 wrong identity and394 missing query observer; later reject strict reason/delivery meaningful."
     },
     "edgion-tests/src/client/suites/edgion_plugins/request_restriction/mod.rs": {
       "sha256": "74837e144e64a6febd23d1cf7c73b12e778b944e4d862ace773d9a61221bfddf",
@@ -17502,9 +17511,10 @@
       "crate": "edgion-tests",
       "present": true,
       "partition": "PART-514",
-      "status": "pending",
-      "evidence": [],
-      "reviewer": null
+      "status": "reviewed",
+      "evidence": "REPORT-PART-514.json",
+      "reviewer": "/root/analyze_outbound",
+      "disposition": "Full1-5; Export accepted."
     },
     "edgion-tests/src/client/suites/edgion_plugins/request_restriction/request_restriction.rs": {
       "sha256": "30ace02e529f28c5e56c2f651a3abe04c65f350b491604e0a71c1b8fca3daa70",
@@ -17512,9 +17522,10 @@
       "crate": "edgion-tests",
       "present": true,
       "partition": "PART-514",
-      "status": "pending",
-      "evidence": [],
-      "reviewer": null
+      "status": "reviewed",
+      "evidence": "REPORT-PART-514.json",
+      "reviewer": "/root/analyze_outbound",
+      "disposition": "Full1-1102 five bounded chunks; All30 DNF/query/claims/referenced IP/HMAC/unresolved-seal cases read with real helpers. Positive error-body predicate rejects empty read default; no348 extension."
     },
     "edgion-tests/src/client/suites/edgion_plugins/resolved_refs/mod.rs": {
       "sha256": "4adb990d8084207f1fcaa89196395c3cd37c459f7c146177e7ff0f75ff9fab50",
@@ -17522,9 +17533,10 @@
       "crate": "edgion-tests",
       "present": true,
       "partition": "PART-515",
-      "status": "pending",
-      "evidence": [],
-      "reviewer": null
+      "status": "reviewed",
+      "evidence": "REPORT-PART-515.json",
+      "reviewer": "/root/analyze_outbound",
+      "disposition": "Full1-2; Export accepted."
     },
     "edgion-tests/src/client/suites/edgion_plugins/resolved_refs/resolved_refs.rs": {
       "sha256": "040e5076d9191b16ffc260e87583d492ada7c2c9e30b34d3713786538f3307c3",
@@ -17532,10 +17544,11 @@
       "crate": "edgion-tests",
       "present": true,
       "partition": "PART-515",
-      "status": "pending",
-      "evidence": [],
-      "reviewer": null,
-      "previous_reviewed_sha256": "7ddc1b3a0428e949bf1d080644937a25d1e44a9e6d0b44e96746089e82647312"
+      "status": "reviewed",
+      "evidence": "REPORT-PART-515.json",
+      "reviewer": "/root/analyze_outbound",
+      "previous_reviewed_sha256": "7ddc1b3a0428e949bf1d080644937a25d1e44a9e6d0b44e96746089e82647312",
+      "disposition": "Full1-313 two chunks; Four static EP/ESP cases use canonical Controller-local condition/reason/missing identity/type; no266/355 extension or supported lifecycle mutation witness."
     },
     "edgion-tests/src/client/suites/edgion_plugins/response_rewrite/mod.rs": {
       "sha256": "355e9401ca648f2f351cd654349546b67f14b71245de331fdf6b435b20c16389",
@@ -17543,9 +17556,10 @@
       "crate": "edgion-tests",
       "present": true,
       "partition": "PART-516",
-      "status": "pending",
-      "evidence": [],
-      "reviewer": null
+      "status": "reviewed",
+      "evidence": "REPORT-PART-516.json",
+      "reviewer": "/root/analyze_outbound",
+      "disposition": "Full1-12; Export and inventory accepted."
     },
     "edgion-tests/src/client/suites/edgion_plugins/response_rewrite/response_rewrite.rs": {
       "sha256": "93f84bffed31ebc2900447240a3edc822282543f8eff8a58223fead076598e7f",
@@ -17553,9 +17567,10 @@
       "crate": "edgion-tests",
       "present": true,
       "partition": "PART-516",
-      "status": "pending",
-      "evidence": [],
-      "reviewer": null
+      "status": "reviewed",
+      "evidence": "REPORT-PART-516.json",
+      "reviewer": "/root/analyze_outbound",
+      "disposition": "Full1-244; Three registered status/set/add/combined cases read. Rename smoke explicitly unregistered; no supplied removal source. Bounded coverage limits rather than new cause."
     },
     "edgion-tests/src/client/suites/edgion_plugins/waf.rs": {
       "sha256": "e3df5692340df7c392897b33bad1c320945e654a94a5ab596a91b18fd6c63722",
@@ -17637,9 +17652,10 @@
       "crate": "edgion-tests",
       "present": true,
       "partition": "PART-517",
-      "status": "pending",
-      "evidence": [],
-      "reviewer": null
+      "status": "reviewed",
+      "evidence": "REPORT-PART-517.json",
+      "reviewer": "/root/analyze_conversion",
+      "disposition": "Full1-3; Export accepted."
     },
     "edgion-tests/src/client/suites/edgion_plugins/wasm/wasm.rs": {
       "sha256": "a9f3018afacc7d245ea339feb5ec0c6d2549bd18ca23fb3291d4e390082c6db3",
@@ -17647,9 +17663,10 @@
       "crate": "edgion-tests",
       "present": true,
       "partition": "PART-517",
-      "status": "pending",
-      "evidence": [],
-      "reviewer": null
+      "status": "reviewed",
+      "evidence": "REPORT-PART-517.json",
+      "reviewer": "/root/analyze_conversion",
+      "disposition": "Full1-541 three chunks; All9 registered guest/header/localreply/trap recovery/callout grant/tick cases read.401 lifetime-counter observation gap; performance smoke only stated header/mean, no payload guarantee."
     },
     "edgion-tests/src/client/suites/edgion_plugins/webhook_key_get/mod.rs": {
       "sha256": "f2e8f1c35681c28ce6f10d06708bd1cab96c71b732407399f2e01f0048662642",
@@ -17678,12 +17695,14 @@
       "crate": "edgion-tests",
       "present": true,
       "partition": "PART-520",
-      "status": "needs-revalidation",
+      "status": "reviewed",
       "evidence": "REPORT-PART-520.json",
       "reviewer": "/root",
       "disposition": "Full261 lines all3 actual cases/static generations. Exact target context, Controller+Gateway attachment-name convergence, stable-socket rename and real traffic assertions inspected; ordinary renamed convergence/traffic failure reaches restoration. No distinct finding; one-listener topology is not all-listener completeness proof.",
       "previous_reviewed_sha256": "2cc8368a26274df897d5987ae0f8763a56def8646155947f89cf8d91ea43ed51",
-      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json",
+      "revalidated_baseline": "BASELINE-AUDIT-20261011-H.json",
+      "revalidated_by": "/root/analyze_outbound"
     },
     "edgion-tests/src/client/suites/edgion_tls/both_absent_parent_ref/mod.rs": {
       "sha256": "ef38c03ec203cbb55d2de8760ca3c6356760d1dcc74ff32d3c48da6e40217dda",
@@ -17691,12 +17710,14 @@
       "crate": "edgion-tests",
       "present": true,
       "partition": "PART-520",
-      "status": "needs-revalidation",
+      "status": "reviewed",
       "evidence": "REPORT-PART-520.json",
       "reviewer": "/root",
       "disposition": "Full4 static declarations/export with actual parent/targeted CLI consumers. No finding.",
       "previous_reviewed_sha256": "ef38c03ec203cbb55d2de8760ca3c6356760d1dcc74ff32d3c48da6e40217dda",
-      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json",
+      "revalidated_baseline": "BASELINE-AUDIT-20261011-H.json",
+      "revalidated_by": "/root/analyze_outbound"
     },
     "edgion-tests/src/client/suites/edgion_tls/cipher/cipher.rs": {
       "sha256": "22a8123de4fb21f1698bac263a323409ecbec582614f924cfe8e77f0739d7ce9",
@@ -17704,12 +17725,14 @@
       "crate": "edgion-tests",
       "present": true,
       "partition": "PART-521",
-      "status": "needs-revalidation",
+      "status": "reviewed",
       "evidence": "REPORT-PART-521.json",
       "reviewer": "/root",
       "disposition": "Full 1-483 actual seven cases, helpers and subprocess watchdog. ARCH282 positive acceptance predicate gaps; stronger later cases and production fail-closed contract preserved as counterevidence.",
       "previous_reviewed_sha256": "22a8123de4fb21f1698bac263a323409ecbec582614f924cfe8e77f0739d7ce9",
-      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json",
+      "revalidated_baseline": "BASELINE-AUDIT-20261011-H.json",
+      "revalidated_by": "/root/analyze_outbound"
     },
     "edgion-tests/src/client/suites/edgion_tls/cipher/mod.rs": {
       "sha256": "a1fdf626b4069dc41dccb9d503913d89719e7e0dd57b08698e1a6af4b7ab6b83",
@@ -17717,12 +17740,14 @@
       "crate": "edgion-tests",
       "present": true,
       "partition": "PART-521",
-      "status": "needs-revalidation",
+      "status": "reviewed",
       "evidence": "REPORT-PART-521.json",
       "reviewer": "/root",
       "disposition": "Full static module/reexport and actual caller checked. No separate actionable issue.",
       "previous_reviewed_sha256": "a1fdf626b4069dc41dccb9d503913d89719e7e0dd57b08698e1a6af4b7ab6b83",
-      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json",
+      "revalidated_baseline": "BASELINE-AUDIT-20261011-H.json",
+      "revalidated_by": "/root/analyze_outbound"
     },
     "edgion-tests/src/client/suites/edgion_tls/fallback_sni/fallback_sni.rs": {
       "sha256": "7b5cd56b97d9a57a4e4e177eff6f1237f02b99933000a7eb3fd8fc290dea9c58",
@@ -17752,12 +17777,14 @@
       "crate": "edgion-tests",
       "present": true,
       "partition": "PART-523",
-      "status": "needs-revalidation",
+      "status": "reviewed",
       "evidence": "REPORT-PART-523.json",
       "reviewer": "/root",
       "disposition": "Full two-line glue; actual aggregate/targeted exports and consumers checked. Retain.",
       "previous_reviewed_sha256": "b69c9c2f4da6253221f233055ab0c65e6a12d1801206fea6c1fd18c4cdcc6807",
-      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json"
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json",
+      "revalidated_baseline": "BASELINE-AUDIT-20261011-H.json",
+      "revalidated_by": "/root/analyze_outbound"
     },
     "edgion-tests/src/client/suites/edgion_tls/grpctls/tls.rs": {
       "sha256": "314587ff3422bd1d6bed5262ec6481f66904607deb54c08585daa8609b00d165",
@@ -17765,12 +17792,14 @@
       "crate": "edgion-tests",
       "present": true,
       "partition": "PART-523",
-      "status": "needs-revalidation",
+      "status": "reviewed",
       "evidence": "REPORT-PART-523.json",
       "reviewer": "/root",
       "disposition": "Full 1\u2013120 actual case. Retain context-selected TLS port, explicit trusted CA/domain_name/origin and RPC content/status/error assertions under async case timeout. Aggregate wrong child context is already ARCH272 at CLI owner, not a new duplicate.",
       "previous_reviewed_sha256": "314587ff3422bd1d6bed5262ec6481f66904607deb54c08585daa8609b00d165",
-      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json"
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json",
+      "revalidated_baseline": "BASELINE-AUDIT-20261011-H.json",
+      "revalidated_by": "/root/analyze_outbound"
     },
     "edgion-tests/src/client/suites/edgion_tls/https/https.rs": {
       "sha256": "f67e438115e9d604c23d9c02b824bf3f5925c5b1433d08ac498f705ca118e542",
@@ -17778,12 +17807,14 @@
       "crate": "edgion-tests",
       "present": true,
       "partition": "PART-524",
-      "status": "needs-revalidation",
+      "status": "reviewed",
       "evidence": "REPORT-PART-524.json",
       "reviewer": "/root",
       "disposition": "Full152 lines; all3 real HTTPS cases/context URLs examined against local and K8s fixtures/server. Health validates2xx+actual secure-path catch-all body, echo2xx/status200 are bounded connectivity assertions; no distinct architecture finding. Selfsigned harness acceptance is not certificate trust verification.",
       "previous_reviewed_sha256": "f67e438115e9d604c23d9c02b824bf3f5925c5b1433d08ac498f705ca118e542",
-      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json"
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json",
+      "revalidated_baseline": "BASELINE-AUDIT-20261011-H.json",
+      "revalidated_by": "/root/analyze_outbound"
     },
     "edgion-tests/src/client/suites/edgion_tls/https/mod.rs": {
       "sha256": "d9c3d743e4c84f1bb9d9dc03b115caa1cedfb6d4642c312cf47e557882270ab4",
@@ -17791,12 +17822,14 @@
       "crate": "edgion-tests",
       "present": true,
       "partition": "PART-524",
-      "status": "needs-revalidation",
+      "status": "reviewed",
       "evidence": "REPORT-PART-524.json",
       "reviewer": "/root",
       "disposition": "Full4 lines static module/reexport and actual parent/CLI consumers; no finding.",
       "previous_reviewed_sha256": "d9c3d743e4c84f1bb9d9dc03b115caa1cedfb6d4642c312cf47e557882270ab4",
-      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json"
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json",
+      "revalidated_baseline": "BASELINE-AUDIT-20261011-H.json",
+      "revalidated_by": "/root/analyze_outbound"
     },
     "edgion-tests/src/client/suites/edgion_tls/last_known_good/last_known_good.rs": {
       "sha256": "8a44e763c6fff65ac670ea794b7e1a3f479abb9f16613173f714da3b4bd9592b",
@@ -17804,12 +17837,14 @@
       "crate": "edgion-tests",
       "present": true,
       "partition": "PART-525",
-      "status": "needs-revalidation",
+      "status": "reviewed",
       "evidence": "REPORT-PART-525.json",
       "reviewer": "/root",
       "disposition": "Full422 lines all4 actual initial/fallback cases, fixture-serial/recovery helper and native/OpenSSL/stash/status/message predicates. Existing ARCH288 owns blocking child; additional ARCH266 all-parent flatten then first condition violates selected owner. No distinct new cause. Exact serial barriers and no-restash recovery semantics preserved.",
       "previous_reviewed_sha256": "8a44e763c6fff65ac670ea794b7e1a3f479abb9f16613173f714da3b4bd9592b",
-      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json",
+      "revalidated_baseline": "BASELINE-AUDIT-20261011-H.json",
+      "revalidated_by": "/root/analyze_outbound"
     },
     "edgion-tests/src/client/suites/edgion_tls/last_known_good/mod.rs": {
       "sha256": "eb7836441819e12a521719554eadc64487970f754d0c2edba4bf8b5659172b29",
@@ -17817,12 +17852,14 @@
       "crate": "edgion-tests",
       "present": true,
       "partition": "PART-525",
-      "status": "needs-revalidation",
+      "status": "reviewed",
       "evidence": "REPORT-PART-525.json",
       "reviewer": "/root",
       "disposition": "Full6 static exports and real dynamic/CLI consumers; no finding.",
       "previous_reviewed_sha256": "eb7836441819e12a521719554eadc64487970f754d0c2edba4bf8b5659172b29",
-      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json",
+      "revalidated_baseline": "BASELINE-AUDIT-20261011-H.json",
+      "revalidated_by": "/root/analyze_outbound"
     },
     "edgion-tests/src/client/suites/edgion_tls/mod.rs": {
       "sha256": "153105658634e2e984dfb532b5edcffef4000e752bb096ce39a32a6ba29bb055",
@@ -20142,10 +20179,12 @@
       "crate": "edgion-waf",
       "present": true,
       "partition": "PART-158",
-      "status": "reviewed",
+      "status": "needs-revalidation",
       "evidence": "REPORT-PART-158.json",
       "reviewer": "/root/analyze_outbound",
-      "disposition": "No actionable issue: checked byte classes/table construction/direct outputs and output links preserve canonical semantics; layout optimization remains conditional."
+      "disposition": "No actionable issue: checked byte classes/table construction/direct outputs and output links preserve canonical semantics; layout optimization remains conditional.",
+      "previous_reviewed_sha256": "ef62c69fac924a1ea74b54664135b74b8bbdb954b0de699ab3913a27d8feef2b",
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-H.json"
     },
     "edgion-waf/src/aho_corasick/error.rs": {
       "sha256": "cbefc544899c46aae22bd8b908cb754e0f0ae98423336e42500d6e1400055c1e",
@@ -20153,10 +20192,12 @@
       "crate": "edgion-waf",
       "present": true,
       "partition": "PART-158",
-      "status": "reviewed",
+      "status": "needs-revalidation",
       "evidence": "REPORT-PART-158.json",
       "reviewer": "/root/analyze_outbound",
-      "disposition": "No actionable issue: bounded structural typed errors avoid pattern/haystack material."
+      "disposition": "No actionable issue: bounded structural typed errors avoid pattern/haystack material.",
+      "previous_reviewed_sha256": "cbefc544899c46aae22bd8b908cb754e0f0ae98423336e42500d6e1400055c1e",
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-H.json"
     },
     "edgion-waf/src/aho_corasick/input.rs": {
       "sha256": "94fe3b74fae5297a062166f4938ff435d8f028cc47be38f8093a6bf445f43d19",
@@ -20164,10 +20205,12 @@
       "crate": "edgion-waf",
       "present": true,
       "partition": "PART-158",
-      "status": "reviewed",
+      "status": "needs-revalidation",
       "evidence": "REPORT-PART-158.json",
       "reviewer": "/root/analyze_outbound",
-      "disposition": "No actionable issue: borrowed input and checked absolute ranges/anchor/earliest semantics avoid another owner."
+      "disposition": "No actionable issue: borrowed input and checked absolute ranges/anchor/earliest semantics avoid another owner.",
+      "previous_reviewed_sha256": "94fe3b74fae5297a062166f4938ff435d8f028cc47be38f8093a6bf445f43d19",
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-H.json"
     },
     "edgion-waf/src/aho_corasick/match_types.rs": {
       "sha256": "dc74fb461bc51f073a9917adf3c2b9b392914e3c79831555ff6f5afa4514343b",
@@ -20175,10 +20218,12 @@
       "crate": "edgion-waf",
       "present": true,
       "partition": "PART-158",
-      "status": "reviewed",
+      "status": "needs-revalidation",
       "evidence": "REPORT-PART-158.json",
       "reviewer": "/root/analyze_outbound",
-      "disposition": "No actionable issue: compact checked IDs/spans and fixed PatternSet with source-order iteration; equal-cardinality set reuse explicitly tested."
+      "disposition": "No actionable issue: compact checked IDs/spans and fixed PatternSet with source-order iteration; equal-cardinality set reuse explicitly tested.",
+      "previous_reviewed_sha256": "dc74fb461bc51f073a9917adf3c2b9b392914e3c79831555ff6f5afa4514343b",
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-H.json"
     },
     "edgion-waf/src/aho_corasick/mod.rs": {
       "sha256": "b11efedc52f57560c911f6f571a3473f28fa42721a6857d30c6a5bbc32bd2d9e",
@@ -20186,10 +20231,12 @@
       "crate": "edgion-waf",
       "present": true,
       "partition": "PART-158",
-      "status": "reviewed",
+      "status": "needs-revalidation",
       "evidence": "REPORT-PART-158.json",
       "reviewer": "/root/analyze_outbound",
-      "disposition": "No actionable issue: immutable fallible construction, canonical backend selection/generation and iterators preserve standard/leftmost/anchored/empty/overlap contracts."
+      "disposition": "No actionable issue: immutable fallible construction, canonical backend selection/generation and iterators preserve standard/leftmost/anchored/empty/overlap contracts.",
+      "previous_reviewed_sha256": "b11efedc52f57560c911f6f571a3473f28fa42721a6857d30c6a5bbc32bd2d9e",
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-H.json"
     },
     "edgion-waf/src/aho_corasick/nfa/build.rs": {
       "sha256": "3707ca89610a21714f7efface437cbcebd337b0cedac817bfada03ea5fc37cb0",
@@ -20197,10 +20244,12 @@
       "crate": "edgion-waf",
       "present": true,
       "partition": "PART-160",
-      "status": "reviewed",
+      "status": "needs-revalidation",
       "evidence": "REPORT-PART-160.json",
       "reviewer": "/root",
-      "disposition": "No actionable candidate: bounded backend-neutral cold graph creates failure/output links without inherited-output flattening; direct outputs/source order and checked construction limits remain necessary. No measured cold allocation bottleneck supports scratch reshuffle."
+      "disposition": "No actionable candidate: bounded backend-neutral cold graph creates failure/output links without inherited-output flattening; direct outputs/source order and checked construction limits remain necessary. No measured cold allocation bottleneck supports scratch reshuffle.",
+      "previous_reviewed_sha256": "3707ca89610a21714f7efface437cbcebd337b0cedac817bfada03ea5fc37cb0",
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-H.json"
     },
     "edgion-waf/src/aho_corasick/nfa/contiguous.rs": {
       "sha256": "50ef3d6c6d462e7724d6f3ce1eaa199f4cf03ae61f3783550d4167ff460c51dd",
@@ -20208,10 +20257,12 @@
       "crate": "edgion-waf",
       "present": true,
       "partition": "PART-160",
-      "status": "reviewed",
+      "status": "needs-revalidation",
       "evidence": "REPORT-PART-160.json",
       "reviewer": "/root",
-      "disposition": "No actionable candidate: checked flat indexes/sentinel, bounded conditional dense rows and exact retained capacities freeze a different runtime representation; canonical graph and output cursor retained."
+      "disposition": "No actionable candidate: checked flat indexes/sentinel, bounded conditional dense rows and exact retained capacities freeze a different runtime representation; canonical graph and output cursor retained.",
+      "previous_reviewed_sha256": "50ef3d6c6d462e7724d6f3ce1eaa199f4cf03ae61f3783550d4167ff460c51dd",
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-H.json"
     },
     "edgion-waf/src/aho_corasick/nfa/mod.rs": {
       "sha256": "141b288d270a1c1edd2b0128f9a11ff68db22f5d5aca9ee3cc234f41940734ab",
@@ -20219,10 +20270,12 @@
       "crate": "edgion-waf",
       "present": true,
       "partition": "PART-160",
-      "status": "reviewed",
+      "status": "needs-revalidation",
       "evidence": "REPORT-PART-160.json",
       "reviewer": "/root",
-      "disposition": "No actionable candidate: shared preparation subtracts acceleration ownership before selected backend admission and restores original error bound. Deterministic opt-in Auto projection avoids speculative table construction; exhaustive dispatch is appropriate."
+      "disposition": "No actionable candidate: shared preparation subtracts acceleration ownership before selected backend admission and restores original error bound. Deterministic opt-in Auto projection avoids speculative table construction; exhaustive dispatch is appropriate.",
+      "previous_reviewed_sha256": "141b288d270a1c1edd2b0128f9a11ff68db22f5d5aca9ee3cc234f41940734ab",
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-H.json"
     },
     "edgion-waf/src/aho_corasick/nfa/sparse.rs": {
       "sha256": "e05d457fd4bd062fc1938f4193f64eea0d30c4aed44bbf8d5953fe833f534f6e",
@@ -20230,10 +20283,12 @@
       "crate": "edgion-waf",
       "present": true,
       "partition": "PART-160",
-      "status": "reviewed",
+      "status": "needs-revalidation",
       "evidence": "REPORT-PART-160.json",
       "reviewer": "/root",
-      "disposition": "No actionable candidate: portable scalar baseline retains sorted sparse transitions, conditional dense root, bounded direct outputs and measured owned-capacity accounting; cold exact-capacity freezing is legitimate."
+      "disposition": "No actionable candidate: portable scalar baseline retains sorted sparse transitions, conditional dense root, bounded direct outputs and measured owned-capacity accounting; cold exact-capacity freezing is legitimate.",
+      "previous_reviewed_sha256": "e05d457fd4bd062fc1938f4193f64eea0d30c4aed44bbf8d5953fe833f534f6e",
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-H.json"
     },
     "edgion-waf/src/aho_corasick/prefilter.rs": {
       "sha256": "a4fd4bf9c54eed64dbd2a085d01cb7475cd732ab945d799fbc3bec2823c51f7a",
@@ -20241,10 +20296,12 @@
       "crate": "edgion-waf",
       "present": true,
       "partition": "PART-158",
-      "status": "reviewed",
+      "status": "needs-revalidation",
       "evidence": "REPORT-PART-158.json",
       "reviewer": "/root/analyze_outbound",
-      "disposition": "No actionable issue: conservative candidates with exact confirmation/rollback/adaptive disabling; SIMD and cold-profile speculation are existing conditional work."
+      "disposition": "No actionable issue: conservative candidates with exact confirmation/rollback/adaptive disabling; SIMD and cold-profile speculation are existing conditional work.",
+      "previous_reviewed_sha256": "a4fd4bf9c54eed64dbd2a085d01cb7475cd732ab945d799fbc3bec2823c51f7a",
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-H.json"
     },
     "edgion-waf/src/aho_corasick/replace.rs": {
       "sha256": "6ffaf080daf3fd008a3fd730a498515d059dc34df15d45420f247ebbe781137f",
@@ -20252,10 +20309,12 @@
       "crate": "edgion-waf",
       "present": true,
       "partition": "PART-158",
-      "status": "reviewed",
+      "status": "needs-revalidation",
       "evidence": "REPORT-PART-158.json",
       "reviewer": "/root/analyze_outbound",
-      "disposition": "No actionable issue: cardinality/output/UTF-8 guards and bounded stream carry; callback heap is not represented as bounded."
+      "disposition": "No actionable issue: cardinality/output/UTF-8 guards and bounded stream carry; callback heap is not represented as bounded.",
+      "previous_reviewed_sha256": "6ffaf080daf3fd008a3fd730a498515d059dc34df15d45420f247ebbe781137f",
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-H.json"
     },
     "edgion-waf/src/aho_corasick/stream.rs": {
       "sha256": "7628b5a3e5a16aa6fe71d535a2d279a5b21b08481a90a3e57dbe8c76714d27da",
@@ -20263,10 +20322,12 @@
       "crate": "edgion-waf",
       "present": true,
       "partition": "PART-159",
-      "status": "reviewed",
+      "status": "needs-revalidation",
       "evidence": "REPORT-PART-159.json",
       "reviewer": "/root",
-      "disposition": "No actionable candidate: generation-bound caller stream state and bounded reader/pending scratch; non-overlapping callback resets and all-pattern suffix/overlap accumulation intentionally differ. Exact semantic mode admission, EOF and read errors remain owned locally; no new cache/copy needed."
+      "disposition": "No actionable candidate: generation-bound caller stream state and bounded reader/pending scratch; non-overlapping callback resets and all-pattern suffix/overlap accumulation intentionally differ. Exact semantic mode admission, EOF and read errors remain owned locally; no new cache/copy needed.",
+      "previous_reviewed_sha256": "7628b5a3e5a16aa6fe71d535a2d279a5b21b08481a90a3e57dbe8c76714d27da",
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-H.json"
     },
     "edgion-waf/src/bounded_sort.rs": {
       "sha256": "27d2fe3dc196ae9b135cbe14dd4b41ef36ec432d21520cd8294a3a63937e3344",
@@ -20313,10 +20374,12 @@
       "crate": "edgion-waf",
       "present": true,
       "partition": "PART-157",
-      "status": "reviewed",
+      "status": "needs-revalidation",
       "evidence": "REPORT-PART-157.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "No actionable candidate: immutable compiled program, admitted scratch, physical/logical source-order mapping and mandatory Reference semantics retain distinct owners. Simple-mode Pike cache serves Reference; transaction already creates scratch lazily. Cumulative phrase mapping preserves cumulative caller contract with no payload copying; no measured value supports extra lazy/delta framework."
+      "disposition": "No actionable candidate: immutable compiled program, admitted scratch, physical/logical source-order mapping and mandatory Reference semantics retain distinct owners. Simple-mode Pike cache serves Reference; transaction already creates scratch lazily. Cumulative phrase mapping preserves cumulative caller contract with no payload copying; no measured value supports extra lazy/delta framework.",
+      "previous_reviewed_sha256": "c2d4742efb1c426727690bb1817672533c6febbe90f0ff8b4ce4d86bb5bd81e1",
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-H.json"
     },
     "edgion-waf/src/seclang/action.rs": {
       "sha256": "6f5d3b9569ef4b86fdfaa3f892ac3f78ecf3ed5f8e57f2509ac1db898d520b56",
@@ -20701,10 +20764,12 @@
       "crate": "edgion-waf",
       "present": true,
       "partition": "PART-176",
-      "status": "reviewed",
+      "status": "needs-revalidation",
       "evidence": "REPORT-PART-176.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full9694-line bounded raw read, all9352 static rows, CHAR_MAP and helpers. One immutable checked-in table supports bounded stack normalization/binary keyword lookup, multiword fold and separate six-byte fingerprint key. Actual tokenizer/detector/transaction consumers, source-pin verifier and relevant real test bodies inspected. No actionable ownership refactor; static table size/repeated rows alone insufficient."
+      "disposition": "Full9694-line bounded raw read, all9352 static rows, CHAR_MAP and helpers. One immutable checked-in table supports bounded stack normalization/binary keyword lookup, multiword fold and separate six-byte fingerprint key. Actual tokenizer/detector/transaction consumers, source-pin verifier and relevant real test bodies inspected. No actionable ownership refactor; static table size/repeated rows alone insufficient.",
+      "previous_reviewed_sha256": "0bac8da6e2f123f1f2c2ffcd987df93bcdc9830c1a9b490bcdd09dabcf84015e",
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-H.json"
     },
     "edgion-waf/src/sqli/mod.rs": {
       "sha256": "ed5129949b0e79ce506e651400bdf764749cc0ab324fcb2d77839cc8ba4f0a5b",
@@ -21191,13 +21256,14 @@
       "paths": [
         "edgion-waf/src/matcher.rs"
       ],
-      "status": "reviewed",
+      "status": "needs-revalidation",
       "bytes": 117804,
       "reports": [
         "REPORT-PART-157.json",
         "REVALIDATION-PART-157-RULE-NAVIGATION-20261011-F.json"
       ],
-      "terminal_complete": true
+      "terminal_complete": false,
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-H.json"
     },
     "PART-158": {
       "crate": "edgion-waf",
@@ -21211,13 +21277,14 @@
         "edgion-waf/src/aho_corasick/prefilter.rs",
         "edgion-waf/src/aho_corasick/replace.rs"
       ],
-      "status": "reviewed",
+      "status": "needs-revalidation",
       "bytes": 99553,
       "reports": [
         "REPORT-PART-158.json",
         "REVALIDATION-PART-158-RULE-NAVIGATION-20261011-F.json"
       ],
-      "terminal_complete": true
+      "terminal_complete": false,
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-H.json"
     },
     "PART-159": {
       "crate": "edgion-waf",
@@ -21225,13 +21292,14 @@
       "paths": [
         "edgion-waf/src/aho_corasick/stream.rs"
       ],
-      "status": "reviewed",
+      "status": "needs-revalidation",
       "bytes": 8864,
       "reports": [
         "REPORT-PART-159.json",
         "REVALIDATION-PART-159-RULE-NAVIGATION-20261011-F.json"
       ],
-      "terminal_complete": true
+      "terminal_complete": false,
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-H.json"
     },
     "PART-160": {
       "crate": "edgion-waf",
@@ -21242,13 +21310,14 @@
         "edgion-waf/src/aho_corasick/nfa/mod.rs",
         "edgion-waf/src/aho_corasick/nfa/sparse.rs"
       ],
-      "status": "reviewed",
+      "status": "needs-revalidation",
       "bytes": 43229,
       "reports": [
         "REPORT-PART-160.json",
         "REVALIDATION-PART-160-RULE-NAVIGATION-20261011-F.json"
       ],
-      "terminal_complete": true
+      "terminal_complete": false,
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-H.json"
     },
     "PART-161": {
       "crate": "edgion-waf",
@@ -21488,13 +21557,14 @@
       "paths": [
         "edgion-waf/src/sqli/generated_data.rs"
       ],
-      "status": "reviewed",
+      "status": "needs-revalidation",
       "bytes": 480963,
       "reports": [
         "REPORT-PART-176.json",
         "REVALIDATION-PART-176-RULE-NAVIGATION-20261011-F.json"
       ],
-      "terminal_complete": true
+      "terminal_complete": false,
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-H.json"
     },
     "PART-177": {
       "crate": "edgion-waf",
@@ -28172,9 +28242,12 @@
         "edgion-tests/src/client/suites/edgion_plugins/region_route/mod.rs",
         "edgion-tests/src/client/suites/edgion_plugins/region_route/region_route.rs"
       ],
-      "status": "pending",
+      "status": "reviewed",
       "bytes": 56490,
-      "reports": []
+      "reports": [
+        "REPORT-PART-510.json"
+      ],
+      "terminal_complete": true
     },
     "PART-511": {
       "crate": "edgion-tests",
@@ -28184,9 +28257,12 @@
         "edgion-tests/src/client/suites/edgion_plugins/request_access_policy/mod.rs",
         "edgion-tests/src/client/suites/edgion_plugins/request_access_policy/request_access_policy.rs"
       ],
-      "status": "pending",
+      "status": "reviewed",
       "bytes": 41000,
-      "reports": []
+      "reports": [
+        "REPORT-PART-511.json"
+      ],
+      "terminal_complete": true
     },
     "PART-512": {
       "crate": "edgion-tests",
@@ -28195,9 +28271,12 @@
         "edgion-tests/src/client/suites/edgion_plugins/request_id/mod.rs",
         "edgion-tests/src/client/suites/edgion_plugins/request_id/request_id.rs"
       ],
-      "status": "pending",
+      "status": "reviewed",
       "bytes": 10691,
-      "reports": []
+      "reports": [
+        "REPORT-PART-512.json"
+      ],
+      "terminal_complete": true
     },
     "PART-513": {
       "crate": "edgion-tests",
@@ -28206,9 +28285,12 @@
         "edgion-tests/src/client/suites/edgion_plugins/request_mirror/mod.rs",
         "edgion-tests/src/client/suites/edgion_plugins/request_mirror/request_mirror.rs"
       ],
-      "status": "pending",
+      "status": "reviewed",
       "bytes": 44311,
-      "reports": []
+      "reports": [
+        "REPORT-PART-513.json"
+      ],
+      "terminal_complete": true
     },
     "PART-514": {
       "crate": "edgion-tests",
@@ -28217,9 +28299,12 @@
         "edgion-tests/src/client/suites/edgion_plugins/request_restriction/mod.rs",
         "edgion-tests/src/client/suites/edgion_plugins/request_restriction/request_restriction.rs"
       ],
-      "status": "pending",
+      "status": "reviewed",
       "bytes": 51050,
-      "reports": []
+      "reports": [
+        "REPORT-PART-514.json"
+      ],
+      "terminal_complete": true
     },
     "PART-515": {
       "crate": "edgion-tests",
@@ -28228,9 +28313,12 @@
         "edgion-tests/src/client/suites/edgion_plugins/resolved_refs/mod.rs",
         "edgion-tests/src/client/suites/edgion_plugins/resolved_refs/resolved_refs.rs"
       ],
-      "status": "pending",
-      "bytes": 14945,
-      "reports": []
+      "status": "reviewed",
+      "bytes": 15015,
+      "reports": [
+        "REPORT-PART-515.json"
+      ],
+      "terminal_complete": true
     },
     "PART-516": {
       "crate": "edgion-tests",
@@ -28239,9 +28327,12 @@
         "edgion-tests/src/client/suites/edgion_plugins/response_rewrite/mod.rs",
         "edgion-tests/src/client/suites/edgion_plugins/response_rewrite/response_rewrite.rs"
       ],
-      "status": "pending",
+      "status": "reviewed",
       "bytes": 11672,
-      "reports": []
+      "reports": [
+        "REPORT-PART-516.json"
+      ],
+      "terminal_complete": true
     },
     "PART-517": {
       "crate": "edgion-tests",
@@ -28250,9 +28341,12 @@
         "edgion-tests/src/client/suites/edgion_plugins/wasm/mod.rs",
         "edgion-tests/src/client/suites/edgion_plugins/wasm/wasm.rs"
       ],
-      "status": "pending",
+      "status": "reviewed",
       "bytes": 26588,
-      "reports": []
+      "reports": [
+        "REPORT-PART-517.json"
+      ],
+      "terminal_complete": true
     },
     "PART-518": {
       "crate": "edgion-tests",
@@ -28286,16 +28380,18 @@
         "edgion-tests/src/client/suites/edgion_tls/both_absent_parent_ref/both_absent_parent_ref.rs",
         "edgion-tests/src/client/suites/edgion_tls/both_absent_parent_ref/mod.rs"
       ],
-      "status": "needs-revalidation",
+      "status": "reviewed",
       "bytes": 10926,
       "reports": [
-        "REPORT-PART-520.json"
+        "REPORT-PART-520.json",
+        "REVALIDATION-PART-520-20261011-H.json"
       ],
-      "terminal_complete": false,
+      "terminal_complete": true,
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json",
       "previous_terminal_receipts": [
         "REPORT-PART-520.json"
-      ]
+      ],
+      "revalidated_baseline": "BASELINE-AUDIT-20261011-H.json"
     },
     "PART-521": {
       "crate": "edgion-tests",
@@ -28304,16 +28400,18 @@
         "edgion-tests/src/client/suites/edgion_tls/cipher/cipher.rs",
         "edgion-tests/src/client/suites/edgion_tls/cipher/mod.rs"
       ],
-      "status": "needs-revalidation",
+      "status": "reviewed",
       "bytes": 21374,
       "reports": [
-        "REPORT-PART-521.json"
+        "REPORT-PART-521.json",
+        "REVALIDATION-PART-521-20261011-H.json"
       ],
-      "terminal_complete": false,
+      "terminal_complete": true,
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json",
       "previous_terminal_receipts": [
         "REPORT-PART-521.json"
-      ]
+      ],
+      "revalidated_baseline": "BASELINE-AUDIT-20261011-H.json"
     },
     "PART-522": {
       "crate": "edgion-tests",
@@ -28337,13 +28435,15 @@
         "edgion-tests/src/client/suites/edgion_tls/grpctls/mod.rs",
         "edgion-tests/src/client/suites/edgion_tls/grpctls/tls.rs"
       ],
-      "status": "needs-revalidation",
+      "status": "reviewed",
       "bytes": 5546,
       "reports": [
-        "REPORT-PART-523.json"
+        "REPORT-PART-523.json",
+        "REVALIDATION-PART-523-20261011-H.json"
       ],
-      "terminal_complete": false,
-      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json"
+      "terminal_complete": true,
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json",
+      "revalidated_baseline": "BASELINE-AUDIT-20261011-H.json"
     },
     "PART-524": {
       "crate": "edgion-tests",
@@ -28352,13 +28452,15 @@
         "edgion-tests/src/client/suites/edgion_tls/https/https.rs",
         "edgion-tests/src/client/suites/edgion_tls/https/mod.rs"
       ],
-      "status": "needs-revalidation",
+      "status": "reviewed",
       "bytes": 6894,
       "reports": [
-        "REPORT-PART-524.json"
+        "REPORT-PART-524.json",
+        "REVALIDATION-PART-524-20261011-H.json"
       ],
-      "terminal_complete": false,
-      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json"
+      "terminal_complete": true,
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json",
+      "revalidated_baseline": "BASELINE-AUDIT-20261011-H.json"
     },
     "PART-525": {
       "crate": "edgion-tests",
@@ -28367,16 +28469,18 @@
         "edgion-tests/src/client/suites/edgion_tls/last_known_good/last_known_good.rs",
         "edgion-tests/src/client/suites/edgion_tls/last_known_good/mod.rs"
       ],
-      "status": "needs-revalidation",
+      "status": "reviewed",
       "bytes": 19000,
       "reports": [
-        "REPORT-PART-525.json"
+        "REPORT-PART-525.json",
+        "REVALIDATION-PART-525-20261011-H.json"
       ],
-      "terminal_complete": false,
+      "terminal_complete": true,
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json",
       "previous_terminal_receipts": [
         "REPORT-PART-525.json"
-      ]
+      ],
+      "revalidated_baseline": "BASELINE-AUDIT-20261011-H.json"
     },
     "PART-526": {
       "crate": "edgion-tests",
@@ -33243,9 +33347,9 @@
     },
     "ARCH-227": {
       "path": "ARCH-227-waf-semantic-reset-output.md",
-      "status": "confirmed",
+      "status": "candidate",
       "partition": "PART-169",
-      "sha256": "2aee6494b219154d85b76621a05a250290fe0cbc24dec37ebfda5c9de3ad4933",
+      "sha256": "017fa71a8862ba13a2e185d78c34c333a17b5c6430aa5ee711a289b3b0d72440",
       "verification": {
         "complete": true,
         "verifier": "/root",
@@ -33254,7 +33358,10 @@
         "evidence": "VERIFICATION-ARCH-227.json"
       },
       "kind": "architecture-debt",
-      "analyst": "/root/analyze_conversion"
+      "analyst": "/root/analyze_conversion",
+      "previous_status": "confirmed",
+      "revalidation_pending": true,
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-H.json"
     },
     "ARCH-232": {
       "path": "ARCH-232-waf-request-head-alias-bytes.md",
@@ -33829,18 +33936,27 @@
       "path": "ARCH-348-canary-anti-spoof-unreadable-echo.md",
       "status": "confirmed",
       "partition": "PART-462",
-      "sha256": "48bb9a23414e8675933dc97f8c476c27f6d29b97c5193d51b2226fd511614482",
+      "sha256": "8aad3d23a2016b68180aeecefb93dcef721ff799e72b1ca75965c002269e44d6",
       "verification": {
         "complete": true,
         "verifier": "/root/verify_ip_union",
-        "input_sha256": "2e29c73ecbde3613ec404979261967904ddf6685a24058d188e4ed4b3cb99a31",
-        "approved_claim_sha256": "5af48e1b2d06c14c8b97ed8904386b4a01fa6ad8951dcf8cb7b4d35f5c9faa51",
+        "input_sha256": "48bb9a23414e8675933dc97f8c476c27f6d29b97c5193d51b2226fd511614482",
+        "approved_claim_sha256": "c72dc5bc4dfc8f984915a02bf5610ba204709b40518d434ff0c5650166f1c637",
         "evidence": "VERIFICATION-ARCH-348.json"
       },
       "kind": "behavior-defect",
       "analyst": "/root/analyze_conversion",
       "revalidation_pending": false,
-      "revalidated_baseline": "BASELINE-AUDIT-20261011-E.json"
+      "revalidated_baseline": "BASELINE-AUDIT-20261011-E.json",
+      "verification_history": [
+        {
+          "complete": true,
+          "verifier": "/root/verify_ip_union",
+          "input_sha256": "2e29c73ecbde3613ec404979261967904ddf6685a24058d188e4ed4b3cb99a31",
+          "approved_claim_sha256": "5af48e1b2d06c14c8b97ed8904386b4a01fa6ad8951dcf8cb7b4d35f5c9faa51",
+          "evidence": "VERIFICATION-ARCH-348.json"
+        }
+      ]
     },
     "ARCH-349": {
       "path": "ARCH-349-csrf-cookie-failure-token-diagnostic.md",
@@ -33934,19 +34050,31 @@
     },
     "ARCH-381": {
       "path": "ARCH-381-oidc-invalid-signature-fixture-encoding.md",
-      "status": "candidate",
+      "status": "confirmed",
       "partition": "PART-502",
-      "sha256": "af2ccfa415de9a62f9b03621ef60feb3ace6998b345d9e68ad49394dc54713df",
-      "verification": null,
+      "sha256": "dc24b431f5691b05a888e5964ad313173a4c7a38a0b321f7013b2677c830e970",
+      "verification": {
+        "complete": true,
+        "verifier": "/root/verify_ip_union",
+        "input_sha256": "af2ccfa415de9a62f9b03621ef60feb3ace6998b345d9e68ad49394dc54713df",
+        "approved_claim_sha256": "0910d6f5b8be98d252b4361e8ed96c296bc8dd33e922ec84187000439e36af57",
+        "evidence": "VERIFICATION-ARCH-381.json"
+      },
       "kind": "architecture-debt",
       "analyst": "/root/analyze_outbound"
     },
     "ARCH-382": {
       "path": "ARCH-382-path-forwarding-complete-output-assertions.md",
-      "status": "candidate",
+      "status": "confirmed",
       "partition": "PART-503",
-      "sha256": "e615768e3d80377c2fb2c67e908f143f4c8966bd439ed29546cb8c9bd3e08aa0",
-      "verification": null,
+      "sha256": "7ac54ea61eba50f7f649b6bcb84ab635b78d4b062d833e25cef322207876c30b",
+      "verification": {
+        "complete": true,
+        "verifier": "/root/verify_ip_union",
+        "input_sha256": "e615768e3d80377c2fb2c67e908f143f4c8966bd439ed29546cb8c9bd3e08aa0",
+        "approved_claim_sha256": "cefc3cd6f17ee969208d125039389f29f5407ff9d44a824dd9ea5f4d28bc8965",
+        "evidence": "VERIFICATION-ARCH-382.json"
+      },
       "kind": "behavior-defect",
       "analyst": "/root/analyze_outbound"
     },
@@ -33967,10 +34095,16 @@
     },
     "ARCH-383": {
       "path": "ARCH-383-condition-target-log-correlation.md",
-      "status": "candidate",
+      "status": "confirmed",
       "partition": "PART-504",
-      "sha256": "ff75e3ef2bc566a63e575cd69759dca9f38e8a4bb676cf945d3a4cc9aacc70bd",
-      "verification": null,
+      "sha256": "49e702d5bd6f9a4c4466ab688cd38d8bf6c16256cac2d7ae63dd714ffaf30dc8",
+      "verification": {
+        "complete": true,
+        "verifier": "/root/verify_ip_union",
+        "input_sha256": "ff75e3ef2bc566a63e575cd69759dca9f38e8a4bb676cf945d3a4cc9aacc70bd",
+        "approved_claim_sha256": "08ae6ed8489b299584366a103b605bf6617b9345ceb26de6087ba3b88851f143",
+        "evidence": "VERIFICATION-ARCH-383.json"
+      },
       "kind": "behavior-defect",
       "analyst": "/root/analyze_outbound",
       "analyst_correction": "Original proposal withdrawn; exact analyst replacement corrects current ordinal-bearing descriptor/fallback witness before independent verification.",
@@ -34006,6 +34140,66 @@
       },
       "kind": "behavior-defect",
       "analyst": "/root/analyze_outbound"
+    },
+    "ARCH-390": {
+      "path": "ARCH-390-region-route-failover-jump-observation.md",
+      "status": "confirmed",
+      "partition": "PART-510",
+      "sha256": "935775043f909a5325f0869926cafb494859a7ee221711adb011770556c4d96c",
+      "verification": {
+        "complete": true,
+        "verifier": "/root/verify_ip_union",
+        "input_sha256": "b5124a8f38932053f1017aae0b7304fe7aa1e612a745d086cf7901d7f878f57a",
+        "approved_claim_sha256": "b6e99da7a76e96270f47d219d08a6d28a7040bce42321e51c33ea1d2d5913847",
+        "evidence": "VERIFICATION-ARCH-390.json"
+      },
+      "kind": "behavior-defect",
+      "analyst": "/root/analyze_outbound"
+    },
+    "ARCH-393": {
+      "path": "ARCH-393-request-mirror-capture-identity.md",
+      "status": "confirmed",
+      "partition": "PART-513",
+      "sha256": "043579d72715831ca0bf241c403dabdebf644b6f52a3797c81560a7f477104ab",
+      "verification": {
+        "complete": true,
+        "verifier": "/root/verify_ip_union",
+        "input_sha256": "57990ba078e9510971e1bbb78d49a776c3061d03f4f30f66f1e909712cbacf35",
+        "approved_claim_sha256": "73d04a148c43984a6aa7700fccc20445e587ff72c2c6f1ec98955ab142c77058",
+        "evidence": "VERIFICATION-ARCH-393.json"
+      },
+      "kind": "behavior-defect",
+      "analyst": "/root/analyze_conversion"
+    },
+    "ARCH-394": {
+      "path": "ARCH-394-request-mirror-query-observation.md",
+      "status": "confirmed",
+      "partition": "PART-513",
+      "sha256": "f0d9c4190e77dc1b06c19a35810fd1a863d253854891d3e172cbc1affc8469f0",
+      "verification": {
+        "complete": true,
+        "verifier": "/root/verify_ip_union",
+        "input_sha256": "af6253701af74b61acbf4923cc245ead55c369bf8fd66e491a994cf6103586c5",
+        "approved_claim_sha256": "f73d32b11f78673082090c62a63d64e62af842e353b0dcf1814b44d86f8f54f8",
+        "evidence": "VERIFICATION-ARCH-394.json"
+      },
+      "kind": "behavior-defect",
+      "analyst": "/root/analyze_conversion"
+    },
+    "ARCH-401": {
+      "path": "ARCH-401-wasm-tick-counter-window.md",
+      "status": "confirmed",
+      "partition": "PART-517",
+      "sha256": "c6349442b6091f347d96a196885634543d2dcb8140c80078b16455b1d5598f04",
+      "verification": {
+        "complete": true,
+        "verifier": "/root/verify_ip_union",
+        "input_sha256": "7ed8f8920605884bcc5431eb3d0f63740e49c346e2481971ede918d7bb471ea5",
+        "approved_claim_sha256": "2aa56cc69874dca8dd24f3b5d7fdc6948a989362ad130e2a14dc22e16cf33eca",
+        "evidence": "VERIFICATION-ARCH-401.json"
+      },
+      "kind": "behavior-defect",
+      "analyst": "/root/analyze_conversion"
     }
   },
   "decisions": [],
@@ -34401,8 +34595,8 @@
       "action": "Retain full prior reads and scoped approvals; new K8s fixture/status/backend updates require current-source revalidation. Confirmed obsolete fixture finding345 independently checked for resolution. Finish active harness rather than restart unrelated anchors."
     }
   ],
-  "current_fingerprint": "93910657a31737c17726558f707ccce0e901fd11b669f0e948ef71b37a90f339",
-  "current_baseline": "BASELINE-AUDIT-20261011-G.json",
+  "current_fingerprint": "ffe2e6a21dcf399b001d30cd1cd8ff5ae780eee347dc41ceb67fe052dccc6a29",
+  "current_baseline": "BASELINE-AUDIT-20261011-H.json",
   "coordinator_investigation": {
     "dependency_dag": "Read all workspace member manifests, public lib boundaries and representative Gateway/context/body/AI/response seams.",
     "coverage": "Only PART-148 claimed; representative/background reads remain secondary evidence.",
@@ -34412,7 +34606,7 @@
       "scope": "spawn_worker observation closure: SERVICE.lock temporary expires at current assignment before gauge0; original supervision contract requires check/write same critical section. Investigate actual stop/start overlap and tests before candidate."
     }
   },
-  "current_head": "25cc8c34d1edf980399623e951e03ff0b3f069f1",
+  "current_head": "ef69a7804dc6764fed3eb5d725020cf27e88980c",
   "partition_refinement": "Unstarted units use recursive functional subtrees; active assignments and reviewed PART-148 preserved. Nested source fixtures/oracles included.",
   "workflow_evaluation": {
     "reviewer": "/root/verify_seed",
@@ -34571,6 +34765,70 @@
       "source": "/root/analyze_outbound PART439 supporting read",
       "status": "unverified-secondary-lead",
       "lead": "Reload polling failure may compare unknown after-server IDs as changed/equal. Script is not primary source scope; preserve uncredited lead for scoped follow-up, no confirmed defect or coverage claim."
+    },
+    {
+      "id": "external_task_records_removed_20261011_H",
+      "removed": [
+        "tasks/pending/architecture-plugin-session-ai-capability/00-context.md",
+        "tasks/pending/architecture-plugin-session-ai-capability/01-design.md",
+        "tasks/pending/architecture-plugin-session-ai-capability/02-implementation.md",
+        "tasks/pending/architecture-plugin-session-ai-capability/03-subtasks.md",
+        "tasks/pending/architecture-plugin-session-ai-capability/04-result-review.md",
+        "tasks/pending/architecture-plugin-session-ai-capability/05-context-layout-evidence.json",
+        "tasks/pending/architecture-plugin-session-ai-capability/06-context-budget-amendment.md",
+        "tasks/pending/architecture-plugin-session-ai-capability/07-final-result-review.md",
+        "tasks/pending/architecture-plugin-session-ai-capability/amendment-lightweight-verification.json",
+        "tasks/pending/architecture-plugin-session-ai-capability/amendment-verification-results.json",
+        "tasks/pending/architecture-plugin-session-ai-capability/architecture-plugin-session-ai-capability.md",
+        "tasks/pending/architecture-plugin-session-ai-capability/combined-result-source-binding.json",
+        "tasks/pending/architecture-plugin-session-ai-capability/combined-result.diff",
+        "tasks/pending/architecture-plugin-session-ai-capability/context-amendment-source-binding.json",
+        "tasks/pending/architecture-plugin-session-ai-capability/context-size-investigation.json",
+        "tasks/pending/architecture-plugin-session-ai-capability/design-source-binding.json",
+        "tasks/pending/architecture-plugin-session-ai-capability/intake-baseline.json",
+        "tasks/pending/architecture-plugin-session-ai-capability/preliminary-verification.json",
+        "tasks/pending/architecture-plugin-session-ai-capability/result-source-binding.json",
+        "tasks/pending/architecture-plugin-session-ai-capability/result.diff",
+        "tasks/pending/architecture-plugin-session-ai-capability/structural-proof.json",
+        "tasks/pending/architecture-plugin-session-ai-capability/verification-results.json",
+        "tasks/pending/architecture-plugin-session-waf-capability/00-context.md",
+        "tasks/pending/architecture-plugin-session-waf-capability/01-design-binding.json",
+        "tasks/pending/architecture-plugin-session-waf-capability/01-design.md",
+        "tasks/pending/architecture-plugin-session-waf-capability/02-implementation.md",
+        "tasks/pending/architecture-plugin-session-waf-capability/03-subtasks.md",
+        "tasks/pending/architecture-plugin-session-waf-capability/04-astra-deep-review.md",
+        "tasks/pending/architecture-plugin-session-waf-capability/architecture-plugin-session-waf-capability.md",
+        "tasks/pending/architecture-plugin-session-waf-capability/intake-baseline.json",
+        "tasks/pending/architecture-plugin-session-waf-capability/result-source-binding.json",
+        "tasks/pending/architecture-plugin-session-waf-capability/verification-results.json",
+        "tasks/pending/waf-body-inspection-policy/00-context.md",
+        "tasks/pending/waf-body-inspection-policy/01-design.md",
+        "tasks/pending/waf-body-inspection-policy/02-implementation.md",
+        "tasks/pending/waf-body-inspection-policy/03-subtasks.md",
+        "tasks/pending/waf-body-inspection-policy/04-storage-plan.md",
+        "tasks/pending/waf-body-inspection-policy/05-composition-plan.md",
+        "tasks/pending/waf-body-inspection-policy/06-inspection-stop-plan.md",
+        "tasks/pending/waf-body-inspection-policy/07-full-default-plan.md",
+        "tasks/pending/waf-body-inspection-policy/08-acceptance-plan.md",
+        "tasks/pending/waf-body-inspection-policy/09-acceptance.md",
+        "tasks/pending/waf-body-inspection-policy/waf-body-inspection-policy.md",
+        "tasks/pending/waf-optimization-design/01-spec.md",
+        "tasks/pending/waf-optimization-design/02-plan.md",
+        "tasks/pending/waf-optimization-design/03-evidence.md",
+        "tasks/pending/waf-optimization-design/04-review.md",
+        "tasks/pending/waf-optimization-design/README.md",
+        "tasks/pending/waf-optimization-design/source-baseline.json",
+        "tasks/pending/waf-tag-selection/00-context.md",
+        "tasks/pending/waf-tag-selection/01-spec.md",
+        "tasks/pending/waf-tag-selection/02-plan.md",
+        "tasks/pending/waf-tag-selection/03-evidence.md",
+        "tasks/pending/waf-tag-selection/03-subtasks.md",
+        "tasks/pending/waf-tag-selection/04-review.md",
+        "tasks/pending/waf-tag-selection/05-verification.md",
+        "tasks/pending/waf-tag-selection/README.md"
+      ],
+      "historical_acceptance": "TASK-ACCEPTANCE-AI-20261011-G.json remains a dated acceptance receipt. Its removed source task records are historical, not current live links. Preserve externally closed ARCH001; no source drift.",
+      "new_pending_task": "ARCH002 separate value assessment only; no implementation/source changes. Personally read original new task; no closure or automatic approval inferred."
     }
   ],
   "anchor_history": [
@@ -34751,16 +35009,15 @@
   ],
   "resume_dispatch": {
     "analysis_conversion": [
-      "PART-511",
-      "PART-512",
-      "PART-513"
+      "PART-517",
+      "PART-518"
     ],
     "analysis_outbound": [
-      "PART-508",
-      "PART-509",
-      "PART-510"
+      "PART-524",
+      "PART-525",
+      "PART-526"
     ],
-    "independent_verifier": "ARCH-381"
+    "independent_verifier": "ARCH-348 KeyAuth supplemental"
   },
   "pending_supplements": {
     "ARCH-296": [
@@ -34774,7 +35031,8 @@
       "REPORT-PART-501.json",
       "REPORT-PART-504.json",
       "REPORT-PART-508.json",
-      "REPORT-PART-507.json"
+      "REPORT-PART-507.json",
+      "REPORT-PART-511.json"
     ],
     "ARCH-264": [
       "REPORT-PART-471.json",
@@ -34784,12 +35042,10 @@
       "REPORT-PART-508.json",
       "REPORT-PART-507.json"
     ],
-    "ARCH-348": [
-      "REPORT-PART-498.json"
-    ],
     "ARCH-266": [
       "REPORT-PART-481.json",
-      "REPORT-PART-485.json"
+      "REPORT-PART-485.json",
+      "REVALIDATION-PART-525-20261011-H.json"
     ],
     "ARCH-265": [
       "REPORT-PART-505.json"

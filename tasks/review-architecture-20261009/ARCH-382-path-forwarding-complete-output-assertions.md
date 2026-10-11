@@ -1,6 +1,6 @@
 ---
 id: ARCH-382
-status: candidate
+status: confirmed
 kind: behavior-defect
 priority: P3
 partition: PART-503

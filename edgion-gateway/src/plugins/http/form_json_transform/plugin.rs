@@ -15,8 +15,8 @@ use serde_json::{Map, Value};
 use crate::plugins::http::common::{
     form_request_headers_are_supported, json_request_headers_are_supported, CappedWriter,
 };
-use crate::plugins::runtime::traits::session::BodyReadError;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use crate::request_body::BodyReadError;
 
 const INVALID_REQUEST_BODY: &str = "Invalid request body";
 const UNSUPPORTED_MEDIA_TYPE: &str = "Unsupported media type";

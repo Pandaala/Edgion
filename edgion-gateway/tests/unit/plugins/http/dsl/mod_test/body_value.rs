@@ -164,7 +164,7 @@ async fn body_facade_and_exact_upload_reservations_use_one_account() {
 
 #[tokio::test]
 async fn body_facade_factory_failure_keeps_the_scan_reservation() {
-    use crate::plugins::runtime::traits::session::BodyReadError;
+    use crate::request_body::BodyReadError;
     use crate::request_body::{BodyOperationError, Md5Scanner};
 
     let mut session = facade_body_session(b"abc", 1).await;

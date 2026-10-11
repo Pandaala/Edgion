@@ -872,7 +872,8 @@ fn form_json_runtime_builds_and_rejects_fail_open_without_controller() {
 
 #[tokio::test]
 async fn form_json_stock_gate_fails_before_header_or_body_mutation() {
-    use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::request_body::BodyReadError;
     use crate::EdgionHttpContext;
     use edgion_resources::resources::edgion_plugins::FormJsonDirection;
 
@@ -1161,7 +1162,8 @@ async fn json_schema_default_limit_rejects_64_kib_plus_one_before_materializatio
 
 #[tokio::test]
 async fn transcoder_body_admission_preserves_json_errors_and_operator_limit() {
-    use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::request_body::BodyReadError;
     use crate::EdgionHttpContext;
     use base64::{engine::general_purpose::STANDARD, Engine};
     use edgion_resources::grpc_transcoding::GrpcJsonTranscoderConfig;
@@ -1242,7 +1244,8 @@ async fn transcoder_body_admission_preserves_json_errors_and_operator_limit() {
 
 #[tokio::test]
 async fn request_body_buffer_fails_closed_when_capture_is_unimplemented() {
-    use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::request_body::BodyReadError;
     use crate::EdgionHttpContext;
 
     let entry = RequestFilterEntry::new(EdgionPlugin::RequestBodyBuffer(Default::default()));
@@ -1287,7 +1290,8 @@ async fn add_from_request_filters_wraps_wasm_with_operator_body() {
     // the module and fail differently). If the gate were not wired for
     // Wasm, `read_request_body` would never be called by the gate at all
     // and this assertion would not observe a 500 from the gate.
-    use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::request_body::BodyReadError;
     use crate::EdgionHttpContext;
     use edgion_resources::resources::edgion_plugins::plugin_configs::WasmConfig;
     use edgion_resources::resources::edgion_plugins::BodyRequirement;

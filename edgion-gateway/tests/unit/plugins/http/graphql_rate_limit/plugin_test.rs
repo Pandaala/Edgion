@@ -1,6 +1,7 @@
 use super::*;
 use crate::ctx::EdgionHttpContext;
-use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
+use crate::plugins::runtime::traits::session::MockPluginSession;
+use crate::request_body::BodyReadError;
 use http::{HeaderMap, HeaderValue};
 use serde_json::json;
 

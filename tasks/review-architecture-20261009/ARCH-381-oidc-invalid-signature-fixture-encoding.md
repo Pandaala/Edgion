@@ -1,6 +1,6 @@
 ---
 id: ARCH-381
-status: candidate
+status: confirmed
 kind: architecture-debt
 priority: P3
 partition: PART-502
@@ -10,7 +10,7 @@ baseline: 8f1c53149be48bb3de89f8cf43a7f08d7ecff602717ec079f6b7ee316705c306
 
 # Construct an encoded, invalid signature for the OIDC signature-rejection probe
 
-`test_jwks_invalid_signature_returns_401` in `edgion-tests/src/client/suites/edgion_plugins/openid_connect/openid_connect.rs:277` generates an RS256 JWT and changes its last encoded character to `a` (or `b`). The test then accepts any 401 as proof that a tampered signature was rejected. This construction does not preserve the token's encoding contract, so the test does not isolate the signature-verification boundary named by its identity.
+`test_jwks_invalid_signature_returns_401` in `edgion-tests/src/client/suites/edgion_plugins/openid_connect/openid_connect.rs:283` generates an RS256 JWT and changes its last encoded character to `a` (or `b`). The test then accepts any 401 as proof that a tampered signature was rejected. This construction does not preserve the token's encoding contract, so the test does not isolate the signature-verification boundary named by its identity.
 
 The in-repository signing key and matching test-server JWK are a 2048-bit RSA pair. Its 256-byte signature has a 342-character unpadded base64url encoding. The last sextet therefore contains two data bits and four unused zero bits: canonical final characters are `A`, `Q`, `g`, or `w`. Both replacement characters have nonzero unused bits. The probe consequently creates a noncanonical encoding rather than guaranteeing a well-encoded, changed signature. A strict decoder can reject this before cryptographic verification; a decoder that ignores unused bits can instead retain the same final signature byte when its original high bits match the replacement. No fresh dependency execution or upstream decoder behavior is claimed here.
 

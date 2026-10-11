@@ -5,7 +5,7 @@ Status: in progress. Production source is read-only.
 Workflow: `edgion-architecture-review` (personal skill).
 See [plan](PLAN.md), [coverage](COVERAGE.md), [state](STATE.json) and [baseline](BASELINE.json).
 
-Source reviewed: 499 / 1676; 467 primary partitions.
+Source reviewed: 512 / 1676; 467 primary partitions.
 
 | ID | Status | Kind | Optimization |
 | --- | --- | --- | --- |
@@ -139,7 +139,7 @@ Source reviewed: 499 / 1676; 467 primary partitions.
 | ARCH-206 | confirmed | behavior-defect | [ARCH-206 — Keep compiler-owned loop temporaries outside source name resolution](ARCH-206-compiler-private-loop-slots.md) |
 | ARCH-211 | confirmed | behavior-defect | [Charge map key expressions to the parser's existing AST budget](ARCH-211-parser-map-key-node-budget.md) |
 | ARCH-226 | candidate | architecture-debt | [ARCH-226: Borrow unchanged form fields before publishing owned WAF body entries](ARCH-226-waf-form-decoder-scratch.md) |
-| ARCH-227 | confirmed | architecture-debt | [ARCH-227: Commit only surviving transformation indices in the semantic fold](ARCH-227-waf-semantic-reset-output.md) |
+| ARCH-227 | candidate | architecture-debt | [ARCH-227: Commit only surviving transformation indices in the semantic fold](ARCH-227-waf-semantic-reset-output.md) |
 | ARCH-231 | candidate | behavior-defect | [Account canonical WAF arena capacity before publishing the generation](ARCH-231-waf-canonical-arena-capacity.md) |
 | ARCH-232 | candidate | architecture-debt | [Share immutable request-head bytes across WAF collection aliases](ARCH-232-waf-request-head-alias-bytes.md) |
 | ARCH-252 | confirmed | architecture-debt | [Retire the orphan file-based LB verification surface](ARCH-252-orphan-lb-log-analyzer.md) |
@@ -176,12 +176,16 @@ Source reviewed: 499 / 1676; 467 primary partitions.
 | ARCH-355 | confirmed | behavior-defect | [The managed-overlay suite treats structural acceptance as proof that the overlay reference resolved](ARCH-355-managed-overlay-reference-resolution-evidence.md) |
 | ARCH-373 | confirmed | behavior-defect | [Make the LDAP TLS Kubernetes mTLS case reach a certificate-required server](ARCH-373-ldap-kubernetes-required-mtls-fixture.md) |
 | ARCH-377 | confirmed | behavior-defect | [Require the KeyAuth anonymous cases to observe their distinct identities](ARCH-377-key-auth-anonymous-identity-observation.md) |
-| ARCH-381 | candidate | architecture-debt | [Construct an encoded, invalid signature for the OIDC signature-rejection probe](ARCH-381-oidc-invalid-signature-fixture-encoding.md) |
-| ARCH-382 | candidate | behavior-defect | [Require the complete upstream path in PathNormalization forwarding assertions](ARCH-382-path-forwarding-complete-output-assertions.md) |
-| ARCH-383 | candidate | behavior-defect | [Correlate AllConditions assertions with the plugin entry being tested](ARCH-383-condition-target-log-correlation.md) |
+| ARCH-381 | confirmed | architecture-debt | [Construct an encoded, invalid signature for the OIDC signature-rejection probe](ARCH-381-oidc-invalid-signature-fixture-encoding.md) |
+| ARCH-382 | confirmed | behavior-defect | [Require the complete upstream path in PathNormalization forwarding assertions](ARCH-382-path-forwarding-complete-output-assertions.md) |
+| ARCH-383 | confirmed | behavior-defect | [Correlate AllConditions assertions with the plugin entry being tested](ARCH-383-condition-target-log-correlation.md) |
 | ARCH-385 | confirmed | behavior-defect | [Require an observed Admin rejection for malformed ConditionSet probes](ARCH-385-condition-set-observed-admin-rejection.md) |
 | ARCH-386 | confirmed | behavior-defect | [Register the existing ProxyRewrite combined host and header assertion](ARCH-386-proxy-rewrite-combined-case-registration.md) |
 | ARCH-389 | confirmed | behavior-defect | [Preserve the selected topology's Redis reference during quota reordering](ARCH-389-quota-reordering-topology-redis-reference.md) |
+| ARCH-390 | confirmed | behavior-defect | [Distinguish the final RegionRoute jump from the preceding failover message](ARCH-390-region-route-failover-jump-observation.md) |
+| ARCH-393 | confirmed | behavior-defect | [Select the actual mirrored capture before asserting its POST body](ARCH-393-request-mirror-capture-identity.md) |
+| ARCH-394 | confirmed | behavior-defect | [Observe the query before claiming RequestMirror preserves it](ARCH-394-request-mirror-query-observation.md) |
+| ARCH-401 | confirmed | behavior-defect | [Require fresh Wasm tick progress in the observation window](ARCH-401-wasm-tick-counter-window.md) |
 
 ## Current limitations
 

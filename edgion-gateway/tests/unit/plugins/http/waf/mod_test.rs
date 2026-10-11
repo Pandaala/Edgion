@@ -446,7 +446,7 @@ async fn malformed_structured_body_fails_closed_without_payload_logging() {
 
 #[tokio::test]
 async fn gateway_body_cap_failure_maps_to_413() {
-    use crate::plugins::runtime::traits::session::BodyReadError;
+    use crate::request_body::BodyReadError;
 
     let plugin = plugin(
         "SecRule REQUEST_BODY \"@contains blocked\" \"id:5,phase:2,pass\"\n",

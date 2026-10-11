@@ -1,5 +1,6 @@
 use super::*;
-use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
+use crate::plugins::runtime::traits::session::MockPluginSession;
+use crate::request_body::BodyReadError;
 use bytes::Bytes;
 use http::header::CONTENT_TYPE;
 use http::{HeaderMap, HeaderValue};

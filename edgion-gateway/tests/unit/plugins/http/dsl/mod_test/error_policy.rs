@@ -1,8 +1,8 @@
 //! Tests for DslErrorPolicy variants, panic isolation, and fixed BodyAccess handling.
 
 use super::*;
-use crate::plugins::runtime::traits::session::BodyReadError;
 use crate::plugins::runtime::DyeOutcome;
+use crate::request_body::BodyReadError;
 use crate::request_body::BodyStorage;
 use crate::EdgionHttpContext;
 use pingora_core::protocols::http::RequestBodyBuffer;

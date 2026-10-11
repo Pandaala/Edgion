@@ -1,0 +1,49 @@
+{
+  "candidate": "ARCH-401",
+  "complete": true,
+  "verifier": "/root/verify_ip_union",
+  "decision": "confirmed",
+  "input_sha256": "7ed8f8920605884bcc5431eb3d0f63740e49c346e2481971ede918d7bb471ea5",
+  "approved_claim_sha256": "2aa56cc69874dca8dd24f3b5d7fdc6948a989362ad130e2a14dc22e16cf33eca",
+  "evidence": [
+    "Independent unchanged cumulative configured-runtime counters/current probes reuse persistent owner; earlier callback200 can satisfy later threshold despite no new success.",
+    "Bounded baseline/positive checked delta with numeric/reset/deadline failures feasible without guestreset/runtime replacement/production instrumentation. Real fresh-runtime tests do not prove this integration window.",
+    "Body-counter guidance remains body-scoped. Own original rules/index/graded/routing/quiescence/pages/bothroutes freshly personal unchanged. No duplicate/no execution/handshake or scheduling incident."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "edgion-tests/src/client/suites/edgion_plugins/wasm/wasm.rs": {
+      "sha256": "a9f3018afacc7d245ea339feb5ec0c6d2549bd18ca23fb3291d4e390082c6db3",
+      "scope": "Complete427-520 target/preceding request callouts/registered vector523 through EOF."
+    },
+    "edgion-tests/wasm/header-demo/src/lib.rs": {
+      "sha256": "427be5953df582275faaa20a15f86c7c75a6a440134653c7c23dc8583e7b60bb",
+      "scope": "62-157 CAS/rootconfig/tick/callback and183-225 read probes."
+    },
+    "edgion-gateway/src/plugins/http/wasm/vm_manager.rs": {
+      "sha256": "c4bb5992f1a65039adf2dd11c80c517c584d04a69ae5790ec92d1be93dd1336e",
+      "scope": "395-505 owner/shutdown/518-563 reuse/1198-1325 lease-cancel completedfollowup/1340-1368 sharedstore injection."
+    },
+    "edgion-gateway/tests/unit/plugins/http/wasm/vm_manager_test.rs": {
+      "sha256": "803d79693ef58fca26908efeeff437db44213d7ffdd75778bc62ab2411a11335",
+      "scope": "Actual492-534 isolation/1566-1583 sharedvisibility/1700-1735 fresh tick/1790-1852 callback success-failure."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/Wasm/02_EdgionPlugins_wasm_advanced.yaml": {
+      "sha256": "cadb49dced6288e8004544837507b1e6686dcab77166b75b031ad601b72cf361",
+      "scope": "Full local owning origin/grant/stage/deadlines."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/Wasm/02_EdgionPlugins_wasm_advanced.yaml": {
+      "sha256": "9a00b7ae03e8b3e794199ae404236e796e2c67ab780360655c0a02872367bd10",
+      "scope": "Full K8s owning origin/grant/stage/deadline; stale sharing comment not ownership proof."
+    },
+    "skills/04-review/wasm/regression-guards/wasm-body-counter-delta-rerun-safe.md": {
+      "sha256": "d96a18addabe55c9f7248b00badf78aee44b6087df01f4ed784e26aac349a944",
+      "scope": "Full original explicitly body-scoped delta/reset/repeat guidance."
+    },
+    "skills/04-review/wasm/regression-guards/wasm-module-cache-key-runtime-config.md": {
+      "sha256": "7ad0b22400357d0aea1790d072ff36415fd5bb7ad2739b939b19866dbae6ba9a",
+      "scope": "Full configured-instance/generation/stage isolation vs historical sharing."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

@@ -1,7 +1,7 @@
 use super::{budget::Reservation, GrpcTranscodingPlan};
 use crate::plugins::runtime::body_gate::{body_read_failure_result, record_body_read_error_status};
-use crate::plugins::runtime::traits::session::BodyReadError;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use crate::request_body::BodyReadError;
 use async_trait::async_trait;
 use bytes::Bytes;
 use edgion_resources::grpc_transcoding::GrpcDescriptorSource;

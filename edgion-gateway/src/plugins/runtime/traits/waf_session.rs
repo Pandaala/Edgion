@@ -1,7 +1,7 @@
 //! Selected-WAF operations at the plugin/session integration boundary.
 
-use super::session::BodyReadError;
 use crate::ctx::{WafErrorCode, WafLogPhase, WafPhase, WafPhaseClaim};
+use crate::request_body::BodyReadError;
 use edgion_waf::seclang::{PhaseOutcome, Transaction};
 use std::sync::Arc;
 

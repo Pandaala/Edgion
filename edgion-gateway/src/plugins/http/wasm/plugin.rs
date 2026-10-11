@@ -16,10 +16,10 @@ use super::host_abi::{HeaderOp, LocalResponse, WasmPhase, MAP_HTTP_REQUEST_HEADE
 use super::vm_manager::{global_vm_manager, CalloutGrant, ModuleEntry, VmLease, WasmRuntime};
 use crate::observe::metrics::registry::{record_wasm_body_pause_unsupported, record_wasm_fail_mode};
 use crate::plugins::runtime::log::la;
-use crate::plugins::runtime::traits::session::BodyReadError;
 use crate::plugins::runtime::{
     DyeOutcome, PluginLog, PluginSession, RequestFilter, UpstreamResponseBodyFilter, UpstreamResponseFilter,
 };
+use crate::request_body::BodyReadError;
 use edgion_resources::filters::PluginRunningResult;
 
 use edgion_common::link_sys_core::outbound_tls::{

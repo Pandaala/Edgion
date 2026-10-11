@@ -1,0 +1,24 @@
+{
+  "disposition": "implemented",
+  "finding": "ARCH-002",
+  "branch": "feature-08-30",
+  "head": "ef69a7804dc6764fed3eb5d725020cf27e88980c",
+  "source_worktree": "/Volumes/ExtStore/ws6/Edgion-arch002",
+  "destination_worktree": "/Volumes/ExtStore/ws6/Edgion",
+  "reviewer": "/root/body_contract_final_review",
+  "review_decision": "PASS",
+  "reviewed_manifest_sha256": "056eaf01062106f8d3f4206ed412060bdeb088391b1bf45363ae16fc5a744993",
+  "existing_files_preflight": 40,
+  "new_files": 2,
+  "post_transfer_hash_matches": 42,
+  "transfer_checks": [
+    "frozen target baseline and rules unchanged",
+    "new file paths absent before transfer",
+    "all reviewed file hashes identical after transfer",
+    "git diff --check passed",
+    "unique canonical definitions and no old session paths"
+  ],
+  "verification_location": "fresh workspace compile, Clippy, guards and 275 focused tests ran in isolated worktree; byte-identical result transferred to same HEAD",
+  "commit": false,
+  "push": false
+}

@@ -18,10 +18,10 @@ use edgion_waf::seclang::{
 use crate::ctx::{WafErrorCode, WafLogPhase, WafPhase, WafPhaseClaim};
 use crate::plugins::runtime::body_gate::body_read_failure_result;
 use crate::plugins::runtime::log::PluginLog;
-use crate::plugins::runtime::traits::session::BodyReadError;
 use crate::plugins::runtime::traits::{
     PluginSession, PluginSessionHeaderExt, RequestFilter, UpstreamResponse, UpstreamResponseFilter,
 };
+use crate::request_body::BodyReadError;
 
 mod json_capture;
 
@@ -813,7 +813,7 @@ mod tests;
 pub(crate) mod fixture;
 
 struct RawInspectionWindow(u64);
-impl crate::plugins::runtime::traits::session::RequestBodyChunkConsumer for RawInspectionWindow {
+impl crate::request_body::RequestBodyChunkConsumer for RawInspectionWindow {
     fn source_window(&self) -> Option<u64> {
         Some(self.0)
     }

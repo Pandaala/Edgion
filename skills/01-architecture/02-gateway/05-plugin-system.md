@@ -79,6 +79,23 @@ registration/mutation conflicts are checked through replacement consumption, and
 one final PluginLog outcome is added at universal logging. See the
 [transcoder regression boundary](../../04-review/h2-grpc/regression-guards/grpc-json-transcoder-admission-and-outcomes.md).
 
+### Request-body read contract ownership
+
+`request_body/contracts.rs` defines `BodyReadError`, `BodyReadResult`,
+`RequestBodyChunkConsumer`, and `RequestBodySnapshotReader`; import them from
+`crate::request_body`. Storage, state, operations, scanners, plugin adapters and
+feature consumers share this canonical owner. Snapshot readers own one immutable
+logical version and its backing references across awaits and later mutations;
+replay cursors and detached-consumer isolation budgets remain separate.
+
+`PluginSession` consumes these contracts while retaining stage/policy/transport
+operations. `RequestBodyInspectionCapture` remains session-owned, and the
+request-body observer retains its access-log integration. This boundary does not
+make the body subsystem completely independent of plugins. Extend a storage/read
+capability in the body-owned contract and its concrete implementations, then
+migrate actual consumers; do not introduce a session compatibility export or a
+second body cache. See the [ownership decision](../../04-review/http-body/intentional-design/request-body-read-contract-ownership.md).
+
 ### Selected-WAF session capability
 
 `PluginSession::waf()` returns a short mutable borrow of

@@ -1,7 +1,8 @@
 //! Unit tests for `body_gate.rs` (see `super`).
 use super::*;
-use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
+use crate::plugins::runtime::traits::session::MockPluginSession;
 use crate::plugins::runtime::traits::test_helpers::setup_condition_input_mocks;
+use crate::request_body::BodyReadError;
 use crate::EdgionHttpContext;
 use bytes::Bytes;
 use edgion_resources::common::KeyGet;

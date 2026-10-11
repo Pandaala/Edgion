@@ -1,0 +1,101 @@
+{
+  "workspace_check": {
+    "exit_code": 0,
+    "warnings": 0,
+    "log": "/tmp/arch002-check.log"
+  },
+  "workspace_clippy": {
+    "exit_code": 0,
+    "warnings": 0,
+    "log": "/tmp/arch002-clippy.log"
+  },
+  "test_results": [
+    {
+      "command": "cargo test -p edgion-gateway --lib request_body::",
+      "exit_code": 0,
+      "log": "/tmp/arch002-test-0.log",
+      "seconds": 248.91,
+      "passed": 110,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "command": "cargo test -p edgion-gateway --lib plugins::runtime::session_adapter::tests::",
+      "exit_code": 0,
+      "log": "/tmp/arch002-test-1.log",
+      "seconds": 1.89,
+      "passed": 49,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "command": "cargo test -p edgion-gateway --lib plugins::runtime::body_gate::tests::",
+      "exit_code": 0,
+      "log": "/tmp/arch002-test-2.log",
+      "seconds": 0.3,
+      "passed": 27,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "command": "cargo test -p edgion-gateway --lib plugins::http::waf::",
+      "exit_code": 0,
+      "log": "/tmp/arch002-test-3.log",
+      "seconds": 1.54,
+      "passed": 50,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "command": "cargo test -p edgion-gateway --lib plugins::http::request_mirror::",
+      "exit_code": 0,
+      "log": "/tmp/arch002-test-4.log",
+      "seconds": 0.33,
+      "passed": 27,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "command": "cargo test -p edgion-gateway --lib plugins::http::dsl::lang::builtins::body_tests::",
+      "exit_code": 0,
+      "log": "/tmp/arch002-test-5.log",
+      "seconds": 0.31,
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "command": "cargo test -p edgion-gateway --lib plugins::http::dsl::lang::builtins::opaque_body_stream_tests::",
+      "exit_code": 0,
+      "log": "/tmp/arch002-test-6.log",
+      "seconds": 0.31,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "command": "cargo test -p edgion-gateway --lib ctx::request_body_cap_tests::",
+      "exit_code": 0,
+      "log": "/tmp/arch002-test-7.log",
+      "seconds": 0.31,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "test_total": 275,
+  "guards": {
+    "validate_agent_docs.py": "pass",
+    "check_ssa_force.py": "pass",
+    "check_metrics_inventory.py": "pass",
+    "check_pingora_source_policy.py": "pass",
+    "generate_gateway_api_transform_contract.py --check": "pass",
+    "check_unit_test_layout.py": "pass",
+    "check_gateway_no_tracing.py": "pass"
+  },
+  "format": "pass",
+  "diff_check": "pass",
+  "unchanged_contracts": "pass",
+  "unchanged_consumer_test_bodies_after_import_path_format_normalization": "pass",
+  "full_suite": "not run"
+}

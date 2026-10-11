@@ -1,6 +1,7 @@
 use super::*;
-use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
+use crate::plugins::runtime::traits::session::MockPluginSession;
 use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
+use crate::request_body::BodyReadError;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use edgion_resources::resources::edgion_plugins::conditions::{Condition, ConditionSet};

@@ -1,0 +1,88 @@
+{
+  "partition": "PART-524",
+  "reviewer": "/root/analyze_outbound",
+  "complete": true,
+  "baseline": "BASELINE-AUDIT-20261011-H.json",
+  "new_primary_coverage": 0,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_tls/https/https.rs",
+      "sha256": "f67e438115e9d604c23d9c02b824bf3f5925c5b1433d08ac498f705ca118e542",
+      "fully_read": true,
+      "scope": "Full1-152",
+      "disposition": "Three bounded HTTPS connectivity/path cases preserved; actual catchall supplies secure-health marker; selfsigned probe deliberately no trust-verification proof."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_tls/https/mod.rs",
+      "sha256": "d9c3d743e4c84f1bb9d9dc03b115caa1cedfb6d4642c312cf47e557882270ab4",
+      "fully_read": true,
+      "scope": "Full1-4",
+      "disposition": "Export preserved."
+    }
+  ],
+  "support_selected": {
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "6c38b285bdfe354c40d5d2e96d4a07be0b7dc37ce3290197ca75054de23bfa98",
+      "scope": "570-610/713-725 router/binding;3526-3552 current path/header producer replaces shifted old scope."
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "68-135 no_proxy/selfsigned/DNS/client5s;535-582 retained30s case timeout."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "3270-3300 exact+aggregate HTTPS registry/3850-3945 port/context."
+    },
+    "edgion-tests/src/client/suites/edgion_tls/mod.rs": {
+      "sha256": "153105658634e2e984dfb532b5edcffef4000e752bb096ce39a32a6ba29bb055",
+      "scope": "Full retained parent export."
+    },
+    "edgion-tests/k8s/conf/EdgionTls/https/Gateway.yaml": {
+      "sha256": "24b93300f7c54cef0842d0eda494791a58df141a8ca1f099167702239060b76d",
+      "scope": "Full local31190 listener."
+    },
+    "edgion-tests/integration/conf/EdgionTls/https/Gateway.yaml": {
+      "sha256": "24b93300f7c54cef0842d0eda494791a58df141a8ca1f099167702239060b76d",
+      "scope": "Full local31190 listener."
+    },
+    "edgion-tests/k8s/conf/EdgionTls/https/HTTPRoute.yaml": {
+      "sha256": "325935d47d4c4bbb317d3e1cb2165a94c7b843c2bc2930b4dda435efa8252917",
+      "scope": "Full local secure/defaultprefix30001 route unchanged."
+    },
+    "edgion-tests/integration/conf/EdgionTls/https/HTTPRoute.yaml": {
+      "sha256": "325935d47d4c4bbb317d3e1cb2165a94c7b843c2bc2930b4dda435efa8252917",
+      "scope": "Full local secure/defaultprefix30001 route unchanged."
+    },
+    "edgion-tests/k8s/conf/EdgionTls/https/EdgionTls.yaml": {
+      "sha256": "1dd21fd78fc9c42e12a07c5e5a996c81f94c1b16424e41d1f49b876820e2eabc",
+      "scope": "Full K8s hostname/section/Secret binding."
+    },
+    "edgion-tests/integration/conf/EdgionTls/https/EdgionTls.yaml": {
+      "sha256": "1dd21fd78fc9c42e12a07c5e5a996c81f94c1b16424e41d1f49b876820e2eabc",
+      "scope": "Full K8s hostname/section/Secret binding."
+    },
+    "skills/05-testing/01-integration-testing.md": {
+      "sha256": "e260042b508fa0956873d1b3c059531f1733a7c15423c548081afb71703a10e1",
+      "scope": "Full retained original current integration guidance."
+    }
+  },
+  "current_support": {
+    "AGENTS.md": "cba9f532fa1c9f70e6a921e1a2331e7ca78c8210981a072a74cdebf4d85d3e42",
+    "skills/SKILL.md": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+    "skills/00-design-rules.md": "c78c86675ca6c72adb30d0f59727509486b582ef2c7f3318bf14e61745eff055",
+    "skills/04-review/knowledge-routing.md": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+    "edgion-tests/src/server/test_server.rs": "6c38b285bdfe354c40d5d2e96d4a07be0b7dc37ce3290197ca75054de23bfa98",
+    "edgion-tests/src/client/framework.rs": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+    "edgion-tests/src/client/test_client.rs": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+    "edgion-tests/src/client/suites/edgion_tls/mod.rs": "153105658634e2e984dfb532b5edcffef4000e752bb096ce39a32a6ba29bb055",
+    "edgion-tests/k8s/conf/EdgionTls/https/Gateway.yaml": "24b93300f7c54cef0842d0eda494791a58df141a8ca1f099167702239060b76d",
+    "edgion-tests/integration/conf/EdgionTls/https/Gateway.yaml": "24b93300f7c54cef0842d0eda494791a58df141a8ca1f099167702239060b76d",
+    "edgion-tests/k8s/conf/EdgionTls/https/HTTPRoute.yaml": "325935d47d4c4bbb317d3e1cb2165a94c7b843c2bc2930b4dda435efa8252917",
+    "edgion-tests/integration/conf/EdgionTls/https/HTTPRoute.yaml": "325935d47d4c4bbb317d3e1cb2165a94c7b843c2bc2930b4dda435efa8252917",
+    "edgion-tests/k8s/conf/EdgionTls/https/EdgionTls.yaml": "1dd21fd78fc9c42e12a07c5e5a996c81f94c1b16424e41d1f49b876820e2eabc",
+    "edgion-tests/integration/conf/EdgionTls/https/EdgionTls.yaml": "1dd21fd78fc9c42e12a07c5e5a996c81f94c1b16424e41d1f49b876820e2eabc",
+    "skills/05-testing/01-integration-testing.md": "e260042b508fa0956873d1b3c059531f1733a7c15423c548081afb71703a10e1"
+  },
+  "preserved_findings": [],
+  "limits": "Original gates full personal/fresh hashes separately bound. Bothfull topology Gateway/HTTPRoute/EdgionTls/localService/EndpointSlice inspected. Current source change preserves asserted markers;272 other children not this context. No execution/live TLS/newcandidate/support primary credit. Historical receipt retained; unchanged primary coverage restored only after actual current context inspection. Findings are not independently reapproved by the analyst."
+}

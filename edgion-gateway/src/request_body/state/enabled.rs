@@ -7,7 +7,7 @@ use super::super::operation::{
     RawBodyScanner,
 };
 use super::super::BodyStorageView;
-use crate::plugins::runtime::traits::session::{BodyReadError, BodyReadResult, RequestBodySnapshotReader};
+use crate::request_body::{BodyReadError, BodyReadResult, RequestBodySnapshotReader};
 
 #[derive(Default)]
 pub(super) struct Backend {

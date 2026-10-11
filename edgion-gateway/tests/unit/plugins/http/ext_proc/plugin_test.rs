@@ -1117,7 +1117,7 @@ async fn response_header_continue_and_replace_uses_failure_policy() {
 
 #[tokio::test]
 async fn request_body_mutation_failure_replaces_final_success_summary_per_policy() {
-    use crate::plugins::runtime::traits::session::BodyReadError;
+    use crate::request_body::BodyReadError;
     use edgion_common::ext_proc::proto::{body_mutation, BodyMutation, CommonResponse};
 
     for (failure_mode_allow, expected_outcome) in [(true, "fail-open"), (false, "fail-close")] {
@@ -1172,7 +1172,7 @@ async fn request_body_mutation_failure_replaces_final_success_summary_per_policy
 
 #[tokio::test]
 async fn request_body_mutation_failure_deactivates_pending_response_per_policy() {
-    use crate::plugins::runtime::traits::session::BodyReadError;
+    use crate::request_body::BodyReadError;
     use edgion_common::ext_proc::proto::{
         body_mutation, BodyMutation, CommonResponse, HeaderAppendAction, HeaderMutation, HeaderValue, HeaderValueOption,
     };

@@ -1,0 +1,78 @@
+{
+  "partition": "PART-523",
+  "reviewer": "/root/analyze_outbound",
+  "complete": true,
+  "baseline": "BASELINE-AUDIT-20261011-H.json",
+  "new_primary_coverage": 0,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_tls/grpctls/mod.rs",
+      "sha256": "b69c9c2f4da6253221f233055ab0c65e6a12d1801206fea6c1fd18c4cdcc6807",
+      "fully_read": true,
+      "scope": "Full1-3",
+      "disposition": "Private export preserved."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_tls/grpctls/tls.rs",
+      "sha256": "314587ff3422bd1d6bed5262ec6481f66904607deb54c08585daa8609b00d165",
+      "fully_read": true,
+      "scope": "Full1-123 corrects old1-120 scope",
+      "disposition": "Explicit CA/domain/origin targeted listener and real unary assertion correct; mixed aggregate context remains272 selection owner."
+    }
+  ],
+  "support_selected": {
+    "skills/04-review/testing/regression-guards/integration-port-selection-must-fail-closed.md": {
+      "sha256": "c2ff61188030d30484afd0c1323201295fb980755c3e4738fe78dd8eea785b89",
+      "scope": "Full original targeted vs aggregate ownership."
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "535-582 completecase timeout/965-1025 actual mapped port unit to completion."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "3280-3310 dispatch/3850-3945 context/resolver."
+    },
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "6c38b285bdfe354c40d5d2e96d4a07be0b7dc37ce3290197ca75054de23bfa98",
+      "scope": "3573-3619 complete SayHello producer/3748-3767 plaintext upstream registration."
+    },
+    "edgion-tests/integration/conf/EdgionTls/grpctls/GRPCRoute.yaml": {
+      "sha256": "b6306cabd700b9b81d9335ff4ccea3de44d0b8686417999da4ba36b0cb29fd74",
+      "scope": "Full local+identicalK8s actual route independently read."
+    },
+    "edgion-tests/k8s/conf/EdgionTls/grpctls/GRPCRoute.yaml": {
+      "sha256": "b6306cabd700b9b81d9335ff4ccea3de44d0b8686417999da4ba36b0cb29fd74",
+      "scope": "Full local+identicalK8s actual route independently read."
+    },
+    "edgion-tests/k8s/conf/EdgionTls/grpctls/Service.yaml": {
+      "sha256": "539f40a69b37afc096fa21f6a8c32ca1f93cde801b074ae5a672521b2a763365",
+      "scope": "Full K8s selector/endpoint topology."
+    },
+    "edgion-tests/integration/conf/ports.json": {
+      "sha256": "6672942f69329bb6b46de10be535b5b16744c0270e6bc7246eca3d2d5dcf0f7b",
+      "scope": "126-151 canonical31200 mapping."
+    },
+    "edgion-tests/integration/scripts/integration/run_integration.sh": {
+      "sha256": "5a6df789c2a894150691b3f50edf85f7ac055961ee0b1cc230291a6b90f85b76",
+      "scope": "2000-2040/2298-2315 real targeted script selection."
+    }
+  },
+  "current_support": {
+    "AGENTS.md": "cba9f532fa1c9f70e6a921e1a2331e7ca78c8210981a072a74cdebf4d85d3e42",
+    "skills/SKILL.md": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+    "skills/00-design-rules.md": "c78c86675ca6c72adb30d0f59727509486b582ef2c7f3318bf14e61745eff055",
+    "skills/04-review/knowledge-routing.md": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+    "skills/04-review/testing/regression-guards/integration-port-selection-must-fail-closed.md": "c2ff61188030d30484afd0c1323201295fb980755c3e4738fe78dd8eea785b89",
+    "edgion-tests/src/client/framework.rs": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+    "edgion-tests/src/client/test_client.rs": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+    "edgion-tests/src/server/test_server.rs": "6c38b285bdfe354c40d5d2e96d4a07be0b7dc37ce3290197ca75054de23bfa98",
+    "edgion-tests/integration/conf/EdgionTls/grpctls/GRPCRoute.yaml": "b6306cabd700b9b81d9335ff4ccea3de44d0b8686417999da4ba36b0cb29fd74",
+    "edgion-tests/k8s/conf/EdgionTls/grpctls/GRPCRoute.yaml": "b6306cabd700b9b81d9335ff4ccea3de44d0b8686417999da4ba36b0cb29fd74",
+    "edgion-tests/k8s/conf/EdgionTls/grpctls/Service.yaml": "539f40a69b37afc096fa21f6a8c32ca1f93cde801b074ae5a672521b2a763365",
+    "edgion-tests/integration/conf/ports.json": "6672942f69329bb6b46de10be535b5b16744c0270e6bc7246eca3d2d5dcf0f7b",
+    "edgion-tests/integration/scripts/integration/run_integration.sh": "5a6df789c2a894150691b3f50edf85f7ac055961ee0b1cc230291a6b90f85b76"
+  },
+  "preserved_findings": [],
+  "limits": "Original current rules/topics personally read; bothfull Gateway/EdgionTls/GRPCRoute/Service+localEndpointSlice and actual tonic-domain-name decision22e4f1b6130f56d5b211149247869f21610e7c1ccbf89e45184ed6676a5d8ba5 inspected. Explicit domain correct, harness tonic exempt from Gateway backend ban. Existing server metadata preserves Hello, Edgion! assertion. No test/build/handshake/certificate execution/stronger content coverage/newfinding/support credit. Historical receipt retained; unchanged primary coverage restored only after actual current context inspection. Findings are not independently reapproved by the analyst."
+}

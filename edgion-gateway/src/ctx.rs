@@ -3051,14 +3051,11 @@ impl EdgionHttpContext {
         &mut self,
         range: std::ops::Range<usize>,
         replacement: Bytes,
-    ) -> crate::plugins::runtime::traits::session::BodyReadResult {
+    ) -> crate::request_body::BodyReadResult {
         self.request_body.replace_slice(range, replacement).await
     }
 
-    pub fn overwrite_request_body(
-        &mut self,
-        body: Bytes,
-    ) -> Result<(), crate::plugins::runtime::traits::session::BodyReadError> {
+    pub fn overwrite_request_body(&mut self, body: Bytes) -> Result<(), crate::request_body::BodyReadError> {
         self.request_body.overwrite(body)
     }
 

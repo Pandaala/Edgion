@@ -1,0 +1,49 @@
+{
+  "candidate": "ARCH-383",
+  "complete": true,
+  "verifier": "/root/verify_ip_union",
+  "decision": "confirmed-with-revision",
+  "input_sha256": "ff75e3ef2bc566a63e575cd69759dca9f38e8a4bb676cf945d3a4cc9aacc70bd",
+  "approved_claim_sha256": "08ae6ed8489b299584366a103b605bf6617b9345ceb26de6087ba3b88851f143",
+  "evidence": [
+    "Independent current ordinal descriptors, aggregate unrelated runs and unconditional empty-log negative acceptance confirmed; negate:true /health fixture supplies actual polarity witness.",
+    "Stable test aliases and one scoped target are feasible existing mechanism; preserve condition/negation/body descriptor semantics and no new request diagnostic payload.",
+    "Only listener cross-reference revised: current296 approved body is narrower than pending supplemental queue. Both original route fixtures/neighboring alias assertions/Mock/units/topic rules personally read. Static no runtime defect incident."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "edgion-tests/src/client/suites/edgion_plugins/plugin_condition/all_conditions.rs": {
+      "sha256": "1fc6a6d1ea97c5ed9312c727c0260e794d993d5902148f1c2a4dcd1ef410c81f",
+      "scope": "Full aggregate/failure/sample/fallback/vector assertions."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/PluginCondition/EdgionPlugins_default_condition-all-types.yaml": {
+      "sha256": "80dddeaae76ee1c1c9e62250a5f66dfe9e373bfa5a28680a7f97c8d14a9124f6",
+      "scope": "Full independent nonterminating/100percent/probability/negation entries."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/PluginCondition/EdgionPlugins_default_condition-all-types.yaml": {
+      "sha256": "80dddeaae76ee1c1c9e62250a5f66dfe9e373bfa5a28680a7f97c8d14a9124f6",
+      "scope": "Full identical current K8s fixture personally read."
+    },
+    "edgion-gateway/src/plugins/runtime/conditions/evaluator.rs": {
+      "sha256": "9b342831e33c7588d26b279ba776b63aa4374ddabe457cf431fd9cd25715bf4d",
+      "scope": "Compiled construction/ordinal descriptors/skip/run/detail thresholds/negation/probability."
+    },
+    "edgion-gateway/tests/unit/plugins/runtime/conditions/evaluator_test.rs": {
+      "sha256": "135be987cf5608923f09142976c42a1d74bef346a9263cc39304740f463b23ff",
+      "scope": "782-800 actual negated path unit witness."
+    },
+    "edgion-gateway/src/plugins/runtime/conditional_filter.rs": {
+      "sha256": "2862b351c186c58580300dfee4d4e32371a5f2df9f3328f8be90e9bcc4389ad8",
+      "scope": "Request wrapper constructor/alias/full invocation/action:cause; body logless."
+    },
+    "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": {
+      "sha256": "d80096aa53f493497d34dfba80f21f7089bf1ad3086f3b5ab3ff6f1689018c9d",
+      "scope": "2960-3007 alias-before-invocation retention and response context."
+    },
+    "edgion-gateway/src/plugins/runtime/log.rs": {
+      "sha256": "bb8bd2221c1bdc9f3e7d54de0db1b93d659e81918ab92534c24363bb4043db28",
+      "scope": "Fields/serializer/with_alias separate canonical identity."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

@@ -3,8 +3,9 @@ use super::super::vm::{execute_safe, DslErrorPolicy, Vm, VmLimits};
 use super::{body_bytes_to_value, checked_bounded_len, lossy_utf8_output_len};
 use crate::plugins::http::dsl::lang::bytecode::CompiledScript;
 use crate::plugins::http::dsl::runtime::DslRuntime;
-use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
+use crate::plugins::runtime::traits::session::MockPluginSession;
 use crate::plugins::runtime::{PluginLog, PluginSession};
+use crate::request_body::BodyReadError;
 use bytes::Bytes;
 use edgion_resources::filters::PluginRunningResult;
 

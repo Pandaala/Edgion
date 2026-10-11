@@ -19,8 +19,8 @@ use super::rules::{CompiledRules, GuardDecision, RuleSpan};
 use super::spans::{select_spans, GuardSpan, GuardSpanKey, SpanError, SpanLimits};
 use crate::ai::protocols::openai::error::{content_filter_response, openai_error_response, AiProxyError};
 use crate::plugins::http::common::outbound::client::PreparedManagedHttp;
-use crate::plugins::runtime::traits::session::BodyReadError;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use crate::request_body::BodyReadError;
 
 const PLUGIN_NAME: &str = "AiGuard";
 

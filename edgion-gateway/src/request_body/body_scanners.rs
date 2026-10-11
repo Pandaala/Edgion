@@ -3,7 +3,7 @@
 use hmac::{Hmac, Mac};
 use md5::Digest as _;
 
-use crate::plugins::runtime::traits::session::BodyReadError;
+use crate::request_body::BodyReadError;
 use crate::request_body::{BodyOperationError, RawBodyScanner, ScanControl};
 
 pub(crate) struct Md5Scanner(md5::Md5);

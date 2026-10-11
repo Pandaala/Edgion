@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use bytes::Bytes;
 
-use crate::plugins::runtime::traits::session::BodyReadError;
+use crate::request_body::BodyReadError;
 
 /// Maximum number of immutable segments retained by one logical request body.
 pub const MAX_BODY_SEGMENTS: usize = 4_096;

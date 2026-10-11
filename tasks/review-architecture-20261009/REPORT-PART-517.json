@@ -1,0 +1,57 @@
+{
+  "partition": "PART-517",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/wasm/mod.rs",
+      "sha256": "e8ba4063703d02e295f591289e59db3990ac580913ca6334fc0e1959c9bb79b2",
+      "fully_read": true,
+      "disposition": "Full1-3; Export accepted."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/wasm/wasm.rs",
+      "sha256": "a9f3018afacc7d245ea339feb5ec0c6d2549bd18ca23fb3291d4e390082c6db3",
+      "fully_read": true,
+      "disposition": "Full1-541 three chunks; All9 registered guest/header/localreply/trap recovery/callout grant/tick cases read.401 lifetime-counter observation gap; performance smoke only stated header/mean, no payload guarantee."
+    }
+  ],
+  "candidates": [
+    "ARCH-401"
+  ],
+  "support_selected": {
+    "edgion-tests/wasm/header-demo/src/lib.rs": {
+      "sha256": "427be5953df582275faaa20a15f86c7c75a6a440134653c7c23dc8583e7b60bb",
+      "scope": "60-145/190-218 actual cumulative CAS/root/callback200/probe reads."
+    },
+    "edgion-gateway/src/plugins/http/wasm/vm_manager.rs": {
+      "sha256": "c4bb5992f1a65039adf2dd11c80c517c584d04a69ae5790ec92d1be93dd1336e",
+      "scope": "660-699/1187-1273 perentry shareddata/persistent task/lease/callout."
+    },
+    "edgion-gateway/tests/unit/plugins/http/wasm/vm_manager_test.rs": {
+      "sha256": "803d79693ef58fca26908efeeff437db44213d7ffdd75778bc62ab2411a11335",
+      "scope": "1395-1498/1700-1720/1790-1869 actual guest/driver/fresh runtime/tick/success/failure units."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/Wasm/02_EdgionPlugins_wasm_advanced.yaml": {
+      "sha256": "cadb49dced6288e8004544837507b1e6686dcab77166b75b031ad601b72cf361",
+      "scope": "Full1-51 local request origin/grant vsresponse."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/Wasm/02_EdgionPlugins_wasm_advanced.yaml": {
+      "sha256": "9a00b7ae03e8b3e794199ae404236e796e2c67ab780360655c0a02872367bd10",
+      "scope": "Full1-53 K8s DNS origin/grant; stale sharedcache comment prose limit."
+    },
+    "skills/04-review/wasm/regression-guards/wasm-body-counter-delta-rerun-safe.md": {
+      "sha256": "d96a18addabe55c9f7248b00badf78aee44b6087df01f4ed784e26aac349a944",
+      "scope": "Full1-68 original explicitly body-scoped decision/cumulative rationale."
+    },
+    "skills/04-review/wasm/regression-guards/wasm-module-cache-key-runtime-config.md": {
+      "sha256": "7ad0b22400357d0aea1790d072ff36415fd5bb7ad2739b939b19866dbae6ba9a",
+      "scope": "Full1-87 current instance/generation isolation."
+    },
+    "skills/04-review/wasm/regression-guards/tick-quiescence-on-zero-reference-eviction.md": {
+      "sha256": "9e05680dec79c5db7d5458b80bf079f3ee3e7faba39197d8e7a149bbce30febc",
+      "scope": "Full1-78 recovered after truncated combined output; original cancel/publication/lease/epochs."
+    }
+  },
+  "limits": "All4local/5K8s static YAML full; registry2740-2745/wrapper300-317/auth server4545-4627/body callback original read. Personal original rules/index/graded/routing/topics fresh unchanged. No duplicate current runtime ownership root; bounded401 observation only. No execution/writes/compiled-artifact equivalence/physical restart claims; support primary0."
+}

@@ -15,8 +15,8 @@ use tokio::sync::Notify;
 use crate::link_sys::providers::redis::RedisLinkClient;
 use crate::link_sys::runtime::store::get_redis_client;
 use crate::plugins::http::common::outbound::call::stream_body_capped;
-use crate::plugins::runtime::traits::session::{BodyReadError, RequestBodySnapshotReader};
 use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt};
+use crate::request_body::{BodyReadError, RequestBodySnapshotReader};
 
 use super::super::runtime::{dsl_http_client, DslRuntime};
 use super::body_ops::body_access_error;

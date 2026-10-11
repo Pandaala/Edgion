@@ -329,7 +329,7 @@ impl AiProxy {
         let before_body_generation = session.ctx().request_body.generation();
         let body = match session.read_request_body(None).await {
             Ok(body) => body,
-            Err(crate::plugins::runtime::traits::session::BodyReadError::BufferLimitExceeded { .. }) => {
+            Err(crate::request_body::BodyReadError::BufferLimitExceeded { .. }) => {
                 return Self::reject(session, log, "body-too-large", AiProxyError::RequestTooLarge);
             }
             Err(_) => return Self::reject(session, log, "body-unavailable", AiProxyError::BackendUnavailable),

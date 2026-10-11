@@ -1,6 +1,6 @@
 ---
 id: ARCH-227
-status: confirmed
+status: candidate
 kind: architecture-debt
 priority: P3
 partition: PART-169

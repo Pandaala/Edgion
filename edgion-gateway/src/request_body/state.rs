@@ -6,7 +6,7 @@ use bytes::Bytes;
 use super::operation::{
     BodyOperationError, BodyScanResult, BodyTextOperation, BodyTextResult, BoundedTextResult, RawBodyScanner,
 };
-use crate::plugins::runtime::traits::session::{BodyReadError, BodyReadResult, RequestBodySnapshotReader};
+use crate::request_body::{BodyReadError, BodyReadResult, RequestBodySnapshotReader};
 
 mod enabled;
 

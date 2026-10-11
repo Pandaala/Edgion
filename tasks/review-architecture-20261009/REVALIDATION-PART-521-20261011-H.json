@@ -1,0 +1,85 @@
+{
+  "partition": "PART-521",
+  "reviewer": "/root/analyze_outbound",
+  "complete": true,
+  "baseline": "BASELINE-AUDIT-20261011-H.json",
+  "new_primary_coverage": 0,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_tls/cipher/cipher.rs",
+      "sha256": "22a8123de4fb21f1698bac263a323409ecbec582614f924cfe8e77f0739d7ce9",
+      "fully_read": true,
+      "scope": "Full1-483 two chunks",
+      "disposition": "282 preserved: four positive probes lack complete exact-policy negotiation evidence, stricter negative/sharedSNI cases limit scope; ten-second watchdog retained."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_tls/cipher/mod.rs",
+      "sha256": "a1fdf626b4069dc41dccb9d503913d89719e7e0dd57b08698e1a6af4b7ab6b83",
+      "fully_read": true,
+      "scope": "Full1-4",
+      "disposition": "Private export preserved."
+    }
+  ],
+  "support_selected": {
+    "skills/04-review/tls/regression-guards/cipher-fail-closed.md": {
+      "sha256": "6c322c896f82fdc2152c079a4340f85807e0debc9c874918b95b0e6caa3cbeda",
+      "scope": "Full original pre-identity invariant; historical source signatures not substituted for current."
+    },
+    "edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs": {
+      "sha256": "7c1223fe27e46a98d67c9d8bc604b0b109b2bd631cba3598f95fb83b6837205e",
+      "scope": "673-743 operator/FIPS/default ordering;1140-1172 strict BoringSSL consumer."
+    },
+    "edgion-gateway/tests/unit/tls/runtime/gateway/tls_pingora_test.rs": {
+      "sha256": "e965b10103a32353290fa2bd5822bce4803cddd498f9ef8246fedc6e44437a80",
+      "scope": "425-461 actual complete uncompilable operator cipher pre-identity rejection test."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "3300-3330 registry/3846-3880 current fail-closed port."
+    },
+    "edgion-tests/k8s/conf/EdgionTls/cipher/EdgionTls_cipher_legacy.yaml": {
+      "sha256": "10ab9c559ed086b974834cdf490186e56133fcfad1b725849569cd7ef41aeeec",
+      "scope": "Full actual four-cipher set."
+    },
+    "edgion-tests/integration/conf/EdgionTls/cipher/EdgionTls_cipher_legacy.yaml": {
+      "sha256": "10ab9c559ed086b974834cdf490186e56133fcfad1b725849569cd7ef41aeeec",
+      "scope": "Full actual four-cipher set."
+    },
+    "edgion-tests/k8s/conf/EdgionTls/cipher/EdgionTls_cipher_modern.yaml": {
+      "sha256": "c274f96e6ad70d67c8cf29fe3a0d8ab8bc50dcb4c611664cb6d435d375530a56",
+      "scope": "Full actual four-cipher set with ECDSA."
+    },
+    "edgion-tests/integration/conf/EdgionTls/cipher/EdgionTls_cipher_modern.yaml": {
+      "sha256": "c274f96e6ad70d67c8cf29fe3a0d8ab8bc50dcb4c611664cb6d435d375530a56",
+      "scope": "Full actual four-cipher set with ECDSA."
+    },
+    "edgion-tests/k8s/conf/EdgionTls/cipher/Gateway.yaml": {
+      "sha256": "ce9a0b0b0840b49738ec3120ec1fcb6bb40d2ab69e1e94464a1676434011bf36",
+      "scope": "Full K8s unchanged three physical listeners."
+    },
+    "tasks/review-architecture-20261009/ARCH-282-cipher-positive-negotiation-evidence.md": {
+      "sha256": "cc502ddc4ae93192a175e641a54cc1965c0e26c76ae824780437dcecf4046fd2",
+      "scope": "Full exact current existing finding; no extension/rewrite."
+    }
+  },
+  "current_support": {
+    "AGENTS.md": "cba9f532fa1c9f70e6a921e1a2331e7ca78c8210981a072a74cdebf4d85d3e42",
+    "skills/SKILL.md": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+    "skills/00-design-rules.md": "c78c86675ca6c72adb30d0f59727509486b582ef2c7f3318bf14e61745eff055",
+    "skills/04-review/knowledge-routing.md": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+    "skills/04-review/tls/regression-guards/cipher-fail-closed.md": "6c322c896f82fdc2152c079a4340f85807e0debc9c874918b95b0e6caa3cbeda",
+    "edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs": "7c1223fe27e46a98d67c9d8bc604b0b109b2bd631cba3598f95fb83b6837205e",
+    "edgion-gateway/tests/unit/tls/runtime/gateway/tls_pingora_test.rs": "e965b10103a32353290fa2bd5822bce4803cddd498f9ef8246fedc6e44437a80",
+    "edgion-tests/src/client/test_client.rs": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+    "edgion-tests/k8s/conf/EdgionTls/cipher/EdgionTls_cipher_legacy.yaml": "10ab9c559ed086b974834cdf490186e56133fcfad1b725849569cd7ef41aeeec",
+    "edgion-tests/integration/conf/EdgionTls/cipher/EdgionTls_cipher_legacy.yaml": "10ab9c559ed086b974834cdf490186e56133fcfad1b725849569cd7ef41aeeec",
+    "edgion-tests/k8s/conf/EdgionTls/cipher/EdgionTls_cipher_modern.yaml": "c274f96e6ad70d67c8cf29fe3a0d8ab8bc50dcb4c611664cb6d435d375530a56",
+    "edgion-tests/integration/conf/EdgionTls/cipher/EdgionTls_cipher_modern.yaml": "c274f96e6ad70d67c8cf29fe3a0d8ab8bc50dcb4c611664cb6d435d375530a56",
+    "edgion-tests/k8s/conf/EdgionTls/cipher/Gateway.yaml": "ce9a0b0b0840b49738ec3120ec1fcb6bb40d2ab69e1e94464a1676434011bf36",
+    "tasks/review-architecture-20261009/ARCH-282-cipher-positive-negotiation-evidence.md": "cc502ddc4ae93192a175e641a54cc1965c0e26c76ae824780437dcecf4046fd2"
+  },
+  "preserved_findings": [
+    "ARCH-282"
+  ],
+  "limits": "All14 topology cipher YAMLs full/runner current/TLS originals/rules personally read. No OpenSSL/build/test/live TLS execution, dormant Gateway rustls excluded; current cold-rendered operator cipher preserves original guard. No new candidate/support credit. Historical receipt retained; unchanged primary coverage restored only after actual current context inspection. Findings are not independently reapproved by the analyst."
+}

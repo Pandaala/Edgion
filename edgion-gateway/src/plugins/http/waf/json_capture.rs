@@ -1,6 +1,6 @@
 //! Awaited structured inspection through the canonical request-body capture seam.
 use super::*;
-use crate::plugins::runtime::traits::session::RequestBodyChunkConsumer;
+use crate::request_body::RequestBodyChunkConsumer;
 use bytes::Bytes;
 use edgion_waf::seclang::{
     JsonInspectionSession, XmlInspectionLimits, XmlInspectionSession, XmlStreamError, XmlStreamLimit,
