@@ -55,3 +55,12 @@ RequestMirrorReferenceGrant	EdgionPlugins/RequestMirror	DynamicTest/initial	edgi
 RegionRouteValidation	EdgionPlugins/RegionRoute/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-test	rrv-small
 TlsRoutePluginsReload	TLSRoute/StreamPlugins/DynamicTest	routes	tlsroutes.gateway.networking.k8s.io	tlsroute	edgion-test	tls-sp-reload-terminate
 RequestIdDynamic	EdgionPlugins/RequestId/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	request-id-dynamic
+GraphqlGuardDynamic	EdgionPlugins/GraphqlGuard/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	graphql-guard-dynamic
+GraphqlSafelistDynamic	EdgionPlugins/GraphqlSafelist/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	graphql-safelist-dynamic
+GraphqlOperationRouterDynamic	EdgionPlugins/GraphqlOperationRouter/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	graphql-router-dynamic
+GraphqlRateLimitDynamic	EdgionPlugins/GraphqlRateLimit/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	graphql-rate-limit-dynamic
+GrpcJsonTranscoderDynamic	EdgionPlugins/GrpcJsonTranscoder/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	grpc-transcoder-dynamic
+DslXmlDynamic	EdgionPlugins/DslBody/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	dsl-xml-dynamic
+WafExpensiveChecks	EdgionPlugins/Waf/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	waf-dynamic
+AiMessagesBinding	EdgionBackend/Messages/DynamicTest	updates/reset	edgionbackends.edgion.io	edgionbackend	edgion-test	messages-provider
+AiResponsesContinuation	EdgionBackend/Responses/DynamicTest	updates/reset	edgionbackends.edgion.io	edgionbackend	edgion-test	responses-provider

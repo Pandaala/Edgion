@@ -1,0 +1,85 @@
+# Rust build artifacts
+target/**
+!target/
+!target/*/
+!target/*/*/
+!target/**/edgion-gateway
+!target/**/edgion-controller
+!target/**/edgion-cli
+!target/**/test_server
+!target/**/test_client
+!target/**/cache_residue
+!target/**/ext_proc_external_processor
+tmp/
+.claude/
+.superpowers/
+**/*.rs.bk
+**/*.pdb
+
+# Cargo files (except Cargo.toml and Cargo.lock which are needed)
+.cargo/
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.iml
+.project
+.settings/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs and runtime files
+logs/
+*.log
+integration_testing/
+runtime/
+
+# Test reports
+test_report.json
+*_report.json
+*.txt
+
+# Test certificates (auto-generated)
+edgion-tests/certs/
+edgion-tests/integration/conf/Secret_*.yaml
+
+# Documentation (not needed in image)
+docs/
+*.md
+!README.md
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# Docker
+.dockerignore
+docker-compose*.yml
+
+# Development tools (build/check scripts — not needed in image build context)
+cicd/*.sh
+cicd/checks/
+
+# Testing only (keep edgion-tests/ for test_server/test_client builds)
+tests/
+
+# License files
+LICENSE
+LICENSE-*
+
+# Backup files
+*.bak
+*.backup
+*.old

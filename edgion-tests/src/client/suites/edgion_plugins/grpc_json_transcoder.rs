@@ -25,13 +25,20 @@ async fn call_traced(
     fixture: Option<&str>,
     marker: Option<&str>,
 ) -> Result<(u16, String, String), String> {
-    let target: std::net::IpAddr = ctx
-        .target_host
-        .parse()
-        .map_err(|_| "fixture target must be an IP".to_owned())?;
+    let targets = tokio::time::timeout(
+        Duration::from_secs(3),
+        tokio::net::lookup_host((ctx.target_host.as_str(), 31180)),
+    )
+    .await
+    .map_err(|_| "fixture target lookup timed out".to_owned())?
+    .map_err(|error| format!("fixture target lookup failed: {error}"))?
+    .collect::<Vec<_>>();
+    if targets.is_empty() {
+        return Err("fixture target resolved to no addresses".into());
+    }
     let builder = reqwest::Client::builder()
         .no_proxy()
-        .resolve(host, std::net::SocketAddr::new(target, 31180))
+        .resolve_to_addrs(host, &targets)
         .timeout(Duration::from_secs(10));
     let client = if h2 {
         builder.http2_prior_knowledge()
@@ -542,11 +549,12 @@ impl TestSuite for GrpcJsonTranscoderDynamicSuite {
                         Ok(r) => r,
                         Err(e) => return TestResult::failed(start.elapsed(), e),
                     };
-                    let accepted = resource["status"]["conditions"].as_array().is_some_and(|conditions| {
-                        conditions
-                            .iter()
-                            .any(|c| c["type"] == "Accepted" && c["status"] == (if valid { "True" } else { "False" }))
-                    });
+                    let accepted =
+                        helpers::controller_local_conditions(&resource["status"]).is_some_and(|conditions| {
+                            conditions.iter().any(|c| {
+                                c["type"] == "Accepted" && c["status"] == (if valid { "True" } else { "False" })
+                            })
+                        });
                     if !accepted {
                         return TestResult::failed(start.elapsed(), "descriptor status has not converged".into());
                     }

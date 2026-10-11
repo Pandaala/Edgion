@@ -11,6 +11,7 @@
 //   2. linksys_invalid_empty_endpoints_rejected → Accepted=False/Invalid, message contains "endpoints"
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use crate::suites::status::helpers::controller_local_conditions;
 use std::time::Instant;
 
 const NS: &str = "edgion-test";
@@ -50,7 +51,7 @@ async fn fetch_conditions(ctx: &TestContext, name: &str) -> Result<Vec<serde_jso
         match req.send().await {
             Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
                 Ok(body) if body["success"].as_bool().unwrap_or(false) => {
-                    if let Some(conditions) = body["data"]["status"]["conditions"].as_array() {
+                    if let Some(conditions) = controller_local_conditions(&body["data"]["status"]) {
                         if !conditions.is_empty() {
                             return Ok(conditions.clone());
                         }
@@ -148,7 +149,7 @@ impl LinkSysStatusTestSuite {
                         match req.send().await {
                             Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
                                 Ok(body) if body["success"].as_bool().unwrap_or(false) => {
-                                    if let Some(conditions) = body["data"]["status"]["conditions"].as_array() {
+                                    if let Some(conditions) = controller_local_conditions(&body["data"]["status"]) {
                                         if let Some(c) = find_condition(conditions, "Accepted") {
                                             if c["status"].as_str() == Some("False")
                                                 && c["reason"].as_str() == Some("Invalid")

@@ -51,7 +51,7 @@ async fn connection_request(
 
 async fn connection_captures(ctx: &TestContext, trace_id: &str) -> Result<Vec<Value>, &'static str> {
     let mut captures = Vec::new();
-    for host in mirror_backend_hosts(ctx) {
+    for host in connection_backend_hosts(ctx) {
         let response = ctx
             .http_client
             .get(format!(
@@ -187,7 +187,7 @@ async fn cleanup_connection_nomination(ctx: &TestContext, traces: &[String; 5]) 
     // Continue clearing observations even if recovery fails.
     let mut result = wait_connection_endpoint(ctx, &traces[4]).await;
 
-    for host in mirror_backend_hosts(ctx) {
+    for host in connection_backend_hosts(ctx) {
         let reset = ctx
             .http_client
             .get(format!("http://{host}:30001/mirror/reset"))
@@ -326,6 +326,15 @@ async fn assert_fail_closed(ctx: TestContext, host: &str) -> TestResult {
         ),
         Err(error) => TestResult::failed(start.elapsed(), format!("Request failed: {error}")),
     }
+}
+
+fn connection_backend_hosts(ctx: &TestContext) -> Vec<String> {
+    if let Ok(host) = std::env::var("EDGION_TEST_CREDENTIAL_CONNECTION_BACKEND_HOST") {
+        if !host.trim().is_empty() {
+            return vec![host];
+        }
+    }
+    mirror_backend_hosts(ctx)
 }
 
 fn mirror_backend_hosts(ctx: &TestContext) -> Vec<String> {

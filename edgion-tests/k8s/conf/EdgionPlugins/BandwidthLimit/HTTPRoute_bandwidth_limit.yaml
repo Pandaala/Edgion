@@ -52,3 +52,25 @@ spec:
         - name: test-http
           namespace: edgion-test
           port: 30001
+
+    # 3. Selected BackendRef Scope Test
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/bandwidth-limit/backend-scope
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplaceFullPath
+              replaceFullPath: /echo
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+          filters:
+            - type: ExtensionRef
+              extensionRef:
+                group: edgion.io
+                kind: EdgionPlugins
+                name: bandwidth-limit-backend

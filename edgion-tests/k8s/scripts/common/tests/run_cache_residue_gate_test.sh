@@ -82,6 +82,8 @@ JSON
           '--controller-token integration-controller-admin-token-0123456789' \
           '--gateway-token integration-gateway-admin-token-0123456789' \
           '--timeout-secs 75' \
+          "--wipe-timeout-secs ${FAKE_EXPECTED_WIPE_TIMEOUT:-300}" \
+          '--report-wipe-inventory' \
           '--ignore-controller-configmap app/kube-root-ca.crt' \
           '--ignore-controller-configmap app2/kube-root-ca.crt' \
           '--ignore-controller-conf-sync-secret edgion-system/edgion-conf-sync-ca' \
@@ -120,8 +122,9 @@ run_case() {
   local expected_rc="$1"
   local output_file="$2"
   local error_file="$3"
+  shift 3
   set +e
-  "$HELPER" > "$output_file" 2> "$error_file"
+  "$HELPER" "$@" > "$output_file" 2> "$error_file"
   local actual_rc=$?
   set -e
   if [ "$actual_rc" -ne "$expected_rc" ]; then
@@ -159,14 +162,32 @@ unset FAKE_VALIDATOR_MODE FAKE_MISSING_BINARY FAKE_NO_CLIENT_POD FAKE_MISSING_EN
 run_case 0 "$OUTPUT_FILE" "$ERROR_FILE"
 assert_protocol PASS 0 clean "$OUTPUT_FILE"
 
+# A custom wipe deadline does not change the polling deadline.
+export FAKE_EXPECTED_WIPE_TIMEOUT=420
+run_case 0 "$OUTPUT_FILE" "$ERROR_FILE" --wipe-timeout-secs 420
+assert_protocol PASS 0 clean "$OUTPUT_FILE"
+unset FAKE_EXPECTED_WIPE_TIMEOUT
+
+# Invalid deadlines fail before any cluster read or validator execution.
+for value in 0 invalid; do
+  : > "$CALL_LOG"
+  export WIPE_TIMEOUT_SECS="$value"
+  run_case 2 "$OUTPUT_FILE" "$ERROR_FILE"
+  [ ! -s "$CALL_LOG" ]
+  grep -q -- '--wipe-timeout-secs must be a positive integer' "$ERROR_FILE"
+done
+unset WIPE_TIMEOUT_SECS
+
 export FAKE_VALIDATOR_MODE=residue
 run_case 1 "$OUTPUT_FILE" "$ERROR_FILE"
 assert_protocol FAIL 1 residue "$OUTPUT_FILE"
 grep -q 'Cache residue detected' "$ERROR_FILE"
 
 export FAKE_VALIDATOR_MODE=infrastructure
+: > "$CALL_LOG"
 run_case 1 "$OUTPUT_FILE" "$ERROR_FILE"
 assert_protocol FAIL 2 infrastructure "$OUTPUT_FILE"
+[ "$(grep -c -- ' -- /usr/local/bin/cache_residue ' "$CALL_LOG")" -eq 1 ]
 
 export FAKE_VALIDATOR_MODE=unexpected
 run_case 1 "$OUTPUT_FILE" "$ERROR_FILE"

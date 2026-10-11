@@ -1,5 +1,6 @@
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use crate::suites::edgion_plugins::hmac_test_utils::build_hmac_headers;
+use crate::suites::status::helpers::controller_local_conditions;
 use bytes::Bytes;
 use sha2::{Digest, Sha256};
 use std::future::poll_fn;
@@ -1801,8 +1802,7 @@ async fn fetch_body_dynamic_accepted(ctx: &TestContext) -> Result<(String, Strin
         .json::<serde_json::Value>()
         .await
         .map_err(|error| format!("Status response was not JSON: {error}"))?;
-    let condition = body["data"]["status"]["conditions"]
-        .as_array()
+    let condition = controller_local_conditions(&body["data"]["status"])
         .and_then(|conditions| {
             conditions
                 .iter()

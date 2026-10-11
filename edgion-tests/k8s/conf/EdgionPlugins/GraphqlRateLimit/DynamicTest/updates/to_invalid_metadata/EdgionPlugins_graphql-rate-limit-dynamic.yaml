@@ -1,0 +1,31 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: graphql-rate-limit-dynamic
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      alias: cost-budget
+      type: GraphqlRateLimit
+      config:
+        schema: |
+          type Query { users(first: Int = 10): [User!]! }
+          type Mutation { users(first: Int = 10): [User!]! }
+          type User { name: String! @deprecated(reason:null) }
+          scalar Date @specifiedBy(url:"https://example.com/date")
+        costRules:
+          - field: Query.users
+            weight: 5
+            multipliers: [first]
+          - field: Mutation.users
+            multipliers: [first]
+        redisRef: "edgion-default/redis-test"
+        key:
+          - type: header
+            name: X-Graphql-Key
+        policies:
+          - rate: 1000
+            interval: "2h"
+            algorithm: FixedWindow
+        requestTimeout: "2s"

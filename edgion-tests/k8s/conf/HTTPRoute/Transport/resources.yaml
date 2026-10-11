@@ -118,6 +118,16 @@ spec:
     - matches:
         - path:
             type: PathPrefix
+            value: /lifecycle
+      timeouts:
+        backendRequest: 0s
+      backendRefs:
+        - name: test-transport-h2
+          namespace: edgion-test
+          port: 30031
+    - matches:
+        - path:
+            type: PathPrefix
             value: /timeout
       timeouts:
         backendRequest: 2s
@@ -173,3 +183,287 @@ spec:
         - name: test-transport-h2
           namespace: edgion-test
           port: 30031
+
+---
+# Force the canonical BodyStorage owner without changing the payload.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: transport-retry-cache
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: transport-retry-cache
+        source: |
+          if req.body.sha256() != req.header("x-expected-body-sha256") {
+            return deny(422, "retry body digest mismatch")
+          }
+        errorPolicy: deny
+
+---
+# P090-008: explicit policy and opt-in controls on the shared transport topology.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: transport-retry-optin-h1
+  namespace: edgion-default
+  annotations:
+    edgion.io/retry-non-idempotent: "true"
+spec:
+  parentRefs:
+    - name: transport-gateway
+      namespace: edgion-test
+  hostnames:
+    - "transport-retry-optin-h1.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /cached
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: transport-retry-cache
+      backendRefs:
+        - name: test-transport-h1
+          namespace: edgion-test
+          port: 30030
+    - backendRefs:
+        - name: test-transport-h1
+          namespace: edgion-test
+          port: 30030
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: transport-retry-policy-h1
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: transport-gateway
+      namespace: edgion-test
+  hostnames:
+    - "transport-retry-policy-h1.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /limited
+      retry:
+        attempts: 1
+        codes: [503]
+      backendRefs:
+        - name: test-transport-h1
+          namespace: edgion-test
+          port: 30030
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /deadline
+      retry:
+        attempts: 5
+      timeouts:
+        request: "1s"
+        backendRequest: "1s"
+      backendRefs:
+        - name: test-transport-h1
+          namespace: edgion-test
+          port: 30030
+    - retry:
+        attempts: 1
+        codes: [503]
+      timeouts:
+        request: "4s"
+        backendRequest: "1s"
+      backendRefs:
+        - name: test-transport-h1
+          namespace: edgion-test
+          port: 30030
+
+---
+# P090-008: explicit policy and opt-in controls on the shared transport topology.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: transport-retry-optin-h2
+  namespace: edgion-default
+  annotations:
+    edgion.io/retry-non-idempotent: "true"
+spec:
+  parentRefs:
+    - name: transport-gateway
+      namespace: edgion-test
+  hostnames:
+    - "transport-retry-optin-h2.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /cached
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: transport-retry-cache
+      backendRefs:
+        - name: test-transport-h2
+          namespace: edgion-test
+          port: 30031
+    - backendRefs:
+        - name: test-transport-h2
+          namespace: edgion-test
+          port: 30031
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: transport-retry-policy-h2
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: transport-gateway
+      namespace: edgion-test
+  hostnames:
+    - "transport-retry-policy-h2.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /limited
+      retry:
+        attempts: 1
+        codes: [503]
+      backendRefs:
+        - name: test-transport-h2
+          namespace: edgion-test
+          port: 30031
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /deadline
+      retry:
+        attempts: 5
+      timeouts:
+        request: "1s"
+        backendRequest: "1s"
+      backendRefs:
+        - name: test-transport-h2
+          namespace: edgion-test
+          port: 30031
+    - retry:
+        attempts: 1
+        codes: [503]
+      timeouts:
+        request: "4s"
+        backendRequest: "1s"
+      backendRefs:
+        - name: test-transport-h2
+          namespace: edgion-test
+          port: 30031
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: transport-stall-h1
+  namespace: edgion-test
+spec:
+  ports:
+  - port: 30030
+    targetPort: 30030
+    protocol: TCP
+  selector:
+    app: edgion-sequence-test-server
+
+---
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: transport-stall-h1
+  namespace: edgion-test
+spec:
+  targetRefs:
+  - kind: Service
+    name: transport-stall-h1
+  outlierDetection:
+    consecutiveErrors: 100
+    consecutiveGatewayErrors: 100
+    consecutiveLocalOriginFailures: 1
+    ejectionTime: 1s
+    maxEjectionTime: 1s
+    maxEjectionPercent: 0
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: transport-stall-h1
+  namespace: edgion-test
+spec:
+  parentRefs:
+  - name: transport-gateway
+  hostnames:
+  - transport-stall-h1.example.com
+  rules:
+  - timeouts:
+      backendRequest: 120s
+    backendRefs:
+    - name: transport-stall-h1
+      port: 30030
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: transport-stall-h2
+  namespace: edgion-test
+spec:
+  ports:
+  - port: 30031
+    targetPort: 30031
+    protocol: TCP
+    appProtocol: kubernetes.io/h2c
+  selector:
+    app: edgion-sequence-test-server
+
+---
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: transport-stall-h2
+  namespace: edgion-test
+spec:
+  targetRefs:
+  - kind: Service
+    name: transport-stall-h2
+  outlierDetection:
+    consecutiveErrors: 100
+    consecutiveGatewayErrors: 100
+    consecutiveLocalOriginFailures: 1
+    ejectionTime: 1s
+    maxEjectionTime: 1s
+    maxEjectionPercent: 0
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: transport-stall-h2
+  namespace: edgion-test
+spec:
+  parentRefs:
+  - name: transport-gateway
+  hostnames:
+  - transport-stall-h2.example.com
+  rules:
+  - timeouts:
+      backendRequest: 120s
+    backendRefs:
+    - name: transport-stall-h2
+      port: 30031

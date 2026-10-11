@@ -1,0 +1,10 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: waf-selector
+  namespace: edgion-default
+spec:
+  data:
+    type: Selector
+    config:
+      active: high

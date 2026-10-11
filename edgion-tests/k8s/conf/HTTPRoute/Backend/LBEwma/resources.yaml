@@ -59,7 +59,7 @@ spec:
             type: PathPrefix
             value: /
       retry:
-        attempts: 0
+        attempts: 1
       timeouts:
         request: 5s
         backendRequest: 4s

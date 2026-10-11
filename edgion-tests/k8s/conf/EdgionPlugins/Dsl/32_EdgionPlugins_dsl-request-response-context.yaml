@@ -1,0 +1,34 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-request-response-context
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "context-request-writer"
+        source: |
+          let mode = req.header("X-Dsl-Context-Write")
+          if mode == "alpha" {
+              ctx.set("dsl_phase_marker", "phase-alpha")
+          }
+          if mode == "beta" {
+              ctx.set("dsl_phase_marker", "phase-beta")
+          }
+          req.remove_header("X-Dsl-Context-Write")
+        errorPolicy: deny
+  upstreamResponseFilterPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "context-response-reader"
+        source: |
+          let marker = ctx.get("dsl_phase_marker")
+          if marker == nil {
+              resp.set_header("X-Dsl-Context-Result", "missing")
+          } else {
+              resp.set_header("X-Dsl-Context-Result", "response:" + marker)
+          }
+        errorPolicy: deny

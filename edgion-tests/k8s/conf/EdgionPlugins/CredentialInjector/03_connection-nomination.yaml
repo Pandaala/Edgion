@@ -1,0 +1,143 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: credential-connection
+  namespace: edgion-default
+spec:
+  ports:
+  - port: 30001
+    targetPort: 30001
+    protocol: TCP
+  selector:
+    app: credential-connection-test-server
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: credential-connection-test-server
+  namespace: edgion-default
+  labels:
+    app: credential-connection-test-server
+    edgion.io/test-server-image: 'true'
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: credential-connection-test-server
+  template:
+    metadata:
+      labels:
+        app: credential-connection-test-server
+        edgion.io/test-server-image: 'true'
+    spec:
+      containers:
+      - name: test-server
+        image: docker.io/pandaala/edgion-test-server:v0.1.1
+        imagePullPolicy: IfNotPresent
+        command:
+        - /usr/local/bin/test_server
+        args:
+        - --http-ports=30001
+        - --log-level=info
+        ports:
+        - name: http
+          containerPort: 30001
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 30001
+          initialDelaySeconds: 1
+          periodSeconds: 2
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+---
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: credential-connection
+  namespace: edgion-default
+spec:
+  targetRefs:
+  - kind: Service
+    name: credential-connection
+  loadBalancer:
+    type: RoundRobin
+    degradeThreshold: 0
+  outlierDetection:
+    consecutiveErrors: 1
+    consecutiveGatewayErrors: 1
+    consecutiveLocalOriginFailures: 1
+    ejectionTime: 5s
+    maxEjectionTime: 5s
+    maxEjectionPercent: 0
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: credential-connection-conflict
+  namespace: edgion-default
+spec:
+  requestPlugins:
+  - type: CredentialInjector
+    config:
+      credentialRef:
+        name: credential-injector-token
+      target:
+        type: Header
+        name: X-Provider-Key
+        valuePrefix: 'Token '
+  - type: ProxyRewrite
+    config:
+      headers:
+        set:
+        - name: Connection
+          value: keep-alive, x-PrOvIdEr-KeY
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: credential-connection-conflict
+  namespace: edgion-default
+spec:
+  parentRefs:
+  - name: edgion-plugins-gateway
+    namespace: edgion-test
+  hostnames:
+  - credential-connection-conflict.example.com
+  rules:
+  - filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: credential-connection-conflict
+    backendRefs:
+    - name: credential-connection
+      port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: credential-connection-control
+  namespace: edgion-default
+spec:
+  parentRefs:
+  - name: edgion-plugins-gateway
+    namespace: edgion-test
+  hostnames:
+  - credential-connection-control.example.com
+  rules:
+  - filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: credential-injector-custom
+    backendRefs:
+    - name: credential-connection
+      port: 30001

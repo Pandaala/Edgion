@@ -1,0 +1,43 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: graphql-rate-limit-routing
+  namespace: edgion-default
+spec:
+  requestPlugins:
+  - enable: true
+    alias: cost-budget
+    type: GraphqlRateLimit
+    config:
+      schema: 'type Query { users(first: Int = 10): [User!]! }
+
+        type Mutation { users(first: Int = 10): [User!]! }
+
+        type User { name: String! }
+
+        '
+      costRules:
+      - field: Query.users
+        weight: 1
+        multipliers:
+        - first
+      - field: Mutation.users
+        multipliers:
+        - first
+      redisRef: edgion-default/redis-test
+      key:
+      - type: header
+        name: X-Graphql-Key
+      policies:
+      - rate: 24
+        interval: 2h
+        algorithm: FixedWindow
+      requestTimeout: 2s
+  - type: GraphqlOperationRouter
+    config:
+      rules:
+      - operationType: query
+        operationName: GetUser
+        backendRef:
+          name: test-http
+          namespace: edgion-test

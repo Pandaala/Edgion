@@ -1,0 +1,21 @@
+# TCPRoute referencing a non-existent EdgionStreamPlugins to lock in the
+# fail-close contract: when the gateway cannot resolve the referenced ESP,
+# connections are rejected rather than silently allowed.
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: tcp-sp-fail-close
+  namespace: edgion-test
+  annotations:
+    edgion.io/edgion-stream-plugins: "tcp-nonexistent-esp"
+spec:
+  parentRefs:
+    - name: tcp-stream-plugins-gw
+      namespace: edgion-test
+      sectionName: tcp-fail-close
+      port: 31273
+  rules:
+    - backendRefs:
+        - name: test-tcp
+          port: 30010
+          weight: 100

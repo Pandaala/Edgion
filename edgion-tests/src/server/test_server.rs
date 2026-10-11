@@ -547,7 +547,24 @@ async fn start_http_server(port: u16) -> Result<()> {
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let server_addr_str = format!("0.0.0.0:{}", port);
-    let app = create_echo_router(server_addr_str.clone());
+    let mut app = create_echo_router(server_addr_str.clone());
+    // Distinguish Kubernetes replicas without changing canonical echo bodies.
+    // The Pod address is resolved once when the test listener is created.
+    if let Ok(pod_ip) = std::env::var("POD_IP") {
+        let ip = pod_ip
+            .parse::<std::net::IpAddr>()
+            .context("Invalid test-server POD_IP")?;
+        let identity = axum::http::HeaderValue::from_str(&SocketAddr::new(ip, port).to_string())?;
+        app = app.layer(axum::middleware::map_response(
+            move |mut response: axum::response::Response| {
+                let identity = identity.clone();
+                async move {
+                    response.headers_mut().insert("x-test-backend-identity", identity);
+                    response
+                }
+            },
+        ));
+    }
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     info!("✓ HTTP server listening on http://{}", addr);

@@ -14,7 +14,8 @@ use std::process;
 use std::time::{Duration, Instant};
 
 const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-const WIPE_ALL_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+const DEFAULT_WIPE_TIMEOUT_SECS: u64 = 60;
+const WIPE_INVENTORY_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const DEFAULT_TIMEOUT_SECS: u64 = 75;
 
 const ROOT_CA_DESCRIPTION: &str = "Contains a CA bundle that can be used to verify the kube-apiserver when using internal endpoints such as the internal service IP or kubernetes.default.svc. No other usage is guaranteed across distributions of Kubernetes clusters.";
@@ -41,6 +42,14 @@ struct Args {
 
     #[arg(long, default_value_t = false)]
     no_wipe: bool,
+
+    /// Deadline for the single destructive wipe request, independent of polling.
+    #[arg(long, default_value_t = DEFAULT_WIPE_TIMEOUT_SECS, value_parser = clap::value_parser!(u64).range(1..))]
+    wipe_timeout_secs: u64,
+
+    /// Report only Controller-reported kind counts before the destructive request.
+    #[arg(long, default_value_t = false)]
+    report_wipe_inventory: bool,
 
     /// Upper bound for resource propagation, task cancellation, and lease release.
     #[arg(long, default_value_t = DEFAULT_TIMEOUT_SECS)]
@@ -154,11 +163,9 @@ async fn main() {
         .expect("reqwest client");
 
     // Step 1: wipe-all (unless --no-wipe)
-    if !args.no_wipe && args.skip.as_deref() != Some("controller") {
-        if let Err(e) = wipe_all(&client, &args.controller_addr, args.controller_token.as_deref()).await {
-            eprintln!("[ERROR] wipe-all failed: {}", e);
-            process::exit(2);
-        }
+    if let Err(error) = wipe_and_report(&client, &args).await {
+        eprintln!("[ERROR] wipe-all failed: {error}");
+        process::exit(2);
     }
 
     // Step 2: clear access logs (gateway side, removes TTL false positive)
@@ -213,13 +220,85 @@ fn with_bearer(rb: reqwest::RequestBuilder, token: Option<&str>) -> reqwest::Req
     }
 }
 
-async fn wipe_all(client: &Client, controller: &str, token: Option<&str>) -> reqwest::Result<()> {
+fn parse_wipe_inventory(body: &Value) -> Result<BTreeMap<String, u64>, String> {
+    let object = body
+        .pointer("/data/conf_center_storage")
+        .and_then(Value::as_object)
+        .ok_or("Controller-reported wipe inventory is missing its counts map")?;
+    let expected = edgion_resources::resource_defs::ALL_RESOURCE_INFOS
+        .iter()
+        .map(|info| info.kind.as_str())
+        .collect::<BTreeSet<_>>();
+    if object.keys().map(String::as_str).collect::<BTreeSet<_>>() != expected {
+        return Err("Controller-reported wipe inventory does not match the canonical kind inventory".into());
+    }
+    let counts = object
+        .iter()
+        .map(|(kind, value)| {
+            value
+                .as_u64()
+                .map(|count| (kind.clone(), count))
+                .ok_or_else(|| "Controller-reported wipe inventory has a non-integer count".to_owned())
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+    counts
+        .values()
+        .try_fold(0u64, |total, count| total.checked_add(*count))
+        .ok_or("Controller-reported wipe inventory total overflows")?;
+    Ok(counts)
+}
+
+async fn wipe_and_report(client: &Client, args: &Args) -> Result<(), String> {
+    if args.no_wipe || args.skip.as_deref() == Some("controller") {
+        return Ok(());
+    }
+    if args.report_wipe_inventory {
+        let url = format!("{}/api/v1/debug/store-stats", args.controller_addr);
+        let body = wipe_inventory_request(client, &url, args.controller_token.as_deref())
+            .send()
+            .await
+            .map_err(|error| format!("wipe inventory request failed: {error}"))?
+            .error_for_status()
+            .map_err(|error| format!("wipe inventory request failed: {error}"))?
+            .json::<Value>()
+            .await
+            .map_err(|_| "wipe inventory response was not JSON".to_owned())?;
+        let counts = parse_wipe_inventory(&body)?;
+        // The diagnostic handler reports zero on an individual list error.
+        // These are Controller-reported counts, not an independent inventory proof.
+        for (kind, count) in &counts {
+            eprintln!("[INFO] Controller-reported wipe inventory: {kind}={count}");
+        }
+        eprintln!(
+            "[INFO] Controller-reported wipe inventory: total={} wipe_timeout_secs={}",
+            counts.values().sum::<u64>(),
+            args.wipe_timeout_secs
+        );
+    }
+    wipe_all(
+        client,
+        &args.controller_addr,
+        args.controller_token.as_deref(),
+        Duration::from_secs(args.wipe_timeout_secs),
+    )
+    .await
+    .map_err(|error| error.to_string())
+}
+
+fn wipe_inventory_request(client: &Client, url: &str, token: Option<&str>) -> reqwest::RequestBuilder {
+    with_bearer(client.get(url), token).timeout(WIPE_INVENTORY_REQUEST_TIMEOUT)
+}
+
+async fn wipe_all(client: &Client, controller: &str, token: Option<&str>, timeout: Duration) -> reqwest::Result<()> {
     let url = format!("{}/api/v1/admin/wipe-all", controller);
     // A Kubernetes wipe deletes hundreds of objects through the API server and
     // can legitimately exceed the short timeout used by read-only polling.
     // Keep one extended request instead of retrying an idempotent-but-still-
     // running destructive operation after an ambiguous transport timeout.
-    let resp = wipe_all_request(client, &url, token).send().await?.error_for_status()?;
+    let resp = wipe_all_request(client, &url, token, timeout)
+        .send()
+        .await?
+        .error_for_status()?;
     let body: Value = resp.json().await?;
     eprintln!(
         "[INFO] wipe-all: total={} errors={} duration_ms={}",
@@ -233,8 +312,8 @@ async fn wipe_all(client: &Client, controller: &str, token: Option<&str>) -> req
     Ok(())
 }
 
-fn wipe_all_request(client: &Client, url: &str, token: Option<&str>) -> reqwest::RequestBuilder {
-    with_bearer(client.post(url), token).timeout(WIPE_ALL_REQUEST_TIMEOUT)
+fn wipe_all_request(client: &Client, url: &str, token: Option<&str>, timeout: Duration) -> reqwest::RequestBuilder {
+    with_bearer(client.post(url), token).timeout(timeout)
 }
 
 async fn clear_access_logs(client: &Client, gateway: &str, token: Option<&str>) -> reqwest::Result<()> {
@@ -687,6 +766,149 @@ mod exit_tests {
         .expect("required addresses are present");
         assert_eq!(args.timeout_secs, DEFAULT_TIMEOUT_SECS);
         assert!(args.timeout_secs > 60);
+        assert_eq!(args.wipe_timeout_secs, 60);
+        assert!(!args.report_wipe_inventory);
+    }
+
+    fn reported_inventory() -> Value {
+        let counts = edgion_resources::resource_defs::ALL_RESOURCE_INFOS
+            .iter()
+            .map(|info| (info.kind.as_str().to_owned(), Value::from(1u64)))
+            .collect::<serde_json::Map<_, _>>();
+        serde_json::json!({"data": {
+            "conf_center_storage": counts,
+            "other": {"secret": "must not enter the count report"}
+        }})
+    }
+
+    fn inventory_args(controller: &str) -> Args {
+        Args::try_parse_from([
+            "cache_residue",
+            "--controller-addr",
+            controller,
+            "--gateway-addr",
+            "http://gateway",
+            "--wipe-timeout-secs",
+            "300",
+            "--report-wipe-inventory",
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn independent_wipe_deadline_preserves_polling_and_rejects_zero() {
+        let args = inventory_args("http://controller");
+        assert_eq!(args.wipe_timeout_secs, 300);
+        assert_eq!(args.timeout_secs, 75);
+        assert!(Args::try_parse_from([
+            "cache_residue",
+            "--controller-addr",
+            "http://controller",
+            "--gateway-addr",
+            "http://gateway",
+            "--wipe-timeout-secs",
+            "0"
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn wipe_inventory_parser_keeps_only_canonical_unsigned_counts() {
+        let body = reported_inventory();
+        let counts = parse_wipe_inventory(&body).unwrap();
+        assert_eq!(counts.len(), edgion_resources::resource_defs::ALL_RESOURCE_INFOS.len());
+        assert!(counts.values().all(|count| *count == 1));
+        assert!(!serde_json::to_string(&counts).unwrap().contains("secret"));
+        assert!(parse_wipe_inventory(&serde_json::json!({})).is_err());
+        for value in [Value::from(-1), Value::from("1"), Value::from(1.5), Value::Null] {
+            let mut malformed = body.clone();
+            malformed["data"]["conf_center_storage"]["Secret"] = value;
+            assert!(parse_wipe_inventory(&malformed).is_err());
+        }
+        let mut missing = body.clone();
+        missing["data"]["conf_center_storage"]
+            .as_object_mut()
+            .unwrap()
+            .remove("Secret");
+        assert!(parse_wipe_inventory(&missing).is_err());
+        let mut overflow = body;
+        overflow["data"]["conf_center_storage"]["Secret"] = Value::from(u64::MAX);
+        assert!(parse_wipe_inventory(&overflow).is_err());
+    }
+
+    #[tokio::test]
+    async fn wipe_inventory_failure_prevents_the_destructive_request() {
+        use wiremock::{
+            matchers::{method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+        let mut malformed = reported_inventory();
+        malformed["data"]["conf_center_storage"]["Secret"] = Value::from(-1);
+        for (status, body) in [
+            (200, serde_json::json!({})),
+            (200, malformed),
+            (500, reported_inventory()),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/debug/store-stats"))
+                .respond_with(ResponseTemplate::new(status).set_body_json(body))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/api/v1/admin/wipe-all"))
+                .respond_with(ResponseTemplate::new(200))
+                .expect(0)
+                .mount(&server)
+                .await;
+            assert!(wipe_and_report(&Client::new(), &inventory_args(&server.uri()))
+                .await
+                .is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn skipped_wipe_does_not_request_an_inventory() {
+        use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        for verb in ["GET", "POST"] {
+            Mock::given(method(verb))
+                .respond_with(ResponseTemplate::new(500))
+                .expect(0)
+                .mount(&server)
+                .await;
+        }
+        let mut args = inventory_args(&server.uri());
+        args.no_wipe = true;
+        assert!(wipe_and_report(&Client::new(), &args).await.is_ok());
+        args.no_wipe = false;
+        args.skip = Some("controller".into());
+        assert!(wipe_and_report(&Client::new(), &args).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn wipe_failure_does_not_retry_the_destructive_request() {
+        use wiremock::{
+            matchers::{method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/debug/store-stats"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(reported_inventory()))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/admin/wipe-all"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(wipe_and_report(&Client::new(), &inventory_args(&server.uri()))
+            .await
+            .is_err());
     }
 
     #[test]
@@ -747,6 +969,8 @@ mod e2e_tests {
             controller_token: None,
             gateway_token: None,
             no_wipe: true,
+            wipe_timeout_secs: DEFAULT_WIPE_TIMEOUT_SECS,
+            report_wipe_inventory: false,
             timeout_secs: 1,
             poll_interval_ms: 100,
             mode: "warn".to_string(),
@@ -789,6 +1013,8 @@ mod e2e_tests {
             controller_token: None,
             gateway_token: None,
             no_wipe: true,
+            wipe_timeout_secs: DEFAULT_WIPE_TIMEOUT_SECS,
+            report_wipe_inventory: false,
             timeout_secs: 1,
             poll_interval_ms: 100,
             mode: "fail".to_string(),
@@ -873,6 +1099,8 @@ mod e2e_tests {
             controller_token: None,
             gateway_token: None,
             no_wipe: true,
+            wipe_timeout_secs: DEFAULT_WIPE_TIMEOUT_SECS,
+            report_wipe_inventory: false,
             timeout_secs: 1,
             poll_interval_ms: 100,
             mode: "warn".to_string(),
@@ -951,6 +1179,8 @@ mod e2e_tests {
             controller_token: None,
             gateway_token: None,
             no_wipe: true,
+            wipe_timeout_secs: DEFAULT_WIPE_TIMEOUT_SECS,
+            report_wipe_inventory: false,
             timeout_secs: 1,
             poll_interval_ms: 100,
             mode: "warn".to_string(),
@@ -1027,6 +1257,8 @@ mod e2e_tests {
             controller_token: None,
             gateway_token: None,
             no_wipe: true,
+            wipe_timeout_secs: DEFAULT_WIPE_TIMEOUT_SECS,
+            report_wipe_inventory: false,
             timeout_secs: 1,
             poll_interval_ms: 100,
             mode: "warn".to_string(),
@@ -1080,6 +1312,8 @@ mod e2e_tests {
             controller_token: None,
             gateway_token: None,
             no_wipe: true,
+            wipe_timeout_secs: DEFAULT_WIPE_TIMEOUT_SECS,
+            report_wipe_inventory: false,
             timeout_secs: 1,
             poll_interval_ms: 100,
             mode: "warn".to_string(),
@@ -1126,11 +1360,25 @@ mod walk_tests {
     #[test]
     fn wipe_all_overrides_the_short_polling_request_timeout() {
         let client = Client::builder().timeout(HTTP_REQUEST_TIMEOUT).build().unwrap();
-        let request = wipe_all_request(&client, "http://127.0.0.1/wipe", None)
+        let request = wipe_all_request(
+            &client,
+            "http://127.0.0.1/wipe",
+            None,
+            Duration::from_secs(DEFAULT_WIPE_TIMEOUT_SECS),
+        )
+        .build()
+        .unwrap();
+
+        assert_eq!(request.timeout(), Some(&Duration::from_secs(60)));
+        let request = wipe_all_request(&client, "http://127.0.0.1/wipe", None, Duration::from_secs(300))
             .build()
             .unwrap();
-
-        assert_eq!(request.timeout(), Some(&WIPE_ALL_REQUEST_TIMEOUT));
+        assert_eq!(request.timeout(), Some(&Duration::from_secs(300)));
+        let request = wipe_inventory_request(&client, "http://127.0.0.1/stats", None)
+            .build()
+            .unwrap();
+        assert_eq!(request.timeout(), Some(&Duration::from_secs(60)));
+        assert_eq!(HTTP_REQUEST_TIMEOUT, Duration::from_secs(10));
     }
 
     #[test]

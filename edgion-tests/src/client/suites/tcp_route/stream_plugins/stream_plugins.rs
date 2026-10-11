@@ -30,17 +30,31 @@ impl TcpStreamPluginsTestSuite {
     /// suites. Probe every fixed member without consuming the connection-rate
     /// budget or replaying traffic.
     async fn wait_for_redis_fixture(ctx: &TestContext) -> Result<(), String> {
-        let fixture: serde_yaml::Value = serde_yaml::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/integration/conf/LinkSys/Redis/01_LinkSys_default_redis-test.yaml"
-        )))
-        .map_err(|_| "Invalid Redis fixture YAML".to_string())?;
+        let fixture_yaml = if std::env::var("EDGION_TEST_K8S_MODE").as_deref() == Ok("true") {
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/k8s/conf/EdgionPlugins/Dsl/00_LinkSys_default_redis-test.yaml"
+            ))
+        } else {
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/integration/conf/LinkSys/Redis/01_LinkSys_default_redis-test.yaml"
+            ))
+        };
+        let fixture: serde_yaml::Value =
+            serde_yaml::from_str(fixture_yaml).map_err(|_| "Invalid Redis fixture YAML".to_string())?;
+        let namespace = fixture["metadata"]["namespace"]
+            .as_str()
+            .ok_or_else(|| "Redis fixture must declare a namespace".to_string())?;
+        let name = fixture["metadata"]["name"]
+            .as_str()
+            .ok_or_else(|| "Redis fixture must declare a name".to_string())?;
         let pool_size = fixture["spec"]["config"]["pool"]["size"]
             .as_u64()
             .filter(|size| (1..=64).contains(size))
             .ok_or_else(|| "Redis fixture must declare a valid pool size".to_string())?;
         let url = format!(
-            "{}/api/v1/testing/link-sys/redis/default%2Fredis-test/ping?all_members=true",
+            "{}/api/v1/testing/link-sys/redis/{namespace}%2F{name}/ping?all_members=true",
             gateway_admin::admin_base(ctx)
         );
         let ready = async {

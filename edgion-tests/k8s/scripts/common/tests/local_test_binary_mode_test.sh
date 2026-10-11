@@ -64,13 +64,15 @@ fixtures = sorted(root.glob("**/DynamicTest/bootstrap/*.yaml"))
 labeled = []
 for fixture in fixtures:
     with fixture.open(encoding="utf-8") as stream:
-        document = yaml.safe_load(stream)
-    if document.get("metadata", {}).get("labels", {}).get("edgion.io/test-server-image") != "true":
-        continue
-    labeled.append(fixture)
-    pod_labels = document.get("spec", {}).get("template", {}).get("metadata", {}).get("labels", {})
-    if pod_labels.get("edgion.io/test-server-image") != "true":
-        raise SystemExit(f"suite image discovery label is missing from Pod template: {fixture}")
+        for document in yaml.safe_load_all(stream):
+            if not isinstance(document, dict) or document.get("kind") != "Deployment":
+                continue
+            if document.get("metadata", {}).get("labels", {}).get("edgion.io/test-server-image") != "true":
+                continue
+            labeled.append(fixture)
+            pod_labels = document.get("spec", {}).get("template", {}).get("metadata", {}).get("labels", {})
+            if pod_labels.get("edgion.io/test-server-image") != "true":
+                raise SystemExit(f"suite image discovery label is missing from Pod template: {fixture}")
 if len(labeled) != 6:
     raise SystemExit(f"expected 6 suite test-server bootstrap Deployments, found {len(labeled)}")
 PY

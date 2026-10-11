@@ -99,9 +99,9 @@ wait_condition() {
 }
 
 wait_condition pp-status-intrinsic gateway Accepted False InvalidProxyProtocolConfig
-wait_condition pp-status-intrinsic listener Accepted False InvalidProxyProtocolListener
+wait_condition pp-status-intrinsic listener Accepted False InvalidProxyProtocolConfig
 wait_condition pp-status-ref gateway ResolvedRefs False RefNotPermitted
-wait_condition pp-status-ref listener ResolvedRefs False InvalidProxyProtocolRef
+wait_condition pp-status-ref listener ResolvedRefs False RefNotPermitted
 for name in pp-status-shared-a pp-status-shared-b; do
     wait_condition "$name" gateway ListenersNotValid True ProxyProtocolPolicyConflict
     wait_condition "$name" listener Conflicted True ProxyProtocolPolicyConflict

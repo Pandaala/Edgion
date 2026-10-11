@@ -1,0 +1,23 @@
+# Runtime packaging needs prebuilt executables, even though source builds
+# exclude target/. Keep dependency objects and unrelated workspace files out.
+**
+!target/
+!target/*/
+!target/*/*/
+!target/**/edgion-gateway
+!target/**/edgion-controller
+!target/**/edgion-cli
+!target/**/test_server
+!target/**/test_client
+!target/**/cache_residue
+!target/**/ext_proc_external_processor
+!edgion-tests/
+!edgion-tests/wasm/
+!edgion-tests/wasm/artifacts/
+!edgion-tests/wasm/artifacts/header_demo.wasm
+
+!config/
+!config/*.toml
+!cicd/
+!cicd/docker/
+!cicd/docker/controller-gateway-entrypoint.sh

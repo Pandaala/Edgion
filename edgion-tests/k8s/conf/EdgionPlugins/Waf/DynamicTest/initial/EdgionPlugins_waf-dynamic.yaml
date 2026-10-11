@@ -5,7 +5,7 @@ metadata:
   namespace: edgion-default
 spec:
   waf:
-    mode: on
+    mode: "on"
     requestBody:
       inspection: prefix
     policyRef:

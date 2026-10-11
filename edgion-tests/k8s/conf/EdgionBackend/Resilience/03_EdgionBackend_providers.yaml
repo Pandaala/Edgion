@@ -122,7 +122,7 @@ metadata:
 spec:
   ai:
     provider: OpenAICompatible
-    endpoint: http://127.0.0.1:30001/ai/resilience-429
+    endpoint: http://edgion-test-server.edgion-test.svc.cluster.local:30001/ai/resilience-429
     allowInsecureHttp: true
     credentialPool:
       credentials:

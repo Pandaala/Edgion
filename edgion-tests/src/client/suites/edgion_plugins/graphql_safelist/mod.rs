@@ -1,4 +1,5 @@
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use crate::suites::status::helpers::controller_local_conditions;
 use reqwest::Method;
 use serde_json::{json, Value};
 use std::time::Instant;
@@ -246,8 +247,7 @@ impl TestSuite for GraphqlSafelistDynamicSuite {
                             "graphql-safelist-dynamic",
                         )
                         .await?;
-                        let accepted = status["status"]["conditions"]
-                            .as_array()
+                        let accepted = controller_local_conditions(&status["status"])
                             .ok_or("Missing plugin conditions")?
                             .iter()
                             .find(|c| c["type"] == "Accepted")

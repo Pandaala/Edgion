@@ -1,0 +1,47 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: graphql-root-quotas
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: GraphqlRateLimit
+      alias: budgets
+      config:
+        showQueryCost: true
+        schema: |
+          schema { query:Read mutation:Write }
+          type Read { users(first:Int=10):[User] ok:Int }
+          type Write { users(first:Int=10):[User] }
+          type User { name:String }
+        costRules:
+          - field: Read.users
+            multipliers: [first]
+          - field: Write.users
+            multipliers: [first]
+        redisRef: edgion-default/redis-test
+        key: [{type: header, name: X-Graphql-Key}]
+        policies: [{rate: 100, interval: 2h, algorithm: FixedWindow}]
+        rootQuotas:
+          - name: read-users
+            field: Read.users
+            key: [{type: header, name: X-Root-Key}]
+            policies: [{rate: 22, interval: 2h, algorithm: FixedWindow}]
+          - name: write-users
+            field: Write.users
+            policies: [{rate: 22, interval: 2h, algorithm: FixedWindow}]
+        requestTimeout: 2s
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: graphql-root-quotas
+  namespace: edgion-default
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: [graphql-root-quotas.example.com]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: graphql-root-quotas}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]

@@ -11,7 +11,7 @@ spec:
   - matches:
     - path:
         type: PathPrefix
-        value: /
+        value: /version
     backendRefs:
     - name: test-h2c
       port: 30001

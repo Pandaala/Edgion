@@ -9,6 +9,7 @@
 //!                → Accepted=True, ResolvedRefs=True (recovered).
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use crate::suites::status::helpers::controller_local_conditions;
 use async_trait::async_trait;
 use std::time::Instant;
 
@@ -46,8 +47,7 @@ async fn fetch_ep_condition(ctx: &TestContext, condition_type: &str) -> Result<(
         return Err(format!("API error: {}", body["error"].as_str().unwrap_or("unknown")));
     }
 
-    let conditions = body["data"]["status"]["conditions"]
-        .as_array()
+    let conditions = controller_local_conditions(&body["data"]["status"])
         .ok_or_else(|| format!("EP '{}' status.conditions not present", EP))?;
 
     let cond = conditions

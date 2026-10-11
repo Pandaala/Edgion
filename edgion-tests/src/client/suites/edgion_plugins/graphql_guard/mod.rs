@@ -1,4 +1,5 @@
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use crate::suites::status::helpers::controller_local_conditions;
 use edgion_gateway::plugins::http::common::graphql_log_consts as log_tokens;
 use reqwest::Method;
 use serde_json::json;
@@ -412,8 +413,7 @@ impl TestSuite for GraphqlGuardDynamicSuite {
                             "graphql-guard-dynamic",
                         )
                         .await?;
-                        let accepted = status["status"]["conditions"]
-                            .as_array()
+                        let accepted = controller_local_conditions(&status["status"])
                             .ok_or("Missing plugin conditions")?
                             .iter()
                             .find(|c| c["type"] == "Accepted")

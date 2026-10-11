@@ -1,0 +1,44 @@
+{
+  "apiVersion": "edgion.io/v1",
+  "kind": "EdgionPlugins",
+  "metadata": {
+    "name": "graphql-router-default",
+    "namespace": "edgion-default"
+  },
+  "spec": {
+    "requestPlugins": [
+      {
+        "type": "GraphqlOperationRouter",
+        "config": {
+          "rules": [
+            {
+              "operationType": "query",
+              "operationName": "GetUser",
+              "backendRef": {
+                "name": "graphql-users"
+              }
+            },
+            {
+              "operationType": "mutation",
+              "operationName": "CreateOrder",
+              "backendRef": {
+                "name": "graphql-orders"
+              }
+            },
+            {
+              "operationType": "query",
+              "operationName": "GetRemote",
+              "backendRef": {
+                "name": "graphql-remote",
+                "namespace": "edgion-backend"
+              }
+            }
+          ],
+          "defaultBackendRef": {
+            "name": "graphql-core"
+          }
+        }
+      }
+    ]
+  }
+}

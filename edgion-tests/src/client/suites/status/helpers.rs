@@ -16,9 +16,14 @@ pub fn controller_local_status<'a>(status: &'a Value, controller_name: &str) -> 
     }
 }
 
+/// Read native conditions owned by the canonical integration Controller.
+pub fn controller_local_conditions(status: &Value) -> Option<&Vec<Value>> {
+    controller_local_status(status, "edgion.io/gateway-controller")?["conditions"].as_array()
+}
+
 #[cfg(test)]
 mod controller_status_tests {
-    use super::controller_local_status;
+    use super::{controller_local_conditions, controller_local_status, has_condition};
     use serde_json::json;
 
     #[test]
@@ -41,6 +46,37 @@ mod controller_status_tests {
             controller_local_status(&partitioned, "missing.example/controller"),
             None
         );
+    }
+    #[test]
+    fn condition_assertions_select_the_owner_and_preserve_native_routes_and_policies() {
+        let conditions = json!({"conditions": [{"type": "Accepted", "status": "True"}]});
+        let native = json!({"status": conditions});
+        let matching = json!({"status": {"controllers": [
+            {"controllerName": "foreign.example/controller", "status": {"conditions": [{"type": "Accepted", "status": "False"}]}},
+            {"controllerName": "edgion.io/gateway-controller", "status": conditions}
+        ]}});
+        let foreign = json!({"status": {"conditions": conditions["conditions"], "controllers": [
+            {"controllerName": "foreign.example/controller", "status": conditions}
+        ]}});
+        assert_eq!(
+            controller_local_conditions(&native["status"]),
+            conditions["conditions"].as_array()
+        );
+        assert_eq!(
+            controller_local_conditions(&matching["status"]),
+            conditions["conditions"].as_array()
+        );
+        assert!(controller_local_conditions(&foreign["status"]).is_none());
+        assert!(has_condition(&native, "Accepted", "True"));
+        assert!(has_condition(&matching, "Accepted", "True"));
+        assert!(!has_condition(&matching, "Accepted", "False"));
+        assert!(!has_condition(&foreign, "Accepted", "True"));
+        for field in ["parents", "ancestors"] {
+            let mut resource = json!({"status": {}});
+            resource["status"][field] = json!([conditions]);
+            assert!(has_condition(&resource, "Accepted", "True"));
+            assert!(!has_condition(&resource, "Accepted", "False"));
+        }
     }
 }
 
@@ -172,11 +208,14 @@ pub async fn fetch_cluster_resource_status(ctx: &TestContext, kind: &str, name: 
 }
 
 /// Check if a resource status has a specific condition with expected status value.
-/// Works with the `status.conditions[]` (Gateway / GatewayClass) pattern as well
+/// Selects this Controller for shared Kubernetes status; also works with the
+/// native `status.conditions[]` (Gateway / GatewayClass) pattern as well
 /// as the `status.parents[]` (Route) and `status.ancestors[]` (Policy) patterns.
 pub fn has_condition(status: &Value, condition_type: &str, expected_status: &str) -> bool {
     // Top-level conditions (Gateway / GatewayClass pattern)
-    if check_conditions(&status["status"], condition_type, expected_status) {
+    if controller_local_status(&status["status"], "edgion.io/gateway-controller")
+        .is_some_and(|local| check_conditions(local, condition_type, expected_status))
+    {
         return true;
     }
     // Try parents (Route pattern)

@@ -723,3 +723,27 @@ spec:
     port: 58339
     targetPort: 58339
     protocol: UDP
+  - name: p31989
+    port: 31989
+    targetPort: 31989
+    protocol: TCP
+  - name: p31990
+    port: 31990
+    targetPort: 31990
+    protocol: TCP
+  - name: p31199
+    port: 31199
+    targetPort: 31199
+    protocol: TCP
+  - name: p31340
+    port: 31340
+    targetPort: 31340
+    protocol: TCP
+  - name: p31981
+    port: 31981
+    targetPort: 31981
+    protocol: TCP
+  - name: p31982
+    port: 31982
+    targetPort: 31982
+    protocol: TCP

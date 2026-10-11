@@ -1,0 +1,27 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: dsl-terminate-grpc-response-contract
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: grpc-test-gateway
+      namespace: edgion-test
+      sectionName: grpc
+  hostnames:
+    - "dsl-terminate-grpc-response.example.com"
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: dsl-terminate-grpc-response-contract
+      backendRefs:
+        - name: test-grpc
+          namespace: edgion-test
+          port: 30021

@@ -18,6 +18,7 @@
 //      when its pre-created RegionRouteOverride EdgionConfigData is present.
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use crate::suites::status::helpers::controller_local_conditions;
 use std::time::Instant;
 
 const PM_MANAGED_NS: &str = "edgion-default";
@@ -162,8 +163,8 @@ impl EdgionConfigDataManagedTestSuite {
                             Ok(resp) if resp.status().is_success() => {
                                 match resp.json::<serde_json::Value>().await {
                                     Ok(body) if body["success"].as_bool().unwrap_or(false) => {
-                                        let conditions = &body["data"]["status"]["conditions"];
-                                        if let Some(arr) = conditions.as_array() {
+                                        let conditions = controller_local_conditions(&body["data"]["status"]);
+                                        if let Some(arr) = conditions {
                                             let is_accepted = arr.iter().any(|c| {
                                                 c["type"].as_str() == Some("Accepted")
                                                     && c["status"].as_str() == Some("True")
@@ -289,8 +290,8 @@ impl EdgionConfigDataManagedTestSuite {
                         match req.send().await {
                             Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
                                 Ok(body) if body["success"].as_bool().unwrap_or(false) => {
-                                    let conditions = &body["data"]["status"]["conditions"];
-                                    if let Some(arr) = conditions.as_array() {
+                                    let conditions = controller_local_conditions(&body["data"]["status"]);
+                                    if let Some(arr) = conditions {
                                         let is_accepted = arr.iter().any(|c| {
                                             c["type"].as_str() == Some("Accepted")
                                                 && c["status"].as_str() == Some("True")

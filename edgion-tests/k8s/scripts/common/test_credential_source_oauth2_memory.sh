@@ -31,13 +31,13 @@ wait_for_credential_valid() {
   deadline=$((SECONDS + timeout))
   while (( SECONDS < deadline )); do
     state="$(kubectl get linksys "$SOURCE" -n "$NAMESPACE" \
-      -o jsonpath='{.status.credentialState}' 2>/dev/null || true)"
+      -o jsonpath='{.status.controllers[?(@.controllerName=="edgion.io/gateway-controller")].status.credentialState}' 2>/dev/null || true)"
     if [[ "$state" == "Valid" ]]; then
       return 0
     fi
     sleep 1
   done
-  echo "Timed out waiting for LinkSys status.credentialState=Valid (last='${state:-}')" >&2
+  echo "Timed out waiting for this Controller's LinkSys credentialState=Valid (last='${state:-}')" >&2
   return 1
 }
 
@@ -106,7 +106,7 @@ kubectl apply -f "$CONF_DIR/01_LinkSys_credential-source.yaml"
 kubectl apply -f "$CONF_DIR/02_EdgionPlugins_credential-source.yaml"
 kubectl apply -f "$CONF_DIR/03_HTTPRoute_credential-source.yaml"
 
-echo "[credential-source-memory] wait for LinkSys status.credentialState=Valid"
+echo "[credential-source-memory] wait for this Controller's LinkSys credentialState=Valid"
 wait_for_credential_valid 90
 
 echo "[credential-source-memory] generated Secret must stay NotFound"

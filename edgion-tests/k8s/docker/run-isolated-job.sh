@@ -40,7 +40,12 @@ PY
   echo "INFO: OIDC resolver interception smoke check passed"
 fi
 set +e
-timeout --signal=TERM --kill-after=15s "${timeout_seconds}s" bash "$script_path"
+if [[ "$scenario_id" == "plugin_policy" ]]; then
+  timeout --signal=TERM --kill-after=15s "${timeout_seconds}s" \
+    bash /usr/local/bin/run-edgion-plugin-policy-topology "$script_path"
+else
+  timeout --signal=TERM --kill-after=15s "${timeout_seconds}s" bash "$script_path"
+fi
 scenario_rc=$?
 set -e
 
@@ -48,7 +53,8 @@ if [[ "$scenario_rc" -ne 0 ]]; then
   echo "INFO: bounded failure diagnostics from /workspace/tmp/integration_testing"
   if [[ -d "${workspace}/tmp/integration_testing" ]]; then
     find "${workspace}/tmp/integration_testing" -type f \
-      \( -name '*.log' -o -name '*.status' -o -name '*.yaml' \) -size -2M -print \
+      \( -name '*.log' -o -name '*.status' -o -name '*.yaml' \) \
+      ! -name 'Secret_*' -size -2M -print \
       | sort \
       | while IFS= read -r diagnostic_file; do
           echo "===== ${diagnostic_file} ====="

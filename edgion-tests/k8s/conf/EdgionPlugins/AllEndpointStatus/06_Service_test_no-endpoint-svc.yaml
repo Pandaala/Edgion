@@ -1,0 +1,16 @@
+# Service with no active endpoints - for testing AllEndpointStatus 0-endpoint behavior
+apiVersion: v1
+kind: Service
+metadata:
+  name: no-endpoint-svc
+  namespace: edgion-test
+spec:
+  # Kubernetes owns the empty endpoint inventory for this unmatched selector.
+  selector:
+    app: aes-no-endpoint-fixture
+  ports:
+    - name: http
+      port: 38999
+      protocol: TCP
+      targetPort: 38999
+  type: ClusterIP

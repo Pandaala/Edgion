@@ -1,0 +1,25 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: waf-bundle-v2
+  namespace: edgion-default
+spec:
+  data:
+    type: WafRuleBundle
+    config:
+      version: "2"
+      profile: integration
+      provenance: edgion-tests/waf-bundle
+      digest: df58f8707a440ad234681cbbbd59cd3849b0b29844eff7a3eee52930b1438002
+      roots: [main.conf]
+      rules:
+        - name: main.conf
+          content: |
+            Include child.conf
+        - name: child.conf
+          content: |
+            SecRule REQUEST_HEADERS:X-Waf-Version "@pmFromFile phrases.data" "id:2001,phase:1,deny,status:451"
+      phraseAssets:
+        - name: phrases.data
+          content: |
+            v2

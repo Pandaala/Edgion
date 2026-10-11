@@ -33,6 +33,7 @@
 // "successfully denied".
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use crate::suites::status::helpers::controller_local_conditions;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream};
@@ -284,7 +285,7 @@ async fn wait_for_esp_accepted(ctx: &TestContext, want_status: &str) -> Result<S
         match req.send().await {
             Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
                 Ok(body) if body["success"].as_bool().unwrap_or(false) => {
-                    if let Some(conditions) = body["data"]["status"]["conditions"].as_array() {
+                    if let Some(conditions) = controller_local_conditions(&body["data"]["status"]) {
                         if let Some(accepted) = conditions.iter().find(|c| c["type"].as_str() == Some("Accepted")) {
                             if accepted["status"].as_str() == Some(want_status) {
                                 return Ok(accepted["message"].as_str().unwrap_or("").to_string());

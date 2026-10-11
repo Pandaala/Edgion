@@ -22,6 +22,7 @@ GATEWAY_ADDR="${GATEWAY_ADDR:-}"
 GATEWAY_ADMIN_TOKEN="${EDGION_GATEWAY_ADMIN_TOKEN:-integration-gateway-admin-token-0123456789}"
 INVENTORY_TIMEOUT_SECS="${INVENTORY_TIMEOUT_SECS:-30}"
 VALIDATOR_TIMEOUT_SECS="${VALIDATOR_TIMEOUT_SECS:-75}"
+WIPE_TIMEOUT_SECS="${WIPE_TIMEOUT_SECS:-300}"
 ROOT_CA_DESCRIPTION='Contains a CA bundle that can be used to verify the kube-apiserver when using internal endpoints such as the internal service IP or kubernetes.default.svc. No other usage is guaranteed across distributions of Kubernetes clusters.'
 
 usage() {
@@ -41,6 +42,7 @@ Options:
   --gateway-token TOKEN       Gateway test admin bearer token
   --inventory-timeout-secs N  EndpointSlice wait deadline (default: 30)
   --validator-timeout-secs N  cache_residue poll deadline (default: 75)
+  --wipe-timeout-secs N       Single wipe request deadline (default: 300)
   -h, --help                  Show this help
 
 Runtime stdout protocol:
@@ -123,6 +125,11 @@ while [ "$#" -gt 0 ]; do
       VALIDATOR_TIMEOUT_SECS="$2"
       shift 2
       ;;
+    --wipe-timeout-secs)
+      [ "$#" -ge 2 ] || { error "--wipe-timeout-secs requires a value"; exit 2; }
+      WIPE_TIMEOUT_SECS="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -137,6 +144,7 @@ done
 
 validate_positive_uint "$INVENTORY_TIMEOUT_SECS" "--inventory-timeout-secs" || exit 2
 validate_positive_uint "$VALIDATOR_TIMEOUT_SECS" "--validator-timeout-secs" || exit 2
+validate_positive_uint "$WIPE_TIMEOUT_SECS" "--wipe-timeout-secs" || exit 2
 if [ -z "$CONTROLLER_ADMIN_TOKEN" ] || [ -z "$GATEWAY_ADMIN_TOKEN" ]; then
   error "Controller and Gateway admin tokens are required"
   exit 2
@@ -310,6 +318,8 @@ kubectl exec \
   --controller-token "$CONTROLLER_ADMIN_TOKEN" \
   --gateway-token "$GATEWAY_ADMIN_TOKEN" \
   --timeout-secs "$VALIDATOR_TIMEOUT_SECS" \
+  --wipe-timeout-secs "$WIPE_TIMEOUT_SECS" \
+  --report-wipe-inventory \
   "${IGNORE_CONTROLLER_CONFIGMAP_ARGS[@]}" \
   "${IGNORE_CONTROLLER_CONF_SYNC_SECRET_ARGS[@]}" \
   --mode fail > "$VALIDATOR_OUTPUT" 2>&1

@@ -130,8 +130,7 @@ fn result(start: Instant, outcome: Result<(), String>) -> TestResult {
 
 async fn accepted(ctx: &TestContext, resource: &str, expected: &str) -> Result<(), String> {
     let status = helpers::fetch_resource_status(ctx, "EdgionPlugins", "edgion-default", resource).await?;
-    let actual = status["status"]["conditions"]
-        .as_array()
+    let actual = helpers::controller_local_conditions(&status["status"])
         .and_then(|conditions| conditions.iter().find(|condition| condition["type"] == "Accepted"))
         .and_then(|condition| condition["status"].as_str());
     if actual != Some(expected) {

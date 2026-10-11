@@ -42,11 +42,13 @@ RUN --mount=type=bind,source=${BINARY_PATH},target=/tmp/binaries \
     && install -m 0755 /tmp/binaries/edgion-gateway /usr/local/bin/edgion-gateway \
     && install -m 0755 /tmp/binaries/edgion-cli /usr/local/bin/edgion-cli \
     && install -m 0755 /tmp/binaries/test_server /usr/local/bin/test_server \
+    && install -m 0755 /tmp/binaries/test_client /usr/local/bin/test_client \
     && mkdir -p /workspace/target/debug \
     && ln -s /usr/local/bin/edgion-controller /workspace/target/debug/edgion-controller \
     && ln -s /usr/local/bin/edgion-gateway /workspace/target/debug/edgion-gateway \
     && ln -s /usr/local/bin/edgion-cli /workspace/target/debug/edgion-cli \
-    && ln -s /usr/local/bin/test_server /workspace/target/debug/test_server
+    && ln -s /usr/local/bin/test_server /workspace/target/debug/test_server \
+    && ln -s /usr/local/bin/test_client /workspace/target/debug/test_client
 
 COPY --from=resolver-builder /tmp/oidc_egress_resolver.so /usr/local/bin/oidc_egress_resolver.so
 RUN ln -s /usr/local/bin/oidc_egress_resolver.so /workspace/target/debug/oidc_egress_resolver.so
@@ -61,9 +63,11 @@ RUN --mount=type=bind,source=edgion-tests/integration/scripts,target=/tmp/script
 
 RUN --mount=type=bind,source=edgion-tests/integration/conf/base,target=/tmp/conf-base \
     --mount=type=bind,source=edgion-tests/integration/conf/PluginPolicy,target=/tmp/conf-plugin-policy \
+    --mount=type=bind,source=edgion-tests/integration/conf/ports.json,target=/tmp/conf-ports.json \
     mkdir -p /workspace/edgion-tests/integration/conf \
     && cp -R /tmp/conf-base /workspace/edgion-tests/integration/conf/base \
-    && cp -R /tmp/conf-plugin-policy /workspace/edgion-tests/integration/conf/PluginPolicy
+    && cp -R /tmp/conf-plugin-policy /workspace/edgion-tests/integration/conf/PluginPolicy \
+    && cp /tmp/conf-ports.json /workspace/edgion-tests/integration/conf/ports.json
 
 RUN --mount=type=bind,source=edgion-tests/integration/fixtures/unknown-config-fields,target=/tmp/unknown-fields \
     mkdir -p /workspace/edgion-tests/integration/fixtures \
@@ -74,6 +78,7 @@ RUN --mount=type=bind,source=edgion-tests/geoip,target=/tmp/geoip \
     && cp -R /tmp/geoip /workspace/edgion-tests/geoip
 
 COPY --chmod=0755 edgion-tests/k8s/docker/run-isolated-job.sh /usr/local/bin/run-edgion-isolated-job
+COPY --chmod=0755 edgion-tests/k8s/docker/run-plugin-policy-topology.sh /usr/local/bin/run-edgion-plugin-policy-topology
 COPY --chmod=0755 edgion-tests/k8s/docker/run-proxy-component.sh /usr/local/bin/run-edgion-proxy-component
 COPY --chmod=0755 edgion-tests/k8s/docker/run-k8s-proxy-protocol-test.sh /usr/local/bin/run-k8s-proxy-protocol-test
 COPY --chmod=0755 edgion-tests/k8s/docker/proxy_wire_dump.py /usr/local/lib/edgion/proxy_wire_dump.py

@@ -1,0 +1,15 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: waf-policy
+  namespace: edgion-default
+spec:
+  data:
+    type: WafPolicy
+    config:
+      profiles:
+        baseline:
+          bundleRefs:
+            - name: waf-bundle-v1
+              expectedDigest: 053a8eaf0278ac16aac2305df3baea7b3e11bce04222f6ed167ab53d2dac182e
+      defaultProfile: baseline

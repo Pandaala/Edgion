@@ -17,6 +17,7 @@
 //   4. esp_resolved_refs_false_when_gcir_pm_missing — ESP + missing PM → ResolvedRefs=False/InvalidEdgionConfigDataRef
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use crate::suites::status::helpers::controller_local_conditions;
 use std::time::Instant;
 
 const NS: &str = "edgion-test";
@@ -65,7 +66,7 @@ async fn fetch_conditions(ctx: &TestContext, kind: &str, name: &str) -> Result<V
         match req.send().await {
             Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
                 Ok(body) if body["success"].as_bool().unwrap_or(false) => {
-                    if let Some(conditions) = body["data"]["status"]["conditions"].as_array() {
+                    if let Some(conditions) = controller_local_conditions(&body["data"]["status"]) {
                         if !conditions.is_empty() {
                             return Ok(conditions.clone());
                         }

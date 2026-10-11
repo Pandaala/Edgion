@@ -1,0 +1,27 @@
+{
+  "apiVersion": "edgion.io/v1",
+  "kind": "EdgionPlugins",
+  "metadata": {
+    "name": "graphql-router-backend-guard",
+    "namespace": "edgion-default"
+  },
+  "spec": {
+    "requestPlugins": [
+      {
+        "type": "AiGuard",
+        "config": {
+          "rules": [
+            {
+              "name": "tripwire",
+              "match": {
+                "type": "regex",
+                "pattern": "never-present"
+              },
+              "action": "reject"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

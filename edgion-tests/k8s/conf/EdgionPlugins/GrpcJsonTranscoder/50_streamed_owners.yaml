@@ -1,0 +1,72 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: grpc-streamed-mutator
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: ExtProc
+      config:
+        grpcService:
+          target: "edgion-test-server.edgion-test.svc.cluster.local:30041"
+          timeoutMs: 2000
+        processingMode:
+          requestHeaderMode: SKIP
+          requestBodyMode: STREAMED
+          responseHeaderMode: SKIP
+          responseBodyMode: NONE
+        failureModeAllow: true
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grpc-streamed-before
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - grpc-streamed-before.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: grpc-streamed-mutator
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: grpc-transcoder-inline
+      backendRefs:
+        - name: grpc-transcoder
+          port: 30021
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grpc-streamed-after
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - grpc-streamed-after.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: grpc-transcoder-inline
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: grpc-streamed-mutator
+      backendRefs:
+        - name: grpc-transcoder
+          port: 30021

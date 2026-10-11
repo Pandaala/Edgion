@@ -56,7 +56,7 @@ case "$command_name" in
         ;;
       gateway)
         cat <<'JSON'
-{"status":{"conditions":[{"type":"Accepted","status":"False","reason":"InvalidProxyProtocolConfig"},{"type":"ResolvedRefs","status":"False","reason":"RefNotPermitted"},{"type":"ListenersNotValid","status":"True","reason":"ProxyProtocolPolicyConflict"}],"listeners":[{"name":"tcp","conditions":[{"type":"Accepted","status":"False","reason":"InvalidProxyProtocolListener"},{"type":"ResolvedRefs","status":"False","reason":"InvalidProxyProtocolRef"},{"type":"Conflicted","status":"True","reason":"ProxyProtocolPolicyConflict"}]}]}}
+{"status":{"conditions":[{"type":"Accepted","status":"False","reason":"InvalidProxyProtocolConfig"},{"type":"ResolvedRefs","status":"False","reason":"RefNotPermitted"},{"type":"ListenersNotValid","status":"True","reason":"ProxyProtocolPolicyConflict"}],"listeners":[{"name":"tcp","conditions":[{"type":"Accepted","status":"False","reason":"InvalidProxyProtocolConfig"},{"type":"ResolvedRefs","status":"False","reason":"RefNotPermitted"},{"type":"Conflicted","status":"True","reason":"ProxyProtocolPolicyConflict"}]}]}}
 JSON
         ;;
       job)
@@ -193,8 +193,8 @@ grep -q 'resources: \["endpointslices"\]' "$TRUST_RBAC"
 grep -q 'apiGroups: \["gateway.networking.k8s.io"\]' "$TRUST_RBAC"
 grep -q 'resources: \["gateways", "httproutes", "grpcroutes", "tcproutes", "udproutes", "tlsroutes", "referencegrants", "backendtlspolicies"\]' "$TRUST_RBAC"
 grep -q 'apiGroups: \["edgion.io"\]' "$TRUST_RBAC"
-grep -q 'resources: \["edgiontls", "edgionstreamplugins", "edgionplugins", "edgionconfigdatas", "linksys", "edgionacmes", "edgionbackendtrafficpolicies", "edgionbackends"\]' "$TRUST_RBAC"
-grep -q 'resources: \["edgionconfigdatas/status"\]' "$TRUST_RBAC"
+grep -q 'resources: \["edgiontls", "edgionstreamplugins", "edgionplugins", "edgionconfigdata", "linksys", "edgionacmes", "edgionbackendtrafficpolicies", "edgionbackends"\]' "$TRUST_RBAC"
+grep -q 'resources: \["edgionconfigdata/status"\]' "$TRUST_RBAC"
 [ "$(grep -c 'verbs: \["get", "list", "watch"\]' "$TRUST_RBAC")" -eq 4 ]
 [ "$(grep -c 'verbs: \["get", "update", "patch"\]' "$TRUST_RBAC")" -eq 1 ]
 ! grep -q '"\*"' "$TRUST_RBAC"

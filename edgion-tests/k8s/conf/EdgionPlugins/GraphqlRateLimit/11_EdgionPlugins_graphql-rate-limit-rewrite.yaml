@@ -1,0 +1,28 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: graphql-rate-limit-rewrite
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: ProxyRewrite
+      config:
+        uri: "/graphql-query?query=%7Busers%28first%3A10%29%7Bname%7D%7D"
+    - type: GraphqlRateLimit
+      alias: cost-budget
+      config:
+        schema: |
+          type Query { users(first: Int = 10): [User!]! }
+          type User { name: String! }
+        costRules:
+          - field: Query.users
+            multipliers: [first]
+        redisRef: edgion-default/redis-test
+        key:
+          - type: header
+            name: X-Graphql-Key
+        policies:
+          - rate: 24
+            interval: "2h"
+            algorithm: FixedWindow
+        requestTimeout: "2s"

@@ -105,8 +105,7 @@ fn echo_body(response: &str) -> Option<&str> {
 
 async fn accepted_status(ctx: &TestContext) -> Result<String, String> {
     let resource = helpers::fetch_resource_status(ctx, "EdgionPlugins", NAMESPACE, DYNAMIC_PLUGIN).await?;
-    let conditions = resource["status"]["conditions"]
-        .as_array()
+    let conditions = helpers::controller_local_conditions(&resource["status"])
         .ok_or_else(|| format!("{DYNAMIC_PLUGIN} has no status.conditions"))?;
     conditions
         .iter()

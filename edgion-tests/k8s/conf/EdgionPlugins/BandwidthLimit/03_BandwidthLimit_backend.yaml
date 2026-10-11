@@ -1,0 +1,11 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: bandwidth-limit-backend
+  namespace: edgion-default
+spec:
+  upstreamResponseBodyFilterPlugins:
+    - enable: true
+      type: BandwidthLimit
+      config:
+        rate: "100kb"

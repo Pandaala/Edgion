@@ -1,0 +1,23 @@
+apiVersion: edgion.io/v1
+kind: EdgionBackend
+metadata:
+  name: messages-provider
+  namespace: edgion-test
+spec:
+  ai:
+    provider: Anthropic
+    endpoint: http://test-http.edgion-test.svc.cluster.local:30001/messages/native
+    allowInsecureHttp: true
+    credentialPool:
+      credentials:
+        - name: primary
+          secretRef:
+            name: messages-credential
+    models:
+      - name: fixture-model
+        aliases: [fixture-alias]
+        pricing:
+          inputPerMillionUsd: "10"
+          outputPerMillionUsd: "20"
+    defaults:
+      streaming: true

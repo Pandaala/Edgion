@@ -1,0 +1,23 @@
+apiVersion: edgion.io/v1
+kind: EdgionBackend
+metadata:
+  name: responses-provider
+  namespace: edgion-test
+spec:
+  ai:
+    provider: OpenAI
+    endpoint: http://test-http.edgion-test.svc.cluster.local:30001/ai/responses
+    allowInsecureHttp: true
+    credentialPool:
+      credentials:
+        - name: primary
+          secretRef:
+            name: responses-credential
+    models:
+      - name: fixture-model
+        aliases: [fixture-alias]
+        pricing:
+          inputPerMillionUsd: "10"
+          outputPerMillionUsd: "20"
+    defaults:
+      streaming: true

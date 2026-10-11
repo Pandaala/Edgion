@@ -9,7 +9,7 @@ metadata:
 spec:
   type: httpdns
   config:
-    urlTemplate: "http://edgion-test-server.edgion-test.svc.cluster.local:30001/dns/resolve?host={domain}&ip=pod"
+    urlTemplate: "http://test-http-retry.edgion-test.svc.cluster.local:30001/dns/resolve?host={domain}&ip=pod"
     response:
       kind: json
       ipPath: ips

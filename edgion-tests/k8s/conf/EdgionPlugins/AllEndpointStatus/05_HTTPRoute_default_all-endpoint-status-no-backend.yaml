@@ -1,5 +1,4 @@
-# HTTPRoute for AllEndpointStatus with non-existent backend
-# Points to a service that doesn't exist to test 0-endpoint handling
+# HTTPRoute for AllEndpointStatus with a real Service and no matching Pods
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -23,6 +22,6 @@ spec:
             kind: EdgionPlugins
             name: all-endpoint-status-no-backend
       backendRefs:
-        - name: nonexistent-service
+        - name: no-endpoint-svc
           namespace: edgion-test
-          port: 39999
+          port: 38999

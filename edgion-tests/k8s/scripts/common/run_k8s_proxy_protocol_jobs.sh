@@ -479,10 +479,10 @@ rules:
     resources: ["gateways", "httproutes", "grpcroutes", "tcproutes", "udproutes", "tlsroutes", "referencegrants", "backendtlspolicies"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["edgion.io"]
-    resources: ["edgiontls", "edgionstreamplugins", "edgionplugins", "edgionconfigdatas", "linksys", "edgionacmes", "edgionbackendtrafficpolicies", "edgionbackends"]
+    resources: ["edgiontls", "edgionstreamplugins", "edgionplugins", "edgionconfigdata", "linksys", "edgionacmes", "edgionbackendtrafficpolicies", "edgionbackends"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["edgion.io"]
-    resources: ["edgionconfigdatas/status"]
+    resources: ["edgionconfigdata/status"]
     verbs: ["get", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

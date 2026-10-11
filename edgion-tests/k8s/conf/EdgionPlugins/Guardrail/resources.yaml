@@ -8,7 +8,7 @@ spec:
     - type: AiProxy
       config:
         api: openaiChat
-        usageObservation: off
+        usageObservation: "off"
         backendSelection:
           type: Weighted
     - type: Guardrail
@@ -36,7 +36,7 @@ spec:
     - type: AiProxy
       config:
         api: openaiChat
-        usageObservation: off
+        usageObservation: "off"
         backendSelection:
           type: Weighted
     - type: Guardrail
@@ -64,7 +64,7 @@ spec:
     - type: AiProxy
       config:
         api: openaiChat
-        usageObservation: off
+        usageObservation: "off"
         backendSelection:
           type: Weighted
     - type: Guardrail
@@ -93,7 +93,7 @@ spec:
     - type: AiProxy
       config:
         api: openaiChat
-        usageObservation: off
+        usageObservation: "off"
         backendSelection:
           type: Weighted
     - type: Guardrail
@@ -121,7 +121,7 @@ spec:
     - type: AiProxy
       config:
         api: openaiChat
-        usageObservation: off
+        usageObservation: "off"
         backendSelection:
           type: Weighted
     - type: Guardrail
@@ -149,7 +149,7 @@ spec:
     - type: AiProxy
       config:
         api: openaiChat
-        usageObservation: off
+        usageObservation: "off"
         backendSelection:
           type: Weighted
     - type: Guardrail
@@ -187,7 +187,7 @@ spec:
     - type: AiProxy
       config:
         api: openaiChat
-        usageObservation: off
+        usageObservation: "off"
         backendSelection:
           type: Weighted
     - type: Guardrail
@@ -556,3 +556,55 @@ spec:
         - group: edgion.io
           kind: EdgionBackend
           name: guardrail-anthropic-provider
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: guardrail-hold-reject
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiProxy
+      config:
+        api: openaiChat
+        usageObservation: "off"
+        backendSelection:
+          type: Weighted
+    - type: Guardrail
+      config:
+        target:
+          name: test-http
+          namespace: edgion-test
+          port: 30001
+        timeoutMs: 2000
+        maxResponseBytes: 4096
+        request:
+          path:
+            template: /guardrail/decision/reject
+        windowBytes: 1
+        overlapBytes: 0
+        holdFirstWindow: true
+        headHoldTimeoutMs: 5000
+        failOpen: false
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: guardrail-hold-reject
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - guardrail-hold-reject.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: guardrail-hold-reject
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: single-provider-fixture-provider

@@ -130,6 +130,8 @@ spec:
     - enable: true
       type: Wasm
       config:
+        pluginConfig:
+          string: response-body-probe
         source:
           file: /usr/local/edgion/test-assets/header_demo.wasm
         failOpen: false

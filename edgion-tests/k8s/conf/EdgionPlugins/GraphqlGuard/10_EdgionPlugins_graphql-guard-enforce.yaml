@@ -1,0 +1,32 @@
+{
+  "apiVersion": "edgion.io/v1",
+  "kind": "EdgionPlugins",
+  "metadata": {
+    "name": "graphql-guard-enforce",
+    "namespace": "edgion-default"
+  },
+  "spec": {
+    "requestPlugins": [
+      {
+        "type": "GraphqlGuard",
+        "config": {
+          "maxDepth": 1,
+          "maxAliases": 0,
+          "maxRootFields": 1,
+          "maxFields": 1,
+          "maxCost": 2,
+          "showQueryCost": true,
+          "schema": "type Query { ping:Int @deprecated user:User blocked:Int } type User { id:ID @deprecated(reason:\"Use identifier\") child:User } scalar Date @specifiedBy(url:\"https://example.com/date\")",
+          "rootFields": {
+            "query": {
+              "deny": [
+                "blocked"
+              ]
+            }
+          },
+          "mode": "enforce"
+        }
+      }
+    ]
+  }
+}

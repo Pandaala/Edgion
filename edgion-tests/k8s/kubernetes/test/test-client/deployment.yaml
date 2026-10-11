@@ -19,6 +19,8 @@ spec:
         app.kubernetes.io/name: edgion-test-client
         app.kubernetes.io/component: test
     spec:
+      securityContext:
+        fsGroup: 1000
       containers:
       - name: test-client
         image: docker.io/pandaala/edgion-test-client:v0.1.1
@@ -26,6 +28,8 @@ spec:
         # Keep container running for manual test execution
         command: ["sleep", "infinity"]
         env:
+        - name: EDGION_TEST_SCRATCH_DIR
+          value: /usr/local/edgion/tmp/integration_testing/scratch
         - name: RUST_LOG
           value: "info"
         # Test server endpoints (direct mode)
@@ -71,6 +75,8 @@ spec:
             cpu: 500m
             memory: 512Mi
         volumeMounts:
+        - name: test-scratch
+          mountPath: /usr/local/edgion/tmp/integration_testing/scratch
         - name: test-ports
           mountPath: /usr/local/edgion/conf
           readOnly: true
@@ -81,6 +87,8 @@ spec:
           mountPath: /usr/local/edgion/edgion-tests/certs/mtls
           readOnly: true
       volumes:
+      - name: test-scratch
+        emptyDir: {}
       - name: test-ports
         configMap:
           name: edgion-test-ports

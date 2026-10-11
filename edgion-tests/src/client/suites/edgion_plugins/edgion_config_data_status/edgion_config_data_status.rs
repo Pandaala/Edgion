@@ -17,6 +17,7 @@
 // which the controller rejects during EdgionStreamPlugins preparse.
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use crate::suites::status::helpers::controller_local_conditions;
 use std::time::Instant;
 
 const NS: &str = "edgion-test";
@@ -183,7 +184,7 @@ impl EdgionConfigDataStatusTestSuite {
                         match req.send().await {
                             Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
                                 Ok(body) if body["success"].as_bool().unwrap_or(false) => {
-                                    if let Some(conditions) = body["data"]["status"]["conditions"].as_array() {
+                                    if let Some(conditions) = controller_local_conditions(&body["data"]["status"]) {
                                         if let Some(accepted) = find_condition(conditions, "Accepted") {
                                             if accepted["status"].as_str() == Some("False")
                                                 && accepted["reason"].as_str() == Some("Invalid")

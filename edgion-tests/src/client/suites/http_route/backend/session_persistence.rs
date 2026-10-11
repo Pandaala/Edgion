@@ -42,6 +42,23 @@ async fn cookie_wire_response(response: reqwest::Response) -> Result<(String, Op
     if response.status() != 200 {
         return Err(format!("expected HTTP 200, got {}", response.status()));
     }
+    let backend_identity = if std::env::var("EDGION_TEST_K8S_MODE").as_deref() == Ok("true") {
+        let value = response
+            .headers()
+            .get("x-test-backend-identity")
+            .ok_or("Kubernetes echo response has no backend identity header")?
+            .to_str()
+            .map_err(|_| "Kubernetes backend identity header is not text")?;
+        let address = value
+            .parse::<std::net::SocketAddr>()
+            .map_err(|_| "Kubernetes backend identity header is not a socket address")?;
+        if address.ip().is_unspecified() || address.port() == 0 {
+            return Err("Kubernetes backend identity is not a concrete endpoint".into());
+        }
+        Some(address.to_string())
+    } else {
+        None
+    };
     let mut cookies = response
         .headers()
         .get_all("set-cookie")
@@ -60,7 +77,7 @@ async fn cookie_wire_response(response: reqwest::Response) -> Result<(String, Op
         .find_map(|line| line.strip_prefix("Server: "))
         .filter(|addr| !addr.is_empty())
         .ok_or("echo response has no backend identity")?;
-    Ok((addr.to_owned(), token))
+    Ok((backend_identity.unwrap_or_else(|| addr.to_owned()), token))
 }
 
 async fn cookie_wire_scenarios(ctx: TestContext) -> Result<String, String> {

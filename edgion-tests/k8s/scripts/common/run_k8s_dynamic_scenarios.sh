@@ -241,7 +241,7 @@ needs_endpoint_discovery=false
 for scenario_id in "${SELECTED_SCENARIOS[@]}"; do
   case "${scenario_id}" in
     DirectEndpointPortResolution|RegionRouteValidation) needs_endpoint_discovery=true ;;
-    AiGuardOrderingDynamic)
+    AiGuardOrderingDynamic|AiMessagesBinding|AiResponsesContinuation|DslXmlDynamic)
       BACKEND_ENDPOINT_IPS="$(
         "${ENDPOINT_INVENTORY}" --namespace edgion-test \
           --service edgion-test-server --port 30001 --timeout-secs 30 --output ips
