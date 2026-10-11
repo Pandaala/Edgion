@@ -1,0 +1,78 @@
+{
+  "partition": "PART-190",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-resources/src/contracts/gateway_api_references.json",
+      "sha256": "3505a8cdd0f5ed085157966cbb3945c91390c334b982beb7e0be05b8499cc61e",
+      "fully_read": true,
+      "read_method": "Complete source JSON semantics through lossless DAG; duplicate members rejected by source reader; all696 nodes read in3bounded outputs, not metadata/filehash inference",
+      "disposition": "No actionable finding: generated finite18 independent sourceGVK reference schemas+scope inventories, required/default/leaf/scalar/cardinality/CEL and source differences retain selected owner. Full unselected inventory separate from scoped executable schema"
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "tasks/review-architecture-20261009/READ-CONTRACT-DAG.json": {
+      "sha256": "01b1276213bb1da4416132c9ac8646311f97a18c2cbef90cabc3a154cb55a8a3",
+      "scope": "All696 lossless interned JSON semantic nodes personally inspected0-229,230-459,460-695; roots/arrays/object edges and scalar literals preserved. Reading aid, not application/check execution"
+    },
+    "cicd/checks/generate_gateway_api_reference_contract.py": {
+      "sha256": "270298337f9d6b26b5af5c46abed2498e4f70ce4311a753eb564290a45b4678b",
+      "scope": "Full original source generator, not executed"
+    },
+    "cicd/checks/generate_gateway_api_transform_contract.py": {
+      "sha256": "2cf5836f70417fb1a5d75b13481cd1ea621b77f06d4c0974c491505770ef6b96",
+      "scope": "Full original generator1-EOF across bounded reads; not executed"
+    },
+    "cicd/checks/test_generate_gateway_api_reference_contract.py": {
+      "sha256": "06da8e1b6f3374ccc36794a16aa12ecad23d8d4023b170b33bb74ba5c3e4ca14",
+      "scope": "Full actual test bodies, not executed"
+    },
+    "cicd/checks/test_generate_gateway_api_transform_contract.py": {
+      "sha256": "9ebf808cb0f4e61713ac0c713a815fa8466862508245f705e9c209fa164f3e33",
+      "scope": "Full actual test bodies, not executed"
+    },
+    "edgion-resources/src/resources/refs/source_contract.rs": {
+      "sha256": "e14e3e022b3c83061354e39323b45847566ed70f4a064bb261ee65d508277409",
+      "scope": "Full actual immutable compiled18source owner/projection/merge"
+    },
+    "edgion-resources/src/crd_contract.rs": {
+      "sha256": "a145537b7bff59a138da034da2ac1ed8224bb96294a8b98f98a9da695e8ad06a",
+      "scope": "1-280 compiler/caps/defaults/normalization/LazyLock; no full fresh source read claimed"
+    },
+    "edgion-resources/src/resources/request_transform.rs": {
+      "sha256": "ff291c068d8ff0d99012dd86dd2c179dc44a6a55d8b64b5be68c08c97e127504",
+      "scope": "1-155 actual typed/context contract consumers"
+    },
+    "edgion-controller/src/conf_mgr/schema_validator.rs": {
+      "sha256": "ba353745a64eb12b23ccac3888884ae3878b83f3fb54618d1de6c9c7b563768a",
+      "scope": "300-415 actual sourceGVK prepare/schema validation/error projection"
+    },
+    "edgion-resources/tests/unit/resources/refs/source_contract_test.rs": {
+      "sha256": "cae8883c70d4dc366acdd8ea7f9c149cc409e5ce78d618c53365efeaf3c98bdb",
+      "scope": "Full114 actual source channels/null/default/group/listbudget tests"
+    },
+    "edgion-resources/tests/unit/crd_contract_test.rs": {
+      "sha256": "518edb0be86cb060cc81456005f510d21ce2bae29566b3d77f22d4238a9877b3",
+      "scope": "Full168"
+    },
+    "edgion-resources/tests/unit/resources/request_transform_test.rs": {
+      "sha256": "87917fb358797402ecee5dc06c65cfafdbead5b073f773cf26beb1ab7d6de950",
+      "scope": "Full actual tests"
+    },
+    "skills/04-review/plugin-runtime/regression-guards/gateway-api-request-transform-validation-and-preparation.md": {
+      "sha256": "ca95e5a7997c45ce87dd1160a1f7823562aa6207d030bbee8a8993479e94a40f",
+      "scope": "Full original; v1.5 prose staleactual1.6.2"
+    },
+    "skills/04-review/resources/intentional-design/schema-validator-non-k8s-asymmetry.md": {
+      "sha256": "35f0559a526dbc627449f1d1e005ed7f31bb7c960591999355d5ea9b67592820",
+      "scope": "1-80 original finite-source exception/availability boundary"
+    },
+    "skills/01-architecture/05-resources/00-schema-transport-contract.md": {
+      "sha256": "d20e74c1c7ccf6183f893bc919767a27bd3fbb47486415d14651a76fdef5a597",
+      "scope": "Full original retained"
+    }
+  },
+  "limits": "Complete JSON member/value/array order inspection, raw whitespace presentation compressed losslessly; not generator validation execution or complete vendoredCRD comparison. Actual cold compiler/consumers/tests and original finite-source/parity contracts read. No primary supporting credit, production writes/builds/tests/Git/network or throughput/compliance claim."
+}

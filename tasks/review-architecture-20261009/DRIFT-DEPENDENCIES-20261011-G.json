@@ -1,0 +1,24 @@
+{
+  "sources_changed": [],
+  "support_changed": [
+    "edgion-gateway/tests/unit/ai/context_test.rs",
+    "edgion-gateway/tests/unit/ctx_test/request_scenario_state_tests.rs",
+    "skills/04-review/cpu-memory/SKILL.md",
+    "tasks/pending/architecture-plugin-session-ai-capability/02-implementation.md",
+    "tasks/pending/architecture-plugin-session-ai-capability/03-subtasks.md",
+    "tasks/pending/architecture-plugin-session-ai-capability/architecture-plugin-session-ai-capability.md"
+  ],
+  "support_added": [
+    "skills/04-review/cpu-memory/intentional-design/http-request-context-layout-budget.md",
+    "tasks/pending/architecture-plugin-session-ai-capability/05-context-layout-evidence.json",
+    "tasks/pending/architecture-plugin-session-ai-capability/06-context-budget-amendment.md",
+    "tasks/pending/architecture-plugin-session-ai-capability/07-final-result-review.md",
+    "tasks/pending/architecture-plugin-session-ai-capability/amendment-lightweight-verification.json",
+    "tasks/pending/architecture-plugin-session-ai-capability/amendment-verification-results.json",
+    "tasks/pending/architecture-plugin-session-ai-capability/combined-result-source-binding.json",
+    "tasks/pending/architecture-plugin-session-ai-capability/combined-result.diff",
+    "tasks/pending/architecture-plugin-session-ai-capability/context-amendment-source-binding.json"
+  ],
+  "partitions": {},
+  "limits": "Recorded effective dependency audit only; prior invalidations remain pending. Unrelated rule/index clarification revalidations retained."
+}

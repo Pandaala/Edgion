@@ -1,0 +1,147 @@
+{
+  "partition": "PART-452",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_backend/single_provider.rs",
+      "sha256": "ab98df94606aaedf0bc349b7a2735ab65906031eb27b39641af65e6e98a13e38",
+      "fully_read": true,
+      "disposition": "Full1-3554 including embedded tests, frozen hash before/after. ARCH344 selected K8s static suite lacks mandatory retry-business-quota route/plugin dependency. Preserve paced H1/H2/cancellation, all-attempt Redis charging, quota/framing/settlement and incremental JSON/encoded observations. Existing rotation owns initial/all-outcome restoration; context owns HTTP port; no264/265/266/296/304 extension."
+    }
+  ],
+  "candidates": [
+    "ARCH-344"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Retained full464 personally read original, fresh unchanged/no nested rules."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Retained full136 original index."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Retained full342 graded gates."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original reread."
+    },
+    "skills/04-review/testing/regression-guards/kubernetes-dynamic-scenario-inventory-parity.md": {
+      "sha256": "0b0f3def4c28d4c556905856f6df45429506625764203d8a3a685ffd981e15af",
+      "scope": "Full original reread; static inventory/historical dynamic-only limits."
+    },
+    "skills/04-review/testing/compatibility-constraints/kubernetes-dynamic-fixture-boundaries.md": {
+      "sha256": "4a4e0a5a3bfd0cdfa5519816ae2f3fc8a4a70cc57a6e5a0991d84953ec4bdc57",
+      "scope": "Full original reread."
+    },
+    "skills/04-review/ai-quota/regression-guards/gateway-terminated-stream-settles-its-reservation.md": {
+      "sha256": "86a4a7dad938ebc8b42cc59a8d3c49116620d8bd94ef48af957ede60fde4e9e5",
+      "scope": "Full original."
+    },
+    "skills/04-review/ai-quota/regression-guards/injected-error-event-needs-its-own-sse-boundary.md": {
+      "sha256": "bbf4ee57caf6c32c81a89466d6e667749d0bb30ebdf0fde01120fb013055d18c",
+      "scope": "Full original."
+    },
+    "skills/04-review/ai-quota/regression-guards/sse-degradation-must-not-disable-enforcement.md": {
+      "sha256": "c721d4dc4e94b70b89f6fb6eccd96874d3f55345c9e0294e6231053c8d2de47d",
+      "scope": "Full original."
+    },
+    "skills/04-review/ai-quota/regression-guards/sse-malformed-events-must-not-disable-enforcement.md": {
+      "sha256": "34f30a48f81a001bd3f9f4d6214e743f2795a16820078e17add52ffc93ae0092",
+      "scope": "Full original."
+    },
+    "skills/04-review/ai-routing/regression-guards/ai-quota-throttle-must-wait-and-readmit-once.md": {
+      "sha256": "e62cdfa323eafec6843455e7e6d985a1005741c345d5ad7a2ad9e3201105aa25",
+      "scope": "Full original."
+    },
+    "skills/04-review/ai-routing/regression-guards/streaming-usage-is-a-monotonic-cumulative-snapshot.md": {
+      "sha256": "b067751f562c0b13ee4adeef312c546c6030a603b695168d85ffbd0187f70517",
+      "scope": "Full original."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "1765-1800; retained1457/3515-3516 port/registration."
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "525-590,630-694; retained749-859."
+    },
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "1eb27bded8bcb40a82ea3cfd4ed6f20d386deedd1f349c7035a226fd44739454",
+      "scope": "1488-1675,1750-1935,2160-2210,2300-2425,5130-5231 including actual deterministic stream fixture unit body."
+    },
+    "edgion-tests/src/client/dynamic/scenarios/ai_backend_secret_rotation.rs": {
+      "sha256": "6e66c27dd2f4665844b976a9dae220fa26d7ed497fca7deca5d700aafa15d1bb",
+      "scope": "Full including embedded fixture test; explicit initial/all-outcome restoration."
+    },
+    "edgion-tests/k8s/scripts/common/run_test_client_batch.sh": {
+      "sha256": "3f892894a61cd08ae873694e56a60ddd0f91a79861464fa013a61b110a5e7f9d",
+      "scope": "Full actual selected batch invocation."
+    },
+    "edgion-tests/k8s/scripts/common/tests/run_test_client_batch_selection_test.sh": {
+      "sha256": "db4db5df2ec7f3e24aac192eb187f6f4289f13261c5bceb6ee963c6bf4abe2cd",
+      "scope": "Full actual selection test."
+    },
+    "edgion-tests/k8s/scripts/run_k8s_integration.sh": {
+      "sha256": "9c7f539e02edccc91c46908c4b6afe1af3fb867b72c7b6061b613bd2723e641f",
+      "scope": "1-30,2580-2700,2790-2910; retained2600-2790."
+    },
+    "edgion-tests/k8s/scripts/common/validate_suite_parity.sh": {
+      "sha256": "55cb642237933d96b39c397dba69ed3f1d71f2eeda4be936d2176facc3103a2a",
+      "scope": "1-70,113-149,315-420; retained full original."
+    },
+    "edgion-tests/k8s/scripts/common/k8s_suite_scope_exceptions.tsv": {
+      "sha256": "26630cc0cdd07ff2dd2eade67a752fa941509749557bc01ebcfbdb67474165a0",
+      "scope": "Full."
+    },
+    "edgion-tests/k8s/README.md": {
+      "sha256": "d548d1dd3c0ccf954d098a7bab8c015f8f9b6c2fc5d498f0392ed5e33a6aa1d3",
+      "scope": "Full actual no-runtime-conversion fixture policy."
+    },
+    "edgion-gateway/src/ai/accounting/usage.rs": {
+      "sha256": "8e678f930f41b3673a0ecc9b5011edd2730496c13fb4e46b571d2d6e0791a11f",
+      "scope": "990-1228 actual streamed enforcement/accounting."
+    },
+    "edgion-gateway/src/ai/runtime/attempt_runtime.rs": {
+      "sha256": "23bcaf0a7529f7e909c3b52981574e2eedc5dcaed4774d0ed0961729eda4bf17",
+      "scope": "415-543; retained648-690."
+    },
+    "edgion-gateway/tests/unit/ai/accounting/usage_test.rs": {
+      "sha256": "ed42177763bd1ca9d591d7e5345f2e9f2b138e261b74048eeaf35b8dbe01af11",
+      "scope": "268-343,419-476,1030-1098 actual test bodies."
+    },
+    "edgion-tests/integration/conf/EdgionBackend/SingleProvider/04_EdgionBackend_enabled.yaml": {
+      "sha256": "45b5df91ffedf4559604393475618940e1e1807c45f80f418fc884a99d2f98b6",
+      "scope": "Full authored backend/plugin/route fixtures; exact retry-quota dependency/local versus K8s adaptation."
+    },
+    "edgion-tests/integration/conf/EdgionBackend/SingleProvider/05_EdgionPlugins_ai-proxy.yaml": {
+      "sha256": "6567148f87de57935552932600e829bdceef819337550eaffae1b887022396da",
+      "scope": "Full authored backend/plugin/route fixtures; exact retry-quota dependency/local versus K8s adaptation."
+    },
+    "edgion-tests/integration/conf/EdgionBackend/SingleProvider/06_HTTPRoute_ai-proxy.yaml": {
+      "sha256": "0fd33b4701851cfffd99bd0de39e13671ec5a53584bde10af595b5ebbaaaef2c",
+      "scope": "Full authored backend/plugin/route fixtures; exact retry-quota dependency/local versus K8s adaptation."
+    },
+    "edgion-tests/k8s/conf/EdgionBackend/SingleProvider/04_EdgionBackend_enabled.yaml": {
+      "sha256": "b9bded92f29ac51931ab13a09794052998a434bb5e2770cb74f64630b57b38d3",
+      "scope": "Full authored backend/plugin/route fixtures; exact retry-quota dependency/local versus K8s adaptation."
+    },
+    "edgion-tests/k8s/conf/EdgionBackend/SingleProvider/05_EdgionPlugins_ai-proxy.yaml": {
+      "sha256": "f2e028000ee71639598bb32cdf41aaf11772b27506fe4fcd384a02db8c0034bf",
+      "scope": "Full authored backend/plugin/route fixtures; exact retry-quota dependency/local versus K8s adaptation."
+    },
+    "edgion-tests/k8s/conf/EdgionBackend/SingleProvider/06_HTTPRoute_ai-proxy.yaml": {
+      "sha256": "4824112a75f739920be63b7f67f8dafdeb9a6fbba763e92f00c00c772f4177fd",
+      "scope": "Full authored backend/plugin/route fixtures; exact retry-quota dependency/local versus K8s adaptation."
+    },
+    "edgion-tests/k8s/conf/EdgionBackend/SingleProvider/08_LinkSys_redis-test.yaml": {
+      "sha256": "c4d83b995204d68cf5d983a8616e3158fe91783a87b40434257718457cc6ffc7",
+      "scope": "Full namespaced existing Redis dependency."
+    }
+  },
+  "limits": "Static complete contextual source evidence only; no executions/builds/network/Git/mutations. Default authored K8s fixture claim; customCONF_ROOT/external preseeding may mask. No promise entire K8s run passes after bounded fixture correction. Supporting reads zero primary coverage."
+}

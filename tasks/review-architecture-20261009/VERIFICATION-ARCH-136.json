@@ -1,0 +1,99 @@
+{
+  "candidate": "ARCH-136",
+  "complete": true,
+  "verifier": "/root/analyze_outbound",
+  "decision": "confirmed",
+  "input_sha256": "f4034a231c365399c8b6111c662497e782c5a0bf2cd01e5787b7848168c08a08",
+  "approved_claim_sha256": "c6d6af792c8aad5ebe28971fad3b147852966c27d519ed127b8a2106dc247b81",
+  "evidence": [
+    "Opaque core Secret lacking data/tls.crt is supported, avoiding native TLS Secret admission objection; sole CertNotFound/KeyNotFound filtered into false success. Absent/denied branch mutually exclusive. Gateway rejects or retains eligible whole predecessor; no serving bypass. Canonical existing fixed messages/type sufficient."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "full original personally retained/fresh unchanged; current independent gates"
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "full original personally retained/fresh unchanged; current independent gates"
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "full original personally retained/fresh unchanged; current independent gates"
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "full original personally retained/fresh unchanged; current independent gates"
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "full original personally retained/fresh unchanged; current independent gates"
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "full original personally retained/fresh unchanged; current independent gates"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_tls.rs": {
+      "sha256": "47b60b8e147ac8fd1d1ad341819fa98a2fd1dd1bd75f43203f494d28f5fc479f",
+      "scope": "full1-528"
+    },
+    "edgion-common/src/tls_validation.rs": {
+      "sha256": "dc721b4c99879e77d184b4e97f00bc9b56f57c50b3d389f9edeab15073b37562",
+      "scope": "1-585 complete validator/status bodies"
+    },
+    "edgion-resources/src/resources/edgion_tls.rs": {
+      "sha256": "fbd6f0b4e557d08543f071edd671f0e807b14b880204661d99da153b976060b6",
+      "scope": "354-392"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/secret.rs": {
+      "sha256": "0b6659cd96e2f2ab4ac24dfbae4e6f2e0e5660b882ab5d3eb39232004f544a63",
+      "scope": "1-201"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/credential/ca_refs.rs": {
+      "sha256": "c7bc5622cfebe43108a7aa076a1e10a40dd5f69d338ced62ebcd55be6ec5c5f0",
+      "scope": "327-338"
+    },
+    "edgion-common/src/secret/secret_store.rs": {
+      "sha256": "87df9e6a37e1b5b3538a9eb8e81fb4d0bbd0b8ab87df2cfd2fdffa7649f0b6b1",
+      "scope": "1-95"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/status_utils.rs": {
+      "sha256": "21d226ee58ab080de243eba391c85f3ef4a7ce0f2a68583b15c7074ac364e065",
+      "scope": "288-335,537-564,606-655"
+    },
+    "edgion-gateway/src/tls/store/tls_store.rs": {
+      "sha256": "5e6c04cd8a9d3298e7402e55d22a88e09c6f1b392c06129529df569ab7e79366",
+      "scope": "237-326"
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/edgion_tls_test.rs": {
+      "sha256": "a7bb917bd1c770d5cae79caad0e1159629b1c431cfd938cec4f3f103b56ffc74",
+      "scope": "full1-754 actual bodies"
+    },
+    "edgion-common/tests/unit/tls_validation_test.rs": {
+      "sha256": "e1283accfcef6fb19e9d23f4eaae42087be72e3ac34410dfc4b2db86406d8bac",
+      "scope": "actual bodies1-95"
+    },
+    "edgion-gateway/tests/unit/tls/store/tls_store_test.rs": {
+      "sha256": "72c61202dfb12365d314ebbdafd86c063dda0bde7d091e96dea397b5cb8525ce",
+      "scope": "actual bodies156-181,282-300"
+    },
+    "skills/01-architecture/05-resources/09-edgion-tls.md": {
+      "sha256": "6ae02b95c0ebd798844fa14f9a9f8dd6681a66db26abcfbff3a1363d7acadf68",
+      "scope": "full"
+    },
+    "skills/04-review/tls/intentional-design/last-known-good-follows-resource-key.md": {
+      "sha256": "10a2a49a357d9c01f9b5f3daf48052640c423269418d59bbb575d485bcfea390",
+      "scope": "full"
+    },
+    "skills/04-review/tls/regression-guards/edgion-tls-serving-chain-install.md": {
+      "sha256": "075132389c7e04484fe5d93276c597952f18c416c59b7d7250780ebecd307f8d",
+      "scope": "full"
+    },
+    "skills/04-review/tls/regression-guards/runtime-expiry-recheck-symmetry.md": {
+      "sha256": "ce14005f3d8eeeb46198a8e41aff9d35fd079eab08df0f2c99605c1b7841921b",
+      "scope": "full"
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

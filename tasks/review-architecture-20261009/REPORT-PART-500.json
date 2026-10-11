@@ -1,0 +1,57 @@
+{
+  "partition": "PART-500",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/ldap_auth_tls/ldap_auth_tls.rs",
+      "sha256": "3729698af350e6bc98c9e8e81fe01ceb7a3d724b70e52fa989e28811a057f9fa",
+      "fully_read": true,
+      "disposition": "Full1-195; Four registeredTLS cases; ARCH373 current K8s purported mTLS endpoint doesnotrequire certificate, others preserved."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/ldap_auth_tls/mod.rs",
+      "sha256": "6e88e5a4ec801aebe5e67a3974459d7439474ca8c3887ee163457bb56cf3b3ac",
+      "fully_read": true,
+      "disposition": "Full1-17; Live export accepted; stale inlinePEM wrongCA comment documentationonly."
+    }
+  ],
+  "candidates": [
+    "ARCH-373"
+  ],
+  "support_selected": {
+    "edgion-tests/k8s/conf/EdgionPlugins/LdapAuthTls/11_Deployment_edgion-test_openldap-tls.yaml": {
+      "sha256": "1ad82fa9dbc880149fb3867431d0eae5a10c8bd1ecf8f6cbc2b30201a4cf5556",
+      "scope": "Full1-113 try-policy server."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/LdapAuthTls/12_Service_edgion-test_openldap-tls.yaml": {
+      "sha256": "4f9576697fc3a3d4fbd8c4f62ba08dbf45035defa098ecdb22c57b007e02b5c0",
+      "scope": "Full1-21 shared listener target."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/LdapAuthTls/04_EdgionPlugins_default_ldap-auth-tls-mtls.yaml": {
+      "sha256": "1027cea6bdd4abce90986a419e98b69cafd6a6f632962f88309735b71c2bd306",
+      "scope": "Full1-25 K8s mTLS plugin."
+    },
+    "edgion-tests/integration/conf/Services/ldap-openldap-tls/docker-compose.yml": {
+      "sha256": "7e90ff478f6c62825b1784104c4a00afe6c029168ddeec1b88aeb2d7feca7e61",
+      "scope": "Full1-61 distinct local demand endpoint."
+    },
+    "edgion-tests/k8s/scripts/run_k8s_integration.sh": {
+      "sha256": "9a858cd81d47c74f20b375a503b10f1c52107ab413116783c8a49c4ec16e42e1",
+      "scope": "1170-1275,2572-2584,2830-2900 actual strictapply/readiness/registry."
+    },
+    "edgion-tests/k8s/scripts/common/apply_all_conf_strict.sh": {
+      "sha256": "394ea219c45f7bbd72f2cfc346655215e49367dde3e0d057de565f376adb2c72",
+      "scope": "1-150 fixture filter/copy preservescontent."
+    },
+    "edgion-gateway/src/plugins/http/ldap_auth/plugin.rs": {
+      "sha256": "d4a7d9f9d41bd609de65f0a3fe2d470f24e375b42450e0b19bf3d6504c02e206",
+      "scope": "240-597 TLSidentity/nativebind/fixed503."
+    },
+    "skills/04-review/ldap-auth/regression-guards/dial-time-egress-policy.md": {
+      "sha256": "dfa65cff757eafbde736d2392b5a23ba1a8249712eece63fa72134d464336d9c",
+      "scope": "Full1-184 requiredmtls matrix/scoped retained standalone exception."
+    }
+  },
+  "limits": "All eight plugin/route YAML each topology,three local/fourK8s Secret YAML,LDIF34/make-test-certs166/real encryptedSAN+material units600-657,837-957/localrunner1030-1170/main2666-2679 and original ARCH283 body24 read. Existing negativeprobe cause distinct. Personal rules originalcurrent/nested rootonly and gates satisfied. Staticonly/no externalimage/handshake/profile execution/network/mutation/support credit."
+}

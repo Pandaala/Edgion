@@ -1,0 +1,86 @@
+{
+  "candidate": "ARCH-232",
+  "complete": true,
+  "verifier": "/root/verify_ip_union",
+  "decision": "confirmed-with-revision",
+  "input_sha256": "497fc6035a1e2138a4b93c484c06d8ccc36c733eb9a631052aaba2896b3a965c",
+  "approved_claim_sha256": "61fb1ef90b14bb876015c63fba3083f420255df92a3fc39b6cb150e23e11eb15",
+  "evidence": [
+    "Independent verification confirms repeated query/header/cookie alias copying into one immutable request arena and existing path subrange reuse as bounded precedent.",
+    "Per-selected-value logical stage work occurs before cached evaluation. Preserve original alias retention charges/count/error order separately from compact physical reservation.",
+    "Narrow approved revision: distinct empty fields already may have equal zero-length ranges; preserve logical records/order and do not add padding/source-identity machinery. Nonempty distinct fields remain separately stored.",
+    "Shared ranges may reuse current-input scans; mutable TX/body/response exclusions and phase/profile invalidation remain mandatory. No allocation-count, throughput, RSS or runtime claim."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Original full personal rules retained and fresh unchanged; no relevant nested rules."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Original knowledge navigation and plugin/body locators."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Original graded logging/access-log/redaction/restraint/reuse/performance/body/error gates."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Original review index."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Original scoped authority and revalidation."
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full original independent workflow."
+    },
+    "skills/04-review/waf/SKILL.md": {
+      "sha256": "a5fa47a4b94ee1edccf3f5cd07197eeb0d644f875616cd33c5976e66bc9edef9",
+      "scope": "Original topic decision index."
+    },
+    "skills/04-review/waf/regression-guards/fused-json-inspection.md": {
+      "sha256": "73f06b0cd3b8e083844ff91ab61f2d20e91a625aecfec8cb6eb358cd17afc6ec",
+      "scope": "Personally read logical/physical ownership and current-input scan eligibility/invalidation/work contracts."
+    },
+    "skills/04-review/waf/regression-guards/request-scoped-control-actions.md": {
+      "sha256": "69bb178d5ec89815b912a8db68b694987608665241cbb470eecaff4918ed213b",
+      "scope": "Full original control/exclusion/ordered effects contract."
+    },
+    "skills/04-review/waf/regression-guards/native-xml-inspection.md": {
+      "sha256": "8637771db2fc67e770784955da6ece8f61a42e6a6e3a1ec6c7d39cd346f5065c",
+      "scope": "1-145 structured-body/replay/logical/physical/failure contracts."
+    },
+    "skills/04-review/waf/regression-guards/static-tag-selection-before-compilation.md": {
+      "sha256": "e307952e4bf862b18bfde1131be3f636e2c2e1625591acde8c9a3d1a00d1bd84",
+      "scope": "Full original strict generation/selection."
+    },
+    "skills/04-review/waf/regression-guards/named-profile-selection-and-bundle-publication.md": {
+      "sha256": "69d48f9da9d67879916060e1a2f0b757c945d917e32626c8778414afed884621",
+      "scope": "Full original generation/request arbitration/borrowed views/policy."
+    },
+    "tasks/pending/waf-optimization-design/01-spec.md": {
+      "sha256": "657aaa3f67f3de385674df6ca986ce9c0a12e1effcb0773b509272bc83f74fef",
+      "scope": "Full original; preserved logical admission and permitted physical trajectory changes."
+    },
+    "edgion-waf/src/seclang/transaction.rs": {
+      "sha256": "24ab89af5d00efd52f78dd5c7840ba3f0bab6b322ceae48c3a0c7b0dd4a70d26",
+      "scope": "475-545,740-785,2360-2530,3100-3355,4190-4330,4480-4620,4700-4795,5350-5780,5825-6010 actual ranges/admission/cache/alias construction/projection."
+    },
+    "edgion-waf/tests/unit/seclang/transaction_test.rs": {
+      "sha256": "3fa5407fc72b9c73b555b1dd16b1b8c505d888d6990036f7b83fbbc9d2d57285",
+      "scope": "Actual bodies580-705 ordering/admission/errors;3940-4185 cache/field/profile/mutable source/phase/marker validation."
+    },
+    "edgion-gateway/src/plugins/http/waf/mod.rs": {
+      "sha256": "d5bca791f259c5266019e3982c9f9e84526961a3174dc7c48dc80fcba856f2c9",
+      "scope": "345-445 actual borrowed head/shared transaction construction."
+    },
+    "edgion-waf/Cargo.toml": {
+      "sha256": "30ce2f0a77895f232e2109a11a06cc11386299d9af0af34d9a2db4bef0ea73d1",
+      "scope": "Full leaf manifest."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

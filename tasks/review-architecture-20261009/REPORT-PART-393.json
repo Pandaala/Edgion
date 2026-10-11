@@ -1,0 +1,141 @@
+{
+  "partition": "PART-393",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-controller/src/conf_mgr/manager.rs",
+      "sha256": "8013d79913c950e802e371bb0600a64848b57bb35ea3a0794ae3d519ee72ec3f",
+      "fully_read": true,
+      "disposition": "Full source and owning consumers/contracts/tests checked; no independent actionable architecture finding."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/metadata_filter.rs",
+      "sha256": "10265add4554d91bd8687515203cd59af3848ff48e61531f923f55d10d4455b3",
+      "fully_read": true,
+      "disposition": "Full source and owning consumers/contracts/tests checked; no independent actionable architecture finding."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/mod.rs",
+      "sha256": "8e920dd114e82245ed873c6b7d54f3f2e00c9af30e5897b57564e436e892ad69",
+      "fully_read": true,
+      "disposition": "Full source and owning consumers/contracts/tests checked; no independent actionable architecture finding."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/processor_registry.rs",
+      "sha256": "942b87b4b68b78c3001f65a04f9621e86d6c0e762915e5054c630b2f5c53ca35",
+      "fully_read": true,
+      "disposition": "Canonical registry/requeue/readiness/stats owners checked; ready notification race has existing one-second safety fallback, unlike087 event watcher."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/runtime.rs",
+      "sha256": "4894a9456643f62b21dd1dc39984acf71696d0f5e5e58a85b119778af92ce811",
+      "fully_read": true,
+      "disposition": "Scoped runtime reset and retained singleton/cycles checked; ListenerPortManager same-gateway filtering/clear-before-add prevents projected cross-gateway conflict witness; no additional finding."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/schema_validator.rs",
+      "sha256": "ba353745a64eb12b23ccac3888884ae3878b83f3fb54618d1de6c9c7b563768a",
+      "fully_read": true,
+      "disposition": "ARCH-089 parallel raw versus bounded value-free schema diagnostics."
+    }
+  ],
+  "candidates": [
+    "ARCH-089"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Original full rules personally retained; all hard gates."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Original full index."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Original full graded rules."
+    },
+    "skills/01-architecture/01-controller/03-config-center/00-overview.md": {
+      "sha256": "c01fb65a3e519c127822512a5ef82e8c2fe22bdb82e94d62066819249cd6aa3b",
+      "scope": "Full original runtime/queue ownership; stale Etcd storage claims qualified."
+    },
+    "skills/04-review/resources/intentional-design/schema-validator-non-k8s-asymmetry.md": {
+      "sha256": "35f0559a526dbc627449f1d1e005ed7f31bb7c960591999355d5ea9b67592820",
+      "scope": "Full original retained placement, no live discovery/bundle gates."
+    },
+    "skills/04-review/concurrency/intentional-design/orphaned-bg-task-accepted.md": {
+      "sha256": "1551a1cf51e8ef355066c1fc23ab6d85e14f31942925a85ceb7ddccf64f14a7c",
+      "scope": "Full original process-scoped lifetime versus reconnect cancellation."
+    },
+    "skills/04-review/observability/SKILL.md": {
+      "sha256": "740c218fa1ae0f3bf1ab573dd4ba1019c70410cf75af267c643915f17a48fd01",
+      "scope": "Full original topic index."
+    },
+    "skills/04-review/resources/SKILL.md": {
+      "sha256": "89c180d998c47338bbc3e2b819ba07347d735b4ce6d1f69c5d4685f741b6d7a7",
+      "scope": "Full original topic index."
+    },
+    "skills/03-coding/01-log-safety.md": {
+      "sha256": "74591411c294befded433b7c2be571202deb22ef36030a704caa60055f214863",
+      "scope": "1-170 original log redaction/configuration/level boundaries."
+    },
+    "edgion-controller/src/api/common.rs": {
+      "sha256": "2d96d7e138a37e864cf499469fefb2fe14dd1f18fc6661e9bd7850f8a3522dc9",
+      "scope": "1-200 actual schema callers/logging and source-GVK seam."
+    },
+    "edgion-controller/src/api/namespaced_handlers.rs": {
+      "sha256": "81943b798b18bb4fbf1c234835e89fdd02fbfb50f27920fe186ae6b783aaa5d5",
+      "scope": "225-227,569-580 actual typed TLS create/update."
+    },
+    "edgion-controller/src/api/validate_handlers.rs": {
+      "sha256": "9e9a7d3f14d684e842e2006126973c5a048e8dc4afd39dd4d1a9957719a68bd8",
+      "scope": "120-190 custom-schema response consumer."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/non_kube_common.rs": {
+      "sha256": "58b9f4e3f396edc3edc5b501a5caf89864c55a1409c4fb95899b1269084adf4b",
+      "scope": "95-135,250-275,315-342 real reset/readiness/watch publication."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/kubernetes/controller.rs": {
+      "sha256": "b95813757f11423fc964a8ec9286be4cf4f891f09b4849b5e79fce6eca067897",
+      "scope": "925-965 phased readiness consumer."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/listener_port_manager.rs": {
+      "sha256": "5329d77a6be326e9ad1f3847efe3100cdd49270598ce9db3d728f2fe434dca9b",
+      "scope": "Full supporting source, same-gateway scope/clear-before-register."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/gateway.rs": {
+      "sha256": "3d241427e284a97f50eff549b41ef8df8f060a6b568c39216fc1efe6c08e9304",
+      "scope": "725-755,1000-1020,1038-1055 actual registration/delete/status consumers."
+    },
+    "edgion-resources/src/resources/edgion_tls.rs": {
+      "sha256": "fbd6f0b4e557d08543f071edd671f0e807b14b880204661d99da153b976060b6",
+      "scope": "170-232 plain host model/serialization."
+    },
+    "config/crd/edgion-crd/edgion_tls_crd.yaml": {
+      "sha256": "2916773e88d7d4956790259d774efdf5661969f08a5b707a0cc1214fe92599f6",
+      "scope": "1-165 actual hostname schema bound/pattern."
+    },
+    "edgion-controller/tests/unit/conf_mgr/schema_validator_test.rs": {
+      "sha256": "3a14138616c3f6f972fc2d00d7d0efe550ac43624617bdbd189f6615e5843368",
+      "scope": "Full327-line bodies, Gateway API safety tests vs custom verdict tests."
+    },
+    "edgion-controller/tests/unit/conf_mgr/processor_registry_test.rs": {
+      "sha256": "06294cea45cafe1214b62c050ce019927a4a63a57876a92d718127c140feffd8",
+      "scope": "Full10-line bodies."
+    },
+    "edgion-controller/tests/unit/conf_mgr/metadata_filter_test.rs": {
+      "sha256": "9684bf96719a4fe002a565e5369d61df7a4d5e5ae802777839a05e880e2a33cc",
+      "scope": "Full120-line bodies."
+    },
+    "Cargo.lock": {
+      "sha256": "18b7b7dee01e024ab6d21f5692ce04a343c4fb265092c7f587099e91c28bea17",
+      "scope": "Actual jsonschema0.40.2 pin."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/jsonschema-0.40.2/src/error.rs": {
+      "sha256": "ee763c4f8b084eb074a3c8f53a12ad39d60406fafb2ce5356ed5b28dc7f1ad2f",
+      "scope": "1360-1545 actual Display values for pattern/type/bounds."
+    }
+  },
+  "limits": "Static contextual review only; no builds/tests/network/Git/mutations outside review records; support zero primary. No claim of private-key leakage from hostname witness."
+}

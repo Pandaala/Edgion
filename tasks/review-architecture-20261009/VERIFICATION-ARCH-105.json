@@ -1,0 +1,80 @@
+{
+  "candidate": "ARCH-105",
+  "complete": true,
+  "verifier": "/root/analyze_outbound",
+  "decision": "confirmed",
+  "input_sha256": "9725348b2d9ea4e8bc12af6e6c59b461b5a77020b0d5dff4454c7f8b810c8ad3",
+  "approved_claim_sha256": "840ed047a51c670b358821e9c7a0aa56cfa16f278b504cc7489b63a2003768cf",
+  "evidence": [
+    "replace_result unconditional afterforget; capturedproducer canrestore orphan.",
+    "Managerprivate-state cleanup doesnotremove restoredregistryresult; absentraw/processedworkitem skipsdeletehook.",
+    "Eligible same-key newUID samegeneration retainsoldresult andgeneration-onlystatus consumesit.",
+    "Cleaned independently obtains currentdesiredsource andretainedoldstate; registrycheckalone cannotcatchmislabel.",
+    "Privatequalification atregistryinsertion/read plusproducerstateidentity/revision feasible; reuseexisting source_input_revision andpreserveexternalfences/LKG.",
+    "Actualtestfixtures needcanonicalinputrevision insteadof weakeningproductionchecks; no staleGatewaytoken/externalatomicrevocation/heapclaim."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original personally retained; freshhash/rootonly."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full retained/current routing."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full retained gradedgates."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full retained/current owner search."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full retained/freshhash."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/credential_source_state.rs": {
+      "sha256": "f10bce1fd96d68c07f83078cefac175fa1d197852e0fab4b54c11111759ac59e",
+      "scope": "Full current registry."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/credential_source_state_test.rs": {
+      "sha256": "53699294851fe589b41c55409038a6bded9921084e32e8fb0141cd3ff25a328c",
+      "scope": "Full100 actualtests/consumerqualification precedents."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs": {
+      "sha256": "391ccbd543ed243c4c10029c1c7938e10346624ca0afcfda0768902237e895c4",
+      "scope": "185-273,294-322,338-408 replacement/delete/generation-onlystatus."
+    },
+    "edgion-controller/src/services/credential_manager/service.rs": {
+      "sha256": "bdf9bf07f20a8c9c60651f2ed55bc2e888ad6dbeb8c3b2b72fd704ddf48c9936",
+      "scope": "Full personally PART433 retained; current292-406,454-552,1533-1612,1702-1748 producer/cleanup/currentness/revision."
+    },
+    "edgion-controller/tests/unit/services/credential_manager/service_test/tests_memory.rs": {
+      "sha256": "d4e27e26e7bfafd5821aa36b7c45b0abcbba5c6c115fcf13556a798851f49633",
+      "scope": "Full personally PART433 retained; current340-438 counts/expiry."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs": {
+      "sha256": "23057df0f04ed113a72fa1b42fb5344153c3ae8cff526e030878c8091fc92bd6",
+      "scope": "534-563,912-952 absentobjectskip/deletehooks."
+    },
+    "skills/01-architecture/05-resources/18-link-sys.md": {
+      "sha256": "13c207c66db843cc04757f4c80a1044796ea2df2a544c016ab0083e7842867f4",
+      "scope": "156-204 owner/lifecycle/fences."
+    },
+    "skills/04-review/link-sys/regression-guards/credential-source-single-active-memory.md": {
+      "sha256": "96c81237b267c878158885747fef6a86bdc5a6d99c0a6a1a414fa3fe8558b847",
+      "scope": "Full current."
+    },
+    "skills/04-review/security/intentional-design/credential-copy-retention.md": {
+      "sha256": "10a0159a28ac80b65e5fb4225f67a47a84a72acbfad7254e8506eae5e78f350c",
+      "scope": "Full retained/currentreread recoveredfinal."
+    },
+    "tasks/pending/resource-reference-contract/01-spec.md": {
+      "sha256": "a01c94e7b47eba2046275fdaafde4be16b71ae053a8ba619dec8656a723a8678",
+      "scope": "738-775 scopedrevision/externalguaranteeexclusion."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

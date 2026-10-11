@@ -1,0 +1,228 @@
+{
+  "partition": "PART-394",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-controller/src/conf_mgr/conf_center/common.rs",
+      "sha256": "3c3b85c5d3af871dfc838d1b2d4ea1d886c596a8faa8d103979105db8db7a6d9",
+      "fully_read": true,
+      "disposition": "ARCH091: repeated complete raw YAML view preparation within one cold call; preserve source checks/text typed decode/advisory."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/conf_center/config.rs",
+      "sha256": "c7f16ae35bd642b7a3c730a3153f16cccd0977bafbda719f123d591fe2ea0255",
+      "fully_read": true,
+      "disposition": "No issue: Controller-owned config schema reexport actual consumers checked."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/conf_center/mod.rs",
+      "sha256": "04a49a0a0c3a38ce147b4e99d3c57a6358c155f4da39a1ea021264b155360193",
+      "fully_read": true,
+      "disposition": "No issue: shared finite provider/dependent lists preserve phase ownership; macro exports and tests checked."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/conf_center/non_kube_common.rs",
+      "sha256": "58b9f4e3f396edc3edc5b501a5caf89864c55a1409c4fb95899b1269084adf4b",
+      "fully_read": true,
+      "disposition": "ARCH092: unexpected closed error channel waits before cleanup, retaining readiness/CSS and ignoring reload/demotion; conditional completed child."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/conf_center/traits.rs",
+      "sha256": "773979d1c867f0abe89ae533b6a284a9271636188a14ee1d09c934ad43fe799e",
+      "fully_read": true,
+      "disposition": "No issue: layered writer errors, opt-in preconditions, metadata projection, typed leadership and backend lifecycle defaults verified."
+    }
+  ],
+  "candidates": [
+    "ARCH-091",
+    "ARCH-092"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Original retained applicable rules and no nested AGENTS."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Original knowledge index retained."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Original graded gates retained."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Original review index retained."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Original routing retained."
+    },
+    "skills/01-architecture/01-controller/03-config-center/00-overview.md": {
+      "sha256": "c01fb65a3e519c127822512a5ef82e8c2fe22bdb82e94d62066819249cd6aa3b",
+      "scope": "Full current original; recovered25-85; stale etcd status and trait count statements qualified."
+    },
+    "skills/08-kubernetes/04-api-version-upgrade.md": {
+      "sha256": "b35ee5f5d7eaabc877a5a1524d3d47a6960e8aa64118e922a87d52a9fa78ab9f",
+      "scope": "Full current original; canonical model/source adapter inventory."
+    },
+    "skills/04-review/conf-sync/regression-guards/initial-documents-consumed-by-phase.md": {
+      "sha256": "f9bf61deda31abb5a7b884ba828e17bb07e794efc73553a5a7d249775c5975bd",
+      "scope": "Full current original."
+    },
+    "skills/04-review/controller/regression-guards/liveness-probe-and-lifecycle-supervision.md": {
+      "sha256": "439892b19b54d5305432320e967aa0f64328df71b72000a6581c6db090906237",
+      "scope": "Full current original; completed-child vs accepted live-stall scopes."
+    },
+    "skills/04-review/controller/regression-guards/tls-route-canonical-api-ingress.md": {
+      "sha256": "69d46e51e00af4a0c816b3ce4fb0c665fc0a4a60b0be6c0878d2d6e7b3b42dcd",
+      "scope": "Full current original; alternate-source update supersedes historical text."
+    },
+    "skills/04-review/controller/regression-guards/backend-tls-policy-canonical-api-ingress.md": {
+      "sha256": "b0f711b8670d4d46c5428af8954803fd609513bb8976026d553ec1f5c5b4b121",
+      "scope": "Full current original; current source update supersedes history."
+    },
+    "skills/04-review/deserialization/regression-guards/runtime-ignore-does-not-mean-no-unknown-field-diagnostic.md": {
+      "sha256": "055d9c4106956903ceb428f832447233a19c9bcaab34e091d2031f5a1d5c86a2",
+      "scope": "Full current original; raw advisory detection required."
+    },
+    "skills/04-review/admin-api/intentional-design/admin-api-write-precondition-opt-in.md": {
+      "sha256": "dd4cdc023de0302a24fdbce5bf4012b019d173ebc4642689d54ffcb178242770",
+      "scope": "Full current original; opt-in preconditions."
+    },
+    "skills/04-review/controller/regression-guards/conf-writer-error-single-export.md": {
+      "sha256": "a9582edd6780002d85750444fe7f717c7481da4d721ba48eda7d4775d6ef7458",
+      "scope": "Full current original layered error ownership."
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/traits_test.rs": {
+      "sha256": "88c805e95188c3675591d5b3e88a84e3296a1851a8a660544a2f507421c289de",
+      "scope": "Full211 actual metadata/pagination/malformed entry/wire tests."
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/non_kube_common_test.rs": {
+      "sha256": "0a8fcf71ea6073bd01b44d428a73e155f4d09683fb064e3cf1f083c6b995fcff",
+      "scope": "Full58 provider/local start tests; no post-ready closure coverage."
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/common_test/error_status_tests.rs": {
+      "sha256": "8885664d9ee8720bcb76c6cb78fdccec87457af5fb084604a773f13022ab979d",
+      "scope": "Full65 dedup/time/sidecar tests."
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/common_test/update_merge_tests.rs": {
+      "sha256": "389a996ac3ed266acfae261ab34161406ffaa12efeafd760fea6f309149e8010",
+      "scope": "Full153 operator replacement/metadata/status/version tests."
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/common_test/unknown_fields_seam_tests.rs": {
+      "sha256": "9c8be3b5f08c037196784a5a6789dbc7648874e516c1f6919cd18e55f2177ddf",
+      "scope": "Full236 four kinds clean/typo/Misc/nonfatal helper conversion qualified tests."
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/common_test/gateway_api_version_guard_tests.rs": {
+      "sha256": "2d0fd1f1d3d4ff179c38a6cb1934488d4068997698ba960a6c5e1252bfb23704",
+      "scope": "Full258 canonical/beta/alpha/bounds/metadata/TypeMeta tests."
+    },
+    "edgion-controller/src/config/conf_center/config.rs": {
+      "sha256": "4d45c78cad1392aea1e8e4e0160e6aa81028dc6830196706f14d61ea005bbce3",
+      "scope": "Full current tagged backend configuration owner."
+    },
+    "edgion-controller/tests/unit/config/conf_center/config_test.rs": {
+      "sha256": "2a84c1d9896c86685a83558319824e189cfd2bdf645ec11d66f802ff8bbfd303",
+      "scope": "Full current tagged/removed/duplicate/accessor fixtures."
+    },
+    "edgion-controller/src/api/common.rs": {
+      "sha256": "2d96d7e138a37e864cf499469fefb2fe14dd1f18fc6661e9bd7850f8a3522dc9",
+      "scope": "340-415 public source guard and actual beta parser consumers."
+    },
+    "edgion-controller/tests/unit/api/common_test.rs": {
+      "sha256": "04e29b6cb33bcddada8638b828b3cc8940bd0968667ac0218c790b52da01388f",
+      "scope": "70-153 complete relevant source-version control fixtures."
+    },
+    "edgion-controller/src/conf_mgr/schema_validator.rs": {
+      "sha256": "ba353745a64eb12b23ccac3888884ae3878b83f3fb54618d1de6c9c7b563768a",
+      "scope": "320-375 source-schema/reference gate."
+    },
+    "edgion-controller/src/conf_mgr/manager.rs": {
+      "sha256": "8013d79913c950e802e371bb0600a64848b57bb35ea3a0794ae3d519ee72ec3f",
+      "scope": "Full current factory and lifecycle delegation; previous middle145-228 retained."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/file_system/center.rs": {
+      "sha256": "44a97c5858c51f0a75ca281ee133c4705f2e3513183647c67d59f133606d63de",
+      "scope": "115-185 actual lifecycle/task/error sender wrapper."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/file_system/controller.rs": {
+      "sha256": "ad73aac06e6ba0ed013b19ae8557288e1b064cee604c3f23cf852756194de76d",
+      "scope": "120-177 phase and runtime watch; no descendant issue owned."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/file_system/resource_controller.rs": {
+      "sha256": "3a98d5b9d45a90fc611d8bd47fd02646f0cd7edd67bda4679ec7ce1352b0ccb3",
+      "scope": "135-188,407-454 offline parse/init/runtime authoritative raw transitions."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/file_system/storage.rs": {
+      "sha256": "160b51c73737d2d6188d3f4b5991589443aeaae6ce723829fbe382ac371fbdc1",
+      "scope": "235-283 operator merge/preconditions inside per-key lock."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/etcd/center.rs": {
+      "sha256": "05b3d74ec1b4ee60cd33466ce9de69ffcc21ac8056796da8fb7fcaecbcedbb53",
+      "scope": "105-170 refreshed plus prior full read."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/etcd/controller.rs": {
+      "sha256": "ae06c447ad12f0458cedbffeaba029739cccd292c1e130e62d33dde6045edfdb",
+      "scope": "Prior full unchanged phase/watch owner."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/etcd/resource_controller.rs": {
+      "sha256": "f323246b899ff298398cb51ca5e3b1379ce593209ba003afe071a4f88fbb3b7c",
+      "scope": "Prior full unchanged actual parser/envelope/store/worker/status consumers."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/etcd/storage.rs": {
+      "sha256": "f6a0d0dbc694663d50eeaa11d10456e0018a24881ff94ef3c030eb569640a72f",
+      "scope": "196-228 refreshed plus prior full; merge/native transaction."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/kubernetes/storage.rs": {
+      "sha256": "20e31600a000e34dffe40d41e26b83457936f08fb204990a99e8327bf66fe500",
+      "scope": "525-575,1070-1135 merge and native metadata-list override."
+    },
+    "edgion-controller/src/api/mod.rs": {
+      "sha256": "9320b3b8da4191ad7317024052c8db9c4da21835721ec26cd051105dabb0d1d6",
+      "scope": "185-199,221-245 deadman and readiness endpoint."
+    },
+    "edgion-controller/src/api/types.rs": {
+      "sha256": "43e2700678d3c234d667b6b7dcae94fa9a6678f81a01bfeb7a4148817bc3cb65",
+      "scope": "58-72 readiness delegation."
+    },
+    "edgion-controller/src/cli/mod.rs": {
+      "sha256": "e6a99b22317b82b315c7a9e9c26b67c58de82e00687dc05eb4d34031829d41af",
+      "scope": "595-644 enclosing task deadman/shutdown."
+    },
+    "edgion-controller/src/conf_mgr/runtime.rs": {
+      "sha256": "4894a9456643f62b21dd1dc39984acf71696d0f5e5e58a85b119778af92ce811",
+      "scope": "200-243 selective reset."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/shutdown.rs": {
+      "sha256": "8d480f6c87cf3cfebee8e34f9fc4a3882283ae9a604e8b160d510d82e8b01805",
+      "scope": "1-91 sticky shared/iteration state/wait."
+    },
+    "edgion-resources/src/gateway_api_support.rs": {
+      "sha256": "fc7df8c6ee85056e55e7fb585e6f1df1ac0494ebf790a43710bf6b14cb378627",
+      "scope": "1-110 canonical/source identity inventory."
+    },
+    "Cargo.lock": {
+      "sha256": "18b7b7dee01e024ab6d21f5692ce04a343c4fb265092c7f587099e91c28bea17",
+      "scope": "Pinned serde_yaml0.9.34+deprecated and Tokio1.53.1."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.53.1/src/sync/oneshot.rs": {
+      "sha256": "0068b57b942098cfc23ed2b7b68f7727acf3a0642fb311d6103f1d2790aeffd1",
+      "scope": "866-902,1268-1338 Sender::drop and Receiver error."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_yaml-0.9.34+deprecated/src/de.rs": {
+      "sha256": "b5416aa3576e454aa92ee3fab10550f8de7d0d6e4d96a9a6a3afdafab12d12bc",
+      "scope": "1800-1822 text typed decode entry."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_yaml-0.9.34+deprecated/src/value/de.rs": {
+      "sha256": "c7f25d5ace625000ea7b6387f2ad8d8e93ab882702b9c6953854d9f41defc0d5",
+      "scope": "1-115 Value visitor scalar/sequence/mapping/tagged."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_yaml-0.9.34+deprecated/src/value/mod.rs": {
+      "sha256": "bb8f14fb534e5d305e1e5c889bf4cb409f7d502030bda0629014ca05608fc2e1",
+      "scope": "113-128 distinct owned Value entry."
+    }
+  },
+  "limits": "Complete1963 source lines/78905 bytes personally read and frozen hashes matched. Static only; no execution/benchmark/mutations. Supported clauses no Gateway request performance/no known panic trigger/no descendant supervision or live progress guarantee. Stale overview and historical current-source decision caveats recorded."
+}

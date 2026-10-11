@@ -1,0 +1,27 @@
+{
+  "complete": true,
+  "verifier": "/root/verify_ip_union",
+  "decision": "confirmed",
+  "approved_input_sha256": "f9ae4e67d244a111073506ae250a4a85afa6ef6ab34f8f709ca43eb7991fb899",
+  "approved_claim_sha256": "403285832ab3408afe0c4e6313cf044f71c2909f875d001a1f1a813a0fe84eb8",
+  "evidence": {
+    "edgion-gateway/src/plugins/runtime/body_gate.rs": "4995c47107514edbb1e56b574c6f4bbc706d200442c6d098cc32aca616c63ebe",
+    "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": "70ea787d34a9a4652adfe131ba66049d2544b381b2034194db519567fe87ead0",
+    "edgion-gateway/src/plugins/runtime/session_adapter.rs": "bb060285f53d6eddb8eeac90c080456e7efabfd9457720990305703c5a143f92",
+    "edgion-gateway/src/ctx.rs": "dd23711a474df4122dd3b0264c7293366c27ba2688a9eb390b24e842f6e6335d",
+    "edgion-gateway/src/plugins/http/common/capped_writer.rs": "fc0a21698b749ded30de56d3d4673a1147868f2d1dab467cb53170e5462bd95e",
+    "skills/04-review/http-body/regression-guards/request-body-gate-lazy-materialization.md": "a63a48aa39d938fdd1fdaa281a3b5cbe796a21e15d1bc00034e53df21fb93dc5",
+    "skills/04-review/http-body/regression-guards/request-body-mutation-physical-cap.md": "2b1046fa6731f1917ead65197baaaf6b5e0d73b5472e6cbc4b36aad10935f0d0",
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/form_json_transform.rs": "f3f9d202b86b1edec25f6281124ea2c001ed37cf5c348c29502b6b38b1e55a14",
+    "edgion-gateway/tests/unit/plugins/http/form_json_transform/plugin_test.rs": "118cf4fbdd692bb213920cb38915d0942cbeb7276b88cca168d79c7541a6d9bc",
+    "edgion-gateway/src/plugins/http/form_json_transform/mod.rs": "b89287dd270c8cee71209e3e932c128c46d22142dcb15702e43e6b3798a4051e",
+    "edgion-gateway/src/plugins/http/form_json_transform/plugin.rs": "44eadd05b2ee068ffe380a470c7413b9279a671885d896ba3593171d28e41bf7",
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/json_schema_validation.rs": "73fc53ef99bcbcfeaa03a432619f57cbd29f9214afa58275397c5dc0275a8106",
+    "edgion-gateway/tests/unit/plugins/http/json_schema_validation/plugin_test.rs": "b612835bbb46d30b51a26b5cdcacc67417590d7558fccc860c06d76a4c5a8a15",
+    "edgion-gateway/src/plugins/http/json_schema_validation/mod.rs": "200a082b0309166b328d976319b2a364263d3046dfe1b053b8c9d1bfdaae34fd",
+    "edgion-gateway/src/plugins/http/json_schema_validation/plugin.rs": "edb3edf7439d95f8c53c574a6a0ea78c8c6f61423452567cd1939486412fc272",
+    "edgion-gateway/tests/unit/plugins/runtime/body_gate_test.rs": "8cac51a1da245adb8eb4873a13c65145050127cc09173319a13c67173c0b64f3"
+  },
+  "reason": "All variants and all four sites match canonical diagnostic helper. Existing JsonSchemaValidation proves reuse feasible without expanded visibility; operation-specific replies/rollback remain owned locally.",
+  "limits": "Selected original source/tests read; no new coverage or execution."
+}

@@ -1,0 +1,69 @@
+{
+  "partition": "PART-503",
+  "analyst": "/root/analyze_outbound",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/path_normalization/forward_view.rs",
+      "sha256": "cf35de30e2754642ca3d9bd12256d1de51c5d262bafa5ed335f571ae0be0f175",
+      "fully_read": true,
+      "disposition": "Full1-608; ARCH382 six originform prefix assertions admit wrong paths; absoluteform query/path and optional canonical log exact."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/path_normalization/mod.rs",
+      "sha256": "a209adf17af452507e177b765e7f8b893e9223634f3e15c0f60f93c4a0a037e8",
+      "fully_read": true,
+      "disposition": "Full1-13; Three private suite exports and actual registrations accepted."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/path_normalization/path_normalization.rs",
+      "sha256": "9566e026f18a77ff81c2cd072a4e254b351711228579b7a2e17ebb10b855bde9",
+      "fully_read": true,
+      "disposition": "Full1-189; Exactroute/pathparam reachability probes match fixtures; narrower prefixprobe doesnotclaim forwarded equality."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/path_normalization/preserve_param.rs",
+      "sha256": "6430b056a9e4e1b98a2f9fa858ba03c3cb89043a2dbc90e7ab47c6dfb60cf8db",
+      "fully_read": true,
+      "disposition": "Full1-158; Modeagnostic automation/deferred restartcase accepted intentional scope."
+    }
+  ],
+  "candidates": [
+    "ARCH-382"
+  ],
+  "support_selected": {
+    "skills/01-architecture/02-gateway/uri-normalization/SKILL.md": {
+      "sha256": "ae1252dac6096d74ea5db2d454025b6a4aa41b60e36ec471651614ff6086f440",
+      "scope": "Full1-217 original normalization architecture."
+    },
+    "skills/04-review/uri-normalization/mandatory-design/normalization-contract.md": {
+      "sha256": "8e4d1037e1659df73e005c7552c393435124b5753ec232d8ab2fdf3e578e853d",
+      "scope": "Full1-161 original invariant."
+    },
+    "edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs": {
+      "sha256": "1e78b4bf440134f3f8949ab883bc1f767c0e70055164818c35fc0e2251b25eaf",
+      "scope": "1-145,1717-1775 actual finalizer/tristate forwarding owner."
+    },
+    "edgion-gateway/tests/unit/routes/http/proxy_http/pg_upstream_peer_test.rs": {
+      "sha256": "14ccc89d36290e92ac69aa08b1b152cffb394278085aad72a2693b65dd302399",
+      "scope": "308-469 actual complete path/query/latch/forwarding matrix units."
+    },
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "6c38b285bdfe354c40d5d2e96d4a07be0b7dc37ce3290197ca75054de23bfa98",
+      "scope": "3526-3587 wildcard separatepath/query/headers producer."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "2949-2992 actual registrations."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/PathNormalization/ForwardView/03_HTTPRoute_default-normalized-forward.yaml": {
+      "sha256": "6ba81385080795d432eb3dfeacc21a591fbe2db9c4ff3d91b5ba7ab688c7cb31",
+      "scope": "Full1-36 local fixture."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/PathNormalization/ForwardView/03_HTTPRoute_default-normalized-forward.yaml": {
+      "sha256": "c0ca1395dd6bc876e452167b893a30a41eb6202ff75206c238f355ae4eb9cd22",
+      "scope": "Full1-20 K8s fixture."
+    }
+  },
+  "limits": "All18selected fixtureYAML full incl recovered truncation; canonicalnormalizer1-190/realunits1-167,441-490/framework532-600 context. Wrapper30s bounds absoluteform awaits; no unboundedhangclaim. No genericregistry/restartautomation. Personal originalrulesfull/freshunchanged, staticonly/no execution/mutation/supportcredit."
+}

@@ -1,0 +1,113 @@
+{
+  "partition": "PART-454",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/body_plugins.rs",
+      "sha256": "2d9b243fdf9e8b22e3260283f93747fd4f8a2bd3ed5cd1f2e83c5179d35410c4",
+      "fully_read": true,
+      "disposition": "Full1-1975; ARCH345 K8s response guest omits required probe mode. Other body digest/transformation/atomic failure/spill/framing/retry/mirror assertions meaningful.264/266/296 extensions only."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/condition_refs_dynamic.rs",
+      "sha256": "6adfc570a1a7ddaceaa14bdef427b2705470a8701a7e04cefe9d2deea387ee20",
+      "fully_read": true,
+      "disposition": "Full1-123; no distinct cause. Resolved invocation port296 and early-error restoration264 supplements; unresolved body requirements fail closed."
+    }
+  ],
+  "candidates": [
+    "ARCH-345"
+  ],
+  "support_selected": {
+    "edgion-gateway/src/plugins/http/wasm/plugin.rs": {
+      "sha256": "2499557e824386f88896fc32de94810622aa9e8d9a5889f10f1cfe4cf403672e",
+      "scope": "Fresh540-605 complete response callback."
+    },
+    "edgion-gateway/src/plugins/http/wasm/vm_manager.rs": {
+      "sha256": "c4bb5992f1a65039adf2dd11c80c517c584d04a69ae5790ec92d1be93dd1336e",
+      "scope": "Fresh575-610,1340-1430 exact config forwarding/decoding."
+    },
+    "edgion-gateway/tests/unit/plugins/http/wasm/plugin_test.rs": {
+      "sha256": "f2af5bcdc0553ca89e2254df2150e16c6234ec1fb7fb9b524a6ae2e0a1be1e83",
+      "scope": "Fresh650-704 complete Pause guest/test655-696; next partial excluded."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/BodyPlugins/resources.yaml": {
+      "sha256": "0a12859130007b2c17bbaf54641283d16956a819104003c4c6758882cf156850",
+      "scope": "Full1-802 response guest129-136/route654-664."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/BodyPlugins/14_EdgionPlugins_wasm-body.yaml": {
+      "sha256": "d480439b619a7c4f6289c3ba68b098986344181854021b0e21831e53d87838ce",
+      "scope": "Full1-62 local probe mode."
+    },
+    "edgion-tests/wasm/header-demo/src/lib.rs": {
+      "sha256": "427be5953df582275faaa20a15f86c7c75a6a440134653c7c23dc8583e7b60bb",
+      "scope": "Full1-283 configure/context/body action."
+    },
+    "edgion-gateway/src/plugins/http/wasm/host_abi.rs": {
+      "sha256": "c90abdf69625345bb5cbaad0a06e2c9f4c74ab8b21b5aa50d0aa3b67beda8449",
+      "scope": "745-780 configuration-buffer owner."
+    },
+    "edgion-tests/k8s/scripts/common/deploy_integration.sh": {
+      "sha256": "58822dc66d104957764b8de13905daa1b7bd3d0405a71f13676bd3c08029b2b3",
+      "scope": "140-162 artifact provisioning."
+    },
+    "edgion-tests/k8s/kubernetes/gateway/deployment.yaml": {
+      "sha256": "7f5a7cf504886b94b6657374edf009df3f641df11ea2ddf281d79fcca8ec8f26",
+      "scope": "95-128 mount;fresh26-42,69-82 topology."
+    },
+    "edgion-tests/wasm/README.md": {
+      "sha256": "e0bb0d2e20e57f29b4ccd40f8f36841ead3063c5acbfe3f87e5fad50d84818ad",
+      "scope": "Full1-79 artifact/probe contract."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "1610-1630,1707-1726,3058-3078,3677-3710,3828-3910,3938-3953."
+    },
+    "edgion-tests/k8s/scripts/run_k8s_integration.sh": {
+      "sha256": "9c7f539e02edccc91c46908c4b6afe1af3fb867b72c7b6061b613bd2723e641f",
+      "scope": "1-30,2540-2558,2580-2700,2790-2910 registration/fixture/batch."
+    },
+    "edgion-tests/k8s/scripts/common/run_test_client_batch.sh": {
+      "sha256": "3f892894a61cd08ae873694e56a60ddd0f91a79861464fa013a61b110a5e7f9d",
+      "scope": "Full1-203 common batch."
+    },
+    "edgion-tests/src/client/metrics_helper.rs": {
+      "sha256": "6a645f919d8d1287911645447cf3228fa25c6f54be3fa889217fbf6b61c0a7fa",
+      "scope": "1-29 complete counter_value only."
+    },
+    "edgion-tests/src/client/dynamic/scenarios/condition_refs_dynamic.rs": {
+      "sha256": "55dd4c6d390bf181d49293870f9d9507fad8a77a10b70e7873e886b2176b6b59",
+      "scope": "Full1-56 restoration/fail-closed transitions."
+    },
+    "edgion-gateway/tests/unit/plugins/runtime/plugin_runtime_test/condition_body_requirement_tests.rs": {
+      "sha256": "db616615acc737c8cbfbeb01702c2a842be5f2279446f563279a6204768cf567",
+      "scope": "Full1-95 compiled condition requirements."
+    },
+    "AGENTS.md": {
+      "sha256": "cba9f532fa1c9f70e6a921e1a2331e7ca78c8210981a072a74cdebf4d85d3e42",
+      "scope": "Personal full current rules."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Personal full retained index current hash matched."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "c78c86675ca6c72adb30d0f59727509486b582ef2c7f3318bf14e61745eff055",
+      "scope": "Personal full current graded gates."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Personal full current routing."
+    }
+  },
+  "limits": [
+    "Source only; no artifact/tests execution. Pause unit does not assert exported counter. Global counter delta can be masked by other traffic."
+  ],
+  "supplemental_candidates": {
+    "ARCH-296": {
+      "status": "awaiting-independent-extension",
+      "scope": "BodyPlugins rawH1/H2helpers70-214,H2retry1195-1240,BodyDynamicfrom1755;ConditionRefs helper9-37 use31180 instead of resolved invocation port. Current default31180: conditional topology-change cause only."
+    }
+  }
+}

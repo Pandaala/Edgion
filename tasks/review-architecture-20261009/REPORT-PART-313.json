@@ -1,0 +1,32 @@
+{
+  "partition": "PART-313",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/plugins/http/forward_auth/mod.rs",
+      "sha256": "537c1672019dc114fc2dbff592c33ba10f3c35d8a23c08ce6aeef9a15c14800c",
+      "fully_read": true,
+      "disposition": "Private export and actual runtime factory checked."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/http/forward_auth/plugin.rs",
+      "sha256": "50d0e604663ac88d88ef945d1f2b0fdf27b86d532043fdde25b0ac9c8dde51ee",
+      "fully_read": true,
+      "disposition": "Actual owned/Route prepared refs share canonical client construction. One bounded outbound owner and fresh diagnostic collector feed classification; body predicate denial forces403 and transport failure records dye before direct write. Repeated response fields preserve set-first/append-rest order and suppress opaque/dynamic hop nominees. Separate copied-header denial is intentional, no generic auth error wrapper proposed."
+    }
+  ],
+  "candidates": [],
+  "support": {
+    "skills/04-review/forward-auth/regression-guards/request-body-sources-mutually-exclusive.md": "9d36c99ec92f2d82cd3f1db31b13c9adec4bbf552204a3d489d37661b2836c96",
+    "skills/04-review/forward-auth/regression-guards/deny-response-repeated-headers-preserved.md": "7cbb92120767bfac486681a1937d9e9415ca755e487350445256e8e88b4bd3f3",
+    "skills/04-review/forward-auth/intentional-design/default-header-forwarding.md": "52a067c54de145b168abacb66f311c9701b8426dedcadb291efa8a967dc595c3",
+    "skills/04-review/observability/regression-guards/outbound-presence-diagnostics.md": "5f2c84ee5561395fdeac4ad5c243af658bf05a0a0de4ada26d265b6f3931dff7",
+    "edgion-gateway/src/plugins/http/common/auth_common.rs": "0a184e336bc99eb91555c07be17a4ff6c49dfe21a401d1668efd7793152fa4b0",
+    "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": "70ea787d34a9a4652adfe131ba66049d2544b381b2034194db519567fe87ead0",
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/forward_auth.rs": "517149b79fab843afd9c21939467a99e70a5a7814edf28e41eb7397e58e7adec",
+    "edgion-gateway/tests/unit/plugins/http/forward_auth/plugin_test.rs": "08d4e06f05c0bdd2eae5b87fa29ba112f41721c239e760a03de5fd58bb0e34af"
+  },
+  "support_scope": "Relevant original trust/body-source/forwarding/diagnostic decisions and actual preparation/extraction/helper/caller sections read. Selected tests cover phase order/hop exclusion/body verdict/owned refs and CA-pool ownership/issuer/validity. Supporting source sections only; no supporting primary coverage.",
+  "limits": "Static only; no tests/builds/network, crypto differential/interop or allocation measurements. Industry claims retained solely as original policy context."
+}

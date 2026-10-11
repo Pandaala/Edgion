@@ -1,0 +1,69 @@
+---
+id: ARCH-130
+status: confirmed
+kind: behavior-defect
+priority: P2
+partition: PART-432
+analyst: /root/verify_ip_union
+baseline: 22f0fb8b6f4353f689ca4ddc172a4dfd98a2d2929dd1709240cbe4a1b3796471
+---
+
+
+# Bind per-replica identity publication to a snapshot captured before the CA read
+
+## Current ownership and concrete interleaving
+
+identity_sync::sync_once reads the CA through load_ca().await before capturing the installed server identity and old_serial. It later signs against that fetched CA, compares the current serial with old_serial, and performs an unconditional handle.store(new_identity).
+
+The leader runs both identity_sync and rotation. CLI startup starts identity_sync on every auto-CA replica, while KubernetesCenter starts the independent rotation worker on the leader. Both write the same process-local ServerIdentityHandle.
+
+A feasible interleaving uses two valid, unexpired roots, A and B:
+
+1. Identity sync fetches root A.
+2. An emergency re-key or BYO-root replacement makes B current. The leader rotation worker completes its Secret writes and installs a server identity using B.
+3. Identity sync now captures the installed B identity and records B's serial as old_serial.
+4. Its decision compares that B identity against the previously fetched A root. The chain or retained-root-byte check requests a re-sign.
+5. It creates a valid new A identity. No further writer runs, so the serial comparison still sees B's recorded serial and passes.
+6. handle.store installs A again, replacing B's verifier with the superseded A verifier.
+
+This witness does not require a writer between the final serial check and store. The snapshot was captured too late to identify the already-completed concurrent publication. The shared validator accepts the candidate because its leaf, key and fetched A root are internally consistent; it does not establish that A remains the current authority.
+
+After this rollback, new handshakes can authenticate against A again until a later successful reconciliation repairs the identity. Previously cancelled connections are not resurrected. No executed exploit, fleet-wide instantaneous revocation guarantee or production incident is claimed.
+
+There is also a narrower window between the final serial load and store. They are separate operations on a multithread runtime, so a writer can install B after the check and still be overwritten. Moving the snapshot earlier closes the first witness but does not make this final conditional publication atomic.
+
+## Bounded improvement and structural value
+
+Capture the expected installed identity before starting the CA GET. Use that retained immutable snapshot for the certificate, trust-anchor, window and diagnostic serial inputs. Construct and validate the candidate outside any publication lock.
+
+Give ServerIdentityHandle a private conditional publication operation that installs the candidate only while the expected identity is still current. Compare the actual retained identity/snapshot identity under the same cold writer boundary used for publication, rather than repeating a serial load followed by an unconditional store. All handle writers must participate in that boundary. A rejected stale candidate leaves the installed identity, trust token and generation untouched and lets the next existing tick reconsider.
+
+Reuse the canonical installed snapshot/publication owner proposed by ARCH-117. Do not create another identity slot, token, fingerprint registry, source-version framework or blocking handshake read lock. A short cold publication lock or equivalently reviewed conditional update can protect the compare-and-publish operation without holding a lock across Kubernetes I/O, signing or validation.
+
+This makes the producer's stale-result rule explicit at its actual owner. The change scenario is a leader root replacement overlapping its per-replica identity tick. A conditional handle operation prevents callers from accidentally splitting the required check from publication, while the earlier capture connects the decision to the whole acquisition interval.
+
+The scope is this per-replica producer. It does not establish global ordering among Kubernetes CA changes or repair every other producer's stale-input policy. Existing rotation generation checks, Secret write ordering and authority remain separate.
+
+## Required semantics and original decisions
+
+Preserve read-only load_ca behavior, absent-CA skip, every-replica execution, the 60-second cadence, lifetime-ratio/emergency decisions independent of the shared client-leaf scheduled/manual policy, validated material, configured SANs, h2 ALPN and last-known-good behavior.
+
+Preserve the canonical publication contract: same-root leaf replacement retains established sessions; distinct root bytes, including same-key renewal, cancel the replaced trust generation. A stale candidate rejected before publication must not cancel a current generation.
+
+Keep leader-only steady-state Secret writes, POST-create/409 adoption, forced SSA, the accepted concurrent-startup leaf-write narrowing, init-before-leadership and unconditional leadership signalling. Add no logs, metrics, connection-age policy, credential copies or Gateway rustls work.
+
+The Controller–Gateway overview explicitly accepts eventual per-replica convergence rather than instantaneous fleet revocation. That acceptance does not require a tick to undo a newer identity already installed on the same replica. The source comment itself identifies clobbering a fresher re-key identity as security-relevant and intends the serial guard to prevent it. The graded concurrency rule requires a shared-state check and mutation to be one atomic operation.
+
+The accepted file-watcher metadata signature governs when file reload starts, not this auto-CA acquisition/publication ordering. Accepted drain-based leader-job shutdown and post-ready liveness limits do not prove freshness of a successfully published identity.
+
+## Verification and deduplication
+
+identity_sync_test.rs tests the pure re-sign reason table, root-byte drift, priorities and boundaries. It does not drive sync_once acquisition/publication order. rotation_test.rs covers trigger/backoff and out-of-sync decisions. tls_identity_test.rs covers sequential validated construction, same-root continuity, root-change cancellation and same-key renewal, but not a stale producer's conditional publication.
+
+Future verification should deterministically model A being acquired before a B publication, retain the pre-acquisition expected snapshot, and prove that the attempted A publication is rejected while B remains installed. Separately exercise a current publication between candidate preparation and conditional commit. Assert that rejected candidates neither advance trust generation nor cancel B's token. Preserve successful same-root replacement and root-change cancellation controls. These can use generated certificates and in-process owners without network unit tests.
+
+ARCH-117 reports verifier/token pairing during handshake and explicitly excludes wider producer stale-input decisions. Even a correctly paired A verifier/token snapshot can be the wrong result of this producer, so this cause is distinct. Reuse its publication boundary rather than duplicate its mechanism.
+
+ARCH-075 concerns certificate selection before installation; ARCH-080 concerns plaintext versus auto-CA startup selection. Neither reports this production ordering.
+
+The historical rotation design path referenced by the config document is absent from the current tree. Current architecture, graded rules, actual producers, validator and test bodies supply the scoped evidence. This review executed no tests or application.

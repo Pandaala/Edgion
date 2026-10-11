@@ -1,0 +1,159 @@
+{
+  "partition": "PART-223",
+  "analyst": "/root/analyze_outbound",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-common/src/conf_sync/cert_duration.rs",
+      "sha256": "7d222bfb165ab7203f89de336e5bffea1f7a9fd82241c203226600910ec374b3",
+      "fully_read": true,
+      "disposition": "No actionable architecture finding: complete source and actual transport/cache/codec/export/test context checked."
+    },
+    {
+      "path": "edgion-common/src/conf_sync/cert_expiry_watch.rs",
+      "sha256": "d996bdf5dbf516ba169e0a41d95ab6f960559eb03714305d5636534b27a4c21c",
+      "fully_read": true,
+      "disposition": "No actionable architecture finding: complete source and actual transport/cache/codec/export/test context checked."
+    },
+    {
+      "path": "edgion-common/src/conf_sync/config.rs",
+      "sha256": "6085290d4ffac4e6aec10be1f540bcb935a88f1da3bf38d39ecf34d3d8b9cfdb",
+      "fully_read": true,
+      "disposition": "ARCH-074: retire live singular TLS representation with coordinated defaults, fixtures and remedy migration."
+    },
+    {
+      "path": "edgion-common/src/conf_sync/mod.rs",
+      "sha256": "af141a215769f43b5eb10e046e1d621885eb652ca9c16034c49e0365986f6a14",
+      "fully_read": true,
+      "disposition": "No actionable architecture finding: complete source and actual transport/cache/codec/export/test context checked."
+    },
+    {
+      "path": "edgion-common/src/conf_sync/payload.rs",
+      "sha256": "48910022dfefbc6bb539d64cdce3dc4b5fc6e3eaaa20b83f91dabec8579685da",
+      "fully_read": true,
+      "disposition": "No actionable architecture finding: complete source and actual transport/cache/codec/export/test context checked."
+    },
+    {
+      "path": "edgion-common/src/conf_sync/proto.rs",
+      "sha256": "f120eabe0666a22fde29aeaeca5176250890e1b2a2a64afb0a6b819f6b4c006e",
+      "fully_read": true,
+      "disposition": "No actionable architecture finding: complete source and actual transport/cache/codec/export/test context checked."
+    },
+    {
+      "path": "edgion-common/src/conf_sync/proto/config_sync.proto",
+      "sha256": "b8ede6b7e9eed0bf1f055c44ab0832ddd3fc079f8451116ceefe87a8854a1512",
+      "fully_read": true,
+      "disposition": "No actionable architecture finding: complete source and actual transport/cache/codec/export/test context checked."
+    },
+    {
+      "path": "edgion-common/src/conf_sync/traits.rs",
+      "sha256": "887222b201fbf2f85e5c6e18aed96d57c6ab5339600f919dc81d1ce0eb55ea46",
+      "fully_read": true,
+      "disposition": "No actionable architecture finding: complete source and actual transport/cache/codec/export/test context checked."
+    },
+    {
+      "path": "edgion-common/src/conf_sync/types.rs",
+      "sha256": "28e2c042021f05f5d58134b3ba8d2261656de0cb9e250d40e046de1023454e7f",
+      "fully_read": true,
+      "disposition": "No actionable architecture finding: complete source and actual transport/cache/codec/export/test context checked."
+    }
+  ],
+  "candidates": [
+    "ARCH-074"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original personal rules; nested search found none."
+    },
+    "skills/01-architecture/03-controller-gateway-link/00-overview.md": {
+      "sha256": "6e973fa8105734d3a40aa3c5da45d5df6965da3c1dee0a52a01b1ef642b62487",
+      "scope": "1-345 current protocol/security/lifecycle."
+    },
+    "skills/02-features/02-config/00-controller-config.md": {
+      "sha256": "07a601d4f500f3466f0556cd58e6fae88fe444994280d22a999d1a6a9b07dbd2",
+      "scope": "211-237,343-374 certs debt and rotation grammar."
+    },
+    "skills/02-features/02-config/01-gateway-config.md": {
+      "sha256": "7a7037ac8f5377ad6de8fd92748ae2b37446f9fbf4bee5eb4bd37a498803be0d",
+      "scope": "308-332 certs debt/autoCA asymmetry."
+    },
+    "skills/04-review/conf-sync/regression-guards/bounded-payload-compression.md": {
+      "sha256": "93a9372361ed897530e898cf619bfef8142fb5acbc0cecdc509bb137dd89d763",
+      "scope": "Full original codec, cancellation and accepted budgets."
+    },
+    "skills/04-review/conf-sync/regression-guards/installed-certificate-expiry.md": {
+      "sha256": "020d95e0d18707c2941a4d2605ba846a35526ba5f8c2f6e8a066c27506d3b931",
+      "scope": "Full installed identity/metrics ownership."
+    },
+    "skills/04-review/conf-sync/regression-guards/conf-sync-plaintext-default-observable.md": {
+      "sha256": "f048cbec38db31196d1c97d3b0e58cc115ada23ca26e593bb885626da45d21ab",
+      "scope": "Full omission refusal and explicit escape hatch."
+    },
+    "edgion-common/tests/unit/conf_sync/config_test.rs": {
+      "sha256": "a80988c4a50e79b1980423817ab202e1dab7c465ff1f470d50f57f5a650fb8ad",
+      "scope": "Full actual tests."
+    },
+    "edgion-common/tests/unit/conf_sync/payload_test.rs": {
+      "sha256": "2a8e42459884bc380b7df244bdcc1564601cde2d3525cab9e1c103f6044762e8",
+      "scope": "Full actual tests."
+    },
+    "edgion-common/tests/unit/conf_sync/cert_duration_test.rs": {
+      "sha256": "ae6b44242151db115dd965ba45bfa993b830be105e606c488ff94d79e9c42dc5",
+      "scope": "Full actual tests."
+    },
+    "edgion-common/tests/unit/conf_sync/cert_expiry_watch_test.rs": {
+      "sha256": "7978256ea62f56e84edbb6f07119fecaf64eff2c4dabf9247e930c5b471ff7ea",
+      "scope": "Full actual tests."
+    },
+    "edgion-controller/src/cli/mod.rs": {
+      "sha256": "e6a99b22317b82b315c7a9e9c26b67c58de82e00687dc05eb4d34031829d41af",
+      "scope": "156-355,801-823 startup/identity/live watcher."
+    },
+    "edgion-controller/src/fed_sync/fed_client/mod.rs": {
+      "sha256": "b677aece92cd9df4e97b1d8f2bbcf849907681a75f99b3d4c03eaeed20051ccb",
+      "scope": "122-174,275-303 TLS/refusal consumers."
+    },
+    "edgion-gateway/src/conf_sync/conf_client/grpc_client.rs": {
+      "sha256": "76f476f977f998cc66b201c2ec485664fdd11544680070d9b4722c1750d46bfe",
+      "scope": "170-325 selected transport, installed validity/reload files."
+    },
+    "edgion-controller/src/conf_sync/conf_server/config_sync_server.rs": {
+      "sha256": "9b4a1e6e3168094ff95f8ce8253e509f628d8b4fbeb413e764edeb80d66d957c",
+      "scope": "230-291 encoded cache/redaction."
+    },
+    "edgion-gateway/src/conf_sync/cache_client/cache_data.rs": {
+      "sha256": "9361e1bddb3532af21675b5b5564383654e0f3fe7cdd6aa71ca794b7ad0a7d55",
+      "scope": "1-75,132-206 shared delta/reset/callbacks."
+    },
+    "config/edgion-controller.yaml": {
+      "sha256": "1f71b7da0c299d0f4b130dc548e62461c839799b63dfa807849ef2a33f89fb58",
+      "scope": "275-296 legacy default."
+    },
+    "config/edgion-controller-etcd.yaml": {
+      "sha256": "166c0cad47cea58f74317e1130e24777890feba53c8c9b8721f5f0cae504a088",
+      "scope": "121-138 legacy default."
+    },
+    "config/edgion-gateway.yaml": {
+      "sha256": "163b72162f1d8acfbcdd1920b447d620f2de9966b823fea076984bfbf7e5a433",
+      "scope": "312-332 legacy default."
+    },
+    "cicd/deploy/kubernetes/gateway/configmap.yaml": {
+      "sha256": "dbd839697de983e1e9ad45370d7bc410b19fa18adc0a64614b23535ba18b0717",
+      "scope": "Full legacy mountpaths/autoCA."
+    },
+    "cicd/deploy/kubernetes/controller/configmap.yaml": {
+      "sha256": "0abf8096525b516f11d098b60f43a731143f93cc37e8d08bdfe3df2a3b02a7d9",
+      "scope": "Full bare autoCA."
+    },
+    "edgion-tests/integration/scripts/utils/conf_sync_certs.sh": {
+      "sha256": "33cedca84b6742380fd4d781b70c7ba9d04fe64eebe98264234694905ed4bbdf",
+      "scope": "79-106,144-169 actual generation."
+    },
+    "edgion-tests/integration/scripts/conf-sync/run_conf_sync_mtls_test.sh": {
+      "sha256": "a7861d425fb991dc874569541cd8ce89c71873d3af99b793a241b6b0a15e2a45",
+      "scope": "271-330 canonical run/unused legacy emission."
+    }
+  },
+  "limits": "Static read-only; no builds/tests/runtime/network; Controller skip_tls precedence is separate support-only seam pending Controller review. All 9 primaries freshly hash matched and fully read; support selection zero primary coverage."
+}

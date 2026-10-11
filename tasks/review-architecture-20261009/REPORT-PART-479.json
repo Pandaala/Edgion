@@ -1,0 +1,37 @@
+{
+  "partition": "PART-479",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/form_json_transform/mod.rs",
+      "sha256": "41ed18918ab70631b8a9062ac356ecd8f013902730f3e8d003a9b58381e85f0b",
+      "fully_read": true,
+      "disposition": "Full1-92 two phase-specific exact sorted-body assertions use canonical mutation; no distinct issue. Same ARCH296 literal31180 at26/69 and ARCH264 scenario lifecycle scope pending extensions."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "edgion-tests/src/client/dynamic/scenarios/form_json_transform.rs": {
+      "sha256": "eac9c0aee0a0dcddf80cda59e130e7419ccb385f732b716050e1264b33aab48d",
+      "scope": "Full actual initial assertion/update/wait, absent initial apply/restoration at29-36."
+    },
+    "edgion-gateway/src/plugins/http/form_json_transform/plugin.rs": {
+      "sha256": "44eadd05b2ee068ffe380a470c7413b9279a671885d896ba3593171d28e41bf7",
+      "scope": "Full1-423 actual canonical transformation."
+    },
+    "edgion-gateway/tests/unit/plugins/http/form_json_transform/plugin_test.rs": {
+      "sha256": "118cf4fbdd692bb213920cb38915d0942cbeb7276b88cca168d79c7541a6d9bc",
+      "scope": "Full1-221 actual transformation units."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/FormJsonTransform/DynamicTest/initial/EdgionPlugins_form-json-transform-dynamic.yaml": {
+      "sha256": "8e87ba94583d14f9a0365c78ba45aee340fe92af6a2088f419868b13038fd852",
+      "scope": "Full local initial direction fixture."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/FormJsonTransform/DynamicTest/initial/01_EdgionPlugins_form-json-transform-dynamic.yaml": {
+      "sha256": "8e87ba94583d14f9a0365c78ba45aee340fe92af6a2088f419868b13038fd852",
+      "scope": "Full Kubernetes initial fixture."
+    }
+  },
+  "limits": "Complete static analysis; both routes/update directions and actual registration/runner TSV34 inspected. Exact nonempty echo comparison cannot pass an empty failed observation, no ARCH348 extension. Preserve both valid direction assertions; lifecycle fix belongs scenario owner. Existing ARCH029 production classifier cause deduplicated. No execution/network/mutation; supports zero credit; original rules/topic decisions personally checked."
+}

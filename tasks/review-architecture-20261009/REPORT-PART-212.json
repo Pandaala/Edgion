@@ -1,0 +1,269 @@
+{
+  "partition": "PART-212",
+  "analyst": "/root/analyze_outbound",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/jwe_decrypt.rs",
+      "sha256": "53ef7a871b68d44b8a92b4dd988a2bacb973e1f97f9c4b0e6be104e53f016031",
+      "fully_read": true,
+      "disposition": "Operator policy, resolved Secret failure and redacted hidden transport have justified separate owners."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/jwt_auth.rs",
+      "sha256": "fae0f0212f1dc2fee3c4b199dc636809c481e87f204f401136495c31d7f11499",
+      "fully_read": true,
+      "disposition": "Issuer groups remain authoritative; cold credentials and verification preserve issuer/key/algorithm binding."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/key_auth.rs",
+      "sha256": "b1cd715e023567dc8fbbd04e4bdcc6a53d13820c985ce85b14a2c0e8780eae32",
+      "fully_read": true,
+      "disposition": "Supported KeyGet subset and first-wins groups feed canonical cold hashed keys and cleared transport."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/ldap_auth.rs",
+      "sha256": "f5c0282e04004e2dd551aa3672b711cedfc73a54f2602c0dab3d952ef7e49689",
+      "fully_read": true,
+      "disposition": "Canonical outbound preparation and escaped DN preserve authoritative per-request bind without credential caching."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/linksys_ref.rs",
+      "sha256": "341a641d6449125d432534127b0c8516b04914bd6fa78220b89dfa70e200364d",
+      "fully_read": true,
+      "disposition": "Small shared DSL/DNS reference shape; unlike references do not justify cosmetic consolidation."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/lru_cache_config.rs",
+      "sha256": "57979c76e214fb53c8885b4f718e7fca710f6ea0d80b2b645ee3e3f04761f274",
+      "fully_read": true,
+      "disposition": "Safety ceilings and capacity/shard consistency delegate inherited policy to existing cold resolver."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/mock.rs",
+      "sha256": "864028df41ee2a39eb82cfbc853b00c24000f7f012dcadb5882a66aca7dc2b40",
+      "fully_read": true,
+      "disposition": "Deterministic status/delay/header admission prepares immutable Bytes/Duration runtime values."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/mod.rs",
+      "sha256": "1d7dde6337f51df2d2bf4e3bbde9c507fb7c8e132c9d01f1c3331331bb1e9599",
+      "fully_read": true,
+      "disposition": "Schema exports and restricted-template gate have real consumers; TransformType retirement belongs to ARCH-067."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/openid_connect.rs",
+      "sha256": "b38e67b7d6171583b5ec0f4355bacc26c590590fff0b09d3c1d36f0da98b6739",
+      "fully_read": true,
+      "disposition": "Redacted hidden material, cold algorithm caches and authentication-mode contracts remain coherent; historical knowledge discrepancy is a documentation-only follow-up."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/proxy_rewrite.rs",
+      "sha256": "7fce439dbfcde54c6739c23cf2cad3a1773e5ab9c21a32372188c85b1f9ee02f",
+      "fully_read": true,
+      "disposition": "ARCH-072: successful precompile repeats and discards regex/JSON Patch compilation through check_fields."
+    }
+  ],
+  "candidates": [
+    "ARCH-072"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full governing original retained/current reread; root only."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original index."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full retained graded rules; relevant gates reread."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full retained original routing."
+    },
+    "skills/01-architecture/05-resources/00-schema-transport-contract.md": {
+      "sha256": "d20e74c1c7ccf6183f893bc919767a27bd3fbb47486415d14651a76fdef5a597",
+      "scope": "Full original opaque config/redaction/transport authority."
+    },
+    "skills/04-review/jwe-decrypt/regression-guards/resolved-credential-failure-policy.md": {
+      "sha256": "115e09a31cc8e59ab770c183a6e99e70a88426f89530a8de397a3017574b5708",
+      "scope": "Full operator versus material failure decision."
+    },
+    "skills/04-review/jwt-auth/mandatory-design/issuer-key-binding.md": {
+      "sha256": "fbcbcc5c291717f12b50b810c5353befd4a7afba9a0f28685ce123e26efc95f6",
+      "scope": "Full issuer/key/algorithm mandatory policy."
+    },
+    "skills/04-review/key-auth/mandatory-design/dup-key-first-wins.md": {
+      "sha256": "beaddf9503dea39145328f7749c1b3ac5bfabda71b1835155c3ff157c1b021d7",
+      "scope": "Full deliberate first-wins decision."
+    },
+    "skills/04-review/key-auth/intentional-design/extract-first-not-shared.md": {
+      "sha256": "ac090177693544051146afb23832115682b38bccebc5be6d517b290d706818b0",
+      "scope": "Full variant-filtered extraction decision."
+    },
+    "skills/04-review/ldap-auth/intentional-design/per-request-connection-accepted.md": {
+      "sha256": "32c9b51780e5d4bca116025afc32c7d59988afd6f52a48b7b5766eaf4b5ecb86",
+      "scope": "Full authoritative bind/no credential-cache decision."
+    },
+    "skills/04-review/oidc/intentional-design/required-scopes-bearer-only-coupling.md": {
+      "sha256": "643c0eb9121e0a1ff3dda3f5c6b73541f8fa0cceea68a5c28ff631049814ccf9",
+      "scope": "Full accepted mode coupling."
+    },
+    "skills/04-review/oidc/intentional-design/resolved-secret-empty-fallthrough.md": {
+      "sha256": "0b75705c6bff1f899016e036f1e4ef921a91ba46569931daaf1506d5f206e70d",
+      "scope": "Full original; pruning and per-request premises re-evaluated against current code."
+    },
+    "skills/04-review/oidc/regression-guards/outbound-tls-policy-construction-fails-closed.md": {
+      "sha256": "954c4b65b82afe61d65a5654554b633f27b1234325fa0f27c7e6fd1d5b39d695",
+      "scope": "Full fixed failure/TLS decision."
+    },
+    "skills/04-review/deserialization/regression-guards/plugin-auth-resolved-credentials-clear-before-resolve.md": {
+      "sha256": "d8f661e96497b757c1e3aba86e62c7fecf151010519d4bd60f5167411dcdf5f2",
+      "scope": "Full resolved material clearing/operator policy isolation."
+    },
+    "skills/04-review/deserialization/intentional-design/plugin-config-regex-dfa-size-limit.md": {
+      "sha256": "4c53022bd1d34033a5b500c885fec3be928065194afccb96d765bbb903c111f2",
+      "scope": "Full accepted regex envelope."
+    },
+    "skills/04-review/plugin-runtime/regression-guards/request-template-policy-unification.md": {
+      "sha256": "413004f76a11df4ef914bc1fb625dba4fa25602d6bf8ac8b25b66d62c3d49e7a",
+      "scope": "Full restricted-template and bounded-runtime decision."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/jwe.rs": {
+      "sha256": "e2001b88ffa0229bc21a9cda129d6894cd1e1d472b2756ab17798657b6342887",
+      "scope": "Full material producer."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/jwt.rs": {
+      "sha256": "d20b82ec822b7df8add985420b21ddd8e8bd550a9003c29185acd48e9920a84d",
+      "scope": "Full issuer credential producer."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/key_auth.rs": {
+      "sha256": "31204f72195dd040e198c8d6342d2e7dc8314c6bb0ff579a85295b8383b65051",
+      "scope": "158-226 clearing/group/first-wins producer."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/openid_connect.rs": {
+      "sha256": "b80498e13c2d66834c993c603c922ad892c878a8117505f88e1ab86b6f3299b8",
+      "scope": "Full bound material producer."
+    },
+    "edgion-gateway/src/plugins/http/jwe_decrypt/plugin.rs": {
+      "sha256": "ce1e8d4481ed1e03700bf6b509232977c3595f9356b22332474b0c3bd411d3d1",
+      "scope": "171-192,251-287 cold projection/prepared cipher."
+    },
+    "edgion-gateway/src/plugins/http/jwt_auth/plugin.rs": {
+      "sha256": "380f7dc0b9586c5c0b05f8f90cec071c06fe73a600eef82a92dba3bf1ab560ef",
+      "scope": "1-71 cold snapshot."
+    },
+    "edgion-gateway/src/plugins/http/jwt_auth/credentials.rs": {
+      "sha256": "f0cd2345bea53b65a36a0bd0c3495ac382bf56e4402e832f732ecbc1294d5b67",
+      "scope": "1-119 prepared scoped keys."
+    },
+    "edgion-gateway/src/plugins/http/jwt_auth/verify.rs": {
+      "sha256": "0a774ee65116bdc3f01067006e39005f577f6c4835c22ed6c099d2a5a70f37af",
+      "scope": "1-140 issuer-first actual verifier."
+    },
+    "edgion-gateway/src/plugins/http/key_auth/plugin.rs": {
+      "sha256": "a0879891ff652cda72d681764a398c7a4338d43dc8b5d30884f7c5ad12555940",
+      "scope": "1-116 cold hashed keys/extraction."
+    },
+    "edgion-gateway/src/plugins/http/ldap_auth/plugin.rs": {
+      "sha256": "8cf91d7a5f7012ad04a9d20f2ee2db3237617dc77516b9832e237ad14851618d",
+      "scope": "273-363,398-438 cold TLS and timed escaped bind."
+    },
+    "edgion-gateway/src/plugins/http/openid_connect/plugin.rs": {
+      "sha256": "5e6045b9d5cc47b62f0e2be8d3187d80d84f43a6085173f189517d7cd1b3aed0",
+      "scope": "270-379 cold secrets/cache/client."
+    },
+    "edgion-gateway/src/plugins/http/openid_connect/session_cookie.rs": {
+      "sha256": "fda5c0f6061cf941292aa9745622d65f392669c898950864be15c4d21733d425",
+      "scope": "1-106 current cold fallback/preparation."
+    },
+    "edgion-gateway/src/plugins/http/openid_connect/error.rs": {
+      "sha256": "1ffb56f6ae20563e36425c8dc51e29615099c6ee8a0945e1cf47d47da470e810",
+      "scope": "1-43 bounded reader/fixed errors."
+    },
+    "edgion-gateway/src/plugins/http/openid_connect/config_validation.rs": {
+      "sha256": "a3b991d819908d4173dd04311348e36e1373e18d0ce0d9806dc5a84991b6ade2",
+      "scope": "54-86 bearer mode scopes."
+    },
+    "edgion-gateway/src/cli/config.rs": {
+      "sha256": "9f19a5bf98552250045c76ce5c2ea606de312c1d61a71ad04c0a01ac3fe75e7f",
+      "scope": "1022-1059 cold inherited LRU policy."
+    },
+    "edgion-gateway/src/plugins/http/mock/plugin.rs": {
+      "sha256": "1f9b16ad20fe0b014d3e7ec905506d577e8d55a2053c3c7b59110ff466e3f71b",
+      "scope": "Full immutable preparation/local response."
+    },
+    "edgion-gateway/src/plugins/http/proxy_rewrite/plugin.rs": {
+      "sha256": "c257049692250ee377fe5d1dd3e981d77fb5f0d5d08a48f2a61a9d66858086a9",
+      "scope": "1-106,356-453 sole production caller and bounded mutation."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/proxy_rewrite_test.rs": {
+      "sha256": "7be9c208b783a7a3c8585ec029c2bc36536756d905c18ff9129ebef8da7c0684",
+      "scope": "Full actual semantics/bounds/cache tests."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/proxy_rewrite_test/validation_trait_tests.rs": {
+      "sha256": "8f7c00a0d15fc91e88020c69bcb351b60013fc1bc248a1d32d63e1b675b8eb86",
+      "scope": "Full actual stateless/conflict tests."
+    },
+    "edgion-gateway/tests/unit/plugins/http/proxy_rewrite/plugin_test.rs": {
+      "sha256": "690f1b25cb41d89b5eb4ae77031acab490199f2c4b80fc82e070616f2ba057b1",
+      "scope": "1-125,172-213,264-307 construction/publication/bounds."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/jwe_decrypt_test.rs": {
+      "sha256": "255b2176f4c0b3e031f0759aa264a6105785a8aa42416f6a403bb20fcfee9261",
+      "scope": "Full isolation/projection tests."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/jwt_auth_test.rs": {
+      "sha256": "805f8ea148ba85a1cc4b94dda7ee6024cdfb69dd339244a537fcab7aa1207d8b",
+      "scope": "Full issuer/injected-state tests."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/key_auth_test.rs": {
+      "sha256": "49c38996a639cfd96996701da58354d88d6c11d625dea65b39e79fadbe8aaac2",
+      "scope": "90-267 supported sources/groups."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/ldap_auth_test.rs": {
+      "sha256": "4479caac7709952e6f114bb38ae3f693c4f487ef8c63f297f0b904707a781f9d",
+      "scope": "Full DN/TLS/hidden field tests."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/lru_cache_config_test.rs": {
+      "sha256": "e936eb979946c2de3be9afacc0bd2c2d87603777ca1771afb6e50aff7976e840",
+      "scope": "Full defaults/limits tests."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/mock_test.rs": {
+      "sha256": "61f7146e66ffd38a9d6881fbaacc4f4dcb4e1bcdb59d6af2f625d2707c5fb94a",
+      "scope": "88-224 fixed/protected header/diagnostic/serde tests."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/openid_connect_test.rs": {
+      "sha256": "0a57c43cda3ae350bc7fc805e6a3271c1711ef4c98288f2a4ba67c4a2b7bc6f1",
+      "scope": "1-104,319-350 cache/destination tests."
+    },
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/guardrail.rs": {
+      "sha256": "0bebc52cffb79231408b0fedb9215d3f7f1184417b1ae9d5c2595f12ab2fdccd",
+      "scope": "174-202 template caller."
+    },
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/ai_guard.rs": {
+      "sha256": "56f9c80d47a9fe1914d87d4a6a8a035d590745d6b11ccdffbe09e44f38de649a",
+      "scope": "427-442 template caller."
+    },
+    "edgion-resources/src/resources/edgion_gateway_config.rs": {
+      "sha256": "bc982f3c7a039ff7318d18971fc66795037069e1373cad2d8746aec752d23821",
+      "scope": "130-143 shared LinkSysRef embedding."
+    },
+    "config/crd/edgion-crd/edgion_plugins_crd.yaml": {
+      "sha256": "58ac942825c504755a5cc3fb999a85ac498fc97d8b0cda2586b089fc1b2207aa",
+      "scope": "163-178,442-452 preserved opaque config."
+    },
+    "edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs": {
+      "sha256": "1c25ed89458f56ce46f71ca1540bc452da9cf8812cb97c960e77252aa1c6cf69",
+      "scope": "730-791 exhaustive source validation."
+    },
+    "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": {
+      "sha256": "70ea787d34a9a4652adfe131ba66049d2544b381b2034194db519567fe87ead0",
+      "scope": "2293-2308 ProxyRewrite factory."
+    }
+  },
+  "limits": "All ten fully read and freshly hash-matched. Static selected context only; zero supporting coverage; no builds/tests/benchmarks/runtime/Git/network. Documentation-only follow-up: resolved-secret-empty-fallthrough incorrectly equates schemars(skip) with ingress rejection under preserved opaque plugin config and mentions retired per-request resolvers; current Controller clearing and Gateway cold empty filtering retain intended safe fallback. Do not infer a source vulnerability or mutate original knowledge."
+}

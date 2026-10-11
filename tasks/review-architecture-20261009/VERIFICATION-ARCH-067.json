@@ -1,0 +1,81 @@
+{
+  "candidate": "ARCH-067",
+  "complete": true,
+  "verifier": "/root/analyze_conversion",
+  "decision": "confirmed",
+  "input_sha256": "efd35fef316c76c74e3000476c5988e1a04f4dd9fa5d9ac9cb8c8fd49c3f76d3",
+  "approved_claim_sha256": "289350500773fa1d036b478335584cea676632084d0ff78b66b6deec74e8361c",
+  "evidence": [
+    "Exactly four validation calls construct owned transforms; runtime uses original fields.",
+    "Borrowed replace/sub tuple can coexist with disjoint cache mutations; retain count gate and cache/error order.",
+    "4096-byte prefix copied twice per individual success; no performance measurement or runtime copy-removal claim."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full personally retained original; fresh hash."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full retained original."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full retained graded gates."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full fresh original."
+    },
+    "skills/04-review/ctx-set/regression-guards/one-transform-operation.md": {
+      "sha256": "4df60a43879d440a94868eda6ac7ec3c3736d72f819ae889352ff8ff44cd77e5",
+      "scope": "Full fresh original."
+    },
+    "skills/04-review/ctx-set/review-evidence/ctx-set-design-decisions.md": {
+      "sha256": "fd77c97282d1458122c89064e78c28b012c3c05a2cbc127c4b25f2c8b999c8ce",
+      "scope": "Full fresh original."
+    },
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/ctx_set.rs": {
+      "sha256": "0e52febba62d6c0bb91e67dc0d1b64dd20506101058fa44e64055c5b4fa27c80",
+      "scope": "Full fresh."
+    },
+    "edgion-gateway/src/plugins/http/ctx_set/plugin.rs": {
+      "sha256": "d789f29516553aa946f9ff1d18d5b70a266dca61dfc1beaaa87acbf1c8e8c6ed",
+      "scope": "Full fresh."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/ctx_set_test.rs": {
+      "sha256": "77813a051864598d386ace4dfe08b7af24faf2d66204608c6b7a5de26eba14bb",
+      "scope": "60-155,205-385 actual test bodies."
+    },
+    "edgion-gateway/tests/unit/plugins/http/ctx_set/plugin_test.rs": {
+      "sha256": "db72fa1aec4efdd4c0a1dc24ab6ab9c83d598c0a0844584fd1f54fe30deb68f9",
+      "scope": "60-193,225-290 actual test bodies."
+    },
+    "edgion-resources/src/resources/edgion_plugins/validate.rs": {
+      "sha256": "4684ace540889d54ce341c38d90b4f7fa0d8947b9beda405be8edcf9f9bfd488",
+      "scope": "555-615 actual gate."
+    },
+    "edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs": {
+      "sha256": "1c25ed89458f56ce46f71ca1540bc452da9cf8812cb97c960e77252aa1c6cf69",
+      "scope": "735-750 dispatch."
+    },
+    "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": {
+      "sha256": "70ea787d34a9a4652adfe131ba66049d2544b381b2034194db519567fe87ead0",
+      "scope": "1060-1085,2130-2148,2295-2308 source gate and construction."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs": {
+      "sha256": "9a6ed6dbb4caa2a8a6a5b9bee0e9a9d75344edd9aad3b9eeee5dccc6413dc16a",
+      "scope": "205-240 original Controller gate."
+    },
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/mod.rs": {
+      "sha256": "1d7dde6337f51df2d2bf4e3bbde9c507fb7c8e132c9d01f1c3331331bb1e9599",
+      "scope": "85-100 export."
+    },
+    "edgion-resources/src/resources/edgion_plugins/mod.rs": {
+      "sha256": "ec8495340aaeb8f7600f87b2b372d1937c1b0e708836d86610f777808fba40cb",
+      "scope": "62-74 export."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

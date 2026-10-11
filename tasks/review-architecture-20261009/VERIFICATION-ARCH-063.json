@@ -1,0 +1,98 @@
+{
+  "candidate": "ARCH-063",
+  "complete": true,
+  "verifier": "/root/analyze_outbound",
+  "decision": "confirmed",
+  "input_sha256": "9527c299531987bc46fb69981da0027a0ef1efea514e0b2ef03f890149693c4c",
+  "approved_claim_sha256": "25f6ae19c5cbbc6e4f85de9bf14d8a5c84b7edc82b9bae421ae8fd9b1e2158c0",
+  "evidence": [
+    "Exactly five Toy-only helper calls; no serving or generated/script consumer.",
+    "Actual borrowed RegionRoute generation/proof owner and retainedController management surface must stay.",
+    "Canonical conceptual replacement requires no orphan helper.",
+    "Candidate maps meaningful futurewrongtype/multi-entry coverage; no current requestcopy/incident/perfclaim."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Original full personally read/current applicable rows reread/no nested."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Original full/current graded gates reread."
+    },
+    "skills/01-architecture/05-resources/15-edgion-config-data.md": {
+      "sha256": "fa43b5425b617f7e7a640f182dd527721d77dc939b56d4a2d0d25cb33c42d02e",
+      "scope": "1-182 conceptualcontract + actual RegionRoute/reference semantics."
+    },
+    "skills/04-review/routing/regression-guards/region-route-effective-table-validation.md": {
+      "sha256": "c5948cf1eba9fd3bfb2f830da3f1c7e6ab2916e95ad060d2d3f665e4bd880c3e",
+      "scope": "Full original."
+    },
+    "skills/04-review/plugin-runtime/regression-guards/edgion-config-data-incremental-atomic-publication.md": {
+      "sha256": "4e64433873c84174f051edd06c6559df69d7c6d4bbe852cd42272432e50f0f61",
+      "scope": "Full original."
+    },
+    "skills/04-review/admin-api/intentional-design/controller-region-route-endpoints-retained-for-drill-in.md": {
+      "sha256": "297cdbed4b0002f6316961f146e8571f78e586e8a3609dd838e6c4b2e3f1564c",
+      "scope": "Full original."
+    },
+    "skills/05-testing/00-unit-testing.md": {
+      "sha256": "d6223d563ef4ef76405dc503dae0c569d7b0b2f31165f8604240b7bd06eded6e",
+      "scope": "1-80,145-190 mandatory coverage mapping."
+    },
+    "edgion-resources/src/resources/edgion_config_data/overlay.rs": {
+      "sha256": "9014462802ff49962e968c829bf4e02a314178d670df884caff53e88cee5a417",
+      "scope": "Full1-85 + hiddenRust/alltext calleraudit."
+    },
+    "edgion-resources/src/resources/edgion_config_data/region_route.rs": {
+      "sha256": "c9f86508899ee0d81cee34000ce2b5401589bceeab161158f6f5e9e225a15098",
+      "scope": "Full1-191."
+    },
+    "edgion-resources/src/resources/edgion_config_data/mod.rs": {
+      "sha256": "8f124494c20dddb9ce5705a1ed731d75597dec0ea702d0cef6c7d8c292a9b55d",
+      "scope": "1-120,225-267,429-469 exports/envelope/variants/switch."
+    },
+    "edgion-resources/tests/unit/resources/edgion_config_data/overlay_test.rs": {
+      "sha256": "3d7061095e45353c9dc15efe6d73115729fdcb6a299f295bc14ac9dc5abd5dd5",
+      "scope": "Full1-124 fiveToyfixtures."
+    },
+    "edgion-resources/tests/unit/resources/edgion_config_data/region_route_test.rs": {
+      "sha256": "95faead368c593abd5d35f4c7278a99835daad92cbf26d50719e191b84b08cdd",
+      "scope": "Full1-139 canonicalNone/empty."
+    },
+    "edgion-gateway/src/plugins/http/region_route/plugin.rs": {
+      "sha256": "709bebcc52cf4341ea8875eef4f37e3b9e81f3952275a85734b7a3ae852d1898",
+      "scope": "1-210,397-430 actual borrowedgeneration/servingdispatch."
+    },
+    "edgion-gateway/src/plugins/runtime/edgion_config_data/conf_handler.rs": {
+      "sha256": "1417737fc1627a07c2d8adefa4db153587b9b3dc79afaf450d008183a466ab7f",
+      "scope": "Full1-466 raw/proofpublication."
+    },
+    "edgion-gateway/tests/unit/plugins/http/region_route/plugin_test.rs": {
+      "sha256": "12feedbe94afde023c3b107d0d2b44085e3de8ab8e67d9b6f168c6a64d481c94",
+      "scope": "1-185,325-453 actual lifetime/fallback/modulo contracts."
+    },
+    "edgion-gateway/tests/unit/plugins/runtime/edgion_config_data/conf_handler_test/stats_tests.rs": {
+      "sha256": "332abc7dd04ef70053423b18f9334c5cd8e497bc613df40908315a222e4ba287",
+      "scope": "1-98 proofreplacement/invalidation."
+    },
+    "edgion-controller/src/api/region_route_handlers.rs": {
+      "sha256": "db96462427db553d11782c329e7c9da08923837e2ff9aa612a07974baab01941",
+      "scope": "1-123,260-430 ownedJSON/view + locked/versioned failoverwrite."
+    },
+    "edgion-controller/src/api/mod.rs": {
+      "sha256": "9320b3b8da4191ad7317024052c8db9c4da21835721ec26cd051105dabb0d1d6",
+      "scope": "605-626 live retainedroutes."
+    },
+    "edgion-controller/tests/unit/api/region_route_handlers_test.rs": {
+      "sha256": "5d2a3bb8d25954b27c1c889f31900ebee2998b83bf303eb7427f3c816fb5ebac",
+      "scope": "216-341 effective replacement/modulo/inheritance."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

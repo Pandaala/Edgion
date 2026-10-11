@@ -1,0 +1,39 @@
+{
+  "partition": "PART-293",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/plugins/http/basic_auth/htpasswd.rs",
+      "sha256": "11fa56e8f7fcc22c8ef8aa0e42817ccb4bbd3ef9ef3739cfd5b2874aaf90f827",
+      "fully_read": true,
+      "disposition": "Private module/export and full hash-format implementation with actual only verification caller checked."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/http/basic_auth/mod.rs",
+      "sha256": "ac8ed5add02cc0af52a887a91855bbda60583a2a9dde5c4ed5d8ae3064db0431",
+      "fully_read": true,
+      "disposition": "Actual private module and factory/export checked."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/http/basic_auth/plugin.rs",
+      "sha256": "b5437d3b4435c4dc435272518413aecce0fd6bd142e3c05744bb199316bea712",
+      "fully_read": true,
+      "disposition": "Source-owned credential map is moved from private runtime clone and pinned by Arc across blocking verification. Cheap supported algorithms remain private; plaintext prepared cold, recognized unsupported hashes reject unchanged, unknown-user fast miss and uniform bad-credential result preserve accepted timing policy. Anonymous applies only to missing header, shared sensitive identity/header/challenge/delay helpers used; no new cache or dummy verify."
+    }
+  ],
+  "candidates": [],
+  "support": {
+    "skills/04-review/basic-auth/mandatory-design/group-in-ok-log.md": "c1d534bed2031c2c291a6ad46eaacdced5b3f311a7467b3af657aa33232b3718",
+    "skills/04-review/auth-timing/intentional-design/basic-auth-no-bcrypt.md": "261f232fb7cf889ee490df801544438066bc1a9a2934c826d26138c241577184",
+    "skills/04-review/auth-timing/regression-guards/basic-auth-username-enumeration.md": "b33fbbc5fe2f8d707747320e29a3a21475b8d4fc338105d932127dfc71c7827c",
+    "skills/04-review/security/intentional-design/auth-identity-headers-overwrite-written-names.md": "1bbf0d70a24f0366a53b0aecb50c6dc17f2c4247fa17753304010b335edfcc42",
+    "edgion-gateway/src/plugins/http/common/auth_common.rs": "0a184e336bc99eb91555c07be17a4ff6c49dfe21a401d1668efd7793152fa4b0",
+    "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": "70ea787d34a9a4652adfe131ba66049d2544b381b2034194db519567fe87ead0",
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/basic_auth.rs": "26efd5a822da7cd18eb3ba6d1222c4e2f55cb2bb066a4e453d74646fe050e008",
+    "edgion-gateway/tests/unit/plugins/http/basic_auth/plugin_test.rs": "cc9f26ef703360bcb13ba6fbc5744abb89653bfa55b5d7a502cdd30413ebb555",
+    "edgion-gateway/tests/unit/plugins/http/basic_auth/htpasswd_test.rs": "34a1251d1f8cb6440bfdf603c19cebbce0963717add0407cc7302bf13e3b4c70"
+  },
+  "support_scope": "Relevant original timing/identity/extraction/strip decisions personally read. Actual cold validation/secrets, shared diagnostics/delivery/typed mutation, source generation/format/credential-order and redaction regression sections read. Supporting files selected sections; no automatic primary credit.",
+  "limits": "Static only; no tests/builds, crypto oracle execution, timing guarantee/measurements, full Controller secret parser coverage or new globally reserved headers."
+}

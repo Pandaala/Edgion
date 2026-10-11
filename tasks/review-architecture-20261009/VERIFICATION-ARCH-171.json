@@ -1,0 +1,107 @@
+{
+  "candidate": "ARCH-171",
+  "complete": true,
+  "verifier": "/root/analyze_outbound",
+  "decision": "confirmed",
+  "input_sha256": "4f919e47fc0f06d9f1e9268ee88a4568f1389d59bf1cc30f7083fb3b1ee0b91f",
+  "approved_claim_sha256": "67922a88ad4c90d2b40c8a38445d1960563055c2f71041358822a1d7c4c629e2",
+  "evidence": [
+    "Sole caller retains complete page; Vec<Value> clone recursively copies unused resource trees.",
+    "All extractors borrow Value and return independently owned row metadata; existing ordinary formatter uses borrowing.",
+    "Borrowed slice/empty fallback preserves unchanged API/lifetimes/count/order/age/labels and existing rendering semantics, no async or transport change.",
+    "Original cold-small-copy decisions differ in scope; no measured performance or broad ownership rewrite, exact dedup found only this cause.",
+    "Full actual code/tests/contracts independently read; complete static-only verification, zero primary coverage."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full personal original retained, current hashes unchanged."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Personal original index/current CLI/performance lookup."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original retained; borrow/reuse/redaction/transport/observability gates."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Original owning-function routing."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original authority/re-evaluation."
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full original independent value/read-only workflow."
+    },
+    "skills/01-architecture/04-ctl/SKILL.md": {
+      "sha256": "f2846ac3479a688f16cbc5f2eec3c131905d9145e26fda5670db900c1bcad463",
+      "scope": "Full original."
+    },
+    "skills/01-architecture/04-ctl/00-overview.md": {
+      "sha256": "0a2acdc3bd1339ae674a569674cdf47d1b33be3c387011e9a942606dfe5b30fc",
+      "scope": "Full original targets/three-tier output."
+    },
+    "skills/01-architecture/04-ctl/01-commands.md": {
+      "sha256": "a42c9fee403fbb921017696ada6fe7cb904f0ae7574762b91d3e08d051c2e03f",
+      "scope": "Full get/pagination/metadata-only contract."
+    },
+    "skills/04-review/cpu-memory/review-evidence/extract-status-json-double-serialization-cold-path.md": {
+      "sha256": "248a9e804817046e5f6521857c9110b9c54e35cf83171ed47e8ae314593c1e06",
+      "scope": "Full original scoped rationale."
+    },
+    "skills/04-review/cpu-memory/review-evidence/small-object-clones-reconcile-config-sync.md": {
+      "sha256": "4b859177a90880934d6d96f63c4941daed018c324d220cd852a401cc4d8b190c",
+      "scope": "Full original small-object/cascading ownership rationale."
+    },
+    "skills/04-review/cpu-memory/review-evidence/performance-review-methodology.md": {
+      "sha256": "67d2950c67ddb50f7f3fc32b75cf0917d941931a4beeb831eb7ee5a08c2c6ce3",
+      "scope": "Full original phase/call/owned versus Arc methodology."
+    },
+    "skills/04-review/cpu-memory/regression-guards/cli-http-client-idle-pool-disabled.md": {
+      "sha256": "6d13237bafbd06b891879fcfc492ac4320754b57bf6bd992413b325689b9660b",
+      "scope": "Full original canonical pool/proxy policy."
+    },
+    "edgion-cli/src/cli/output.rs": {
+      "sha256": "0d8e6204bcda767a88b6dffb531454ac11f09d75f26f3b6068e8f5a95162a1cd",
+      "scope": "Entire implementation/row extractors/rendering/test declaration."
+    },
+    "edgion-cli/src/cli/commands/get.rs": {
+      "sha256": "609d33c9a9cb1bedc9b176bd671bb91a21a04fd10afd95d4b442d62ffb6de891",
+      "scope": "Retained full implementation;185-259 fresh sole caller/lifetime/continuation."
+    },
+    "edgion-cli/tests/unit/cli/output_test.rs": {
+      "sha256": "1ef046e4fc3484c45f03081afe874af602e838df6da8dd09676cae6ab1a7c26d",
+      "scope": "Every actual test body."
+    },
+    "edgion-cli/tests/unit/cli/commands/get_test.rs": {
+      "sha256": "2336a3a14007c3f1527f40961112023f4826386ae86570214e79260ba28c4300",
+      "scope": "Every actual test body retained, fresh unchanged hash."
+    },
+    "edgion-controller/src/api/namespaced_handlers.rs": {
+      "sha256": "81943b798b18bb4fbf1c234835e89fdd02fbfb50f27920fe186ae6b783aaa5d5",
+      "scope": "35-80 actual complete-resource listing."
+    },
+    "edgion-controller/src/api/types.rs": {
+      "sha256": "43e2700678d3c234d667b6b7dcae94fa9a6678f81a01bfeb7a4148817bc3cb65",
+      "scope": "35-150 storage content parsed to Value."
+    },
+    "Cargo.lock": {
+      "sha256": "18b7b7dee01e024ab6d21f5692ce04a343c4fb265092c7f587099e91c28bea17",
+      "scope": "serde_json1.0.151 pin."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.151/src/value/mod.rs": {
+      "sha256": "6331d59ea362a74b6cd3d302d08114a63a73a384ff56fef737de29edea2f8d91",
+      "scope": "110-180 Clone/owned variants."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.151/src/map.rs": {
+      "sha256": "b5a2fd1ee865e6cfd83ef2da0a2e1057f892465ac7ede8a78a11354a60526f33",
+      "scope": "386-412 Map clone."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

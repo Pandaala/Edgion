@@ -1,0 +1,141 @@
+{
+  "partition": "PART-410",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_backend_traffic_policy.rs",
+      "sha256": "7925d76536c03b8f126cb42fc62797c98be7d057649762b4c8e1c4809e9f6807",
+      "fully_read": true,
+      "disposition": "No new finding: canonicalpureeligibility/typedrecovery/all-or-noneconflict andTLSfailurewinningoccupancy; foreignancestorcapacityalreadyARCH106, timestampprojection99 separate."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_config_data.rs",
+      "sha256": "e8dfb8e3af2c1b95ae82dc2d9656f5a8fa95bd0af83250b83e03d95f9246b6b8",
+      "fully_read": true,
+      "disposition": "No finding: ownpolicybundleedges beforeGrant, clearonretarget/typedidentity/barequeuekeys, retainincomingdeleteedges; boundedrequired/optionalstatus andpartial-goodvariants intentional."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_gateway_config.rs",
+      "sha256": "07f270a10221f384105822bf2cb6e48bdbc98c52575c3ffa3f176ae47a06d570",
+      "fully_read": true,
+      "disposition": "No finding: intrinsicclusterstatus/adminTLSselection withindependentCA/client andcanonicalclearing; ownedGatewayClass validation; smallclassallrequeue avoids newindex."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original retained; fresh unchanged."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original retained; progressive index."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original retained; applicable graded gates."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full original retained; review index."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original retained; original evidence routing."
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full original retained; independent verification."
+    },
+    "skills/01-architecture/05-resources/SKILL.md": {
+      "sha256": "dae4740e05545a9d674199070cc49a6559fd921e69ae0d08dab19dc51d3efef6",
+      "scope": "Full currentindex."
+    },
+    "skills/01-architecture/05-resources/20-edgion-backend-traffic-policy.md": {
+      "sha256": "6864e41c758349b093e4db885b77eb3e6b793d47025238e8ae137e6ebc7994e6",
+      "scope": "Full; homogeneousidentity/AIcapabilities/health-localTLS/requestpinning."
+    },
+    "skills/01-architecture/05-resources/03-edgion-gateway-config.md": {
+      "sha256": "ab268064136a95a18b3c11dda741b5e4f0eba2418b75aacd3ab3f3b9a9f85ad4",
+      "scope": "Full145; truncatedtail120\u2013145 recovered; intrinsicstatus/adminTLS/requeue/scopedpublish."
+    },
+    "skills/01-architecture/05-resources/15-edgion-config-data.md": {
+      "sha256": "fa43b5425b617f7e7a640f182dd527721d77dc939b56d4a2d0d25cb33c42d02e",
+      "scope": "Selected184\u2013237,304\u2013374,528\u2013567; ownbundle/optional/Grant/typedowner/currentconsumercontracts."
+    },
+    "skills/02-features/03-resources/SKILL.md": {
+      "sha256": "45ea9b0f43280adc42e1eac112ea27dbe9d00d1858d467434976a5c77992aeb0",
+      "scope": "Selected1\u201395; partialsearchoutputrecovered1\u201338; ConfigDatahasnostandalonefeaturepage."
+    },
+    "skills/02-features/03-resources/20-edgion-backend-traffic-policy.md": {
+      "sha256": "4b7ee468a220e775c9d7f247139ac04281f1d195c39b8f9bf5e94156bfdc74ea",
+      "scope": "Selected1\u201382; activeTLS/capabilities/invalidwinningcheckretained."
+    },
+    "skills/04-review/status/regression-guards/shared-config-status-deployment-independence.md": {
+      "sha256": "6eeee3511b669f05b787867bbf8df7ad987a60d0ba74cff81f11dbdf383dfafb",
+      "scope": "Full; EGCintrinsicstatus/ownedclassvalidation."
+    },
+    "skills/04-review/handler-requeue/regression-guards/ebtp-typed-service-key-btp-requeue.md": {
+      "sha256": "4c688362cda76deef22e67156a577d0af8ecd7990bee8099f8c8cdaf0e122a71",
+      "scope": "Full; legacyService-onlytranslationprosecheckedagainstcurrenttypedBTPbasekey."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/edgion_config_data_test/dependency_requeue_tests.rs": {
+      "sha256": "9dc1b3b8c6291e0b4e0d5d3d22f0222e811a3f5f98eaaba6443b72592ead0a2b",
+      "scope": "Full379; actualqueues/deleteincomingrefs/WAFtypechange/bareowner/optionalinvalid."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/edgion_config_data_test/unknown_fields_tests.rs": {
+      "sha256": "eba5fc8f5cedb97136b1495d28b27d1fa6fe5fd3683c4a3231a053e6c218e140",
+      "scope": "Full91; advisoryconditions/strictPROXY."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/edgion_gateway_config_test.rs": {
+      "sha256": "c3456c499f7d84c12c4deafafb67451833bf6301790311ae643a068ac4bc2fbb",
+      "scope": "Selected1\u2013210,224\u2013248,824\u2013859; actualadminTLS/provenance/clear/intrinsicstatus/globalrefidentity."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/edgion_backend_traffic_policy_test.rs": {
+      "sha256": "cb92ed5885fbc850dd861cb98f389d11a6dcd88d0dcddb4cb11308597f37de85",
+      "scope": "Selected1\u2013120,340\u2013579,831\u2013969,1034\u20131295,1297\u20131389; actualfixtures/arbitration/mixed/forgedemptyerror/status/healthTLS/identityrecovery; partialedgefnlinesnotcountedbody."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/backend_capability.rs": {
+      "sha256": "850b72b14294ec97c923d165de59e93632429f852327ae6b3c3e4811ccc220dd",
+      "scope": "Full; rawgenerationAIcapability."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/backend_tls_policy.rs": {
+      "sha256": "db90d7dba9390d47a77cc7d4c0ae3f70d0ace74b5ca7c600f694cd96a749bc7c",
+      "scope": "Selected100\u2013129,431\u2013467; exacttypedcurrent/droppedEBTPqueuekeys."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/gateway_class.rs": {
+      "sha256": "4f8fd0b1ccfc7c6205fa7cf5d21a73def74fe80fef6c806a68d56ad77984c50a",
+      "scope": "Selected40\u2013114; actualrawparams/pluginclassification/intrinsicowningidentity."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/edgion_config_data_utils/edgion_config_data_store.rs": {
+      "sha256": "017b3741016133d8f83200e20a3986a31a4df92f1fcd45988b4f20c1d4d3fb04",
+      "scope": "Selected1\u2013145; coldget/update/boundedWAFsnapshotowner."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs": {
+      "sha256": "23057df0f04ed113a72fa1b42fb5344153c3ae8cff526e030878c8091fc92bd6",
+      "scope": "Retainedactualstageflow; callsites717\u2013740 refreshed validate/parse/status."
+    },
+    "edgion-gateway/src/backends/policy/backend_traffic/store.rs": {
+      "sha256": "0a35add8c64ab31f105772c87d9e80182ca68e265e1b750fd7221125cc321610",
+      "scope": "Selected86\u2013113,224\u2013270; immutabletargetlookup/eligibility/currentequivalence."
+    },
+    "edgion-resources/src/resources/edgion_config_data/mod.rs": {
+      "sha256": "8f124494c20dddb9ce5705a1ed731d75597dec0ea702d0cef6c7d8c292a9b55d",
+      "scope": "Selected344\u2013415; exactvariantvalidation/unknownsecurityfields."
+    },
+    "edgion-resources/src/resources/edgion_config_data/waf_policy.rs": {
+      "sha256": "c33f422849584accf37b1cf928ebc907170b8e73c4abe6b643c9ec0e14e8cad2",
+      "scope": "Selected90\u2013165; hardprofile/ref/selectionbounds."
+    },
+    "edgion-resources/src/resources/refs/waf_fields.rs": {
+      "sha256": "799e0e7e6d0a3d882824c30943a9c1f0417948932a1e59b3c33389d02be101b3",
+      "scope": "Selected130\u2013205; actualpolicyidentity/bundleloans."
+    }
+  },
+  "limits": [
+    "Allthreeprimaries1217linesfullyread plus relevantactualtests/contracts/callers; staticnoexecution/mutations; secondarycreditzero.",
+    "No genericresolver/statusfamilyframework orcoldcopy rewrite justified;106/99deduplicated; currenttypedBTPbasekeys do notuseobsoleteService-onlytranslation.",
+    "Documentationfollowup only: ConfigDataarchitectureparseclaims overlaytype validation notpresenthere; UnknownConfigFields row namesPROXY/WafRuleBundle but currentWafPolicyalso rejects unknownconfigfields. Sourcepreparsewarningbranch forWafRuleBundle stillsaysignored whilevalidate rejects; minordiagnostic wording notpromotedarchitecturefinding. No existing knowledge/log edited."
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "candidate": "ARCH-054",
+  "complete": true,
+  "decision": "confirmed",
+  "verifier": "/root/analyze_conversion",
+  "input_sha256": "6db24b078e38583c49b25092d05ca964eb08d7c15d448ed8b32fdafdf7fb750c",
+  "approved_claim_sha256": "9d55ac0231571dfe9e019d00c98841a0db564890194f3c1d28995f2aaeb108fc",
+  "reason": "Nonempty percent-free str already UTF8; borrowing cannot change strict escapes or slash preservation. Local scalar finalJSONowned; rawqueryvalidate beforeignore/formparse remains. Emptyvec notheapclaim. Distinct permissive decoder ARCH048.",
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original retained; original graded rules and readonly scope"
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original retained"
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original retained (large repeated read truncated, not a fresh full-read claim)"
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full original retained"
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original retained"
+    },
+    "skills/01-architecture/05-resources/SKILL.md": {
+      "sha256": "dae4740e05545a9d674199070cc49a6559fd921e69ae0d08dab19dc51d3efef6",
+      "scope": "Full original"
+    },
+    "skills/01-architecture/05-resources/00-schema-transport-contract.md": {
+      "sha256": "d20e74c1c7ccf6183f893bc919767a27bd3fbb47486415d14651a76fdef5a597",
+      "scope": "Full original"
+    },
+    "skills/04-review/h2-grpc/SKILL.md": {
+      "sha256": "3093a4094e25cf3f6e094c46688d71c86e7729a8795cdbca92c9880d2d6ade5c",
+      "scope": "Full original; independently personally read"
+    },
+    "skills/04-review/h2-grpc/regression-guards/grpc-json-transcoder-admission-and-outcomes.md": {
+      "sha256": "14a332e2e51c9c8ac01a9d718df74f12e681450c6465c2057484a0d0d35790f4",
+      "scope": "Full original; independently personally read"
+    },
+    "skills/04-review/resources/regression-guards/grpc-descriptor-configmap-ownership.md": {
+      "sha256": "50ae4ad57ee78f127b7b6b6d9ed78ba00edc598d5e065b7e83f070998a37946d",
+      "scope": "Full original; independently personally read"
+    },
+    "edgion-resources/src/grpc_transcoding/mapping.rs": {
+      "sha256": "92b90979da32fe590dd385a8e5d2548949744641ec12a08f4080ad38bf4b2ccf",
+      "scope": "Full; independently personally read"
+    },
+    "edgion-resources/src/grpc_transcoding/mod.rs": {
+      "sha256": "a3513cc67cf25640209d196aac3e6b27b0c5a319e02e9df495f230609d844b63",
+      "scope": "277-320; independently personally read"
+    },
+    "edgion-gateway/src/plugins/http/grpc_json_transcoder/plugin.rs": {
+      "sha256": "1e64bcce8c31495f2009f6ecde38b51ff1acbc3319a6b3406512d0c39f10894a",
+      "scope": "80-175; independently personally read"
+    },
+    "edgion-resources/src/uri_utils.rs": {
+      "sha256": "103636182e26c3560623a7f2af47ebdefaf660cf3ba8a75675b551937f3c8f87",
+      "scope": "46-118; independently personally read"
+    },
+    "edgion-resources/tests/unit/grpc_transcoding/mod_test.rs": {
+      "sha256": "668dca7c85502cd4945fe00ca6f52b8014fdc0984287abee9731c22b919eb574",
+      "scope": "1-110,153-215; independently personally read"
+    }
+  },
+  "limits": "Readonly source/test body/original knowledge inspection; no execution or primary credit. No substantive revision."
+}

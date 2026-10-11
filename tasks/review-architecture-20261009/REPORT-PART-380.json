@@ -1,0 +1,68 @@
+{
+  "partition": "PART-380",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/sse/chain.rs",
+      "sha256": "a36fc526f1cf547fdba28e190375f990b5b077ebf5218dd469aaec219aec088e",
+      "fully_read": true,
+      "disposition": "Bounded retained slice/arena owner, prospective append admission before commitment, borrowed complete records."
+    },
+    {
+      "path": "edgion-gateway/src/sse/mod.rs",
+      "sha256": "e8ee7f4b7d9a24937f54bb2918c3d9bcfbeffc87e9f870f13cf2c8b6181dc0e7",
+      "fully_read": true,
+      "disposition": "Canonical byte-exact framing/BOM/partial event bounds, Data/Dataless/Poisoned classification and terminal opaque fallback; ARCH013 owns consumer classification loss."
+    },
+    {
+      "path": "edgion-gateway/src/sse/window.rs",
+      "sha256": "b6301aa6a60a3c7ecae1b436e18856ad32891eb099850275ce7bcc3c8f36219f",
+      "fully_read": true,
+      "disposition": "Independent input/resident/metadata/event/line/range/fragment/snapshot/overlap/replacement/combined bounds; failed retain preserves original ownership; explicit generation release/replace/discard and one terminal finish; emitted-only UTF8-safe overlap."
+    }
+  ],
+  "candidates": [],
+  "existing_related": [
+    "ARCH-013"
+  ],
+  "support_selected": {
+    "skills/04-review/sse/regression-guards/window-capacity-admission.md": {
+      "sha256": "48b08d0768d3ed32ac0793b27727b5069e68cda7dd5358ccb8cd4d8dfa08c6b0",
+      "scope": "Full original"
+    },
+    "skills/04-review/sse/regression-guards/window-emitted-context.md": {
+      "sha256": "afd9738fbed99f1e38477ad8cf0f147f87a744d0b0de3ff2200bd562016ed4d5",
+      "scope": "Full original"
+    },
+    "skills/04-review/sse/review-evidence/sse-empty-data-fields-dispatch-events.md": {
+      "sha256": "0cf4584c50ffb504909c777bcf98a60566670f7eaf7fc5acf01c20e4cd911a51",
+      "scope": "Full original"
+    },
+    "edgion-gateway/tests/unit/sse/chain_test.rs": {
+      "sha256": "b8a25a9410aeaf29dabf36f226c1fb3f7c44bdf4b35a48a7596e968f919fcc85",
+      "scope": "Full 68 lines"
+    },
+    "edgion-gateway/tests/unit/sse/mod_test.rs": {
+      "sha256": "32ecc4504b486598a4284822b96a3ab1eb4a44e294b6aa41d7738e6502b6e05b",
+      "scope": "Full 413 lines"
+    },
+    "edgion-gateway/tests/unit/sse/window_test.rs": {
+      "sha256": "cdbc8cdf005f16e9c1dde56cb45fb8fab2644a14e64687c418294351935e5659",
+      "scope": "Full 1086 lines"
+    },
+    "edgion-gateway/src/ai/guards/semantic/response.rs": {
+      "sha256": "a344d8c4689316a9933a5158f49885972ff0bcf8bfff3ab1c54d69e5b691c639",
+      "scope": "1-175,258-369,459-815; awaited decision, caps, retry/EOS/cancel"
+    },
+    "edgion-gateway/src/response/driver.rs": {
+      "sha256": "1bf18b498c8cf2c6c6c29633f019b581e8e9c39d51fc8e965f87e67364eae50f",
+      "scope": "119-215 lease release on future drop"
+    },
+    "edgion-gateway/src/plugins/runtime/traits/streaming_response_processor.rs": {
+      "sha256": "d474538e9bb1abc722c265496691984e41de49ccf432a1481cbe5b51b0a6f2b6",
+      "scope": "Full 164 lines"
+    }
+  },
+  "limits": "Personally full-read primaries; actual scoped original contracts/callers/test bodies. Static review only; no execution, mutation, measurements or supporting primary credit."
+}

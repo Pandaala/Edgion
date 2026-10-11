@@ -1,0 +1,151 @@
+{
+  "partition": "PART-198",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-resources/src/resource/defs.rs",
+      "sha256": "300c71b7bdea3a95395df2f575e380aa2461d27703b640fbb9d96e44c5c39748",
+      "fully_read": true,
+      "disposition": "Canonical cold resource inventory/defaultcapacity/names/cache/scopes and explicit Secret/ConfigMap registry excludes; manualwireenum required."
+    },
+    {
+      "path": "edgion-resources/src/resource/kind.rs",
+      "sha256": "f852a6b31c40b97ef9764e77a926fddc6daa6ccd95db2061171cae5e7b6a607c",
+      "fully_read": true,
+      "disposition": "ARCH047 lexicalkind initialscan conflicts structured envelope; manual wire/as_str/name declarations intentional."
+    },
+    {
+      "path": "edgion-resources/src/resource/macros.rs",
+      "sha256": "9a22990cc9d0643174489ab40566480f4ab4f42d74741e77f4c66b95839d0929",
+      "fully_read": true,
+      "disposition": "Static metadata/lookup generator; exhaustivecentraldispatch retained, capacitycold nothotpath. Unused enum_value declaration is legacy comment/contract followup, no current parity defect inferred."
+    },
+    {
+      "path": "edgion-resources/src/resource/meta/envelope.rs",
+      "sha256": "e3bab7fc55a3edba254c0adac8758c8e5235f8c49afb7636d275a4c2ee0960f5",
+      "fully_read": true,
+      "disposition": "Canonical structured root kind/name/namespace used by admin/storage/CLI; metadata missing rejected; no expanded schema parseowner."
+    },
+    {
+      "path": "edgion-resources/src/resource/meta/impls.rs",
+      "sha256": "27c60a71a1cf5ea7b95534fd66fc6d8ef9a1b82eefc7a682ed8f15226ccb8ac1",
+      "fully_read": true,
+      "disposition": "All22 ResourceMeta impls; canonical preparse/HTTPGRPC retry+time derivation and Gateway omitted-address failclosed; Link/ConfigData advisory differs actualgatewaycompile enforced separately."
+    },
+    {
+      "path": "edgion-resources/src/resource/meta/mod.rs",
+      "sha256": "5ee74db7600bba4a257fe47fa6d66662695b6c6ed0e83ca162cec9de3cf3f777",
+      "fully_read": true,
+      "disposition": "Thin private modules/publiccanonical exports traced."
+    },
+    {
+      "path": "edgion-resources/src/resource/meta/traits.rs",
+      "sha256": "83e947ba6949dd38e8e5ebae8808f17b884f60d0e224691c1ef3434ec9a85653",
+      "fully_read": true,
+      "disposition": "Trait generic transport identity/version/syncversion; macro4scopepreparse variants preserve actualcold owners; opaque Kubernetes PATCHversions remainraw elsewhere."
+    },
+    {
+      "path": "edgion-resources/src/resource/mod.rs",
+      "sha256": "788ff7283dd085240241f416a6ef5b8b520f7f2a511cde84e213211ce18a85b5",
+      "fully_read": true,
+      "disposition": "Modulemacro order/exports traced; compatibilitycomment is stale not actualshim proposal."
+    },
+    {
+      "path": "edgion-resources/src/resource/registry.rs",
+      "sha256": "47d9fcf2848c85ea43ad578701541ce1d3eeca03f53e5e29a5d63a0fdc4fb2fe",
+      "fully_read": true,
+      "disposition": "Delegates canonicalinventory used byGateway readiness/stats; excludedcontrolleronly kinds remain supportedboundary."
+    }
+  ],
+  "candidates": [
+    "ARCH-047"
+  ],
+  "support_selected": {
+    "edgion-resources/tests/unit/resource/defs_test.rs": {
+      "sha256": "8486ab29439386ed5675d019536cadd368a5f88c9728b2669e7d796f1a5b6e62",
+      "scope": "Full"
+    },
+    "edgion-resources/tests/unit/resource/kind_test.rs": {
+      "sha256": "fde93090ca3ffa68a65e9ff6e53cf4d7417c66fa1fb7e2f6ae53a23427469d85",
+      "scope": "Full"
+    },
+    "edgion-resources/tests/unit/resource/macros_test.rs": {
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "scope": "Full empty testmodule"
+    },
+    "edgion-resources/tests/unit/resource/registry_test.rs": {
+      "sha256": "e57f0f78c8fa4ab9141ebffabfdf1f289ff28c53d63e096438f5fdb4dae716f0",
+      "scope": "Full"
+    },
+    "edgion-resources/tests/unit/resource/meta/envelope_test.rs": {
+      "sha256": "e288261c2b7dec55d536599961b6cd6359a0acf3cfb49147bae490765e321224",
+      "scope": "Full"
+    },
+    "skills/01-architecture/00-common/03-resource-system.md": {
+      "sha256": "d5d6d40e2abd3b510d12382b7886bcc8553887056df341cfcf00f1ab0637ffcf",
+      "scope": "Full original; auto20 table staleactualmanual22"
+    },
+    "skills/01-architecture/05-resources/00-resource-flow.md": {
+      "sha256": "27c9ca17c7012ba436fad9531cbc93ed319ce855f5248ad780eeb46f49507cfe",
+      "scope": "Full original"
+    },
+    "skills/01-architecture/05-resources/00-schema-transport-contract.md": {
+      "sha256": "d20e74c1c7ccf6183f893bc919767a27bd3fbb47486415d14651a76fdef5a597",
+      "scope": "Full original"
+    },
+    "skills/01-architecture/01-controller/03-config-center/01-file-system.md": {
+      "sha256": "e2a0bb66db0ab4a0c30b5e5246475570deea3bd6bdf2f9bc5190941deafeb4d8",
+      "scope": "1-170"
+    },
+    "skills/04-review/cpu-memory/regression-guards/controller-confcenter-stats-canonical-inventory.md": {
+      "sha256": "68fe430b1ae1a02f8b40c24a8f6ee598612eeb8926cdbf6fdd203179924239c4",
+      "scope": "Full original"
+    },
+    "skills/04-review/status/regression-guards/kubernetes-status-snapshot-concurrency.md": {
+      "sha256": "9834dcaeb04d766b44c9346663058487e6cd6eeeff900c614b0021bb7a9e1bd1",
+      "scope": "Full original"
+    },
+    "edgion-controller/src/conf_mgr/conf_center/file_system/file_watcher.rs": {
+      "sha256": "db5980226663f13119f56f2b0c6d0b27cecd3266c2ebfad2a8227f262a1e0d95",
+      "scope": "105-250,305-505 actualprime/phaseddispatch/runtimefilename"
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/file_system/file_watcher_test.rs": {
+      "sha256": "f19fa4c809a54d23b4714e0ccdd64fc8359843ca0972731d42f4d241e98b6404",
+      "scope": "235-370 collision/phasedinit/repeated generation; other exacttestnames searched"
+    },
+    "edgion-controller/src/conf_mgr/conf_center/file_system/resource_controller.rs": {
+      "sha256": "3a98d5b9d45a90fc611d8bd47fd02646f0cd7edd67bda4679ec7ce1352b0ccb3",
+      "scope": "145-205,908-932 actual typedinit/identityguard"
+    },
+    "edgion-controller/src/conf_mgr/conf_center/common.rs": {
+      "sha256": "3c3b85c5d3af871dfc838d1b2d4ea1d886c596a8faa8d103979105db8db7a6d9",
+      "scope": "1-105,204-300 typedAPIversion/source decode contract"
+    },
+    "edgion-controller/src/conf_mgr/conf_center/file_system/storage.rs": {
+      "sha256": "160b51c73737d2d6188d3f4b5991589443aeaae6ce723829fbe382ac371fbdc1",
+      "scope": "315-360 actualcanonicalenvelope"
+    },
+    "edgion-controller/src/api/namespaced_handlers.rs": {
+      "sha256": "81943b798b18bb4fbf1c234835e89fdd02fbfb50f27920fe186ae6b783aaa5d5",
+      "scope": "115-165 canonicalenvelopeadmission"
+    },
+    "edgion-cli/src/cli/commands/apply.rs": {
+      "sha256": "edf04496c89b88d15205450a28952f865ac9a09768667de0b7b77dd1695bb352",
+      "scope": "105-150 canonicalenvelope"
+    },
+    "edgion-gateway/src/conf_sync/conf_client/config_client.rs": {
+      "sha256": "1c3568262e1c01287a6abd82514b87d1ba069c578d46a353865b02c113d638af",
+      "scope": "317-349,426-479 readiness/stats actualconsumers"
+    },
+    "edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs": {
+      "sha256": "81db42781da15c030a91759b7b38b9492ac9a796c597d26fc70be5967309930f",
+      "scope": "195-224,276-305 preparse/syncversion actualpublication"
+    },
+    "edgion-common/src/conf_sync/proto/config_sync.proto": {
+      "sha256": "b8ede6b7e9eed0bf1f055c44ab0832ddd3fc079f8451116ceefe87a8854a1512",
+      "scope": "32-65 transport syncversion distinctsourceRV"
+    }
+  },
+  "limits": "Personally full primary9 currentsource39KB + actualcaller/test/contract scopes, staticnoexecution/mutations/benchmarks/supportprimarycredit. Prioracceptedmanualwireenum/current scopedexceptions notsuppressedactuallexicalkind defect. Sourcecoldtracing permitted, rawstatusversion notparsedhelper forPATCH."
+}

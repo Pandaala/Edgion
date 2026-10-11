@@ -1,0 +1,111 @@
+{
+  "partition": "PART-449",
+  "analyst": "/root/analyze_outbound",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/l4_duplex.rs",
+      "sha256": "5b986a7f2a753ab45c2c2a779c888615f41eda0dd2a1be8287bc46401858e611",
+      "fully_read": true,
+      "disposition": "Full source read, bounded exact stream protocol, independent reverse progress and scoped idle-close evidence match current canonical relay. No actionable new issue; outer cancellation cleanup limitation is recorded."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/mod.rs",
+      "sha256": "7ce09dacca746e2d9e4f3c6db066d0d9f0a76accdef335b68a61d36e19b74f5c",
+      "fully_read": true,
+      "disposition": "Full static exports and actual representative callers checked. Deliberate module glue, no actionable new issue; child coverage is not inferred."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full personally retained original, freshly unchanged SHA"
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full personally retained original knowledge index"
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full personally retained graded gates"
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original routing"
+    },
+    "skills/04-review/routing/regression-guards/l4-duplex-relay-centralization.md": {
+      "sha256": "a47597e27ed0ba85d56c17776e378517828f1920f70ca7f2cfd8e2360dbc6b0d",
+      "scope": "Full current independent-progress, EOF and integration evidence boundary"
+    },
+    "skills/04-review/security/regression-guards/l4-relay-idle-timeout.md": {
+      "sha256": "3e8718f4b81e541a95742338972adf28549eb9f11f707ea6c4a138cef084dee1",
+      "scope": "Full current byte-progress timer and optout/backpressure boundary"
+    },
+    "skills/04-review/listeners/regression-guards/l4-timeout-snapshot-publication.md": {
+      "sha256": "09e781569029a3ac0159f263e042ec5bc28bcefb29e4617bb30809064555865e",
+      "scope": "Full immutable connection generation and accepted connect-test limits"
+    },
+    "skills/04-review/testing/regression-guards/integration-orchestrators-need-owned-deadlines.md": {
+      "sha256": "932bd3bd8f8fa44d3f300898d5ac8f84c7b384cd9c7ce0584a731dcb0031b625",
+      "scope": "Full original lifecycle deadline scope"
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "550-585 current outer deadline; full retained actual implementation/tests"
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "150-292,710-738,2328-2370,3515-3560 actual targeted/aggregate registrations and callers"
+    },
+    "edgion-tests/src/server/l4_duplex.rs": {
+      "sha256": "1f348e34733b13edecfb8560f385bf909eee1dee73468744a61ec50020cea057",
+      "scope": "Full 1-173 bounded fixture state, permits, lifecycle timeout and RAII registration cleanup"
+    },
+    "edgion-tests/src/server/l4_duplex_protocol.rs": {
+      "sha256": "7a343d772f6573bc18b251ef264d1c5aee64e3c5907b521dbc4ce1730f5a40b5",
+      "scope": "Full 1-55 partial writes, exact bounded payload and terminal framing"
+    },
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "1eb27bded8bcb40a82ea3cfd4ed6f20d386deedd1f349c7035a226fd44739454",
+      "scope": "150-180,337-365,665-680 actual fixture registration"
+    },
+    "edgion-gateway/src/routes/l4_duplex.rs": {
+      "sha256": "2eb6bddbd99f3d54ede2711a193b2cbddd38d78f91de7b114235e06b7e02d418",
+      "scope": "Full 1-250 canonical independently polled relay and immediate EOF policy"
+    },
+    "edgion-gateway/tests/unit/routes/l4_duplex_test.rs": {
+      "sha256": "ed85154d8d915c1eb05456453e909b81a6a60c9ebd4f5a647a999e3ab02e6a92",
+      "scope": "Full 1-567 actual reverse progress, partial writes, idle, flush, errors and EOF tests"
+    },
+    "edgion-gateway/src/observe/logs/tcp_log.rs": {
+      "sha256": "3a5c04b2ae01f88cc5d2562eb47b16a402285e4aebf328e70661b6314d03ae5a",
+      "scope": "Full canonical TCP schema and monotonic duration emission"
+    },
+    "edgion-tests/k8s/scripts/common/k8s_suite_scope_exceptions.tsv": {
+      "sha256": "26630cc0cdd07ff2dd2eade67a752fa941509749557bc01ebcfbdb67474165a0",
+      "scope": "1-8 explicit host-log/control-topology exception"
+    },
+    "edgion-tests/integration/conf/TCPRoute/DuplexBackpressure/Gateway.yaml": {
+      "sha256": "6d5bd9ffffe35306cf33efcda211478114ac924f3d66bd7352a70af61ee43def",
+      "scope": "Full three-listener fixture"
+    },
+    "edgion-tests/integration/conf/TCPRoute/DuplexBackpressure/TCPRoute.yaml": {
+      "sha256": "18b0b4196c8019cee40e484382c804f08ca79504ab848b962e37a9ba779a22f5",
+      "scope": "Full actual plain TCP attachment"
+    },
+    "edgion-tests/integration/conf/TCPRoute/DuplexBackpressure/TLSRoute_passthrough.yaml": {
+      "sha256": "9b0871e084684b88b539ca532e1b5bf875c88dab9abc727e8d49a9078c7b22c7",
+      "scope": "Full actual passthrough attachment"
+    },
+    "edgion-tests/integration/conf/TCPRoute/DuplexBackpressure/TLSRoute_terminate.yaml": {
+      "sha256": "ff697271b871f81861d840e8608f169fd05ec1b34064b2aa5bfe52d2ed49a170",
+      "scope": "Full actual terminate attachment subject to explicit current capability deferral"
+    }
+  },
+  "limits": [
+    "Static source-only review; no execution, writes outside results, network or Git mutation. Supporting reads have zero primary credit.",
+    "TestCase 50s outer cancellation can bypass returned-result cleanup; connect is outside inner 40s exchange timer. Actual server 60s lifecycle and Registration Drop bound eventual release. No guaranteed immediate cancellation cleanup or unbounded leak is claimed.",
+    "Local canonical log evidence does not establish Kubernetes execution or concurrent topology isolation. Historical run records are not fresh verification."
+  ]
+}

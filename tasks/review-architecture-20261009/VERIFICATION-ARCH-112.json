@@ -1,0 +1,122 @@
+{
+  "candidate": "ARCH-112",
+  "complete": true,
+  "verifier": "/root/analyze_outbound",
+  "decision": "confirmed",
+  "input_sha256": "d8d359e5995708abcaf77c9708ffe7630f9459e61353853a8b40dcbad0accff6",
+  "approved_claim_sha256": "e07ec767afc391975872507ba6d7d7ad453e9204278d2600f2f541ee8456a7d2",
+  "evidence": [
+    "Actualdeadlinecheckedonlyafter non404error; retry/Lease/acquisitionlabel/retrylabel waits have noactivedeadline. last_renewed updatesafterack preservingwitness.",
+    "Consumers share flagnotprivateclock; typedliveLease defenseactualcallersonly. Kube30/295/295s transporttimeouts do notenforce electionwindow orpreciseRPCbound.",
+    "Boundedexistingowner/labelsingletick/ackauthority preserved; canceldoesnotreverse serversidewrite, freshread/CAS before republishing.",
+    "Fullactualfence/center tests notpendingIO; staticonlynoincident/exactoverlap/crossprocessfence guarantee."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original retained; fresh unchanged."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original retained; progressive index."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original retained; applicable graded gates."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full original retained; review index."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original retained; original evidence routing."
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full original retained; independent verification."
+    },
+    "skills/01-architecture/01-controller/03-config-center/02-kubernetes/01-ha-mode.md": {
+      "sha256": "224d10f91ea7d009971b71b452649f104809997ef6978cdbf1b6a76258bbd362",
+      "scope": "Full original."
+    },
+    "skills/04-review/concurrency/regression-guards/leader-pod-label-tick-resync.md": {
+      "sha256": "f9250e1b63229e9dc906d4e4932a432c31c98962dcf97f263bb1b7c08c2ad82c",
+      "scope": "Full singlescheduler/derivedlabel/expirycontract."
+    },
+    "skills/04-review/concurrency/regression-guards/leader-lease-release-on-shutdown.md": {
+      "sha256": "879a5a1ff3b32f174453285828b549506f3d2b848cfdee1bdfe4fb641b91efd1",
+      "scope": "Full boundedrelease/CAS."
+    },
+    "skills/04-review/concurrency/intentional-design/leader-handle-polling.md": {
+      "sha256": "4dc49064467bb5cbf61bc922995013f7ed74a50596ba57bd0ef2e1ff597be390",
+      "scope": "Full acceptedpolling distinguishedfrompendingIO/staleprose."
+    },
+    "skills/04-review/concurrency/intentional-design/leader-status-write-per-write-guard-vs-lifecycle-gate.md": {
+      "sha256": "185436ef8b251cc837ad15851e5c976f3556128b644290f586ef887bc9c1abc4",
+      "scope": "Full retainedlocalauthority/RV distinction."
+    },
+    "skills/04-review/controller/regression-guards/liveness-probe-and-lifecycle-supervision.md": {
+      "sha256": "439892b19b54d5305432320e967aa0f64328df71b72000a6581c6db090906237",
+      "scope": "Full retainedstartup/postready boundaries."
+    },
+    "skills/02-features/02-config/00-controller-config.md": {
+      "sha256": "07a601d4f500f3466f0556cd58e6fae88fe444994280d22a999d1a6a9b07dbd2",
+      "scope": "Selected579\u2013600; explicitrenewalwindow."
+    },
+    "edgion-controller/src/config/conf_center/kubernetes.rs": {
+      "sha256": "ec179d16d38b20c8390b61976875966b86ae53f1a82a077051106fdceef42fc0",
+      "scope": "Selected239\u2013305; config/defaults."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/kubernetes/leader_election.rs": {
+      "sha256": "147a40a170dbc721854b4c8513472e9cc19172277433e3752cd75f8032e8b245",
+      "scope": "Full827; actualpendingIO/deadlinebranch."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/kubernetes/center.rs": {
+      "sha256": "a0227d8154789e688a2e633f771844508e01934a7d7f82abd262e8c966ae4731",
+      "scope": "Full1555 retained; refreshed780\u2013825,1322\u20131360,1458\u20131492."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/kubernetes/resource_controller.rs": {
+      "sha256": "4eb1b4efed2ac099a34ba36330eae1b7f66e3284a34bf226d81da00f61c95c14",
+      "scope": "Full982 retained; refreshed707\u2013728; localflagstatusgate."
+    },
+    "edgion-controller/src/services/credential_manager/service.rs": {
+      "sha256": "bdf9bf07f20a8c9c60651f2ed55bc2e888ad6dbeb8c3b2b72fd704ddf48c9936",
+      "scope": "Full1757 retained; refreshed145\u2013186,607\u2013628; typedfenceseparateconsumer."
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/kubernetes/leader_election_test/fence_tests.rs": {
+      "sha256": "2899d88190a6a15596a6993ae9ec362aaf3d4fddcc5625be9de22bd82f49c256",
+      "scope": "Full101; actual fence classification notrunpendingIO."
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/kubernetes/center_test/failure_budget_tests.rs": {
+      "sha256": "02681c31ad69e2570855da2ddb91c1c27feb6b347d2a766685a3f77c5ec08b4d",
+      "scope": "Full38."
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/kubernetes/center_test/loop_turn_tests.rs": {
+      "sha256": "fce9295e45215f5ef061d939c7966b50d86d51834ad7a7683e8cb2bec7fd4a2b",
+      "scope": "Full78."
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/kubernetes/center_test/leadership_signal_tests.rs": {
+      "sha256": "ab0e578f161d46b7e62b5b5e297fdccb7f502925fbe859f17e5628b2b74c5c38",
+      "scope": "Full121."
+    },
+    "Cargo.lock": {
+      "sha256": "18b7b7dee01e024ab6d21f5692ce04a343c4fb265092c7f587099e91c28bea17",
+      "scope": "Selectedkube-client2.0.1 entry."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/kube-client-2.0.1/src/config/mod.rs": {
+      "sha256": "926f6057022868e834bec31ac4b3374474d9f3e9ad79830d850e17a14ae43210",
+      "scope": "Selected135\u2013222,247\u2013265,308\u2013330,390\u2013410; actualtimeoutinference."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/kube-client-2.0.1/src/client/mod.rs": {
+      "sha256": "294aaf8d6c9ed097a298e7eaef044bb94a25f7ca26bc11f73763fbabe4b54b75",
+      "scope": "Selected174\u2013200; try_default."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/kube-client-2.0.1/src/client/builder.rs": {
+      "sha256": "ada2886d636713f7d1950a3c0cab24f39b337da79e7e485f757aeb4b22dadb29",
+      "scope": "Selected145\u2013195; timeoutapplied."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

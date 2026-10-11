@@ -1,0 +1,149 @@
+{
+  "partition": "PART-158",
+  "analyst": "/root/analyze_outbound",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-waf/src/aho_corasick/dfa.rs",
+      "sha256": "ef62c69fac924a1ea74b54664135b74b8bbdb954b0de699ab3913a27d8feef2b",
+      "fully_read": true,
+      "disposition": "No actionable issue: checked byte classes/table construction/direct outputs and output links preserve canonical semantics; layout optimization remains conditional."
+    },
+    {
+      "path": "edgion-waf/src/aho_corasick/error.rs",
+      "sha256": "cbefc544899c46aae22bd8b908cb754e0f0ae98423336e42500d6e1400055c1e",
+      "fully_read": true,
+      "disposition": "No actionable issue: bounded structural typed errors avoid pattern/haystack material."
+    },
+    {
+      "path": "edgion-waf/src/aho_corasick/input.rs",
+      "sha256": "94fe3b74fae5297a062166f4938ff435d8f028cc47be38f8093a6bf445f43d19",
+      "fully_read": true,
+      "disposition": "No actionable issue: borrowed input and checked absolute ranges/anchor/earliest semantics avoid another owner."
+    },
+    {
+      "path": "edgion-waf/src/aho_corasick/match_types.rs",
+      "sha256": "dc74fb461bc51f073a9917adf3c2b9b392914e3c79831555ff6f5afa4514343b",
+      "fully_read": true,
+      "disposition": "No actionable issue: compact checked IDs/spans and fixed PatternSet with source-order iteration; equal-cardinality set reuse explicitly tested."
+    },
+    {
+      "path": "edgion-waf/src/aho_corasick/mod.rs",
+      "sha256": "b11efedc52f57560c911f6f571a3473f28fa42721a6857d30c6a5bbc32bd2d9e",
+      "fully_read": true,
+      "disposition": "No actionable issue: immutable fallible construction, canonical backend selection/generation and iterators preserve standard/leftmost/anchored/empty/overlap contracts."
+    },
+    {
+      "path": "edgion-waf/src/aho_corasick/prefilter.rs",
+      "sha256": "a4fd4bf9c54eed64dbd2a085d01cb7475cd732ab945d799fbc3bec2823c51f7a",
+      "fully_read": true,
+      "disposition": "No actionable issue: conservative candidates with exact confirmation/rollback/adaptive disabling; SIMD and cold-profile speculation are existing conditional work."
+    },
+    {
+      "path": "edgion-waf/src/aho_corasick/replace.rs",
+      "sha256": "6ffaf080daf3fd008a3fd730a498515d059dc34df15d45420f247ebbe781137f",
+      "fully_read": true,
+      "disposition": "No actionable issue: cardinality/output/UTF-8 guards and bounded stream carry; callback heap is not represented as bounded."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Original full personally retained/refreshed, no nested WAF AGENTS."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Original full retained, progressive navigation."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Original full retained; bounded safe external-only leaf, redaction, body/performance/observability gates applied."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Original full retained."
+    },
+    "skills/04-review/waf/SKILL.md": {
+      "sha256": "a5fa47a4b94ee1edccf3f5cd07197eeb0d644f875616cd33c5976e66bc9edef9",
+      "scope": "Full original."
+    },
+    "tasks/todo/waf-native-simd-search.md": {
+      "sha256": "68f321552c8f42cb3253b558f639dc0fdc70042173f537b8690e33e49cc476a2",
+      "scope": "Full original conditional profiling/adoption task."
+    },
+    "tasks/todo/waf-dfa-state-layout.md": {
+      "sha256": "35f3051ee5d0577eb566b6914f8b0212e13392de48e07635c0e985a37691c407",
+      "scope": "Full original conditional layout task."
+    },
+    "edgion-waf/Cargo.toml": {
+      "sha256": "30ce2f0a77895f232e2109a11a06cc11386299d9af0af34d9a2db4bef0ea73d1",
+      "scope": "Full external-only manifest."
+    },
+    "skills/12-algorithms/SKILL.md": {
+      "sha256": "338b061bd3ccd4ef6a0482b0879feb42b81020cff12ed4a7509068fca0bd7515",
+      "scope": "Original full retained; replacement value gates and absent Aho decision record."
+    },
+    "tasks/pending/waf-optimization-design/01-spec.md": {
+      "sha256": "657aaa3f67f3de385674df6ca986ce9c0a12e1effcb0773b509272bc83f74fef",
+      "scope": "Current native/search decisions and measured adoption scopes 1-42,145-180,198-233."
+    },
+    "tasks/todo/waf-self-built-implementation.md": {
+      "sha256": "92eb93568a8cd3fa27f9ca044d037ad17b55cac85ab0501c936a34fed8bcc6e9",
+      "scope": "Full original historical superseded proposal distinguished from current engine/body contract."
+    },
+    "edgion-waf/src/lib.rs": {
+      "sha256": "ae867774e364d711d7b2a21e4929017015a89fe910fc28a1d5a31d60d799cb07",
+      "scope": "Full exports/forbid unsafe."
+    },
+    "edgion-waf/src/aho_corasick/nfa/mod.rs": {
+      "sha256": "141b288d270a1c1edd2b0128f9a11ff68db22f5d5aca9ee3cc234f41940734ab",
+      "scope": "Full 311-line backend construction/accounting/fallback/output context, no primary credit."
+    },
+    "edgion-waf/src/aho_corasick/nfa/build.rs": {
+      "sha256": "3707ca89610a21714f7efface437cbcebd337b0cedac817bfada03ea5fc37cb0",
+      "scope": "Full 296-line graph/failure-links context, no primary credit."
+    },
+    "edgion-waf/src/aho_corasick/stream.rs": {
+      "sha256": "7628b5a3e5a16aa6fe71d535a2d279a5b21b08481a90a3e57dbe8c76714d27da",
+      "scope": "Full 265-line stream context, no primary credit."
+    },
+    "edgion-waf/src/matcher.rs": {
+      "sha256": "c2d4742efb1c426727690bb1817672533c6febbe90f0ff8b4ce4d86bb5bd81e1",
+      "scope": "Actual supported phrase/capture producers and ordered scratch 1410-1535,2180-2290,2350-2450,2825-2913."
+    },
+    "edgion-waf/src/seclang/compiler.rs": {
+      "sha256": "6259ebaf9e73726d5989f08d7a48d74320183ddd419fda5c6659ded5835a3404",
+      "scope": "Actual matcher construction/admission 4100-4145."
+    },
+    "edgion-waf/tests/unit/matcher_test.rs": {
+      "sha256": "f433995381ac472f75afe9ca42413088485e6515f746bb0822d74eccf9af4d72",
+      "scope": "Actual phrase/capture/suffix/source-order/shape/limits tests 680-1078."
+    },
+    "edgion-waf/tests/unit/aho_corasick/mod_test.rs": {
+      "sha256": "1a178d890aca64e68bc3e715b4256ee358bdcf758cbaa907d24fee61c1e49567",
+      "scope": "All 1210 actual lines, every backend/mode/byte/range/empty/set/capacity/Auto parity."
+    },
+    "edgion-waf/tests/unit/aho_corasick/dfa_test.rs": {
+      "sha256": "74e56f51cf9269886a04225d0136ec10dfd2d41121b4e16c7706d824134ed59b",
+      "scope": "All 88 actual lines."
+    },
+    "edgion-waf/tests/unit/aho_corasick/prefilter_test.rs": {
+      "sha256": "ac0320e3a692055ae9ffe728528cfd9536ffda6bb0a782edd567cdc158a7e1d8",
+      "scope": "All 121 actual lines."
+    },
+    "edgion-waf/tests/unit/aho_corasick/replace_test.rs": {
+      "sha256": "620641e565e3e9c36cb4e2aaf69f33b235ece7518bc63a62520c019753ba74e5",
+      "scope": "All 128 actual lines."
+    },
+    "edgion-waf/tests/oracles/aho-corasick-1.1.5/README.md": {
+      "sha256": "12ac044542b40c0592802f451410c9d404ea65848272140a2b419503737b2ead",
+      "scope": "Full pinned oracle contract."
+    },
+    "edgion-waf/tests/oracles/aho-corasick-1.1.5/Cargo.toml": {
+      "sha256": "822a9c67e87dd8d1412b95492ec22761f5166d1c2b21f360ce1c297c6c15ed8f",
+      "scope": "Full separate oracle workspace; no production dependency."
+    }
+  },
+  "limits": "All seven frozen primary implementations fully personally read, no gaps. Actual tests and native consumers/oracle contracts inspected, no execution/mutation or throughput claims. Supporting NFA/stream/matcher/compiler sources have zero primary credit. Reserved ARCH216-220 unused."
+}

@@ -1,0 +1,190 @@
+{
+  "partition": "PART-235",
+  "analyst": "/root/analyze_outbound",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-cli/src/cli/commands/apply.rs",
+      "sha256": "edf04496c89b88d15205450a28952f865ac9a09768667de0b7b77dd1695bb352",
+      "fully_read": true,
+      "disposition": "Full implementation; ARCH-177 lost directory failure outcome. YAML framing cause separately deferred under one-file policy."
+    },
+    {
+      "path": "edgion-cli/src/cli/commands/delete.rs",
+      "sha256": "888827d97639467ee899796299f2176f9af15c528725a486039958151ea396a0",
+      "fully_read": true,
+      "disposition": "Full implementation; direct/file metadata, auth/delete/error chain traced; accepted optional preconditions. File precedence documentation drift only."
+    },
+    {
+      "path": "edgion-cli/src/cli/commands/get.rs",
+      "sha256": "609d33c9a9cb1bedc9b176bd671bb91a21a04fd10afd95d4b442d62ffb6de891",
+      "fully_read": true,
+      "disposition": "Full implementation; ARCH-176 cache namespace projection bypassed by --all. URL diagnostic lead relayed to transport owner for deduplication."
+    },
+    {
+      "path": "edgion-cli/src/cli/commands/login.rs",
+      "sha256": "b38862a9dc500abb69e514fc3c6a34b287353a7d5d3b453ddde191d66a476e73",
+      "fully_read": true,
+      "disposition": "Full implementation; token-only persistence and nonfatal canonical-client status probe traced. URL diagnostic lead relayed to transport owner."
+    },
+    {
+      "path": "edgion-cli/src/cli/commands/mod.rs",
+      "sha256": "0128f2ae7748cbc2445087572215278ea5f4cee9c8ac37120a4c4613c079dc06",
+      "fully_read": true,
+      "disposition": "All eight exports checked against actual dispatch/local tooling; no new issue."
+    },
+    {
+      "path": "edgion-cli/src/cli/commands/reload.rs",
+      "sha256": "a88f4c30ea82739281e410864127ed790255e3c05b4568f01d7ee00f7c635bdb",
+      "fully_read": true,
+      "disposition": "Full implementation; Center-only authenticated initiation, response and actual Controller reload traced; no new issue."
+    }
+  ],
+  "candidates": [
+    "ARCH-176",
+    "ARCH-177"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full personal original retained, fresh unchanged hash, only root AGENTS."
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full personal original."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full personal original retained; CLI routing."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full personal original retained; redaction/transport/failure/ownership/observability refresh."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full personal original retained; owning function routing."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original."
+    },
+    "skills/01-architecture/04-ctl/SKILL.md": {
+      "sha256": "f2846ac3479a688f16cbc5f2eec3c131905d9145e26fda5670db900c1bcad463",
+      "scope": "Full original."
+    },
+    "skills/01-architecture/04-ctl/00-overview.md": {
+      "sha256": "0a2acdc3bd1339ae674a569674cdf47d1b33be3c387011e9a942606dfe5b30fc",
+      "scope": "Full original target/API/client-owned cache namespace contracts."
+    },
+    "skills/01-architecture/04-ctl/01-commands.md": {
+      "sha256": "a42c9fee403fbb921017696ada6fe7cb904f0ae7574762b91d3e08d051c2e03f",
+      "scope": "Full original ordered paths, multi-document apply, namespace/pagination/auth."
+    },
+    "skills/04-review/admin-api/SKILL.md": {
+      "sha256": "636875f035a48fa125aafed702ff7afd4ebd0d929f628d5130685d96c86e64dd",
+      "scope": "Full original owning index."
+    },
+    "skills/04-review/admin-api/intentional-design/admin-api-write-precondition-opt-in.md": {
+      "sha256": "dd4cdc023de0302a24fdbce5bf4012b019d173ebc4642689d54ffcb178242770",
+      "scope": "Full original declarative apply/atomic backend windows."
+    },
+    "skills/04-review/admin-api/intentional-design/gateway-admin-api-response-shape.md": {
+      "sha256": "0594485ccc8df8aa5fa77c16a963142240277f1805dbf6b98cbc3437cce2e4e0",
+      "scope": "Full original response shape/body success."
+    },
+    "skills/04-review/admin-api/mandatory-design/gateway-admin-configclient-redaction.md": {
+      "sha256": "405c44cbc6083a37f4ccba06f25062f1a7b523e96154b45be3a0bdec146bf82b",
+      "scope": "Full original serialization/redaction owner."
+    },
+    "skills/04-review/cpu-memory/regression-guards/cli-http-client-idle-pool-disabled.md": {
+      "sha256": "6d13237bafbd06b891879fcfc492ac4320754b57bf6bd992413b325689b9660b",
+      "scope": "Full original canonical pool/proxy exception."
+    },
+    "edgion-cli/Cargo.toml": {
+      "sha256": "9f94b96a3e42050fa02daffa7f646b2802294b097a0cd9f829f4f0262250af4a",
+      "scope": "Full manifest."
+    },
+    "edgion-cli/src/bin/edgion_ctl.rs": {
+      "sha256": "1b780fd98d035916bb413c82276829d385c94319ae86be3a7dc4fe98a7a3c03c",
+      "scope": "Full binary Result-to-exit contract."
+    },
+    "edgion-cli/src/cli/mod.rs": {
+      "sha256": "8feafddf836ec2f4f305808ba874743903b6bc5c4a5b9298fadb68d2de6c3a98",
+      "scope": "1-325 actual clap/auth/dispatch."
+    },
+    "edgion-cli/src/cli/client.rs": {
+      "sha256": "ce62f4a6d129f0b96d1e8400faf6dcece962c1b3e14c72eef55fe4356a86e962",
+      "scope": "1-77,210-365 canonical construction and namespace fallback/CRUD."
+    },
+    "edgion-cli/src/cli/output.rs": {
+      "sha256": "0d8e6204bcda767a88b6dffb531454ac11f09d75f26f3b6068e8f5a95162a1cd",
+      "scope": "175-280 actual accumulated/streaming output."
+    },
+    "edgion-cli/src/cli/auto_auth.rs": {
+      "sha256": "1c95288b2ed06c7550599de025540aeb7b28802711e041bb524e8c3c16dc8438",
+      "scope": "Full implementation."
+    },
+    "edgion-cli/src/cli/token.rs": {
+      "sha256": "6c8e77c88cf5bf3a04cdfaafdb25781d029dd1921b1c003f19666b282f170b79",
+      "scope": "Full implementation supporting persistence."
+    },
+    "edgion-cli/tests/unit/cli/commands/apply_test.rs": {
+      "sha256": "0bd6f05006061b0ce19c4af7e2318dc8ccc2403390ccbf0ef5dbb5a410c7a9e0",
+      "scope": "Every actual body; no directory-result coverage."
+    },
+    "edgion-cli/tests/unit/cli/commands/get_test.rs": {
+      "sha256": "2336a3a14007c3f1527f40961112023f4826386ae86570214e79260ba28c4300",
+      "scope": "Every actual body; no --all/cache namespace wiring."
+    },
+    "edgion-cli/tests/unit/cli/commands/delete_test.rs": {
+      "sha256": "5b7b79d4d81c053b31175be5f926db473ee8696cd6e7e77abe880cf40342e7b8",
+      "scope": "Every actual body."
+    },
+    "edgion-cli/tests/unit/cli/commands/login_test.rs": {
+      "sha256": "413ef2639914c9a3cfe0957dc72e739d51b0b15d3d98b2f10d6bab36f2450aac",
+      "scope": "Every actual body."
+    },
+    "edgion-cli/tests/unit/cli/commands/reload_test.rs": {
+      "sha256": "38e6012d7e6b4de35f0641c25b03c4074862426fcada90b87bfd1ee13634cbb9",
+      "scope": "Every actual body."
+    },
+    "edgion-controller/src/api/configserver_handlers.rs": {
+      "sha256": "b2e5e79cebf1c720f35f46296bdedb1e77dfa327c15075bd9559158f532e5723",
+      "scope": "Entire implementation; actual namespace-free cache list."
+    },
+    "edgion-controller/src/api/types.rs": {
+      "sha256": "43e2700678d3c234d667b6b7dcae94fa9a6678f81a01bfeb7a4148817bc3cb65",
+      "scope": "270-317,410-461 actual cache list/redaction/envelope."
+    },
+    "edgion-controller/src/api/namespaced_handlers.rs": {
+      "sha256": "81943b798b18bb4fbf1c234835e89fdd02fbfb50f27920fe186ae6b783aaa5d5",
+      "scope": "100-149 actual create admission."
+    },
+    "edgion-controller/src/api/mod.rs": {
+      "sha256": "9320b3b8da4191ad7317024052c8db9c4da21835721ec26cd051105dabb0d1d6",
+      "scope": "383-422 actual reload policy/resource initiation."
+    },
+    "edgion-gateway/src/api/mod.rs": {
+      "sha256": "a7b6ba1fd44e1b5f7dad36c738e970bbf7b31e95b2cd5de73820904271de9662",
+      "scope": "208-277 actual redacted unfiltered cache list/get."
+    },
+    "edgion-resources/src/resource/meta/envelope.rs": {
+      "sha256": "e3bab7fc55a3edba254c0adac8758c8e5235f8c49afb7636d275a4c2ee0960f5",
+      "scope": "Full canonical single-document envelope implementation."
+    },
+    "edgion-common/src/link_sys_core/http_client.rs": {
+      "sha256": "49412608bb84b8ed7fac48b41a98d12f09a1b5d271b3d7961bc0996bb5ec62e8",
+      "scope": "1-177 actual canonical transport policy."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_yaml-0.9.34+deprecated/src/de.rs": {
+      "sha256": "b5416aa3576e454aa92ee3fab10550f8de7d0d6e4d96a9a6a3afdafab12d12bc",
+      "scope": "1-181 canonical stream iterator and single-document rejection."
+    },
+    "Cargo.lock": {
+      "sha256": "18b7b7dee01e024ab6d21f5692ce04a343c4fb265092c7f587099e91c28bea17",
+      "scope": "serde_yaml package pin 0.9.34+deprecated."
+    }
+  },
+  "limits": "Static full source/actual tests/contracts; no CLI/parser execution/build/test/network/Git/mutation. Supporting reads zero primary credit; no incident/performance/auth-bypass claim."
+}

@@ -1,0 +1,37 @@
+{
+  "partition": "PART-300",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/plugins/http/csrf/mod.rs",
+      "sha256": "b423b057830a22f0fcf03021191c31adb77f83764224cc8fd1eabf1f74bcebe6",
+      "fully_read": true,
+      "disposition": "Private module/export checked against actual plugin factory."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/http/csrf/plugin.rs",
+      "sha256": "e1beb3337bee2257d54c2022d0ce2264bafe64f051053d378f620f83c72cd6c7",
+      "fully_read": true,
+      "disposition": "Stateless token pure crypto/time validation stays private to CSRF. Runtime unresolved-key gate precedes construction; shared schema owns positive lifetime/name/secrets. Canonical borrowed header/owned cookie access, fixed failure replies and append Set-Cookie preserve wire/security policy. Checked time arithmetic rejects future/overflow; integer-second expiry and operator Secure remain intentional. No parallel cookie parser or session owner introduced."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/http/csrf/token.rs",
+      "sha256": "8cc8b0a46e947de2ad05000c24d1e0807d3fd31ac0ac8c26d77545f96c7143cc",
+      "fully_read": true,
+      "disposition": "Stateless token pure crypto/time validation stays private to CSRF. Runtime unresolved-key gate precedes construction; shared schema owns positive lifetime/name/secrets. Canonical borrowed header/owned cookie access, fixed failure replies and append Set-Cookie preserve wire/security policy. Checked time arithmetic rejects future/overflow; integer-second expiry and operator Secure remain intentional. No parallel cookie parser or session owner introduced."
+    }
+  ],
+  "candidates": [],
+  "support": {
+    "skills/04-review/csrf/intentional-design/csrf-expires-integer-seconds-retained.md": "2a50aa62a160702c020682c75f0502eb4809f178b253e2c1a8ef45721107adbe",
+    "skills/04-review/csrf/regression-guards/set-cookie-append.md": "48e005c9ccefea96b3336b6ce3db36dd6b55c6a827b380d5dceee69f49a56b47",
+    "skills/04-review/csrf/regression-guards/cookie-secure-configurable.md": "8b474a3dff17f3c49bab61024c4c662fd8d7851d6118b7e092bbb890157fd7c8",
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/csrf.rs": "5cb1705ab5bcdc3ec69682730caaaf4c0d1d97f76fff860a447da1ee5cd939fe",
+    "edgion-gateway/tests/unit/plugins/http/csrf/plugin_test.rs": "2b4814d262e95e4ad0742636ca0929e1d55888f2ef04b1b0102ce07d771533c0",
+    "edgion-gateway/tests/unit/plugins/http/csrf/token_test.rs": "6e27cd06a7fea2f9201d0857756fb26af595a52d6108122a97d1cda1ef03a410",
+    "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": "70ea787d34a9a4652adfe131ba66049d2544b381b2034194db519567fe87ead0"
+  },
+  "support_scope": "Original relevant decisions, actual factory/helper/phase paths and selected test bodies read. Supporting source sections only; no supporting primary coverage inferred.",
+  "limits": "Static source review; no tests/builds/benchmarks or new response-signature/session binding requirements. Historical verification remains historical."
+}

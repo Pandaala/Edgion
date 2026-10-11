@@ -1,0 +1,113 @@
+{
+  "partition": "PART-417",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/udp_route.rs",
+      "sha256": "b4148579a490927f9b42a0fd4125e9cd9576d69e916e946fa770f30124f2f594",
+      "fully_read": true,
+      "disposition": "No new actionable finding: typedactualowner/backend slots, dependency-before-grant andclearbeforeadd+droppedpolicy wakeups, foreign-preserving parentstatus/currenttransport, Gateway listenerprojection andpostselect deniedweight semantics traced. Real invalidmulti-rule updates withdrawoldroute andcleardependencies throughprocessor hooks. Protocolspecific handler policy remains legible; no genericframework needed."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Fullretained root/currentnesteddiscovery."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full current index."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Fullretained graded/currentreread."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full current index."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full current."
+    },
+    "skills/01-architecture/05-resources/08-udp-route.md": {
+      "sha256": "d58e531f5c5019f152cf312fcf3cc174b6b658cd8fb06460f98dce114effcdd8",
+      "scope": "Full current; obsolete validator-noop sentence noted."
+    },
+    "skills/02-features/03-resources/08-udproute.md": {
+      "sha256": "e4c2c18158f4f4fb842f33bf5bf2ca05279be71943296e7203e06c8f9d4f4239",
+      "scope": "Full current."
+    },
+    "skills/04-review/routing/regression-guards/udp-route-schema-arc-sharing.md": {
+      "sha256": "692e3a9813de762c483e668aa5e02f1002a7d8a2c97f686ee78c0b96010fb45c",
+      "scope": "Full current."
+    },
+    "skills/04-review/routing/regression-guards/l4-backend-ref-denied-fail-closed.md": {
+      "sha256": "616b6ca19976a44935b3d7ef07c214c4d59ff97fbd223a75fa0fa9397779c13c",
+      "scope": "Full current."
+    },
+    "skills/04-review/routing/regression-guards/udproute-stream-plugins-annotation-wiring.md": {
+      "sha256": "67742d8dcce32d916c368ef03ceae79c0c17ba43244e2ea235a0bb8f9e0ed03e",
+      "scope": "Full current."
+    },
+    "skills/04-review/handler-requeue/regression-guards/reference-grant-dependency-before-authorization.md": {
+      "sha256": "53f1c5febed6161b22954ec3c508e7042c7a4b0f0c38998d28722ebb8f403792",
+      "scope": "Full current fromPART421 retained."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/ref_grant/validator.rs": {
+      "sha256": "b914f00fe8eda7fc40b9c493f8857e1b33f74c73f88b3f62f6fbcbffaa2ba865",
+      "scope": "Full currentPART421 retained; actualsingle-rulegate."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs": {
+      "sha256": "23057df0f04ed113a72fa1b42fb5344153c3ae8cff526e030878c8091fc92bd6",
+      "scope": "790-865 realshould_publish/deleteoldhooks; validation/parse sequence currentPART421 retained."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/route_backend_refs.rs": {
+      "sha256": "52c816a50c3fb3bd868f2b0c392dc8f7a46620e0ffe621bd9fec91acd1493304",
+      "scope": "25-154 currentPART421 retained; actualvalidtyped/dependency/denial."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/route_utils.rs": {
+      "sha256": "40750b718b634fb69dd713512428742694abbfc033a2d66ddb6b0d9d94c39393",
+      "scope": "597-834,903-1052 statusidentity/acceptedtracker/serviceclearreplace/listenerattachments."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/mod.rs": {
+      "sha256": "7020c50f927ed0050ead9d22694f0cb5334bfced4383ba37cb4a86f897a0174c",
+      "scope": "118-165,245-290 gateway/droppeddependency-policyrequeues."
+    },
+    "edgion-resources/src/resources/refs/route_fields.rs": {
+      "sha256": "4c44e6dda6e93d5e97653d0a453868e5d98d808213328ad738e757c7c24f28a5",
+      "scope": "244-376 macroactualUDPowner/authored/effective/slots;445-504 unrelatedextensioncontextonly."
+    },
+    "edgion-gateway/src/routes/udp/route_unit.rs": {
+      "sha256": "cbe7d75084d34e87a0f8ec11ab132546754d491e80bd5d8bfd281fe4d50a76d0",
+      "scope": "Full current constructor/statuscontroller/compiledownership."
+    },
+    "edgion-gateway/src/routes/udp/edgion_udp.rs": {
+      "sha256": "59be4792617d2bbcb9f508cb0036e94ca2c62440bee8f7eee0554ee472b6c256",
+      "scope": "320-367 actualpostselect deny-before-discovery."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/udp_route_test/multi_rule_tests.rs": {
+      "sha256": "8ab67f2540961749db9b42157ff51860dc30dcc7c90914ad97cb46d6d8c05fd3",
+      "scope": "Full actual invalidoldwithdrawal/dependencycleanup/recovery test."
+    },
+    "edgion-gateway/tests/unit/routes/udp/route_unit_test.rs": {
+      "sha256": "f92561076be9400573e5d913d57236444b49d5a4e78acedb18f687e25493cb58",
+      "scope": "165-197 actualinvalidowner/publicationalignmenttest; fixture/contextpriorprimaryreview retained."
+    },
+    "edgion-resources/tests/unit/resources/refs/route_fields_test.rs": {
+      "sha256": "e23d293fed8676cd0e15536521c0ae453234145b7a56bd4f5df49cd15736e689",
+      "scope": "1-67 actualfiveowneridentity/invalidtargetslots tests."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/route_utils_test.rs": {
+      "sha256": "b23d85d9308353c09d0f04ba23f72d5c3b794f568ccd894eb2546289cad98658",
+      "scope": "1-90 actualTLSattachmentboundary test; nexttestbegincontextonly."
+    }
+  },
+  "limits": [
+    "Static read-only no tests/builds/network/Git/mutations; support zero primary credit.",
+    "UDParchitecture validator-noop/old helper wording stale versus currentsingle-rule/typeadapter enforcement; behavior validated against current actualtest, no docs edits.",
+    "Established UDP sessions retainaccepted pin semantics; no perpacketrevocation/immediate teardown claim. ARCH100 selector cardinality separateexistingcause."
+  ]
+}

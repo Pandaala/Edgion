@@ -1,0 +1,133 @@
+{
+  "partition": "PART-229",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-common/src/observe/cardinality_guard.rs",
+      "sha256": "225c112543913b857b79ab24dc9066001192ad04e85193bcae614e08fb3050f4",
+      "fully_read": true,
+      "disposition": "No additional finding: documented lifetime-distinct soft cap and monitoring-only Observe mode, actual recorder/tests; retained self-handle concern overlaps ARCH043 rather than generic enum redesign."
+    },
+    {
+      "path": "edgion-common/src/observe/fed_metrics.rs",
+      "sha256": "50df2c6ffde3fb8e9fc8946b5badd8ad895ff397d9d49ca8e934a42b8fd77489",
+      "fully_read": true,
+      "disposition": "No additional Common-owned finding: RBAC callers bound labels; Controller watch forwarding retains raw req.kind after normalized admission, queued for Controller-owned review with zero primary credit."
+    },
+    {
+      "path": "edgion-common/src/observe/logs.rs",
+      "sha256": "9b36890bf477b879397fbe8697b52dd1044bfecdd9f5d6773e2e6cd08ca70464",
+      "fully_read": true,
+      "disposition": "No finding: binary bootstrap/protected targets before both sinks; WorkerGuard retained; actual filter/thread test bodies."
+    },
+    {
+      "path": "edgion-common/src/observe/metrics_api.rs",
+      "sha256": "0bcf4d251fcbab84cdadc4cf0cedd06342d96c56fc9645b468ed76fb4d308793",
+      "fully_read": true,
+      "disposition": "ARCH-078 supporting ALL-kind idle policy; serial startup idempotence documented and actual binary startup matched."
+    },
+    {
+      "path": "edgion-common/src/observe/mod.rs",
+      "sha256": "75bad3496e198ee2edf8a7c3221a97a3af887ad2f2750a8fb3c988c3bec1b1ad",
+      "fully_read": true,
+      "disposition": "No finding: actual shared export and binary bootstrap/metrics mount consumers; no alternate registry."
+    },
+    {
+      "path": "edgion-common/src/observe/system_metrics.rs",
+      "sha256": "23e9c2c80ef51d8a9c71925d1da5e19f8a5fe67d2a56d69ea1377aad9921509e",
+      "fully_read": true,
+      "disposition": "ARCH-078: persistent process condition exists only in one-shot exporter emission and can vanish under ordinary Gateway idle eviction."
+    }
+  ],
+  "candidates": [
+    "ARCH-078"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original rules personally retained."
+    },
+    "skills/03-coding/observability/01-metrics.md": {
+      "sha256": "7a498385055f6b4b701edc3259b1e266b38381d8d61f59036d625ec4cbbab21b",
+      "scope": "Original full governing review retained;190-229 cold single-owner/label/installation policy reread."
+    },
+    "skills/04-review/observability/SKILL.md": {
+      "sha256": "740c218fa1ae0f3bf1ab573dd4ba1019c70410cf75af267c643915f17a48fd01",
+      "scope": "Relevant index routing and original topic search."
+    },
+    "skills/04-review/observability/regression-guards/system-error-state-metric.md": {
+      "sha256": "5ddb8bbb8a47376c5d0ea095712e2abae6e5ef8a0143a7bb43b5e04bfedbafe5",
+      "scope": "Full original continuous state/latch/process authority."
+    },
+    "skills/04-review/observability/regression-guards/pingora-h1-header-logs-have-an-error-floor.md": {
+      "sha256": "42578cf6169ef0fec10e381cae632b70309ec833c9ab035dce18d5faa733c826",
+      "scope": "Full original guard and rejection rationale;38-end repaired after truncation."
+    },
+    "tasks/review-architecture-20261009/ARCH-043-cached-metric-handle-lifetime.md": {
+      "sha256": "00f8ad64c94d4b24c1fb72dd6730440f24c6782b4023c8e290c7d13285f1795f",
+      "scope": "Full current confirmed body; distinct retained request-handle cause versus missing process-state owner."
+    },
+    "edgion-common/tests/unit/observe/cardinality_guard_test.rs": {
+      "sha256": "8464dd18f6f2d1ed28edfe3aaa48a491bf6dfeb710b6f34fb0debbac72c53d3e",
+      "scope": "Full actual cap/repeat/enforce/observe tests."
+    },
+    "edgion-common/tests/unit/observe/metrics_api_test.rs": {
+      "sha256": "1ac2814cf23a43602a11f50d5e98f6885c7b86f25d9c0ba030bef9da6efecddc",
+      "scope": "Full guard bootstrap test body."
+    },
+    "edgion-common/tests/unit/observe/logs_test.rs": {
+      "sha256": "3ae8dc66241e10a4cc061a9037edb0957aacbefed016b6e54a6f30a6aa333926",
+      "scope": "Full actual protected filter and isolated thread logging tests."
+    },
+    "edgion-common/tests/unit/observe/system_metrics_test.rs": {
+      "sha256": "570927ded20eca33c1d431cb6fac4b45a60e81b82ced9664469287ac4bd6a1f8",
+      "scope": "Full actual mark/clear/component/isolation bodies."
+    },
+    "edgion-common/tests/unit/observe/fed_metrics_test.rs": {
+      "sha256": "0467c139f005eb4f2d964f822880b2f05379058651c27c813bd8ce15ed4e63c6",
+      "scope": "Full actual names/labels/direct emissions,127-151 repaired; noexecution."
+    },
+    "edgion-common/tests/unit/observe/fed_metrics_test/rbac_metric_tests.rs": {
+      "sha256": "5b65e4ae14a869c286f509a8928d61980c286974d1c723edccd6c9ef3a765308",
+      "scope": "Full actual bounded counter/intent/running/source tests."
+    },
+    "edgion-gateway/src/observe/metrics/api.rs": {
+      "sha256": "5a931d4c74d7516d17489cc47f4d89ae711836d9d0b5722fe7f4541e549f756f",
+      "scope": "1-115 actual Gateway registration/render sampling boundaries."
+    },
+    "edgion-gateway/src/cli/config.rs": {
+      "sha256": "9f19a5bf98552250045c76ce5c2ea606de312c1d61a71ad04c0a01ac3fe75e7f",
+      "scope": "747-778 actual optional duration disabled/default600 policy."
+    },
+    "edgion-gateway/src/cli/mod.rs": {
+      "sha256": "393ea796feb6e022ab7438e16e2084f2a94a21c1e470ec7befdc49f4cb3002bd",
+      "scope": "435-462 eager recorder before marks;645-663 once-only integration latch."
+    },
+    "edgion-gateway/src/conf_sync/conf_client/grpc_client.rs": {
+      "sha256": "76f476f977f998cc66b201c2ec485664fdd11544680070d9b4722c1750d46bfe",
+      "scope": "239-263 actual skipTLS once mark."
+    },
+    "edgion-controller/src/cli/mod.rs": {
+      "sha256": "e6a99b22317b82b315c7a9e9c26b67c58de82e00687dc05eb4d34031829d41af",
+      "scope": "507-532 actual noeviction recorder."
+    },
+    "edgion-controller/src/api/authz_middleware.rs": {
+      "sha256": "7e2814f6c871ce59dc83e9fc794e522a5cd536d475b1ed02756f6389bd7c19f7",
+      "scope": "89-154 actual bounded kind/verb/source labels."
+    },
+    "edgion-controller/src/fed_sync/fed_client/mod.rs": {
+      "sha256": "b677aece92cd9df4e97b1d8f2bbcf849907681a75f99b3d4c03eaeed20051ccb",
+      "scope": "700-727,731-771,815-839 actual normalized-kind registry gate and watch emit."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/metrics-exporter-prometheus-0.18.3/src/recorder.rs": {
+      "sha256": "63d2223f81ceb16b5500345c9ff10c1dc7a4d1c307e80a2e1afc2ca86a27e00e",
+      "scope": "1-121 locked render/gauge generation and deletion."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/metrics-util-0.20.4/src/registry/recency.rs": {
+      "sha256": "0535a8da0877d46a761548821c744596285742e4fc5ccd66337e1c1f9b148786",
+      "scope": "1-359 locked gauge update generation and should_store deletion."
+    }
+  },
+  "limits": "All6 primary implementations fully read and fresh hashes match; system_metrics prefix plus105-end repair complete. Static only/no executed timed scrape or tests/builds. No global eviction disabling or new metric family proposed; common trigger distinct from ARCH043 state ownership. Supporting zero primary coverage. Controller watch-kind metric caller discrepancy is a support-only lead, not suppressed by Common wrapper correctness."
+}

@@ -1,0 +1,115 @@
+{
+  "partition": "PART-377",
+  "analyst": "/root/analyze_outbound",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/runtime/server/base.rs",
+      "sha256": "25e86709b8bff3d663e5f4951dbc690bbbd965ff249ee694a0cb3e6cf9b341f8",
+      "fully_read": true,
+      "disposition": "ARCH041: unordered first-owner shared HTTP startup declaration."
+    },
+    {
+      "path": "edgion-gateway/src/runtime/server/downstream_h2.rs",
+      "sha256": "e5522a9d47203674bde9a01d6355e0edfecb6eb01d135b4c065f0737dca9b680",
+      "fully_read": true,
+      "disposition": "Cold bounded window/stream policy; transport credit is not heap guarantee."
+    },
+    {
+      "path": "edgion-gateway/src/runtime/server/error_response.rs",
+      "sha256": "996e89144485d877e11d235f2c4ae58885676e19f11689b879be080a2844d818",
+      "fully_read": true,
+      "disposition": "Canonical native/web gRPC terminal ownership, fixed failures/write delivery; common preparation overlaps ARCH003."
+    },
+    {
+      "path": "edgion-gateway/src/runtime/server/listener_builder.rs",
+      "sha256": "3d9965a2601c72989a44de13c4d7e9ed5408a04812eb2e702e0e7088ce19a970",
+      "fully_read": true,
+      "disposition": "ARCH040: constant true constructor ignores resolved HTTPS H2 flag."
+    },
+    {
+      "path": "edgion-gateway/src/runtime/server/mod.rs",
+      "sha256": "aa3d8d2d6a355964b39a4a1e28be7cf1f84232a5d887e349cc0747fb2cafd6ab",
+      "fully_read": true,
+      "disposition": "Full exports checked against actual runtime consumers."
+    },
+    {
+      "path": "edgion-gateway/src/runtime/server/proxy_protocol_policy.rs",
+      "sha256": "cd5abbd615419a63dca1b8ee79722f5777039a83759ea26fff1851db88d13b25",
+      "fully_read": true,
+      "disposition": "Typed physical-key declaration, startup race validation, monotonic fatal state and cold canonical CIDRs."
+    },
+    {
+      "path": "edgion-gateway/src/runtime/server/server_header.rs",
+      "sha256": "f400e510cd7cdff0a33be8a8d02b1648e8c9835e615ecd1ca94522a0cf0d2e2f",
+      "fully_read": true,
+      "disposition": "Prepared defaults/plaintext HSTS removal/cheap cloning."
+    }
+  ],
+  "candidates": [
+    "ARCH-040",
+    "ARCH-041"
+  ],
+  "existing_related": [
+    "ARCH-003"
+  ],
+  "support_selected": {
+    "edgion-gateway/src/cli/pingora.rs": {
+      "sha256": "5aa138131a0cb310bcfd407f9e7bfa2fadbfbb133db00737ba59d7b718e10395",
+      "scope": "85-120,145-end startup/fatal watch"
+    },
+    "edgion-gateway/src/conf_sync/conf_client/config_client.rs": {
+      "sha256": "1c3568262e1c01287a6abd82514b87d1ba069c578d46a353865b02c113d638af",
+      "scope": "375-415 Gateway list"
+    },
+    "edgion-gateway/src/conf_sync/cache_client/cache.rs": {
+      "sha256": "0fc6aef9f8b121b4db739bc1e9183a1f05f819f8aaf4884fa15f9282fa1f2b5e",
+      "scope": "90-145 list_owned"
+    },
+    "edgion-gateway/src/conf_sync/cache_client/cache_data.rs": {
+      "sha256": "9361e1bddb3532af21675b5b5564383654e0f3fe7cdd6aa71ca794b7ad0a7d55",
+      "scope": "1-220 producer/values"
+    },
+    "edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs": {
+      "sha256": "7c1223fe27e46a98d67c9d8bc604b0b109b2bd631cba3598f95fb83b6837205e",
+      "scope": "455-635,730-845,955-1000"
+    },
+    "edgion-gateway/src/routes/http/redirect_http.rs": {
+      "sha256": "b008e154f2798a86a535bfcf9e1111fcb15bac075d48d16b429228df58b5ada0",
+      "scope": "1-226 redirect interception"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/listener_port_manager.rs": {
+      "sha256": "5329d77a6be326e9ad1f3847efe3100cdd49270598ce9db3d728f2fe434dca9b",
+      "scope": "1-235 same-Gateway conflict"
+    },
+    "edgion-gateway/tests/unit/runtime/server/base_test.rs": {
+      "sha256": "d86a9f49a236d72e06e7c8a15df5d5441fa4e494aeaf11e65de7b54ca92f2bd8",
+      "scope": "Full"
+    },
+    "edgion-gateway/tests/unit/runtime/server/listener_builder_test.rs": {
+      "sha256": "4db888e32719be8e6d2229e91e6c1ba175d3be5343d79db66efb5d8e479cb8b1",
+      "scope": "Full"
+    },
+    "edgion-gateway/tests/unit/runtime/handler_test.rs": {
+      "sha256": "0f6472f3abc9c3cab6bbe5e462876a0df9f71e824fbc67b31396e930a15215ce",
+      "scope": "Full"
+    },
+    "skills/04-review/listeners/compatibility-constraints/listener-port-set-frozen-at-startup.md": {
+      "sha256": "82879d7099c547615d57844ffad394c474db00d53f1d591cdb35b0824ac6711a",
+      "scope": "Full original"
+    },
+    "skills/04-review/listeners/intentional-design/gateway-recreation-requires-restart.md": {
+      "sha256": "7ac6f253ad0aeeeab4f34c7056c299b84a11e9daa6c65520eff45eb4327c0fe0",
+      "scope": "Full original"
+    },
+    "skills/02-features/03-resources/01-gateway.md": {
+      "sha256": "b826f4b1732e17e0f6a3d9b6a87839d9c79b2979fbddfd181d81708cd4d8f420",
+      "scope": "Full original with scoped stale descriptions"
+    },
+    "skills/04-review/h2-grpc/regression-guards/grpc-web-independent-of-frontend-http2.md": {
+      "sha256": "d9468a2fb68c1aa3502857cc391c7923b7a0a6546011d276087c4c604ac60c1b",
+      "scope": "Full original"
+    }
+  },
+  "limits": "Personally full-read primaries; actual scoped original contracts/callers/test bodies. Static review only; no execution, mutation, measurements or supporting primary credit."
+}

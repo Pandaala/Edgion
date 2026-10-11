@@ -1,0 +1,59 @@
+{
+  "partition": "PART-480",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/forward_auth/forward_auth.rs",
+      "sha256": "bae663b7e9c58fba85ad094cc5c321557ce4a2cbac139ea2e72bf824eaa61774",
+      "fully_read": true,
+      "disposition": "Full1-1654 seven consecutive bounded ranges,26 registered cases; auth/probe/multivalue denial/body/boundedfailure preserved. Pending same ARCH348 strict204 case observation extension."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/forward_auth/mod.rs",
+      "sha256": "7920bf6c8d5e988c6d38000d006b9784430b2e243ae942735ca341de5f1b3c11",
+      "fully_read": true,
+      "disposition": "Full1-15 actual modules/export registration; obsolete combined-route comment only documentation follow-up."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "edgion-gateway/src/plugins/http/forward_auth/plugin.rs": {
+      "sha256": "50d0e604663ac88d88ef945d1f2b0fdf27b86d532043fdde25b0ac9c8dde51ee",
+      "scope": "Full1-366 actual auth decision/denial relay."
+    },
+    "edgion-gateway/tests/unit/plugins/http/forward_auth/plugin_test.rs": {
+      "sha256": "08d4e06f05c0bdd2eae5b87fa29ba112f41721c239e760a03de5fd58bb0e34af",
+      "scope": "Full1-495 exact denial bytes/header order/shutdown unit bodies."
+    },
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "6c38b285bdfe354c40d5d2e96d4a07be0b7dc37ce3290197ca75054de23bfa98",
+      "scope": "750-770,880-1015,4370-4675 health/auth JSON/denial/header probes."
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "103-127,536-590,600-648 five-second HTTP/thirty-second wrapper."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/ForwardAuth/17_EdgionPlugins_forward-auth-strict-204.yaml": {
+      "sha256": "6382d886e2a0decc43ec07ff68f4e26182fdda3fcd86324faf2d59b407a4aaba",
+      "scope": "Full1-32 local exact204 allowed-status fixture."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/ForwardAuth/17_EdgionPlugins_forward-auth-strict-204.yaml": {
+      "sha256": "6382d886e2a0decc43ec07ff68f4e26182fdda3fcd86324faf2d59b407a4aaba",
+      "scope": "Full1-32 Kubernetes exact204 fixture."
+    },
+    "skills/04-review/forward-auth/regression-guards/deny-response-repeated-headers-preserved.md": {
+      "sha256": "7cbb92120767bfac486681a1937d9e9415ca755e487350445256e8e88b4bd3f3",
+      "scope": "Full1-100 original denial relay ownership."
+    },
+    "edgion-gateway/src/plugins/http/common/outbound/client.rs": {
+      "sha256": "f74828d2acbb9b0c7213d88cbb1526c91b1518fbfccc1f8a5584a9ef44827fee",
+      "scope": "512-550 actual custom status classification."
+    },
+    "edgion-resources/src/resources/common/success.rs": {
+      "sha256": "d5cdcba18cf7474905ffff5d1f472eb541b6c7463bdd8b2328ae01965681c728",
+      "scope": "145-204 configured success status semantics."
+    }
+  },
+  "limits": "Complete read-only terminal;21 local/21 Kubernetes YAMLs and both actual runners/context inspected. Same-root ARCH348 extension pending independent review: strict204 case1445-1512 defaults HTTP200 body at1469; loose200/not-backend branch1487-1498 accepts unreadable/empty/unrelated body without auth identity. Fallible read and actual expected auth JSON identity/status are bounded remedy; legitimate empty204 sibling unchanged. No new finding/production defect/normal fixture outage. No ARCH296 because ctx.http_url used. LB case smoke-only limitation retained. No execution/builds/network/mutation; supports zero credit."
+}

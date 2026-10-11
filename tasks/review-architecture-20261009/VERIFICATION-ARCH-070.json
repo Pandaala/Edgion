@@ -1,0 +1,142 @@
+{
+  "candidate": "ARCH-070",
+  "complete": true,
+  "verifier": "/root/analyze_outbound",
+  "decision": "confirmed",
+  "input_sha256": "828ef5a99f2b4d0304b548c4904d4925cf6e02d66d87491487b2edc067a3fdae",
+  "approved_claim_sha256": "beef495c608f3daadcac4b82b8e0bcebdca4f36d09161d73bec3fd1a234a7c3f",
+  "evidence": [
+    "Five HeaderCertAuth scalar names and standalone Hmac whitelist entries lack token validation; actual Controller and Gateway validators have no subsequent repair.",
+    "Hmac exact configured metadata is populated by actual standalone Secret producer; condition whitelist remains empty.",
+    "Real sensitive setter/Pingora HeaderName rejects space/tab/colon before insertion; current authenticated request keeps successful result despite ignored write error.",
+    "Existing pure token validator is feasible; producer-local last-write/skip decisions remain valid; no bypass/incident established."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full personally retained original root rules; fresh hash."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full personally retained original index; fresh hash."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full graded rules personally retained; applicable gates rechecked."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original routing personally read/current hash."
+    },
+    "skills/01-architecture/05-resources/00-schema-transport-contract.md": {
+      "sha256": "d20e74c1c7ccf6183f893bc919767a27bd3fbb47486415d14651a76fdef5a597",
+      "scope": "Full retained opaque config and hidden resolved transport gates."
+    },
+    "skills/04-review/security/regression-guards/auth-claim-header-projection.md": {
+      "sha256": "f3c6e4b23f4399c57bff67c515aea27f79cde89940199898b79121bb4bf0095e",
+      "scope": "Full token/projection/local write original."
+    },
+    "skills/04-review/security/intentional-design/auth-identity-headers-overwrite-written-names.md": {
+      "sha256": "1bbf0d70a24f0366a53b0aecb50c6dc17f2c4247fa17753304010b335edfcc42",
+      "scope": "Full original accepted replace/last-write/skip boundary."
+    },
+    "skills/04-review/hmac-auth/mandatory-design/dup-key-first-wins.md": {
+      "sha256": "bfaf20fdeeaa62fd4d64689356e732dfe63e166901bc24d3c13c336894af4fb8",
+      "scope": "Full original metadata/first-wins policy."
+    },
+    "skills/04-review/header-cert-auth/review-evidence/chain-verification-header-mode.md": {
+      "sha256": "c9e660a5f5cc88ea31db02c6935c4b120878db164fb7519770eafa8484760502",
+      "scope": "Full original secondary CA filtering."
+    },
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/header_cert_auth.rs": {
+      "sha256": "fd867cb84211550b71749bc7db3f98418b89cf58fa29b83ce2cb6dc6926b5bdd",
+      "scope": "Full current implementation."
+    },
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/hmac_auth.rs": {
+      "sha256": "c3ce51abe3b4bdcf2a902b80eba311186e4b231fdcdd2766c4f97fb4136090d4",
+      "scope": "Full current implementation."
+    },
+    "edgion-resources/src/gwapi_types.rs": {
+      "sha256": "2567a0aefb97e4149cb62d7d9370d4de420f507d0124c06b3a3d160bd2df2319",
+      "scope": "1-130 canonical token versus separate GWAPI length."
+    },
+    "edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs": {
+      "sha256": "1c25ed89458f56ce46f71ca1540bc452da9cf8812cb97c960e77252aa1c6cf69",
+      "scope": "755-771 validation dispatch."
+    },
+    "edgion-resources/src/resources/edgion_plugins/validate.rs": {
+      "sha256": "4684ace540889d54ce341c38d90b4f7fa0d8947b9beda405be8edcf9f9bfd488",
+      "scope": "394-444,553-625 active/disabled/unknown/error gates."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs": {
+      "sha256": "9a6ed6dbb4caa2a8a6a5b9bee0e9a9d75344edd9aad3b9eeee5dccc6413dc16a",
+      "scope": "170-240,410-491 actual shared preparse/status."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/hmac.rs": {
+      "sha256": "0ea0bd5993631f583248d997583c9161d589695aa02a42fcd6cfd60b7a866977",
+      "scope": "Full1-352 actual standalone versus condition metadata producer."
+    },
+    "edgion-gateway/src/plugins/http/header_cert_auth/plugin.rs": {
+      "sha256": "346464466384a30dc02dde337e1f1fb6041a6e8b265ab267abc69518f3fb8e99",
+      "scope": "Full current constructor/source/write/success owner."
+    },
+    "edgion-gateway/src/plugins/http/hmac_auth/plugin.rs": {
+      "sha256": "d601f7a7483f7f9809b4a62ddaad5eada78db0c40e9582e840acd47d0dc6fedd",
+      "scope": "115-233,250-296,570-730 cold verifier and actual metadata/success."
+    },
+    "edgion-gateway/src/plugins/http/common/auth_common.rs": {
+      "sha256": "0a184e336bc99eb91555c07be17a4ff6c49dfe21a401d1668efd7793152fa4b0",
+      "scope": "1-33 sensitive value, unchanged name."
+    },
+    "edgion-gateway/src/plugins/runtime/session_adapter.rs": {
+      "sha256": "bb060285f53d6eddb8eeac90c080456e7efabfd9457720990305703c5a143f92",
+      "scope": "1290-1320 real write/sealed boundary."
+    },
+    "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": {
+      "sha256": "70ea787d34a9a4652adfe131ba66049d2544b381b2034194db519567fe87ead0",
+      "scope": "576-599,1060-1079,1253-1290,2135-2155,2278-2292 source validation/construction/seal."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/header_cert_auth_test.rs": {
+      "sha256": "5d5ddcbb440a6e180c1ad636038eecb9705cc78d418fbad2180a9b844d2fbb74",
+      "scope": "Full actual tests."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/hmac_auth_test.rs": {
+      "sha256": "2958a52edc0a54dfb3dca73747f59a14c2d44c42b929b125599892970c987141",
+      "scope": "Full actual tests."
+    },
+    "edgion-gateway/tests/unit/plugins/http/header_cert_auth/plugin_test.rs": {
+      "sha256": "3dbaba050b0f0ad14b929baba4b294273f7e6ac5b5e484fa627f937c9ba23c50",
+      "scope": "Full1-362 actual identity/CA/permissive setter tests."
+    },
+    "edgion-gateway/tests/unit/plugins/http/hmac_auth/plugin_test.rs": {
+      "sha256": "4fcae1ad181cf632058aa30cfa29d21ce015459e0aa95dd017bf1721c67f00d4",
+      "scope": "1-155,370-464,580-636 actual vectors/sensitive mock/body tests."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins_test.rs": {
+      "sha256": "3cd131fcab4e744691ed943db288c06d1a35cd30197b751138282983f5a015f8",
+      "scope": "1540-1793 actual exact selected metadata tests."
+    },
+    "config/crd/edgion-crd/edgion_plugins_crd.yaml": {
+      "sha256": "58ac942825c504755a5cc3fb999a85ac498fc97d8b0cda2586b089fc1b2207aa",
+      "scope": "163-178,442-453 preserved config."
+    },
+    "Cargo.lock": {
+      "sha256": "18b7b7dee01e024ab6d21f5692ce04a343c4fb265092c7f587099e91c28bea17",
+      "scope": "2894-2908 and exact Pingora source pin."
+    },
+    "/Users/caohao/.cargo/git/checkouts/pingora-fd43c38079a9f4ee/1aaa45c/pingora-http/src/lib.rs": {
+      "sha256": "c35c523a01b077136151e71950291fbe0ebfc2b6dcee1d7776868d4bfbd03d1c",
+      "scope": "210-235,860-925 real insertion/conversion."
+    },
+    "/Users/caohao/.cargo/git/checkouts/pingora-fd43c38079a9f4ee/1aaa45c/pingora-http/src/case_header_name.rs": {
+      "sha256": "51f5983087b4afb8d121f856785af18cdf911da7a2dc5ff30b2388abe13381d3",
+      "scope": "Full unchanged-byte conversion."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/http-1.5.0/src/header/name.rs": {
+      "sha256": "3aa66c4f7d5579b9dcfa2745325cea381e13cf27ee7e41ac773cfad8df66c685",
+      "scope": "1000-1038,1073-1147 charset and actual fallible parser."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

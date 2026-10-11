@@ -1,0 +1,187 @@
+{
+  "partition": "PART-181",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-dsl/src/ast.rs",
+      "sha256": "85f1f009e618b9ead59d143cbf649047eeae0877581cdfe82636322da23c0f2b",
+      "fully_read": true,
+      "disposition": "No actionable candidate: neutral owned syntax/span model; current parser and compiler own admission and lowering. Hidden loop temporary leakage is separately owned by compiler analysis."
+    },
+    {
+      "path": "edgion-dsl/src/bytecode.rs",
+      "sha256": "4f9619ad06ebab37113371768439a734e5c7bd39fc0486f0727ce1220448f144",
+      "fully_read": true,
+      "disposition": "No actionable candidate: one versioned bounded transport representation and exhaustive builtin/body predicates; independent runtime caches and trust checks are required."
+    },
+    {
+      "path": "edgion-dsl/src/error.rs",
+      "sha256": "2f2e71de9ef749cdb94223393a6cf6c6f16cdae2e6fba93aeb2506a48bcf900a",
+      "fully_read": true,
+      "disposition": "No actionable candidate: runtime-neutral typed parse/compile/validation/runtime errors with stable body/value failures."
+    },
+    {
+      "path": "edgion-dsl/src/json_path.rs",
+      "sha256": "2a99fd6b15dfe2fae834f61d3e31a4d3ece92e60e973778fe25380dc1b25b6eb",
+      "fully_read": true,
+      "disposition": "No actionable candidate: canonical bounded definite-selector grammar reused by compiler, validator and runtime; no duplicate parser or unbounded selector representation."
+    },
+    {
+      "path": "edgion-dsl/src/lib.rs",
+      "sha256": "2e447a6d98e717fb0f0a4769c44b07643e303ba88fda3c10142582b5942e8265",
+      "fully_read": true,
+      "disposition": "No actionable candidate: exports preserve external-only language leaf and actual config/runtime consumers."
+    },
+    {
+      "path": "edgion-dsl/src/script.rs",
+      "sha256": "7cfd292966383dd325bc89b117767a47b4fd04d67b423caefa5c2da04c5238b5",
+      "fully_read": true,
+      "disposition": "No actionable candidate: shared representation priority and self-contained static safety pipeline; Redis scan explicitly abstains for ambiguous operand/control-flow windows. Cold serialization and independent validation are not established bottlenecks."
+    },
+    {
+      "path": "edgion-dsl/src/validator.rs",
+      "sha256": "575a61fc491a6f1331bac174bfa3d7b13975bf114319c3997759ed8ca02f7d60",
+      "fully_read": true,
+      "disposition": "No actionable candidate: bounded structural validation precedes private flow analysis; exact constant kind/arity/map bounds and lexical loop owner identity match actual tests. Runtime checks protect distinct execution properties."
+    },
+    {
+      "path": "edgion-dsl/src/value.rs",
+      "sha256": "ee38addf5354e257bfdd0999bc26153255fb6c334e7c6867afddc9abea981211",
+      "fully_read": true,
+      "disposition": "No actionable candidate: independently bounded shape/work accounting and required Arc/boxed Map ownership; preserved 24-byte layout and actual VM precharge consumers. No profiled Value representation bottleneck."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Original full repository rules retained; no nested DSL rules."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Original navigation and progressively loaded DSL references."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Original graded gates retained and checked against ownership conclusions."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Original review index retained."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Original review routing retained."
+    },
+    "skills/04-review/dsl/SKILL.md": {
+      "sha256": "4b20ea559926d29e0970ab9d9061af44b24dbd277e408d79628c00b305ab085d",
+      "scope": "Full original DSL review index."
+    },
+    "skills/03-coding/dsl/SKILL.md": {
+      "sha256": "060a2dc111a2b613b91ebf5da4c7ae995c0f11919a1b4b55f819b2e1d88c2f02",
+      "scope": "Full original DSL coding index."
+    },
+    "skills/01-architecture/02-gateway/dsl-engine.md": {
+      "sha256": "7ed47817132d4ffc9dc24aa62f4120c75d4e7b58d829b143c6ba34793fd05bf7",
+      "scope": "Current trust/transport, static pipeline and body ownership, lines 1-160; read gaps recovered."
+    },
+    "skills/01-architecture/02-gateway/dsl-engine-security-model.md": {
+      "sha256": "74a500ea801297f018a0af16f32a2e3060b637dc875e55fb0e29b262767dc5b1",
+      "scope": "Current independent loader/runtime bounds, lines 1-150; read gaps recovered."
+    },
+    "skills/04-review/dsl/intentional-design/dsl-design-decisions.md": {
+      "sha256": "4743b87ffcb7f590ffe1a4f8d00e39bb185f6cef41789dac1514d5b55c4ec2b0",
+      "scope": "Current custom-VM and independent representation/validation trust ADR, lines 1-110."
+    },
+    "skills/04-review/dsl/intentional-design/dsl-validate-construct-double-resolve.md": {
+      "sha256": "532cd25e63fd5bf03c164ff1c681edf3e4a8c3505248db737e3fd61bc40e1ae2",
+      "scope": "Full original; accepted self-contained cold validation/construction redundancy revalidated against current callers."
+    },
+    "skills/04-review/dsl/intentional-design/redis-link-check-positional-heuristic.md": {
+      "sha256": "a009ad60ba28f758b37ddc54165f6dcc1cd73a3cdfc1162963b2be2341fa4e9f",
+      "scope": "Full original; both single-push window and jump ingress abstention revalidated."
+    },
+    "skills/04-review/dsl/intentional-design/map-variant-is-boxed.md": {
+      "sha256": "4de9b6b65073560307fe3007599fbe675c874b87c0e5e0f586478f7d0ec42160",
+      "scope": "Full original; current 24-byte Value and actual layout test retain boxed Map."
+    },
+    "skills/04-review/dsl/intentional-design/sso-migration-not-worth-it.md": {
+      "sha256": "24864b413fcb0501103893298b000d9ff69ceb2c4ceb49b3f4bc385aeaa69375",
+      "scope": "Full original across recovered read gaps; no Value representation migration or unmeasured bottleneck finding."
+    },
+    "skills/04-review/dsl/regression-guards/builtin-argument-capacity-and-stack-validation.md": {
+      "sha256": "9cb7738de53896d8f24bad5db67714f6d0723bdb53057b28373cd5a8c54d848a",
+      "scope": "Full original; exact arity, stack flow and LogFmt provenance independently checked against current implementation and actual tests."
+    },
+    "skills/04-review/dsl/regression-guards/structured-bytecode-control-flow.md": {
+      "sha256": "7ca399ba0144491cb418f8965b84e05eeb415a62e4339ab5a4ae7506f60cec55",
+      "scope": "Full original; lexical parent identity and checked LoopBack preserve separate loop budget."
+    },
+    "skills/04-review/dsl/regression-guards/host-result-byte-budgets.md": {
+      "sha256": "b05eee927b7d152c8cfa1506d58e6e6a2a6d9832b8f7a0a71d1f9c505a916b5f",
+      "scope": "Full original; producer admission remains distinct from Value shape/work inspection; historical tests not fresh executions."
+    },
+    "edgion-dsl/Cargo.toml": {
+      "sha256": "02c0dc8814d20dcd076843962e45b1d3f00de466f54c3531693b9a40cc0cfe47",
+      "scope": "Full manifest; external-only leaf with parser/compiler/static validation independent of runtime."
+    },
+    "edgion-dsl/tests/unit/bytecode_test.rs": {
+      "sha256": "902649f4cbb55d1a6a62d65969202424429979b32bbd11c19efffade48497204",
+      "scope": "All 210 actual lines; schema/version, size bounds, optional source maps, builtin/body detection."
+    },
+    "edgion-dsl/tests/unit/error_test.rs": {
+      "sha256": "934306945e85646ec9c40daf034baf4c1ec8a80a331b5e7051c469ecf3ab27b9",
+      "scope": "All 29 actual lines; fixed concise error contracts."
+    },
+    "edgion-dsl/tests/unit/json_path_test.rs": {
+      "sha256": "ed0c0387d879d1091f6655eb66507161b8dcd67686f16397482f284092d7d129",
+      "scope": "All 63 actual lines; canonical definite selectors and length/depth/escape/index rejection."
+    },
+    "edgion-dsl/tests/unit/value_test.rs": {
+      "sha256": "fd80cfe1e4a351749108ddecbb8d777c9f5a52ea7e4fb0683c2dfc1ef7a1bf27",
+      "scope": "All 201 actual lines; 24-byte layout, shape limits, branching work and implicit key conversion."
+    },
+    "edgion-dsl/tests/unit/script_test.rs": {
+      "sha256": "aa2877bd77355fa97282bad9bf60a6befb945bb1b262120ee7657b02f2be9745",
+      "scope": "All 370 actual lines; priority, invalid source/wire, jump structure, Redis literal and ingress abstention."
+    },
+    "edgion-dsl/tests/unit/validator_test.rs": {
+      "sha256": "985ea33b3efdbac77995aac33f479e8ee79a50b2f15ca0e0f6a8ae056ca0f542",
+      "scope": "All 549 actual lines; structural/schema/constant/arity/path/map/loop limits and full compiler pipeline."
+    },
+    "edgion-dsl/tests/unit/validator/stack_test.rs": {
+      "sha256": "8dfaf3946575abf332967b7f7be0302a1ec04dabeef1c0abc22df82129e0a93f",
+      "scope": "All 236 actual lines; stack residue/joins/back edges, direct literal provenance and compiler control-flow cases."
+    },
+    "edgion-dsl/src/parser/mod.rs": {
+      "sha256": "981daabb7d97f6c0e2cd369ec811cb604b150dad030fca26dbedd0b67f58d7ff",
+      "scope": "Full 177-line public source admission/caller seam, secondary context only."
+    },
+    "edgion-dsl/src/compiler/mod.rs": {
+      "sha256": "882bec8d13bfe8db18acc3cc2c4e72e196eb4eb626e4bc689ccbf88fad9dda1b",
+      "scope": "Compiler ownership/state and shared bounded streaming regex, lines 1-100; secondary context."
+    },
+    "edgion-dsl/src/compiler/emit.rs": {
+      "sha256": "f677b6c0fb92bcf137d5cd67558941f10d90ebad64b507d1da5b06531a60806a",
+      "scope": "Canonical definite selector admission and local slot seam, lines 110-154; secondary context."
+    },
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/dsl.rs": {
+      "sha256": "03057d287e1bc1178b1815281bcb345647bf6c0461984f7f7bee572575ab26f3",
+      "scope": "Actual shared static pipeline/trust/error order and response body prohibition, lines 350-412."
+    },
+    "edgion-gateway/src/plugins/http/dsl/plugin.rs": {
+      "sha256": "7948524b4a2d7bc33d5aebc7f54c37ac316f428944d264c0e74fc01fd95bdfa2",
+      "scope": "Actual script reuse, runtime policy construction, independent factories and response mutation gate, lines 1-122."
+    },
+    "edgion-gateway/src/plugins/http/dsl/lang/vm.rs": {
+      "sha256": "830e80cb6b406f5f6d9204eb0644cbc2c1743acd4122c600f75ed7bd2ea0db9c",
+      "scope": "Selected actual Value admission 188-238, compiled bounded constant caches 262-351, local clone precharge 430-470, comparison precharge 608-651, map/index producer admission 1084-1194. No VM primary coverage claimed."
+    },
+    "edgion-gateway/src/plugins/http/dsl/lang/body_scanners.rs": {
+      "sha256": "a87bb708a016605199d33d7f61cd4713611623562285e3099b19720de2e6cdf6",
+      "scope": "Actual canonical selector consumer and bounded streaming DFA seam, lines 1-72."
+    }
+  },
+  "limits": "All eight primaries fully personally read. Static original code/contracts/actual tests only; no executions or benchmark evidence. Root does not credit secondary compiler/parser/runtime sources as primary coverage. Existing accepted design is verified against current scope rather than treated as automatic suppression."
+}

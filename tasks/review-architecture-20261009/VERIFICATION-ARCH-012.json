@@ -1,0 +1,17 @@
+{
+  "reviewer": "/root/verify_seed",
+  "complete": true,
+  "disposition": "confirmed",
+  "approved_input_sha256": "93bc067efabcca2dcfcf3a42e7dbf39f0113ffcbf19f2366399b19ad2422fb85",
+  "approved_claim_sha256": "5fd7613ee93e8eabec86297b9170a22fc550ee0c63ef3b7e8254383cf111e335",
+  "evidence": {
+    "edgion-gateway/src/ai/protocols/anthropic/request.rs": "7f27766425c6d2a34d7ba6b55bdf4b956ed850a0379c34e36d29fb81cdf2549a",
+    "edgion-gateway/src/ai/protocols/openai/request.rs": "e978e3dd3a62e974bb2505338f0bca62165f8b526fba1534894848e64a9b27d5",
+    "edgion-gateway/src/ai/http/proxy.rs": "45b3250490d016c5aef663e4856055bec8043d28cead0e0158b8c02c005d40df",
+    "edgion-gateway/src/ai/runtime/dispatch.rs": "e75694fa7727aa04fa8c83743c83ab9cf13cb9647d05830d4e661d9962a19e7e",
+    "Cargo.lock": "18b7b7dee01e024ab6d21f5692ce04a343c4fb265092c7f587099e91c28bea17",
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.151/src/read.rs": "17a2efe49e5a6937c8d7d4a5c0b9eac84453de0f86bf8e7ee421387e82341bb3",
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.151/src/de.rs": "4998d7e252eb513be85b298e287048b4fb283882e9ba7df905f572f07200f3f3"
+  },
+  "limitations": "No executed tests, calls or primary coverage; proposed UTF-8 admission is byte validity, not a full AST/grammar validator."
+}

@@ -1,0 +1,36 @@
+{
+  "partition": "PART-258",
+  "reviewer": "/root",
+  "complete": true,
+  "candidate_count": 0,
+  "files": {
+    "edgion-gateway/src/cache/mod.rs": {
+      "sha256": "051a36e2346790d2ad40b2c1d8286a14ad62347b7ca5da8c8130a00e5d56f69f",
+      "fully_read": true,
+      "disposition": "no-finding"
+    },
+    "edgion-gateway/src/cache/tiny_ufo.rs": {
+      "sha256": "bcb5483039d5a73d8a142f657bfe6121814f9f1f1a49891f446f4d28e73e5a22",
+      "fully_read": true,
+      "disposition": "no-finding"
+    }
+  },
+  "decisive_notes": [
+    "Canonical required-TTL TinyUFO wrapper is constrained to recomputable positive OIDC introspection; no per-key invalidation contract is added.",
+    "Logical retained-weight and entry bounds, collision identity, precise expiry and serialized same-key insert mitigation have distinct owners.",
+    "Current OIDC consumer bounds TTL by expiry, hashes token keys and uses authoritative current results after normal non-retention.",
+    "Constructor/expiry/invalid TTL/retention/collision/oversize/concurrent test source inspected; benchmark fixture was not executed."
+  ],
+  "evidence": {
+    "AGENTS.md": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+    "edgion-gateway/src/cli/config.rs": "9f19a5bf98552250045c76ce5c2ea606de312c1d61a71ad04c0a01ac3fe75e7f",
+    "edgion-gateway/src/plugins/http/openid_connect/plugin.rs": "5e6045b9d5cc47b62f0e2be8d3187d80d84f43a6085173f189517d7cd1b3aed0",
+    "edgion-gateway/src/plugins/http/openid_connect/token_verify.rs": "9602a082d738a190f5df20b3d861d28aa4642d237d95d9cd32f5a02136a842b8",
+    "edgion-gateway/tests/unit/cache/tiny_ufo_test.rs": "21dd6666de9f676adcd9d948da482d8e6c8578e0de51e69b5da888a51f65ae9b",
+    "skills/12-algorithms/SKILL.md": "338b061bd3ccd4ef6a0482b0879feb42b81020cff12ed4a7509068fca0bd7515",
+    "skills/01-architecture/00-common/05-unification-points.md": "011c7e0897b5af81b6459096b678774d9ac988843f705295ecc559d8892d7d92"
+  },
+  "limitations": [
+    "Static contextual source review; no fresh fork accounting/benchmark execution or RSS claim."
+  ]
+}

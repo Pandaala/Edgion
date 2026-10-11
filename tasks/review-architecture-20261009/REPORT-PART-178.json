@@ -1,0 +1,128 @@
+{
+  "partition": "PART-178",
+  "analyst": "/root/analyze_outbound",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-waf/src/xss/blacklists.rs",
+      "sha256": "f803bcba34ad7c13f2e8ca939c6e257a68942887d4bad726a0fe5ff65171b493",
+      "fully_read": true,
+      "disposition": "No actionable finding. Fully read lines 1-1939; static classification tables and numeric entity decoding belong to this native detector; finite provenance/validation scope does not justify a generic matcher replacement."
+    },
+    {
+      "path": "edgion-waf/src/xss/detector.rs",
+      "sha256": "88e61f473e7d83f8868a4d57a8b74aa12dff03178eab27d3a943f703936b2471",
+      "fully_read": true,
+      "disposition": "No actionable finding. Fully read lines 1-399; borrowed input, stack normalization, canonical tokenizer/classification helpers, five-context decisions and existing ordering have a coherent owner."
+    },
+    {
+      "path": "edgion-waf/src/xss/html5.rs",
+      "sha256": "55c3e710b32b8eb3f1244a318b9de435f2f6e1224f14c97988a821253cd34c28",
+      "fully_read": true,
+      "disposition": "No actionable finding. Fully read lines 1-771; borrowed token slices, distinct EOF and cursor transitions preserve bounded progress; current repository high-byte/EOF and finite parser fixtures inspected."
+    },
+    {
+      "path": "edgion-waf/src/xss/mod.rs",
+      "sha256": "70bd8d1e3fb5402a41f44b8feb46540289381833caefc949ac6b473549ff0abd",
+      "fully_read": true,
+      "disposition": "No actionable finding. Fully read lines 1-5 and actual consumer; private exports serve injection evaluation and existing private tests."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original 1-464 personally retained; unchanged hash; no applicable nested rules."
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full original retained; source-complete read-only workflow and repository-only evidence boundary."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original retained; progressive routing."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original retained; safe Rust, leaf, redaction/logging/restraint/reuse/body/performance gates."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full original retained; current review index."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original retained; historical evidence versus current requirement."
+    },
+    "skills/04-review/waf/SKILL.md": {
+      "sha256": "a5fa47a4b94ee1edccf3f5cd07197eeb0d644f875616cd33c5976e66bc9edef9",
+      "scope": "Full original retained; native injection routing."
+    },
+    "skills/04-review/waf/regression-guards/native-injection-operators-use-bounded-detection.md": {
+      "sha256": "780bfcac8205cd8c105200049a535456629cfc10ec86d98555369dac715b8f59",
+      "scope": "Full current original; transformed targets, input/work caps, EOF, capture/negation/chains and provenance limitations."
+    },
+    "edgion-waf/INJECTION.md": {
+      "sha256": "c9fff8da074d2d324a63902d46db0823c84fa342986d1fc35132338b9fb116fd",
+      "scope": "Full current original; source provenance, external-only oracle role, weighted work and finite fixtures."
+    },
+    "edgion-waf/Cargo.toml": {
+      "sha256": "30ce2f0a77895f232e2109a11a06cc11386299d9af0af34d9a2db4bef0ea73d1",
+      "scope": "Full retained; external-only dependencies."
+    },
+    "edgion-waf/src/lib.rs": {
+      "sha256": "ae867774e364d711d7b2a21e4929017015a89fe910fc28a1d5a31d60d799cb07",
+      "scope": "Full retained; safe Rust and exports."
+    },
+    "edgion-waf/src/injection.rs": {
+      "sha256": "d9943e539f2e184ca6eaa7bf58fca5051a1871e8b102aeb699505b80dc59e7ea",
+      "scope": "Full current; hard input cap, checked weighted work and private detector seam."
+    },
+    "edgion-waf/src/seclang/transaction.rs": {
+      "sha256": "24ab89af5d00efd52f78dd5c7840ba3f0bab6b322ceae48c3a0c7b0dd4a70d26",
+      "scope": "Full retained PART172 including 3128-3282 and 4970; ordered semantic work/capture and evaluator paths."
+    },
+    "edgion-waf/src/seclang/compiler.rs": {
+      "sha256": "6259ebaf9e73726d5989f08d7a48d74320183ddd419fda5c6659ded5835a3404",
+      "scope": "Full retained PART162; current 4448-4466 argument-free typed detector admission."
+    },
+    "edgion-waf/src/seclang/semantic.rs": {
+      "sha256": "044053c001d934ddae1b5c343df1beab078641a8364b817190366f63ea754303",
+      "scope": "Current 4340-4365 and call search; strict argument-free detector admission."
+    },
+    "edgion-waf/tools/verify_libinjection_go_v0_3_2.py": {
+      "sha256": "ee9e75f1ac394fec485f835568833712f6ce01bf3843572606d74eb4d14b51b5",
+      "scope": "Full current source only; reference hashes and table/license/fixture validation boundaries; not executed."
+    },
+    "edgion-waf/tests/unit/xss/html5_test.rs": {
+      "sha256": "384e3200874c04e5d35df8e3f3929e672847181b88a0b719ad4c6f3c470cea4f",
+      "scope": "Full actual test bodies; high bytes remain data and whitespace EOF terminates."
+    },
+    "edgion-waf/tests/unit/injection_test.rs": {
+      "sha256": "bfabfbd04f4f2b72c708bbc6950096e0e727dd7f08c1f5c7c96948f2dae7e396",
+      "scope": "Full actual test bodies; input/work overflow, full-size and adversarial cases."
+    },
+    "edgion-waf/tests/unit/lib_test/libinjection_diff.rs": {
+      "sha256": "0c142a579a8c2869c784e8380bd4f83303fa8d63bb73c41137e1896027d1ed71",
+      "scope": "Full actual test bodies; finite offline parser/verdict fixtures, progress guards and ignored external-checkout tests."
+    },
+    "edgion-waf/tests/unit/seclang/transaction_test.rs": {
+      "sha256": "3fa5407fc72b9c73b555b1dd16b1b8c505d888d6990036f7b83fbbc9d2d57285",
+      "scope": "Actual selected 925-1155; transforms, rollback, negation/captures, decoded high bytes and budget failures."
+    },
+    "edgion-gateway/src/plugins/http/waf/mod.rs": {
+      "sha256": "d5bca791f259c5266019e3982c9f9e84526961a3174dc7c48dc80fcba856f2c9",
+      "scope": "Retained selected 60-250,360-440,500-670,680-804; shared generation, request capture and transaction ownership."
+    },
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/waf.rs": {
+      "sha256": "761bbdee08bbb2dec67731afe889348332aa8eaa6bcdbb3fe42854f43992bab4",
+      "scope": "Retained selected 900-1005,1056-1255,1340-1372; shared strict compilation and body policy."
+    }
+  },
+  "limits": [
+    "Static read-only review; no product/test/doc/Git changes, execution, benchmarks or network.",
+    "No fresh upstream parity, exhaustive byte equivalence, CPU bound, throughput or incident claim. Fixtures and historical verification are finite evidence.",
+    "The analyst read cached Go helpers/tokenizer and one upstream test outside the repository while falsifying a lead. This exceeded the secondary-evidence boundary. These paths are excluded from baseline support and coverage; no further external reads occurred after correction. Final dispositions use repository evidence only.",
+    "Supporting reads have zero primary credit. Reserved ARCH-240 through ARCH-243 are unused."
+  ]
+}

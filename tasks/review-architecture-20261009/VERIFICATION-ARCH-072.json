@@ -1,0 +1,48 @@
+{
+  "candidate": "ARCH-072",
+  "complete": true,
+  "verifier": "/root/verify_ip_union",
+  "decision": "confirmed",
+  "input_sha256": "c5e5457dc814e98645f282e0d7fafca5f97a9611cad8a3ba1e4b9c2d83289376",
+  "approved_claim_sha256": "87a61ae27f195a0250eb6201f6ecee96b151f63d1bdeb80bcd22c664b0dcd239",
+  "evidence": [
+    "Successful mixed precompile builds both regex and JSON template artifacts twice; existing preparation tuple can preserve clear-before-prepare and Host/regex/JSON diagnostics.",
+    "Actual tests establish cached semantics but not compilation count. Independent admission remains separate; ARCH037 and ARCH050 have different owners."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original personal governing read; fresh hash."
+    },
+    "skills/04-review/plugin-runtime/regression-guards/request-template-policy-unification.md": {
+      "sha256": "413004f76a11df4ef914bc1fb625dba4fa25602d6bf8ac8b25b66d62c3d49e7a",
+      "scope": "Full current original template ownership."
+    },
+    "skills/04-review/deserialization/intentional-design/plugin-config-regex-dfa-size-limit.md": {
+      "sha256": "4c53022bd1d34033a5b500c885fec3be928065194afccb96d765bbb903c111f2",
+      "scope": "Full current accepted regex bounds and tradeoffs."
+    },
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/proxy_rewrite.rs": {
+      "sha256": "7fce439dbfcde54c6739c23cf2cad3a1773e5ab9c21a32372188c85b1f9ee02f",
+      "scope": "Full current primary source read independently."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/proxy_rewrite_test.rs": {
+      "sha256": "7be9c208b783a7a3c8585ec029c2bc36536756d905c18ff9129ebef8da7c0684",
+      "scope": "Full actual test bodies."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/proxy_rewrite_test/validation_trait_tests.rs": {
+      "sha256": "8f7c00a0d15fc91e88020c69bcb351b60013fc1bc248a1d32d63e1b675b8eb86",
+      "scope": "Full actual stateless diagnostic bodies."
+    },
+    "edgion-gateway/src/plugins/http/proxy_rewrite/plugin.rs": {
+      "sha256": "c257049692250ee377fe5d1dd3e981d77fb5f0d5d08a48f2a61a9d66858086a9",
+      "scope": "Selected 1-615 constructor and runtime consumption."
+    },
+    "edgion-gateway/tests/unit/plugins/http/proxy_rewrite/plugin_test.rs": {
+      "sha256": "690f1b25cb41d89b5eb4ae77031acab490199f2c4b80fc82e070616f2ba057b1",
+      "scope": "Full actual runtime test bodies."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

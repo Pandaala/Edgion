@@ -1,0 +1,65 @@
+{
+  "partition": "PART-519",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_tls/mod.rs",
+      "sha256": "153105658634e2e984dfb532b5edcffef4000e752bb096ce39a32a6ba29bb055",
+      "fully_read": true,
+      "disposition": "Full23 lines static declarations/reexports; actual suite and CLI consumers checked. No distinct finding; aggregate context ownership belongs to existing ARCH272."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Personally retained complete original rules unchanged."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Personally retained original knowledge index."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Personally retained full graded gates."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Personally retained original review index."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Personally retained original scope/authority rules."
+    },
+    "skills/05-testing/01-integration-testing.md": {
+      "sha256": "e260042b508fa0956873d1b3c059531f1733a7c15423c548081afb71703a10e1",
+      "scope": "Personally read full original guide; real assertions and bounded harness context."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "3270-3355 actual aggregate and targeted TLS registrations; earlier unchanged full source read."
+    },
+    "edgion-tests/src/client/suites/mod.rs": {
+      "sha256": "7ce09dacca746e2d9e4f3c6db066d0d9f0a76accdef335b68a61d36e19b74f5c",
+      "scope": "Earlier personally read full static export consumer."
+    },
+    "edgion-tests/src/client/suites/edgion_tls/https/https.rs": {
+      "sha256": "f67e438115e9d604c23d9c02b824bf3f5925c5b1433d08ac498f705ca118e542",
+      "scope": "Full source related context, not yet credited primary."
+    },
+    "edgion-tests/src/client/suites/edgion_tls/grpctls/tls.rs": {
+      "sha256": "314587ff3422bd1d6bed5262ec6481f66904607deb54c08585daa8609b00d165",
+      "scope": "Full actual TLS GRPC child personally read; REPORT523."
+    },
+    "edgion-tests/src/client/suites/edgion_tls/port_only/port_only.rs": {
+      "sha256": "b62ee53ed1bf5e08b425c935e4ea9d0cf7252de7083681e5061ee2a41caa7615",
+      "scope": "Full actual explicit-port attachment child personally read; REPORT528."
+    },
+    "edgion-tests/src/client/suites/edgion_tls/sni_collision/sni_collision.rs": {
+      "sha256": "6e106537e04f5c6842560410f0728de7c4284c618ca77751f63aa4c8787cb3fe",
+      "scope": "Full actual collision child personally read; REPORT529."
+    }
+  },
+  "limits": "Static read-only review. No tests/build/network/source/Git mutation. Supporting exports do not imply primary child coverage. ARCH272 independent review pending. Initial guessed grpctls/grpctls.rs support path absent; corrected to actual tls.rs before writing report."
+}

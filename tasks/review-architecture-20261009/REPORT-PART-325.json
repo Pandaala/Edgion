@@ -1,0 +1,38 @@
+{
+  "partition": "PART-325",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/plugins/http/jwe_decrypt/mod.rs",
+      "sha256": "6fe49f2ae86f4662b3b0b407ba79c7658ecbdb850b3413877fed1d9106891215",
+      "fully_read": true,
+      "disposition": "Private plugin export matches runtime constructor."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/http/jwe_decrypt/plugin.rs",
+      "sha256": "ce1e8d4481ed1e03700bf6b509232977c3595f9356b22332474b0c3bd411d3d1",
+      "fully_read": true,
+      "disposition": "Cold cipher and typed credential failure consume private resolved carrier; strict unique-member protected object/raw AAD, allowlist defensive check, exact token/key-error precedence and sensitive claim/header ordering remain deliberate. No new architecture issue."
+    }
+  ],
+  "candidates": [],
+  "support": {
+    "AGENTS.md": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+    "skills/SKILL.md": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+    "skills/00-design-rules.md": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+    "skills/04-review/knowledge-routing.md": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+    "skills/04-review/security/intentional-design/credential-copy-retention.md": "10a0159a28ac80b65e5fb4225f67a47a84a72acbfad7254e8506eae5e78f350c",
+    "skills/04-review/security/mandatory-design/fail-closed-error-body-no-internal-detail.md": "2f4d74bd5bfb3335de18481b56331b7692a53524138ae221f1c9a6e0266ccdc1",
+    "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": "70ea787d34a9a4652adfe131ba66049d2544b381b2034194db519567fe87ead0",
+    "edgion-gateway/src/plugins/http/common/auth_common.rs": "0a184e336bc99eb91555c07be17a4ff6c49dfe21a401d1668efd7793152fa4b0",
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/jwe_decrypt.rs": "53ef7a871b68d44b8a92b4dd988a2bacb973e1f97f9c4b0e6be104e53f016031",
+    "edgion-gateway/tests/unit/plugins/http/jwe_decrypt/plugin_test.rs": "5a8a4d77d7364564e52c94c2452964da84db21dbf071a3d88a2e6e0a49680dd2",
+    "skills/04-review/jwe-decrypt/SKILL.md": "941e52117f46acf188e1dc240c1960e53e9a20f62c3e9bc0727692a0cbf7832a",
+    "skills/04-review/jwe-decrypt/intentional-design/allowed-algorithms-defensive-check.md": "8a686e4249628b93252ff933657b0004c11a5911c85e908975fd20f0448305e8",
+    "skills/04-review/jwe-decrypt/regression-guards/resolved-credential-failure-policy.md": "115e09a31cc8e59ab770c183a6e99e70a88426f89530a8de397a3017574b5708",
+    "skills/04-review/jwe-decrypt/regression-guards/strict-protected-header-json.md": "3c0e22dc2963ae6c4cf4b6c61fa3c0bb0e57a7624a2d8f9f67a02f18475ca683"
+  },
+  "support_scope": "Relevant original records read, production support selected schema/validation/resolver/factory/helper sections only. HMAC tests selected ownership/wire/digest/order/no-credential/body limits; JWE selected cold generation/strict objects/rawAAD/size/success-order tests. JWT credentials/plugin/module/algorithm/token-source tests fully read; verify tests first190 lines. No supporting primary coverage.",
+  "limits": "Static only, no execution/mutations/measurements. Truncated searches recovered with owning functions/test bodies; no whole supporting tree credit."
+}

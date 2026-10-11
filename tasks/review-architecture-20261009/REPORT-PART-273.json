@@ -1,0 +1,79 @@
+{
+  "partition": "PART-273",
+  "analyst": "/root/analyze_session",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/link_sys/providers/elasticsearch/apply.rs",
+      "sha256": "79dffd1b3bcf24bdd3a7fa03dcbba4b0c3dfb5d009692671053d900d05be6230",
+      "fully_read": true,
+      "disposition": "Prepared actual-owner TLS and publication-aware health retain canonical ownership."
+    },
+    {
+      "path": "edgion-gateway/src/link_sys/providers/elasticsearch/bulk.rs",
+      "sha256": "636f3143fcf8ae73da1fc16b697b5a54cd63c33f5b719c8dfd20650b8acd8084",
+      "fully_read": true,
+      "disposition": "ARCH027: successful acknowledgement read lacks an independent cap; keep exact correlation, subset retry and shutdown."
+    },
+    {
+      "path": "edgion-gateway/src/link_sys/providers/elasticsearch/client.rs",
+      "sha256": "e9edcc4062f447a551640a70fd642b17ea583020052a29bc25ea58a215d69654",
+      "fully_read": true,
+      "disposition": "Key-current lookup and provider-owned tasks/retirement fences are coherent; worker panic is ARCH025."
+    },
+    {
+      "path": "edgion-gateway/src/link_sys/providers/elasticsearch/config_mapping.rs",
+      "sha256": "755ab11708b72d33c7596d6b92e70dc0d0266d35348c27462bbb42f06e57413c",
+      "fully_read": true,
+      "disposition": "ARCH025: unchecked date pattern can terminate a worker after normal publication."
+    },
+    {
+      "path": "edgion-gateway/src/link_sys/providers/elasticsearch/log_sender.rs",
+      "sha256": "99b9c9fe9ee63675ac750b9710ce3c76a219373c7bb019058ea16cf1550e0e3a",
+      "fully_read": true,
+      "disposition": "Thin key-only nonblocking submitter retains dispatcher-owned drop counting."
+    },
+    {
+      "path": "edgion-gateway/src/link_sys/providers/elasticsearch/mod.rs",
+      "sha256": "e32b4fb077d6bd05fdaf7ff681875372c08a62493b9a3d58736e6be6666cfec9",
+      "fully_read": true,
+      "disposition": "Provider exports and actual factory consumers checked."
+    },
+    {
+      "path": "edgion-gateway/src/link_sys/providers/elasticsearch/ops.rs",
+      "sha256": "d46d640d95f3a66a39b424b8d2d20bddcae1b4c7732798ff294e519dee0d5c73",
+      "fully_read": true,
+      "disposition": "CRUD/search methods have authenticated integration-testing admin consumers; production log delivery uses bulk. No cosmetic extraction."
+    }
+  ],
+  "candidates": [
+    "ARCH-025",
+    "ARCH-027"
+  ],
+  "support": {
+    "skills/01-architecture/02-gateway/09-link-sys.md": "e90b36830b4f0cb1277d1914fc572f12d05ecf13ec820ba5f40c2533677bc214",
+    "skills/01-architecture/02-gateway/14-link-sys-dev.md": "fd29e48b078e7253949f077a69cba6b8bbb13df3e4b2849ddea871b341892160",
+    "skills/04-review/link-sys/intentional-design/access-log-fallback-backfill-tradeoffs.md": "d298416b92beb109ae765e4f1e305f5221eaba55efc6d303d81c6fbefd725397",
+    "skills/04-review/link-sys/intentional-design/healthy-semantics-intentional-non-flips.md": "4c1e7a4f1abb612c67656fc0cb339f3f1319834e9d48ec14b8e840b30e0fc787",
+    "skills/04-review/link-sys/intentional-design/provider-owned-runtime-and-simple-removal.md": "d3a6e869608d5764c916b593c229dc9ce80c83f70820e78107742e4f4703d7ec",
+    "skills/04-review/concurrency/regression-guards/es-bulk-max-body-bytes-enforced.md": "26203066f0488bba8d88fdca0d05553ca72e594c9b8d4f6756d5e0907c97c4b9",
+    "skills/04-review/concurrency/regression-guards/es-bulk-item-level-429-retry.md": "93a648fdeab4279fd9f409f5e40cdc96dda8f54d41685335f94e5fd9695cd7c0",
+    "skills/04-review/concurrency/regression-guards/es-bulk-shutdown-cancellation.md": "f56f35d2f26e7abd525ad9baa8841252b138030140538a89af2077f7deed6501",
+    "skills/04-review/concurrency/regression-guards/es-bulk-ingest-empty-endpoints-fail-closed.md": "a0d34a7e562b75f326b6e0d9ac89027ff64edd00fee519fa40d69a2f31ea4a7d",
+    "skills/04-review/concurrency/regression-guards/local-file-per-batch-size-rotation.md": "cd964d01f9b6f461cd953d1f54518c18098c7fed79cb6a66c721b843b1cb7d5d",
+    "skills/04-review/observability/regression-guards/local-file-write-error-surfaced.md": "c885d7c74541a8f06a7f3d79aac0d9bcd34aa9bb39000b7329a6131f969dffd3",
+    "edgion-resources/src/resources/link_sys/mod.rs": "0b4d599a497c34a856d5cb390599c03cbdc971ca4736d2b0b8e68badb93a9a44",
+    "edgion-resources/src/resources/link_sys/elasticsearch.rs": "eb5b70ab9d74277d851955e5d116a1700978b8503aa3161fd71ff4ed2e906c20",
+    "edgion-gateway/src/link_sys/runtime/runner.rs": "1234da3d9e5053c436918ab20953d2032f18b5800a23c408a15d6cf0aa9f59f8",
+    "edgion-gateway/src/link_sys/runtime/store.rs": "b995c16f0e1b9cbde6cdc9c7a74576464b9f0184b9316e4924aac97c230970de",
+    "edgion-gateway/src/observe/access_log/logger.rs": "5662ec21ad53fd06b8f2b572cea4873aaa49637664a42b1949d6cb17c392f317",
+    "edgion-gateway/src/plugins/http/common/outbound/call.rs": "16f9a8c69669aa4b4ecb9457532875dbba69bb0f7c8a5c79909aaa2e8ecd0bed",
+    "edgion-gateway/tests/unit/link_sys/providers/elasticsearch/bulk_test.rs": "cb19fb823f77d1a43b7fda7c5853ddd41d849cc4228813adb2768186f94d382d",
+    "edgion-gateway/tests/unit/link_sys/providers/local_file/data_sender_impl_test.rs": "426c911096d16dc0e59ca34e3b3959dbe675459059f064170c886a0011488cbb",
+    "Cargo.lock": "18b7b7dee01e024ab6d21f5692ce04a343c4fb265092c7f587099e91c28bea17",
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/chrono-0.4.45/src/format/formatting.rs": "b6d096228cd87ae78a71a1a1cf8e1b933d2259eb33c9020824287d603ab432e5",
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/chrono-0.4.45/src/format/strftime.rs": "928e684b1a98a08dd5e3a3253ee19e20b555f20331d5d3a8917017fc09e515fc"
+  },
+  "support_scope": "Analyst original progressive relevant-section reads; full primary reads only. Local locked Chrono source establishes formatting behavior.",
+  "limits": "Static only; no reproduction, measured RSS/latency, tests, builds or Git mutations."
+}

@@ -1,0 +1,63 @@
+{
+  "partition": "PART-504",
+  "analyst": "/root/analyze_outbound",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/plugin_condition/all_conditions.rs",
+      "sha256": "1fc6a6d1ea97c5ed9312c727c0260e794d993d5902148f1c2a4dcd1ef410c81f",
+      "fully_read": true,
+      "disposition": "Full1-1408 five disjoint complete ranges; ARCH383 target condition outcome not established by aggregate/unconditional assertions; numeric31180 separately pending296."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/plugin_condition/conditions.rs",
+      "sha256": "24313f636fea45b88befaa0426663abaea517e34e255e06956ee699504e89e11",
+      "fully_read": true,
+      "disposition": "Full1-354; Three aliascorrelated Cors cases fail missing/read/parseconditions and retain descriptor suppression/composite evidence. Accepted."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/plugin_condition/mod.rs",
+      "sha256": "9093e010544d8a866b55cbdba87fc5db15393a41448ca972c685a6f9a3ec8add",
+      "fully_read": true,
+      "disposition": "Full1-13; Actual parent/child exportregistry accepted."
+    }
+  ],
+  "candidates": [
+    "ARCH-383"
+  ],
+  "support_selected": {
+    "skills/01-architecture/02-gateway/05-plugin-system.md": {
+      "sha256": "4cfcad0d1d1d43bfe530ed69f28d79c804c1f8b17e1b4017df1f5a0642aee299",
+      "scope": "241-375 actualcurrent ConditionSet/skiprun/negate/ordinal/bodyphase originalcontracts."
+    },
+    "edgion-gateway/src/plugins/runtime/conditional_filter.rs": {
+      "sha256": "2862b351c186c58580300dfee4d4e32371a5f2df9f3328f8be90e9bcc4389ad8",
+      "scope": "1-105 actual requestalias/skip path."
+    },
+    "edgion-gateway/src/plugins/runtime/conditions/evaluator.rs": {
+      "sha256": "9b342831e33c7588d26b279ba776b63aa4374ddabe457cf431fd9cd25715bf4d",
+      "scope": "1-190,195-295,335-391,395-679,751-782,884-978 compiled dispatch/ordinalcauses/skipfirst/runsecond/negation/probability."
+    },
+    "edgion-gateway/tests/unit/plugins/runtime/conditions/evaluator_test.rs": {
+      "sha256": "135be987cf5608923f09142976c42a1d74bef346a9263cc39304740f463b23ff",
+      "scope": "430-533,733-816 actual boundary/probability/negatedpath units."
+    },
+    "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": {
+      "sha256": "d80096aa53f493497d34dfba80f21f7089bf1ad3086f3b5ab3ff6f1689018c9d",
+      "scope": "2950-3046 actual aliasedrequestlog dispatch/retained outcomes."
+    },
+    "edgion-gateway/src/plugins/http/mock/plugin.rs": {
+      "sha256": "1f9b16ad20fe0b014d3e7ec905506d577e8d55a2053c3c7b59110ff466e3f71b",
+      "scope": "Full1-86 nonterminatingfixedlog/responsemarker."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/PluginCondition/EdgionPlugins_default_condition-all-types.yaml": {
+      "sha256": "80dddeaae76ee1c1c9e62250a5f66dfe9e373bfa5a28680a7f97c8d14a9124f6",
+      "scope": "Full1-377 bothtopologies independent100percent andexclusionpolarity."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/PluginCondition/EdgionPlugins_default_condition-all-types.yaml": {
+      "sha256": "80dddeaae76ee1c1c9e62250a5f66dfe9e373bfa5a28680a7f97c8d14a9124f6",
+      "scope": "Full1-377 bothtopologies independent100percent andexclusionpolarity."
+    }
+  },
+  "limits": "Both eight fixtureYAMLs full/actualregistry2560-2583/suitekey1551-1564/framework75-156,207-228,532-600/pluginmetadata+singleowner+descriptor originals/mandatoryintegration personally read. Personaloriginal rulesfull/freshhash/current/no nested. No SSE/bodyphase case or streamcoverage claim. Current compiled ordinal contract corrects initial proposed unrelateddescriptor witness; unconditionalfallback stillproves target falsePASS. No runtimepredicate defect/execution/mutation/supportcredit."
+}

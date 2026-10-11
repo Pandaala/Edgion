@@ -1,0 +1,103 @@
+{
+  "reviewer": "/root/verify_seed",
+  "complete": true,
+  "kind": "independent-candidate-verification",
+  "approvals": {
+    "ARCH-001": {
+      "reviewer": "/root/verify_seed",
+      "complete": true,
+      "disposition": "confirmed",
+      "approved_input_sha256": "bf9a2acb131c432be96dd7ef1c19ed6c92b312e071243ef93ad7e8c5949f84ff",
+      "approved_claim_sha256": "653d9970c0caa2c031bc76d2689a0ffd225d99ea1e6446da43b879d7f30835c9",
+      "evidence": {
+        "edgion-gateway/src/plugins/runtime/traits/session.rs": "df61ce697bef246477efa045afd23d5667309c8c010026ecbe971f9d36344b3b",
+        "edgion-gateway/src/ctx.rs": "5248ecbfe30c102b4e746c65672b4909fccc0b261f2840a924a25f2cb749c629",
+        "edgion-gateway/src/plugins/runtime/session_adapter.rs": "3d1afbfca15a04e425191d5e6acaabcc7a41b86c9b620626756fc7a21456046e"
+      },
+      "drift_at_checkpoint": []
+    },
+    "ARCH-002": {
+      "reviewer": "/root/verify_seed",
+      "complete": true,
+      "disposition": "confirmed",
+      "approved_input_sha256": "7016c2dd83168ab8f6c6a350686770f7779495034df11053d897aed209d03924",
+      "approved_claim_sha256": "52268542e863d5807d379facec0c14fdb1b9fd6f94688185d4510c72d4cdbd92",
+      "evidence": {
+        "edgion-gateway/src/plugins/runtime/traits/session.rs": "df61ce697bef246477efa045afd23d5667309c8c010026ecbe971f9d36344b3b",
+        "edgion-gateway/src/ctx.rs": "5248ecbfe30c102b4e746c65672b4909fccc0b261f2840a924a25f2cb749c629",
+        "edgion-gateway/src/plugins/runtime/session_adapter.rs": "3d1afbfca15a04e425191d5e6acaabcc7a41b86c9b620626756fc7a21456046e",
+        "edgion-gateway/src/request_body/storage.rs": "e4b3f891f138f1bff617c95d5b3293151467c01707d71530db50eaeaaf8f0dac",
+        "edgion-gateway/src/request_body/state.rs": "47e036ef9a725668ee7b052ae2bb26c76c2baf98f49d830617fbb933cc8e91da",
+        "edgion-gateway/src/request_body/state/enabled.rs": "92e0ba87c8851d29fc01ee51def141662f16b0550db11c2c9fb875b41071850a",
+        "edgion-gateway/src/request_body/operation.rs": "e7bd43f32b45613ee6bc425e696f8a8b2be531dda7cd91e867aadf0881c6b534",
+        "edgion-gateway/src/request_body/body_scanners.rs": "a54fba94ea1ee34d21f45e54c9d7687a3e6483e48ccbccaf5f87509fe5fcc95c"
+      },
+      "drift_at_checkpoint": []
+    },
+    "ARCH-003": {
+      "reviewer": "/root/verify_seed",
+      "complete": true,
+      "disposition": "confirmed",
+      "approved_input_sha256": "2ac809469fa5cd7a8ef30aef229cc320f04035c924c3c78b8c643783f8fa3b6c",
+      "approved_claim_sha256": "de9cf48556102f9ea204f9d2cd72233a17a776d92ed5c90b57b52780ef8c2843",
+      "evidence": {
+        "edgion-gateway/src/plugins/runtime/session_adapter.rs": "3d1afbfca15a04e425191d5e6acaabcc7a41b86c9b620626756fc7a21456046e",
+        "edgion-gateway/src/runtime/server/error_response.rs": "996e89144485d877e11d235f2c4ae58885676e19f11689b879be080a2844d818"
+      },
+      "drift_at_checkpoint": []
+    },
+    "ARCH-004": {
+      "reviewer": "/root/verify_seed",
+      "complete": true,
+      "disposition": "confirmed",
+      "approved_input_sha256": "98dbcb688489aea39463d87cb80107055c897398c6c6ac47c7f352f674f4fa82",
+      "approved_claim_sha256": "4f23a0636d3d220622d0073b39134087f33f157beda990f2317b0b7de27a72bb",
+      "evidence": {
+        "edgion-gateway/src/ctx.rs": "5248ecbfe30c102b4e746c65672b4909fccc0b261f2840a924a25f2cb749c629",
+        "edgion-gateway/src/routes/http/match_unit.rs": "05d7510e81cb3bb4e3ee3b85526120ea8af56a4f09f89eeefd9665541a2052dc",
+        "edgion-gateway/src/observe/access_log/log_ext.rs": "c03ccc5d39bea1b13b023f6fb04d978667fa81d6e4375344a8a5a1fcfe42ec53",
+        "skills/04-review/uri-normalization/mandatory-design/normalization-contract.md": "8e4d1037e1659df73e005c7552c393435124b5753ec232d8ab2fdf3e578e853d"
+      },
+      "drift_at_checkpoint": []
+    },
+    "ARCH-005": {
+      "reviewer": "/root/verify_seed",
+      "complete": true,
+      "disposition": "confirmed",
+      "approved_input_sha256": "5426b608437e8700a15ed3b16c375295771b5426d55eb56501b211e0a069c9fe",
+      "approved_claim_sha256": "ae989bccf5a026daee9a1ba06576ebf58192da40cc0e2bfee5abecc1ff640611",
+      "evidence": {
+        "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": "70ea787d34a9a4652adfe131ba66049d2544b381b2034194db519567fe87ead0",
+        "edgion-gateway/src/plugins/runtime/entry_bundle.rs": "67671e98466d8d8be2f1d2cf0533b66e7f2150d9d40dca77af21b8cea0ecf680",
+        "edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs": "e36642b6cc73c0e52fad939c9ad994725d5b40bb99f6c9bd3aabf5e8c7606551",
+        "edgion-resources/src/resources/edgion_plugins/validate.rs": "4684ace540889d54ce341c38d90b4f7fa0d8947b9beda405be8edcf9f9bfd488",
+        "skills/04-review/h2-grpc/regression-guards/grpc-json-transcoder-admission-and-outcomes.md": "14a332e2e51c9c8ac01a9d718df74f12e681450c6465c2057484a0d0d35790f4",
+        "skills/04-review/plugin-runtime/intentional-design/plugin-runtime-god-match.md": "cc7a7d9e8592298e138b99ba19244c6dd19edc14dd0f62fb1db861916ff7214b",
+        "skills/04-review/plugin-runtime/intentional-design/add-from-builders-duplication.md": "232032fbbf605ffe44d26a86f9cc09dcc52da58cd0a5dd45158ef70d3ee2663b"
+      },
+      "drift_at_checkpoint": []
+    },
+    "ARCH-006": {
+      "reviewer": "/root/verify_seed",
+      "complete": true,
+      "disposition": "confirmed",
+      "approved_input_sha256": "599490bfee18263d9d8ad2fd4551b556c752c1edba7bd29b305e43a6a0fe1a0d",
+      "approved_claim_sha256": "2bb7f36b9791c6581dbc8c633c422ff991bd6afc13ace275209f275ea344dc3f",
+      "evidence": {
+        "edgion-gateway/src/plugins/runtime/body_gate.rs": "4995c47107514edbb1e56b574c6f4bbc706d200442c6d098cc32aca616c63ebe",
+        "edgion-gateway/src/plugins/http/hmac_auth/plugin.rs": "d601f7a7483f7f9809b4a62ddaad5eada78db0c40e9582e840acd47d0dc6fedd",
+        "edgion-resources/src/resources/edgion_plugins/body_requirement.rs": "26d496894096926576662cfc29f4e66f644ac7e2f21993c2362ecfb242f1cc2e",
+        "edgion-resources/src/resources/common/byte_size.rs": "767646f76632ffd8b33e0529a79a44cafaa7744fadcab3465b219f3ec68ba36d",
+        "skills/04-review/cpu-memory/regression-guards/header-hmac-condition-verifier-prebuilt.md": "d2e87acc573d14d06e451702c498332f2e3d588a6d8a2a72eee230d99cb7649f",
+        "skills/04-review/http-body/regression-guards/request-body-gate-lazy-materialization.md": "a63a48aa39d938fdd1fdaa281a3b5cbe796a21e15d1bc00034e53df21fb93dc5"
+      },
+      "drift_at_checkpoint": []
+    }
+  },
+  "limitations": [
+    "Source-specific static recommendations; no fresh tests, allocation measurements or borrowed mock lifetime implementation proof.",
+    "Candidate revalidation adds no primary coverage; active WAF implementation is not accepted by this review."
+  ],
+  "scoped_revalidation": "Original WAF06 plan and exact trait/context/adapter changes assessed; ARCH001 removed obsolete fixed operation count.",
+  "latest_revalidation": "Independent WAF source-window equality guard and trait documentation delta inspected; old three roots survive. WAF implementation acceptance excluded."
+}

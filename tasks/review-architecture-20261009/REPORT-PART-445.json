@@ -1,0 +1,505 @@
+{
+  "partition": "PART-445",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/encrypted_active_health_checks.rs",
+      "sha256": "d92863c855adc31a30d4bfff2e7495d7f3de5b598ab2eb7c1fbc9e6a8e42e959",
+      "fully_read": true,
+      "disposition": "Full373 lines; explicit transport/CA/mTLS/expiry/rotation independent health assertions; scoped K8s exception retained. No finding."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/ext_proc_tls_policy_recovery.rs",
+      "sha256": "6ecc2c8891b9daac60e7972e97372671519b37b216077fb8530efc18864b246d",
+      "fully_read": true,
+      "disposition": "Full741 lines; dedicated processor/material/constructor failures/failclosed/counters/restoration; retain real transitions. No finding."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/form_json_transform.rs",
+      "sha256": "eac9c0aee0a0dcddf80cda59e130e7419ccb385f732b716050e1264b33aab48d",
+      "fully_read": true,
+      "disposition": "Full44 lines; ARCH264 supplement FormToJson initial versus retained JsonToForm final."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/gateway_class_params_flap.rs",
+      "sha256": "f6952484aaddb864bfbe103cb3d87967d2d0ea9ed674af8726bbff6881451509",
+      "fully_read": true,
+      "disposition": "Full60 lines; ARCH264 failure-after-EGC-create skips delete; happy path returns missing baseline. Native GatewayClass status correct."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/gateway_dynamic.rs",
+      "sha256": "ea0987df9155f5acbacbd768d9afd32bbb6f779dbe2da9a3822d0ccba08318d8",
+      "fully_read": true,
+      "disposition": "Full99 lines; ARCH264 listener/hostname/method retained mutations. CurrentStatus/controller projection correct; optional deletion list accepted."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/graphql_guard.rs",
+      "sha256": "da587e221590d7f2512dd058b07a1ff0aa1f0e598cb20b91886aef0ac9085a03",
+      "fully_read": true,
+      "disposition": "Full169 lines; ARCH304 publication gap; ARCH264 failure-after-strict, not universal repeat failure; supporting ARCH266 flat lookup migration."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/graphql_operation_router.rs",
+      "sha256": "c8fdf7b9b3cd20e4d10ae259ba18f2c5727b2a119ea9d453bccfa54a9bc00c10",
+      "fully_read": true,
+      "disposition": "Full92 lines; ARCH304 gap; ARCH264 finalusers-to-orders/grant cleanup failure; preserve identity/sibling/grant assertions. Supporting Route-parent predicate differs from flat lookup."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/graphql_rate_limit.rs",
+      "sha256": "a654c0815b7a692e6415216941e69ec6f47da7d639194420674830830dfe0e1a",
+      "fully_read": true,
+      "disposition": "Full118 lines; ARCH304 gap; ARCH264 invalidSDL initial versus validrootquota final; ARCH266 flat lookup migration. Fresh quota keys accepted."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/graphql_safelist.rs",
+      "sha256": "6f68f3fd3e62905c5909d8e4bc14b3c8232e3e4ed42471a0398d7a3a72c41183",
+      "fully_read": true,
+      "disposition": "Full62 lines; ARCH304 gap; ARCH264 initialpong200 versus revoked403 final; ARCH266 flat lookup migration."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/grpc_json_transcoder.rs",
+      "sha256": "ff600bfbe9bbf8c48cea2dbe5b4bf129a4aee31b69e4dc8449d9db7fdfb8c23c",
+      "fully_read": true,
+      "disposition": "Full47 lines; ARCH304 gap and actual DNS migration seam; ARCH264 failure-only restoration, happy descriptor source identical; ARCH266 flat lookup migration."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/grpc_route_delegation_dynamic.rs",
+      "sha256": "ca6f288ba891980a6f9c389636ff8eecec52856949ff035e5379d61e87fb2af5",
+      "fully_read": true,
+      "disposition": "Full50 lines; ARCH264 SayHello initial versus StreamNumbers final; preserve unary/streaming inversion."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/http_route_duplicate_headers.rs",
+      "sha256": "729a523ed67a1edc34ad6faed219a25210b04c10fc3af90bba34ffe48e383d95",
+      "fully_read": true,
+      "disposition": "Full116 lines; actual reordered-match, restored generation, absence and cleanup across outcomes, real identity first-name-wins. No finding."
+    }
+  ],
+  "candidates": [
+    "ARCH-304"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Personal full1-464 retained unchanged; fresh1-464 bounded rereads/gap recovery."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full1-136 original."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full1-342 retained; fresh80-120,225-275 original gates."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full1-86 original."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full1-78 original."
+    },
+    "skills/05-testing/SKILL.md": {
+      "sha256": "4ad0fb8f8a15693ec04116e8224095c6696bbe1e3e63f0a5528053e560466343",
+      "scope": "Full1-79 original."
+    },
+    "skills/04-review/testing/SKILL.md": {
+      "sha256": "11d71f0b85ff6695f99019bad1dc44c2520ec79eb185d93032bf8dda6d609271",
+      "scope": "Full1-57 original."
+    },
+    "skills/05-testing/01-integration-testing.md": {
+      "sha256": "e260042b508fa0956873d1b3c059531f1733a7c15423c548081afb71703a10e1",
+      "scope": "289-395 fresh;289-535 personally retained unchanged."
+    },
+    "skills/04-review/backends/intentional-design/active-health-check-transport-is-independent.md": {
+      "sha256": "e3a0e5af0670d6707917122aa7624fbaa03f2673966c305470ef4388d9bc23f5",
+      "scope": "Full1-118 original personally read."
+    },
+    "skills/04-review/backends/regression-guards/active-health-port-validation.md": {
+      "sha256": "8990634349da147103b4a70b8392dbd29d3210e9600d741e43d1e1751073494f",
+      "scope": "Full1-105 original personally read."
+    },
+    "skills/04-review/ext-proc/regression-guards/unsupported-outbound-tls-identity-fails-closed.md": {
+      "sha256": "269b7ec7f32c17ef7aaf4a046d0d144967a5524e53f8da6f1ad5d6cc584b8b29",
+      "scope": "Full1-123 original personally read."
+    },
+    "skills/04-review/rate-limit/regression-guards/graphql-guard-selected-shape.md": {
+      "sha256": "459b92ef1f955fab6a7d1940624b928702ce483c0a6bb2725d680fb5fab3874d",
+      "scope": "Full1-89 original personally read."
+    },
+    "skills/04-review/rate-limit/regression-guards/graphql-static-safelist.md": {
+      "sha256": "88673418784202ccec39fff317445fae0a7acbac3e72c0a5f61db581d82ed7ad",
+      "scope": "Full1-34 original personally read."
+    },
+    "skills/04-review/routing/regression-guards/graphql-operation-router-declared-backends.md": {
+      "sha256": "6290109de61e79248cd6b29a5063be5c300d7ec2875149870112613324aeed21",
+      "scope": "Full1-52 original personally read."
+    },
+    "skills/04-review/rate-limit/regression-guards/graphql-query-cost-budgets.md": {
+      "sha256": "eac2cd61092931fc5e6dac43fe348481bbd1c56941ba9be03bef95fbd41dfc7d",
+      "scope": "Full1-168 original personally read."
+    },
+    "skills/04-review/h2-grpc/regression-guards/grpc-json-transcoder-admission-and-outcomes.md": {
+      "sha256": "14a332e2e51c9c8ac01a9d718df74f12e681450c6465c2057484a0d0d35790f4",
+      "scope": "Full1-184 original personally read."
+    },
+    "skills/04-review/handler-requeue/intentional-design/controller-06-gatewayclass-egc-no-gateway-requeue.md": {
+      "sha256": "51b86184cd7a4464225d165477497df7283380a9739fe8a3bd345adc252a677b",
+      "scope": "Full1-87; superseded blanket scope narrowed by page/current source original personally read."
+    },
+    "skills/04-review/routing/regression-guards/http-header-match-first-name-wins.md": {
+      "sha256": "044c0f2a1b8e917995b259d7276ab732c63bd0624c5c0a6846bf8cc5fc3cf96a",
+      "scope": "Full1-126 original personally read."
+    },
+    "skills/04-review/routing/regression-guards/grpc-header-match-first-name-wins.md": {
+      "sha256": "ebc7e5a4f65f17d74881f86b980dde8640cb3337823ae51bd97989cf50903e46",
+      "scope": "Full1-73 original personally read."
+    },
+    "skills/04-review/testing/regression-guards/kubernetes-dynamic-scenario-inventory-parity.md": {
+      "sha256": "0b0f3def4c28d4c556905856f6df45429506625764203d8a3a685ffd981e15af",
+      "scope": "Full1-95 original personally read."
+    },
+    "skills/04-review/testing/compatibility-constraints/kubernetes-dynamic-fixture-boundaries.md": {
+      "sha256": "4a4e0a5a3bfd0cdfa5519816ae2f3fc8a4a70cc57a6e5a0991d84953ec4bdc57",
+      "scope": "Full1-42 original personally read."
+    },
+    "skills/04-review/testing/intentional-design/local-shared-topology-single-owner-takeover.md": {
+      "sha256": "eae06ba0841415879d938c00bd164b14596a613e085ee3897df49dfa86af8135",
+      "scope": "Full1-83 original personally read."
+    },
+    "skills/04-review/testing/regression-guards/integration-suite-lifecycle-errors-must-fail.md": {
+      "sha256": "bf3999aaa30bb0bb903e5ae3aafe31442cb60f942ab04c1317c060d29a4f3906",
+      "scope": "Full1-134 original personally read."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "15-85,90-239,428-437,579-620,1680-1765,3670-3807 actual inventory/context/capabilities."
+    },
+    "edgion-tests/src/client/dynamic/registry.rs": {
+      "sha256": "330dd01d67642e19abd188b7e0f336e53b47592f3f99fa00cabbc58a011f60ee",
+      "scope": "Full1-82 retained;1-64 fresh."
+    },
+    "edgion-tests/src/client/dynamic/ctx.rs": {
+      "sha256": "f37853b6b736f31472cc3a0a5a0a16501898b4160647ec5ca4d0f6a69e3e8866",
+      "scope": "Full1-238 actual phase/apply/test-target resolution."
+    },
+    "edgion-tests/src/client/dynamic/apply.rs": {
+      "sha256": "4824e28e2358c529c27c22e21c7a43dff06734cb792d6befd0d9840da99dbbb8",
+      "scope": "Full1-259 personally retained441 unchanged."
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "Fresh1-155; retained445-485,525-610 actual client/cleanup/deadlines."
+    },
+    "edgion-tests/src/client/suites/status/helpers.rs": {
+      "sha256": "6a83e0e2f2f186d7c87d1a005c395340ed681ec04a487a503ea63c4530a23588",
+      "scope": "1-262 actual selected projection and tests."
+    },
+    "edgion-tests/src/client/suites/edgion_plugins/form_json_transform/mod.rs": {
+      "sha256": "41ed18918ab70631b8a9062ac356ecd8f013902730f3e8d003a9b58381e85f0b",
+      "scope": "Full1-92 actual phases."
+    },
+    "edgion-tests/src/client/suites/status/gateway_class_params.rs": {
+      "sha256": "732f942228b7a8639a4684ea59d4d8db4435d21e2a4543918d7f78c6e79ac60b",
+      "scope": "Full1-186 actual native initial/present/missing assertions."
+    },
+    "edgion-tests/src/client/suites/gateway/dynamic/mod.rs": {
+      "sha256": "c17ce425eff60935576f39396ac317431e182d62da157b49f6e89a55ae48b961",
+      "scope": "Full1-14 static exports."
+    },
+    "edgion-tests/src/client/suites/gateway/dynamic/initial_tests.rs": {
+      "sha256": "d64d44b990a9431197ea39c7fa05ebd94fd421f11bc4568e4a34d290d0041de2",
+      "scope": "Full1-91 real initial traffic."
+    },
+    "edgion-tests/src/client/suites/gateway/dynamic/update_tests.rs": {
+      "sha256": "7247608dab1f8f92a64e4a16eb8a6b4d5c75b8150576beb8121a6aad26638e86",
+      "scope": "Full1-125 real updated traffic."
+    },
+    "edgion-tests/src/client/suites/grpc_route/delegation.rs": {
+      "sha256": "3257558c3832c4c8e64a9f68096d2614503601093823e4c5988be9539461d427",
+      "scope": "1-55,322-426 actual dynamic protocol assertions."
+    },
+    "edgion-tests/src/client/suites/edgion_plugins/graphql_guard/mod.rs": {
+      "sha256": "3fe6645712fbbfd832e5b7da9183fa042718a29ce1942f1f728f541e9786fcf2",
+      "scope": "1-126,276-432 all actual dynamic assertions/status helper."
+    },
+    "edgion-tests/src/client/suites/edgion_plugins/graphql_operation_router/mod.rs": {
+      "sha256": "5e00db3ccd00285de847357ab4907401e31d398c10e9394557c087c708d3dad7",
+      "scope": "1-49,314-400 all actual dynamic backend/grant/parent assertions."
+    },
+    "edgion-tests/src/client/suites/edgion_plugins/graphql_rate_limit/graphql_rate_limit.rs": {
+      "sha256": "770d4bfa2bc60d0161535854d7b23ac4d6ff0f2d1506d97cded9e1a0a836adea",
+      "scope": "1-198,750-853 actual helpers and all dynamic phases."
+    },
+    "edgion-tests/src/client/suites/edgion_plugins/graphql_safelist/mod.rs": {
+      "sha256": "b522ee06b1fddaa68f78b90b10150a2feecaafa7a4f70a21a7c5205ef300408c",
+      "scope": "1-76,180-266 actual helpers/all dynamic phases."
+    },
+    "edgion-tests/src/client/suites/edgion_plugins/grpc_json_transcoder.rs": {
+      "sha256": "4cfd239187c0958956a417c35484e7a0acf5eb5528f58a3edaddcf7f36a90487",
+      "scope": "1-86,490-577 actual call_traced/IP-only and all dynamic phases."
+    },
+    "edgion-tests/src/client/suites/http_route/match/duplicate_headers.rs": {
+      "sha256": "94019e78ec00df887181d87935df8c7a9896173efffd64b4fb81c5c5aa5a3739",
+      "scope": "Full1-118 actual backend/assertion helper."
+    },
+    "edgion-resources/src/resources/gateway_class.rs": {
+      "sha256": "bdab843bf8665d6f5c6fa2ce33f0c0e5fc3e0e5966a0c14f948fdd3d52999c0e",
+      "scope": "Retained1-135;fresh130-187 native status."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/status_ownership.rs": {
+      "sha256": "16bd392bfa42f032c9c607945b63d6d6d8b349d5195fab665f203df51f988ce7",
+      "scope": "1-105 actual native/simple partition."
+    },
+    "edgion-tests/k8s/scripts/run_k8s_integration.sh": {
+      "sha256": "9c7f539e02edccc91c46908c4b6afe1af3fb867b72c7b6061b613bd2723e641f",
+      "scope": "2160-2245,2980-3025 plus whole-file searches direct IDs; not full read."
+    },
+    "edgion-tests/k8s/scripts/common/run_k8s_dynamic_scenarios.sh": {
+      "sha256": "edf8aa9859ebef675ec7ea8441ca54095b434043f1d7f01cc4adda91a3fdc5f6",
+      "scope": "1-192,284-310,630-655,900-990 fresh;660-785 retained actual staging/reset/execution."
+    },
+    "edgion-tests/k8s/scripts/common/validate_suite_parity.sh": {
+      "sha256": "55cb642237933d96b39c397dba69ed3f1d71f2eeda4be936d2176facc3103a2a",
+      "scope": "130-222,257-287,350-428 actual canonical/direct/manifest/exception parity."
+    },
+    "edgion-tests/k8s/scripts/common/k8s_dynamic_scenarios.tsv": {
+      "sha256": "bb7bd55699de2cd7f27e6f11416de8fda6bdad85af1b1dbf6b82d9a0b46b39f9",
+      "scope": "Full1-57 actual manifest."
+    },
+    "edgion-tests/k8s/scripts/common/k8s_suite_scope_exceptions.tsv": {
+      "sha256": "26630cc0cdd07ff2dd2eade67a752fa941509749557bc01ebcfbdb67474165a0",
+      "scope": "Full1-5 actual exceptions."
+    },
+    "edgion-tests/integration/capabilities.tsv": {
+      "sha256": "6224d0f3efeaed115bc705f2631cbd92b00859a80233b21be8ff8ba720f318a9",
+      "scope": "Full1-26 actual capabilities."
+    },
+    "edgion-tests/k8s/scripts/common/tests/validate_suite_parity_test.sh": {
+      "sha256": "7246a41e129394dd5898b272fa5fd0f28aea1a9ccfbed71f12e3dbf5fb4ceaa8",
+      "scope": "Full1-235 actual tests, not run."
+    },
+    "edgion-tests/k8s/scripts/common/tests/run_k8s_dynamic_scenarios_test.sh": {
+      "sha256": "641f9e75024f68a30a5e9370331d950f5ee4cf061e55b411154dd3952476fe15",
+      "scope": "1-70,198-251,290-353 actual tests, not run."
+    },
+    "edgion-tests/k8s/scripts/common/validate_no_endpoints.sh": {
+      "sha256": "5c7194ddcb0290210a4239cccbebaa88b2172d5abad7b9d405773a034a572e68",
+      "scope": "Full1-38 actual endpoint gate."
+    },
+    "edgion-tests/k8s/scripts/common/endpoint_inventory.sh": {
+      "sha256": "7c704e15e00147ddbb8c7eaf49472e82d54251e186d3eab8b4280e962982fcfa",
+      "scope": "Symbol/contract search only, not full read."
+    },
+    "edgion-tests/integration/scripts/integration/run_integration.sh": {
+      "sha256": "5a6df789c2a894150691b3f50edf85f7ac055961ee0b1cc230291a6b90f85b76",
+      "scope": "1980-2005 plus whole-file direct-ID selection search only."
+    },
+    "edgion-tests/k8s/conf/base/Service_edgion-test_test-grpc.yaml": {
+      "sha256": "0c9ccafb0e5dd04d633b210ab5bc58b6d25eba40e649715115a3d212ef8dff41",
+      "scope": "Full1-15 selector Service."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/Dsl/00_LinkSys_default_redis-test.yaml": {
+      "sha256": "231cf080247ecfb8ffe13e4a045bc4cd3a1894ce19dfea62a21c80a5396b1a84",
+      "scope": "Full1-22 actual edgion-default Redis."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/Dsl/00_Secret_default_redis-test-auth.yaml": {
+      "sha256": "6b42b3e4693e75252cb4f2acd2445ce1c8d87e1feb0a93a70dcc67baaf6e4a24",
+      "scope": "Full1-12 actual dependency fixture."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/RateLimitRedis/01_EdgionPlugins_default_rate-limit-redis.yaml": {
+      "sha256": "feb1de41ad14d5e2123bd7ba9a96adfa92bc52224e5e63653769218db4e947ed",
+      "scope": "1-55 actual working Redis consumer."
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/EncryptedActiveHealthChecks/DynamicTest/initial/resources.yaml": {
+      "sha256": "59cbe9ab031f5cbf8d4fb74ca46837a57948a7568caac5eaf9c5242b2d42953f",
+      "scope": "Full42 actual encrypted fixture."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/ExtProc/DynamicTest/README.md": {
+      "sha256": "80d5db826552ce203b51dfd8a767feb67f88fe74bdf5dee245ce680fd6f725ea",
+      "scope": "Full63 actual fixture ownership."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/ExtProc/DynamicTest/plugin.yaml.tmpl": {
+      "sha256": "48d965c5d0348eade96517805175982bd864cd06503652280fd8185daf664a6d",
+      "scope": "Full19 actual plugin template."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/ExtProc/DynamicTest/route.yaml.tmpl": {
+      "sha256": "2bdccf647d9112e2d9a15884d28e5d1ec3f978ba53a5284f5f807a9cd3337501",
+      "scope": "Full22 actual route template."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/FormJsonTransform/DynamicTest/initial/EdgionPlugins_form-json-transform-dynamic.yaml": {
+      "sha256": "8e87ba94583d14f9a0365c78ba45aee340fe92af6a2088f419868b13038fd852",
+      "scope": "Full10 initialFormToJson."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/FormJsonTransform/DynamicTest/updates/to_json_to_form/EdgionPlugins_form-json-transform-dynamic.yaml": {
+      "sha256": "07ec39d436aa28cbbbbc08a2434630a55383921d8b7795bba21cb9ef967909a2",
+      "scope": "Full10 finalJsonToForm."
+    },
+    "edgion-tests/integration/conf/Status/GatewayClassParamsRef/RefFlap/DynamicTest/delete/egc.txt": {
+      "sha256": "9227d18af61048bfbec9d469b86772eb47cc690949da140bf15afc193133b113",
+      "scope": "Full3 deletion."
+    },
+    "edgion-tests/integration/conf/Status/GatewayClassParamsRef/RefFlap/DynamicTest/initial/GatewayClass_params-flap-class.yaml": {
+      "sha256": "e0837e5fd7bdcbe646e211c644261cfac51279454f4d4890b1166fd540d7444c",
+      "scope": "Full12 initialmissing ref."
+    },
+    "edgion-tests/integration/conf/Status/GatewayClassParamsRef/RefFlap/DynamicTest/updates/to_present/EdgionGatewayConfig_params-flap-egc.yaml": {
+      "sha256": "9e643baff77aa0664ef9a52b61eff9baad2cc28af32b8b6a7bd34baa827e37f7",
+      "scope": "Full5 present generation."
+    },
+    "edgion-tests/integration/conf/Gateway/DynamicTest/initial/Gateway_dynamic-test.yaml": {
+      "sha256": "0627ea9388bd7beb5ea5cfe22825fffd8134daa8d79bace6148bb7e77bc688ee",
+      "scope": "Full17 initial listener."
+    },
+    "edgion-tests/integration/conf/Gateway/DynamicTest/initial/HTTPRoute_hostname_match.yaml": {
+      "sha256": "5d14e12f4bc0259c9b7649bdf5440cd6fb7c3f978b543b7d9b698e25dd560cd9",
+      "scope": "Full21 initial hostname."
+    },
+    "edgion-tests/integration/conf/Gateway/DynamicTest/initial/HTTPRoute_method.yaml": {
+      "sha256": "2ab3abc9cd5414edec5cf96c109ad604ebb061ce5d8a4a8d89e9011657dcc34c",
+      "scope": "Full22 initial GET."
+    },
+    "edgion-tests/integration/conf/Gateway/DynamicTest/updates/Gateway_dynamic-test_update.yaml": {
+      "sha256": "905dc1954f5c5ca9bde5ddc4461f0ac6123edca6b70445f9ab77cc31f0df7111",
+      "scope": "Full17 updated listener."
+    },
+    "edgion-tests/integration/conf/Gateway/DynamicTest/updates/HTTPRoute_hostname_match_update.yaml": {
+      "sha256": "664892c8ffebc2ae35aa3435feac564bfc58bcdd2491e8bad4975e5341742617",
+      "scope": "Full23 changed hostname."
+    },
+    "edgion-tests/integration/conf/Gateway/DynamicTest/updates/HTTPRoute_method_update.yaml": {
+      "sha256": "025310db93648da46dc9d2989ff854a21b75666dcb65e5b4cebe3653af79c429",
+      "scope": "Full22 changed method."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GraphqlGuard/DynamicTest/initial/EdgionPlugins_graphql-guard-dynamic.yaml": {
+      "sha256": "0392f7fe9a26892d69a18534293278ebed3c555f8107b8821f43938c45e07039",
+      "scope": "Full21 initial permissive."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GraphqlGuard/DynamicTest/updates/to_strict/EdgionPlugins_graphql-guard-dynamic.yaml": {
+      "sha256": "f57c11859b3683e80937f376586cf9c9cffda6c4875e70a711ee80d6185e6dfe",
+      "scope": "Full18 strictalias0."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GraphqlGuard/DynamicTest/updates/to_metadata/EdgionPlugins_graphql-guard-dynamic.yaml": {
+      "sha256": "1424b9ada296a0297f7548c4f2195ba0928efbe95b1d31e3cf2569bbdb6bdd4e",
+      "scope": "Full32 final metadata measure; no universal repeat failure."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GraphqlOperationRouter/DynamicTest/initial/EdgionPlugins_graphql-router-dynamic.yaml": {
+      "sha256": "f5294d0c6be21a33e31115beb7d606e93100fe1ebc0433ca45c9a9548c0f04c4",
+      "scope": "Full41 initial users."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GraphqlOperationRouter/DynamicTest/updates/to_switch/EdgionPlugins_graphql-router-dynamic.yaml": {
+      "sha256": "d8ddbd4363f15c3639752770397497c94f13a92b36121fcca52952df200131c4",
+      "scope": "Full41 final orders."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GraphqlOperationRouter/DynamicTest/initial/HTTPRoute_graphql-router-dynamic.yaml": {
+      "sha256": "5e87997b9a686defb2521b635a9773f95d3742a862368ecd28f18f23224b92df",
+      "scope": "Full83 actual route/grant contracts."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GraphqlRateLimit/DynamicTest/initial/EdgionPlugins_graphql-rate-limit-dynamic.yaml": {
+      "sha256": "fbfc2747ee52101b32b1928f4b3fc7ddd6bf4f7e98731387f1692b3e08af65b5",
+      "scope": "Full24 invalidSDL."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GraphqlRateLimit/DynamicTest/updates/to_valid_roots/EdgionPlugins_graphql-rate-limit-dynamic.yaml": {
+      "sha256": "178e6d8dddab71605a617ba75436554c763f08ff3b2104f7e13c38e5d7fcd478",
+      "scope": "Full36 validrootquota."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GraphqlSafelist/DynamicTest/initial/EdgionPlugins_graphql-safelist-dynamic.yaml": {
+      "sha256": "40fc4dbb64fd0345a0fb95bee0424e55aa02422430fe52e4afb322083b15a7a8",
+      "scope": "Full25 initialpong admission."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GraphqlSafelist/DynamicTest/updates/to_revoked/EdgionPlugins_graphql-safelist-dynamic.yaml": {
+      "sha256": "c9dbea84b20b558ea9fec580e6588003ad375fa5fa2a36ee918167fa3fd6c21e",
+      "scope": "Full22 final revocation."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GrpcJsonTranscoder/DynamicTest/updates/invalid/ConfigMap.yaml": {
+      "sha256": "10cc5a2ca161e40204f54af68e2d55e30e400c8a72081902a77a3c153e9fc126",
+      "scope": "Full7 invalid descriptor."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GrpcJsonTranscoder/DynamicTest/initial/00_configmap.yaml": {
+      "sha256": "31b99bb48b72361336440091bcf56c84ddeab4c0e599c9036d0a210354bfce7e",
+      "scope": "Selected1-6 only; opaque encodeddescriptor7 excluded; whole-file hash equality with recovery, not decoded evidence."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GrpcJsonTranscoder/DynamicTest/updates/recovery/ConfigMap.yaml": {
+      "sha256": "31b99bb48b72361336440091bcf56c84ddeab4c0e599c9036d0a210354bfce7e",
+      "scope": "Selected1-6 only; opaque encodeddescriptor7 excluded."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GrpcJsonTranscoder/DynamicTest/delete/resources_to_delete.txt": {
+      "sha256": "acf40450c654f5c2bce9f5513961553210624a4699febd7729c2cf405e2d30b7",
+      "scope": "Full1 owned deletion."
+    },
+    "edgion-tests/integration/conf/GRPCRoute/Delegation/DynamicTest/GRPCRoute_edgion-grpc-deleg-dyn_child.yaml": {
+      "sha256": "2c0547a274e64741b43213fbaf63214b7d88fc75e2e47db1b272c00f9b597f5d",
+      "scope": "Full18 initialSayHello."
+    },
+    "edgion-tests/integration/conf/GRPCRoute/Delegation/DynamicTest/updates/GRPCRoute_edgion-grpc-deleg-dyn_child.yaml": {
+      "sha256": "3ccaf1ef431fb6f7976a886c3156585fb4871604f48ef16ac91a924b37775636",
+      "scope": "Full18 updatedStreamNumbers."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GraphqlGuard/01_Service_graphql-guard.yaml": {
+      "sha256": "a2e7e0ec30c8a1850d726056fe289202584cdd26f0d3a3af3d3f3dcd51c34ea7",
+      "scope": "Full actual local backend/loopback fixture; K8s requires selector Service."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GraphqlGuard/02_EndpointSlice_graphql-guard.yaml": {
+      "sha256": "be8610d20df45fe05ae1e248e449286ca00784bdb093b65d689ff7f56fdc57ca",
+      "scope": "Full actual local backend/loopback fixture; K8s requires selector Service."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GraphqlSafelist/01_Service_graphql-safelist.yaml": {
+      "sha256": "073d679d767f30b1c03ea93a7420cbc8ccd8d552356750e055c83651dc19c0f3",
+      "scope": "Full actual local backend/loopback fixture; K8s requires selector Service."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GraphqlSafelist/02_EndpointSlice_graphql-safelist.yaml": {
+      "sha256": "b00d5b6469e452ea1e2ac6b275109b46963d1de2f4bcdfc0368e1227cd5cd5d4",
+      "scope": "Full actual local backend/loopback fixture; K8s requires selector Service."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GraphqlOperationRouter/01_Service_graphql-core.yaml": {
+      "sha256": "de89dbdf47bf7522d478e5980e396f1f9d587aa3d4a4ac8cbe04dbc9974679f3",
+      "scope": "Full actual distinct backend/namespace/loopback topology."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GraphqlOperationRouter/02_EndpointSlice_graphql-core.yaml": {
+      "sha256": "ec8ada5e869b2eb2669cbf8f33cdb8b3af67d3f1a38d4207206aa4caa20b2913",
+      "scope": "Full actual distinct backend/namespace/loopback topology."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GraphqlOperationRouter/01_Service_graphql-orders.yaml": {
+      "sha256": "3f925cc8064a2f2c62ffaf42d7a2479e6ac7fc0ce7371d40932ccbf56f3b548d",
+      "scope": "Full actual distinct backend/namespace/loopback topology."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GraphqlOperationRouter/02_EndpointSlice_graphql-orders.yaml": {
+      "sha256": "0ff3c6f408c0665b7a1f8407d18be4758d4506216b5ab179acc8b458f7f9921a",
+      "scope": "Full actual distinct backend/namespace/loopback topology."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GraphqlOperationRouter/01_Service_graphql-remote.yaml": {
+      "sha256": "f007671e5004a0437240d26379335f81a7698a556fe80141d9122505d168f4dd",
+      "scope": "Full actual distinct backend/namespace/loopback topology."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GraphqlOperationRouter/02_EndpointSlice_graphql-remote.yaml": {
+      "sha256": "e9634dca5cc38047e7288414ac354f8d845f807b074966ec700c7bc63bfaa25f",
+      "scope": "Full actual distinct backend/namespace/loopback topology."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GraphqlOperationRouter/01_Service_graphql-users.yaml": {
+      "sha256": "7a04027d66a64e1d84aa61e5305e987b48241b5a18ea4a2dad0976d1e94d55b5",
+      "scope": "Full actual distinct backend/namespace/loopback topology."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GraphqlOperationRouter/02_EndpointSlice_graphql-users.yaml": {
+      "sha256": "81d7f2721397e43ee515dd7c7750b0fcaa0661b8b4c674515407a8a43c9e3cba",
+      "scope": "Full actual distinct backend/namespace/loopback topology."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GrpcJsonTranscoder/00_backends.yaml": {
+      "sha256": "6e58a008df8f476b368346305512556378fc7b33194f42647f27fb254d0afcb2",
+      "scope": "Full1-106 actual unary/streaming/descriptor test backends."
+    }
+  },
+  "limits": "All12 primaries69258bytes1971lines fully read and fresh STATE hashes asserted. Static repository-only analysis no execution/checker/build/test/network/Git/file writes. Supporting actual scopes only;70 dynamic fixtures fullyread and2 opaque descriptors selected1-6, encodedpayload excluded. Minimal decisive subset recorded. Historical parity not current success; missing old task files not invented approval. No incidents/performance claim.",
+  "supplemental_candidates": {
+    "ARCH-264": {
+      "status": "awaiting-independent-extension",
+      "scope": "9 scenario owners/form transform/GcParams/Gateway/four GraphQL/transcoder/GRPC delegation and actual phase suites",
+      "evidence": "Failure-only GcParams/transcoder; Guard successful repeat not universally fails; others finaldifferent authored generations. Keep K8s wrapper reset and optional deletion list acceptance."
+    },
+    "ARCH-266": {
+      "status": "awaiting-independent-extension",
+      "scope": "GraphqlGuard408-424,Safelist242-258,RateLimit132-145,Transcoder534-551 flat EdgionPlugins helpers; Router365-392 all-parent demands distinct attachment concern",
+      "evidence": "Conditional K8s migration prerequisite while five entries absent; no current K8s success claim. GatewayClass nativeconditions and GatewayDynamic selectedcurrentStatus are counterevidence."
+    }
+  }
+}

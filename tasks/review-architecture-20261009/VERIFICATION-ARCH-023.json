@@ -1,0 +1,14 @@
+{
+  "reviewer": "/root/verify_seed",
+  "complete": true,
+  "disposition": "confirmed",
+  "approved_input_sha256": "6d64426ed66f0eb42d95750eebe15b8e6def95019ebd565bbab54d567e0d975f",
+  "approved_claim_sha256": "26a44d9100f7bdcaf71132c6170e2d107ffc437f3ce9ec53261b5f6806050576",
+  "evidence": {
+    "edgion-gateway/src/backends/policy/backend_traffic/store.rs": "0a35add8c64ab31f105772c87d9e80182ca68e265e1b750fd7221125cc321610",
+    "edgion-resources/src/resources/edgion_backend_traffic_policy.rs": "fad34c6fa53efb534a02987098ceb7ffba45f3a4bc67bddfe66923db75a42c6e",
+    "skills/04-review/backends/regression-guards/ebtp-atomic-service-snapshot.md": "fd5fb614710952666de22b0caa0a2325787c468b04ca02f3a0629a8c18c0d7be",
+    "skills/04-review/backends/regression-guards/ebtp-ai-target-limits-preserve-service-fanout.md": "2df691e2058c2d768917196fa3ccd79c54a5d6f7c3afc46806ed29b74b81d6f9"
+  },
+  "limits": "Static ownership/storage and supported-input derivation. No heap benchmark or executed reproducer; current ordinary Controller emits Update even at creation. No primary coverage credit."
+}

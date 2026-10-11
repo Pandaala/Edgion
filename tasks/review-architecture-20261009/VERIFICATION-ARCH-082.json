@@ -1,0 +1,49 @@
+{
+  "candidate": "ARCH-082",
+  "complete": true,
+  "verifier": "/root/analyze_conversion",
+  "decision": "confirmed",
+  "input_sha256": "1adb21b6ea2299075414ca7b28ff868da3ea5f64c99867c6451f25271e238ed1",
+  "approved_claim_sha256": "c8fce48353fe4045e9c47b0e0bef3daea83c6fd5a399e73f26de542a9bab98d7",
+  "evidence": [
+    "Same authorized canonical store admits alternate casing.",
+    "Successful counter captures raw req.kind, direct emit bypasses bounded_kind_label.",
+    "Existing static projection feasible; cardinality guard soft admission accurately qualified."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "edgion-controller/src/fed_sync/fed_client/mod.rs": {
+      "sha256": "b677aece92cd9df4e97b1d8f2bbcf849907681a75f99b3d4c03eaeed20051ccb",
+      "scope": "690-878 actual admission/producer."
+    },
+    "edgion-controller/src/api/authz_classifier.rs": {
+      "sha256": "5bb5dfe2f481ec663cdd614345b78e3500fd46204575ef0a27409e2b9d415474",
+      "scope": "Full canonical normalization/bounded projection."
+    },
+    "edgion-common/src/observe/fed_metrics.rs": {
+      "sha256": "50df2c6ffde3fb8e9fc8946b5badd8ad895ff397d9d49ca8e934a42b8fd77489",
+      "scope": "95-125 metric consumer."
+    },
+    "edgion-common/src/observe/cardinality_guard.rs": {
+      "sha256": "225c112543913b857b79ab24dc9066001192ad04e85193bcae614e08fb3050f4",
+      "scope": "16-24,70-141 concurrent soft cap."
+    },
+    "edgion-controller/tests/unit/api/authz_classifier_test.rs": {
+      "sha256": "e08396e4d3a24fc9875c986e2564eccafe32e9c1b30fd1cf4c901fe7183d9588",
+      "scope": "205-221 normalization/projection."
+    },
+    "edgion-common/tests/unit/observe/fed_metrics_test.rs": {
+      "sha256": "0467c139f005eb4f2d964f822880b2f05379058651c27c813bd8ce15ed4e63c6",
+      "scope": "136-183 labels."
+    },
+    "skills/01-architecture/01-controller/11-authentication-authorization.md": {
+      "sha256": "9e3878e3dac96ccb305f0373f4cead3e009f5cd58ebc216332dd482072abf2f2",
+      "scope": "95-115 kind policy."
+    },
+    "skills/03-coding/observability/01-metrics.md": {
+      "sha256": "7a498385055f6b4b701edc3259b1e266b38381d8d61f59036d625ec4cbbab21b",
+      "scope": "1-39 cardinality original."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

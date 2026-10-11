@@ -1,0 +1,67 @@
+{
+  "partition": "PART-468",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/direct_endpoint/direct_endpoint.rs",
+      "sha256": "acdfd27a8ca9401575dc7e6491921b5bbe5ff08c1ecd55a1f207bc338bcf63d9",
+      "fully_read": true,
+      "disposition": "Full1-152. Concrete selected IP:30001 success dye, membership403 and missing-input fallback/no-success-dye; accepted ownership. Header observation does not claim body completion. Uses canonical selected context port."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/direct_endpoint/mod.rs",
+      "sha256": "8806835d9c3075a2c234262f62c2bcd3c306884d2190e6532d2fab291de56b3b",
+      "fully_read": true,
+      "disposition": "Full1-2 exports and actual registration; no issue."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "edgion-gateway/src/plugins/http/direct_endpoint/plugin.rs": {
+      "sha256": "8faeb4c08c558c84aedf454d36ecc0240e414f79e3cb478a347557fe09e1cdc8",
+      "scope": "Full actual plugin."
+    },
+    "edgion-gateway/tests/unit/plugins/http/direct_endpoint/plugin_test.rs": {
+      "sha256": "58e352396016782cd096baf83ee95ab5be4fd3794d0c41e6f82b57cf9148f83a",
+      "scope": "Full actual plugin unit bodies."
+    },
+    "edgion-gateway/src/backends/validation.rs": {
+      "sha256": "acb04a2021e945e87301e9352bf7ea365f4c283ad170f1e9d4873470a4ca2201",
+      "scope": "Full canonical backend validation."
+    },
+    "edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs": {
+      "sha256": "1e78b4bf440134f3f8949ab883bc1f767c0e70055164818c35fc0e2251b25eaf",
+      "scope": "1498-1555 actual selected peer."
+    },
+    "edgion-tests/k8s/scripts/common/run_test_client.sh": {
+      "sha256": "8ab474c68710e307baefb98ea93d45ad4cd741a01be2f8a7b2156b46a673fde1",
+      "scope": "208-223 current Kubernetes endpoint-inventory producer."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/DirectEndpoint/EdgionPlugins_default_direct-endpoint.yaml": {
+      "sha256": "9f7005a6ae297bbd5c5c8695880d272a069a8e3eeb2cb5ecf699fa3dd6457a28",
+      "scope": "Full local plugin."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/DirectEndpoint/EdgionPlugins_default_direct-endpoint.yaml": {
+      "sha256": "2ac5d9cdfc0786fe71b8a8798e2730a7eb203bb5328ef2176dc030d274b479ee",
+      "scope": "Full Kubernetes plugin."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/DirectEndpoint/EndpointSlice_default_direct-endpoint-backend-slice.yaml": {
+      "sha256": "952a5d18a2324c91484117918b0eca57da8ab9821ff728fae791f80e07a0fa03",
+      "scope": "Full authoritative local endpoint."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/DirectEndpoint/Service_default_direct-endpoint-backend.yaml": {
+      "sha256": "e010b52129f2e2013502d9dd0317525bd88974a1b65681de7ddb2aa5bd9d43a4",
+      "scope": "Full Kubernetes selector-backed Service."
+    },
+    "skills/04-review/routing/regression-guards/backendref-upstream-jump-plugin-scope.md": {
+      "sha256": "6e8adbd3c4157f955b25f4c1ddee728af24cdab9ba44884936e21731cb145e73",
+      "scope": "Full original explicit route ownership contract."
+    },
+    "skills/04-review/routing/regression-guards/shared-service-backend-ref-predicate.md": {
+      "sha256": "17aa6b12c0fd8d2a778658a21671a4297439157ef4bf49afac020f1d322090e5",
+      "scope": "Full original canonical predicate."
+    }
+  },
+  "limits": "Complete static analysis; real endpoint-inventory producer falsifies fixed-loopback concern. Both fixture trees and actual selected routes/Services read. No ARCH296 extension: framework199-223 borrows ctx.http_port. No tests/builds/execution/network/Git mutation; supporting reads zero coverage. Original rules personally retained and fresh-checked, no nested rules."
+}

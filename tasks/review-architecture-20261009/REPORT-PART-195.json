@@ -1,0 +1,179 @@
+{
+  "partition": "PART-195",
+  "analyst": "/root/verify_ip_union",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-resources/src/grpc_transcoding/codec.rs",
+      "sha256": "50a01ca253565a170b6eaf49745802a205cdcd0b6708a21d7711fe7c5c4c7235",
+      "fully_read": true,
+      "disposition": "Accepted bounded trusted descriptor/normalization/codec/wire ownership; no distinct finding"
+    },
+    {
+      "path": "edgion-resources/src/grpc_transcoding/descriptor-admission.md",
+      "sha256": "8370fa4d7d2c2b022858a856774fb0fc9da8c440f7907aa8688563ee3fb94c25",
+      "fully_read": true,
+      "disposition": "Accepted bounded trusted descriptor/normalization/codec/wire ownership; no distinct finding"
+    },
+    {
+      "path": "edgion-resources/src/grpc_transcoding/descriptor.rs",
+      "sha256": "89bfabf22445c053e3ba9dde138a4d6656f2352829cc3f3be085274d19c991e7",
+      "fully_read": true,
+      "disposition": "Accepted bounded trusted descriptor/normalization/codec/wire ownership; no distinct finding"
+    },
+    {
+      "path": "edgion-resources/src/grpc_transcoding/descriptor_admission.pb",
+      "sha256": "567baf6e2d5ae6b85e2fc9a3d7ab7e650b94fe1b933b56064350794e340aa14b",
+      "fully_read": true,
+      "disposition": "Accepted bounded trusted descriptor/normalization/codec/wire ownership; no distinct finding"
+    },
+    {
+      "path": "edgion-resources/src/grpc_transcoding/mapping.rs",
+      "sha256": "92b90979da32fe590dd385a8e5d2548949744641ec12a08f4080ad38bf4b2ccf",
+      "fully_read": true,
+      "disposition": "ARCH-054 strict decoder borrow opportunity"
+    },
+    {
+      "path": "edgion-resources/src/grpc_transcoding/mod.rs",
+      "sha256": "a3513cc67cf25640209d196aac3e6b27b0c5a319e02e9df495f230609d844b63",
+      "fully_read": true,
+      "disposition": "Accepted bounded trusted descriptor/normalization/codec/wire ownership; no distinct finding"
+    },
+    {
+      "path": "edgion-resources/src/grpc_transcoding/normalize.rs",
+      "sha256": "4e9b1867ad16555bb153658f0a1e68971e04e786abdcac5090d8000382e420a4",
+      "fully_read": true,
+      "disposition": "Accepted bounded trusted descriptor/normalization/codec/wire ownership; no distinct finding"
+    },
+    {
+      "path": "edgion-resources/src/grpc_transcoding/serialize.rs",
+      "sha256": "81f23fdd243a4862b80a015ee0c930853aa4ed5db683b1c492c478d844a6237b",
+      "fully_read": true,
+      "disposition": "Accepted bounded trusted descriptor/normalization/codec/wire ownership; no distinct finding"
+    },
+    {
+      "path": "edgion-resources/src/grpc_transcoding/wire.rs",
+      "sha256": "6569d442bd80f417132544707367dbeffa048c58c198b356c7ec5cd24932fa37",
+      "fully_read": true,
+      "disposition": "Accepted bounded trusted descriptor/normalization/codec/wire ownership; no distinct finding"
+    }
+  ],
+  "candidates": [
+    "ARCH-054"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Personally full read by analyst, original rules/pages where applicable"
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Personally full read by analyst, original rules/pages where applicable"
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Personally full read by analyst, original rules/pages where applicable"
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Personally full read by analyst, original rules/pages where applicable"
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Personally full read by analyst, original rules/pages where applicable"
+    },
+    "skills/01-architecture/05-resources/SKILL.md": {
+      "sha256": "dae4740e05545a9d674199070cc49a6559fd921e69ae0d08dab19dc51d3efef6",
+      "scope": "Personally full read by analyst, original rules/pages where applicable"
+    },
+    "skills/01-architecture/05-resources/00-schema-transport-contract.md": {
+      "sha256": "d20e74c1c7ccf6183f893bc919767a27bd3fbb47486415d14651a76fdef5a597",
+      "scope": "Personally full read by analyst, original rules/pages where applicable"
+    },
+    "skills/04-review/h2-grpc/SKILL.md": {
+      "sha256": "3093a4094e25cf3f6e094c46688d71c86e7729a8795cdbca92c9880d2d6ade5c",
+      "scope": "Personally full read by analyst, original rules/pages where applicable"
+    },
+    "skills/04-review/h2-grpc/regression-guards/grpc-json-transcoder-admission-and-outcomes.md": {
+      "sha256": "14a332e2e51c9c8ac01a9d718df74f12e681450c6465c2057484a0d0d35790f4",
+      "scope": "Personally full read by analyst, original rules/pages where applicable"
+    },
+    "skills/04-review/resources/regression-guards/grpc-descriptor-configmap-ownership.md": {
+      "sha256": "50ae4ad57ee78f127b7b6b6d9ed78ba00edc598d5e065b7e83f070998a37946d",
+      "scope": "Personally full read by analyst, original rules/pages where applicable"
+    },
+    "docs/en/user-guide/http-route/filters/edgion-plugins/grpc-json-transcoder.md": {
+      "sha256": "d5245022a3c432d28f260db20fca1be7533f366ac52fc36c0415086d148c83e0",
+      "scope": "Personally full read by analyst, original rules/pages where applicable"
+    },
+    "edgion-resources/Cargo.toml": {
+      "sha256": "bc38ae0ce6c47097b1ff571f7dd92c0e7284c601918e43d7ee68d520f734121b",
+      "scope": "Personally full read by analyst, original rules/pages where applicable"
+    },
+    "edgion-resources/tests/unit/grpc_transcoding/mod_test.rs": {
+      "sha256": "668dca7c85502cd4945fe00ca6f52b8014fdc0984287abee9731c22b919eb574",
+      "scope": "Personally full read by analyst, original rules/pages where applicable"
+    },
+    "edgion-resources/tests/unit/grpc_transcoding/normalize_test.rs": {
+      "sha256": "fd7cbac621035108ec8dfc68d06c8565469e4676ec06de7fa99a33c3791a545f",
+      "scope": "Personally full read by analyst, original rules/pages where applicable"
+    },
+    "edgion-resources/tests/unit/grpc_transcoding/serialize_test.rs": {
+      "sha256": "3b1a3bc02f0920e442bcc26f28837b7d65bbf7e9af7b89f47159335ea4685f9a",
+      "scope": "Personally full read by analyst, original rules/pages where applicable"
+    },
+    "edgion-resources/src/uri_utils.rs": {
+      "sha256": "103636182e26c3560623a7f2af47ebdefaf660cf3ba8a75675b551937f3c8f87",
+      "scope": "Personally full read by analyst, original rules/pages where applicable"
+    },
+    "edgion-gateway/src/plugins/http/grpc_json_transcoder/plugin.rs": {
+      "sha256": "1e64bcce8c31495f2009f6ecde38b51ff1acbc3319a6b3406512d0c39f10894a",
+      "scope": "Personally full read by analyst, original rules/pages where applicable"
+    },
+    "edgion-gateway/src/plugins/http/grpc_json_transcoder/budget.rs": {
+      "sha256": "8dc2901a573c63b2da82aac8a1a8e095c662d776901c6149153e254104e76f38",
+      "scope": "Personally full read by analyst, original rules/pages where applicable"
+    },
+    "edgion-gateway/src/plugins/http/grpc_json_transcoder/response.rs": {
+      "sha256": "aad6fb5696b56ab12c96627431fadbf59e4bc3d325347870674bd98d28e46da5",
+      "scope": "Personally full read by analyst, original rules/pages where applicable"
+    },
+    "edgion-gateway/src/plugins/http/grpc_json_transcoder/transport.rs": {
+      "sha256": "b845266c0305c1899d0ddd2f19388734be364bd5d423c7f353fd8b298eb6b744",
+      "scope": "Personally full read by analyst, original rules/pages where applicable"
+    },
+    "edgion-gateway/tests/unit/plugins/http/grpc_json_transcoder/response_test.rs": {
+      "sha256": "ba7cd0fd3054e27e222428a081fed609a2c9e0bfa8ed675a4957f458ec87734a",
+      "scope": "Personally full read by analyst, original rules/pages where applicable"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/grpc_descriptor.rs": {
+      "sha256": "69b2fb6ce75d833b01512105252a8fa9121fc7960cc8b8187b576ee1afb02514",
+      "scope": "Personally full read by analyst, original rules/pages where applicable"
+    },
+    "skills/01-architecture/02-gateway/00-overview.md": {
+      "sha256": "6f8b1cdf88f2fa5aca32d77e0edf73b5c8563b7a44844508656e303a7c742738",
+      "scope": "265-298; selected, no full claim"
+    },
+    "skills/01-architecture/05-resources/13-edgion-plugins.md": {
+      "sha256": "176b34ceae236190b76fd70c9fa3543cbbdee97ed8223420f8dc1379d480b35d",
+      "scope": "36-44 and113-149; selected, no full claim"
+    },
+    "edgion-resources/src/graphql_request/envelope.rs": {
+      "sha256": "6e0b292dfdb891ba9001bcaa78c7ab756320068a4c5136bbb14535d7c349cab0",
+      "scope": "1-102 different strict decoder; selected, no full claim"
+    },
+    "edgion-resources/src/resources/refs/plugin_fields.rs": {
+      "sha256": "4c3c891758ab704386c68867060669adc42636e92fdf6dee7b787aa4e6145307",
+      "scope": "395-460,1000-1045,1120-1155; selected, no full claim"
+    },
+    "edgion-resources/src/resources/edgion_plugins/validate.rs": {
+      "sha256": "4684ace540889d54ce341c38d90b4f7fa0d8947b9beda405be8edcf9f9bfd488",
+      "scope": "1-60,138-185; selected, no full claim"
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins_test.rs": {
+      "sha256": "3cd131fcab4e744691ed943db288c06d1a35cd30197b751138282983f5a015f8",
+      "scope": "1-225 and7294-7376; selected, no full claim"
+    }
+  },
+  "limits": "Terminal agent receipts explicitly all primary fully read and fresh hashes match frozen STATE; supporting scopes preserved. All text full-read; PART195 binary14181 bytes recursively inspected1864 wire fields, exact3 files and extension72295728/MethodOptions; all bytes consumed incl opaque complete hex. Static source only, no writes/checks/tests/runtime/Git/network; no primary credit for supports."
+}

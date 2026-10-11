@@ -1,0 +1,75 @@
+{
+  "partition": "PART-457",
+  "analyst": "/root/analyze_outbound",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/access_log_extern/access_log_extern.rs",
+      "sha256": "1d36001e92ebff4a734ce106705d3a81ca79cd364178cf28d3c51aba362a0458",
+      "fully_read": true,
+      "disposition": "Full 1-791, ten actual cases. No new independent issue: terminal 404/401/204, route provenance, seven sources, entry-query versus rewrite, timeout absence, route precedence, byte cap and JSON escaping respect canonical ownership."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/access_log_extern/mod.rs",
+      "sha256": "58e116b70ffc71f659108165fe0997712352b4ff69c765e3f4276f0f78acba31",
+      "fully_read": true,
+      "disposition": "Full 1-5 exports and caller registration; no issue."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "edgion-gateway/src/observe/access_log/log_ext.rs": {
+      "sha256": "c03ccc5d39bea1b13b023f6fb04d978667fa81d6e4375344a8a5a1fcfe42ec53",
+      "scope": "Full implementation 1-276."
+    },
+    "edgion-gateway/tests/unit/observe/access_log/log_ext_test.rs": {
+      "sha256": "4756efbd1ca869b8e630e706c6604ba54c780c497954b9cb5d82c34708877b36",
+      "scope": "Full 1-258 isolated masking/overwrite/cap/UTF8/escaping/invalid reference."
+    },
+    "edgion-resources/tests/unit/resources/edgion_gateway_config_test/access_log_extern_policy_tests.rs": {
+      "sha256": "12d0c8d3c2c155e28dc59d3c97d3ed6d2fde291cd15666176b24232dff692326",
+      "scope": "Full actual policy defaults, categories, casing and overrides."
+    },
+    "edgion-gateway/src/routes/http/proxy_http/pg_logging.rs": {
+      "sha256": "972f72ec7371c3ab876bfa12957eb70559e31aaa9d25f8f2078c24e197523a6a",
+      "scope": "85-145 terminal collection and JSON store."
+    },
+    "edgion-gateway/src/plugins/http/plugin_store.rs": {
+      "sha256": "8b6b68306f38fa3adbac1d89f6a31500f8fca82cee3b587b8ff392ab474ac805",
+      "scope": "325-365 cold invalid-entry retain/drop."
+    },
+    "edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs": {
+      "sha256": "e21e8d49bbdc1e71588fd9318324c19ff9f2d0bc49f1301831d1acc2c9a1d29e",
+      "scope": "320-365 matched preflight and short circuit."
+    },
+    "edgion-gateway/src/plugins/http/key_auth/plugin.rs": {
+      "sha256": "a0879891ff652cda72d681764a398c7a4338d43dc8b5d30884f7c5ad12555940",
+      "scope": "139-181 missing-key 401."
+    },
+    "edgion-gateway/src/plugins/http/proxy_rewrite/plugin.rs": {
+      "sha256": "c257049692250ee377fe5d1dd3e981d77fb5f0d5d08a48f2a61a9d66858086a9",
+      "scope": "218-254 injected/original query and upstream URI."
+    },
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "6c38b285bdfe354c40d5d2e96d4a07be0b7dc37ce3290197ca75054de23bfa98",
+      "scope": "3500-3550 actual delay and catch-all echo."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/AccessLogExtern/resources.yaml": {
+      "sha256": "7dcb23e6665da13a4078e75f3a6c9f8ef9d1bc07d4be12f6263e1f0bfd4bf081",
+      "scope": "Full current Kubernetes fixture 1-557."
+    },
+    "skills/04-review/ctx-set/regression-guards/claims-access-log-filter.md": {
+      "sha256": "d81fb2a94b55e81b27c02073c5a7d1d82b53c84fee9bbf99919408ac9b6ec39f",
+      "scope": "Full original claims-to-access-log contract."
+    },
+    "skills/04-review/observability/intentional-design/ctx-provenance-unmasking-risk.md": {
+      "sha256": "5c95b61380fdaf5efe616b2d99058b0d2f5408dca8341f9c3a97c9552469f8de",
+      "scope": "Full original provenance policy."
+    },
+    "skills/04-review/testing/regression-guards/sensitive-mode-test-subprocess-isolation.md": {
+      "sha256": "65c5e8065c0e5ea7e61a6b784a76f262bc70c749a1817f5e488723962811a59c",
+      "scope": "Full original isolation policy."
+    }
+  },
+  "limits": "Read-only complete terminal analysis. Supporting reads earn zero primary coverage. Off-mode omissions are covered by isolated production-unit tests; private/local and public Kubernetes policy fixtures intentionally differ. Collision checks route precedence only; query fixture lacks a separate upstream-body stimulus control. No executed results or production defect claimed."
+}

@@ -1,0 +1,130 @@
+{
+  "partition": "PART-530",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_tls/wildcard_single_label/mod.rs",
+      "sha256": "d02365927793433c9d9854de7c69b568b70e1bb368a0539e2adb3427143b86fe",
+      "fully_read": true,
+      "disposition": "Full4 static module/export and real parent/CLI consumers. No finding."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_tls/wildcard_single_label/wildcard_single_label.rs",
+      "sha256": "e041c16ab7bc09fdf64b5500b81b968e5dd75b5d499b989f05ea8daae6e0b0ff",
+      "fully_read": true,
+      "disposition": "Full249 lines actual3 single-label/deep/apex SNI cases and complete OpenSSL output parser. Same ARCH288 child lifetime cause; preserve exact31387 SNI probes and domain-specific certificate semantics, no new finding."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original rules retained unchanged."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Original index retained."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full graded gates retained."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Original index retained."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Original routing retained."
+    },
+    "skills/04-review/tls/SKILL.md": {
+      "sha256": "418dcd7183dfc84a98c2c51dcd0548447f0cf91d310646e578a5f6d2e6d2a837",
+      "scope": "Full original TLS index read."
+    },
+    "skills/04-review/tls/regression-guards/wildcard-depth-gateway-api-vs-rfc6125.md": {
+      "sha256": "30342b339e51f8f8fd510198f19896819856ed0ea30de9cb2e3fad53310cd2a0",
+      "scope": "Full original domain-specific semantics revalidated against current canonical matcher/tests. Historical dead helper/old matcher locations not authority."
+    },
+    "skills/04-review/testing/regression-guards/integration-orchestrators-need-owned-deadlines.md": {
+      "sha256": "932bd3bd8f8fa44d3f300898d5ac8f84c7b384cd9c7ce0584a731dcb0031b625",
+      "scope": "Full original outer containment contract."
+    },
+    "skills/05-testing/01-integration-testing.md": {
+      "sha256": "e260042b508fa0956873d1b3c059531f1733a7c15423c548081afb71703a10e1",
+      "scope": "Full original guide retained."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "3270-3355 actual targeted/aggregate registrations; prior full retained."
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "Actual cooperative TestCase timeout535-578 retained; earlier full source read."
+    },
+    "edgion-tests/src/client/suites/edgion_tls/mod.rs": {
+      "sha256": "153105658634e2e984dfb532b5edcffef4000e752bb096ce39a32a6ba29bb055",
+      "scope": "Full parent exports."
+    },
+    "edgion-gateway/src/tls/store/cert_matcher.rs": {
+      "sha256": "286dc45c0a4e944cf5ec3950a8f078191b7ad91df7c0ef0bbfb6566677ee76f0",
+      "scope": "1-95 actual snapshot listener/attachment lookup and canonical leaf matcher call. Initial obsolete guessed tls/runtime/matching/cert_matcher.rs absent; corrected actual store path."
+    },
+    "edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs": {
+      "sha256": "7c1223fe27e46a98d67c9d8bc604b0b109b2bd631cba3598f95fb83b6837205e",
+      "scope": "490-615 actual current snapshot/cert selection/no-match close."
+    },
+    "edgion-algo/src/matcher/rfc6125_hostname/mod.rs": {
+      "sha256": "98a00f06437533609d85f5bdf6fc6f6a6d826f582a6d9fd7430521f13803f7b6",
+      "scope": "Full actual matches/lookup canonical validation/single-label rule."
+    },
+    "edgion-algo/tests/unit/matcher/rfc6125_hostname/mod_test.rs": {
+      "sha256": "1919e0ba024bfa6dd4b496529333f52a54fcb55ac6b3877e665661248479c1c9",
+      "scope": "Full actual test bodies: exact/multiple depth/apex/invalid/case/borrowed probe dimensions; no execution."
+    },
+    "edgion-tests/integration/scripts/gen_certs/generate_tls_certs.sh": {
+      "sha256": "237b9d447501843c4877a294172983f0c4f6586d9aefe6c5fdf5f8e92725ad89",
+      "scope": "35-82 actual generated Secret destination and required wildcard SAN list; search only later OpenSSL command not full script credit."
+    },
+    "edgion-tests/integration/conf/EdgionTls/wildcard_single_label/Gateway.yaml": {
+      "sha256": "7d32a172c0b684f4c8ad6bb61617b0c3ddd7cdcff9bda74eb71c7ab3f9822e4f",
+      "scope": "Full actual31387 listener/wildcard cert/route and Secret attachment."
+    },
+    "edgion-tests/integration/conf/EdgionTls/wildcard_single_label/HTTPRoute.yaml": {
+      "sha256": "a51cce9fb5ea1c1ac643a703d39ca1cf17ba75741bc7ccdfdb3cbe3780551dda",
+      "scope": "Full actual31387 listener/wildcard cert/route and Secret attachment."
+    },
+    "edgion-tests/integration/conf/EdgionTls/wildcard_single_label/EdgionTls.yaml": {
+      "sha256": "907cd8b8673fb49a2f0ccc85d99fc021b61d285edf32c6e9caafe9f4650429a7",
+      "scope": "Full actual31387 listener/wildcard cert/route and Secret attachment."
+    },
+    "edgion-tests/k8s/conf/EdgionTls/wildcard_single_label/Gateway.yaml": {
+      "sha256": "52610e9961bad0533d2cf4531cbea40957ac0aa45e65517ed585b622f05f7f8a",
+      "scope": "Full actual31387 listener/wildcard cert/route and Secret attachment."
+    },
+    "edgion-tests/k8s/conf/EdgionTls/wildcard_single_label/HTTPRoute.yaml": {
+      "sha256": "953299684134ff58904b2c46ddc14664974f733ee24ef6f87ef653a00671dfa4",
+      "scope": "Full actual31387 listener/wildcard cert/route and Secret attachment."
+    },
+    "edgion-tests/k8s/conf/EdgionTls/wildcard_single_label/EdgionTls.yaml": {
+      "sha256": "e3e1a2506906966636ef6184fc57d09930290a4d48fd72b399e7e7d06fc1bbaf",
+      "scope": "Full actual31387 listener/wildcard cert/route and Secret attachment."
+    },
+    "edgion-tests/integration/conf/EdgionTls/wildcard_single_label/Service.yaml": {
+      "sha256": "1462098fc9f14c52e6945468993ab175d9dc2b4971a8cb7948d470c78ebfaf2b",
+      "scope": "Full actual test-http30001 binding."
+    },
+    "edgion-tests/integration/conf/EdgionTls/wildcard_single_label/EndpointSlice.yaml": {
+      "sha256": "6539f6df3dfb493c224db74ecdf7443185d6483afd90d4edf739a0827b9ba374",
+      "scope": "Full actual test-http30001 binding."
+    }
+  },
+  "limits": "Static complete primary review; no build/test/child/network/source/Git mutation. Supporting exact tests read but historical knowledge executions not fresh. No certificate trust/client-validation/HTTP-route semantics equivalence claim. Empty guessed cert-matcher285 range provided no evidence; actual1-95 subsequently read. No primary embedded tests.",
+  "supplemental_candidates": {
+    "ARCH-288": {
+      "status": "verified-in-revision",
+      "scope": "wildcard_single_label.rs60-69 synchronous s_client output in three async cases",
+      "evidence": "Same child lifetime/cooperative timeout defect; preserve capability selection and exact SNI positive/negative semantics."
+    }
+  }
+}

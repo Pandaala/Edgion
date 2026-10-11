@@ -1,0 +1,83 @@
+{
+  "partition": "PART-466",
+  "analyst": "/root/analyze_outbound",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/ctx_set/ctx_set.rs",
+      "sha256": "c40a797493a51efc0c4050915c8652b876312bb128028066a8baada073fb40d6",
+      "fully_read": true,
+      "disposition": "Full1-343 five actual header/default/lowercase/mapping cases use canonical traceparent and explicit access-log declarations. No new architecture root. Same ARCH296 literal31180/context-resolved-port mismatch pending independent extension."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/ctx_set/mod.rs",
+      "sha256": "a429e8071218e950958b212b2f0420f7b8c87e95ed204007d676409b06587d24",
+      "fully_read": true,
+      "disposition": "Full1-5 export/caller checked; no issue."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "edgion-gateway/src/plugins/http/ctx_set/plugin.rs": {
+      "sha256": "d789f29516553aa946f9ff1d18d5b70a266dca61dfc1beaaa87acbf1c8e8c6ed",
+      "scope": "Full1-203; originally truncated145-180 recovered."
+    },
+    "edgion-gateway/tests/unit/plugins/http/ctx_set/plugin_test.rs": {
+      "sha256": "db72fa1aec4efdd4c0a1dc24ab6ab9c83d598c0a0844584fd1f54fe30deb68f9",
+      "scope": "Full1-282 actual bodies."
+    },
+    "edgion-tests/src/client/access_log_client.rs": {
+      "sha256": "f7691b8ad4c8765a0ab446c414a1596df48c930d8472678d724f918edcf84d55",
+      "scope": "Fresh1-39,350-407 marker/get/retry; unchanged retained full read."
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "Fresh170-191,350-362; unchanged full context."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "1553-1568,3013-3030,3837-3864,3910-3948 actual selected context/registration."
+    },
+    "edgion-tests/src/client/port_config.rs": {
+      "sha256": "121db5936d48cddb5c947e75692d413fb1c710f14740d77dad8dd87f3f4d4d7f",
+      "scope": "55-91 exact key/protocol getter."
+    },
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "6c38b285bdfe354c40d5d2e96d4a07be0b7dc37ce3290197ca75054de23bfa98",
+      "scope": "694-722,3524-3550 actual catch-all router/handler."
+    },
+    "skills/04-review/ctx-set/review-evidence/ctx-set-design-decisions.md": {
+      "sha256": "fd77c97282d1458122c89064e78c28b012c3c05a2cbc127c4b25f2c8b999c8ce",
+      "scope": "Full original implementation design decisions."
+    },
+    "skills/04-review/ctx-set/regression-guards/one-transform-operation.md": {
+      "sha256": "4df60a43879d440a94868eda6ac7ec3c3736d72f819ae889352ff8ff44cd77e5",
+      "scope": "Full original transform owner."
+    },
+    "skills/04-review/ctx-set/regression-guards/claims-access-log-filter.md": {
+      "sha256": "d81fb2a94b55e81b27c02073c5a7d1d82b53c84fee9bbf99919408ac9b6ec39f",
+      "scope": "Full original canonical observation contract."
+    },
+    "skills/04-review/testing/regression-guards/integration-port-selection-must-fail-closed.md": {
+      "sha256": "c2ff61188030d30484afd0c1323201295fb980755c3e4738fe78dd8eea785b89",
+      "scope": "Full original port authority."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/CtxSet/01_EdgionPlugins_ctx-setter.yaml": {
+      "sha256": "79896c754c3bf0a2cb1701e7cb0b0f05f33a3ca2f3dd150eb1e9d96b0e1badcf",
+      "scope": "Full actual integration fixture."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/CtxSet/HTTPRoute_default_ctx-setter.yaml": {
+      "sha256": "1b06cff0ac859d6c5fdc6f0408db416d5940788065ac689529e4ddad1f4a6121",
+      "scope": "Full actual integration fixture."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/CtxSet/01_EdgionPlugins_ctx-setter.yaml": {
+      "sha256": "79896c754c3bf0a2cb1701e7cb0b0f05f33a3ca2f3dd150eb1e9d96b0e1badcf",
+      "scope": "Full actual k8s fixture."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/CtxSet/HTTPRoute_default_ctx-setter.yaml": {
+      "sha256": "1b06cff0ac859d6c5fdc6f0408db416d5940788065ac689529e4ddad1f4a6121",
+      "scope": "Full actual k8s fixture."
+    }
+  },
+  "limits": "Complete read-only terminal. All five URL sites hardcode31180 despite caller selected EdgionPlugins.http; same ARCH296 cause, not new ID. Whole-JSON substring checks and undeclared template/extract/chaining coverage are limitations, no hypothetical false-pass claim. No tests/builds/network/Git mutation. Original rules/topics personally read; supports zero primary coverage."
+}

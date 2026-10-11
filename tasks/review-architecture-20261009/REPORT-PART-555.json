@@ -1,0 +1,342 @@
+{
+  "partition": "PART-555",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/http_route/backend/informational_retry.rs",
+      "sha256": "e31a22b0f3dcc933077fbac50a2e8e93a7a159774741345152bcd3b3f0746d93",
+      "fully_read": true,
+      "disposition": "Full 1\u2013276 including actual recorder-host unit test. Retain exact downstream 100/final200/body/close, two trace-keyed recorder attempts, canonical access log, bounded evidence and unconditional fallible cleanup."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/http_route/backend/lb_consistenthash.rs",
+      "sha256": "40834efd5923e4f1510adfecbf53d940db265b894d7eb70966c71bcbe73dce38",
+      "fully_read": true,
+      "disposition": "Full 1\u2013459. ARCH280 ignored generated request failures and lifetime keyed observations; five intended hash cases retained."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/http_route/backend/lb_ewma.rs",
+      "sha256": "8fabcb802b7ac6c1ec3d070e9efc3b62442a8dc0b2ec43810329bdaed65a42ef",
+      "fully_read": true,
+      "disposition": "Full 1\u2013153. ARCH280 lifetime endpoint evidence; actual error checks/concurrency retained, no strict equality requirement."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/http_route/backend/lb_ewma_retry_on_status.rs",
+      "sha256": "e26568838d42e5f176d94e532b828483cc995c33532d9007ff0ae2ed1b6b7d22",
+      "fully_read": true,
+      "disposition": "Full 1\u2013122. Retain exact unique canonical access-log four-attempt 503/Ewma/RetryOnStatus contract; internal ledger unit contract remains separate."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/http_route/backend/lb_leastconn.rs",
+      "sha256": "d2adae19db9318084884af1c7a1a06259bf0589fbadd258e28edfa57c83b65e1",
+      "fully_read": true,
+      "disposition": "Full 1\u2013153. ARCH280 lifetime endpoint evidence; actual status/errors/concurrency retained."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/http_route/backend/lb_leastconn_retry_on_status.rs",
+      "sha256": "02737ec724ec1e0b9cbc689bb1b66119bf7eaa08c90e1296dc51654c8bf331e9",
+      "fully_read": true,
+      "disposition": "Full 1\u2013204. ARCH280 healthy phase metric window; ARCH281 independent missing attempt-chain observer. Preserve both traffic phases and live assertions."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/http_route/backend/lb_roundrobin.rs",
+      "sha256": "f73adca9d4b1feca3955ce1474c2d63382ab2d7b6f4c306783da7c477c7b20a4",
+      "fully_read": true,
+      "disposition": "Full 1\u2013385 including five actual unit tests. Retain authoritative endpoints, sequential successes, exact Service/endpoint/count/warmup deltas and reset/error rejection."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/http_route/backend/mod.rs",
+      "sha256": "4e61d4fcabbfaae1111f2a7e53b0c06b13f79223a01e1ed0ced993ded54a2f72",
+      "fully_read": true,
+      "disposition": "Full 1\u201354; actual CLI/public suite exports checked. Retain bounded static module/export ownership."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/http_route/backend/partially_invalid.rs",
+      "sha256": "49f50f1f70c276d013b741c7b777541d2897c4f7714ff170d64e69b8f15285d6",
+      "fully_read": true,
+      "disposition": "Full 1\u2013148. Retain actual fixed 200/500 cases, legitimate invalid-slot behavior and Gateway fixture. Fixture comments disagree with current intended outcomes; narrow documentation follow-up only."
+    }
+  ],
+  "candidates": [
+    "ARCH-280",
+    "ARCH-281"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original personally read rules/index; retained unchanged reading"
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original personally read rules/index; retained unchanged reading"
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original personally read rules/index; retained unchanged reading"
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full original personally read rules/index; retained unchanged reading"
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original personally read rules/index; retained unchanged reading"
+    },
+    "skills/05-testing/SKILL.md": {
+      "sha256": "4ad0fb8f8a15693ec04116e8224095c6696bbe1e3e63f0a5528053e560466343",
+      "scope": "Full original personally read rules/index; retained unchanged reading"
+    },
+    "skills/04-review/testing/SKILL.md": {
+      "sha256": "11d71f0b85ff6695f99019bad1dc44c2520ec79eb185d93032bf8dda6d609271",
+      "scope": "Full original personally read rules/index; retained unchanged reading"
+    },
+    "skills/04-review/testing/regression-guards/integration-lb-metrics-require-scoped-deltas.md": {
+      "sha256": "610f579998565c3e90353dc60d0cb29b59b482c393a88f6559142558fd3ec1ce",
+      "scope": "Full original"
+    },
+    "skills/04-review/routing/regression-guards/1xx-response-filter-state-pollution.md": {
+      "sha256": "67d7ffb4f48484585c7858432cc4e174c092c477b3f4ebab3dffbe3a5c6d1760",
+      "scope": "Full original; clipped per-attempt paragraph recovered in separate full read"
+    },
+    "skills/04-review/routing/regression-guards/status-retry-outlier-detection-per-attempt.md": {
+      "sha256": "e01f7939e4bb698d7c4523bf3378165c31289cd6a2675e4e1f7cb62d3e34fde8",
+      "scope": "Full original; clipped per-attempt paragraph recovered in separate full read"
+    },
+    "skills/04-review/routing/regression-guards/per-try-timeout-test-coverage.md": {
+      "sha256": "b4b2da64b70472e9ce334338504c70da44d37a26e1e760874a7122881fbabea4",
+      "scope": "Full original; clipped per-attempt paragraph recovered in separate full read"
+    },
+    "skills/05-testing/01-integration-testing.md": {
+      "sha256": "e260042b508fa0956873d1b3c059531f1733a7c15423c548081afb71703a10e1",
+      "scope": "Full retained 582-line guide personally read earlier; original listener/test boundaries"
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "Selected 1840\u20131985,3810\u20133846 actual backend registration and canonical context; searched named mapping/export/all registration sites"
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "Selected 640\u2013690,750\u2013815 actual serial case/suite dispatch and infrastructure failure ownership; full retained PART438 supporting read"
+    },
+    "edgion-tests/src/client/metrics_helper.rs": {
+      "sha256": "6a645f919d8d1287911645447cf3228fa25c6f54be3fa889217fbf6b61c0a7fa",
+      "scope": "Full retained PART438 primary read including actual tests; fresh 1\u201385,125\u2013235,400\u2013565,770\u2013865 analyzer/parser evidence"
+    },
+    "edgion-tests/src/client/access_log_client.rs": {
+      "sha256": "f7691b8ad4c8765a0ab446c414a1596df48c930d8472678d724f918edcf84d55",
+      "scope": "Selected 1\u2013110 including real marker tests; existing context retrieval consumer inspected in PART438"
+    },
+    "edgion-tests/src/server/transport/h1.rs": {
+      "sha256": "9b4bbb18abc272cd52b482dc7077360ddd1c9c59c2802368ff4ab5cb148952ba",
+      "scope": "Selected 95\u2013155,275\u2013325,510\u2013535 including actual informational classification test"
+    },
+    "edgion-gateway/src/routes/http/proxy_http/pg_logging.rs": {
+      "sha256": "972f72ec7371c3ab876bfa12957eb70559e31aaa9d25f8f2078c24e197523a6a",
+      "scope": "Selected 255\u2013370 terminal metric producer and current final-attempt cleanup"
+    },
+    "edgion-gateway/src/observe/metrics/registry.rs": {
+      "sha256": "a53d0512e93bcce257f45cd21c9a90e5ca066ec6588e12b7c14ec1edbe6efc7d",
+      "scope": "Selected 525\u2013610 complete existing backend counter emission, independently re-read after combined output clipping"
+    },
+    "edgion-gateway/src/observe/metrics/test_metrics.rs": {
+      "sha256": "8b043e7ec1b7f1ca96110bf5cbdd4f92f26ae2a7b9976bc3df4487b09482caca",
+      "scope": "Full production source re-read after combined clipping"
+    },
+    "edgion-gateway/tests/unit/observe/metrics/test_metrics_test.rs": {
+      "sha256": "e67c8a2732ee4c12214f380629fd472ceedb8f9be35558d4b289fecc8847fdf2",
+      "scope": "Full actual test bodies"
+    },
+    "edgion-gateway/src/lb/attempt.rs": {
+      "sha256": "17033064689346a4c99ce0765814e5ea1f8cab520ab31930b705d9a22c06a31b",
+      "scope": "Full production guard source"
+    },
+    "edgion-gateway/tests/unit/lb/attempt_test.rs": {
+      "sha256": "43d116028f8c7e6f1865006e42421ac6058bca2b06c8ba9c372e603be48142e7",
+      "scope": "Full actual seven tests"
+    },
+    "edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_filter.rs": {
+      "sha256": "bfa2ac6926771a8c0b74d557b17bdddd9e0a17fc50770b537b6db2fe25d03dcf",
+      "scope": "Selected 70\u2013180 status/latency/outlier and interim guard"
+    },
+    "edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs": {
+      "sha256": "1e78b4bf440134f3f8949ab883bc1f767c0e70055164818c35fc0e2251b25eaf",
+      "scope": "Selected 715\u2013735,788\u2013813 actual invalid-target fixed 500 behavior"
+    },
+    "edgion-tests/integration/scripts/integration/run_integration.sh": {
+      "sha256": "5a6df789c2a894150691b3f50edf85f7ac055961ee0b1cc230291a6b90f85b76",
+      "scope": "Selected 2098\u20132108,2142\u20132148 actual mandatory LB dispatch; prior mixed clipped output not credited"
+    },
+    "edgion-tests/k8s/scripts/common/run_test_client.sh": {
+      "sha256": "5146538b2585d8671476b51842527e6489b6ca0c13a37c60e02842bf727d3944",
+      "scope": "Selected 239\u2013265 existing authoritative RR endpoint inventory and metrics endpoint resolution"
+    },
+    "edgion-tests/k8s/scripts/run_k8s_integration.sh": {
+      "sha256": "9c7f539e02edccc91c46908c4b6afe1af3fb867b72c7b6061b613bd2723e641f",
+      "scope": "Selected 2450\u20132464 actual LB mappings"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBConsistentHash/Gateway.yaml": {
+      "sha256": "eece65a5342ae87779d87ddf6fe3728e7e076a9ee0296d3e1e45a42b630156f4",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBConsistentHash/HTTPRoute_default_lb-ch-header-eps.yaml": {
+      "sha256": "a5cdd71d933880229ac19411cf2e99ae89d87ada463431b615a3b549041bc4f3",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBConsistentHash/HTTPRoute_default_lb-ch-cookie.yaml": {
+      "sha256": "e6c5dca19177cc56f2b696f6ce3e22626a3cfd7ac33b09b08b3daa2069d7ba5e",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBConsistentHash/HTTPRoute_default_lb-ch-arg.yaml": {
+      "sha256": "a47772c1fdc55ae74b9c6e1f5a0b3516b4d9935fe9559901a087b2a139070e3f",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBConsistentHash/HTTPRoute_default_lb-ch-multi.yaml": {
+      "sha256": "50b4d175e9586073cba4ddf343ba00eeb95db1e8d65ee7413e717904225b1338",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBConsistentHash/HTTPRoute_default_lb-ch-sourceip.yaml": {
+      "sha256": "bd97e906a91c8785a1b9962399ceac978f49e388ea973701cd548ef148fcd6bc",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBConsistentHash/EdgionBackendTrafficPolicy_default_lb-ch-header.yaml": {
+      "sha256": "0528ee837cbc89f7f5239e80708928eeb5df9e37e3d42745d590e0674d1b5625",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBConsistentHash/EdgionBackendTrafficPolicy_default_lb-ch-cookie.yaml": {
+      "sha256": "f6a9786bbf1cad69f9c2f0dae2b50a5a2a1ecb0029c786c6992d320772e03883",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBConsistentHash/EdgionBackendTrafficPolicy_default_lb-ch-arg.yaml": {
+      "sha256": "78e622f583da5f55be3b20c254055e5a3bf01cfd6b7a3b775caa62098fc39ff6",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBConsistentHash/EdgionBackendTrafficPolicy_default_lb-ch-multi.yaml": {
+      "sha256": "6df560515ed202a1172e3d3993c9233264922c1140ff2febd746d1e77a0c4621",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBConsistentHash/EdgionBackendTrafficPolicy_default_lb-ch-sourceip.yaml": {
+      "sha256": "9edff9693aa2d10380092cd46d30f85b83fe5d81d196aaedada2ab0c5ae283b7",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBConsistentHash/EndpointSlice_default_lb-ch.yaml": {
+      "sha256": "181d125eb07c2c92e3080e3d991fd3f2089f28b3d487158f21cdb7213c737e18",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBConsistentHash/EndpointSlice_default_lb-ch-multi-1.yaml": {
+      "sha256": "e3a4a7d656093e6737a49c6578bd3da9ad0f02643c33f612010a015e34092326",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBConsistentHash/EndpointSlice_default_lb-ch-multi-2.yaml": {
+      "sha256": "75718c6e457eac611016bbe60ab519748690c32810e1f2ade55b91fa7ebadfc4",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBEwma/Gateway.yaml": {
+      "sha256": "9c6adad451ed65eaeb72e265f5b05b61a72d35d1ecf5108b947c0448d495f55e",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBEwma/HTTPRoute_default_lb-ewma.yaml": {
+      "sha256": "eec09f646eeb93458a45633855423fe08fd15d933c144342441a5563169e69dd",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBEwma/EndpointSlice_default_lb-ewma.yaml": {
+      "sha256": "afa384c02b22eb47a6730342b46a163279d26300196ff1a34a64f7d83a1c71f3",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBLeastConn/Gateway.yaml": {
+      "sha256": "0b62435ed40e5ba33f2028ae44b5b8701d20a690c026a2b11dba3cc4a75fc65e",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBLeastConn/HTTPRoute_default_lb-lc.yaml": {
+      "sha256": "deccd02c063beee055591609744bc1c94650210c6e2fc11a146cd1fbe99488c7",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBLeastConn/EndpointSlice_default_lb-lc.yaml": {
+      "sha256": "5a987eb8e4872615334c8ccbd47372af69693cfe044851d58ce27f5e71a07185",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBLeastConnRetryOnStatus/Gateway.yaml": {
+      "sha256": "bfc0aaa5b25c71a6d45cd3e84d7e14f246cbf16d6aaf88a26dce16dba6d144ae",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBLeastConnRetryOnStatus/HTTPRoute_default_lb-lc-rs.yaml": {
+      "sha256": "b2424942add810e981c8a39c6cc17a4034e4126df48ce17d02157aa6ba45fe18",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBLeastConnRetryOnStatus/EdgionBackendTrafficPolicy_default_lb-lc-rs.yaml": {
+      "sha256": "eed7bc32a8043887376169104e335977f1a15de7f64be4546ff116dacf0d8f67",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBLeastConnRetryOnStatus/EndpointSlice_default_lb-lc-rs.yaml": {
+      "sha256": "e69ac6fda24efb78f50d09d038d501f184d638945e150c0005816b13a1b8e3e4",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/InformationalRetry/README.md": {
+      "sha256": "e5847144aae67282fae3a58abd6dc13da05c86ff0574ff65392e6006f63dcf2f",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/InformationalRetry/00_Gateway.yaml": {
+      "sha256": "9f2d1da0abdecab57d96291f843ec2548be48d917df955c339c1498901c0fc14",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/InformationalRetry/01_Service.yaml": {
+      "sha256": "ab581450386fa0987a617f85a9941db7ff0ce26260167a090df7f10ba8eb7abd",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/InformationalRetry/02_EndpointSlice.yaml": {
+      "sha256": "9a353a30de9a5128ed10ca18b0f6c2a86c1f74ac976dd389fb93d72c8ed8152a",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/InformationalRetry/03_HTTPRoute.yaml": {
+      "sha256": "dca88cec25be6f04f933047722570a32016c77043568ada878260ec7b4e6306a",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/PartiallyInvalid/HTTPRoute_default_partially-invalid.yaml": {
+      "sha256": "cf0eac10614279e795bd73c36c36560db0a624cf6c109e5ab2651991488bce68",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/PartiallyInvalid/HTTPRoute_default_all-invalid.yaml": {
+      "sha256": "fc0639cc62462745e6f23a0cdf90e9d5ed39ab9a2134bf001efcb5d2cc3da55e",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/PartiallyInvalid/EndpointSlice.yaml": {
+      "sha256": "6c37997bab6011e86ba31e3cdd4a441fe11851abde5460efcc39c943e8cb93a1",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/PartiallyInvalid/Gateway.yaml": {
+      "sha256": "1894bee6bf575b9c9bfbd5b35a1abe675c49b9b6231d7deea72986ad35c4215d",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBEwmaRetryOnStatus/Gateway.yaml": {
+      "sha256": "7f0fdf7de919f0981352461fb4f86842ef01cdd762dcac90cf4954626d463275",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBEwmaRetryOnStatus/HTTPRoute_default_lb-ewma-rs.yaml": {
+      "sha256": "6ddbc3417c94b7d4eb8c6c96ff4c30fbf34bf1f9394fa5b37769ed13e47439d8",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBEwmaRetryOnStatus/EndpointSlice_default_lb-ewma-rs.yaml": {
+      "sha256": "d0e2e81dd949c6831050414024ce980d136e0fdb5dffdde481fdfd40ba8c4859",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBRoundRobin/EndpointSlice_default_lb-rr.yaml": {
+      "sha256": "bdcc403568cb92195daa88bac8f6a73fcdd3d231323440fb11c71ce038d765b8",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBRoundRobin/EndpointSlice_default_lb-rr-multi-1.yaml": {
+      "sha256": "35ea0289144f48c89db0facf461caa317aed0cb88bcee324e9ca3158bcc59252",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/LBRoundRobin/EndpointSlice_default_lb-rr-multi-2.yaml": {
+      "sha256": "2e49463df50bd2337160d2f51dc7702711415a57a9603992c2dc8fc44024849f",
+      "scope": "Full individual actual fixture; no whole-directory claim"
+    }
+  },
+  "limits": [
+    "Static repository-only review; no build/test/network/product mutations.",
+    "All nine primary sources fully read and fresh frozen hashes matched. Supporting reads receive no primary credit; clipped ranges were re-read or excluded.",
+    "Candidates await independent verification; no runtime incident/performance claim.",
+    "Knowledge page per-try-timeout-test-coverage retains a historical sentence calling implemented informational integration coverage deferred; track owning-page correction rather than suppress live inspected evidence.",
+    "PartiallyInvalid fixture comments and Weighted sample wording are documentation follow-ups, not new architecture root causes."
+  ]
+}

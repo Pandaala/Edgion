@@ -1,0 +1,51 @@
+{
+  "partition": "PART-494",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/ip_restriction_refs/ip_restriction_refs.rs",
+      "sha256": "24d080212708e64115f446c4483a48caa5d8116b33e032f6d6f6a1e1f7f68370",
+      "fully_read": true,
+      "disposition": "Full1-81,3663bytes; Two static allow/deny Ref traffic cases use owned ConfigData/canonical RemoteIp/atomic matcher. Accepted."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/ip_restriction_refs/mod.rs",
+      "sha256": "94c288789aec0e880c2fb6b715cf7760841dfe893418f41ba63d4b5ad62a7d83",
+      "fully_read": true,
+      "disposition": "Full1-5,130bytes; Real export/registration accepted."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "edgion-gateway/src/plugins/runtime/edgion_config_data/conf_handler.rs": {
+      "sha256": "1417737fc1627a07c2d8adefa4db153587b9b3dc79afaf450d008183a466ab7f",
+      "scope": "1-145 cold bound validation/one immutable generation."
+    },
+    "edgion-gateway/src/plugins/http/ip_restriction/plugin.rs": {
+      "sha256": "f2737aa2f7772cafc79af9a744e3e356ded91d4212b1e30008b124d10deaab7b",
+      "scope": "Full1-259 retained full actual production owner."
+    },
+    "edgion-gateway/tests/unit/plugins/http/ip_restriction/plugin_test.rs": {
+      "sha256": "9c5583b790b5cbe3980c25b62e1ee3aba49de966dcac27026260394ff99ba871",
+      "scope": "445-573 actual same-key reload and denied allow tests."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/IpRestrictionRefs/01_EdgionConfigData_ipref-allowlist.yaml": {
+      "sha256": "aca28ffce95ba92c057293732d62614ea517eb829a216aa4cad7b64c7741d9aa",
+      "scope": "Full1-16 actual local allow list."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/IpRestrictionRefs/01_EdgionConfigData_ipref-allowlist.yaml": {
+      "sha256": "897d39d7573f1fc945b42cea1b1785ef08b87236e401e5465772708921735aab",
+      "scope": "Full1-16 actual K8s OrbStack allow list."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/IpRestrictionRefs/02_EdgionPlugins_allow_ref_hit.yaml": {
+      "sha256": "452736b7cc53fe5830e4f883bbae3ddea42d9ea5929b499c2440ccd9d81fdc05",
+      "scope": "Full1-17 K8s allowRef hit."
+    },
+    "skills/04-review/resources/intentional-design/reference-grant-validation-controller-scoped.md": {
+      "sha256": "59fd39c28512dcf5ebcad7b4f6c37960eb0c390b057caf27f28fee1177375ffb",
+      "scope": "Full1-93 original scoped Grant and Gateway pipeline caveat."
+    }
+  },
+  "limits": "Full five fixture YAMLs each topology and local README; same-namespace refs need no crossnamespace grant. K8s explicitly substitutes192.168/16; stale127/8 comment documentation only. Static positive resolution, no claim full negative/Grant/reload suite coverage. Actual main2782-2788/local2217/K8s2576 registry checked. Original personal rules/progressive knowledge satisfied, no new cause or264/266/296/348 extension. Read-only/no execution, supports zero credit."
+}

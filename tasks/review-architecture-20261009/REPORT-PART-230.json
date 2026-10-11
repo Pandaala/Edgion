@@ -1,0 +1,75 @@
+{
+  "partition": "PART-230",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-common/src/secret/mod.rs",
+      "sha256": "e9cd131cc860ffa9a75e8410697bde5cd43a7d737a548242f9203d96da3a0867",
+      "fully_read": true,
+      "disposition": "Small canonical export seam serves distinct runtime Controller stores and Gateway fallback; stale overview comment is documentation-only, not a new ownership mechanism."
+    },
+    {
+      "path": "edgion-common/src/secret/secret_store.rs",
+      "sha256": "87df9e6a37e1b5b3538a9eb8e81fb4d0bbd0b8ab87df2cfd2fdffa7649f0b6b1",
+      "fully_read": true,
+      "disposition": "Bounded access lifetime uses owned Secret projection on cold resolution paths; per-runtime store versus global fallback is deliberate. Replacing these with shared cross-process/global authority or adding cache zeroization changes explicit contract."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original retained root rules; no nested AGENTS."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original retained index."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original retained graded gates."
+    },
+    "skills/01-architecture/00-common/SKILL.md": {
+      "sha256": "abbd2fab4c8bb9447e222834811c7d48c2f6994390fcef037f3b5e79a9aa25a3",
+      "scope": "Full current shared-layer navigation."
+    },
+    "edgion-common/Cargo.toml": {
+      "sha256": "ff48da27e3dac181748df83bf88b68e3be62e8b10fbe8f2f82842ed8706cc71c",
+      "scope": "Full current dependencies/DAG."
+    },
+    "edgion-common/src/lib.rs": {
+      "sha256": "ffba1431429869b11d02d38eb2b2e5b9f0dd422e3a3b53076ed065d1610aa3af",
+      "scope": "Full current export boundary."
+    },
+    "skills/01-architecture/05-resources/10-secret.md": {
+      "sha256": "0c4483c705098e2e9ef9ad8786f136eadbcee40ade1b88c9f8c05794c01ed29d",
+      "scope": "Full original storage/material split and explicit limited zeroization scope; recovered truncated112-end."
+    },
+    "edgion-common/tests/unit/secret/secret_store_test.rs": {
+      "sha256": "3f637a810b485aa1cc449daddc1077365e29d20fbbe46f250761d553ce125455",
+      "scope": "Full actual get/replace/update/no-namespace bodies."
+    },
+    "edgion-common/tests/unit/secret/secret_store_test/stats_tests.rs": {
+      "sha256": "6cd6f6c9f493e11a704a3485b3e56969f0cc211aff10a8ce92c89964b5bb5af6",
+      "scope": "Full actual empty stats body."
+    },
+    "edgion-controller/src/conf_mgr/runtime.rs": {
+      "sha256": "4894a9456643f62b21dd1dc39984acf71696d0f5e5e58a85b119778af92ce811",
+      "scope": "58,126,254 and original runtime ownership selected symbol/call context retained from architecture investigation."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/secret.rs": {
+      "sha256": "0b6659cd96e2f2ab4ac24dfbae4e6f2e0e5660b882ab5d3eb39232004f544a63",
+      "scope": "150-219 actual normalize/replace/update/delete and cascade ownership."
+    },
+    "edgion-gateway/src/plugins/http/openid_connect/session_cookie.rs": {
+      "sha256": "fda5c0f6061cf941292aa9745622d65f392669c898950864be15c4d21733d425",
+      "scope": "Full retained prior Gateway primary review; selected actual cold fallback call25."
+    },
+    "edgion-gateway/src/plugins/http/header_cert_auth/plugin.rs": {
+      "sha256": "346464466384a30dc02dde337e1f1fb6041a6e8b265ab267abc69518f3fb8e99",
+      "scope": "Full retained prior Gateway primary review; selected actual fallback67."
+    }
+  },
+  "limits": "Both full implementations and actual caller/test/contract context read; static only, no builds/tests/mutations. Zero additional support coverage. Documentation-only discrepancy: module overview still implies a globally populated cross-plane store, while current runtime owners and canonical Secret architecture describe separate lifecycle stores. Original architecture also mentions DNS credentials beyond current authorized HTTP-01 ACME scope; retain project scope and do not add DNS-01 behavior."
+}

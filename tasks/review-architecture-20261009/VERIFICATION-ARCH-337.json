@@ -1,0 +1,53 @@
+{
+  "candidate": "ARCH-337",
+  "complete": true,
+  "verifier": "/root/verify_ip_union",
+  "decision": "confirmed",
+  "input_sha256": "653dbe2538933321985a4348274455c78c1f2b326ea74cfd418b39eb1cb5a249",
+  "approved_claim_sha256": "2657c1b5b48e49a84e889417d417ef3edbfcb079ba7d41aea975fd63ffb31158",
+  "evidence": [
+    "Failed baseline scrapes/selected parse errors still collapse tozero; final503 count does not independently prove retrydenials.",
+    "Reason-specific authority502 tests remain useful but cannot repair erased metric observation errors.",
+    "Current field-loan/prepared-store drift does not change these helpers/emitters. Narrow fallible reader can preserve valid absent-serieszero without newmetric."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "edgion-tests/src/client/suites/edgion_backend_traffic_policy/retry_budget.rs": {
+      "sha256": "1963d06340f25f8cb6799b3ff2c4d84f08f1c97c014f40fdb20f2050fa72709e",
+      "scope": "1-265 helpers/floor/full measured-load case."
+    },
+    "edgion-tests/src/client/suites/edgion_backend_traffic_policy/upstream_authority.rs": {
+      "sha256": "3fd8b31a70077ffea048900a054ca433d2f6f2c9c3c7dcabaf5034fbd57860dd",
+      "scope": "49-77,156-200,244-308 counter adapter/bothreason tests."
+    },
+    "edgion-tests/src/client/metrics_helper.rs": {
+      "sha256": "6a645f919d8d1287911645447cf3228fa25c6f54be3fa889217fbf6b61c0a7fa",
+      "scope": "1-54,118-163 counter_value/falliblefetch."
+    },
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "1eb27bded8bcb40a82ea3cfd4ed6f20d386deedd1f349c7035a226fd44739454",
+      "scope": "3488-3505 native statusproducer."
+    },
+    "edgion-gateway/src/observe/metrics/registry.rs": {
+      "sha256": "a53d0512e93bcce257f45cd21c9a90e5ca066ec6588e12b7c14ec1edbe6efc7d",
+      "scope": "918-935,1165-1175 actual increments."
+    },
+    "edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs": {
+      "sha256": "1e78b4bf440134f3f8949ab883bc1f767c0e70055164818c35fc0e2251b25eaf",
+      "scope": "395-425 fixedreason/502 emitter."
+    },
+    "edgion-gateway/tests/unit/backends/policy/backend_traffic/authority_test.rs": {
+      "sha256": "3b5e183a6a01e23c10ddbd90263b6c5f90d9542fde9f7529a59967c2d9b8c8aa",
+      "scope": "1-100 actual rendering/injection/IP regression."
+    },
+    "skills/04-review/testing/regression-guards/integration-lb-metrics-require-scoped-deltas.md": {
+      "sha256": "610f579998565c3e90353dc60d0cb29b59b482c393a88f6559142558fd3ec1ce",
+      "scope": "Full original."
+    },
+    "skills/04-review/backends/regression-guards/retry-budget-epoch-coherence.md": {
+      "sha256": "832da700fb1adf0d07eb1dab6dcf0a435c5895c35827c4d176ea46479ad0377f",
+      "scope": "Full original."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

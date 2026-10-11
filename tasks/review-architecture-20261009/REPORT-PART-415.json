@@ -1,0 +1,177 @@
+{
+  "partition": "PART-415",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/mod.rs",
+      "sha256": "7020c50f927ed0050ead9d22694f0cb5334bfced4383ba37cb4a86f897a0174c",
+      "fully_read": true,
+      "disposition": "No finding: module exports and typed current/dropped target policy wakeups use canonical semantic Gateway ancestry and role filtering"
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/reference_grant.rs",
+      "sha256": "d1424a4684ae618ef3b13922bc822979079fc7887045beb9ab085eb2612186be",
+      "fully_read": true,
+      "disposition": "No finding: grant store publishes before new/orphan/delete namespace dispatch; serial worker and existing recovery contracts justified"
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/request_mirror.rs",
+      "sha256": "b0886261b6c531a8f092958b9c257b0aaa19c70273dc66c034a8fa843e5e97ce",
+      "fully_read": true,
+      "disposition": "No finding: original actual field authority/root wakeups and separate mirror-role dependencies/status absence-before-denial accepted"
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/route_auth.rs",
+      "sha256": "ac3c4f0a4e9e820fd2f7a8788415b2c6dfdbc1cec1dbc7434a98c3e9b1536b07",
+      "fully_read": true,
+      "disposition": "No finding: root recovery receipts cannot substitute for child permission; scrub/acquire/apply/readonly paths share canonical bound material pipeline"
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/route_backend_refs.rs",
+      "sha256": "52c816a50c3fb3bd868f2b0c392dc8f7a46620e0ffe621bd9fec91acd1493304",
+      "fully_read": true,
+      "disposition": "No finding: cold dependency receipt is non-authoritative; valid terminal loans own Grant reads; invalid/denied target presence reads skipped"
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/route_delegation.rs",
+      "sha256": "b5fc711cdfc4baf0a2b97d1e298b444ba43a90ff334799744a2e9b5d7b8e0868",
+      "fully_read": true,
+      "disposition": "Candidate ARCH156: regex textual prefix check does not prove compiled segment containment; other DFS/filter/auth/locality/identity complexity justified"
+    }
+  ],
+  "candidates": [
+    "ARCH-156"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original personally retained; freshly hashed unchanged applicable gates"
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original personally retained; freshly hashed unchanged applicable gates"
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original personally retained; freshly hashed unchanged applicable gates"
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full original personally retained; freshly hashed unchanged applicable gates"
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original personally retained; freshly hashed unchanged applicable gates"
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full original personally retained; freshly hashed unchanged applicable gates"
+    },
+    "skills/01-architecture/05-resources/SKILL.md": {
+      "sha256": "dae4740e05545a9d674199070cc49a6559fd921e69ae0d08dab19dc51d3efef6",
+      "scope": "full"
+    },
+    "skills/04-review/handler-requeue/SKILL.md": {
+      "sha256": "4a0ed8f3890f002cf754c9d2f58aa4f7ed5c03713f7e1b80cb3a43f5facc8e4c",
+      "scope": "full"
+    },
+    "skills/04-review/routing/SKILL.md": {
+      "sha256": "a6ddc1d0d71b94b8ce7758a52ef261b35caff48be4925806c90dfe81fc1083f4",
+      "scope": "full"
+    },
+    "skills/01-architecture/05-resources/11-reference-grant.md": {
+      "sha256": "d184efdff0daa2d47007aafa95739a91e896f94c0484d474d6a3c5cb75d10350",
+      "scope": "full"
+    },
+    "skills/01-architecture/05-resources/04-http-route.md": {
+      "sha256": "0f3d650acb823e939e7b723b15c2bbb0f8e293ccc6fa14ecb69cea89e67320d3",
+      "scope": "1-290 selected ownership/delegation/auth/compiled backend"
+    },
+    "skills/04-review/handler-requeue/mandatory-design/handler-requeue-rule.md": {
+      "sha256": "4d089de595f7c2f7816d25fff9f600a9aebfda3c29d83e77621e085faaf7f586",
+      "scope": "full"
+    },
+    "skills/04-review/handler-requeue/regression-guards/reference-grant-dependency-before-authorization.md": {
+      "sha256": "53f1c5febed6161b22954ec3c508e7042c7a4b0f0c38998d28722ebb8f403792",
+      "scope": "full"
+    },
+    "skills/04-review/routing/regression-guards/delegated-extensionref-remains-child-local.md": {
+      "sha256": "334fb6ecb6f7e15c313521799ea5d53db819ee75b6da57711f73addc35f2e19b",
+      "scope": "full"
+    },
+    "skills/04-review/routing/regression-guards/delegation-root-prefix-inherits-scope.md": {
+      "sha256": "8ba5b4b4611235ce070320195734d49502e88630e75517e54e3b49660d5fec38",
+      "scope": "full"
+    },
+    "skills/04-review/routing/intentional-design/route-architecture-consistency.md": {
+      "sha256": "f9fec83a1d5226d5f101715fb538c2e54c0b90cff40dc5cf57c0aa00a58b4464",
+      "scope": "full; truncated middle recovered121-237 and96-126"
+    },
+    "skills/04-review/cpu-memory/review-evidence/http-grpc-route-regex-matching-no-fallback.md": {
+      "sha256": "d1a86fadf26db018e6df35cbf7684a1f238f0523840bc0e536f63d6f5ab97423",
+      "scope": "full"
+    },
+    "skills/04-review/request-mirror/regression-guards/mirror-reference-grant-enforcement.md": {
+      "sha256": "1395c3c1bdd49064f65d4f9e7b19560025db612a0b30b8619b0cca5d011f8070",
+      "scope": "full;105-end recovered"
+    },
+    "skills/04-review/request-mirror/regression-guards/mirror-standard-validation-and-service-status.md": {
+      "sha256": "976e6b0d0c34c638e31141f3ba30724b960df97fd753310deac52da5101ddc9d",
+      "scope": "full recovered"
+    },
+    "docs/en/user-guide/http-route/delegation.md": {
+      "sha256": "1d8c10f10aae9b3ed9317d37f1be86639a5befe62b3fbf0f282a2514b664850c",
+      "scope": "82-108 path segment and regex contract"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/service_ref.rs": {
+      "sha256": "92ce46eea48b17b4f224c59157b7c31c165ea1c15f3f40cb15b1d6398e4f8cb5",
+      "scope": "full51"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/http_route.rs": {
+      "sha256": "826bcdd3deded094b2f450527d36b2978855901442a8767aa47cc6bce5b71ddd",
+      "scope": "55-115,330-434,544-635,1263-1345 actual adapter/flatten/retained dependency/callback/invalid-rule bodies"
+    },
+    "edgion-gateway/src/routes/http/conf_handler_impl.rs": {
+      "sha256": "49894825ccd9db485962bcabd8a8d463b65e7df9730ad146cf9ded4d50b10f31",
+      "scope": "325-390,630-710 actual compiled regex/effective rules/RegexSet owner"
+    },
+    "edgion-gateway/src/routes/http/match_unit.rs": {
+      "sha256": "05d7510e81cb3bb4e3ee3b85526120ea8af56a4f09f89eeefd9665541a2052dc",
+      "scope": "395-415 compiled regex is_match"
+    },
+    "edgion-gateway/src/routes/http/match_engine/regex_routes_engine.rs": {
+      "sha256": "e44d8f300da24c1c34abebb806511ed9211fbc716a4f6baceb81187e1f9a6676",
+      "scope": "full123 actual set/fallback paths no parent-prefix guard"
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/route_auth_test.rs": {
+      "sha256": "c8835807d1c64296c51130b5bb379c0e800c9377414532fdb96e0c0102634b06",
+      "scope": "full273"
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/reference_grant_test.rs": {
+      "sha256": "a538ebf59b0d52ed144f02f512015598bec20537dc2251cbdf65e9e402fbb41b",
+      "scope": "full228"
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/mod_test.rs": {
+      "sha256": "e5ee2f9250277a00f6a8e9a69594b306cf5e22fe11dc0c660ee3746a0fea0078",
+      "scope": "full230;1-25 truncation recovered"
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/mod_test/parent_status_identity_test.rs": {
+      "sha256": "e49b3341e57442df0c596f02ad7d06b0dba2521ec425de7632ec6e1a3a913b12",
+      "scope": "1-154 complete owner/default/port isolation test; excluded partial second body"
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/route_backend_refs_test.rs": {
+      "sha256": "6596a46fbd5e9b3f3cedeeb40c81f8c7fd7100807f6e705a51de879db85b984d",
+      "scope": "full434;34-71 and330-365 truncations recovered"
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/request_mirror_test.rs": {
+      "sha256": "ea9635b7d340051503e5511f225d26eed76e96edcbda704226f23d9c8fac575b",
+      "scope": "actual bodies68-199,287-345,378-455"
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/route_delegation_test.rs": {
+      "sha256": "28c55a18ad344af8bd0ef53279e70181e3621d15eda5c78ab3c4cbe8fb300730",
+      "scope": "actual fixture1-110 and tests314-572,599-657,724-791,842-1539,1622-1802; selected not full1802-line file"
+    }
+  },
+  "limits": "Static full six primary implementations and selected actual tests/contracts; no execution. Large delegation/mirror tests selected rather than full. Source witness uses eligible parent/listener and otherwise-valid child, no deployed exploit/performance claim. Cold clone simplifications not findings without substantive owner drift or measured amplification."
+}

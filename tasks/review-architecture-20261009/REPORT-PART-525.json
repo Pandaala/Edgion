@@ -1,0 +1,114 @@
+{
+  "partition": "PART-525",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_tls/last_known_good/last_known_good.rs",
+      "sha256": "8a44e763c6fff65ac670ea794b7e1a3f479abb9f16613173f714da3b4bd9592b",
+      "fully_read": true,
+      "disposition": "Full422 lines all4 actual initial/fallback cases, fixture-serial/recovery helper and native/OpenSSL/stash/status/message predicates. Existing ARCH288 owns blocking child; additional ARCH266 all-parent flatten then first condition violates selected owner. No distinct new cause. Exact serial barriers and no-restash recovery semantics preserved."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_tls/last_known_good/mod.rs",
+      "sha256": "eb7836441819e12a521719554eadc64487970f754d0c2edba4bf8b5659172b29",
+      "fully_read": true,
+      "disposition": "Full6 static exports and real dynamic/CLI consumers; no finding."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original rules retained."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Original index retained."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full graded gates retained."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Original index retained."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Original routing retained."
+    },
+    "skills/05-testing/01-integration-testing.md": {
+      "sha256": "e260042b508fa0956873d1b3c059531f1733a7c15423c548081afb71703a10e1",
+      "scope": "Full original guide retained."
+    },
+    "skills/04-review/tls/regression-guards/edgion-tls-incremental-atomic-publication.md": {
+      "sha256": "2416d726633ba4ed77a9b0695ce641104c1d8037dabc5a1dcaa82effde680a80",
+      "scope": "Full original independently bounded LKG publication contract, history not fresh tests."
+    },
+    "skills/04-review/tls/intentional-design/last-known-good-follows-resource-key.md": {
+      "sha256": "10a2a49a357d9c01f9b5f3daf48052640c423269418d59bbb575d485bcfea390",
+      "scope": "Full original accepted availability policy versus object lifetime."
+    },
+    "skills/04-review/status/regression-guards/canonical-parent-status-ownership.md": {
+      "sha256": "4c6bba39e7cb8bbdb366d0645896ed941faf67c023e452b7fd2ffd9f2d148a76",
+      "scope": "Full original foreign/current/controller/canonical identity including EdgionTls native status."
+    },
+    "edgion-tests/src/client/dynamic/scenarios/edgion_tls_last_known_good.rs": {
+      "sha256": "328569727113cff6b3dd782d8a623875917bdfac1f11181e28288deb4b86c98b",
+      "scope": "Full actual scenario generation/fixture serial/recovery/rotation/paired result/restoration; already reviewed444 supporting reread only."
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "Actual client5s and cooperative case30s deadline retained."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "Prior full actual phase exports/registrations retained."
+    },
+    "edgion-tests/src/client/suites/edgion_tls/mod.rs": {
+      "sha256": "153105658634e2e984dfb532b5edcffef4000e752bb096ce39a32a6ba29bb055",
+      "scope": "Full actual parent reexports."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_tls.rs": {
+      "sha256": "47b60b8e147ac8fd1d1ad341819fa98a2fd1dd1bd75f43203f494d28f5fc479f",
+      "scope": "465-525 actual selected controller parent writer/foreign-preserving retention."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/mod_test/parent_status_identity_test.rs": {
+      "sha256": "e49b3341e57442df0c596f02ad7d06b0dba2521ec425de7632ec6e1a3a913b12",
+      "scope": "1-156 actual six-writer fixture generator and complete foreign-first/last/default/port/reconcile timestamp test; TLS included."
+    },
+    "edgion-tests/integration/conf/EdgionTls/LastKnownGood/initial/Gateway.yaml": {
+      "sha256": "6fe460f9e1b251c35a9c5e8932a91ac5882f4c30da6add9ce268ff5163f4160b",
+      "scope": "Full actual31201 lkg.example.com/lkg-gateway https-lkg attachment; backend incidental to serial assertion."
+    },
+    "edgion-tests/integration/conf/EdgionTls/LastKnownGood/initial/HTTPRoute.yaml": {
+      "sha256": "bba34e41ab724c0603b0f2a6207c77ba023f5c00bc17354b6c1e9b6b85a3d701",
+      "scope": "Full actual31201 lkg.example.com/lkg-gateway https-lkg attachment; backend incidental to serial assertion."
+    },
+    "edgion-tests/integration/conf/EdgionTls/LastKnownGood/initial/EdgionTls.yaml": {
+      "sha256": "e8883ad9e15613cc46105d180c4dc2389d6b3cc490291a562c81de5848b5b6d7",
+      "scope": "Full actual31201 lkg.example.com/lkg-gateway https-lkg attachment; backend incidental to serial assertion."
+    },
+    "edgion-tests/k8s/conf/EdgionTls/LastKnownGood/initial/Gateway.yaml": {
+      "sha256": "6fe460f9e1b251c35a9c5e8932a91ac5882f4c30da6add9ce268ff5163f4160b",
+      "scope": "Full actual31201 lkg.example.com/lkg-gateway https-lkg attachment; backend incidental to serial assertion."
+    },
+    "edgion-tests/k8s/conf/EdgionTls/LastKnownGood/initial/HTTPRoute.yaml": {
+      "sha256": "bba34e41ab724c0603b0f2a6207c77ba023f5c00bc17354b6c1e9b6b85a3d701",
+      "scope": "Full actual31201 lkg.example.com/lkg-gateway https-lkg attachment; backend incidental to serial assertion."
+    },
+    "edgion-tests/k8s/conf/EdgionTls/LastKnownGood/initial/EdgionTls.yaml": {
+      "sha256": "e8883ad9e15613cc46105d180c4dc2389d6b3cc490291a562c81de5848b5b6d7",
+      "scope": "Full actual31201 lkg.example.com/lkg-gateway https-lkg attachment; backend incidental to serial assertion."
+    }
+  },
+  "limits": "Static full-source review; no tests/build/network/child/source/Git mutation. Real serial acquisition is certificate selection evidence, not proof of Gateway internal rejected generation; Controller may reject first. Secret encoded values not needed/read as fresh support, generated local fixture absence not reported a defect. Existing approved-candidate ARCH288 already explicitly owns these helpers; no duplicate supplement. ARCH266 TLS owner extension awaits independent review; no false-success whole-scenario claim.",
+  "supplemental_candidates": {
+    "ARCH-266": {
+      "status": "awaiting-independent-extension",
+      "scope": "last_known_good.rs122-186 fetch_tls_conditions/find_condition and actual initial/fallback/recovery callers",
+      "evidence": "Flatten all complete parents then first matching condition ignores exactparent/controller even single declaredparent; actual producer keeps foreign-first/last parents."
+    }
+  }
+}

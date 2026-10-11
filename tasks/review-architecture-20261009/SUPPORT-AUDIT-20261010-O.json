@@ -1,0 +1,11 @@
+{
+  "complete": true,
+  "reviewer": "/root",
+  "baseline": "BASELINE-AUDIT-20261010-O.json",
+  "receipt_count": 425,
+  "unique_support_files": 1977,
+  "changed": [],
+  "missing": [],
+  "primary_coverage": 0,
+  "scope": "Fresh hash reconciliation of all support_selected entries in saved partition reports and independent receipts. This verifies evidence currency, not new implementation reading or executed behavioral tests."
+}

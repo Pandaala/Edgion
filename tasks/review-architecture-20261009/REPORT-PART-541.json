@@ -1,0 +1,101 @@
+{
+  "partition": "PART-541",
+  "analyst": "/root/analyze_outbound",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/gateway/tls/backend_tls/backend_tls.rs",
+      "sha256": "4460e060337696b32d3bcea2243d9e5c7ce12ffd4ee56b7376ae901d3b40c34a",
+      "fully_read": true,
+      "disposition": "Full1-312; ARCH342 ordinary marker echo not checked; reserved X-Trace-ID literal forwarding excluded. Generic negative5xx attribution and stale intro comments remain limitations."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/gateway/tls/backend_tls/mod.rs",
+      "sha256": "d107d8af9ce5aeb93e75b683c355554ece59bb3a8f2bd71a50c7058afdff88d4",
+      "fully_read": true,
+      "disposition": "Full1-7 export/case composition; no issue."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/gateway/tls/backend_tls/pool_isolation.rs",
+      "sha256": "b8681af81a2ac3cfd77674ce256bbcbebec9a1dc0398f42d8033ad01f295eecc",
+      "fully_read": true,
+      "disposition": "Full1-231 real-socket reuse/CA rotation/rejection/recovery/business polling/fallible all-outcome cleanup.90s phase inside120s owning case; no issue."
+    }
+  ],
+  "candidates": [
+    "ARCH-342"
+  ],
+  "support_selected": {
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "1eb27bded8bcb40a82ea3cfd4ed6f20d386deedd1f349c7035a226fd44739454",
+      "scope": "700-719,3500-3535 echo/header producer;4670-4730 HTTPS/mTLS;4790-4821 verifier."
+    },
+    "edgion-gateway/src/request_trace_id/mod.rs": {
+      "sha256": "003101f5874221609d131dac0369f4c715fc8f76402666c863bee553ae24097c",
+      "scope": "1-152 canonical W3C/managed identity."
+    },
+    "edgion-gateway/src/backends/peer_builder.rs": {
+      "sha256": "b1ceab6e862bc12a76303adf78e19bd39aa5d4209ea95af95022ad7724b04ba9",
+      "scope": "162-286 current lookup/identity/CA/SAN/reuse."
+    },
+    "edgion-gateway/src/backends/policy/backend_tls/backend_tls_policy_store.rs": {
+      "sha256": "be00c75410baddf423128548f715408d807bb9277d43083627f02dab9b9d04f6",
+      "scope": "Full current1-618 material validation/occupancy/profile/publication."
+    },
+    "edgion-gateway/src/backends/gateway_backend_tls_store.rs": {
+      "sha256": "bc7a129a73be91f33e0f80998757fbdaf68985edbb81ba3bc522bbaa51fe66ad",
+      "scope": "Full current actual Gateway/key/material pairing/withdrawal."
+    },
+    "edgion-resources/src/resources/refs/gateway_tls_fields.rs": {
+      "sha256": "7817d79d16931efb92ce2fa8606c5edd088cc12bd1f428c841840b0d4fce8344",
+      "scope": "Full current1-180 actual field loan and doc-test bodies; no execution."
+    },
+    "edgion-gateway/tests/unit/backends/peer_builder_test/pool_tests.rs": {
+      "sha256": "9ca3a059b183825d85169bce97fc96b1fc04ab0698098c292484d8857dc85b17",
+      "scope": "Full current1-207 same-serial controls/owner rotation/precedence."
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/BackendTLS/HTTPRoute_edge_backend-tls.yaml": {
+      "sha256": "edf14cd6f731cdc9de264d525edee1dc0ce87f73b1ad225a48410027c345c44a",
+      "scope": "Full1-20 TLS target."
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/BackendTLS/HTTPRoute_edge_backend-mtls.yaml": {
+      "sha256": "061255bd77614b14e4f05e09d1efbf0a1d080218e69422d583c60fa13f9ef4a6",
+      "scope": "Full1-26 mTLS/no-client-cert targets."
+    },
+    "skills/04-review/tls/regression-guards/backend-client-identity-tls-selection.md": {
+      "sha256": "52d401e5191c6f51e98243528bd8467d41d19787a482aa2de6048dc03cfbae72",
+      "scope": "Full current1-143 material pairing/withdrawal/precedence."
+    },
+    "skills/04-review/tls/regression-guards/backend-tls-pool-isolation.md": {
+      "sha256": "ada3c00c00d0c0c04df2bc0f14ba6240e028943f4ffc10b033935c7c2c2dcc82",
+      "scope": "Full current1-135 real socket continuity/bounded business polling."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "Retained full;2490-2513 registration."
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "Retained full context/deadline/Admin apply."
+    },
+    "AGENTS.md": {
+      "sha256": "cba9f532fa1c9f70e6a921e1a2331e7ca78c8210981a072a74cdebf4d85d3e42",
+      "scope": "Personal full current rules."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Personal full retained index current hash matched."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "c78c86675ca6c72adb30d0f59727509486b582ef2c7f3318bf14e61745eff055",
+      "scope": "Personal full current graded gates."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Personal full current original routing."
+    }
+  },
+  "limits": [
+    "Source only; no TLS/pool execution. Generic negative5xx lacks unique client-auth oracle; no telemetry recommendation. No live H2/identity rotation claim."
+  ]
+}

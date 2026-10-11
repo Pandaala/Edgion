@@ -1,0 +1,263 @@
+{
+  "partition": "PART-202",
+  "analyst": "/root/analyze_outbound",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-resources/src/resources/http_route.rs",
+      "sha256": "8229971982f61024d1bf8d8b475ea110334844b0c0c11011026af0ced414b2b1",
+      "fully_read": true,
+      "disposition": "ARCH-060; separate session-lifetime grammar and no cold resolved runtime scalar. Native CORS/mirror/path/header/auth/transport owners otherwise coherent."
+    },
+    {
+      "path": "edgion-resources/src/resources/http_route_ai_admission.rs",
+      "sha256": "1b1ccb8c301a72896f933c9c0cdee50c6b6a2f48dd70ceeb4fe81ca904d40d03",
+      "fully_read": true,
+      "disposition": "AI source facts retain original slots and recompute after flattening; captured-scope publisher gate and actual same-route Weak generation boundary; no additional finding."
+    },
+    {
+      "path": "edgion-resources/src/resources/http_route_preparse.rs",
+      "sha256": "bd4df4d61d01ee2cd2a4f3081729988cf1adc391d1b66bbd05cd22516d813704",
+      "fully_read": true,
+      "disposition": "Canonical path and authored/resolved cold preparation; strict annotation and independent mirror capacity fallback; supports ARCH-060. Arbitrary decoded mutation is not production evidence."
+    }
+  ],
+  "candidates": [
+    "ARCH-060"
+  ],
+  "support_selected": {
+    "edgion-resources/src/duration.rs": {
+      "sha256": "481bafe576d87e0f92c8d01d616e2039e9b80091160d027544eabd3bf1ea3330",
+      "scope": "Full; canonical grammar/trim"
+    },
+    "edgion-resources/src/resource/meta/impls.rs": {
+      "sha256": "27c60a71a1cf5ea7b95534fd66fc6d8ef9a1b82eefc7a682ed8f15226ccb8ac1",
+      "scope": "1-65"
+    },
+    "edgion-resources/src/resources/grpc_route.rs": {
+      "sha256": "dbe3db908c94e634efe5c03296c669df5831c8601513a38860ff87444ac8a425",
+      "scope": "575-615 plus symbol-selected shared session configuration/effective-rule members"
+    },
+    "edgion-resources/src/resources/refs/targets.rs": {
+      "sha256": "8d7c99578a322a78a4ceff3cdfb3e2187fc4fc326635f714557a657c1ef0b924",
+      "scope": "1-110"
+    },
+    "edgion-resources/src/resources/refs/route_fields.rs": {
+      "sha256": "4c44e6dda6e93d5e97653d0a453868e5d98d808213328ad738e757c7c24f28a5",
+      "scope": "250-349,454-536"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/http_route.rs": {
+      "sha256": "826bcdd3deded094b2f450527d36b2978855901442a8767aa47cc6bce5b71ddd",
+      "scope": "263-458,640-744,1054-1205,1248-1322"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/route_delegation.rs": {
+      "sha256": "b5fc711cdfc4baf0a2b97d1e298b444ba43a90ff334799744a2e9b5d7b8e0868",
+      "scope": "40-78,792-838,1024-1058"
+    },
+    "edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs": {
+      "sha256": "81db42781da15c030a91759b7b38b9492ac9a796c597d26fc70be5967309930f",
+      "scope": "192-224,280-308,320-349"
+    },
+    "edgion-gateway/src/routes/http/conf_handler_impl.rs": {
+      "sha256": "49894825ccd9db485962bcabd8a8d463b65e7df9730ad146cf9ded4d50b10f31",
+      "scope": "524-599"
+    },
+    "edgion-gateway/src/routes/http/match_unit.rs": {
+      "sha256": "05d7510e81cb3bb4e3ee3b85526120ea8af56a4f09f89eeefd9665541a2052dc",
+      "scope": "86-143,180-286"
+    },
+    "edgion-gateway/src/routes/grpc/match_unit.rs": {
+      "sha256": "16ed2689987e5c1f4eb950cb2081e60be47c90a9e9ef74213432dfbe07cf8cbe",
+      "scope": "105-169"
+    },
+    "edgion-gateway/src/plugins/publication/publisher.rs": {
+      "sha256": "ad317dc250d7eae46decb51ed2484aadbc8d21ce449b3fbef292ed1f10f45983",
+      "scope": "760-848"
+    },
+    "edgion-gateway/src/plugins/publication/views.rs": {
+      "sha256": "8a6fa0e34b7be2833a648d7feb6840043bc6f5b620b5dd344e521a9d25a3abe9",
+      "scope": "1-70"
+    },
+    "edgion-gateway/src/ctx.rs": {
+      "sha256": "dd23711a474df4122dd3b0264c7293366c27ba2688a9eb390b24e842f6e6335d",
+      "scope": "3635-3672,3895-3910"
+    },
+    "edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_filter.rs": {
+      "sha256": "bfa2ac6926771a8c0b74d557b17bdddd9e0a17fc50770b537b6db2fe25d03dcf",
+      "scope": "313-400"
+    },
+    "edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs": {
+      "sha256": "1e78b4bf440134f3f8949ab883bc1f767c0e70055164818c35fc0e2251b25eaf",
+      "scope": "935-985,1148-1168"
+    },
+    "edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs": {
+      "sha256": "87182925d95a051b181344926bd6dd1912283178bfd7f0df40aec83e63178d2a",
+      "scope": "303-324"
+    },
+    "edgion-gateway/src/routes/http/session_persistence.rs": {
+      "sha256": "6cc51518cd3c1d5c018f8379f78ae0df929f035aac6da1434576aeb8d34c3666",
+      "scope": "110-165,215-281"
+    },
+    "config/crd/gateway-api/gateway-api-experimental-v1.6.2.yaml": {
+      "sha256": "fb03263a4a720cc7abe9b36ede6e308b558d2d725a39595d664f34fe37f9c503",
+      "scope": "11250-11378"
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/http_route_test.rs": {
+      "sha256": "f417cf6d819f6d21b6f7fb062799dcb247dd6909001f40ecd7167822f725c17e",
+      "scope": "535-632,1858-1898,2364-2426"
+    },
+    "edgion-gateway/tests/unit/plugins/publication/mod_test.rs": {
+      "sha256": "ccb6703608d33d4f404bf1fdb440608d2a5edeca752dc3de91f54067b8e77a59",
+      "scope": "699-735,826-891"
+    },
+    "edgion-gateway/tests/unit/routes/http/conf_handler_impl_test.rs": {
+      "sha256": "b514ec69d82b0524a3ee3457f2db1b0e0a9a8aa03eb9ae4c755736839532bba8",
+      "scope": "1392-1426 full mirror test; preceding/next test partial only"
+    },
+    "edgion-gateway/tests/unit/routes/http/session_persistence_test.rs": {
+      "sha256": "d532fa15341ceeba04250966f7c60ff3330baecd93c10c0491cc283d84a60a8e",
+      "scope": "180-260,310-365"
+    },
+    "edgion-resources/tests/unit/resources/http_route_test.rs": {
+      "sha256": "7e6bb0f7b44bb5f8b17252a08bbd3f0893e5473842df13d1f5a6a4b79523bf13",
+      "scope": "Full personally read by analyst"
+    },
+    "edgion-resources/tests/unit/resources/http_route_ai_admission_test.rs": {
+      "sha256": "360763ad9e576469dc3e613408e48017e6697ba9a575bfe82ffabc3ff7e4d501",
+      "scope": "Full personally read by analyst"
+    },
+    "edgion-resources/tests/unit/resources/http_route_preparse_test.rs": {
+      "sha256": "ea8a1f3279a5e49bab3e013b9a778a3ff9c2f4aed529dc9ced67617846be82c3",
+      "scope": "Full personally read by analyst"
+    },
+    "edgion-resources/tests/unit/resources/http_route_test/source_version_tests.rs": {
+      "sha256": "7706af1e5616e2f46d60eea77b112994aec593bd45abbf6a8a0532643787647b",
+      "scope": "Full personally read by analyst"
+    },
+    "edgion-resources/tests/unit/resources/http_route_test/logical_slot_identity_tests.rs": {
+      "sha256": "66a4abf4f808ae4d15b71783c5cd98138eb41ad3e960d2480832cab7692c3524",
+      "scope": "Full personally read by analyst"
+    },
+    "edgion-resources/tests/unit/resources/http_route_test/v16_retry_tests.rs": {
+      "sha256": "30ae152a7a7e1fc69b84653dc5a8f059a3c54192ee5389ec14004d4357fbe978",
+      "scope": "Full personally read by analyst"
+    },
+    "edgion-resources/tests/unit/duration_test.rs": {
+      "sha256": "68f3728d210affd6bc8d2c1f5bfe48b9455183cfeba65a80dea7d34503e37ab1",
+      "scope": "Full personally read by analyst"
+    },
+    "skills/01-architecture/05-resources/04-http-route.md": {
+      "sha256": "0f3d650acb823e939e7b723b15c2bbb0f8e293ccc6fa14ecb69cea89e67320d3",
+      "scope": "Full personally read by analyst"
+    },
+    "skills/02-features/03-resources/04-httproute.md": {
+      "sha256": "8d4ca7bef2d054f36cab55e22984daabd0385a3a7c232bea6d011133b07212f5",
+      "scope": "Full personally read by analyst"
+    },
+    "skills/04-review/ai-routing/SKILL.md": {
+      "sha256": "514a6c505446a2cfdba1132203f8c32b98dfb3f2327f0a94928fcbdffd9e4e54",
+      "scope": "Full personally read by analyst"
+    },
+    "skills/04-review/ai-routing/regression-guards/ai-rule-accepted-escalates-only-when-nothing-serves.md": {
+      "sha256": "6e6b560bd84cca419c4f7a431c7b4362cd80f38ba10ba14700f5ba4c89dfbe21",
+      "scope": "Full personally read by analyst"
+    },
+    "skills/04-review/resources/intentional-design/gep2257-duration-field-scope.md": {
+      "sha256": "11d4cbe043235ed6ae8e43f4453fce6e0b75f0b918c6ad3ca15e98aa940b7201",
+      "scope": "Full personally read by analyst"
+    },
+    "skills/04-review/routing/intentional-design/session-persistence-two-state-inheritance-and-k8s-strict-scope.md": {
+      "sha256": "a346d004d2d277d72d8cd585e3ee2c89b9b2e7b0fc7c6d88d3462ee1000b2ea3",
+      "scope": "Full personally read by analyst"
+    },
+    "skills/04-review/routing/regression-guards/delegated-extensionref-remains-child-local.md": {
+      "sha256": "334fb6ecb6f7e15c313521799ea5d53db819ee75b6da57711f73addc35f2e19b",
+      "scope": "Full personally read by analyst"
+    },
+    "skills/04-review/routing/regression-guards/delegation-root-prefix-inherits-scope.md": {
+      "sha256": "8ba5b4b4611235ce070320195734d49502e88630e75517e54e3b49660d5fec38",
+      "scope": "Full personally read by analyst"
+    },
+    "skills/04-review/request-mirror/intentional-design/mirror-tuning-annotations-vendored-crd-prune.md": {
+      "sha256": "488d1b70e2192f0d7f758dad447c57f3c0846cd8ea34cad18bb089aca2c04f2a",
+      "scope": "Full personally read by analyst"
+    },
+    "skills/04-review/request-mirror/regression-guards/mirror-standard-validation-and-service-status.md": {
+      "sha256": "976e6b0d0c34c638e31141f3ba30724b960df97fd753310deac52da5101ddc9d",
+      "scope": "Full personally read by analyst"
+    },
+    "skills/04-review/routing/regression-guards/http-header-match-first-name-wins.md": {
+      "sha256": "044c0f2a1b8e917995b259d7276ab732c63bd0624c5c0a6846bf8cc5fc3cf96a",
+      "scope": "Full personally read by analyst"
+    },
+    "skills/04-review/cors/regression-guards/native-v15-validation-parity.md": {
+      "sha256": "6e41dcda409201f469a6f6db63bd1e3e03297e60bcf453a6ad4d730da2922823",
+      "scope": "Full personally read by analyst"
+    },
+    "skills/04-review/cors/intentional-design/native-cors-rule-scope.md": {
+      "sha256": "c349246ae21b8e8be39a1acd0fd31e3c81ab50ccb6c41eb3b5815e1193743802",
+      "scope": "Full personally read by analyst"
+    },
+    "skills/04-review/cors/intentional-design/native-credentialed-exposure-policy.md": {
+      "sha256": "081ce6eeb6f3228067b2993d463c03f19a0affb45da2c58f438967b02e271c43",
+      "scope": "Full personally read by analyst"
+    },
+    "skills/04-review/plugin-runtime/regression-guards/gw-plugin-runtime-01-httproute-external-auth-invalid-plugins-never-sealed.md": {
+      "sha256": "e3346d13b7b1b41d7a750d9eb19b2d400fd72a04e9b7344d9bb43d36733ad9bb",
+      "scope": "Full personally read by analyst"
+    },
+    "skills/04-review/plugin-runtime/regression-guards/scoped-policy-runtime-publication.md": {
+      "sha256": "487b19a41c8f05d36f0b1519133b8c1b834270c34e8120078a3d62235d900d5f",
+      "scope": "Full personally read by analyst"
+    },
+    "skills/04-review/routing/regression-guards/sp-strict-mode-fail-close.md": {
+      "sha256": "cad1cad4717579632969e4f7a4ca791c5e8481994592b1387fa8dd26edc3903d",
+      "scope": "Full personally read by analyst"
+    },
+    "skills/04-review/routing/intentional-design/local-reply-drops-sticky-set-cookie.md": {
+      "sha256": "739b3064002b736782900a68d23c1cf7a3331d4ac50c243893c35fcea8134a13",
+      "scope": "Full personally read by analyst"
+    },
+    "skills/04-review/routing/regression-guards/gateway-api-extensionref-validation-fails-closed.md": {
+      "sha256": "f373eee47ab7daedb5a169ef8c528521265288eecb78e2b6bd5c4df88b62638c",
+      "scope": "Full personally read by analyst"
+    },
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original personally retained by same analyst; fresh344-360 canonical-duration re-read"
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original personally retained by same analyst; fresh344-360 canonical-duration re-read"
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original personally retained by same analyst; fresh344-360 canonical-duration re-read"
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full original personally retained by same analyst; fresh344-360 canonical-duration re-read"
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original personally retained by same analyst; fresh344-360 canonical-duration re-read"
+    },
+    "skills/01-architecture/05-resources/SKILL.md": {
+      "sha256": "dae4740e05545a9d674199070cc49a6559fd921e69ae0d08dab19dc51d3efef6",
+      "scope": "Full original personally retained by same analyst; fresh344-360 canonical-duration re-read"
+    },
+    "skills/01-architecture/05-resources/00-schema-transport-contract.md": {
+      "sha256": "d20e74c1c7ccf6183f893bc919767a27bd3fbb47486415d14651a76fdef5a597",
+      "scope": "Full original personally retained by same analyst; fresh344-360 canonical-duration re-read"
+    },
+    "skills/01-architecture/00-common/05-unification-points.md": {
+      "sha256": "011c7e0897b5af81b6459096b678774d9ac988843f705295ecc559d8892d7d92",
+      "scope": "Full original personally retained by same analyst; fresh344-360 canonical-duration re-read"
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full original personally retained by same analyst; fresh344-360 canonical-duration re-read"
+    }
+  },
+  "limits": "Static full source/test and scoped supporting review only. No execution/benchmark/build/Git/network/writes or supporting primary coverage. Current AI admission supersedes stale escalation guidance; input mutation without production lifecycle is not a finding."
+}

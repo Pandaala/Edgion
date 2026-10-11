@@ -1,0 +1,99 @@
+{
+  "partition": "PART-340",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/plugins/http/request_mirror/budget.rs",
+      "sha256": "4ffe1335fe78a1e6e25232123aabca3f2690266ce2724467ac647b4cb4a69959",
+      "fully_read": true,
+      "disposition": "Full: process singleton prepared cold; task and exact owned body admission; final transport-clone lifetime retains both local/global leases and drops payload before permits."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/http/request_mirror/config.rs",
+      "sha256": "373f03468d4cb0959b3b97933633548309c9f5e67067ee4acbf7bf9e0c6a3bd5",
+      "fully_read": true,
+      "disposition": "Full: restart-only process limits resolved and bounded before initialization."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/http/request_mirror/mirror_log.rs",
+      "sha256": "b313b686d8401925c5fdf057a64aa525942ac13dd148aedbac8adce51ce16592",
+      "fully_read": true,
+      "disposition": "Full: canonical access-log sink, fixed coarse error classes/status and bounded outcome metric."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/http/request_mirror/mirror_state.rs",
+      "sha256": "62d82148deecf12bba4718c54b9e7491d10c875bcd50525eb46ad05d3dd7d35f",
+      "fully_read": true,
+      "disposition": "Full: empty historical declaration; actual context state owner and export traced. No cosmetic-move finding."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/http/request_mirror/mod.rs",
+      "sha256": "68b7a0685ac6c5df1cfe0295d888c7de9697caa62c4b22e9da0fb6c1ea39654a",
+      "fully_read": true,
+      "disposition": "Full: exports match startup/plugin consumers."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/http/request_mirror/plugin.rs",
+      "sha256": "fd1f288cef9740573b8c73733a7fab83b22da97ef548c9ccff54d4f605b0e2ad",
+      "fully_read": true,
+      "disposition": "Full 1-528: owner-bound authorized target, prepared section/scheme, current eligible endpoint safety, nonqueuing instance/process admission; isolated budgeted committed snapshot or bounded tee; cancellation reason before closure; response discarded after headers. Dedicated HTTP transport/LB/TLS limitations and first Connection-line gap are explicitly retained/deferred original decisions, not newly discovered issues. No new actionable architecture candidate. Endpoint presentation debt already ARCH021."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "edgion-gateway/src/cli/mod.rs": {
+      "sha256": "393ea796feb6e022ab7438e16e2084f2a94a21c1e470ec7befdc49f4cb3002bd",
+      "scope": "570-595 startup admission before plugin loading"
+    },
+    "edgion-gateway/src/plugins/http/common/http_client.rs": {
+      "sha256": "9f0a4228882de9f59967f46173bcbd0106bc38035210ec6d2aec153e39024717",
+      "scope": "78-115 singleton,150-224 canonical headers"
+    },
+    "edgion-gateway/tests/unit/plugins/http/request_mirror/config_test.rs": {
+      "sha256": "57925ff0b71bd7d84705a14e8b2efb022a58d4cbaba9b876abd6da551ed81a23",
+      "scope": "Full"
+    },
+    "edgion-gateway/tests/unit/plugins/http/request_mirror/budget_test.rs": {
+      "sha256": "44330844680e2ed58f26cf9f4af99708ec213338cb337013dfc16f80c143711b",
+      "scope": "Full"
+    },
+    "edgion-gateway/tests/unit/plugins/http/request_mirror/plugin_test/arming_tests.rs": {
+      "sha256": "5826dfaa49e74fa1a0965b352632d4933b3f561a4ee0194c8925dc304447d1cc",
+      "scope": "1-470 actual writer isolation, snapshot/framing/arming/cancellation; selected final tests"
+    },
+    "edgion-gateway/tests/unit/plugins/http/request_mirror/plugin_test/cancellation_tests.rs": {
+      "sha256": "4adbbba8028b84d30a41f56d70688bec1eb348ee0d3e54000eb46081b5821f7c",
+      "scope": "Full"
+    },
+    "edgion-gateway/tests/unit/plugins/http/request_mirror/plugin_test/budget_tests.rs": {
+      "sha256": "98c712510010fd54392145550605a4267de32f5e07182ed015a69b3011c53cb0",
+      "scope": "94-end actual process generation/last-clone/snapshot/disk streaming limits"
+    },
+    "skills/04-review/request-mirror/regression-guards/mirror-resource-budgets.md": {
+      "sha256": "100b3b87d22b4cb4cd09ad628a86af8d71811e99c294d9c90a2b7dae1c958fb6",
+      "scope": "Full original"
+    },
+    "skills/04-review/request-mirror/regression-guards/request-mirror-committed-body-snapshot.md": {
+      "sha256": "6de304ef4ff4ce90df01c730d722411502f0d3b6e46cff24eb9b9e38740e0161",
+      "scope": "Full original"
+    },
+    "skills/04-review/request-mirror/intentional-design/mirror-uses-separate-http-client-bypasses-lb-tls-policy.md": {
+      "sha256": "620a0dc969883bd6c3375bcf44a947f349dabfcd0bbf62cf0f8b0816a7c41155",
+      "scope": "Full original"
+    },
+    "skills/04-review/request-mirror/regression-guards/mirror-reference-grant-enforcement.md": {
+      "sha256": "1395c3c1bdd49064f65d4f9e7b19560025db612a0b30b8619b0cca5d011f8070",
+      "scope": "1-110 original denial/LKG/current owner policy"
+    },
+    "skills/04-review/request-mirror/regression-guards/mirror-standard-validation-and-service-status.md": {
+      "sha256": "976e6b0d0c34c638e31141f3ba30724b960df97fd753310deac52da5101ddc9d",
+      "scope": "1-105 canonical validation/service lifecycle"
+    },
+    "skills/04-review/http1/regression-guards/hop-by-hop-dynamic-stripping.md": {
+      "sha256": "72daaa0919d0df2cf4ee97bc7a66c2319230fa544ee723d5109b00225c4934a7",
+      "scope": "Full original including explicitly deferred first Connection-line gap"
+    }
+  },
+  "limits": "Static actual source/test inspection only. No execution/live mirror exchange/log delivery/framing proof or measurements. Original outcomes historical; no secondary primary credit."
+}

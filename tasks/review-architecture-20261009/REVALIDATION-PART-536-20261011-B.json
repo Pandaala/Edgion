@@ -1,0 +1,28 @@
+{
+  "partition": "PART-536",
+  "reviewer": "/root/verify_ip_union",
+  "complete": true,
+  "baseline": "BASELINE-AUDIT-20261011-B.json",
+  "new_primary_coverage": 0,
+  "conclusion": "Current TLS-reference preparation preserves explicit namedFalse verdicts; native Gateway status unchanged.339 independent current approval separately saved; absent admission evidence remains scoped limitation.",
+  "current_support": {
+    "skills/01-architecture/05-resources/01-gateway.md": "b7cbd1b2b4d53a76d4d636cec69b455d3365cbae3acab52f0de581b00012eda9",
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/gateway.rs": "685b8624f947af59c6f12303334fb27659861c8f4d28ae3eef75ebde17e38c86",
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/gateway_test.rs": "cacc52b25e1bcafd523233dc3fd99d5f085717f13ed1c96b881af6965aa2bb53"
+  },
+  "support_selected": {
+    "skills/01-architecture/05-resources/01-gateway.md": {
+      "sha256": "b7cbd1b2b4d53a76d4d636cec69b455d3365cbae3acab52f0de581b00012eda9",
+      "scope": "Full current native TLS-reference/intra-Gateway status contract."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/gateway.rs": {
+      "sha256": "685b8624f947af59c6f12303334fb27659861c8f4d28ae3eef75ebde17e38c86",
+      "scope": "826-898,1150-1360 actual precomputation/named conditions/removal."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/gateway_test.rs": {
+      "sha256": "cacc52b25e1bcafd523233dc3fd99d5f085717f13ed1c96b881af6965aa2bb53",
+      "scope": "710-770 actual named sharedPROXY listener conflict test."
+    }
+  },
+  "limits": "Restore historic unchanged primary reads after actual current supporting revalidation. No new primary reading, candidate self-verification or executed tests."
+}

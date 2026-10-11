@@ -1,0 +1,58 @@
+{
+  "candidate": "ARCH-084",
+  "complete": true,
+  "verifier": "/root/analyze_conversion",
+  "decision": "confirmed-with-revision",
+  "input_sha256": "40cd2db453a422386702103b82eb12e051b252268f9cf19ce0e26fbfd73fcf0e",
+  "approved_claim_sha256": "8023749f888dbe4406af4ca6e15e109b678ecf8df63ae33d3c804658bd49bcdf",
+  "evidence": [
+    "Outer shutdown drops connection future before tail cancellation.",
+    "Pinned0.7.19 token Drop does not cancel clones; DropGuard API does.",
+    "Quiet unchanged CSS forwarding retains concrete typed producer chain after client exits.",
+    "Cancellation must interrupt selected send while preserving active backpressure; ten-second hung detach exempt."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "edgion-controller/src/fed_sync/fed_client/mod.rs": {
+      "sha256": "b677aece92cd9df4e97b1d8f2bbcf849907681a75f99b3d4c03eaeed20051ccb",
+      "scope": "220-265,300-460,690-878 real lifecycle."
+    },
+    "edgion-controller/src/fed_sync/supervisor.rs": {
+      "sha256": "50964ce261d22e6dd8021439399c30cef94b4ba7d32b8fc9adb6f1184241ea63",
+      "scope": "1-102 top-level stop/detach."
+    },
+    "edgion-controller/src/conf_sync/conf_server/config_sync_server.rs": {
+      "sha256": "9b4a1e6e3168094ff95f8ce8253e509f628d8b4fbeb413e764edeb80d66d957c",
+      "scope": "280-354 downstream closure."
+    },
+    "edgion-controller/src/conf_sync/cache_server/cache.rs": {
+      "sha256": "aadad5a4f36ed54e6b0ca3142bba5e23e02f3ddae99ce147035c10b43228ac76",
+      "scope": "85-160,185-220,278-340 typed producer."
+    },
+    "edgion-controller/tests/unit/fed_sync/supervisor_test.rs": {
+      "sha256": "2668399b8717cf1c2065393b738415b3a4b195ff5e286b8515a63fc2c4e860b5",
+      "scope": "478-499,560-592 fake stop tests."
+    },
+    "skills/04-review/concurrency/intentional-design/orphaned-bg-task-accepted.md": {
+      "sha256": "1551a1cf51e8ef355066c1fc23ab6d85e14f31942925a85ceb7ddccf64f14a7c",
+      "scope": "1-70,90-EOF original process-lifetime exemption."
+    },
+    "skills/04-review/concurrency/intentional-design/watcher-send-await-backpressure-no-timeout.md": {
+      "sha256": "c0018d75a9c6a28a559c0502db921d4d4c8807a812faffd3e097690a5de04c75",
+      "scope": "1-82 original reliable backpressure."
+    },
+    "Cargo.lock": {
+      "sha256": "18b7b7dee01e024ab6d21f5692ce04a343c4fb265092c7f587099e91c28bea17",
+      "scope": "Actual tokio1.53.1/tokio-util0.7.19 pins."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-util-0.7.19/src/sync/cancellation_token.rs": {
+      "sha256": "e1e8131516deea5fc45131cad9e446e32353433941dd2418ab22b58a6113cb25",
+      "scope": "145-155,275-297 noncanceling Drop/drop_guard."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-util-0.7.19/src/sync/cancellation_token/guard.rs": {
+      "sha256": "89419faf3dec8ce4e5e2a00f43a55586e49465f5efabf5752e89074b0c6e542f",
+      "scope": "Full cancellation/disarm."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

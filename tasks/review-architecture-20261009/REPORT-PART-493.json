@@ -1,0 +1,51 @@
+{
+  "partition": "PART-493",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/ip_restriction_partial_good/ip_restriction_partial_good.rs",
+      "sha256": "f493f3dfe6cced1c541ca76a6d32722fea1f42cbcc68b96d84e14dd8fbf35f58",
+      "fully_read": true,
+      "disposition": "Full1-176,8827bytes; Four paired hit/miss cases referenced/inline keep valid CIDR beside invalid sibling; canonical RemoteIp/compiler/evaluator retained. No new cause."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/ip_restriction_partial_good/mod.rs",
+      "sha256": "21b2fda5aba578385028af11c1de026be030b1594300d7540bda7314390140d3",
+      "fully_read": true,
+      "disposition": "Full1-5,161bytes; Live export/registration accepted."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "edgion-gateway/src/plugins/http/ip_restriction/plugin.rs": {
+      "sha256": "f2737aa2f7772cafc79af9a744e3e356ded91d4212b1e30008b124d10deaab7b",
+      "scope": "Full1-259 canonical production matcher owner."
+    },
+    "edgion-gateway/tests/unit/plugins/http/ip_restriction/plugin_test.rs": {
+      "sha256": "9c5583b790b5cbe3980c25b62e1ee3aba49de966dcac27026260394ff99ba871",
+      "scope": "103-159 actual partial deny exact body tests."
+    },
+    "edgion-resources/tests/unit/matcher/ip_cidr_helpers_test.rs": {
+      "sha256": "f79cafff2273ec9035d63007dc12f73549b7c8f7491d0adde4d03a2406bc6432",
+      "scope": "382-455 actual keep/miss/duplicate/all-invalid tests."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/IpRestrictionPartialGood/01_EdgionConfigData_ippg-blocklist-hit.yaml": {
+      "sha256": "330c4f003ddb97a53fa419c43022f183d57afb53c0890c48d77f09ee93aca215",
+      "scope": "Full1-23 local hit fixture."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/IpRestrictionPartialGood/01_EdgionConfigData_ippg-blocklist-hit.yaml": {
+      "sha256": "97796294566fa5fb787d0a7e47d085ea661048275bf4a7f1c059302c60d3a503",
+      "scope": "Full1-23 K8s declared OrbStack192.168/16."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/IpRestrictionPartialGood/02_EdgionPlugins_inline_deny_hit.yaml": {
+      "sha256": "2950d0b63e49790dd3ca55343c5b2ff680594a175044105f6773cdcf596a3464",
+      "scope": "Full1-25 K8s inline hit."
+    },
+    "skills/04-review/ip-restriction/regression-guards/http-create-must-call-validate-and-init.md": {
+      "sha256": "0a8a5f66da1e2f57cc679518239b9cdea71aacb7d9779564e5f07bae6a11863f",
+      "scope": "Full1-101 original admission contract."
+    }
+  },
+  "limits": "Full seven YAMLs in each topology and local README; traffic-only cases intentionally do not claim status coverage, no266/348 extension. Stale local127/8 comments are documentation issue; K8s declared OrbStack not arbitrary cluster guarantee. Actual main2782-2804/local1935,2253/K8s2577 registered. Original root/nested discovery/index/routing/IP/algorithm/testing personally read; current graded gates retained/fresh. Static only, no execution or mutation, supporting zero coverage."
+}

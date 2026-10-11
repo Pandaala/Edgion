@@ -1,0 +1,12 @@
+{
+  "reviewer": "/root/verify_seed",
+  "complete": true,
+  "disposition": "confirmed",
+  "approved_input_sha256": "367754b64ec3776441048a5818c0321c5a62c891b1c42d2a896d6084295fe88f",
+  "approved_claim_sha256": "e15ee5eb0b02f9056f5d50699677191eb5060ee8581e0b444f706c4fd9eff521",
+  "evidence": {
+    "edgion-gateway/src/backends/discovery/coordinator.rs": "1869a0e26ecb55c60a4c9535be48ae2db1774e2b64c9f885f99533a1236b91f4",
+    "edgion-gateway/src/lb/compiled_selector.rs": "7d8e4fd31fa19bb1efe68c2c00a6a4074248cdbe7f657837aba719009fdb2a2f"
+  },
+  "limits": "Independent original rules/current implementation/caller/test review; static only, no executions/primary credit/measurements. Keep explicit preserved invariants and proposed implementation verification."
+}

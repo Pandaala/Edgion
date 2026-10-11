@@ -1,0 +1,144 @@
+{
+  "partition": "PART-224",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-common/src/dns/hickory.rs",
+      "sha256": "057ace18e7c5711b0e111497918f11f9f80ea91c1558244c0e59928b263ceb75",
+      "fully_read": true,
+      "disposition": "No finding: explicit port/UDP/TCP canonical resolver and actual tests."
+    },
+    {
+      "path": "edgion-common/src/dns/http_fetcher.rs",
+      "sha256": "e498a50ce51ea2086425dd95ac8602209f2313aad7526e489db176680fe1d533",
+      "fully_read": true,
+      "disposition": "ARCH-076: redact attached URL before transport errors become DNS diagnostics."
+    },
+    {
+      "path": "edgion-common/src/dns/httpdns.rs",
+      "sha256": "5acb828e1a4e160445afe9c8359859ccf77581bcbc8a61bbf3f30a2872b94c99",
+      "fully_read": true,
+      "disposition": "ARCH-077: prepare immutable response fields/pointer once, preserving conditional delimiter behavior."
+    },
+    {
+      "path": "edgion-common/src/dns/mod.rs",
+      "sha256": "21c00c02ea53136940640137bfe3c9989083a8b7dc486185927217fc7f547901",
+      "fully_read": true,
+      "disposition": "ARCH-077: existing actual-owner generation provides private response preparation seam."
+    },
+    {
+      "path": "edgion-common/src/dns/resolver_select.rs",
+      "sha256": "d7132f7fbfa6873e55c58162c301adf818fb37a2e12d398a1531c79cab78372e",
+      "fully_read": true,
+      "disposition": "No finding: borrowed precedence/actual owner proof/selected inline server ownership."
+    },
+    {
+      "path": "edgion-common/src/dns/standard.rs",
+      "sha256": "0004a898ec248a17d004015c8c34900cab141038896cba496b03ffb0fda9ba81",
+      "fully_read": true,
+      "disposition": "No bounded finding: native resolver sharing changes cache/lifecycle policies, not justified."
+    },
+    {
+      "path": "edgion-common/src/dns/system.rs",
+      "sha256": "c8d56d2a1ae428a4186343ecf2c6063ae52ca11e6a2348ee73560d5ff1556f5f",
+      "fully_read": true,
+      "disposition": "No finding: literal bypass/stable address deduplication verified."
+    }
+  ],
+  "candidates": [
+    "ARCH-076",
+    "ARCH-077"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full personal original governing rules."
+    },
+    "skills/04-review/ssrf/regression-guards/httpdns-endpoint-egress.md": {
+      "sha256": "54ec2fe8e1e4c0e93711afe06e13ea560f27833974d263bbfb008719156d6013",
+      "scope": "Full original endpoint/dial distinction."
+    },
+    "skills/04-review/link-sys/regression-guards/httpdns-prepared-runtime.md": {
+      "sha256": "097fa29239de62656a878a3a3842eb523ce8472d8b44f8c2b237d8bf1dc1ca34",
+      "scope": "Full current source/reference/generation contract."
+    },
+    "skills/03-coding/01-log-safety.md": {
+      "sha256": "74591411c294befded433b7c2be571202deb22ef36030a704caa60055f214863",
+      "scope": "1-150 actual URL/secret error ownership."
+    },
+    "edgion-common/Cargo.toml": {
+      "sha256": "ff48da27e3dac181748df83bf88b68e3be62e8b10fbe8f2f82842ed8706cc71c",
+      "scope": "Full DAG/dependency context."
+    },
+    "edgion-resources/src/resources/link_sys/httpdns.rs": {
+      "sha256": "8e231f3f924f5807bbec0b571a42fe1dd6c3abd0e0eaa969ceaae04a0b41967c",
+      "scope": "Full schema/preset/template/response/fallback body."
+    },
+    "edgion-controller/src/services/dns_resolver/service.rs": {
+      "sha256": "4d573f1812836daeac90075b566b64fc687ee01a3836ac91a4b260350019743f",
+      "scope": "100-145,314-345,460-545 generation/query/error/selection."
+    },
+    "edgion-gateway/src/backends/mod.rs": {
+      "sha256": "090a16c7dc7403426a93ece829b5d687021d34694c21356a6bf4eaed9b1b8256",
+      "scope": "285-307,330-419 actual upstream error and cache bypass/miss."
+    },
+    "edgion-gateway/src/link_sys/runtime/store.rs": {
+      "sha256": "b995c16f0e1b9cbde6cdc9c7a74576464b9f0184b9316e4924aac97c230970de",
+      "scope": "535-590 HTTPDNS replacement/failure."
+    },
+    "edgion-gateway/src/geoip/updater.rs": {
+      "sha256": "5d1046a9d5f2832107d2f6aa1939e872bd2a138dd8835dc59de04694ab503804",
+      "scope": "548-570,594-608 existing without_url projection."
+    },
+    "edgion-common/tests/unit/dns/hickory_test.rs": {
+      "sha256": "a97e688e777c333ed6300e5be4560f0629c51f850b64b560b360353ca10a7e84",
+      "scope": "Full actual test bodies."
+    },
+    "edgion-common/tests/unit/dns/system_test.rs": {
+      "sha256": "7ccec53147d3fd2beed0951a94da32336422973ac454ddf3d9270e1deabbe816",
+      "scope": "Full actual test bodies."
+    },
+    "edgion-common/tests/unit/dns/standard_test.rs": {
+      "sha256": "94e065022ad19960e7c9a80655996a10993f03ba74e2056f1111ac320149877c",
+      "scope": "Full actual test bodies."
+    },
+    "edgion-common/tests/unit/dns/httpdns_test.rs": {
+      "sha256": "e01048c7e646a5c73a5ab84929431068e226df8f4c22bd0d8eaf4ea59430bc45",
+      "scope": "Full actual test bodies."
+    },
+    "edgion-common/tests/unit/dns/resolver_select_test.rs": {
+      "sha256": "e162630d0773177c5ae7cae8d79000bf61dec1e10209d320531e1eca9a553a0c",
+      "scope": "Full actual test bodies."
+    },
+    "edgion-common/tests/unit/dns/mod_test.rs": {
+      "sha256": "7c159b3df191721cd745bde2736013829e1e90cda7e5e078c7c1811bf539b123",
+      "scope": "1-187,418-480 identity/proofs/failed fallback/query audits."
+    },
+    "edgion-common/tests/httpdns_fetcher.rs": {
+      "sha256": "aa0db0d79ef5d5b8911d4085a6e888c3c655dfcb4a18453b8df3d74134ff6943",
+      "scope": "1-230,250-280,318-344,385-458 actual transport/reuse/cancellation and beginning fallback."
+    },
+    "Cargo.lock": {
+      "sha256": "18b7b7dee01e024ab6d21f5692ce04a343c4fb265092c7f587099e91c28bea17",
+      "scope": "5538-5565 pinned reqwest0.12.28."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/reqwest-0.12.28/src/error.rs": {
+      "sha256": "4f2ffac588056f8d98f8619fa4046e66efee97c0faef51ddce9c07ea0a46601b",
+      "scope": "1-167,190-283 URL/without_url/kind/source/Display"
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/reqwest-0.12.28/src/async_impl/client.rs": {
+      "sha256": "8c30b009838be2126b90344ef97fb6141ac8bdf695f4e7bb00a3052a707d9b5c",
+      "scope": "3015-3090 request errors URL attachment"
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/reqwest-0.12.28/src/async_impl/response.rs": {
+      "sha256": "e7ad89c6473ad3adcb96a0adec857cc2c74bbabeffc56346efa270ce7082ea9f",
+      "scope": "305-331 chunk decode no attached URL"
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/reqwest-0.12.28/src/async_impl/body.rs": {
+      "sha256": "60948ec5a44c995beb2dd22f6d4ca1f48a56cf01f8fc3174ed809a1e3dd9ce59",
+      "scope": "371-417 timeout wrappers"
+    }
+  },
+  "limits": "All 7 implementations fully read and fresh SHA matched; static only/no execution. Send URL leak proven; chunk projection defensive only. Response prep must be infallible and preserve empty delimiter array distinction. No allocation-free/benchmark/TTL/new resolver claims; supports zero coverage."
+}

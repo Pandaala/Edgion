@@ -1,0 +1,567 @@
+{
+  "partition": "PART-447",
+  "analyst": "/root/analyze_outbound",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/region_route_validation.rs",
+      "sha256": "2e14b6d36e5e7e577248428f80b98bf5fde5b01d09fd98ea5f5e9da1c24eadaf",
+      "fully_read": true,
+      "disposition": "Full752 including tests; independent raw/current/effective/traffic observations,generation/modulo/onehop/422/cleanup; remote selection+address refusal deliberately not successful delivery. No newfinding."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/request_access_policy_hmac_dynamic.rs",
+      "sha256": "7a532588dcb205e47039c8426709e67f3e5359fc86887fdd492f9bb1de165408",
+      "fully_read": true,
+      "disposition": "Full68; capture rotation/deletion, all-outcome Secret restore+business barrier, real HMAC/sibling fallback. No newfinding."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/request_id_dynamic.rs",
+      "sha256": "119ffdd0a512e61e4c32e423402ed23de1ea3923e32719f5dc1b04db98e97201",
+      "fully_read": true,
+      "disposition": "Full146; response/upstream/custom log ID+unconditional W3C, default suppression,deletion/replacement, cleanup+absence. No newfinding."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/request_mirror_reference_grant.rs",
+      "sha256": "774c757aad156ba4aa81fa59c87b64a58a11c1a394d657c7dd5045568fcbf353",
+      "fully_read": true,
+      "disposition": "Full541 including embedded fixture test; ARCH266 supplementary check290-328 flat plugin conditions/firstrouteparent. Preserve distinct grants/specconvergence/receipt controls/fixed+chunked+prebuffered POST/sealedinvalid runtime/falliblecleanup."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/retained_listener_handles.rs",
+      "sha256": "dfffb47374878b99765a44a68d9485f59b9deee697a8f21fa3336bf0d9434ab1",
+      "fully_read": true,
+      "disposition": "Full298; accepted destructive logical Gateway recreation leaves startup listener oldmanager cleared; freshregistry exactdelta. Exclude from ARCH264 per original acceptedboundary."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/route_delegation_dynamic.rs",
+      "sha256": "563914fd1af75fb6107ab07edcaef07d2b38994d432e91fb86f935bad7e99fee",
+      "fully_read": true,
+      "disposition": "Full49; ARCH264 supplementary retained/pay-to-pay2 child; next direct initial assumes/pay200/pay2 404."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/service_degrade_threshold.rs",
+      "sha256": "61433a2d1786019601035345f25b93f6e15fa0507e99881bcd05f49df09ef7a3",
+      "fully_read": true,
+      "disposition": "Full172; freshbefore/after selectioncounter delta and actualtraffic, enabled/disabled barriers,allkeycleanup+absence; newrequest publication scope. No newfinding."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/sp_backend_change.rs",
+      "sha256": "6f4d8ca8b899827dedea229758441f2a5ba62ddc0af00178630a6fd987cebbcc",
+      "fully_read": true,
+      "disposition": "Full50; ARCH264 supplementary finalemptybackendA+weights0/50/50 versus initial100/0/0; restorebothsources preservecookie/accesslogfallback."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/sp_weighted.rs",
+      "sha256": "7cfd6b647a4d61c983112e71acd09f678719494ad7bcaa73fdaef9dd0776f051",
+      "fully_read": true,
+      "disposition": "Full65; ARCH264 supplementary final100/0+emptyB versus initial70/30 liveB; restorebothsources preserve sampling/isolation/sticky/refresh."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/tcp_esp_reload.rs",
+      "sha256": "309724620a415c59dea32748825635e6790d1e7b976acf670525bdd642e9e5ea",
+      "fully_read": true,
+      "disposition": "Full56; ARCH264 failure-after-deny skips finalallow; supporting phasehelper defect/framing lead deferred to real owning primary."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/tls_route_attachments.rs",
+      "sha256": "ae8aebc27dda3f6ec19d0c8a6eca88c18d740d346e97a49b911578f80a8c9d7c",
+      "fully_read": true,
+      "disposition": "Full411; strictbounded TLS/HTTP readers,healthycontrols,exactparent hostname/attachment,creationorder K8s delay accepted,all-outcome restore. No finding."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/tls_route_plugins_reload.rs",
+      "sha256": "2a06f42154340d9de4663c932bc0b3715c1fc44768fae13bb8e79e1ffe67c8b1",
+      "fully_read": true,
+      "disposition": "Full204; strictcanonical TLS controls bothsupportedmodes,stage2 semantics/capabilitydeferral/all-outcomecleanup+absence. No finding."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full1-464 personally retained original rules unchanged; no nested."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original knowledge index retained unchanged."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full graded gates retained unchanged."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full original retained."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original retained."
+    },
+    "skills/05-testing/SKILL.md": {
+      "sha256": "4ad0fb8f8a15693ec04116e8224095c6696bbe1e3e63f0a5528053e560466343",
+      "scope": "Full original retained."
+    },
+    "skills/05-testing/01-integration-testing.md": {
+      "sha256": "e260042b508fa0956873d1b3c059531f1733a7c15423c548081afb71703a10e1",
+      "scope": "195-455 personally retained original assertions/lifecycle."
+    },
+    "skills/04-review/testing/SKILL.md": {
+      "sha256": "11d71f0b85ff6695f99019bad1dc44c2520ec79eb185d93032bf8dda6d609271",
+      "scope": "Full original retained."
+    },
+    "skills/04-review/testing/mandatory-design/dynamic-secret-fixtures-must-be-tracked.md": {
+      "sha256": "89fb8808ce4ed6f005da1af4612e6732a851726a44b52de96fc9f35accf284dc",
+      "scope": "Full original personally read/revalidated; exact topic authority, historical execution not fresh."
+    },
+    "skills/04-review/testing/regression-guards/integration-orchestrators-need-owned-deadlines.md": {
+      "sha256": "932bd3bd8f8fa44d3f300898d5ac8f84c7b384cd9c7ce0584a731dcb0031b625",
+      "scope": "Full original personally read/revalidated; exact topic authority, historical execution not fresh."
+    },
+    "skills/04-review/testing/regression-guards/integration-suite-lifecycle-errors-must-fail.md": {
+      "sha256": "bf3999aaa30bb0bb903e5ae3aafe31442cb60f942ab04c1317c060d29a4f3906",
+      "scope": "Full original personally read/revalidated; exact topic authority, historical execution not fresh."
+    },
+    "skills/04-review/testing/regression-guards/integration-port-selection-must-fail-closed.md": {
+      "sha256": "c2ff61188030d30484afd0c1323201295fb980755c3e4738fe78dd8eea785b89",
+      "scope": "Full original personally read/revalidated; exact topic authority, historical execution not fresh."
+    },
+    "skills/04-review/testing/compatibility-constraints/kubernetes-dynamic-fixture-boundaries.md": {
+      "sha256": "4a4e0a5a3bfd0cdfa5519816ae2f3fc8a4a70cc57a6e5a0991d84953ec4bdc57",
+      "scope": "Full original personally read/revalidated; exact topic authority, historical execution not fresh."
+    },
+    "skills/04-review/listeners/regression-guards/retained-listener-manager-clearing-wire-coverage.md": {
+      "sha256": "d31cdd71a55c54a13eb846009b18df0bccca0366783e0c6a962ae437d3817a27",
+      "scope": "Full original personally read/revalidated; exact topic authority, historical execution not fresh."
+    },
+    "skills/04-review/listeners/intentional-design/gateway-recreation-requires-restart.md": {
+      "sha256": "7ac6f253ad0aeeeab4f34c7056c299b84a11e9daa6c65520eff45eb4327c0fe0",
+      "scope": "Full original personally read/revalidated; exact topic authority, historical execution not fresh."
+    },
+    "skills/04-review/routing/regression-guards/region-route-effective-table-validation.md": {
+      "sha256": "c5948cf1eba9fd3bfb2f830da3f1c7e6ab2916e95ad060d2d3f665e4bd880c3e",
+      "scope": "Full original personally read/revalidated; exact topic authority, historical execution not fresh."
+    },
+    "skills/04-review/tls/regression-guards/tls-route-stage-isolation.md": {
+      "sha256": "8a075b56883d0e850e36932d6781d6755a74fca5af5db16caa3893fa7a8a528d",
+      "scope": "Full original personally read/revalidated; exact topic authority, historical execution not fresh."
+    },
+    "skills/04-review/routing/regression-guards/tls-hostnames-per-attachment.md": {
+      "sha256": "7d300c4492838110d6ab4031c7859c65265bed6676229db9c631f5871a2731f5",
+      "scope": "Full original personally read/revalidated; exact topic authority, historical execution not fresh."
+    },
+    "skills/04-review/lb/regression-guards/sp-weighted-backends-resolve-before-selection.md": {
+      "sha256": "08de1b6f766f6fcf34895f4decd6aee384ffca7fcfbbd30a87e60095f62655ec",
+      "scope": "Full original personally read/revalidated; exact topic authority, historical execution not fresh."
+    },
+    "skills/04-review/backends/regression-guards/ebtp-atomic-service-snapshot.md": {
+      "sha256": "fd5fb614710952666de22b0caa0a2325787c468b04ca02f3a0629a8c18c0d7be",
+      "scope": "Full original personally read/revalidated; exact topic authority, historical execution not fresh."
+    },
+    "skills/04-review/lb/regression-guards/degrade-selection-counter-ownership.md": {
+      "sha256": "e9a09f24a429b1d62a3e098de9500cdfc4326261d71326a55d09454ded56b071",
+      "scope": "Full original personally read/revalidated; exact topic authority, historical execution not fresh."
+    },
+    "skills/04-review/observability/intentional-design/request-trace-id-lifecycle.md": {
+      "sha256": "c680a28cc8b36352a4f7025041872a9c5150c7698ceec1800c34f0295f8846de",
+      "scope": "Full original personally read/revalidated; exact topic authority, historical execution not fresh."
+    },
+    "skills/04-review/request-mirror/SKILL.md": {
+      "sha256": "20da9a3172f7c8323aa92f25ca1edc29df51d1af35e29dd87e713afbe8743e50",
+      "scope": "Full original personally read/revalidated; exact topic authority, historical execution not fresh."
+    },
+    "skills/04-review/request-mirror/regression-guards/mirror-reference-grant-enforcement.md": {
+      "sha256": "1395c3c1bdd49064f65d4f9e7b19560025db612a0b30b8619b0cca5d011f8070",
+      "scope": "Full original personally read/revalidated; exact topic authority, historical execution not fresh."
+    },
+    "skills/04-review/hmac-auth/regression-guards/credential-yaml-borrowed-decoding.md": {
+      "sha256": "d42129c7b439a5143b8aaf4be62fe4fcf64367292602eea4763b4c608df632e3",
+      "scope": "Full original personally read/revalidated; exact topic authority, historical execution not fresh."
+    },
+    "skills/01-architecture/05-resources/13-edgion-plugins.md": {
+      "sha256": "176b34ceae236190b76fd70c9fa3543cbbdee97ed8223420f8dc1379d480b35d",
+      "scope": "1-60 original HMAC/status architecture."
+    },
+    "edgion-tests/src/client/dynamic/ctx.rs": {
+      "sha256": "f37853b6b736f31472cc3a0a5a0a16501898b4160647ec5ca4d0f6a69e3e8866",
+      "scope": "Full1-255 actualapply/phase/K8sbarrier."
+    },
+    "edgion-tests/src/client/dynamic/registry.rs": {
+      "sha256": "330dd01d67642e19abd188b7e0f336e53b47592f3f99fa00cabbc58a011f60ee",
+      "scope": "Full retained actualregistrations."
+    },
+    "edgion-tests/src/client/dynamic/scenario.rs": {
+      "sha256": "7635beb168e5e2183b4e6f55cedacf7ed36fd366521384bd402367299206afd4",
+      "scope": "Full retained actualphasemodel."
+    },
+    "edgion-tests/src/client/dynamic/apply.rs": {
+      "sha256": "4824e28e2358c529c27c22e21c7a43dff06734cb792d6befd0d9840da99dbbb8",
+      "scope": "Full retained actualapply/tests."
+    },
+    "edgion-tests/src/client/dynamic/status.rs": {
+      "sha256": "9ac8c3e973f4a91ae05824d8560758f0a89ed928ecdceafc90b1bd0b46d30ad2",
+      "scope": "Full retained selectedController helper."
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "Full1-1070 retained including actualtests/lifecycle/port/assertions."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "Full1-3964 retained actualtests;1660-1758,3678-3777 currentdirect/scopedcontext."
+    },
+    "edgion-tests/src/client/suites/status/helpers.rs": {
+      "sha256": "6a83e0e2f2f186d7c87d1a005c395340ed681ec04a487a503ea63c4530a23588",
+      "scope": "Full retained actualhelpers/tests complete diagnostic/selectedController."
+    },
+    "edgion-tests/src/client/suites/edgion_plugins/request_access_policy/dynamic.rs": {
+      "sha256": "27390a4df5dce3096a4bdf36eaf287849e118b894e21416a4e68e2a16bcbf198",
+      "scope": "Full1-116 actual signedphaseassertions."
+    },
+    "edgion-tests/src/client/suites/edgion_plugins/hmac_test_utils.rs": {
+      "sha256": "46859004be8eb00b18acbaea83648208f56b720cc7bda58fe5649c6866e9151d",
+      "scope": "Full actualsignaturebuilder."
+    },
+    "edgion-tests/src/client/suites/http_route/backend/sp_backend_change.rs": {
+      "sha256": "110a759b9aa794d140c2bb37a0070b3337e3141b6aa3474201ed6ffab7e4bb97",
+      "scope": "Full1-281 actualcookie/fallback/accesslog."
+    },
+    "edgion-tests/src/client/suites/http_route/backend/sp_weighted.rs": {
+      "sha256": "3f3d7a4c55119dad7cfcf0c652a4d0c1348964f1feb49f02be41f5c769cdf32e",
+      "scope": "Full1-553 actualsampling/sticky/isolation/weight0/fallback/tokenrefresh."
+    },
+    "edgion-tests/src/client/suites/http_route/delegation.rs": {
+      "sha256": "60cb530e63365b35300d03d6558284486f9fd0b2513a9438c4a0408cd22747ac",
+      "scope": "Full1-244 actualpay/pay2phasecases."
+    },
+    "edgion-tests/src/client/suites/tcp_route/stream_plugins/esp_reload.rs": {
+      "sha256": "7cffb22a88a94d2a093dcc85d46a5c061139aea61a951329eac9cc1d7b5f21ce",
+      "scope": "Full actualallowecho/denialcases; supportingonly defectlead."
+    },
+    "edgion-tests/src/client/suites/tls_route/stream_plugins/stream_plugins.rs": {
+      "sha256": "de2f409a4375dd7251519ff7ba433571348a914dda5aa975f2ce296ad1840e99",
+      "scope": "Full1-128 strictboundedprobe/healthycontrols."
+    },
+    "edgion-tests/src/client/suites/plugin_policy/mod.rs": {
+      "sha256": "1d9ef05654a17128d3a0e0e7e3892fb2651fbb3c6d19398520ff22f7c7815221",
+      "scope": "Full retained exact-read/strictclassification/cases."
+    },
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "1eb27bded8bcb40a82ea3cfd4ed6f20d386deedd1f349c7035a226fd44739454",
+      "scope": "1018-1108 actualmirrorcapture/query;4155-4195 retainedTCPecho."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/file_system/storage.rs": {
+      "sha256": "160b51c73737d2d6188d3f4b5991589443aeaae6ce723829fbe382ac371fbdc1",
+      "scope": "236-267 actualpersistentconditionalwrite retained."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/common.rs": {
+      "sha256": "3c3b85c5d3af871dfc838d1b2d4ea1d886c596a8faa8d103979105db8db7a6d9",
+      "scope": "425-535 actualoperatorspecmerge/statuspreservation retained."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/RegionRoute/DynamicTest/README.md": {
+      "sha256": "faded9fd4850ebbc3f23ae31a9f354960f37a14e2969e870d459c32523af10ed",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/RegionRoute/DynamicTest/initial/consumers.yaml": {
+      "sha256": "3c8dbdf95e5e0b410ed12f6b35ff6b41c516357e659f00f4c5a202717042458b",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/RequestAccessPolicy/DynamicTest/README.md": {
+      "sha256": "793d840d46ce04dcee65d068fa8833079552f6aac1c044de9523f7156f764a77",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/RequestAccessPolicy/DynamicTest/delete/secret.txt": {
+      "sha256": "d869d59d33790de233befbf20f7837cee68ab6c8033b514bcecd280ab5736788",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/RequestAccessPolicy/DynamicTest/initial/00_Secret_gac-hmac-dynamic.yaml": {
+      "sha256": "40908c7a312b5b887b70e59dc606578c73263c7d5f3058e92cd06f9e421a51f2",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/RequestAccessPolicy/DynamicTest/initial/01_EdgionConfigData_gac-hmac-dynamic-urls.yaml": {
+      "sha256": "cdda38d7aaecb387353bfa1ec2ad7edd47a1820ad57a723c9441a098c9f470c6",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/RequestAccessPolicy/DynamicTest/initial/01_EdgionPlugins_gac-hmac-dynamic.yaml": {
+      "sha256": "86d6d3ca17dfd8ab7a24cb6b5a470300b08367993780dec8f3d6a97539e4bd3a",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/RequestAccessPolicy/DynamicTest/initial/02_HTTPRoute_gac-hmac-dynamic.yaml": {
+      "sha256": "ee921014b8c732c2658d86b8a75dd1a49ee812a20473b2633f30f89f0fbd0b24",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/RequestAccessPolicy/DynamicTest/updates/00_Secret_gac-hmac-dynamic.yaml": {
+      "sha256": "f02211eb3d452bd4c73a3f88bbba56f32102cdfb7ac267a28a9b3a4c3c2fbd95",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/RequestId/DynamicTest/delete/resources.txt": {
+      "sha256": "0eda32d481d9bcc095f680e1cb192b0a6b7195c03fb2e6c945103cdebad4338e",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/RequestId/DynamicTest/initial/EdgionPlugins.yaml": {
+      "sha256": "ef10cdaaba1fa960c8428058076b4ab5ccdfebf04c62c0738206d453ac2e5a8e",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/RequestId/DynamicTest/initial/HTTPRoute.yaml": {
+      "sha256": "02a2954f9e47ce1f8daf77fc2d82d3cc43e37cbb86058eef5290ff200d98a99d",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/RequestId/DynamicTest/updates/EdgionPlugins.yaml": {
+      "sha256": "4fc64162a1716a8ba40938acfd717314bc68d1a781c6846ade3e69b317a24c6d",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/Gateway/RetainedListenerHandles/DynamicTest/README.md": {
+      "sha256": "62b5ccc540e6740efd47022c21a59c01622bea42491c9dc595bc92c2d1ce03bf",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/Gateway/RetainedListenerHandles/DynamicTest/delete/gateway.txt": {
+      "sha256": "5b5f7bfd0363256caf28bf84fa50c969426cbde9f083c037946e287d0e0ec2e5",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/Gateway/RetainedListenerHandles/DynamicTest/delete/routes.txt": {
+      "sha256": "59d3b14edec2a0df3a0a1667e460fb11bdd19cd18443a37d290bf06ad11e3dcd",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/Gateway/RetainedListenerHandles/DynamicTest/initial/00_Gateway.yaml": {
+      "sha256": "17f26d9bcbccbec2574dcb5c553e1191e6e2185cc15c28de61eac268a2cf0cf7",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/Gateway/RetainedListenerHandles/DynamicTest/initial/01_Services.yaml": {
+      "sha256": "9ee85890f87e9e29443cefe974af56efcf9b84ff44264d483b502ee1542b3894",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/Gateway/RetainedListenerHandles/DynamicTest/initial/02_EndpointSlices.yaml": {
+      "sha256": "9a560d27730a30ba671f867eacbcb8482e13ed6306964aef05be63d28fc18752",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/Gateway/RetainedListenerHandles/DynamicTest/initial/03_Routes.yaml": {
+      "sha256": "2da074a6db0a21692c1c7df79a3f83b51d4bbdf8aaaa3668bbe5f1a6104c3bc0",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Delegation/DynamicTest/HTTPRoute_edgion-deleg-dyn_billing-child.yaml": {
+      "sha256": "a51ba75aa9e3593402d5a01907336951d93571e401a6ad6e4a725781400c131e",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Delegation/DynamicTest/updates/HTTPRoute_edgion-deleg-dyn_billing-child.yaml": {
+      "sha256": "89b523ff33802ac2acab5b3bdda6f011d8c27936753d54a90af3759658bf953f",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Delegation/DynamicTest/HTTPRoute_edgion-test_delegation-dyn-parent.yaml": {
+      "sha256": "024f9cd5afe0f6a9fc34b679ec61e1018300fafb3fde30b41a1c8e4fd3a9a139",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/DegradeThreshold/DynamicTest/initial/00_Service.yaml": {
+      "sha256": "4ac13deeaac7f885a546d8be70a8c6cc738d0200ad761d513443965f82365feb",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/DegradeThreshold/DynamicTest/initial/01_EndpointSlice.yaml": {
+      "sha256": "09f67fd82d715ca701a2409fa10a9d27bee88a65a7a2c4f1d17f7a2539a22ecf",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/DegradeThreshold/DynamicTest/initial/02_Policy.yaml": {
+      "sha256": "a14ed9e89e3d1fc35f33677811a7f6589e860de69de0c20f6ac908e864d57c08",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/DegradeThreshold/DynamicTest/initial/03_HTTPRoute.yaml": {
+      "sha256": "3647369b42fddf84787527cee1846e1190d6ba4b1150ef41bcc9fda87180c4a7",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/DegradeThreshold/DynamicTest/updates/enabled.yaml": {
+      "sha256": "ac42e513a7dabc42487c90abd076f2c304e0c357101148cdec5e2782bd320f2e",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/SessionPersistenceBackendChange/DynamicTest/initial/EndpointSlice_default_backend-a.yaml": {
+      "sha256": "52973367409f0874bdfbdf32aa47b285108a031bf4f5fdab5e68b70c438abd42",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/SessionPersistenceBackendChange/DynamicTest/initial/HTTPRoute_default_sp-change-route.yaml": {
+      "sha256": "07359746be4e50b544e653c129cf2b31cecf04d57ee9ff8603d0ff09cccbcb59",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/SessionPersistenceBackendChange/DynamicTest/updates/delete_a/EndpointSlice_default_backend-a.yaml": {
+      "sha256": "0aa7fe512c46b2fdeaa10c296fa6f14d9eb3faf989fc769b461e7fe541dc7567",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/SessionPersistenceBackendChange/DynamicTest/updates/delete_a/HTTPRoute_default_sp-change-route.yaml": {
+      "sha256": "1ab9a88d7dda9584fa9a49ce1e7f6153d9d7e00385f2316ebbc4efb6412c9d85",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/SessionPersistenceWeighted/DynamicTest/initial/EndpointSlice_default_spw-b.yaml": {
+      "sha256": "cb8d5236e4e4bedab208721ff603106c181576ebd86803ab650dcbb570510341",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/SessionPersistenceWeighted/DynamicTest/initial/HTTPRoute_default_spw-route.yaml": {
+      "sha256": "bfae6c85e3c10e31527da2bcf5a0aa43cecedbb7dd5a68f735c0b7ca598fd37a",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/SessionPersistenceWeighted/DynamicTest/updates/delete_b/EndpointSlice_default_spw-b.yaml": {
+      "sha256": "fcd5ffdfd48638a23a425c37dba27d683f85a0a1bc1a1335c017d20e3c6cd01e",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/SessionPersistenceWeighted/DynamicTest/updates/zero_weight_b/HTTPRoute_default_spw-route.yaml": {
+      "sha256": "d598062e9bfb5a57d1a21bca014dcc625d3e4c6b9266cd4063f558743c369346",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TCPRoute/StreamPlugins/DynamicTest/initial/EdgionStreamPlugins_edgion-test_tcp-sp-reload-esp.yaml": {
+      "sha256": "4d374e446a333c2bec3e08194d4cd06128e173e301d5e6226fe9430cd940b17e",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TCPRoute/StreamPlugins/DynamicTest/initial/TCPRoute_edgion-test_tcp-sp-reload-route.yaml": {
+      "sha256": "baaa8d647049096d538cf09025d24f7d39e4df24641f507b98a8b251245b93ae",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TCPRoute/StreamPlugins/DynamicTest/updates/to_allow/EdgionStreamPlugins_edgion-test_tcp-sp-reload-esp.yaml": {
+      "sha256": "90b77ce2c6f73abd5bedfe9e85936cc4e1507a077a16ad0d721adce5d3070b02",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TCPRoute/StreamPlugins/DynamicTest/updates/to_deny/EdgionStreamPlugins_edgion-test_tcp-sp-reload-esp.yaml": {
+      "sha256": "35e8e213e4ee85f84e41383765305310a5cea5c74abbd33fcc365fc2b8be2e28",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TLSRoute/Attachments/DynamicTest/initial/TLSRoute_target.yaml": {
+      "sha256": "471c7119c4885c3322f712db38771aa8a45e6aa93ad8af60629ff8fad85d7c04",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TLSRoute/Attachments/DynamicTest/updates/broad-parent/TLSRoute_target.yaml": {
+      "sha256": "723a27357b28eea3ea02f7f306ef4d7ec8ec9187ecaaea92d116331b61843957",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TLSRoute/Attachments/DynamicTest/updates/hostname/TLSRoute_target.yaml": {
+      "sha256": "70523098c27f0ca2ab32fa8bbfb377a302fefca96abba3f44425545ee7d0c6ab",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TLSRoute/Attachments/DynamicTest/updates/listener/Gateway_a.yaml": {
+      "sha256": "52459149f0f1b50240a80f99a1873a11f9f4f29d3e9b462b33109e2c5455a70f",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TLSRoute/Attachments/DynamicTest/updates/parent/TLSRoute_target.yaml": {
+      "sha256": "7af9c77638abe7c87f991c44462cd7d78bc3d0cfaccb97ea8671141fed4587c2",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TLSRoute/Attachments/DynamicTest/updates/rename/Gateway_a.yaml": {
+      "sha256": "48abb0c108ae79b63aea259de8d85556ad49da8697522254e5e3dda6ed2a5181",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TLSRoute/Attachments/bootstrap/Gateway_a.yaml": {
+      "sha256": "0ec5d22da0819a1c84dd6db85cab0e1a171be09682cb065e299dd847a1266576",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TLSRoute/Attachments/bootstrap/Gateway_b.yaml": {
+      "sha256": "e3a7c29abb0790c77b080f398f66573c23a021761c0a81ddb4094ed1ce863950",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TLSRoute/Attachments/bootstrap/Gateway_c.yaml": {
+      "sha256": "e0806cb5167b2e571ac314f3518abd3703ca80f9ef0a54267e6bce1fae5d65db",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TLSRoute/Attachments/bootstrap/TLSRoute_competitor.yaml": {
+      "sha256": "21b6c92a0af6f2a4000b80136ce71234bed644e975436e196ed802633242b8a6",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TLSRoute/Attachments/bootstrap/TLSRoute_control_a.yaml": {
+      "sha256": "b0f08cb88597d503e67271c944882c705a4b966a6fe24a23f70b257b1d2b1030",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TLSRoute/Attachments/bootstrap/TLSRoute_control_b.yaml": {
+      "sha256": "565eb27b7073d03236766be9b4dd0b8d5e62cd26639745cdb360cd9638c18326",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TLSRoute/Attachments/bootstrap/TLSRoute_unrestricted.yaml": {
+      "sha256": "d18d51863f3474fbc1bcef495730c2e64b422c2aa8883b3336591abfa5de398f",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TLSRoute/Attachments/bootstrap/TLSRoute_wildcard.yaml": {
+      "sha256": "654274ae5b3ccada1de85d26ddb7d7d47e01d27b905094f361628c934ef0d8a7",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TLSRoute/StreamPlugins/DynamicTest/delete/plugin.txt": {
+      "sha256": "e8645ab62ee99b2703522367e3b1a15961c3cb9eaabb309954dc333702ef0c8b",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TLSRoute/StreamPlugins/DynamicTest/delete/resources.txt": {
+      "sha256": "ebdbb6a8e168ea2af120c6488a986b29c93b588985678d51f3eb6af78770a0da",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TLSRoute/StreamPlugins/DynamicTest/initial/01_EdgionStreamPlugins.yaml": {
+      "sha256": "80cd60457389205e0fffe75476b7174d7d674748f8e91b8185d8aa52aaf7c6b3",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TLSRoute/StreamPlugins/DynamicTest/routes/TLSRoute_tls-sp-reload-passthrough-control.yaml": {
+      "sha256": "dacc1458aab0ca0e57f1e867560e655f61348f9bde6378ad0ed736f0927ee0dd",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TLSRoute/StreamPlugins/DynamicTest/routes/TLSRoute_tls-sp-reload-passthrough.yaml": {
+      "sha256": "63ec7f63f48b40aeff604351f49aa08d7209d643a0de781e35e3153bd5c382e9",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TLSRoute/StreamPlugins/DynamicTest/routes/TLSRoute_tls-sp-reload-terminate-control.yaml": {
+      "sha256": "3a3d6da87993a37f4a5a766363495e04d780902af15d554d5218208b4e1edf05",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TLSRoute/StreamPlugins/DynamicTest/routes/TLSRoute_tls-sp-reload-terminate.yaml": {
+      "sha256": "bcace9d612fcef074ee70b7ce62aa6f2feb311537886f1adfab7b557fe2dc49e",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TLSRoute/StreamPlugins/DynamicTest/updates/deny/EdgionStreamPlugins.yaml": {
+      "sha256": "01dfbb2e95e394a29b4dd400f6e2654abb923cf249bea50a0b0d8d5f909184a4",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TLSRoute/StreamPlugins/DynamicTest/updates/disabled/EdgionStreamPlugins.yaml": {
+      "sha256": "42bf23e2f6459e0858162573638d5eaeb2afbbe867608e0a425ccd47849afb75",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TLSRoute/StreamPlugins/DynamicTest/updates/empty/EdgionStreamPlugins.yaml": {
+      "sha256": "c898fd31c1c57a66dbbb6530abb74f3b6be02eaf0ae48bcfd6af843bb550241f",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TLSRoute/StreamPlugins/DynamicTest/updates/no_plugins/EdgionStreamPlugins.yaml": {
+      "sha256": "89ee9ba0876531a244e8ce8e4354dc7dbcf56e8b67bafc8caa3532f7740dc3aa",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/integration/conf/TLSRoute/StreamPlugins/DynamicTest/updates/stage1_only/EdgionStreamPlugins.yaml": {
+      "sha256": "afc1a9e060adf0e6ad98e44848d797c8a6b969faf880ff5275e81a4a47033c18",
+      "scope": "Full actual authoredfixture/deletion/README lifecycle contract; selecteddecisive subset of full analystreceipt."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/RegionRoute/DynamicTest/initial/consumers.yaml": {
+      "sha256": "d8941c3bfbb11a505f8e7fc716f6db20f423813168b2ca01e2d53168b3fadc71",
+      "scope": "Full actualK8s consumers."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/RequestMirror/DynamicTest/initial/edgion-backend.yaml": {
+      "sha256": "b7a13ccd14862c58f41c6dcf6aad3291ce93f39cc207f0c4468c7d9630ed7c30",
+      "scope": "Full actualK8smirror publishergrant topology."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/RequestMirror/DynamicTest/initial/edgion-default.yaml": {
+      "sha256": "6d16f7b4f3c7b1c033607d4688bbb920d1f1915e8ddec995c7e5eb025120820e",
+      "scope": "Full actualK8smirror publishergrant topology."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/RequestMirror/DynamicTest/initial/primary.yaml": {
+      "sha256": "7022dfac54f206c5bab980d54492ab29e593bae140e81bd9d6e94204dbe34dcf",
+      "scope": "Full actualK8smirror publishergrant topology."
+    }
+  },
+  "limits": "Full12 primaries fresh hashassertions match before/after. Static repository-only no execution/build/test/network/Git/writes. Supporting no primarycredit. Newcandidate0;320-327unused. Retainedlistenerdestructive recreation is acceptedexcludedfrom264. Scoped deferredTCPphasehelper lead not promoted beforeowningprimary review. Exact fixture subset recorded concisely.",
+  "supplemental_candidates": {
+    "ARCH-264": {
+      "status": "awaiting-independent-extension",
+      "scope": "Delegation/SPBackendChange/SPWeighted/TcpEspReload and actualbeforeafterfixtures/phasecases",
+      "evidence": "Successfuldelegation/SP mutationspersist;TCPfaileddeny skips finalallow. Do notclaimlive sweep reachedwitness; excludedRetainedListenerHandles."
+    },
+    "ARCH-266": {
+      "status": "awaiting-independent-extension",
+      "scope": "request_mirror_reference_grant.rs290-328 check() pluginflatconditions/routefirstparent",
+      "evidence": "SelectintendedControllerandattachment; preserveindependent receipt/specconvergence/refDenied/sealedinvalid assertions."
+    },
+    "ARCH-312": {
+      "status": "verified-in-revision",
+      "scope": "Supporting tcp_route/stream_plugins/esp_reload.rs test_allow_echo",
+      "evidence": "Same15-byte fixed-message one-read assumption; notselfverified ornewprimary."
+    }
+  },
+  "deferred_support": [
+    {
+      "path": "edgion-tests/src/client/suites/tcp_route/stream_plugins/esp_reload.rs",
+      "scope": "test_deny_connection",
+      "evidence": "Connect timeout/refusal andeveryreaderror acceptedasdenial. Owningprimary mustreview healthycontrols+IOclassification beforepromotion."
+    }
+  ]
+}

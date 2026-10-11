@@ -1,0 +1,161 @@
+{
+  "partition": "PART-220",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-resources/src/resources/refs/source_contract.rs",
+      "sha256": "e14e3e022b3c83061354e39323b45847566ed70f4a064bb261ee65d508277409",
+      "fully_read": true,
+      "disposition": "Accepted exact finite GVK selected reference schema projection; lazy compiled trusted contracts/cold bounds; generated primary JSON separately covered PART190/191"
+    },
+    {
+      "path": "edgion-resources/src/resources/refs/stream_plugin_fields.rs",
+      "sha256": "67ae214580c026f8913f34abaf4eb884132e0e4e8175afde26466ce06fcbb58c",
+      "fully_read": true,
+      "disposition": "Accepted actual active Redis config loan; owner validation separated from original target grammar; no clones/provider authority"
+    },
+    {
+      "path": "edgion-resources/src/resources/refs/targets.rs",
+      "sha256": "8d7c99578a322a78a4ceff3cdfb3e2187fc4fc326635f714557a657c1ef0b924",
+      "fully_read": true,
+      "disposition": "Accepted native presence-aware exact identity vs finite managed HTTP transport convenience; wildcard delegation is selector not object/Grant"
+    },
+    {
+      "path": "edgion-resources/src/resources/refs/template_fields.rs",
+      "sha256": "71c3a11d3efc5ea50702b91d2d8165702f32d4e64c14d48274a0eaa58a455850",
+      "fully_read": true,
+      "disposition": "Accepted cold reference-only snapshot; canonical parser/position walker, ordered SecretRef keys only; literals/material excluded and owner-bounded loans"
+    },
+    {
+      "path": "edgion-resources/src/resources/refs/waf_fields.rs",
+      "sha256": "799e0e7e6d0a3d882824c30943a9c1f0417948932a1e59b3c33389d02be101b3",
+      "fully_read": true,
+      "disposition": "Accepted synchronous actual EP/policy loans; lexical selected transport descriptors do not mint Grant authority; correct owner source for Selector/bundles"
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original retained; original graded rules and readonly scope"
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original retained"
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original retained (large repeated read truncated, not a fresh full-read claim)"
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full original retained"
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original retained"
+    },
+    "skills/01-architecture/05-resources/SKILL.md": {
+      "sha256": "dae4740e05545a9d674199070cc49a6559fd921e69ae0d08dab19dc51d3efef6",
+      "scope": "Full original"
+    },
+    "skills/01-architecture/05-resources/00-schema-transport-contract.md": {
+      "sha256": "d20e74c1c7ccf6183f893bc919767a27bd3fbb47486415d14651a76fdef5a597",
+      "scope": "Full original"
+    },
+    "skills/04-review/plugin-runtime/regression-guards/request-template-policy-unification.md": {
+      "sha256": "413004f76a11df4ef914bc1fb625dba4fa25602d6bf8ac8b25b66d62c3d49e7a",
+      "scope": "Full original"
+    },
+    "skills/04-review/waf/regression-guards/named-profile-selection-and-bundle-publication.md": {
+      "sha256": "69d48f9da9d67879916060e1a2f0b757c945d917e32626c8778414afed884621",
+      "scope": "Full original"
+    },
+    "skills/04-review/controller/regression-guards/backend-tls-policy-canonical-api-ingress.md": {
+      "sha256": "b0f711b8670d4d46c5428af8954803fd609513bb8976026d553ec1f5c5b4b121",
+      "scope": "1-140 current explicitsourceupdate separated historicalv1-only"
+    },
+    "skills/04-review/routing/regression-guards/shared-service-backend-ref-predicate.md": {
+      "sha256": "17aa6b12c0fd8d2a778658a21671a4297439157ef4bf49afac020f1d322090e5",
+      "scope": "Full original retained"
+    },
+    "edgion-resources/src/resources/refs/mod.rs": {
+      "sha256": "911547d72fbf7934bbd7559c420709122ddffb5c20d0438e6b79a927de7c080c",
+      "scope": "Full exports"
+    },
+    "edgion-resources/src/resources/refs/owned.rs": {
+      "sha256": "af783c0534b07590ebb900e8d8e0411683f0b5a98e63e59eaf8c6d3dbf36ea48",
+      "scope": "1-175 actual topology/owner/frozen capability"
+    },
+    "edgion-resources/src/resources/refs/plugin_fields.rs": {
+      "sha256": "4c3c891758ab704386c68867060669adc42636e92fdf6dee7b787aa4e6145307",
+      "scope": "462-510 actual templatevisitor and prepared snapshot"
+    },
+    "edgion-resources/src/resources/refs/link_sys_fields.rs": {
+      "sha256": "f6c90fe8d767c3867fb1301784f8965bcf7efd777e027dfc896d01b088610764",
+      "scope": "141-160 actual Webhook templatevisitor"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/credential/request_secrets.rs": {
+      "sha256": "095427e1c1a78dbe1b9954b6c1b7523a08ba3bc683a87085d459abfdce54cae5",
+      "scope": "Full actual bound/readonly Secret consumer"
+    },
+    "edgion-gateway/src/plugins/stream/stream_plugin_runtime.rs": {
+      "sha256": "c5cb0450bd2dfaa54acb231e8c4949b9cca2076caf30d3834c9449283668bcd2",
+      "scope": "45-110 unsupported/masks andactualconfigloan"
+    },
+    "edgion-controller/src/conf_mgr/schema_validator.rs": {
+      "sha256": "ba353745a64eb12b23ccac3888884ae3878b83f3fb54618d1de6c9c7b563768a",
+      "scope": "343-409 finite-sourceview andfullschema validation"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/edgion_config_data_utils/edgion_config_data_store.rs": {
+      "sha256": "017b3741016133d8f83200e20a3986a31a4df92f1fcd45988b4f20c1d4d3fb04",
+      "scope": "35-97 actualWAFpolicy/bundle/Selector capture and targetidentityguard"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs": {
+      "sha256": "9a6ed6dbb4caa2a8a6a5b9bee0e9a9d75344edd9aad3b9eeee5dccc6413dc16a",
+      "scope": "640-675 and730-770 actualpolicycapture/Grant/selector"
+    },
+    "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": {
+      "sha256": "70ea787d34a9a4652adfe131ba66049d2544b381b2034194db519567fe87ead0",
+      "scope": "350-383 actualWAFcacheidentitygate"
+    },
+    "edgion-resources/tests/unit/resources/refs/source_contract_test.rs": {
+      "sha256": "cae8883c70d4dc366acdd8ea7f9c149cc409e5ce78d618c53365efeaf3c98bdb",
+      "scope": "Full mirrored test body; no execution"
+    },
+    "edgion-resources/tests/unit/resources/refs/stream_plugin_fields_test.rs": {
+      "sha256": "1d74327f42843520a62b0ffd14b3ddaaae1d7055f40005c3dd6ebe05cf524300",
+      "scope": "Full mirrored test body; no execution"
+    },
+    "edgion-resources/tests/unit/resources/refs/targets_test.rs": {
+      "sha256": "3822eba985b6a9f63c3ca3b5a58608221a131ac95c355c8fff67a4b47b535de6",
+      "scope": "Full mirrored test body; no execution"
+    },
+    "edgion-resources/tests/unit/resources/refs/template_fields_test.rs": {
+      "sha256": "dd52388036cdfa3f92a1ebfe70df9a77f14afad01f32fdc23fbcf51487082786",
+      "scope": "Full mirrored test body; no execution"
+    },
+    "edgion-resources/tests/unit/resources/refs/waf_fields_test.rs": {
+      "sha256": "4c82defdbf16c72e85a93251a5be55752399d01d4285f15a52f26c24af6960f8",
+      "scope": "Full mirrored test body; no execution"
+    },
+    "cicd/checks/generate_gateway_api_reference_contract.py": {
+      "sha256": "270298337f9d6b26b5af5c46abed2498e4f70ce4311a753eb564290a45b4678b",
+      "scope": "Full original source generator, not executed"
+    },
+    "cicd/checks/generate_gateway_api_transform_contract.py": {
+      "sha256": "2cf5836f70417fb1a5d75b13481cd1ea621b77f06d4c0974c491505770ef6b96",
+      "scope": "Full original generator1-EOF across bounded reads; not executed"
+    },
+    "skills/04-review/resources/intentional-design/schema-validator-non-k8s-asymmetry.md": {
+      "sha256": "35f0559a526dbc627449f1d1e005ed7f31bb7c960591999355d5ea9b67592820",
+      "scope": "1-80 original finite-source exception/availability boundary"
+    }
+  },
+  "related_reports": [
+    "REPORT-PART-190.json",
+    "REPORT-PART-191.json"
+  ],
+  "limits": "Personally full all5primary/664 mirrored tests lines; exact scopes only for other supporting code. Trusted JSON contracts previously losslessly read semantic DAG; no fresh generator/check/test execution or fullvendoredCRD verification. No writes except review artifacts or primarycredit outsideowner; rules retained unchanged."
+}

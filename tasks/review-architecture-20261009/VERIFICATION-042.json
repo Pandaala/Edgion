@@ -1,0 +1,84 @@
+{
+  "reviewer": "/root/verify_ip_union",
+  "complete": true,
+  "disposition": "confirmed-with-revision",
+  "approved_input_sha256": "610e9e19c011d48fb2a5c12bd675ddc1b4ac88148db5b0c9f67e19a6843eb127",
+  "approved_replacement_sha256": "900c7a3e17a899d483d00b33a9050be2add7dae51eed565993c9fafb7978ea78",
+  "approved_claim_sha256": "6a4f3245e729c2ab3f319d599e74fee9c2df301c7b17bca35d45063fbb56799f",
+  "evidence": {
+    "edgion-gateway/src/tls/runtime/backend/cert_extractor.rs": "0126fb49bc9056c718474b44ad0d70de314e19b7690f284c78347c831a382dbf",
+    "edgion-gateway/tests/unit/tls/runtime/backend/cert_extractor_test.rs": "b3f114e4e4bf43f0636b7127e6d3c34cd8d19cc28a8fe401361d2118c6779455",
+    "edgion-common/src/allowed_san.rs": "eeae1536c88d7e25e56d37f5ce0365f27078eb9d1889c8e26be51a01d6ea15ec",
+    "edgion-gateway/src/tls/validation/mtls.rs": "e2d3cef5948af1dbd0fd92518b30337d6e7b93272009f4ea807d9e578548dbd9",
+    "edgion-gateway/tests/unit/tls/validation/mtls_test.rs": "9a8f2d3252e4d535df0083732f4fe3a4f5a8c59865baafd6d790745ad57f11ce",
+    "edgion-gateway/src/tls/validation/backend_san.rs": "0ab99a8be7ec9d9111585abb1309860dcfe8e39de9a32dc1f3921c2381517b4d",
+    "edgion-gateway/tests/unit/tls/validation/backend_san_test.rs": "fec0cd9144defdec7fdef5c3aea441ee96adbaaa8b7602e3886f4a965ae3a2e9",
+    "edgion-gateway/src/tls/boringssl/mtls_verify_callback.rs": "7732826979f08c7f247981722435773fd77b05b028e86ef6172f1c1843b229da",
+    "edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs": "7c1223fe27e46a98d67c9d8bc604b0b109b2bd631cba3598f95fb83b6837205e",
+    "edgion-gateway/src/backends/peer_builder.rs": "b1ceab6e862bc12a76303adf78e19bd39aa5d4209ea95af95022ad7724b04ba9",
+    "edgion-gateway/src/plugins/http/header_cert_auth/plugin.rs": "346464466384a30dc02dde337e1f1fb6041a6e8b265ab267abc69518f3fb8e99",
+    "skills/04-review/tls/regression-guards/typed-san-display-prefix-not-dns.md": "15aca28b01d69dcda5afa265ee7792758aec3724b9c6ce8123c2e3c2861b7234",
+    "skills/04-review/tls/regression-guards/mtls-leaf-only-whitelist-verification.md": "c05364df1aad05aaaacb2e7ed27d1609a9f8664cf3a9a3206efae8834a2ac42f",
+    "skills/04-review/tls/intentional-design/ssl-ctx-exdata-handoff-audit-ownership.md": "5b16666dbc1f636be21b4d53b790274e0e8018699ff31a77dff0e4442e4607f6"
+  },
+  "support_selected": {
+    "edgion-gateway/src/tls/runtime/backend/cert_extractor.rs": {
+      "sha256": "0126fb49bc9056c718474b44ad0d70de314e19b7690f284c78347c831a382dbf",
+      "scope": "Full"
+    },
+    "edgion-gateway/tests/unit/tls/runtime/backend/cert_extractor_test.rs": {
+      "sha256": "b3f114e4e4bf43f0636b7127e6d3c34cd8d19cc28a8fe401361d2118c6779455",
+      "scope": "Full; BMPString embeddedNUL preservation"
+    },
+    "edgion-common/src/allowed_san.rs": {
+      "sha256": "eeae1536c88d7e25e56d37f5ce0365f27078eb9d1889c8e26be51a01d6ea15ec",
+      "scope": "Full"
+    },
+    "edgion-gateway/src/tls/validation/mtls.rs": {
+      "sha256": "e2d3cef5948af1dbd0fd92518b30337d6e7b93272009f4ea807d9e578548dbd9",
+      "scope": "Full"
+    },
+    "edgion-gateway/tests/unit/tls/validation/mtls_test.rs": {
+      "sha256": "9a8f2d3252e4d535df0083732f4fe3a4f5a8c59865baafd6d790745ad57f11ce",
+      "scope": "Full"
+    },
+    "edgion-gateway/src/tls/validation/backend_san.rs": {
+      "sha256": "0ab99a8be7ec9d9111585abb1309860dcfe8e39de9a32dc1f3921c2381517b4d",
+      "scope": "Full"
+    },
+    "edgion-gateway/tests/unit/tls/validation/backend_san_test.rs": {
+      "sha256": "fec0cd9144defdec7fdef5c3aea441ee96adbaaa8b7602e3886f4a965ae3a2e9",
+      "scope": "Full"
+    },
+    "edgion-gateway/src/tls/boringssl/mtls_verify_callback.rs": {
+      "sha256": "7732826979f08c7f247981722435773fd77b05b028e86ef6172f1c1843b229da",
+      "scope": "1-308"
+    },
+    "edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs": {
+      "sha256": "7c1223fe27e46a98d67c9d8bc604b0b109b2bd631cba3598f95fb83b6837205e",
+      "scope": "349-381"
+    },
+    "edgion-gateway/src/backends/peer_builder.rs": {
+      "sha256": "b1ceab6e862bc12a76303adf78e19bd39aa5d4209ea95af95022ad7724b04ba9",
+      "scope": "210-254"
+    },
+    "edgion-gateway/src/plugins/http/header_cert_auth/plugin.rs": {
+      "sha256": "346464466384a30dc02dde337e1f1fb6041a6e8b265ab267abc69518f3fb8e99",
+      "scope": "235-263"
+    },
+    "skills/04-review/tls/regression-guards/typed-san-display-prefix-not-dns.md": {
+      "sha256": "15aca28b01d69dcda5afa265ee7792758aec3724b9c6ce8123c2e3c2861b7234",
+      "scope": "Full original"
+    },
+    "skills/04-review/tls/regression-guards/mtls-leaf-only-whitelist-verification.md": {
+      "sha256": "c05364df1aad05aaaacb2e7ed27d1609a9f8664cf3a9a3206efae8834a2ac42f",
+      "scope": "Full original"
+    },
+    "skills/04-review/tls/intentional-design/ssl-ctx-exdata-handoff-audit-ownership.md": {
+      "sha256": "5b16666dbc1f636be21b4d53b790274e0e8018699ff31a77dff0e4442e4607f6",
+      "scope": "Full original"
+    }
+  },
+  "conclusion": "Actual .0/.1 projections and production consumers prove discarded populated allocations. Preserve embeddedNUL without truncation; original claim rejection wrong. Allocation requirement excludes necessary shared decoder temporary values. Exact corrected substantive body approved.",
+  "limitations": "Static independent verification; no execution/mutations/measurements/new primary credit. No DERcollapse/cache/trust-policy change."
+}

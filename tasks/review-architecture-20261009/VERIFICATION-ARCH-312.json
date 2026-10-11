@@ -1,0 +1,93 @@
+{
+  "candidate": "ARCH-312",
+  "complete": true,
+  "verifier": "/root/verify_ip_union",
+  "decision": "confirmed-with-revision",
+  "input_sha256": "85725c83315834d3c431551fa16171184dec52d28ac828be00af62046c186689",
+  "approved_claim_sha256": "f9271ae692def002342547aec68340dcd542f6bd341a53761eb3ab93d3547adc",
+  "evidence": [
+    "Both fixed readers reject legal prefixes of15-byte echoes; actual server and canonical relay expose arbitrary TCP chunk boundaries.",
+    "PART447 allow framing extension confirmed only; denial classification and scenario restoration are separate.",
+    "Bounded read_exact precedent in client/suites/plugin_policy/mod.rs; no production relay defect or executed flake claimed."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Retained full unchanged original rules."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Retained full index."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Retained full graded gates."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original current routing requirements."
+    },
+    "skills/04-review/listeners/regression-guards/l4-timeout-snapshot-publication.md": {
+      "sha256": "09e781569029a3ac0159f263e042ec5bc28bcefb29e4617bb30809064555865e",
+      "scope": "Full original generation/completed exchange guard."
+    },
+    "skills/04-review/security/regression-guards/l4-relay-idle-timeout.md": {
+      "sha256": "3e8718f4b81e541a95742338972adf28549eb9f11f707ea6c4a138cef084dee1",
+      "scope": "Full shared clock/progress contract."
+    },
+    "skills/04-review/routing/regression-guards/l4-duplex-relay-centralization.md": {
+      "sha256": "a47597e27ed0ba85d56c17776e378517828f1920f70ca7f2cfd8e2360dbc6b0d",
+      "scope": "Full original relay partial-write obligations."
+    },
+    "skills/04-review/testing/regression-guards/integration-suite-lifecycle-errors-must-fail.md": {
+      "sha256": "bf3999aaa30bb0bb903e5ae3aafe31442cb60f942ab04c1317c060d29a4f3906",
+      "scope": "Full original result ownership."
+    },
+    "edgion-tests/src/client/dynamic/scenarios/l4_timeout_hot_reload.rs": {
+      "sha256": "6d0895974bdc980ee809a1d450271792e07ac74f967796e6fd79f44af2b91c30",
+      "scope": "Full423 lines independently read."
+    },
+    "edgion-tests/src/client/suites/tcp_route/stream_plugins/esp_reload.rs": {
+      "sha256": "7cffb22a88a94d2a093dcc85d46a5c061139aea61a951329eac9cc1d7b5f21ce",
+      "scope": "Full141 lines; allow framing extension only."
+    },
+    "edgion-tests/src/client/dynamic/scenarios/tcp_esp_reload.rs": {
+      "sha256": "309724620a415c59dea32748825635e6790d1e7b976acf670525bdd642e9e5ea",
+      "scope": "Full56 lines actual phases."
+    },
+    "edgion-tests/src/client/dynamic/registry.rs": {
+      "sha256": "330dd01d67642e19abd188b7e0f336e53b47592f3f99fa00cabbc58a011f60ee",
+      "scope": "Full real registry."
+    },
+    "edgion-tests/src/client/dynamic/ctx.rs": {
+      "sha256": "f37853b6b736f31472cc3a0a5a0a16501898b4160647ec5ca4d0f6a69e3e8866",
+      "scope": "1-120,130-end actual phase/result/retry ownership."
+    },
+    "edgion-tests/src/client/suites/plugin_policy/mod.rs": {
+      "sha256": "1d9ef05654a17128d3a0e0e7e3892fb2651fbb3c6d19398520ff22f7c7815221",
+      "scope": "125-178 fixed-buffer timeout-wrapped read_exact precedent."
+    },
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "1eb27bded8bcb40a82ea3cfd4ed6f20d386deedd1f349c7035a226fd44739454",
+      "scope": "160-170,340-350,4140-4200 actual arbitrary-chunk echo."
+    },
+    "edgion-gateway/src/routes/l4_duplex.rs": {
+      "sha256": "2eb6bddbd99f3d54ede2711a193b2cbddd38d78f91de7b114235e06b7e02d418",
+      "scope": "86-245 actual buffers and partial-write cursor."
+    },
+    "edgion-gateway/src/routes/tcp/edgion_tcp.rs": {
+      "sha256": "fbbdb63b907ef4ec74032d7d2a5a567517e1407d6e41406b2f1057b60d343f03",
+      "scope": "245-292 canonical duplex caller."
+    },
+    "edgion-gateway/src/routes/tls/proxy.rs": {
+      "sha256": "0ee82ad7e36d598671b2914d68033247d6db5575df803abc26bb3fe837e7dfa1",
+      "scope": "430-465 terminate caller."
+    },
+    "edgion-gateway/tests/unit/routes/l4_duplex_test.rs": {
+      "sha256": "ed85154d8d915c1eb05456453e909b81a6a60c9ebd4f5a647a999e3ab02e6a92",
+      "scope": "1-129,190-224 complete relevant real test bodies."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

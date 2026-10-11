@@ -1,0 +1,118 @@
+{
+  "candidate": "ARCH-186",
+  "complete": true,
+  "verifier": "/root/verify_ip_union",
+  "decision": "confirmed",
+  "input_sha256": "de0b654ec745bde6988e46860bd49cace116d701ffaa4acfe123e07a44feac0a",
+  "approved_claim_sha256": "98d8c526624b83987c3ce8d28c049421f8b0eab784a5615a2f6ed663039889bd",
+  "evidence": [
+    "Original nodekey retirement clone discarded; no subsequent release obligation needskey. Taking original K with same invariant check feasible.",
+    "Concrete DNS3String and OIDCsession-reference/cookie-digest request consumers; preserve insertion/hit clones and all canonical index/list/free/capacity/TTL/stats contracts.",
+    "Original release/index decision does not requireclone; dedupsearched; full actualimplementations/tests read.",
+    "Static zero primary coverage/no execution or measurements; no arbitrary K::Drop timing equivalence or new panic recovery guarantee."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original retained/cache selector refreshed/no nested."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Original navigation."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full graded original retained/applicable gates."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full original index."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original."
+    },
+    "skills/12-algorithms/SKILL.md": {
+      "sha256": "338b061bd3ccd4ef6a0482b0879feb42b81020cff12ed4a7509068fca0bd7515",
+      "scope": "Full original placeholder supplies no cache acceptance."
+    },
+    "skills/01-architecture/00-common/05-unification-points.md": {
+      "sha256": "011c7e0897b5af81b6459096b678774d9ac988843f705295ecc559d8892d7d92",
+      "scope": "Selected original canonical DNS/cache context."
+    },
+    "skills/04-review/cpu-memory/regression-guards/lru-bounded-expiration-index.md": {
+      "sha256": "db77beb15921ceb73f49221297a96b9ee64d70fbb62bff83ea9b409c8211a474",
+      "scope": "Full original exact release/progress/prune/alternatives/history caveats."
+    },
+    "skills/04-review/backends/regression-guards/externalname-dns-cache-identity-and-lifecycle.md": {
+      "sha256": "d25915deb79b97f7c9ec4748d0291832428eeb703fa1bd878178c69e9328c0c3",
+      "scope": "Full original."
+    },
+    "skills/04-review/cpu-memory/regression-guards/oidc-access-token-cache-ttl-only.md": {
+      "sha256": "d0975a9cef0de3be6a0f4c8b1bc2efd48122edac49eb19fbb1a92466de0cfba6",
+      "scope": "Full original."
+    },
+    "edgion-algo/src/cache/lru.rs": {
+      "sha256": "98a7c3ba2e57e1d423b33d859ad1cbed7f1d6a3e4cb590130bea9a66b865ad73",
+      "scope": "Full implementation and every release caller/list/map/free/index/stats."
+    },
+    "edgion-algo/src/cache/sharded_lru.rs": {
+      "sha256": "5a1fdc58542b471003e235d0243532c9346070ed8d4136b3ad3339f65d3e7301",
+      "scope": "Full implementation."
+    },
+    "edgion-algo/src/cache/mod.rs": {
+      "sha256": "bbb6766ea172b947250eab499d2cec115f5befd32020614cc4b046464b514aa9",
+      "scope": "Full exports."
+    },
+    "edgion-algo/Cargo.toml": {
+      "sha256": "f8ffd2d936ac2c2640df661326727dd517cad9036b0b3c491c6a83d82ca3fc2a",
+      "scope": "Full original retained/currenthash."
+    },
+    "edgion-algo/tests/unit/cache/lru_test.rs": {
+      "sha256": "095518a09ca45a5a33869af73558dfea41a33794b3611d2ab5f69aa645849be6",
+      "scope": "Full607 actualtest lines."
+    },
+    "edgion-algo/tests/unit/cache/sharded_lru_test.rs": {
+      "sha256": "bb6f7552f2e6082472939b8a5f2bf814ea028cf44799ea737147b60b1ec769e9",
+      "scope": "Full143 actualtest lines."
+    },
+    "edgion-gateway/src/backends/discovery/dns_cache.rs": {
+      "sha256": "e110e7b7213f3024a1e6c1c3e9399f25fec50c33dfb84083650b5c47cdea93d4",
+      "scope": "Full implementation."
+    },
+    "edgion-gateway/src/backends/mod.rs": {
+      "sha256": "090a16c7dc7403426a93ece829b5d687021d34694c21356a6bf4eaed9b1b8256",
+      "scope": "Complete384-418 resolve_external_ips_with plus adjacentdispatch."
+    },
+    "edgion-gateway/tests/unit/backends/discovery/dns_cache_test.rs": {
+      "sha256": "6706a47a1eff5a5d3b4ae3d7e50e462663f492fcb156c53a4770617d8f892bcd",
+      "scope": "Full actual tests."
+    },
+    "edgion-gateway/src/plugins/http/openid_connect/token_exchange.rs": {
+      "sha256": "68df7fce1f119c85ce269bfb94620c6dcc1c8c9402b7ebbd86856a1e46540c11",
+      "scope": "Full implementation."
+    },
+    "edgion-gateway/src/plugins/http/openid_connect/request_filter_impl.rs": {
+      "sha256": "aa96872b2904a572792305bacfab11ab3793fab4c34bfb02203fcaaa915c26fb",
+      "scope": "1-166 logout/session lookup/recent refresh."
+    },
+    "edgion-gateway/src/plugins/http/openid_connect/session_cookie.rs": {
+      "sha256": "fda5c0f6061cf941292aa9745622d65f392669c898950864be15c4d21733d425",
+      "scope": "143-174 complete opaque session-reference function."
+    },
+    "edgion-gateway/src/plugins/http/openid_connect/plugin.rs": {
+      "sha256": "5e6045b9d5cc47b62f0e2be8d3187d80d84f43a6085173f189517d7cd1b3aed0",
+      "scope": "267-289,431-446 cachetype/construction."
+    },
+    "edgion-gateway/tests/unit/plugins/http/openid_connect/plugin_test.rs": {
+      "sha256": "763fec6054cf53785140b8a8b03b2ae8958e4afa987d5289970a0ef199606e37",
+      "scope": "2140-2206,2359-2405 actual TTL and completeexplicitremoval tests."
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full original."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

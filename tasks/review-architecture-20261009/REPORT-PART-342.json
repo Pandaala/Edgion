@@ -1,0 +1,25 @@
+{
+  "partition": "PART-342",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/plugins/http/response_rewrite/mod.rs",
+      "sha256": "d23956d0942981d46e7d83bb7472d7ddf179f7091adb194811db5ad5f194f0f7",
+      "fully_read": true,
+      "disposition": "Factory and trait exports checked."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/http/response_rewrite/plugin.rs",
+      "sha256": "7444cea63e8c3ff5f62e2c774072a67b4160e8629c300c683cc7cd32cebb8fe4",
+      "fully_read": true,
+      "disposition": "Prepared validated status and rename/add/set/remove sequence preserve canonical protected response headers. Rename checks both sides and destination-first failure policy is tested. Invalid direct constructors are diagnostic no-ops while real compilation/config validation fails closed; no production fail-open finding."
+    }
+  ],
+  "candidates": [],
+  "support": {
+    "skills/04-review/plugin-runtime/regression-guards/response-header-mutation-policy.md": "4274727258b156f2ce9aa05f80980316bf90b5c67f67618973c5456720fc05b7"
+  },
+  "support_scope": "Relevant original contracts, caller/callee and test sections inspected; supporting hashes do not claim complete secondary reads.",
+  "limits": "Source/static evidence only; no builds, tests, benchmarks or Git mutations. Accepted lifecycle and failure policies preserved."
+}

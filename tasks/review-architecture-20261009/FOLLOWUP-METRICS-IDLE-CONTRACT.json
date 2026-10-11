@@ -1,0 +1,16 @@
+{
+  "complete": true,
+  "kind": "documentation-follow-up",
+  "source_finding": "ARCH-043",
+  "scope": "Inventory idle table says default0/no-op; actualconfig600 seconds applies ALL through shared installer even optionaldurationdisabled. Analyst and independentverifier inspected realvalue. Correct relevantcurrent guidance within futureauthorized043fix. Module historical route-design path absent; resolve scoped commentreference without inventing acceptance.",
+  "evidence": {
+    "docs/en/ops-guide/observability/metrics-inventory.md": {
+      "sha256": "37b819c29362a6719fc06fdf99aa8077f6a632bed94e741a9cba31ae406e976d",
+      "scope": "145-175"
+    },
+    "edgion-gateway/src/cli/config.rs": {
+      "sha256": "9f19a5bf98552250045c76ce5c2ea606de312c1d61a71ad04c0a01ac3fe75e7f",
+      "scope": "745-820"
+    }
+  }
+}

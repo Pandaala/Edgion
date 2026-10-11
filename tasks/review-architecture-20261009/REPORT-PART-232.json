@@ -1,0 +1,103 @@
+{
+  "partition": "PART-232",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-cli/src/bin/edgion_ctl.rs",
+      "sha256": "1b780fd98d035916bb413c82276829d385c94319ae86be3a7dc4fe98a7a3c03c",
+      "fully_read": true,
+      "disposition": "No actionable debt: binary owns allocator/runtime bootstrap, clap entry and terminal stderr/exit handling; shared crypto initialization applies to backend-independent clients."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original personally retained; unchanged current inventory."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original personally retained; unchanged current inventory."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original personally retained; unchanged current inventory."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full original personally retained; unchanged current inventory."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original personally retained; unchanged current inventory."
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full original personally retained; unchanged current inventory."
+    },
+    "skills/01-architecture/04-ctl/SKILL.md": {
+      "sha256": "f2846ac3479a688f16cbc5f2eec3c131905d9145e26fda5670db900c1bcad463",
+      "scope": "Full original personally retained; unchanged current inventory."
+    },
+    "skills/04-review/supply-chain/regression-guards/allocator-feature-surface.md": {
+      "sha256": "d27372a74c3eb612e3bd013b9d356ab3472936a234d03f5e0cc806f2f985f592",
+      "scope": "Full original personally retained; unchanged current inventory."
+    },
+    "skills/03-coding/02-rust-coding-rules.md": {
+      "sha256": "3afda15775dbf0c05def4e821563f01907fdbf1f30f40ff1ea74d3007112c1a9",
+      "scope": "Full original personally retained; unchanged current inventory."
+    },
+    "skills/04-review/tls/review-evidence/tonic-domain-name-false-positive.md": {
+      "sha256": "22e4f1b6130f56d5b211149247869f21610e7c1ccbf89e45184ed6676a5d8ba5",
+      "scope": "Full original personally retained; unchanged current inventory."
+    },
+    "edgion-cli/Cargo.toml": {
+      "sha256": "9f94b96a3e42050fa02daffa7f646b2802294b097a0cd9f829f4f0262250af4a",
+      "scope": "Full manifest"
+    },
+    "skills/01-architecture/04-ctl/00-overview.md": {
+      "sha256": "0a2acdc3bd1339ae674a569674cdf47d1b33be3c387011e9a942606dfe5b30fc",
+      "scope": "1\u2013120"
+    },
+    "skills/01-architecture/04-ctl/01-commands.md": {
+      "sha256": "a42c9fee403fbb921017696ada6fe7cb904f0ae7574762b91d3e08d051c2e03f",
+      "scope": "181\u2013274"
+    },
+    "skills/01-architecture/03-controller-gateway-link/00-overview.md": {
+      "sha256": "6e973fa8105734d3a40aa3c5da45d5df6965da3c1dee0a52a01b1ef642b62487",
+      "scope": "330\u2013365"
+    },
+    "skills/02-features/02-config/00-controller-config.md": {
+      "sha256": "07a601d4f500f3466f0556cd58e6fae88fe444994280d22a999d1a6a9b07dbd2",
+      "scope": "240\u2013275"
+    },
+    "skills/06-tracing/SKILL.md": {
+      "sha256": "9fae4d9cde6e5d4b807cae16a046f341bd113b6da5ad1fc30042e438bec8cd80",
+      "scope": "Full"
+    },
+    "skills/06-tracing/00-debugging.md": {
+      "sha256": "a7fcedbdddc722886542237699b27678b582f1a85361b91433c7349c698e0879",
+      "scope": "1\u2013130"
+    },
+    "skills/03-coding/SKILL.md": {
+      "sha256": "87215b74d0356cbda5315294868d052c08006b27923488fe271ca6c2b8be2357",
+      "scope": "Full"
+    },
+    "edgion-common/src/startup.rs": {
+      "sha256": "56a99496cc9848c5187dcbfc9ba61278e4f8df962fe2061f967ea3a31f577f06",
+      "scope": "100\u2013140"
+    },
+    "edgion-cli/src/cli/mod.rs": {
+      "sha256": "8feafddf836ec2f4f305808ba874743903b6bc5c4a5b9298fadb68d2de6c3a98",
+      "scope": "153\u2013190"
+    },
+    "edgion-cli/tests/unit/cli/commands/gen_certs_test.rs": {
+      "sha256": "b4368d57a8041fa01e980ec56f5a8d4bff3388ee75a531111e2ee28d9a7f0e9b",
+      "scope": "Full 1\u2013135"
+    }
+  },
+  "limits": [
+    "Full frozen primary implementation read with actual entry/caller/test/contracts. Static review only; no command execution, certificate generation, filesystem/Kubernetes publication or tests. Supporting reads have zero primary credit. Gen-certs prose lists ca.key although current bundle intentionally omits the CA private key; record documentation drift, not a new CA persistence feature."
+  ]
+}

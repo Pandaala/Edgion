@@ -1,0 +1,70 @@
+{
+  "partition": "PART-533",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/gateway/combined/combined.rs",
+      "sha256": "958db936dc234f79e173f4e5cc9f205d96d0468c4b788805af3e914f9676c4e2",
+      "fully_read": true,
+      "disposition": "Full1-210. Five explicit combined matching assertions retained. Only primary31230 literals at26/61/96 supply pending ARCH296 evidence; two31231 secondary listener probes excluded. Actual local/K8s execution and owning30-second case deadline checked."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/gateway/combined/mod.rs",
+      "sha256": "47bda92435acce6c0803946694d4b34137075c2e9af4bf1cc7600872af760d6d",
+      "fully_read": true,
+      "disposition": "Full1-5. Explicit module/public suite export reaches actual registration; no issue."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "525-590,630-694; retained749-859 serial runner."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "1654-1683,3208-3240,3838-3896,3900-3935."
+    },
+    "edgion-tests/src/client/port_config.rs": {
+      "sha256": "121db5936d48cddb5c947e75692d413fb1c710f14740d77dad8dd87f3f4d4d7f",
+      "scope": "1-81 canonical suite ports."
+    },
+    "edgion-tests/integration/conf/ports.json": {
+      "sha256": "6672942f69329bb6b46de10be535b5b16744c0270e6bc7246eca3d2d5dcf0f7b",
+      "scope": "198-210 primary mapping."
+    },
+    "edgion-tests/integration/scripts/integration/run_integration.sh": {
+      "sha256": "5a6df789c2a894150691b3f50edf85f7ac055961ee0b1cc230291a6b90f85b76",
+      "scope": "1867-1881,2288-2299 actual Combined calls."
+    },
+    "edgion-tests/k8s/scripts/run_k8s_integration.sh": {
+      "sha256": "9c7f539e02edccc91c46908c4b6afe1af3fb867b72c7b6061b613bd2723e641f",
+      "scope": "2524-2535; retained2643-2790 dispatch."
+    },
+    "edgion-tests/k8s/kubernetes/gateway/service.yaml": {
+      "sha256": "e5e4bbde3201aa76b93060a365455cb83d223021dd64568ffce72d9ce8c05460",
+      "scope": "162-180 exposed31230/31/32."
+    },
+    "edgion-gateway/src/runtime/matching/route.rs": {
+      "sha256": "d325c8ca61ec71bf2e71f429f6e54cfe2bb6521d7093fd878dc2bf56cc8f4eda",
+      "scope": "Full1-193 matcher and parent/listener ownership."
+    },
+    "edgion-gateway/tests/unit/runtime/matching/route_test.rs": {
+      "sha256": "1c63d9293eef7e27f53d13e30822f2360dfa6d1161d27ec2770df606e63997a6",
+      "scope": "37-140,168-177,332-364 actual test bodies."
+    },
+    "skills/04-review/testing/regression-guards/integration-port-selection-must-fail-closed.md": {
+      "sha256": "c2ff61188030d30484afd0c1323201295fb980755c3e4738fe78dd8eea785b89",
+      "scope": "Full original contract."
+    }
+  },
+  "limits": "Static source review only; frozen primaries matched; original project/graded and relevant routing/testing rules retained. No execution/mutations. Existing scalar primary resolution cannot replace secondary listener identities; no generic multiport framework. No extra source credit from support.",
+  "supplemental_candidates": {
+    "ARCH-296": {
+      "status": "awaiting-independent-extension",
+      "scope": "combined.rs26/61/96 primary listener probes",
+      "evidence": "Canonical Gateway/Combined.http resolves into TestContext.http_port; primary31230 literals bypass it. Consume existing context for these three only. Secondary31231 has no second HTTP field and is excluded; no offsets or blanket replacement."
+    }
+  }
+}

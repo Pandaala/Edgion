@@ -1,0 +1,37 @@
+{
+  "partition": "PART-531",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/gateway/mod.rs",
+      "sha256": "752b98f019b80492a57cc83e5fbfddb960a59d1eff253154f899878b0a2ea879",
+      "fully_read": true,
+      "disposition": "Full module read; private children and explicit typed suite exports traced through suites/mod.rs and actual test_client dispatch. Supported TLS ownership remains in child suites; no actionable architecture issue."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Retained full original project rules."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Retained full original index."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Retained full graded gates."
+    },
+    "edgion-tests/src/client/suites/mod.rs": {
+      "sha256": "7ce09dacca746e2d9e4f3c6db066d0d9f0a76accdef335b68a61d36e19b74f5c",
+      "scope": "74-81 concrete Gateway/TLS reexports."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "2500-2550 actual typed TLS suite dispatch, 3175-3240 Gateway registration; original complete review retained."
+    }
+  },
+  "limits": "Read-only static glue assessment; no runtime execution. Supporting declarations/searches are not child-source primary coverage. Full sources byte-read at current frozen SHA."
+}

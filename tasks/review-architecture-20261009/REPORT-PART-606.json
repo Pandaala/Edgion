@@ -1,0 +1,95 @@
+{
+  "partition": "PART-606",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-cli/src/cli/commands/waf.rs",
+      "sha256": "455c4c9725cc009707d111ec031161a7bc0ecd8e7dfb7ad424368d79de984339",
+      "fully_read": true,
+      "disposition": "Full 259 lines; local strict/value-free inspect and explicit bounded tag metadata traced through canonical resource APIs and actual fixtures; no new finding."
+    },
+    {
+      "path": "edgion-cli/src/cli/commands/wasm.rs",
+      "sha256": "d2c9a6eab1e242f593585d5965ccebdcf1c7a625bace72c11835b6acfa28717e",
+      "fully_read": true,
+      "disposition": "Full 1426 lines; strict Envoy DTO/protobuf duration/Any byte fidelity, blockers, canonical validation and bounded atomic report output traced with actual tests; legitimate protocol translation complexity, no new finding."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original rules retained, fresh unchanged baseline M."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original index retained, CLI/Waf/Wasm topic lookup."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original graded rules retained; relevant body/leaf/redaction/scope gates."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full original retained."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original retained."
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full original refreshed this continuation."
+    },
+    "skills/01-architecture/04-ctl/SKILL.md": {
+      "sha256": "f2846ac3479a688f16cbc5f2eec3c131905d9145e26fda5670db900c1bcad463",
+      "scope": "Full original."
+    },
+    "skills/01-architecture/04-ctl/00-overview.md": {
+      "sha256": "0a2acdc3bd1339ae674a569674cdf47d1b33be3c387011e9a942606dfe5b30fc",
+      "scope": "1-120; prior full retained."
+    },
+    "skills/02-features/01-binary-and-deployment/00-binaries.md": {
+      "sha256": "9f3e43a8b97cbc09b8baf27127a2df4e4fa1e9fc93d7e7e17440015685081aa9",
+      "scope": "135-195 local-only converter and CLI schema."
+    },
+    "skills/04-review/wasm/SKILL.md": {
+      "sha256": "e75c2c63d62ec8664424116e14056da679273002a903e1f24738427b34e6040b",
+      "scope": "Full original catalog."
+    },
+    "skills/04-review/resources/regression-guards/waf-support-inspection-must-not-imply-publication.md": {
+      "sha256": "ce473914fe96f83f17ee83d288d9c8cc914b622aa50dd7ee1e2180c2e4453342",
+      "scope": "Full original; value-free local inspection versus strict compilation/publication."
+    },
+    "skills/04-review/waf/regression-guards/named-profile-selection-and-bundle-publication.md": {
+      "sha256": "69d48f9da9d67879916060e1a2f0b757c945d917e32626c8778414afed884621",
+      "scope": "1-125 selected-profile/bundle authority, local metadata/publication distinction."
+    },
+    "edgion-cli/tests/unit/cli/commands/wasm_test.rs": {
+      "sha256": "ac1daba4c195eca22d95d38e98f0a7d0defc71c5703d993347ab304ce0e46b9a",
+      "scope": "Full actual 479-line test bodies and fixtures; no execution."
+    },
+    "edgion-cli/tests/unit/cli/commands/waf_test.rs": {
+      "sha256": "f02638a130254a819b95a9ea76cd75898a992364fa56d6f434f37e243a0fb0e1",
+      "scope": "Full actual test bodies and local fixtures; no execution."
+    },
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/wasm.rs": {
+      "sha256": "820aaf7449c1142857237fc49a3db53ae94b95fffcae78c955499853e5757aaa",
+      "scope": "315-365 guest byte canonicalization/cap,515-655 actual validate constraints."
+    },
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/waf.rs": {
+      "sha256": "761bbdee08bbb2dec67731afe889348332aa8eaa6bcdbb3fe42854f43992bab4",
+      "scope": "860-935 typed failures/local tag API;1220-1325 exact inline inspect, strict compilation and bounded fixed report outcomes."
+    },
+    "edgion-resources/src/resources/edgion_config_data/waf_tags.rs": {
+      "sha256": "08db1b7c356cb4e004aa163d023d96cd48e4da70f2f35adbb1c77e6208b9c936",
+      "scope": "315-465 actual local metadata admission, identity/source borrowing and independent output budget."
+    },
+    "edgion-wasm/src/lib.rs": {
+      "sha256": "40a744ba417500f5b18becac7899e357b558b75137be7c15b41891cabe46be69",
+      "scope": "250-360 report semantics,655-720 analyze preflight/validator seam; context only, not leaf primary coverage."
+    }
+  },
+  "limits": "Static full primary and actual tests; selected canonical APIs/contracts inspected. No program/build/test/network/source mutation; compatibility never claimed publication, converter remote intentionally blocked; supporting reads zero primary credit."
+}

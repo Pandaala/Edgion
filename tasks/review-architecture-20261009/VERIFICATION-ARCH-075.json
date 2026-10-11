@@ -1,0 +1,101 @@
+{
+  "candidate": "ARCH-075",
+  "complete": true,
+  "verifier": "/root/analyze_outbound",
+  "decision": "confirmed",
+  "input_sha256": "6c2ed1b17f651c40134dd7a7fd969777ba4061176aafd6aa74d682cbb30fd455",
+  "approved_claim_sha256": "e430478d1b7773cc30abb2f9b0ac71b706e9d8b7b97f315230fdff71562bcef0",
+  "evidence": [
+    "Pinned x509 parser ignores PEM label; rustls certificate iterator skips valid relabeled PUBLIC KEY and constructor checks only syntax/key, allowing same-key expired serving leaf.",
+    "Existing validate-before-swap guarantee and actual read/from_pems/store path establish invalid installation and misleading metadata; no remote material write/incident/auth bypass claimed.",
+    "Conservative label rejection preserves Controller first-block metadata and initial client mixedprefix, unlike withdrawn validator-only selector migration."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original independent personal rules."
+    },
+    "skills/04-review/conf-sync/regression-guards/installed-certificate-expiry.md": {
+      "sha256": "020d95e0d18707c2941a4d2605ba846a35526ba5f8c2f6e8a066c27506d3b931",
+      "scope": "Full original withdrawn unilateral validator migration and initial client scope."
+    },
+    "skills/01-architecture/03-controller-gateway-link/00-overview.md": {
+      "sha256": "6e973fa8105734d3a40aa3c5da45d5df6965da3c1dee0a52a01b1ef642b62487",
+      "scope": "Original181-225,314-345 validate-before-swap."
+    },
+    "edgion-common/src/grpc_tls.rs": {
+      "sha256": "8a07b9d2ca8531b8bac2dd9357029a55e58487de7f5082a7d307e46c2de94085",
+      "scope": "Full independent initialloading/validator."
+    },
+    "edgion-controller/src/conf_sync/conf_server/tls_identity.rs": {
+      "sha256": "9e01e046ac0f25b710e0df2ac848a2b3557828d98957f905c525fc7ab804b9e6",
+      "scope": "Full independent metadata/serving selector/store."
+    },
+    "edgion-controller/src/conf_sync/conf_server/cert_watch.rs": {
+      "sha256": "bd12d113aa8f0bd5a7d1513842170ca3593c35b992592eb62a3c48f80dd12aee",
+      "scope": "1-110 from_pems/store retention."
+    },
+    "edgion-controller/src/services/conf_sync_ca/provision.rs": {
+      "sha256": "b9c7a03134233f7f9eb474ab2f8db947ba179ad6035cee2a42b94a03c793b4f2",
+      "scope": "1-100 adoption/rewrite outcome."
+    },
+    "edgion-controller/src/services/conf_sync_ca/rotation.rs": {
+      "sha256": "9779dbe48bd4a180f1153e9c0571fbb9c8f461f08703b9975337e7d6927169cb",
+      "scope": "400-447,576-611 validation and serving construction fences."
+    },
+    "edgion-controller/src/services/conf_sync_ca/identity_sync.rs": {
+      "sha256": "8f283a7b4a0cad720eecdf3dbd4b06175faf21e362fcd8aef431f2add69362ec",
+      "scope": "223-257 installed metadata/construction."
+    },
+    "edgion-gateway/src/conf_sync/conf_client/grpc_client.rs": {
+      "sha256": "76f476f977f998cc66b201c2ec485664fdd11544680070d9b4722c1750d46bfe",
+      "scope": "244-280,450-491,831-864 initial versus prepare/reload/publication."
+    },
+    "edgion-common/tests/unit/grpc_tls_test/validate_identity_tests.rs": {
+      "sha256": "0e3c7f4c21ad668d992ea34ac5acce05795d93f56ffb68db6ef74455f3a935a8",
+      "scope": "Full actual gate test bodies."
+    },
+    "edgion-common/tests/unit/cert_util_test.rs": {
+      "sha256": "a81c1f5d204e8583cd0ff69fb61da4110958781e45148d60133320592bbb2c65",
+      "scope": "Full actual mixedprefix initialmetadata tests."
+    },
+    "edgion-controller/tests/unit/conf_sync/conf_server/tls_identity_test.rs": {
+      "sha256": "9b08bbe06800a1a83c4891593a48bbcc490093908439277bcf3d83887a445596",
+      "scope": "Full actual serving/metadata/cancellation bodies."
+    },
+    "edgion-controller/tests/unit/conf_sync/conf_server/cert_watch_test.rs": {
+      "sha256": "a512fdaedee2c24a3df255c11b8dee34c9a534fc7c4cc9264d9a28e40fe37361",
+      "scope": "Full actual reload/lastgood/signature bodies."
+    },
+    "edgion-gateway/tests/conf_sync_cert_expiry.rs": {
+      "sha256": "f10ebe05485e359a1f2c8cb631d90da5d1a4772302d686ba885f80c42810b20b",
+      "scope": "75-123 productioninitialmixedprefix retention."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/x509-parser-0.18.1/src/pem.rs": {
+      "sha256": "4942e04db47db8e5b35d1cdaafb9c8fbdefb30587c8cdf0c681808ec1db7953e",
+      "scope": "1-205 arbitrarylabel/DER"
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustls-pemfile-2.2.0/src/lib.rs": {
+      "sha256": "a034313b16e626e0ac4d5d851f1c1356d8fc2264a5b8ba9a8067242a0f8bd45d",
+      "scope": "1-165 certificatefilter"
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustls-pemfile-2.2.0/src/pemfile.rs": {
+      "sha256": "99bc7ec767084f56c2a209d31c862682e601192d10c0e15176a697c7a47da774",
+      "scope": "1-155 opaque PUBLIC KEY wrapper"
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustls-0.23.45/src/server/builder.rs": {
+      "sha256": "4ec5532bbaaf9d60ae2fb577e8f463e2f3f6915aa80d0f11627829214fa7eb8c",
+      "scope": "30-110 constructor"
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustls-0.23.45/src/crypto/signer.rs": {
+      "sha256": "b097775c0b30d507255824a8ac65d8d7440e723b16a9e91036e0d096a3d7b071",
+      "scope": "130-210 keycheck/firstcertificate"
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustls-webpki-0.103.15/src/cert.rs": {
+      "sha256": "1a4da3c745a72f61e8e95f222fc5847cb4779a4de524f4d6d09ae1d25b27c001",
+      "scope": "50-115 syntaxconversion no currenttime"
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

@@ -1,0 +1,65 @@
+{
+  "candidate": "ARCH-341",
+  "complete": true,
+  "verifier": "/root/verify_ip_union",
+  "decision": "confirmed",
+  "input_sha256": "959614be4deb6c098f0f109416a7b2ef820b91f1091c9840783cbaacb32af8e2",
+  "approved_claim_sha256": "c73bd1cadc12020b2850934e75182da45656ee86efc8f28d5a3bd719f09b065f",
+  "evidence": [
+    "All negative establishment errors/timeouts currently pass; healthy positive sockets cannot prove31271/31272 availability.",
+    "Actual GuardFirst bridge is after accept; unavailable socket is distinguishing witness. Existing GeoRestriction treats connect failure Inconclusive.",
+    "Bounded accepted-connection close observation is feasible without new telemetry; reset timing and later EOF attribution retained as future/limited evidence."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "edgion-tests/src/client/suites/gateway/stream_plugins/stream_plugins.rs": {
+      "sha256": "e8b8a8b5460a72cbf28baff323ab350ff76db296a98704e606b1aa2e37902cb7",
+      "scope": "Full actualfive cases."
+    },
+    "edgion-gateway/src/runtime/server/listener_builder.rs": {
+      "sha256": "3d9965a2601c72989a44de13c4d7e9ed5408a04812eb2e702e0e7088ce19a970",
+      "scope": "327-367,565-605 actual guard wiring."
+    },
+    "edgion-gateway/src/runtime/server/proxy_protocol_policy.rs": {
+      "sha256": "cd5abbd615419a63dca1b8ee79722f5777039a83759ea26fff1851db88d13b25",
+      "scope": "529-562 actual early handshake boundary."
+    },
+    "edgion-gateway/src/plugins/stream/connection_filter_bridge.rs": {
+      "sha256": "a5f7373380d72a0cbf70ca8496a1b4a5089a19f64478a7c4acb084fd17780364",
+      "scope": "Full current actual pinnedConnectionView/Stage1."
+    },
+    "edgion-gateway/tests/unit/plugins/stream/connection_filter_bridge_test.rs": {
+      "sha256": "f2f0da2e4e2c3bf8e8aadb05ebedbdc4927d7c17ae1ad3d92986694611cf42d6",
+      "scope": "Full current actual body tests."
+    },
+    "edgion-gateway/tests/unit/plugins/publication/inputs_test.rs": {
+      "sha256": "ec53b26dd44a4e46e30109908f98ad72e9de53a59b752fdf820c020c0ce2928a",
+      "scope": "1-70 actual projection."
+    },
+    "edgion-gateway/tests/unit/plugins/publication/mod_test.rs": {
+      "sha256": "5890b1e453aaa27059596673e7bc4f9cdb84d06c5d5ac5b698244859b1e47ce3",
+      "scope": "1560-1630 actual invalid-sentinel/decoy/sharedListener assertions."
+    },
+    "skills/04-review/observability/mandatory-design/tcp-stream-plugin-no-tracing.md": {
+      "sha256": "1a228837ec2b37925651fdfdf5eea3b59d7c0acdbe24145e1a4bfdc0b90c9ae0",
+      "scope": "Full current original."
+    },
+    "skills/04-review/security/regression-guards/gateway-stream-plugins-same-namespace.md": {
+      "sha256": "11b554c91c38fcd7df87f691b68279f5ceb79236df55ff9b8160c73184b12d41",
+      "scope": "Full current original."
+    },
+    "edgion-tests/integration/conf/ports.json": {
+      "sha256": "6672942f69329bb6b46de10be535b5b16744c0270e6bc7246eca3d2d5dcf0f7b",
+      "scope": "175-184 four sockets."
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "535-582 owning30s deadline."
+    },
+    "edgion-tests/src/client/suites/tcp_route/geo_restriction/geo_restriction.rs": {
+      "sha256": "78d2f2d1195b409fde4dd8a43cf6683ed74fdce3b0ecc60cdbbcb261d76b672b",
+      "scope": "1-115 actual Inconclusive-connect precedent."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

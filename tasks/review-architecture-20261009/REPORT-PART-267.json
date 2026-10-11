@@ -1,0 +1,22 @@
+{
+  "partition": "PART-267",
+  "analyst": "/root/analyze_session",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/lb/ewma/mod.rs",
+      "sha256": "d7b25b27355277f47e7f9d7de5d5a2f3d35740469ca6d90d4fea03755d58da08",
+      "fully_read": true,
+      "disposition": "Exports and relevant callers checked; no separate finding."
+    },
+    {
+      "path": "edgion-gateway/src/lb/ewma/score.rs",
+      "sha256": "0a1bda1db1794b0c9e98e6c000f0c129f17928502ffbdbbb4cdf2737ff97aa9a",
+      "fully_read": true,
+      "disposition": "Packed monotonic decay/peak updates and sample ownership checked."
+    }
+  ],
+  "candidates": [],
+  "support_scope": "Actual callers, original rules/index/review-routing/topic decisions and existing tests inspected; secondary reads confer no primary coverage. Detailed candidate evidence in corresponding issue files.",
+  "limitations": "Read-only static review, no checks/builds/tests/Git mutation or performance evidence."
+}

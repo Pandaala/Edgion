@@ -1,0 +1,115 @@
+{
+  "partition": "PART-465",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/csrf/csrf.rs",
+      "sha256": "0800ae4644078db887ad11ec959ebf42aae91ff3491365c0299a4eeed9111edd",
+      "fully_read": true,
+      "disposition": "Full1-435, eight static cases; ARCH349 failure diagnostic serializes issued cookies. No production cookie/signature defect claimed."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/csrf/dynamic.rs",
+      "sha256": "3811de992cd26d1b1815abec706ce737a8ac5e83cf723c3f55bbfee25d5ebbd3",
+      "fully_read": true,
+      "disposition": "Full1-227 signed issuance/validation, stale-token rejection, missing-material sealing, value-free messages and Drop token cleanup; no independent issue."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/csrf/mod.rs",
+      "sha256": "2e92a5ac8a36713ec986c130b9c8f009999049109b2196b231a7db8fd39075c4",
+      "fully_read": true,
+      "disposition": "Full1-8 explicit exports and token guard ownership; no independent issue."
+    }
+  ],
+  "candidates": [
+    "ARCH-349"
+  ],
+  "support_selected": {
+    "edgion-gateway/src/plugins/http/csrf/plugin.rs": {
+      "sha256": "e1beb3337bee2257d54c2022d0ce2264bafe64f051053d378f620f83c72cd6c7",
+      "scope": "Full actual plugin."
+    },
+    "edgion-gateway/src/plugins/http/csrf/token.rs": {
+      "sha256": "8cc8b0a46e947de2ad05000c24d1e0807d3fd31ac0ac8c26d77545f96c7143cc",
+      "scope": "Full actual signing/validation."
+    },
+    "edgion-gateway/tests/unit/plugins/http/csrf/plugin_test.rs": {
+      "sha256": "2b4814d262e95e4ad0742636ca0929e1d55888f2ef04b1b0102ce07d771533c0",
+      "scope": "Full actual plugin unit bodies."
+    },
+    "edgion-gateway/tests/unit/plugins/http/csrf/token_test.rs": {
+      "sha256": "6e27cd06a7fea2f9201d0857756fb26af595a52d6108122a97d1cda1ef03a410",
+      "scope": "Full actual token unit bodies."
+    },
+    "edgion-tests/src/client/dynamic/scenarios/csrf_secret_rotation.rs": {
+      "sha256": "45246d05964d5616c33bc7a7aa34e83a42dd8ca93af1e4f32c27c518486b1740",
+      "scope": "Full current scenario including fixture-key unit body."
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "485-531,640-699 failed result retention/report conversion."
+    },
+    "edgion-tests/src/client/reporter.rs": {
+      "sha256": "fe5136f8b928f78374ea448f10a5406517a6a6280e027f8be34e1be4ef90779d",
+      "scope": "1-72,140-167 console and optional JSON error propagation."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "3007-3020,3942-3960 actual suite and phase registration."
+    },
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "6c38b285bdfe354c40d5d2e96d4a07be0b7dc37ce3290197ca75054de23bfa98",
+      "scope": "3438-3456 fixed upstream cookie producer."
+    },
+    "skills/03-coding/01-log-safety.md": {
+      "sha256": "74591411c294befded433b7c2be571202deb22ef36030a704caa60055f214863",
+      "scope": "1-120 original token redaction rule."
+    },
+    "skills/04-review/csrf/regression-guards/csrf-secret-rotation-integration-coverage.md": {
+      "sha256": "86ec095731997d1be52808fa55c48167efa42bfa12185e1040fea216c96eb86a",
+      "scope": "Full original rotation coverage contract."
+    },
+    "skills/04-review/csrf/regression-guards/set-cookie-append.md": {
+      "sha256": "48e005c9ccefea96b3336b6ce3db36dd6b55c6a827b380d5dceee69f49a56b47",
+      "scope": "Full original append ownership."
+    },
+    "skills/04-review/security/regression-guards/credential-material-debug-redaction.md": {
+      "sha256": "f0bbf522255cd241aa96c93dfb0d8e9cc9703d315638f8844f614c927bf2b104",
+      "scope": "Full original Debug versus direct-field redaction boundary."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/csrf.rs": {
+      "sha256": "ae21036361fa73c351bd026ca1c335de9f8f3087d7ef1c44284aabc006b7f687",
+      "scope": "Full resolver original."
+    },
+    "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": {
+      "sha256": "d80096aa53f493497d34dfba80f21f7089bf1ad3086f3b5ab3ff6f1689018c9d",
+      "scope": "2318-2340 missing-key seal gate."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/Csrf/EdgionPlugins_default_csrf-test.yaml": {
+      "sha256": "56c0f1be965637bd416e1255cc91243feb030aa4d319182b1ef272ae9bca231d",
+      "scope": "Full local Secret-backed key/lifetime fixture."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/Csrf/HTTPRoute_default_csrf-test.yaml": {
+      "sha256": "9322b37ab7fae371acc1271844f3808304e22d7e3e4231c8452c2a945bfb6e49",
+      "scope": "Full local selected route."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/Csrf/EdgionPlugins_default_csrf-test.yaml": {
+      "sha256": "7be0a9b90ccfd9a45d76611d9731589bf7dd7cf2dcf6108a59288a38fdd2621b",
+      "scope": "Full Kubernetes key/lifetime fixture."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/Csrf/HTTPRoute_default_csrf-test.yaml": {
+      "sha256": "e76493f736742da928a5bff26005895547f4fdf69ae87240e9ea67e9cb80d276",
+      "scope": "Full Kubernetes selected route."
+    },
+    "edgion-tests/integration/scripts/integration/run_integration.sh": {
+      "sha256": "5a6df789c2a894150691b3f50edf85f7ac055961ee0b1cc230291a6b90f85b76",
+      "scope": "1895-1901 actual suite dispatch."
+    },
+    "edgion-tests/k8s/scripts/run_k8s_integration.sh": {
+      "sha256": "9a858cd81d47c74f20b375a503b10f1c52107ab413116783c8a49c4ec16e42e1",
+      "scope": "2545-2558 actual suite dispatch."
+    }
+  },
+  "limits": "Complete static analysis, no tests/builds/execution/network/Git mutation. Synthetic issued test token only; no observed disclosure or production token impact. Original authority/graded/routing personally read; original Secure/integer-second expiry decisions retained, no duration/watcher/body/TLS changes. Existing lifecycle/status/cleanup findings deduplicated. Supporting files earn zero primary coverage."
+}

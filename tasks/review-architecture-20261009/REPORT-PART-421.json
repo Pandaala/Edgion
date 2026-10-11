@@ -1,0 +1,196 @@
+{
+  "partition": "PART-421",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/ref_grant/cross_ns_ref_manager.rs",
+      "sha256": "797cee40ed0984da317351f2fb75dec4c7ea0c1cde7f92b85f6c1c71d59ceac2",
+      "fully_read": true,
+      "disposition": "No finding: type alias/factory reuse canonical bidirectional manager; actual runtime owner/requeue readers verified."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/ref_grant/edgion_config_data_grant.rs",
+      "sha256": "879d39f0a3b0879affaa2326eadee5314a210edf964c00834c719fbeec503614",
+      "fully_read": true,
+      "disposition": "No finding: pure explicit visibility/flag/locality decision reused across validtyped callers; remaining rawstring convenience has no productioncallers and canonical matcher owns exact identity."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/ref_grant/events.rs",
+      "sha256": "65be4ab3ec976595004e744a4549887112c441bad36bee238adba30b037650b4",
+      "fully_read": true,
+      "disposition": "No finding: clones listener Arc list before await; one actual listener and retainedreset lifecycle justify simple dispatch, no registry/framework needed."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/ref_grant/mod.rs",
+      "sha256": "6863da0e28798adf9cf9fa4295066e3070c438ae442a7d773a1ffb68cf51a80b",
+      "fully_read": true,
+      "disposition": "No finding: actual exports/caller searches show deliberate canonical store/query/helper boundaries; unusedlegacy convenience belongs reference-contract transition, not another framework."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/ref_grant/revalidation_listener.rs",
+      "sha256": "2416c434c819816955316c6d37c27ba3cdbdb66c5c4a41fc919bfe85dcfafb28",
+      "fully_read": true,
+      "disposition": "No finding: startup gaps and runtime dependency-trigger flows distinct; actual readiness callers use existing per-kind queue, runtime events dedup and propagate canonical TriggerChain."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/ref_grant/store.rs",
+      "sha256": "95aafe5df000a670d514acae397292f2fd7cefc9a9125a1baaadbde5b3ef2583",
+      "fully_read": true,
+      "disposition": "ARCH110: namespace-index mutation visits all unrelated raw grants under its otherwise correct singleState lock; independent value assessment pending."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/ref_grant/validator.rs",
+      "sha256": "b914f00fe8eda7fc40b9c493f8857e1b33f74c73f88b3f62f6fbcbffaa2ba865",
+      "fully_read": true,
+      "disposition": "No finding: exactmatching/canonicalquery reused; dependency-before-read helper realtyped terminal callers; advisory regex/enum checks and L4 rulebound retain separate per-rule/domain outcomes."
+    }
+  ],
+  "candidates": [
+    "ARCH-110"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full retained original; current nested discovery root only."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full current reread."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full retained, current selected reread with truncation recovery."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "1-95 full index/current."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full current."
+    },
+    "skills/01-architecture/05-resources/11-reference-grant.md": {
+      "sha256": "d184efdff0daa2d47007aafa95739a91e896f94c0484d474d6a3c5cb75d10350",
+      "scope": "Full current; EGC relationship table stale versus current owning-TLS and dependency guard."
+    },
+    "skills/04-review/resources/intentional-design/reference-grant-validation-controller-scoped.md": {
+      "sha256": "43e196128a7689ccca51ad3f5aaf6423b0b089e53d0aadd980bd23d812613ff3",
+      "scope": "Full current."
+    },
+    "skills/04-review/handler-requeue/regression-guards/reference-grant-dependency-before-authorization.md": {
+      "sha256": "53f1c5febed6161b22954ec3c508e7042c7a4b0f0c38998d28722ebb8f403792",
+      "scope": "Full current."
+    },
+    "skills/04-review/cpu-memory/review-evidence/small-object-clones-reconcile-config-sync.md": {
+      "sha256": "4b859177a90880934d6d96f63c4941daed018c324d220cd852a401cc4d8b190c",
+      "scope": "Full current."
+    },
+    "skills/04-review/cpu-memory/review-evidence/performance-review-methodology.md": {
+      "sha256": "67d2950c67ddb50f7f3fc32b75cf0917d941931a4beeb831eb7ee5a08c2c6ce3",
+      "scope": "Full current."
+    },
+    "skills/04-review/controller/regression-guards/source-scoped-watch-snapshots.md": {
+      "sha256": "c8a7d7cda326b64a7358ab8cfa34002aaa253ef94e731ac86bc0cc8a3fe75d05",
+      "scope": "20-63 relist/worker/epoch ownership."
+    },
+    "tasks/pending/resource-reference-contract/01-spec.md": {
+      "sha256": "a01c94e7b47eba2046275fdaafde4be16b71ae053a8ba619dec8656a723a8678",
+      "scope": "265-308 exactmatching/pending scope."
+    },
+    "edgion-resources/src/resources/reference_grant.rs": {
+      "sha256": "c27689ec7e30f94cff41831a46ff1066a3535698a285fd132661c34f47d59e0b",
+      "scope": "1-140 implementation and type boundary."
+    },
+    "edgion-resources/src/resources/refs/grants.rs": {
+      "sha256": "6722118287597bda15f9586caaed08c36eae56f1f715ad7c7b2ddd60719486db",
+      "scope": "Full canonical purematcher."
+    },
+    "edgion-controller/src/conf_mgr/manager.rs": {
+      "sha256": "8013d79913c950e802e371bb0600a64848b57bb35ea3a0794ae3d519ee72ec3f",
+      "scope": "70-103 actual listener registration."
+    },
+    "edgion-controller/src/conf_mgr/runtime.rs": {
+      "sha256": "4894a9456643f62b21dd1dc39984acf71696d0f5e5e58a85b119778af92ce811",
+      "scope": "194-238 reset/retained listener/canonical store ownership."
+    },
+    "edgion-controller/src/conf_mgr/processor_registry.rs": {
+      "sha256": "942b87b4b68b78c3001f65a04f9621e86d6c0e762915e5054c630b2f5c53ca35",
+      "scope": "195-233 existing chain requeue."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/non_kube_common.rs": {
+      "sha256": "58b9f4e3f396edc3edc5b501a5caf89864c55a1409c4fb95899b1269084adf4b",
+      "scope": "220-280 readiness-tail realcall."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/kubernetes/center.rs": {
+      "sha256": "a0227d8154789e688a2e633f771844508e01934a7d7f82abd262e8c966ae4731",
+      "scope": "946-961 realcancellable readiness tail."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/kubernetes/resource_controller.rs": {
+      "sha256": "4eb1b4efed2ac099a34ba36330eae1b7f66e3284a34bf226d81da00f61c95c14",
+      "scope": "420-465 nativewatchsources;750-800 worker tail."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs": {
+      "sha256": "23057df0f04ed113a72fa1b42fb5344153c3ae8cff526e030878c8091fc92bd6",
+      "scope": "570-660,690-738 real unconditionalparsepipeline."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/reference_grant.rs": {
+      "sha256": "d1424a4684ae618ef3b13922bc822979079fc7887045beb9ab085eb2612186be",
+      "scope": "Full current realproducer/delete/event sequence."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/route_backend_refs.rs": {
+      "sha256": "52c816a50c3fb3bd868f2b0c392dc8f7a46620e0ffe621bd9fec91acd1493304",
+      "scope": "25-154 validtypedloan/dependency-before-enable/grant."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/config_data_ref_mark.rs": {
+      "sha256": "908c316fcf483af503eb1903a36984256fe083d549f38e8b9f80369cbecfa602",
+      "scope": "1-100 canonicalpermission caller."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/ip_list_refs.rs": {
+      "sha256": "f163b6c811ebd74ea0a74aea58d8bdf501df6613952cb48ccf5fd5d672c7c2ae",
+      "scope": "15-90 canonicalpermission caller."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs": {
+      "sha256": "9a6ed6dbb4caa2a8a6a5b9bee0e9a9d75344edd9aad3b9eeee5dccc6413dc16a",
+      "scope": "580-622 readonlystatus/WAF permission consumer; targeted dependency registry search."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/reference_grant_test.rs": {
+      "sha256": "a538ebf59b0d52ed144f02f512015598bec20537dc2251cbdf65e9e402fbb41b",
+      "scope": "Full228 actual tests."
+    },
+    "edgion-controller/tests/support/conf_mgr/sync_runtime/resource_processor/ref_grant/edgion_config_data_grant.rs": {
+      "sha256": "d7d0f504e7eb44e1d798b2b9ecbc109d81f75fb347da7a3cdd539f93e79c36c2",
+      "scope": "Full test-onlyconstant."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/ref_grant/cross_ns_ref_manager_test.rs": {
+      "sha256": "a15e01aba21b64a0ba62fe7980a8771f7e90de58c1d298ddea7c19f797583f6b",
+      "scope": "Full actual tests, all read ranges recovered."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/ref_grant/edgion_config_data_grant_test.rs": {
+      "sha256": "177f9da84140b22698388f2856f789c46536239cbe9d9e628c43b8f4a98d5bbd",
+      "scope": "Full actual tests, all read ranges recovered."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/ref_grant/events_test.rs": {
+      "sha256": "a10c3377ee3538e63144305d02d859ddbddfc7049f7a695b63e4c7d3101b6919",
+      "scope": "Full actual tests, all read ranges recovered."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/ref_grant/revalidation_listener_test.rs": {
+      "sha256": "a7c47d7a4147798f3fd6da7f32fbab105f704a06265f602734aaeac39269fc74",
+      "scope": "Full actual tests, all read ranges recovered."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/ref_grant/store_test.rs": {
+      "sha256": "5d85c6aa2d32f7ba07d2bc7d2f447518d871ff3b1f50dd21534e87bd843566ac",
+      "scope": "Full actual tests, all read ranges recovered."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/ref_grant/validator_test.rs": {
+      "sha256": "a2dc4134e99ea06a16938c7c461656dbc3ba10fca56402ee2230e2f3b2a91a4e",
+      "scope": "Full actual tests, all read ranges recovered."
+    }
+  },
+  "limits": [
+    "Static read-only; no builds/tests/network/Git/application; support zero primary credit.",
+    "Cold whole-inventory index traversal candidate requires independent value assessment; no measured performance claim and no tiny Arc-clone finding.",
+    "ReferenceGrant architecture EGC Grant row superseded by current authoritative EGC administrative selection; no reinterpretation of cluster authority or newGrantpermission.",
+    "CrossNamespaceValidator legacy convenience exports have no productionusers by source search; pending reference-contract owns transition; no cosmetic deletion claim."
+  ]
+}

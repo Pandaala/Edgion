@@ -1,0 +1,15 @@
+{
+  "partition": "PART-290",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/plugins/http/ai_proxy/mod.rs",
+      "sha256": "e616cd715dbc40f5ac30150d80493f705baecfc3e7ee908847d32a46656e618f",
+      "fully_read": true,
+      "disposition": "Full registration re-export read; canonical AiProxy implementation previously reviewed. No duplicate owner."
+    }
+  ],
+  "candidates": [],
+  "limitations": "No tests/builds/source edits; supporting caller snippets do not claim coverage."
+}

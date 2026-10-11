@@ -1,0 +1,19 @@
+{
+  "partitions": [
+    "PART-360",
+    "PART-361",
+    "PART-362"
+  ],
+  "reviewer": "/root/analyze_session",
+  "complete": true,
+  "scope": "Changed support seams only; no added primary credit.",
+  "current_support": {
+    "edgion-gateway/src/plugins/runtime/traits/session.rs": "7b999e5186d352b839b32271c2af4b415d2cde9309f99a89850726474e9d4dd1",
+    "edgion-gateway/src/routes/http/proxy_http/pg_request_body_filter_action.rs": "7e80bd804c30e91a0d8843ae338d51320d2008a4e6a80bebaced3e49b01d8209",
+    "edgion-gateway/src/plugins/http/waf/json_capture.rs": "7ded6756fd44a2b17f2a91776253f6219c10600a85602f034fca95d43820d3ed",
+    "edgion-gateway/src/plugins/runtime/session_adapter.rs": "bb060285f53d6eddb8eeac90c080456e7efabfd9457720990305703c5a143f92",
+    "skills/04-review/http-body/regression-guards/waf-prefix-before-dispatch.md": "2d4aeec3063b956097e37d10ca9352ce56eab9afd0b4372beaf2883d7c9ea332"
+  },
+  "conclusion": "Scoped current replay/capture contracts remain: hard physical/format admission precedes optional state and survives stop; N+1 inspection is not complete cache; actual EOF/full-length checks remain; raw fallback retains sealed owner; stop releases provisional state without fake EOF. Original primary coverage remains adapter-owned. No new candidate.",
+  "limits": "Static original-source/contract inspection; no builds/tests or runtime execution."
+}

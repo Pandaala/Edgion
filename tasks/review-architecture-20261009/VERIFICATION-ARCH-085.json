@@ -1,0 +1,66 @@
+{
+  "candidate": "ARCH-085",
+  "complete": true,
+  "verifier": "/root/analyze_conversion",
+  "decision": "confirmed-with-revision",
+  "input_sha256": "f82514299c2dca0ac35de36159b158b1d010f6c0583f2bf523096c534584c820",
+  "approved_claim_sha256": "126c57fd3ba437ba7403fb4a1a9d6c03d69e6628e206431c7e121b22c460b3a9",
+  "evidence": [
+    "Typed loopback range/expanded/mapped literals bypass few string comparisons.",
+    "Actual constructor validates/copies identity; learned Admin409 hint exposes unusable remote-loopback endpoint.",
+    "Correction reuses public policy-free Common classify_ip while keeping narrow reject policy/local authority grammar.",
+    "Preserve localhost/DNS/private/IPv6/timing/TLS; no DNS reachability or Gateway advertised consumer claimed."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "edgion-controller/src/config/conf_center/etcd.rs": {
+      "sha256": "39da99ddb0a94ada77f38ca605e96004246c110056a00f7d4e18b90c570dae6d",
+      "scope": "Full current independently read."
+    },
+    "edgion-controller/tests/unit/config/conf_center/etcd_test.rs": {
+      "sha256": "9b7d237a3000347596a79af7421462b73d782ecfd6ff5ecbb21239147eb94f11",
+      "scope": "Full current bodies."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/etcd/center.rs": {
+      "sha256": "05b3d74ec1b4ee60cd33466ce9de69ffcc21ac8056796da8fb7fcaecbcedbb53",
+      "scope": "50-105,175-200 actual constructor/hint; prior full retained."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/etcd/leader_election.rs": {
+      "sha256": "095eb808099edbd078815173e7f395d757fafd4de086f0e7d30d8a927ad1ab21",
+      "scope": "20-85,395-412,450-502 actual validation/serialization/cache; prior full retained."
+    },
+    "edgion-controller/src/api/mod.rs": {
+      "sha256": "9320b3b8da4191ad7317024052c8db9c4da21835721ec26cd051105dabb0d1d6",
+      "scope": "140-185,760-785 actual409/canonicalclassification."
+    },
+    "edgion-controller/tests/unit/api/mod_test/leadership_gate_tests.rs": {
+      "sha256": "c1d8fc196bff50f0037db4123f536c89fe0ffe18c9c1732fa429b81a6974df86",
+      "scope": "Full actual supplied-address hint bodies."
+    },
+    "edgion-controller/tests/unit/api/mod_test/admin_exposure_tests.rs": {
+      "sha256": "6989361befe459cead93f6ecc91fa751f09f7f5f0145e9907c27c7413ec9028e",
+      "scope": "Full typed/mapped classification bodies."
+    },
+    "edgion-common/src/egress.rs": {
+      "sha256": "ef68ad370443a10c0e6d58aad1cdd11507e94d1ac4654219e85c9b2ca72bcf05",
+      "scope": "1-180 public policy-free classify_ip versus resolverpolicy."
+    },
+    "skills/01-architecture/00-common/05-unification-points.md": {
+      "sha256": "011c7e0897b5af81b6459096b678774d9ac988843f705295ecc559d8892d7d92",
+      "scope": "1-85,155-210 canonical classification/policy separation."
+    },
+    "skills/04-review/ssrf/regression-guards/ipv4-mapped-ipv6.md": {
+      "sha256": "5382e5862f06a84eff8fedca3219ae2a36474d34636d8605913216952767128f",
+      "scope": "Full original mappedaddress separate corrected owner."
+    },
+    "config/edgion-controller-etcd.yaml": {
+      "sha256": "166c0cad47cea58f74317e1130e24777890feba53c8c9b8721f5f0cae504a088",
+      "scope": "50-64 host:port deployment contract."
+    },
+    "docs/en/ops-guide/configuration/controller-config.md": {
+      "sha256": "b349c44f753aae34b91f72e91aa2d4ffa5145a53a507e57247be4c5e4a2e46ee",
+      "scope": "280-305 original Adminhint contract."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

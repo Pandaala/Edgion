@@ -1,0 +1,26 @@
+{
+  "complete": true,
+  "decision": "confirmed",
+  "verifier": "/root/verify_ip_union",
+  "approved_input_sha256": "6a915cb6576d79ac3cb056f051d3097262ee1e4fab7663a474f969cd7739415c",
+  "approved_claim_sha256": "9a59aa9bf52476dd4e112d747dc0eb4b2db2348c1833a5bd21b87290fea37cc2",
+  "reason": "Full Vec clone precedes range validation and occurs for type-only setter classification. Response Bytes already shared. Snapshot exactly selected bytes before guest allocator reentry; no live HostState borrow across guest call. Preserve empty/nonempty/unsigned max/status and mutation limits.",
+  "evidence": {
+    "AGENTS.md": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+    "skills/00-design-rules.md": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+    "edgion-gateway/src/plugins/http/wasm/host_abi.rs": "c90abdf69625345bb5cbaad0a06e2c9f4c74ab8b21b5aa50d0aa3b67beda8449",
+    "edgion-gateway/src/plugins/http/wasm/plugin.rs": "8a8bdbf1b585dcd718a8985afb4acddbf71ca32015d33da45890fb633347f30f",
+    "edgion-gateway/src/plugins/http/wasm/vm_manager.rs": "5e15c1f81ec4aef0a7979bc98b7524a83b5b9815cb2426a7371d32d1076ca843",
+    "edgion-gateway/src/plugins/http/wasm/callout.rs": "a3f343beb01ccee5877d1a11bbff0efa42258bd45ed633ff2b9bc52823611f4e",
+    "edgion-wasm/src/lib.rs": "40a744ba417500f5b18becac7899e357b558b75137be7c15b41891cabe46be69",
+    "edgion-gateway/tests/unit/plugins/http/wasm/host_abi_test.rs": "9c6eca99bde5dbae58bb42aecd6e3d13e766a4aec225697f7048896f6847b7ce",
+    "edgion-gateway/tests/unit/plugins/http/wasm/plugin_test.rs": "f803a59c83ca7860168803c5aa9aa2790ca98f98d8d91b0d11a8844c24402b81",
+    "edgion-gateway/tests/unit/plugins/http/wasm/vm_manager_test.rs": "e85676a924845a240efd21d2118f816877d4549026572c38c7ec4637c9876fcd",
+    "skills/04-review/cpu-memory/regression-guards/wasm-abi-retention-budget.md": "d9aad856ae74c8c8b6c22672b486943067b2c515275b220e051c21bf54ccb3d0",
+    "skills/04-review/security/regression-guards/proxy-wasm-runtime-hardening.md": "3128c1e493b7b6bd47e403a6cdbd8bbda9a1f6554f3626d1fb872a32d61d7939",
+    "skills/04-review/wasm/regression-guards/tick-quiescence-on-zero-reference-eviction.md": "9e05680dec79c5db7d5458b80bf079f3ee3e7faba39197d8e7a149bbce30febc",
+    "skills/04-review/cpu-memory/intentional-design/wasm-shared-data-no-eviction-no-cluster-kv.md": "216387a8261f9d13bbe7a5b1af35659b88843b51ecbd37f42e250db4a896255c"
+  },
+  "scope": "Actual HostState/reset/selector/get/set/guest writer, staging/drains/pool/drop/context/tick cancellation and ABI/retention/lifecycle original contracts plus actual slice/mutation/reset/closed/poisoned lease tests. Zero primary credit.",
+  "limits": "Independent static source/test inspection only; no execution/mutation/network or fresh measurement."
+}

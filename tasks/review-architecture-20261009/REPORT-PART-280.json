@@ -1,0 +1,66 @@
+{
+  "partition": "PART-280",
+  "analyst": "/root/analyze_session",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/link_sys/runtime/apply.rs",
+      "sha256": "8cafc408bc09879452809bc38cbfae4ec8c701b8c20d762c8e0ec9e3e034dd44",
+      "fully_read": true,
+      "disposition": "Reuse/replacement explicitly retain ordinary last-good and forced withdrawal semantics."
+    },
+    {
+      "path": "edgion-gateway/src/link_sys/runtime/conf_handler.rs",
+      "sha256": "fe6dd5e48e9a83d3e9f798f7be19416934fd39be9dc7064acc28fb1c496919b6",
+      "fully_read": true,
+      "disposition": "Serial source/publication delegation; Gateway does not own Controller workqueues."
+    },
+    {
+      "path": "edgion-gateway/src/link_sys/runtime/data_sender.rs",
+      "sha256": "940af363eb91a61ec49d6d908ca82429643f69a59959bee0e5c4c60a801633fb",
+      "fully_read": true,
+      "disposition": "Borrowed metadata/provider delivery retain accepted queue marking/saturation/exit."
+    },
+    {
+      "path": "edgion-gateway/src/link_sys/runtime/health_probe.rs",
+      "sha256": "11e0f88b0478aa338a77bd67f995b44fb8c2e9d38e3576e2114dc6d42bad3b72",
+      "fully_read": true,
+      "disposition": "PublishedHealth transition owner, monotonic backoff, timeout and shutdown cancellation have separate necessary roles."
+    },
+    {
+      "path": "edgion-gateway/src/link_sys/runtime/mod.rs",
+      "sha256": "9a0de25a4ff909d91c57fc5f55203ed6fac02ba4af4a04b8c67296db2d9e71d4",
+      "fully_read": true,
+      "disposition": "Canonical public lifecycle exports and actual factory callers checked."
+    },
+    {
+      "path": "edgion-gateway/src/link_sys/runtime/runner.rs",
+      "sha256": "1234da3d9e5053c436918ab20953d2032f18b5800a23c408a15d6cf0aa9f59f8",
+      "fully_read": true,
+      "disposition": "Persistent desired-generation runner serializes retirement/init, retains force across replay and rejects superseded publication."
+    },
+    {
+      "path": "edgion-gateway/src/link_sys/runtime/store.rs",
+      "sha256": "b995c16f0e1b9cbde6cdc9c7a74576464b9f0184b9316e4924aac97c230970de",
+      "fully_read": true,
+      "disposition": "Typed ArcSwap registry and source-event serialization own prepare/publish without waiting on provider network initialization."
+    }
+  ],
+  "candidates": [],
+  "support": {
+    "skills/04-review/link-sys/intentional-design/provider-owned-runtime-and-simple-removal.md": "d3a6e869608d5764c916b593c229dc9ce80c83f70820e78107742e4f4703d7ec",
+    "skills/04-review/link-sys/intentional-design/healthy-semantics-intentional-non-flips.md": "4c1e7a4f1abb612c67656fc0cb339f3f1319834e9d48ec14b8e840b30e0fc787",
+    "skills/04-review/link-sys/regression-guards/persistent-runner-publish-supersession.md": "28adfbe2fb25453918be0b48bd3706362919a5708b084d4eb444df0e5459aab9",
+    "skills/04-review/link-sys/regression-guards/forced-rebuild-survives-ordinary-replay.md": "87d85a429347ec5c1af9e1090370080bad53ef1c6b0b54c063e69b368da17c22",
+    "skills/04-review/link-sys/regression-guards/full-set-retain-serializes-join-replay.md": "9eb313ea2247d3a59bdb4e6df5271baf09ad562666d46e2dec31adb3d289abf8",
+    "skills/04-review/link-sys/regression-guards/published-generation-health-transition-ownership.md": "8de53bac9d282eafe8165376982583e4a06b590108e9396e49749793dfbfc0af",
+    "skills/04-review/link-sys/regression-guards/link-sys-hot-reload-reuse-and-retirement.md": "de13c829ae93daa5f05e0fbac13402a6f80fe7d0b9bde9b97c5eb1fe0fb0704a",
+    "skills/04-review/link-sys/intentional-design/access-log-fallback-backfill-tradeoffs.md": "d298416b92beb109ae765e4f1e305f5221eaba55efc6d303d81c6fbefd725397",
+    "edgion-gateway/tests/unit/link_sys/runtime/runner_test.rs": "ca97b43c71abd4f083a5fd07ca9679de598f1889029e60fcd0c9b29c4c8d2f44",
+    "edgion-gateway/tests/unit/link_sys/runtime/store_test.rs": "f060c38c8ed5391024eccfa06620262dbe87290f9e486682e6a22851a84d2b8e",
+    "edgion-gateway/tests/unit/link_sys/runtime/health_probe_test.rs": "a6f8ca9b16b8892a4452e34197bf9e67a900a496cf3a168d5971f2034e6599ef",
+    "edgion-gateway/tests/unit/link_sys/runtime/data_sender_test.rs": "4fece94ddbea8c8fef231c9af3630ab4c2be28d2d671cf457c03946563ef14cb"
+  },
+  "support_scope": "Relevant original contracts, actual callers/callees and selected test source inspected. Only primary files fully credited.",
+  "limits": "Static only; no tests/builds/runtime executions or measured cost. Existing publication, failure and hot-reload policies retained."
+}

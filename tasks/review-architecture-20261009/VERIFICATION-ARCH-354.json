@@ -1,0 +1,49 @@
+{
+  "candidate": "ARCH-354",
+  "complete": true,
+  "verifier": "/root/verify_ip_union",
+  "decision": "confirmed-with-revision",
+  "input_sha256": "709b743ef3f0be54ad17473401abdc2153ee47f1899c647d51345e52bb1bc832",
+  "approved_claim_sha256": "1fd5eea569ab028d0c06ecaf1814b1b2357783cb6e8a1f813ee798f2e28bd4f5",
+  "evidence": [
+    "Independently confirmed unrelated 500/502 false attribution; exact approved symbol correction only.",
+    "Selection precedes admission, canonical BackendLocalhostNotAllowed records precise decision; shared K8s loopback override legitimate and must remain.",
+    "No production bypass/incident/execution; require isolated suite deny policy and correlated terminal evidence."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "edgion-tests/src/client/suites/edgion_plugins/dynamic_external_upstream/dynamic_external_upstream.rs": {
+      "sha256": "7066f9b6db602730f29772d5a173a904ec583df114be9de6592549c778393992",
+      "scope": "Both rejection/fallback/log correlation cases and registrations."
+    },
+    "edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs": {
+      "sha256": "1e78b4bf440134f3f8949ab883bc1f767c0e70055164818c35fc0e2251b25eaf",
+      "scope": "1538-1584 external jump;1678-1690 validation;1692-1709 rejected attempt."
+    },
+    "edgion-gateway/src/plugins/http/dynamic_external_upstream/plugin.rs": {
+      "sha256": "5e4f071c747f51bc9b7a6030cca25251aa6ece8b05fa8b82249f4574e4f12629",
+      "scope": "Full selection/jump/Host/dye/upstream-selected before admission."
+    },
+    "edgion-gateway/tests/unit/plugins/http/dynamic_external_upstream/plugin_test.rs": {
+      "sha256": "3d40322d10b73e5f3239c22ab4c236da5d57c141cde872c44d78b051840d10b9",
+      "scope": "Full real selection/Host/dye/rejected-jump/fallback units."
+    },
+    "edgion-tests/integration/conf/base/EdgionGatewayConfig.yaml": {
+      "sha256": "0e024b70c3393ed8fb2d8672e03ac1d242caa933daaf0b36b6e102903d1e4258",
+      "scope": "Full local base loopback override omitted."
+    },
+    "edgion-tests/k8s/conf/base/EdgionGatewayConfig.yaml": {
+      "sha256": "f93e62d71514f480822b84edd5705890ca826c9b07e995bc7b5fdab1fed01566",
+      "scope": "Full shared base explicit allow-loopback true."
+    },
+    "skills/04-review/ssrf/mandatory-design/upstream-address-safety.md": {
+      "sha256": "09bc36a6ebf56e5706f29552cb9f1236ab661e0cea88380fc5608e8eb6c97e90",
+      "scope": "Full original admission/authorization/override/Endpoint exemption."
+    },
+    "edgion-tests/src/client/access_log_client.rs": {
+      "sha256": "f7691b8ad4c8765a0ab446c414a1596df48c930d8472678d724f918edcf84d55",
+      "scope": "Canonical marker/traceparent/authenticated retries/exact error diagnostics."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

@@ -1,0 +1,104 @@
+{
+  "candidate": "ARCH-052",
+  "verifier": "/root/verify_ip_union",
+  "complete": true,
+  "decision": "confirmed-exact",
+  "input_sha256": "8d190029624e33cb8b59baaadf5744f66dff7ce4d2303038571b3fe47ee0676d",
+  "approved_claim_sha256": "bf7a931894b9840dae7109758d39270673de56c3a9320e9271ff30534fc2633d",
+  "evidence": "Four nonempty stage buffers for default percent-only witness, three with preservation. from_utf8 consumes Vec, no fifth allocation. Private ownership propagation feasible, unchanged stages retain incoming owner and final owner moves; stage guards must cover own full domain including relative/lone-dot helpers. Sequential intermediate effects required. UTF8 preservation needs no new unsafe code. Actual canonical entry/rewrite/config/test scope and original current contracts independently verified. No security defect/measurement claimed.",
+  "support_selected": {
+    "edgion-resources/src/path_normalization/mod.rs": {
+      "sha256": "d88ad38fc9eae7a0e7cb69ad3ace22bec0fe292baf1acbb33594d6d21c05f527",
+      "scope": "Full"
+    },
+    "edgion-resources/src/path_normalization/config.rs": {
+      "sha256": "e04a412c16d433aee5ae54607b5dea80671fd7c6127803f1209640099a99425e",
+      "scope": "Full"
+    },
+    "edgion-resources/src/path_normalization/normalize.rs": {
+      "sha256": "d146210e6e7c10b5e311fcf9371b5112ff038e9003124dbecb8b27fc98f1465e",
+      "scope": "Full"
+    },
+    "edgion-resources/tests/unit/path_normalization/normalize_test.rs": {
+      "sha256": "618a3e4a8ed83b6f83a0f2a872c9c2fdd6799765cc454464208d916604f9f053",
+      "scope": "Full527"
+    },
+    "edgion-resources/tests/unit/path_normalization/config_test.rs": {
+      "sha256": "32e95cb009122ca0ede86a11842392ab82c3aa5ed10f5fdec5fbf4eff4b2c45b",
+      "scope": "Full"
+    },
+    "edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs": {
+      "sha256": "87182925d95a051b181344926bd6dd1912283178bfd7f0df40aec83e63178d2a",
+      "scope": "466-492,547-568,719-762,185-218"
+    },
+    "edgion-gateway/tests/unit/routes/http/proxy_http/pg_request_filter_test.rs": {
+      "sha256": "d94b9afdd57beb589915d3d0b71b19ff0fb4aff313c58f8fcc676e767b0d4cab",
+      "scope": "39-64"
+    },
+    "edgion-gateway/src/ctx.rs": {
+      "sha256": "dd23711a474df4122dd3b0264c7293366c27ba2688a9eb390b24e842f6e6335d",
+      "scope": "3824-3867"
+    },
+    "edgion-gateway/tests/unit/ctx_test/path_view_tests.rs": {
+      "sha256": "51f50dedd3ead59af74c6f30f8e5e623a14a2b85b44034b4cc97aa45036cce5a",
+      "scope": "Full"
+    },
+    "edgion-gateway/src/plugins/runtime/session_adapter.rs": {
+      "sha256": "bb060285f53d6eddb8eeac90c080456e7efabfd9457720990305703c5a143f92",
+      "scope": "1375-1428"
+    },
+    "edgion-gateway/tests/unit/plugins/runtime/session_adapter_test.rs": {
+      "sha256": "f222c02777766174ac92dba23b9def78b205fad04657bd9905a6bb6082e2e16f",
+      "scope": "247-345"
+    },
+    "edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs": {
+      "sha256": "1e78b4bf440134f3f8949ab883bc1f767c0e70055164818c35fc0e2251b25eaf",
+      "scope": "1710-1760"
+    },
+    "edgion-gateway/tests/unit/routes/http/proxy_http/pg_upstream_peer_test.rs": {
+      "sha256": "14ccc89d36290e92ac69aa08b1b152cffb394278085aad72a2693b65dd302399",
+      "scope": "308-437"
+    },
+    "edgion-resources/src/resources/http_route_preparse.rs": {
+      "sha256": "bd4df4d61d01ee2cd2a4f3081729988cf1adc391d1b66bbd05cd22516d813704",
+      "scope": "208-254"
+    },
+    "edgion-resources/tests/unit/resources/http_route_preparse_test.rs": {
+      "sha256": "ea8a1f3279a5e49bab3e013b9a778a3ff9c2f4aed529dc9ced67617846be82c3",
+      "scope": "1-120"
+    },
+    "edgion-resources/src/resources/edgion_plugins/conditions.rs": {
+      "sha256": "b948b51f185eb99591e78efd1a9ba7249b242c1ee3cbb9a2be450d1ff27ae923",
+      "scope": "278-296"
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/conditions_test.rs": {
+      "sha256": "8f5b684e7a9794701fc0300e5a838d3f6295c3e9d299aeaae0355d0b2ff4772e",
+      "scope": "673-691"
+    },
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/request_access_policy.rs": {
+      "sha256": "bd23b462525811322f05411e2f2d3b5982a054eb4d1a5964211cc786b5f578ba",
+      "scope": "380-402"
+    },
+    "edgion-gateway/src/cli/mod.rs": {
+      "sha256": "393ea796feb6e022ab7438e16e2084f2a94a21c1e470ec7befdc49f4cb3002bd",
+      "scope": "675-689"
+    },
+    "edgion-gateway/src/ai/runtime/dispatch.rs": {
+      "sha256": "e75694fa7727aa04fa8c83743c83ab9cf13cb9647d05830d4e661d9962a19e7e",
+      "scope": "343-362"
+    },
+    "skills/01-architecture/02-gateway/uri-normalization/SKILL.md": {
+      "sha256": "ae1252dac6096d74ea5db2d454025b6a4aa41b60e36ec471651614ff6086f440",
+      "scope": "Full"
+    },
+    "skills/04-review/uri-normalization/mandatory-design/normalization-contract.md": {
+      "sha256": "8e4d1037e1659df73e005c7552c393435124b5753ec232d8ab2fdf3e578e853d",
+      "scope": "Full"
+    },
+    "skills/02-features/02-config/01-gateway-config.md": {
+      "sha256": "7a7037ac8f5377ad6de8fd92748ae2b37446f9fbf4bee5eb4bd37a498803be0d",
+      "scope": "219-229"
+    }
+  },
+  "limits": "Independent original rules/current sources/tests read; static no execution/writes/Git/network/primary credit. Historical specs absent and stale forwarding prose separate."
+}

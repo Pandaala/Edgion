@@ -1,0 +1,164 @@
+{
+  "partition": "PART-451",
+  "analyst": "/root/analyze_outbound",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_backend/resilience.rs",
+      "sha256": "a689018355e665406dc066a7e28ecf5945691083cb48658fc2e3f9102d282ede",
+      "fully_read": true,
+      "disposition": "Full 1-667. Real retry isolation, canonical attempt/provider counters, committed-SSE no fallback, exclusive half-open among eight peers and recovery; canonical target selection. No actionable new issue."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_backend/responses.rs",
+      "sha256": "eed4e894a879d3b30a744c5b7d2d4c541a304cd0dc9cfbbfd2db471cc7d9ab4d",
+      "fully_read": true,
+      "disposition": "Full 1-717 with overlapping refill. H1/H2 dialect and split SSE, reported/unknown/notObserved usage, exact log write, malformed admission, continuation restore, paced cancellation and quota reconciliation. No actionable new issue."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full personally retained original and fresh hash check, no nested rules"
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original knowledge navigation"
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full retained graded gates, current hash unchanged"
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original evidence routing"
+    },
+    "skills/04-review/ai-routing/regression-guards/native-responses-observation-and-continuation.md": {
+      "sha256": "1ac541ab0cfc7568ffe8bc697ddafd0f5db98db3399d5d707f645ad50152e844",
+      "scope": "Full original current dialect/observation/binding constraints"
+    },
+    "skills/04-review/ai-routing/regression-guards/ai-failover-tests-must-cross-runtime-boundaries.md": {
+      "sha256": "8b49f5dfc51256df296c45459dbe8285c8a9d7c546a7dc447cc618b40b6d9cad",
+      "scope": "Full original runtime evidence contract"
+    },
+    "skills/04-review/testing/regression-guards/ai-tests-must-discriminate-the-claimed-boundary.md": {
+      "sha256": "06c992ef85da4b28465e626c22b55c4b3994371bac898e16af58757b01936339",
+      "scope": "Full original assertion specificity"
+    },
+    "skills/04-review/testing/regression-guards/ai-stream-client-disconnect-needs-wire-coverage.md": {
+      "sha256": "aec573333e7b19eceed3577c5c6148b37288b98517e25e50f0b0b15a46a699ba",
+      "scope": "Full original real paced producer cancellation evidence boundary"
+    },
+    "skills/04-review/testing/regression-guards/ai-time-boundary-tests-use-controlled-clocks.md": {
+      "sha256": "9dde85be15f76aaf5ce4793241664131206aa1fd09610553cf6d87f10277e7ce",
+      "scope": "Full original unit clocks/integration delay scope"
+    },
+    "skills/01-architecture/05-resources/22-edgion-backend.md": {
+      "sha256": "d4bfa5c8dc8cb816ca478ec1a1fd67b5f246ea26473da834fa81d5e6308db87c",
+      "scope": "Full original resource boundary"
+    },
+    "edgion-tests/src/client/suites/edgion_backend/mod.rs": {
+      "sha256": "4a4174683f6002bfab4216a2d20ee7fa22656888df9c568037e74bbd05d2194b",
+      "scope": "Full actual exports"
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "1750-1810,3478-3535 actual callers; retained full actual source/tests"
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "540-590 actual TestCase deadlines"
+    },
+    "edgion-tests/src/client/access_log_client.rs": {
+      "sha256": "f7691b8ad4c8765a0ab446c414a1596df48c930d8472678d724f918edcf84d55",
+      "scope": "1-62 marker tests,270-310 one-write boundary,374-420 bounded retry/list APIs; retained full prior primary"
+    },
+    "edgion-tests/src/client/dynamic/scenarios/ai_responses_continuation.rs": {
+      "sha256": "0e7e476003265d1dac7d0d0eacadbe83dc571c2a5ccddc42db644cb2176bb7d2",
+      "scope": "Full actual update/restoration caller"
+    },
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "1eb27bded8bcb40a82ea3cfd4ed6f20d386deedd1f349c7035a226fd44739454",
+      "scope": "1-140 state;1540-1575 abort;1935-2192 Responses producer/dispatch;2190-2440 retry/abort;2450-2540 controls;2985-3065 Anthropic;5120-5210 actual fixture tests"
+    },
+    "edgion-gateway/src/ai/protocols/openai/responses.rs": {
+      "sha256": "78490ab7e2ce66b9039dc41789432b6cb32f3b92c032f32a232f5c66afd1c1ea",
+      "scope": "Full actual bounded event/local-error implementation"
+    },
+    "edgion-gateway/src/ai/runtime/attempt_runtime.rs": {
+      "sha256": "23bcaf0a7529f7e909c3b52981574e2eedc5dcaed4774d0ed0961729eda4bf17",
+      "scope": "490-555 actual EOS health-success and settlement"
+    },
+    "edgion-gateway/tests/unit/ai/protocols/openai/responses_test.rs": {
+      "sha256": "6ba518d4e40b81b8adcf40a4688f5d2e3f8b0f9d15805a5f91ddc89548f8528a",
+      "scope": "Full 51 actual fragmented terminal and SDK-error unit test bodies"
+    },
+    "edgion-gateway/tests/unit/ai/runtime/credential_outlier_test.rs": {
+      "sha256": "1126673697f638d424933be744c4ad7d57eb16118657db31a48db1a01ec55718",
+      "scope": "Full 356 actual cooldown/exclusive probe/recovery/generation tests"
+    },
+    "edgion-tests/integration/scripts/integration/run_integration.sh": {
+      "sha256": "5a6df789c2a894150691b3f50edf85f7ac055961ee0b1cc230291a6b90f85b76",
+      "scope": "1135-1185 Redis dependency,1746-1772 targeted and2070-2104 aggregate calls"
+    },
+    "edgion-tests/integration/conf/EdgionBackend/Resilience/00_EdgionGatewayConfig_resilience.yaml": {
+      "sha256": "0c2037868c1e99ee6f0b6e0a30f456b7762fa7b5bd401fbfc1a47f6aefb8278f",
+      "scope": "Full actual authored provider/plugin/route/timeout/policy fixture"
+    },
+    "edgion-tests/integration/conf/EdgionBackend/Resilience/01_Gateway_resilience.yaml": {
+      "sha256": "ecfe22a6260c2cb35112a8c6d826ea2994521486ec505a4c5a2d8291925ff25f",
+      "scope": "Full actual authored provider/plugin/route/timeout/policy fixture"
+    },
+    "edgion-tests/integration/conf/EdgionBackend/Resilience/02_Secret_provider.yaml": {
+      "sha256": "194819f7e50c5f3c91e3a127dee0a15ca943c5819b17d10d8d4a8b1e558424e1",
+      "scope": "Full actual authored provider/plugin/route/timeout/policy fixture"
+    },
+    "edgion-tests/integration/conf/EdgionBackend/Resilience/03_EdgionBackend_providers.yaml": {
+      "sha256": "16bc53afbf421aa1fdd5870f677a3e4d6a0be9e735904136b5691a4dfc51ee2f",
+      "scope": "Full actual authored provider/plugin/route/timeout/policy fixture"
+    },
+    "edgion-tests/integration/conf/EdgionBackend/Resilience/04_EdgionPlugins_ai-proxy.yaml": {
+      "sha256": "e20fa4b61d4742f22a8a236565b6832c560cb0ff08b6b3c3b33631a58c9eb9e8",
+      "scope": "Full actual authored provider/plugin/route/timeout/policy fixture"
+    },
+    "edgion-tests/integration/conf/EdgionBackend/Resilience/05_HTTPRoute_resilience.yaml": {
+      "sha256": "f797dc58c85b9c6e68e3dbe568b4bab78a587a0856f866e86a929e1974122c04",
+      "scope": "Full actual authored provider/plugin/route/timeout/policy fixture"
+    },
+    "edgion-tests/integration/conf/EdgionBackend/Resilience/06_EdgionBackendTrafficPolicy_half-open.yaml": {
+      "sha256": "be9445fe2aaa1d04469b49715109518b2e11c2a9a3e328f368b378698457d432",
+      "scope": "Full actual authored provider/plugin/route/timeout/policy fixture"
+    },
+    "edgion-tests/integration/conf/EdgionBackend/Responses/00_EdgionGatewayConfig_responses.yaml": {
+      "sha256": "71de9978d6b17f78201b94c16a1158fd65e572dbecf6727def11aefd07ba8e2d",
+      "scope": "Full actual authored provider/plugin/route/timeout/policy fixture"
+    },
+    "edgion-tests/integration/conf/EdgionBackend/Responses/01_Gateway_responses.yaml": {
+      "sha256": "2cd9cbd73e74ab0ba5fc21399f4a8fd37e22ef5a43bc6f69517fef668f35eb3c",
+      "scope": "Full actual authored provider/plugin/route/timeout/policy fixture"
+    },
+    "edgion-tests/integration/conf/EdgionBackend/Responses/02_Secret_responses.yaml": {
+      "sha256": "8549c04ea494b8cbfd6ed842c874d87f2d11955744e6a942abe8d412190b28ad",
+      "scope": "Full actual authored provider/plugin/route/timeout/policy fixture"
+    },
+    "edgion-tests/integration/conf/EdgionBackend/Responses/03_EdgionBackend_responses.yaml": {
+      "sha256": "b01647e4ccfd2c1e116890dd796c4f4a267f2233e2564e8fe206c1ade4860401",
+      "scope": "Full actual authored provider/plugin/route/timeout/policy fixture"
+    },
+    "edgion-tests/integration/conf/EdgionBackend/Responses/04_EdgionPlugins_responses.yaml": {
+      "sha256": "68ee420d2c4808f87207b161f0e1d4594c1883d3e69205c271cf92140af8e9aa",
+      "scope": "Full actual authored provider/plugin/route/timeout/policy fixture"
+    },
+    "edgion-tests/integration/conf/EdgionBackend/Responses/05_HTTPRoute_responses.yaml": {
+      "sha256": "7dc7a03c559334b4cf967948af5660c471ee5362341600d3bb2729be9a6d4f3d",
+      "scope": "Full actual authored provider/plugin/route/timeout/policy fixture"
+    }
+  },
+  "limits": [
+    "Static source-only; no execution/mutation or supporting primary credit.",
+    "Half-open ordinary path joins all children; early failures after spawning do not guarantee immediate draining. Existing ten-second HTTP/gate bounds remain; no unbounded orphan or observed cross-suite incident established.",
+    "Access-log polling attempts times delay is not a proven whole-operation bound; management request deadlines also apply. Actual outer case uses120s.",
+    "Cancellation proves inspected finite paced provider and terminal log boundary, not every SDK/provider scheduling. Truncated bulk refresh output earns no additional full-read credit; retained full original rules hash unchanged."
+  ]
+}

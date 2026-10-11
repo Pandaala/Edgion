@@ -1,0 +1,147 @@
+{
+  "partition": "PART-535",
+  "analyst": "/root/analyze_outbound",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/gateway/listener_hostname/hostname.rs",
+      "sha256": "be7700668af46877bc9709689491326d1859088afaddd472de0477f0f410cc22",
+      "fully_read": true,
+      "disposition": "Full1-243. Five cases preserve exact, mismatch, wildcard children/root and explicitly named unrestricted-listener Route. Negatives require404 and fail transport errors; no ARCH338 extension. Three distinct31240/31241/31242 listeners cannot collapse into scalar ctx.http_port; no automatic296 extension."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/gateway/listener_hostname/mod.rs",
+      "sha256": "2ef9230f1869a5b4d627529204ac22fbf3ec0ae00e752349e7edeb71ef0f98d0",
+      "fully_read": true,
+      "disposition": "Full1-4. Private implementation/public export reaches Gateway reexports and actual test-client registration; no actionable issue."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Retained full personally read original rules; fresh unchanged hash; no applicable nested rules."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Retained full knowledge index."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Retained full graded gates."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original routing requirements."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "3193-3198 actual registration; retained3840-3887/3927-3968 context resolution."
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "Retained full implementation/tests;554-581 deadline and690-789 listener resolution."
+    },
+    "edgion-tests/src/client/suites/gateway/mod.rs": {
+      "sha256": "752b98f019b80492a57cc83e5fbfddb960a59d1eff253154f899878b0a2ea879",
+      "scope": "Full glue and ListenerHostname export."
+    },
+    "edgion-tests/src/client/suites/mod.rs": {
+      "sha256": "7ce09dacca746e2d9e4f3c6db066d0d9f0a76accdef335b68a61d36e19b74f5c",
+      "scope": "Retained full Gateway reexport glue."
+    },
+    "edgion-tests/integration/conf/ports.json": {
+      "sha256": "6672942f69329bb6b46de10be535b5b16744c0270e6bc7246eca3d2d5dcf0f7b",
+      "scope": "204-211 ListenerHostname.http."
+    },
+    "edgion-gateway/src/runtime/matching/route.rs": {
+      "sha256": "d325c8ca61ec71bf2e71f429f6e54cfe2bb6521d7093fd878dc2bf56cc8f4eda",
+      "scope": "Full implementation; canonical matcher, parent section/port and stronger-listener gates."
+    },
+    "edgion-gateway/tests/unit/runtime/matching/route_test.rs": {
+      "sha256": "1c63d9293eef7e27f53d13e30822f2360dfa6d1161d27ec2770df606e63997a6",
+      "scope": "250-335 complete relevant test bodies."
+    },
+    "edgion-algo/src/matcher/radix_hostname/pattern.rs": {
+      "sha256": "dd609de70cf114e3a5ed2abe25f1d911dde86193b58150cde1129c3fecb307d3",
+      "scope": "1-87; retained full algorithm review."
+    },
+    "edgion-algo/tests/unit/matcher/radix_hostname/mod_test.rs": {
+      "sha256": "d37928e21160b2070fbeb33bac9f8dbe58418e0d4b94c8b07efbeffc55453650",
+      "scope": "1-50 complete exact/wildcard boundary test."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/hostname_resolution.rs": {
+      "sha256": "7e8daa61b3f20e860c613e52c6ccbe277e38a6db9c82c6b55be1eb092a4e8a8f",
+      "scope": "Actual resolution/intersection; retained complete PART413 review."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/hostname_resolution_test.rs": {
+      "sha256": "21e92ca4c54d8ddb48220ad373689a4a2dff3bad2ac3f81b344e8344c2cbcc27",
+      "scope": "1-105 complete relevant intersection tests."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/http_route.rs": {
+      "sha256": "826bcdd3deded094b2f450527d36b2978855901442a8767aa47cc6bce5b71ddd",
+      "scope": "480-519 clear-before-resolve projection."
+    },
+    "edgion-gateway/src/routes/http/conf_handler_impl.rs": {
+      "sha256": "49894825ccd9db485962bcabd8a8d463b65e7df9730ad146cf9ded4d50b10f31",
+      "scope": "530-551 accepted-parent filter."
+    },
+    "skills/12-algorithms/route-hostname-matching.md": {
+      "sha256": "ed97ee89eebeec67eb0a88fc109996c0c0a87032ab4cc33b7a2df4ef6e76c7ce",
+      "scope": "1-70 canonical grammar and owner; retained full algorithm review."
+    },
+    "skills/01-architecture/02-gateway/03-routes/SKILL.md": {
+      "sha256": "d7c78868e57f9638a94d5ee74481e07ded8e56f1f5754689c4d77ff9cc72a19d",
+      "scope": "Matcher navigation and135-148 Listener isolation."
+    },
+    "edgion-tests/integration/conf/Gateway/ListenerHostname/01_Gateway.yaml": {
+      "sha256": "246ca0ac75847afcc66021ba38135e0b1fe3f0ca348a6a7fd4f74eccd765b2e8",
+      "scope": "Full authored fixture; paired tree byte-identical."
+    },
+    "edgion-tests/integration/conf/Gateway/ListenerHostname/HTTPRoute_exact_match.yaml": {
+      "sha256": "2236da97e7804c8c64ccc26136909d4509da24ac009d7c90841458230811ee44",
+      "scope": "Full authored fixture; paired tree byte-identical."
+    },
+    "edgion-tests/integration/conf/Gateway/ListenerHostname/HTTPRoute_mismatch.yaml": {
+      "sha256": "db3d7988b8731edeaac30d7d7aba3469f691dbd7c4b6acb154e580289c01f37a",
+      "scope": "Full authored fixture; paired tree byte-identical."
+    },
+    "edgion-tests/integration/conf/Gateway/ListenerHostname/HTTPRoute_no_restriction.yaml": {
+      "sha256": "8f8db908404d4d05b5528b723049027689f0ec75aa22d0cc364b3f08e6febc0b",
+      "scope": "Full authored fixture; paired tree byte-identical."
+    },
+    "edgion-tests/integration/conf/Gateway/ListenerHostname/HTTPRoute_wildcard_match.yaml": {
+      "sha256": "ce9ce6bc4912a5c44a1de39ff318d2666bbe17c10257e1f30de17c23ed619190",
+      "scope": "Full authored fixture; paired tree byte-identical."
+    },
+    "edgion-tests/integration/conf/Gateway/ListenerHostname/HTTPRoute_wildcard_root_mismatch.yaml": {
+      "sha256": "78d27712697445bb3f67376211f98835ded9a96fc841698fd02b84fe4128f406",
+      "scope": "Full authored fixture; paired tree byte-identical."
+    },
+    "edgion-tests/k8s/conf/Gateway/ListenerHostname/01_Gateway.yaml": {
+      "sha256": "246ca0ac75847afcc66021ba38135e0b1fe3f0ca348a6a7fd4f74eccd765b2e8",
+      "scope": "Full authored fixture; paired tree byte-identical."
+    },
+    "edgion-tests/k8s/conf/Gateway/ListenerHostname/HTTPRoute_exact_match.yaml": {
+      "sha256": "2236da97e7804c8c64ccc26136909d4509da24ac009d7c90841458230811ee44",
+      "scope": "Full authored fixture; paired tree byte-identical."
+    },
+    "edgion-tests/k8s/conf/Gateway/ListenerHostname/HTTPRoute_mismatch.yaml": {
+      "sha256": "db3d7988b8731edeaac30d7d7aba3469f691dbd7c4b6acb154e580289c01f37a",
+      "scope": "Full authored fixture; paired tree byte-identical."
+    },
+    "edgion-tests/k8s/conf/Gateway/ListenerHostname/HTTPRoute_no_restriction.yaml": {
+      "sha256": "8f8db908404d4d05b5528b723049027689f0ec75aa22d0cc364b3f08e6febc0b",
+      "scope": "Full authored fixture; paired tree byte-identical."
+    },
+    "edgion-tests/k8s/conf/Gateway/ListenerHostname/HTTPRoute_wildcard_match.yaml": {
+      "sha256": "ce9ce6bc4912a5c44a1de39ff318d2666bbe17c10257e1f30de17c23ed619190",
+      "scope": "Full authored fixture; paired tree byte-identical."
+    },
+    "edgion-tests/k8s/conf/Gateway/ListenerHostname/HTTPRoute_wildcard_root_mismatch.yaml": {
+      "sha256": "78d27712697445bb3f67376211f98835ded9a96fc841698fd02b84fe4128f406",
+      "scope": "Full authored fixture; paired tree byte-identical."
+    }
+  },
+  "limits": "Static source review only; primary frozen hashes matched before/after. No builds/tests/network/Git/mutations. Unit wildcard multi-level coverage is not live multi-level proof; named Route on unrestricted Listener is not arbitrary-host coverage. Controller and Gateway gates jointly contribute404 and are not individually certified. No new candidate;339-343 unused."
+}

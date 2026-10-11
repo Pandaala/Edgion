@@ -1,0 +1,46 @@
+{
+  "partition": "PART-379",
+  "reviewer": "/root",
+  "complete": true,
+  "files": {
+    "edgion-gateway/src/services/acme/challenge_store.rs": {
+      "sha256": "c2796e6aef77a53e80b00b2fc113b07a2ccdf4a73b35551ca0439621625fc334",
+      "fully_read": true,
+      "disposition": "no-finding"
+    },
+    "edgion-gateway/src/services/acme/conf_handler_impl.rs": {
+      "sha256": "77067d33ce0502063fecc0650c25f363765b74c413570313bc88c2e958e5b9b7",
+      "fully_read": true,
+      "disposition": "no-finding"
+    },
+    "edgion-gateway/src/services/acme/mod.rs": {
+      "sha256": "0ac9ec70f8dd8b77eee506fca34b6a6a03edf3e2a090c614526e21906988f9f2",
+      "fully_read": true,
+      "disposition": "no-finding"
+    },
+    "edgion-gateway/src/services/mod.rs": {
+      "sha256": "9d1483a504f220bb9d8a966ae0dcd6a088d049077ebc49f4a38a7f3b62a31fd8",
+      "fully_read": true,
+      "disposition": "no-finding"
+    }
+  },
+  "candidate_count": 0,
+  "decisive_notes": [
+    "HTTP-01 token snapshot retains resource and live listener/proof authority, strict expiry, bounded collision overflow and conflicting-authorization fail-close.",
+    "Full and partial publication use canonical bucket semantics; delta updates preserve other resources and overflow recovery. Request reads remain lock-free, refcount bodies and canonical bounded metrics.",
+    "ConfHandler uses existing ownership helpers; no justified new mechanism for cold clones. Snapshot concurrency, expiry, collision, overflow recovery and attachment bounds tests inspected."
+  ],
+  "evidence": {
+    "skills/01-architecture/01-controller/08-acme-service.md": "c1a4cf3c58d9c4320f60b5a45ad08b2501a5a6dcab063e0f033e45c1affcf253",
+    "skills/04-review/acme/regression-guards/acme-http01-gatewayref-serving-ownership.md": "e3b91877665b9e344a35bcbb721b0ae17509a699c02072eeed24fd189cdc1cc9",
+    "skills/04-review/acme/regression-guards/challenge-host-split-ipv6-literal.md": "cf663afda12951df1476f506b5d1dcbf76f2b0c8b8056756f7351c9ac9387491",
+    "edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs": "e36642b6cc73c0e52fad939c9ad994725d5b40bb99f6c9bd3aabf5e8c7606551",
+    "edgion-gateway/src/conf_sync/conf_client/config_client.rs": "1c3568262e1c01287a6abd82514b87d1ba069c578d46a353865b02c113d638af",
+    "edgion-gateway/tests/unit/services/acme/challenge_store_test.rs": "10c0c9ea583b3131d9cfd8123cc35885efea3706d3a0a8624fa18bae5986b171",
+    "skills/04-review/cpu-memory/review-evidence/small-object-clones-reconcile-config-sync.md": "4b859177a90880934d6d96f63c4941daed018c324d220cd852a401cc4d8b190c",
+    "skills/04-review/conf-sync/intentional-design/conf-handler-simple-map-pattern.md": "46bd809fd5b09794b5bcfa8b06179913021cd80a09f78c6a29cdcf89d593571d"
+  },
+  "limitations": [
+    "Static contextual review; selected source tests inspected, not executed; no live CA/Kubernetes verification."
+  ]
+}

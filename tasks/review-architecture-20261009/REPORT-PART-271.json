@@ -1,0 +1,21 @@
+{
+  "partition": "PART-271",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/link_sys/mod.rs",
+      "sha256": "5842ab57bad5561c55750209a22ea4a61f874ddf36de66a69c7d2c8795d454c0",
+      "fully_read": true,
+      "disposition": "Full LinkSys module facade and runtime readme read; provider/core split and typed runtime lookup checked. Code boundary is appropriate. Readme HTTPDNS row is stale: live typed PreparedHttpDns publication/get_httpdns_client replaces its claimed raw-config lookup. Record documentation follow-up; no runtime defect inferred."
+    },
+    {
+      "path": "edgion-gateway/src/link_sys/readme",
+      "sha256": "e0553c8251545c6783522859c7257c085cbe55d4be321a83fe6fc8e0ef0dfa57",
+      "fully_read": true,
+      "disposition": "Full LinkSys module facade and runtime readme read; provider/core split and typed runtime lookup checked. Code boundary is appropriate. Readme HTTPDNS row is stale: live typed PreparedHttpDns publication/get_httpdns_client replaces its claimed raw-config lookup. Record documentation follow-up; no runtime defect inferred."
+    }
+  ],
+  "candidates": [],
+  "limitations": "No tests/builds/source edits; supporting caller snippets do not claim coverage."
+}

@@ -1,0 +1,173 @@
+{
+  "partition": "PART-432",
+  "analyst": "/root/verify_ip_union",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-controller/src/services/conf_sync_ca/ca.rs",
+      "sha256": "2f1d7ac1245db57ab628cf6123feb051619fb4134f2e11e9d8eaaa7366ef3174",
+      "fully_read": true,
+      "disposition": "No separate finding: root/leaf signing, same-key renewal, zeroizing keys, absolute lifetimes and SAN/EKU/backdating inspected."
+    },
+    {
+      "path": "edgion-controller/src/services/conf_sync_ca/cert_util.rs",
+      "sha256": "8726ad01433e43c5440ec9ef47b66278f9f5ad55169f9b9d959fa50b06119b1f",
+      "fully_read": true,
+      "disposition": "No separate finding: chain comparison, validity thresholds, scheduled/emergency decisions and bounded cron inspected."
+    },
+    {
+      "path": "edgion-controller/src/services/conf_sync_ca/identity_sync.rs",
+      "sha256": "8f283a7b4a0cad720eecdf3dbd4b06175faf21e362fcd8aef431f2add69362ec",
+      "fully_read": true,
+      "disposition": "ARCH-130: post-CA-read snapshot and non-atomic publication can overwrite a newer local root identity."
+    },
+    {
+      "path": "edgion-controller/src/services/conf_sync_ca/mod.rs",
+      "sha256": "2bd4d60a7b5e3f4354abf89f64c342fa3deb14ba226e2aa2652be3bd54424dd9",
+      "fully_read": true,
+      "disposition": "No separate finding: exports traced to startup, rotation and API."
+    },
+    {
+      "path": "edgion-controller/src/services/conf_sync_ca/provision.rs",
+      "sha256": "b9c7a03134233f7f9eb474ab2f8db947ba179ad6035cee2a42b94a03c793b4f2",
+      "fully_read": true,
+      "disposition": "No separate finding: validated adoption, every-replica bootstrap, bounded leaf re-read and per-replica identity inspected."
+    },
+    {
+      "path": "edgion-controller/src/services/conf_sync_ca/rotation.rs",
+      "sha256": "9779dbe48bd4a180f1153e9c0571fbb9c8f461f08703b9975337e7d6927169cb",
+      "fully_read": true,
+      "disposition": "Real concurrent writer supporting ARCH-130; no separate finding in generation lifecycle, manual queue, backoff, torn-write repair or Secret publication ordering."
+    },
+    {
+      "path": "edgion-controller/src/services/conf_sync_ca/secret_io.rs",
+      "sha256": "d396f6815e826f94026723f4b18a17e5666d5460c982f977602642402f45731a",
+      "fully_read": true,
+      "disposition": "No separate finding: read/bootstrap authority, POST/409 arbitration, forced SSA and CA-key preservation inspected."
+    }
+  ],
+  "candidates": [
+    "ARCH-130"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full personally retained, applicable rules refreshed; no nested rules found."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full current-task read."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full retained; applicable rows including atomic check-and-mutate refreshed."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full retained; owning-function entries refreshed."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full current-task read."
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full retained; source-complete and independent verification rules refreshed."
+    },
+    "skills/01-architecture/03-controller-gateway-link/SKILL.md": {
+      "sha256": "a0fd4384dc833739f432448f95f3ebc992865036771ca81b3b0df376500e2a78",
+      "scope": "Full current-task read."
+    },
+    "skills/01-architecture/03-controller-gateway-link/00-overview.md": {
+      "sha256": "6e973fa8105734d3a40aa3c5da45d5df6965da3c1dee0a52a01b1ef642b62487",
+      "scope": "Selected85\u2013223: TLS ownership, leader/per-replica split, eventual convergence and root revocation."
+    },
+    "skills/02-features/02-config/00-controller-config.md": {
+      "sha256": "07a601d4f500f3466f0556cd58e6fae88fe444994280d22a999d1a6a9b07dbd2",
+      "scope": "Selected270\u2013345,459\u2013529: policy separation, reconciliation, re-key runbook and propagation."
+    },
+    "skills/04-review/conf-sync/SKILL.md": {
+      "sha256": "5239b629f69f8d53d133e834f786e1fae3923cb2942f6dd4892811bcbd58b0c3",
+      "scope": "Full current-task read."
+    },
+    "skills/04-review/conf-sync/intentional-design/conf-sync-cert-watch-mtime-length-signature.md": {
+      "sha256": "1b468fad624099bf214d226e78e5522f866ff14525fef995c5b8e8c445fb9b76",
+      "scope": "Full current-task read."
+    },
+    "skills/04-review/conf-sync/regression-guards/installed-certificate-expiry.md": {
+      "sha256": "020d95e0d18707c2941a4d2605ba846a35526ba5f8c2f6e8a066c27506d3b931",
+      "scope": "Full current-task read."
+    },
+    "skills/04-review/controller/regression-guards/leader-jobs-call-site-consolidation.md": {
+      "sha256": "4d4677ffb4090ddfeefd95cdbcbbad64b155f1afd3f3a9a0d0159cbdf1021da5",
+      "scope": "Full current-task read."
+    },
+    "skills/04-review/controller/regression-guards/liveness-probe-and-lifecycle-supervision.md": {
+      "sha256": "439892b19b54d5305432320e967aa0f64328df71b72000a6581c6db090906237",
+      "scope": "Selected1\u2013125; accepted drain and post-ready limitations."
+    },
+    "edgion-controller/src/conf_sync/conf_server/tls_identity.rs": {
+      "sha256": "9e01e046ac0f25b710e0df2ac848a2b3557828d98957f905c525fc7ab804b9e6",
+      "scope": "Full current-task read; validator/publication/cancellation."
+    },
+    "edgion-controller/src/conf_sync/conf_server/grpc_server.rs": {
+      "sha256": "ae38d7fa6636724e74edc5ba031ece0a85a595141a55f400aacd36f55b7e650d",
+      "scope": "Selected90\u2013133,330\u2013392; actual trust stream and handshake."
+    },
+    "edgion-controller/src/conf_sync/conf_server/cert_watch.rs": {
+      "sha256": "bd12d113aa8f0bd5a7d1513842170ca3593c35b992592eb62a3c48f80dd12aee",
+      "scope": "Selected40\u2013110; file-mode writer."
+    },
+    "edgion-controller/src/cli/mod.rs": {
+      "sha256": "e6a99b22317b82b315c7a9e9c26b67c58de82e00687dc05eb4d34031829d41af",
+      "scope": "Selected225\u2013340,580\u2013601; every-replica loop/startup."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/kubernetes/center.rs": {
+      "sha256": "a0227d8154789e688a2e633f771844508e01934a7d7f82abd262e8c966ae4731",
+      "scope": "Selected1360\u20131405; leader rotation activation."
+    },
+    "edgion-controller/src/api/mod.rs": {
+      "sha256": "9320b3b8da4191ad7317024052c8db9c4da21835721ec26cd051105dabb0d1d6",
+      "scope": "Selected455\u2013493; manual rotation."
+    },
+    "edgion-common/src/grpc_tls.rs": {
+      "sha256": "8a07b9d2ca8531b8bac2dd9357029a55e58487de7f5082a7d307e46c2de94085",
+      "scope": "Selected50\u2013108; material consistency validator."
+    },
+    "edgion-controller/tests/unit/conf_sync/conf_server/tls_identity_test.rs": {
+      "sha256": "9b08bbe06800a1a83c4891593a48bbcc490093908439277bcf3d83887a445596",
+      "scope": "Full actual 177-line test bodies; no execution."
+    },
+    "edgion-controller/tests/unit/services/conf_sync_ca/ca_test.rs": {
+      "sha256": "d847517433931183c84488688afab59dc75b8462d98cdb2747e250a478c0c261",
+      "scope": "Full actual 120-line test bodies; no execution."
+    },
+    "edgion-controller/tests/unit/services/conf_sync_ca/cert_util_test.rs": {
+      "sha256": "92c77e999316b73f9c7eefcf4513294bdea0e165c650b18446a14c20956b5901",
+      "scope": "Full actual 351-line test bodies; no execution."
+    },
+    "edgion-controller/tests/unit/services/conf_sync_ca/identity_sync_test.rs": {
+      "sha256": "859ab4c57ec05095a7ce05c8677de4cb4a0048c6c30dbc43ea86e599b05ccd4e",
+      "scope": "Full actual 165-line test bodies; no execution."
+    },
+    "edgion-controller/tests/unit/services/conf_sync_ca/provision_test.rs": {
+      "sha256": "07912f3078306f558e2740b297b3a81e0bc4f599f14015e238a0e095c2bfd064",
+      "scope": "Full actual 56-line test bodies; no execution."
+    },
+    "edgion-controller/tests/unit/services/conf_sync_ca/rotation_test.rs": {
+      "sha256": "d6645813e0632fe10694c0b63e60805b094ac084c0eb8a67ea57294adf74eafa",
+      "scope": "Full actual 287-line test bodies; no execution."
+    },
+    "edgion-controller/tests/unit/services/conf_sync_ca/secret_io_test.rs": {
+      "sha256": "bbe7497e606539452cb939806db3e1e1702ebf6765bd90aac782c49d5a83cc03",
+      "scope": "Full actual 59-line test bodies; no execution."
+    }
+  },
+  "limits": [
+    "Static read only; no executed incident/fleet fence/source monotonicity/performance claimed.",
+    "Historical rotation design path absent; current source and original applicable rules used.",
+    "Leader-job page older job set checked against current credential_manager addition.",
+    "ARCH117 artifact fully read for dedup (not a source hash dependency); producer stale-input scope expressly excluded.",
+    "ARCH130 awaits independent verification."
+  ]
+}

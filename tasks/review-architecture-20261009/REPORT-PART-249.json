@@ -1,0 +1,46 @@
+{
+  "partition": "PART-249",
+  "reviewer": "/root/analyze_session",
+  "complete": true,
+  "files": {
+    "edgion-gateway/src/ai/runtime/dispatch.rs": {
+      "sha256": "e75694fa7727aa04fa8c83743c83ab9cf13cb9647d05830d4e661d9962a19e7e",
+      "fully_read": true,
+      "disposition": "candidate-supported"
+    },
+    "edgion-gateway/src/ai/runtime/mod.rs": {
+      "sha256": "36fe267489a92077cd0635b5803679a0b8ea2beacc3bc9bbb2b39ca2a287d7dd",
+      "fully_read": true,
+      "disposition": "no-finding"
+    },
+    "edgion-gateway/src/ai/runtime/selected.rs": {
+      "sha256": "bf62c813e7b20043adbd92dc8bf272ac0ded2472f413e5081de7ccce99a552a9",
+      "fully_read": true,
+      "disposition": "no-finding"
+    }
+  },
+  "candidate_ids": [
+    "ARCH-009"
+  ],
+  "decisive_notes": [
+    "Settlement precedes summaries/metrics/business reconciliation; idempotence, unknown/overflow and EOS/transport versus numeric accounting distinctions retained.",
+    "Cumulative/provisional bounded observation, terminal claims and canonical access-log redaction supported by actual consumers and tests.",
+    "Selected handle pins proof generation; baseline/deadline/body/converter lifecycle assessed. Prepared admission projection is recorded separately.",
+    "Early-plan restoration hypothesis not promoted: earlier effective retry admission prevents established reproduction."
+  ],
+  "evidence": {
+    "edgion-gateway/src/ai/runtime/attempt_runtime.rs": "23bcaf0a7529f7e909c3b52981574e2eedc5dcaed4774d0ed0961729eda4bf17",
+    "edgion-gateway/src/ai/quota/mod.rs": "4dcf2053246703b2821ea548bc717deb83dd8e552961491bc42af44c2a028092",
+    "edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs": "1e78b4bf440134f3f8949ab883bc1f767c0e70055164818c35fc0e2251b25eaf",
+    "edgion-gateway/tests/unit/ai/runtime/dispatch_test.rs": "8b6deea93223b4cd8d41972c5837a2829ce4f790e5368396f21070c13f91531c",
+    "edgion-gateway/tests/unit/ai/runtime/attempt_runtime_test.rs": "a82207c214bead1b98a9ffd74f2b31e23391610c27932605c079df967be60938",
+    "edgion-gateway/tests/unit/ai/accounting/finalize_test.rs": "db6a6d3cfd8d33ad1ac48ca6a9945be778796476fbf92f48857dc60d37fc0370",
+    "edgion-gateway/tests/unit/ai/accounting/usage_test.rs": "ed42177763bd1ca9d591d7e5345f2e9f2b138e261b74048eeaf35b8dbe01af11",
+    "skills/04-review/ai-routing/regression-guards/streaming-usage-is-a-monotonic-cumulative-snapshot.md": "b067751f562c0b13ee4adeef312c546c6030a603b695168d85ffbd0187f70517",
+    "skills/04-review/ai-routing/regression-guards/ai-predispatch-scan-rechecks-deadlines.md": "7d451220cfef0061b594dcf76278f8570dac8bd017b13e2971fcb54493e0faa7",
+    "skills/04-review/ai-quota/regression-guards/gateway-terminated-stream-settles-its-reservation.md": "86a4a7dad938ebc8b42cc59a8d3c49116620d8bd94ef48af957ede60fde4e9e5"
+  },
+  "limitations": [
+    "Static contextual source review; tests inspected, not executed; secondary modules not primary coverage."
+  ]
+}

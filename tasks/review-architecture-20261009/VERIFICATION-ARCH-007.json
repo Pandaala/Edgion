@@ -1,0 +1,28 @@
+{
+  "reviewer": "/root/verify_seed",
+  "complete": true,
+  "disposition": "confirmed",
+  "approved_input_sha256": "9a9110c02fc64008ff9a6acf2979bb26a42e71309d802d2dbdcfb41d9ba66fa7",
+  "approved_claim_sha256": "66f2889d44103bf0a21b94ff6663c86e2040bcb5e5dfcdc9e9e9bf12debe546a",
+  "evidence": {
+    "edgion-gateway/src/plugins/runtime/traits/session.rs": "df61ce697bef246477efa045afd23d5667309c8c010026ecbe971f9d36344b3b",
+    "edgion-gateway/src/plugins/runtime/session_adapter.rs": "3d1afbfca15a04e425191d5e6acaabcc7a41b86c9b620626756fc7a21456046e",
+    "edgion-gateway/src/ctx.rs": "5248ecbfe30c102b4e746c65672b4909fccc0b261f2840a924a25f2cb749c629",
+    "edgion-gateway/src/plugins/runtime/conditions/extract.rs": "8013fb91b5520a14c54d074d57f45a4013d9ea95421237fdc52562a34a9360f1",
+    "edgion-gateway/src/plugins/runtime/conditions/evaluator.rs": "9b342831e33c7588d26b279ba776b63aa4374ddabe457cf431fd9cd25715bf4d",
+    "edgion-gateway/src/plugins/runtime/conditional_filter.rs": "2862b351c186c58580300dfee4d4e32371a5f2df9f3328f8be90e9bcc4389ad8",
+    "edgion-gateway/src/plugins/http/header_cert_auth/plugin.rs": "346464466384a30dc02dde337e1f1fb6041a6e8b265ab267abc69518f3fb8e99",
+    "edgion-gateway/src/plugins/http/dsl/lang/builtins.rs": "c21fd8920f3142ab15472f72453b13a6324355a1a7d950b9e009283998878e1a",
+    "skills/04-review/cpu-memory/regression-guards/response-condition-live-input-borrowing.md": "c1b92846d8e356af62ed9141cf84a54dd5e674a9b3bb7967c69ce468dacbd984",
+    "skills/04-review/plugin-metadata/mandatory-design/condition-set-single-owner.md": "eb021205b436c1b999f947d3281b2883df3d68ef4f8e1398a2f74544a216ed6f",
+    "edgion-common/src/allowed_san.rs": "eeae1536c88d7e25e56d37f5ce0365f27078eb9d1889c8e26be51a01d6ea15ec",
+    "edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs": "7c1223fe27e46a98d67c9d8bc604b0b109b2bd631cba3598f95fb83b6837205e",
+    "edgion-gateway/tests/unit/plugins/runtime/conditions/extract_test.rs": "29f2c1713e657e24d1f392c6e589a36f2ea865d843f021eb49d8b315b3a68d57"
+  },
+  "drift_at_checkpoint": [],
+  "limitations": [
+    "MatchCore internal allocations remain outside this borrowing change.",
+    "Mock reference lifetime support and workload benefit remain future verification gates.",
+    "No tests/builds/throughput measurement performed."
+  ]
+}

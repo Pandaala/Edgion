@@ -1,0 +1,139 @@
+{
+  "partition": "PART-182",
+  "analyst": "/root/verify_ip_union",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-dsl/src/xml.rs",
+      "sha256": "ceec35805f946417d97335e7837c90dd0667198ceafe48ed5024415b477bd8cc",
+      "fully_read": true,
+      "disposition": "ARCH-201: private decoded scratch ownership for unchanged tokens; final immutable node ownership remains necessary."
+    }
+  ],
+  "candidates": [
+    "ARCH-201"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original; only root AGENTS exists."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Original navigation and DSL locator."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original and all applicable gates."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original routing."
+    },
+    "skills/04-review/dsl/SKILL.md": {
+      "sha256": "4b20ea559926d29e0970ab9d9061af44b24dbd277e408d79628c00b305ab085d",
+      "scope": "Full original."
+    },
+    "skills/03-coding/dsl/SKILL.md": {
+      "sha256": "060a2dc111a2b613b91ebf5da4c7ae995c0f11919a1b4b55f819b2e1d88c2f02",
+      "scope": "Full original."
+    },
+    "skills/03-coding/dsl/builtin-error-semantics.md": {
+      "sha256": "7fbe055cf4abb8b09fde439f2df6dbae5a061d398ad7527ceb4f11450f467317",
+      "scope": "Full original frozen XML and BodyAccess outcomes."
+    },
+    "skills/01-architecture/02-gateway/dsl-engine.md": {
+      "sha256": "7ed47817132d4ffc9dc24aa62f4120c75d4e7b58d829b143c6ba34793fd05bf7",
+      "scope": "Full original."
+    },
+    "skills/01-architecture/02-gateway/dsl-engine-security-model.md": {
+      "sha256": "74a500ea801297f018a0af16f32a2e3060b637dc875e55fb0e29b262767dc5b1",
+      "scope": "Full original."
+    },
+    "skills/04-review/dsl/regression-guards/bounded-xml-primitives.md": {
+      "sha256": "6f04ae53d73912caefdacf9a496285eec03d63923ba9fd0e93a1f18bd2b4e2bc",
+      "scope": "Full original compared against current sources/tests."
+    },
+    "skills/04-review/dsl/regression-guards/host-result-byte-budgets.md": {
+      "sha256": "b05eee927b7d152c8cfa1506d58e6e6a2a6d9832b8f7a0a71d1f9c505a916b5f",
+      "scope": "Full original producer admission."
+    },
+    "skills/04-review/dsl/intentional-design/map-variant-is-boxed.md": {
+      "sha256": "4de9b6b65073560307fe3007599fbe675c874b87c0e5e0f586478f7d0ec42160",
+      "scope": "Full original."
+    },
+    "skills/04-review/dsl/intentional-design/sso-migration-not-worth-it.md": {
+      "sha256": "24864b413fcb0501103893298b000d9ff69ceb2c4ceb49b3f4bc385aeaa69375",
+      "scope": "Full original; no representation migration proposed."
+    },
+    "tasks/pending/request-body-capability-next/dsl-xml-primitives.md": {
+      "sha256": "5c461a952e3d1946c8cd6a8ca4d65e3920caaff8c7f54c943f257a828833683f",
+      "scope": "Full original; linked design ledger absent."
+    },
+    "edgion-dsl/Cargo.toml": {
+      "sha256": "02c0dc8814d20dcd076843962e45b1d3f00de466f54c3531693b9a40cc0cfe47",
+      "scope": "Full external-only manifest."
+    },
+    "edgion-dsl/src/lib.rs": {
+      "sha256": "2e447a6d98e717fb0f0a4769c44b07643e303ba88fda3c10142582b5942e8265",
+      "scope": "Full exports."
+    },
+    "edgion-dsl/src/value.rs": {
+      "sha256": "ee38addf5354e257bfdd0999bc26153255fb6c334e7c6867afddc9abea981211",
+      "scope": "Complete work account and XML ownership/coercion/equality/shape seam, selected lines 1-138 and 145-338."
+    },
+    "edgion-dsl/tests/unit/xml_test.rs": {
+      "sha256": "df75a099ea98b56715bbd89ff213707f7b57ee0773eacdd16fdf0250422375ab",
+      "scope": "All actual test bodies."
+    },
+    "edgion-dsl/src/bytecode.rs": {
+      "sha256": "4f9619ad06ebab37113371768439a734e5c7bd39fc0486f0727ce1220448f144",
+      "scope": "XML builtin inventory and body/mutation reference methods."
+    },
+    "edgion-dsl/src/compiler/builtins.rs": {
+      "sha256": "5496fd6e6d34094fe14de781dd625da2a2b23ca48c89cd375b6c221437f00935",
+      "scope": "XML builtin resolution and exact arity."
+    },
+    "edgion-dsl/tests/unit/compiler/expr_test.rs": {
+      "sha256": "6c0a00015053d91b165fe8098dc6bc8f06332613993b314e7ff9e16fb7bacee5",
+      "scope": "Complete XML resolution/arity/capture regression."
+    },
+    "edgion-gateway/src/plugins/http/dsl/lang/xml_builtins.rs": {
+      "sha256": "d7d7cc36b1aa879256f8c6c16e746fc47d6364e258b6478a7857681ed4169e4b",
+      "scope": "Full implementation."
+    },
+    "edgion-gateway/src/plugins/http/dsl/lang/body_ops.rs": {
+      "sha256": "3fdd9df6df1eb59c2caf649b16daf191878cc42ac0c26b192ea15a4306a54ea2",
+      "scope": "Actual parse_xml reservation seam lines 39-92."
+    },
+    "edgion-gateway/src/plugins/http/dsl/lang/vm.rs": {
+      "sha256": "830e80cb6b406f5f6d9204eb0644cbc2c1743acd4122c600f75ed7bd2ea0db9c",
+      "scope": "XML dispatch and stack admission lines 1180-1203."
+    },
+    "edgion-gateway/tests/unit/plugins/http/dsl/lang/xml_builtins_test.rs": {
+      "sha256": "ca08a736a364329c5d795124e28c081e44dd7db0465caa72a21087602d0647c0",
+      "scope": "All actual 229-line test bodies."
+    },
+    "edgion-gateway/src/plugins/http/dsl/plugin.rs": {
+      "sha256": "7948524b4a2d7bc33d5aebc7f54c37ac316f428944d264c0e74fc01fd95bdfa2",
+      "scope": "Response factory rejection lines 94-120."
+    },
+    "edgion-gateway/tests/unit/plugins/http/dsl/plugin_test.rs": {
+      "sha256": "49740ddee57c8b7b240ec4984cc12d7d13429863a1f4fe651ff9ff74b932c0d5",
+      "scope": "Actual XML source/wire stage regression lines 1-17."
+    },
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/dsl.rs": {
+      "sha256": "03057d287e1bc1178b1815281bcb345647bf6c0461984f7f7bee572575ab26f3",
+      "scope": "Compilation owner and response prohibition lines 360-410."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/dsl_test.rs": {
+      "sha256": "7b2ef275f687c271ea526311ff0954890a827bbff33aa4e9fb76fe6fea0cff59",
+      "scope": "Actual response rejection lines 281-292."
+    },
+    "edgion-resources/src/resources/edgion_plugins/validate.rs": {
+      "sha256": "4684ace540889d54ce341c38d90b4f7fa0d8947b9beda405be8edcf9f9bfd488",
+      "scope": "Non-request mutation rejection lines 585-614."
+    }
+  },
+  "limits": "Static source and actual test inspection only. No functional/security defect, performance measurements or execution. Final Arc ownership and conservative nonrefundable charging remain required; absent historical design link is not authority to relax them."
+}

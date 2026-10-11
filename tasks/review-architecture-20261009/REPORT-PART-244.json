@@ -1,0 +1,42 @@
+{
+  "partition": "PART-244",
+  "analyst": "/root/analyze_adapter",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/ai/protocols/anthropic/error.rs",
+      "sha256": "b5a8517fedf94f2c3734d0a99fc96c7cc8dd5f49b134b557885f05679531fde9",
+      "fully_read": true,
+      "disposition": "Fixed native envelopes and named boundary errors."
+    },
+    {
+      "path": "edgion-gateway/src/ai/protocols/anthropic/mod.rs",
+      "sha256": "80e9d99faaafd0404a11a5eee77c311e2b97a1b3284ed48c04a8a9aa981a2ca7",
+      "fully_read": true,
+      "disposition": "Canonical exports and native ownership."
+    },
+    {
+      "path": "edgion-gateway/src/ai/protocols/anthropic/processor.rs",
+      "sha256": "4cd6486dc7a13c798ddce039776a8eff5c23dd3fcefdefbac52669ce9f97fe19",
+      "fully_read": true,
+      "disposition": "Reported-only observation, envelope matching, sticky unknown and quota terminal delegation."
+    },
+    {
+      "path": "edgion-gateway/src/ai/protocols/anthropic/request.rs",
+      "sha256": "7f27766425c6d2a34d7ba6b55bdf4b956ed850a0379c34e36d29fb81cdf2549a",
+      "fully_read": true,
+      "disposition": "Borrowed bounded metadata and patching; missing full UTF-8 admission."
+    },
+    {
+      "path": "edgion-gateway/src/ai/protocols/anthropic/usage.rs",
+      "sha256": "012a43fda6e456f1d34891f83e4ca14fe67416e090f8d092c931e42ea3b8f157",
+      "fully_read": true,
+      "disposition": "Bounded selective tokens and parent/counter normalization."
+    }
+  ],
+  "candidates": [
+    "ARCH-012"
+  ],
+  "context": "Original rules, native Messages/Responses, SSE empty-data/window, Guardrail contracts; all ten protocol tests fully read; locked serde_json sources inspected.",
+  "limitations": "No tests/builds/external calls or source edits; secondary seams do not count as coverage."
+}

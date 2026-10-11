@@ -1,0 +1,143 @@
+{
+  "partition": "PART-402",
+  "analyst": "/root/verify_ip_union",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/metrics.rs",
+      "sha256": "eee4bccf7421bbe8fe4b69569990583e3543ccfb869d5d77fa72699e60f5c955",
+      "fully_read": true,
+      "disposition": "ARCH088 manual accounting versus reused existing scope guard."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/mod.rs",
+      "sha256": "4523856657db2296a6db71a53ffdb47f1db31cb01c5263fdffb095af3b519197",
+      "fully_read": true,
+      "disposition": "Full exports/module ownership checked; no finding."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_version.rs",
+      "sha256": "fde1c67ffd5c882e76bf737d8f6a7c7e2885774a52165302b6a793a284e84c03",
+      "fully_read": true,
+      "disposition": "Full floor/under-lock allocation/concurrent tests checked; no finding."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/shutdown.rs",
+      "sha256": "8d480f6c87cf3cfebee8e34f9fc4a3882283ae9a604e8b160d510d82e8b01805",
+      "fully_read": true,
+      "disposition": "Full one-way signal/handles/real consumers checked; no finding."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/workqueue.rs",
+      "sha256": "3e916862877a009e6048241544c8ebba40e3a95d6f57740b4b9982b0084e5cde",
+      "fully_read": true,
+      "disposition": "Full dirty requeue/delay/chain/context/tests checked; no heap cap/retry/clone-only finding."
+    }
+  ],
+  "candidates": [
+    "ARCH-088"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original personally read/recovered all gates."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original index retained."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full graded original retained."
+    },
+    "skills/01-architecture/01-controller/04-workqueue.md": {
+      "sha256": "37f555984b883130fc52206b1cf03545007b32a529ef61a8a53eaa8f66fde733",
+      "scope": "Full original queue/chain/no backoff ownership."
+    },
+    "skills/04-review/controller/regression-guards/single-worker-initialization.md": {
+      "sha256": "b433dcb3cfca7d35f6e13aab1c67f5dd0ba8d7d3ad11a02e5cfda15b79a106bb",
+      "scope": "Full original worker gate."
+    },
+    "skills/04-review/controller/regression-guards/source-scoped-watch-snapshots.md": {
+      "sha256": "c8a7d7cda326b64a7358ab8cfa34002aaa253ef94e731ac86bc0cc8a3fe75d05",
+      "scope": "Selected ownership/cancellation/backpressure including75-84."
+    },
+    "skills/04-review/handler-requeue/intentional-design/status-write-no-retry-accepted.md": {
+      "sha256": "e88cd2826d72c9cdb18c4c48ff52e155abba658f98bc1c813adfe8234b9ae9d3",
+      "scope": "Full original no automatic recovery deadline."
+    },
+    "skills/04-review/handler-requeue/intentional-design/worker-path-status-io-inline-accepted.md": {
+      "sha256": "3d41c778b5f93279117216564b2d2359a1d17feafee7c73eccba3d1e1381fb70",
+      "scope": "Full original serial inline durable IO."
+    },
+    "skills/04-review/cpu-memory/review-evidence/workqueue-delay-heap-no-size-cap.md": {
+      "sha256": "0cb02219f884567d087b7108a1518652d386289120394b4984678545dfc552f4",
+      "scope": "Full original current-source comparison; stale pressure/limits qualified."
+    },
+    "skills/03-coding/observability/01-metrics.md": {
+      "sha256": "7a498385055f6b4b701edc3259b1e266b38381d8d61f59036d625ec4cbbab21b",
+      "scope": "Original Gauge symmetry/Drop rules."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/file_system/resource_controller.rs": {
+      "sha256": "3a98d5b9d45a90fc611d8bd47fd02646f0cd7edd67bda4679ec7ce1352b0ccb3",
+      "scope": "Run entry/select/tail and worker; all return/error sites searched."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/etcd/resource_controller.rs": {
+      "sha256": "f323246b899ff298398cb51ca5e3b1379ce593209ba003afe071a4f88fbb3b7c",
+      "scope": "Run entry/select/tail and worker; all return/error sites searched."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/kubernetes/resource_controller.rs": {
+      "sha256": "4eb1b4efed2ac099a34ba36330eae1b7f66e3284a34bf226d81da00f61c95c14",
+      "scope": "157-168,430-515,605-650 andworker; existing private guard/acquisition/cleanup."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/file_system/controller.rs": {
+      "sha256": "ad73aac06e6ba0ed013b19ae8557288e1b064cee604c3f23cf852756194de76d",
+      "scope": "108-181 actual handles/abort."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/etcd/controller.rs": {
+      "sha256": "ae06c447ad12f0458cedbffeaba029739cccd292c1e130e62d33dde6045edfdb",
+      "scope": "104-159 actual handles/abort."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/non_kube_common.rs": {
+      "sha256": "58b9f4e3f396edc3edc5b501a5caf89864c55a1409c4fb95899b1269084adf4b",
+      "scope": "Lifecycle handle/abort/reload/reset sections."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/context.rs": {
+      "sha256": "51b54d424a745d023338c1dc5b55e67cd076e33f37f7db8d9e9f1e5f0ae2b388",
+      "scope": "Full chain/depth/cycle/delay owner."
+    },
+    "edgion-controller/src/cli/mod.rs": {
+      "sha256": "e6a99b22317b82b315c7a9e9c26b67c58de82e00687dc05eb4d34031829d41af",
+      "scope": "500-541 recorder before work/no Controller eviction."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/workqueue_test.rs": {
+      "sha256": "171c3ff33c9a2a6ab5cc828e027618b840d31784b8999f8ef2a0ccca23e23bbb",
+      "scope": "Full dirty requeue/concurrent/delay/chain/watermark bodies."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_version_test.rs": {
+      "sha256": "2410da344ebd23096a56a92890b852c884e43f66dfaee7c0afcbfb0be316f761",
+      "scope": "Full monotonic/concurrent/floor bodies."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/shutdown_test.rs": {
+      "sha256": "5734125bd5e006ec17906b34150f0416c1c63b3ebf298df01ceb8f24c97b5931",
+      "scope": "Full shared-state test body."
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/file_system/resource_controller_test.rs": {
+      "sha256": "c2878991dc50e3f46c2b21b06cae05148ce1d6d3e7a617e42dbeca834d61d8b6",
+      "scope": "Complete duplicate-init run-future fixture body."
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/etcd/resource_controller_test.rs": {
+      "sha256": "10c53843812375245c7903b408652a4932cf412299c63222fc41af6688f36c2a",
+      "scope": "Full invalid/repair bodies."
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/kubernetes/resource_controller_test.rs": {
+      "sha256": "2b6472d75200dd0f3f6760aef2a9300bb23d6ac8f46522cb3ec68ab6e56ff64b",
+      "scope": "Complete blocked-resync/cancellation/forced-abort body."
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/non_kube_common_test.rs": {
+      "sha256": "0a8fcf71ea6073bd01b44d428a73e155f4d09683fb064e3cf1f083c6b995fcff",
+      "scope": "Full phased lifecycle bodies."
+    }
+  },
+  "limits": "Static only; no execution/incident/performance/Git/network/mutations; supporting zero primary."
+}

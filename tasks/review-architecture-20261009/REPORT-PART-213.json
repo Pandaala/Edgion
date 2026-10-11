@@ -1,0 +1,277 @@
+{
+  "partition": "PART-213",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/rate_limit_local.rs",
+      "sha256": "56df11142d56718d5acd87be6874e2b4e2ffe39961ff42d0065dff04656eaaa0",
+      "fully_read": true,
+      "disposition": "ARCH-073: unchecked estimator K multiplication precedes the documented clamp; other quota/key/header/scope boundaries are appropriately shared."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/rate_limit_redis.rs",
+      "sha256": "be7902d98d087df8d3aead5b443161ea08c6391317461597f63dc2c116e666e0",
+      "fully_read": true,
+      "disposition": "Named quotas delegate bounded duration/unit policy and retain intended Redis failure and independent emission semantics."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/real_ip.rs",
+      "sha256": "4fc7a82e134b46935d00644a6a024695a9adb413372915cf36504804e689c8de",
+      "fully_read": true,
+      "disposition": "Canonical read-direction header token and named CIDR policy; cold extractor and optional trusted-hop semantics are deliberate."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/region_route.rs",
+      "sha256": "af76aed8ed870683c6e93ad7f876f37c06373a7b2380da994e188809f30e8126",
+      "fully_read": true,
+      "disposition": "Canonical complete-table proof and per-consumer modulo validation; bound override/base policy remains separate."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/request_access_policy.rs",
+      "sha256": "bd23b462525811322f05411e2f2d3b5982a054eb4d1a5964211cc786b5f578ba",
+      "fully_read": true,
+      "disposition": "Typed required-group/container policy reuses canonical condition payload validation and deliberate source/resolved profile separation."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/request_body_buffer.rs",
+      "sha256": "e7af792da55e8f5df4e678ca5ff138fe2b89c0bbce9ac7fc627cb1a908117e28",
+      "fully_read": true,
+      "disposition": "Empty operator marker is deliberate: canonical runtime body gate owns capture, ordered filter remains a no-op."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/request_id.rs",
+      "sha256": "e52cf94cdc06380eba3fbf8d934f48ccf6d16b214832b8c116478a74e53092c7",
+      "fully_read": true,
+      "disposition": "Bounded destination/source/generator validation feeds canonical compiled request identity owner."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/request_mirror.rs",
+      "sha256": "5e6879e807aa5210c267680d12505373a1c56a5dc334a1f9f03d9416adc2e31c",
+      "fully_read": true,
+      "disposition": "Composes canonical standard mirror validation and bounded tuning; effective role-bound reference and snapshot owner remain separate."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/request_restriction.rs",
+      "sha256": "bf3a6eb7c38e087c3368b8392fd9efd990dd9f1b2bda5bb6e7729c8d89fcfd53",
+      "fully_read": true,
+      "disposition": "Explicit required polarity and canonical conditions preserve unavailable-candidate versus denial-runtime semantics."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/response_rewrite.rs",
+      "sha256": "2ea2c1a3ba0ff9ce897e8606572e1d4a436a2be91d6460de84842f485302f384",
+      "fully_read": true,
+      "disposition": "Canonical token/status/protected-field validation feeds immutable response preparation without response aggregation."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/tiny_ufo_ttl_cache_config.rs",
+      "sha256": "73b10b1f536bc37224631a02e23076e7950b9b99f7b59ef52d94300398b9889e",
+      "fully_read": true,
+      "disposition": "Paired bounded cache overrides preserve Controller/Gateway parity; cold inherited effective limits use the existing canonical cache owner."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/upstream_fallback.rs",
+      "sha256": "77ae61d6c9c073dd9dae0c933463b6cce3c454db8714fa60a129de99b4610a87",
+      "fully_read": true,
+      "disposition": "Finite shared upstream fallback vocabulary preserves each consumer field default and invalid-token rejection."
+    }
+  ],
+  "candidates": [
+    "ARCH-073"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original retained governing gates; root only."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original retained index."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original retained graded gates."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original retained authority routing."
+    },
+    "skills/04-review/rate-limit/SKILL.md": {
+      "sha256": "e1daac2d25e7c211ea096657323504afa62a92e49d1fdbc7cc37116d62fefb3f",
+      "scope": "Full current index."
+    },
+    "skills/04-review/rate-limit/regression-guards/local-allowance-redis-overflow.md": {
+      "sha256": "96e3350087448353af3a148a0644e0ffd4d5c8c83af022df849668632e14e3ad",
+      "scope": "Full original current Continue/Redis dependency and failure contract."
+    },
+    "skills/04-review/rate-limit/regression-guards/response-header-name-validation.md": {
+      "sha256": "36741ef52b38a0ae903d82f8743a21751f52872aa055ca37be2e7e4c334481b5",
+      "scope": "Full canonical cold header-name owner."
+    },
+    "skills/04-review/rate-limit/regression-guards/key-extraction-shared-helper.md": {
+      "sha256": "2810f46e1cfab85087bd67e6a588b9a5f8198ed0fc9ead2148362d80b038b7f3",
+      "scope": "Full canonical extraction policy."
+    },
+    "skills/04-review/rate-limit/regression-guards/multi-source-key-composition-injective.md": {
+      "sha256": "ec46e409eb74ca186b95622ccaf82fa9343970b5c06e3fcd02e9e437fa0fd50a",
+      "scope": "Full complete canonical composition policy; recovered truncated aggregate."
+    },
+    "skills/04-review/rate-limit/intentional-design/header-injection-duplication.md": {
+      "sha256": "be8a083ebc125bc76d5335d85147038bfeaa44a1df46596d305fef67777c8635",
+      "scope": "Full original deliberate independent emission decision; recovered truncated aggregate."
+    },
+    "skills/04-review/rate-limit/intentional-design/redis-fail-open.md": {
+      "sha256": "66a0b8d1f03c1443c90b3f4daeaddf4ce10f17723931e289a74c68fd796cb57c",
+      "scope": "Full fixed existing failure-policy decision."
+    },
+    "skills/04-review/real-ip/regression-guards/header-name-canonical-validation.md": {
+      "sha256": "c816022329b2e918c83adce355ec28761989699e79fd3f7937182682bf20b03c",
+      "scope": "Full canonical read-direction validation and global/plugin backstops."
+    },
+    "skills/04-review/real-ip/intentional-design/max-trusted-hops-opt-in.md": {
+      "sha256": "e0e0f3a166a1171990460e6e7c4eda93592420f3bc127052afa7f9a10cdb5c8a",
+      "scope": "Full original optional hop policy."
+    },
+    "skills/04-review/routing/regression-guards/region-route-effective-table-validation.md": {
+      "sha256": "c5948cf1eba9fd3bfb2f830da3f1c7e6ab2916e95ad060d2d3f665e4bd880c3e",
+      "scope": "Full original complete table/proof/modulo/one-hop and bound owner contract."
+    },
+    "skills/04-review/request-restriction/regression-guards/mode-is-required-no-default-polarity.md": {
+      "sha256": "9e008bb06661e78c2005db84564e33e72c8c87a1e367273b35d02b989a4b7517",
+      "scope": "Full current required polarity and canonical condition contract."
+    },
+    "skills/04-review/plugin-metadata/mandatory-design/matchcore-payload-validation-belongs-to-condition.md": {
+      "sha256": "bc0fabc834b340a0940516bfd6176da5a600e6620ef1cbdb33cc287e0f514f39",
+      "scope": "Full canonical payload validation owner."
+    },
+    "skills/04-review/plugin-metadata/regression-guards/unresolved-condition-references-need-consumer-policy.md": {
+      "sha256": "7ab1f93edfe43a06239c7ecd65df25f4f9376f57ee9a87376d6b679d7cdee9db",
+      "scope": "Full current per-consumer incomplete reference policy and partial-good RAP IP exception."
+    },
+    "skills/04-review/request-mirror/regression-guards/mirror-standard-validation-and-service-status.md": {
+      "sha256": "976e6b0d0c34c638e31141f3ba30724b960df97fd753310deac52da5101ddc9d",
+      "scope": "Full standard validation/role-dependent requeue/current owner boundary."
+    },
+    "skills/04-review/plugin-metadata/mandatory-design/condition-set-single-owner.md": {
+      "sha256": "eb021205b436c1b999f947d3281b2883df3d68ef4f8e1398a2f74544a216ed6f",
+      "scope": "Full retained current effective condition owner."
+    },
+    "skills/04-review/plugin-runtime/regression-guards/response-header-mutation-policy.md": {
+      "sha256": "4274727258b156f2ce9aa05f80980316bf90b5c67f67618973c5456720fc05b7",
+      "scope": "Full retained current canonical response mutation guard from Gateway review."
+    },
+    "edgion-resources/src/rate_limit_local_config.rs": {
+      "sha256": "a4824f91d9e49acd2dad2b5587b302dbf92eb0de992212b126237e9e9b696e6f",
+      "scope": "Full current global unit constant/getters and explicit independent global-policy limitation."
+    },
+    "edgion-gateway/src/plugins/http/rate_limit_local/plugin.rs": {
+      "sha256": "4abb3cb88124cca228f0229e0e17ca8bf2197bdef85da88a6544d8173dd32491",
+      "scope": "1-125 current constructor validation and actual estimator consumer."
+    },
+    "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": {
+      "sha256": "70ea787d34a9a4652adfe131ba66049d2544b381b2034194db519567fe87ead0",
+      "scope": "1510-1545,2285-2310 actual factory; prior full Gateway coverage retains admission/body gates."
+    },
+    "edgion-gateway/src/plugins/http/rate_limit_redis/plugin.rs": {
+      "sha256": "8300ea1ea1c66a0c513021699ae66e92ad5008d44485e923f401c07db360827c",
+      "scope": "75-112 cold bounded runtime owner."
+    },
+    "edgion-gateway/src/plugins/http/real_ip/plugin.rs": {
+      "sha256": "fce7958bf6a3e51d0825019548830a7ddac4e916b183f292f5f64547a673c746",
+      "scope": "20-95 actual cold extractor and request lookup."
+    },
+    "edgion-gateway/src/plugins/http/region_route/plugin.rs": {
+      "sha256": "709bebcc52cf4341ea8875eef4f37e3b9e81f3952275a85734b7a3ae852d1898",
+      "scope": "90-153 actual bound construction/base proof and snapshot lookup."
+    },
+    "edgion-gateway/src/plugins/http/request_access_policy/plugin.rs": {
+      "sha256": "589cab7cea5550b0cd8926449ee0ededb2cff93c2f15dd34e26a6e01bf48c608",
+      "scope": "340-425 cold source/resolved projection and init denial."
+    },
+    "edgion-gateway/src/plugins/http/request_body_buffer/plugin.rs": {
+      "sha256": "55b3f9ad2eb0d0b9b73e7c84c496019e8ae63e1e1555a6bdf14d532613b5d42f",
+      "scope": "Full current ordered marker consumer."
+    },
+    "edgion-gateway/src/plugins/http/request_restriction/plugin.rs": {
+      "sha256": "4df0c3288a662ebbac75f114eb361fa43fff00b5d26ef40cf98e76b8aa8028fb",
+      "scope": "62-113 actual cold compilation and unresolved polarity policy."
+    },
+    "edgion-gateway/src/plugins/http/response_rewrite/plugin.rs": {
+      "sha256": "7444cea63e8c3ff5f62e2c774072a67b4160e8629c300c683cc7cd32cebb8fe4",
+      "scope": "22-45 immutable preparation with shared source check."
+    },
+    "edgion-gateway/src/plugins/http/request_id/mod.rs": {
+      "sha256": "e67cbd2491f797626dc4aea24c121dc040a4b70d79c687f97173489abbb4181b",
+      "scope": "Full current canonical compiled rule delegation."
+    },
+    "edgion-gateway/src/plugins/http/request_mirror/plugin.rs": {
+      "sha256": "fd1f288cef9740573b8c73733a7fab83b22da97ef548c9ccff54d4f605b0e2ad",
+      "scope": "133-170 actual bound target and normalized capacity."
+    },
+    "edgion-gateway/src/cli/config.rs": {
+      "sha256": "9f19a5bf98552250045c76ce5c2ea606de312c1d61a71ad04c0a01ac3fe75e7f",
+      "scope": "1110-1149 cold inherited TinyUFO effective limits."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/rate_limit_local_test.rs": {
+      "sha256": "c41719fd8c82fbd0af4518d27e5c03bbfade0d8016f4119b00d81f767b005e3a",
+      "scope": "Full 563-line current configuration test bodies."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/rate_limit_local_test/validation_trait_tests.rs": {
+      "sha256": "68000de5f69acb029a0e8650e21d356488212c128d2550e443ebd116c51980e9",
+      "scope": "Full stateless/schema/clamp tests."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/rate_limit_redis_test.rs": {
+      "sha256": "b516e4fb65a488e8c34252dab36a05ad39064399dd3ea8d9da14279a57472333",
+      "scope": "1-145 actual bounded policy/references/errors tests."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/real_ip_test/validation_tests.rs": {
+      "sha256": "6543ac1ed86f3c11ec25b502e1bcba72e47a68802a45302d5e3dcbb4a71ba55e",
+      "scope": "Full actual canonical admission tests."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/region_route_test/validation_trait_tests.rs": {
+      "sha256": "c8218062a8800ab8d0491ebe8c442f661128f3754322f335b99c23a90656fa0e",
+      "scope": "Full actual endpoint/base/modulo tests."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/request_access_policy_test.rs": {
+      "sha256": "402b31e563043ab4c49e96fdd4582161a26939128ae220f8e233cc02072f758f",
+      "scope": "1-225 actual required-group/status/canonical matcher/redacted credential tests."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/request_restriction_test.rs": {
+      "sha256": "a7cf726b22666b8ac216005edd999c4f40a51cd2385d65d17e731883d5a3a84b",
+      "scope": "1-152 actual required polarity/status/container tests."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/request_id_test.rs": {
+      "sha256": "9c083701794ce77c82276c0ce33085c3a3c4a2cd83b9eddf87c12cbeedd929b3",
+      "scope": "Full actual bounds/sensitive destination/generator tests."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/request_mirror_test.rs": {
+      "sha256": "c7d15cc65ef29716375c4c7b5f618c6785da7f44490c3941c7b83b48983fcad9",
+      "scope": "Full actual standard/tuning boundary tests."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/response_rewrite_test.rs": {
+      "sha256": "b906f217ec3b75359bf7d908340e5128894738bc60478f19197929cbfa9ce8e4",
+      "scope": "1-228 full default/status/name-boundary/action-classification test bodies; following value test fragment not claimed."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/response_rewrite_test/validation_trait_tests.rs": {
+      "sha256": "704f3d166425220347b7f48136065835cb0f04d0757640e0a7cfaa9c571f2f68",
+      "scope": "Full actual stateless admission tests."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/tiny_ufo_ttl_cache_config_test.rs": {
+      "sha256": "39a33b4723545ed43fb8afcda7fcb9943a293d337f80226e4ba5b9c5d034ea67",
+      "scope": "Full actual paired/capped budget tests."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/upstream_fallback_test/defaults_tests.rs": {
+      "sha256": "2e6ffb6183920ad28630eeacfd29ba92f495e4daa7be626111f83c89ef67ee7b",
+      "scope": "Full actual consumer defaults/token tests."
+    },
+    "Cargo.toml": {
+      "sha256": "767f23c4126fc826a5b38b40ef074c345572bd339011c5ec0e3d7f8fbdb98873",
+      "scope": "250-280 production profile inherits release without overflow override."
+    },
+    "docs/en/user-guide/http-route/filters/edgion-plugins/rate-limit-local.md": {
+      "sha256": "90bb1095a48e647f588083937da395ac4cf704b52b16aff768a91723361c20c9",
+      "scope": "Full operator attachment contract; standalone slot contract selected by exact symbols."
+    }
+  },
+  "limits": "All twelve primary implementations fully read in bounded source segments during continuous review and freshly hash-matched. Supporting scopes only, no new primary credit. Static review; no execution, measured CMS effect, observed admission or passing-test claim. Global capacity policy normalization explicitly outside ARCH-073."
+}

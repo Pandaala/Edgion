@@ -1,0 +1,170 @@
+{
+  "partition": "PART-437",
+  "analyst": "/root/analyze_outbound",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/access_log_client.rs",
+      "sha256": "f7691b8ad4c8765a0ab446c414a1596df48c930d8472678d724f918edcf84d55",
+      "fully_read": true,
+      "disposition": "No actionable finding. Full 1-433 including marker tests; canonical normalization/repeated lookup and actual authenticated retry API consumers; last-write/store_count scoped intentional contract."
+    },
+    {
+      "path": "edgion-tests/src/client/admin_apply.rs",
+      "sha256": "0bec1f26fc271bec2ad18caaf80f78c5d15e62534efa6a42eb840a6a8cf92015",
+      "fully_read": true,
+      "disposition": "No actionable finding. Full 1-140 including tests; bounded unconditional PUT conflict retry under one deadline, explicit CAS/If-Match:* preserved, other failures not retried."
+    },
+    {
+      "path": "edgion-tests/src/client/framework.rs",
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "fully_read": true,
+      "disposition": "No actionable finding. Full 1-1070 including all lifecycle/selection/listener tests; failures affect actual reporters/exits; direct test clients/TLS legitimate."
+    },
+    {
+      "path": "edgion-tests/src/client/log_analyzer.rs",
+      "sha256": "e9ac93828e82b21a403dd3ae78db2fb8bc3000672e32177c341b4446ff7aeeeb",
+      "fully_read": true,
+      "disposition": "ARCH-252 architecture-debt P3 candidate. Full 1-440 including all tests; orphan exported file-based LB verification owner, scoped retirement preserves live integration assertions/fixtures; no runtime/format defect claim."
+    }
+  ],
+  "candidates": [
+    "ARCH-252"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full 1-464 personally retained, fresh hash; no nested harness rules."
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full original workflow authority only."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full personally retained index, fresh hash."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full personally retained graded rules, fresh hash."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full original review index."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original routing."
+    },
+    "skills/05-testing/SKILL.md": {
+      "sha256": "4ad0fb8f8a15693ec04116e8224095c6696bbe1e3e63f0a5528053e560466343",
+      "scope": "Full original testing index."
+    },
+    "skills/05-testing/01-integration-testing.md": {
+      "sha256": "e260042b508fa0956873d1b3c059531f1733a7c15423c548081afb71703a10e1",
+      "scope": "Original selected 255-410; listener/contracts/assertion hierarchy/registration/dynamic lifecycle."
+    },
+    "skills/04-review/testing/SKILL.md": {
+      "sha256": "11d71f0b85ff6695f99019bad1dc44c2520ec79eb185d93032bf8dda6d609271",
+      "scope": "Full original testing review index."
+    },
+    "skills/04-review/testing/regression-guards/integration-suite-lifecycle-errors-must-fail.md": {
+      "sha256": "bf3999aaa30bb0bb903e5ae3aafe31442cb60f942ab04c1317c060d29a4f3906",
+      "scope": "Full original lifecycle/zero-case guard."
+    },
+    "skills/04-review/testing/regression-guards/integration-port-selection-must-fail-closed.md": {
+      "sha256": "c2ff61188030d30484afd0c1323201295fb980755c3e4738fe78dd8eea785b89",
+      "scope": "Full original listener guard."
+    },
+    "skills/04-review/testing/regression-guards/integration-report-must-cover-the-whole-run.md": {
+      "sha256": "62f49adac5b4af2e3ba9c8da40aae96506a5511d8d9677af6732e354052c630e",
+      "scope": "Full original report guard."
+    },
+    "skills/04-review/testing/regression-guards/integration-lb-metrics-require-scoped-deltas.md": {
+      "sha256": "610f579998565c3e90353dc60d0cb29b59b482c393a88f6559142558fd3ec1ce",
+      "scope": "Full original live LB assertion owner/limits."
+    },
+    "skills/04-review/testing/regression-guards/custom-connector-request-contracts.md": {
+      "sha256": "f6fe6a8bf9172843641e8913c130d8a00878e1f9c33279603b7e25af6cd7cc13",
+      "scope": "Full repository original; no external fork source read."
+    },
+    "skills/04-review/admin-api/intentional-design/admin-api-write-precondition-opt-in.md": {
+      "sha256": "dd4cdc023de0302a24fdbce5bf4012b019d173ebc4642689d54ffcb178242770",
+      "scope": "Original selected 1-160; CAS/unconditional/backend-conflict."
+    },
+    "skills/04-review/observability/intentional-design/request-trace-id-lifecycle.md": {
+      "sha256": "c680a28cc8b36352a4f7025041872a9c5150c7698ceec1800c34f0295f8846de",
+      "scope": "Full original W3C identity and last-write/store_count."
+    },
+    "edgion-tests/src/lib.rs": {
+      "sha256": "fd650594a7188f250f059bb7a1140dec67a42819515e6fe52e9cf5ef92579feb",
+      "scope": "Full actual library exports and bin ownership."
+    },
+    "edgion-tests/src/client/reporter.rs": {
+      "sha256": "fe5136f8b928f78374ea448f10a5406517a6a6280e027f8be34e1be4ef90779d",
+      "scope": "Full actual console/JSON lifecycle/run-error implementation."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "Actual selected 1848-1955,3820-3975; registrations/listener/report/failure exit."
+    },
+    "edgion-tests/src/client_direct/test_client_direct.rs": {
+      "sha256": "3e085b6662bf8f3f47f4ad9cdbc98a8004a2c380283618f403738f38ab706036",
+      "scope": "Full actual direct client config/suite/report/failure exit."
+    },
+    "edgion-tests/src/client/port_config.rs": {
+      "sha256": "121db5936d48cddb5c947e75692d413fb1c710f14740d77dad8dd87f3f4d4d7f",
+      "scope": "Full actual implementation/tests."
+    },
+    "edgion-tests/src/client/dynamic/apply.rs": {
+      "sha256": "4824e28e2358c529c27c22e21c7a43dff06734cb792d6befd0d9840da99dbbb8",
+      "scope": "Full actual implementation/tests; CAS/ordered apply/fail-fast/redaction."
+    },
+    "edgion-tests/src/client/dynamic/ctx.rs": {
+      "sha256": "f37853b6b736f31472cc3a0a5a0a16501898b4160647ec5ca4d0f6a69e3e8866",
+      "scope": "Actual selected 145-200; phase runner lifecycle/failure."
+    },
+    "edgion-tests/src/client/suites/http_route/backend/lb_roundrobin.rs": {
+      "sha256": "f73adca9d4b1feca3955ce1474c2d63382ab2d7b6f4c306783da7c477c7b20a4",
+      "scope": "Full actual implementation/all unit bodies; completion/markers/fixture identity/exact deltas."
+    },
+    "edgion-tests/src/client/suites/http_route/backend/retry_on_status.rs": {
+      "sha256": "ebcc761d9ca386762b6b45952ed99363653bfbc0e88706a687f287e66f3973c0",
+      "scope": "Actual selected 1-205; live retry-reason assertions."
+    },
+    "edgion-tests/src/client/suites/http_route/backend/health_check_transition.rs": {
+      "sha256": "6d3cb99b8d8ca1f0d098f467c4edfdd5ed5bc72fa7d2212b2b572ad707376961",
+      "scope": "Actual selected 1-145; If-Match:* and bounded readiness."
+    },
+    "edgion-tests/src/client/suites/tls_route/both_absent_parent_ref/both_absent_parent_ref.rs": {
+      "sha256": "840ab4ad0c40217b3185ad21283ffeef81978509b84c301e94f7e25e553c9b8c",
+      "scope": "Actual selected 130-252; listener projection/rename/restore/assertions."
+    },
+    "edgion-tests/src/client/metrics_helper.rs": {
+      "sha256": "6a645f919d8d1287911645447cf3228fa25c6f54be3fa889217fbf6b61c0a7fa",
+      "scope": "Actual selected 140-280; shared fetch/analysis types, no cleanup proposed."
+    },
+    "edgion-gateway/src/api/mod.rs": {
+      "sha256": "a7b6ba1fd44e1b5f7dad36c738e970bbf7b31e95b2cd5de73820904271de9662",
+      "scope": "Actual selected 319-390,640-668; testing API and registration."
+    },
+    "edgion-gateway/src/ctx.rs": {
+      "sha256": "dd23711a474df4122dd3b0264c7293366c27ba2688a9eb390b24e842f6e6335d",
+      "scope": "Actual selected 1316-1382; serialized upstream policy/optionals."
+    },
+    "edgion-resources/src/resources/lb_policy.rs": {
+      "sha256": "b6dab2e5352186676a8eb373d2483a297e9ca67a75eb4d7a35afad104d7ce205",
+      "scope": "Full actual parsed-policy enum/producer."
+    },
+    "edgion-controller/src/api/common.rs": {
+      "sha256": "2d96d7e138a37e864cf499469fefb2fe14dd1f18fc6661e9bd7850f8a3522dc9",
+      "scope": "Actual selected 300-341; If-Match and string resourceVersion."
+    }
+  },
+  "limits": [
+    "Static repository sources/original decisions/actual tests only; no test/build/runtime/network/Git/write operations by analyst.",
+    "All four primary frozen hashes matched. Supports get zero primary credit. ARCH-252 awaits independent value verification.",
+    "No live integration fixtures/assertions/case identities/registrations or MetricsClient cleanup proposed.",
+    "Unknown external consumers cannot be excluded by repository searches; repeat caller search on implementation baseline."
+  ]
+}

@@ -1,0 +1,101 @@
+{
+  "candidate": "ARCH-001",
+  "complete": true,
+  "verifier": "/root/verify_ip_union",
+  "decision": "confirmed",
+  "input_sha256": "a5030ff03066531d9bd41f9588f7aa7af3d6423670967bebaf99678407de6079",
+  "approved_claim_sha256": "b975d8002afa2b8222b6f6895a4ba0d4f1cf7a0e79360da203f37397ac936afa",
+  "evidence": [
+    "Current publication pins lazy feature state and generation sequencing, while the automocked common trait still exposes individual WAF/AI operations.",
+    "Bounded capability grouping remains actionable architecture debt; borrowed signatures, object safety, mock compatibility, lifecycle and request-path performance require future design verification.",
+    "No runtime defect, approved concrete signature, benchmark, executed test or primary coverage is claimed."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "edgion-gateway/src/plugins/runtime/traits/session.rs": {
+      "sha256": "7b999e5186d352b839b32271c2af4b415d2cde9309f99a89850726474e9d4dd1",
+      "scope": "Imports and automock declaration; WAF/AI/canonical/semantic operations 548-731 and guard 952-988."
+    },
+    "edgion-gateway/src/plugins/runtime/session_adapter.rs": {
+      "sha256": "bb060285f53d6eddb8eeac90c080456e7efabfd9457720990305703c5a143f92",
+      "scope": "1590-1865 native/cache/admission/owner/plan/canonical/processor/guardrail ownership."
+    },
+    "edgion-gateway/src/ctx.rs": {
+      "sha256": "71647688ae0bf8b2eaa0439d954183f1d1a4de77b1557f66fc6ff0a9086b8221",
+      "scope": "WAF context 140-290; frozen generations 2840-2930; selection/admission phases 3080-3205."
+    },
+    "edgion-gateway/src/ai/context.rs": {
+      "sha256": "fd2694023651d81a8b04650dbf4dabd9a9746f2148a76b79dc372f46e56a41aa",
+      "scope": "Full lazy AI state, context access and installation."
+    },
+    "edgion-gateway/src/plugins/http/waf/mod.rs": {
+      "sha256": "d5bca791f259c5266019e3982c9f9e84526961a3174dc7c48dc80fcba856f2c9",
+      "scope": "300-370 failure/summary/restore/claim; 435-485 phase one/preflight/format."
+    },
+    "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": {
+      "sha256": "d80096aa53f493497d34dfba80f21f7089bf1ad3086f3b5ab3ff6f1689018c9d",
+      "scope": "360-440 cached WAF companions; 440-530 AI/conversion compatibility."
+    },
+    "edgion-gateway/src/plugins/http/plugin_generation.rs": {
+      "sha256": "aad01465d21727564f3347136454a87da287fb3c15f5c5c3b7ff9958111372b8",
+      "scope": "Full source: demand/cache/compilation/release."
+    },
+    "edgion-gateway/src/routes/http/proxy_http/global_plugins_resolve.rs": {
+      "sha256": "9c2819a276b74076edbf3d35c68047443b5022452f04c5f76462807ffc5d90af",
+      "scope": "73-112 election scope, priority and tie."
+    },
+    "edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs": {
+      "sha256": "e21e8d49bbdc1e71588fd9318324c19ff9f2d0bc49f1301831d1acc2c9a1d29e",
+      "scope": "350-405 pinned winner, physical body cap and body consumers."
+    },
+    "edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_body_filter.rs": {
+      "sha256": "f4cb74f73a823f4f490a9441a163d1c3f56cc5fb0faa8180883fef975e8fe89d",
+      "scope": "130-255 freeze, canonical handoff, AI semantic/ordinary sequencing and terminal cleanup."
+    },
+    "edgion-gateway/tests/unit/plugins/http/waf/mod_test.rs": {
+      "sha256": "9b75f3cc3a3fb3a4db56e8fb67fbe03125908893374610e8eb592295a82d9fd6",
+      "scope": "30-120 mocks; 315-370 response take/install; 1180-1250 format admission."
+    },
+    "edgion-gateway/tests/unit/ai/protocols/openai/canonical_sse_test.rs": {
+      "sha256": "ea2c7d26cb6fd5b8c81c6329705341265263bbc6b21c2b94b8f7799d3e58121f",
+      "scope": "70-120 raw cap and semantic publication."
+    },
+    "AGENTS.md": {
+      "sha256": "cba9f532fa1c9f70e6a921e1a2331e7ca78c8210981a072a74cdebf4d85d3e42",
+      "scope": "Full original project authority read by verifier."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original knowledge navigation."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "c78c86675ca6c72adb30d0f59727509486b582ef2c7f3318bf14e61745eff055",
+      "scope": "Full graded hard rules."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original knowledge routing."
+    },
+    "skills/01-architecture/02-gateway/05-plugin-system.md": {
+      "sha256": "b650f5d2e93ab34fe8dea73cae28c88259c7dae7f41e0a4d21c8a77384880eef",
+      "scope": "1-220 original ownership architecture."
+    },
+    "skills/04-review/http-body/regression-guards/waf-prefix-before-dispatch.md": {
+      "sha256": "2d4aeec3063b956097e37d10ca9352ce56eab9afd0b4372beaf2883d7c9ea332",
+      "scope": "Full original WAF dispatch/body ownership contract."
+    },
+    "skills/04-review/plugin-runtime/regression-guards/borrowed-plugin-header-access.md": {
+      "sha256": "b47c5c5e99ecdaa24ea37d1d6c47c1024a40aca4022a5b6e32eecc29a7a78698",
+      "scope": "Full original borrowed-access performance contract."
+    },
+    "skills/04-review/plugin-runtime/regression-guards/ai-guard-ordering-publication.md": {
+      "sha256": "8a69f2b03f3df18a5f8fee79f044a30d8e614341c74936f49261a5ed6eec72d3",
+      "scope": "Full original guard ordering/publication contract."
+    },
+    "skills/04-review/plugin-runtime/intentional-design/plugin-runtime-god-match.md": {
+      "sha256": "cc7a7d9e8592298e138b99ba19244c6dd19edc14dd0f62fb1db861916ff7214b",
+      "scope": "Full original exhaustive dispatch decision."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

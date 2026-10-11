@@ -1,0 +1,79 @@
+{
+  "candidate": "ARCH-087",
+  "complete": true,
+  "verifier": "/root",
+  "decision": "confirmed",
+  "input_sha256": "269f8d3691fcddba660bfc0b9e125d8683146ec54fcb357578c38fd4beba0d8e",
+  "approved_claim_sha256": "ce6e8ca1f646f489e04bf5820800f6df537396357636695189ef97044c625b5c",
+  "evidence": [
+    "Independent unchanged-body falsification confirms scan/store-lock release precedes Notified construction.",
+    "Real push mutates+unlocks then broadcast; multithreaded separate workers permit missing-broadcast interleave.",
+    "Pinned Tokio construction epoch and first-poll comparison prove no retained earlier broadcast; construct-before-scan closes gap.",
+    "Healthy unchanged-generation downstream only waits or checks server ID, no version recovery timer.",
+    "Actual complete cache/store tests lack scan/wait interleave; retain current reliable backpressure/ring/reload policy."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full retained original independently personally read."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original retained."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full graded original retained/gates."
+    },
+    "edgion-controller/src/conf_sync/cache_server/cache.rs": {
+      "sha256": "aadad5a4f36ed54e6b0ca3142bba5e23e02f3ddae99ce147035c10b43228ac76",
+      "scope": "1-355 actual scan/wait/write/serialization/closure."
+    },
+    "edgion-controller/src/conf_sync/cache_server/store.rs": {
+      "sha256": "55e74385f6a76ebf2827096cf6042b46118b29c1a435d2e925048df3cb0e3a1e",
+      "scope": "95-170 actual write/version/ring source, relevant get-events contract retained."
+    },
+    "edgion-controller/tests/unit/conf_sync/cache_server/cache_test.rs": {
+      "sha256": "9f02fa3feaa0b32d0bc6b5acccd16d4ebbe390f8dc78b6b3321f2e9b0888a061",
+      "scope": "Full240-line bodies."
+    },
+    "edgion-controller/tests/unit/conf_sync/cache_server/store_test.rs": {
+      "sha256": "3090dcdd33a7c0f3829432b412ff23d038e18187bc9bbf5b6e6c00ccacd6fdb1",
+      "scope": "Full373-line bodies."
+    },
+    "edgion-controller/src/conf_sync/conf_server/config_sync_server.rs": {
+      "sha256": "9b4a1e6e3168094ff95f8ce8253e509f628d8b4fbeb413e764edeb80d66d957c",
+      "scope": "280-355 actual typed conversion consumer."
+    },
+    "edgion-controller/src/conf_sync/conf_server/grpc_server.rs": {
+      "sha256": "ae38d7fa6636724e74edc5ba031ece0a85a595141a55f400aacd36f55b7e650d",
+      "scope": "650-755 actual same-generation polling."
+    },
+    "edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs": {
+      "sha256": "81db42781da15c030a91759b7b38b9492ac9a796c597d26fc70be5967309930f",
+      "scope": "605-740 receive/generation/error consumer; full prior Gateway primary retained."
+    },
+    "skills/04-review/concurrency/intentional-design/watcher-send-await-backpressure-no-timeout.md": {
+      "sha256": "c0018d75a9c6a28a559c0502db921d4d4c8807a812faffd3e097690a5de04c75",
+      "scope": "Actual original backpressure policy read; preserve reliable send/no new timeout."
+    },
+    "skills/04-review/concurrency/intentional-design/reload-detection-polling-vs-event-driven.md": {
+      "sha256": "5a5e42183341fa55ed88cc1943d6c92e749c149bd4831a89a26f87f934af0a55",
+      "scope": "Original generation polling decision read, recovered20-80."
+    },
+    "skills/04-review/conf-sync/intentional-design/ring-buffer-fixed-capacity-toooldversion-relist.md": {
+      "sha256": "3a99679143254ed75ff80bc8349d2260b6cf4180c48cc60b429cfbcb7abf964e",
+      "scope": "Full original ring/relist capacity acceptance."
+    },
+    "Cargo.lock": {
+      "sha256": "18b7b7dee01e024ab6d21f5692ce04a343c4fb265092c7f587099e91c28bea17",
+      "scope": "Actual tokio1.53.1 pin."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.53.1/src/sync/notify.rs": {
+      "sha256": "58995a30236252e2825f0311a08959635e8044ffe2796c0a59562dffbe008638",
+      "scope": "515-580,730-795,1108-1165 construction epoch/broadcast/firstpoll."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

@@ -1,0 +1,239 @@
+{
+  "partition": "PART-217",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-resources/src/resources/refs/backend_fields.rs",
+      "sha256": "6286e2259aacb104d142b0f535a933dee883856985d2be5d7e9f2750ec8e30f4",
+      "fully_read": true,
+      "disposition": "Actual EdgionBackend credential ordinals and Redis source borrow retain field-specific schema grammar and no provider cache/Grant substitution; actual Controller material and Gateway compile consumers reviewed."
+    },
+    {
+      "path": "edgion-resources/src/resources/refs/condition_fields.rs",
+      "sha256": "241900c12fb07cd504c1639f9861f8801c46299daa25245eda1853ba053238bf",
+      "fully_read": true,
+      "disposition": "ARCH-071 only transient IP wire equality clone; canonical synchronous effective condition source/shape/activity/material authority and RAP warning transaction otherwise justified."
+    },
+    {
+      "path": "edgion-resources/src/resources/refs/config_data_fields.rs",
+      "sha256": "3eebb0eae2ead5c875e289b0daa8ab6f58e3dd22881cb6dd5255b69b3f1caaaa",
+      "fully_read": true,
+      "disposition": "Finite actual EP/ESP Selector/Region/URL roles constrain target authority; actual Controller marking and Gateway runtime-key fallback remain distinct consumer policies."
+    },
+    {
+      "path": "edgion-resources/src/resources/refs/dns_fields.rs",
+      "sha256": "5f35c25901ea2d27887fd8c7fefe537f21901895fafed1065c06191a730ad68b",
+      "fully_read": true,
+      "disposition": "Actual Service/Gateway annotation source has approved finite trimmed target grammar; true-cluster EGC administrative target is separately strict. Absence/inline/fallback contracts remain canonical."
+    },
+    {
+      "path": "edgion-resources/src/resources/refs/egc_tls_fields.rs",
+      "sha256": "844c86d7e619510a75e397e149ccd1d3688f9b5b384fa360c0fbfe560cd768b5",
+      "fully_read": true,
+      "disposition": "Necessary reference-only snapshot rebind, borrowed actual policy/material and private administrative selection prevent ordinary tokens acquiring EGC privileges; Controller/global TLS consumers inspected."
+    },
+    {
+      "path": "edgion-resources/src/resources/refs/extension_ref.rs",
+      "sha256": "b6e2e39acef48061525c3336431d767b08bf9c68eadcb46d201f8d1a1d268a0a",
+      "fully_read": true,
+      "disposition": "Canonical discriminator/payload and exact supported target grammar feeds route actual-field loans; no new finding."
+    },
+    {
+      "path": "edgion-resources/src/resources/refs/gateway_class_fields.rs",
+      "sha256": "ec3ccd16f4eb16d213cbeb6c5c5630fdc32a552cd0d54745cf6a434bb9437596",
+      "fully_read": true,
+      "disposition": "Actual class-owned optional parameters validates exact cluster EGC and no namespace before consumer lookup; source metadata admission remains independent by contract."
+    },
+    {
+      "path": "edgion-resources/src/resources/refs/gateway_process_locator.rs",
+      "sha256": "6bb5dacf5ee95759ab7fbc6fb5d330dc45c82b9e9e1d27751b689a4c7f9e5696",
+      "fully_read": true,
+      "disposition": "Finite process-instance locator intentionally preserves exact untrimmed bytes and validation order, distinct from DNS/Kubernetes object authority."
+    },
+    {
+      "path": "edgion-resources/src/resources/refs/grants.rs",
+      "sha256": "6722118287597bda15f9586caaed08c36eae56f1f715ad7c7b2ddd60719486db",
+      "fully_read": true,
+      "disposition": "Concrete private validated query matches one Grant exact source/target group/kind/namespace/name; only omitted Grant target is wildcard, no cluster Grant authority."
+    },
+    {
+      "path": "edgion-resources/src/resources/refs/identity.rs",
+      "sha256": "d5fba4459f87f4b0844ff1bbe8d476ec2463ab4978b5014e0e314536002530fd",
+      "fully_read": true,
+      "disposition": "Borrowed canonical exact identities, explicit scopes and private field-specific grammar exceptions preserve strict/default boundaries; no generic public constructor or synonym collapse."
+    },
+    {
+      "path": "edgion-resources/src/resources/refs/ip_list_fields.rs",
+      "sha256": "af1cafeec989250991d50fd64ecb815d0862eac59f9f789f69ba02d796ffb5ff",
+      "fully_read": true,
+      "disposition": "ARCH-071 clone-only wire comparisons; actual source/slot/side/profile/activity topology and separate denial/material updates remain required at cold construction."
+    }
+  ],
+  "candidates": [
+    "ARCH-071"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Original full root retained, applicable nested none; selected rereads current."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Original full knowledge index retained; selected current rerouting."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Original full graded rules retained; applicable gates."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Original full review index retained and current1-100 routing."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Original full authority retained."
+    },
+    "skills/01-architecture/05-resources/03-edgion-gateway-config.md": {
+      "sha256": "ab268064136a95a18b3c11dda741b5e4f0eba2418b75aacd3ab3f3b9a9f85ad4",
+      "scope": "Full actual-cluster EGC material authority/status/DNS and publication contract."
+    },
+    "skills/04-review/plugin-metadata/mandatory-design/condition-set-single-owner.md": {
+      "sha256": "eb021205b436c1b999f947d3281b2883df3d68ef4f8e1398a2f74544a216ed6f",
+      "scope": "Full original synchronous effective catalogue and nonfreezable token contract."
+    },
+    "skills/04-review/plugin-runtime/regression-guards/edgion-config-data-incremental-atomic-publication.md": {
+      "sha256": "4e64433873c84174f051edd06c6559df69d7c6d4bbe852cd42272432e50f0f61",
+      "scope": "140-180 current standalone/remaining field binding and snapshot policy."
+    },
+    "tasks/pending/resource-reference-contract/01-spec.md": {
+      "sha256": "a01c94e7b47eba2046275fdaafde4be16b71ae053a8ba619dec8656a723a8678",
+      "scope": "1135-1170 original effective Condition IP versus standalone IpList activity, source/target and publication scope."
+    },
+    "tasks/pending/resource-reference-contract/07-progress.md": {
+      "sha256": "2fe20c846a92ceb09b489880054f21225f879333a5eaeb4976fb8feb26dd2efe",
+      "scope": "Selected clone/descriptor/material/current status sections and exact-symbol searches; no duplicate comparison finding found."
+    },
+    "edgion-resources/src/resources/refs/owned.rs": {
+      "sha256": "af783c0534b07590ebb900e8d8e0411683f0b5a98e63e59eaf8c6d3dbf36ea48",
+      "scope": "205-233 actual FieldWire enum ownership and private contracts; canonical targets selected symbols."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/ip_list_refs.rs": {
+      "sha256": "f163b6c811ebd74ea0a74aea58d8bdf501df6613952cb48ccf5fd5d672c7c2ae",
+      "scope": "1-205 fully read across truncation repair149-166; actual shared typed policy/dependency/mark/status borrowing."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/condition_tree.rs": {
+      "sha256": "685e604c06275a1a9de71b06e4039638dc6ee60f30d13067785feaf26c1a1c17",
+      "scope": "32-85 and120-215 actual expansion-before-credentials, leaf reloan and readonly status."
+    },
+    "edgion-gateway/src/plugins/stream/plugin_generation.rs": {
+      "sha256": "af2d34f16b86c287f01dfe97bb8fd65b7b96f44806876bf8809d0e388bd705be",
+      "scope": "83-130 actual standalone prepared-owner cold compilation."
+    },
+    "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": {
+      "sha256": "70ea787d34a9a4652adfe131ba66049d2544b381b2034194db519567fe87ead0",
+      "scope": "990-1020 actual HTTP owner preparation/bind before cache use."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/dns_resolver_guard.rs": {
+      "sha256": "ba01d6f99f6288f89b829b93c384b7ea94659d316b330ebe37499264ffe6a44e",
+      "scope": "Full original-owner registration-before-read and shipped-only denial stripping."
+    },
+    "edgion-common/src/dns/resolver_select.rs": {
+      "sha256": "d7132f7fbfa6873e55c58162c301adf818fb37a2e12d398a1531c79cab78372e",
+      "scope": "65-112 actual annotation/EGC candidate precedence and fallback."
+    },
+    "edgion-common/src/link_sys_core/outbound_tls/global.rs": {
+      "sha256": "afdf50047c4596cdc5d926ec708c7f54c329e49ab64f3a346c7bfc898a901660",
+      "scope": "1-82 actual retained immutable EGC owner and source/material proofs."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/credential/egc_tls.rs": {
+      "sha256": "3ed2e84a090e71cf77947f96f52f930b2e6d39fcf3652fba76a5ee0d980e4595",
+      "scope": "1-98 actual intrinsic status, bounded selection roles and no Grant administrative lookup."
+    },
+    "edgion-gateway/src/conf_sync/conf_client/grpc_client.rs": {
+      "sha256": "76f476f977f998cc66b201c2ec485664fdd11544680070d9b4722c1750d46bfe",
+      "scope": "172-202 actual process environment validation and scoped client."
+    },
+    "edgion-gateway/src/conf_sync/conf_client/scoped_handler.rs": {
+      "sha256": "b73f2734e0444a5437985d83ab2dc52f108d7c949dc2b1c4e764b887782f57b8",
+      "scope": "214-243 actual locator/native parent comparison and scope projection."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_backend.rs": {
+      "sha256": "bda3e8e40b43bf9fdbb685ff768e0e914238d5d13853a5acf92bc0bef45f1521",
+      "scope": "137-175 actual clear/material ordinal loans."
+    },
+    "edgion-gateway/src/ai/runtime/backend_store.rs": {
+      "sha256": "d83e92ba7e75dfea4c5338f1d3752a1cc2977b1631ed5cb13ec0b31bcba4bd0b",
+      "scope": "518-545 actual Redis source gate before backend compilation."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/gateway_class.rs": {
+      "sha256": "4f8fd0b1ccfc7c6205fa7cf5d21a73def74fe80fef6c806a68d56ad77984c50a",
+      "scope": "30-66 actual optional/unsupported/unwatched/missing target lookup."
+    },
+    "edgion-gateway/src/runtime/server/base.rs": {
+      "sha256": "25e86709b8bff3d663e5f4951dbc690bbbd965ff249ee694a0cb3e6cf9b341f8",
+      "scope": "30-60 actual startup target validation before lookup."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/config_data_ref_mark.rs": {
+      "sha256": "908c316fcf483af503eb1903a36984256fe083d549f38e8b9f80369cbecfa602",
+      "scope": "1-80 canonical source/target before lookup and right-type permission decision."
+    },
+    "edgion-gateway/src/plugins/http/region_route/plugin.rs": {
+      "sha256": "709bebcc52cf4341ea8875eef4f37e3b9e81f3952275a85734b7a3ae852d1898",
+      "scope": "95-148 actual owner proof/runtime fallback and canonical snapshot owner."
+    },
+    "edgion-gateway/src/plugins/http/canary/plugin.rs": {
+      "sha256": "a4cd7f4010609381b9bd7d27de487fd87b0c51bbf5d2486fb023f03b01e70410",
+      "scope": "25-67 actual owner proof/runtime-key fallback."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/ref_grant/store.rs": {
+      "sha256": "95aafe5df000a670d514acae397292f2fd7cefc9a9125a1baaadbde5b3ef2583",
+      "scope": "1-90 actual typed-query matching store; selected exact check-query symbols."
+    },
+    "edgion-resources/tests/unit/resources/refs/backend_fields_test.rs": {
+      "sha256": "f73db2e0096a1732c284d52d5686f72d73a9408d4d1fdffb4294d287a93d1438",
+      "scope": "Full actual test bodies read; field-specific identities/defaults, loan topology/activity, material/denial controls and authoritative-source separation. No execution."
+    },
+    "edgion-resources/tests/unit/resources/refs/condition_fields_test.rs": {
+      "sha256": "892c4062e78fff1eba3a4480113e42f416c98f3e6ae3bbd65cd6c8574b41f716",
+      "scope": "Full actual test bodies read; field-specific identities/defaults, loan topology/activity, material/denial controls and authoritative-source separation. No execution."
+    },
+    "edgion-resources/tests/unit/resources/refs/config_data_fields_test.rs": {
+      "sha256": "ef1a1c842a4e2f46876681e40ff267d99bfac63dbe442e1578adeab02790d498",
+      "scope": "Full actual test bodies read; field-specific identities/defaults, loan topology/activity, material/denial controls and authoritative-source separation. No execution."
+    },
+    "edgion-resources/tests/unit/resources/refs/dns_fields_test.rs": {
+      "sha256": "6c31ac600ed71944d0fe45f3fcf6bec3ea7f555f2c61b855da0243137c98fc9e",
+      "scope": "Full actual test bodies read; field-specific identities/defaults, loan topology/activity, material/denial controls and authoritative-source separation. No execution."
+    },
+    "edgion-resources/tests/unit/resources/refs/egc_tls_fields_test.rs": {
+      "sha256": "37fd5dde5ac193226425c9605e7e4b97ce8cca8bec1948e3a9ccddba3d1b0695",
+      "scope": "Full actual test bodies read; field-specific identities/defaults, loan topology/activity, material/denial controls and authoritative-source separation. No execution."
+    },
+    "edgion-resources/tests/unit/resources/refs/extension_ref_test.rs": {
+      "sha256": "7709557e3573703a63c2aca3387e02195aa6c8a960a85d7ab39f10a4f9fe9d1a",
+      "scope": "Full actual test bodies read; field-specific identities/defaults, loan topology/activity, material/denial controls and authoritative-source separation. No execution."
+    },
+    "edgion-resources/tests/unit/resources/refs/gateway_class_fields_test.rs": {
+      "sha256": "e02e91746fc0a9bf14a2d53c19ef28088bf12c382216029827f4d275c04aa794",
+      "scope": "Full actual test bodies read; field-specific identities/defaults, loan topology/activity, material/denial controls and authoritative-source separation. No execution."
+    },
+    "edgion-resources/tests/unit/resources/refs/gateway_process_locator_test.rs": {
+      "sha256": "d05b058c6cd02e8447470b4b9fa78b01e0b0002d31146078f014225ac0b8e3f5",
+      "scope": "Full actual test bodies read; field-specific identities/defaults, loan topology/activity, material/denial controls and authoritative-source separation. No execution."
+    },
+    "edgion-resources/tests/unit/resources/refs/grants_test.rs": {
+      "sha256": "ca68dc684acdf64b7799392a7ee1fba52fcb9970abb583b89e9d0b43e66d3953",
+      "scope": "Full actual test bodies read; field-specific identities/defaults, loan topology/activity, material/denial controls and authoritative-source separation. No execution."
+    },
+    "edgion-resources/tests/unit/resources/refs/identity_test.rs": {
+      "sha256": "52288d07d4f005cf655eb36319bda21c46939e101dc642c44ea4e5d9160f989b",
+      "scope": "Full actual test bodies read; field-specific identities/defaults, loan topology/activity, material/denial controls and authoritative-source separation. No execution."
+    },
+    "edgion-resources/tests/unit/resources/refs/ip_list_fields_test.rs": {
+      "sha256": "d458f3b4005407e154f30e624b0cd03925e91db5ed39526857c1bbb34e08ced4",
+      "scope": "Full actual test bodies read; field-specific identities/defaults, loan topology/activity, material/denial controls and authoritative-source separation. No execution."
+    }
+  },
+  "limits": "All eleven primaries fully read, source hashes checked. Selected actual consumers, original rules and all eleven mirrored unit test files inspected. Static-only no mutation/build/test/network, supporting zero coverage. Candidate cold copies source-derived, no live incident/conformance/performance claim; external consumers unaudited."
+}

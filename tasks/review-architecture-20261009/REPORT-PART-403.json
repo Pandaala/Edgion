@@ -1,0 +1,287 @@
+{
+  "partition": "PART-403",
+  "analyst": "/root/verify_ip_union",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/attached_route_tracker.rs",
+      "sha256": "d52c8bd08e0c7f40beda83817f6ba6ce83a37ce1963c783c0075410b388125d6",
+      "fully_read": true,
+      "disposition": "No finding: actual producer records deduplicated accepted listener names; wildcard/explicit double counting falsified."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/backend_tls_policy_ref.rs",
+      "sha256": "8cd9d72d2fce5b1b007803cffa107a21b35badac81e8b924a1384276aa65f46a",
+      "fully_read": true,
+      "disposition": "ARCH-099: full timestamp inventory clone couples target-local arbitration to unrelated policies."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/context.rs",
+      "sha256": "51b54d424a745d023338c1dc5b55e67cd076e33f37f7db8d9e9f1e5f0ae2b388",
+      "fully_read": true,
+      "disposition": "No finding: typed shared state and trigger-chain checks feed existing coalesced workqueue without new I/O owner."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/credential_source_state.rs",
+      "sha256": "f10bce1fd96d68c07f83078cefac175fa1d197852e0fab4b54c11111759ac59e",
+      "fully_read": true,
+      "disposition": "ARCH-105: unqualified logical-key result slot admits orphan or replacement-source results."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/frontend_ca_ref.rs",
+      "sha256": "c6e878041849e49c1d483fca06a804b9db48f5250de1efcaccfcf221f1095e79",
+      "fully_read": true,
+      "disposition": "No finding: typed Secret/ConfigMap keys reuse canonical bidirectional manager and preserve reverse requeues."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/gateway_route_index.rs",
+      "sha256": "dd97ffae56c6c1c850d22dcf454e50bc6df307edcad334894bda41d359eb68a4",
+      "fully_read": true,
+      "disposition": "No finding: dependency index, accepted-listener accounting and published serving state have distinct roles; replacement requeues dropped dependencies and excludes secrets."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handler.rs",
+      "sha256": "ce2416a1a0718797805e39ddb959be7d25bbfd15d4e0bf4c577e3eb2be751282",
+      "fully_read": true,
+      "disposition": "No finding: synchronous finalization and asynchronous post-publication hooks serve distinct actual ownership checks."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/listener_port_manager.rs",
+      "sha256": "5329d77a6be326e9ad1f3847efe3100cdd49270598ce9db3d728f2fe434dca9b",
+      "fully_read": true,
+      "disposition": "No finding: replacement registration, deterministic peers and intra-Gateway scope verified; runtime reset retention explicit."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/mod.rs",
+      "sha256": "3b2849d6f7abd5b6b5935ea2e7144fd5de8a283c7d9e9ade51ebd5ebfeccf680",
+      "fully_read": true,
+      "disposition": "No finding: actual exports/aliases/runtime consumers match ownership."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/namespace_store.rs",
+      "sha256": "3e317865ab40d5454c61b481b22cc6be34f62c6df7415a996adc478efa768658",
+      "fully_read": true,
+      "disposition": "ARCH-100: invalid expression cardinality, including empty NotIn, accepted by namespace gate."
+    }
+  ],
+  "candidates": [
+    "ARCH-099",
+    "ARCH-100",
+    "ARCH-105"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original retained; only root applies."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full retained index."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full retained graded gates."
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full retained workflow; current1-135 reread."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full retained index."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full retained routing."
+    },
+    "skills/01-architecture/01-controller/05-resource-processor.md": {
+      "sha256": "2f557ac0077fe0fefc39e77522f96edc8f3d660c47d4aec848ec8cf6943ee4c6",
+      "scope": "Full retained source/derived/serial ownership."
+    },
+    "skills/01-architecture/01-controller/06-requeue-mechanism.md": {
+      "sha256": "d2b23a830ad3f51194502009c736ff89d1011464e58050e510f034c293083b52",
+      "scope": "Full."
+    },
+    "skills/01-architecture/05-resources/SKILL.md": {
+      "sha256": "dae4740e05545a9d674199070cc49a6559fd921e69ae0d08dab19dc51d3efef6",
+      "scope": "Full."
+    },
+    "skills/01-architecture/05-resources/01-gateway.md": {
+      "sha256": "0109ce331cede4bd6b8420f3d3505e259e153463c8cc77aa70d2f9b458fa1c71",
+      "scope": "Full."
+    },
+    "skills/01-architecture/05-resources/12-backend-tls-policy.md": {
+      "sha256": "00653583de1c3704225665a061ef4310303162d1dcea345a77bd0db8b010348c",
+      "scope": "Full."
+    },
+    "skills/01-architecture/05-resources/18-link-sys.md": {
+      "sha256": "13c207c66db843cc04757f4c80a1044796ea2df2a544c016ab0083e7842867f4",
+      "scope": "Full."
+    },
+    "skills/02-features/03-resources/01-gateway.md": {
+      "sha256": "b826f4b1732e17e0f6a3d9b6a87839d9c79b2979fbddfd181d81708cd4d8f420",
+      "scope": "Full; stale cross-Gateway listener prose noted."
+    },
+    "skills/04-review/routing/SKILL.md": {
+      "sha256": "a6ddc1d0d71b94b8ce7758a52ef261b35caff48be4925806c90dfe81fc1083f4",
+      "scope": "Full."
+    },
+    "skills/04-review/listeners/SKILL.md": {
+      "sha256": "c53b400b6d1bb0b5e88b5c6ea4a485e91cf60a84ad02ebe56974d83c9922dbe2",
+      "scope": "Full."
+    },
+    "skills/04-review/handler-requeue/SKILL.md": {
+      "sha256": "4a0ed8f3890f002cf754c9d2f58aa4f7ed5c03713f7e1b80cb3a43f5facc8e4c",
+      "scope": "Full."
+    },
+    "skills/04-review/handler-requeue/mandatory-design/handler-requeue-rule.md": {
+      "sha256": "4d089de595f7c2f7816d25fff9f600a9aebfda3c29d83e77621e085faaf7f586",
+      "scope": "Full."
+    },
+    "skills/04-review/handler-requeue/regression-guards/backend-tls-winner-single-snapshot.md": {
+      "sha256": "15eaa78693611752cf77b3dd5c0262457be0ddd8f223ebfc07654ebab72c8dd9",
+      "scope": "Full."
+    },
+    "skills/04-review/status/regression-guards/deterministic-condition-messages.md": {
+      "sha256": "6d3711af111fc2b149975f4ec7bc07853b4e538aa229e5d04bbcdfe5c4d62dba",
+      "scope": "Full."
+    },
+    "skills/04-review/security/intentional-design/credential-copy-retention.md": {
+      "sha256": "10a0159a28ac80b65e5fb4225f67a47a84a72acbfad7254e8506eae5e78f350c",
+      "scope": "Full."
+    },
+    "skills/04-review/link-sys/regression-guards/credential-source-single-active-memory.md": {
+      "sha256": "96c81237b267c878158885747fef6a86bdc5a6d99c0a6a1a414fa3fe8558b847",
+      "scope": "Full."
+    },
+    "skills/04-review/controller/regression-guards/source-scoped-watch-snapshots.md": {
+      "sha256": "c8a7d7cda326b64a7358ab8cfa34002aaa253ef94e731ac86bc0cc8a3fe75d05",
+      "scope": "Full retained."
+    },
+    "skills/04-review/handler-requeue/regression-guards/controller-derived-fields-use-processed-cache.md": {
+      "sha256": "ea1740197124bb149e0b0fdbb577c7e82dae7910cacfda2936d0b16fd6631045",
+      "scope": "Full retained."
+    },
+    "tasks/pending/resource-reference-contract/01-spec.md": {
+      "sha256": "a01c94e7b47eba2046275fdaafde4be16b71ae053a8ba619dec8656a723a8678",
+      "scope": "90-107,768-776,905-918,1192-1202."
+    },
+    "tasks/pending/resource-reference-contract/04-implementation.md": {
+      "sha256": "d0a13c60405cf25ecca45b130877d3eaffac8ba2d5439255808085726de0245b",
+      "scope": "288-311."
+    },
+    "edgion-controller/src/conf_mgr/runtime.rs": {
+      "sha256": "4894a9456643f62b21dd1dc39984acf71696d0f5e5e58a85b119778af92ce811",
+      "scope": "Full."
+    },
+    "edgion-controller/src/conf_mgr/processor_registry.rs": {
+      "sha256": "942b87b4b68b78c3001f65a04f9621e86d6c0e762915e5054c630b2f5c53ca35",
+      "scope": "195-230."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/ref_manager.rs": {
+      "sha256": "4afcf6a056dd50a86d0db0bd0fe17c8cd5017ee5186d53f1c457a1ce00991d4f",
+      "scope": "Full."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs": {
+      "sha256": "23057df0f04ed113a72fa1b42fb5344153c3ae8cff526e030878c8091fc92bd6",
+      "scope": "572-584,765-785,865-880,910-943 retained,956-978."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/route_utils.rs": {
+      "sha256": "40750b718b634fb69dd713512428742694abbfc033a2d66ddb6b0d9d94c39393",
+      "scope": "325-367,469-568,640-699,747-825."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/gateway.rs": {
+      "sha256": "3d241427e284a97f50eff549b41ef8df8f060a6b568c39216fc1efe6c08e9304",
+      "scope": "483-601,705-753,920-1020,1025-1058,1721-1785."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/backend_tls_policy.rs": {
+      "sha256": "db90d7dba9390d47a77cc7d4c0ae3f70d0ace74b5ca7c600f694cd96a749bc7c",
+      "scope": "255-286,380-489,545-596."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_backend_traffic_policy.rs": {
+      "sha256": "7925d76536c03b8f126cb42fc62797c98be7d057649762b4c8e1c4809e9f6807",
+      "scope": "85-110,533-578."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs": {
+      "sha256": "391ccbd543ed243c4c10029c1c7938e10346624ca0afcfda0768902237e895c4",
+      "scope": "194-271,300-320,354-383."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs": {
+      "sha256": "9a6ed6dbb4caa2a8a6a5b9bee0e9a9d75344edd9aad3b9eeee5dccc6413dc16a",
+      "scope": "235-256,387-407."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/secret.rs": {
+      "sha256": "0b6659cd96e2f2ab4ac24dfbae4e6f2e0e5660b882ab5d3eb39232004f544a63",
+      "scope": "1-82."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/configmap.rs": {
+      "sha256": "9938a4f58a781756e1f1ccebd2fd192f486c8e58f26f788709a91dc0aa472521",
+      "scope": "1-74."
+    },
+    "edgion-controller/src/services/credential_manager/service.rs": {
+      "sha256": "bdf9bf07f20a8c9c60651f2ed55bc2e888ad6dbeb8c3b2b72fd704ddf48c9936",
+      "scope": "SourceState/job declarations;300-435,440-557,943-1040,1150-1188,1527-1658,1694-1749; lifecycle selections."
+    },
+    "edgion-controller/tests/unit/services/credential_manager/service_test/tests_memory.rs": {
+      "sha256": "d4e27e26e7bfafd5821aa36b7c45b0abcbba5c6c115fcf13556a798851f49633",
+      "scope": "1-150,350-440."
+    },
+    "edgion-resources/src/resources/gateway.rs": {
+      "sha256": "b3ee91f3d6fa041087bc5b9c868a59abccac73089b015f5b159c498e986887a2",
+      "scope": "458-490."
+    },
+    "edgion-resources/src/resources/refs/owned.rs": {
+      "sha256": "af783c0534b07590ebb900e8d8e0411683f0b5a98e63e59eaf8c6d3dbf36ea48",
+      "scope": "96-145."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/kubernetes/controller.rs": {
+      "sha256": "b95813757f11423fc964a8ec9286be4cf4f891f09b4849b5e79fce6eca067897",
+      "scope": "459-614."
+    },
+    "config/crd/gateway-api/gateway-api-standard-v1.6.2.yaml": {
+      "sha256": "faede450fa178126aba41337737b97d351ebe87d93c910237ce1e072d1ca40d9",
+      "scope": "1950-2005,2486-2618,4160-4205; Selector/from/CEL search."
+    },
+    "Cargo.lock": {
+      "sha256": "18b7b7dee01e024ab6d21f5692ce04a343c4fb265092c7f587099e91c28bea17",
+      "scope": "kube-core2.0.1/k8s-openapi0.26.1 pins."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/kube-core-2.0.1/src/labels.rs": {
+      "sha256": "e15799a724ab0d74bbfc54387db936d4e1c54b5a66b33effee8c8a25e487405d",
+      "scope": "1-365 implementation;365-430 tests."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/route_utils_test.rs": {
+      "sha256": "b23d85d9308353c09d0f04ba23f72d5c3b794f568ccd894eb2546289cad98658",
+      "scope": "1-176,320-462."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/attached_route_tracker_test.rs": {
+      "sha256": "9b751c9ba6a25ea2ad0341ea2a3640f2ef5f8bb62a7687d8a643ae98550182ac",
+      "scope": "Full actual test bodies."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/backend_tls_policy_ref_test.rs": {
+      "sha256": "07130db3eff0259fcd21d5e9fd134b2b62108cdaa410a0b434c48150f7e65fbc",
+      "scope": "Full actual test bodies."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/credential_source_state_test.rs": {
+      "sha256": "53699294851fe589b41c55409038a6bded9921084e32e8fb0141cd3ff25a328c",
+      "scope": "Full actual test bodies."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/gateway_route_index_test.rs": {
+      "sha256": "d59f6a4585d7d06f8127369ccfe1c649cc40325290feace2ef8d0fb729165a83",
+      "scope": "Full actual test bodies."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/listener_port_manager_test.rs": {
+      "sha256": "83eceb9cd3959c19f711c6cd8147cc0a0a952e028a35900e4bb54f42bce445b6",
+      "scope": "Full actual test bodies."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/namespace_store_test.rs": {
+      "sha256": "cc56113cdc6965ab7f00519b074455dbe016628e9f91df8aff2f3069bd5edff3",
+      "scope": "Full actual test bodies."
+    }
+  },
+  "limits": [
+    "Static source review; no writes/builds/tests/application/Git/network by analyst; support zero primary credit.",
+    "Context-only route_utils344-346 accepts Selector with no selector; current test expects it but feature/schema require selector. Separate contract conflict excluded from100.",
+    "Gateway feature page cross-Gateway conflict prose is stale versus current implementation/tests/architecture intra-Gateway scope; no scope expansion."
+  ]
+}

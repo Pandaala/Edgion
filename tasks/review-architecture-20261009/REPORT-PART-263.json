@@ -1,0 +1,60 @@
+{
+  "partition": "PART-263",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/config/edgion_gateway/conf_handler_impl.rs",
+      "sha256": "f7d679ec4910f557b624ed08ec1e4fd6973e65df71396294d3e97b459319b9f1",
+      "fully_read": true,
+      "disposition": "Full 591-line implementation read; cold resolved runtime/body/DNS, stable weak listener handles, per-EGC publication, deterministic globals and incremental input forwarding are justified. No separate EGC finding."
+    },
+    {
+      "path": "edgion-gateway/src/config/edgion_gateway/mod.rs",
+      "sha256": "79404296714f810715a82f0347d7925407a98886fbdddfc8b7524d4efc57bdb8",
+      "fully_read": true,
+      "disposition": "Full read; cohesive configuration facade."
+    },
+    {
+      "path": "edgion-gateway/src/config/gateway_class/conf_handler_impl.rs",
+      "sha256": "99e31d12222574f28fcdf0750905aabd2cf9653357a1ec82fd810ca7bdd808fd",
+      "fully_read": true,
+      "disposition": "Full 117-line implementation read; canonical publication/adaptive callbacks appropriate; owned full-object mirror only has diagnostic production count (ARCH014)."
+    },
+    {
+      "path": "edgion-gateway/src/config/gateway_class/mod.rs",
+      "sha256": "67a0058b3a40c5c8917560674d98a2c8b812b03f9312ba5e0899145a1ff106c9",
+      "fully_read": true,
+      "disposition": "Full read; cohesive configuration facade."
+    },
+    {
+      "path": "edgion-gateway/src/config/mod.rs",
+      "sha256": "0cdfc6ed45ad6ed9635655793d5ff166c457cd6bf96767e956cce87f24c4fea3",
+      "fully_read": true,
+      "disposition": "Full read; cohesive configuration facade."
+    }
+  ],
+  "candidates": [
+    "ARCH-014"
+  ],
+  "support": {
+    "edgion-gateway/src/api/mod.rs": "a7b6ba1fd44e1b5f7dad36c738e970bbf7b31e95b2cd5de73820904271de9662",
+    "edgion-gateway/src/conf_sync/cache_client/cache.rs": "0fc6aef9f8b121b4db739bc1e9183a1f05f819f8aaf4884fa15f9282fa1f2b5e",
+    "edgion-gateway/src/conf_sync/cache_client/cache_data.rs": "9361e1bddb3532af21675b5b5564383654e0f3fe7cdd6aa71ca794b7ad0a7d55",
+    "edgion-gateway/src/conf_sync/conf_client/config_client.rs": "1c3568262e1c01287a6abd82514b87d1ba069c578d46a353865b02c113d638af",
+    "edgion-gateway/src/plugins/publication/publisher.rs": "ad317dc250d7eae46decb51ed2484aadbc8d21ce449b3fbef292ed1f10f45983",
+    "edgion-gateway/src/runtime/server/base.rs": "25e86709b8bff3d663e5f4951dbc690bbbd965ff249ee694a0cb3e6cf9b341f8",
+    "edgion-gateway/src/routes/http/proxy_http/pg_new_ctx.rs": "09b3558e6e0cf7a441f7634155cba5c59a14fa05aa68a43d460790c261e1cb51",
+    "skills/04-review/http-body/mandatory-design/request-body-policy-egc-hot-reload.md": "1f9638edc6bed623361d760a6b33e42cb4073df1cca456d55cb6479823f638a9",
+    "skills/04-review/resources/regression-guards/edgion-gateway-config-global-aggregation-deterministic.md": "564e678d959edd1ec3082ba68af32cdc9b182fa0397663f2b5724c60c3e65699",
+    "skills/04-review/listeners/regression-guards/egc-runtime-snapshot-publication.md": "8409d3f3c1d7f90b9afd375b9bb6e1828f67aedd88e95a2de93f04c3cfef4750",
+    "skills/04-review/plugin-runtime/regression-guards/scoped-policy-runtime-publication.md": "487b19a41c8f05d36f0b1519133b8c1b834270c34e8120078a3d62235d900d5f",
+    "skills/01-architecture/05-resources/02-gateway-class.md": "554568bb2b6458078842973040cdcd55746401b96edab0ff538df657d0966af2",
+    "edgion-gateway/tests/support/config/gateway_class/conf_handler_impl_test/20_function_item.rs": "22a5768a12cd118d7527120b2d93459c42c8c989fba1b146ccf01ebfab470c9a",
+    "edgion-gateway/tests/support/config/gateway_class/conf_handler_impl_test/28_function_item.rs": "3293f3ec45e25f3b46852962fc4f6a973ccbc5ee63adddd53c9589fb3f84c0a0",
+    "edgion-gateway/tests/unit/config/gateway_class/conf_handler_impl_test.rs": "26d700bba16e73a97ae2d3966c7f14550a97cf1d30cd2c9ef001bd471a2c9a12",
+    "edgion-gateway/tests/unit/config/edgion_gateway/conf_handler_impl_test.rs": "5d99bfacab2cfc729ab92db1a88a033d143c6a02d73ec4f7de2b1ecea7642671"
+  },
+  "support_scope": "GatewayClass test/support functions fully read; EGC tests inspected at binding/concurrent publication/runtime pin/aggregation cases; larger production sources read at relevant seams.",
+  "limitations": "No executed tests/builds/measurements. Separate publication boundaries intentional; stale GatewayClass architecture mirror statement recorded in candidate."
+}

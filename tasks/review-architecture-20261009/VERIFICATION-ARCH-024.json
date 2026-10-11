@@ -1,0 +1,20 @@
+{
+  "reviewer": "/root/verify_seed",
+  "complete": true,
+  "disposition": "confirmed",
+  "approved_input_sha256": "b6a50af951e1d2be6e91197635cd402995be69ba84bd667b014032bd6b7a9ece",
+  "approved_claim_sha256": "6b411491fb79319e41f201a16c7d507ad18f3845f5e3f48b375d1e44e7ea753a",
+  "evidence": {
+    "edgion-gateway/src/backends/policy/backend_traffic/store.rs": "0a35add8c64ab31f105772c87d9e80182ca68e265e1b750fd7221125cc321610",
+    "edgion-resources/src/resources/edgion_backend_traffic_policy.rs": "fad34c6fa53efb534a02987098ceb7ffba45f3a4bc67bddfe66923db75a42c6e",
+    "skills/04-review/backends/regression-guards/ebtp-atomic-service-snapshot.md": "fd5fb614710952666de22b0caa0a2325787c468b04ca02f3a0629a8c18c0d7be",
+    "edgion-gateway/src/conf_sync/cache_client/cache_data.rs": "9361e1bddb3532af21675b5b5564383654e0f3fe7cdd6aa71ca794b7ad0a7d55",
+    "edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs": "81db42781da15c030a91759b7b38b9492ac9a796c597d26fc70be5967309930f",
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs": "23057df0f04ed113a72fa1b42fb5344153c3ae8cff526e030878c8091fc92bd6",
+    "edgion-controller/src/conf_sync/cache_server/cache.rs": "aadad5a4f36ed54e6b0ca3142bba5e23e02f3ddae99ce147035c10b43228ac76",
+    "edgion-gateway/src/backends/policy/backend_tls/backend_tls_policy_store.rs": "e3ee25cd2f617d6655197fafd0b0dfa5496a9d0ce17ae5e17cbc0ac7395fbc1b",
+    "edgion-gateway/tests/unit/conf_sync/cache_client/cache_data_test.rs": "60cf4d5bfe8739466c9f8780f26646b0517c3240a67b4089ce6b0b66f203bbe5",
+    "skills/04-review/concurrency/intentional-design/partial-update-under-lock-intentional.md": "7d3eaf47879362b6abb6b3b6fe68fae63efb14fd1e026dd493ef4b737d294f20"
+  },
+  "limits": "Static ownership/storage and supported-input derivation. No heap benchmark or executed reproducer; current ordinary Controller emits Update even at creation. No primary coverage credit."
+}

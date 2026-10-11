@@ -1,0 +1,109 @@
+{
+  "candidate": "ARCH-338",
+  "complete": true,
+  "verifier": "/root/verify_ip_union",
+  "decision": "confirmed-with-revision",
+  "input_sha256": "6d6c415f2724c8616050368e0da6d8e02f36358b2333290b4f82ec3437863e34",
+  "approved_claim_sha256": "7ecebe7555d2d48862be920dd71e6abe8b1afa6251d140309e2ab823ff803e05",
+  "evidence": [
+    "Blanket connection/RPC-error acceptance confirmed by actual fixture and producer; no executed incident.",
+    "Material correction: gRPC-aware HTTP lookup miss returnsHTTP200/application-grpc/status5; native-table miss returns12.",
+    "ExistingRawH2Conn/protobuf/wire-inspection precedent supports bounded response evidence and cleanup without new framework."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Retained full original rules fresh unchanged hash; no nested rules."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Retained full original index."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Retained full graded gates."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Retained full original current routing."
+    },
+    "skills/04-review/routing/regression-guards/route-listener-protocol-acceptance-parity.md": {
+      "sha256": "c7d1df529e267aa88f8a299e3762120d15fb46207b492c3959ee491c19d83879",
+      "scope": "Fresh full original kind narrowing/parent rejection contract."
+    },
+    "skills/04-review/h2-grpc/compatibility-constraints/trailers-only-three-frame.md": {
+      "sha256": "6057a287a02170909298c8d4990fc2340b67eab83e92b3a08727880609fa033c",
+      "scope": "Fresh full original current single-frame contract versus superseded divergence."
+    },
+    "skills/04-review/h2-grpc/regression-guards/negative-tests-need-out-of-band-observation.md": {
+      "sha256": "c3e2736037ff556af13a4d502d4e749120f1fa8a6c49a933a30bcdc5e58e6caa",
+      "scope": "Fresh full original negative discrimination and historical limits."
+    },
+    "skills/01-architecture/02-gateway/03-routes/02-grpc-route.md": {
+      "sha256": "36f180a76de00afb118ccd2c614499cca37a8b05d75850b887c347470a3ff928",
+      "scope": "1-155 current per-listener tables/fallback ownership."
+    },
+    "edgion-tests/src/client/suites/gateway/allowed_routes/kinds.rs": {
+      "sha256": "d61b1affeb3fa829488990bee2de8cd41917e23d80f5e62a209c28e4b506df6b",
+      "scope": "Full both cases and registration independently read."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/route_utils.rs": {
+      "sha256": "40750b718b634fb69dd713512428742694abbfc033a2d66ddb6b0d9d94c39393",
+      "scope": "401-605 actual protocol/kind/namespace/hostname/parent gates."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/status_utils.rs": {
+      "sha256": "21d226ee58ab080de243eba391c85f3ef4a7ce0f2a68583b15c7074ac364e065",
+      "scope": "158-185 NotAllowedByListenerKind mapping."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/grpc_route.rs": {
+      "sha256": "f4897a5813a13011b62c8320ebd332cb5248c0631fd04857d1ef8d8597437b8f",
+      "scope": "580-660 generation-owned parent conditions."
+    },
+    "edgion-gateway/src/routes/grpc/conf_handler_impl.rs": {
+      "sha256": "4826f60ab822b49bc2f95b005ec67b523b4d1a69c887af7736d78a52c301a351",
+      "scope": "147-235 accepted parent filter."
+    },
+    "edgion-gateway/src/routes/common.rs": {
+      "sha256": "7ccb9f73d649102e16c4eaa34371b008cb5825b405aac1da102de27b293df28c",
+      "scope": "106-225 canonical parent/controller identity."
+    },
+    "edgion-gateway/src/routes/grpc/routes_mgr.rs": {
+      "sha256": "a172e903070b5863a4b82124c5304eee13803d70193caf1c801f54cf4879cc90",
+      "scope": "85-140,235-275 per-listener has_routes/empty table."
+    },
+    "edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs": {
+      "sha256": "87182925d95a051b181344926bd6dd1912283178bfd7f0df40aec83e63178d2a",
+      "scope": "115-232,620-655 table/fallback/protocol detection."
+    },
+    "edgion-gateway/src/runtime/server/error_response.rs": {
+      "sha256": "996e89144485d877e11d235f2c4ae58885676e19f11689b879be080a2844d818",
+      "scope": "1-210,275-360 canonical writer/404->5/501->12."
+    },
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "1eb27bded8bcb40a82ea3cfd4ed6f20d386deedd1f349c7035a226fd44739454",
+      "scope": "3550-3605 actualSayHelloOK producer."
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "535-590 actual owning deadline."
+    },
+    "edgion-tests/src/client/transport.rs": {
+      "sha256": "4898c15701ec31b3a7bfacce302d6319597d382c7d048198c57dd0fa2986e3a3",
+      "scope": "515-583 RawH2Conn/connect/send/Drop abort."
+    },
+    "edgion-tests/src/client/suites/edgion_plugins/dsl/grpc_error.rs": {
+      "sha256": "7da99bdb9a6a1b9490136d71353f96bfff0f17a0980e32ab59c25ca30c111ff3",
+      "scope": "1-126 actual protobuf native wire-inspection precedent."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/route_utils_test.rs": {
+      "sha256": "b23d85d9308353c09d0f04ba23f72d5c3b794f568ccd894eb2546289cad98658",
+      "scope": "82-184 complete explicit-route-kind protocol regression."
+    },
+    "edgion-gateway/tests/unit/runtime/server/error_response_test.rs": {
+      "sha256": "94f7d9385522e66ff841c760c5bcb54b8c3660f1eb338c9b87d2e6ed324fe57f",
+      "scope": "185-234,350-370 actual wire fields and stale terminal removal."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

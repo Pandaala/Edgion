@@ -1,0 +1,63 @@
+{
+  "partition": "PART-501",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/matched_route_meta/matched_route_meta.rs",
+      "sha256": "8a5cb58b85776d0945e0f334dc161939a4222393cc6a54d5b2ef12064247a4c9",
+      "fully_read": true,
+      "disposition": "Full1-107; Canonical CtxSet/matchedroute selector/explicit AccessLogExtern/W3C terminal log; actual metadata five values/dottedslash key. Accepted, same296literal31180 onlypending."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/matched_route_meta/mod.rs",
+      "sha256": "87c13e234cd11782d40cce19f4e7cdaa36969fa6609d72a4acd39eb8ee2ebb12",
+      "fully_read": true,
+      "disposition": "Full1-5; Minimal actual export accepted."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "edgion-tests/integration/conf/EdgionPlugins/MatchedRouteMeta/01_EdgionPlugins_matched-route-meta.yaml": {
+      "sha256": "546296aacb23b9a687559bbe2eae29f866443271afd30a4e0d38975ac995339e",
+      "scope": "Full1-24 local actual metadata plugin."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/MatchedRouteMeta/01_EdgionPlugins_matched-route-meta.yaml": {
+      "sha256": "546296aacb23b9a687559bbe2eae29f866443271afd30a4e0d38975ac995339e",
+      "scope": "Full1-24 local actual metadata plugin."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/MatchedRouteMeta/02_HTTPRoute_matched-route-meta.yaml": {
+      "sha256": "f8dd7f58cb95388c7555ead8207a0857334376832504d8c8f4e624cd9860200a",
+      "scope": "Full1-35 actual K8s route; EOF correction accepted."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/MatchedRouteMeta/02_HTTPRoute_matched-route-meta.yaml": {
+      "sha256": "f8dd7f58cb95388c7555ead8207a0857334376832504d8c8f4e624cd9860200a",
+      "scope": "Full1-35 actual K8s route; EOF correction accepted."
+    },
+    "edgion-gateway/src/plugins/runtime/session_adapter.rs": {
+      "sha256": "54470cf128baa1a7510be8a49c1d35e70d5d680f540f43b39b09c0be8d0b7566",
+      "scope": "297-325,1080-1096 actual selectors/matchedroute owner."
+    },
+    "edgion-gateway/tests/unit/plugins/runtime/session_adapter_test/route_meta_tests.rs": {
+      "sha256": "4f8f85338bfc3cf2d0900b255dc4694a27838fca98fd71c9d516ea98030f0615",
+      "scope": "Full1-38 positive/missing/unknown selectors realunit."
+    },
+    "edgion-tests/src/client/access_log_client.rs": {
+      "sha256": "f7691b8ad4c8765a0ab446c414a1596df48c930d8472678d724f918edcf84d55",
+      "scope": "1-95,334-412 trace normalization/strictretrieval/retries realunits."
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "100-140,196-241,608-825 URL/context/mappedwrapper/per-suite listener owner."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "1565-1623,1768-1804,3015-3038,3840-3955 mapping/registry/invocation."
+    },
+    "skills/04-review/testing/regression-guards/integration-port-selection-must-fail-closed.md": {
+      "sha256": "c2ff61188030d30484afd0c1323201295fb980755c3e4738fe78dd8eea785b89",
+      "scope": "Full1-26 original listener contract."
+    }
+  },
+  "limits": "Same296 supplement request32 hardcodes31180 despite EdgionPlugins resolvedHTTP context, pendingindependentextension. Full both three-file fixtures/baseGateways/crossnamespacegrant/ports/templates/actual adapterctxmeta units/original runtime-template85/ctx-set60/claims53/accesslog/pglogging/logext/CtxSet read. Masking falsification: both harnessconfigs explicitly modeoff, productionreplace default retained; expected plaintext not defect. Original personalrules fresh/no nested. No execution/mutation/transportguarantee/broad absencecoverage, supports zero."
+}

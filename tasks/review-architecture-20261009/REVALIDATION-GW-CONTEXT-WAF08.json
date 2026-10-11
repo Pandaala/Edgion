@@ -1,0 +1,19 @@
+{
+  "partition": "GW-CONTEXT",
+  "analyst": "/root/analyze_session",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/ctx.rs",
+      "sha256": "dd23711a474df4122dd3b0264c7293366c27ba2688a9eb390b24e842f6e6335d",
+      "fully_read": true,
+      "disposition": "Full current reread; existing feature/body/query ownership candidates remain, new bounded WAF hard admission/native-body and terminal lifecycle assessed, no additional root."
+    }
+  ],
+  "candidates": [
+    "ARCH-004"
+  ],
+  "source_lines_total_refresh": 5526,
+  "support_scope": "Current Stage C/D/E original plans, hard admission/mutation pair, body storage/capture/replay/native upgrade and actual cache query callers/tests. All eight current primaries fully reread, secondary seams only.",
+  "limits": "No new candidate or executions. Current Stage E documents accept runtime pinned incompatible pair validation; no transient WAF issue."
+}

@@ -1,0 +1,191 @@
+{
+  "partition": "PART-407",
+  "analyst": "/root/verify_ip_union",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/credential/ca_refs.rs",
+      "sha256": "c7bc5622cfebe43108a7aa076a1e10a40dd5f69d338ced62ebcd55be6ec5c5f0",
+      "fully_read": true,
+      "disposition": "No newfinding: actual DirectSameNs healthcaller rejects crossNS before helper; typedTLS acquisition/ConfigMap provenance/ordinarySecret marker removal intentional; legacy migration pendingreferencecontract."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/credential/egc_tls.rs",
+      "sha256": "3ed2e84a090e71cf77947f96f52f930b2e6d39fcf3652fba76a5ee0d980e4595",
+      "fully_read": true,
+      "disposition": "No finding: private administrative selections enforce actualclusterowner/explicitnamespace, recovery dependencies/independentCAclient outcomes, no fabricatedGrant."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/credential/mod.rs",
+      "sha256": "99202293add521020c21755d47478f30ff5e32d570ae90639dedd5be58ef13dc",
+      "fully_read": true,
+      "disposition": "No newfinding: exports connect realtyped/legacy consumers; cosmeticcleanup rejected and finite migration alreadytracked."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/credential/pipeline.rs",
+      "sha256": "4a48be638ba31b9d21a04a7ac09aae33af71d88ceb6be561460b3925b5d1683d",
+      "fully_read": true,
+      "disposition": "No newfinding: boundidentity checks before reads, dependencies beforegrant, authorizationrevision andreadonly parity; actuallegacyACME/health validatefirst, migrationtracked."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/credential/request_secrets.rs",
+      "sha256": "095427e1c1a78dbe1b9954b6c1b7523a08ba3bc683a87085d459abfdce54cae5",
+      "fully_read": true,
+      "disposition": "ARCH108: readonly errors-only statuscollects copies ofsuccessfulvalues andmap onlytodiscard."
+    }
+  ],
+  "candidates": [
+    "ARCH-108"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full retained original; onlyroot applies."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full current index."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full retained/currentapplicable rows."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full retained."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full retained."
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full retained."
+    },
+    "skills/01-architecture/00-common/05-unification-points.md": {
+      "sha256": "011c7e0897b5af81b6459096b678774d9ac988843f705295ecc559d8892d7d92",
+      "scope": "1-110 current; retained outboundTLS/egress."
+    },
+    "skills/01-architecture/05-resources/03-edgion-gateway-config.md": {
+      "sha256": "ab268064136a95a18b3c11dda741b5e4f0eba2418b75aacd3ab3f3b9a9f85ad4",
+      "scope": "Full current administrativeTLS/status."
+    },
+    "skills/01-architecture/05-resources/11-reference-grant.md": {
+      "sha256": "d184efdff0daa2d47007aafa95739a91e896f94c0484d474d6a3c5cb75d10350",
+      "scope": "Full current; staleEGCrow recorded."
+    },
+    "skills/01-architecture/05-resources/13-edgion-plugins.md": {
+      "sha256": "176b34ceae236190b76fd70c9fa3543cbbdee97ed8223420f8dc1379d480b35d",
+      "scope": "145-180 current; retained credentialsections."
+    },
+    "skills/04-review/plugin-runtime/regression-guards/request-template-policy-unification.md": {
+      "sha256": "413004f76a11df4ef914bc1fb625dba4fa25602d6bf8ac8b25b66d62c3d49e7a",
+      "scope": "Full current separate ranges."
+    },
+    "skills/04-review/security/intentional-design/credential-copy-retention.md": {
+      "sha256": "10a0159a28ac80b65e5fb4225f67a47a84a72acbfad7254e8506eae5e78f350c",
+      "scope": "Full retained unchanged."
+    },
+    "skills/03-coding/01-log-safety.md": {
+      "sha256": "74591411c294befded433b7c2be571202deb22ef36030a704caa60055f214863",
+      "scope": "1-130 current; fullretained."
+    },
+    "tasks/pending/resource-reference-contract/01-spec.md": {
+      "sha256": "a01c94e7b47eba2046275fdaafde4be16b71ae053a8ba619dec8656a723a8678",
+      "scope": "520-570 current; retainedsource/output/frozenboundary."
+    },
+    "tasks/pending/resource-reference-contract/04-implementation.md": {
+      "sha256": "d0a13c60405cf25ecca45b130877d3eaffac8ba2d5439255808085726de0245b",
+      "scope": "510-650 template/EGC."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/mod.rs": {
+      "sha256": "8c80f278c5c1a7594a7a6c57aedf50495887c73abfc0fbdd9a4e0adbbb1f5236",
+      "scope": "1-155 boundstatusvisitor."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/managed_http.rs": {
+      "sha256": "58cd45788f46946fc975fd4f87d767383d222af3f98f9e73b2a592b9c8ee0bc3",
+      "scope": "Full materialproducer/allstageclear."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs": {
+      "sha256": "9a6ed6dbb4caa2a8a6a5b9bee0e9a9d75344edd9aad3b9eeee5dccc6413dc16a",
+      "scope": "465-505 realstatusinvocation."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs": {
+      "sha256": "391ccbd543ed243c4c10029c1c7938e10346624ca0afcfda0768902237e895c4",
+      "scope": "440-555,630-685 auth/Webhook producers."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/route_auth.rs": {
+      "sha256": "ac3c4f0a4e9e820fd2f7a8788415b2c6dfdbc1cec1dbc7434a98c3e9b1536b07",
+      "scope": "150-240 readonlyretainsrealvalues."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_gateway_config.rs": {
+      "sha256": "07f270a10221f384105822bf2cb6e48bdbc98c52575c3ffa3f176ae47a06d570",
+      "scope": "1-155,160-170 lifecycle/acquisition/status."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_backend_traffic_policy.rs": {
+      "sha256": "7925d76536c03b8f126cb42fc62797c98be7d057649762b4c8e1c4809e9f6807",
+      "scope": "270-380 sameNSprecheck/CAcaller."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_acme.rs": {
+      "sha256": "681f1c599d034b0ed96e9495ade9b7d3712119259f1c2b3249f51ef5d0b667f8",
+      "scope": "150-235 strictguardbeforelegacyresolver."
+    },
+    "edgion-resources/src/resources/health_check.rs": {
+      "sha256": "fbd67473517b907f7412ea7d05e913e6380be3e7163944fd8f2173a9640655b1",
+      "scope": "180-225 sameNSguard."
+    },
+    "edgion-resources/src/resources/refs/template_fields.rs": {
+      "sha256": "71c3a11d3efc5ea50702b91d2d8165702f32d4e64c14d48274a0eaa58a455850",
+      "scope": "Full opaqueownership."
+    },
+    "edgion-resources/src/resources/refs/plugin_fields.rs": {
+      "sha256": "4c3c891758ab704386c68867060669adc42636e92fdf6dee7b787aa4e6145307",
+      "scope": "1140-1165 supported/enablediterator."
+    },
+    "edgion-resources/src/resources/refs/link_sys_fields.rs": {
+      "sha256": "f6c90fe8d767c3867fb1301784f8965bcf7efd777e027dfc896d01b088610764",
+      "scope": "466-493 templateiterator."
+    },
+    "edgion-common/src/link_sys_core/outbound_tls.rs": {
+      "sha256": "a21de0f2f55ce08fa31cb5d9f5034e8b17c92afdf968a3f63b9333c6155567df",
+      "scope": "Full retainedPART226; current230-340,740-807 cardinality/provenance/failure."
+    },
+    "edgion-common/src/secret/secret_store.rs": {
+      "sha256": "87df9e6a37e1b5b3538a9eb8e81fb4d0bbd0b8ab87df2cfd2fdffa7649f0b6b1",
+      "scope": "Full current; getremainsownedclone."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/edgion_gateway_config_test.rs": {
+      "sha256": "c3456c499f7d84c12c4deafafb67451833bf6301790311ae643a068ac4bc2fbb",
+      "scope": "1-210,370-456,755-859."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins_test.rs": {
+      "sha256": "3cd131fcab4e744691ed943db288c06d1a35cd30197b751138282983f5a015f8",
+      "scope": "250-384,5900-5982 actual managed/status bodies."
+    },
+    "/Users/caohao/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/alloc/src/string.rs": {
+      "sha256": "f26867da19450cb50a549373c0bc29d1ac4911035e262f0854b2319edb5afd24",
+      "scope": "556-573,2325-2336 UTF8/Display."
+    },
+    "/Users/caohao/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/str/error.rs": {
+      "sha256": "f85d9bc2f78615bd24509dc7c3441859e69569768552307e71109d597ac5192a",
+      "scope": "108-137 diagnosticformat."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/credential/ca_refs_test.rs": {
+      "sha256": "00117b14071354de3ae475d97d162caeb03ee2fa2d4a7b820c0f9e9798aa4a93",
+      "scope": "Full actual test bodies."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/credential/pipeline_test.rs": {
+      "sha256": "7b8cb321447a0dd12e0a8da17dcac7abd648d6778d54661155a6d76946932e8d",
+      "scope": "Full actual test bodies."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/credential/request_secrets_test.rs": {
+      "sha256": "c30ca316638962109932c38344a440ea5130e4e982c19c3779d7c7c1b16a208d",
+      "scope": "Full actual test bodies."
+    }
+  },
+  "limits": [
+    "Static analysis; no execution/writes/network/Git; supportszero primary; ARCH109 unused.",
+    "ReferenceGrant architecture EGC row supersededby owningEGC administrative approval/currentarchitecture; staleprose only.",
+    "108 excludes existingSecretStore.getwholeSecretclone andallnecessaryruntime materialcopies; dependency-registration flagcannotstandin forvalueprojection."
+  ]
+}

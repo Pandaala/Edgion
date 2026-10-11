@@ -1,0 +1,53 @@
+{
+  "partition": "PART-474",
+  "analyst": "/root/analyze_outbound",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/edgion_config_data_managed/edgion_config_data_managed.rs",
+      "sha256": "8e2b8745dfff2e82c8199e4d70d512aa6b9d4f606bfdf6e6b57e0243e6520222",
+      "fully_read": true,
+      "disposition": "Full1-367. ARCH355 two resolution cases use structural acceptance alone; expected ConfigData existence does not prove actual owning reference."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/edgion_config_data_managed/mod.rs",
+      "sha256": "e3698d7116e7b213d8e3d7d2e5bfe106881626dad1230ee57edf263fb2a938e9",
+      "fully_read": true,
+      "disposition": "Full1-2 actual export/caller registration; no issue."
+    }
+  ],
+  "candidates": [
+    "ARCH-355"
+  ],
+  "support_selected": {
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs": {
+      "sha256": "9a6ed6dbb4caa2a8a6a5b9bee0e9a9d75344edd9aad3b9eeee5dccc6413dc16a",
+      "scope": "421-486,530-595,1040-1105 separate Accepted/ResolvedRefs and override resolver."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins_test.rs": {
+      "sha256": "f50b5c4d0c2b9ab687f84f4e688e9eb34dc64ae61e03589f49d87407ef172ccd",
+      "scope": "3055-3103,3175-3224 actual valid/missing-overlay units."
+    },
+    "edgion-tests/src/client/suites/status/helpers.rs": {
+      "sha256": "0236de331bc053f9ba00610543ef4e7a8932a9d49e129110f068091d98f823dc",
+      "scope": "Retained personal full1-244 unchanged canonical selected/native projection and actual units."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/EdgionConfigDataManaged/01_EdgionPlugins_data-managed.yaml": {
+      "sha256": "6f7c2fcae611e83b264af98bdb95a7360332f0f7166e99781e65eed89ae9e77e",
+      "scope": "Full owning reference and valid base."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/EdgionConfigDataManaged/resources.yaml": {
+      "sha256": "280beba7e2b6d0233acc0315db1330e92f92ec2e8bb3224e25a5168256996691",
+      "scope": "Full five actual fixture documents."
+    },
+    "skills/01-architecture/05-resources/15-edgion-config-data.md": {
+      "sha256": "fa43b5425b617f7e7a640f182dd527721d77dc939b56d4a2d0d25cb33c42d02e",
+      "scope": "1-110 original overlay/fail-to-base authority."
+    },
+    "skills/04-review/resources/intentional-design/edgion-config-data-managed-by-is-inert.md": {
+      "sha256": "d65933db21c3d82323b4ca10238974a48dc1b1a337671c7d522c68fcd88752dd",
+      "scope": "Full1-126 accepted metadata ownership."
+    }
+  },
+  "limits": "Complete static analysis. All five local fixtures and actual registration2871-2877 read. Selected/native Controller projection already correct, distinct ARCH266. Historical external Center references were only read in local docs, no external verification/traffic coverage. Original authority personally read/current-checked; zero supporting credit. No tests/builds/network/Git mutation."
+}

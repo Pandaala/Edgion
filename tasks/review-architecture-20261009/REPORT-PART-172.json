@@ -1,0 +1,119 @@
+{
+  "partition": "PART-172",
+  "analyst": "/root/analyze_outbound",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-waf/src/seclang/transaction.rs",
+      "sha256": "24ab89af5d00efd52f78dd5c7840ba3f0bab6b322ceae48c3a0c7b0dd4a70d26",
+      "fully_read": true,
+      "disposition": "Entire6020 lines read contiguously without gaps; frozen SHA matches actual227196 bytes. ARCH232 candidate for repeated decoded immutable source-field payload ownership across request-head collections. Other transaction lifecycle, staged TX/capture rollback, controls, generation pinning, shared matcher cache, scratch admission, structured publication and response-window mechanisms have no additional actionable finding."
+    }
+  ],
+  "candidates": [
+    "ARCH-232"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original1-464 retained, fresh unchanged; no nested WAF rules."
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full original1-134 reread."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original1-136 reread."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original1-342 retained, unchanged gates."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full original1-86 retained unchanged."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original1-78 reread."
+    },
+    "skills/04-review/waf/SKILL.md": {
+      "sha256": "a5fa47a4b94ee1edccf3f5cd07197eeb0d644f875616cd33c5976e66bc9edef9",
+      "scope": "Full original1-46 reread."
+    },
+    "skills/04-review/waf/regression-guards/fused-json-inspection.md": {
+      "sha256": "73f06b0cd3b8e083844ff91ab61f2d20e91a625aecfec8cb6eb358cd17afc6ec",
+      "scope": "Full original1-553 retained/current reads, logical versus physical accounting."
+    },
+    "skills/04-review/waf/regression-guards/native-xml-inspection.md": {
+      "sha256": "8637771db2fc67e770784955da6ece8f61a42e6a6e3a1ec6c7d39cd346f5065c",
+      "scope": "Full original1-149 retained."
+    },
+    "skills/04-review/waf/regression-guards/request-scoped-control-actions.md": {
+      "sha256": "69bb178d5ec89815b912a8db68b694987608665241cbb470eecaff4918ed213b",
+      "scope": "Full original1-56 retained."
+    },
+    "skills/04-review/waf/regression-guards/static-tag-selection-before-compilation.md": {
+      "sha256": "e307952e4bf862b18bfde1131be3f636e2c2e1625591acde8c9a3d1a00d1bd84",
+      "scope": "Full original1-74 retained."
+    },
+    "skills/04-review/waf/regression-guards/named-profile-selection-and-bundle-publication.md": {
+      "sha256": "69d48f9da9d67879916060e1a2f0b757c945d917e32626c8778414afed884621",
+      "scope": "Full original1-152 retained."
+    },
+    "skills/01-architecture/02-gateway/05-plugin-system.md": {
+      "sha256": "b650f5d2e93ab34fe8dea73cae28c88259c7dae7f41e0a4d21c8a77384880eef",
+      "scope": "Selected original1-90 canonical body and callbacks."
+    },
+    "skills/01-architecture/02-gateway/12-edgion-plugin-dev.md": {
+      "sha256": "6ab38a79d35a35280c1dbf845518da14a2d05a0d55acba1ff7db8dc7e40e4c70",
+      "scope": "Selected original1-90 freshly read plugin phases."
+    },
+    "tasks/pending/waf-optimization-design/01-spec.md": {
+      "sha256": "657aaa3f67f3de385674df6ca986ce9c0a12e1effcb0773b509272bc83f74fef",
+      "scope": "Selected original1-75,145-180,198-233 preserved logical admission and physical trajectories."
+    },
+    "edgion-waf/Cargo.toml": {
+      "sha256": "30ce2f0a77895f232e2109a11a06cc11386299d9af0af34d9a2db4bef0ea73d1",
+      "scope": "Full1-69 retained external-only leaf."
+    },
+    "edgion-waf/src/lib.rs": {
+      "sha256": "ae867774e364d711d7b2a21e4929017015a89fe910fc28a1d5a31d60d799cb07",
+      "scope": "Full1-22 retained safe boundary."
+    },
+    "edgion-waf/src/seclang/compiler.rs": {
+      "sha256": "6259ebaf9e73726d5989f08d7a48d74320183ddd419fda5c6659ded5835a3404",
+      "scope": "Full1-5618 retained previous primary; support only here."
+    },
+    "edgion-waf/src/seclang/json_inspection_runtime.rs": {
+      "sha256": "61b04310809d24edf165138f738a0505794e57d17687dd5486edcfae60e0c29b",
+      "scope": "Selected113-170,502-641 publication/parity/failure/poisoning."
+    },
+    "edgion-waf/src/seclang/xml_inspection_runtime.rs": {
+      "sha256": "48bf05b57500fc5336c128d7812b20b035297d8ae863d9c93c368a6c2b1bbd0f",
+      "scope": "Selected250-305,400-445 parity/poisoning; partial-method scope."
+    },
+    "edgion-gateway/src/plugins/http/waf/mod.rs": {
+      "sha256": "d5bca791f259c5266019e3982c9f9e84526961a3174dc7c48dc80fcba856f2c9",
+      "scope": "Selected60-250 retained,360-440,500-670,680-804 actual request/body/response/logging."
+    },
+    "edgion-waf/tests/unit/seclang/transaction_test.rs": {
+      "sha256": "3fa5407fc72b9c73b555b1dd16b1b8c505d888d6990036f7b83fbbc9d2d57285",
+      "scope": "Actual bodies427-549,595-924,1488-1655,1990-2181,2238-2443,3054-3125,3849-4118 generation/rollback/collections/budgets/body/controls/cache."
+    },
+    "edgion-gateway/tests/unit/plugins/http/waf/mod_test.rs": {
+      "sha256": "9b75f3cc3a3fb3a4db56e8fb67fbe03125908893374610e8eb592295a82d9fd6",
+      "scope": "Actual bodies304-371,472-535,631-674 duplicate headers/callback ownership/body proof/caps."
+    },
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/waf.rs": {
+      "sha256": "761bbdee08bbb2dec67731afe889348332aa8eaa6bcdbb3fe42854f43992bab4",
+      "scope": "Selected900-1005,1056-1255,1340-1372 retained shared generation/body admission."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/waf_test.rs": {
+      "sha256": "e69a8590aab6372fe61b5a2630fbdf0e2074da8fe7e2a704a384f413c8858256",
+      "scope": "Actual bodies730-870,893-949 retained validation parity."
+    }
+  },
+  "limits": "Static read-only source/test inspection; no execution or product/Git mutations. Candidate pending independent review; no measured allocation/throughput/RSS claim. Preserve nominal alias charge and first error order separately from physical reservation; semantic stage work admitted before cached evaluate. Supporting files zero primary credit. Frozen partition aggregate bytes stale; authoritative file SHA/size match."
+}

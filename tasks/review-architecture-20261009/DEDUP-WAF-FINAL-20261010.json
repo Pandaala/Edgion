@@ -1,0 +1,37 @@
+{
+  "complete": true,
+  "verifier": "/root/verify_ip_union",
+  "decision": "distinct-root-causes",
+  "primary_coverage": 0,
+  "corpus_artifacts": 133,
+  "corpus_sha256": "ca8b8dab54f46454279bf5c266da324279ffaa51c412e9407a181f79de8f1f97",
+  "corpus_hash_format": "Sorted artifact filename + colon + full SHA256 + LF",
+  "bound": {
+    "ARCH-001": {
+      "path": "ARCH-001-plugin-session-feature-capabilities.md",
+      "sha256": "2dea2ccbe105207f07c7e2904e41ce7cc16be34beeb4072eb2007ad7c4835828",
+      "claim_sha256": "b975d8002afa2b8222b6f6895a4ba0d4f1cf7a0e79360da203f37397ac936afa"
+    },
+    "ARCH-227": {
+      "path": "ARCH-227-waf-semantic-reset-output.md",
+      "sha256": "2aee6494b219154d85b76621a05a250290fe0cbc24dec37ebfda5c9de3ad4933",
+      "claim_sha256": "b0101161974a47d235e710adda1af65db25e4bbbf9724fb810b36c4bef526b12"
+    },
+    "ARCH-231": {
+      "path": "ARCH-231-waf-canonical-arena-capacity.md",
+      "sha256": "cf52caf35b476c3d17f89870e62ce77a0f0a504e14f82790fe8d412a7118480a",
+      "claim_sha256": "8497d91bfa1d18da35ed49e7956a0c28b54f305db9762747d33fdbbf84036799"
+    },
+    "ARCH-232": {
+      "path": "ARCH-232-waf-request-head-alias-bytes.md",
+      "sha256": "5bc3379a6669b1e50eff07432a5d90b2962d8b65713a77476dd33a5b3ee150a4",
+      "claim_sha256": "61fb1ef90b14bb876015c63fba3083f420255df92a3fc39b6cb150e23e11eb15"
+    }
+  },
+  "evidence": [
+    "227 concerns discarded semantic frontend indexes; 231 concerns published compiler arena capacity admission and has a no-reset witness.",
+    "232 shares immutable request-head alias storage; 001 narrows shared PluginSession feature vocabulary. Neither depends on the other.",
+    "Full competing ARCH002/004/005/048/226 claims inspected: generic body contract, query cache source, typed transport metadata, Common decoder scratch and WAF body form scratch are separate owners."
+  ],
+  "limits": "Supporting dedup only, not fresh review of every finding. Original rules/knowledge and actual semantic/session sources read; retained prior independent compiler/transaction sources rechecked by hash. No changes to findings or product code; no tests/build/network."
+}

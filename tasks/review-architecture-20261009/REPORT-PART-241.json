@@ -1,0 +1,89 @@
+{
+  "partition": "PART-241",
+  "reviewer": "/root/analyze_adapter",
+  "complete": true,
+  "files": {
+    "edgion-gateway/src/ai/guards/mod.rs": {
+      "sha256": "d80fc3dcca2acf41cdcc0a8ff32be96b367170a3e3eaf87809e71630b7335c0e",
+      "fully_read": true,
+      "disposition": "no-finding"
+    },
+    "edgion-gateway/src/ai/guards/request/evaluator.rs": {
+      "sha256": "0f6a014f5625cdbd35f587d7868feb1920a805f68d01262ba1000456fcb05c5c",
+      "fully_read": true,
+      "disposition": "candidate-supported"
+    },
+    "edgion-gateway/src/ai/guards/request/mod.rs": {
+      "sha256": "284cdbc0b674b3acb83b6fa9b7c81ea7ce250c0c43a3ba88f552ad5bc483513f",
+      "fully_read": true,
+      "disposition": "no-finding"
+    },
+    "edgion-gateway/src/ai/guards/request/plugin.rs": {
+      "sha256": "a179ef29974d370c4785808fffaeb0ee0b684d5a0b09dad1ee73c4a6de6ba5d9",
+      "fully_read": true,
+      "disposition": "candidate-supported"
+    },
+    "edgion-gateway/src/ai/guards/request/rules.rs": {
+      "sha256": "5c4e79524958ce72f325e06a901dbbd58bc26ca6fc94e0a56bd9921cd6d60fab",
+      "fully_read": true,
+      "disposition": "candidate-supported"
+    },
+    "edgion-gateway/src/ai/guards/request/spans.rs": {
+      "sha256": "143865a3cfcfce3b1b75ab33eebef400faf1240a26d4f22d4f70f12c42b863ba",
+      "fully_read": true,
+      "disposition": "no-finding"
+    },
+    "edgion-gateway/src/ai/guards/semantic/attached.rs": {
+      "sha256": "a4f6fa21378182982aa1fd798d2846f30af9edd0346977e781a99c69d27df0df",
+      "fully_read": true,
+      "disposition": "no-finding"
+    },
+    "edgion-gateway/src/ai/guards/semantic/mod.rs": {
+      "sha256": "bea3b55bad7671df3e02624cc362c5d14b263595d059a92849e6bc9bf50a87c0",
+      "fully_read": true,
+      "disposition": "no-finding"
+    },
+    "edgion-gateway/src/ai/guards/semantic/plugin.rs": {
+      "sha256": "a2d6c02476ef6c0f2e929dd09631a4672ee6ccfcf054fc64a5c926226dbac1cf",
+      "fully_read": true,
+      "disposition": "no-finding"
+    },
+    "edgion-gateway/src/ai/guards/semantic/protocol.rs": {
+      "sha256": "c7175c0f7a9cedd07c675845934ebd682f4f961f57e9758a117e201288526f70",
+      "fully_read": true,
+      "disposition": "no-finding"
+    },
+    "edgion-gateway/src/ai/guards/semantic/response.rs": {
+      "sha256": "a344d8c4689316a9933a5158f49885972ff0bcf8bfff3ab1c54d69e5b691c639",
+      "fully_read": true,
+      "disposition": "no-finding"
+    }
+  },
+  "candidate_ids": [
+    "ARCH-011"
+  ],
+  "decisive_notes": [
+    "Local/evaluator producers independently enforce the configured aggregate ceiling; their union lacks a final owner/check.",
+    "Span selection, generation/ordering settlement, minimized bounded evaluator exchange, strict wire keys and semantic window/cancellation/terminal/log ownership assessed.",
+    "Shared decision-envelope dedup was examined but not promoted: aligned current policy and strict distinct keys/lifecycles are supported; concrete composition budget gap has stronger value.",
+    "Deferred unselected-string decoding remains intentional selected-span scope; no provider-bypass finding."
+  ],
+  "evidence": {
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/ai_guard.rs": "56f9c80d47a9fe1914d87d4a6a8a035d590745d6b11ccdffbe09e44f38de649a",
+    "docs/en/user-guide/http-route/filters/edgion-plugins/ai-guard.md": "a98650855caf6f18be99ce946895257bad86f4c3afaa67f9dcba2d36d9f5728b",
+    "skills/04-review/plugin-runtime/regression-guards/ai-guard-span-bounds-and-skip-semantics.md": "dfeae0730626de7bc4b22161211c53285d7560f55cdb7a63673791d9d6f64800",
+    "skills/04-review/plugin-runtime/regression-guards/ai-guard-ordering-publication.md": "8a69f2b03f3df18a5f8fee79f044a30d8e614341c74936f49261a5ed6eec72d3",
+    "edgion-gateway/tests/unit/ai/guards/request/evaluator_test.rs": "136b92da1ddd50f7c0a9d11383a6c7ee61d75b5731f7a53689d822ba59a93260",
+    "edgion-gateway/tests/unit/ai/guards/request/plugin_test.rs": "26f751d73e9775cdd2521c80c44fb61f985bd8374a21f7b102e856618734d5d5",
+    "edgion-gateway/tests/unit/ai/guards/request/rules_test.rs": "b14cbe00cd4f42868886eee9abc71ef48597d2de1d9fd769f14323fd946aa312",
+    "edgion-gateway/tests/unit/ai/guards/request/spans_test.rs": "287cc4f4e4c2c02abd6aba8d64d87d6e00c1b0950f392ef59f9409bf62711eaf",
+    "edgion-gateway/tests/unit/ai/guards/semantic/attached_test.rs": "3dda04643ffe89b26fb5dd84c07bdd6f7b89132300fe468a1d48624c4a28baaf",
+    "edgion-gateway/tests/unit/ai/guards/semantic/plugin_test.rs": "304503e5debd93e2e0fc93450d1b49fa666c9a585f0768c50924e2232cd304c0",
+    "edgion-gateway/tests/unit/ai/guards/semantic/protocol_test.rs": "38f25883655bdf8828f035d10a8db5dca73d34b7041d1b4038cdf7b49782afd5",
+    "edgion-gateway/tests/unit/ai/guards/semantic/response_test.rs": "8f64e8a052869e52da9c0bd5b3b68b42c4f0030e55676cbc322c323c53ae62d7"
+  },
+  "limitations": [
+    "Static contextual source review; all eight guard unit-test sources fully read, none executed.",
+    "Guardrail integration source partially inspected; only visible contracts support context, not full primary coverage."
+  ]
+}

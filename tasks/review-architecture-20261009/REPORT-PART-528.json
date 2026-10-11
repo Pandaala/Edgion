@@ -1,0 +1,96 @@
+{
+  "partition": "PART-528",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_tls/port_only/mod.rs",
+      "sha256": "229c9e63aab8a877847a75f30d95059690a851706f58aef14cb1274205df2630",
+      "fully_read": true,
+      "disposition": "Full three-line module/export glue; actual public/CLI caller checked. Retain."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_tls/port_only/port_only.rs",
+      "sha256": "b62ee53ed1bf5e08b425c935e4ea9d0cf7252de7083681e5061ee2a41caa7615",
+      "fully_read": true,
+      "disposition": "Full1\u201360 sole actual business case. Retain context-selected host/HTTPS port and status/body/error assertion for port-only parent binding; fixtures have no Gateway-owned certificateRef. Aggregate wrong child context already ARCH272 at CLI selection owner, not a duplicate."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full retained original personally read rules/index"
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full retained original personally read rules/index"
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full retained original personally read rules/index"
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full retained original personally read rules/index"
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full retained original personally read rules/index"
+    },
+    "skills/05-testing/SKILL.md": {
+      "sha256": "4ad0fb8f8a15693ec04116e8224095c6696bbe1e3e63f0a5528053e560466343",
+      "scope": "Full retained original personally read rules/index"
+    },
+    "skills/04-review/testing/regression-guards/integration-port-selection-must-fail-closed.md": {
+      "sha256": "c2ff61188030d30484afd0c1323201295fb980755c3e4738fe78dd8eea785b89",
+      "scope": "Full original"
+    },
+    "skills/04-review/tls/SKILL.md": {
+      "sha256": "418dcd7183dfc84a98c2c51dcd0548447f0cf91d310646e578a5f6d2e6d2a837",
+      "scope": "Full original index"
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "3280\u20133345 targeted/aggregate dispatch and3846\u20133940 special port-only host and effective listener projection"
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "70\u2013132 DNS/client construction,155\u2013237 with_ports/url;525\u2013578 timeout; retained full source"
+    },
+    "edgion-tests/src/client/suites/edgion_tls/mod.rs": {
+      "sha256": "153105658634e2e984dfb532b5edcffef4000e752bb096ce39a32a6ba29bb055",
+      "scope": "Full source exports"
+    },
+    "edgion-tests/integration/conf/EdgionTls/port_only/Gateway.yaml": {
+      "sha256": "2bdf5f3ff600c077638de3fcb2cc2cb574918f0f62d5dca05f7f8b25556abde0",
+      "scope": "Full actual fixture declarations"
+    },
+    "edgion-tests/integration/conf/EdgionTls/port_only/HTTPRoute.yaml": {
+      "sha256": "6be84cd8ee6e9273d76199915e669710725a0889ca06b2ee59b8cdf39d9a62e7",
+      "scope": "Full actual fixture declarations"
+    },
+    "edgion-tests/integration/conf/EdgionTls/port_only/EdgionTls.yaml": {
+      "sha256": "93907d7a0eb3c3ce7ffd4bf31a0627f20bace689aad2023e55811d14353177d7",
+      "scope": "Full actual fixture declarations"
+    },
+    "edgion-tests/k8s/conf/EdgionTls/port_only/Gateway.yaml": {
+      "sha256": "4fcebefd4f94cc988bc1af0f04f8f5c554581dfacf36ef6a43741b7bfbb8d5dc",
+      "scope": "Full actual fixture declarations"
+    },
+    "edgion-tests/k8s/conf/EdgionTls/port_only/HTTPRoute.yaml": {
+      "sha256": "4e5a417e223e0f528bd92c690a9fad09a25d1104ad46d748df8b8a95264503d6",
+      "scope": "Full actual fixture declarations"
+    },
+    "edgion-tests/k8s/conf/EdgionTls/port_only/EdgionTls.yaml": {
+      "sha256": "21f6c1db375f7e49fbbb65aa5105a6c9d8dba8091f1ed73d970507631ee41e78",
+      "scope": "Full actual fixture declarations"
+    }
+  },
+  "limits": [
+    "Static review; no tests/build/network/source mutation.",
+    "Both primary frozen hashes freshly matched; full actual implementations and callers/fixtures read.",
+    "Test self-signed-client setting is legitimate harness policy; case does not claim certificate trust validation.",
+    "SniCollision source read only as related supporting seam before its own primary promotion; zero primary credit here."
+  ]
+}

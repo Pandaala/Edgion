@@ -1,0 +1,64 @@
+{
+  "complete": true,
+  "analyst": "/root",
+  "source_drift": [],
+  "support_changes": [
+    {
+      "path": "edgion-gateway/tests/unit/plugins/http/waf/mod_test.rs",
+      "previous_sha256": "7217bdb4595c090f30e59434ac87f6dbcbedbbaa764ac824bce82ca9ed662b75",
+      "current_sha256": "9b75f3cc3a3fb3a4db56e8fb67fbe03125908893374610e8eb592295a82d9fd6"
+    },
+    {
+      "path": "skills/01-architecture/02-gateway/05-plugin-system.md",
+      "previous_sha256": "44b802cdd752a4401149c715e4db5df712546083958c4f7c297c6eb5a433eaf9",
+      "current_sha256": "b650f5d2e93ab34fe8dea73cae28c88259c7dae7f41e0a4d21c8a77384880eef"
+    },
+    {
+      "path": "skills/02-features/03-resources/13-edgion-plugins.md",
+      "previous_sha256": "93de4f10b45c7a4b775af3e1ee80cfd81ed47f0bdd26ab9743c44c5c69f84dbc",
+      "current_sha256": "b705aa0b53914467b4028f84f0fbcb6e55c68913a347a7314fbe8109aa9e9e30"
+    },
+    {
+      "path": "skills/04-review/http-body/regression-guards/waf-prefix-before-dispatch.md",
+      "previous_sha256": "26a1fada587eb2e0e3c7b3905dffcd2a26b059b70a4e5095d724ba171dbf1a01",
+      "current_sha256": "2d4aeec3063b956097e37d10ca9352ce56eab9afd0b4372beaf2883d7c9ea332"
+    },
+    {
+      "path": "tasks/pending/waf-body-inspection-policy/01-design.md",
+      "previous_sha256": "5096c7c53e2b00b514b1660e9cb24bee41285a9004296c906c130e2a3bf43bc5",
+      "current_sha256": "d30c55a299c28ea4f8b60efa574924aabaa1dc86ec266decb684125f4fa0eac4"
+    },
+    {
+      "path": "tasks/pending/waf-body-inspection-policy/02-implementation.md",
+      "previous_sha256": "6a7fa0f81e12b8c930dcb569f20d6f937f5a069c410c263ad18ffc9b45c7534b",
+      "current_sha256": "0ae0f6a74594880d09a064c4c19d87e408ee501de7708e21a96280d04a451c7e"
+    },
+    {
+      "path": "tasks/pending/waf-body-inspection-policy/03-subtasks.md",
+      "previous_sha256": "5bf256248a7e1c09c6f5117a149a436f1f9d15ac7a3b93807e56fcc1b484fd5c",
+      "current_sha256": "60556d6539228bd8efbf681a0c572bbac3f64d70e1c958f31f1377bb6a74a3b9"
+    },
+    {
+      "path": "tasks/pending/waf-body-inspection-policy/08-acceptance-plan.md",
+      "previous_sha256": "6f5e28136585f58d88781e2e0d3b0c285e0d97198f5d7443093eebc17673dda1",
+      "current_sha256": "52ae58a575441133a6b64fa0330bd0670009ac2fdbcce378ec9107032e2bb523"
+    },
+    {
+      "path": "tasks/pending/waf-body-inspection-policy/09-acceptance.md",
+      "previous_sha256": null,
+      "current_sha256": "eb7b0ed16053192292c4e5200b9a4d80c99c5fc49e1c1a809aa8fa95b7135601"
+    },
+    {
+      "path": "tasks/pending/waf-body-inspection-policy/waf-body-inspection-policy.md",
+      "previous_sha256": "8d5aab94e3f9a408a78038a85eff3d6738daa86b1b539baca743a1d1dc45c323",
+      "current_sha256": "be7d08d2d0a7c46af9a09d206ace129a9234808692a40aeac8236a4a412550f0"
+    }
+  ],
+  "source_coverage_retained": true,
+  "reason": "No primary source hash changed; WAF-only support changes are scoped to existing related evidence and independently being revalidated.",
+  "pending_scoped_revalidation": [
+    "ARCH-001",
+    "ARCH-005"
+  ],
+  "head": "2573387c362aaeaba84d5b44b86f4c55a06b5158"
+}

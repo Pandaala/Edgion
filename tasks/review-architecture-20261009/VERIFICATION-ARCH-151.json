@@ -1,0 +1,147 @@
+{
+  "candidate": "ARCH-151",
+  "complete": true,
+  "verifier": "/root/analyze_outbound",
+  "decision": "confirmed",
+  "input_sha256": "317809890e7fcf97c73ff7ac9473bea14491c1884cbed7e9f9f6c0d3804401a0",
+  "approved_claim_sha256": "c5764aeb9920d54f75b3e336265b99f19958d110efb9e1874b1e79b48ebc82d3",
+  "evidence": [
+    "Independently compared both complete frontend traversals: identical count/range/duplicate/reference order, text and multiplicity.",
+    "Existing helper returns exactly the duplicate block errors; replacing it at the same position preserves early return and surrounding diagnostics.",
+    "Parse independently uses the same helper for StrictReject projection; both phase executions remain necessary.",
+    "Actual selected tests verify authoritative per-port absence, raw-field clearing, HTTPS projection, CA identities and sixteen-reference fallback; independent Gateway TLS defense remains.",
+    "P3 bounded ownership/change-amplification debt, no present bypass or performance claim."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original personally read; fresh unchanged hash."
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full original personally read; fresh unchanged hash."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original personally read; fresh unchanged hash."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original personally read; fresh unchanged hash."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full original personally read; fresh unchanged hash."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original personally read; fresh unchanged hash."
+    },
+    "skills/01-architecture/05-resources/SKILL.md": {
+      "sha256": "dae4740e05545a9d674199070cc49a6559fd921e69ae0d08dab19dc51d3efef6",
+      "scope": "Full original personally read; fresh unchanged hash."
+    },
+    "skills/01-architecture/05-resources/00-schema-transport-contract.md": {
+      "sha256": "d20e74c1c7ccf6183f893bc919767a27bd3fbb47486415d14651a76fdef5a597",
+      "scope": "Full original personally read; fresh unchanged hash."
+    },
+    "skills/01-architecture/05-resources/01-gateway.md": {
+      "sha256": "0109ce331cede4bd6b8420f3d3505e259e153463c8cc77aa70d2f9b458fa1c71",
+      "scope": "Full original personally read; fresh unchanged hash."
+    },
+    "skills/08-kubernetes/04-api-version-upgrade.md": {
+      "sha256": "b35ee5f5d7eaabc877a5a1524d3d47a6960e8aa64118e922a87d52a9fa78ab9f",
+      "scope": "Full original personally read; fresh unchanged hash."
+    },
+    "skills/04-review/resources/intentional-design/schema-validator-non-k8s-asymmetry.md": {
+      "sha256": "35f0559a526dbc627449f1d1e005ed7f31bb7c960591999355d5ea9b67592820",
+      "scope": "Full original personally read; fresh unchanged hash."
+    },
+    "skills/04-review/listeners/compatibility-constraints/listener-port-set-frozen-at-startup.md": {
+      "sha256": "82879d7099c547615d57844ffad394c474db00d53f1d591cdb35b0824ac6711a",
+      "scope": "Full original personally read; fresh unchanged hash."
+    },
+    "skills/04-review/tls/regression-guards/frontend-mtls-empty-store-on-missing-ca-key.md": {
+      "sha256": "495872d7945fd1ceae91b1001a097999f472451bc14d0720c74612dd560b0065",
+      "scope": "Full original personally read; fresh unchanged hash."
+    },
+    "skills/04-review/tls/regression-guards/frontend-validation-is-mtls-empty-ca.md": {
+      "sha256": "b78f1ee15fe34d0fd044d43f5a1e2efffb67c59272583cb9a4ffab961b943e7c",
+      "scope": "Full original personally read; fresh unchanged hash."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/gateway.rs": {
+      "sha256": "3d241427e284a97f50eff549b41ef8df8f060a6b568c39216fc1efe6c08e9304",
+      "scope": "407\u2013447,482\u2013745,920\u20131405,1410\u20131725,1897\u20131984,2187\u20132363"
+    },
+    "edgion-controller/src/conf_mgr/conf_center/common.rs": {
+      "sha256": "3c3b85c5d3af871dfc838d1b2d4ea1d886c596a8faa8d103979105db8db7a6d9",
+      "scope": "170\u2013338"
+    },
+    "edgion-controller/src/conf_mgr/conf_center/file_system/resource_controller.rs": {
+      "sha256": "3a98d5b9d45a90fc611d8bd47fd02646f0cd7edd67bda4679ec7ce1352b0ccb3",
+      "scope": "130\u2013186,650\u2013721"
+    },
+    "edgion-controller/src/conf_mgr/conf_center/etcd/resource_controller.rs": {
+      "sha256": "f323246b899ff298398cb51ca5e3b1379ce593209ba003afe071a4f88fbb3b7c",
+      "scope": "128\u2013157,250\u2013278"
+    },
+    "edgion-controller/src/conf_mgr/conf_center/non_kube_common.rs": {
+      "sha256": "58b9f4e3f396edc3edc5b501a5caf89864c55a1409c4fb95899b1269084adf4b",
+      "scope": "495\u2013562"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs": {
+      "sha256": "23057df0f04ed113a72fa1b42fb5344153c3ae8cff526e030878c8091fc92bd6",
+      "scope": "622\u2013756,805\u2013875; retained 700\u2013875"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/listener_port_manager.rs": {
+      "sha256": "5329d77a6be326e9ad1f3847efe3100cdd49270598ce9db3d728f2fe434dca9b",
+      "scope": "45\u2013220"
+    },
+    "edgion-resources/src/resources/gateway.rs": {
+      "sha256": "b3ee91f3d6fa041087bc5b9c868a59abccac73089b015f5b159c498e986887a2",
+      "scope": "1\u2013170"
+    },
+    "edgion-resources/src/gateway_api_support.rs": {
+      "sha256": "fc7df8c6ee85056e55e7fb585e6f1df1ac0494ebf790a43710bf6b14cb378627",
+      "scope": "114\u2013128"
+    },
+    "edgion-resources/src/gwapi_types.rs": {
+      "sha256": "2567a0aefb97e4149cb62d7d9370d4de420f507d0124c06b3a3d160bd2df2319",
+      "scope": "PORT_MIN/PORT_MAX definitions and 60\u201380"
+    },
+    "edgion-resources/src/listener_key.rs": {
+      "sha256": "6ab7fe730542978e6110ac1c1e3313a011f164fa92d543cd665c6b1097576760",
+      "scope": "60\u201385"
+    },
+    "edgion-gateway/src/runtime/server/base.rs": {
+      "sha256": "25e86709b8bff3d663e5f4951dbc690bbbd965ff249ee694a0cb3e6cf9b341f8",
+      "scope": "75\u2013296"
+    },
+    "edgion-gateway/src/runtime/server/listener_builder.rs": {
+      "sha256": "3d9965a2601c72989a44de13c4d7e9ed5408a04812eb2e702e0e7088ce19a970",
+      "scope": "185\u2013265,510\u2013555"
+    },
+    "edgion-gateway/src/runtime/server/proxy_protocol_policy.rs": {
+      "sha256": "cd5abbd615419a63dca1b8ee79722f5777039a83759ea26fff1851db88d13b25",
+      "scope": "199\u2013260,365\u2013448"
+    },
+    "edgion-gateway/src/runtime/matching/tls.rs": {
+      "sha256": "c89ca99930b8c8a02b83d2edbf115cdb73f7ae758845655da9a040e0fb371c2d",
+      "scope": "146\u2013261"
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/gateway_test.rs": {
+      "sha256": "352a0995eefd2fff54d35768b4611d8f7015979f0e689912d345bec3405cd436",
+      "scope": "244\u2013296,1537\u20131860; complete selected tests"
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/gateway_test/route_refresh_tests.rs": {
+      "sha256": "2df1994796d40223538eddbc4b6bef232ddd12003972110c8d58d151f44bbf0f",
+      "scope": "1\u2013200,330\u2013end; complete selected fixtures and tests"
+    },
+    "config/crd/gateway-api/gateway-api-standard-v1.6.2.yaml": {
+      "sha256": "faede450fa178126aba41337737b97d351ebe87d93c910237ce1e072d1ca40d9",
+      "scope": "2637\u20132655"
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

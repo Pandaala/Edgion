@@ -1,0 +1,8 @@
+{
+  "complete": false,
+  "scope": "Detected concurrent WAF capability extraction; bounded dye consumer revalidation only. Inventory and seed claim reconciliation remain pending.",
+  "unchanged_dye_scope": "Current session_adapter 370-435 plus full diff against current-C HEAD read; WAF ownership extracted below unrelated dye implementation.",
+  "session_adapter_sha256": "2f9adeec44dac2b08f4135373744df00673344602abc1f742420ebd289053833",
+  "seed_revalidation_required": "ARCH-001; current trait and WAF methods changed after its independent receipt.",
+  "primary_coverage": 0
+}

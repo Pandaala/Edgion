@@ -1,0 +1,69 @@
+{
+  "partition": "PART-175",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-waf/src/sqli/blacklist.rs",
+      "sha256": "032db94c447b37b8641672448105ec1cadda5ebdc39bf51799d86bb13e53b8da",
+      "fully_read": true,
+      "disposition": "Entire implementation read. No actionable issue: fixed six-byte local conversion owns v0-to-v1 fingerprint normalization and rejects empty/oversized/invalid-UTF8 lookup keys without allocation. Existing pinned table lookup is canonical and the live detector separately applies its false-positive policy. No new parser, cache or generalized registry is justified."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Original full retained; native leaf and external reference-only boundary."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Original full retained."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Original full retained."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Original full retained."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Original full retained."
+    },
+    "skills/04-review/waf/SKILL.md": {
+      "sha256": "a5fa47a4b94ee1edccf3f5cd07197eeb0d644f875616cd33c5976e66bc9edef9",
+      "scope": "Full original."
+    },
+    "skills/04-review/waf/regression-guards/native-injection-operators-use-bounded-detection.md": {
+      "sha256": "780bfcac8205cd8c105200049a535456629cfc10ec86d98555369dac715b8f59",
+      "scope": "Full original; weighted caps, false-positive ownership and reference-only contract."
+    },
+    "edgion-waf/INJECTION.md": {
+      "sha256": "c9fff8da074d2d324a63902d46db0823c84fa342986d1fc35132338b9fb116fd",
+      "scope": "Full original; pin/provenance, limits and historical evidence qualification."
+    },
+    "edgion-waf/src/sqli/sqli_data.rs": {
+      "sha256": "8b3f1255636fa142d24e843984461232a207bd49da4449ddf55e7ed3322afe09",
+      "scope": "Entire implementation read; one checked-in table owner and canonical character helpers."
+    },
+    "edgion-waf/src/sqli/generated_data.rs": {
+      "sha256": "0bac8da6e2f123f1f2c2ffcd987df93bcdc9830c1a9b490bcdd09dabcf84015e",
+      "scope": "1\u201350 and 9615\u20139665; selected static table and exact stack bounded uppercase/binary lookup consumer, not full primary coverage."
+    },
+    "edgion-waf/src/sqli/mod.rs": {
+      "sha256": "ed5129949b0e79ce506e651400bdf764749cc0ab324fcb2d77839cc8ba4f0a5b",
+      "scope": "178\u2013220 and 1080\u20131120; actual fingerprint producer, blacklist then false-positive policy."
+    },
+    "edgion-waf/tests/unit/injection_test.rs": {
+      "sha256": "bfabfbd04f4f2b72c708bbc6950096e0e727dd7f08c1f5c7c96948f2dae7e396",
+      "scope": "Entire actual tests; pinned fingerprints, byte/high-byte behavior and bounded weighted adversarial cases, inspected only."
+    }
+  },
+  "limits": [
+    "Static implementation/context/tests only, no execution/oracle/network.",
+    "Selected generated table source grants no full-file coverage.",
+    "Pinned-equality and benchmark history not current execution or measured benefit."
+  ]
+}

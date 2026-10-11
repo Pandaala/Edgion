@@ -1,0 +1,55 @@
+{
+  "partition": "PART-483",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/global_plugins_snapshot/global_plugins_snapshot.rs",
+      "sha256": "4a4d14aea8d669fc32162499c4850192eb651a6c77a9f7c29b90a7c85be9b820",
+      "fully_read": true,
+      "disposition": "Full1-134 two actual wirestatus/header cases. Response-global and dangling-ref owner accepted; not concurrent reload/onion/large-body proof."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/global_plugins_snapshot/mod.rs",
+      "sha256": "07c6a9e575a6e8b43199c209bfae24d2db075a172ee000ec6bc4da22c69b1ccd",
+      "fully_read": true,
+      "disposition": "Full1-3 explicit export/actual registration; no issue."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "edgion-tests/integration/conf/EdgionPlugins/GlobalPluginsSnapshot/02_EdgionGatewayConfig_example-gateway.yaml": {
+      "sha256": "39265d29f7f3ec96c1705b9fb36fa1fd9f3a8e9e96ef3a9162202b789c9fe6d3",
+      "scope": "Full1-62 local generation source."
+    },
+    "edgion-tests/k8s/conf/base/EdgionGatewayConfig.yaml": {
+      "sha256": "f93e62d71514f480822b84edd5705890ca826c9b07e995bc7b5fdab1fed01566",
+      "scope": "Full1-54 authoritative Kubernetes base includes real global and ghost refs."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/GlobalPluginsSnapshot/resources.yaml": {
+      "sha256": "b3270285c12807a27a4e609c9a7013125e2c0f890e82b96acca3093f116b949f",
+      "scope": "Full1-42 Kubernetes suite fixture."
+    },
+    "edgion-gateway/src/routes/http/proxy_http/global_plugins_resolve.rs": {
+      "sha256": "9c2819a276b74076edbf3d35c68047443b5022452f04c5f76462807ffc5d90af",
+      "scope": "Full1-117 pure/silent captured resolver."
+    },
+    "edgion-gateway/tests/unit/routes/http/proxy_http/global_plugins_resolve_test.rs": {
+      "sha256": "521f8aad2530cb364ed447e45be592d5ecb3b2153286e7f47cab6e452c9fe250",
+      "scope": "Full1-231 actual order/defaultns/dangling/position/invalid collision units."
+    },
+    "edgion-gateway/src/ctx.rs": {
+      "sha256": "71647688ae0bf8b2eaa0439d954183f1d1a4de77b1557f66fc6ff0a9086b8221",
+      "scope": "2552-2609 request-pinned global snapshot."
+    },
+    "edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_filter.rs": {
+      "sha256": "bfa2ac6926771a8c0b74d557b17bdddd9e0a17fc50770b537b6db2fe25d03dcf",
+      "scope": "433-472 response callback snapshot and outer global phase."
+    },
+    "skills/04-review/observability/mandatory-design/global-plugins-resolve-no-tracing.md": {
+      "sha256": "b0830d7a37e238702e13974819d2b7b67ae660716d8a9f5c0187a8cc1979e9d4",
+      "scope": "Full1-68 original mandatory no request-path tracing."
+    }
+  },
+  "limits": "Complete read-only review. Missing suite-local Kubernetes EGC intentional: shared base owns authoritative global policy. Stale comments15-17/84-85 and local fixture claim per-request warning contradict current silent implementation/original mandatory restraint; documentation-only follow-up, no new log/metric. Other local fixtures/request/runtime/response plugin/real registrations and original no-per-route override read. No tests/builds/network/mutation; supports zero coverage."
+}

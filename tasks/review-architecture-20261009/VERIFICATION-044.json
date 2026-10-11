@@ -1,0 +1,68 @@
+{
+  "reviewer": "/root/analyze_outbound",
+  "complete": true,
+  "disposition": "confirmed",
+  "approved_input_sha256": "907564c92ca26631a8b7b218e810046480bf6120b2b860a3bb84cae1064d46c5",
+  "approved_claim_sha256": "e7aa9bc7ac934bc0c0f34304bed5d334ea13e06899eb0f37cd0ec8f5e80bb6b3",
+  "evidence": {
+    "edgion-gateway/src/cli/config.rs": "9f19a5bf98552250045c76ce5c2ea606de312c1d61a71ad04c0a01ac3fe75e7f",
+    "edgion-gateway/src/cli/mod.rs": "393ea796feb6e022ab7438e16e2084f2a94a21c1e470ec7befdc49f4cb3002bd",
+    "edgion-gateway/src/cli/pingora.rs": "5aa138131a0cb310bcfd407f9e7bfa2fadbfbb133db00737ba59d7b718e10395",
+    "edgion-gateway/src/bin/edgion_gateway.rs": "9bbd454154f6110d7f277d810eb6d74d61ec82597b0425aa34e4b971bf0995a6",
+    "edgion-gateway/tests/unit/cli/config_test.rs": "4dd99dcaa6c433010b9196628d8a5eb19c2f1c8c63536629b157dcb42beb3a83",
+    "edgion-gateway/tests/unit/cli/pingora_test/server_conf_tests.rs": "529bcf807a8e40530824a489b9f0dfb566bd4584fdb4daad35686f1802d6b90e",
+    "skills/01-architecture/00-common/01-cli-and-startup.md": "e8d381d51ba309814a2b850d91f811cefc11029d60e766b2cfad6d511c42ed67",
+    "skills/04-review/resources/intentional-design/gateway-process-config-is-yaml-only.md": "be544e2f8818a5bdf1bca19f6eb2e4f122431f9777ab46c19e06e32e7171e6fc",
+    "skills/04-review/deserialization/intentional-design/gateway-process-config-unknown-fields-advisory.md": "c8a5b1754a69f37854782e712c176be7d95c2ec8cd3ed23da194d839d959eb2b",
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clap_derive-4.6.4/src/item.rs": "382ef691d65bdc867eaa5465a408374ffda528e96824cebeff88de7f9d40e2eb",
+    "/Users/caohao/.cargo/git/checkouts/pingora-fd43c38079a9f4ee/1aaa45c/pingora-core/src/server/mod.rs": "c1d5d88419c4d8c9e60efdfc8118b889000ba2d6ae9fc3b0a2ac046c54cb8d66"
+  },
+  "support_selected": {
+    "edgion-gateway/src/cli/config.rs": {
+      "sha256": "9f19a5bf98552250045c76ce5c2ea606de312c1d61a71ad04c0a01ac3fe75e7f",
+      "scope": "1-210,520-690,1100-1250; declarations/load/merge"
+    },
+    "edgion-gateway/src/cli/mod.rs": {
+      "sha256": "393ea796feb6e022ab7438e16e2084f2a94a21c1e470ec7befdc49f4cb3002bd",
+      "scope": "1-105,360-525,640-715,735-764 plus consumer searches"
+    },
+    "edgion-gateway/src/cli/pingora.rs": {
+      "sha256": "5aa138131a0cb310bcfd407f9e7bfa2fadbfbb133db00737ba59d7b718e10395",
+      "scope": "Full"
+    },
+    "edgion-gateway/src/bin/edgion_gateway.rs": {
+      "sha256": "9bbd454154f6110d7f277d810eb6d74d61ec82597b0425aa34e4b971bf0995a6",
+      "scope": "Full"
+    },
+    "edgion-gateway/tests/unit/cli/config_test.rs": {
+      "sha256": "4dd99dcaa6c433010b9196628d8a5eb19c2f1c8c63536629b157dcb42beb3a83",
+      "scope": "115-163,525-580,719-772"
+    },
+    "edgion-gateway/tests/unit/cli/pingora_test/server_conf_tests.rs": {
+      "sha256": "529bcf807a8e40530824a489b9f0dfb566bd4584fdb4daad35686f1802d6b90e",
+      "scope": "Full"
+    },
+    "skills/01-architecture/00-common/01-cli-and-startup.md": {
+      "sha256": "e8d381d51ba309814a2b850d91f811cefc11029d60e766b2cfad6d511c42ed67",
+      "scope": "Full original"
+    },
+    "skills/04-review/resources/intentional-design/gateway-process-config-is-yaml-only.md": {
+      "sha256": "be544e2f8818a5bdf1bca19f6eb2e4f122431f9777ab46c19e06e32e7171e6fc",
+      "scope": "Full original"
+    },
+    "skills/04-review/deserialization/intentional-design/gateway-process-config-unknown-fields-advisory.md": {
+      "sha256": "c8a5b1754a69f37854782e712c176be7d95c2ec8cd3ed23da194d839d959eb2b",
+      "scope": "Full original"
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clap_derive-4.6.4/src/item.rs": {
+      "sha256": "382ef691d65bdc867eaa5465a408374ffda528e96824cebeff88de7f9d40e2eb",
+      "scope": "1145-1178 OptionBoolSet"
+    },
+    "/Users/caohao/.cargo/git/checkouts/pingora-fd43c38079a9f4ee/1aaa45c/pingora-core/src/server/mod.rs": {
+      "sha256": "c1d5d88419c4d8c9e60efdfc8118b889000ba2d6ae9fc3b0a2ac046c54cb8d66",
+      "scope": "445-515; sixconsumer search"
+    }
+  },
+  "conclusion": "Six real flattened options omitted by merge; downstream Pingora None cannot rescue; Option<bool> Set makes false override meaningful. Source witness YAML4 CLI1 remains4. Existing final-struct tests skip merge; bounded typedmerge preserves all startup invariants.",
+  "limitations": "Static independent verification, no execution/measurements/new primary credit. Error_log claim preserves configuredvalue only, not filecreation in every mode."
+}

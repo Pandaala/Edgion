@@ -1,0 +1,79 @@
+{
+  "partition": "PART-464",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/credential_injector/credential_injector.rs",
+      "sha256": "a4beac17b5ed69f8419c7db0255538e3714cf882869fd485777e7a781f54288d",
+      "fully_read": true,
+      "disposition": "Full1-637 bounded reads. No distinct candidate: deferred injection, later mutation/double injector, mirror isolation, fail-close and generation phases. Same failed negative-observation cause as ARCH348 at assert_fail_closed293-329/read304, pending independent extension."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/credential_injector/mod.rs",
+      "sha256": "86d6a47447dcdffdc14071341ff3db69a86509eca42cfd26929eb0e60ca03566",
+      "fully_read": true,
+      "disposition": "Full1-6 exports and caller registration; no issue."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "edgion-gateway/src/plugins/http/credential_injector/plugin.rs": {
+      "sha256": "773f8ab10eb5e5ab24eb0e6b2edda6673641aba8a76d727697c5a20f86da72c5",
+      "scope": "Full current deferred injection implementation."
+    },
+    "edgion-gateway/tests/unit/plugins/http/credential_injector/plugin_test.rs": {
+      "sha256": "6ddb99754dc229bc8466ce3d552c5a4256accd5365156d278d0d471033a5d2f0",
+      "scope": "Full actual deferred/Secret-generation unit bodies."
+    },
+    "edgion-gateway/src/routes/http/proxy_http/pg_upstream_request_filter.rs": {
+      "sha256": "da2fb4fb247c725cde69e47fa929dd0c2c152decd3aa871ac021a42c35047349",
+      "scope": "Full actual final upstream request owner."
+    },
+    "edgion-gateway/tests/unit/routes/http/proxy_http/pg_upstream_request_filter_test/deferred_credential_connection_tests.rs": {
+      "sha256": "1841ca7e65f011ae805635295b3a3994b484ff8f0a3259a0f25e9a8085e1163e",
+      "scope": "Full actual Connection nomination guard tests."
+    },
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "6c38b285bdfe354c40d5d2e96d4a07be0b7dc37ce3290197ca75054de23bfa98",
+      "scope": "881-935,1030-1125,1171-1182 actual credential/mirror/capture handlers."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/CredentialInjector/resources.yaml": {
+      "sha256": "ab921608e54a11878dab7a853def0ad5bb880eeebb273564532864d4e93504c7",
+      "scope": "Full current Kubernetes fixture."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/CredentialInjector/03_connection-nomination.yaml": {
+      "sha256": "ba0ef5da0f859f6c93bd34ee914173268827eb6888d527d2d34045d751afab29",
+      "scope": "Full selected Kubernetes nomination fixture."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/CredentialInjector/03_connection-nomination.yaml": {
+      "sha256": "3f85b945810f18a9e904ca16002316b7ccaa4bfdd2120550442629d1fae34131",
+      "scope": "Full selected local nomination fixture."
+    },
+    "edgion-tests/src/client/dynamic/scenarios/credential_injector_dynamic.rs": {
+      "sha256": "e27aa327d95a35558babdf2036c2fabbedc7055bbb3fe9d70c9c655ce8a68255",
+      "scope": "Full current scenario, initial/group/UID/generation/status/execution/restore; historical ARCH264/266 gaps cannot be asserted against this current caller."
+    },
+    "skills/04-review/security/regression-guards/deferred-credential-connection-nomination.md": {
+      "sha256": "cd559f815a40166e2caf78dd901c48e356f6d11438092828bdb385754f3300dd",
+      "scope": "Full original current nomination contract; old local-only evidence does not suppress current topology."
+    },
+    "edgion-tests/k8s/scripts/common/run_test_client.sh": {
+      "sha256": "8ab474c68710e307baefb98ea93d45ad4cd741a01be2f8a7b2156b46a673fde1",
+      "scope": "296-312 dedicated backend host producer."
+    },
+    "edgion-tests/k8s/scripts/common/run_test_client_batch.sh": {
+      "sha256": "00089d28fdfa37374020345714e51f3e84776aec27412945f1646117d2a4ec72",
+      "scope": "153-164 dedicated backend host producer."
+    },
+    "edgion-gateway/src/ctx.rs": {
+      "sha256": "71647688ae0bf8b2eaa0439d954183f1d1a4de77b1557f66fc6ff0a9086b8221",
+      "scope": "2400-2478 current deferred credential staging."
+    },
+    "edgion-gateway/src/plugins/runtime/session_adapter.rs": {
+      "sha256": "2f9adeec44dac2b08f4135373744df00673344602abc1f742420ebd289053833",
+      "scope": "1280-1376 fresh current credential header mutation scopes; no whole-file current read credit."
+    }
+  },
+  "limits": "Complete current read-only terminal analysis. Current Connection nomination cases use strict read/capture failures, bounded positive/negative controls, diagnostic/single-attempt/zero-receipt plus real502 ejection control and explicit cleanup/deadlines. Same-root ARCH348 supplement concerns only failclosed absence after response-read error; empty successful error response is legitimate, so echo-shape requirement must not be copied here. Current dynamic caller now applies initial and restores resources; old lifecycle/status findings require own scope revalidation. No executed result; supports zero primary coverage."
+}

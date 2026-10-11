@@ -1,0 +1,98 @@
+{
+  "candidate": "ARCH-201",
+  "complete": true,
+  "verifier": "/root/analyze_conversion",
+  "decision": "confirmed",
+  "input_sha256": "36a9c62ef8ee6f1c52d4e718830a53f71b04a27282099fdd3d86ef34bd65323a",
+  "approved_claim_sha256": "1159edb712f4fb804a142fa35d3c70d91dc8846c4ac764df633728e0a9c8d685",
+  "evidence": [
+    "Independent complete XML/parser/constructor/Writer review proves scratch String copied into final Arc text/attributes/namespaces; actual Gateway test contains unchanged 128 KiB token.",
+    "Pinned xmlparser source-borrowed StrSpan and immediate owned-node consumers permit private borrowed intermediate without source lifetime escape.",
+    "Per-character emitted precharge, output admission and append charge, failed-charge remaining balance, late prefix accounting and capped reservation must remain exact.",
+    "Final Arc allocation/copy remains necessary; accepted SSO decision addresses different broad Value representation migration. No performance measurements, executions or functional/security defect claimed."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Original full retained, refreshed hash, no nested applicable rules."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Original full retained."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Original full graded gates retained."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Original full retained."
+    },
+    "skills/04-review/dsl/SKILL.md": {
+      "sha256": "4b20ea559926d29e0970ab9d9061af44b24dbd277e408d79628c00b305ab085d",
+      "scope": "Original full retained and hash matched."
+    },
+    "skills/03-coding/dsl/SKILL.md": {
+      "sha256": "060a2dc111a2b613b91ebf5da4c7ae995c0f11919a1b4b55f819b2e1d88c2f02",
+      "scope": "Original full retained and hash matched."
+    },
+    "skills/04-review/dsl/regression-guards/bounded-xml-primitives.md": {
+      "sha256": "6f04ae53d73912caefdacf9a496285eec03d63923ba9fd0e93a1f18bd2b4e2bc",
+      "scope": "Full original independently read."
+    },
+    "skills/04-review/dsl/intentional-design/sso-migration-not-worth-it.md": {
+      "sha256": "24864b413fcb0501103893298b000d9ff69ceb2c4ceb49b3f4bc385aeaa69375",
+      "scope": "Full original independently read."
+    },
+    "skills/01-architecture/02-gateway/dsl-engine.md": {
+      "sha256": "7ed47817132d4ffc9dc24aa62f4120c75d4e7b58d829b143c6ba34793fd05bf7",
+      "scope": "Personally retained full original, refreshed; XML 145-188 reread."
+    },
+    "skills/01-architecture/02-gateway/dsl-engine-security-model.md": {
+      "sha256": "74a500ea801297f018a0af16f32a2e3060b637dc875e55fb0e29b262767dc5b1",
+      "scope": "Retained original 1-205, refreshed; 115-178 reread."
+    },
+    "tasks/pending/request-body-capability-next/dsl-xml-primitives.md": {
+      "sha256": "5c461a952e3d1946c8cd6a8ca4d65e3920caaff8c7f54c943f257a828833683f",
+      "scope": "Full original; missing historical linked ledger distinguished from current authority."
+    },
+    "edgion-dsl/src/xml.rs": {
+      "sha256": "ceec35805f946417d97335e7837c90dd0667198ceafe48ed5024415b477bd8cc",
+      "scope": "Full actual 816-line implementation freshly read."
+    },
+    "edgion-dsl/src/value.rs": {
+      "sha256": "ee38addf5354e257bfdd0999bc26153255fb6c334e7c6867afddc9abea981211",
+      "scope": "Actual checked-subtraction budget failure semantics 65-125."
+    },
+    "edgion-dsl/tests/unit/xml_test.rs": {
+      "sha256": "df75a099ea98b56715bbd89ff213707f7b57ee0773eacdd16fdf0250422375ab",
+      "scope": "All actual 342 lines freshly read."
+    },
+    "edgion-gateway/src/plugins/http/dsl/lang/xml_builtins.rs": {
+      "sha256": "d7d7cc36b1aa879256f8c6c16e746fc47d6364e258b6478a7857681ed4169e4b",
+      "scope": "Full actual 386-line implementation freshly read."
+    },
+    "edgion-gateway/src/plugins/http/dsl/lang/body_ops.rs": {
+      "sha256": "3fdd9df6df1eb59c2caf649b16daf191878cc42ac0c26b192ea15a4306a54ea2",
+      "scope": "Actual admission/reservation/settlement/body length 1-145."
+    },
+    "edgion-gateway/src/plugins/http/dsl/lang/vm.rs": {
+      "sha256": "830e80cb6b406f5f6d9204eb0644cbc2c1743acd4122c600f75ed7bd2ea0db9c",
+      "scope": "Actual XML dispatch 1178-1198."
+    },
+    "edgion-gateway/tests/unit/plugins/http/dsl/lang/xml_builtins_test.rs": {
+      "sha256": "ca08a736a364329c5d795124e28c081e44dd7db0465caa72a21087602d0647c0",
+      "scope": "All actual 229 lines freshly read."
+    },
+    "edgion-dsl/Cargo.toml": {
+      "sha256": "02c0dc8814d20dcd076843962e45b1d3f00de466f54c3531693b9a40cc0cfe47",
+      "scope": "Exact xmlparser 0.13.6 pin."
+    },
+    "Cargo.lock": {
+      "sha256": "18b7b7dee01e024ab6d21f5692ce04a343c4fb265092c7f587099e91c28bea17",
+      "scope": "Exact resolved xmlparser package 8159-8172; verifier personally inspected dependency borrowed StrSpan and token producer source locally."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

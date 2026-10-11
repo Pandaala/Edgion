@@ -1,0 +1,26 @@
+{
+  "partition": "PART-301",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/plugins/http/ctx_set/mod.rs",
+      "sha256": "5ac34ba3eabf2ac782584af3a6c0359efd9f0d183e2327b4957c0db8d1b446cd",
+      "fully_read": true,
+      "disposition": "Exports match factory and plugin ownership."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/http/ctx_set/plugin.rs",
+      "sha256": "d789f29516553aa946f9ff1d18d5b70a266dca61dfc1beaaa87acbf1c8e8c6ed",
+      "fully_read": true,
+      "disposition": "Cold config validation/compiled regex/template, ordered rule dataflow and one-transform operation retain canonical template escaping; static/template/from priority is explicit. No meaningful separate ownership defect established."
+    }
+  ],
+  "candidates": [],
+  "support": {
+    "skills/04-review/ctx-set/review-evidence/ctx-set-design-decisions.md": "fd77c97282d1458122c89064e78c28b012c3c05a2cbc127c4b25f2c8b999c8ce",
+    "skills/04-review/ctx-set/regression-guards/one-transform-operation.md": "4df60a43879d440a94868eda6ac7ec3c3736d72f819ae889352ff8ff44cd77e5"
+  },
+  "support_scope": "Relevant original contracts, caller/callee and test sections inspected; supporting hashes do not claim complete secondary reads.",
+  "limits": "Source/static evidence only; no builds, tests, benchmarks or Git mutations. Accepted lifecycle and failure policies preserved."
+}

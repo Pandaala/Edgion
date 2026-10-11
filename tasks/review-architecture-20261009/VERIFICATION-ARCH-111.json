@@ -1,0 +1,77 @@
+{
+  "candidate": "ARCH-111",
+  "complete": true,
+  "verifier": "/root/analyze_outbound",
+  "decision": "confirmed",
+  "input_sha256": "ec6396856fc5195ab6c90ae838ec90fbd28377da4ff9be52a35b8d76eef9f7ac",
+  "approved_claim_sha256": "8f133e0a185b3d37cb4de1ee02c13188393bbb56008e4a86f9479829d1cb95e4",
+  "evidence": [
+    "Both serving modes filterEndpointSlice expectedinventory; actualspawnunguarded andgenericspawnconstructs/registersbeforefuturepoll.",
+    "Originalconfig/operator/lifecycle explicitsuppression hasno mandatorykindexception; defaultenabled/Namespace/soleworker/source/drain semantics preserved.",
+    "Full actualsourcelifecycletests missdisabledEndpointSlice actualbranch; helper-only testwouldmiss. Static contractviolationno universaloutage/timeout."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original retained; fresh unchanged."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original retained; progressive index."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original retained; applicable graded gates."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original retained; original evidence routing."
+    },
+    "skills/01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md": {
+      "sha256": "b50afcd34d1cd03fd3eeea01f784f95b98cc9b37d5a5cdc3214abf8496b25e55",
+      "scope": "Full retained399; revalidated source/epoch."
+    },
+    "skills/04-review/controller/regression-guards/source-scoped-watch-snapshots.md": {
+      "sha256": "c8a7d7cda326b64a7358ab8cfa34002aaa253ef94e731ac86bc0cc8a3fe75d05",
+      "scope": "Full; bootstrap/drain and stale status paragraph."
+    },
+    "skills/04-review/controller/regression-guards/single-worker-initialization.md": {
+      "sha256": "b433dcb3cfca7d35f6e13aab1c67f5dd0ba8d7d3ad11a02e5cfda15b79a106bb",
+      "scope": "Full completion idempotence."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/kubernetes/controller.rs": {
+      "sha256": "b95813757f11423fc964a8ec9286be4cf4f891f09b4849b5e79fce6eca067897",
+      "scope": "Selected88\u2013205,628\u2013665,738\u20131189; registration/inventory/fullphasedrun/Namespace/childsupervision."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/kubernetes/center.rs": {
+      "sha256": "a0227d8154789e688a2e633f771844508e01934a7d7f82abd262e8c966ae4731",
+      "scope": "Full retained399; refreshed381\u2013414,700\u2013754,1267\u20131284; config/bothinventories."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/kubernetes/version_detection.rs": {
+      "sha256": "edfcd3ed056ebff53e386b6d06e5ef210844591c104504e9dbcd8a9d2762af8c",
+      "scope": "Full retained401; recognizedEndpointSlice."
+    },
+    "edgion-controller/src/config/conf_center/kubernetes.rs": {
+      "sha256": "ec179d16d38b20c8390b61976875966b86ae53f1a82a077051106fdceef42fc0",
+      "scope": "Selected86\u201399; suppression/readiness."
+    },
+    "skills/02-features/02-config/00-controller-config.md": {
+      "sha256": "07a601d4f500f3466f0556cd58e6fae88fe444994280d22a999d1a6a9b07dbd2",
+      "scope": "Selected579\u2013591; operatorcontract."
+    },
+    "skills/04-review/backends/regression-guards/endpoint-slice-ownership-transitions.md": {
+      "sha256": "4a0ecdc14fec4fbd04df443f65989883d991894f510572b44a756120d79fe344",
+      "scope": "Full original; Gatewaymutationdoesnotrequire disabledK8swatch."
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/kubernetes/controller_test/source_lifecycle_tests.rs": {
+      "sha256": "1018a48c8b3ed75440e260816d033a1a1cbf8a70bfabe42b978fc21e58891dad",
+      "scope": "Full163; actualsourcefixtures/tests."
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/kubernetes/center_test/caches_ready_tests.rs": {
+      "sha256": "edaaf798089c343ad29347e4464bd0c3d32a95608e86d3fadb28dd8525283e3e",
+      "scope": "Full retained399; refreshed115\u2013138; independentNamespacegate."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

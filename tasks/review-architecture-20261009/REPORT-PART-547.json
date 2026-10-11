@@ -1,0 +1,99 @@
+{
+  "partition": "PART-547",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/gateway/tls/no_hostname_listener/mod.rs",
+      "sha256": "b426efe6b8a63c43d5a7528e37cb5da6eea8f5811932953f56805daacd8988bc",
+      "fully_read": true,
+      "disposition": "Full typed private implementation/public suite export; parent TLS/Gateway/suites/test_client dispatch traced."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/gateway/tls/no_hostname_listener/no_hostname_listener.rs",
+      "sha256": "a7c854777a08da6006f9713dc9dfdafe1de238b506d79673897a0e19db38844a",
+      "fully_read": true,
+      "disposition": "Full one actual positive TLS case. Canonical context hostname/https_port selects authored hostname-less listener and health route; handshake/request/non200 errors fail. Preserve real catch-all readiness assertion and existing30-second deadline. No architecture improvement justified."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Retained full unchanged original rules."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Retained full index."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Retained graded gates."
+    },
+    "skills/04-review/testing/regression-guards/integration-port-selection-must-fail-closed.md": {
+      "sha256": "c2ff61188030d30484afd0c1323201295fb980755c3e4738fe78dd8eea785b89",
+      "scope": "Full original primary listener contract."
+    },
+    "skills/04-review/tls/intentional-design/gateway-tls-candidate-ownership.md": {
+      "sha256": "fb395c82548613e2c0182b8a1888804e487d2a27ce0a7302ffe9cbb7e7d0fce4",
+      "scope": "Full original candidate retention and catch-all ownership; historical checks not fresh."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "2524-2529 exact dispatch;3845-3898 canonicalhttps_port/hostname resolution."
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "540-581 default30-second case deadline and timeout-wrapped run."
+    },
+    "edgion-tests/integration/conf/ports.json": {
+      "sha256": "6672942f69329bb6b46de10be535b5b16744c0270e6bc7246eca3d2d5dcf0f7b",
+      "scope": "149-168 exactHTTPS31286 mapping."
+    },
+    "edgion-tests/k8s/kubernetes/gateway/service.yaml": {
+      "sha256": "e5e4bbde3201aa76b93060a365455cb83d223021dd64568ffce72d9ce8c05460",
+      "scope": "350-352 explicit31286 exposure."
+    },
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "1eb27bded8bcb40a82ea3cfd4ed6f20d386deedd1f349c7035a226fd44739454",
+      "scope": "563 health registration;737-754 actual200/OK producer."
+    },
+    "edgion-gateway/src/runtime/matching/tls.rs": {
+      "sha256": "c89ca99930b8c8a02b83d2edbf115cdb73f7ae758845655da9a040e0fb371c2d",
+      "scope": "450-475 actual snapshot exact/wildcard then listener-keyed catch-all selection;598-625 hostname-less map publication."
+    },
+    "edgion-gateway/tests/unit/runtime/matching/tls_test.rs": {
+      "sha256": "a184a0b3d89e07773a9b6348de8660b8702b397743a1ecb381b8491f62a77b6f",
+      "scope": "985-1016 full specific/catch-all/key isolation test;1223-1258 full deterministic cross-Gateway catch-all test."
+    },
+    "edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs": {
+      "sha256": "7c1223fe27e46a98d67c9d8bc604b0b109b2bd631cba3598f95fb83b6837205e",
+      "scope": "461-535 actual SNI/select callback and Gateway matcher usage."
+    },
+    "edgion-tests/integration/scripts/integration/run_integration.sh": {
+      "sha256": "5a6df789c2a894150691b3f50edf85f7ac055961ee0b1cc230291a6b90f85b76",
+      "scope": "1881,2298 actualNoHostnameListener dispatch."
+    },
+    "edgion-tests/k8s/scripts/run_k8s_integration.sh": {
+      "sha256": "9c7f539e02edccc91c46908c4b6afe1af3fb867b72c7b6061b613bd2723e641f",
+      "scope": "2533 actual selected suite."
+    },
+    "edgion-tests/integration/conf/Gateway/TLS/NoHostnameListener/Gateway_edgion-test_gateway-tls-no-hostname.yaml": {
+      "sha256": "59cf64900fb693d402073359c61e88771f9a7ff6fa0a8deb9e2e394c23dae83d",
+      "scope": "Full authoredHTTPS31286 hostname-less Gateway and explicitRoute hostname/section/test-http binding."
+    },
+    "edgion-tests/integration/conf/Gateway/TLS/NoHostnameListener/HTTPRoute_edgion-test_gateway-tls-no-hostname-route.yaml": {
+      "sha256": "87be5c968b424774e9881d255a9cf95bb796e99517faa0b2b8679abed9a8a871",
+      "scope": "Full authoredHTTPS31286 hostname-less Gateway and explicitRoute hostname/section/test-http binding."
+    },
+    "edgion-tests/k8s/conf/Gateway/TLS/NoHostnameListener/Gateway_edgion-test_gateway-tls-no-hostname.yaml": {
+      "sha256": "b09c2eaa68c6725b6f2ec3d45d828537de8ac02831951cf4c86afc30c26fb946",
+      "scope": "Full authoredHTTPS31286 hostname-less Gateway and explicitRoute hostname/section/test-http binding."
+    },
+    "edgion-tests/k8s/conf/Gateway/TLS/NoHostnameListener/HTTPRoute_edgion-test_gateway-tls-no-hostname-route.yaml": {
+      "sha256": "e64cd28d65707fc505c434e78296ad7ba4e8d164e5714586e76283d59b726820",
+      "scope": "Full authoredHTTPS31286 hostname-less Gateway and explicitRoute hostname/section/test-http binding."
+    }
+  },
+  "limits": "Static source/fixture/test-body evidence only; no builds/tests/network/Git. This case checks declared Route hostname on a hostname-lessTLS listener, not arbitrary HTTPRoute hosts, certificate trust, precedence against every provider, or full matrix conformance. Supporting matcher unit bodies preserve exact/wildcard/catch-all/key selection."
+}

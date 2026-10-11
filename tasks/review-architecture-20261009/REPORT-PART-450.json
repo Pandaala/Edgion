@@ -1,0 +1,96 @@
+{
+  "partition": "PART-450",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_backend/anthropic_provider.rs",
+      "sha256": "9d60438ca50e4fb53c7077b8d619b7529477023a9838652065814e6330ab178b",
+      "fully_read": true,
+      "disposition": "Full1-798. Retain real unary/tool/paced H1-H2 conversion, credential/header isolation, bounded errors and usage/redaction assertions; no new cause."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_backend/credential_exhaustion.rs",
+      "sha256": "e1cb78ae3011c773f1bd2abc28eafa60c0de7744422fca05d07a15f5f12c294d",
+      "fully_read": true,
+      "disposition": "Full1-456. Real scoped Redis RPM/TPM settlement and exact attempt ledger/exhaustion witness; controlled minute boundary follows original guard; no global flush."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_backend/gateway_admin.rs",
+      "sha256": "0f4600820ec945e008effbdea3b48aeb1a2e427f1b9ddbc65bebd1e4df764422",
+      "fully_read": true,
+      "disposition": "Full1-71. Canonical typed admin/UID helper agrees with runtime UID and typed fallback."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_backend/messages.rs",
+      "sha256": "f9dc0d5f6ab080737f1de230886dce240ca661ace21938552bc021bbfaf092b8",
+      "fully_read": true,
+      "disposition": "Full1-759. Preserve native JSON/SSE, state-bound credentials, accounting/quota and producer cancellation assertions. Pending ARCH304 K8s execution-owner extension."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_backend/mod.rs",
+      "sha256": "4a4174683f6002bfab4216a2d20ee7fa22656888df9c568037e74bbd05d2194b",
+      "fully_read": true,
+      "disposition": "Full1-19. Explicit typed exports and actual callers checked."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "edgion-tests/src/client/dynamic/scenarios/ai_messages_binding.rs": {
+      "sha256": "b036d3290ec6f82e7eaec5ff5edb29825345bcd27bf7ac7cf3955b7b150e0352",
+      "scope": "Full1-105 captured-generation A/B/A and unresolved-declaration rejection."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "1755-1815; ID/port searches43/1745; retained3670-3807."
+    },
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "1eb27bded8bcb40a82ea3cfd4ed6f20d386deedd1f349c7035a226fd44739454",
+      "scope": "640-653,2178-2250,2308-2330,2439-2458,2523-3169 actual producer."
+    },
+    "edgion-tests/integration/scripts/integration/run_integration.sh": {
+      "sha256": "5a6df789c2a894150691b3f50edf85f7ac055961ee0b1cc230291a6b90f85b76",
+      "scope": "1140-1180,1748-1775,2083-2098,2310-2365,2630-2640 actual invocations."
+    },
+    "edgion-tests/k8s/scripts/run_k8s_integration.sh": {
+      "sha256": "9c7f539e02edccc91c46908c4b6afe1af3fb867b72c7b6061b613bd2723e641f",
+      "scope": "2600-2790 and whole invocation searches for Messages/Responses/AiMessagesBinding."
+    },
+    "edgion-tests/k8s/scripts/common/validate_suite_parity.sh": {
+      "sha256": "55cb642237933d96b39c397dba69ed3f1d71f2eeda4be936d2176facc3103a2a",
+      "scope": "1-38,113-168,250-320,366-397,407-420."
+    },
+    "edgion-tests/k8s/scripts/common/k8s_dynamic_scenarios.tsv": {
+      "sha256": "bb7bd55699de2cd7f27e6f11416de8fda6bdad85af1b1dbf6b82d9a0b46b39f9",
+      "scope": "Retained full1-57 plus fresh ID search."
+    },
+    "edgion-tests/k8s/scripts/common/k8s_suite_scope_exceptions.tsv": {
+      "sha256": "26630cc0cdd07ff2dd2eade67a752fa941509749557bc01ebcfbdb67474165a0",
+      "scope": "Full1-5."
+    },
+    "edgion-gateway/src/ai/runtime/dispatch.rs": {
+      "sha256": "e75694fa7727aa04fa8c83743c83ab9cf13cb9647d05830d4e661d9962a19e7e",
+      "scope": "533-592 native processor versus Chat converter."
+    },
+    "edgion-tests/k8s/kubernetes/gateway/service.yaml": {
+      "sha256": "e5e4bbde3201aa76b93060a365455cb83d223021dd64568ffce72d9ce8c05460",
+      "scope": "540-576 and whole31990 search."
+    },
+    "skills/04-review/ai-routing/regression-guards/native-messages-preservation-and-accounting.md": {
+      "sha256": "6df1f00652e43177bc189df13efa608e51182f9e0686bfb2b04b6bfca93d7e43",
+      "scope": "Full original native accounting and preservation contract."
+    },
+    "skills/04-review/ai-routing/regression-guards/anthropic-translation-tests-must-use-real-wire-shapes.md": {
+      "sha256": "1fcb35646c71b6460719cd506d8e0c6bce93976a7c879ede52bcfe8cab58c6d2",
+      "scope": "Full original wire-shape tests contract."
+    }
+  },
+  "limits": "Static contextual review, all frozen primary hashes matched. Original project/graded/review rules personally retained/revalidated. No executions/mutations; support zero primary. Anthropic usage Task03 queued history is stale relative to current bounded converter and not fresh verification.",
+  "supplemental_candidates": {
+    "ARCH-304": {
+      "status": "awaiting-independent-extension",
+      "scope": "Native Messages static and AiMessagesBinding dynamic K8s execution",
+      "evidence": "Actual local static and targeted dynamic calls exist. K8s static selection/direct calls, complete dynamic manifest and validated exception union omit both. Chat conversion does not cover native state/history/accounting/cancellation. Add real K8s baseline/reset manifests, selector-backed existing /messages/native, GatewayService31990, namespaced Redis dependency and existing scenario registration/reset. No Responses extension or row-only remedy; preserve existing confirmed GraphQL/transcoder scope pending independent revision."
+    }
+  }
+}

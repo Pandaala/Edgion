@@ -1,0 +1,78 @@
+{
+  "candidate": "ARCH-089",
+  "complete": true,
+  "verifier": "/root/analyze_outbound",
+  "decision": "confirmed",
+  "input_sha256": "3a5e488b3f68c02d63210df2e682fdc81166ad3f262bb4c3d41a01530915d87b",
+  "approved_claim_sha256": "1f61912bb310b7119497ff8699709c63422c454c744b379d3e421b2b5f1f0b08",
+  "evidence": [
+    "Plain typed TLS hosts reaches actual custom schema, real CRD rejects malformed pattern.",
+    "Pinned Pattern Display includes submitted value; current custom validator/debug/actual Admin WARN leak authored configuration.",
+    "Existing private value-free bounded Gateway formatter can unify both registries while preserving admission/placement/typed string diagnostics.",
+    "No private-key or exploit incident claimed; authorized diagnostics response distinct persistent WARN."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full retained personally read original rules."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Original personally read index."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full graded original applied."
+    },
+    "skills/04-review/resources/intentional-design/schema-validator-non-k8s-asymmetry.md": {
+      "sha256": "35f0559a526dbc627449f1d1e005ed7f31bb7c960591999355d5ea9b67592820",
+      "scope": "Full placement/registry original; truncation recovered."
+    },
+    "skills/04-review/resources/intentional-design/validation-errors-untyped-string-vs-status-reason-taxonomy.md": {
+      "sha256": "6349ae9b5771888baccae01f0eabf13bc14643a7c1485b479d4ed20fafc31926",
+      "scope": "Full accepted string-diagnostic original; no new taxonomy needed."
+    },
+    "skills/03-coding/01-log-safety.md": {
+      "sha256": "74591411c294befded433b7c2be571202deb22ef36030a704caa60055f214863",
+      "scope": "1-95 secret/config/summary contract."
+    },
+    "edgion-controller/src/conf_mgr/schema_validator.rs": {
+      "sha256": "ba353745a64eb12b23ccac3888884ae3878b83f3fb54618d1de6c9c7b563768a",
+      "scope": "Full415-line current source."
+    },
+    "edgion-controller/tests/unit/conf_mgr/schema_validator_test.rs": {
+      "sha256": "3a14138616c3f6f972fc2d00d7d0efe550ac43624617bdbd189f6615e5843368",
+      "scope": "Full327-line current bodies."
+    },
+    "edgion-controller/src/api/common.rs": {
+      "sha256": "2d96d7e138a37e864cf499469fefb2fe14dd1f18fc6661e9bd7850f8a3522dc9",
+      "scope": "1-100,225-252,348-407 actual WARN/parse/version."
+    },
+    "edgion-controller/src/api/namespaced_handlers.rs": {
+      "sha256": "81943b798b18bb4fbf1c234835e89fdd02fbfb50f27920fe186ae6b783aaa5d5",
+      "scope": "125-168,205-238,426-467,559-582 actual TLS create/update."
+    },
+    "edgion-controller/src/api/validate_handlers.rs": {
+      "sha256": "9e9a7d3f14d684e842e2006126973c5a048e8dc4afd39dd4d1a9957719a68bd8",
+      "scope": "1-185 actual authorized response."
+    },
+    "edgion-resources/src/resources/edgion_tls.rs": {
+      "sha256": "fbd6f0b4e557d08543f071edd671f0e807b14b880204661d99da153b976060b6",
+      "scope": "165-220 plain host model/serde/Secret adapter."
+    },
+    "config/crd/edgion-crd/edgion_tls_crd.yaml": {
+      "sha256": "2916773e88d7d4956790259d774efdf5661969f08a5b707a0cc1214fe92599f6",
+      "scope": "1-84 real pattern/required reference."
+    },
+    "Cargo.lock": {
+      "sha256": "18b7b7dee01e024ab6d21f5692ce04a343c4fb265092c7f587099e91c28bea17",
+      "scope": "Actual jsonschema0.40.2 pin."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/jsonschema-0.40.2/src/error.rs": {
+      "sha256": "ee763c4f8b084eb074a3c8f53a12ad39d60406fafb2ce5356ed5b28dc7f1ad2f",
+      "scope": "1358-1378,1418-1448,1468-1488,1500-1517,1530-1549 raw-instance Display."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

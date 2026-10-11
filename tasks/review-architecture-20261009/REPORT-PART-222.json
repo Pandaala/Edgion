@@ -1,0 +1,179 @@
+{
+  "partition": "PART-222",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-common/src/allowed_san.rs",
+      "sha256": "eeae1536c88d7e25e56d37f5ce0365f27078eb9d1889c8e26be51a01d6ea15ec",
+      "fully_read": true,
+      "disposition": "No finding: typed SAN/ASCII containment and explicit regex case policy verified against actual mTLS leaf consumers and tests; allocation-only redesign lacked worthwhile bounded scenario."
+    },
+    {
+      "path": "edgion-common/src/cert_util.rs",
+      "sha256": "5b74e49f2a54058152050bdeea27eaeaafb39fd794466b18a671a989c71b5a7b",
+      "fully_read": true,
+      "disposition": "No finding: canonical first-CERTIFICATE validity and sanitized PEM diagnostics; inclusive allocation-free classifier and client metadata consumer checked."
+    },
+    {
+      "path": "edgion-common/src/egress.rs",
+      "sha256": "ef68ad370443a10c0e6d58aad1cdd11507e94d1ac4654219e85c9b2ca72bcf05",
+      "fully_read": true,
+      "disposition": "No finding: canonical classification, mapped IPv6, selected resolver, bounded positive/negative cache and transport adapter; actual test bodies checked."
+    },
+    {
+      "path": "edgion-common/src/grpc_tls.rs",
+      "sha256": "8a07b9d2ca8531b8bac2dd9357029a55e58487de7f5082a7d307e46c2de94085",
+      "fully_read": true,
+      "disposition": "ARCH-075: first-any-PEM validation can describe a different leaf from transport selection; reject mismatched labels at the gate without unilateral Controller selector migration."
+    },
+    {
+      "path": "edgion-common/src/lib.rs",
+      "sha256": "ffba1431429869b11d02d38eb2b2e5b9f0dd422e3a3b53076ed065d1610aa3af",
+      "fully_read": true,
+      "disposition": "No finding: full exports and manifest/DAG consumers checked; no duplicate runtime ownership."
+    },
+    {
+      "path": "edgion-common/src/startup.rs",
+      "sha256": "56a99496cc9848c5187dcbfc9ba61278e4f8df962fe2061f967ea3a31f577f06",
+      "fully_read": true,
+      "disposition": "No finding: canonical binary panic/fatal ownership, nested allocation-free redaction, bounded recursive destructor handling and subprocess test bodies."
+    },
+    {
+      "path": "edgion-common/src/test_mode.rs",
+      "sha256": "f435a9ce45e222ad92fff5e6d6f9cf45484637a981a8ed97b7ef7c3c29c30763",
+      "fully_read": true,
+      "disposition": "No finding: cold explicit process flags and actual CLI/API/backend/access-log consumers; no independent dynamic policy owner."
+    },
+    {
+      "path": "edgion-common/src/time.rs",
+      "sha256": "db55d360b960422bfbee1a007e95b41eb15f851cfdd1957f5f501bc441850418",
+      "fully_read": true,
+      "disposition": "No finding: injected clocks, checked rate-limit parsing and explicit caller-specific cooldown policy; actual test/caller bodies."
+    },
+    {
+      "path": "edgion-common/src/tls_validation.rs",
+      "sha256": "dc721b4c99879e77d184b4e97f00bc9b56f57c50b3d389f9edeab15073b37562",
+      "fully_read": true,
+      "disposition": "No finding: canonical ordered serving-chain/host/key/CA validation and deterministic status; actual Controller/Gateway consumers and validation tests."
+    }
+  ],
+  "candidates": [
+    "ARCH-075"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original personal governing rules, retained continuous review; only root AGENTS found."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original knowledge index."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original graded gates."
+    },
+    "skills/01-architecture/00-common/05-unification-points.md": {
+      "sha256": "011c7e0897b5af81b6459096b678774d9ac988843f705295ecc559d8892d7d92",
+      "scope": "Full original canonical owners during continuous review."
+    },
+    "skills/04-review/tls/regression-guards/mtls-leaf-only-whitelist-verification.md": {
+      "sha256": "c05364df1aad05aaaacb2e7ed27d1609a9f8664cf3a9a3206efae8834a2ac42f",
+      "scope": "Full current original policy, historical limits and reevaluation triggers."
+    },
+    "skills/04-review/tls/intentional-design/relist-recompiles-every-generation.md": {
+      "sha256": "f1c4315b2ca09092ce525f12cc923074ae581b1284c9770432dbeb98bb6746ce",
+      "scope": "Full current original policy, historical limits and reevaluation triggers."
+    },
+    "skills/04-review/tls/regression-guards/edgion-tls-serving-chain-install.md": {
+      "sha256": "075132389c7e04484fe5d93276c597952f18c416c59b7d7250780ebecd307f8d",
+      "scope": "Full current original policy, historical limits and reevaluation triggers."
+    },
+    "skills/04-review/conf-sync/regression-guards/installed-certificate-expiry.md": {
+      "sha256": "020d95e0d18707c2941a4d2605ba846a35526ba5f8c2f6e8a066c27506d3b931",
+      "scope": "Full current original policy, historical limits and reevaluation triggers."
+    },
+    "skills/04-review/tls/regression-guards/allowed-san-regex-case-mode.md": {
+      "sha256": "f1ba32979011d614d35eecbf83c3bc9ef9e8db31c7ddadde9b293d8345c0b27d",
+      "scope": "Full original case semantics."
+    },
+    "edgion-common/Cargo.toml": {
+      "sha256": "ff48da27e3dac181748df83bf88b68e3be62e8b10fbe8f2f82842ed8706cc71c",
+      "scope": "Full manifest/DAG."
+    },
+    "edgion-common/tests/unit/egress_test.rs": {
+      "sha256": "f5c0ba905531169ab05bc7ed39bf77ad98719005dcbc190e68cba8462e143e4c",
+      "scope": "Full actual cache/classification/transport test bodies."
+    },
+    "edgion-common/tests/unit/tls_validation_test.rs": {
+      "sha256": "e1283accfcef6fb19e9d23f4eaae42087be72e3ac34410dfc4b2db86406d8bac",
+      "scope": "Actual selected 1-504 and506-653 validation/chain/IP/mTLS bodies; no execution."
+    },
+    "edgion-common/tests/unit/grpc_tls_test/validate_identity_tests.rs": {
+      "sha256": "0e3c7f4c21ad668d992ea34ac5acce05795d93f56ffb68db6ef74455f3a935a8",
+      "scope": "Full actual identity gate tests."
+    },
+    "edgion-controller/src/conf_sync/conf_server/tls_identity.rs": {
+      "sha256": "9e01e046ac0f25b710e0df2ac848a2b3557828d98957f905c525fc7ab804b9e6",
+      "scope": "Full source, metadata/config/store ownership; context-only."
+    },
+    "edgion-controller/tests/unit/conf_sync/conf_server/tls_identity_test.rs": {
+      "sha256": "9b08bbe06800a1a83c4891593a48bbcc490093908439277bcf3d83887a445596",
+      "scope": "Full actual metadata/rotation/cancellation/atomic tests."
+    },
+    "edgion-controller/src/conf_sync/conf_server/cert_watch.rs": {
+      "sha256": "bd12d113aa8f0bd5a7d1513842170ca3593c35b992592eb62a3c48f80dd12aee",
+      "scope": "1-155 watcher contract and real read/from_pems/store path."
+    },
+    "edgion-controller/src/services/conf_sync_ca/provision.rs": {
+      "sha256": "b9c7a03134233f7f9eb474ab2f8db947ba179ad6035cee2a42b94a03c793b4f2",
+      "scope": "1-90 shared validator/adoption outcome."
+    },
+    "edgion-controller/src/services/conf_sync_ca/cert_util.rs": {
+      "sha256": "8726ad01433e43c5440ec9ef47b66278f9f5ad55169f9b9d959fa50b06119b1f",
+      "scope": "1-115 first-block metadata/chain/rotation inputs."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_tls.rs": {
+      "sha256": "47b60b8e147ac8fd1d1ad341819fa98a2fd1dd1bd75f43203f494d28f5fc479f",
+      "scope": "390-435 shared deterministic validation/status consumption."
+    },
+    "edgion-gateway/src/tls/validation/mtls.rs": {
+      "sha256": "e2d3cef5948af1dbd0fd92518b30337d6e7b93272009f4ea807d9e578548dbd9",
+      "scope": "Full typed SAN projection/canonical leaf logic."
+    },
+    "edgion-common/src/dns/http_fetcher.rs": {
+      "sha256": "e498a50ce51ea2086425dd95ac8602209f2313aad7526e489db176680fe1d533",
+      "scope": "65-115 actual egress preparation/literal enforcement."
+    },
+    "edgion-gateway/src/backends/peer_builder.rs": {
+      "sha256": "b1ceab6e862bc12a76303adf78e19bd39aa5d4209ea95af95022ad7724b04ba9",
+      "scope": "346-385 explicit endpoint loopback policy."
+    },
+    "edgion-controller/src/api/mod.rs": {
+      "sha256": "9320b3b8da4191ad7317024052c8db9c4da21835721ec26cd051105dabb0d1d6",
+      "scope": "635-665 process flag consumer."
+    },
+    "edgion-controller/src/services/credential_manager/providers/oauth2.rs": {
+      "sha256": "3c6fad636fe0707603c51ebe40437cc7bff7bde6c39b3dac62a8832cd0f1fe65",
+      "scope": "350-373 Retry-After canonical parsing and local caps."
+    },
+    "edgion-gateway/src/ai/http/response.rs": {
+      "sha256": "99eb6d5f4b8cdf04d185582c38f947d75f763cd0356de4010fcc1f3a6b1cee65",
+      "scope": "82-112 provider reset selection/canonical parsing."
+    },
+    "edgion-gateway/src/ai/runtime/credential_outlier.rs": {
+      "sha256": "badd9a03d28ff47bd6989757115650cc2703a8aac00f7569094d70dfcef557cb",
+      "scope": "141-163 retry hint/cooldown."
+    },
+    "edgion-gateway/src/plugins/http/common/outbound/call.rs": {
+      "sha256": "16f9a8c69669aa4b4ecb9457532875dbba69bb0f7c8a5c79909aaa2e8ecd0bed",
+      "scope": "601-622 shared time projection."
+    },
+    "Cargo.lock": {
+      "sha256": "18b7b7dee01e024ab6d21f5692ce04a343c4fb265092c7f587099e91c28bea17",
+      "scope": "Selected exact locked x509-parser0.18.1,rustls0.23.45,pemfile2.2.0 versions."
+    }
+  },
+  "limits": "All 9 primary implementations fully read across bounded excerpts and fresh hashes; Common TLS validation 1-829 full. Static only; no builds/tests/network. Dependency selection witness read in locally cached locked sources; peer behavior not experimentally verified. Supporting reads zero primary coverage."
+}

@@ -1,0 +1,49 @@
+{
+  "candidate": "ARCH-353",
+  "complete": true,
+  "verifier": "/root/verify_ip_union",
+  "decision": "confirmed-with-revision",
+  "input_sha256": "98cc3ef3938781bc1df888d6cdce9b101ec7d02127b566dfde25cb3714cd1e34",
+  "approved_claim_sha256": "05ab0058d6787b01a4250dbec238f5bff56e27744a0ba3e5343d0f65c9276a9d",
+  "evidence": [
+    "Independent verifier confirms observation-error false PASS; current producer stores opt-in terminal records even with no plugins.",
+    "Exact approved revision removes unsupported independent single-case selection claim; serial suite selection does not witness later request.",
+    "Original rules/topic decisions/both fixture trees and real units read personally; no execution or incident claim."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "edgion-tests/src/client/suites/edgion_plugins/debug_access_log/logs.rs": {
+      "sha256": "2c83844e7ccc9e1c101d762e7810da3693020871cca9eec761cd93dfe2275036",
+      "scope": "Model19-62,helper67-99,empty263-299,status359-404,registration411-430."
+    },
+    "edgion-tests/src/client/access_log_client.rs": {
+      "sha256": "f7691b8ad4c8765a0ab446c414a1596df48c930d8472678d724f918edcf84d55",
+      "scope": "Full marker/traceparent/auth/HTTP/envelope/JSON/retries and real unit."
+    },
+    "edgion-gateway/src/routes/http/proxy_http/pg_logging.rs": {
+      "sha256": "972f72ec7371c3ab876bfa12957eb70559e31aaa9d25f8f2078c24e197523a6a",
+      "scope": "1-145 canonical producer;104-144 opt-in storage has no plugin-presence gate."
+    },
+    "edgion-gateway/src/observe/access_log/entry.rs": {
+      "sha256": "a0db01fd33530ef61dc5bd4f356320b0bdfd940111273b0f8ac260e6ab518965",
+      "scope": "174-178 stage omission;230-257 context projection."
+    },
+    "edgion-gateway/src/observe/access_log_store.rs": {
+      "sha256": "db0f8065a6dfc62de5f0050c6f262081cd9625c3022c00add03df4fe5cd735b7",
+      "scope": "1-220 bounded admission/TTL/status."
+    },
+    "edgion-gateway/src/api/mod.rs": {
+      "sha256": "a7b6ba1fd44e1b5f7dad36c738e970bbf7b31e95b2cd5de73820904271de9662",
+      "scope": "276-306 testing/auth mount;334-350 envelope;646-664 endpoints."
+    },
+    "edgion-gateway/tests/unit/observe/access_log/entry_test.rs": {
+      "sha256": "21b2b3b5b6486bdab12b6fb831b2d94a944fbcd7de6dc20571b0da15c5118caa",
+      "scope": "227-239 actual absent-state omission unit."
+    },
+    "edgion-gateway/tests/unit/observe/access_log_store_test.rs": {
+      "sha256": "0ecf063cfe5aea4e707ea4c320ff3eed14bb128788d93ddcca30bbcd67196da5",
+      "scope": "1-19,100-151 real store/missing/admission/TTL units."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

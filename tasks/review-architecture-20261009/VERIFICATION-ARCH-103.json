@@ -1,0 +1,103 @@
+{
+  "candidate": "ARCH-103",
+  "complete": true,
+  "verifier": "/root/analyze_outbound",
+  "decision": "confirmed",
+  "input_sha256": "e3bcfa5be79fbd8458d26b3ba5372a02d7eaa25e8ebe6a7dc74ef778d60fcc6c",
+  "approved_claim_sha256": "2ffb0cda1fe6a463519e0dbef8f66129cc6e116861372a487dfea0941445afa4",
+  "evidence": [
+    "Complete forward-only owner removes edges but retains empty historical target Strings/HashSets; globalRustsearch finds remove_edgion_config_data only definition, ordinary reset is distinct.",
+    "Actual EP RegionRoute registers valid missingtargets beforelookup; WAF/stream/Gateway clear-before-add/delete paths remove logical edges, preserve obsolete buckets.",
+    "Actual ConfigData deletion preserves nonempty incoming dependencies; retain nonempty under existinglock preserves shared/missing/deleted target recovery and publicgetrefs keys/results.",
+    "Generic noGCproof depends on emptybucketpruning absent here; current lookup-based tests do not distinguish absent versusempty. No broadgenericmigration required.",
+    "OuterHashMap capacity may remain historical: no capacityshrink/processheap bound or O(liveedges)clear complexity claim. StaticP3ownershipvalue, no measurements/revision."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "full original"
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "full original"
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "full original;88-109,130-149 reuse/serialrules"
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "full original"
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "full original"
+    },
+    "skills/04-review/cpu-memory/SKILL.md": {
+      "sha256": "3012dfd4151322ec3af1f340fc9100b821df8963401f65052ab5f54a263f3573",
+      "scope": "full original"
+    },
+    "skills/04-review/cpu-memory/review-evidence/bidirectional-ref-manager-no-gc-not-memory-leak.md": {
+      "sha256": "d9df4f6f7f840c74bd8743cf4895b10ea54f68e2a035a76d670045bbca807dfb",
+      "scope": "full scoped generic assumptions"
+    },
+    "skills/04-review/cpu-memory/review-evidence/performance-review-methodology.md": {
+      "sha256": "67d2950c67ddb50f7f3fc32b75cf0917d941931a4beeb831eb7ee5a08c2c6ce3",
+      "scope": "full cold/history cost methodology"
+    },
+    "skills/01-architecture/01-controller/05-resource-processor.md": {
+      "sha256": "2f557ac0077fe0fefc39e77522f96edc8f3d660c47d4aec848ec8cf6943ee4c6",
+      "scope": "153-183 reference index architecture"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/edgion_config_data_utils/ref_manager.rs": {
+      "sha256": "6b71cba78b9175fd15afdd1be2f75552e3b0858ce9f20bc65a40ea7984f212f3",
+      "scope": "full65 and global remove-method call search"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/ref_manager.rs": {
+      "sha256": "4afcf6a056dd50a86d0db0bd0fe17c8cd5017ee5186d53f1c457a1ce00991d4f",
+      "scope": "1-57,201-280 genericlock/prune/reverse traversal"
+    },
+    "edgion-controller/src/conf_mgr/runtime.rs": {
+      "sha256": "4894a9456643f62b21dd1dc39984acf71696d0f5e5e58a85b119778af92ce811",
+      "scope": "248-272 reset;constructor/fieldsearch"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_config_data.rs": {
+      "sha256": "e8dfb8e3af2c1b95ae82dc2d9656f5a8fa95bd0af83250b83e03d95f9246b6b8",
+      "scope": "1-288 WAF rebuild/delete incoming dependency"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs": {
+      "sha256": "9a6ed6dbb4caa2a8a6a5b9bee0e9a9d75344edd9aad3b9eeee5dccc6413dc16a",
+      "scope": "63-123,255-326,385-422 actualregionextract/clearadd/delete"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs": {
+      "sha256": "794c9bfcf6310054566aab1055ea730309a109ca5a15e6648bf181b5a66f48c0",
+      "scope": "205-265 actual clearadd/delete"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/gateway.rs": {
+      "sha256": "3d241427e284a97f50eff549b41ef8df8f060a6b568c39216fc1efe6c08e9304",
+      "scope": "320-353,669-698,986-1003 actualmissingtarget/ownerreplacement/delete"
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/edgion_config_data_test/dependency_requeue_tests.rs": {
+      "sha256": "9dc1b3b8c6291e0b4e0d5d3d22f0222e811a3f5f98eaaba6443b72592ead0a2b",
+      "scope": "full379 actualcurrentbodies"
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins_test.rs": {
+      "sha256": "3cd131fcab4e744691ed943db288c06d1a35cd30197b751138282983f5a015f8",
+      "scope": "368-374,2397-2448,3105-3224,7914-7962 actualregionexisting/missing/bareIPclear tests"
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins_test.rs": {
+      "sha256": "3a43f0ca4bc423948e49629015fe31732e30cb18523735a00a3202f97a228dac",
+      "scope": "887-983 relevant fullrecovery/retarget/delete test"
+    },
+    "tasks/pending/resource-reference-contract/02-field-manifest.md": {
+      "sha256": "6799d52b46163b7b02f7336d316e4733ab6bf8fb4154d0699c1396d4681d96a5",
+      "scope": "306-331,389-417;250-259/428 targeted owner/recoveryrows"
+    },
+    "tasks/pending/resource-reference-contract/01-spec.md": {
+      "sha256": "a01c94e7b47eba2046275fdaafde4be16b71ae053a8ba619dec8656a723a8678",
+      "scope": "543-571 ConfigDatabinding; no matching bucketcorrectionfound"
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

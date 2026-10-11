@@ -1,0 +1,111 @@
+{
+  "candidate": "ARCH-140",
+  "complete": true,
+  "verifier": "/root/analyze_conversion",
+  "decision": "confirmed-with-revision",
+  "input_sha256": "58030b8992d29ab9de2d0657be666d62196ad5f1d34dfc540cc229821d28af30",
+  "approved_claim_sha256": "30549117c33ce4a7499147678264f0851ccddf790840fc1a27487dfe6df7a8f9",
+  "evidence": [
+    "Confirmed with exact pinned-version revision only: typed parse precedes schema; reachable invalid closed enum retains authored value in YAML Error Display; numeric location supports private value-free boundary. Original no-preview decision retained, its broad value-free-error assertion false. Distinct ARCH089 later schema formatter. Dedup artifact ARCH089 full read (not dependency-hashed mutable result)."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full retained original independently read, freshly hash matched"
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full retained original independently read, freshly hash matched"
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full retained original independently read, freshly hash matched"
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full retained original independently read, freshly hash matched"
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full retained original independently read, freshly hash matched"
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full retained original independently read, freshly hash matched"
+    },
+    "skills/03-coding/01-log-safety.md": {
+      "sha256": "74591411c294befded433b7c2be571202deb22ef36030a704caa60055f214863",
+      "scope": "1-150; prior full retained"
+    },
+    "skills/04-review/observability/regression-guards/config-client-data-preview-log-safety.md": {
+      "sha256": "e55ad384e5f21389c968b1b832ce34d0c30eed150269aff601d972c86c39ffd8",
+      "scope": "full; incorrect value-free Display assertion"
+    },
+    "skills/01-architecture/01-controller/02-admin-api.md": {
+      "sha256": "d6f53ff71ce2f274f867daca6f354afb69822b5b5d7207eddc2f4e3dd708acd7",
+      "scope": "1-80,130-165,308-349"
+    },
+    "skills/04-review/admin-api/intentional-design/admin-api-write-precondition-opt-in.md": {
+      "sha256": "dd4cdc023de0302a24fdbce5bf4012b019d173ebc4642689d54ffcb178242770",
+      "scope": "1-60,110-161"
+    },
+    "edgion-controller/src/api/common.rs": {
+      "sha256": "2d96d7e138a37e864cf499469fefb2fe14dd1f18fc6661e9bd7850f8a3522dc9",
+      "scope": "full1-404"
+    },
+    "edgion-controller/tests/unit/api/common_test.rs": {
+      "sha256": "04e29b6cb33bcddada8638b828b3cc8940bd0968667ac0218c790b52da01388f",
+      "scope": "full1-194"
+    },
+    "edgion-controller/src/api/namespaced_handlers.rs": {
+      "sha256": "81943b798b18bb4fbf1c234835e89fdd02fbfb50f27920fe186ae6b783aaa5d5",
+      "scope": "1-175,215-245,369-465,556-590"
+    },
+    "edgion-controller/src/api/validate_handlers.rs": {
+      "sha256": "9e9a7d3f14d684e842e2006126973c5a048e8dc4afd39dd4d1a9957719a68bd8",
+      "scope": "full1-230"
+    },
+    "edgion-controller/src/conf_mgr/conf_center/common.rs": {
+      "sha256": "3c3b85c5d3af871dfc838d1b2d4ea1d886c596a8faa8d103979105db8db7a6d9",
+      "scope": "285-355"
+    },
+    "edgion-resources/src/resources/edgion_tls.rs": {
+      "sha256": "fbd6f0b4e557d08543f071edd671f0e807b14b880204661d99da153b976060b6",
+      "scope": "70-125,140-240"
+    },
+    "edgion-controller/src/api/mod.rs": {
+      "sha256": "9320b3b8da4191ad7317024052c8db9c4da21835721ec26cd051105dabb0d1d6",
+      "scope": "551-577,632-648,682-726"
+    },
+    "edgion-controller/tests/unit/api/cluster_handlers_test/update_identity_tests.rs": {
+      "sha256": "5bd353d464cfe237c9346619c10dc2c9c0e970f58ff0271c1aa4394181232e76",
+      "scope": "full"
+    },
+    "edgion-controller/tests/unit/api/types_test/cache_redact_tests.rs": {
+      "sha256": "7a79f8f539ce852f7df9f4a95deefcfdc38f6234e03c5f4e13b66dc80962bd57",
+      "scope": "full"
+    },
+    "Cargo.lock": {
+      "sha256": "18b7b7dee01e024ab6d21f5692ce04a343c4fb265092c7f587099e91c28bea17",
+      "scope": "5970-6025,6038-6050,6080-6102"
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_core-1.0.229/src/de/mod.rs": {
+      "sha256": "5ec8602d593915e0cf480b0ce67b02f6ab066dac34725237d2c7b4a6ef12a845",
+      "scope": "205-290"
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_derive-1.0.229/src/de/identifier.rs": {
+      "sha256": "b653c26f4274e5c323e3f893c6f9a2b21bd5c873abdc2a801f0289a5e56a9f6c",
+      "scope": "250-285"
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_yaml-0.9.34+deprecated/src/error.rs": {
+      "sha256": "7734732a5fc907e9a424cc7df48ca4a46cf5d57bedf3e328b0b31c5166d3421a",
+      "scope": "full1-290"
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_yaml-0.9.34+deprecated/src/de.rs": {
+      "sha256": "b5416aa3576e454aa92ee3fab10550f8de7d0d6e4d96a9a6a3afdafab12d12bc",
+      "scope": "380-407,738-772,801-827,1150-1225,1460-1492,1705-1795"
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

@@ -1,0 +1,95 @@
+{
+  "partition": "PART-524",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_tls/https/https.rs",
+      "sha256": "f67e438115e9d604c23d9c02b824bf3f5925c5b1433d08ac498f705ca118e542",
+      "fully_read": true,
+      "disposition": "Full152 lines; all3 real HTTPS cases/context URLs examined against local and K8s fixtures/server. Health validates2xx+actual secure-path catch-all body, echo2xx/status200 are bounded connectivity assertions; no distinct architecture finding. Selfsigned harness acceptance is not certificate trust verification."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_tls/https/mod.rs",
+      "sha256": "d9c3d743e4c84f1bb9d9dc03b115caa1cedfb6d4642c312cf47e557882270ab4",
+      "fully_read": true,
+      "disposition": "Full4 lines static module/reexport and actual parent/CLI consumers; no finding."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Personally retained original full rules unchanged."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Personally retained knowledge index."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Personally retained graded gates."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Original index personally retained."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Original routing personally retained."
+    },
+    "skills/05-testing/01-integration-testing.md": {
+      "sha256": "e260042b508fa0956873d1b3c059531f1733a7c15423c548081afb71703a10e1",
+      "scope": "Original full guide personally read; actual fixture assertions and bounded contexts."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "3270-3355 real aggregate and targeted registrations; earlier full read and listener resolution retained."
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "68-133 actual5s client/no_proxy/selfsigned/DNS; retained155-237,525-578 real projection/30s cases."
+    },
+    "edgion-tests/src/client/suites/edgion_tls/mod.rs": {
+      "sha256": "153105658634e2e984dfb532b5edcffef4000e752bb096ce39a32a6ba29bb055",
+      "scope": "Full actual static export parent."
+    },
+    "edgion-tests/integration/conf/EdgionTls/https/Gateway.yaml": {
+      "sha256": "24b93300f7c54cef0842d0eda494791a58df141a8ca1f099167702239060b76d",
+      "scope": "Full actual31190 listener/test.example.com/secure+default-prefix backend30001 and selected TLS secret attachment."
+    },
+    "edgion-tests/integration/conf/EdgionTls/https/HTTPRoute.yaml": {
+      "sha256": "325935d47d4c4bbb317d3e1cb2165a94c7b843c2bc2930b4dda435efa8252917",
+      "scope": "Full actual31190 listener/test.example.com/secure+default-prefix backend30001 and selected TLS secret attachment."
+    },
+    "edgion-tests/integration/conf/EdgionTls/https/EdgionTls.yaml": {
+      "sha256": "1dd21fd78fc9c42e12a07c5e5a996c81f94c1b16424e41d1f49b876820e2eabc",
+      "scope": "Full actual31190 listener/test.example.com/secure+default-prefix backend30001 and selected TLS secret attachment."
+    },
+    "edgion-tests/k8s/conf/EdgionTls/https/Gateway.yaml": {
+      "sha256": "24b93300f7c54cef0842d0eda494791a58df141a8ca1f099167702239060b76d",
+      "scope": "Full actual31190 listener/test.example.com/secure+default-prefix backend30001 and selected TLS secret attachment."
+    },
+    "edgion-tests/k8s/conf/EdgionTls/https/HTTPRoute.yaml": {
+      "sha256": "325935d47d4c4bbb317d3e1cb2165a94c7b843c2bc2930b4dda435efa8252917",
+      "scope": "Full actual31190 listener/test.example.com/secure+default-prefix backend30001 and selected TLS secret attachment."
+    },
+    "edgion-tests/k8s/conf/EdgionTls/https/EdgionTls.yaml": {
+      "sha256": "1dd21fd78fc9c42e12a07c5e5a996c81f94c1b16424e41d1f49b876820e2eabc",
+      "scope": "Full actual31190 listener/test.example.com/secure+default-prefix backend30001 and selected TLS secret attachment."
+    },
+    "edgion-tests/integration/conf/EdgionTls/https/Service.yaml": {
+      "sha256": "7155a3a7f5a20f6d3017188cf8cf230edf60662e274635123616f15d2b8111fc",
+      "scope": "Full actual backend Service/loopback30001 endpoint."
+    },
+    "edgion-tests/integration/conf/EdgionTls/https/EndpointSlice.yaml": {
+      "sha256": "669009d3222380d93c4c87d9c5925dfd4b00854a4f1be69c80c1df867ccc929b",
+      "scope": "Full actual backend Service/loopback30001 endpoint."
+    },
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "1eb27bded8bcb40a82ea3cfd4ed6f20d386deedd1f349c7035a226fd44739454",
+      "scope": "550-570 actual server/router and650-710 real catch-all binding;3495-3560 catch-all response path evidence."
+    }
+  },
+  "limits": "Static source-complete review; no test/build/network/source/Git mutation. Fixture path is passed unchanged to catch-all backend. Existing ARCH272 concerns other aggregate children, not this correct HTTPS context. Existing punctuation is unmodified and not an architecture finding; no unit bodies in primaries."
+}

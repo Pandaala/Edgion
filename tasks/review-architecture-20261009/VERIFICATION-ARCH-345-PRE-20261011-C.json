@@ -1,0 +1,65 @@
+{
+  "candidate": "ARCH-345",
+  "complete": true,
+  "verifier": "/root/verify_ip_union",
+  "decision": "confirmed",
+  "input_sha256": "b22f8984d9656c5323c34816f7daa35293da5cdfe0880fe2fbcd4a81a1477909",
+  "approved_claim_sha256": "912fadef497df69c4b534c2e56168422f2c070149567854b11c5d6abb63fe1dc",
+  "evidence": [
+    "ActualselectedK8sresponseentry lacks pluginConfig whilelocalsets response-body-probe. Authoredguest absentconfig returnsContinue; hostPausecounterincrements onlynonzeroaction.",
+    "Case requiresnonempty200+positive summedcounterdelta; route/backend/mount/runner exist. Existingfixturefieldrepair feasible withoutcallbackchange orskip.",
+    "Checked-inartifact onlyheader/export/string-inspected, notexecuted/provensourceidentical. Quiet authoredguest andothertrafficmasking qualifications preserved; future authorized artifactbehavior verification remains."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "edgion-tests/src/client/suites/edgion_plugins/body_plugins.rs": {
+      "sha256": "2d9b243fdf9e8b22e3260283f93747fd4f8a2bd3ed5cd1f2e83c5179d35410c4",
+      "scope": "1620-1760 fullhook/caselist."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/BodyPlugins/resources.yaml": {
+      "sha256": "0a12859130007b2c17bbaf54641283d16956a819104003c4c6758882cf156850",
+      "scope": "112-145 request/responseentries;643-672 route/backend."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/BodyPlugins/14_EdgionPlugins_wasm-body.yaml": {
+      "sha256": "d480439b619a7c4f6289c3ba68b098986344181854021b0e21831e53d87838ce",
+      "scope": "Full localmode/separatemirror."
+    },
+    "edgion-tests/wasm/header-demo/src/lib.rs": {
+      "sha256": "427be5953df582275faaa20a15f86c7c75a6a440134653c7c23dc8583e7b60bb",
+      "scope": "88-157 configure/context;235-266 action."
+    },
+    "edgion-gateway/src/plugins/http/wasm/vm_manager.rs": {
+      "sha256": "c4bb5992f1a65039adf2dd11c80c517c584d04a69ae5790ec92d1be93dd1336e",
+      "scope": "1340-1433 configvector/lifecycle/absentdecode."
+    },
+    "edgion-gateway/src/plugins/http/wasm/host_abi.rs": {
+      "sha256": "c90abdf69625345bb5cbaad0a06e2c9f4c74ab8b21b5aa50d0aa3b67beda8449",
+      "scope": "750-778 PluginConfiguration."
+    },
+    "edgion-gateway/src/plugins/http/wasm/plugin.rs": {
+      "sha256": "2499557e824386f88896fc32de94810622aa9e8d9a5889f10f1cfe4cf403672e",
+      "scope": "548-602 responsecallback/Pauseemitter."
+    },
+    "edgion-gateway/tests/unit/plugins/http/wasm/plugin_test.rs": {
+      "sha256": "f2af5bcdc0553ca89e2254df2150e16c6234ec1fb7fb9b524a6ae2e0a1be1e83",
+      "scope": "650-715 actualPause/chunkrelease bodies."
+    },
+    "edgion-tests/k8s/scripts/common/deploy_integration.sh": {
+      "sha256": "58822dc66d104957764b8de13905daa1b7bd3d0405a71f13676bd3c08029b2b3",
+      "scope": "135-161 ConfigMapproducer."
+    },
+    "edgion-tests/k8s/kubernetes/gateway/deployment.yaml": {
+      "sha256": "7f5a7cf504886b94b6657374edf009df3f641df11ea2ddf281d79fcca8ec8f26",
+      "scope": "95-131 exactartifactmount."
+    },
+    "edgion-tests/k8s/scripts/run_k8s_integration.sh": {
+      "sha256": "9c7f539e02edccc91c46908c4b6afe1af3fb867b72c7b6061b613bd2723e641f",
+      "scope": "6,2528-2565,2055-2106,2645-2735,2880 actualdefaultselection/filter/batch/apply."
+    },
+    "edgion-tests/wasm/README.md": {
+      "sha256": "e0bb0d2e20e57f29b4ccd40f8f36841ead3063c5acbfe3f87e5fad50d84818ad",
+      "scope": "Full originalguest/mode/artifactcontract."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

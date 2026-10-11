@@ -1,0 +1,133 @@
+{
+  "partition": "PART-226",
+  "analyst": "/root/verify_ip_union",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-common/src/link_sys_core/credential.rs",
+      "sha256": "90a4ed253ceb0df2a424b99c9fc9eb9bfc344fc72d5efc95d7cd0855e4b1b394",
+      "fully_read": true,
+      "disposition": "Existing ARCH-051 orphan credential variants; no additional root cause."
+    },
+    {
+      "path": "edgion-common/src/link_sys_core/fingerprint.rs",
+      "sha256": "a25e26e1b92353875f17e8bd575b39116cb4ceefe275e1cb67f7613243b4aa31",
+      "fully_read": true,
+      "disposition": "No finding: canonical encoder actual consumers; tiny cold Vec/sort alone lacks structural value."
+    },
+    {
+      "path": "edgion-common/src/link_sys_core/health.rs",
+      "sha256": "3ee35d86e38bf98fc8d68d10d495b268e523e4e0700735da4de9598c1784569a",
+      "fully_read": true,
+      "disposition": "No finding: necessary published generation barrier; actual runner serializes handovers."
+    },
+    {
+      "path": "edgion-common/src/link_sys_core/http_client.rs",
+      "sha256": "49412608bb84b8ed7fac48b41a98d12f09a1b5d271b3d7961bc0996bb5ec62e8",
+      "fully_read": true,
+      "disposition": "No finding: canonical factory/actual proof preserves distinct provider transport."
+    },
+    {
+      "path": "edgion-common/src/link_sys_core/mod.rs",
+      "sha256": "38db1adb97fa5b19700f420c2f390d5194465140bad58e2fcfab24b681ed2fef",
+      "fully_read": true,
+      "disposition": "No finding: actual Common and Controller consumers justify placement and exports."
+    },
+    {
+      "path": "edgion-common/src/link_sys_core/outbound_tls.rs",
+      "sha256": "a21de0f2f55ce08fa31cb5d9f5034e8b17c92afdf968a3f63b9333c6155567df",
+      "fully_read": true,
+      "disposition": "No finding: distinct source/local/global/bootstrap authority feeds one effective resolver."
+    },
+    {
+      "path": "edgion-common/src/link_sys_core/tls.rs",
+      "sha256": "295e44a67d4148e1c10d13312452ca7cf57dd64a5ab7186d9edbec3641f02201",
+      "fully_read": true,
+      "disposition": "No finding: canonical conversions preserve SDK-specific connector meaning/capability rejection."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original personal rules/root-only nested search."
+    },
+    "skills/01-architecture/05-resources/18-link-sys.md": {
+      "sha256": "13c207c66db843cc04757f4c80a1044796ea2df2a544c016ab0083e7842867f4",
+      "scope": "Full current; stale Webhook from_parts prose distinguished from owning selection."
+    },
+    "skills/04-review/link-sys/regression-guards/shared-outbound-tls-loading.md": {
+      "sha256": "f29e30c5b343e7f60730bdfe04e6d554fd494f0ef02d52a3f5984be20449d3fc",
+      "scope": "Current enablement/owner/inheritance/SDK limits."
+    },
+    "skills/04-review/link-sys/regression-guards/shared-tls-fingerprint-encoding.md": {
+      "sha256": "9fc4e2dc8e7c73a5d6186d51072f98df62cfac9e0a7f314b2dc0f62df0d61086",
+      "scope": "Full current proof/fingerprint/setter distinction."
+    },
+    "skills/04-review/link-sys/regression-guards/published-generation-health-transition-ownership.md": {
+      "sha256": "8de53bac9d282eafe8165376982583e4a06b590108e9396e49749793dfbfc0af",
+      "scope": "Full original publication/serialized lifecycle contract."
+    },
+    "skills/04-review/link-sys/intentional-design/core-runtime-module-split-naming.md": {
+      "sha256": "b705e257516b727897be91b5581b7bf36d6be7a8e399fdc93c3482f8682ddd9d",
+      "scope": "Full original; obsolete lifecycle symbol distinguished."
+    },
+    "tasks/review-architecture-20261009/ARCH-051-retired-webhook-auth-resolvers.md": {
+      "sha256": "c9699d68ed7d174a8a84a35f2798f813b43ce3b5d0f023c33e65f95e90a933eb",
+      "scope": "Full accepted rootcause dedup."
+    },
+    "edgion-common/tests/unit/link_sys_core/credential_test.rs": {
+      "sha256": "36da8f42b74f50c3f80f879460c71ed9acdf50c3ea07029141b5efd1d2feb6c8",
+      "scope": "Full 632-line actual tests."
+    },
+    "edgion-common/tests/unit/link_sys_core/fingerprint_test.rs": {
+      "sha256": "080094136a736f6ccbc6ace48553d1a498f5b474602be0d39942445312db7f19",
+      "scope": "Full109-line actual tests."
+    },
+    "edgion-common/tests/unit/link_sys_core/health_test.rs": {
+      "sha256": "d72c4c50fd87bb76e1959378b96c30b6c3e9dcfabd449cbe999ac4ef4f2d1619",
+      "scope": "Full104-line actual tests."
+    },
+    "edgion-common/tests/unit/link_sys_core/http_client_test.rs": {
+      "sha256": "a0b44e4ec33c9302f3ee05e3da71c484fc94e062091c33d79b5ba08f46644ab8",
+      "scope": "Full191-line actual tests."
+    },
+    "edgion-common/tests/unit/link_sys_core/tls_test.rs": {
+      "sha256": "03d4f9a1dd088654dabe3e8624e40cf7b43cfe0b541a12ccb4bb8870be470fbd",
+      "scope": "1-99,126-153,160-274,349-403,532-586 connector/CA/policy/trailing truncation."
+    },
+    "edgion-common/tests/unit/link_sys_core/outbound_tls_test.rs": {
+      "sha256": "382415d3189a9ed234eb83e14689a73d447aa4dac5fc67403bf1d0d7231956ba",
+      "scope": "1-190,225-303,395-716 actual ownership/proof/capture/SAN/precedence."
+    },
+    "edgion-gateway/src/link_sys/runtime/runner.rs": {
+      "sha256": "1234da3d9e5053c436918ab20953d2032f18b5800a23c408a15d6cf0aa9f59f8",
+      "scope": "140-166,175-205,460-540 actual publication/deletion serialization."
+    },
+    "edgion-gateway/src/link_sys/runtime/health_probe.rs": {
+      "sha256": "11e0f88b0478aa338a77bd67f995b44fb8c2e9d38e3576e2114dc6d42bad3b72",
+      "scope": "72-112 binary reporter/probe policy."
+    },
+    "edgion-gateway/src/link_sys/runtime/store.rs": {
+      "sha256": "b995c16f0e1b9cbde6cdc9c7a74576464b9f0184b9316e4924aac97c230970de",
+      "scope": "884-925 readiness composition."
+    },
+    "edgion-gateway/src/link_sys/providers/elasticsearch/config_mapping.rs": {
+      "sha256": "755ab11708b72d33c7596d6b92e70dc0d0266d35348c27462bbb42f06e57413c",
+      "scope": "40-85,135-185 owning fixed-header sensitive auth factory."
+    },
+    "edgion-controller/src/services/credential_manager/providers/oauth2.rs": {
+      "sha256": "3c6fad636fe0707603c51ebe40437cc7bff7bde6c39b3dac62a8832cd0f1fe65",
+      "scope": "175-215 captured factory/client."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/auth_spec.rs": {
+      "sha256": "2a6bb02e44cab61a8f89c40aec709d5f25b0476685cbb37404ad5d589569ef91",
+      "scope": "135-end authorized collection."
+    },
+    "edgion-common/src/link_sys_core/providers/etcd/config_mapping.rs": {
+      "sha256": "01ec1d73ce8c546ed5b78ab0335d3656a9c6c432547fed80d8e8af9d1b9ee5ac",
+      "scope": "1-86 fixed owner/credentials/retained options."
+    }
+  },
+  "limits": "All7 primaries fullyread and fresh hashes match; static only. Supporting zero primary coverage; no broad borrowed TLS output justified, cold sort not promoted. Stale narrow documentation noted as followup, no sourcefinding."
+}

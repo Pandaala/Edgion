@@ -1,0 +1,67 @@
+{
+  "partition": "PART-347",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/plugins/http/wasm/oci/auth.rs",
+      "sha256": "325cfd39aa227a93c04bd5a51ef6a24602e1f979829278111ddf7cb92c87d2e9",
+      "fully_read": true,
+      "disposition": "Deterministic fail-closed credential selection; capped strict challenge parsing and password redaction."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/http/wasm/oci/cache.rs",
+      "sha256": "36b83eeb0acc1e3aea08ca4069fbab5973f4ca4a174df8e0aaf5111ad4fdff9c",
+      "fully_read": true,
+      "disposition": "Canonical LRU; final shared-payload drop releases accounting even after eviction; physical idle cleanup and generation invalidation."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/http/wasm/oci/manifest.rs",
+      "sha256": "c4daf2836d0880204aa1cbcb0eb295a1565232ddb6bf84c1a6ecb2c342ee9845",
+      "fully_read": true,
+      "disposition": "Bounded two-pass archive preflight/extraction and strict descriptor/shared budget; terminal decoder validation."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/http/wasm/oci/mod.rs",
+      "sha256": "49f3918248e4f5ea6e5332839dcd57d933eb20731693735d4c450c26defa2e63",
+      "fully_read": true,
+      "disposition": "Canonical capped transport and redirect/realm egress checks; cancellation retains blocking-stage pipeline permit; final artifact hash verified."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "edgion-gateway/tests/unit/plugins/http/wasm/oci/auth_test.rs": {
+      "sha256": "de7458902ad40551a2a2c7cb8d94d5b86c66bfca4b68c302e90245dc2d77ed1e",
+      "scope": "Full 1-152"
+    },
+    "edgion-gateway/tests/unit/plugins/http/wasm/oci/cache_test.rs": {
+      "sha256": "1095d6ace371aa35670bdada0e7d34d681ba76492ab0e723e0fb2368e2de8a0b",
+      "scope": "Full 1-216"
+    },
+    "edgion-gateway/tests/unit/plugins/http/wasm/oci/manifest_test.rs": {
+      "sha256": "bfb65cceda4c2f4e5b889b45a7f666ac15fd70275e21ad6ae9a0c024cfe39ba3",
+      "scope": "Full 1-465"
+    },
+    "edgion-gateway/tests/unit/plugins/http/wasm/oci/mod_test.rs": {
+      "sha256": "616c4ec7cc46ae8ed67027cc560246d757646d6368b91a16f9e3900d06cbdab1",
+      "scope": "Full 1-917"
+    },
+    "edgion-gateway/tests/unit/plugins/http/wasm/oci/mod_test/memory_pipeline_tests.rs": {
+      "sha256": "c7a7a91346bbd4e76efd56b95a498fad61402b00fb4ca764bcb90852fc4e39e7",
+      "scope": "Full 1-185"
+    },
+    "skills/04-review/wasm/intentional-design/bounded-oci-artifact-memory-cache.md": {
+      "sha256": "d229d4ae816d3b2a34a15f7601ba5f1d3bb4bdfe30e1d335424f4b0bf17e96e2",
+      "scope": "Full original"
+    },
+    "skills/04-review/security/regression-guards/proxy-wasm-runtime-hardening.md": {
+      "sha256": "3128c1e493b7b6bd47e403a6cdbd8bbda9a1f6554f3626d1fb872a32d61d7939",
+      "scope": "Full original"
+    },
+    "tasks/todo/wasmtime-rustsec-2026-0316-triage.md": {
+      "sha256": "a9e2061ee8f26b2e035466aa0eea66d8035ddc04e8d0e6dcfbbdabae3daef529",
+      "scope": "Full; separate dependency security task retained, no advisory browsing/audit"
+    }
+  },
+  "limits": "Independent static source/caller/test-body inspection only. No builds/tests/network/mutation or fresh performance/runtime measurements. Supporting reads do not add primary coverage."
+}

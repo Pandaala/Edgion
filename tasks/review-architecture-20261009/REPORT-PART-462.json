@@ -1,0 +1,111 @@
+{
+  "partition": "PART-462",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/canary/canary.rs",
+      "sha256": "1f57a04d862d06c7bc5f7823eebeb6fb74c9f4a90fbd14e55cf8f19170405ec8",
+      "fully_read": true,
+      "disposition": "Full 1-666. ARCH348 two anti-spoof absence predicates pass after body-read failure; remaining routing/dye/fallback/rejection/ordering assertions assessed."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/canary/dynamic.rs",
+      "sha256": "592b319256a68fe7b1eff0176c4559ccbee18ddda36ba8c294d566f6e8350ee1",
+      "fully_read": true,
+      "disposition": "Full 1-141. Initial/final backend and dye assertions exercise both generations; restoration belongs to existing ARCH264."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/canary/mod.rs",
+      "sha256": "db3351779dafbf9f47ad5160a206c8e03fcd8803aae25c233bcdf8fbd67d941a",
+      "fully_read": true,
+      "disposition": "Full 1-5 explicit exports and caller registration; no independent issue."
+    }
+  ],
+  "candidates": [
+    "ARCH-348"
+  ],
+  "support_selected": {
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "95-125, 552-589 client and case timeouts."
+    },
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "6c38b285bdfe354c40d5d2e96d4a07be0b7dc37ce3290197ca75054de23bfa98",
+      "scope": "815-858 complete echo and header renderer."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "2758-2780 registration."
+    },
+    "edgion-tests/integration/scripts/integration/run_integration.sh": {
+      "sha256": "5a6df789c2a894150691b3f50edf85f7ac055961ee0b1cc230291a6b90f85b76",
+      "scope": "1928-1936 selected local suite."
+    },
+    "edgion-tests/k8s/scripts/run_k8s_integration.sh": {
+      "sha256": "9a858cd81d47c74f20b375a503b10f1c52107ab413116783c8a49c4ec16e42e1",
+      "scope": "2545-2556 current suite dispatch."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/Canary/resources.yaml": {
+      "sha256": "07081fb907dbf1dedcceb3e55d3837de2772c0e7d26c9af34b35f7d0da9fb1d4",
+      "scope": "Full 1-621 actual current fixtures."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/Canary/06_EdgionPlugins_default_canary-invalid-fallback.yaml": {
+      "sha256": "facbde6531c37ca8124a13f7ac8a36c401e5bfd6629d4259e23383810de422de",
+      "scope": "Full fallback plugin."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/Canary/20_EdgionPlugins_default_canary-kill-switch-strip.yaml": {
+      "sha256": "c2f95926fe634e710c4781943837814611e3c240061b02c70be4407a566d4c76",
+      "scope": "Full internally disabled plugin."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/Canary/07_HTTPRoute_default_canary-invalid-fallback-test.yaml": {
+      "sha256": "011118d946cf5a3a2c6d9f637d016479c4a293d0494a4cf83112a1463751f61c",
+      "scope": "Full actual fallback route."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/Canary/21_HTTPRoute_default_canary-kill-switch-strip-test.yaml": {
+      "sha256": "f3cfdb029340d92217e69d6eec9b8c0488b1b62739ce1462a434a4e738f825c1",
+      "scope": "Full actual disabled route."
+    },
+    "edgion-gateway/src/plugins/http/canary/plugin.rs": {
+      "sha256": "a4cd7f4010609381b9bd7d27de487fd87b0c51bbf5d2486fb023f03b01e70410",
+      "scope": "Full 1-184 plugin."
+    },
+    "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": {
+      "sha256": "d80096aa53f493497d34dfba80f21f7089bf1ad3086f3b5ab3ff6f1689018c9d",
+      "scope": "2949-2986 runtime ordering."
+    },
+    "edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs": {
+      "sha256": "41254c9e4cfdc64a6b60a01c7061fdc452d7800e969341ab81d3544340620083",
+      "scope": "261-289 extension wiring."
+    },
+    "edgion-gateway/src/plugins/runtime/session_adapter.rs": {
+      "sha256": "2f9adeec44dac2b08f4135373744df00673344602abc1f742420ebd289053833",
+      "scope": "390-423 borrowed dye operations; coordinator fresh 370-435 read and complete current-C diff establish WAF extraction leaves dye implementation unchanged."
+    },
+    "edgion-gateway/tests/unit/plugins/runtime/session_adapter_test/dye_strip_tests.rs": {
+      "sha256": "864b16200fd4d26812a8465e736dea091449e19c270b9ce8e595e2e08a29b681",
+      "scope": "Full actual stripping bodies."
+    },
+    "edgion-gateway/tests/unit/plugins/http/canary/plugin_test.rs": {
+      "sha256": "c9af5443ecfc5fd7248d41f5faa6368f62d1ae0708ebf1f26c3623e491145a1e",
+      "scope": "366-480 four actual bodies."
+    },
+    "skills/01-architecture/02-gateway/entry-level-dye.md": {
+      "sha256": "e9d6906ef2b6231757770df226c8e4974f5f20b4a36e38d138ba6fd24283f32f",
+      "scope": "Full original dye owner."
+    },
+    "skills/04-review/plugin-runtime/regression-guards/dye-stage-producer-parity.md": {
+      "sha256": "1d157f384455ce3efc947988214a86d6fb2dd7816b49e6ee1947c900e176554a",
+      "scope": "Full original dye stage contract."
+    },
+    "edgion-tests/src/client/dynamic/scenarios/canary_hot_swap.rs": {
+      "sha256": "c1a7efbdf27cf55a187346416172d4f77070b1a0b5030ad0efc1fc7e94a5c624",
+      "scope": "Full actual scenario; same ARCH264 restoration cause."
+    },
+    "edgion-tests/src/client/dynamic/status.rs": {
+      "sha256": "9ac8c3e973f4a91ae05824d8560758f0a89ed928ecdceafc90b1bd0b46d30ad2",
+      "scope": "Full 1-19; Canary does not consume this helper."
+    }
+  },
+  "limits": "Complete static source and actual fixture/registration/unit-body analysis; supports zero primary coverage. No tests/builds/execution/network/Git mutation. Conditional false-PASS test outcome only, no current production strip defect or incident. No ARCH266 extension: scenario does not consume status helper; ARCH264 is existing scenario restoration owner."
+}

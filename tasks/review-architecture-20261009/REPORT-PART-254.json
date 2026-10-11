@@ -1,0 +1,54 @@
+{
+  "partition": "PART-254",
+  "analyst": "/root/analyze_session",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/backends/health/check/config_store.rs",
+      "sha256": "bca51799d476409cb338508b69ec9e22b1c2795f262c1431ded3e0a32f44e2e6",
+      "fully_read": true,
+      "disposition": "Implementation fully read with original contracts, relevant callers/tests; no independent finding. DNS bounded identity/lifecycle, health transport ownership, serialized marker/probe lifecycle and canonical exports retain distinct purposes."
+    },
+    {
+      "path": "edgion-gateway/src/backends/health/check/encrypted.rs",
+      "sha256": "1973a688c631f531630a32214e3a3e204f2eab7e7c6b697a226aa2949300e9d5",
+      "fully_read": true,
+      "disposition": "Implementation fully read with original contracts, relevant callers/tests; no independent finding. DNS bounded identity/lifecycle, health transport ownership, serialized marker/probe lifecycle and canonical exports retain distinct purposes."
+    },
+    {
+      "path": "edgion-gateway/src/backends/health/check/manager.rs",
+      "sha256": "52ec2d05eca8421131e7c91f98b30ee2838e99d1973640c7a0e0047ab1c50c12",
+      "fully_read": true,
+      "disposition": "Implementation fully read with original contracts, relevant callers/tests; no independent finding. DNS bounded identity/lifecycle, health transport ownership, serialized marker/probe lifecycle and canonical exports retain distinct purposes."
+    },
+    {
+      "path": "edgion-gateway/src/backends/health/check/mod.rs",
+      "sha256": "8bf4a297bc39af152e1d9a8f219685db0693ddcb91e2bad393f95f3110605d41",
+      "fully_read": true,
+      "disposition": "Implementation fully read with original contracts, relevant callers/tests; no independent finding. DNS bounded identity/lifecycle, health transport ownership, serialized marker/probe lifecycle and canonical exports retain distinct purposes."
+    },
+    {
+      "path": "edgion-gateway/src/backends/health/check/probes.rs",
+      "sha256": "1ae670d435df8539c14a9cdd3ed8f2bcd893981123749ea6edcdde880610cd73",
+      "fully_read": true,
+      "disposition": "Implementation fully read with original contracts, relevant callers/tests; no independent finding. DNS bounded identity/lifecycle, health transport ownership, serialized marker/probe lifecycle and canonical exports retain distinct purposes."
+    },
+    {
+      "path": "edgion-gateway/src/backends/health/check/status_store.rs",
+      "sha256": "364d749e871dab9dfb62fb9adb7dd1ee7b96cf983c9e0073788b3c7c03fd5e7d",
+      "fully_read": true,
+      "disposition": "Unused test-driven threshold owner around production markers: ARCH022."
+    },
+    {
+      "path": "edgion-gateway/src/backends/health/mod.rs",
+      "sha256": "42ea73a6ba9bbfab955d5eb1e6e1c6dd496f0ce6692f4ab7b5f1b32801f20078",
+      "fully_read": true,
+      "disposition": "Implementation fully read with original contracts, relevant callers/tests; no independent finding. DNS bounded identity/lifecycle, health transport ownership, serialized marker/probe lifecycle and canonical exports retain distinct purposes."
+    }
+  ],
+  "candidates": [
+    "ARCH-022"
+  ],
+  "support_scope": "Original rules/index/review-routing, backend/unification architecture, snapshot/ownership/namedport/health marker decisions; actual outbound/health/native selection/probe callers and corresponding unit-test sources. Secondary reads have no primary credit.",
+  "limitations": "Static analysis; no tests/builds/Git writes/benchmarks. Health retained-engine decision explicitly reconsidered for structural cost, not current defect."
+}

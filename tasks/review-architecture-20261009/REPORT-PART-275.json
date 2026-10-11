@@ -1,0 +1,56 @@
+{
+  "partition": "PART-275",
+  "analyst": "/root/analyze_adapter",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/link_sys/providers/kafka/apply.rs",
+      "sha256": "10f7b7832a0ec7a60af17f9a537f5be9c3fa1907ee4a5f7658ca3c494a323f20",
+      "fully_read": true,
+      "disposition": "Actual prepared resource and captured TLS selection precede effective fingerprint/reuse; SASL readiness/defaults/consumed inherited axes have cold ownership."
+    },
+    {
+      "path": "edgion-gateway/src/link_sys/providers/kafka/client.rs",
+      "sha256": "0d2c1bdd068f914917a1d4d8cd8a0cebbaf44e9d59dcbe8b75b5013da11ff2dd",
+      "fully_read": true,
+      "disposition": "Aggregate count/byte/topic admission with retained reservation, producer registration/retirement fence, connector and SDK reconnect/produce bounds is coherent; accepted no durable replay retained."
+    },
+    {
+      "path": "edgion-gateway/src/link_sys/providers/kafka/log_sender.rs",
+      "sha256": "9454586c5dc1a83b7a7b04d2e8515c7e5f7bbc66566bc68f4d1514bbe8e6beff",
+      "fully_read": true,
+      "disposition": "Current generation looked up for each key/topic submission."
+    },
+    {
+      "path": "edgion-gateway/src/link_sys/providers/kafka/mod.rs",
+      "sha256": "77981d8320da4ce2c3f6118b764a9d968b8b2fef2ec6cc108c4f632340d19667",
+      "fully_read": true,
+      "disposition": "Exports agree with actual factory and logging consumers."
+    }
+  ],
+  "candidates": [],
+  "support": {
+    "edgion-gateway/src/link_sys/runtime/runner.rs": "1234da3d9e5053c436918ab20953d2032f18b5800a23c408a15d6cf0aa9f59f8",
+    "edgion-gateway/src/link_sys/runtime/apply.rs": "8cafc408bc09879452809bc38cbfae4ec8c701b8c20d762c8e0ec9e3e034dd44",
+    "edgion-gateway/src/link_sys/runtime/health_probe.rs": "11e0f88b0478aa338a77bd67f995b44fb8c2e9d38e3576e2114dc6d42bad3b72",
+    "edgion-gateway/src/link_sys/runtime/store.rs": "b995c16f0e1b9cbde6cdc9c7a74576464b9f0184b9316e4924aac97c230970de",
+    "edgion-common/src/link_sys_core/credential.rs": "90a4ed253ceb0df2a424b99c9fc9eb9bfc344fc72d5efc95d7cd0855e4b1b394",
+    "edgion-common/src/link_sys_core/health.rs": "3ee35d86e38bf98fc8d68d10d495b268e523e4e0700735da4de9598c1784569a",
+    "edgion-common/src/link_sys_core/outbound_tls.rs": "a21de0f2f55ce08fa31cb5d9f5034e8b17c92afdf968a3f63b9333c6155567df",
+    "edgion-common/src/link_sys_core/outbound_tls/link_sys.rs": "6f72d2195ddc33e45818fab0b407cf1fa5ed3534cd5290630cacdfeb4885fbd0",
+    "skills/04-review/link-sys/intentional-design/provider-owned-runtime-and-simple-removal.md": "d3a6e869608d5764c916b593c229dc9ce80c83f70820e78107742e4f4703d7ec",
+    "skills/04-review/link-sys/intentional-design/healthy-semantics-intentional-non-flips.md": "4c1e7a4f1abb612c67656fc0cb339f3f1319834e9d48ec14b8e840b30e0fc787",
+    "skills/04-review/link-sys/regression-guards/published-generation-health-transition-ownership.md": "8de53bac9d282eafe8165376982583e4a06b590108e9396e49749793dfbfc0af",
+    "skills/04-review/link-sys/regression-guards/link-sys-hot-reload-reuse-and-retirement.md": "de13c829ae93daa5f05e0fbac13402a6f80fe7d0b9bde9b97c5eb1fe0fb0704a",
+    "skills/04-review/link-sys/regression-guards/shared-tls-fingerprint-encoding.md": "9fc4e2dc8e7c73a5d6186d51072f98df62cfac9e0a7f314b2dc0f62df0d61086",
+    "skills/04-review/link-sys/regression-guards/shared-outbound-tls-loading.md": "f29e30c5b343e7f60730bdfe04e6d554fd494f0ef02d52a3f5984be20449d3fc",
+    "skills/04-review/link-sys/intentional-design/kafka-broker-dialing-sdk-owned.md": "b87fcca2b8915b732268368d21f0512516299a37e896aaecad066afe06f66790",
+    "skills/04-review/link-sys/intentional-design/kafka-health-flag-relaxed-ordering.md": "ee16ed914c4b2dd2eee8d8a75bfc2005da3cfa2b843f5c9064a4a4f65b067d14",
+    "skills/04-review/link-sys/regression-guards/kafka-aggregate-queue-bounds.md": "58f0628b2295493b5285ba2dcc14562a95232e3d5e041e6417de9925e5d4910b",
+    "skills/04-review/link-sys/regression-guards/kafka-producer-generation-shutdown.md": "7d759b85de09e1f1e030f3f3252c155df33716b434fb239dc52373a38f0eaf92",
+    "edgion-gateway/tests/unit/link_sys/providers/kafka/client_test.rs": "1f90f7672d24cf0056543f7cd255e3744560edcf4bbc6ab74ccb8bde3b9f0bee",
+    "edgion-gateway/tests/unit/link_sys/providers/kafka/apply_test.rs": "488db8a9c828229ac3dcc8b7d360602c4536820e05751ed10afb5ab56131d57d"
+  },
+  "support_scope": "Analyst original relevant contracts, factory/consumer/publication/shutdown and selected tests inspected; SDK boundary acceptance checked against current adapters. No secondary coverage credited.",
+  "limits": "Static only. Queue saturation and TCP health are advisory accepted semantics; no fabricated complete SDK payload heap proof, replay guarantee or measured cost. Historical task paths absent. No tests/builds/Git."
+}

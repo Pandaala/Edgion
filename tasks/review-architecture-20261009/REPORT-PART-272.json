@@ -1,0 +1,15 @@
+{
+  "partition": "PART-272",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/link_sys/providers/mod.rs",
+      "sha256": "33aa1dd97a90430b59828f1be83c4cade0fd5ad8cbfce2b3a9a975a4bcbda93f",
+      "fully_read": true,
+      "disposition": "Full typed provider facade read; shared Etcd re-export and canonical runtime table consumers checked. No second store or duplicate implementation."
+    }
+  ],
+  "candidates": [],
+  "limitations": "No tests/builds/source edits; supporting caller snippets do not claim coverage."
+}

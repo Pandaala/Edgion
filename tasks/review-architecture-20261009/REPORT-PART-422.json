@@ -1,0 +1,29 @@
+{
+  "partition": "PART-422",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/region_route_table/mod.rs",
+      "sha256": "85f8021fffd04e090220a00839eccaeba6d46dded93141c20f1a069a7d38c79d",
+      "fully_read": true,
+      "disposition": "Full empty module; parent declaration and live base/overlay owners verified. Cosmetic removal alone lacks architectural value, no finding."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/mod.rs": {
+      "sha256": "3b2849d6f7abd5b6b5935ea2e7144fd5de8a283c7d9e9ade51ebd5ebfeccf680",
+      "scope": "33 and99 explicit declaration/no exports."
+    },
+    "edgion-controller/src/api/region_route_handlers.rs": {
+      "sha256": "db96462427db553d11782c329e7c9da08923837e2ff9aa612a07974baab01941",
+      "scope": "1-90 actual base/overlay derived effective view."
+    },
+    "edgion-gateway/src/plugins/http/region_route/plugin.rs": {
+      "sha256": "709bebcc52cf4341ea8875eef4f37e3b9e81f3952275a85734b7a3ae852d1898",
+      "scope": "1-65 actual generation-owned base/overlay; prior full Gateway primary retained."
+    }
+  },
+  "limits": "No implementation in empty module; actual ownership checked, no cosmetic proposal; support zero primary."
+}

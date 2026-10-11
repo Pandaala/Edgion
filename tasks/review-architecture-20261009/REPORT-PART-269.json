@@ -1,0 +1,16 @@
+{
+  "partition": "PART-269",
+  "analyst": "/root/analyze_session",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/lb/runtime_state/mod.rs",
+      "sha256": "805254f7643e95bc3a2ac8877458dfcd54b197121a682b5407779fa1440d3fa4",
+      "fully_read": true,
+      "disposition": "Generation-tagged affinity and exact identity draining; accepted lazy miss lock."
+    }
+  ],
+  "candidates": [],
+  "support_scope": "Actual callers, original rules/index/review-routing/topic decisions and existing tests inspected; secondary reads confer no primary coverage. Detailed candidate evidence in corresponding issue files.",
+  "limitations": "Read-only static review, no checks/builds/tests/Git mutation or performance evidence."
+}

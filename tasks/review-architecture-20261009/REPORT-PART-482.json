@@ -1,0 +1,51 @@
+{
+  "partition": "PART-482",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/global_connection_ip_restriction/global_connection_ip_restriction.rs",
+      "sha256": "b875641dc992ad077c9dbcdc409e538018a148babf4383b56223ad04e91443de",
+      "fully_read": true,
+      "disposition": "Full1-312 two ranges,three authenticated bounded polls. Typed Selector existence/Accepted/activep1/nonemptydescription roundtrip match Controller storage scope; no liveL4 policy coverage claim."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/global_connection_ip_restriction/mod.rs",
+      "sha256": "e6477d935f4a8ec017cc00da3da6d64c5eaded489401d1be05fe027f3bb2f2c6",
+      "fully_read": true,
+      "disposition": "Full1-2 export/real runner registration; no issue."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "edgion-tests/integration/conf/EdgionPlugins/GlobalConnectionIpRestriction/01_EdgionConfigData_gcir-smoke.yaml": {
+      "sha256": "980f59ec6e23bfeb11bb824f98fc5482b722f8bfed8fb4ee64f9c759aa172916",
+      "scope": "Full1-20 local actual Selector fixture."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/GlobalConnectionIpRestriction/01_EdgionConfigData_gcir-smoke.yaml": {
+      "sha256": "7d9534d4f815e345343e229029400b4d307201897976ee646a1562ec9c63a607",
+      "scope": "Full1-11 Kubernetes fixture."
+    },
+    "edgion-resources/src/resources/edgion_config_data/selector.rs": {
+      "sha256": "9934e58b1a3063d1ccd76c9a2ce361036f86ef5b76edf517e6b9cbc1931d1261",
+      "scope": "Full1-38 actual consumer-owned profiles."
+    },
+    "edgion-resources/tests/unit/resources/edgion_config_data/selector_test.rs": {
+      "sha256": "af954067bb49233e0059ddcb783902b800f62118fc478a77acbeba653070f712",
+      "scope": "Full1-33 actual Selector tests."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/status_observation.rs": {
+      "sha256": "029ec4202103c429f56e10b3e19e1e168f885607b5759308f306d42fedf012ed",
+      "scope": "1-70 exact partitioned-kind exclusion for ConfigData."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_config_data.rs": {
+      "sha256": "e8dfb8e3af2c1b95ae82dc2d9656f5a8fa95bd0af83250b83e03d95f9246b6b8",
+      "scope": "150-276 actual native producer."
+    },
+    "edgion-gateway/src/plugins/stream/global_connection_ip_restriction/plugin.rs": {
+      "sha256": "29dd1fac332a8aafab8ef4151a461bb5fe43779fe9be4fa48ec03633d4199492",
+      "scope": "Full1-194 actual canonical snapshot/IP consumer."
+    }
+  },
+  "limits": "Complete static analysis; ConfigData native conditions intentionally remain flat, falsifying ARCH266 lead. Consumer-owned profile membership/fail-to-base retained, no stricter admission. Real TCP runner/unit coverage separate. Both runners and current typed IP/snapshot mechanism/original decisions personally read. No builds/tests/network/mutation; supporting zero credit; original authority/current hashes checked."
+}

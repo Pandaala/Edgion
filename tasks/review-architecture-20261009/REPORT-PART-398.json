@@ -1,0 +1,167 @@
+{
+  "partition": "PART-398",
+  "analyst": "/root/verify_ip_union",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-controller/src/conf_mgr/conf_center/file_system/resource_controller.rs",
+      "sha256": "3a98d5b9d45a90fc611d8bd47fd02646f0cd7edd67bda4679ec7ce1352b0ccb3",
+      "fully_read": true,
+      "disposition": "ARCH-096: no-source read failure revokes processed generation while leaving previous raw object; complete worker/event initialization and source ownership read."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/conf_center/file_system/status.rs",
+      "sha256": "970587b6011c17ac079a793eb3972bdaed7c15790250054d2a3fee164682ba4b",
+      "fully_read": true,
+      "disposition": "No independent issue: inline sidecar/error dedup/native-status preservation/marker-only repair and orphan cleanup match scoped accepted ownership."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/conf_center/file_system/storage.rs",
+      "sha256": "160b51c73737d2d6188d3f4b5991589443aeaae6ce723829fbe382ac371fbdc1",
+      "fully_read": true,
+      "disposition": "No independent issue: registry winners, per-key writer locks, exclusive create, atomic update, version/identity merge and validate-before-unlink traversal gates agree; optional preconditions and external-edit limitations accepted."
+    }
+  ],
+  "candidates": [
+    "ARCH-096"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "full original retained; no nested applicable"
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "original full retained"
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "original graded gates"
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "original retained"
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "original retained"
+    },
+    "skills/01-architecture/01-controller/03-config-center/01-file-system.md": {
+      "sha256": "e2a0bb66db0ab4a0c30b5e5246475570deea3bd6bdf2f9bc5190941deafeb4d8",
+      "scope": "full retained PART397; fresh167-254 source/raw/lifecycle"
+    },
+    "skills/01-architecture/01-controller/05-resource-processor.md": {
+      "sha256": "2f557ac0077fe0fefc39e77522f96edc8f3d660c47d4aec848ec8cf6943ee4c6",
+      "scope": "full original raw versus processed/interface ownership"
+    },
+    "skills/04-review/status/regression-guards/native-status-sidecar-cleanup.md": {
+      "sha256": "a7ccc5ca9c886270cc3fcf5593325c200e7b664627b50a59678c50797b0531a1",
+      "scope": "full original marker/native status and scoped residual"
+    },
+    "skills/04-review/handler-requeue/regression-guards/controller-derived-fields-use-processed-cache.md": {
+      "sha256": "ea1740197124bb149e0b0fdbb577c7e82dae7910cacfda2936d0b16fd6631045",
+      "scope": "full original raw unfiltered/derived processed distinction"
+    },
+    "skills/04-review/controller/intentional-design/non-kubernetes-pre-init-runtime-events-unsupported.md": {
+      "sha256": "9a80100d7cf520d32eceb2ca50dd206d4e6e25732d9251abe1df7a80c7179b87",
+      "scope": "full original supported initialized malformed revocation"
+    },
+    "skills/04-review/controller/regression-guards/single-worker-initialization.md": {
+      "sha256": "b433dcb3cfca7d35f6e13aab1c67f5dd0ba8d7d3ad11a02e5cfda15b79a106bb",
+      "scope": "full original retained"
+    },
+    "skills/04-review/controller/regression-guards/source-scoped-watch-snapshots.md": {
+      "sha256": "c8a7d7cda326b64a7358ab8cfa34002aaa253ef94e731ac86bc0cc8a3fe75d05",
+      "scope": "full original source versus eventual processed contract; not FS read-error acceptance"
+    },
+    "skills/04-review/handler-requeue/intentional-design/worker-path-status-io-inline-accepted.md": {
+      "sha256": "3d41c778b5f93279117216564b2d2359a1d17feafee7c73eccba3d1e1381fb70",
+      "scope": "full original retained"
+    },
+    "skills/04-review/handler-requeue/intentional-design/status-write-no-retry-accepted.md": {
+      "sha256": "e88cd2826d72c9cdb18c4c48ff52e155abba658f98bc1c813adfe8234b9ae9d3",
+      "scope": "full original retained"
+    },
+    "skills/04-review/admin-api/intentional-design/admin-api-write-precondition-opt-in.md": {
+      "sha256": "dd4cdc023de0302a24fdbce5bf4012b019d173ebc4642689d54ffcb178242770",
+      "scope": "full original optional CAS"
+    },
+    "skills/04-review/concurrency/regression-guards/fs-conditional-delete-validate-before-unlink.md": {
+      "sha256": "52dce5ab227d14c25adbd728d3a42aead505ef9caee6a21217b8a08062f9d547",
+      "scope": "full original external edit limits"
+    },
+    "skills/04-review/security/regression-guards/file-backend-namespace-path-traversal.md": {
+      "sha256": "5a70b4cd059bf27287b1b5b7558c25589a0d6f8ec460139ed7d75aeb1d188015",
+      "scope": "full original storage choke point"
+    },
+    "skills/04-review/concurrency/regression-guards/failover-read-modify-write-per-key-lock.md": {
+      "sha256": "9497699008ce49a09ecd18cc3d82ed8df85012fb0c38f9da9a8b50b9b6f0901e",
+      "scope": "full original distinct critical sections"
+    },
+    "skills/04-review/admin-api/regression-guards/update-namespaced-reject-body-name-mismatch.md": {
+      "sha256": "4356dc5f9cdfe8b0a3eb98cd15c6ed15a99800f3944e31e1935ac124398d9cc3",
+      "scope": "full original URL/body namespace/version contract"
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/file_system/resource_controller_test.rs": {
+      "sha256": "c2878991dc50e3f46c2b21b06cae05148ce1d6d3e7a617e42dbeca834d61d8b6",
+      "scope": "full879 across397/398; harness reread"
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/file_system/status_test.rs": {
+      "sha256": "de19b349794b8bf4a3e77536fd974923d5d38824ef371b11500ea370d1d74011",
+      "scope": "full actual tests retained397"
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/file_system/storage_test/update_contract_tests.rs": {
+      "sha256": "cc836c8f477351d49dd4b323c373ad3f91c7f0e9f885bdc76924be8900c9a02a",
+      "scope": "full actual merge/writer/CAS/delete tests"
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/file_system/storage_test/path_tests.rs": {
+      "sha256": "580e4969169d38523155afa1662a5302524d02c02de813a91fa3eef3088eb53b",
+      "scope": "full actual path/traversal tests"
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/file_system/storage_test/list_filter_tests.rs": {
+      "sha256": "45300871aa5b1a60a03ad15fb5d03086a39b90ad915e683f1a9d0b32d7037f19",
+      "scope": "full actual registry list/get retained397"
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/common_test/error_status_tests.rs": {
+      "sha256": "8885664d9ee8720bcb76c6cb78fdccec87457af5fb084604a773f13022ab979d",
+      "scope": "full actual dedup/time/sidecar tests"
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/common_test/update_merge_tests.rs": {
+      "sha256": "389a996ac3ed266acfae261ab34161406ffaa12efeafd760fea6f309149e8010",
+      "scope": "full actual identity/version/generation tests"
+    },
+    "edgion-controller/src/conf_mgr/conf_center/common.rs": {
+      "sha256": "3c3b85c5d3af871dfc838d1b2d4ea1d886c596a8faa8d103979105db8db7a6d9",
+      "scope": "1-168 retained;212-346 validation/adapters;420-610 merge/preconditions"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs": {
+      "sha256": "23057df0f04ed113a72fa1b42fb5344153c3ae8cff526e030878c8091fc92bd6",
+      "scope": "529-564,910-943,1026-1060 work outcome/delete/raw interface"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/raw_store.rs": {
+      "sha256": "86ed3b7f95e141be265ebaecfaa8888ef6bc462176a9e18ee129e28b627527d6",
+      "scope": "full current owner/snapshot semantics"
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/raw_store_test/snapshot_tests.rs": {
+      "sha256": "d84f4c1ede7dab58d654b0fb691a867da7922180500f28a91b5f7cf8f13cbcc0",
+      "scope": "full actual remove/snapshot test"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/route_utils.rs": {
+      "sha256": "40750b718b634fb69dd713512428742694abbfc033a2d66ddb6b0d9d94c39393",
+      "scope": "469-521,747-825,915-963 raw parent lookup versus serving attachment"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/gateway.rs": {
+      "sha256": "3d241427e284a97f50eff549b41ef8df8f060a6b568c39216fc1efe6c08e9304",
+      "scope": "963-1015,2085-2145,2740-2777 actual listener withdrawal/requeues/raw consumers"
+    },
+    "edgion-controller/src/api/namespaced_handlers.rs": {
+      "sha256": "81943b798b18bb4fbf1c234835e89fdd02fbfb50f27920fe186ae6b783aaa5d5",
+      "scope": "424-477 admission,842-862 delete precondition"
+    },
+    "edgion-controller/src/api/common.rs": {
+      "sha256": "2d96d7e138a37e864cf499469fefb2fe14dd1f18fc6661e9bd7850f8a3522dc9",
+      "scope": "303-348 IfMatch/body precedence"
+    }
+  },
+  "limits": "Static full source analysis, no execution. Exactly three frozen primary files; all supporting reads zero credit. No incident/performance/live recovery claim; current source adapters outrank stale canonical-version-only prose; defensive preinit Apply is unsupported. Independent096 decision pending."
+}

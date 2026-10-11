@@ -1,0 +1,101 @@
+{
+  "partition": "PART-157",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-waf/src/matcher.rs",
+      "sha256": "c2d4742efb1c426727690bb1817672533c6febbe90f0ff8b4ce4d86bb5bd81e1",
+      "fully_read": true,
+      "disposition": "No actionable candidate: immutable compiled program, admitted scratch, physical/logical source-order mapping and mandatory Reference semantics retain distinct owners. Simple-mode Pike cache serves Reference; transaction already creates scratch lazily. Cumulative phrase mapping preserves cumulative caller contract with no payload copying; no measured value supports extra lazy/delta framework."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Original full personally retained/refreshed, no nested WAF AGENTS."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Original full retained, progressive navigation."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Original full retained; bounded safe external-only leaf, redaction, body/performance/observability gates applied."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Original full retained."
+    },
+    "skills/04-review/waf/SKILL.md": {
+      "sha256": "a5fa47a4b94ee1edccf3f5cd07197eeb0d644f875616cd33c5976e66bc9edef9",
+      "scope": "Full original."
+    },
+    "tasks/todo/waf-native-simd-search.md": {
+      "sha256": "68f321552c8f42cb3253b558f639dc0fdc70042173f537b8690e33e49cc476a2",
+      "scope": "Full original conditional profiling/adoption task."
+    },
+    "tasks/todo/waf-dfa-state-layout.md": {
+      "sha256": "35f3051ee5d0577eb566b6914f8b0212e13392de48e07635c0e985a37691c407",
+      "scope": "Full original conditional layout task."
+    },
+    "edgion-waf/Cargo.toml": {
+      "sha256": "30ce2f0a77895f232e2109a11a06cc11386299d9af0af34d9a2db4bef0ea73d1",
+      "scope": "Full external-only manifest."
+    },
+    "skills/04-review/waf/regression-guards/fused-json-inspection.md": {
+      "sha256": "73f06b0cd3b8e083844ff91ab61f2d20e91a625aecfec8cb6eb358cd17afc6ec",
+      "scope": "Current scratch/current-input/capture-shadow/guard/simple lowering and evidence limits 81-105,320-545."
+    },
+    "skills/04-review/waf/regression-guards/native-injection-operators-use-bounded-detection.md": {
+      "sha256": "780bfcac8205cd8c105200049a535456629cfc10ec86d98555369dac715b8f59",
+      "scope": "Full original."
+    },
+    "tasks/pending/waf-optimization-design/README.md": {
+      "sha256": "2bf083e9165b3bb93c95d74fdfa0c59ce1f660515fc2413ed673bd08d5dd7822",
+      "scope": "Full original."
+    },
+    "tasks/pending/waf-optimization-design/01-spec.md": {
+      "sha256": "657aaa3f67f3de385674df6ca986ce9c0a12e1effcb0773b509272bc83f74fef",
+      "scope": "Full original."
+    },
+    "tasks/pending/waf-optimization-design/02-plan.md": {
+      "sha256": "98427e14f666c327b6090d2892d4d5f4eaa546df565771030a1e20eaf9d8d09a",
+      "scope": "Current original serial plan 1-212; initial gap recovered."
+    },
+    "tasks/todo/waf-shared-request-body-inspection.md": {
+      "sha256": "a005dffd7bc431fb0226535880682e17375fe1c8915835b963b09411cf4188cd",
+      "scope": "Full original conditional separate scheduling work."
+    },
+    "edgion-waf/tests/unit/matcher_test.rs": {
+      "sha256": "f433995381ac472f75afe9ca42413088485e6515f746bb0822d74eccf9af4d72",
+      "scope": "All 1808 actual lines, recovered overlap boundaries."
+    },
+    "edgion-waf/src/seclang/compiler.rs": {
+      "sha256": "6259ebaf9e73726d5989f08d7a48d74320183ddd419fda5c6659ded5835a3404",
+      "scope": "Actual final publication/optional hint ordering/work/retention/peak constructors 3950-4255."
+    },
+    "edgion-waf/src/seclang/transaction.rs": {
+      "sha256": "24ab89af5d00efd52f78dd5c7840ba3f0bab6b322ceae48c3a0c7b0dd4a70d26",
+      "scope": "Actual scratch/generation/cache/reference/raw-stream seams 1150-1460,1670-1885,4005-4108,4135-4225,4835-5070."
+    },
+    "edgion-waf/src/aho_corasick/stream.rs": {
+      "sha256": "7628b5a3e5a16aa6fe71d535a2d279a5b21b08481a90a3e57dbe8c76714d27da",
+      "scope": "Actual cumulative state/shape/EOS contract 100-165."
+    },
+    "edgion-waf/tests/unit/seclang/compiler_test.rs": {
+      "sha256": "80f2f5634bda2e847ff23f0f5fa399c176aeb21231a7044c709e66912f0913a8",
+      "scope": "Actual inventory/fallback/admission/content-free publication tests 1-214,1180-1250."
+    },
+    "edgion-waf/tests/unit/seclang/transaction_test.rs": {
+      "sha256": "3fa5407fc72b9c73b555b1dd16b1b8c505d888d6990036f7b83fbbc9d2d57285",
+      "scope": "Actual scratch/body/work/lazy-slot tests 835-885,1828-1945,3835-3925."
+    },
+    "Cargo.lock": {
+      "sha256": "18b7b7dee01e024ab6d21f5692ce04a343c4fb265092c7f587099e91c28bea17",
+      "scope": "Pinned regex-automata 0.4.18; verifier personally read relevant local PikeVM cache/construction/search sources."
+    }
+  },
+  "limits": "Complete full 3118-line/117804-byte primary, frozen SHA matched, all actual matcher tests and critical publication/runtime seams read. No builds/tests/bench/oracles/network/mutations or measured-performance claims. Conditional optimization work not rediscovered; ARCH221-225 unused."
+}

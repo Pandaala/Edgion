@@ -1,0 +1,62 @@
+{
+  "candidate": "ARCH-099",
+  "complete": true,
+  "verifier": "/root/analyze_outbound",
+  "decision": "confirmed",
+  "input_sha256": "dda60b54d59217e909b5b8906a012457f941e16028eb477f708695c52711e01f",
+  "approved_claim_sha256": "f5d22418993b701be9c4df98667de0674d53c8a88046d729678699693eec3bcc",
+  "evidence": [
+    "Fulltimestamp HashMap clone copies unrelated owned policy keys afterzero/one shortcut.",
+    "Actual BTP/EBTP status handlers use separate runtime instances; mutation/delete/sibling paths verified.",
+    "One guard covering referenced timestamps preserves historical coherentview; DateTimeprojection then unlockbeforesort feasible.",
+    "No joint ref/timestamp atomicity or ARCH055 precision change."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original personally retained; freshhash/rootonly."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full retained/current routing."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full retained gradedgates."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full retained/current owner search."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full retained/freshhash."
+    },
+    "skills/01-architecture/05-resources/12-backend-tls-policy.md": {
+      "sha256": "00653583de1c3704225665a061ef4310303162d1dcea345a77bd0db8b010348c",
+      "scope": "Full current eligibility/arbitration/siblings."
+    },
+    "skills/04-review/handler-requeue/regression-guards/backend-tls-winner-single-snapshot.md": {
+      "sha256": "15eaa78693611752cf77b3dd5c0262457be0ddd8f223ebfc07654ebab72c8dd9",
+      "scope": "Full current consistency requirement."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/backend_tls_policy_ref.rs": {
+      "sha256": "8cd9d72d2fce5b1b007803cffa107a21b35badac81e8b924a1384276aa65f46a",
+      "scope": "Full current."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/backend_tls_policy_ref_test.rs": {
+      "sha256": "07130db3eff0259fcd21d5e9fd134b2b62108cdaa410a0b434c48150f7e65fbc",
+      "scope": "Full140 actual tests."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/backend_tls_policy.rs": {
+      "sha256": "db90d7dba9390d47a77cc7d4c0ae3f70d0ace74b5ca7c600f694cd96a749bc7c",
+      "scope": "395-440,454-482,550-586 registration/timestamps/delete/arbitration."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_backend_traffic_policy.rs": {
+      "sha256": "7925d76536c03b8f126cb42fc62797c98be7d057649762b4c8e1c4809e9f6807",
+      "scope": "433-503,517-574 separate-state registration/cleanup/arbitration."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

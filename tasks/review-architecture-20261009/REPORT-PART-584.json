@@ -1,0 +1,49 @@
+{
+  "partition": "PART-584",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/tls_route/mod.rs",
+      "sha256": "4ec514bc52fa9215d6696aeacf4c7905d7036a2a5ab99c6ab36db4419ea77262",
+      "fully_read": true,
+      "disposition": "Full small module personally read. Explicit private child/public typed export chain matches actual test-client registration; no independent architecture issue or automatic child coverage. Canonical SUPPORTED_FEATURES membership owns terminate-case eligibility; current unadvertised capability is deliberately deferred. No duplicated legacy feature Boolean or unauthorized TLS implementation requested."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Retained full original rules, revalidated unchanged."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Retained full index."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Retained full graded gates."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full current original routing rules."
+    },
+    "edgion-tests/src/client/suites/mod.rs": {
+      "sha256": "7ce09dacca746e2d9e4f3c6db066d0d9f0a76accdef335b68a61d36e19b74f5c",
+      "scope": "42-62 and90-106 exact L4/ExtProc typed reexports."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "2290-2445 exact TCP/TLS registrations;2807-2818 ExtProc new(full_test)."
+    },
+    "edgion-resources/src/resources/gateway_class.rs": {
+      "sha256": "bdab843bf8665d6f5c6fa2ce33f0c0e5fc3e0e5966a0c14f948fdd3d52999c0e",
+      "scope": "90-145 current supported/unsupported feature inventories; TLSRouteModeTerminate explicitly unadvertised."
+    },
+    "skills/04-review/tls/regression-guards/downstream-handshake-offload-budget-and-cancellation.md": {
+      "sha256": "be4104a9541319a35019502d87ed93afe8946e696ec1cd21d4087e05939d4ae2",
+      "scope": "125-145 scoped terminate deferral; historical transport acceptance is not Controller or conformance support."
+    }
+  },
+  "limits": "Static glue/capability review only; actual full primary read and caller/export checks, no executions/builds/network/Git. Production implementations and child test suites remain independently owned. Harness printing is legitimate binary/test output, not Gateway hot-path tracing."
+}

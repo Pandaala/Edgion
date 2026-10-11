@@ -1,0 +1,89 @@
+{
+  "candidate": "ARCH-337",
+  "complete": true,
+  "verifier": "/root/verify_ip_union",
+  "decision": "confirmed",
+  "input_sha256": "653dbe2538933321985a4348274455c78c1f2b326ea74cfd418b39eb1cb5a249",
+  "approved_claim_sha256": "2657c1b5b48e49a84e889417d417ef3edbfcb079ba7d41aea975fd63ffb31158",
+  "evidence": [
+    "Full independent source verification confirms both suite adapters erase scrape and selected parse failures into0.",
+    "Prior cumulative counts plus failed baseline/recovered after can satisfy deltas; real503 and502 response assertions remain valuable but do not establish new denials/reasons.",
+    "Successful valid absent series is legitimately0; lazy counters and narrow fallible reads permit bounded correction preserving all cases and observability restraint."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Retained full original rules, fresh unchanged hash; no nested rules."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Retained full original index."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Retained full graded gates."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Retained full original routing."
+    },
+    "skills/04-review/testing/regression-guards/mandatory-integration-gates-fail-closed.md": {
+      "sha256": "fe6af9c24d502f415ddbe946a8c404487abc17fa8ffe3e9df345dbf15394d895",
+      "scope": "Fresh full original unavailable-prerequisite contract."
+    },
+    "skills/04-review/testing/regression-guards/integration-lb-metrics-require-scoped-deltas.md": {
+      "sha256": "610f579998565c3e90353dc60d0cb29b59b482c393a88f6559142558fd3ec1ce",
+      "scope": "Fresh full original cumulative history guard."
+    },
+    "skills/05-testing/01-integration-testing.md": {
+      "sha256": "e260042b508fa0956873d1b3c059531f1733a7c15423c548081afb71703a10e1",
+      "scope": "309-342 real assertions and existing counter-only scope."
+    },
+    "skills/03-coding/observability/01-metrics.md": {
+      "sha256": "7a498385055f6b4b701edc3259b1e266b38381d8d61f59036d625ec4cbbab21b",
+      "scope": "1-110 and later dedicated listener/test exception sections."
+    },
+    "skills/04-review/backends/regression-guards/retry-budget-epoch-coherence.md": {
+      "sha256": "832da700fb1adf0d07eb1dab6dcf0a435c5895c35827c4d176ea46479ad0377f",
+      "scope": "Fresh full original algorithm/soft-cap and historical limits."
+    },
+    "edgion-tests/src/client/suites/edgion_backend_traffic_policy/retry_budget.rs": {
+      "sha256": "1963d06340f25f8cb6799b3ff2c4d84f08f1c97c014f40fdb20f2050fa72709e",
+      "scope": "Full independent source and both actual cases."
+    },
+    "edgion-tests/src/client/suites/edgion_backend_traffic_policy/upstream_authority.rs": {
+      "sha256": "3fd8b31a70077ffea048900a054ca433d2f6f2c9c3c7dcabaf5034fbd57860dd",
+      "scope": "Full1-525 and seven real cases."
+    },
+    "edgion-tests/src/client/metrics_helper.rs": {
+      "sha256": "6a645f919d8d1287911645447cf3228fa25c6f54be3fa889217fbf6b61c0a7fa",
+      "scope": "1-175 exact fallible client/endpoint/10-second timeout and unconditional counter_value."
+    },
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "1eb27bded8bcb40a82ea3cfd4ed6f20d386deedd1f349c7035a226fd44739454",
+      "scope": "3480-3510 actual status producer, registration search."
+    },
+    "edgion-gateway/src/observe/metrics/registry.rs": {
+      "sha256": "a53d0512e93bcce257f45cd21c9a90e5ca066ec6588e12b7c14ec1edbe6efc7d",
+      "scope": "920-935,1160-1177 cumulative lazy counter emitters."
+    },
+    "edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_filter.rs": {
+      "sha256": "bfa2ac6926771a8c0b74d557b17bdddd9e0a17fc50770b537b6db2fe25d03dcf",
+      "scope": "170-285 budget denial ordering and outcomes."
+    },
+    "edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs": {
+      "sha256": "1e78b4bf440134f3f8949ab883bc1f767c0e70055164818c35fc0e2251b25eaf",
+      "scope": "370-430 authority Reject reason/502."
+    },
+    "edgion-gateway/tests/unit/backends/policy/backend_traffic/retry_budget_test.rs": {
+      "sha256": "32a644d9dccdbcafe55bef693378eebf3f012e10ecebebc542e4f71866475bdf",
+      "scope": "88-122 actual floor/denominator/cap bodies."
+    },
+    "edgion-gateway/tests/unit/routes/http/proxy_http/mod_test/retry_budget_tests.rs": {
+      "sha256": "5a49168e111086e587969128db2eef54c8c0c9cb594b784a6d3930d46fee410c",
+      "scope": "Full three actual retry-count test bodies."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

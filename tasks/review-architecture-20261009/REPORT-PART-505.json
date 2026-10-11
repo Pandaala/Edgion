@@ -1,0 +1,57 @@
+{
+  "partition": "PART-505",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/plugin_validation_status/mod.rs",
+      "sha256": "eb2dd0ad096362a4d9dbf81b4d839e0dbf8d16939dde407a513fe867ce099956",
+      "fully_read": true,
+      "disposition": "Full1-2,97bytes; Actual privateexport accepted."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/plugin_validation_status/plugin_validation_status.rs",
+      "sha256": "dba1b4173afbed6e924ae59bbdec7d1b1993da61364cda21b5f2f4d272654776",
+      "fully_read": true,
+      "disposition": "Full1-406,17562bytes; Ten cases: canonicalControllerFalse/Invalid/message and emptysemanticoperator accepted; ARCH385 local structuralnegative boundary. Pending265local emptycase cleanup result."
+    }
+  ],
+  "candidates": [
+    "ARCH-385"
+  ],
+  "support_selected": {
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "379-453 YAML PUT/POST retry/status erasure."
+    },
+    "edgion-tests/src/client/suites/status/helpers.rs": {
+      "sha256": "0236de331bc053f9ba00610543ef4e7a8932a9d49e129110f068091d98f823dc",
+      "scope": "1-74,326-374 controllerprojection/strict admission helper."
+    },
+    "edgion-tests/k8s/scripts/common/verify_plugin_validation_admission.sh": {
+      "sha256": "d08a5c3175522fd3ab135fc8d5501e70f3e476feafe7ab7e3ef71c0e552d2fee",
+      "scope": "Full1-40 K8s specificthree rejection reasons."
+    },
+    "edgion-tests/k8s/invalid/EdgionPlugins/PluginValidationStatus/both_operators.yaml": {
+      "sha256": "c5c85ebf92cfa52ce6435cd04dc24fab7c2b0925f8c4696fa030212b6a614f3c",
+      "scope": "Full1-18 actual invalid K8s document."
+    },
+    "edgion-resources/tests/condition_set_schema.rs": {
+      "sha256": "1e1b527a6221836a98e9c7b8b408d9bb5fce4434b0fb39bce0607d6a3b746f20",
+      "scope": "1-170 actual JSON/YAML structural vs semantic tests."
+    },
+    "edgion-controller/src/api/common.rs": {
+      "sha256": "2d96d7e138a37e864cf499469fefb2fe14dd1f18fc6661e9bd7850f8a3522dc9",
+      "scope": "225-243 typedparse400."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs": {
+      "sha256": "9a6ed6dbb4caa2a8a6a5b9bee0e9a9d75344edd9aad3b9eeee5dccc6413dc16a",
+      "scope": "178-194,426-456,466-490 structural/preparse vs refs status owner."
+    },
+    "skills/04-review/plugin-metadata/mandatory-design/condition-set-single-owner.md": {
+      "sha256": "eb021205b436c1b999f947d3281b2883df3d68ef4f8e1398a2f74544a216ed6f",
+      "scope": "Full1-48 original boundedcanonical container."
+    }
+  },
+  "limits": "All8local+9K8s valid/advisory fixtures+3invalid full; actualmintflags60-76/61-72/main2889-2909/K8s2598 andtypedConditionSet105-149,850-877/real compileempty536-592 originals inspected. Same265local380-384 deleteErr ignored afterPASS; malformed328 cleanup ignore afteralreadyFAIL no furtherPASSwitness. No266/355 duplicate. Original rules retained/fresh rootonly nested. Staticno execution/mutation/supportcredit."
+}

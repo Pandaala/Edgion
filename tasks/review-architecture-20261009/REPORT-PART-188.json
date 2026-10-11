@@ -1,0 +1,63 @@
+{
+  "partition": "PART-188",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-resources/src/common/key_accessor.rs",
+      "sha256": "b5261f6ebba0d4e031c3372f6a3f2bb858bd092e71a2657e8e8e751f85748279",
+      "fully_read": true,
+      "disposition": "Typed twelve local sync IO-free KeyGet / four KeySet sources; schema/wire/log metadata and exhaustive actual adapter/tests; no duplicate registry"
+    },
+    {
+      "path": "edgion-resources/src/common/mod.rs",
+      "sha256": "78ecd96d76735231dfb69a8149244a9d908c4613307160e8e30232bedf74ac74",
+      "fully_read": true,
+      "disposition": "Typed twelve local sync IO-free KeyGet / four KeySet sources; schema/wire/log metadata and exhaustive actual adapter/tests; no duplicate registry"
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original retained; original graded rules and readonly scope"
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original retained"
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original retained (large repeated read truncated, not a fresh full-read claim)"
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full original retained"
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original retained"
+    },
+    "skills/01-architecture/05-resources/SKILL.md": {
+      "sha256": "dae4740e05545a9d674199070cc49a6559fd921e69ae0d08dab19dc51d3efef6",
+      "scope": "Full original"
+    },
+    "skills/01-architecture/05-resources/00-schema-transport-contract.md": {
+      "sha256": "d20e74c1c7ccf6183f893bc919767a27bd3fbb47486415d14651a76fdef5a597",
+      "scope": "Full original"
+    },
+    "edgion-resources/tests/unit/common/key_accessor_test.rs": {
+      "sha256": "6a4f2b7baf98e0fe18464059162522ec20f97495f0527c01e11361c19868b3ea",
+      "scope": "Full"
+    },
+    "edgion-gateway/src/plugins/runtime/session_adapter.rs": {
+      "sha256": "bb060285f53d6eddb8eeac90c080456e7efabfd9457720990305703c5a143f92",
+      "scope": "2327-2378 actual exhaustive key_get/key_set"
+    },
+    "skills/04-review/plugin-metadata/mandatory-design/keyget-is-local-io-free.md": {
+      "sha256": "ca49fdeb7f564619625002fafb0f60b2cc1846e8c4cd8fc1810eb246a802ce4c",
+      "scope": "Full original"
+    }
+  },
+  "limits": "Root personally read every primary byte; original retained context plus exact fresh support scopes. Static no tests/builds/runtime/network/Git/production writes. Empty tracked src markers counted by frozen inventory. Supporting reads zero primary credit; no unsourced benchmark or security incident claims."
+}

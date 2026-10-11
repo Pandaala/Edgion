@@ -1,0 +1,87 @@
+{
+  "partition": "PART-259",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/cli/config.rs",
+      "sha256": "9f19a5bf98552250045c76ce5c2ea606de312c1d61a71ad04c0a01ac3fe75e7f",
+      "fully_read": true,
+      "disposition": "Full declared local YAML/Clap config, bounded advisory paths, defaults/strict subtrees, FIPS/token/env rules, validated cache limits, immutable global initialization and production load/merge. ARCH044 six ordinary ServerConfig flags lost in merge."
+    },
+    {
+      "path": "edgion-gateway/src/cli/mod.rs",
+      "sha256": "393ea796feb6e022ab7438e16e2084f2a94a21c1e470ec7befdc49f4cb3002bd",
+      "fully_read": true,
+      "disposition": "Full secure sync bootstrap/bounded initial retry, metric/config ordering before watches, guarded test mode, cold logs, auxiliary task startup; actual UDP construction-error cleanup and normal drain then OTLP with armed startup guard; runtime handoff preserves original errors. No unsolicited supervisor/framework or lossless logger redesign."
+    },
+    {
+      "path": "edgion-gateway/src/cli/pingora.rs",
+      "sha256": "5aa138131a0cb310bcfd407f9e7bfa2fadbfbb133db00737ba59d7b718e10395",
+      "fully_read": true,
+      "disposition": "Full typed ServerConf/default/offload pair/retry translation, actual Gateway list and construction; Unix external/internal fatal watch, main loop result. ARCH040/041 already own listener declaration defects."
+    }
+  ],
+  "candidates": [
+    "ARCH-044"
+  ],
+  "existing_related": [
+    "ARCH-040",
+    "ARCH-041"
+  ],
+  "support_selected": {
+    "skills/01-architecture/02-gateway/01-startup-shutdown.md": {
+      "sha256": "d624247d52b0995a5b8baec6de4b9c83205a07aef327116ec0427799c7bf35e6",
+      "scope": "Full original; source eager selector publication removed former preload, scoped documentation follow-up"
+    },
+    "skills/04-review/deserialization/intentional-design/gateway-process-config-unknown-fields-advisory.md": {
+      "sha256": "c8a5b1754a69f37854782e712c176be7d95c2ec8cd3ed23da194d839d959eb2b",
+      "scope": "Full original"
+    },
+    "skills/04-review/resources/intentional-design/gateway-process-config-is-yaml-only.md": {
+      "sha256": "be544e2f8818a5bdf1bca19f6eb2e4f122431f9777ab46c19e06e32e7171e6fc",
+      "scope": "Full original"
+    },
+    "skills/04-review/link-sys/intentional-design/process-exit-log-delivery-best-effort.md": {
+      "sha256": "4b7546f6b5d45a002166f9bd1b62b0316dcf941838c64120744aa129a831c427",
+      "scope": "Full recovered 1-90 and90-145"
+    },
+    "skills/04-review/link-sys/regression-guards/otlp-provider-ownership-and-egress.md": {
+      "sha256": "f0275da01b4b8539d27474160a81e44a7f1f1c4e24cebd17d7048b69f4771e55",
+      "scope": "90-170 selected startup/retirement contract"
+    },
+    "skills/02-features/02-config/01-gateway-config.md": {
+      "sha256": "7a7037ac8f5377ad6de8fd92748ae2b37446f9fbf4bee5eb4bd37a498803be0d",
+      "scope": "446-483 server ownership/precedence; exact symbol searches"
+    },
+    "edgion-gateway/tests/unit/cli/config_test.rs": {
+      "sha256": "4dd99dcaa6c433010b9196628d8a5eb19c2f1c8c63536629b157dcb42beb3a83",
+      "scope": "1-163,175-235,270-320,450-630,682-810 actual load/merge/defaults/cache/redaction/FIPS; relevant remaining test names searched"
+    },
+    "edgion-gateway/tests/unit/cli/mod_test/otlp_startup_tests.rs": {
+      "sha256": "e5ed2bc8db20c306f7575eb1c6f23216ee9983462d792a5103f841f555705969",
+      "scope": "Full isolated real SDK owner startup error drain test, not executed"
+    },
+    "edgion-gateway/tests/unit/cli/mod_test/config_diagnostic_tests.rs": {
+      "sha256": "1abb2d49785f328d7d7a0c481d23ba7a527a43791f8dcd729d6622bce6529301",
+      "scope": "Full actual bounded value-free diagnostics"
+    },
+    "edgion-gateway/tests/unit/cli/pingora_test/server_conf_tests.rs": {
+      "sha256": "529bcf807a8e40530824a489b9f0dfb566bd4584fdb4daad35686f1802d6b90e",
+      "scope": "Full actual final-config construction tests and offload merge boundary"
+    },
+    "edgion-gateway/tests/unit/cli/pingora_test.rs": {
+      "sha256": "9a0fd39f7b5c7d568366826962d990c9085e6cac2b08d9289bdc2a947f3455cb",
+      "scope": "Full external signal and internal fatal tests"
+    },
+    "edgion-gateway/src/routes/udp/mod.rs": {
+      "sha256": "977874cb9a4c4a914380cfd59323fa98a6912b6044224dd54ce9279cce6807c0",
+      "scope": "92-174 actual idempotent cancel/join/abort acknowledgement"
+    },
+    "edgion-gateway/src/link_sys/runtime/store.rs": {
+      "sha256": "b995c16f0e1b9cbde6cdc9c7a74576464b9f0184b9316e4924aac97c230970de",
+      "scope": "843-880 actual SDK cleanup ownership, prior full implementation receipt reused"
+    }
+  },
+  "limits": "All primary implementations actually read fully; scoped supporting originals/callers/tests; static only, no execution/mutation/measurements/support primary credit."
+}

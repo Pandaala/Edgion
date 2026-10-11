@@ -1,0 +1,9 @@
+{
+  "kind": "documentation-follow-up",
+  "path": "skills/01-architecture/02-gateway/01-startup-shutdown.md",
+  "sha256": "d624247d52b0995a5b8baec6de4b9c83205a07aef327116ec0427799c7bf35e6",
+  "discrepancy": "Guide says startup hydrates referenced backend lists after cache readiness. Current cli/mod.rs step19 explains selectors are compiled eagerly with joint Service/EndpointSlice generations and no preload pass remains. Preserve actual order, remove stale hydration step in future authorized doc update.",
+  "source": "edgion-gateway/src/cli/mod.rs",
+  "source_sha256": "393ea796feb6e022ab7438e16e2084f2a94a21c1e470ec7befdc49f4cb3002bd",
+  "limits": "Read-only scoped follow-up; no source or knowledge modification."
+}

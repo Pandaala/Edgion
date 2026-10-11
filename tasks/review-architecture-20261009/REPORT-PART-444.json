@@ -1,0 +1,629 @@
+{
+  "partition": "PART-444",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/credential_injector_dynamic.rs",
+      "sha256": "4e8457ce0222826e4d17794a127e08bc1195a292bd6f3016998d4b364088a08c",
+      "fully_read": true,
+      "disposition": "Full1\u201372. Retain explicit initial, rotated/deleted business assertions and unconditional restoration."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/csrf_secret_rotation.rs",
+      "sha256": "45246d05964d5616c33bc7a7aa34e83a42dd8ca93af1e4f32c27c518486b1740",
+      "fully_read": true,
+      "disposition": "Full1\u2013146. Retain fresh/stale/deleted token/credential checks, token cleanup and generation restoration."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/delegation_parentref_gateway_collision.rs",
+      "sha256": "23ff344e5d8cd9d15b98e27eb70d134db67b7e1e4a81354dafceca98808e1d91",
+      "fully_read": true,
+      "disposition": "Full1\u2013684. Retain HTTP/gRPC identity/generation/delegation/direct-access assertions; bootstrap Gateway correctly outside runtime initialization."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/direct_endpoint_port_resolution.rs",
+      "sha256": "363f517b24ceb5ef36e55bf98de261d4cd18619c8f3d8e47c87717d5804199b5",
+      "fully_read": true,
+      "disposition": "Full1\u2013366. Retain originating port, sibling/unready rejection, TLS preparation failure and aggregated cleanup errors."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/dns_resolution_flap.rs",
+      "sha256": "194e6b3a78b75ba68b08aed93ef6e985b2fcd23486a46031aa0e4c8f09326fb1",
+      "fully_read": true,
+      "disposition": "Full1\u201379. Supplemental ARCH264 success-state Service drift/failure restoration; preserve all DNS/egress/cap checks."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/dsl_dynamic.rs",
+      "sha256": "8f23c7600cc968a4b669e1fe7291927e315ff08ca2722b9569603447b20f8ce4",
+      "fully_read": true,
+      "disposition": "Full1\u201349. Supplemental ARCH264 retained v2 conflicts with repeated initial v1 assertion."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/dsl_terminate_dynamic.rs",
+      "sha256": "3c0cc1508baf0008e498340d5e4049f778a22a3ad6bec633991d51306604b738",
+      "fully_read": true,
+      "disposition": "Full1\u201372. Retain captured-result restoration and next/empty/local-response semantics."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/dsl_xml_dynamic.rs",
+      "sha256": "9077ed371e59c73dd3047b9d591aa04bd7add66224f085fb4d07f9d73eba9d53",
+      "fully_read": true,
+      "disposition": "Full1\u201389. Retain explicit body policy/v1/v2/cap/output failure checks and restoration."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/duplicate_host_policy_hot_reload.rs",
+      "sha256": "0f93b9a686ffd7f7b5c6a3ce339595094db9eaae4a0d936b542ff62485d5d828",
+      "fully_read": true,
+      "disposition": "Full1\u2013162. Retain protocol duplicate-Host rejection preceding EGC processing; unsupported opt-out unnecessary."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/edgion_config_data_ref_flap.rs",
+      "sha256": "4587ccd98eefb3ad9768db6872a5dbff85af129b72c757ed5fbee5f17b64c356",
+      "fully_read": true,
+      "disposition": "Full1\u201360. Supplemental ARCH264 failure restoration and ARCH266 projection; successful final state matches initial, K8s projection failure limits later phase reachability."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/edgion_tls_last_known_good.rs",
+      "sha256": "328569727113cff6b3dd782d8a623875917bdfac1f11181e28288deb4b86c98b",
+      "fully_read": true,
+      "disposition": "Full1\u2013184. ARCH288 live synchronous OpenSSL child lifetime inside nominally timed async tests."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenarios/egc_runtime_hot_reload.rs",
+      "sha256": "9e60c79b639ff9215c309e3d76acfaa822f30ace2bd115f2685847a9b000d7aa",
+      "fully_read": true,
+      "disposition": "Full1\u2013249. Retain live XFF/compression/deleted-parameter checks and restoration; TLS Terminate capability-gated/deferred."
+    }
+  ],
+  "candidates": [
+    "ARCH-288"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original personally read/refreshed; unchanged retained scope"
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original personally read/refreshed; unchanged retained scope"
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original personally read/refreshed; unchanged retained scope"
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full original personally read/refreshed; unchanged retained scope"
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original personally read/refreshed; unchanged retained scope"
+    },
+    "skills/05-testing/SKILL.md": {
+      "sha256": "4ad0fb8f8a15693ec04116e8224095c6696bbe1e3e63f0a5528053e560466343",
+      "scope": "Full original personally read/refreshed; unchanged retained scope"
+    },
+    "skills/04-review/testing/SKILL.md": {
+      "sha256": "11d71f0b85ff6695f99019bad1dc44c2520ec79eb185d93032bf8dda6d609271",
+      "scope": "Full original personally read/refreshed; unchanged retained scope"
+    },
+    "skills/04-review/csrf/SKILL.md": {
+      "sha256": "d09e4c573f0f8858ef6ed1e5782a3a0310781085b001ed89f15b9168ed341196",
+      "scope": "Full original personally read/refreshed; unchanged retained scope"
+    },
+    "skills/05-testing/01-integration-testing.md": {
+      "sha256": "e260042b508fa0956873d1b3c059531f1733a7c15423c548081afb71703a10e1",
+      "scope": "289\u2013395 fresh; retained personally289\u2013535 unchanged"
+    },
+    "skills/04-review/testing/mandatory-design/dynamic-secret-fixtures-must-be-tracked.md": {
+      "sha256": "89fb8808ce4ed6f005da1af4612e6732a851726a44b52de96fc9f35accf284dc",
+      "scope": "Full original"
+    },
+    "skills/04-review/testing/intentional-design/local-shared-topology-single-owner-takeover.md": {
+      "sha256": "eae06ba0841415879d938c00bd164b14596a613e085ee3897df49dfa86af8135",
+      "scope": "Full original"
+    },
+    "skills/04-review/testing/compatibility-constraints/kubernetes-dynamic-fixture-boundaries.md": {
+      "sha256": "4a4e0a5a3bfd0cdfa5519816ae2f3fc8a4a70cc57a6e5a0991d84953ec4bdc57",
+      "scope": "Full original"
+    },
+    "skills/04-review/testing/regression-guards/integration-orchestrators-need-owned-deadlines.md": {
+      "sha256": "932bd3bd8f8fa44d3f300898d5ac8f84c7b384cd9c7ce0584a731dcb0031b625",
+      "scope": "Full original"
+    },
+    "skills/04-review/testing/regression-guards/integration-suite-lifecycle-errors-must-fail.md": {
+      "sha256": "bf3999aaa30bb0bb903e5ae3aafe31442cb60f942ab04c1317c060d29a4f3906",
+      "scope": "Full original"
+    },
+    "skills/04-review/tls/intentional-design/last-known-good-follows-resource-key.md": {
+      "sha256": "10a2a49a357d9c01f9b5f3daf48052640c423269418d59bbb575d485bcfea390",
+      "scope": "Full original"
+    },
+    "skills/04-review/csrf/regression-guards/csrf-secret-rotation-integration-coverage.md": {
+      "sha256": "86ec095731997d1be52808fa55c48167efa42bfa12185e1040fea216c96eb86a",
+      "scope": "Full original"
+    },
+    "skills/04-review/dsl/regression-guards/terminate-explicit-local-response.md": {
+      "sha256": "716cd1b4645b63d642aec891ed5869cf42a8b93f01f41b9fcbbd52cf91f58ed3",
+      "scope": "Full original"
+    },
+    "skills/04-review/dsl/regression-guards/bounded-xml-primitives.md": {
+      "sha256": "6f04ae53d73912caefdacf9a496285eec03d63923ba9fd0e93a1f18bd2b4e2bc",
+      "scope": "Full original"
+    },
+    "skills/04-review/routing/regression-guards/delegation-parentref-gateway-name-collision.md": {
+      "sha256": "ec3cc11066356bc30d6e88703587c4d1892e86741d04301d2b361be2a4076911",
+      "scope": "Full original"
+    },
+    "skills/04-review/backends/regression-guards/named-port-resolve-against-originating-slice.md": {
+      "sha256": "e6de87d8d80ef970dcbc3c5cc36dce29a160d5a1b2893368a7060d23d2adafe3",
+      "scope": "Full original"
+    },
+    "skills/04-review/http1/regression-guards/duplicate-host.md": {
+      "sha256": "a527a40fa14a6dac51e4e9ce44b44e71fe3c73edcaede6fac41baca291c65193",
+      "scope": "Full original"
+    },
+    "skills/04-review/link-sys/regression-guards/httpdns-prepared-runtime.md": {
+      "sha256": "097fa29239de62656a878a3a3842eb523ce8472d8b44f8c2b237d8bf1dc1ca34",
+      "scope": "Full original"
+    },
+    "skills/04-review/status/regression-guards/deployment-partitioned-observations.md": {
+      "sha256": "f34036a4abf9b836d0292ab0970e4b5a64c290b5a2e0d6d7862ef6af56dff86d",
+      "scope": "Full original"
+    },
+    "skills/04-review/tls/regression-guards/downstream-handshake-offload-budget-and-cancellation.md": {
+      "sha256": "be4104a9541319a35019502d87ed93afe8946e696ec1cd21d4087e05939d4ae2",
+      "scope": "126\u2013148 only; TLSRoute Terminate unsupported and capability gated"
+    },
+    "edgion-tests/src/client/suites/edgion_plugins/credential_injector/credential_injector.rs": {
+      "sha256": "98c8eae5429717953cdaa93889737cbc47ab1b2cf38a7f17b16984737e2b5220",
+      "scope": "1\u2013158,237\u2013335,403\u2013628"
+    },
+    "edgion-tests/src/client/suites/edgion_plugins/csrf/dynamic.rs": {
+      "sha256": "3811de992cd26d1b1815abec706ce737a8ac5e83cf723c3f55bbfee25d5ebbd3",
+      "scope": "Full1\u2013227"
+    },
+    "edgion-tests/src/client/suites/edgion_plugins/dsl/dynamic.rs": {
+      "sha256": "5d2e242535f78cd500da51c99e998046aa1f8ee49baeaad5037c939fcbb65927",
+      "scope": "Full1\u2013222"
+    },
+    "edgion-tests/src/client/suites/edgion_plugins/dsl/terminate_dynamic.rs": {
+      "sha256": "c8a70756916ed79d6a149f29e95f4e522771b29fff3cb6b7dddc1340618ff4f5",
+      "scope": "Full1\u201395"
+    },
+    "edgion-tests/src/client/suites/edgion_plugins/dsl/xml.rs": {
+      "sha256": "b9413ac7f55d1bc5d33b3e08246b0a7200245131ef24c09ba529e47f52bd1c5e",
+      "scope": "Full1\u2013350"
+    },
+    "edgion-tests/src/client/suites/edgion_plugins/edgion_config_data_status/dynamic.rs": {
+      "sha256": "90f52229d5a4283921dc344431390ad4e8f257ac81c5765d28a1278a215421a2",
+      "scope": "Full1\u2013288"
+    },
+    "edgion-tests/src/client/suites/http_route/backend/dns_resolution_flap.rs": {
+      "sha256": "7ce896d795d8369a72a3865efbd24c73d74813d2d4db8bb29fa3cdf6d5b33650",
+      "scope": "Full1\u2013225"
+    },
+    "edgion-tests/src/client/suites/edgion_tls/last_known_good/last_known_good.rs": {
+      "sha256": "8a44e763c6fff65ac670ea794b7e1a3f479abb9f16613173f714da3b4bd9592b",
+      "scope": "Full1\u2013422"
+    },
+    "edgion-tests/src/client/dynamic/ctx.rs": {
+      "sha256": "f37853b6b736f31472cc3a0a5a0a16501898b4160647ec5ca4d0f6a69e3e8866",
+      "scope": "Full1\u2013238"
+    },
+    "edgion-tests/src/client/dynamic/status.rs": {
+      "sha256": "9ac8c3e973f4a91ae05824d8560758f0a89ed928ecdceafc90b1bd0b46d30ad2",
+      "scope": "Full1\u201320"
+    },
+    "edgion-tests/src/client/dynamic/registry.rs": {
+      "sha256": "330dd01d67642e19abd188b7e0f336e53b47592f3f99fa00cabbc58a011f60ee",
+      "scope": "Full1\u201382"
+    },
+    "edgion-tests/src/client/dynamic/wait.rs": {
+      "sha256": "04ed93d16c4f432f5a29de3770370e25eb0113c7c2c8eefc2e3ff2f197c65b53",
+      "scope": "Full1\u201357"
+    },
+    "edgion-tests/src/client/dynamic/scenarios/plugin_policy.rs": {
+      "sha256": "ff58ba92b1e09da74b9bca81bb63cddf409561c255c420261d5ab6e7c39f5787",
+      "scope": "152\u2013202 native async child precedent only"
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "445\u2013485,525\u2013610"
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "1\u201398,166\u2013200,1700\u20131764,3678\u20133807"
+    },
+    "edgion-tests/src/client/suites/tls_route/mod.rs": {
+      "sha256": "4ec514bc52fa9215d6696aeacf4c7905d7036a2a5ab99c6ab36db4419ea77262",
+      "scope": "Full1\u201333"
+    },
+    "edgion-tests/src/client/suites/status/helpers.rs": {
+      "sha256": "6a83e0e2f2f186d7c87d1a005c395340ed681ec04a487a503ea63c4530a23588",
+      "scope": "1\u201395 including complete controller-status tests"
+    },
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "1eb27bded8bcb40a82ea3cfd4ed6f20d386deedd1f349c7035a226fd44739454",
+      "scope": "3550\u20133656 actual SayHello/StreamNumbers"
+    },
+    "edgion-tests/Cargo.toml": {
+      "sha256": "acc6a130b31b4e1f852998eea3fec608322986559d3aad542a29d402eb6561be",
+      "scope": "1\u2013110"
+    },
+    "Cargo.toml": {
+      "sha256": "767f23c4126fc826a5b38b40ef074c345572bd339011c5ec0e3d7f8fbdb98873",
+      "scope": "Line72 Tokio full features"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs": {
+      "sha256": "23057df0f04ed113a72fa1b42fb5344153c3ae8cff526e030878c8091fc92bd6",
+      "scope": "742\u2013792,850\u2013877"
+    },
+    "edgion-controller/src/api/types.rs": {
+      "sha256": "43e2700678d3c234d667b6b7dcae94fa9a6678f81a01bfeb7a4148817bc3cb65",
+      "scope": "280\u2013346"
+    },
+    "edgion-controller/src/api/configserver_handlers.rs": {
+      "sha256": "b2e5e79cebf1c720f35f46296bdedb1e77dfa327c15075bd9559158f532e5723",
+      "scope": "Full1\u201358"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs": {
+      "sha256": "9a6ed6dbb4caa2a8a6a5b9bee0e9a9d75344edd9aad3b9eeee5dccc6413dc16a",
+      "scope": "255\u2013279,1045\u20131100"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/csrf.rs": {
+      "sha256": "ae21036361fa73c351bd026ca1c335de9f8f3087d7ef1c44284aabc006b7f687",
+      "scope": "Full1\u201358"
+    },
+    "edgion-gateway/tests/unit/tls/store/tls_store_test.rs": {
+      "sha256": "72c61202dfb12365d314ebbdafd86c063dda0bde7d091e96dea397b5cb8525ce",
+      "scope": "133\u2013150,156\u2013223 actual invalid-update retention and invalid-attachment revoke/repair"
+    },
+    "edgion-resources/src/resources/gateway_class.rs": {
+      "sha256": "bdab843bf8665d6f5c6fa2ce33f0c0e5fc3e0e5966a0c14f948fdd3d52999c0e",
+      "scope": "1\u2013135 complete advertised features"
+    },
+    "edgion-tests/integration/scripts/integration/run_integration.sh": {
+      "sha256": "5a6df789c2a894150691b3f50edf85f7ac055961ee0b1cc230291a6b90f85b76",
+      "scope": "608\u2013650,3200\u20133256,3270\u20133288,3350\u20133372"
+    },
+    "edgion-tests/integration/scripts/integration/run_all_integration.sh": {
+      "sha256": "e54074d66c1ac82b2863ea14a06feea6fb96378e141cff4ccfbf1f9c9e5415a7",
+      "scope": "300\u2013338 outer owned deadline"
+    },
+    "edgion-tests/integration/scripts/utils/run_with_deadline.py": {
+      "sha256": "4027e6146431eb4b19ff8be31eb8efd4b4834f75b3b8f0968c981f2e2c0de66e",
+      "scope": "Full1\u2013117, recovered clipped tail"
+    },
+    "edgion-tests/integration/scripts/utils/load_conf.sh": {
+      "sha256": "6ee424b07a4b8791ebc124be54cc6b95b04fcdbbb368e11feb5eac9b79a51b70",
+      "scope": "190\u2013222"
+    },
+    "edgion-tests/k8s/scripts/common/run_k8s_dynamic_scenarios.sh": {
+      "sha256": "edf8aa9859ebef675ec7ea8441ca54095b434043f1d7f01cc4adda91a3fdc5f6",
+      "scope": "630\u2013655,943\u2013990 fresh; retained660\u2013785"
+    },
+    "edgion-tests/k8s/scripts/common/k8s_dynamic_scenarios.tsv": {
+      "sha256": "bb7bd55699de2cd7f27e6f11416de8fda6bdad85af1b1dbf6b82d9a0b46b39f9",
+      "scope": "29\u201352 and matched rows3,16,17"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/CredentialInjector/DynamicTest/README.md": {
+      "sha256": "8f8c8b61078af31f3b36b254fbb6a4fc6c8991d116ce77273e2b47b7e0c1fde5",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/CredentialInjector/DynamicTest/delete/secret.txt": {
+      "sha256": "bf65ad2c7dd45e44887933b8ca9d9a15900986b7c0ad92cdd33daba4d77a29f6",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/CredentialInjector/DynamicTest/initial/00_Secret_credential-injector-dynamic.yaml": {
+      "sha256": "91cd3fb8da0b736c2f61e522ce0cb13720f502b1dda872b46d31bd7b22b398fb",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/CredentialInjector/DynamicTest/initial/01_EdgionPlugins_credential-injector-dynamic.yaml": {
+      "sha256": "4b0d4218a2dd0e3a10e77132436be4eb871e324d012e5f98635deb45b94460be",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/CredentialInjector/DynamicTest/initial/02_HTTPRoute_credential-injector-dynamic.yaml": {
+      "sha256": "12f320a1eaf3c748cf9b1ff65f26eeea8681020ed8303f2c4344ae79186f49ab",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/CredentialInjector/DynamicTest/updates/00_Secret_credential-injector-dynamic.yaml": {
+      "sha256": "07feae1cc90585135382c8dc3cce9730ce9506f317777926f62a3f3f9276067b",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/Csrf/DynamicTest/README.md": {
+      "sha256": "7adfe77fee5478bb2a70d71be32b24ce7341eb8819fa81a3fd0e370803f65498",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/Csrf/DynamicTest/delete/secret.txt": {
+      "sha256": "34928a39b55b37b8d938c33825ca527bfc31da734033cd26ca40a317a1b7633a",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/Csrf/DynamicTest/initial/00_Secret_csrf-rotation-key.yaml": {
+      "sha256": "5f7ec3507c99d7e816d8ef82e981b3fc6168b55bcb372224d3a41561f6ed972d",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/Csrf/DynamicTest/initial/01_EdgionPlugins_csrf-secret-rotation.yaml": {
+      "sha256": "504e0dc734cd16d6c02335f0629bc5fe1b4a752b453645b85085019c46f31acf",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/Csrf/DynamicTest/initial/02_HTTPRoute_csrf-secret-rotation.yaml": {
+      "sha256": "1ade3fd37df06c8af4355afa41bc2f34165cb2679751873d87a8cbe89498b761",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/Csrf/DynamicTest/updates/00_Secret_csrf-rotation-key.yaml": {
+      "sha256": "4efa285d9bbf2a7a273a26a321731c29dc0ce6b13ea05478ea1bb4fbe1eaa1c0",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/DirectEndpoint/DynamicTest/initial/00_Service.yaml": {
+      "sha256": "b47d5f425e3b57f98623f875e19faabf0f705e75adc3ab57552524786e5a77f1",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/DirectEndpoint/DynamicTest/initial/01_EndpointSlice.yaml": {
+      "sha256": "e6e67d7008c9d99efca91355c2e1384d45f99ff6d673de844104a76504d5505c",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/DirectEndpoint/DynamicTest/initial/02_EdgionPlugins.yaml": {
+      "sha256": "a2165ad4bd71ec64cd765e98a6ce8346058ed72f8511c07a98911b205c7fb27b",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/DirectEndpoint/DynamicTest/initial/03_HTTPRoute.yaml": {
+      "sha256": "e6b0d9f7d4015c54778c167b993cf7d1b6878277f44a34aeb64fabc92443babf",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/DirectEndpoint/DynamicTest/updates/changed.yaml": {
+      "sha256": "ffedf46266b096e0f131711c22391ee14e78be83d17cab1390499c90d2f7f0df",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/DirectEndpoint/DynamicTest/updates/invalid_tls.yaml": {
+      "sha256": "ec66b967dd4c89ae839ad94f24549bed8bbaff9d2ff912f7c9f747dbe751cfcf",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/DirectEndpoint/DynamicTest/updates/missing.yaml": {
+      "sha256": "b638f91844c76dac693e053fb4d1fd52ff1223c91031f3da517ee330f2b401fc",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/DirectEndpoint/DynamicTest/updates/tls/00_EndpointSlice.yaml": {
+      "sha256": "1d9f8b4a24ca3e394841ce03d7e0061070d5c25756a5e62f75158c96eff95802",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/DirectEndpoint/DynamicTest/updates/tls/01_BackendTLSPolicy.yaml": {
+      "sha256": "d4eabcf4703cbd75f49bd48b9371d94e6f6ce35bb3abed956bd67eb54374f20e",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/DirectEndpoint/DynamicTest/updates/unready.yaml": {
+      "sha256": "dcb87281800518610160b04eb4532fa215cae3c82ff915de3edc59334d59574b",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/DslBody/DynamicTest/initial/EdgionPlugins_dsl-xml-dynamic.yaml": {
+      "sha256": "50e23ecff239d703cceb4c6a718ce5250ffabe17765b4a5a165999c8388f154d",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/DslBody/DynamicTest/initial/HTTPRoute_dsl-xml-dynamic.yaml": {
+      "sha256": "4793399af070483186fb848fe994e3fef19e5d0900e93aa405d680a78a27c8c8",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/DslBody/DynamicTest/updates/to_capped/EdgionGatewayConfig_example-gateway.yaml": {
+      "sha256": "e4072a395fa9dc26f206ed34c594eea7b52103a711a69aa328fde40cc9ab4bed",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/DslBody/DynamicTest/updates/to_restored/EdgionGatewayConfig_example-gateway.yaml": {
+      "sha256": "9fba7cadeabc9606d91ff8bbf7cc184cd443e75e965933732d22d4a4cfeac173",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/DslBody/DynamicTest/updates/to_updated/EdgionPlugins_dsl-xml-dynamic.yaml": {
+      "sha256": "1ad0384d8abe45a5a6f7adbf74884d937af83f0d85edc66d1e9cd3bf1a29c6ef",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/DslDynamic/DynamicTest/initial/EdgionPlugins_dsl-dynamic.yaml": {
+      "sha256": "0b5a5844dcce2bfae9a31b9bb19a6be70eaf5a97c101939b83f9697cb36e048d",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/DslDynamic/DynamicTest/initial/HTTPRoute_dsl-dynamic.yaml": {
+      "sha256": "90b7f0d836d6d215cd9a2cdb9b96b236a0cea8f9de429b73cad145b96b06473d",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/DslDynamic/DynamicTest/updates/EdgionPlugins_dsl-dynamic.yaml": {
+      "sha256": "94e6a41889c7bb15cf32bb34b61237066650e041fc37224d896991c0fd688062",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/DslTerminateDynamic/DynamicTest/initial/EdgionPlugins_dsl-terminate-dynamic.yaml": {
+      "sha256": "059d9752b3f679f47fde01edbb15889ca5d2a0c9288de82b86ac1b1e8143947b",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/DslTerminateDynamic/DynamicTest/initial/HTTPRoute_dsl-terminate-dynamic.yaml": {
+      "sha256": "350fc2f95efb8b602f4a98079c78b5e9f743ae6bdee101ecbde4fc07ecc585e8",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/DslTerminateDynamic/DynamicTest/updates/EdgionPlugins_dsl-terminate-dynamic.yaml": {
+      "sha256": "c3da6cb8be37eca2daec8cd86f7d70dabd5477fc946dbd9c42df9a684651c49d",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/DslTerminateDynamic/DynamicTest/updates_grouped/EdgionPlugins_dsl-terminate-dynamic.yaml": {
+      "sha256": "6ac668a2c71c7926b83ec1c7b16ea196833cd72385159f4fe05f782d472c0a48",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/EdgionConfigDataStatus/RefFlap/DynamicTest/initial/EdgionConfigData_edgion-test_pmd-flap-good.yaml": {
+      "sha256": "e5e375dd0c39c9b6fa572c1654d02746a09c58e51530bbdb484c14502dbd5432",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/EdgionConfigDataStatus/RefFlap/DynamicTest/initial/EdgionPlugins_edgion-test_pmd-flap-plugin.yaml": {
+      "sha256": "f5b6ae2ff07700904641e0b5d32de5192ff0eb5ad1126b31123db7908db065be",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/EdgionConfigDataStatus/RefFlap/DynamicTest/updates/to_invalid/EdgionPlugins_edgion-test_pmd-flap-plugin.yaml": {
+      "sha256": "b189b8505bfd5f4121db7f5ca73a92e4b99790b51827c3582a0456b9af4cf65a",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/EdgionConfigDataStatus/RefFlap/DynamicTest/updates/to_valid/EdgionPlugins_edgion-test_pmd-flap-plugin.yaml": {
+      "sha256": "77a65fa99aa4f864729bdb17368f36f9d6401f74ff9dd4f5b5e3d2445b1e6ad8",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionTls/LastKnownGood/initial/EdgionTls.yaml": {
+      "sha256": "e8883ad9e15613cc46105d180c4dc2389d6b3cc490291a562c81de5848b5b6d7",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/EdgionTls/LastKnownGood/initial/Gateway.yaml": {
+      "sha256": "6fe460f9e1b251c35a9c5e8932a91ac5882f4c30da6add9ce268ff5163f4160b",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/GRPCRoute/Delegation/ParentRefGatewayCollision/DynamicTest/initial/02_GRPCRoute_parent.yaml": {
+      "sha256": "b4050e0f5576cb0741529a04f964a441ce2e18218bfea379babf799e33154dcb",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/GRPCRoute/Delegation/ParentRefGatewayCollision/DynamicTest/initial/03_GRPCRoute_child.yaml": {
+      "sha256": "19de69698816be2dcce3a75e164f9cde8a9f749eac3039ce89dc19c89d2400fe",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/GRPCRoute/Delegation/ParentRefGatewayCollision/DynamicTest/updates/03_GRPCRoute_child.yaml": {
+      "sha256": "24224b30db0b4441246a1e43383177836ca00a08556452da4eb0401e64ac098f",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/GRPCRoute/Delegation/ParentRefGatewayCollision/bootstrap/01_Gateway.yaml": {
+      "sha256": "cfc8dbcce83229e9e22d564069ec7a1a809525f7bbdaf5500ea265606a6cbab1",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Delegation/ParentRefGatewayCollision/DynamicTest/initial/02_HTTPRoute_parent.yaml": {
+      "sha256": "6cba08841b9faf8399438b2d27d3d9b99215f3510d0c24e05c5809ac0ca8e81f",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Delegation/ParentRefGatewayCollision/DynamicTest/initial/03_HTTPRoute_child.yaml": {
+      "sha256": "402a87bcd48da07bdf4470aa673aa6c1bb32627b39d10cb01da9b850ff3e2641",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Delegation/ParentRefGatewayCollision/DynamicTest/updates/03_HTTPRoute_child.yaml": {
+      "sha256": "e890c9195a0e2b44f50a0e61f392fc275130039c9339a69fc4941064ec28952c",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Delegation/ParentRefGatewayCollision/bootstrap/01_Gateway.yaml": {
+      "sha256": "3bd3d9c452be824649d4ba914c84f21d3523e95c6620df5411aadffff7c20bcf",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/Gateway/DuplicateHostPolicyHotReload/DynamicTest/bootstrap/resources.yaml": {
+      "sha256": "a8f868a766209426a699af5c291501e6bbe76a07469a1ef53d794dabde1c2c69",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/Gateway/DuplicateHostPolicyHotReload/DynamicTest/initial/egc.yaml": {
+      "sha256": "70e4fee8124fac2a6c3cf60c4f7512e12900d3a95a64a26c7d2ad6dc2a8e4c6c",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/Gateway/DuplicateHostPolicyHotReload/DynamicTest/updates/egc.yaml": {
+      "sha256": "8419afac9663808eb9a3e7cb108bc7717d3afaabfda6aaafd90ad0c9aa8cda93",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/Gateway/EgcRuntimeHotReload/DynamicTest/bootstrap/resources.yaml": {
+      "sha256": "399ff5af61755e8b6b405021e711fc31f04b784ee3f465cba8bf245db2cc0c75",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/Gateway/EgcRuntimeHotReload/DynamicTest/initial/egc.yaml": {
+      "sha256": "6af55ece7e3c4099c959ca48640c89682586104180845a0dc3f512d9016a76c7",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/Gateway/EgcRuntimeHotReload/DynamicTest/updates/egc.yaml": {
+      "sha256": "72393a9c3ca805012471b036fd2b4302b842ee17af16d7d10eb1b9fb0070b541",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/DnsResolutionFlap/DynamicTest/initial/00_EdgionGatewayConfig_dns-flap-egc.yaml": {
+      "sha256": "971b278f59d4265e20272dc552118828ccf8603520fdbfa444a2ec2a890384ef",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/DnsResolutionFlap/DynamicTest/initial/00_GatewayClass_dns-flap-class.yaml": {
+      "sha256": "4e5a0e6f6a8d9ff8530d404dfad9cd9f213408346d8544b045a48c1f00763566",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/DnsResolutionFlap/DynamicTest/initial/00_LinkSys_edgion-default_dns-flap-dead.yaml": {
+      "sha256": "4ac73baac7691cf01c487eddf00d6e06bb5e2e40b879483ec78eb381e17beb9e",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/DnsResolutionFlap/DynamicTest/initial/00_LinkSys_edgion-default_dns-flap-local.yaml": {
+      "sha256": "72f6df098788b1248b1603419df8ea555bf95265ec5967209559e5ecb8b6af70",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/DnsResolutionFlap/DynamicTest/initial/01_Service_edgion-default_dns-flap.yaml": {
+      "sha256": "fcb11013e5993595e3e8c52899775a2b4dc45e018bbd3bb3598f035122b99190",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/DnsResolutionFlap/DynamicTest/initial/02_Gateway_edgion-test_dns-flap-gateway.yaml": {
+      "sha256": "a1c564280236684dd9493daddb61fd3140227a105afd75e3d742c8d2d9175134",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/DnsResolutionFlap/DynamicTest/initial/03_HTTPRoute_edgion-default_dns-flap.yaml": {
+      "sha256": "c6c381b32ec67276cb1c1598907a6663201a4b35692887308584da48c638d7b2",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/DnsResolutionFlap/DynamicTest/updates/to_blocked/00_LinkSys_edgion-default_dns-flap-local.yaml": {
+      "sha256": "d599265a5f89fc7f9d4e281c6676852c27156447b88e2e48c36719c23cf1e5a3",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/DnsResolutionFlap/DynamicTest/updates/to_invalid_connection/00_LinkSys_edgion-default_dns-flap-local.yaml": {
+      "sha256": "c60cd01e58a928fa655f5568ecf7b6f314de9f3f0c12efab853c06c9d9aef6d1",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/DnsResolutionFlap/DynamicTest/updates/to_restored/00_LinkSys_edgion-default_dns-flap-local.yaml": {
+      "sha256": "51f8eefd49063e3524c345365f371906f847f0661291de5c7502b30fb42687f1",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/DnsResolutionFlap/DynamicTest/updates/to_small_response/00_LinkSys_edgion-default_dns-flap-local.yaml": {
+      "sha256": "3f14cccff9154c1ce047016797ae96b7896df374111dd8f95d2e6821b582e4ac",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/integration/conf/HTTPRoute/Backend/DnsResolutionFlap/DynamicTest/updates/to_working/01_Service_edgion-default_dns-flap.yaml": {
+      "sha256": "35a44fd88731ef5621f102d62e9122bb7963a0685a518bd5d0d0069714173fb3",
+      "scope": "Full individual actual fixture; no directory credit"
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/EdgionConfigDataStatus/RefFlap/DynamicTest/initial/EdgionConfigData_edgion-test_pmd-flap-good.yaml": {
+      "sha256": "e5e375dd0c39c9b6fa572c1654d02746a09c58e51530bbdb484c14502dbd5432",
+      "scope": "Full individual actual fixture"
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/EdgionConfigDataStatus/RefFlap/DynamicTest/initial/EdgionPlugins_edgion-test_pmd-flap-plugin.yaml": {
+      "sha256": "f5b6ae2ff07700904641e0b5d32de5192ff0eb5ad1126b31123db7908db065be",
+      "scope": "Full individual actual fixture"
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/EdgionConfigDataStatus/RefFlap/DynamicTest/updates/to_invalid/EdgionPlugins_edgion-test_pmd-flap-plugin.yaml": {
+      "sha256": "b189b8505bfd5f4121db7f5ca73a92e4b99790b51827c3582a0456b9af4cf65a",
+      "scope": "Full individual actual fixture"
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/EdgionConfigDataStatus/RefFlap/DynamicTest/updates/to_valid/EdgionPlugins_edgion-test_pmd-flap-plugin.yaml": {
+      "sha256": "77a65fa99aa4f864729bdb17368f36f9d6401f74ff9dd4f5b5e3d2445b1e6ad8",
+      "scope": "Full individual actual fixture"
+    },
+    "edgion-tests/k8s/conf/EdgionTls/LastKnownGood/initial/EdgionTls.yaml": {
+      "sha256": "e8883ad9e15613cc46105d180c4dc2389d6b3cc490291a562c81de5848b5b6d7",
+      "scope": "Full individual actual fixture"
+    },
+    "edgion-tests/k8s/conf/EdgionTls/LastKnownGood/initial/Gateway.yaml": {
+      "sha256": "6fe460f9e1b251c35a9c5e8932a91ac5882f4c30da6add9ce268ff5163f4160b",
+      "scope": "Full individual actual fixture"
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/DirectEndpoint/DynamicTest/bootstrap/01_Deployment_unready.yaml": {
+      "sha256": "26fb0309bebdc856cacd9cf79ddd8bca992166684d952958c681454699fb01b6",
+      "scope": "Full actual fixture"
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/DirectEndpoint/DynamicTest/updates/unready.yaml": {
+      "sha256": "664b465b72ce497b82dc822669a47ff119d1d8887d0c8f6c447f5a566e7c76c7",
+      "scope": "Full actual fixture"
+    }
+  },
+  "limits": [
+    "Static repository-only review; no build/tests/OpenSSL/network/Git/source mutation.",
+    "12 frozen source hashes freshly matched; 77,096 bytes/2,212 lines fully read, real test/caller/callee/fixture evidence inspected.",
+    "Supporting selected/full scopes receive zero primary credit; raw TLS certificate/key/Secret file contents not blanket read claimed.",
+    "74 individual fixture files personally fully read; no directory coverage inferred.",
+    "ARCH288 retains independent outer process-group deadline and requires operation cancellation/reaping; no forever-job/runtime incident/performance or precise OS progress promise.",
+    "Additional264/266 evidence awaits independent extension; no positive current TLSRoute Terminate coverage claimed."
+  ],
+  "supplemental_candidates": {
+    "ARCH-264": {
+      "scope": "dsl_dynamic.rs34\u201340;dns_resolution_flap.rs45\u201370;edgion_config_data_ref_flap.rs43\u201351",
+      "status": "awaiting-independent-extension",
+      "evidence": "DSL ends v2, DNS Service remains working and LinkSys errors bypass restore, Pmd success returns valid state but failure skips restore. Preserve differing success/reachability conditions."
+    },
+    "ARCH-266": {
+      "scope": "suites/edgion_plugins/edgion_config_data_status/dynamic.rs24\u201361 and registered PmdRefFlap initial phase",
+      "status": "verified-in-revision",
+      "evidence": "Flat conditions helper misses selected K8s controller envelope at initial assertion; use canonical projection without claiming subsequent transitions already pass.",
+      "verification": "VERIFICATION-ARCH-266.json"
+    }
+  }
+}

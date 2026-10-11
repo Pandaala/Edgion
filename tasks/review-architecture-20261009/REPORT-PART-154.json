@@ -1,0 +1,119 @@
+{
+  "partition": "PART-154",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-algo/src/matcher/radix_path/builder.rs",
+      "sha256": "b042962e82f490f80ed5a8834c5d6164aa11ba37ba6d8698fdea7ba52fb82d98",
+      "fully_read": true,
+      "disposition": "Full368 lines; static/parameter byte grammar, deterministic splitting, duplicate-value admission, builder/frozen ownership and actual callers/tests inspected; no actionable selected finding."
+    },
+    {
+      "path": "edgion-algo/src/matcher/radix_path/error.rs",
+      "sha256": "084456c26ccf2fe0293d14bfd2b56f5863da8b93850ed39dc03d6c0bddc65458",
+      "fully_read": true,
+      "disposition": "Full90 lines; existing typed construction limits align packed storage/error propagation; no new abstraction needed."
+    },
+    {
+      "path": "edgion-algo/src/matcher/radix_path/frozen.rs",
+      "sha256": "7a08d54a1a7c29e0b865a00c372b1732066141c12320923a5f8eded21045e688",
+      "fully_read": true,
+      "disposition": "Full675 lines; packed pools, static prefix versus parameter DFS traversal, match-kind semantics and existing consumers inspected. Policy/ranking belongs in consumers; no cosmetic iterator consolidation or runtime framework proposed."
+    },
+    {
+      "path": "edgion-algo/src/matcher/radix_path/mod.rs",
+      "sha256": "05c2ae7915ea25629b9e8b8253437295f07a0648ce3fb5f712d301f5c1d682e9",
+      "fully_read": true,
+      "disposition": "Full23 lines; canonical exports/two-phase immutable tree boundary preserved; no issue."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full personal original retained and baselineM unchanged."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full personal original retained, current algorithms quick lookup."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original retained; leaf, reuse, logging/redaction/performance/body/scope gates."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full personal original retained, symbols routed."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full personal original retained."
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full original refreshed this continuation."
+    },
+    "edgion-algo/Cargo.toml": {
+      "sha256": "f8ffd2d936ac2c2640df661326727dd517cad9036b0b3c491c6a83d82ca3fc2a",
+      "scope": "Full external-only manifest/benchmark paths."
+    },
+    "skills/12-algorithms/SKILL.md": {
+      "sha256": "338b061bd3ccd4ef6a0482b0879feb42b81020cff12ed4a7509068fca0bd7515",
+      "scope": "Full original catalog, cache/matcher policy and replacement criteria."
+    },
+    "edgion-algo/tests/unit/matcher/radix_path/builder_test.rs": {
+      "sha256": "566587421f9172fc44cd866a86e5d782dcd92c6e738e918221395a011c8f64b6",
+      "scope": "Full108 lines actual grammar/escape/empty-name/double-slash tests."
+    },
+    "edgion-algo/tests/unit/matcher/radix_path/frozen_test.rs": {
+      "sha256": "f4fed105388f5bf0cc4be2123bd51bb561bd6cb7dd5602e31bdf6b6bc4c1867c",
+      "scope": "Full169 lines actual parameter/static/prefix/boundary/root/sibling tests."
+    },
+    "skills/01-architecture/02-gateway/03-routes/SKILL.md": {
+      "sha256": "d7c78868e57f9638a94d5ee74481e07ded8e56f1f5754689c4d77ff9cc72a19d",
+      "scope": "1-90 actual leaf candidate generation versus consumer policy/snapshot ranking."
+    },
+    "skills/04-review/routing/regression-guards/radix-path-specificity.md": {
+      "sha256": "dfc329c1f6229c82d4865a1dfef479c6f1ccf76feab7064b899be27311dd6e10",
+      "scope": "1-130 and trailing-slash/end sections read; truncated middle60-130 explicitly recovered; original parameter grammar/ranking contract retained."
+    },
+    "skills/04-review/routing/regression-guards/radix-candidate-precedence-rank-precomputed.md": {
+      "sha256": "c4026267679ce6801eed9a1ee0cef09891841c0ea93e9335efe83e52b8297380",
+      "scope": "1-80 plus actual index/ranking sections; accepted cold integer precedence, large-count trigger only."
+    },
+    "edgion-gateway/src/routes/http/match_engine/radix_route_match.rs": {
+      "sha256": "cee88caa0d633ea800988ddedf695c9dc7d5e52a4676dc5636bb5e145a4bd3ca",
+      "scope": "1-255 actual build/insert dense values, match_all_ext exact/prefix eligibility and immutable ranking."
+    },
+    "edgion-gateway/src/routes/http/match_engine/radix_path.rs": {
+      "sha256": "2924f8123734815ee405678d37b4d093b024a041be8d658a64c1255db4da2a77",
+      "scope": "Full source actual normalization/tree-key/specificity owner; no leaf policy duplication."
+    },
+    "edgion-gateway/tests/unit/routes/http/match_engine/radix_route_match_test.rs": {
+      "sha256": "6c3b8932a6a7ba7b12dc664172aad7c1b77f2812ada70df99c84324df4bb968b",
+      "scope": "Full241 actual independent ordering fixture/test bodies."
+    },
+    "edgion-gateway/src/plugins/http/request_access_policy/plugin.rs": {
+      "sha256": "589cab7cea5550b0cd8926449ee0ededb2cff93c2f15dd34e26a6e01bf48c608",
+      "scope": "100-185 actual unique bucket indices, shared leaf compile and match-kind projection."
+    },
+    "edgion-gateway/src/routes/http/conf_handler_impl.rs": {
+      "sha256": "49894825ccd9db485962bcabd8a8d463b65e7df9730ad146cf9ded4d50b10f31",
+      "scope": "630-700 actual publication admission/build error handling."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/http_route.rs": {
+      "sha256": "826bcdd3deded094b2f450527d36b2978855901442a8767aa47cc6bce5b71ddd",
+      "scope": "249-263 actual validate scope."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/common.rs": {
+      "sha256": "3c3b85c5d3af871dfc838d1b2d4ea1d886c596a8faa8d103979105db8db7a6d9",
+      "scope": "219-290 current static-backend version/selected-schema adaptation (context only)."
+    },
+    "edgion-resources/src/resources/http_route.rs": {
+      "sha256": "8229971982f61024d1bf8d8b475ea110334844b0c0c11011026af0ced414b2b1",
+      "scope": "405-440 matcher/default field grammar context; path-bound search."
+    }
+  },
+  "limits": "Static complete implementations and actual tests; no execution/stress measurement. Dense production values checked by actual caller shape; no claim of observed large-count truncation or recursive-stack failure. No generalized policy/cache/registry rewrite."
+}

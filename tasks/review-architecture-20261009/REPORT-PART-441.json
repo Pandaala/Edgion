@@ -1,0 +1,186 @@
+{
+  "partition": "PART-441",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/dynamic/apply.rs",
+      "sha256": "4824e28e2358c529c27c22e21c7a43dff06734cb792d6befd0d9840da99dbbb8",
+      "fully_read": true,
+      "disposition": "No actionable finding. Full 1-259; scoped ordered files/documents, canonical CLI auth/transport, failure propagation, explicit CAS and narrow unconditional conflict retry."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/ctx.rs",
+      "sha256": "f37853b6b736f31472cc3a0a5a0a16501898b4160647ec5ca4d0f6a69e3e8866",
+      "fully_read": true,
+      "disposition": "No actionable finding. Full 1-238; business-suite convergence, port/lifecycle/empty-selection errors and typed fatal Kubernetes acknowledgements propagate; no justified generic cleanup layer."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/mod.rs",
+      "sha256": "419566d57869c7ac3f718fff4726ed316e7a788127424c6a8a51ac5cc27d2944",
+      "fully_read": true,
+      "disposition": "No actionable finding. Full 1-19; minimal exports and actual consumers inspected."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/registry.rs",
+      "sha256": "330dd01d67642e19abd188b7e0f336e53b47592f3f99fa00cabbc58a011f60ee",
+      "fully_read": true,
+      "disposition": "No actionable finding. Full 1-82; explicit inventory and actual enumeration expected IDs/uniqueness/capabilities/listeners, no runtime registry rewrite."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/scenario.rs",
+      "sha256": "7635beb168e5e2183b4e6f55cedacf7ed36fd366521384bd402367299206afd4",
+      "fully_read": true,
+      "disposition": "No actionable finding. Full 1-38; small immutable scenario/phase contract and function-pointer dispatch."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/status.rs",
+      "sha256": "9ac8c3e973f4a91ae05824d8560758f0a89ed928ecdceafc90b1bd0b46d30ad2",
+      "fully_read": true,
+      "disposition": "No actionable finding. Full 1-20; topology-specific condition projection fails closed, actual callers check verdict and observed generation separately."
+    },
+    {
+      "path": "edgion-tests/src/client/dynamic/wait.rs",
+      "sha256": "04ed93d16c4f432f5a29de3770370e25eb0113c7c2c8eefc2e3ff2f197c65b53",
+      "fully_read": true,
+      "disposition": "No actionable finding. Full 1-57; setup helper has no repository callers, so no active subprocess deadline witness. Retention review needs demonstrated value."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original personal rules retained, unchanged hash; no nested applicable rules."
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full original workflow retained."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original personal navigation retained."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original graded gates retained."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full original review routing retained."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original current/historical distinction retained."
+    },
+    "skills/05-testing/SKILL.md": {
+      "sha256": "4ad0fb8f8a15693ec04116e8224095c6696bbe1e3e63f0a5528053e560466343",
+      "scope": "Full original 1-79."
+    },
+    "skills/05-testing/01-integration-testing.md": {
+      "sha256": "e260042b508fa0956873d1b3c059531f1733a7c15423c548081afb71703a10e1",
+      "scope": "Original selected 289-535."
+    },
+    "skills/05-testing/02-k8s-integration-testing.md": {
+      "sha256": "50f3411740c40425e4fed21ee985586aa63b86dbe2f50efc1ef4075a2cbcbbc7",
+      "scope": "Original selected 1-60."
+    },
+    "skills/04-review/testing/SKILL.md": {
+      "sha256": "11d71f0b85ff6695f99019bad1dc44c2520ec79eb185d93032bf8dda6d609271",
+      "scope": "Full original 1-57."
+    },
+    "skills/04-review/testing/mandatory-design/dynamic-secret-fixtures-must-be-tracked.md": {
+      "sha256": "89fb8808ce4ed6f005da1af4612e6732a851726a44b52de96fc9f35accf284dc",
+      "scope": "Full original 1-28."
+    },
+    "skills/04-review/testing/compatibility-constraints/kubernetes-dynamic-fixture-boundaries.md": {
+      "sha256": "4a4e0a5a3bfd0cdfa5519816ae2f3fc8a4a70cc57a6e5a0991d84953ec4bdc57",
+      "scope": "Full original 1-42."
+    },
+    "skills/04-review/testing/regression-guards/dynamic-scenario-enumeration-must-fail-closed.md": {
+      "sha256": "7ce00c719cbc4ac98e889298a88f923e349ec5a0c1fc1a1686f642e37c0259f3",
+      "scope": "Full original 1-44."
+    },
+    "skills/04-review/testing/regression-guards/integration-orchestrators-need-owned-deadlines.md": {
+      "sha256": "932bd3bd8f8fa44d3f300898d5ac8f84c7b384cd9c7ce0584a731dcb0031b625",
+      "scope": "Full original 1-73."
+    },
+    "skills/04-review/testing/regression-guards/integration-suite-lifecycle-errors-must-fail.md": {
+      "sha256": "bf3999aaa30bb0bb903e5ae3aafe31442cb60f942ab04c1317c060d29a4f3906",
+      "scope": "Full original 1-134."
+    },
+    "skills/04-review/testing/intentional-design/local-shared-topology-single-owner-takeover.md": {
+      "sha256": "eae06ba0841415879d938c00bd164b14596a613e085ee3897df49dfa86af8135",
+      "scope": "Full original 1-83."
+    },
+    "skills/04-review/testing/intentional-design/kubernetes-integration-cleanup-ownership-boundary.md": {
+      "sha256": "58f3ff582b3e244431bfbca1303134e7e59583cd5aff983e1a354f619b47876d",
+      "scope": "Original selected 1-62."
+    },
+    "skills/04-review/testing/regression-guards/kubernetes-dynamic-scenario-inventory-parity.md": {
+      "sha256": "0b0f3def4c28d4c556905856f6df45429506625764203d8a3a685ffd981e15af",
+      "scope": "Full original 1-95."
+    },
+    "skills/04-review/testing/regression-guards/resource-diff-must-fail-on-incomplete-reads.md": {
+      "sha256": "8ded4b99d9cca915e04eeeaa2fda1b4cd9b2b312c377d2ca41439245564ae1f9",
+      "scope": "Full original 1-25."
+    },
+    "skills/04-review/admin-api/intentional-design/admin-api-write-precondition-opt-in.md": {
+      "sha256": "dd4cdc023de0302a24fdbce5bf4012b019d173ebc4642689d54ffcb178242770",
+      "scope": "Original selected 1-62."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "Actual selected 166-200,425-465,3678-3805; scenario invocation/listener/inventory/error ownership."
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "Actual selected 1-125,540-695,735-835,890-940; suite/lifecycle/port/empty outcomes and actual test bodies."
+    },
+    "edgion-tests/src/client/admin_apply.rs": {
+      "sha256": "0bec1f26fc271bec2ad18caaf80f78c5d15e62534efa6a42eb840a6a8cf92015",
+      "scope": "Full actual 1-140 including tests; shared test mutation contract."
+    },
+    "edgion-tests/src/client/dynamic/scenarios/basic_auth_dynamic.rs": {
+      "sha256": "ad4a80de2ce2ebfc86e0b7a115307c7ccc362097349922a8adbc29bebc3665f8",
+      "scope": "Full actual 1-85; scenario-owned initial/restore follow-up, no primary credit here."
+    },
+    "edgion-tests/src/client/dynamic/scenarios/csrf_secret_rotation.rs": {
+      "sha256": "45246d05964d5616c33bc7a7aa34e83a42dd8ca93af1e4f32c27c518486b1740",
+      "scope": "Full actual 1-146 including fixture test; explicit restoration control."
+    },
+    "edgion-tests/src/client/dynamic/scenarios/cors_validation.rs": {
+      "sha256": "4c9ff216ef88a0f448da3b5f6683ee112b2bd1fbb554c894bd66e45353571acf",
+      "scope": "Actual selected 65-122."
+    },
+    "edgion-tests/src/client/suites/edgion_plugins/basic_auth/dynamic.rs": {
+      "sha256": "c6114a09b38b466dd6dd98a1f7aceeb904a299e70914fc459dfa0f49b96a682b",
+      "scope": "Full actual 1-312; concrete phase 200/401 and challenge assertions."
+    },
+    "edgion-tests/integration/scripts/integration/run_integration.sh": {
+      "sha256": "5a6df789c2a894150691b3f50edf85f7ac055961ee0b1cc230291a6b90f85b76",
+      "scope": "Actual selected 608-650; dynamic registry dispatcher."
+    },
+    "edgion-tests/k8s/scripts/common/run_k8s_dynamic_scenarios.sh": {
+      "sha256": "edf8aa9859ebef675ec7ea8441ca54095b434043f1d7f01cc4adda91a3fdc5f6",
+      "scope": "Actual selected 660-785; marker acknowledgement/inventory/deadline containment."
+    },
+    "edgion-tests/k8s/scripts/common/tests/run_k8s_dynamic_scenarios_test.sh": {
+      "sha256": "641f9e75024f68a30a5e9370331d950f5ee4cf061e55b411154dd3952476fe15",
+      "scope": "Actual selected test bodies 390-405,423-443,463-479; acknowledgements/timeouts/restoration/stop."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/BasicAuth/DynamicTest/initial/EdgionPlugins_basic-auth-dynamic.yaml": {
+      "sha256": "92de9079c656d77b4266d1a2a31bfd6ae3aa11b4a59952ea5da33db32871c89f",
+      "scope": "Full actual 1-20."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/BasicAuth/DynamicTest/updates/EdgionPlugins_basic-auth-dynamic.yaml": {
+      "sha256": "c8373b2cf2af384df394a4533eb4c6b1dba8fac1652d7b62ac4539ac4120bce4",
+      "scope": "Full actual 1-19."
+    }
+  },
+  "limits": [
+    "Static read-only; no tests/builds/network/application or mutation; all seven frozen primary hashes matched. Reserved ARCH-256 through ARCH-259 unused.",
+    "wait_phase checks time between complete attempts; no strict wall-clock cancellation certification. General YAML-stream framing previously deferred, not republished here.",
+    "Historical framework spec referenced by integration guide is absent. Actual present implementation and selected tests provide scoped evidence.",
+    "BasicAuth scenario initial/restoration lead belongs to pending PART443; exact second invocation/reset remains to be investigated there. Supporting reads have zero primary credit."
+  ]
+}

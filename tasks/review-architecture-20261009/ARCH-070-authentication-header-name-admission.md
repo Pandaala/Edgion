@@ -1,0 +1,41 @@
+---
+id: ARCH-070
+status: candidate
+kind: behavior-defect
+priority: P2
+partition: PART-211
+analyst: /root/analyze_conversion
+baseline: 22f0fb8b6f4353f689ca4ddc172a4dfd98a2d2929dd1709240cbe4a1b3796471
+---
+
+# Reject HTTP-invalid configured authentication header names during shared admission
+
+HeaderCertAuthConfig::detect_validation_error in edgion-resources/src/resources/edgion_plugins/plugin_configs/header_cert_auth.rs198–226 rejects empty names and CR/LF/NUL, but does not require an HTTP token. The fields are certificateHeaderName and upstreamHeaders.consumerHeader/dnHeader/sanHeader/fingerprintHeader. HmacAuthConfig::detect_validation_error in hmac_auth.rs214–226 applies the same incomplete character checks to upstreamHeaderFields.
+
+Names such as "bad name", "X:Identity", or a name containing a tab are nonempty and contain none of the three rejected bytes. Otherwise-valid configurations therefore pass these checks. This is a source-level admission witness, not an executed Controller acceptance probe.
+
+Both trust boundaries consume these validators. EdgionPlugin::validation_error dispatches to the two owning configurations; Resources validate_entries invokes it for active entries. Controller EdgionPluginsHandler::preparse calls validate_plugins_before_waf_resolution at line225, and its Accepted condition reflects collected validation errors. Gateway PluginRuntime independently collects configuration errors at1066–1078, delegates to the same source validator at2142, and prevents construction when an error exists at1268. No later constructor name-validation gate repairs the missing token check.
+
+The two runtime producers remain distinct. HeaderCertAuth owns certificate-derived identities. Its apply_headers at plugin.rs153–173 discards set_sensitive_request_header errors, then run_request ends with cert verify:ok and GoodNext at341–343. With Connection mode, a valid exposed client certificate and consumerHeader="bad name", identity selection can succeed while the configured consumer-header write fails. An invalid certificateHeaderName in Header mode instead cannot name a valid incoming HTTP field. The documented identity propagation and source-header configuration are therefore admitted despite being unrepresentable.
+
+HmacAuth owns extra metadata from credential Secrets. Controller resolve_credential/hmac.rs268–300 builds the exact whitelist from the actual standalone configuration. decode_group_secret at168–188 copies only matching Secret headers into HmacCredential.headers, without validating the selected name as an HTTP token. For a valid whitelisted Secret entry named "bad name", the resolved credential retains that name and its value. HmacAuth::set_upstream_headers at613–620 again filters only CR/LF/NUL and discards write failure. After successful HMAC verification, run_request at708–719 calls that helper, performs existing credential hiding, records success and returns GoodNext.
+
+The real transport supplies the decisive rejection. set_sensitive_request_header constructs a sensitive HeaderValue and delegates to the real session adapter. PluginSessionAdapter::set_request_header_value at1300–1313 calls RequestHeader::insert_header. The locked Edgion Pingora fork1aaa45cc70430bc782990bc20ddee3fef36d6b99 converts the supplied name into HeaderName in pingora-http/src/lib.rs885–907 and returns InvalidHTTPHeader before insertion when that conversion fails. A mock accepting every name would hide this gap. The finding asserts omitted configured output or an unusable configured source, not a demonstrated authentication bypass or production incident.
+
+The root cause is that the schema owners admit names that their canonical HTTP consumer cannot represent. Validation belongs before publishing an immutable configuration, where Controller and Gateway already share it. The runtime’s necessary defensive HTTP validation should remain.
+
+Reuse the existing pure Resources gwapi_types::is_valid_header_token for these exact fields, with field-specific fixed diagnostics. It already accepts the complete HTTP token punctuation and both ASCII cases and rejects spaces, tabs, colons and non-ASCII bytes. Preserve existing empty/control validation precedence and unrelated realm, matching, credential-source, status and CA-reference checks. Do not trim or lowercase the stored HMAC whitelist: its exact Secret-key selection is separate from HTTP’s case-insensitive destination semantics. This recommendation addresses the demonstrated character-representability gap; it does not introduce a new arbitrary name-length policy.
+
+Keep the scope to the five HeaderCertAuth scalar names and HmacAuth upstreamHeaderFields entries. HmacMatchConfig.enforceHeaders and signed-header pseudo names have different semantics and must not be routed through this check. No other authentication plugin, header family, dynamic header map, registry or transport owner is included.
+
+Changing ignored write failures into request-time denial is an alternative, but discovers immutable operator mistakes after certificate/HMAC work and does not restore shared admission or solve an unusable certificate source name. A stricter runtime failure contract would also require a separate decision for sealed headers and otherwise-valid value/write failures. Cold character validation is the bounded correction here. Preserve existing runtime defensive checks and valid-name write behavior.
+
+Original auth-identity-headers-overwrite-written-names deliberately accepts local replace-on-write, cross-plugin last-write-wins and skipped writes without a global reserved family. This proposal retains those decisions. Auth-claim-header-projection establishes canonical token validation for Jwt/OIDC/JWE mappings, but its collision/order/sanitization contract does not automatically apply to these producers. HeaderCertAuth’s original single-layer CA filtering and shared failure delay remain unchanged. HMAC retains exact metadata selection, first-wins credentials, condition consumers’ empty metadata whitelist, strict credential/reference handling, cheap-auth-before-body hashing, redaction and canonical request BodyStorage.
+
+Current HeaderCertAuth configuration tests cover defaults, Header-mode CA requirements and valid Connection mode; they do not test HTTP-invalid configured names. Its Gateway Connection success test checks sensitive writes but returns Ok for every mock name. HmacAuth configuration test bodies cover credential-source/matching validation, flat transport and redaction; the Controller credential resolver test verifies that whitelisted X-Consumer-Username survives while X-Ignored is removed. Existing first-wins and verifier tests were also inspected. None of this is fresh execution evidence or an invalid-name regression.
+
+Future verification should cover every allowed field, empty/control precedence, invalid space/tab/colon/non-ASCII spellings, and valid mixed-case/full-token punctuation. Assert shared source validation and Gateway fail-closed construction, while known disabled entries remain inert and unknown-type/front/body/stage gates retain their current precedence. Retain valid Header/Connection identity output, anonymous/hide behavior, exact HMAC Secret metadata filtering and empty condition metadata. Exercise a real header-name conversion boundary rather than relying on a permissive setter mock. Diagnostics must identify only the field/index, never echo certificate, credential, metadata value or attacker-authored name content.
+
+ARCH007 concerns borrowed mTLS condition candidates; ARCH034 concerns Base64 leaf DER ownership; ARCH042 concerns SAN output projection. ARCH050 concerns repeated cold validator invocation. None owns this configured-name character contract. The expected benefit is rejecting unusable configuration through one existing shared admission boundary, without new request allocations, logging, metrics, Secret acquisition or lifecycle ownership. Static read-only review only; no implementation, builds, tests or runtime experiments were performed.
+
+Baseline SHA256 values: header_cert_auth.rs fd867cb84211550b71749bc7db3f98418b89cf58fa29b83ce2cb6dc6926b5bdd; hmac_auth.rs c3ce51abe3b4bdcf2a902b80eba311186e4b231fdcdd2766c4f97fb4136090d4. Exact evidence scopes and hashes accompany the PART211 terminal report.

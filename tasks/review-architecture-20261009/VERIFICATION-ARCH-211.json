@@ -1,0 +1,122 @@
+{
+  "candidate": "ARCH-211",
+  "complete": true,
+  "verifier": "/root",
+  "decision": "confirmed",
+  "input_sha256": "5882e33c3474b5be4ebae404581dd0c70f6732ed01b16ea497bfbde83073fc3a",
+  "approved_claim_sha256": "b8c31cf87889209cd6ea0b4313eed80d4a1b0757f3f86c474cdbdc5768764931",
+  "evidence": [
+    "Independent full parser expression/literal and canonical admission read proves map key helper creates real Expr without add_node.",
+    "Original parser budget and actual nil-statement boundary require all created nodes. Static count 333 maps: 1998 charged, 2664 retained AST nodes, 6660 source bytes, finite parse work below 50000.",
+    "Actual shared parse/compile/validate pipeline compiles both key/value before rejecting 2665 instructions at default 1000; only early admission violation is confirmed.",
+    "Local pre-key charge preserves conservative existing map charge and all literal/budget/trust semantics, adds no runtime/public framework or observability. Dedup search found no same producer/account finding."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Original full retained; applicable rules checked."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Original full retained; canonical early producer admission and restraint."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Original full retained."
+    },
+    "skills/01-architecture/02-gateway/dsl-engine-security-model.md": {
+      "sha256": "74a500ea801297f018a0af16f32a2e3060b637dc875e55fb0e29b262767dc5b1",
+      "scope": "Original limits independently reread 132-169; root retained 1-150 current trust and Body gates."
+    },
+    "skills/04-review/dsl/intentional-design/dsl-design-decisions.md": {
+      "sha256": "4743b87ffcb7f590ffe1a4f8d00e39bb185f6cef41789dac1514d5b55c4ec2b0",
+      "scope": "Current independent trust/engine budgets 1-110."
+    },
+    "skills/04-review/dsl/regression-guards/quoted-string-newline-contract.md": {
+      "sha256": "7105f0ffa68397c7b29fe7730b8a17bae37e838f0c0f9cef9f262c10f02cd174",
+      "scope": "Full original freshly read."
+    },
+    "edgion-dsl/src/parser/expr.rs": {
+      "sha256": "323f218c4b40d7a716ecd20747009d48063b977e9b2256ccabbf8cd29c9295a7",
+      "scope": "Full 375-line implementation freshly personally read in two chunks."
+    },
+    "edgion-dsl/src/parser/lit.rs": {
+      "sha256": "57a95fd3b7adedf61293b4cdba19fcdf55fdf51363c688c4603f943010541dfe",
+      "scope": "Full 85-line implementation freshly personally read."
+    },
+    "edgion-dsl/src/parser/mod.rs": {
+      "sha256": "981daabb7d97f6c0e2cd369ec811cb604b150dad030fca26dbedd0b67f58d7ff",
+      "scope": "Full actual canonical admission/context previously personally read this review segment."
+    },
+    "edgion-dsl/src/parser/stmt.rs": {
+      "sha256": "f453c81918e8c512ca9a4ce5b1d36abf402901807f719a43c14d7fa0833c3a8d",
+      "scope": "Actual statement dispatch and expression statement/block creation 1-48,315-390."
+    },
+    "edgion-dsl/src/ast.rs": {
+      "sha256": "85f1f009e618b9ead59d143cbf649047eeae0877581cdfe82636322da23c0f2b",
+      "scope": "Full retained primary and helpers; MapLiteral owns actual key/value Expr pairs."
+    },
+    "edgion-dsl/src/compiler/mod.rs": {
+      "sha256": "882bec8d13bfe8db18acc3cc2c4e72e196eb4eb626e4bc689ccbf88fad9dda1b",
+      "scope": "Full current program compilation/publication freshly read."
+    },
+    "edgion-dsl/src/compiler/expr.rs": {
+      "sha256": "645bc7b8772caa6e14543d350ef0bea026ed6e18bed515736a1defb0e88088bd",
+      "scope": "Actual map key/value lowering 115-151."
+    },
+    "edgion-dsl/src/compiler/stmt.rs": {
+      "sha256": "ba6619dd61a3086dcd37b87a439531c31511d7c14df959e73ec89937b4638843",
+      "scope": "Actual expression Pop 96-126."
+    },
+    "edgion-dsl/src/compiler/emit.rs": {
+      "sha256": "f677b6c0fb92bcf137d5cd67558941f10d90ebad64b507d1da5b06531a60806a",
+      "scope": "Actual bounded deduplicated constant/emission 1-92."
+    },
+    "edgion-dsl/src/validator.rs": {
+      "sha256": "575a61fc491a6f1331bac174bfa3d7b13975bf114319c3997759ed8ca02f7d60",
+      "scope": "Full personally retained primary; parse then compile then static validation."
+    },
+    "edgion-dsl/src/script.rs": {
+      "sha256": "7cfd292966383dd325bc89b117767a47b4fd04d67b423caefa5c2da04c5238b5",
+      "scope": "Full personally retained primary; bytecode priority unchanged."
+    },
+    "edgion-dsl/tests/unit/parser/expr_test.rs": {
+      "sha256": "bfef904d016191a496f73821db2580940a022591f4ddeb919b5d135c7e4fc56f",
+      "scope": "All actual 222 lines freshly read."
+    },
+    "edgion-dsl/tests/unit/parser/mod_test.rs": {
+      "sha256": "0216f39c5a8aa125c683b90825b55974e684865f33449eeaabe6a8d2f1f00e82",
+      "scope": "All actual 68 lines freshly read."
+    },
+    "edgion-dsl/tests/unit/parser/stmt_test.rs": {
+      "sha256": "b12d319c847294700fce863143ffb7be9354e6220016971998a501f7aec973ce",
+      "scope": "All actual 204 lines freshly read."
+    },
+    "edgion-dsl/tests/unit/validator_test.rs": {
+      "sha256": "985ea33b3efdbac77995aac33f479e8ee79a50b2f15ca0e0f6a8ae056ca0f542",
+      "scope": "All actual 549 lines personally read earlier in same segment."
+    },
+    "edgion-dsl/tests/unit/script_test.rs": {
+      "sha256": "aa2877bd77355fa97282bad9bf60a6befb945bb1b262120ee7657b02f2be9745",
+      "scope": "All actual 370 lines personally read earlier in same segment."
+    },
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/dsl.rs": {
+      "sha256": "03057d287e1bc1178b1815281bcb345647bf6c0461984f7f7bee572575ab26f3",
+      "scope": "Actual canonical pipeline and PluginValidation entry 350-412."
+    },
+    "edgion-resources/src/resources/edgion_plugins/validate.rs": {
+      "sha256": "4684ace540889d54ce341c38d90b4f7fa0d8947b9beda405be8edcf9f9bfd488",
+      "scope": "Actual active entry dispatch 395-419,559-598."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs": {
+      "sha256": "9a6ed6dbb4caa2a8a6a5b9bee0e9a9d75344edd9aad3b9eeee5dccc6413dc16a",
+      "scope": "Actual current preparse schema call 175-243."
+    },
+    "edgion-gateway/src/plugins/http/dsl/plugin.rs": {
+      "sha256": "7948524b4a2d7bc33d5aebc7f54c37ac316f428944d264c0e74fc01fd95bdfa2",
+      "scope": "Actual independent preparation/factories 1-122."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

@@ -1,0 +1,36 @@
+{
+  "partition": "PART-250",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/api/admin_auth.rs",
+      "sha256": "941d95fd9383b53e88c83fcdcace812d486667118214fa771d8a27ee444d0292",
+      "fully_read": true,
+      "disposition": "Fully read fixed digest auth/parser/middleware. Configured rejects fixed 401; unconfigured retryable 503; no token reflection."
+    },
+    {
+      "path": "edgion-gateway/src/api/mod.rs",
+      "sha256": "a7b6ba1fd44e1b5f7dad36c738e970bbf7b31e95b2cd5de73820904271de9662",
+      "fully_read": true,
+      "disposition": "Fully read all 1725 lines in bounded slices. Reviewed full router/test-gate/auth ordering, synchronous redaction, readiness fatal policy, backfill single-flight, store stats, typed provider endpoints and serving. No distinct finding: file-size split/generic provider helper/response shape have no proven current value or coupling leak."
+    }
+  ],
+  "candidates": [],
+  "support": {
+    "skills/04-review/admin-api/mandatory-design/gateway-admin-configclient-redaction.md": "405c44cbc6083a37f4ccba06f25062f1a7b523e96154b45be3a0bdec146bf82b",
+    "skills/04-review/admin-api/regression-guards/gateway-admin-bearer-boundary.md": "5846b520787d86f7a07aec0605f83bc37819b7a37c2ce4444968db22e60e6b00",
+    "skills/04-review/admin-api/regression-guards/gateway-admin-loopback-default.md": "c257af51c40375f0e25a86d3c5dba2547f1b678498ae93ccbba7d2d1975fba92",
+    "skills/04-review/admin-api/intentional-design/gateway-admin-api-response-shape.md": "0594485ccc8df8aa5fa77c16a963142240277f1805dbf6b98cbc3437cce2e4e0",
+    "skills/04-review/review-method/intentional-design/size-and-similarity-heuristics.md": "0bb0e108bcc38e80258189cfc17dd01d5b5fd6391c6269b82b4b8f0737adc3f2",
+    "edgion-gateway/src/cli/mod.rs": "393ea796feb6e022ab7438e16e2084f2a94a21c1e470ec7befdc49f4cb3002bd",
+    "edgion-gateway/src/conf_sync/cache_client/cache.rs": "0fc6aef9f8b121b4db739bc1e9183a1f05f819f8aaf4884fa15f9282fa1f2b5e",
+    "edgion-gateway/tests/unit/api/admin_auth_test.rs": "301d7fb8c90f7e959932c3cfec031a5c14678860f9c7d00408ae7b99b445dc2c",
+    "edgion-gateway/tests/unit/api/mod_test/edgion_tls_scrub_tests.rs": "d7f8b2d39aee7603a2e547194a8bf5648387246c820421ab2c3c539d620436d3",
+    "edgion-gateway/tests/unit/api/mod_test/router_shape_tests.rs": "68d210978a211a7e705e8609c48b428afa5777f233ac059f4e11e2e4dcdb33c1",
+    "edgion-gateway/tests/unit/api/mod_test/edgion_backend_admin_tests.rs": "a80780a0faa3c7e7ccc1074a95f4b32fffe2405b8702a74d1a83debf7b8f0a96",
+    "edgion-gateway/tests/unit/api/mod_test/store_stats_tests.rs": "6bdc7281a4305e329171073906f7e563d795157158b8ddeb9bd8f93f53ae1399"
+  },
+  "support_scope": "API tests and named authority pages read fully; larger caller/cache/startup files read at relevant seams. Full primary reads only count for coverage.",
+  "limitations": "No test/build/source edits. Cold admin get serialization could be optimized but no material value established; intentional body-level success preserved. Historical page line numbers checked against live current router."
+}

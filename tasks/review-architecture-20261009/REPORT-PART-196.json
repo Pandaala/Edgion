@@ -1,0 +1,97 @@
+{
+  "partition": "PART-196",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-resources/src/matcher/ip_cidr_helpers.rs",
+      "sha256": "375e92e2641680ffee5ac10232513d480aad6ae69be75dc0b2280add608c0408",
+      "fully_read": true,
+      "disposition": "Shared strict/partial structural checks and intent-aware canonical evaluator; keep-first duplicate occurrence gating matches tests. Cold repeated parse/mirrored policy is not a second live ACL owner. ARCH028 union cost separate already recorded"
+    },
+    {
+      "path": "edgion-resources/src/matcher/key_group_helpers.rs",
+      "sha256": "6dd8907797bb492a635cd566f55002d4db138fb43d5f207a2098442355d01cda",
+      "fully_read": true,
+      "disposition": "Stateless structural/regex literal validation actually used by ConfigData preparse; empty/duplicate checks borrowed; regex equivalence deliberately excluded"
+    },
+    {
+      "path": "edgion-resources/src/matcher/mod.rs",
+      "sha256": "abec94bdfa13f7ab8a26b638958f0a1304cc7ab853856a6b6d7736ac78ed142c",
+      "fully_read": true,
+      "disposition": "No actionable finding; source and actual consumers/contracts reviewed"
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original retained; original graded rules and readonly scope"
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original retained"
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original retained (large repeated read truncated, not a fresh full-read claim)"
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full original retained"
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original retained"
+    },
+    "skills/01-architecture/05-resources/SKILL.md": {
+      "sha256": "dae4740e05545a9d674199070cc49a6559fd921e69ae0d08dab19dc51d3efef6",
+      "scope": "Full original"
+    },
+    "skills/01-architecture/05-resources/00-schema-transport-contract.md": {
+      "sha256": "d20e74c1c7ccf6183f893bc919767a27bd3fbb47486415d14651a76fdef5a597",
+      "scope": "Full original"
+    },
+    "edgion-resources/tests/unit/matcher/ip_cidr_helpers_test.rs": {
+      "sha256": "f79cafff2273ec9035d63007dc12f73549b7c8f7491d0adde4d03a2406bc6432",
+      "scope": "Full1-509 in two bounded reads"
+    },
+    "edgion-resources/src/resources/edgion_config_data/mod.rs": {
+      "sha256": "8f124494c20dddb9ce5705a1ed731d75597dec0ea702d0cef6c7d8c292a9b55d",
+      "scope": "330-385 actual KeyList validate_pre_parse"
+    },
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/ip_restriction.rs": {
+      "sha256": "4884ac57e3f20fcf6c595b97ea44a45a35b14343698340361c455fe88e123b95",
+      "scope": "155-195 inline partial constructor"
+    },
+    "edgion-resources/src/resources/edgion_stream_plugins/connection_ip_restriction_rules.rs": {
+      "sha256": "8cd1585736ea01656015593f75d299beedf219d25ff00c6352e95a229f8788d0",
+      "scope": "75-100 partial initialization"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_config_data.rs": {
+      "sha256": "e8dfb8e3af2c1b95ae82dc2d9656f5a8fa95bd0af83250b83e03d95f9246b6b8",
+      "scope": "285-335 actual partially-invalid status"
+    },
+    "edgion-gateway/src/plugins/runtime/edgion_config_data/conf_handler.rs": {
+      "sha256": "1417737fc1627a07c2d8adefa4db153587b9b3dc79afaf450d008183a466ab7f",
+      "scope": "295-325 actual compile_ip_list"
+    },
+    "skills/04-review/ip-restriction/regression-guards/http-create-must-call-validate-and-init.md": {
+      "sha256": "0a8a5f66da1e2f57cc679518239b9cdea71aacb7d9779564e5f07bae6a11863f",
+      "scope": "1-90 current conclusion/guards; late ownership boundary read in previous untruncated section"
+    },
+    "skills/04-review/ip-restriction/regression-guards/stream-preparse-uses-plugin-validation.md": {
+      "sha256": "f31ac025c9db9c097ec3717cfc3c61e9887a9959c9cb1838bcc7554e2741cbe1",
+      "scope": "Selected1-85 original cold stateless-vs-init boundary"
+    },
+    "skills/04-review/ip-restriction/regression-guards/deny-allow-default-algorithm-extracted-to-evaluate-ip-access.md": {
+      "sha256": "4bedd1b69f761b25d1fa606e3c746863f5769275542ff59ac759dfb028759b7a",
+      "scope": "Full original"
+    },
+    "tasks/review-architecture-20261009/ARCH-028-borrowed-ip-matcher-union.md": {
+      "sha256": "9fc46d0179079fc2df61650fcebca17f95156b7ba462eec2f83d588eee48db63",
+      "scope": "Selected actual original cause and proposal, not full fresh reread"
+    }
+  },
+  "limits": "Root personally read every primary byte; original retained context plus exact fresh support scopes. Static no tests/builds/runtime/network/Git/production writes. Empty tracked src markers counted by frozen inventory. Supporting reads zero primary credit; no unsourced benchmark or security incident claims."
+}

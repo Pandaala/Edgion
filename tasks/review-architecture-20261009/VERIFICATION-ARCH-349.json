@@ -1,0 +1,49 @@
+{
+  "candidate": "ARCH-349",
+  "complete": true,
+  "verifier": "/root/verify_ip_union",
+  "decision": "confirmed",
+  "input_sha256": "714b70ae8dcf732ee6cde496d3e0192b504318338bc1cb50be32be64dc5d966e",
+  "approved_claim_sha256": "94733555c2449e02a834b6d6140fe626a719597b76e043b6c50aca8411186a5e",
+  "evidence": [
+    "Conditional output reaches vector formatting when required upstream cookie absent but issued CSRF cookie present, then console/JSON retains whole token.",
+    "Fresh random nonce and Secret signature distinguish minted token from public deterministic HMAC vector; P3 reflects synthetic fixtures, no production credential or observed disclosure claim.",
+    "Preserve all current cookie/signature assertions; value-free presence/count diagnostic feasible at original producer."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "edgion-tests/src/client/suites/edgion_plugins/csrf/csrf.rs": {
+      "sha256": "0800ae4644078db887ad11ec959ebf42aae91ff3491365c0299a4eeed9111edd",
+      "scope": "Full static suite/eight registration/assertions; vector125-132."
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "488-523 failed error retained,1-145 setup/client."
+    },
+    "edgion-tests/src/client/reporter.rs": {
+      "sha256": "fe5136f8b928f78374ea448f10a5406517a6a6280e027f8be34e1be4ef90779d",
+      "scope": "Full actual console and optional JSON error propagation."
+    },
+    "edgion-gateway/src/plugins/http/csrf/plugin.rs": {
+      "sha256": "e1beb3337bee2257d54c2022d0ce2264bafe64f051053d378f620f83c72cd6c7",
+      "scope": "Full actual safe GET mint/append and validator."
+    },
+    "edgion-gateway/src/plugins/http/csrf/token.rs": {
+      "sha256": "8cc8b0a46e947de2ad05000c24d1e0807d3fd31ac0ac8c26d77545f96c7143cc",
+      "scope": "Full actual RNG nonce/HMAC/encoding/lifetime."
+    },
+    "skills/03-coding/01-log-safety.md": {
+      "sha256": "74591411c294befded433b7c2be571202deb22ef36030a704caa60055f214863",
+      "scope": "1-85 complete-token/source-local redaction rule, retained original remaining scopes."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/Csrf/EdgionPlugins_default_csrf-test.yaml": {
+      "sha256": "56c0f1be965637bd416e1255cc91243feb030aa4d319182b1ef272ae9bca231d",
+      "scope": "Full local Secret reference and7200-second lifetime."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/Csrf/EdgionPlugins_default_csrf-test.yaml": {
+      "sha256": "7be0a9b90ccfd9a45d76611d9731589bf7dd7cf2dcf6108a59288a38fdd2621b",
+      "scope": "Full Kubernetes reference/lifetime."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

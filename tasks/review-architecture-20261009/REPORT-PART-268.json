@@ -1,0 +1,22 @@
+{
+  "partition": "PART-268",
+  "analyst": "/root/analyze_session",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/lb/leastconn/cleaner.rs",
+      "sha256": "5c2d8780bb2dfa41ee63f3e1400f690ab6e954adb5b8be39114834c4314c985c",
+      "fully_read": true,
+      "disposition": "Single cancellation token/handle and bounded exact draining cleanup."
+    },
+    {
+      "path": "edgion-gateway/src/lb/leastconn/mod.rs",
+      "sha256": "e47cbe514df27806376b8e79aae16d5f424786cb0409aead145d64f9da0b0746",
+      "fully_read": true,
+      "disposition": "Exports and relevant callers checked; no separate finding."
+    }
+  ],
+  "candidates": [],
+  "support_scope": "Actual callers, original rules/index/review-routing/topic decisions and existing tests inspected; secondary reads confer no primary coverage. Detailed candidate evidence in corresponding issue files.",
+  "limitations": "Read-only static review, no checks/builds/tests/Git mutation or performance evidence."
+}

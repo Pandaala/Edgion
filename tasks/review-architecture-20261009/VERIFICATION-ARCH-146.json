@@ -1,0 +1,102 @@
+{
+  "candidate": "ARCH-146",
+  "complete": true,
+  "verifier": "/root/verify_ip_union",
+  "decision": "confirmed",
+  "input_sha256": "24beaba6a8972d4713201f86f5c04115971cbb858032cccfbbcbc959d56df58a",
+  "approved_claim_sha256": "c34101612e37246e610fcf28fe299c61d4d40bf01bec32e7c6dfc6f62f8efc99",
+  "evidence": [
+    "Actual raw FS get_one/Admin Value/legacy-first mutation/canonical validation/conditional raw update and Gateway typed consumer verified.",
+    "Mixed hand-authored FS unknown-field witness survives advisory ingest; ordinary typed Admin/K8s witness excluded. AlreadyApplied consults legacy table too.",
+    "Remove only legacy search while preserving raw unknown fields, per-key lock, CAS/version/retries, full-table validation/idempotence and retained endpoint purpose.",
+    "Actual full patch/version tests lack mixed-table case; original rules/knowledge/dedup searched. Static only; zero new primary coverage."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full personal original retained; current rules refresh; only root AGENTS."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Personal original navigation retained, current topic routing."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original retained, applicable A-E/G-H/N/P/Q/S-Y refresh."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Original category routing and search."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Original routing."
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full original."
+    },
+    "skills/01-architecture/05-resources/SKILL.md": {
+      "sha256": "dae4740e05545a9d674199070cc49a6559fd921e69ae0d08dab19dc51d3efef6",
+      "scope": "Original navigation."
+    },
+    "skills/01-architecture/05-resources/15-edgion-config-data.md": {
+      "sha256": "fa43b5425b617f7e7a640f182dd527721d77dc939b56d4a2d0d25cb33c42d02e",
+      "scope": "Unknown fields and RegionRoute overlay; retained full personal read."
+    },
+    "skills/04-review/admin-api/intentional-design/controller-region-route-endpoints-retained-for-drill-in.md": {
+      "sha256": "297cdbed4b0002f6316961f146e8571f78e586e8a3609dd838e6c4b2e3f1564c",
+      "scope": "Full original."
+    },
+    "skills/04-review/routing/regression-guards/region-route-effective-table-validation.md": {
+      "sha256": "c5948cf1eba9fd3bfb2f830da3f1c7e6ab2916e95ad060d2d3f665e4bd880c3e",
+      "scope": "Full original."
+    },
+    "skills/04-review/concurrency/regression-guards/failover-read-modify-write-per-key-lock.md": {
+      "sha256": "9497699008ce49a09ecd18cc3d82ed8df85012fb0c38f9da9a8b50b9b6f0901e",
+      "scope": "Full original refresh."
+    },
+    "edgion-controller/src/api/region_route_handlers.rs": {
+      "sha256": "db96462427db553d11782c329e7c9da08923837e2ff9aa612a07974baab01941",
+      "scope": "Full actual implementation."
+    },
+    "edgion-controller/tests/unit/api/region_route_handlers_test.rs": {
+      "sha256": "5d2a3bb8d25954b27c1c889f31900ebee2998b83bf303eb7427f3c816fb5ebac",
+      "scope": "Full 338 lines actual tests."
+    },
+    "edgion-controller/tests/unit/api/region_route_handlers_test/failover_version_tests.rs": {
+      "sha256": "0748e16d37c0e1ddb309b125387fd2144bd1cf79aeab3124eb016b234793e2ea",
+      "scope": "Full 160 lines actual tests."
+    },
+    "edgion-controller/src/api/types.rs": {
+      "sha256": "43e2700678d3c234d667b6b7dcae94fa9a6678f81a01bfeb7a4148817bc3cb65",
+      "scope": "Complete center_get_resource 199-238."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/file_system/storage.rs": {
+      "sha256": "160b51c73737d2d6188d3f4b5991589443aeaae6ce723829fbe382ac371fbdc1",
+      "scope": "Complete update_one_if_version/get_one 230-318; retained full prior read."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/common.rs": {
+      "sha256": "3c3b85c5d3af871dfc838d1b2d4ea1d886c596a8faa8d103979105db8db7a6d9",
+      "scope": "Complete merge_operator_update_values/YAML 410-540; prior full retained."
+    },
+    "edgion-resources/src/resources/edgion_config_data/mod.rs": {
+      "sha256": "8f124494c20dddb9ce5705a1ed731d75597dec0ea702d0cef6c7d8c292a9b55d",
+      "scope": "80-193,225-275,345-420; retained prior full."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_config_data.rs": {
+      "sha256": "e8dfb8e3af2c1b95ae82dc2d9656f5a8fa95bd0af83250b83e03d95f9246b6b8",
+      "scope": "150-215 advisory unknowns/canonical publication."
+    },
+    "edgion-gateway/src/plugins/http/region_route/plugin.rs": {
+      "sha256": "709bebcc52cf4341ea8875eef4f37e3b9e81f3952275a85734b7a3ae852d1898",
+      "scope": "35-58,140-181 effective canonical table."
+    },
+    "config/crd/edgion-crd/edgion_config_data_crd.yaml": {
+      "sha256": "512a37f2bc576bbd56dd1b8275a1db9ff2e60c91a45cd96d89474c32e45013c2",
+      "scope": "15-70 actual structural envelope."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

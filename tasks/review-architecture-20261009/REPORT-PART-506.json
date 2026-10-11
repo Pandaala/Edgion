@@ -1,0 +1,57 @@
+{
+  "partition": "PART-506",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/proxy_rewrite/mod.rs",
+      "sha256": "feecea01124d289d6894ffbddc6e5739c9d044522c082fc93373186af1ae247d",
+      "fully_read": true,
+      "disposition": "Full1-9; Actual export accepted."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/proxy_rewrite/proxy_rewrite.rs",
+      "sha256": "8191854e8af42cb0843bd53c796402dbf86590069b4b53046b59bacd9e717720",
+      "fully_read": true,
+      "disposition": "Full1-678 three complete ranges; Nine real rewrite/encoding/capture cases accepted; existingcombined test disconnected ARCH386. Defaulted responsecannotpasspositivecontains. ContextURLs canonical."
+    }
+  ],
+  "candidates": [
+    "ARCH-386"
+  ],
+  "support_selected": {
+    "edgion-tests/k8s/conf/EdgionPlugins/ProxyRewrite/05_EdgionPlugins_combined.yaml": {
+      "sha256": "aaaf503c147aeb84e72ab2665268d4aa23848c35680a8cb45b6c698658ca7ecd",
+      "scope": "Full1-26 both topology actualcombined plugin."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/ProxyRewrite/05_EdgionPlugins_combined.yaml": {
+      "sha256": "aaaf503c147aeb84e72ab2665268d4aa23848c35680a8cb45b6c698658ca7ecd",
+      "scope": "Full1-26 both topology actualcombined plugin."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/ProxyRewrite/HTTPRoute_default_proxy-rewrite.yaml": {
+      "sha256": "0a1671f5299e19b691e32df8bcddd34e870f61ec222471b541871045e2589701",
+      "scope": "Full1-140 K8s route combinedprefix."
+    },
+    "edgion-gateway/src/plugins/http/proxy_rewrite/plugin.rs": {
+      "sha256": "c257049692250ee377fe5d1dd3e981d77fb5f0d5d08a48f2a61a9d66858086a9",
+      "scope": "280-369,713-751 actualHost/addsetremove order."
+    },
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "6c38b285bdfe354c40d5d2e96d4a07be0b7dc37ce3290197ca75054de23bfa98",
+      "scope": "734-767,810-834 both real echohandlers/casings."
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "608-825 current casesvector-only actualiteration."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "2680-2689 andretained3915-3955 real invocation."
+    },
+    "edgion-gateway/tests/unit/plugins/http/proxy_rewrite/plugin_test.rs": {
+      "sha256": "690f1b25cb41d89b5eb4ae77031acab490199f2c4b80fc82e070616f2ba057b1",
+      "scope": "366-446 actualEOF,encoding units recovered400-427 gap."
+    }
+  },
+  "limits": "Full nineYAML each topology+README/separateResponseRewrite153-171/adapterHost1430-1457/originalappendheaders15/testing/context/template inspected. README historical coverage/pathprose stale only. Dedup037072 no productionencoding/preparation claim, no296348. Original rules fullpersonalcurrent/gates; sourceonly/noexecution/mutation/supportcredit."
+}

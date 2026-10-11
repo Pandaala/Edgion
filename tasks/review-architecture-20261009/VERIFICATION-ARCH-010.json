@@ -1,0 +1,24 @@
+{
+  "reviewer": "/root/verify_seed",
+  "complete": true,
+  "disposition": "confirmed",
+  "approved_input_sha256": "b0dbeab970e570452da63fd20ed807e66be40929087cdcb96355fecb6781e1de",
+  "approved_claim_sha256": "4cfefc75036997afc99b17302ef8c475254cd873a85ea02ac1d5f201cd61ff14",
+  "evidence": {
+    "edgion-gateway/src/ai/protocols/json_span.rs": "1d136b12bf808b1285475a6ec5ab9c7eddb1709b2bb662fc2344b0d56d0e1bcd",
+    "edgion-gateway/src/sse/mod.rs": "e8ee7f4b7d9a24937f54bb2918c3d9bcfbeffc87e9f870f13cf2c8b6181dc0e7",
+    "edgion-gateway/src/ai/protocols/openai/canonical_sse.rs": "4bd9bc48a5cb1949501df9ab2c5e41968556cdfb647f160be6ecf19aaf418e2d",
+    "edgion-gateway/src/ai/accounting/usage.rs": "8e678f930f41b3673a0ecc9b5011edd2730496c13fb4e46b571d2d6e0791a11f",
+    "edgion-gateway/tests/unit/ai/protocols/openai/canonical_sse_test.rs": "ea2c7d26cb6fd5b8c81c6329705341265263bbc6b21c2b94b8f7799d3e58121f",
+    "skills/04-review/ai-quota/regression-guards/sse-malformed-events-must-not-disable-enforcement.md": "34f30a48f81a001bd3f9f4d6214e743f2795a16820078e17add52ffc93ae0092"
+  },
+  "external_authority": [
+    "https://doc.rust-lang.org/stable/core/primitive.u8.html#method.is_ascii_whitespace",
+    "https://www.rfc-editor.org/rfc/rfc8259.html#section-2"
+  ],
+  "drift_at_checkpoint": [],
+  "limitations": [
+    "Static inferred reproducer; no tests executed or quota-bypass claim.",
+    "Independent candidate-specific verification adds no primary coverage."
+  ]
+}

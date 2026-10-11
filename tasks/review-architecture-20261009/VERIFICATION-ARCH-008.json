@@ -1,0 +1,21 @@
+{
+  "reviewer": "/root/verify_seed",
+  "complete": true,
+  "disposition": "confirmed",
+  "approved_input_sha256": "a25e9836f16d943c538ffc0316cd69910119275b73dc20aaea3bc53f48e4156c",
+  "approved_claim_sha256": "36c33eebf4f032296830337a7640502f9982c516a77048204486dc3f2bef8c39",
+  "evidence": {
+    "edgion-gateway/src/backends/runtime.rs": "29b957bf02ed6f7f94e1b4b5906905925d6a8d871b1438de98d6d359f7c01e75",
+    "edgion-gateway/src/ai/http/proxy.rs": "45b3250490d016c5aef663e4856055bec8043d28cead0e0158b8c02c005d40df",
+    "edgion-gateway/src/ai/runtime/backend_store.rs": "d83e92ba7e75dfea4c5338f1d3752a1cc2977b1631ed5cb13ec0b31bcba4bd0b",
+    "edgion-gateway/src/ai/runtime/attempt_plan.rs": "a26629255ac9afee7d978e18debcf1d376425bd8762f370c2b72b4d763b1e780",
+    "edgion-gateway/src/ai/runtime/selected.rs": "bf62c813e7b20043adbd92dc8bf272ac0ded2472f413e5081de7ccce99a552a9",
+    "edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs": "1e78b4bf440134f3f8949ab883bc1f767c0e70055164818c35fc0e2251b25eaf",
+    "edgion-gateway/tests/unit/ai/http/proxy_test.rs": "c804d15efe4899bd977714f48a6041db773c7ab0bd0bee1379046994997cbdcf"
+  },
+  "drift_at_checkpoint": [],
+  "limitations": [
+    "Static candidate-specific verification; no executed runtime or performance validation.",
+    "Implementation move/borrow feasibility remains a future gate."
+  ]
+}

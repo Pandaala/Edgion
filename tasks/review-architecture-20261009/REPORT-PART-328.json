@@ -1,0 +1,38 @@
+{
+  "partition": "PART-328",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/plugins/http/ldap_auth/mod.rs",
+      "sha256": "1db9c7b1f5faa95ae7c45a5a8bf7ee55e3c9bb53a8c526fe2616d246f9ab6e79",
+      "fully_read": true,
+      "disposition": "Private factory/export checked."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/http/ldap_auth/plugin.rs",
+      "sha256": "8cf91d7a5f7012ad04a9d20f2ee2db3237617dc77516b9832e237ad14851618d",
+      "fully_read": true,
+      "disposition": "Generation owns minimal bind/TLS/auth plan; decoded credential owns one UTF8 buffer/ranges, exact proxy-header precedence; canonical dial-time egress retains TLS identity. Credential401 and dependency503/Dye before self-write remain distinct. Fresh per-request bind/no pool/no result cache are deliberate; no new candidate."
+    }
+  ],
+  "candidates": [],
+  "support": {
+    "AGENTS.md": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+    "skills/SKILL.md": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+    "skills/00-design-rules.md": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+    "skills/04-review/knowledge-routing.md": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+    "skills/04-review/ldap-auth/SKILL.md": "a75205021740d73ca395922bb500efbfa43617faeca9d8596585f601c963caf9",
+    "skills/04-review/ldap-auth/intentional-design/per-request-connection-accepted.md": "32c9b51780e5d4bca116025afc32c7d59988afd6f52a48b7b5766eaf4b5ecb86",
+    "skills/04-review/ldap-auth/regression-guards/dial-time-egress-policy.md": "a636c3713c13ec6f79c2d8c239567c364bf6db9c34ec5821eb342c2c2ab3c11a",
+    "skills/04-review/ldap-auth/review-evidence/discriminated-error-log-tags.md": "167e845c1855956745391e1556dcde8e6665e6f77d188fe915a765390aed01ae",
+    "skills/04-review/auth-timing/intentional-design/ldap-auth-cache-timing-oracle.md": "46b64fe31482ca9cc06082f314dad51781e964a1cd437d5376f81574889838d0",
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/ldap_auth.rs": "f5c0282e04004e2dd551aa3672b711cedfc73a54f2602c0dab3d952ef7e49689",
+    "edgion-gateway/tests/unit/plugins/http/ldap_auth/plugin_test.rs": "dcd6a59532c767ffcdb1958ce0d68d6623c22a18967647248b23f6e3a70a80f6",
+    "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": "70ea787d34a9a4652adfe131ba66049d2544b381b2034194db519567fe87ead0",
+    "edgion-gateway/src/plugins/http/common/outbound/egress.rs": "127aee8676be7a21152c1d03d0d2a3e028f08fabf5afbb017af5bd184659685d",
+    "edgion-common/src/link_sys_core/outbound_tls.rs": "a21de0f2f55ce08fa31cb5d9f5034e8b17c92afdf968a3f63b9333c6155567df"
+  },
+  "support_scope": "Original records and existing canonical transport owners read in relevant sections, selected resource validation and runtime factory. Actual LDAP test bodies 1-102,185-320,668-738 inspected; full test file/TLS matrix not claimed. Relevant egress/TLS sources previously inspected as canonical owner support; no supporting primary coverage.",
+  "limits": "Static only; no tests/builds/network/TLS interoperability or production throughput measurements. Historical LDAP matrix does not establish fresh execution."
+}

@@ -1,0 +1,37 @@
+{
+  "partition": "PART-185",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-dsl/src/validator/stack.rs",
+      "sha256": "362288a1f5f8a10362a54149095ca07a505504db6ec5ba8085ca15c674158ddc",
+      "fully_read": true,
+      "disposition": "No actionable candidate: instruction-bounded reachable flow worklist with monotone literal provenance weakening, checked merge heights, exhaustive stack effects and terminal residue guards; structural preconditions enforced by sole outer caller."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "edgion-dsl/src/validator.rs": {
+      "sha256": "575a61fc491a6f1331bac174bfa3d7b13975bf114319c3997759ed8ca02f7d60",
+      "scope": "Full primary source read; sole private analysis caller runs only after all structural/instruction checks pass."
+    },
+    "edgion-dsl/tests/unit/validator/stack_test.rs": {
+      "sha256": "8dfaf3946575abf332967b7f7be0302a1ec04dabeef1c0abc22df82129e0a93f",
+      "scope": "All 236 actual lines personally read, including late branch and loop provenance weakening."
+    },
+    "skills/04-review/dsl/regression-guards/builtin-argument-capacity-and-stack-validation.md": {
+      "sha256": "9cb7738de53896d8f24bad5db67714f6d0723bdb53057b28373cd5a8c54d848a",
+      "scope": "Full original; nonlinear but instruction-bounded fixed-point contract."
+    },
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Original full retained."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Original full retained."
+    }
+  },
+  "limits": "Complete full 115-line private implementation and actual caller/tests. No test execution; no generic type-verifier or dispatch framework proposed."
+}

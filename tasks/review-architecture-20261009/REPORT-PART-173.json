@@ -1,0 +1,101 @@
+{
+  "partition": "PART-173",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-waf/src/seclang/transform.rs",
+      "sha256": "e98a4845150656ca245598eaae790200e300c6b9e9e9563da5a9b43184785fd6",
+      "fully_read": true,
+      "disposition": "Full 1\u2013962 read. No actionable issue: one fallibly bounded walker serves ordinary materialization and provisional observers, reuses two buffers and borrows identity results while preserving work/checkpoints and later validation. Observer physical failures remain distinct from provisional predicate errors. Byte decoders and normalization stay private canonical implementations; explicit dispatch and deliberate multiMatch stage retention are required semantics."
+    },
+    {
+      "path": "edgion-waf/src/seclang/xml_inspection_plan.rs",
+      "sha256": "26d65208b22dd9a829a36ef1cff292077e2511c65b7caa9c9826f904a905fc6b",
+      "fully_read": true,
+      "disposition": "Full 1\u201312 read. No actionable issue: small typed unsupported capability findings are attributed to original rule/member and consumed by compiler/resource/runtime admission, with no generic plugin leakage."
+    },
+    {
+      "path": "edgion-waf/src/seclang/xml_inspection_runtime.rs",
+      "sha256": "48bf05b57500fc5336c128d7812b20b035297d8ae863d9c93c368a6c2b1bbd0f",
+      "fully_read": true,
+      "disposition": "Full 1\u2013437 read. No actionable issue: scoped transaction loan owns source parity/completion/abandonment, shared collector and logical accounting, while parser owns grammar. Malformed DetectionOnly fallback discards provisional facts; sticky physical limits survive later syntax errors. Raw-source policy is explicit; atomically sealed publication admits aggregate ownership before committing, and incomplete Drop poisons the transaction."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Original full retained; canonical request body and no response storage, leaf and privacy gates."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Original full retained."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Original full retained."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Original full retained."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Original full retained."
+    },
+    "skills/04-review/waf/SKILL.md": {
+      "sha256": "a5fa47a4b94ee1edccf3f5cd07197eeb0d644f875616cd33c5976e66bc9edef9",
+      "scope": "Full original."
+    },
+    "skills/04-review/waf/regression-guards/native-xml-inspection.md": {
+      "sha256": "8637771db2fc67e770784955da6ece8f61a42e6a6e3a1ec6c7d39cd346f5065c",
+      "scope": "Full 1\u2013160 recovered without truncation; grammar/replay/owned publication/raw visibility and precise budget limitations."
+    },
+    "skills/04-review/waf/regression-guards/fused-json-inspection.md": {
+      "sha256": "73f06b0cd3b8e083844ff91ab61f2d20e91a625aecfec8cb6eb358cd17afc6ec",
+      "scope": "220\u2013244 and 300\u2013334; accepted identity/scratch/checkpoint semantics and measured capture rejection precedent."
+    },
+    "edgion-waf/tests/unit/seclang/transform_test.rs": {
+      "sha256": "9aa69c19c80d5e9eeeb89335ac8d2deafaa3c1221b9be1072e14c2193ba56e45",
+      "scope": "Full 1\u2013679; byte semantics, identity ownership, exact and first-excess work/output, growth overlap, callbacks and late errors."
+    },
+    "edgion-waf/tests/unit/seclang/xml_inspection_runtime_test.rs": {
+      "sha256": "f7a8b1d3d7f660c5d75f7ec7779b612e2da802980171f2d412a7c18785ebea3e",
+      "scope": "1\u2013429 and 712\u2013745; actual source-order sealed capture/TX/control replay, malformed/raw fallback, empty transport, sticky source/work/XML-domain limits, unsupported/Drop and policy stop. 350\u2013435 recovered complete preceding bodies."
+    },
+    "edgion-waf/src/seclang/json_inspection_plan.rs": {
+      "sha256": "decfe2564d5b24b9add5027c19ed8d25f74363f56a8dbce95bda921e1e48e991",
+      "scope": "355\u2013470, including recovered 433\u2013457; actual unsupported path/dynamic findings and static shared groups."
+    },
+    "edgion-waf/src/seclang/json_inspection_collector.rs": {
+      "sha256": "7a6dc7593041639b2143a2680b7d932d2d5cb2964cc42d72c7bc71599312b707",
+      "scope": "400\u2013470, 870\u2013978; shared walker, physical/semantic error separation and observer capacity/checkpoint ownership."
+    },
+    "edgion-waf/src/seclang/transaction.rs": {
+      "sha256": "24ab89af5d00efd52f78dd5c7840ba3f0bab6b322ceae48c3a0c7b0dd4a70d26",
+      "scope": "1648\u20131690, 2940\u20133075, 1550\u20131605; actual canonical ordinary/prefix transform callers and aggregate publication admission."
+    },
+    "edgion-waf/src/seclang/compiler.rs": {
+      "sha256": "6259ebaf9e73726d5989f08d7a48d74320183ddd419fda5c6659ded5835a3404",
+      "scope": "1245\u20131275; domain plan and unsupported findings export."
+    },
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/waf.rs": {
+      "sha256": "761bbdee08bbb2dec67731afe889348332aa8eaa6bcdbb3fe42854f43992bab4",
+      "scope": "945\u2013985; strict Full unsupported capability admission."
+    },
+    "edgion-gateway/src/plugins/http/waf/mod.rs": {
+      "sha256": "d5bca791f259c5266019e3982c9f9e84526961a3174dc7c48dc80fcba856f2c9",
+      "scope": "508\u2013550; resolved source cap and canonical XML driver call."
+    },
+    "edgion-gateway/src/plugins/http/waf/json_capture.rs": {
+      "sha256": "7ded6756fd44a2b17f2a91776253f6219c10600a85602f034fca95d43820d3ed",
+      "scope": "230\u2013410; exact scoped session, chunk/parity/true EOF/policy stop, raw read and finish ordering."
+    }
+  },
+  "limits": [
+    "Static complete primary implementation and selected complete test bodies inspected; no execution.",
+    "No arbitrary XPath, constant-memory whole transaction, allocator peak or measured throughput guarantee.",
+    "Supporting reads grant zero primary coverage."
+  ]
+}

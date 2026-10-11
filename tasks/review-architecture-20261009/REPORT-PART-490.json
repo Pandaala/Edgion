@@ -1,0 +1,55 @@
+{
+  "partition": "PART-490",
+  "analyst": "/root/analyze_outbound",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/header_cert_auth/header_cert_auth.rs",
+      "sha256": "ad783b3cf39e0ebc4368dd2772511d6b56b86fd55899ad1590c85fc48989f0ff",
+      "fully_read": true,
+      "disposition": "Full1-219 three real resolved-listener/mounted-certificate probes; positive identity/fingerprint remains mandatory, exact missing-cert status and source-header strip. No new cause/defaulting false pass."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/header_cert_auth/mod.rs",
+      "sha256": "cf3dafbccec67bd143fd103780edce59fc9b855143c6a1ab7610abdfeb2c3d62",
+      "fully_read": true,
+      "disposition": "Full1-10 private module/live export/scoped fixture contract; accepted."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "skills/04-review/header-cert-auth/review-evidence/chain-verification-header-mode.md": {
+      "sha256": "0a951b99d16bcead979cd988aae1ab79521c57ff20ce8f457fea96bcfb1cb762",
+      "scope": "Full original Header trust/CA provenance."
+    },
+    "edgion-gateway/src/plugins/http/header_cert_auth/plugin.rs": {
+      "sha256": "4f8876e7d1762dfec0c0dd45204e66e0fdae144dbd983bf89ebc2dadeb5f5139",
+      "scope": "Full1-338 live CA/decode/identity/hide/deny."
+    },
+    "edgion-gateway/tests/unit/plugins/http/header_cert_auth/plugin_test.rs": {
+      "sha256": "f381c795a67c19e50c21ed5d7518dc99d273a0d68fadc91a5d7916fd9799d20a",
+      "scope": "Full1-459 real crypto/identity/response/CA units."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/HeaderCertAuth/EdgionPlugins_default_header-cert-auth.yaml": {
+      "sha256": "a5504725df00daaf3537579baa023bf71c45880a87bf257fe471d6c20318589b",
+      "scope": "Full local/K8s active Header fixtures."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/HeaderCertAuth/EdgionPlugins_default_header-cert-auth.yaml": {
+      "sha256": "a5504725df00daaf3537579baa023bf71c45880a87bf257fe471d6c20318589b",
+      "scope": "Full local/K8s active Header fixtures."
+    },
+    "edgion-tests/integration/scripts/gen_certs/generate_mtls_certs.sh": {
+      "sha256": "4488a01be91b13eb6e132f24b13b01f79c2fd1dd12f7f8ac06dbb6fea1054c93",
+      "scope": "155-184 real leaf Secret;229-257 CA producer."
+    },
+    "edgion-tests/k8s/scripts/common/generate_runtime_certs.sh": {
+      "sha256": "6d3d2392798b7ac4686f90262f4412e105a818c0c23c375e4516a8b2bab134cb",
+      "scope": "360-380 CA;425-436 same leaf Secret producer."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "2654-2671 actual suite registration."
+    }
+  },
+  "limits": "Personally original rules/graded/index/routing/shared delay/Header originals read, no nested AGENTS. Both full fixture trees and real load/apply template-skip paths inspected. ARCH034 leaf DER and ARCH070 header-name admission existing roots; no new duplicate. Static only/no execution/builds/tests/network/mutation/live TLS proof or expanded chain construction; supports zero."
+}

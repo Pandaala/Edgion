@@ -1,0 +1,30 @@
+{
+  "partition": "PART-281",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/link_sys/template/engine.rs",
+      "sha256": "3414a614447f75dbdf199035ba1fe8ccaaa395ffb339675c33acfe366d232968",
+      "fully_read": true,
+      "disposition": "Canonical segment walker, explicit consumer policies/Secret loan/sensitivity and checked output growth; no new finding."
+    },
+    {
+      "path": "edgion-gateway/src/link_sys/template/mod.rs",
+      "sha256": "35de0767158c69880adbb75387e2fc7d8c3ad68061589286c7d0209c9534dde7",
+      "fully_read": true,
+      "disposition": "Canonical segment walker, explicit consumer policies/Secret loan/sensitivity and checked output growth; no new finding."
+    }
+  ],
+  "candidates": [],
+  "support": {
+    "skills/01-architecture/02-gateway/request-template-runtime.md": "78a90c711b450658f43bc2724fc35f0f6d7cd17c14bf5f64fca29a8fdfb0fa40",
+    "skills/04-review/plugin-runtime/regression-guards/request-template-policy-unification.md": "413004f76a11df4ef914bc1fb625dba4fa25602d6bf8ac8b25b66d62c3d49e7a",
+    "edgion-gateway/tests/unit/link_sys/template/engine_test.rs": "df1fbd8c3c915518b42d6c0d7124bd0f11ec2be60e9c5d3b48d45cdd8382421b",
+    "edgion-gateway/src/plugins/http/common/outbound/request.rs": "d4406a5e25092190e59f4d307acb463e8af7c54b4021153decefb796e69bc80f",
+    "edgion-gateway/src/plugins/http/ctx_set/plugin.rs": "d789f29516553aa946f9ff1d18d5b70a266dca61dfc1beaaa87acbf1c8e8c6ed",
+    "edgion-gateway/src/plugins/http/proxy_rewrite/plugin.rs": "c257049692250ee377fe5d1dd3e981d77fb5f0d5d08a48f2a61a9d66858086a9"
+  },
+  "support_scope": "Original topic decisions and architecture relevant contracts; tests/callers inspected at ownership/serialization/masking/budget seams, not general support-file full-coverage claims.",
+  "limitations": "Read-only static source review; no tests/builds or benchmarks."
+}

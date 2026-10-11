@@ -1,0 +1,41 @@
+{
+  "partition": "PART-282",
+  "reviewer": "/root",
+  "complete": true,
+  "candidate_count": 0,
+  "files": {
+    "edgion-gateway/src/observe/access_log_store.rs": {
+      "sha256": "db0f8065a6dfc62de5f0050c6f262081cd9625c3022c00add03df4fe5cd735b7",
+      "fully_read": true,
+      "disposition": "no-finding"
+    },
+    "edgion-gateway/src/observe/mod.rs": {
+      "sha256": "9a9b581c3f5aabcfba6565f4578a2574d9e27f60ec622e4fab7045992c1261f9",
+      "fully_read": true,
+      "disposition": "no-finding"
+    },
+    "edgion-gateway/src/observe/request_diagnostics.rs": {
+      "sha256": "e7f3b5004ce07788d299890d2e52f852bcc7a5cf113da498a8c7ae51138ed505",
+      "fully_read": true,
+      "disposition": "no-finding"
+    }
+  },
+  "decisive_notes": [
+    "Integration-only access-log store owns query/write-count test semantics, strict serialized new-key capacity and read/write TTL sweeping without background task.",
+    "DashMap guard release before cleanup preserves repeated-key path; existing concurrent capacity/write-count and TTL tests inspected.",
+    "RequestDiagnostics owns ordered intrinsic code history, one spill and 32-entry tail bound; actual context/access-log projection borrow that owner rather than duplicating it."
+  ],
+  "evidence": {
+    "edgion-gateway/src/routes/http/proxy_http/pg_logging.rs": "972f72ec7371c3ab876bfa12957eb70559e31aaa9d25f8f2078c24e197523a6a",
+    "edgion-gateway/src/api/mod.rs": "a7b6ba1fd44e1b5f7dad36c738e970bbf7b31e95b2cd5de73820904271de9662",
+    "edgion-gateway/src/ctx.rs": "5248ecbfe30c102b4e746c65672b4909fccc0b261f2840a924a25f2cb749c629",
+    "edgion-gateway/src/observe/access_log/entry.rs": "a0db01fd33530ef61dc5bd4f356320b0bdfd940111273b0f8ac260e6ab518965",
+    "edgion-gateway/tests/unit/observe/access_log_store_test.rs": "0ecf063cfe5aea4e707ea4c320ff3eed14bb128788d93ddcca30bbcd67196da5",
+    "edgion-gateway/tests/unit/observe/request_diagnostics_test.rs": "078e56f19d873cdd899d91198b4cc0bcfd133ac9fc392a9e5895e6fe8514b8d4",
+    "skills/04-review/observability/regression-guards/access-log-store-ttl-read-path-cleanup.md": "ae911142bc96be214a8427eda17ea697cc8b1f71d97ddbe7cfe9d5d57bb7d6fd",
+    "skills/03-coding/observability/00-access-log.md": "8b1717ea65e2a493bbd97a4703e8a5142b1195a97c342398fb396bef183deb09"
+  },
+  "limitations": [
+    "Static source review; existing tests inspected, not executed."
+  ]
+}

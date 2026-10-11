@@ -1,0 +1,16 @@
+{
+  "partition": "PART-252",
+  "analyst": "/root/analyze_adapter",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/backends/circuit_breaker/mod.rs",
+      "sha256": "59ae0fb043a6abb2f6c59f7087e757eb80801065248d2cf020a0e63680f259ef",
+      "fully_read": true,
+      "disposition": "Atomic permit, retries/release and Drop cleanup coherent."
+    }
+  ],
+  "candidates": [],
+  "support_scope": "Actual callers, original rules/index/review-routing/topic decisions and existing tests inspected; secondary reads confer no primary coverage. Detailed candidate evidence in corresponding issue files.",
+  "limitations": "Read-only static review, no checks/builds/tests/Git mutation or performance evidence."
+}

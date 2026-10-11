@@ -1,0 +1,75 @@
+{
+  "partition": "PART-406",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/configmap_utils/configmap_store.rs",
+      "sha256": "528657590f14e6ed7ee276ffea284b4abf4b947b7fd51031a14538b8f4cfa613",
+      "fully_read": true,
+      "disposition": "No issue: per-runtime cold ConfigMap store uses one lock, delta remove/upsert, cloned consumer values and explicit reset; actual typed CA and descriptor consumers and wakeups preserve source identity and missing-target edges."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/configmap_utils/mod.rs",
+      "sha256": "7adc54f88e75d6bc5e10ec8c921ff0f5e541eccce51beda2fd64053f1094b8e9",
+      "fully_read": true,
+      "disposition": "No issue: direct store export/callers/reset and real handler tests checked."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "original applicable retained rules"
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "index retained"
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "original graded gates retained"
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "review index retained"
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "routing retained"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/configmap.rs": {
+      "sha256": "9938a4f58a781756e1f1ccebd2fd192f486c8e58f26f788709a91dc0aa472521",
+      "scope": "full handler parse/change/delete; typed/legacy material wakeups"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/backend_tls_policy.rs": {
+      "sha256": "db90d7dba9390d47a77cc7d4c0ae3f70d0ace74b5ca7c600f694cd96a749bc7c",
+      "scope": "260-420 actual clear/add/directsameNS material lookup"
+    },
+    "edgion-controller/src/conf_mgr/runtime.rs": {
+      "sha256": "4894a9456643f62b21dd1dc39984acf71696d0f5e5e58a85b119778af92ce811",
+      "scope": "235-275 reset clears delta-only store"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/credential/ca_refs.rs": {
+      "sha256": "c7bc5622cfebe43108a7aa076a1e10a40dd5f69d338ced62ebcd55be6ec5c5f0",
+      "scope": "1-145,268-315 actual borrowed typed fetch and ConfigMap material projection; remaining projection unnecessary to store ownership"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/mod.rs": {
+      "sha256": "3b2849d6f7abd5b6b5935ea2e7144fd5de8a283c7d9e9ade51ebd5ebfeccf680",
+      "scope": "116-120 keyprefix/formatter search matches"
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/configmap_test.rs": {
+      "sha256": "6db809d61356aa212f71e2e33fe59206ea6d89ba6674239f1f3ed63a441b9be2",
+      "scope": "full351 actual typed CA delete/recreate and descriptor owner/requeue/coalesced replacement tests; truncated tail recovered"
+    },
+    "skills/04-review/tls/regression-guards/backend-ca-bundle-multi-pem.md": {
+      "sha256": "51cef4688a01a17d24121567a6203639e2f5fc81bde3abd0525aaefce1fa9c07",
+      "scope": "original current upstream failclosed scope"
+    },
+    "skills/01-architecture/01-controller/05-resource-processor.md": {
+      "sha256": "2f557ac0077fe0fefc39e77522f96edc8f3d660c47d4aec848ec8cf6943ee4c6",
+      "scope": "1-160 ownership/handler/reference architecture"
+    }
+  },
+  "limits": "Read only static owner analysis, no execution. Exactly two primary files. Cold clone/simple store does not justify framework/unrequested cache or data-plane claims; consumers beyond reviewed ranges remain separate primary partitions."
+}

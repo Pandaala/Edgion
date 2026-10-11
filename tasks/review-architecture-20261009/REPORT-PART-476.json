@@ -1,0 +1,49 @@
+{
+  "partition": "PART-476",
+  "analyst": "/root/analyze_outbound",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/ext_proc/ext_proc.rs",
+      "sha256": "13cfcc27863ff2c2e160a768df1089a8fd4231357a1bc4b92572bdd238699824",
+      "fully_read": true,
+      "disposition": "Full1-3689 without gaps,35 cases and embedded tests. No distinct new cause; same ARCH348 unreadable negative-observation supplement. Preserve fast/full/phases/EOS/retry/backpressure/TLS/cleanup owners."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "6c38b285bdfe354c40d5d2e96d4a07be0b7dc37ce3290197ca75054de23bfa98",
+      "scope": "3777-4127 actual fake processor/verdict/attached stream/TLS producers."
+    },
+    "edgion-tests/integration/fixtures/ext_proc_external/main.go": {
+      "sha256": "26f2bac10dfb6bd7c54ace20fa91d37e0dce7d63121db9d504b426b3b45ede7f",
+      "scope": "1056-1238 repository-only Process admission/phases/EOF/cancel/barrier producer."
+    },
+    "edgion-gateway/tests/unit/plugins/http/ext_proc/client_test.rs": {
+      "sha256": "2a67710bd769e085167b6a1d4656141e2659c9751c6c24797d09db24780b6f3c",
+      "scope": "481-797 actual bounded-channel/order/finalEOF/drain/halfclose unit bodies."
+    },
+    "skills/04-review/testing/regression-guards/ext-proc-conformance-evidence.md": {
+      "sha256": "f60e54ad43a8ce46c6f72d5d0f557e7608df8871afb3bd46c9abff9bbb1faf85",
+      "scope": "Full original fast/full evidence and unsupported-mode limits."
+    },
+    "edgion-tests/integration/fixtures/ext_proc_external/config.yaml.tmpl": {
+      "sha256": "6b2ea665d70d3131b2bb76931fc3c88302901836631cc74738d280d82b7317d8",
+      "scope": "Full1-520 actual full-only routes/modes/retry/TLS/trailers."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/ExtProc/03_EdgionPlugins_ext-proc-failopen.yaml": {
+      "sha256": "00b66ff5043b4d042db2bc53e471f735c84c56eb2f5c7814e4e6a2394305a29d",
+      "scope": "Full local dead-target fail-open fixture."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/ExtProc/03_EdgionPlugins_ext-proc-failopen.yaml": {
+      "sha256": "36523bffb371898112ba485ceab7d7a597017f6f40e39ee9bcbedabf1c3f7752",
+      "scope": "Full Kubernetes dead-target fixture."
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "103-122,532-569 actual five-second HTTP and thirty-second wrapper."
+    }
+  },
+  "limits": "Complete static repository-only analysis; no execution/mutation/network/upstream parity or fresh interop claim. Same ARCH348 supplement: fail_open3052-3087 and sanitized failures1827-1865/1868-1907/3024-3049/3090-3125/3304-3345 default failed read to empty; predicate1586 accepts empty. Fallible observation preserves legitimate completed empty500; fail-open additionally needs actual completed/get fixture. No product failure-policy/secret-leak incident claimed. Compatibility/opaque-header/replacement originals, current native ownership/unit/fixture/registration personally read. Original graded gates verified; supported rustls test clients/explicit dispatch/size are accepted. Supports zero credit."
+}

@@ -1,0 +1,106 @@
+{
+  "partition": "PART-436",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/build_test_proto.rs",
+      "sha256": "ef779468c2516bbf2dbf3cdd30ec0f30bacca44b0a7f82a95f571f286c4984cf",
+      "fully_read": true,
+      "disposition": "Full 1-62 developer binary and real wrapper/generated-schema consumers inspected. ARCH-260: optional generator probes absent inputs and does not declare ownership of the existing matching TestService schema; explicit checked-in ordinary builds are preserved."
+    },
+    {
+      "path": "edgion-tests/src/lib.rs",
+      "sha256": "fd650594a7188f250f059bb7a1140dec67a42819515e6fe52e9cf5ef92579feb",
+      "fully_read": true,
+      "disposition": "No actionable finding. Full 1-41 library root; path re-rooting and exported framework modules have real client/server/direct-client consumers and manifest-owned bin targets; no cosmetic split/registry justified."
+    }
+  ],
+  "candidates": [
+    "ARCH-260"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full personally read original 1-464, including safe Rust, unit/harness distinction, DAG, logging/redaction/unification/body/product and Git gates."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original personally read; testing quick locator."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original 1-342 in bounded reads, graded gates."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Original review routing retained."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original personally read."
+    },
+    "skills/05-testing/SKILL.md": {
+      "sha256": "4ad0fb8f8a15693ec04116e8224095c6696bbe1e3e63f0a5528053e560466343",
+      "scope": "Full original personally read; harness topology routing."
+    },
+    "skills/04-review/testing/SKILL.md": {
+      "sha256": "11d71f0b85ff6695f99019bad1dc44c2520ec79eb185d93032bf8dda6d609271",
+      "scope": "Full original personally read; scoped existing decisions."
+    },
+    "skills/05-testing/01-integration-testing.md": {
+      "sha256": "e260042b508fa0956873d1b3c059531f1733a7c15423c548081afb71703a10e1",
+      "scope": "Full original 1-582; real preparation/runtime/generator boundary and suite registration."
+    },
+    "skills/05-testing/references/integration-suite-map.md": {
+      "sha256": "e230cc8c2882e2f438f256ccc5f6f7bfdc722578ae9b80c5952323b3afd5c3f7",
+      "scope": "Full original; grpc basic and shared framework ownership."
+    },
+    "edgion-tests/Cargo.toml": {
+      "sha256": "acc6a130b31b4e1f852998eea3fec608322986559d3aad542a29d402eb6561be",
+      "scope": "Full original manifest; bin, framework library and tonic/prost dependencies."
+    },
+    "edgion-tests/integration/scripts/proto/generate_test_proto.sh": {
+      "sha256": "883d226e62437c0d80a69ad2dc5913611008bc2b41e37a015993e2fdce2aacab",
+      "scope": "Full actual 1-32 wrapper; canonical repo root and optional developer invocation."
+    },
+    "edgion-tests/integration/scripts/utils/prepare.sh": {
+      "sha256": "4e023fc0496c671a72992245e0f83488281af16a0dbc4f82068b6fb366b2cdfd",
+      "scope": "Selected 85-120 by symbol search; ordinary helper build list, not a full implementation claim."
+    },
+    "edgion-tests/src/proto_gen/test.rs": {
+      "sha256": "1b6a82fcb3ef38a3e47f3363c6b7ad7a84ea3d276976cf332f30006738192e40",
+      "scope": "Actual selected 1-190; four protobuf messages, method names/paths and generated service trait; not full primary coverage."
+    },
+    "edgion-tests/src/client/suites/grpc_route/mod.rs": {
+      "sha256": "864288bda2d33e7baf33a017951986288745aea6b6e9b98b7804729c4e6ab4c6",
+      "scope": "Full actual module; one generated proto include and suite exports."
+    },
+    "edgion-tests/src/client/suites/grpc_route/basic/basic.rs": {
+      "sha256": "938236ed02ada4914939ea0e7c91c928ca925784f1f44f2296a21125dec6bc94",
+      "scope": "Actual selected 1-175; complete unary and server-streaming case bodies, only adjacent deadline-case opening."
+    },
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "1eb27bded8bcb40a82ea3cfd4ed6f20d386deedd1f349c7035a226fd44739454",
+      "scope": "Actual selected 3510-3565 and 3550-3640; generated include and complete TestService unary/streaming implementation; partial adjacent health module."
+    },
+    "edgion-tests/src/client_direct/test_client_direct.rs": {
+      "sha256": "3e085b6662bf8f3f47f4ad9cdbc98a8004a2c380283618f403738f38ab706036",
+      "scope": "Actual selected 1-130; shared library imports, context and runner construction; partial dispatch, no full source credit."
+    },
+    "edgion-tests/proto/grpc_json_transcoding/test.proto": {
+      "sha256": "67a5fb9a40d00ee1c8b49633ec7b62351dd3da900029331d03984a6db53fd849",
+      "scope": "Full actual matching package/TestService/four messages plus codec/overlap schema; separate existing descriptor owner."
+    },
+    "edgion-tests/proto/grpc_json_transcoding/README.md": {
+      "sha256": "08de34e7b63bfcc7bf6099b54f52652885730178da797825919f11d8d8318031",
+      "scope": "Full original descriptor regeneration/annotation/wire correspondence scope."
+    }
+  },
+  "limits": [
+    "Static source review only; no builds, generators, protoc, tests, services, Git or network mutations.",
+    "Existing TestService descriptor definition was found; no claim of schema absence, current wire mismatch or fresh output equivalence.",
+    "Supporting implementations/actual tests were selected only as stated; no extra primary coverage. ARCH-260 awaits independent challenge.",
+    "Truncated broad generation search was replaced by narrow named-generator evidence; adjacent partial bodies are excluded."
+  ]
+}

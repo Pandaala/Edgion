@@ -1,0 +1,45 @@
+{
+  "partition": "PART-391",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-controller/src/bin/edgion_controller.rs",
+      "sha256": "8f88b31bcd10fd0796f4adf156536129c996435e5acdcbc63eeed31f3dfb6e20",
+      "fully_read": true,
+      "disposition": "Full thin binary: binary-owned allocator, canonical panic/crypto initialization, CLI entry, preserved log guard/fallback-error contract and nonzero exit. No actionable finding."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original binary allocator/dependency/language/testing rules retained."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Original navigation retained."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original graded gates retained."
+    },
+    "skills/01-architecture/01-controller/01-startup-shutdown.md": {
+      "sha256": "975d6bd5f8b843020a7ffe70e571c95dfab335d20ebd80a3c7d06f45de1e98f8",
+      "scope": "Full current entry/startup/shutdown architecture; stale support notes separately tracked."
+    },
+    "edgion-controller/Cargo.toml": {
+      "sha256": "495557bf9a3895542f3ae480c592f3e08d397c70961b96104a4c4e3311b1b5e4",
+      "scope": "Full manifest dependency DAG, exactlib/bin and optionalallocatorfeatures."
+    },
+    "edgion-controller/src/cli/mod.rs": {
+      "sha256": "e6a99b22317b82b315c7a9e9c26b67c58de82e00687dc05eb4d34031829d41af",
+      "scope": "Full current real re-export consumer, startup allocator metadata and log guard lifetime."
+    },
+    "edgion-common/src/startup.rs": {
+      "sha256": "56a99496cc9848c5187dcbfc9ba61278e4f8df962fe2061f967ea3a31f577f06",
+      "scope": "Full current crypto/panic/fallback reporter contract; support-only."
+    }
+  },
+  "limits": "Full primary and actual startup callee/manifest read. Static only; no builds or tests, no scope expansion."
+}

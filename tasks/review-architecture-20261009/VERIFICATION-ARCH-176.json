@@ -1,0 +1,102 @@
+{
+  "candidate": "ARCH-176",
+  "complete": true,
+  "verifier": "/root/analyze_conversion",
+  "decision": "confirmed",
+  "input_sha256": "0ff933444183fb31626d38baa19bc25956b927fd28e2bbd320d2056015fea7f0",
+  "approved_claim_sha256": "93c9f82a1cffd67f0d51cc3c0e0cffbcb1080aef0208ae9fac4076e37fd7a63a",
+  "evidence": [
+    "Actual --all branches before command-owned cache namespace filter; both current single-page endpoint responses demonstrate loss.",
+    "Existing per-page projection feasible, retain original continuation even filtered-empty and printed-count header state.",
+    "Actual full source/endpoints/tests/original contracts reviewed; no auth/redaction change, separate from171.",
+    "Complete static independent verification, zero primary coverage, no execution/mutations."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full personal original retained/fresh unchanged, root-only AGENTS."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original retained/current topic lookup."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original retained/current applicable gates."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full original retained/current symbol routing."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original retained."
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full original retained."
+    },
+    "skills/01-architecture/04-ctl/SKILL.md": {
+      "sha256": "f2846ac3479a688f16cbc5f2eec3c131905d9145e26fda5670db900c1bcad463",
+      "scope": "Retained full original."
+    },
+    "skills/01-architecture/04-ctl/00-overview.md": {
+      "sha256": "0a2acdc3bd1339ae674a569674cdf47d1b33be3c387011e9a942606dfe5b30fc",
+      "scope": "Retained full1-177 cache namespace/transport/auth."
+    },
+    "skills/01-architecture/04-ctl/01-commands.md": {
+      "sha256": "a42c9fee403fbb921017696ada6fe7cb904f0ae7574762b91d3e08d051c2e03f",
+      "scope": "1-104 actual get/apply contracts."
+    },
+    "skills/01-architecture/00-common/05-unification-points.md": {
+      "sha256": "011c7e0897b5af81b6459096b678774d9ac988843f705295ecc559d8892d7d92",
+      "scope": "27-84 canonical client/CLI exception."
+    },
+    "skills/04-review/cpu-memory/regression-guards/cli-http-client-idle-pool-disabled.md": {
+      "sha256": "6d13237bafbd06b891879fcfc492ac4320754b57bf6bd992413b325689b9660b",
+      "scope": "Full original transport lifecycle."
+    },
+    "edgion-cli/src/cli/client.rs": {
+      "sha256": "ce62f4a6d129f0b96d1e8400faf6dcece962c1b3e14c72eef55fe4356a86e962",
+      "scope": "Retained full PART234 original current namespace/static token/auth/diagnostic owner."
+    },
+    "edgion-cli/src/cli/mod.rs": {
+      "sha256": "8feafddf836ec2f4f305808ba874743903b6bc5c4a5b9298fadb68d2de6c3a98",
+      "scope": "Retained full PART234 original actual args/auth/dispatch."
+    },
+    "edgion-cli/src/cli/commands/get.rs": {
+      "sha256": "609d33c9a9cb1bedc9b176bd671bb91a21a04fd10afd95d4b442d62ffb6de891",
+      "scope": "Full1-355 cache filtering/pagination/continuation/header/error."
+    },
+    "edgion-cli/src/cli/output.rs": {
+      "sha256": "0d8e6204bcda767a88b6dffb531454ac11f09d75f26f3b6068e8f5a95162a1cd",
+      "scope": "Retained full PART234 formatter/returned count."
+    },
+    "edgion-cli/tests/unit/cli/commands/get_test.rs": {
+      "sha256": "2336a3a14007c3f1527f40961112023f4826386ae86570214e79260ba28c4300",
+      "scope": "Retained full1-139 actual tests."
+    },
+    "edgion-cli/tests/unit/cli/output_test.rs": {
+      "sha256": "1ef046e4fc3484c45f03081afe874af602e838df6da8dd09676cae6ab1a7c26d",
+      "scope": "Retained full1-85 actual tests."
+    },
+    "edgion-controller/src/api/configserver_handlers.rs": {
+      "sha256": "b2e5e79cebf1c720f35f46296bdedb1e77dfa327c15075bd9559158f532e5723",
+      "scope": "Full1-58 actual cache list."
+    },
+    "edgion-controller/src/api/types.rs": {
+      "sha256": "43e2700678d3c234d667b6b7dcae94fa9a6678f81a01bfeb7a4148817bc3cb65",
+      "scope": "283-321,414-447 actual envelope/list."
+    },
+    "edgion-gateway/src/api/mod.rs": {
+      "sha256": "a7b6ba1fd44e1b5f7dad36c738e970bbf7b31e95b2cd5de73820904271de9662",
+      "scope": "49-69,199-268 actual routes/list."
+    },
+    "edgion-gateway/tests/unit/api/mod_test/router_shape_tests.rs": {
+      "sha256": "68d210978a211a7e705e8609c48b428afa5777f233ac059f4e11e2e4dcdb33c1",
+      "scope": "Full1-61 actual tests."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

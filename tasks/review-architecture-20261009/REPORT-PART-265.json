@@ -1,0 +1,40 @@
+{
+  "partition": "PART-265",
+  "analyst": "/root/analyze_session",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/lb/attempt.rs",
+      "sha256": "17033064689346a4c99ce0765814e5ea1f8cab520ab31930b705d9a22c06a31b",
+      "fully_read": true,
+      "disposition": "RAII owns captured attempt; release and accounting coherent."
+    },
+    {
+      "path": "edgion-gateway/src/lb/backend.rs",
+      "sha256": "8927909202266d90c35cf37422c08165349501dba4204e2847e5bd224b91b55a",
+      "fully_read": true,
+      "disposition": "Separate wrapper drain counts and shared transport counters preserve retirement."
+    },
+    {
+      "path": "edgion-gateway/src/lb/compiled_selector.rs",
+      "sha256": "7d8e4fd31fa19bb1efe68c2c00a6a4074248cdbe7f657837aba719009fdb2a2f",
+      "fully_read": true,
+      "disposition": "Eager four-policy selectors use captured geometry with live eligibility and degradation."
+    },
+    {
+      "path": "edgion-gateway/src/lb/mod.rs",
+      "sha256": "ed4fbaee2e1f5032a839a2800d07c2445f89794cd5bb6763d5aca40a274d3ef0",
+      "fully_read": true,
+      "disposition": "Exports and callers checked."
+    },
+    {
+      "path": "edgion-gateway/src/lb/sample.rs",
+      "sha256": "3f45f18d6bd1502015949b368cfce4c9e18a93cb933787a38f3654c4231708af",
+      "fully_read": true,
+      "disposition": "Terminal sampling and failure classes have distinct intentional semantics."
+    }
+  ],
+  "candidates": [],
+  "support_scope": "Actual callers, original rules/index/review-routing/topic decisions and existing tests inspected; secondary reads confer no primary coverage. Detailed candidate evidence in corresponding issue files.",
+  "limitations": "Read-only static review, no checks/builds/tests/Git mutation or performance evidence."
+}

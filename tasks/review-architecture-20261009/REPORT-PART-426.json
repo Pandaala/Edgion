@@ -1,0 +1,193 @@
+{
+  "partition": "PART-426",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-controller/src/conf_sync/conf_server/cert_watch.rs",
+      "sha256": "bd12d113aa8f0bd5a7d1513842170ca3593c35b992592eb62a3c48f80dd12aee",
+      "fully_read": true,
+      "disposition": "No new finding: acceptedmtime/length signature, finite debounce/restat, validatedLKG, dualproducerselectionlegitimate."
+    },
+    {
+      "path": "edgion-controller/src/conf_sync/conf_server/client_registry.rs",
+      "sha256": "9b26afac2768923794c14f01be58d97ed1d8961719e2d613bd3cffc253c6b6ae",
+      "fully_read": true,
+      "disposition": "ARCH118: same-ID liveRPC presence has key-only cleanup, lacking registration ownership."
+    },
+    {
+      "path": "edgion-controller/src/conf_sync/conf_server/config_sync_server.rs",
+      "sha256": "9b4a1e6e3168094ff95f8ce8253e509f628d8b4fbeb413e764edeb80d66d957c",
+      "fully_read": true,
+      "disposition": "No finding: productionregisteronlybeforepublish; rawsingleflight/version/Bytes/wirecell/redactionisolated; dedicatedforwardlayeraddsserverID."
+    },
+    {
+      "path": "edgion-controller/src/conf_sync/conf_server/grpc_server.rs",
+      "sha256": "ae38d7fa6636724e74edc5ba031ece0a85a595141a55f400aacd36f55b7e650d",
+      "fully_read": true,
+      "disposition": "ARCH117 snapshotpairing andARCH119 delivered-count projection; boundedTLSadmission/provider/term/backpressure legitimate."
+    },
+    {
+      "path": "edgion-controller/src/conf_sync/conf_server/mod.rs",
+      "sha256": "2cf988ec6cbfc586813bb4b225c937a68c8dc1c8643c2431fa1c8af6fb326681",
+      "fully_read": true,
+      "disposition": "No finding: closedmodule/exports usedbyactualbootstrap/provider/producers."
+    },
+    {
+      "path": "edgion-controller/src/conf_sync/conf_server/tls_identity.rs",
+      "sha256": "9e01e046ac0f25b710e0df2ac848a2b3557828d98957f905c525fc7ab804b9e6",
+      "fully_read": true,
+      "disposition": "ARCH117: identity andtrusttoken publishedseparately; validatedroot/same-rootcontinuity legitimate."
+    },
+    {
+      "path": "edgion-controller/src/conf_sync/conf_server/traits.rs",
+      "sha256": "0aa48a28eac7fc928b8a8fdd60e943b113f617979dc3d8f460f9304c65ff693b",
+      "fully_read": true,
+      "disposition": "No finding: boundedobject-safe coldserialization protocol/monotoneversion/currentcacheconsumer retained."
+    }
+  ],
+  "candidates": [
+    "ARCH-117",
+    "ARCH-118",
+    "ARCH-119"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original retained; fresh unchanged."
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full original retained; independent verification."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original retained; progressive index."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original retained; applicable graded gates."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full original retained; review index."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original retained; original evidence routing."
+    },
+    "skills/01-architecture/03-controller-gateway-link/SKILL.md": {
+      "sha256": "a0fd4384dc833739f432448f95f3ebc992865036771ca81b3b0df376500e2a78",
+      "scope": "Full retained index."
+    },
+    "skills/04-review/conf-sync/SKILL.md": {
+      "sha256": "5239b629f69f8d53d133e834f786e1fae3923cb2942f6dd4892811bcbd58b0c3",
+      "scope": "Full topicindex."
+    },
+    "skills/01-architecture/03-controller-gateway-link/00-overview.md": {
+      "sha256": "6e973fa8105734d3a40aa3c5da45d5df6965da3c1dee0a52a01b1ef642b62487",
+      "scope": "Selected170\u2013255; producer/replica/transportrootcontracts."
+    },
+    "skills/01-architecture/03-controller-gateway-link/01-controller-side.md": {
+      "sha256": "b586479a54d9c12018b7751b8ecfa4d58b0e990e9cba5455641d4038abd028b9",
+      "scope": "Selected1\u2013180; actualserver/provider/registry/watch wiring."
+    },
+    "skills/04-review/conf-sync/intentional-design/conf-sync-cert-watch-mtime-length-signature.md": {
+      "sha256": "1b468fad624099bf214d226e78e5522f866ff14525fef995c5b8e8c445fb9b76",
+      "scope": "Full original; acceptedtriggerduplication/residualmiss."
+    },
+    "skills/04-review/conf-sync/regression-guards/transactional-controller-channel-selection.md": {
+      "sha256": "f97d1f49752138408841bcffdcfdb369cf86426d39ab7d2125a40011c4ef8bdf",
+      "scope": "Full original; recoveredtail111\u2013145."
+    },
+    "skills/04-review/conf-sync/regression-guards/bounded-payload-compression.md": {
+      "sha256": "93a9372361ed897530e898cf619bfef8142fb5acbc0cecdc509bb137dd89d763",
+      "scope": "Full original; raw/wire/redaction/queues/bounds."
+    },
+    "skills/04-review/conf-sync/regression-guards/installed-certificate-expiry.md": {
+      "sha256": "020d95e0d18707c2941a4d2605ba846a35526ba5f8c2f6e8a066c27506d3b931",
+      "scope": "Selected1\u2013100; installedowner andacceptedproducerseams."
+    },
+    "skills/04-review/concurrency/intentional-design/watcher-send-await-backpressure-no-timeout.md": {
+      "sha256": "c0018d75a9c6a28a559c0502db921d4d4c8807a812faffd3e097690a5de04c75",
+      "scope": "Full original; truncatedtailrecovered90\u2013145, acceptedslow-readerretention."
+    },
+    "skills/04-review/rate-limit/SKILL.md": {
+      "sha256": "e1daac2d25e7c211ea096657323504afa62a92e49d1fdbc7cc37116d62fefb3f",
+      "scope": "Full index; count/quotaknowledgerouting."
+    },
+    "edgion-controller/tests/unit/conf_sync/conf_server/cert_watch_test.rs": {
+      "sha256": "a512fdaedee2c24a3df255c11b8dee34c9a534fc7c4cc9264d9a28e40fe37361",
+      "scope": "Full88; validinvalidLKG/signature table."
+    },
+    "edgion-controller/tests/unit/conf_sync/conf_server/client_registry_test.rs": {
+      "sha256": "fac1150045c7a59157fcc76e566c0da7828a84e6db1ca1328a2208c8f0101034",
+      "scope": "Full54; unique/repeatcount/unregister/wakeup, no overlappinglease."
+    },
+    "edgion-controller/tests/unit/conf_sync/conf_server/config_sync_server_test.rs": {
+      "sha256": "6bb63076b64247114c27a31bde7f67ead0b1232f53319eb547572553b8f57062",
+      "scope": "Full255; singleflight/versions/clear/redaction/bytes/wire."
+    },
+    "edgion-controller/tests/unit/conf_sync/conf_server/grpc_server_test.rs": {
+      "sha256": "6059468837c3a3c599dca8c2972848e693a970816cd828cf24c26baaaabf90ab",
+      "scope": "Full562; plaintext/meta/term/shutdown/reload/realTLSsequential."
+    },
+    "edgion-controller/tests/unit/conf_sync/conf_server/tls_identity_test.rs": {
+      "sha256": "9b08bbe06800a1a83c4891593a48bbcc490093908439277bcf3d83887a445596",
+      "scope": "Full177; validation/root/leaf/renewal/sequentialpublish."
+    },
+    "edgion-controller/src/services/conf_sync_ca/identity_sync.rs": {
+      "sha256": "8f283a7b4a0cad720eecdf3dbd4b06175faf21e362fcd8aef431f2add69362ec",
+      "scope": "Selected245\u2013280; serialcheck/storeproducer."
+    },
+    "edgion-controller/src/services/conf_sync_ca/rotation.rs": {
+      "sha256": "9779dbe48bd4a180f1153e9c0571fbb9c8f461f08703b9975337e7d6927169cb",
+      "scope": "Selected590\u2013625; generationcheck/storeproducer."
+    },
+    "edgion-controller/src/bin/edgion_controller.rs": {
+      "sha256": "8f88b31bcd10fd0796f4adf156536129c996435e5acdcbc63eeed31f3dfb6e20",
+      "scope": "Full30; realmultithread entry."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/non_kube_common.rs": {
+      "sha256": "58b9f4e3f396edc3edc5b501a5caf89864c55a1409c4fb95899b1269084adf4b",
+      "scope": "Selected240\u2013278; newCSSregistrationbeforepublish."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/kubernetes/center.rs": {
+      "sha256": "a0227d8154789e688a2e633f771844508e01934a7d7f82abd262e8c966ae4731",
+      "scope": "Selected935\u2013965; registrationbeforepublish."
+    },
+    "edgion-controller/src/conf_sync/cache_server/cache.rs": {
+      "sha256": "aadad5a4f36ed54e6b0ca3142bba5e23e02f3ddae99ce147035c10b43228ac76",
+      "scope": "Selected245\u2013307; actualWatchObjversion/json/typedbody conversion."
+    },
+    "edgion-gateway/src/conf_sync/conf_client/grpc_client.rs": {
+      "sha256": "76f476f977f998cc66b201c2ec485664fdd11544680070d9b4722c1750d46bfe",
+      "scope": "Selected510\u2013740; solemetadatacoordinator/stableID/generationcancel/reconnect/actualcountconsumer."
+    },
+    "edgion-resources/src/rate_limit_local_config.rs": {
+      "sha256": "a4824f91d9e49acd2dad2b5587b302dbf92eb0de992212b126237e9e9b696e6f",
+      "scope": "Selected1\u2013160; bootstrap/staticfallback/atomiccount."
+    },
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/rate_limit_local.rs": {
+      "sha256": "56df11142d56718d5acd87be6874e2b4e2ffe39961ff42d0065dff04656eaaa0",
+      "scope": "Selected480\u2013510; clusterdivision versusInstance."
+    },
+    "edgion-gateway/src/plugins/http/rate_limit_local/plugin.rs": {
+      "sha256": "4abb3cb88124cca228f0229e0e17ca8bf2197bdef85da88a6544d8173dd32491",
+      "scope": "Selected100\u2013135; actualeffective-rate headerconsumer, other request callsites located."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-rustls-0.26.4/src/server.rs": {
+      "sha256": "8aae1fb57ff7563d10b7b3416da5d4fc7a9edfe3d2f4406bd1faecf240ee3e5c",
+      "scope": "Selected16\u201378; retainedsuppliedconfig."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.53.1/src/sync/notify.rs": {
+      "sha256": "58995a30236252e2825f0311a08959635e8044ffe2796c0a59562dffbe008638",
+      "scope": "Selected515\u2013580,730\u2013795,1108\u20131165; constructionepoch/broadcast/firstpoll."
+    }
+  },
+  "limits": [
+    "Allsevenprimaries1910linesfullyread, actualfiveunitfiles fullyread; secondaryreads only scoped evidence. No builds/tests/network/Git/mutations outside reviewdir.",
+    "117 independently confirmed;118119pending. Legitimate watcher signature duplication, per-client slow-readerbackpressure, private wire/redactioncache andcold traitdispatch retained. No blanketconnectionage/new registry or body policy change.",
+    "Broader staleproduceridentity publication decisions are separateCAprimarypartitions. Prior087 typedNotify finding inspected fordedup;119 independentmetadata bootstrapunsent-baseline cause awaits verification."
+  ]
+}

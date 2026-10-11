@@ -1,0 +1,31 @@
+{
+  "partition": "PART-338",
+  "reviewer": "/root",
+  "complete": true,
+  "candidate_count": 0,
+  "files": {
+    "edgion-gateway/src/plugins/http/request_body_buffer/mod.rs": {
+      "sha256": "fcf40d3479b81aebbab8bb2cb0d348352290b60028b1ed9f1c2b15106102afc4",
+      "fully_read": true,
+      "disposition": "no-finding"
+    },
+    "edgion-gateway/src/plugins/http/request_body_buffer/plugin.rs": {
+      "sha256": "55b3f9ad2eb0d0b9b73e7c84c496019e8ae63e1e1555a6bdf14d532613b5d42f",
+      "fully_read": true,
+      "disposition": "no-finding"
+    }
+  },
+  "decisive_notes": [
+    "Explicit capture-only ordered marker delegates bounds/failure to the canonical body gate; no duplicate buffer or materialization. Schema intrinsic request-only capture and runtime factory agree. Existing tests cover fail-close unimplemented capture and disk spill left unmaterialized."
+  ],
+  "evidence": {
+    "edgion-gateway/src/plugins/runtime/body_gate.rs": "4995c47107514edbb1e56b574c6f4bbc706d200442c6d098cc32aca616c63ebe",
+    "edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs": "1c25ed89458f56ce46f71ca1540bc452da9cf8812cb97c960e77252aa1c6cf69",
+    "skills/04-review/http-body/regression-guards/request-body-gate-lazy-materialization.md": "a63a48aa39d938fdd1fdaa281a3b5cbe796a21e15d1bc00034e53df21fb93dc5",
+    "edgion-gateway/tests/unit/plugins/runtime/plugin_runtime_test.rs": "6019aa7be6dc42592de1c1081e50a4f18d769df9a6f3ec3f16993807836ab931",
+    "edgion-gateway/tests/unit/plugins/runtime/session_adapter_test/record_outcome_tests.rs": "ef8b9259a6f775546b4469fa9bc32936c28598535edcbde5015bb2ee3c551a53"
+  },
+  "limitations": [
+    "Static source review; contracts/callers and relevant tests inspected, not executed. Supporting files are not primary coverage."
+  ]
+}

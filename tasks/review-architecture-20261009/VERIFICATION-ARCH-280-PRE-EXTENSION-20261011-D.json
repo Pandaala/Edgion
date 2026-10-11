@@ -1,0 +1,108 @@
+{
+  "candidate": "ARCH-280",
+  "complete": true,
+  "verifier": "/root/verify_ip_union",
+  "decision": "confirmed-with-revision",
+  "input_sha256": "8b6a0fe9d81b2737cfbbca1a4e0d1117b3648154e35d7addb6070eb923d07cf6",
+  "approved_claim_sha256": "f5007a89a1dbf2d35032ab70785bea51fa4f08f9310d975efcd890103eb9c8a3",
+  "evidence": [
+    "Independent verifier confirmed the lifetime-counter root cause and bounded per-case delta solution.",
+    "The exact approved revision corrects the claim about existing reset-test coverage; production behavior and adaptive-selector semantics remain separately scoped."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original rules, independently retained and freshly hash checked"
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original knowledge index independently retained"
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full applicable graded gates independently retained"
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full original review index"
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original routing"
+    },
+    "skills/04-review/testing/regression-guards/integration-lb-metrics-require-scoped-deltas.md": {
+      "sha256": "610f579998565c3e90353dc60d0cb29b59b482c393a88f6559142558fd3ec1ce",
+      "scope": "Full original metric-window contract"
+    },
+    "skills/04-review/observability/intentional-design/retry-counter-metric-declined.md": {
+      "sha256": "0ea6e013ab60a22ea1d47669da1524408da6a6fe62f093ed6fcd9bf519349bca",
+      "scope": "Full original restraint and canonical attempts boundary"
+    },
+    "edgion-tests/src/client/metrics_helper.rs": {
+      "sha256": "6a645f919d8d1287911645447cf3228fa25c6f54be3fa889217fbf6b61c0a7fa",
+      "scope": "Full actual cumulative metric parser and unit bodies"
+    },
+    "edgion-tests/src/client/access_log_client.rs": {
+      "sha256": "f7691b8ad4c8765a0ab446c414a1596df48c930d8472678d724f918edcf84d55",
+      "scope": "Full bounded canonical log retrieval, identity and cleanup, actual unit bodies"
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "Actual serial case execution, hooks, shared context and absence of per-case metric resets"
+    },
+    "edgion-gateway/src/routes/http/proxy_http/pg_logging.rs": {
+      "sha256": "972f72ec7371c3ab876bfa12957eb70559e31aaa9d25f8f2078c24e197523a6a",
+      "scope": "Terminal backend metric recording and canonical attempt log/test store"
+    },
+    "edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_filter.rs": {
+      "sha256": "bfa2ac6926771a8c0b74d557b17bdddd9e0a17fc50770b537b6db2fe25d03dcf",
+      "scope": "Actual retry status/attempt/deadline/body gates"
+    },
+    "edgion-gateway/src/lb/attempt.rs": {
+      "sha256": "17033064689346a4c99ce0765814e5ea1f8cab520ab31930b705d9a22c06a31b",
+      "scope": "Full actual attempt guard"
+    },
+    "edgion-gateway/tests/unit/lb/attempt_test.rs": {
+      "sha256": "43d116028f8c7e6f1865006e42421ac6058bca2b06c8ba9c372e603be48142e7",
+      "scope": "Full seven actual guard unit bodies; distinct internal ledger evidence"
+    },
+    "edgion-tests/src/client/suites/http_route/backend/informational_retry.rs": {
+      "sha256": "e31a22b0f3dcc933077fbac50a2e8e93a7a159774741345152bcd3b3f0746d93",
+      "scope": "Full actual load-balancer scenario including existing RoundRobin unit bodies where present"
+    },
+    "edgion-tests/src/client/suites/http_route/backend/lb_consistenthash.rs": {
+      "sha256": "40834efd5923e4f1510adfecbf53d940db265b894d7eb70966c71bcbe73dce38",
+      "scope": "Full actual load-balancer scenario including existing RoundRobin unit bodies where present"
+    },
+    "edgion-tests/src/client/suites/http_route/backend/lb_ewma.rs": {
+      "sha256": "8fabcb802b7ac6c1ec3d070e9efc3b62442a8dc0b2ec43810329bdaed65a42ef",
+      "scope": "Full actual load-balancer scenario including existing RoundRobin unit bodies where present"
+    },
+    "edgion-tests/src/client/suites/http_route/backend/lb_ewma_retry_on_status.rs": {
+      "sha256": "e26568838d42e5f176d94e532b828483cc995c33532d9007ff0ae2ed1b6b7d22",
+      "scope": "Full actual load-balancer scenario including existing RoundRobin unit bodies where present"
+    },
+    "edgion-tests/src/client/suites/http_route/backend/lb_leastconn.rs": {
+      "sha256": "d2adae19db9318084884af1c7a1a06259bf0589fbadd258e28edfa57c83b65e1",
+      "scope": "Full actual load-balancer scenario including existing RoundRobin unit bodies where present"
+    },
+    "edgion-tests/src/client/suites/http_route/backend/lb_leastconn_retry_on_status.rs": {
+      "sha256": "02737ec724ec1e0b9cbc689bb1b66119bf7eaa08c90e1296dc51654c8bf331e9",
+      "scope": "Full actual load-balancer scenario including existing RoundRobin unit bodies where present"
+    },
+    "edgion-tests/src/client/suites/http_route/backend/lb_roundrobin.rs": {
+      "sha256": "f73adca9d4b1feca3955ce1474c2d63382ab2d7b6f4c306783da7c477c7b20a4",
+      "scope": "Full actual load-balancer scenario including existing RoundRobin unit bodies where present"
+    },
+    "edgion-tests/src/client/suites/http_route/backend/mod.rs": {
+      "sha256": "4e61d4fcabbfaae1111f2a7e53b0c06b13f79223a01e1ed0ced993ded54a2f72",
+      "scope": "Full actual load-balancer scenario including existing RoundRobin unit bodies where present"
+    },
+    "edgion-tests/src/client/suites/http_route/backend/partially_invalid.rs": {
+      "sha256": "49f50f1f70c276d013b741c7b777541d2897c4f7714ff170d64e69b8f15285d6",
+      "scope": "Full actual load-balancer scenario including existing RoundRobin unit bodies where present"
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

@@ -1,0 +1,175 @@
+{
+  "partition": "PART-219",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-resources/src/resources/refs/plugin_fields.rs",
+      "sha256": "4c3c891758ab704386c68867060669adc42636e92fdf6dee7b787aa4e6145307",
+      "fully_read": true,
+      "disposition": "Canonical actual-owner prepared reference topology, shared visitor/rebind traversal and capability loans serve Controller resolution/status and Gateway compilation. Source/slot/activity proofs, independent native material ownership and secret exclusion justify bounded cold snapshots; no new finding."
+    },
+    {
+      "path": "edgion-resources/src/resources/refs/plugin_target.rs",
+      "sha256": "35435809d2830536932c2f8d85b847b6f090497160ae3a1def8b0cda578b82ca",
+      "fully_read": true,
+      "disposition": "Finite EP-only raw/semantic default candidates preserve Missing/Unique/Ambiguous ownership and no invalid-identity lookup; current Controller and Gateway collision policy requires this canonical leaf."
+    },
+    {
+      "path": "edgion-resources/src/resources/refs/policy_fields.rs",
+      "sha256": "7ab5faacae1d9138c504b243d8a2775fbfb0f2e3c03f08b95329bfdfcabef608",
+      "fully_read": true,
+      "disposition": "Actual borrowed BTP/EBTP target loans supply shared namespace and canonical typed-target validation to both Controller eligibility and Gateway indexes; native/custom field contracts remain distinct."
+    },
+    {
+      "path": "edgion-resources/src/resources/refs/proxy_protocol_fields.rs",
+      "sha256": "79675e2dd2dd0ec7054f72c0a1f572ef21edbab21bff0778c093014ac6646644",
+      "fully_read": true,
+      "disposition": "Actual Gateway annotation parse lends validated typed query only for resourceRef; inline/absent paths remain independent. Dependencies and authorization use this real source and canonical target."
+    },
+    {
+      "path": "edgion-resources/src/resources/refs/route_auth_fields.rs",
+      "sha256": "928383c28e3c538c0f5a1568c69d4559a4609d5a2c4442bc1610efd1eeb30a86",
+      "fully_read": true,
+      "disposition": "Authored actual filter snapshot/loan grants material authority while effective locality is explicitly nonauthorizing. Reference topology rebind, private transport stamp and existing constructor sealing remain necessary; no concrete new structural defect established."
+    },
+    {
+      "path": "edgion-resources/src/resources/refs/route_fields.rs",
+      "sha256": "4c44e6dda6e93d5e97653d0a453868e5d98d808213328ad738e757c7c24f28a5",
+      "fully_read": true,
+      "disposition": "Canonical actual native Route owner/family/slot loans distinguish authored terminal Grant authority, selectors/delegation, nonauthorizing effective targets, ExtensionRefs and mirrors. Exhaustive family facade is finite field ownership rather than redundant registry."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Original root rules retained; no nested applicable rules found."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Original index and progressive lookup retained."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Original graded gates retained."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Original review index retained."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Original routing/authority retained."
+    },
+    "skills/01-architecture/05-resources/19-resource-dependency.md": {
+      "sha256": "b1b04ade9a72e1ed3b34b213f084703c18a2be9fd3002af8e7051c51160f69d5",
+      "scope": "Full original dependency graph and store/ref-manager writer/readers."
+    },
+    "skills/04-review/resources/intentional-design/reference-grant-validation-controller-scoped.md": {
+      "sha256": "43e196128a7689ccca51ad3f5aaf6423b0b089e53d0aadd980bd23d812613ff3",
+      "scope": "Full Controller-global authorization policy, no per-EGC toggle."
+    },
+    "skills/04-review/controller/regression-guards/reference-manager-canonical-surface.md": {
+      "sha256": "9ea648208e9fb705da96a6042e09e6ba4bbee27a9b2663432ced82ac7cee5d97",
+      "scope": "Full canonical cleanup surface."
+    },
+    "skills/04-review/plugin-runtime/regression-guards/gw-plugin-runtime-01-httproute-external-auth-invalid-plugins-never-sealed.md": {
+      "sha256": "e3346d13b7b1b41d7a750d9eb19b2d400fd72a04e9b7344d9bb43d36733ad9bb",
+      "scope": "Full current authored-field/effective locality and fail-closed auth contract; historical verification not fresh."
+    },
+    "skills/04-review/plugin-runtime/superseded/request-plugin-reference-generation-boundary.md": {
+      "sha256": "9dd11c40317af4c7d3bf5bd11ee9a33699772a1a7d9be4aa29d6d4ca54c3766f",
+      "scope": "Full superseded decision and current replacement pointer; old no-capture conclusion not enforced."
+    },
+    "skills/04-review/handler-requeue/regression-guards/reference-grant-dependency-before-authorization.md": {
+      "sha256": "53f1c5febed6161b22954ec3c508e7042c7a4b0f0c38998d28722ebb8f403792",
+      "scope": "Full authored authority, root recovery owner and register-before-read rule."
+    },
+    "skills/04-review/request-mirror/regression-guards/mirror-reference-grant-enforcement.md": {
+      "sha256": "1395c3c1bdd49064f65d4f9e7b19560025db612a0b30b8619b0cca5d011f8070",
+      "scope": "Full actual source/ordinal, nonauthorizing effective mirror and lifecycle contract."
+    },
+    "tasks/pending/resource-reference-contract/README.md": {
+      "sha256": "950a89b9c1603ea2a6d5207f8c6a7a17d75399d388a5d0140d37189de4056ab6",
+      "scope": "Full active finite-reference task scope and authorization boundaries; implementation authority not inherited by review."
+    },
+    "tasks/pending/resource-reference-contract/01-spec.md": {
+      "sha256": "a01c94e7b47eba2046275fdaafde4be16b71ae053a8ba619dec8656a723a8678",
+      "scope": "1088-1145 EP collision and policy actual-owner namespace contracts."
+    },
+    "tasks/pending/resource-reference-contract/07-progress.md": {
+      "sha256": "2fe20c846a92ceb09b489880054f21225f879333a5eaeb4976fb8feb26dd2efe",
+      "scope": "1388-1435 R4d source identity/collision correction evidence; historical runs not fresh."
+    },
+    "edgion-gateway/src/plugins/http/plugin_store.rs": {
+      "sha256": "9aac57eba6c1392b1938cc473937c0f253ccd78e933b2ddfa96dabbd0ede2d24",
+      "scope": "130-180 actual prepared-owner descriptor material copy gate;380-460 compiler sealing/material release."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/mod.rs": {
+      "sha256": "8c80f278c5c1a7594a7a6c57aedf50495887c73abfc0fbdd9a4e0adbbb1f5236",
+      "scope": "1-110 actual canonical resolver exports and bound current-field readonly status."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/managed_http.rs": {
+      "sha256": "58cd45788f46946fc975fd4f87d767383d222af3f98f9e73b2a592b9c8ee0bc3",
+      "scope": "Full actual bound source resolution, clear-before-write and material ownership."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/route_auth.rs": {
+      "sha256": "ac3c4f0a4e9e820fd2f7a8788415b2c6dfdbc1cec1dbc7434a98c3e9b1536b07",
+      "scope": "1-110 and215-275 authored source, private root recovery receipt and actual slot preparation; no invented child authority."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/gateway.rs": {
+      "sha256": "3d241427e284a97f50eff549b41ef8df8f060a6b568c39216fc1efe6c08e9304",
+      "scope": "292-370 annotation loan, valid-target dependency before Grant read and source-sensitive policy."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/backend_tls_policy.rs": {
+      "sha256": "db90d7dba9390d47a77cc7d4c0ae3f70d0ace74b5ca7c600f694cd96a749bc7c",
+      "scope": "88-132 actual canonical target requeue."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_backend_traffic_policy.rs": {
+      "sha256": "7925d76536c03b8f126cb42fc62797c98be7d057649762b4c8e1c4809e9f6807",
+      "scope": "188-235 whole-policy identity before cross-object lookup."
+    },
+    "edgion-gateway/src/backends/policy/backend_tls/backend_tls_policy_store.rs": {
+      "sha256": "e3ee25cd2f617d6655197fafd0b0dfa5496a9d0ce17ae5e17cbc0ac7395fbc1b",
+      "scope": "230-255 actual canonical target/class/section validity gate."
+    },
+    "edgion-gateway/src/backends/policy/backend_traffic/store.rs": {
+      "sha256": "0a35add8c64ab31f105772c87d9e80182ca68e265e1b750fd7221125cc321610",
+      "scope": "196-220 actual canonical target keys and dedup."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/route_backend_refs.rs": {
+      "sha256": "52c816a50c3fb3bd868f2b0c392dc8f7a46620e0ffe621bd9fec91acd1493304",
+      "scope": "1-140 actual terminal-only authority and nonauthorizing receipt lifecycle."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/route_utils.rs": {
+      "sha256": "40750b718b634fb69dd713512428742694abbfc033a2d66ddb6b0d9d94c39393",
+      "scope": "185-247 and1055-1110 actual EP-only classification, readonly source and ExtensionRef lookup."
+    },
+    "edgion-resources/tests/unit/resources/refs/plugin_fields_test.rs": {
+      "sha256": "0502e8ca57f73740611f4186248b93069696c1f0fdb768365b9509798210f2a9",
+      "scope": "Full actual test bodies; source/target/slot/activity/topology/material exclusion, default/ambiguity and authored/effective authority witnesses. Not executed."
+    },
+    "edgion-resources/tests/unit/resources/refs/plugin_target_test.rs": {
+      "sha256": "a58e80f96e9bb4c7ada51f0228fb99a7a8ff4a052003907c34b542f23b0025e7",
+      "scope": "Full actual test bodies; source/target/slot/activity/topology/material exclusion, default/ambiguity and authored/effective authority witnesses. Not executed."
+    },
+    "edgion-resources/tests/unit/resources/refs/policy_fields_test.rs": {
+      "sha256": "8a477c85cc452f440bdf3edb35e5bcaa2f907e0a2e206b21d9f54af00f89d89e",
+      "scope": "Full actual test bodies; source/target/slot/activity/topology/material exclusion, default/ambiguity and authored/effective authority witnesses. Not executed."
+    },
+    "edgion-resources/tests/unit/resources/refs/proxy_protocol_fields_test.rs": {
+      "sha256": "453b84f7ade53a200a8fdbb86306aa718962c7a637afb0a922c9ab38719d191c",
+      "scope": "Full actual test bodies; source/target/slot/activity/topology/material exclusion, default/ambiguity and authored/effective authority witnesses. Not executed."
+    },
+    "edgion-resources/tests/unit/resources/refs/route_auth_fields_test.rs": {
+      "sha256": "813fc1ea2f2edefda748826857e2f114ad6dbb1a322cffed3c1281b733936061",
+      "scope": "Full actual test bodies; source/target/slot/activity/topology/material exclusion, default/ambiguity and authored/effective authority witnesses. Not executed."
+    },
+    "edgion-resources/tests/unit/resources/refs/route_fields_test.rs": {
+      "sha256": "e23d293fed8676cd0e15536521c0ae453234145b7a56bd4f5df49cd15736e689",
+      "scope": "Full actual test bodies; source/target/slot/activity/topology/material exclusion, default/ambiguity and authored/effective authority witnesses. Not executed."
+    }
+  },
+  "limits": "All six primary source files fully read; selected actual consumers and original contracts/tests reviewed. No builds/tests/network or reviewed-file mutation; no performance or live conformance claim. Supporting source adds zero coverage."
+}

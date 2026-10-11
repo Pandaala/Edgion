@@ -1,0 +1,265 @@
+{
+  "partition": "PART-204",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-resources/src/resources/common/byte_size.rs",
+      "sha256": "767646f76632ffd8b33e0529a79a44cafaa7744fadcab3465b219f3ec68ba36d",
+      "fully_read": true,
+      "disposition": "Canonical cold size parser; positive/range policy belongs to each bounded owning consumer."
+    },
+    {
+      "path": "edgion-resources/src/resources/common/controller_status.rs",
+      "sha256": "f828cad63b1c10330d85c61d3847171b0f8d46cb20ed68df9d78d5462388283a",
+      "fully_read": true,
+      "disposition": "Native/partitioned/opaque representation preserves malformed API history while canonical pipeline projects local status and suppresses invalid persistence."
+    },
+    {
+      "path": "edgion-resources/src/resources/common/external_http.rs",
+      "sha256": "719e5cefd0a6ca13a330b3fe1d6e754b3f8c12b74400d26be56e04913eecb1d4",
+      "fully_read": true,
+      "disposition": "Shared bounded outbound exchange schema, target/timeout/retry/success/health policies; actual field adapters own redacted resolved values."
+    },
+    {
+      "path": "edgion-resources/src/resources/common/group_name.rs",
+      "sha256": "b68e4c3d1f0b0355066ce466e18d696916f82956c910352a90e2edb9415e3c76",
+      "fully_read": true,
+      "disposition": "Shared label-value group predicate intentionally distinct from DNS object identity."
+    },
+    {
+      "path": "edgion-resources/src/resources/common/kubernetes_name.rs",
+      "sha256": "46e13c126bf7d4a114ca58b280dabb9c31ffec422105eac6b9408c473311df6e",
+      "fully_read": true,
+      "disposition": "Existing canonical ASCII DNS label/subdomain predicates; ARCH059 already owns health-local duplication."
+    },
+    {
+      "path": "edgion-resources/src/resources/common/log_labels.rs",
+      "sha256": "8ea7b1ea2fc381c2d6b89282ddfdfd5f6575067ed9067a8548f3896b1d627d4e",
+      "fully_read": true,
+      "disposition": "Canonical cold TLS metadata projection with deterministic bounded output; HTTP metadata remains AccessLogExtern-owned."
+    },
+    {
+      "path": "edgion-resources/src/resources/common/mod.rs",
+      "sha256": "fd00af774ab5c6cf343adbd1ec8ef2fd9cdc677a7af8b1af12dacf98bf0b7237",
+      "fully_read": true,
+      "disposition": "Exports and shared finite schema shapes checked against actual owners; no runtime orchestration added."
+    },
+    {
+      "path": "edgion-resources/src/resources/common/outbound_request.rs",
+      "sha256": "dc617145699d02dd4db00a465e4cac7e4afbe39f4d89bbd6ba846037e05651be",
+      "fully_read": true,
+      "disposition": "ARCH061 custom-field source arity; canonical private position walker and template policy otherwise preserve admission/binding alignment."
+    },
+    {
+      "path": "edgion-resources/src/resources/common/outbound_tls.rs",
+      "sha256": "0463f228b184671bc5795058247933f7209630893272345b9b58c0f1ce34400e",
+      "fully_read": true,
+      "disposition": "Strict local outbound TLS reference schema; owning validation/proof and captured global defaults remain separate legitimate boundaries."
+    },
+    {
+      "path": "edgion-resources/src/resources/common/request_template.rs",
+      "sha256": "5546748ca635ab6ecfe36526da54006c004e1d317b1951c856e8884be08a311d",
+      "fully_read": true,
+      "disposition": "Canonical cold grammar/segments and independent variable/Secret admission; actual runtime owns rendering and consumer missing-value semantics."
+    },
+    {
+      "path": "edgion-resources/src/resources/common/secret_object_ref.rs",
+      "sha256": "526f8be99a12f7d9fb74f16f9aef9b86c752bf9a2584b7c8a81dc31e1444cf78",
+      "fully_read": true,
+      "disposition": "Shared Secret identity shape retains owner-specific defaulting/authorization in reference adapters."
+    },
+    {
+      "path": "edgion-resources/src/resources/common/secret_slot.rs",
+      "sha256": "59fb42d4d86cf74ff27baf982bf0b189b26b085ac711d5aa01f1cdd2779a8e05",
+      "fully_read": true,
+      "disposition": "Schema-hidden redacted serialized resolved material; strict Secret slot reference and actual auth adapters preserve provenance."
+    }
+  ],
+  "candidates": [
+    "ARCH-061"
+  ],
+  "support_selected": {
+    "skills/04-review/status/regression-guards/deployment-partitioned-observations.md": {
+      "sha256": "f34036a4abf9b836d0292ab0970e4b5a64c290b5a2e0d6d7862ef6af56dff86d",
+      "scope": "Full original"
+    },
+    "skills/04-review/status/mandatory-design/foreign-status-entry-preservation.md": {
+      "sha256": "c87be886f1b393cc905b34dc7456728a7793fa12845763615de57f59e382a1ef",
+      "scope": "Full original"
+    },
+    "skills/04-review/status/regression-guards/native-status-sidecar-cleanup.md": {
+      "sha256": "a7ccc5ca9c886270cc3fcf5593325c200e7b664627b50a59678c50797b0531a1",
+      "scope": "Full original"
+    },
+    "skills/04-review/plugin-metadata/mandatory-design/keylist-group-structure.md": {
+      "sha256": "c5db2d993b83e014d2feb170e5c4627bafddb6e1bac51f4ae913fd365d6c9dcc",
+      "scope": "Full original"
+    },
+    "skills/04-review/plugin-runtime/regression-guards/request-template-policy-unification.md": {
+      "sha256": "413004f76a11df4ef914bc1fb625dba4fa25602d6bf8ac8b25b66d62c3d49e7a",
+      "scope": "Full original; bounded reread repairs earlier aggregate truncation"
+    },
+    "skills/04-review/resources/intentional-design/deny-unknown-fields-credential-structs-forward-compat-tradeoff.md": {
+      "sha256": "876d10a36efa4365c8209874d8eac2447c8fb8c2c40e8ce4d5042cdaf1cff4bd",
+      "scope": "Full original retained in this partition"
+    },
+    "skills/04-review/resources/compatibility-constraints/serde-ignored-blind-spots-schema-walk-instead.md": {
+      "sha256": "dd914f285c635f3e002c0b6c8f5c469735c09ab3b06730cc8fd0244aaf81d0de",
+      "scope": "Full original"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/status_pipeline.rs": {
+      "sha256": "942317f05cbcfd52090141a842f8756c2c08b8d5cd4f1cef7ca515c5f989f241",
+      "scope": "Full"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs": {
+      "sha256": "23057df0f04ed113a72fa1b42fb5344153c3ae8cff526e030878c8091fc92bd6",
+      "scope": "670-800"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/status_observation.rs": {
+      "sha256": "029ec4202103c429f56e10b3e19e1e168f885607b5759308f306d42fedf012ed",
+      "scope": "1-160,160-215"
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/status_observation_test.rs": {
+      "sha256": "ba615ca5076394f146cf10a222f5168e02bfa70f38141adc4c7312837592f941",
+      "scope": "Full 1-105"
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/status_pipeline_test.rs": {
+      "sha256": "29f81341f4b51639a56701f1a8efd03cc42ebf7fc9b7f4c6211c145bb1ebe180",
+      "scope": "195-285"
+    },
+    "edgion-resources/src/schema_check/mod.rs": {
+      "sha256": "73dca576e5c45cfbb4ba1a1caa1092ee349e673cfac48b1b208d540f5aafe0db",
+      "scope": "Full"
+    },
+    "edgion-resources/src/schema_check/walk.rs": {
+      "sha256": "f57fe8226f95cd133010c14003e3ecb62746ba953334ee8dda8ec84794e286d9",
+      "scope": "240-380 union ambiguity and advisory scope"
+    },
+    "edgion-resources/src/resources/link_sys/mod.rs": {
+      "sha256": "0b4d599a497c34a856d5cb390599c03cbdc971ca4736d2b0b8e68badb93a9a44",
+      "scope": "43-99,190-280"
+    },
+    "edgion-resources/src/resources/link_sys/webhook.rs": {
+      "sha256": "8c2eba4b4afc3a93f79d0eb428d02a3565345adf923d27c3ebce0ba1d48633ab",
+      "scope": "1-110,126-134,145-210; full retained as PART218 support"
+    },
+    "edgion-gateway/src/plugins/http/common/outbound/request.rs": {
+      "sha256": "d4406a5e25092190e59f4d307acb463e8af7c54b4021153decefb796e69bc80f",
+      "scope": "170-245,470-530; actual cold typed-source compilation"
+    },
+    "edgion-gateway/src/plugins/http/common/outbound/client.rs": {
+      "sha256": "f070dae86cbbbd9096590dd0176c8b80dfb07e4d4675c70d02dfe5a38eb50be7",
+      "scope": "145-200 readiness; full retained previous Gateway owner"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/auth_spec.rs": {
+      "sha256": "2a6bb02e44cab61a8f89c40aec709d5f25b0476685cbb37404ad5d589569ef91",
+      "scope": "40-115 actual shared Secret slot adapters"
+    },
+    "edgion-gateway/src/ctx.rs": {
+      "sha256": "dd23711a474df4122dd3b0264c7293366c27ba2688a9eb390b24e842f6e6335d",
+      "scope": "675-710 actual TLS-only canonical log projection"
+    },
+    "edgion-gateway/src/request_body/config.rs": {
+      "sha256": "05d93aa67b11d68171b78ec2c3769e4f693f2086e8b0dddaa50f17558bc06ab5",
+      "scope": "Full; independent bounded read repaired aggregate truncation"
+    },
+    "edgion-gateway/src/ai/conversion/chat_to_anthropic/limits.rs": {
+      "sha256": "9a4d92fcf443a2b987b3ad6e1ee98b4f2361e3932679337d07ac7b7bbb324f4d",
+      "scope": "Full; independent bounded read repaired aggregate truncation"
+    },
+    "skills/02-features/03-resources/18-link-sys.md": {
+      "sha256": "7406c58081ef3256405df06b3132bd41ec87f9cd3e7e0b29316dd6d1f6093ad4",
+      "scope": "350-371 exact custom-field source contract; subsequent unrelated historical render-size prose is not current evidence"
+    },
+    "docs/en/ops-guide/infrastructure/connectors.md": {
+      "sha256": "58bad93281f44a791a7c019f7c4719f412de6e484bff20aac055a7919bca00c6",
+      "scope": "780-800 valid single-source examples"
+    },
+    "config/crd/edgion-crd/link_sys_crd.yaml": {
+      "sha256": "53b1ec946e27809852e49a878671a45a25c21160b07dc921056904fc34c57698",
+      "scope": "1-60,130-185 opaque config scope"
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs": {
+      "sha256": "68ee17774d3bbc693d9f19803747fa2c3afdb7046482e6d94ac6cf7db5a4fe20",
+      "scope": "3180-3275,3420-3455 flattened enum selection"
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_derive-1.0.229/src/de/struct_.rs": {
+      "sha256": "7b26982ce59504a9bb5a18c3ab56eee2d75e70fd465774ff035d15c50452c118",
+      "scope": "190-425; flattened buffering/extraction/conditional leftovers rejection"
+    },
+    "edgion-resources/tests/unit/resources/common/byte_size_test.rs": {
+      "sha256": "8fc128f84af7d86caeaa99f8e13b1fe0822c3525f4032aaea322476ce46a2880",
+      "scope": "Full personally read in bounded calls"
+    },
+    "edgion-resources/tests/unit/resources/common/group_name_test.rs": {
+      "sha256": "951b38a060ec5b4b04b57642ea5aebd1e75823f95018c7bc5a4f836d378c7cdc",
+      "scope": "Full personally read in bounded calls"
+    },
+    "edgion-resources/tests/unit/resources/common/log_labels_test.rs": {
+      "sha256": "7e54225cc91e3e3990ce45f6a86acf7e4a7bcbc833b16e444dc19487780877bf",
+      "scope": "Full personally read in bounded calls"
+    },
+    "edgion-resources/tests/unit/resources/common/controller_status_test.rs": {
+      "sha256": "2ef7e8c772a2fdbcc6d5c7b4630cf9a6a9fc07003751d4e83c559c7b1d121810",
+      "scope": "Full personally read in bounded calls"
+    },
+    "edgion-resources/tests/unit/resources/common/secret_object_ref_test.rs": {
+      "sha256": "424a37d1f91d8de9c7fb9cf1f41ce5e6bad70fabeb49bad3ff1efa7cc08b29a7",
+      "scope": "Full personally read in bounded calls"
+    },
+    "edgion-resources/tests/unit/resources/common/secret_slot_test.rs": {
+      "sha256": "be67061bd23135be7c82493c0d76cc739c19d26659a7463d9571427f7b5b5a61",
+      "scope": "Full personally read in bounded calls"
+    },
+    "edgion-resources/tests/unit/resources/common/outbound_request_test.rs": {
+      "sha256": "f7fb9f29cbc11e9e168b673b3a16f493565cc5fdf7ac98bc1fb322ebacc6627d",
+      "scope": "Full personally read in bounded calls"
+    },
+    "edgion-resources/tests/unit/resources/common/outbound_tls_test.rs": {
+      "sha256": "bb26fb1584686e4f23556129def75f52ce14a9c17ca4d7b387efb40a7f1acc7c",
+      "scope": "Full personally read in bounded calls"
+    },
+    "edgion-resources/tests/unit/resources/common/request_template_test.rs": {
+      "sha256": "96ac145bd0e17d575a030de6364cb6db807033bf1775fbba80a1564a57b9c133",
+      "scope": "Full personally read in bounded calls"
+    },
+    "edgion-resources/tests/unit/resources/common/secret_slot_test/redact_tests.rs": {
+      "sha256": "9786bb060b397f2b1e466facf8e9a3858b8b404a487465736285688154369436",
+      "scope": "Full"
+    },
+    "edgion-resources/tests/unit/resources/common/outbound_request_test/template_admission_tests.rs": {
+      "sha256": "5cf9dcf4492d3c1fc88177e7967f7e332273ac957fcec8219a4780d7391f72fa",
+      "scope": "Full"
+    },
+    "edgion-resources/tests/unit/resources/common/external_http_test/failure_policy_tests.rs": {
+      "sha256": "247ff915f6ad39dc3fc43f9ba398145d96600f440354e3c2c670e828976ddad6",
+      "scope": "Full personally read in bounded calls"
+    },
+    "edgion-resources/tests/unit/resources/common/external_http_test/active_health_path_tests.rs": {
+      "sha256": "b05782be0be4804f3b730494c32181b4b28f6a1d6cc5bd890e515d68450d5d66",
+      "scope": "Full personally read in bounded calls"
+    },
+    "edgion-resources/tests/unit/resources/common/external_http_test/retry_schema_tests.rs": {
+      "sha256": "22c119895fbebbe94d4db433ed929b8aac8dfa1f2032a1f35d305c8f949eaa59",
+      "scope": "Full personally read in bounded calls"
+    },
+    "edgion-resources/tests/unit/resources/common/external_http_test/success_body_max_response_bytes_tests.rs": {
+      "sha256": "2db43d3df37f4fdb8d75199f1e32c2d199726d66b0920c0c7fe94dadae4e078a",
+      "scope": "Full personally read in bounded calls"
+    },
+    "edgion-resources/tests/unit/resources/common/external_http_test/managed_service_target_tests.rs": {
+      "sha256": "435823714ea04cfc39360160889113d78f10fcc88203f6ddb73467b9301797ee",
+      "scope": "Full personally read in bounded calls"
+    },
+    "edgion-resources/tests/unit/resources/common/external_http_test/timeout_ms_template_tests.rs": {
+      "sha256": "fb0a751782b9102dbe99c3a53863340473fa0c640c10dc55623fa341f8c2ca39",
+      "scope": "Full personally read in bounded calls"
+    },
+    "edgion-resources/tests/unit/resources/common/external_http_test/timeout_ms_bound_tests.rs": {
+      "sha256": "3b0b4ec110abdbb381c44cc1aa1dbdd3b6758cf5223efdb59ad05b78893e9a63",
+      "scope": "Full personally read in bounded calls"
+    }
+  },
+  "limits": "Full primary reads retained from the immediately preceding bounded review segment; source hashes unchanged. Relevant tests fully read. Original governing root/index/schema rules retained unchanged. Static only: no execution, mutation or supporting primary coverage."
+}

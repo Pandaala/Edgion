@@ -1,0 +1,49 @@
+{
+  "candidate": "ARCH-373",
+  "complete": true,
+  "verifier": "/root/verify_ip_union",
+  "decision": "confirmed",
+  "input_sha256": "5d8297c93c08d11b8b6963f7c9fcfc97f6163c2f6b65433a1e95a1eb94aa2577",
+  "approved_claim_sha256": "983c28e00a48b48921a7e62c647227475808b84d5d1c809ab4ef8a21fc66d0e4",
+  "evidence": [
+    "Exact independent unchanged approval: K8s single declared trylistener sharedCA-only/mTLSports doesnotestablish requiredclientidentity prerequisite.",
+    "Existing local separate demand and standalone with/withoutidentity matrix acknowledge scopedcoverage; preserveCAonly/STARTTLS/wrongCA.",
+    "Original rules/LDAPknowledge/currentfixtures/readiness/cleanup/TLSunitbindings personallyread; no vendorimage/livehandshake or executedincident claim."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "edgion-tests/src/client/suites/edgion_plugins/ldap_auth_tls/ldap_auth_tls.rs": {
+      "sha256": "3729698af350e6bc98c9e8e81fe01ceb7a3d724b70e52fa989e28811a057f9fa",
+      "scope": "Full fourcases and mTLS prerequisite/predicates/registry."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/LdapAuthTls/11_Deployment_edgion-test_openldap-tls.yaml": {
+      "sha256": "1ad82fa9dbc880149fb3867431d0eae5a10c8bd1ecf8f6cbc2b30201a4cf5556",
+      "scope": "Full single tryserver/cert mounts/seed/readiness."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/LdapAuthTls/12_Service_edgion-test_openldap-tls.yaml": {
+      "sha256": "4f9576697fc3a3d4fbd8c4f62ba08dbf45035defa098ecdb22c57b007e02b5c0",
+      "scope": "Full bothports same server636."
+    },
+    "edgion-tests/integration/conf/Services/ldap-openldap-tls/docker-compose.yml": {
+      "sha256": "7e90ff478f6c62825b1784104c4a00afe6c029168ddeec1b88aeb2d7feca7e61",
+      "scope": "Full distinct try/demand fixture servers/certs/mappings/health."
+    },
+    "edgion-tests/k8s/scripts/run_k8s_integration.sh": {
+      "sha256": "9a858cd81d47c74f20b375a503b10f1c52107ab413116783c8a49c4ec16e42e1",
+      "scope": "1-35,130-181,1185-1280,1418-1460,2070-2128,2574-2584,2832-2865,2880-2926 strictapply/prep/readiness/cleanup/reuse/registry."
+    },
+    "edgion-gateway/src/plugins/http/ldap_auth/plugin.rs": {
+      "sha256": "d4a7d9f9d41bd609de65f0a3fe2d470f24e375b42450e0b19bf3d6504c02e206",
+      "scope": "190-280 canonicalTLS/trust/clientauth vs no-clientauth construction."
+    },
+    "edgion-gateway/tests/unit/plugins/http/ldap_auth/plugin_test.rs": {
+      "sha256": "2f34688a68c69dbc594934409d7d38e32346df53b6ceea6086f80df91319680c",
+      "scope": "806-955 actual materialowner/encryptedtransport tests notlivehandshake."
+    },
+    "edgion-tests/integration/scripts/integration/ldap_egress/scenario.py": {
+      "sha256": "91debb2a0bfc3688f448e2be94f2e6d7c911c5dc1552b110b1e8af42fefeac49",
+      "scope": "259-297,367-391,477-513 existing standalone try/demand and with/withoutidentity matrix."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

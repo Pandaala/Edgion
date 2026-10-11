@@ -1,0 +1,66 @@
+{
+  "partition": "PART-326",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/plugins/http/jwt_auth/credentials.rs",
+      "sha256": "f0cd2345bea53b65a36a0bd0c3495ac382bf56e4402e832f732ecbc1294d5b67",
+      "fully_read": true,
+      "disposition": "Cold issuer-scoped key/error/Validation store consumed from private config; peek and verified validation separate."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/http/jwt_auth/mod.rs",
+      "sha256": "2b3537d1a5771dee2b574efffebea154783418feeaa3ee7781076e2de59bb6af",
+      "fully_read": true,
+      "disposition": "Private static-issuer verifier and narrow helper exports; no cross-plugin consolidation."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/http/jwt_auth/plugin.rs",
+      "sha256": "380f7dc0b9586c5c0b05f8f90cec071c06fe73a600eef82a92dba3bf1ab560ef",
+      "fully_read": true,
+      "disposition": "Captured group generation and prepared claim plan; generic denial vs anonymous fallback explicit; success identity masked."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/http/jwt_auth/request_stage.rs",
+      "sha256": "c58c13c1063732c6734f722fe5134ae81cd961a3b00e0cb34c4c67a0cf1810f6",
+      "fully_read": true,
+      "disposition": "Header/query/cookie token priority and configured source hiding use canonical helpers. Owned String unifies source semantics, explicitly accepted original owner."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/http/jwt_auth/verify.rs",
+      "sha256": "0a774ee65116bdc3f01067006e39005f577f6c4835c22ed6c099d2a5a70f37af",
+      "fully_read": true,
+      "disposition": "Exact iss routing then alg binding then scoped payload selector and real verification; numeric dates and private diagnostics safe. Two payload decodes have different trust duties; no profile for broader parser rewrite."
+    }
+  ],
+  "candidates": [],
+  "support": {
+    "AGENTS.md": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+    "skills/SKILL.md": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+    "skills/00-design-rules.md": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+    "skills/04-review/knowledge-routing.md": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+    "skills/04-review/security/intentional-design/credential-copy-retention.md": "10a0159a28ac80b65e5fb4225f67a47a84a72acbfad7254e8506eae5e78f350c",
+    "skills/04-review/security/mandatory-design/fail-closed-error-body-no-internal-detail.md": "2f4d74bd5bfb3335de18481b56331b7692a53524138ae221f1c9a6e0266ccdc1",
+    "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": "70ea787d34a9a4652adfe131ba66049d2544b381b2034194db519567fe87ead0",
+    "edgion-gateway/src/plugins/http/common/auth_common.rs": "0a184e336bc99eb91555c07be17a4ff6c49dfe21a401d1668efd7793152fa4b0",
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/jwt_auth.rs": "fae0f0212f1dc2fee3c4b199dc636809c481e87f204f401136495c31d7f11499",
+    "edgion-gateway/tests/unit/plugins/http/jwt_auth/credentials_test.rs": "e7ac3040ee3de854f32efedb653345065cd00f1239cc70455d7b86a5e0042af5",
+    "edgion-gateway/tests/unit/plugins/http/jwt_auth/plugin_test.rs": "bbd093c9e5b88d11f0180fea60b961c7e64b49684c655ef30c436d08a2ce0c1c",
+    "edgion-gateway/tests/unit/plugins/http/jwt_auth/verify_test.rs": "4881da1e1edfe24f9d795b7f3597aa5fb7a17c4076dbfc95664d65cc74680372",
+    "edgion-gateway/tests/unit/plugins/http/jwt_auth/mod_test.rs": "296f484316b57109c03121b900206c0786c8816dbaa7ee5e695c9ec35f042226",
+    "edgion-gateway/tests/unit/plugins/http/jwt_auth/mod_test/algorithm.rs": "60f7d91a574b2ed4ca9aa09242a16878a3d18d22b426b337fa8e900ed4fd879b",
+    "edgion-gateway/tests/unit/plugins/http/jwt_auth/mod_test/token_source.rs": "b8421c160c46d7cc496bf20640e0ad47f3a6c1ab979b6ef1a4d03b32a1c3fd14",
+    "skills/04-review/jwt-auth/SKILL.md": "6cbff3bfa86227673c9656afd328e3ea5a002659b13ff0d295f14840467a2686",
+    "skills/04-review/jwt-auth/intentional-design/query-token-opt-in.md": "d45b3035936c61d0cc315072c038c67ef299d23bc73e5bd054af6aae31161136",
+    "skills/04-review/jwt-auth/intentional-design/jwt-oidc-helper-split-deliberate.md": "0c7cc9d43318795cf53ac5bccd5cbf6a62b70830585ff1c72da5653b86967a65",
+    "skills/04-review/jwt-auth/superseded/jwt-auth-multi-key-double-decode.md": "3ae56a1a21042d4f30fcc4428159eadd137670e514ff166c76201b5d2ba5d593",
+    "skills/04-review/jwt-auth/regression-guards/hide-credentials-query-cookie-strip.md": "be4774d0c44c2d453d6b9cf0013295ece1f7a4c6ec3b6b5f42ae9b6014ab3c40",
+    "skills/04-review/jwt-auth/regression-guards/decoding-key-prebuilt.md": "8ef255d2409ad8c8df686cc99ede642c28c6d922c3e98c710348fd6e9673c32e",
+    "skills/04-review/jwt-auth/regression-guards/bearer-www-authenticate-error-attributes.md": "33991df3d2e760c8a97870b3cab11314d59b8ec2b61e2b612bb2bc79c5c12214",
+    "skills/04-review/jwt-auth/mandatory-design/issuer-key-binding.md": "fbcbcc5c291717f12b50b810c5353befd4a7afba9a0f28685ce123e26efc95f6",
+    "skills/04-review/jwt-auth/mandatory-design/group-in-ok-log.md": "018f87ca212006db52cbeab92badf4f654c328c1fef7e43d9b8ff036abe3d665"
+  },
+  "support_scope": "Relevant original records read, production support selected schema/validation/resolver/factory/helper sections only. HMAC tests selected ownership/wire/digest/order/no-credential/body limits; JWE selected cold generation/strict objects/rawAAD/size/success-order tests. JWT credentials/plugin/module/algorithm/token-source tests fully read; verify tests first190 lines. No supporting primary coverage.",
+  "limits": "Static only, no execution/mutations/measurements. Truncated searches recovered with owning functions/test bodies; no whole supporting tree credit."
+}

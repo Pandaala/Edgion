@@ -1,0 +1,246 @@
+{
+  "partition": "PART-211",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/geoip_location.rs",
+      "sha256": "8c57a4efdfe69f38fd4fc05c820df590afde7ddad00bc9c341ab370ea6d43a57",
+      "fully_read": true,
+      "disposition": "Canonical matching, strict HTTP/stream admission and cold lookup needs are appropriately owned."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/graphql_guard.rs",
+      "sha256": "27084332286700e6a170016b16ac4fde347622385bfa6323ffb5521a7c770af6",
+      "fully_read": true,
+      "disposition": "Immutable shape/root/cost policy; repeated compile and field-coordinate costs belong to ARCH-050/053."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/graphql_operation_router.rs",
+      "sha256": "2d271f646c0932a15036b010a852d45408870cf3310bd14522d079dd348cab11",
+      "fully_read": true,
+      "disposition": "Same-rule raw backend binding and effective composition deliberately have separate inputs and owners."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/graphql_rate_limit.rs",
+      "sha256": "232b91f2b99e704e4a420dbeaf83472bf6ae4c124801f195b49aab252e4a184f",
+      "fully_read": true,
+      "disposition": "Cold shared quota/cost preparation; preserve canonical Redis deadline/failure ownership; deduplicate ARCH-050/053."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/graphql_safelist.rs",
+      "sha256": "ba94c359c1eb1897475303c7b21387eecfadf9330209688353de7a5b02eed767",
+      "fully_read": true,
+      "disposition": "Bounded cold registration and borrowed selected-operation lookup retain one trusted-document owner."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/guardrail.rs",
+      "sha256": "0bebc52cffb79231408b0fedb9215d3f7f1184417b1ae9d5c2595f12ab2fdccd",
+      "fully_read": true,
+      "disposition": "Canonical bounded outbound policy and response-window ownership; broader session/window findings already own runtime changes."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/header_cert_auth.rs",
+      "sha256": "fd867cb84211550b71749bc7db3f98418b89cf58fa29b83ce2cb6dc6926b5bdd",
+      "fully_read": true,
+      "disposition": "ARCH-070: configured scalar header names lack HTTP token validation; DER/SAN costs owned by ARCH-034/042."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/hmac_auth.rs",
+      "sha256": "c3ce51abe3b4bdcf2a902b80eba311186e4b231fdcdd2766c4f97fb4136090d4",
+      "fully_read": true,
+      "disposition": "ARCH-070: upstream metadata whitelist admits unrepresentable HTTP names; preserve exact Secret producer semantics."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/ip_restriction.rs",
+      "sha256": "4884ac57e3f20fcf6c595b97ea44a45a35b14343698340361c455fe88e123b95",
+      "fully_read": true,
+      "disposition": "Partial-good inline compilation and allow intent are deliberate; canonical snapshot/matcher union owns runtime work."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/json_schema_validation.rs",
+      "sha256": "73fc53ef99bcbcfeaa03a432619f57cbd29f9214afa58275397c5dc0275a8106",
+      "fully_read": true,
+      "disposition": "ARCH-069: strict object parser retains copied keys in a second inventory; cold invocation repetition belongs to ARCH-050."
+    }
+  ],
+  "candidates": [
+    "ARCH-069",
+    "ARCH-070"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full retained governing rules; only applicable AGENTS."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full retained original knowledge index."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full retained graded gates."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full retained routing and original authority rules."
+    },
+    "skills/01-architecture/05-resources/00-schema-transport-contract.md": {
+      "sha256": "d20e74c1c7ccf6183f893bc919767a27bd3fbb47486415d14651a76fdef5a597",
+      "scope": "Full retained schema/transport boundary; selected refresh."
+    },
+    "skills/04-review/security/intentional-design/auth-identity-headers-overwrite-written-names.md": {
+      "sha256": "1bbf0d70a24f0366a53b0aecb50c6dc17f2c4247fa17753304010b335edfcc42",
+      "scope": "Full producer-local write policy."
+    },
+    "skills/04-review/security/regression-guards/auth-claim-header-projection.md": {
+      "sha256": "f3c6e4b23f4399c57bff67c515aea27f79cde89940199898b79121bb4bf0095e",
+      "scope": "Full canonical token and separate claim projection contract."
+    },
+    "skills/04-review/hmac-auth/mandatory-design/dup-key-first-wins.md": {
+      "sha256": "bfaf20fdeeaa62fd4d64689356e732dfe63e166901bc24d3c13c336894af4fb8",
+      "scope": "Full original credential conflict decision."
+    },
+    "skills/04-review/rate-limit/regression-guards/graphql-query-cost-budgets.md": {
+      "sha256": "eac2cd61092931fc5e6dac43fe348481bbd1c56941ba9be03bef95fbd41dfc7d",
+      "scope": "Full strict frontend and carried permit contract."
+    },
+    "edgion-gateway/src/plugins/http/header_cert_auth/plugin.rs": {
+      "sha256": "346464466384a30dc02dde337e1f1fb6041a6e8b265ab267abc69518f3fb8e99",
+      "scope": "1-185,240-349 real certificate producer and ignored output failures."
+    },
+    "edgion-gateway/src/plugins/http/hmac_auth/plugin.rs": {
+      "sha256": "d601f7a7483f7f9809b4a62ddaad5eada78db0c40e9582e840acd47d0dc6fedd",
+      "scope": "250-340,600-727 real authenticated Secret metadata consumer."
+    },
+    "edgion-gateway/src/plugins/runtime/session_adapter.rs": {
+      "sha256": "bb060285f53d6eddb8eeac90c080456e7efabfd9457720990305703c5a143f92",
+      "scope": "1285-1315 real setter boundary."
+    },
+    "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": {
+      "sha256": "70ea787d34a9a4652adfe131ba66049d2544b381b2034194db519567fe87ead0",
+      "scope": "1060-1085,1250-1285,2120-2150,2230-2295 admission/factory dispatch."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/hmac.rs": {
+      "sha256": "0ea0bd5993631f583248d997583c9161d589695aa02a42fcd6cfd60b7a866977",
+      "scope": "26-75,162-195,258-318 exact Secret metadata producer."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs": {
+      "sha256": "9a6ed6dbb4caa2a8a6a5b9bee0e9a9d75344edd9aad3b9eeee5dccc6413dc16a",
+      "scope": "1-145,176-235,340-414,430-480 admission/status/reference orchestration."
+    },
+    "edgion-resources/src/gwapi_types.rs": {
+      "sha256": "2567a0aefb97e4149cb62d7d9370d4de420f507d0124c06b3a3d160bd2df2319",
+      "scope": "75-104 canonical header token grammar."
+    },
+    "edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs": {
+      "sha256": "1c25ed89458f56ce46f71ca1540bc452da9cf8812cb97c960e77252aa1c6cf69",
+      "scope": "200-240,740-790 source validation dispatch."
+    },
+    "edgion-resources/src/resources/edgion_plugins/validate.rs": {
+      "sha256": "4684ace540889d54ce341c38d90b4f7fa0d8947b9beda405be8edcf9f9bfd488",
+      "scope": "560-608,690-785 active/disabled validation gates."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/header_cert_auth_test.rs": {
+      "sha256": "5d5ddcbb440a6e180c1ad636038eecb9705cc78d418fbad2180a9b844d2fbb74",
+      "scope": "Full actual test bodies."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/hmac_auth_test.rs": {
+      "sha256": "2958a52edc0a54dfb3dca73747f59a14c2d44c42b929b125599892970c987141",
+      "scope": "1-105,174-255 actual credential/redaction tests."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/hmac_test.rs": {
+      "sha256": "3a7dd18247e7d8612b5e6f1e27a63eeacc0288f5d0226368cd0396dd30837d5e",
+      "scope": "Full actual metadata selection tests."
+    },
+    "edgion-gateway/tests/unit/plugins/http/header_cert_auth/plugin_test.rs": {
+      "sha256": "3dbaba050b0f0ad14b929baba4b294273f7e6ac5b5e484fa627f937c9ba23c50",
+      "scope": "170-199 sensitive connection success with permissive setter."
+    },
+    "edgion-gateway/tests/unit/plugins/http/hmac_auth/plugin_test.rs": {
+      "sha256": "4fcae1ad181cf632058aa30cfa29d21ce015459e0aa95dd017bf1721c67f00d4",
+      "scope": "1-85,380-414,529-544 actual verifier and first-wins tests."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/json_schema_validation_test.rs": {
+      "sha256": "961c4c2d5c5bca5c24aef385d510c4f2406413e0b75fa5137b16a07da989ff9e",
+      "scope": "Full strict parser/accounting/work tests."
+    },
+    "edgion-resources/src/graphql_request/envelope.rs": {
+      "sha256": "6e0b292dfdb891ba9001bcaa78c7ab756320068a4c5136bbb14535d7c349cab0",
+      "scope": "Full tighter strict frontend parser."
+    },
+    "edgion-resources/src/grpc_transcoding/codec.rs": {
+      "sha256": "50a01ca253565a170b6eaf49745802a205cdcd0b6708a21d7711fe7c5c4c7235",
+      "scope": "1-90,108-125 strict request encoding consumer."
+    },
+    "edgion-gateway/src/plugins/http/common/graphql_request.rs": {
+      "sha256": "ddfaf01a9a68670ed675db50d05c1f4238f604a17d4036e563c9f54a67bd72d5",
+      "scope": "Full permit-lifetime/evaluation owner."
+    },
+    "edgion-gateway/src/plugins/http/json_schema_validation/plugin.rs": {
+      "sha256": "edb3edf7439d95f8c53c574a6a0ea78c8c6f61423452567cd1939486412fc272",
+      "scope": "Full canonical body/error consumer."
+    },
+    "edgion-gateway/src/plugins/http/graphql_guard/mod.rs": {
+      "sha256": "3fd98f09caec33da95833dba2779a5db7ccb3da054e87a1767cb6ed9be15c53c",
+      "scope": "Full runtime guard owner."
+    },
+    "edgion-gateway/src/plugins/http/graphql_safelist/mod.rs": {
+      "sha256": "8c69925c5ef9f407c370f1662bc0fc9b3d742905356f1b9fcfe3cb7ad3e8cfa5",
+      "scope": "Full runtime safelist owner."
+    },
+    "edgion-gateway/src/plugins/http/graphql_rate_limit/plugin.rs": {
+      "sha256": "ae318d23b9c655a49820985bf6a64ecd99fcc9015e33360b1054d7783f25ef99",
+      "scope": "Full quota consumer."
+    },
+    "edgion-gateway/src/plugins/http/graphql_operation_router/plugin.rs": {
+      "sha256": "05af968c590fdb768648ef895393d25b48f68d4067445cb4ab48fb2955ed47df",
+      "scope": "Full declared routing consumer."
+    },
+    "edgion-gateway/src/plugins/http/geoip_location/plugin.rs": {
+      "sha256": "0cd62429927f4958c0acb7d993a84886bc8d5f1f11a2843c3e3f9cc99698c734",
+      "scope": "Full HTTP cold/runtime consumer."
+    },
+    "edgion-gateway/src/plugins/stream/geoip_location/plugin.rs": {
+      "sha256": "30494a41d4e464708163a3481522265befb67567f98e01ed5613b3a443ee6b9c",
+      "scope": "Full stream consumer."
+    },
+    "edgion-gateway/src/plugins/http/ip_restriction/plugin.rs": {
+      "sha256": "f2737aa2f7772cafc79af9a744e3e356ded91d4212b1e30008b124d10deaab7b",
+      "scope": "Full actual union/snapshot consumer."
+    },
+    "edgion-gateway/src/ai/guards/semantic/plugin.rs": {
+      "sha256": "a2d6c02476ef6c0f2e929dd09631a4672ee6ccfcf054fc64a5c926226dbac1cf",
+      "scope": "Full guard lifecycle owner."
+    },
+    "Cargo.lock": {
+      "sha256": "18b7b7dee01e024ab6d21f5692ce04a343c4fb265092c7f587099e91c28bea17",
+      "scope": "Pinned serde_json and Pingora dependency identities."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.151/src/map.rs": {
+      "sha256": "b5a2fd1ee865e6cfd83ef2da0a2e1057f892465ac7ede8a78a11354a60526f33",
+      "scope": "1-75,265-295,623-650,765-794 entry ownership/lifetime feasibility."
+    },
+    "/Users/caohao/.cargo/git/checkouts/pingora-fd43c38079a9f4ee/1aaa45c/pingora-http/src/lib.rs": {
+      "sha256": "c35c523a01b077136151e71950291fbe0ebfc2b6dcee1d7776868d4bfbd03d1c",
+      "scope": "210-240,875-927 actual invalid-name rejection."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/guardrail_test.rs": {
+      "sha256": "61a704eff215ce913fc12ba0a709cf1a4f82baec90d357d6d68fa3eb8a2382aa",
+      "scope": "Full actual test bodies."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/graphql_rate_limit_test.rs": {
+      "sha256": "567510ef334d06a58a1bc994cfe9434d8c0731b21358c3b2ddacb18f964a75ac",
+      "scope": "Full actual test bodies."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/graphql_operation_router_test.rs": {
+      "sha256": "27e1fe98bdefa3a523fea1b28b2b0cd5e99dcb2ca2bbe1ac003426ca09aafe65",
+      "scope": "Full actual test bodies."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/graphql_safelist_test.rs": {
+      "sha256": "842185020df17ee44c9e326e97bff8d73aaa1cbf153cfa62385c62cfba308eb3",
+      "scope": "Full actual test bodies."
+    }
+  },
+  "limits": "Static full primary reads and selected original/supporting evidence only; no fresh builds, tests, benchmarks, runtime observation or full parser heap proof. All ten freshly checked source hashes match assignment. Supporting reads confer zero additional primary coverage."
+}

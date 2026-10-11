@@ -1,0 +1,118 @@
+{
+  "candidate": "ARCH-092",
+  "complete": true,
+  "verifier": "/root",
+  "decision": "confirmed",
+  "input_sha256": "94d98012418f5d5ddb6598abc8c4ab2c644f977fbb57733ccf44417626133e87",
+  "approved_claim_sha256": "f465d8e4ad239150d2948e5bc4c03a725eca76f05af474a5c44e1d8541cc7593",
+  "evidence": [
+    "Supported conditional unexpected top-level completion drops backend sender without value; native oneshot produces Err.",
+    "Published CSS and cache ready flags persist because selected branch waits before iteration cleanup; actual Admin readiness stays200 and reload/demotion branch no longer polled.",
+    "Enclosing CLI deadman cannot observe pending lifecycle; accepted live-stall limitation is distinct.",
+    "Fixed closed-channel failure action reuses existing cleanup-before-Error-wait policy and preserves shutdown/no restart; no particular panic trigger/descendant-drain claim."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Original applicable root rules retained; no nested AGENTS."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Original index retained."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Original graded gates retained."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Original review index retained."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Original routing retained."
+    },
+    "skills/04-review/controller/regression-guards/liveness-probe-and-lifecycle-supervision.md": {
+      "sha256": "439892b19b54d5305432320e967aa0f64328df71b72000a6581c6db090906237",
+      "scope": "Full original freshly read; completed children distinguished from accepted post-ready live-task stalls; no automatic worker restart."
+    },
+    "skills/04-review/controller/regression-guards/leader-jobs-call-site-consolidation.md": {
+      "sha256": "4d4677ffb4090ddfeefd95cdbcbbad64b155f1afd3f3a9a0d0159cbdf1021da5",
+      "scope": "Full original freshly read; caller catch/abort not task-boundary supervision; finite lifecycle ownership."
+    },
+    "skills/01-architecture/01-controller/03-config-center/00-overview.md": {
+      "sha256": "c01fb65a3e519c127822512a5ef82e8c2fe22bdb82e94d62066819249cd6aa3b",
+      "scope": "1-105 phase/readiness/worker owner original; stale etcd status and writer atomicity table qualified."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/non_kube_common.rs": {
+      "sha256": "58b9f4e3f396edc3edc5b501a5caf89864c55a1409c4fb95899b1269084adf4b",
+      "scope": "Full607 fresh independent source read; closed-error-channel wait precedes ready CSS cleanup/reset."
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/non_kube_common_test.rs": {
+      "sha256": "0a8fcf71ea6073bd01b44d428a73e155f4d09683fb064e3cf1f083c6b995fcff",
+      "scope": "Full58 actual existing tests; phase and pre-ready ungated-start only, no closed post-ready child."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/file_system/center.rs": {
+      "sha256": "44a97c5858c51f0a75ca281ee133c4705f2e3513183647c67d59f133606d63de",
+      "scope": "108-190 actual spawned error sender and readiness/CSS delegation."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/etcd/center.rs": {
+      "sha256": "05b3d74ec1b4ee60cd33466ce9de69ffcc21ac8056796da8fb7fcaecbcedbb53",
+      "scope": "105-170 actual gated wrapper/error sender and readiness delegation."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/file_system/controller.rs": {
+      "sha256": "ad73aac06e6ba0ed013b19ae8557288e1b064cee604c3f23cf852756194de76d",
+      "scope": "113-185 actual phases and pending watcher; normal error forwarded not closed-channel witness."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/etcd/controller.rs": {
+      "sha256": "ae06c447ad12f0458cedbffeaba029739cccd292c1e130e62d33dde6045edfdb",
+      "scope": "103-171 actual startup/watch task; result errors forwarded."
+    },
+    "edgion-controller/src/cli/mod.rs": {
+      "sha256": "e6a99b22317b82b315c7a9e9c26b67c58de82e00687dc05eb4d34031829d41af",
+      "scope": "580-650 real enclosing lifecycle observer remains pending when child channel arm waits."
+    },
+    "edgion-controller/src/api/mod.rs": {
+      "sha256": "9320b3b8da4191ad7317024052c8db9c4da21835721ec26cd051105dabb0d1d6",
+      "scope": "183-250 actual deadman/readiness response."
+    },
+    "edgion-controller/src/api/types.rs": {
+      "sha256": "43e2700678d3c234d667b6b7dcae94fa9a6678f81a01bfeb7a4148817bc3cb65",
+      "scope": "54-78 readiness facade."
+    },
+    "edgion-controller/src/conf_mgr/manager.rs": {
+      "sha256": "8013d79913c950e802e371bb0600a64848b57bb35ea3a0794ae3d519ee72ec3f",
+      "scope": "100-139 actual lifecycle/start/readiness delegation."
+    },
+    "edgion-controller/src/conf_mgr/runtime.rs": {
+      "sha256": "4894a9456643f62b21dd1dc39984acf71696d0f5e5e58a85b119778af92ce811",
+      "scope": "198-247 original selective reset/registry cycle ownership."
+    },
+    "edgion-controller/src/conf_mgr/processor_registry.rs": {
+      "sha256": "942b87b4b68b78c3001f65a04f9621e86d6c0e762915e5054c630b2f5c53ca35",
+      "scope": "23-120 registry Arc retention and is_all_ready from cache flags, not task completion."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs": {
+      "sha256": "23057df0f04ed113a72fa1b42fb5344153c3ae8cff526e030878c8091fc92bd6",
+      "scope": "440-475,960-980 cache readiness publication and control."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/shutdown.rs": {
+      "sha256": "8d480f6c87cf3cfebee8e34f9fc4a3882283ae9a604e8b160d510d82e8b01805",
+      "scope": "Full sticky shared process/iteration shutdown source."
+    },
+    "edgion-controller/src/conf_sync/conf_server/config_sync_server.rs": {
+      "sha256": "9b4a1e6e3168094ff95f8ce8253e509f628d8b4fbeb413e764edeb80d66d957c",
+      "scope": "352-383 actual clear_all caches/list bytes owner; no task-state readiness reset."
+    },
+    "Cargo.lock": {
+      "sha256": "18b7b7dee01e024ab6d21f5692ce04a343c4fb265092c7f587099e91c28bea17",
+      "scope": "6624-6625 pinned Tokio1.53.1."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.53.1/src/sync/oneshot.rs": {
+      "sha256": "0068b57b942098cfc23ed2b7b68f7727acf3a0642fb311d6103f1d2790aeffd1",
+      "scope": "864-910,1264-1340 actual drop complete/wake/Receiver errorwithoutvalue."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

@@ -1,0 +1,36 @@
+{
+  "partition": "PART-334",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/plugins/http/rate_limit_redis/mod.rs",
+      "sha256": "167f8191156e297528a09757adf758e852582d2c04292f1eb1e4b24f64b31880",
+      "fully_read": true,
+      "disposition": "Exports and actual factory/caller ownership checked."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/http/rate_limit_redis/plugin.rs",
+      "sha256": "8300ea1ea1c66a0c513021699ae66e92ad5008d44485e923f401c07db360827c",
+      "fully_read": true,
+      "disposition": "Cold quotas/prefixes/validity, bounded retained identities, one captured current Redis client and one data-only deadline preserve prepare-before-debit/render-once. Typed caller costs and selected quota result remain separate from shared Lua; ambiguous partial debits are not retried. Independent headers/failure policy and JSON override preserve actual queued-header ordering."
+    }
+  ],
+  "candidates": [],
+  "support": {
+    "skills/04-review/rate-limit/intentional-design/header-injection-duplication.md": "be8a083ebc125bc76d5335d85147038bfeaa44a1df46596d305fef67777c8635",
+    "skills/04-review/rate-limit/intentional-design/redis-fail-open.md": "66a0b8d1f03c1443c90b3f4daeaddf4ce10f17723931e289a74c68fd796cb57c",
+    "skills/04-review/rate-limit/intentional-design/deny-response-shutdown-scope.md": "4b84358ba0c495cfe5a1f59a3c7cf1e53b3949a0cfeabaf2d44458e1a8615e1b",
+    "skills/04-review/rate-limit/regression-guards/local-allowance-redis-overflow.md": "96e3350087448353af3a148a0644e0ffd4d5c8c83af022df849668632e14e3ad",
+    "skills/04-review/rate-limit/regression-guards/redis-named-quotas.md": "c2bb243e81b34bb761d1d72552f3a8ac3d57f58c6e29107cc1033e43ceb9b702",
+    "skills/04-review/rate-limit/regression-guards/response-header-name-validation.md": "36741ef52b38a0ae903d82f8743a21751f52872aa055ca37be2e7e4c334481b5",
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/rate_limit_local.rs": "56df11142d56718d5acd87be6874e2b4e2ffe39961ff42d0065dff04656eaaa0",
+    "edgion-resources/src/rate_limit_local_config.rs": "a4824f91d9e49acd2dad2b5587b302dbf92eb0de992212b126237e9e9b696e6f",
+    "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": "70ea787d34a9a4652adfe131ba66049d2544b381b2034194db519567fe87ead0",
+    "edgion-gateway/src/plugins/common/redis_rate_limiter/mod.rs": "0bac7a17a547801b8a2a4e7d34bfcdcb5d7c4066647fa341cb8dd72b3d49e377",
+    "edgion-gateway/tests/unit/plugins/http/rate_limit_local/plugin_test.rs": "29b8eb3807c400331feacc9e156a9af6ac25f9d00a9e70c6d747dbb5d0fe68e3",
+    "edgion-gateway/tests/unit/plugins/http/rate_limit_redis/plugin_test.rs": "205e4d419492b5d8d8936763be62a76605a9910896d71d243a5d64dcbeeebd2e"
+  },
+  "support_scope": "Relevant original contracts and actual helpers/context/compiler/factory plus selected tests inspected. Secondary whole-file coverage not claimed.",
+  "limits": "Static only, no tests/checks/benchmarks. Local CMS approximate accounting unchanged; no Redis transactional/global quota guarantee or new observability."
+}

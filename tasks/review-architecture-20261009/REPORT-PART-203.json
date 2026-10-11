@@ -1,0 +1,207 @@
+{
+  "partition": "PART-203",
+  "analyst": "/root/analyze_outbound",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-resources/src/resources/lb_policy.rs",
+      "sha256": "b6dab2e5352186676a8eb373d2483a297e9ca67a75eb4d7a35afad104d7ce205",
+      "fully_read": true,
+      "disposition": "Pure parsed policies with actual cold producers/consumers."
+    },
+    {
+      "path": "edgion-resources/src/resources/mod.rs",
+      "sha256": "09541d17178d2e28ae6645c02d9b865425050751abc1b810edb2d8cf42007647",
+      "fully_read": true,
+      "disposition": "Leaf dependency/export wiring."
+    },
+    {
+      "path": "edgion-resources/src/resources/outlier_detection.rs",
+      "sha256": "04130dc94d4388f0b67a512f2780c97ad7dd613e9ff3041b8a33e4175796c77c",
+      "fully_read": true,
+      "disposition": "Canonical durations/inheritance/clamps, separate live endpoint state."
+    },
+    {
+      "path": "edgion-resources/src/resources/plugin_policy.rs",
+      "sha256": "0f1399ee57cbee4d1f4e4cb5ea5bfae4c19ba9081d3c591d57bbcb8ba82bf97b",
+      "fully_read": true,
+      "disposition": "Qualified policy compiler/malformed scope unavailable."
+    },
+    {
+      "path": "edgion-resources/src/resources/proxy_protocol.rs",
+      "sha256": "c2970446251aae6ef83957006462299c086a5fadd4e4e2a6e542b218f8ca3a96",
+      "fully_read": true,
+      "disposition": "Bounded annotation parser/canonical CIDRs; strict inline vs advisory ECD intended."
+    },
+    {
+      "path": "edgion-resources/src/resources/reference_grant.rs",
+      "sha256": "c27689ec7e30f94cff41831a46ff1066a3535698a285fd132661c34f47d59e0b",
+      "fully_read": true,
+      "disposition": "Canonical GrantQuery/v1beta1 processor."
+    },
+    {
+      "path": "edgion-resources/src/resources/request_transform.rs",
+      "sha256": "ff291c068d8ff0d99012dd86dd2c179dc44a6a55d8b64b5be68c08c97e127504",
+      "fully_read": true,
+      "disposition": "ARCH062 prefix predicate unnecessarily owns/clones unrelated match payload."
+    },
+    {
+      "path": "edgion-resources/src/resources/tcp_route.rs",
+      "sha256": "e937235610a43c69e97a69325ebcc083b7bb6d61fbb56dca9566a61d3d3d01e5",
+      "fully_read": true,
+      "disposition": "Schema-hidden Controller facts/immutable runtime preserve weighted denial."
+    },
+    {
+      "path": "edgion-resources/src/resources/tls_route.rs",
+      "sha256": "e82a0d6014385f764c12a4d3b0bb1afdb86557333812a6a264cd6a3118b09348",
+      "fully_read": true,
+      "disposition": "Canonical hostname/per-attachment identity."
+    },
+    {
+      "path": "edgion-resources/src/resources/udp_route.rs",
+      "sha256": "fd23b3c31b34b54d649d72f66fb87ff203bda40b6e88d4dc4c8d6bf3b962e07f",
+      "fully_read": true,
+      "disposition": "Immutable selectors/denied weights/pinned UDPsession intended."
+    },
+    {
+      "path": "edgion-resources/src/resources/upstream_authority.rs",
+      "sha256": "7af5bf550a4cd5be9fb346101b29c8c98db5b8b65dabb82c12953a0a72c8973e",
+      "fully_read": true,
+      "disposition": "Bounded trusted template/numeric-label destination-safety owner."
+    }
+  ],
+  "candidates": [
+    "ARCH-062"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original personally read/no nested."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original."
+    },
+    "edgion-resources/src/resources/http_route.rs": {
+      "sha256": "8229971982f61024d1bf8d8b475ea110334844b0c0c11011026af0ced414b2b1",
+      "scope": "165-206,404-460,520-564 match schema/payload."
+    },
+    "edgion-resources/src/crd_contract.rs": {
+      "sha256": "a145537b7bff59a138da034da2ac1ed8224bb96294a8b98f98a9da695e8ad06a",
+      "scope": "225-272,468-500 borrowed default/inputbudget."
+    },
+    "config/crd/gateway-api/gateway-api-standard-v1.6.2.yaml": {
+      "sha256": "faede450fa178126aba41337737b97d351ebe87d93c910237ce1e072d1ca40d9",
+      "scope": "10135-10218 header bounds."
+    },
+    "edgion-gateway/src/routes/http/conf_handler_impl.rs": {
+      "sha256": "49894825ccd9db485962bcabd8a8d463b65e7df9730ad146cf9ded4d50b10f31",
+      "scope": "552-618 once-per-rule validation."
+    },
+    "edgion-gateway/src/routes/http/match_unit.rs": {
+      "sha256": "05d7510e81cb3bb4e3ee3b85526120ea8af56a4f09f89eeefd9665541a2052dc",
+      "scope": "210-306 public/prevalidated compiler."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/http_route.rs": {
+      "sha256": "826bcdd3deded094b2f450527d36b2978855901442a8767aa47cc6bce5b71ddd",
+      "scope": "1238-1303 authored validation."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/route_delegation.rs": {
+      "sha256": "b5fc711cdfc4baf0a2b97d1e298b444ba43a90ff334799744a2e9b5d7b8e0868",
+      "scope": "819-881 effective validation."
+    },
+    "edgion-resources/src/resources/refs/grants.rs": {
+      "sha256": "6722118287597bda15f9586caaed08c36eae56f1f715ad7c7b2ddd60719486db",
+      "scope": "Full."
+    },
+    "edgion-resources/src/resources/edgion_backend_traffic_policy.rs": {
+      "sha256": "fad34c6fa53efb534a02987098ceb7ffba45f3a4bc67bddfe66923db75a42c6e",
+      "scope": "320-445 validation/parsedLB."
+    },
+    "edgion-gateway/src/backends/policy/backend_traffic/store.rs": {
+      "sha256": "0a35add8c64ab31f105772c87d9e80182ca68e265e1b750fd7221125cc321610",
+      "scope": "341-465 cold sections/snapshots."
+    },
+    "edgion-gateway/src/backends/policy/backend_traffic/authority.rs": {
+      "sha256": "8be728b5fadd86e0f437f01d47397a01484ba4c0180626dcc09ded3097eff26c",
+      "scope": "Full."
+    },
+    "edgion-gateway/src/plugins/publication/publisher.rs": {
+      "sha256": "ad317dc250d7eae46decb51ed2484aadbc8d21ce449b3fbef292ed1f10f45983",
+      "scope": "328-365 malformed policy scope."
+    },
+    "edgion-gateway/src/runtime/server/proxy_protocol_policy.rs": {
+      "sha256": "cd5abbd615419a63dca1b8ee79722f5777039a83759ea26fff1851db88d13b25",
+      "scope": "350-430 transport validation."
+    },
+    "edgion-gateway/src/routes/tcp/route_unit.rs": {
+      "sha256": "dac6a64796d75408c4167ee074b04f77eebe92c61735a2b00c6d70ae9a33f7fc",
+      "scope": "Full."
+    },
+    "edgion-gateway/src/routes/udp/route_unit.rs": {
+      "sha256": "cbe7d75084d34e87a0f8ec11ab132546754d491e80bd5d8bfd281fe4d50a76d0",
+      "scope": "Full."
+    },
+    "edgion-gateway/src/routes/tls/route_unit.rs": {
+      "sha256": "5d39a58dc94fcf59cf8199494691e261d2a971a58e26618a61723209737c3a0e",
+      "scope": "1-156 accepted immutable attachment."
+    },
+    "edgion-gateway/src/backends/runtime.rs": {
+      "sha256": "29b957bf02ed6f7f94e1b4b5906905925d6a8d871b1438de98d6d359f7c01e75",
+      "scope": "84-218 L4slots/selected-denialgate."
+    },
+    "edgion-resources/tests/unit/resources/request_transform_test.rs": {
+      "sha256": "87917fb358797402ecee5dc06c65cfafdbead5b073f773cf26beb1ab7d6de950",
+      "scope": "Full actual test bodies."
+    },
+    "edgion-resources/tests/unit/resources/outlier_detection_test.rs": {
+      "sha256": "cc2013048d34916c66a208bdcdc35824e8f2b066409243bfa91b30c965d050b7",
+      "scope": "Full actual test bodies."
+    },
+    "edgion-resources/tests/unit/resources/plugin_policy_test.rs": {
+      "sha256": "12e8b5e59877624ed611057d615d4b5cca117b0405e9cca95a70818140ce3017",
+      "scope": "Full actual test bodies."
+    },
+    "edgion-resources/tests/unit/resources/proxy_protocol_test.rs": {
+      "sha256": "b63d7654653ebf9af47c286dcb6379f8620656e912e110c8e5c21e1b77457f58",
+      "scope": "Full actual test bodies."
+    },
+    "edgion-resources/tests/unit/resources/upstream_authority_test.rs": {
+      "sha256": "91927f101bce51be98d751562993d7037a53a710c2f7a3a5bf9c4eda220d7ef4",
+      "scope": "Full actual test bodies."
+    },
+    "skills/04-review/plugin-runtime/regression-guards/gateway-api-request-transform-validation-and-preparation.md": {
+      "sha256": "ca95e5a7997c45ce87dd1160a1f7823562aa6207d030bbee8a8993479e94a40f",
+      "scope": "Full original."
+    },
+    "skills/04-review/plugin-runtime/regression-guards/scoped-policy-runtime-publication.md": {
+      "sha256": "487b19a41c8f05d36f0b1519133b8c1b834270c34e8120078a3d62235d900d5f",
+      "scope": "Full original."
+    },
+    "skills/04-review/resources/intentional-design/reference-grant-validation-controller-scoped.md": {
+      "sha256": "43e196128a7689ccca51ad3f5aaf6423b0b089e53d0aadd980bd23d812613ff3",
+      "scope": "Full original."
+    },
+    "skills/04-review/handler-requeue/regression-guards/reference-grant-dependency-before-authorization.md": {
+      "sha256": "53f1c5febed6161b22954ec3c508e7042c7a4b0f0c38998d28722ebb8f403792",
+      "scope": "Full original."
+    },
+    "skills/04-review/routing/regression-guards/l4-backend-ref-denied-fail-closed.md": {
+      "sha256": "616b6ca19976a44935b3d7ef07c214c4d59ff97fbd223a75fa0fa9397779c13c",
+      "scope": "Full original."
+    },
+    "skills/04-review/lb/regression-guards/service-runtime-snapshot-selection.md": {
+      "sha256": "dbcb7eecf4611307c1e5df6df2f4dc69c3e96bd429157a863cb38b243dc8a8d1",
+      "scope": "Full original."
+    }
+  },
+  "limits": "Terminal11 full source reads/fresh hashesmatch. Cold discardedcopyvolume only; no measuredperf/requesthot/securitydefect. Zero supportingcredit/no execution/Git/network/mutations. Candidate062 text reconstructs established claims after compaction; requires fresh independentverification of persisted text."
+}

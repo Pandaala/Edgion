@@ -1,0 +1,93 @@
+{
+  "partition": "PART-159",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-waf/src/aho_corasick/stream.rs",
+      "sha256": "7628b5a3e5a16aa6fe71d535a2d279a5b21b08481a90a3e57dbe8c76714d27da",
+      "fully_read": true,
+      "disposition": "No actionable candidate: generation-bound caller stream state and bounded reader/pending scratch; non-overlapping callback resets and all-pattern suffix/overlap accumulation intentionally differ. Exact semantic mode admission, EOF and read errors remain owned locally; no new cache/copy needed."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Original full retained and applicable rules checked."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Original full retained; leaf, bounded streaming, no hot mock allocations."
+    },
+    "skills/04-review/waf/SKILL.md": {
+      "sha256": "a5fa47a4b94ee1edccf3f5cd07197eeb0d644f875616cd33c5976e66bc9edef9",
+      "scope": "Original full personally read."
+    },
+    "tasks/todo/waf-native-simd-search.md": {
+      "sha256": "68f321552c8f42cb3253b558f639dc0fdc70042173f537b8690e33e49cc476a2",
+      "scope": "Full conditional measurement gate; no benchmark evidence or ISA change proposed."
+    },
+    "tasks/todo/waf-dfa-state-layout.md": {
+      "sha256": "35f3051ee5d0577eb566b6914f8b0212e13392de48e07635c0e985a37691c407",
+      "scope": "Full conditional task; no DFA layout rediscovery."
+    },
+    "tasks/pending/waf-optimization-design/01-spec.md": {
+      "sha256": "657aaa3f67f3de385674df6ca986ce9c0a12e1effcb0773b509272bc83f74fef",
+      "scope": "Current decisions/preserved boundaries and reader admission lines 1-85; initial gap recovered."
+    },
+    "edgion-waf/tests/unit/aho_corasick/stream_test.rs": {
+      "sha256": "940c29c8f83a698c589a63d697c52159c5ee8c6807b39d1cce233170baafc32a",
+      "scope": "All actual tests personally read, every split, fixed buffers, support-before-consumption, generation/EOF and raw reader failure."
+    },
+    "edgion-waf/tests/unit/aho_corasick/replace_test.rs": {
+      "sha256": "620641e565e3e9c36cb4e2aaf69f33b235ece7518bc63a62520c019753ba74e5",
+      "scope": "All actual tests personally read; chunk replacement parity, bounded scratch, setup/read/write errors."
+    },
+    "edgion-waf/src/aho_corasick/replace.rs": {
+      "sha256": "6ffaf080daf3fd008a3fd730a498515d059dc34df15d45420f247ebbe781137f",
+      "scope": "Actual bounded replacement stream consumer 128-218."
+    },
+    "edgion-waf/src/aho_corasick/mod.rs": {
+      "sha256": "b11efedc52f57560c911f6f571a3473f28fa42721a6857d30c6a5bbc32bd2d9e",
+      "scope": "Original native portable correctness boundary/exports/generation/limits 1-87."
+    },
+    "edgion-waf/src/aho_corasick/nfa/mod.rs": {
+      "sha256": "141b288d270a1c1edd2b0128f9a11ff68db22f5d5aca9ee3cc234f41940734ab",
+      "scope": "Actual backend transition/output/pattern-length dispatch 180-223."
+    },
+    "edgion-waf/src/aho_corasick/match_types.rs": {
+      "sha256": "dc74fb461bc51f073a9917adf3c2b9b392914e3c79831555ff6f5afa4514343b",
+      "scope": "Actual shape admission and bounded checked bit insertion 253-296."
+    },
+    "edgion-waf/src/matcher.rs": {
+      "sha256": "c2d4742efb1c426727690bb1817672533c6febbe90f0ff8b4ce4d86bb5bd81e1",
+      "scope": "Actual phrase-group stream mapping 2210-2305 and bounded matcher stream state/dispatch 2690-2783."
+    },
+    "edgion-waf/tests/unit/matcher_test.rs": {
+      "sha256": "f433995381ac472f75afe9ca42413088485e6515f746bb0822d74eccf9af4d72",
+      "scope": "Actual suffix phrase adapter regression 865-901."
+    },
+    "edgion-waf/tests/unit/aho_corasick/mod_test.rs": {
+      "sha256": "1a178d890aca64e68bc3e715b4256ee358bdcf758cbaa907d24fee61c1e49567",
+      "scope": "Actual duplicates/suffix/mismatched pattern-set shape tests 985-1035."
+    },
+    "edgion-waf/src/seclang/transaction.rs": {
+      "sha256": "24ab89af5d00efd52f78dd5c7840ba3f0bab6b322ceae48c3a0c7b0dd4a70d26",
+      "scope": "Actual body/work-before-scan and ordered stream publication/early positive seam 1800-1896."
+    },
+    "edgion-waf/tests/unit/seclang/transaction_test.rs": {
+      "sha256": "3fa5407fc72b9c73b555b1dd16b1b8c505d888d6990036f7b83fbbc9d2d57285",
+      "scope": "Actual full raw-stream/chunk/work/early-positive test bodies 1830-1948."
+    },
+    "edgion-waf/tests/fuzz/fuzz_targets/aho_corasick_equivalence.rs": {
+      "sha256": "b1db3b5f8edcfb758656361234f83631747f7a78307f2a0f216f2a84214df4d5",
+      "scope": "Actual finite standard chunk equivalence producer 100-144."
+    },
+    "edgion-waf/tests/oracles/aho-corasick-1.1.5/src/main.rs": {
+      "sha256": "f3290830f585da3ab02dcd2a66ddb7aee0d0dc214f709fd39782772a0847450d",
+      "scope": "Actual pinned oracle range and stream comparison 106-153; context only."
+    }
+  },
+  "limits": "Complete full implementation and actual consumer/tests static review only. No executions or performance observations; external oracles remain test-only. Deferred shared scheduling is not a new missing implementation finding."
+}

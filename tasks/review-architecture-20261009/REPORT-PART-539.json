@@ -1,0 +1,91 @@
+{
+  "partition": "PART-539",
+  "analyst": "/root/analyze_outbound",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/gateway/stream_plugins/mod.rs",
+      "sha256": "054bc56e60e2644136ca1292cc2d157c2af1d4ba3dbe9d537374aa235c664547",
+      "fully_read": true,
+      "disposition": "Full1-6 export/caller check; no separate issue."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/gateway/stream_plugins/stream_plugins.rs",
+      "sha256": "e8b8a8b5460a72cbf28baff323ab350ff76db296a98704e606b1aa2e37902cb7",
+      "fully_read": true,
+      "disposition": "Full1-301 cases/registration; ARCH341 establishment errors/timeouts incorrectly pass negative probes. Preserve five case identities/four sockets/bare policy purpose/deadlines."
+    }
+  ],
+  "candidates": [
+    "ARCH-341"
+  ],
+  "support_selected": {
+    "edgion-gateway/src/plugins/stream/connection_filter_bridge.rs": {
+      "sha256": "a5f7373380d72a0cbf70ca8496a1b4a5089a19f64478a7c4acb084fd17780364",
+      "scope": "Full1-101 immutable view/Unavailable/Stage1."
+    },
+    "edgion-gateway/src/runtime/server/listener_builder.rs": {
+      "sha256": "3d9965a2601c72989a44de13c4d7e9ed5408a04812eb2e702e0e7088ce19a970",
+      "scope": "320-355,593-611 actual TCP GuardFirst wiring."
+    },
+    "edgion-gateway/tests/unit/plugins/stream/connection_filter_bridge_test.rs": {
+      "sha256": "f2f0da2e4e2c3bf8e8aadb05ebedbdc4927d7c17ae1ad3d92986694611cf42d6",
+      "scope": "Full current1-241 actual peer/view/budget/owner/update tests."
+    },
+    "edgion-gateway/tests/unit/plugins/publication/inputs_test.rs": {
+      "sha256": "ec53b26dd44a4e46e30109908f98ad72e9de53a59b752fdf820c020c0ce2928a",
+      "scope": "1-64,273-294 actual bare/qualified attachment tests."
+    },
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "1eb27bded8bcb40a82ea3cfd4ed6f20d386deedd1f349c7035a226fd44739454",
+      "scope": "4158-4189 complete TCP echo producer."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "Retained full;1625-1647,3225-3247,3860-3884 selection."
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "Retained full;185-206 ports,554-590 timeout."
+    },
+    "edgion-tests/integration/conf/ports.json": {
+      "sha256": "6672942f69329bb6b46de10be535b5b16744c0270e6bc7246eca3d2d5dcf0f7b",
+      "scope": "172-185 four physical StreamPlugins sockets."
+    },
+    "edgion-tests/integration/conf/Gateway/StreamPlugins/04_Gateway_denied.yaml": {
+      "sha256": "67cafa104c9a8573bf612004ead2a0b9f57f86081e2ed459e489843dec353d30",
+      "scope": "Full deny-all attachment."
+    },
+    "edgion-tests/integration/conf/Gateway/StreamPlugins/05_Gateway_qualified_name_rejected.yaml": {
+      "sha256": "6acc10228e4b2fa87bd695628c074ae2b969af4b74e1b691a4750208bcb7540f",
+      "scope": "Full qualified attachment."
+    },
+    "skills/04-review/security/regression-guards/gateway-stream-plugins-same-namespace.md": {
+      "sha256": "11b554c91c38fcd7df87f691b68279f5ceb79236df55ff9b8160c73184b12d41",
+      "scope": "Full1-42 original."
+    },
+    "skills/04-review/observability/mandatory-design/tcp-stream-plugin-no-tracing.md": {
+      "sha256": "1a228837ec2b37925651fdfdf5eea3b59d7c0acdbe24145e1a4bfdc0b90c9ae0",
+      "scope": "Full1-160 original accepted pre-protocol boundary."
+    },
+    "AGENTS.md": {
+      "sha256": "cba9f532fa1c9f70e6a921e1a2331e7ca78c8210981a072a74cdebf4d85d3e42",
+      "scope": "Personal full current rules."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Personal full retained index current hash matched."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "c78c86675ca6c72adb30d0f59727509486b582ef2c7f3318bf14e61745eff055",
+      "scope": "Personal full current graded gates."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Personal full current original routing."
+    }
+  },
+  "limits": [
+    "Static source only; no packet/platform execution. Established EOF is not uniquely plugin attribution; pre-establishment reset requires future platform evidence."
+  ]
+}

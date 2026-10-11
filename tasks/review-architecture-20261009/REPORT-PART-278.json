@@ -1,0 +1,72 @@
+{
+  "partition": "PART-278",
+  "analyst": "/root/analyze_adapter",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/link_sys/providers/redis/apply.rs",
+      "sha256": "5d78db610317b7fa2b553fcc5a6376ca5ccb64929064e90ef35bc8761ca63b1e",
+      "fully_read": true,
+      "disposition": "Actual-owner TLS/topology/default/credential identity feeds cold reuse with masked inherited axes."
+    },
+    {
+      "path": "edgion-gateway/src/link_sys/providers/redis/client.rs",
+      "sha256": "53eac770ebf3a8467d1734d46ebfb7eeb2ddc5d833e35d863a270b185efd1aa4",
+      "fully_read": true,
+      "disposition": "Canonical resolver installed before Fred init; validated construction, aggregate pool health and generation retirement retain explicit ownership."
+    },
+    {
+      "path": "edgion-gateway/src/link_sys/providers/redis/config_mapping.rs",
+      "sha256": "d9210678a143b490e4bb9efb22e70ed6607bfef5a52a558b14c0780fa4d9a371",
+      "fully_read": true,
+      "disposition": "Resource validation owns topology/transport/config limits; SDK reconnect backoff and one command attempt are separate accepted policies."
+    },
+    {
+      "path": "edgion-gateway/src/link_sys/providers/redis/mod.rs",
+      "sha256": "d10cdb4d0271147c6508d8ad2545c696a3031f608f805d29259a7749131dfacd",
+      "fully_read": true,
+      "disposition": "Actual admin and plugin consumers verified."
+    },
+    {
+      "path": "edgion-gateway/src/link_sys/providers/redis/ops.rs",
+      "sha256": "8679e7121458d1f962121284b31eb6a4a69e7a06f4c2b699a94bee84e7ccae13",
+      "fully_read": true,
+      "disposition": "HGETALL checks raw SDK frame count/bytes before owned map; received SDK frame allocation is accepted separate boundary. Lock helpers have authenticated admin test consumers, not an obsolete engine."
+    },
+    {
+      "path": "edgion-gateway/src/link_sys/providers/redis/resolver.rs",
+      "sha256": "3e98a4c1370b3ba29cfea1489b1bea4bb9b08f67cc917d4a694b1e5e5e5d6500",
+      "fully_read": true,
+      "disposition": "Fred seeds, discovered/reconnected endpoints and redirects route through canonical EgressResolver; no parallel DNS owner."
+    }
+  ],
+  "candidates": [],
+  "support": {
+    "edgion-gateway/src/link_sys/runtime/runner.rs": "1234da3d9e5053c436918ab20953d2032f18b5800a23c408a15d6cf0aa9f59f8",
+    "edgion-gateway/src/link_sys/runtime/apply.rs": "8cafc408bc09879452809bc38cbfae4ec8c701b8c20d762c8e0ec9e3e034dd44",
+    "edgion-gateway/src/link_sys/runtime/health_probe.rs": "11e0f88b0478aa338a77bd67f995b44fb8c2e9d38e3576e2114dc6d42bad3b72",
+    "edgion-gateway/src/link_sys/runtime/store.rs": "b995c16f0e1b9cbde6cdc9c7a74576464b9f0184b9316e4924aac97c230970de",
+    "edgion-common/src/link_sys_core/credential.rs": "90a4ed253ceb0df2a424b99c9fc9eb9bfc344fc72d5efc95d7cd0855e4b1b394",
+    "edgion-common/src/link_sys_core/health.rs": "3ee35d86e38bf98fc8d68d10d495b268e523e4e0700735da4de9598c1784569a",
+    "edgion-common/src/link_sys_core/outbound_tls.rs": "a21de0f2f55ce08fa31cb5d9f5034e8b17c92afdf968a3f63b9333c6155567df",
+    "edgion-common/src/link_sys_core/outbound_tls/link_sys.rs": "6f72d2195ddc33e45818fab0b407cf1fa5ed3534cd5290630cacdfeb4885fbd0",
+    "skills/04-review/link-sys/intentional-design/provider-owned-runtime-and-simple-removal.md": "d3a6e869608d5764c916b593c229dc9ce80c83f70820e78107742e4f4703d7ec",
+    "skills/04-review/link-sys/intentional-design/healthy-semantics-intentional-non-flips.md": "4c1e7a4f1abb612c67656fc0cb339f3f1319834e9d48ec14b8e840b30e0fc787",
+    "skills/04-review/link-sys/regression-guards/published-generation-health-transition-ownership.md": "8de53bac9d282eafe8165376982583e4a06b590108e9396e49749793dfbfc0af",
+    "skills/04-review/link-sys/regression-guards/link-sys-hot-reload-reuse-and-retirement.md": "de13c829ae93daa5f05e0fbac13402a6f80fe7d0b9bde9b97c5eb1fe0fb0704a",
+    "skills/04-review/link-sys/regression-guards/shared-tls-fingerprint-encoding.md": "9fc4e2dc8e7c73a5d6186d51072f98df62cfac9e0a7f314b2dc0f62df0d61086",
+    "skills/04-review/link-sys/regression-guards/shared-outbound-tls-loading.md": "f29e30c5b343e7f60730bdfe04e6d554fd494f0ef02d52a3f5984be20449d3fc",
+    "skills/04-review/link-sys/regression-guards/redis-configuration-contract.md": "98e800e13bcd05625b147a04f3825997ea6d96090796944c3a66f3a047cfd1d7",
+    "skills/04-review/link-sys/regression-guards/redis-pool-aggregate-health.md": "5b81728a54e02e2e063a51cf69b8599f052a18c39de097bd3d726612110caa93",
+    "skills/04-review/link-sys/regression-guards/redis-dial-time-egress-policy.md": "e08a9e16b9ad40571fb0d035472ac0948ab9bd4c2a504b8f9713c08b28d0e0e6",
+    "skills/04-review/dsl/regression-guards/redis-read-values-truncate-to-max-string-len.md": "c4e654ae750a000c4dd550bd9d5e6067e17be2f6ce090d53a86ef03243e6d4e1",
+    "skills/04-review/dsl/regression-guards/redis-error-results-bounded-and-redacted.md": "0d4e5c2c3e3d17cc9198921e9a29e26b0aa3b8b9b160de405b9ef23059e09591",
+    "edgion-gateway/src/api/mod.rs": "a7b6ba1fd44e1b5f7dad36c738e970bbf7b31e95b2cd5de73820904271de9662",
+    "edgion-gateway/src/plugins/http/dsl/lang/builtins.rs": "c21fd8920f3142ab15472f72453b13a6324355a1a7d950b9e009283998878e1a",
+    "edgion-common/src/link_sys_core/outbound_tls/redis.rs": "91fd7a42eb47d911a6a48041d7c35b54e20888c3f2eea2377fa64207e5eee792",
+    "edgion-gateway/tests/unit/link_sys/providers/redis/resolver_test.rs": "7c6efc5aeb281c030488a773fdb58f81af78e326cf838237df7a7f29064b85b1",
+    "edgion-gateway/tests/unit/link_sys/providers/redis/ops_test.rs": "e6436561709967c57c87736215aee51bddbbf4311564353c8eb6a9f8ff5b6fbe"
+  },
+  "support_scope": "Analyst original relevant contracts, factory/consumer/publication/shutdown and selected tests inspected; SDK boundary acceptance checked against current adapters. No secondary coverage credited.",
+  "limits": "Static only. Queue saturation and TCP health are advisory accepted semantics; no fabricated complete SDK payload heap proof, replay guarantee or measured cost. Historical task paths absent. No tests/builds/Git."
+}

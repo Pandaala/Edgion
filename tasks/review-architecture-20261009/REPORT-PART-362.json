@@ -1,0 +1,35 @@
+{
+  "partition": "PART-362",
+  "reviewer": "/root/analyze_adapter",
+  "complete": true,
+  "files": {
+    "edgion-gateway/src/request_body/state/enabled.rs": {
+      "sha256": "92e0ba87c8851d29fc01ee51def141662f16b0550db11c2c9fb875b41071850a",
+      "fully_read": true,
+      "disposition": "no-finding"
+    }
+  },
+  "candidate_count": 0,
+  "decisive_notes": [
+    "Single immutable snapshot publication owner; complete cache remains distinct from native partial replay and proven empty.",
+    "Bounded I/O/scan lanes, deadline/cancellation permits, transactional generations, independent snapshot/replay cursors and persistent mutation freeze have explicit contracts.",
+    "Cold EGC publication and actual hook/DSL/mirror/prompt-mask/framing/release/logging consumers assessed. Observer extension has wiring/tests but no current production registration was found.",
+    "All nine request-body unit sources and adapter storage-I/O suites inspected; canonical-body contract and HMAC numeric-limit roots are already separate candidates."
+  ],
+  "evidence": {
+    "edgion-gateway/src/plugins/runtime/session_adapter.rs": "bb060285f53d6eddb8eeac90c080456e7efabfd9457720990305703c5a143f92",
+    "edgion-gateway/src/plugins/runtime/traits/session.rs": "c5797012a46dfdbd1e4159092a20b3f4ecb51d214d7b8854a676554c019d6c8c",
+    "edgion-gateway/src/config/edgion_gateway/conf_handler_impl.rs": "f7d679ec4910f557b624ed08ec1e4fd6973e65df71396294d3e97b459319b9f1",
+    "edgion-gateway/src/routes/http/proxy_http/pg_new_ctx.rs": "09b3558e6e0cf7a441f7634155cba5c59a14fa05aa68a43d460790c261e1cb51",
+    "edgion-gateway/src/routes/http/proxy_http/pg_request_body_filter_action.rs": "69055a49d4771555d2f49f4f64bd981e27e2c826ba1501d0e76804526784305a",
+    "edgion-gateway/src/routes/http/proxy_http/pg_upstream_request_filter.rs": "da2fb4fb247c725cde69e47fa929dd0c2c152decd3aa871ac021a42c35047349",
+    "edgion-gateway/src/plugins/http/request_mirror/plugin.rs": "fd1f288cef9740573b8c73733a7fab83b22da97ef548c9ccff54d4f605b0e2ad",
+    "edgion-gateway/src/plugins/http/dsl/lang/body_ops.rs": "3fdd9df6df1eb59c2caf649b16daf191878cc42ac0c26b192ea15a4306a54ea2",
+    "edgion-gateway/src/plugins/http/dsl/lang/body_scanners.rs": "a87bb708a016605199d33d7f61cd4713611623562285e3099b19720de2e6cdf6",
+    "edgion-gateway/src/plugins/http/waf/json_capture.rs": "ec53414016d6fb2ad56cb0fc356fd265e4a3e035425b8dffe7916d260f4972da"
+  },
+  "limitations": [
+    "Static contextual source review; tests inspected, not run.",
+    "Active WAF Stage C/D is implementation in progress; changed supporting files require scoped revalidation and are not functionally accepted."
+  ]
+}

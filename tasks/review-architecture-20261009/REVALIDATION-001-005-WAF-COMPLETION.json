@@ -1,0 +1,33 @@
+{
+  "complete": true,
+  "verifier": "/root/verify_ip_union",
+  "decision": "confirmed-with-revision",
+  "new_primary_coverage": 0,
+  "reason": "Technical roots unchanged; completed WAF policy and implemented complete-consumer metadata require scoped artifact status/overlap correction. Historical acceptance is not fresh execution.",
+  "evidence": {
+    "skills/01-architecture/02-gateway/05-plugin-system.md": "b650f5d2e93ab34fe8dea73cae28c88259c7dae7f41e0a4d21c8a77384880eef",
+    "skills/02-features/03-resources/13-edgion-plugins.md": "b705aa0b53914467b4028f84f0fbcb6e55c68913a347a7314fbe8109aa9e9e30",
+    "skills/04-review/http-body/regression-guards/waf-prefix-before-dispatch.md": "2d4aeec3063b956097e37d10ca9352ce56eab9afd0b4372beaf2883d7c9ea332",
+    "tasks/pending/waf-body-inspection-policy/02-implementation.md": "0ae0f6a74594880d09a064c4c19d87e408ee501de7708e21a96280d04a451c7e",
+    "tasks/pending/waf-body-inspection-policy/05-composition-plan.md": "a4bead69ac9824032b53c3de4ae9a20f5e11f1af559eedce9fdb460b24f04cf9",
+    "tasks/pending/waf-body-inspection-policy/09-acceptance.md": "eb7b0ed16053192292c4e5200b9a4d80c99c5fc49e1c1a809aa8fa95b7135601",
+    "edgion-gateway/src/plugins/runtime/traits/session.rs": "7b999e5186d352b839b32271c2af4b415d2cde9309f99a89850726474e9d4dd1",
+    "edgion-gateway/src/plugins/runtime/session_adapter.rs": "bb060285f53d6eddb8eeac90c080456e7efabfd9457720990305703c5a143f92",
+    "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": "70ea787d34a9a4652adfe131ba66049d2544b381b2034194db519567fe87ead0",
+    "edgion-gateway/src/plugins/runtime/entry_bundle.rs": "67671e98466d8d8be2f1d2cf0533b66e7f2150d9d40dca77af21b8cea0ecf680",
+    "edgion-resources/src/resources/edgion_plugins/validate.rs": "4684ace540889d54ce341c38d90b4f7fa0d8947b9beda405be8edcf9f9bfd488",
+    "edgion-gateway/src/plugins/http/waf/mod.rs": "d5bca791f259c5266019e3982c9f9e84526961a3174dc7c48dc80fcba856f2c9"
+  },
+  "candidates": {
+    "ARCH-001": {
+      "input": "60f5cf6a3e0573521561a3f41291099fed7380bc80b533e8f7320c4936913b10",
+      "full": "2dea2ccbe105207f07c7e2904e41ce7cc16be34beeb4072eb2007ad7c4835828",
+      "claim": "b975d8002afa2b8222b6f6895a4ba0d4f1cf7a0e79360da203f37397ac936afa"
+    },
+    "ARCH-005": {
+      "input": "8cab2d80da98d5ef028dad2b174728832f8e27d69a719827a88abd2aef084349",
+      "full": "f009e36926117b3c682656dec8e033637ea256a92520cd0149c17604d8565d9e",
+      "claim": "224ff49d74d4604dc1137c56bf1f8f5f4e9c4c64f659c41f1fbf6f0b492e41e6"
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "partition": "PART-348",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/plugins/http/webhook_key_get/mod.rs",
+      "sha256": "29e0ff1901640e5d83763225b3a239198932756bb83cae95748899ea351a783c",
+      "fully_read": true,
+      "disposition": "Private module/export checked against actual plugin factory."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/http/webhook_key_get/plugin.rs",
+      "sha256": "cd308b37931076f7653244cb44541d9a8e44cc01a2e02b6ee01994be60bbcb8a",
+      "fully_read": true,
+      "disposition": "Ordered asynchronous webhook exchange belongs to this plugin and canonical provider, separate from synchronous local KeyGet. Each variable resolves through current registry/capped outbound engine and fresh diagnostic collector before borrowed outcome selection; ownership occurs only at context write. Default/skip never reject; no second network/key extraction interface or generic policy graph warranted."
+    }
+  ],
+  "candidates": [],
+  "support": {
+    "skills/04-review/plugin-metadata/mandatory-design/keyget-is-local-io-free.md": "ca49fdeb7f564619625002fafb0f60b2cc1846e8c4cd8fc1810eb246a802ce4c",
+    "skills/04-review/observability/regression-guards/outbound-presence-diagnostics.md": "5f2c84ee5561395fdeac4ad5c243af658bf05a0a0de4ada26d265b6f3931dff7",
+    "skills/04-review/webhook-key/intentional-design/response-signature-not-needed.md": "a187d1ee2e27838872fb785c6910095f9c8f6b7fe283d7d919a9253be0bd9243",
+    "edgion-gateway/src/link_sys/providers/webhook/resolver.rs": "fcf338066af10dc9e2d1344f555ae17c7033e56ca7be745c2826be2c699a756c",
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/webhook_key_get.rs": "1c08bbfbe07a91367301d2cda0d722852685f10cb92a628e293f798d236a11d4",
+    "edgion-gateway/tests/unit/plugins/http/webhook_key_get/plugin_test.rs": "8214eb105c5ebcf1256f56a433a8fc773a4acba4b4b8187fe139246b69c43a5a",
+    "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": "70ea787d34a9a4652adfe131ba66049d2544b381b2034194db519567fe87ead0"
+  },
+  "support_scope": "Original relevant decisions, actual factory/helper/phase paths and selected test bodies read. Supporting source sections only; no supporting primary coverage inferred.",
+  "limits": "Static source review; no tests/builds/benchmarks or new response-signature/session binding requirements. Historical verification remains historical."
+}

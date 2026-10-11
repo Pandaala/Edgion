@@ -1,0 +1,91 @@
+{
+  "candidate": "ARCH-231",
+  "complete": true,
+  "verifier": "/root/verify_ip_union",
+  "decision": "confirmed",
+  "input_sha256": "df37f5f8f1fd2a5c0f2eda152f227dcc0cdb15e79f6001babe1a16aad87041b6",
+  "approved_claim_sha256": "8497d91bfa1d18da35ed49e7956a0c28b54f305db9762747d33fdbbf84036799",
+  "evidence": [
+    "Independent verification confirms all five occurrence-sized canonical reservations omit corresponding capacity admission, charge only unique insertion lengths, and retain backing allocations through publication.",
+    "Two ordinary rules sharing one target and transformation establish requested spare capacity without optional engines or body inspection. Dropping the original transformation charge does not cover new unused capacity.",
+    "Reported exact-limit tests do not independently verify these capacities; existing JSON/capture-plan reservation owners provide a bounded MatcherCompileWork correction.",
+    "Any correction must keep later target_bytes appends, including resolved ctl selectors, consistent with its capacity-accounting path.",
+    "Confirmed omitted compiler capacity admission only; no total heap guarantee, unboundedness, default exhaustion, exploit or measured performance claim. Static review only."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Original full project/campaign rules retained and fresh hash; no applicable nested rules found."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Original knowledge navigation and relevant plugin/body locators."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Original graded gates personally read."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Original review index and topic routing."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Original scoped authority and revalidation rules."
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full independent-verification read-only workflow."
+    },
+    "skills/04-review/waf/SKILL.md": {
+      "sha256": "a5fa47a4b94ee1edccf3f5cd07197eeb0d644f875616cd33c5976e66bc9edef9",
+      "scope": "Original topic decision index and relevant links."
+    },
+    "skills/04-review/waf/regression-guards/fused-json-inspection.md": {
+      "sha256": "73f06b0cd3b8e083844ff91ab61f2d20e91a625aecfec8cb6eb358cd17afc6ec",
+      "scope": "Relevant compiler/canonical capacity, optional admission, overlap and forecast qualifications personally reread."
+    },
+    "skills/04-review/waf/regression-guards/static-tag-selection-before-compilation.md": {
+      "sha256": "e307952e4bf862b18bfde1131be3f636e2c2e1625591acde8c9a3d1a00d1bd84",
+      "scope": "Full original strict baseline, selected rebuild, work and peak contract."
+    },
+    "tasks/pending/waf-optimization-design/01-spec.md": {
+      "sha256": "657aaa3f67f3de385674df6ca986ce9c0a12e1effcb0773b509272bc83f74fef",
+      "scope": "Full original specification and preserved budgets; distinct from five published reservations."
+    },
+    "edgion-waf/Cargo.toml": {
+      "sha256": "30ce2f0a77895f232e2109a11a06cc11386299d9af0af34d9a2db4bef0ea73d1",
+      "scope": "Full leaf manifest."
+    },
+    "edgion-waf/src/seclang/compiler.rs": {
+      "sha256": "6259ebaf9e73726d5989f08d7a48d74320183ddd419fda5c6659ded5835a3404",
+      "scope": "Limits/getters/interner;1580-2178,2880-3180,3470-3544,3700-3975,3990-4032,4060-4110,4180-4355,5300-5535,5565-5610 actual reservation, insertion, accounting and publication."
+    },
+    "edgion-waf/src/seclang/json_inspection_plan.rs": {
+      "sha256": "decfe2564d5b24b9add5027c19ed8d25f74363f56a8dbce95bda921e1e48e991",
+      "scope": "100-160 capacity, allocator-extra and overlap admission."
+    },
+    "edgion-waf/src/seclang/capture_hit_plan.rs": {
+      "sha256": "03c47ee03f70a3a4e3d9185cd255a51e9a81ca592b2dd8e8fce2f75c5d604e7d",
+      "scope": "50-110 retained/working reservation and capacity reconciliation."
+    },
+    "edgion-waf/src/seclang/include.rs": {
+      "sha256": "8666016d872f5d5ea4ba88da67402c98a928a84d4a567703d3e720e02a45fc13",
+      "scope": "1005-1065,1245-1305 strict baseline and selection frontend."
+    },
+    "edgion-waf/tests/unit/seclang/compiler_test.rs": {
+      "sha256": "80f2f5634bda2e847ff23f0f5fa399c176aeb21231a7044c709e66912f0913a8",
+      "scope": "Actual bodies1450-1500,1730-1835,1910-1965,2050-2125,2270-2340 canonical IDs/order/reported exact budgets/fallback/selection."
+    },
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/waf.rs": {
+      "sha256": "761bbdee08bbb2dec67731afe889348332aa8eaa6bcdbb3fe42854f43992bab4",
+      "scope": "960-1040,1050-1235,1318-1375 production compile and validation seams."
+    },
+    "edgion-gateway/src/plugins/http/waf/mod.rs": {
+      "sha256": "d5bca791f259c5266019e3982c9f9e84526961a3174dc7c48dc80fcba856f2c9",
+      "scope": "90-168 independent compilation and published Arc generation."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

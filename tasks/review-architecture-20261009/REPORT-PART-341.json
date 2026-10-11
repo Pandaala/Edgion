@@ -1,0 +1,25 @@
+{
+  "partition": "PART-341",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/plugins/http/request_restriction/mod.rs",
+      "sha256": "1c0339d9e6dda54614d1dfb751fc659e67f5197acb8f4ff051ae52476a38bbea",
+      "fully_read": true,
+      "disposition": "Factory and trait exports checked."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/http/request_restriction/plugin.rs",
+      "sha256": "4df0c3288a662ebbac75f114eb361fa43fff00b5d26ef40cf98e76b8aa8028fb",
+      "fully_read": true,
+      "disposition": "Cold prepared policy, tri-state canonical conditions, shared body/capture context and explicit Allow/Deny failure polarity have one owner. Prepared denial Bytes and JSON escaping preserve writer termination; unresolved conditions keep mode-specific behavior."
+    }
+  ],
+  "candidates": [],
+  "support": {
+    "skills/04-review/request-restriction/regression-guards/mode-is-required-no-default-polarity.md": "9e008bb06661e78c2005db84564e33e72c8c87a1e367273b35d02b989a4b7517"
+  },
+  "support_scope": "Relevant original contracts, caller/callee and test sections inspected; supporting hashes do not claim complete secondary reads.",
+  "limits": "Source/static evidence only; no builds, tests, benchmarks or Git mutations. Accepted lifecycle and failure policies preserved."
+}

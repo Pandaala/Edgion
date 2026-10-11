@@ -1,0 +1,33 @@
+{
+  "partition": "PART-424",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-controller/src/conf_sync/mod.rs",
+      "sha256": "1152b2cb5b0182db520aadc4e51d9e0dfcb2bf3e2151e1df55a764208e9db1b0",
+      "fully_read": true,
+      "disposition": "Full source; actual child exports and CLI/facade/runtime consumers checked; no actionable finding."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "edgion-controller/src/conf_sync/conf_server/mod.rs": {
+      "sha256": "2cf988ec6cbfc586813bb4b225c937a68c8dc1c8643c2431fa1c8af6fb326681",
+      "scope": "Full child exports personally read."
+    },
+    "edgion-controller/src/conf_sync/cache_server/mod.rs": {
+      "sha256": "acaa331a51796b32b1e36fb65d3921ba0cc95f333f3629fd97967d009662b1a8",
+      "scope": "Full child ServerCache export personally read."
+    },
+    "edgion-controller/src/cli/mod.rs": {
+      "sha256": "e6a99b22317b82b315c7a9e9c26b67c58de82e00687dc05eb4d34031829d41af",
+      "scope": "Full retained primary actual exported gRPC/provider consumers."
+    },
+    "edgion-controller/src/conf_mgr/manager.rs": {
+      "sha256": "8013d79913c950e802e371bb0600a64848b57bb35ea3a0794ae3d519ee72ec3f",
+      "scope": "Full current primary CSS/facade consumers."
+    }
+  },
+  "limits": "Glue coverage only; static full source/export/caller check, no execution; support zero primary."
+}

@@ -1,0 +1,17 @@
+{
+  "reviewer": "/root/verify_seed",
+  "complete": true,
+  "disposition": "confirmed",
+  "approved_input_sha256": "4b0cb5d9bde4fed88aec1e15bad856f6ee2342ff0fa54a473d35a0c7bd1977ce",
+  "approved_claim_sha256": "60f43d427d6c634abba19005c833274ba13c3fe2083938dccae647fa55d5744a",
+  "evidence": {
+    "edgion-gateway/src/lb/backend_selector/selector.rs": "b260c503923a9d72e6dd6fe2b39fa9c45836bd70484cd2d1fa7534a6757f0a98",
+    "edgion-gateway/src/lb/backend_selector/weighted_selector.rs": "1c4ea2899d5f4ea3b8b8e44bb4eb800c7eb164a1cf7b9d516d62bcb36a7b927a",
+    "edgion-gateway/src/routes/http/match_unit.rs": "05d7510e81cb3bb4e3ee3b85526120ea8af56a4f09f89eeefd9665541a2052dc",
+    "edgion-gateway/src/routes/http/conf_handler_impl.rs": "49894825ccd9db485962bcabd8a8d463b65e7df9730ad146cf9ded4d50b10f31",
+    "edgion-gateway/src/routes/grpc/match_unit.rs": "16ed2689987e5c1f4eb950cb2081e60be47c90a9e9ef74213432dfbe07cf8cbe",
+    "edgion-gateway/src/routes/grpc/conf_handler_impl.rs": "4826f60ab822b49bc2f95b005ec67b523b4d1a69c887af7736d78a52c301a351",
+    "edgion-gateway/src/backends/runtime.rs": "29b957bf02ed6f7f94e1b4b5906905925d6a8d871b1438de98d6d359f7c01e75"
+  },
+  "limits": "Independent original-rule/source/caller/test review, no executions/primary credit/benchmarks. Preserve specified construction errors, generation ownership and legitimate per-request mutable state; implementation memory/lifetime review remains required."
+}

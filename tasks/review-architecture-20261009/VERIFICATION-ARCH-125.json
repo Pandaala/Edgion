@@ -1,0 +1,155 @@
+{
+  "candidate": "ARCH-125",
+  "complete": true,
+  "verifier": "/root/analyze_conversion",
+  "decision": "confirmed",
+  "input_sha256": "a536d3d53d4707bdac7f1a960ec19c7c7651b2e9c472350883e973c540c6b372",
+  "approved_claim_sha256": "d1f208661787ceb62c2216cdd4917523c011898ba23a425894be01a611e2ea34",
+  "evidence": [
+    "Confirmed unchanged: name-only predicate conflates same-name Secret and ConfigMap CA references; exact marker/material binding supports current store semantics. Inverse successful witness is absent Secret with valid ConfigMap, not existing empty Secret. Narrow pending R8 refinement; existing runtime and arbitration contracts preserved."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/backend_tls_policy.rs": {
+      "sha256": "db90d7dba9390d47a77cc7d4c0ae3f70d0ace74b5ca7c600f694cd96a749bc7c",
+      "scope": "full846"
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/backend_tls_policy_test.rs": {
+      "sha256": "613cc3a50708bbec60ad8a17189557a6d9a90d383f5ba69bb8362ef17394dde5",
+      "scope": "full678"
+    },
+    "edgion-controller/tests/support/conf_mgr/sync_runtime/resource_processor/handlers/backend_tls_policy.rs": {
+      "sha256": "108a88ce2402137084dc2251b593bd1517f6d2618cdd2a296fa176520bdff30b",
+      "scope": "full"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/credential/ca_refs.rs": {
+      "sha256": "c7bc5622cfebe43108a7aa076a1e10a40dd5f69d338ced62ebcd55be6ec5c5f0",
+      "scope": "301-340"
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/credential/ca_refs_test.rs": {
+      "sha256": "00117b14071354de3ae475d97d162caeb03ee2fa2d4a7b820c0f9e9798aa4a93",
+      "scope": "1-61,169-219"
+    },
+    "edgion-resources/src/resources/backend_tls_policy.rs": {
+      "sha256": "d2948e63bda575e69b7bb296149893bde04800ddff1414533684ddd9410f7bfb",
+      "scope": "1-192,223-287"
+    },
+    "edgion-resources/src/constants/annotations.rs": {
+      "sha256": "4258e9182535f4770bf57635b66c67d0fd5c0790e2bd73b399eae745ac404c52",
+      "scope": "1-14"
+    },
+    "edgion-common/src/link_sys_core/outbound_tls.rs": {
+      "sha256": "a21de0f2f55ce08fa31cb5d9f5034e8b17c92afdf968a3f63b9333c6155567df",
+      "scope": "276-325; distinct prepared proof scope"
+    },
+    "edgion-gateway/src/backends/policy/backend_tls/backend_tls_policy_store.rs": {
+      "sha256": "e3ee25cd2f617d6655197fafd0b0dfa5496a9d0ce17ae5e17cbc0ac7395fbc1b",
+      "scope": "1-150,155-186,222-380,389-432"
+    },
+    "edgion-gateway/src/backends/policy/backend_tls/conf_handler_impl.rs": {
+      "sha256": "d164753b1514d59bad82c98e90742eb22d29ee757254c236fedb82b5ec53a4a1",
+      "scope": "full"
+    },
+    "edgion-gateway/src/backends/peer_builder.rs": {
+      "sha256": "b1ceab6e862bc12a76303adf78e19bd39aa5d4209ea95af95022ad7724b04ba9",
+      "scope": "96-240"
+    },
+    "edgion-gateway/tests/unit/backends/policy/backend_tls/backend_tls_policy_store_test.rs": {
+      "sha256": "ff13f0308871b923212f911fcb225d81eff9e617c73d45b8e3b07611ba5c5475",
+      "scope": "206-362"
+    },
+    "edgion-common/src/secret/secret_store.rs": {
+      "sha256": "87df9e6a37e1b5b3538a9eb8e81fb4d0bbd0b8ab87df2cfd2fdffa7649f0b6b1",
+      "scope": "1-54,60-94"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/configmap_utils/configmap_store.rs": {
+      "sha256": "528657590f14e6ed7ee276ffea284b4abf4b947b7fd51031a14538b8f4cfa613",
+      "scope": "1-51,55-68"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/configmap.rs": {
+      "sha256": "9938a4f58a781756e1f1ccebd2fd192f486c8e58f26f788709a91dc0aa472521",
+      "scope": "full101"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/secret.rs": {
+      "sha256": "0b6659cd96e2f2ab4ac24dfbae4e6f2e0e5660b882ab5d3eb39232004f544a63",
+      "scope": "1-71,148-219"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs": {
+      "sha256": "23057df0f04ed113a72fa1b42fb5344153c3ae8cff526e030878c8091fc92bd6",
+      "scope": "622-650,718-788"
+    },
+    "config/crd/gateway-api/gateway-api-standard-v1.6.2.yaml": {
+      "sha256": "faede450fa178126aba41337737b97d351ebe87d93c910237ce1e072d1ca40d9",
+      "scope": "210-318,889-993; fresh replacement selected evidence"
+    },
+    "skills/01-architecture/05-resources/SKILL.md": {
+      "sha256": "dae4740e05545a9d674199070cc49a6559fd921e69ae0d08dab19dc51d3efef6",
+      "scope": "full"
+    },
+    "skills/01-architecture/05-resources/12-backend-tls-policy.md": {
+      "sha256": "00653583de1c3704225665a061ef4310303162d1dcea345a77bd0db8b010348c",
+      "scope": "full"
+    },
+    "skills/01-architecture/05-resources/00-schema-transport-contract.md": {
+      "sha256": "d20e74c1c7ccf6183f893bc919767a27bd3fbb47486415d14651a76fdef5a597",
+      "scope": "1-40; retained unchanged"
+    },
+    "skills/02-features/03-resources/12-backend-tls-policy.md": {
+      "sha256": "e808245e14080f4d5495dd55175cb9d24db16275bd34f9e874731d6eef5c5f42",
+      "scope": "1-90; fresh replacement selected evidence"
+    },
+    "skills/01-architecture/02-gateway/07-backends.md": {
+      "sha256": "48b69eeab355e203f0cfc275deb2a7da10e970895641d34a11abc1895dc967ea",
+      "scope": "338-395"
+    },
+    "skills/04-review/backends/SKILL.md": {
+      "sha256": "08b91977e02ddf2ad6b95b951a8738062065838d6dcadcf827f8af91bb848325",
+      "scope": "full"
+    },
+    "skills/04-review/controller/regression-guards/backend-tls-policy-canonical-api-ingress.md": {
+      "sha256": "b0f711b8670d4d46c5428af8954803fd609513bb8976026d553ec1f5c5b4b121",
+      "scope": "1-58"
+    },
+    "skills/04-review/backends/regression-guards/backend-tls-policy-incremental-atomic-publication.md": {
+      "sha256": "30a533d9f0553b37d847f2dd6de17ed6f77a7c3c2e11d24caa24d7116f95da8b",
+      "scope": "8-90,98-135"
+    },
+    "skills/04-review/handler-requeue/regression-guards/ebtp-typed-service-key-btp-requeue.md": {
+      "sha256": "4c688362cda76deef22e67156a577d0af8ecd7990bee8099f8c8cdaf0e122a71",
+      "scope": "full; stale legacy-key translation"
+    },
+    "tasks/pending/resource-reference-contract/07-progress.md": {
+      "sha256": "2fe20c846a92ceb09b489880054f21225f879333a5eaeb4976fb8feb26dd2efe",
+      "scope": "2513-2520; fresh replacement selected evidence"
+    },
+    "tasks/pending/resource-reference-contract/02-field-manifest.md": {
+      "sha256": "6799d52b46163b7b02f7336d316e4733ab6bf8fb4154d0699c1396d4681d96a5",
+      "scope": "30-50,75-96; fresh replacement selected evidence"
+    },
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "full personally retained unchanged"
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "full personally retained unchanged"
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "full personally retained unchanged"
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "full personally retained unchanged"
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "full personally retained unchanged"
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "full personally retained unchanged"
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

@@ -1,0 +1,78 @@
+{
+  "reviewer": "/root/verify_ip_union",
+  "complete": true,
+  "disposition": "confirmed",
+  "approved_input_sha256": "ab413b90b4ce81704eb7e814e5f158c1fc921f6a3c54ac401261e45ad6eb3a90",
+  "approved_claim_sha256": "c208eed63086d751b081bfc4ceb6a9ac1006790ef257729c5d047f445260d797",
+  "evidence": {
+    "edgion-gateway/src/routes/udp/edgion_udp.rs": "59be4792617d2bbcb9f508cb0036e94ca2c62440bee8f7eee0554ee472b6c256",
+    "edgion-gateway/tests/unit/routes/udp/edgion_udp_test.rs": "20a3cd3a3dffd26ff1b0b5e6f08696b6dc79844e66207fccbbe768e7b7af9b19",
+    "edgion-gateway/src/observe/logs/udp_log.rs": "e6261533808c66c14e2d517e429427f5ceaf9bec6b3394b017d53402336f46d4",
+    "edgion-gateway/tests/unit/observe/logs/udp_log_test.rs": "0d0f45b6fbc1f98077cf5d5a6b9d3666827d61cf7b58d823476509893514a7ba",
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.53.1/src/net/udp.rs": "d949eee898f951b03397f1f18146d8098be49a5b6a039a467a42f8c6fd759b94",
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.53.1/src/io/poll_evented.rs": "334619a06d840de8d5d7037bee6d6f48accf5e8e1252460841637a512fa233f8",
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mio-1.2.2/src/net/udp.rs": "865baa73b3f4d863cabb86cf5ba2e6bcc705a638efe7f02c52fe1e5c36ac6ab4",
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mio-1.2.2/src/sys/unix/udp.rs": "2d9c704b059fdd0be6b844be4db8ef4dcad902fc146e9cf55eae5a5eef2fdb86",
+    "skills/04-review/backends/regression-guards/session-bind-address-family.md": "406c7129c4b940ac4e2754f172537b5a6534899fe701f0f119cf12f98d9aba74",
+    "skills/04-review/listeners/regression-guards/udp-session-generation-retirement.md": "9cd0415fe7e9dade383e5d258670679ed63596d6ed15f6805b1c853fa941371f",
+    "skills/04-review/listeners/regression-guards/udp-process-shutdown.md": "e6c19bfd114d06ad267dbe963b6c8cf8e9304487ef21aa730bd933c1c16e9f1c",
+    "skills/04-review/listeners/regression-guards/udp-upstream-response-source.md": "f0525be5e0e0d88ef2a8c023fa36fd279ce260fd005e10d5333605c0cbce4084",
+    "skills/04-review/cpu-memory/regression-guards/udp-established-session-route-pipeline-per-packet.md": "0d05d2da07a861e7d04772683457c2343dd3df09deeb9cd4b5047bd351964668"
+  },
+  "support_selected": {
+    "edgion-gateway/src/routes/udp/edgion_udp.rs": {
+      "sha256": "59be4792617d2bbcb9f508cb0036e94ca2c62440bee8f7eee0554ee472b6c256",
+      "scope": "Full"
+    },
+    "edgion-gateway/tests/unit/routes/udp/edgion_udp_test.rs": {
+      "sha256": "20a3cd3a3dffd26ff1b0b5e6f08696b6dc79844e66207fccbbe768e7b7af9b19",
+      "scope": "Full"
+    },
+    "edgion-gateway/src/observe/logs/udp_log.rs": {
+      "sha256": "e6261533808c66c14e2d517e429427f5ceaf9bec6b3394b017d53402336f46d4",
+      "scope": "Full"
+    },
+    "edgion-gateway/tests/unit/observe/logs/udp_log_test.rs": {
+      "sha256": "0d0f45b6fbc1f98077cf5d5a6b9d3666827d61cf7b58d823476509893514a7ba",
+      "scope": "Full"
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.53.1/src/net/udp.rs": {
+      "sha256": "d949eee898f951b03397f1f18146d8098be49a5b6a039a467a42f8c6fd759b94",
+      "scope": "150-180 bind"
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.53.1/src/io/poll_evented.rs": {
+      "sha256": "334619a06d840de8d5d7037bee6d6f48accf5e8e1252460841637a512fa233f8",
+      "scope": "80-133 registration"
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mio-1.2.2/src/net/udp.rs": {
+      "sha256": "865baa73b3f4d863cabb86cf5ba2e6bcc705a638efe7f02c52fe1e5c36ac6ab4",
+      "scope": "Binddelegation"
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/mio-1.2.2/src/sys/unix/udp.rs": {
+      "sha256": "2d9c704b059fdd0be6b844be4db8ef4dcad902fc146e9cf55eae5a5eef2fdb86",
+      "scope": "1-36 socketcreation/bind"
+    },
+    "skills/04-review/backends/regression-guards/session-bind-address-family.md": {
+      "sha256": "406c7129c4b940ac4e2754f172537b5a6534899fe701f0f119cf12f98d9aba74",
+      "scope": "Full original"
+    },
+    "skills/04-review/listeners/regression-guards/udp-session-generation-retirement.md": {
+      "sha256": "9cd0415fe7e9dade383e5d258670679ed63596d6ed15f6805b1c853fa941371f",
+      "scope": "Full original"
+    },
+    "skills/04-review/listeners/regression-guards/udp-process-shutdown.md": {
+      "sha256": "e6c19bfd114d06ad267dbe963b6c8cf8e9304487ef21aa730bd933c1c16e9f1c",
+      "scope": "Full original"
+    },
+    "skills/04-review/listeners/regression-guards/udp-upstream-response-source.md": {
+      "sha256": "f0525be5e0e0d88ef2a8c023fa36fd279ce260fd005e10d5333605c0cbce4084",
+      "scope": "Full original"
+    },
+    "skills/04-review/cpu-memory/regression-guards/udp-established-session-route-pipeline-per-packet.md": {
+      "sha256": "0d05d2da07a861e7d04772683457c2343dd3df09deeb9cd4b5047bd351964668",
+      "scope": "Full original"
+    }
+  },
+  "conclusion": "Actualsolecaller maps bothuniterrors tocapacity; successfullyacquiredpermitdropsbefore receiver/sessiononbindfail. Locked Tokio/Mio socket/reactor errors independentlyfallible, familymatchingnotproofinfallible. Fixedtypedstatusfitscanonicalfailure withoutnewlogs/dynamicerrors/allocations/lifecyclechanges. Testsinitialemptyonly do notexercisecreation.",
+  "limitations": "Staticactualsource/originals/tests/lockeddeps; no execution/network/Git/mutations/injectedOSerrors/measurements/newprimarycredit."
+}

@@ -1,0 +1,45 @@
+{
+  "partition": "PART-247",
+  "analyst": "/root/analyze_session",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/ai/routing/adaptive.rs",
+      "sha256": "10bdf2a84014214e05897cfa39a014eb1dbdbfbe94c14cbe36b6d5bc6c23a660",
+      "fully_read": true,
+      "disposition": "Bounded fixed buckets, complete-second publication, incremental reverse dependencies and catalog retention preserve generation ownership."
+    },
+    {
+      "path": "edgion-gateway/src/ai/routing/candidate.rs",
+      "sha256": "2e4023ab1be1669ab0ca9067623b6a2b03aa9a9f800e7ecd9b17da78953a782a",
+      "fully_read": true,
+      "disposition": "Pure bounded selection; invalid weight shares, eligibility, bootstrap/exploration, capacity and checked costs are distinct semantics."
+    },
+    {
+      "path": "edgion-gateway/src/ai/routing/mod.rs",
+      "sha256": "1bbcac274689b85f6b025f862874bb7ed9aef6a862ce7ef4c3c6b5e7cc4151b3",
+      "fully_read": true,
+      "disposition": "Cohesive module exports."
+    },
+    {
+      "path": "edgion-gateway/src/ai/routing/model_router.rs",
+      "sha256": "15567fccaa35c31ad445e0b4056a43b4e647b145b61db1dc9c7d12b0d14becef",
+      "fully_read": true,
+      "disposition": "Cold patterns/headers and borrowed request matching; equal-specificity overlap rejected before production compilation."
+    }
+  ],
+  "candidates": [],
+  "support": {
+    "edgion-gateway/src/ai/http/proxy.rs": "45b3250490d016c5aef663e4856055bec8043d28cead0e0158b8c02c005d40df",
+    "edgion-gateway/src/ai/runtime/attempt_runtime.rs": "23bcaf0a7529f7e909c3b52981574e2eedc5dcaed4774d0ed0961729eda4bf17",
+    "edgion-gateway/src/ai/accounting/finalize.rs": "2998c5e4c4c08d3f62a358feef925648d26b869772a34b68d5406a5b2bfcfa00",
+    "edgion-gateway/src/plugins/common/redis_rate_limiter/scripts.rs": "c9dc78c022def01a04b4163c995fb4d17d22a86e449f7d086afba1e600996140",
+    "skills/04-review/ai-routing/regression-guards/identity-model-quota-uses-requested-logical-name.md": "f7c94dc90f2487d01a75b78c00ac81782679d6ca645f4b4dd6defbb244d2f968",
+    "skills/04-review/ai-routing/regression-guards/ai-quota-throttle-must-wait-and-readmit-once.md": "e62cdfa323eafec6843455e7e6d985a1005741c345d5ad7a2ad9e3201105aa25",
+    "skills/04-review/cpu-memory/regression-guards/adaptive-telemetry-reconcile-is-incremental.md": "27f9151d0d0726c264f2e59d0ac6c19e444d981879ea4c23f26b7c9a1c67fd4b",
+    "skills/04-review/testing/regression-guards/ai-adaptive-reconcile-needs-destructive-set-coverage.md": "7ca55d1621a8a0fd22769fb4a5a8e7c66b948281608f192463312cbdf2d2723c",
+    "skills/04-review/ai-quota/regression-guards/gateway-terminated-stream-settles-its-reservation.md": "86a4a7dad938ebc8b42cc59a8d3c49116620d8bd94ef48af957ede60fde4e9e5"
+  },
+  "context": "Production validation, native request plan/dispatch, quota worker/Redis cumulative revisions, marker expiry, adaptive route/plugin/backend publication and shutdown-aware ticker; relevant original tests inspected.",
+  "limitations": "No executed tests/builds/measurements; secondary reads do not add coverage; ARCH008/009 roots not duplicated."
+}

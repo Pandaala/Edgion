@@ -1,0 +1,55 @@
+{
+  "partition": "PART-283",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/observe/access_log/backfill.rs",
+      "sha256": "c065c15d26b6106595719f66d456a9bb88b3ff0986cd0ab2eaf953d7eefc8361",
+      "fully_read": true,
+      "disposition": "Original first-healthy/manual best-effort queue-entry/dedicated-path/admin blocking tradeoffs apply; no new finding."
+    },
+    {
+      "path": "edgion-gateway/src/observe/access_log/entry.rs",
+      "sha256": "a0db01fd33530ef61dc5bd4f356320b0bdfd940111273b0f8ac260e6ab518965",
+      "fully_read": true,
+      "disposition": "Borrowed context projection has avoidable owned GeoIP dimension copies: ARCH019. Lazy statuses/coordinates/canonical serialization remain coherent."
+    },
+    {
+      "path": "edgion-gateway/src/observe/access_log/log_ext.rs",
+      "sha256": "c03ccc5d39bea1b13b023f6fb04d978667fa81d6e4375344a8a5a1fcfe42ec53",
+      "fully_read": true,
+      "disposition": "Ordered bounded fields, masking, overwrite, ownership and captured plugin scope coherent."
+    },
+    {
+      "path": "edgion-gateway/src/observe/access_log/logger.rs",
+      "sha256": "5662ec21ad53fd06b8f2b572cea4873aaa49637664a42b1949d6cb17c392f317",
+      "fully_read": true,
+      "disposition": "First healthy sink and intentional no send-fallback; typed metadata shares decision contract."
+    },
+    {
+      "path": "edgion-gateway/src/observe/access_log/mod.rs",
+      "sha256": "650a52dac9d8a8ac5b9664b8b24ad323dde4cd69c9ec8b06d14dc3129f6f273b",
+      "fully_read": true,
+      "disposition": "Cold logger/backfill identity initialization and disabled no-op coherent."
+    }
+  ],
+  "candidates": [
+    "ARCH-019"
+  ],
+  "support": {
+    "skills/04-review/link-sys/intentional-design/access-log-fallback-backfill-tradeoffs.md": "d298416b92beb109ae765e4f1e305f5221eaba55efc6d303d81c6fbefd725397",
+    "skills/04-review/observability/regression-guards/geoip-no-global-enabled-switch-access-log-lazy.md": "49f665c03452ca8a7e218299f69db2970ee0175fb0aacb3083f2dca9a96d2c14",
+    "edgion-gateway/src/ctx.rs": "dd23711a474df4122dd3b0264c7293366c27ba2688a9eb390b24e842f6e6335d",
+    "edgion-gateway/src/geoip/info.rs": "98044c1babc7d823dd0cf95c5f090559de39ea0659ae37c2e1a26317a2304f0e",
+    "edgion-gateway/src/routes/http/proxy_http/pg_logging.rs": "972f72ec7371c3ab876bfa12957eb70559e31aaa9d25f8f2078c24e197523a6a",
+    "edgion-gateway/src/routes/http/proxy_http/pg_connected_to_upstream.rs": "58041c2f873d64bef721f6f9feebae438c9a9c8e032e4113d7af1dd433c4c205",
+    "edgion-gateway/src/plugins/runtime/gateway_api_filters/debug_access_log.rs": "1bb3a3c7f7a0ec9af8f00db6ebfb680221316093269750b79644eebe8b08b6bc",
+    "edgion-gateway/tests/unit/observe/access_log/entry_test.rs": "21b2b3b5b6486bdab12b6fb831b2d94a944fbcd7de6dc20571b0da15c5118caa",
+    "edgion-gateway/tests/unit/observe/access_log/backfill_test.rs": "7885a215b182b9798a74b3e16b5ae217a6dd9bb733ca4d0363cc5fe9674b440c",
+    "edgion-gateway/tests/unit/observe/access_log/mod_test.rs": "ce045126f95b2b0ed6f872fa41243a8c91bc731586e8c9571dead4abdf0f5c3f",
+    "edgion-gateway/tests/unit/observe/access_log/log_ext_test.rs": "1a70c60228723fec45462008b151f73f2d42c74a7ee220e7766be390ba8e452f"
+  },
+  "support_scope": "Original topic decisions and architecture relevant contracts; tests/callers inspected at ownership/serialization/masking/budget seams, not general support-file full-coverage claims.",
+  "limitations": "Read-only static source review; no tests/builds or benchmarks."
+}

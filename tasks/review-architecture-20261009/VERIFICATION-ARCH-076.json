@@ -1,0 +1,64 @@
+{
+  "candidate": "ARCH-076",
+  "complete": true,
+  "verifier": "/root/verify_ip_union",
+  "decision": "confirmed",
+  "input_sha256": "a005df7b586868c0d9d76976b916b35280d9000d766e1ed2ec20863fd3913f2a",
+  "approved_claim_sha256": "de8a328bd30ce611204f75bef2d94721040064b5630cb77882a4111648541b0f",
+  "evidence": [
+    "Independent complete verdict confirms attached URL on reqwest send/timeout and Display suffix; pinned chunk has no URL attachment.",
+    "Actual fallback preserves primary error and Controller log/Gateway upstream error are sinks. without_url clears attached URL only; retained kind/source limitation accurate."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full independent personal rules."
+    },
+    "skills/03-coding/01-log-safety.md": {
+      "sha256": "74591411c294befded433b7c2be571202deb22ef36030a704caa60055f214863",
+      "scope": "Original credential/config/reqwest URL origin redaction."
+    },
+    "skills/04-review/link-sys/regression-guards/httpdns-prepared-runtime.md": {
+      "sha256": "097fa29239de62656a878a3a3842eb523ce8472d8b44f8c2b237d8bf1dc1ca34",
+      "scope": "Original canonical source/client/fallback owner."
+    },
+    "skills/04-review/ssrf/regression-guards/httpdns-endpoint-egress.md": {
+      "sha256": "54ec2fe8e1e4c0e93711afe06e13ea560f27833974d263bbfb008719156d6013",
+      "scope": "Original actual-dial versus returned backend."
+    },
+    "edgion-common/src/dns/http_fetcher.rs": {
+      "sha256": "e498a50ce51ea2086425dd95ac8602209f2313aad7526e489db176680fe1d533",
+      "scope": "Independent full source; transport mappings."
+    },
+    "edgion-common/src/dns/httpdns.rs": {
+      "sha256": "5acb828e1a4e160445afe9c8359859ccf77581bcbc8a61bbf3f30a2872b94c99",
+      "scope": "Independent full source; fallback precedence."
+    },
+    "edgion-common/src/dns/mod.rs": {
+      "sha256": "21c00c02ea53136940640137bfe3c9989083a8b7dc486185927217fc7f547901",
+      "scope": "Independent prepared generation and error display."
+    },
+    "edgion-controller/src/services/dns_resolver/service.rs": {
+      "sha256": "4d573f1812836daeac90075b566b64fc687ee01a3836ac91a4b260350019743f",
+      "scope": "314-345 actual error log sink."
+    },
+    "edgion-gateway/src/backends/mod.rs": {
+      "sha256": "090a16c7dc7403426a93ece829b5d687021d34694c21356a6bf4eaed9b1b8256",
+      "scope": "285-307 actual upstream error sink."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/reqwest-0.12.28/src/error.rs": {
+      "sha256": "4f2ffac588056f8d98f8619fa4046e66efee97c0faef51ddce9c07ea0a46601b",
+      "scope": "Pinned URL/without_url/Display mechanism."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/reqwest-0.12.28/src/async_impl/client.rs": {
+      "sha256": "8c30b009838be2126b90344ef97fb6141ac8bdf695f4e7bb00a3052a707d9b5c",
+      "scope": "Pinned send/timeout URL attachment."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/reqwest-0.12.28/src/async_impl/response.rs": {
+      "sha256": "e7ad89c6473ad3adcb96a0adec857cc2c74bbabeffc56346efa270ce7082ea9f",
+      "scope": "Pinned chunk mapping has no URL attachment."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

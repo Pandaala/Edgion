@@ -1,0 +1,115 @@
+{
+  "partition": "PART-520",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_tls/both_absent_parent_ref/both_absent_parent_ref.rs",
+      "sha256": "2cc8368a26274df897d5987ae0f8763a56def8646155947f89cf8d91ea43ed51",
+      "fully_read": true,
+      "disposition": "Full261 lines all3 actual cases/static generations. Exact target context, Controller+Gateway attachment-name convergence, stable-socket rename and real traffic assertions inspected; ordinary renamed convergence/traffic failure reaches restoration. No distinct finding; one-listener topology is not all-listener completeness proof."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_tls/both_absent_parent_ref/mod.rs",
+      "sha256": "ef38c03ec203cbb55d2de8760ca3c6356760d1dcc74ff32d3c48da6e40217dda",
+      "fully_read": true,
+      "disposition": "Full4 static declarations/export with actual parent/targeted CLI consumers. No finding."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original rules retained."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Original index retained."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original graded gates retained."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Original index retained."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Original routing retained."
+    },
+    "skills/05-testing/01-integration-testing.md": {
+      "sha256": "e260042b508fa0956873d1b3c059531f1733a7c15423c548081afb71703a10e1",
+      "scope": "Full original guide retained real assertion/topology constraints."
+    },
+    "skills/04-review/listeners/compatibility-constraints/listener-port-set-frozen-at-startup.md": {
+      "sha256": "82879d7099c547615d57844ffad394c474db00d53f1d591cdb35b0824ac6711a",
+      "scope": "Full original stable socket versus unsupported dynamic port boundary."
+    },
+    "skills/04-review/tls/regression-guards/edgion-tls-incremental-atomic-publication.md": {
+      "sha256": "2416d726633ba4ed77a9b0695ce641104c1d8037dabc5a1dcaa82effde680a80",
+      "scope": "Full original attachment publication and hot-reload limits, history not fresh execution."
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "255-415 actual Controller+Gateway projection barrier and apply entry, prior full apply/CAS read retained."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "2550-2570 actual target arm;3848-3885 exact context registry/host binding and prior listener resolution retained."
+    },
+    "edgion-tests/src/client/suites/edgion_tls/mod.rs": {
+      "sha256": "153105658634e2e984dfb532b5edcffef4000e752bb096ce39a32a6ba29bb055",
+      "scope": "Full parent exports."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/gateway.rs": {
+      "sha256": "3d241427e284a97f50eff549b41ef8df8f060a6b568c39216fc1efe6c08e9304",
+      "scope": "925-983 after-publish requeue path and proof epoch. Initial broad search clipped, subsequent exact body read."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_tls.rs": {
+      "sha256": "47b60b8e147ac8fd1d1ad341819fa98a2fd1dd1bd75f43203f494d28f5fc479f",
+      "scope": "298-358 actual bounded resolved attachments and transport filter."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/route_utils.rs": {
+      "sha256": "40750b718b634fb69dd713512428742694abbfc033a2d66ddb6b0d9d94c39393",
+      "scope": "872-1040 actual canonical reference selection, proof filtering, broad/port/section and attachment construction. Initial glob wrong; actual flat file subsequently read."
+    },
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "1eb27bded8bcb40a82ea3cfd4ed6f20d386deedd1f349c7035a226fd44739454",
+      "scope": "550-570 router,730-750 health OK,3495-3560 catch-all retained actual server bindings."
+    },
+    "edgion-tests/integration/conf/EdgionTls/BothAbsentParentRef/Gateway.yaml": {
+      "sha256": "f6db508c26ef8994b7151df6a6a5fe0b81ade5366ee2075674e36886b71121d5",
+      "scope": "Full actual stable31289 socket/exact host/broad TLS+HTTP parents."
+    },
+    "edgion-tests/integration/conf/EdgionTls/BothAbsentParentRef/HTTPRoute.yaml": {
+      "sha256": "6334ec1da7d496a46d81c8234595f922aedf7d285b1513e61c1096fee953e08b",
+      "scope": "Full actual stable31289 socket/exact host/broad TLS+HTTP parents."
+    },
+    "edgion-tests/integration/conf/EdgionTls/BothAbsentParentRef/EdgionTls.yaml": {
+      "sha256": "56972a3d2d45e7034b808cb72738d9b1d5d401e1af798515e662fa3b034c2c48",
+      "scope": "Full actual stable31289 socket/exact host/broad TLS+HTTP parents."
+    },
+    "edgion-tests/k8s/conf/EdgionTls/BothAbsentParentRef/Gateway.yaml": {
+      "sha256": "d2f9e6a201232079c41b2e76d56d17e404a56219729a2690f1d99f34371ac58c",
+      "scope": "Full actual stable31289 socket/exact host/broad TLS+HTTP parents."
+    },
+    "edgion-tests/k8s/conf/EdgionTls/BothAbsentParentRef/HTTPRoute.yaml": {
+      "sha256": "7908a93e8ee85ee80536b1758b6bfa3300ffd44c7c76c4fc6bc712b3ff98a0ef",
+      "scope": "Full actual stable31289 socket/exact host/broad TLS+HTTP parents."
+    },
+    "edgion-tests/k8s/conf/EdgionTls/BothAbsentParentRef/EdgionTls.yaml": {
+      "sha256": "6dd7ab58a13722f69f04f6ad859f10d85a5294c3f0ca0337a483087515816e33",
+      "scope": "Full actual stable31289 socket/exact host/broad TLS+HTTP parents."
+    },
+    "edgion-tests/integration/conf/EdgionTls/BothAbsentParentRef/Service.yaml": {
+      "sha256": "6c89bc2f00a431429680d3a46da982a7062b93159d1548bb502915b8b9640aa2",
+      "scope": "Full actual backend30001."
+    },
+    "edgion-tests/integration/conf/EdgionTls/BothAbsentParentRef/EndpointSlice.yaml": {
+      "sha256": "bc7bfca7d0831f530ba0c3f326aec726a21d94313a1de0228bd312e4e381bddc",
+      "scope": "Full actual backend30001."
+    }
+  },
+  "limits": "Static full-source review; no tests/build/network/source/Git mutation. The40s cooperative case budget is preserved but cancellation-safe restore was not established. Initial/apply failures and outer cancellation are not claimed covered by normal captured restoration; retain as unverified lifecycle follow-up rather than asserting a new defect. No embedded unit bodies in primary."
+}

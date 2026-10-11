@@ -1,0 +1,186 @@
+{
+  "candidate": "ARCH-266",
+  "complete": true,
+  "verifier": "/root/verify_ip_union",
+  "decision": "confirmed-with-revision",
+  "input_sha256": "a3e7a110016041600fce3586fcea87e78f64a240223625d14f7cd5a497da40d5",
+  "approved_claim_sha256": "e429b38d4209a12a04bf236590825a669a8a2111bf1f7c8b842b74fa052d5981",
+  "evidence": [
+    "Body/Pmd flat conditions bypass selected envelope.",
+    "AI simple/Route/Policy recursive searches bypass selected observer/attachment.",
+    "Foreign preservation and complete/current split verified against actual producers/tests.",
+    "Scope narrowed to individual barriers; complete false-success matrix not claimed."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Personally retained complete original rules, unchanged hash; no applicable nested AGENTS."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Personally read original knowledge index."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Personally retained complete original graded gates."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Personally reread original review index."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Personally reread original routing and authority."
+    },
+    "skills/01-architecture/01-controller/10-status-management.md": {
+      "sha256": "24fa83b82deaacf7e1d89c897951639d543f6366a1bc9c102219331074af4c53",
+      "scope": "65-117,350-375 local/envelope and complete/current attachment ownership."
+    },
+    "skills/04-review/status/regression-guards/deployment-partitioned-observations.md": {
+      "sha256": "f34036a4abf9b836d0292ab0970e4b5a64c290b5a2e0d6d7862ef6af56dff86d",
+      "scope": "Full original observer identity and complete/current split."
+    },
+    "skills/04-review/status/regression-guards/canonical-parent-status-ownership.md": {
+      "sha256": "4c6bba39e7cb8bbdb366d0645896ed941faf67c023e452b7fd2ffd9f2d148a76",
+      "scope": "Full original canonical attachment identity and controller ownership."
+    },
+    "skills/04-review/status/mandatory-design/foreign-status-entry-preservation.md": {
+      "sha256": "c87be886f1b393cc905b34dc7456728a7793fa12845763615de57f59e382a1ef",
+      "scope": "Full original repository-supported normative/source contract; no external evidence."
+    },
+    "skills/04-review/testing/compatibility-constraints/kubernetes-dynamic-fixture-boundaries.md": {
+      "sha256": "4a4e0a5a3bfd0cdfa5519816ae2f3fc8a4a70cc57a6e5a0991d84953ec4bdc57",
+      "scope": "Full original literal ACME and encrypted-health exceptions."
+    },
+    "skills/05-testing/01-integration-testing.md": {
+      "sha256": "e260042b508fa0956873d1b3c059531f1733a7c15423c548081afb71703a10e1",
+      "scope": "349-441 real supported dynamic/direct invocation and retained assertions."
+    },
+    "edgion-tests/src/client/dynamic/status.rs": {
+      "sha256": "9ac8c3e973f4a91ae05824d8560758f0a89ed928ecdceafc90b1bd0b46d30ad2",
+      "scope": "Full exact native/controller-envelope selector and missing-observation failure."
+    },
+    "edgion-tests/src/client/suites/status/helpers.rs": {
+      "sha256": "6a83e0e2f2f186d7c87d1a005c395340ed681ec04a487a503ea63c4530a23588",
+      "scope": "1-65 selector and actual test;170-205 broader any-parent/any-ancestor predicate."
+    },
+    "edgion-tests/src/client/suites/edgion_plugins/body_plugins.rs": {
+      "sha256": "2d9b243fdf9e8b22e3260283f93747fd4f8a2bd3ed5cd1f2e83c5179d35410c4",
+      "scope": "1780-1985 actual helper/all dynamic cases; retained actual traffic/H1/H2 helpers."
+    },
+    "edgion-tests/src/client/suites/edgion_plugins/edgion_config_data_status/dynamic.rs": {
+      "sha256": "90f52229d5a4283921dc344431390ad4e8f257ac81c5765d28a1278a215421a2",
+      "scope": "Full flat helper and all six initial/invalid/recovery assertions."
+    },
+    "edgion-tests/src/client/dynamic/scenarios/body_dynamic.rs": {
+      "sha256": "b8254e32c33d002376c88af48add48b428e0db792524de7c0b529a14c4b134ad",
+      "scope": "Full transitions and rejected-phase invocation."
+    },
+    "edgion-tests/src/client/dynamic/scenarios/edgion_config_data_ref_flap.rs": {
+      "sha256": "4587ccd98eefb3ad9768db6872a5dbff85af129b72c757ed5fbee5f17b64c356",
+      "scope": "Full actual initial/missing/recovery phase runner."
+    },
+    "edgion-tests/src/client/dynamic/scenarios/ai_backend_lifecycle.rs": {
+      "sha256": "34d6b0aa1963bbb5cf288a0f8c45f46fcc51721c3736cbafc044de1fde6d66e4",
+      "scope": "Full implementation and embedded tests retained unchanged; recursive predicate and family callsites reread."
+    },
+    "edgion-tests/src/client/dynamic/scenarios/ai_backend_policy_integration.rs": {
+      "sha256": "6d6f02aa276ceb76ccdc1fcc857bb91c0d99e0c0650ec69b8580f77250765d4a",
+      "scope": "Full implementation and embedded tests retained unchanged; recursive predicate, Gateway selection and callers reread."
+    },
+    "edgion-tests/src/client/dynamic/scenarios/ai_backend_weighted.rs": {
+      "sha256": "c2d43afbb51ea03f63a3d864784f56e12813c44d3dab9680349a8672a9f66269",
+      "scope": "Full implementation and embedded tests retained unchanged; recursive Route predicate and wait reread."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs": {
+      "sha256": "23057df0f04ed113a72fa1b42fb5344153c3ae8cff526e030878c8091fc92bd6",
+      "scope": "655-805,835-875 native projection, merge, current capture, complete restoration and cache publication."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/status_pipeline.rs": {
+      "sha256": "942317f05cbcfd52090141a842f8756c2c08b8d5cd4f1cef7ca515c5f989f241",
+      "scope": "1-150 partition routing, selected observer and native currentStatus capture."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/status_observation.rs": {
+      "sha256": "029ec4202103c429f56e10b3e19e1e168f885607b5759308f306d42fedf012ed",
+      "scope": "1-105 selected controller projection and foreign-preserving merge."
+    },
+    "edgion-controller/src/api/configserver_handlers.rs": {
+      "sha256": "b2e5e79cebf1c720f35f46296bdedb1e77dfa327c15075bd9559158f532e5723",
+      "scope": "Full ConfigServer GET of complete cached object."
+    },
+    "edgion-controller/src/api/types.rs": {
+      "sha256": "43e2700678d3c234d667b6b7dcae94fa9a6678f81a01bfeb7a4148817bc3cb65",
+      "scope": "278-347 redaction/serialize/parse preserve complete status."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_backend_traffic_policy.rs": {
+      "sha256": "7925d76536c03b8f126cb42fc62797c98be7d057649762b4c8e1c4809e9f6807",
+      "scope": "535-730 complete ancestor owner construction and foreign preservation."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/backend_tls_policy.rs": {
+      "sha256": "db90d7dba9390d47a77cc7d4c0ae3f70d0ace74b5ca7c600f694cd96a749bc7c",
+      "scope": "570-625,716-741 ancestor owner construction and foreign preservation."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/status_observation_test.rs": {
+      "sha256": "ba615ca5076394f146cf10a222f5168e02bfa70f38141adc4c7312837592f941",
+      "scope": "1-38 complete actual projection and merge tests."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/status_ownership_test.rs": {
+      "sha256": "276024e85eaa37d2c37a17e4fed28a5a97c5881ab50ca3e29a75bb67da35a473",
+      "scope": "287-325,329-379 complete actual native and HTTP-handler ownership tests."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/mod_test/parent_status_identity_test.rs": {
+      "sha256": "e49b3341e57442df0c596f02ad7d06b0dba2521ec425de7632ec6e1a3a913b12",
+      "scope": "94-154 complete all_writers_isolate_owners_defaults_ports_and_duplicates test."
+    },
+    "edgion-resources/src/resources/refs/parent_identity.rs": {
+      "sha256": "9a77d7bf421155fbeda8ac72458bcffbb841468f7dad5fc86d01d5221bc46321",
+      "scope": "Full borrowed canonical ParentReference/RouteParentStatus identity."
+    },
+    "edgion-resources/tests/unit/resources/refs/parent_identity_test.rs": {
+      "sha256": "dc5246db788c7b2cc1366a2bdac6afaf086e0be37a8b82e92b19d690afec77cf",
+      "scope": "Full actual defaults/attachment-dimension/controller-owner tests."
+    },
+    "edgion-tests/k8s/scripts/common/k8s_dynamic_scenarios.tsv": {
+      "sha256": "bb7bd55699de2cd7f27e6f11416de8fda6bdad85af1b1dbf6b82d9a0b46b39f9",
+      "scope": "Actual Body/Pmd/Lifecycle/Weighted registration/reset rows."
+    },
+    "edgion-tests/k8s/scripts/common/run_k8s_dynamic_scenarios.sh": {
+      "sha256": "edf8aa9859ebef675ec7ea8441ca54095b434043f1d7f01cc4adda91a3fdc5f6",
+      "scope": "914-996 actual child mode/auth/reset/containment."
+    },
+    "edgion-tests/k8s/scripts/run_k8s_integration.sh": {
+      "sha256": "9c7f539e02edccc91c46908c4b6afe1af3fb867b72c7b6061b613bd2723e641f",
+      "scope": "2145-2170 separate actual PolicyIntegration invocation/Gateway name."
+    },
+    "edgion-tests/k8s/scripts/common/run_test_client.sh": {
+      "sha256": "5146538b2585d8671476b51842527e6489b6ca0c13a37c60e02842bf727d3944",
+      "scope": "275-319 actual child K8s mode/auth/Gateway name propagation."
+    },
+    "edgion-tests/k8s/kubernetes/controller/configmap.yaml": {
+      "sha256": "2f0e67e4873253a968eb467b08a71a1b4430d14aafce474e0544a83a3d6cd743",
+      "scope": "1-48 canonical Controller identity."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/BodyDynamic/DynamicTest/updates/to_invalid/EdgionPlugins_body-dynamic.yaml": {
+      "sha256": "2e0bd465379cbe8d8c64a7b7228878642444c6512bfb34dd9df4b9799ac2e736",
+      "scope": "Full actual rejected-generation fixture."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/EdgionConfigDataStatus/RefFlap/DynamicTest/initial/EdgionPlugins_edgion-test_pmd-flap-plugin.yaml": {
+      "sha256": "f5b6ae2ff07700904641e0b5d32de5192ff0eb5ad1126b31123db7908db065be",
+      "scope": "Full actual initial overrideRef fixture."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/EdgionConfigDataStatus/RefFlap/DynamicTest/initial/EdgionConfigData_edgion-test_pmd-flap-good.yaml": {
+      "sha256": "e5e375dd0c39c9b6fa572c1654d02746a09c58e51530bbdb484c14502dbd5432",
+      "scope": "Full actual RegionRouteOverride reference."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/EdgionConfigDataStatus/RefFlap/DynamicTest/updates/to_invalid/EdgionPlugins_edgion-test_pmd-flap-plugin.yaml": {
+      "sha256": "b189b8505bfd5f4121db7f5ca73a92e4b99790b51827c3582a0456b9af4cf65a",
+      "scope": "Full actual missing-reference transition."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/EdgionConfigDataStatus/RefFlap/DynamicTest/updates/to_valid/EdgionPlugins_edgion-test_pmd-flap-plugin.yaml": {
+      "sha256": "77a65fa99aa4f864729bdb17368f36f9d6401f74ff9dd4f5b5e3d2445b1e6ad8",
+      "scope": "Full actual recovered-reference transition."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

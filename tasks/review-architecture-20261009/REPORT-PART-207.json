@@ -1,0 +1,267 @@
+{
+  "partition": "PART-207",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/access_decision.rs",
+      "sha256": "8f2edd7d99c76780affcb34ea118e43be15f057ca01d62f5963eb55b4f28c720",
+      "fully_read": true,
+      "disposition": "No actionable new finding; canonical typed/stage/config/condition/redaction owners checked against actual callers/tests/originals"
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/auth_realm.rs",
+      "sha256": "eee1b9e230c9e80ccb4e5821cad86202fbf6956c7d0ae34164e7fb511697cca0",
+      "fully_read": true,
+      "disposition": "No actionable new finding; canonical typed/stage/config/condition/redaction owners checked against actual callers/tests/originals"
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/body_requirement.rs",
+      "sha256": "26d496894096926576662cfc29f4e66f644ac7e2f21993c2362ecfb242f1cc2e",
+      "fully_read": true,
+      "disposition": "No actionable new finding; canonical typed/stage/config/condition/redaction owners checked against actual callers/tests/originals"
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/conditions.rs",
+      "sha256": "b948b51f185eb99591e78efd1a9ba7249b242c1ee3cbb9a2be450d1ff27ae923",
+      "fully_read": true,
+      "disposition": "No actionable new finding; canonical typed/stage/config/condition/redaction owners checked against actual callers/tests/originals"
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/dye.rs",
+      "sha256": "2bffa7adbd50a9cc1ab55b2f57fb835bd2a454e931c208b8368e1fdcab19aee9",
+      "fully_read": true,
+      "disposition": "No actionable new finding; canonical typed/stage/config/condition/redaction owners checked against actual callers/tests/originals"
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs",
+      "sha256": "1c25ed89458f56ce46f71ca1540bc452da9cf8812cb97c960e77252aa1c6cf69",
+      "fully_read": true,
+      "disposition": "No actionable new finding; canonical typed/stage/config/condition/redaction owners checked against actual callers/tests/originals"
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "edgion-dsl/src/lib.rs": {
+      "sha256": "2e447a6d98e717fb0f0a4769c44b07643e303ba88fda3c10142582b5942e8265",
+      "scope": "Full"
+    },
+    "edgion-dsl/src/script.rs": {
+      "sha256": "7cfd292966383dd325bc89b117767a47b4fd04d67b423caefa5c2da04c5238b5",
+      "scope": "Full"
+    },
+    "edgion-resources/src/schema_check/mod.rs": {
+      "sha256": "73dca576e5c45cfbb4ba1a1caa1092ee349e673cfac48b1b208d540f5aafe0db",
+      "scope": "Full"
+    },
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/dsl.rs": {
+      "sha256": "03057d287e1bc1178b1815281bcb345647bf6c0461984f7f7bee572575ab26f3",
+      "scope": "340-419 EOF"
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs": {
+      "sha256": "9a6ed6dbb4caa2a8a6a5b9bee0e9a9d75344edd9aad3b9eeee5dccc6413dc16a",
+      "scope": "170-245"
+    },
+    "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": {
+      "sha256": "70ea787d34a9a4652adfe131ba66049d2544b381b2034194db519567fe87ead0",
+      "scope": "1040-1135,1350-1415,2120-2195"
+    },
+    "edgion-gateway/src/plugins/http/plugin_store.rs": {
+      "sha256": "9aac57eba6c1392b1938cc473937c0f253ccd78e933b2ddfa96dabbd0ede2d24",
+      "scope": "267-330,454-585"
+    },
+    "edgion-gateway/src/plugins/http/dsl/plugin.rs": {
+      "sha256": "7948524b4a2d7bc33d5aebc7f54c37ac316f428944d264c0e74fc01fd95bdfa2",
+      "scope": "35-105"
+    },
+    "edgion-gateway/src/plugins/runtime/conditions/evaluator.rs": {
+      "sha256": "9b342831e33c7588d26b279ba776b63aa4374ddabe457cf431fd9cd25715bf4d",
+      "scope": "1-160,275-335"
+    },
+    "edgion-gateway/src/plugins/runtime/conditions/extract.rs": {
+      "sha256": "8013fb91b5520a14c54d074d57f45a4013d9ea95421237fdc52562a34a9360f1",
+      "scope": "Full"
+    },
+    "edgion-gateway/src/plugins/runtime/dye_plan.rs": {
+      "sha256": "6dd57dfafc74bf3dd5e6497436d7474980557043c92ed8c06f2eb735bd3c7301",
+      "scope": "Full"
+    },
+    "edgion-gateway/src/plugins/http/common/auth_common.rs": {
+      "sha256": "0a184e336bc99eb91555c07be17a4ff6c49dfe21a401d1668efd7793152fa4b0",
+      "scope": "155-254"
+    },
+    "edgion-gateway/tests/unit/plugins/http/plugin_store_test/compile_plugins_tests.rs": {
+      "sha256": "5bfc921952319822c2762a53a4de8c9f8dea7040df5f03943731c69019963de9",
+      "scope": "1770-2256,2429-2523 complete parity/descriptor bodies"
+    },
+    "edgion-resources/tests/plugin_crd_type_coverage.rs": {
+      "sha256": "9e0522dfb6d275a4064c94f1c6c64c2b3b48bf527cdd14cbf860cdc0f1aeaf49",
+      "scope": "Full"
+    },
+    "config/crd/edgion-crd/edgion_plugins_crd.yaml": {
+      "sha256": "58ac942825c504755a5cc3fb999a85ac498fc97d8b0cda2586b089fc1b2207aa",
+      "scope": "180-355,404-455,627-695"
+    },
+    "skills/01-architecture/02-gateway/05-plugin-system.md": {
+      "sha256": "b650f5d2e93ab34fe8dea73cae28c88259c7dae7f41e0a4d21c8a77384880eef",
+      "scope": "233-298"
+    },
+    "skills/01-architecture/02-gateway/dsl-engine.md": {
+      "sha256": "7ed47817132d4ffc9dc24aa62f4120c75d4e7b58d829b143c6ba34793fd05bf7",
+      "scope": "1-70"
+    },
+    "skills/04-review/dsl/intentional-design/dsl-design-decisions.md": {
+      "sha256": "4743b87ffcb7f590ffe1a4f8d00e39bb185f6cef41789dac1514d5b55c4ec2b0",
+      "scope": "1-175"
+    },
+    "tasks/review-architecture-20261009/ARCH-005-typed-transport-admission-capabilities.md": {
+      "sha256": "f009e36926117b3c682656dec8e033637ea256a92520cd0149c17604d8565d9e",
+      "scope": "Full"
+    },
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original"
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original"
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original"
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full original"
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original"
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full original"
+    },
+    "skills/01-architecture/05-resources/SKILL.md": {
+      "sha256": "dae4740e05545a9d674199070cc49a6559fd921e69ae0d08dab19dc51d3efef6",
+      "scope": "Full original"
+    },
+    "skills/02-features/SKILL.md": {
+      "sha256": "288412290871c573c2bda519a13a19d7fd1a3910cd380b8118788422d3c37f4c",
+      "scope": "Full original"
+    },
+    "skills/01-architecture/05-resources/13-edgion-plugins.md": {
+      "sha256": "176b34ceae236190b76fd70c9fa3543cbbdee97ed8223420f8dc1379d480b35d",
+      "scope": "Full original"
+    },
+    "skills/02-features/03-resources/13-edgion-plugins.md": {
+      "sha256": "b705aa0b53914467b4028f84f0fbcb6e55c68913a347a7314fbe8109aa9e9e30",
+      "scope": "Full original"
+    },
+    "skills/01-architecture/05-resources/00-schema-transport-contract.md": {
+      "sha256": "d20e74c1c7ccf6183f893bc919767a27bd3fbb47486415d14651a76fdef5a597",
+      "scope": "Full original"
+    },
+    "skills/04-review/plugin-metadata/SKILL.md": {
+      "sha256": "6571ffe2e81c850900a92c6afa4ad6aeb354aa5ddf7b487b5b4955a23d945cda",
+      "scope": "Full original"
+    },
+    "skills/04-review/resources/SKILL.md": {
+      "sha256": "89c180d998c47338bbc3e2b819ba07347d735b4ce6d1f69c5d4685f741b6d7a7",
+      "scope": "Full original"
+    },
+    "skills/04-review/plugin-runtime/intentional-design/add-from-builders-duplication.md": {
+      "sha256": "232032fbbf605ffe44d26a86f9cc09dcc52da58cd0a5dd45158ef70d3ee2663b",
+      "scope": "Full original"
+    },
+    "skills/04-review/plugin-metadata/mandatory-design/matchcore-payload-validation-belongs-to-condition.md": {
+      "sha256": "bc0fabc834b340a0940516bfd6176da5a600e6620ef1cbdb33cc287e0f514f39",
+      "scope": "Full original"
+    },
+    "skills/04-review/plugin-metadata/mandatory-design/jwt-claim-accessor-validation-belongs-to-condition.md": {
+      "sha256": "d6c423fb5a0f6cfeeb805c69ab4a9c1ae9775bed2ccbd352dadbdf5e671e2c9d",
+      "scope": "Full original"
+    },
+    "skills/04-review/plugin-metadata/mandatory-design/condition-set-single-owner.md": {
+      "sha256": "eb021205b436c1b999f947d3281b2883df3d68ef4f8e1398a2f74544a216ed6f",
+      "scope": "Full original"
+    },
+    "skills/04-review/resources/intentional-design/unknown-plugin-variant-strict-enum.md": {
+      "sha256": "8d6fca1df3d30240391bc0b05eb3ec501ed516d6faa477cd0a485d7c3e10bd7f",
+      "scope": "Full original"
+    },
+    "skills/04-review/plugin-metadata/regression-guards/disabled-entry-conditions-not-compiled.md": {
+      "sha256": "6ea82e0a14003875b85fc893b7e19ab065df0caa6d9609fa28c46282325415f2",
+      "scope": "Full original"
+    },
+    "skills/04-review/resources/compatibility-constraints/serde-ignored-blind-spots-schema-walk-instead.md": {
+      "sha256": "dd914f285c635f3e002c0b6c8f5c469735c09ab3b06730cc8fd0244aaf81d0de",
+      "scope": "Full original"
+    },
+    "skills/04-review/resources/regression-guards/edgion-plugins-crd-type-enum-drift.md": {
+      "sha256": "b3174bfb1ad5e52968399b7d41f3125936da02173786f11427ec3ee8022590c6",
+      "scope": "Full original"
+    },
+    "skills/04-review/plugin-runtime/regression-guards/dye-stage-producer-parity.md": {
+      "sha256": "1d157f384455ce3efc947988214a86d6fb2dd7816b49e6ee1947c900e176554a",
+      "scope": "Full original"
+    },
+    "skills/04-review/plugin-metadata/intentional-design/resource-ip-condition-count-policy.md": {
+      "sha256": "2c0abf90ae7819b61b774fe660db07df56e566e9aeef17495b26c8ab53799522",
+      "scope": "Full original"
+    },
+    "skills/04-review/security/regression-guards/auth-challenge-realm-quoted-strings.md": {
+      "sha256": "010d6f99b84ebf995cace36b750e6405c255248ecb85c0710c3874e3e5ec14cf",
+      "scope": "Full original"
+    },
+    "skills/04-review/hmac-auth/regression-guards/request-body-hash-after-cheap-auth.md": {
+      "sha256": "39954ad253abbf93b9729327666bc1e2de88d691b0f79e6616a29aa9b32c2378",
+      "scope": "Full original"
+    },
+    "skills/04-review/cpu-memory/regression-guards/header-hmac-condition-verifier-prebuilt.md": {
+      "sha256": "d2e87acc573d14d06e451702c498332f2e3d588a6d8a2a72eee230d99cb7649f",
+      "scope": "Full original"
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/validate_test.rs": {
+      "sha256": "6437599007a3af2643bbfeea402103dcf46f92b82a422e0b573f35dd77ea3e83",
+      "scope": "1-160,190-245,270-318,450-655"
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/conditions_test.rs": {
+      "sha256": "8f5b684e7a9794701fc0300e5a838d3f6295c3e9d299aeaae0355d0b2ff4772e",
+      "scope": "1-176,589-672"
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/body_requirement_test.rs": {
+      "sha256": "43e36c68afb517b36919965e3f0bab69850bc15b7b7c89954f2aea2bac9c2d49",
+      "scope": "Full"
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/auth_realm_test.rs": {
+      "sha256": "3f38fb7ccd39d6925d1860a41b4dc121e9a5e18a5de24361ac740051c144fbcb",
+      "scope": "Full"
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/access_decision_test.rs": {
+      "sha256": "c3920b756446ebda165b597a820e08739f9596ce1163bae0a28e7ee2af998667",
+      "scope": "Full"
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/dye_test.rs": {
+      "sha256": "5ef687f527eb41ef180e780f5b5decb04142b5b4ec7f66833148381dacf392ce",
+      "scope": "Full"
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/validate_test/disabled_condition_tests.rs": {
+      "sha256": "ab628eaefa657de086e31a8238a2c87e067ee6106ff80a31dcbf69114428f3e8",
+      "scope": "Full"
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/edgion_plugin_test/dsl_body_requirement_tests.rs": {
+      "sha256": "de5b4522f65a696167cd6be3e54424cef92eb330f69e4bdf2fc3e4ec5456926a",
+      "scope": "Full"
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/edgion_plugin_test/wasm_body_gate_tests.rs": {
+      "sha256": "dc701858903bd29519a61079b6f7b49b2a14c4621135dcf9974eac54736d6163",
+      "scope": "Full"
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/edgion_plugin_test/dye_capability_tests.rs": {
+      "sha256": "4e37c107ad609cd25800bf6cb6404c527fc21fbd95a44d35cc3cd62d0308d5db",
+      "scope": "1-70"
+    }
+  },
+  "limits": "Terminal full primary12, frozen fresh hashes verified. Actual source/test/original scopes. No outside primary credit, writes/builds/tests/Git/network/runtime measurement; sorted parity tests not evidence of preserved ordering."
+}

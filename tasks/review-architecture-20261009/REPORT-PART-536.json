@@ -1,0 +1,143 @@
+{
+  "partition": "PART-536",
+  "analyst": "/root/analyze_outbound",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/gateway/port_conflict/mod.rs",
+      "sha256": "fb19dac190de4588312bc115ed3bcfdf8ad806918e170dbacf2d4322dfd43bbb",
+      "fully_read": true,
+      "disposition": "Full1-6 typed export reaches actual registration; no issue."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/gateway/port_conflict/port_conflict.rs",
+      "sha256": "800e36b290899596399fde65f4ce0550255c8e64d15358e95267b0b12dbb28f7",
+      "fully_read": true,
+      "disposition": "Full1-378. ARCH339 missing Listener observations accepted as no conflict. Native Gateway conditions/listeners falsifies preliminary266 envelope analogy; no266 extension. Explicit control-plane-only suite legitimately requires no data-plane listener."
+    }
+  ],
+  "candidates": [
+    "ARCH-339"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original personally retained and fresh hash unchanged; no nested rules."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original index retained."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original graded gates retained."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original retained."
+    },
+    "skills/01-architecture/01-controller/10-status-management.md": {
+      "sha256": "24fa83b82deaacf7e1d89c897951639d543f6366a1bc9c102219331074af4c53",
+      "scope": "1-83 native versus custom status pipeline."
+    },
+    "skills/01-architecture/05-resources/01-gateway.md": {
+      "sha256": "0109ce331cede4bd6b8420f3d3505e259e153463c8cc77aa70d2f9b458fa1c71",
+      "scope": "65-92 Listener conflict-status contract."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "1631-1667 control-plane-only classification;3238-3250 actual registration."
+    },
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "Retained full actual source/tests; authenticated client and owning deadline."
+    },
+    "edgion-tests/k8s/scripts/common/run_test_client.sh": {
+      "sha256": "5146538b2585d8671476b51842527e6489b6ca0c13a37c60e02842bf727d3944",
+      "scope": "68-207 full actual PortConflict replacement branch and predicates."
+    },
+    "edgion-tests/k8s/scripts/common/apply_all_conf_strict.sh": {
+      "sha256": "394ea219c45f7bbd72f2cfc346655215e49367dde3e0d057de565f376adb2c72",
+      "scope": "85-122 actual internal-conflict fixture exclusion."
+    },
+    "edgion-tests/k8s/scripts/run_k8s_integration.sh": {
+      "sha256": "9c7f539e02edccc91c46908c4b6afe1af3fb867b72c7b6061b613bd2723e641f",
+      "scope": "2115-2170 actual wrapper invocation;2535 registration located."
+    },
+    "edgion-tests/integration/conf/Gateway/PortConflict/README.md": {
+      "sha256": "8b90f46102cd8cb002ef4ec735d044e40debfd58256e6153a2e8826daea595cc",
+      "scope": "Full authored expectations; source checked independently."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/listener_port_manager.rs": {
+      "sha256": "5329d77a6be326e9ad1f3847efe3100cdd49270598ce9db3d728f2fe434dca9b",
+      "scope": "1-62 identity;176-231 actual conflict computation."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/listener_port_manager_test.rs": {
+      "sha256": "83eceb9cd3959c19f711c6cd8147cc0a0a952e028a35900e4bb54f42bce445b6",
+      "scope": "1-55 deterministic messages;111-206 complete actual conflict test bodies."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/gateway.rs": {
+      "sha256": "3d241427e284a97f50eff549b41ef8df8f060a6b568c39216fc1efe6c08e9304",
+      "scope": "1040-1060 conflict source;1410-1450 aggregate omission;1480-1546 explicit listener True/False."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/gateway_test.rs": {
+      "sha256": "352a0995eefd2fff54d35768b4611d8f7015979f0e689912d345bec3405cd436",
+      "scope": "353-434,700-767 complete relevant actual test bodies."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/status_pipeline.rs": {
+      "sha256": "942317f05cbcfd52090141a842f8756c2c08b8d5cd4f1cef7ca515c5f989f241",
+      "scope": "90-134 native current status versus custom envelopes."
+    },
+    "edgion-resources/src/resources/gateway.rs": {
+      "sha256": "b3ee91f3d6fa041087bc5b9c868a59abccac73089b015f5b159c498e986887a2",
+      "scope": "1-100 typed Gateway;500-525 native status shape."
+    },
+    "config/crd/gateway-api/gateway-api-standard-v1.6.2.yaml": {
+      "sha256": "faede450fa178126aba41337737b97d351ebe87d93c910237ce1e072d1ca40d9",
+      "scope": "2353-2400 Listener status/isolation contract."
+    },
+    "edgion-tests/integration/conf/Gateway/PortConflict/Gateway_cross_conflict_A.yaml": {
+      "sha256": "5cca2b6ed9f89823f95f0adad12ce6f3276bb3969d555d197999a1b1538a74f5",
+      "scope": "Full authored fixture; paired trees identical."
+    },
+    "edgion-tests/integration/conf/Gateway/PortConflict/Gateway_cross_conflict_B.yaml": {
+      "sha256": "a0ef738e109f046b932cc0f829853ae06bc930fbcc806f34f0721b813910adc0",
+      "scope": "Full authored fixture; paired trees identical."
+    },
+    "edgion-tests/integration/conf/Gateway/PortConflict/Gateway_internal_conflict.yaml": {
+      "sha256": "b89011f414d9f209521cfd7a2f1a9fc3bada504b9534c6443c1e7cec7cb465dc",
+      "scope": "Full authored fixture; paired trees identical."
+    },
+    "edgion-tests/integration/conf/Gateway/PortConflict/Gateway_same_port_diff_hostname.yaml": {
+      "sha256": "90752b6719ca0bf4b4e50a80f5413e07ec253f4dcc1c79e3af15a0415752e097",
+      "scope": "Full authored fixture; paired trees identical."
+    },
+    "edgion-tests/k8s/conf/Gateway/PortConflict/Gateway_cross_conflict_A.yaml": {
+      "sha256": "5cca2b6ed9f89823f95f0adad12ce6f3276bb3969d555d197999a1b1538a74f5",
+      "scope": "Full authored fixture; paired trees identical."
+    },
+    "edgion-tests/k8s/conf/Gateway/PortConflict/Gateway_cross_conflict_B.yaml": {
+      "sha256": "a0ef738e109f046b932cc0f829853ae06bc930fbcc806f34f0721b813910adc0",
+      "scope": "Full authored fixture; paired trees identical."
+    },
+    "edgion-tests/k8s/conf/Gateway/PortConflict/Gateway_internal_conflict.yaml": {
+      "sha256": "b89011f414d9f209521cfd7a2f1a9fc3bada504b9534c6443c1e7cec7cb465dc",
+      "scope": "Full authored fixture; paired trees identical."
+    },
+    "edgion-tests/k8s/conf/Gateway/PortConflict/Gateway_same_port_diff_hostname.yaml": {
+      "sha256": "90752b6719ca0bf4b4e50a80f5413e07ec253f4dcc1c79e3af15a0415752e097",
+      "scope": "Full authored fixture; paired trees identical."
+    }
+  },
+  "limits": "Frozen primary hashes asserted before/after; static source review no tests/builds/network/Git/mutation. Real producer/test bodies checked, no live incident or whole-matrix-pass claim. No production status/logging/observability/TLS/body/workqueue/topology change proposed;340-343 unused.",
+  "deferred_issues": [
+    {
+      "scope": "internal missing-Gateway branch and strict-apply exclusion",
+      "evidence": "Absence assumes admission rejection without executed-attempt receipt; separate topology/admission limitation."
+    },
+    {
+      "scope": "K8s cross-Gateway branch",
+      "evidence": "Accepts both conflicted or both explicitly nonconflicted, unlike current Rust no-cross-Gateway conflict contract; separate historical expectation follow-up."
+    }
+  ]
+}

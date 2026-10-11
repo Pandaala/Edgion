@@ -1,0 +1,129 @@
+{
+  "partition": "PART-453",
+  "analyst": "/root/analyze_outbound",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_backend_traffic_policy/connect_timeout.rs",
+      "sha256": "0b1b0e077179f3ad771bc8c978921632cfa2a0ba7bbcc3db9e998082852091f8",
+      "fully_read": true,
+      "disposition": "Full1-284. Preserve owned TLS-stall ClientHello/elapsed/peer closure/attempt evidence and healthy sibling. Blackhole alone permits fast host errors; no new cause."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_backend_traffic_policy/control_plane.rs",
+      "sha256": "d3cf1a4cb2025fbbeed55196d3d39915a7e363f0acfa68a8cb10364a54028850",
+      "fully_read": true,
+      "disposition": "Full1-526. ARCH336 prepared conflict-phase barrier. Ignored final cleanup outcomes supplement265; intermediate ignored delete/service-churn assertion deferred separately."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_backend_traffic_policy/mod.rs",
+      "sha256": "64eaf910f89de5d2909ae5daf33029ab0cf8b57fa40c139a4b352eab0b43d4ab",
+      "fully_read": true,
+      "disposition": "Full1-36. Valid typed export glue and actual registrations; no child credit."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_backend_traffic_policy/retry_budget.rs",
+      "sha256": "1963d06340f25f8cb6799b3ff2c4d84f08f1c97c014f40fdb20f2050fa72709e",
+      "fully_read": true,
+      "disposition": "Full1-283. ARCH337 metric observation-result ownership. Preserve60 concurrent request/join/status failures, soft budget band and low-rate-floor attempt assertions."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_backend_traffic_policy/upstream_authority.rs",
+      "sha256": "3fd8b31a70077ffea048900a054ca433d2f6f2c9c3c7dcabaf5034fbd57860dd",
+      "fully_read": true,
+      "disposition": "Full1-525. ARCH337 shared failed-baseline cause; retain exact Host/reason/status/ForwardAuth/probe authority. Stale comments about health TLS support are documentation follow-up, not production gap."
+    }
+  ],
+  "candidates": [
+    "ARCH-336",
+    "ARCH-337"
+  ],
+  "support_selected": {
+    "edgion-tests/src/client/framework.rs": {
+      "sha256": "dd7b89a260befd5283e63c7a405e878918949ad17a618af0b23138312fed0383",
+      "scope": "395-490 actual apply/delete; retained full tests/deadlines."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "1804-1836 actual registration; retained full source/tests."
+    },
+    "edgion-tests/src/client/metrics_helper.rs": {
+      "sha256": "6a645f919d8d1287911645447cf3228fa25c6f54be3fa889217fbf6b61c0a7fa",
+      "scope": "1-95,110-210 fallible fetch and permissive counter reader."
+    },
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "1eb27bded8bcb40a82ea3cfd4ed6f20d386deedd1f349c7035a226fd44739454",
+      "scope": "745-775 health Host;3485-3540 actual503/echo;4920-4975 wildcard TLS."
+    },
+    "edgion-controller/src/api/namespaced_handlers.rs": {
+      "sha256": "81943b798b18bb4fbf1c234835e89fdd02fbfb50f27920fe186ae6b783aaa5d5",
+      "scope": "337-425 EBTP persistence boundary."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/file_system/storage.rs": {
+      "sha256": "160b51c73737d2d6188d3f4b5991589443aeaae6ce723829fbe382ac371fbdc1",
+      "scope": "145-238 persistence return."
+    },
+    "edgion-gateway/src/conf_sync/cache_client/cache_data.rs": {
+      "sha256": "9361e1bddb3532af21675b5b5564383654e0f3fe7cdd6aa71ca794b7ad0a7d55",
+      "scope": "1-60,70-225 watched cache versus100ms dispatch."
+    },
+    "edgion-gateway/src/backends/policy/backend_traffic/conf_handler_impl.rs": {
+      "sha256": "82713a50fd70d5ba89fcf64efdf12b8703bd4c4d37c574a92c54f4b044dbffb2",
+      "scope": "Full handler."
+    },
+    "edgion-gateway/src/backends/policy/backend_traffic/store.rs": {
+      "sha256": "0a35add8c64ab31f105772c87d9e80182ca68e265e1b750fd7221125cc321610",
+      "scope": "80-115,215-252,275-302,370-462,547-595 typed prepared/effective generation."
+    },
+    "edgion-gateway/tests/unit/backends/policy/backend_traffic/store_test.rs": {
+      "sha256": "1fb797856c0b761e2d17827ad164f9efd92c96abe4b853e8564c46ed3fed4a97",
+      "scope": "160-217 complete oldest/promotion test."
+    },
+    "edgion-gateway/src/api/mod.rs": {
+      "sha256": "a7b6ba1fd44e1b5f7dad36c738e970bbf7b31e95b2cd5de73820904271de9662",
+      "scope": "515-540 effective LB debug projection; retained full."
+    },
+    "edgion-gateway/src/backends/policy/backend_traffic/authority.rs": {
+      "sha256": "8be728b5fadd86e0f437f01d47397a01484ba4c0180626dcc09ded3097eff26c",
+      "scope": "Full actual authority implementation."
+    },
+    "edgion-gateway/src/observe/metrics/registry.rs": {
+      "sha256": "a53d0512e93bcce257f45cd21c9a90e5ca066ec6588e12b7c14ec1edbe6efc7d",
+      "scope": "1155-1180 retry counter; authority927-928 located; retained full."
+    },
+    "skills/01-architecture/05-resources/20-edgion-backend-traffic-policy.md": {
+      "sha256": "6864e41c758349b093e4db885b77eb3e6b793d47025238e8ae137e6ebc7994e6",
+      "scope": "Full original architecture."
+    },
+    "skills/04-review/backends/regression-guards/ebtp-atomic-service-snapshot.md": {
+      "sha256": "fd5fb614710952666de22b0caa0a2325787c468b04ca02f3a0629a8c18c0d7be",
+      "scope": "Full original snapshot ownership."
+    },
+    "skills/04-review/backends/regression-guards/retry-budget-epoch-coherence.md": {
+      "sha256": "832da700fb1adf0d07eb1dab6dcf0a435c5895c35827c4d176ea46479ad0377f",
+      "scope": "Full original budget coherence."
+    },
+    "skills/04-review/testing/regression-guards/integration-lb-metrics-require-scoped-deltas.md": {
+      "sha256": "610f579998565c3e90353dc60d0cb29b59b482c393a88f6559142558fd3ec1ce",
+      "scope": "Full original scoped observations."
+    }
+  },
+  "limits": "Static contextual source evidence; all five frozen hashes before/after; original project rules/graded gates and authored fixtures/selected real tests personally read. No execution/mutation or extra primary credit. No per-request attribution from global counters. Prior265/280/281 causes deduplicated.",
+  "supplemental_candidates": {
+    "ARCH-265": {
+      "status": "awaiting-independent-extension",
+      "scope": "control_plane.rs100-106,124-128 final cleanup helpers",
+      "evidence": "delete_resource Result is ignored, allowing non404/transport cleanup failures to leave PASS. Existing cleanup outcome ownership cause; preserve original264 initialization distinct."
+    }
+  },
+  "deferred_issues": [
+    {
+      "scope": "control_plane.rs435-505 test_resync_service_churn",
+      "evidence": "Intermediate delete outcome ignored then500ms sleep/recreate while LeastConn observation remains unchanged; separate from final cleanup and conflict-phase cause. Not independently promoted."
+    },
+    {
+      "scope": "upstream_authority.rs and authored fixtures",
+      "evidence": "Comments claim active-health TLS unsupported despite current independent HTTPS/GRPCS contract; documentation follow-up only."
+    }
+  ]
+}

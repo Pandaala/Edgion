@@ -1,0 +1,31 @@
+{
+  "partition": "PART-318",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/plugins/http/graphql_safelist/mod.rs",
+      "sha256": "8c69925c5ef9f407c370f1662bc0fc9b3d742905356f1b9fcfe3cb7ad3e8cfa5",
+      "fully_read": true,
+      "disposition": "Shared strict bounded frontend and immutable compiled digest/membership owner; GET/POST rejection contract, no input mutation, no AST cache or response owner added."
+    }
+  ],
+  "candidates": [],
+  "support": {
+    "edgion-gateway/src/plugins/http/common/graphql_request.rs": "ddfaf01a9a68670ed675db50d05c1f4238f604a17d4036e563c9f54a67bd72d5",
+    "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": "70ea787d34a9a4652adfe131ba66049d2544b381b2034194db519567fe87ead0",
+    "edgion-gateway/src/plugins/http/rate_limit_redis/plugin.rs": "8300ea1ea1c66a0c513021699ae66e92ad5008d44485e923f401c07db360827c",
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/graphql_rate_limit.rs": "232b91f2b99e704e4a420dbeaf83472bf6ae4c124801f195b49aab252e4a184f",
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/graphql_operation_router.rs": "2d271f646c0932a15036b010a852d45408870cf3310bd14522d079dd348cab11",
+    "skills/04-review/rate-limit/regression-guards/graphql-query-cost-budgets.md": "eac2cd61092931fc5e6dac43fe348481bbd1c56941ba9be03bef95fbd41dfc7d",
+    "skills/04-review/rate-limit/regression-guards/graphql-static-safelist.md": "88673418784202ccec39fff317445fae0a7acbac3e72c0a5f61db581d82ed7ad",
+    "skills/04-review/rate-limit/regression-guards/graphql-guard-selected-shape.md": "459b92ef1f955fab6a7d1940624b928702ce483c0a6bb2725d680fb5fab3874d",
+    "skills/04-review/routing/regression-guards/graphql-operation-router-declared-backends.md": "6290109de61e79248cd6b29a5063be5c300d7ec2875149870112613324aeed21",
+    "edgion-gateway/tests/unit/plugins/http/graphql_guard/mod_test.rs": "e38c507a5173d86d5f7ad5c9c4be1c7b0869438871a4ac5e7caa52d54a8e1b04",
+    "edgion-gateway/tests/unit/plugins/http/graphql_safelist/mod_test.rs": "db8e35dc328d0ffa1e75d4120b4a6512f44ce57550e90232c93617f3ca4c3fd6",
+    "edgion-gateway/tests/unit/plugins/http/graphql_operation_router/plugin_test.rs": "55f8ccc0d910f397321e017ea6f2f3556d4c706acbb4605ac1dd72443a634ce3",
+    "edgion-gateway/tests/unit/plugins/http/graphql_rate_limit/plugin_test.rs": "6681b503878f71a8c067e076060f0c854a781803ccfc0f0d7112ee2f74a80dde"
+  },
+  "support_scope": "Original owning GraphQL records read; actual frontend, compiler/factory/limiter and selected regression ranges inspected. Secondary reads carry no new coverage.",
+  "limits": "Static only. Later request mutation and entry masks remain explicit trusted-chain boundaries; no final-forwarding seal proposed. Historical parser memory estimate not independently measured."
+}

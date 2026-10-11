@@ -1,0 +1,15 @@
+{
+  "partition": "PART-339",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/plugins/http/request_id/mod.rs",
+      "sha256": "e67cbd2491f797626dc4aea24c121dc040a4b70d79c687f97173489abbb4181b",
+      "fully_read": true,
+      "disposition": "Full RequestId compiler/run wrapper read; traced canonical rule compilation, scoped phased runtime, borrowed adapter application, bounded per-request ID owner and original lifecycle decisions. No separate candidate."
+    }
+  ],
+  "candidates": [],
+  "limitations": "No tests/builds/source edits; supporting caller snippets do not claim coverage."
+}

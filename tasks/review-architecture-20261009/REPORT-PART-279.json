@@ -1,0 +1,63 @@
+{
+  "partition": "PART-279",
+  "analyst": "/root/analyze_session",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/link_sys/providers/webhook/apply.rs",
+      "sha256": "c159fa81f4523ec89b694088f64c81159b1aff1826125566050ffce7f67dc782",
+      "fully_read": true,
+      "disposition": "Effective fingerprint excludes inactive TLS fields; namespace affects Service identity."
+    },
+    {
+      "path": "edgion-gateway/src/link_sys/providers/webhook/client.rs",
+      "sha256": "5401b34b3b71458b78d8fa3051dce9f0979618f3b5b4845777d2ab77fdc58be8",
+      "fully_read": true,
+      "disposition": "Actual owner/reference/TLS checked before reuse; retired probes stop while retained calls may finish."
+    },
+    {
+      "path": "edgion-gateway/src/link_sys/providers/webhook/manager.rs",
+      "sha256": "a5bb99f119c900d6255e2c9b87d8b9123303a9ad4e97f87de9a09c82811a607c",
+      "fully_read": true,
+      "disposition": "Stateless current-client lookup and atomic response cap reuse canonical outbound."
+    },
+    {
+      "path": "edgion-gateway/src/link_sys/providers/webhook/mod.rs",
+      "sha256": "0e9c214f20db035e5d638c2d38375afe9de8a648fcaaa6601c8ee2bd5ba6b17f",
+      "fully_read": true,
+      "disposition": "Export boundary adds no registry."
+    },
+    {
+      "path": "edgion-gateway/src/link_sys/providers/webhook/resolver.rs",
+      "sha256": "fcf338066af10dc9e2d1344f555ae17c7033e56ca7be745c2826be2c699a756c",
+      "fully_read": true,
+      "disposition": "Fallback/extraction consume bounded results with PluginLog diagnostics."
+    },
+    {
+      "path": "edgion-gateway/src/link_sys/providers/webhook/runtime.rs",
+      "sha256": "2534cfbf36406f3f69d2ae58acd513cd9e55ddce099c506ed24853c94682fcc7",
+      "fully_read": true,
+      "disposition": "Limiter rotates and admits in one atomic state; fixed-grid/exhaustion fail closed. Location alone has no design cost."
+    }
+  ],
+  "candidates": [],
+  "support": {
+    "skills/04-review/link-sys/intentional-design/provider-owned-runtime-and-simple-removal.md": "d3a6e869608d5764c916b593c229dc9ce80c83f70820e78107742e4f4703d7ec",
+    "skills/04-review/link-sys/intentional-design/healthy-semantics-intentional-non-flips.md": "4c1e7a4f1abb612c67656fc0cb339f3f1319834e9d48ec14b8e840b30e0fc787",
+    "skills/04-review/link-sys/regression-guards/persistent-runner-publish-supersession.md": "28adfbe2fb25453918be0b48bd3706362919a5708b084d4eb444df0e5459aab9",
+    "skills/04-review/link-sys/regression-guards/forced-rebuild-survives-ordinary-replay.md": "87d85a429347ec5c1af9e1090370080bad53ef1c6b0b54c063e69b368da17c22",
+    "skills/04-review/link-sys/regression-guards/full-set-retain-serializes-join-replay.md": "9eb313ea2247d3a59bdb4e6df5271baf09ad562666d46e2dec31adb3d289abf8",
+    "skills/04-review/link-sys/regression-guards/published-generation-health-transition-ownership.md": "8de53bac9d282eafe8165376982583e4a06b590108e9396e49749793dfbfc0af",
+    "skills/04-review/link-sys/regression-guards/link-sys-hot-reload-reuse-and-retirement.md": "de13c829ae93daa5f05e0fbac13402a6f80fe7d0b9bde9b97c5eb1fe0fb0704a",
+    "skills/04-review/link-sys/intentional-design/access-log-fallback-backfill-tradeoffs.md": "d298416b92beb109ae765e4f1e305f5221eaba55efc6d303d81c6fbefd725397",
+    "skills/01-architecture/03-controller-gateway-link/webhook.md": "fb9916612bb3888d8787835faa9c3a8585bf5cc90a364377f96a58ba4a4df02f",
+    "skills/04-review/link-sys/regression-guards/webhook-publication-outside-generic-lifecycle.md": "428659a38a5d3609815f5938afe2b108bbe8346ef16552405e6b91ed23d673cc",
+    "skills/04-review/concurrency/regression-guards/sliding-window-check-then-increment.md": "5b2e5e9f53605fc71bd5642ba5fb291896b4e58afe74678ffae9fc62a396855d",
+    "skills/04-review/concurrency/regression-guards/webhook-dispatch-credential-gate.md": "188c70b33167711828292347787a11132f788487e8777b09db5f19d8473c2c6f",
+    "edgion-gateway/src/plugins/http/common/outbound/call.rs": "16f9a8c69669aa4b4ecb9457532875dbba69bb0f7c8a5c79909aaa2e8ecd0bed",
+    "edgion-gateway/tests/unit/link_sys/providers/webhook/runtime_test.rs": "7029bd2296a73a573a97dc6f36c0edabf5c3c39e07065a5bfb6986f5d3a263c2",
+    "edgion-gateway/tests/unit/link_sys/providers/webhook/client_test.rs": "dbc6f58ac442ca338195c5d9e3d9c666580a6e194d73efbcf07e12301de93f27"
+  },
+  "support_scope": "Relevant original contracts, actual callers/callees and selected test source inspected. Only primary files fully credited.",
+  "limits": "Static only; no tests/builds/runtime executions or measured cost. Existing publication, failure and hot-reload policies retained."
+}

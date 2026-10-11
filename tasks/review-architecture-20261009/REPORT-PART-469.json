@@ -1,0 +1,71 @@
+{
+  "partition": "PART-469",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/dsl/body.rs",
+      "sha256": "d264b2192cda9eaf70530d9bc37aba81f87d1eb2485635adb300a10ae7057b46",
+      "fully_read": true,
+      "disposition": "Full1-1079, four bounded ranges and recovered tail. Request-only BodyStorage, one-scan cache, spill/mutation, H1/H2 replay, every-attempt digest, bounded separate http.call/framing/invalid UTF8, physical cap/100Continue assertions preserve owners. Same ARCH296 literal listener-port cause pending extension."
+    },
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/dsl/context.rs",
+      "sha256": "5f9dcd843d9721b594c474f7c8b06236083e77a197d9fc6e759f56e3af3b3ee7",
+      "fully_read": true,
+      "disposition": "Full1-77. Request-writer/response-reader positive alpha/beta, missing and no-write sequence; fallible64KiB drains and canonical context port. No new cause."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "edgion-gateway/src/plugins/http/dsl/lang/body_ops.rs": {
+      "sha256": "3fdd9df6df1eb59c2caf649b16daf191878cc42ac0c26b192ea15a4306a54ea2",
+      "scope": "Full1-236 actual DSL body owner."
+    },
+    "edgion-gateway/tests/unit/plugins/http/dsl/lang/builtins_test/ctx_value_tests.rs": {
+      "sha256": "4d710c9a6b37ef43ace3bc944e67b8503970ba3caffdc7bb9e567cec86d9b6b0",
+      "scope": "Full actual context unit bodies."
+    },
+    "edgion-gateway/tests/unit/plugins/http/dsl/lang/builtins_test/opaque_body_stream_tests.rs": {
+      "sha256": "7ee1da6185c0b3a093324175cf517cd81180783cd108d83fb61962ed4d5dd914",
+      "scope": "Full actual bounded opaque stream bodies."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/DslBody/resources.yaml": {
+      "sha256": "d59f40b2987e48ad61d2f36447f1a072105241a4622e1d03868052a99f706ec3",
+      "scope": "Full1-556 actual Kubernetes body fixture."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/DslBody/EdgionPlugins_dsl-req-body-read.yaml": {
+      "sha256": "de735d7f6328dcc17f3d083b8dfbf86ce0127005b2b4349f3f921cdb58cee3e5",
+      "scope": "Full local request-body fixture."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/DslBody/EdgionPlugins_dsl-body-http-call.yaml": {
+      "sha256": "de5c53e884b6a4c9fa6cbf33dab942bcd5710e8157884415bfb05299ae37dcbd",
+      "scope": "Full local bounded external call fixture."
+    },
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "6c38b285bdfe354c40d5d2e96d4a07be0b7dc37ce3290197ca75054de23bfa98",
+      "scope": "1182-1283 actual retry producer validates digest before counter on every attempt."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "1550-1660,3040-3075,3830-3905 selected registration and port resolution."
+    },
+    "skills/04-review/dsl/regression-guards/bounded-body-text-reads.md": {
+      "sha256": "cad06a917c75fe2dca303f7677dd8cb936a26bd49116aa4d29fb7611d92ac6d4",
+      "scope": "Full original bounded complete-body rule."
+    },
+    "skills/04-review/dsl/regression-guards/http-call-full-body-read-before-truncate.md": {
+      "sha256": "9e9234d1010801dcf6bf0eb4e19bf562e705295f30ac321797dff23bbadf4c90",
+      "scope": "Full original separate bounded exchange contract."
+    },
+    "skills/04-review/dsl/regression-guards/request-response-context-continuity.md": {
+      "sha256": "2cdf3e2bc12b1204a05ef71538a61e79292498cb3a83836479822e99da61acde",
+      "scope": "Full original continuity contract."
+    },
+    "skills/04-review/testing/regression-guards/integration-port-selection-must-fail-closed.md": {
+      "sha256": "c2ff61188030d30484afd0c1323201295fb980755c3e4738fe78dd8eea785b89",
+      "scope": "Full original port authority."
+    }
+  },
+  "limits": "No new candidate; supporting reads zero credit and no execution. Exact expected strings do not pass on empty fallback, so no ARCH348 extension. Pending ARCH296 scope: body.rs URL31180 at29/97/166/258/313/363/742/859/910/1017, raw sockets568/604, H2 sockets806/956 and URL824 ignore selected ctx.http_port. No current failure claimed; retain logical Host/backend30001/framing/timeouts/assertions."
+}

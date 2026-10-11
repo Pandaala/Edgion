@@ -1,0 +1,169 @@
+{
+  "partition": "PART-214",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/waf.rs",
+      "sha256": "761bbdee08bbb2dec67731afe889348332aa8eaa6bcdbb3fe42854f43992bab4",
+      "fully_read": true,
+      "disposition": "Canonical leaf compiler/strictselectedgeneration/transportsource+safe bounded diagnostics; legitimate independentadmission/reportowners; body/sessiondebt alreadyARCH001005."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/wasm.rs",
+      "sha256": "820aaf7449c1142857237fc49a3db53ae94b95fffcae78c955499853e5757aaa",
+      "fully_read": true,
+      "disposition": "ARCH066 rawcalloutorigin echoed beforestatus/coldlogging; instance runtime/rawguestconfig/pin remaincanonical."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/wasm_oci.rs",
+      "sha256": "ef7f4c6cc9839fdaf325389ceeba6982db9dbd8df896bca59d0bcd19e41fb99c",
+      "fully_read": true,
+      "disposition": "TypedOCIimage/policy/alias+resolvedSecretredaction; actualnativefetch owner preserved."
+    },
+    {
+      "path": "edgion-resources/src/resources/edgion_plugins/plugin_configs/webhook_key_get.rs",
+      "sha256": "1c08bbfbe07a91367301d2cda0d722852685f10cb92a628e293f798d236a11d4",
+      "fully_read": true,
+      "disposition": "Canonical stateless firsterrorvalidator/ordered variable/default behavior; realWebhook/TLS resolver owns bounded exchange."
+    }
+  ],
+  "candidates": [
+    "ARCH-066"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original personally retained/no nested."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Original progressive index/quicklookup."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original retained/currentredactionrows reread."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original retained."
+    },
+    "skills/03-coding/01-log-safety.md": {
+      "sha256": "74591411c294befded433b7c2be571202deb22ef36030a704caa60055f214863",
+      "scope": "Current1-210,225-EOF; personally retained original context; password/category/origin redaction gates."
+    },
+    "skills/04-review/wasm/SKILL.md": {
+      "sha256": "e75c2c63d62ec8664424116e14056da679273002a903e1f24738427b34e6040b",
+      "scope": "Full original."
+    },
+    "skills/04-review/waf/SKILL.md": {
+      "sha256": "a5fa47a4b94ee1edccf3f5cd07197eeb0d644f875616cd33c5976e66bc9edef9",
+      "scope": "Full original."
+    },
+    "skills/04-review/webhook-key/SKILL.md": {
+      "sha256": "035db42352afc44307d46cdf882792472a6bee29325b49c0211974f1eec47b7c",
+      "scope": "Full original."
+    },
+    "skills/04-review/wasm/regression-guards/wasm-url-source-identity-redaction.md": {
+      "sha256": "06e82e64bdc297a07d4ffd9cde9f56016b3c2565a0cc99411c49e318baee46c1",
+      "scope": "Full original distinctsource/calloutscope."
+    },
+    "skills/04-review/wasm/regression-guards/wasm-module-cache-key-runtime-config.md": {
+      "sha256": "7ad0b22400357d0aea1790d072ff36415fd5bb7ad2739b939b19866dbae6ba9a",
+      "scope": "Full original configured-instance ownership."
+    },
+    "skills/04-review/security/regression-guards/wasm-cache-key-includes-sha256-pin.md": {
+      "sha256": "6f304358c05e5041da586d1b62f6069bcb4cd2c7ff76242de2f32c3df42fbf87",
+      "scope": "Full original pin isolation."
+    },
+    "skills/04-review/security/regression-guards/proxy-wasm-runtime-hardening.md": {
+      "sha256": "3128c1e493b7b6bd47e403a6cdbd8bbda9a1f6554f3626d1fb872a32d61d7939",
+      "scope": "Full original; stale historical runtime-key prose is superseded by instanceownership/current source."
+    },
+    "skills/04-review/ssrf/regression-guards/wasm-callout-egress-and-header-model.md": {
+      "sha256": "b94684941f29202fcd075ee938a1d287b7c5b13cd41ffac171bfc2014cd79cad",
+      "scope": "Full original canonical origins/acceptedtrust."
+    },
+    "skills/04-review/waf/regression-guards/named-profile-selection-and-bundle-publication.md": {
+      "sha256": "69d48f9da9d67879916060e1a2f0b757c945d917e32626c8778414afed884621",
+      "scope": "Full original actualgeneration/reference authority."
+    },
+    "skills/04-review/waf/regression-guards/static-tag-selection-before-compilation.md": {
+      "sha256": "e307952e4bf862b18bfde1131be3f636e2c2e1625591acde8c9a3d1a00d1bd84",
+      "scope": "Full original cumulativebounds/strictbaseline/selectedbinding."
+    },
+    "skills/04-review/resources/regression-guards/waf-support-inspection-must-not-imply-publication.md": {
+      "sha256": "ce473914fe96f83f17ee83d288d9c8cc914b622aa50dd7ee1e2180c2e4453342",
+      "scope": "Full original valueless support report distinctpublication."
+    },
+    "skills/04-review/webhook-key/intentional-design/response-signature-not-needed.md": {
+      "sha256": "a187d1ee2e27838872fb785c6910095f9c8f6b7fe283d7d919a9253be0bd9243",
+      "scope": "Full original activeTLS-owned exchange boundary."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/wasm_oci_test.rs": {
+      "sha256": "86a6cfc3be952b42ed8a76c19051ad096daddc2eb38fb698aab69d15cf0ef8e7",
+      "scope": "Full99lines parse/pullpolicy/alias/adminredaction/SecretRef."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/webhook_key_get_test.rs": {
+      "sha256": "78a23fc825fef12a20f418fb2c8c7ffbd44ba53e927d400b6b4aa2be557fe6f1",
+      "scope": "Full179lines shape/orderedfirsterror/parity/serde."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/wasm_test.rs": {
+      "sha256": "df3732d469eeadd52f82f20ec9af3e53ddd6bb672aa581515fb25d14c84e8956",
+      "scope": "1-210 and300-491 actualadmission/origin/redaction/rawconfigbounds/OCI; no fullfiletestclaim."
+    },
+    "edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/waf_test.rs": {
+      "sha256": "e69a8590aab6372fe61b5a2630fbdf0e2074da8fe7e2a704a384f413c8858256",
+      "scope": "1-404,507-584,620-656,666-757,891-1103 actualtransportselection/digest/limits/safediagnostic/mode/reference; selectedonly."
+    },
+    "edgion-gateway/src/plugins/http/webhook_key_get/plugin.rs": {
+      "sha256": "cd308b37931076f7653244cb44541d9a8e44cc01a2e02b6ee01994be60bbcb8a",
+      "scope": "Full actualordered resolver/defaultctx writes."
+    },
+    "edgion-gateway/src/plugins/http/wasm/plugin.rs": {
+      "sha256": "8a8bdbf1b585dcd718a8985afb4acddbf71ca32015d33da45890fb633347f30f",
+      "scope": "1-120 construction/allowlist/preload/create entrypoints."
+    },
+    "edgion-gateway/src/plugins/http/wasm/oci/mod.rs": {
+      "sha256": "49f3918248e4f5ea6e5332839dcd57d933eb20731693735d4c450c26defa2e63",
+      "scope": "210-285 actualregistryURL/auth/resolvedSecret/nativeboundedrequest."
+    },
+    "edgion-gateway/src/plugins/http/wasm/vm_manager.rs": {
+      "sha256": "5e15c1f81ec4aef0a7979bc98b7524a83b5b9815cb2426a7371d32d1076ca843",
+      "scope": "550-615,1350-1370 actualinstance config/pin/guestbytes; sourcekeyglobalsearchnolivecaller."
+    },
+    "edgion-gateway/src/plugins/http/waf/mod.rs": {
+      "sha256": "d5bca791f259c5266019e3982c9f9e84526961a3174dc7c48dc80fcba856f2c9",
+      "scope": "1-195 actualcoldcompile/pinnedbodylimits/sharedowner."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs": {
+      "sha256": "9a6ed6dbb4caa2a8a6a5b9bee0e9a9d75344edd9aad3b9eeee5dccc6413dc16a",
+      "scope": "210-250,450-484,580-595 actualdiagnosticstatus;740-858 WAFtrials/references with810-838 truncationrepair."
+    },
+    "edgion-resources/src/resources/common/mod.rs": {
+      "sha256": "fd00af774ab5c6cf343adbd1ec8ef2fd9cdc677a7af8b1af12dacf98bf0b7237",
+      "scope": "145-195 Condition.message unadaptedString."
+    },
+    "edgion-resources/src/resources/edgion_plugins/validate.rs": {
+      "sha256": "4684ace540889d54ce341c38d90b4f7fa0d8947b9beda405be8edcf9f9bfd488",
+      "scope": "565-590 actualenabledconfigdiagnosticpropagation."
+    },
+    "edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs": {
+      "sha256": "1c25ed89458f56ce46f71ca1540bc452da9cf8812cb97c960e77252aa1c6cf69",
+      "scope": "754-795 actualWasmPluginValidation delegation."
+    },
+    "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": {
+      "sha256": "70ea787d34a9a4652adfe131ba66049d2544b381b2034194db519567fe87ead0",
+      "scope": "1250-1295 actualcoldvalidation/failclosed."
+    },
+    "edgion-resources/src/resources/refs/link_sys_fields.rs": {
+      "sha256": "f6c90fe8d767c3867fb1301784f8965bcf7efd777e027dfc896d01b088610764",
+      "scope": "135-173 actualWebhooktarget/template collector."
+    },
+    "edgion-resources/src/resources/refs/plugin_fields.rs": {
+      "sha256": "4c3c891758ab704386c68867060669adc42636e92fdf6dee7b787aa4e6145307",
+      "scope": "190-226 selectedcanonicalowning context."
+    }
+  },
+  "limits": "All4primarysources fullyread, 2322lines, truncation gaps repaired. Selected supporting reads only/zero coverage. Static no builds/tests/Git/network/production edits. Legacy sourcecache helper observed fixture-only but not a separate finding in this partition; candidate focuses demonstrable rawdiagnostic disclosure. Stale historical cache-key prose is superseded by current instanceowner guard; existing review knowledge not edited."
+}

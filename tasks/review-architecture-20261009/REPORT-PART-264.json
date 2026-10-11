@@ -1,0 +1,57 @@
+{
+  "partition": "PART-264",
+  "analyst": "/root",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/geoip/config.rs",
+      "sha256": "783f6e0987f2cab1b5ff2116732b1e5a82d20fc6dacc313ec10faa323c5febdf",
+      "fully_read": true,
+      "disposition": "Full read: node-local strict/redacted config, pinned projection, atomic mmap and typed lookup failures, init-local fallback are coherent."
+    },
+    {
+      "path": "edgion-gateway/src/geoip/info.rs",
+      "sha256": "98044c1babc7d823dd0cf95c5f090559de39ea0659ae37c2e1a26317a2304f0e",
+      "fully_read": true,
+      "disposition": "Full read: node-local strict/redacted config, pinned projection, atomic mmap and typed lookup failures, init-local fallback are coherent."
+    },
+    {
+      "path": "edgion-gateway/src/geoip/mod.rs",
+      "sha256": "df4c4005504e4bc59904b54f538599f00c7026f99f1ebccaf1753169df7e21cf",
+      "fully_read": true,
+      "disposition": "Full read: node-local strict/redacted config, pinned projection, atomic mmap and typed lookup failures, init-local fallback are coherent."
+    },
+    {
+      "path": "edgion-gateway/src/geoip/provider.rs",
+      "sha256": "e96ec2621dd79b028d2c82199f9456af4b6a98f7c073a20717a055055c7c3cdd",
+      "fully_read": true,
+      "disposition": "Full read: node-local strict/redacted config, pinned projection, atomic mmap and typed lookup failures, init-local fallback are coherent."
+    },
+    {
+      "path": "edgion-gateway/src/geoip/updater.rs",
+      "sha256": "5d1046a9d5f2832107d2f6aa1939e872bd2a138dd8835dc59de04694ab503804",
+      "fully_read": true,
+      "disposition": "Full 651-line implementation read in bounded slices. Canonical HTTP, literal/DNS egress, streaming/file caps, structural swap, local-validator recovery and jitter have distinct roles; persisted validator lacks source URL identity (ARCH015)."
+    }
+  ],
+  "candidates": [
+    "ARCH-015"
+  ],
+  "support": {
+    "docs/en/ops-guide/gateway/geoip.md": "ecc3ebc504edf6a5a6fbe2d371f93bb5602c5f0a398f773ca8e0dcad0b70e95a",
+    "skills/04-review/observability/regression-guards/geoip-no-global-enabled-switch-access-log-lazy.md": "49f665c03452ca8a7e218299f69db2970ee0175fb0aacb3083f2dca9a96d2c14",
+    "skills/04-review/observability/regression-guards/geoip-lookup-failures-follow-fail-open.md": "6fa7e6b1aceb7182c90b0e13da325ee538ca5b5ab067201e372936826626a8de",
+    "edgion-gateway/tests/unit/geoip/updater_test.rs": "7e0186d6a498b0c4bbc8a871124ee60f766e4d76d88cff57c81981248e124c5d",
+    "edgion-gateway/tests/unit/geoip/provider_test.rs": "6d7ef478202c9d38e37e7abed8bbf62f42b11e46c244831b2d401fa93c96916d",
+    "edgion-gateway/tests/unit/geoip/mod_test.rs": "8fe646f4a1986c9d4bc2208df7e10e93e21d11827a3f89e77df24ddcbb77f444",
+    "edgion-gateway/tests/unit/geoip/info_test.rs": "8203789399198f28dd11f58561ffdb957cd82023feb7be4726a319845c9fe251",
+    "edgion-gateway/src/plugins/http/geoip_location/plugin.rs": "0cd62429927f4958c0acb7d993a84886bc8d5f1f11a2843c3e3f9cc99698c734",
+    "edgion-gateway/src/plugins/stream/geoip_location/plugin.rs": "30494a41d4e464708163a3481522265befb67567f98e01ed5613b3a443ee6b9c"
+  },
+  "support_scope": "Original lazy/typed-failure pages full reads; updater tests at conditional recovery/persistence/swap, provider tests at load/mapped/missing/fault cases; operator docs at config and conditional source seams; consumers traced by relevant policy branches.",
+  "external_primary_authority": [
+    "https://www.rfc-editor.org/rfc/rfc9110.html#section-8.8.3",
+    "https://www.rfc-editor.org/rfc/rfc9110.html#section-13.1.2"
+  ],
+  "limitations": "No executed tests/builds/updates/traffic. URL-change case only, not proof of credential representation variation or provider exploitation. Different HTTP/stream lookup policy and local fallback remain intentional."
+}

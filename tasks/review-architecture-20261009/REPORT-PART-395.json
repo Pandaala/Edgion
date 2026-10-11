@@ -1,0 +1,229 @@
+{
+  "partition": "PART-395",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-controller/src/conf_mgr/conf_center/etcd/center.rs",
+      "sha256": "05b3d74ec1b4ee60cd33466ce9de69ffcc21ac8056796da8fb7fcaecbcedbb53",
+      "fully_read": true,
+      "disposition": "No additional finding. Trusted bootstrap, gated writes, term-token publication and active-passive lifecycle traced. Supporting consequences of ARCH081."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/conf_center/etcd/config.rs",
+      "sha256": "25e2a82ea4135918decbd323da296f74ed7da4bbd6fd9aa5bab92113856ba8d7",
+      "fully_read": true,
+      "disposition": "Configuration re-export glue checked against actual constructors; no cosmetic proposal."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/conf_center/etcd/controller.rs",
+      "sha256": "ae06c447ad12f0458cedbffeaba029739cccd292c1e130e62d33dde6045edfdb",
+      "fully_read": true,
+      "disposition": "No additional finding. Canonical phased initialization/native watcher/status adapters retain ownership."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/conf_center/etcd/event.rs",
+      "sha256": "2cd65351b382a3622bd59b090a69afba0fb3e2fcb169ab722d099e59ddfd61f5",
+      "fully_read": true,
+      "disposition": "Init/runtime producer-consumer event contract assessed; no additional finding."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/conf_center/etcd/leader_election.rs",
+      "sha256": "095eb808099edbd078815173e7f395d757fafd4de086f0e7d30d8a927ad1ab21",
+      "fully_read": true,
+      "disposition": "ARCH081: awaited post-win diagnostic Leader lookup blocks guard/supervision/shutdown/demotion after flag/token publication. Keep diagnostics outside authoritative transition."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/conf_center/etcd/leadership_gate.rs",
+      "sha256": "dd999fe3d10f0194261f44bff716060fa506ef1e34b560305479ba214d99af5a",
+      "fully_read": true,
+      "disposition": "No separate finding. Boolean and freshness distinct as explicit test demonstrates; accepted local transaction gate retained."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/conf_center/etcd/mod.rs",
+      "sha256": "d8bcdaf270e145982dd0c0708e0447b992c9eca16dbf689d819de37be17bf0cb",
+      "fully_read": true,
+      "disposition": "Export/module glue assessed; no actionable change."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/conf_center/etcd/resource_controller.rs",
+      "sha256": "f323246b899ff298398cb51ca5e3b1379ce593209ba003afe071a4f88fbb3b7c",
+      "fully_read": true,
+      "disposition": "No additional finding. Runtime apply/delete enqueue authoritative keys, worker revokes invalid generations, InitDone idempotent; pre-init runtime event hardening excluded."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/conf_center/etcd/status.rs",
+      "sha256": "a5fdf720e192a573cbbcb224b7308b371a6c3c6a752e6d705eab06f7dcb25caf",
+      "fully_read": true,
+      "disposition": "No additional finding. Gated native status writes/comparison/unchanged-error suppression and repair clearing; inline status IO accepted."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/conf_center/etcd/storage.rs",
+      "sha256": "f6a0d0dbc694663d50eeaa11d10456e0018a24881ff94ef3c030eb569640a72f",
+      "fully_read": true,
+      "disposition": "No additional finding. Native atomic create/mod-revision update-delete/RV conflicts/server-owned merge; local leadership TOCTOU separateaccepted boundary."
+    }
+  ],
+  "candidates": [
+    "ARCH-081"
+  ],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full personal original and fresh unchanged hash; no nested Controller rules."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full personal original index retained."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full personal original graded gates retained."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full personal original review index retained."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full personal original evidence routing retained."
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full personal original workflow retained."
+    },
+    "skills/01-architecture/01-controller/SKILL.md": {
+      "sha256": "7ab04f98d8d9f9fc4b1f841013fa4ee6fde2f05b64b1df96da8d47bfa75e16b0",
+      "scope": "Full original current Controller index."
+    },
+    "skills/01-architecture/01-controller/03-config-center/SKILL.md": {
+      "sha256": "cd658f4ae636cf6dafe4ab409341c8129bdc8c67d6d7aec57031d706c4f7f330",
+      "scope": "Full original current center index."
+    },
+    "skills/01-architecture/01-controller/03-config-center/00-overview.md": {
+      "sha256": "c01fb65a3e519c127822512a5ef82e8c2fe22bdb82e94d62066819249cd6aa3b",
+      "scope": "1-196 current original; bounded output recovered."
+    },
+    "skills/01-architecture/01-controller/04-workqueue.md": {
+      "sha256": "37f555984b883130fc52206b1cf03545007b32a529ef61a8a53eaa8f66fde733",
+      "scope": "1-100 original queue contract."
+    },
+    "skills/04-review/controller/regression-guards/single-worker-initialization.md": {
+      "sha256": "b433dcb3cfca7d35f6e13aab1c67f5dd0ba8d7d3ad11a02e5cfda15b79a106bb",
+      "scope": "Full current idempotence original."
+    },
+    "skills/04-review/controller/regression-guards/etcd-key-content-identity.md": {
+      "sha256": "f385f629bad65ab108695f064c88fde40b1b8731180a16a358a7274cde3d2601",
+      "scope": "Full current identity original."
+    },
+    "skills/04-review/controller/intentional-design/non-kubernetes-pre-init-runtime-events-unsupported.md": {
+      "sha256": "9a80100d7cf520d32eceb2ca50dd206d4e6e25732d9251abe1df7a80c7179b87",
+      "scope": "Full accepted preinit scope."
+    },
+    "skills/04-review/handler-requeue/intentional-design/worker-path-status-io-inline-accepted.md": {
+      "sha256": "3d41c778b5f93279117216564b2d2359a1d17feafee7c73eccba3d1e1381fb70",
+      "scope": "Full original inline status authority."
+    },
+    "skills/04-review/handler-requeue/intentional-design/status-write-no-retry-accepted.md": {
+      "sha256": "e88cd2826d72c9cdb18c4c48ff52e155abba658f98bc1c813adfe8234b9ae9d3",
+      "scope": "1-85 accepted retry policy."
+    },
+    "skills/04-review/concurrency/intentional-design/etcd-leadership-gate-not-fenced-at-txn.md": {
+      "sha256": "97a7af7332c88738957731a69c203cdddab26028c2d8c991ae3470eb6ca303f6",
+      "scope": "Original personally read; 125-185/EOF recovery; acceptedlocalboundary."
+    },
+    "skills/04-review/concurrency/intentional-design/leader-status-write-per-write-guard-vs-lifecycle-gate.md": {
+      "sha256": "185436ef8b251cc837ad15851e5c976f3556128b644290f586ef887bc9c1abc4",
+      "scope": "1-95 K8s AllServe excluded from Etcd winner transition."
+    },
+    "skills/04-review/link-sys/regression-guards/etcd-configuration-and-message-boundaries.md": {
+      "sha256": "9cc09f6555ca94b9ada73805da4b7ad833bc3d8bcbd70e5f00a056d6462d5d70",
+      "scope": "Full retained current nativeSDKboundary."
+    },
+    "skills/04-review/conf-sync/intentional-design/conf-center-etcd-abstraction.md": {
+      "sha256": "5daacb3574debbb9787005ba0a915f61d61952b21730ff78aee6220aafda0427",
+      "scope": "Full retained trustedbootstrap/options contract."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/non_kube_common.rs": {
+      "sha256": "58b9f4e3f396edc3edc5b501a5caf89864c55a1409c4fb95899b1269084adf4b",
+      "scope": "199-344,372-395,410-610 actual leadership and phased init."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/etcd/watcher.rs": {
+      "sha256": "a857c3d32cd4dbfab76b324490353149b35302f8391e00cbad4232b1820f7e39",
+      "scope": "1-352 selected snapshots/watch/dispatch/events recovered."
+    },
+    "edgion-controller/src/config/conf_center/etcd.rs": {
+      "sha256": "39da99ddb0a94ada77f38ca605e96004246c110056a00f7d4e18b90c570dae6d",
+      "scope": "80-190,227-331 timing/bootstrapdefaults."
+    },
+    "edgion-controller/src/conf_mgr/manager.rs": {
+      "sha256": "8013d79913c950e802e371bb0600a64848b57bb35ea3a0794ae3d519ee72ec3f",
+      "scope": "60-87 EtcdCenterconstruction."
+    },
+    "edgion-controller/src/cli/mod.rs": {
+      "sha256": "e6a99b22317b82b315c7a9e9c26b67c58de82e00687dc05eb4d34031829d41af",
+      "scope": "212-227 actual termtokenwiring."
+    },
+    "edgion-controller/src/conf_sync/conf_server/grpc_server.rs": {
+      "sha256": "ae38d7fa6636724e74edc5ba031ece0a85a595141a55f400aacd36f55b7e650d",
+      "scope": "645-675,780-812 Watch/meta termcancellation."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs": {
+      "sha256": "23057df0f04ed113a72fa1b42fb5344153c3ae8cff526e030878c8091fc92bd6",
+      "scope": "450-555,610-645,830-855,910-942 init/runtime/publication/delete."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/http_route.rs": {
+      "sha256": "826bcdd3deded094b2f450527d36b2978855901442a8767aa47cc6bce5b71ddd",
+      "scope": "190-225,260-275,545-577 representativeapplyreplace/droppedparentrequeue."
+    },
+    "edgion-controller/src/conf_mgr/conf_center/common.rs": {
+      "sha256": "3c3b85c5d3af871dfc838d1b2d4ea1d886c596a8faa8d103979105db8db7a6d9",
+      "scope": "423-474 operatorupdate/server-owned merge."
+    },
+    "edgion-common/src/link_sys_core/providers/etcd/client.rs": {
+      "sha256": "a060184e8216a377ceec74339bc6e4714fbcfb1dd4c821c4eddd35b606e0fb95",
+      "scope": "415-445 retained electionconnection."
+    },
+    "edgion-common/src/link_sys_core/providers/etcd/config_mapping.rs": {
+      "sha256": "01ec1d73ce8c546ed5b78ab0335d3656a9c6c432547fed80d8e8af9d1b9ee5ac",
+      "scope": "90-213 separatedial/keepalive/no electionunarydeadline."
+    },
+    "edgion-common/src/link_sys_core/providers/etcd/election.rs": {
+      "sha256": "ff1dd05a7a943999eb0559f5f6cdd4bb8ea87e0831e43d9138c9e45c6f17d2d7",
+      "scope": "Full current nativecampaign/Leader/probewrappers."
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/etcd/leader_election_test.rs": {
+      "sha256": "ffcedcafd6804d6e87c42a529ee3f98953a08e00f8450ee628cfde4418d6dda4",
+      "scope": "Full actual394lines current election tests with clipped gaps recovered."
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/etcd/leadership_gate_test.rs": {
+      "sha256": "085ca3cf27f44b3dc748651e8a4969b5dffc0ec0387ba260045ca5e57ad7d801",
+      "scope": "Full actual stale-flag/lease/writegates."
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/etcd/resource_controller_test.rs": {
+      "sha256": "10c53843812375245c7903b408652a4932cf412299c63222fc41af6688f36c2a",
+      "scope": "Full actual init/runtimebodies."
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/etcd/storage_test.rs": {
+      "sha256": "c0ec2cfe5b2a34e5dc690523d5d4ac298d2adb802435e5f26408dc5954e8fb4c",
+      "scope": "Full actual nativeatomic/RV/server-merge tests."
+    },
+    "edgion-controller/tests/unit/conf_mgr/conf_center/etcd/center_test/identity_tests.rs": {
+      "sha256": "628fa79a3d508ca0bf6613c6b9d3aa186953d7e52f9f18cb37c372d6839fc10b",
+      "scope": "Full actual startupidentity bodies."
+    },
+    "Cargo.lock": {
+      "sha256": "18b7b7dee01e024ab6d21f5692ce04a343c4fb265092c7f587099e91c28bea17",
+      "scope": "2148-2171 registryetcd-client0.18.0 pin."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/etcd-client-0.18.0/src/client.rs": {
+      "sha256": "e9e1a3f08ee20e03feac54ce71eba660e8f961b9fb5ff2d7464d948dbb822049",
+      "scope": "210-240,790-810,846-868,892-909 distinctnative connection/requestdeadlines."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/etcd-client-0.18.0/src/rpc/election.rs": {
+      "sha256": "733753920085da1176c057bb8a9dbfa2e6b9dcec90ae7047bbedb80168f7a341",
+      "scope": "522-546 nativeLeader awaits RPC."
+    }
+  },
+  "limits": "All ten full primary files personally read 93010 bytes2306lines, frozen hashes match, actual consumers/tests. Static only, noexecution/sourcewrites. Original comparisontables stale status/noatomic descriptions explicitly excluded; missing historicalspec notacceptance."
+}

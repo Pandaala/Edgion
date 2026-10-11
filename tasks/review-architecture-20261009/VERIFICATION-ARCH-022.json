@@ -1,0 +1,14 @@
+{
+  "reviewer": "/root/verify_seed",
+  "complete": true,
+  "disposition": "confirmed",
+  "approved_input_sha256": "41946f5db641f12d3879691d064826a9b4d66c0c5875af4cce36e79c940d70ad",
+  "approved_claim_sha256": "e844c7d3f8b200eba23e15472b7a1764a1d2644b50f22c572c9ce22cccf28dce",
+  "evidence": {
+    "edgion-gateway/src/backends/health/check/status_store.rs": "364d749e871dab9dfb62fb9adb7dd1ee7b96cf983c9e0073788b3c7c03fd5e7d",
+    "edgion-gateway/src/backends/health/check/manager.rs": "52ec2d05eca8421131e7c91f98b30ee2838e99d1973640c7a0e0047ab1c50c12",
+    "edgion-gateway/src/backends/discovery/coordinator.rs": "1869a0e26ecb55c60a4c9535be48ae2db1774e2b64c9f885f99533a1236b91f4",
+    "edgion-gateway/src/api/mod.rs": "a7b6ba1fd44e1b5f7dad36c738e970bbf7b31e95b2cd5de73820904271de9662"
+  },
+  "limits": "Independent actual source/caller/test and original topic/rules review. Scoped health compatibility retention reassessed for cost, no current threshold/cancel defect. Static-only; no executions/primary credit/measurements."
+}

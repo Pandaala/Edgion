@@ -1,0 +1,55 @@
+{
+  "partition": "GW-SESSION",
+  "analyst": "/root/analyze_session",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/plugins/runtime/traits/session.rs",
+      "sha256": "7b999e5186d352b839b32271c2af4b415d2cde9309f99a89850726474e9d4dd1",
+      "fully_read": true,
+      "disposition": "Full current reread; existing feature/body/query ownership candidates remain, new bounded WAF hard admission/native-body and terminal lifecycle assessed, no additional root."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/runtime/traits/header_ext.rs",
+      "sha256": "3f62cabf432e68e7f333980e603be18cf82d4996912aadc925c67d406fccc27c",
+      "fully_read": true,
+      "disposition": "Full current reread; existing feature/body/query ownership candidates remain, new bounded WAF hard admission/native-body and terminal lifecycle assessed, no additional root."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/runtime/traits/request_filter.rs",
+      "sha256": "21383e9b72b91717e8d82b7138f7ebdf844160a7ef725dce4d56bc869cd036d6",
+      "fully_read": true,
+      "disposition": "Full current reread; existing feature/body/query ownership candidates remain, new bounded WAF hard admission/native-body and terminal lifecycle assessed, no additional root."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/runtime/traits/upstream_response_filter.rs",
+      "sha256": "1a1654b083429d907e8335b076fc55b399809dd7f7a40e2947e2dbc40c1779bd",
+      "fully_read": true,
+      "disposition": "Full current reread; existing feature/body/query ownership candidates remain, new bounded WAF hard admission/native-body and terminal lifecycle assessed, no additional root."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/runtime/traits/upstream_response.rs",
+      "sha256": "dab12cda4b12fc6ad1241509c03d820d28cb6814dddcc4643852842b2af84760",
+      "fully_read": true,
+      "disposition": "Full current reread; existing feature/body/query ownership candidates remain, new bounded WAF hard admission/native-body and terminal lifecycle assessed, no additional root."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/runtime/traits/upstream_response_body_filter.rs",
+      "sha256": "d015efe246fd7087da738338ae3b3d4676012fb0936a45401d1d9dbdbca91b31",
+      "fully_read": true,
+      "disposition": "Full current reread; existing feature/body/query ownership candidates remain, new bounded WAF hard admission/native-body and terminal lifecycle assessed, no additional root."
+    },
+    {
+      "path": "edgion-gateway/src/plugins/runtime/traits/mod.rs",
+      "sha256": "11dceb3c435b737f667734c3c54c464c555c5f815cf0a366385c647125327262",
+      "fully_read": true,
+      "disposition": "Full current reread; existing feature/body/query ownership candidates remain, new bounded WAF hard admission/native-body and terminal lifecycle assessed, no additional root."
+    }
+  ],
+  "candidates": [
+    "ARCH-002"
+  ],
+  "source_lines_total_refresh": 5526,
+  "support_scope": "Current Stage C/D/E original plans, hard admission/mutation pair, body storage/capture/replay/native upgrade and actual cache query callers/tests. All eight current primaries fully reread, secondary seams only.",
+  "limits": "No new candidate or executions. Current Stage E documents accept runtime pinned incompatible pair validation; no transient WAF issue."
+}

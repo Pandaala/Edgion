@@ -1,0 +1,11 @@
+{
+  "complete": true,
+  "anchor": "edgion-gateway",
+  "primary_reviewed": 569,
+  "primary_total": 569,
+  "confirmed_findings": 46,
+  "pending_verification": [],
+  "baseline": "BASELINE-AUDIT-20261010-C.json",
+  "limitations": "Only Gateway source coverage complete. Remaining1100 repositorysources remain scope. Static only, no production/test/doc mutations or execution. Supporting reads neverprimarycredit.",
+  "next_anchor": "edgion-resources"
+}

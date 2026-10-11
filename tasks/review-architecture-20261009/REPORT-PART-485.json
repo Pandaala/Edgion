@@ -1,0 +1,49 @@
+{
+  "partition": "PART-485",
+  "analyst": "/root/analyze_outbound",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-tests/src/client/suites/edgion_plugins/graphql_operation_router/mod.rs",
+      "sha256": "5e00db3ccd00285de847357ab4907401e31d398c10e9394557c087c708d3dad7",
+      "fully_read": true,
+      "disposition": "Full1-400 exact operation/default/backend/requestbytes/selectedAIconflict/grant/declared-backend invalidation wire checks; no new cause. Same ARCH266 missing owned attachment projection at370-394 pending extension."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "skills/04-review/routing/regression-guards/graphql-operation-router-declared-backends.md": {
+      "sha256": "6290109de61e79248cd6b29a5063be5c300d7ec2875149870112613324aeed21",
+      "scope": "Full original declared-backend contract."
+    },
+    "skills/04-review/status/regression-guards/canonical-parent-status-ownership.md": {
+      "sha256": "4c6bba39e7cb8bbdb366d0645896ed941faf67c023e452b7fd2ffd9f2d148a76",
+      "scope": "Full original foreign preservation/current-vs-complete contract."
+    },
+    "edgion-gateway/src/plugins/http/graphql_operation_router/plugin.rs": {
+      "sha256": "05af968c590fdb768648ef895393d25b48f68d4067445cb4ab48fb2955ed47df",
+      "scope": "Full actual selector/grant/strict jump owner."
+    },
+    "edgion-gateway/tests/unit/plugins/http/graphql_operation_router/plugin_test.rs": {
+      "sha256": "55f8ccc0d910f397321e017ea6f2f3556d4c706acbb4605ac1dd72443a634ce3",
+      "scope": "Full1-222 actual unit bodies."
+    },
+    "edgion-tests/src/client/dynamic/scenarios/graphql_operation_router.rs": {
+      "sha256": "c8fdf7b9b3cd20e4d10ae259ba18f2c5727b2a119ea9d453bccfa54a9bc00c10",
+      "scope": "Full1-92 update/grant phases."
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/GraphqlOperationRouter/DynamicTest/initial/HTTPRoute_graphql-router-dynamic.yaml": {
+      "sha256": "5e87997b9a686defb2521b635a9773f95d3742a862368ecd28f18f23224b92df",
+      "scope": "Full local parent/backend/sibling identity."
+    },
+    "edgion-tests/k8s/conf/EdgionPlugins/GraphqlOperationRouter/DynamicTest/initial/HTTPRoute_graphql-router-dynamic.yaml": {
+      "sha256": "4ad02518c6eedec9fcafa0430587e9e797c07140930dfa6cbdd98b68db274a3c",
+      "scope": "Full Kubernetes canonical attachment/crossnamespace identity."
+    },
+    "edgion-tests/src/server/test_server.rs": {
+      "sha256": "6c38b285bdfe354c40d5d2e96d4a07be0b7dc37ce3290197ca75054de23bfa98",
+      "scope": "796-842,3510-3555 actual original POST/GET bytes and URI fallback."
+    }
+  },
+  "limits": "Complete static review; both entire fixture trees/current registry/shared request helper/original rules read. Same ARCH266 supplement: requiring Accepted/PartiallyInvalid across every diagnostic parent allows preserved foreign false entries to fail a valid current attachment; select edgion.io/gateway-controller plus edgion-test/edgion-plugins-gateway while preserving current traffic/sibling checks. Existing ARCH264 restoration/ARCH304 tree drift are separate pending roots. No automatically approved extension, backend GraphQL/performance claim or execution/mutation; supports zero credit."
+}

@@ -1,0 +1,61 @@
+{
+  "candidate": "ARCH-252",
+  "complete": true,
+  "verifier": "/root/verify_ip_union",
+  "decision": "confirmed",
+  "input_sha256": "a572e8d134bfd46f7f62e95d46f5b225209616888c419c33a8d3b0bff1db4242",
+  "approved_claim_sha256": "53d604e4fb25072c417f8b8405906d79da513e25abc593cc31ec8d29881b4045",
+  "evidence": [
+    "Fresh whole-repository caller search finds only analyzer definition/self-tests/module export. No actual offline consumer.",
+    "Current serialized LB shape remains supported; retirement is scoped structural ownership reduction, not live format defect.",
+    "Only disappearing helper contract is retired; preserve live RR delta/endpoint/identity/security unit bodies and all suite identities/fixtures."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "edgion-tests/src/client/log_analyzer.rs": {
+      "sha256": "e9ac93828e82b21a403dd3ae78db2fb8bc3000672e32177c341b4446ff7aeeeb",
+      "scope": "Full actual source/private tests;306-356 recovered after truncated output."
+    },
+    "edgion-tests/src/lib.rs": {
+      "sha256": "fd650594a7188f250f059bb7a1140dec67a42819515e6fe52e9cf5ef92579feb",
+      "scope": "1-40 actual module export."
+    },
+    "edgion-tests/src/client/access_log_client.rs": {
+      "sha256": "f7691b8ad4c8765a0ab446c414a1596df48c930d8472678d724f918edcf84d55",
+      "scope": "1-80 marker/helper/test;330-382 normalized lookup."
+    },
+    "edgion-tests/src/client/suites/http_route/backend/lb_roundrobin.rs": {
+      "sha256": "f73adca9d4b1feca3955ce1474c2d63382ab2d7b6f4c306783da7c477c7b20a4",
+      "scope": "Full delta/request/fixture implementation and five real unit bodies."
+    },
+    "edgion-tests/src/client/suites/http_route/backend/retry_on_status.rs": {
+      "sha256": "ebcc761d9ca386762b6b45952ed99363653bfbc0e88706a687f287e66f3973c0",
+      "scope": "1-105 actual live retry status/canonical reason assertion."
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "1310-1390 inventory;1850-1870,1935-1955 actual registrations."
+    },
+    "edgion-gateway/src/observe/access_log_store.rs": {
+      "sha256": "db0f8065a6dfc62de5f0050c6f262081cd9625c3022c00add03df4fe5cd735b7",
+      "scope": "105-178 canonical trace-key store/get."
+    },
+    "skills/04-review/observability/regression-guards/debug-access-log-wire-and-lifecycle.md": {
+      "sha256": "901add987e034a9c18bb8234f6ca422c1519cd5a298415385b8f2f21da4b4a3d",
+      "scope": "Full original terminal/store distinction."
+    },
+    "skills/05-testing/00-unit-testing.md": {
+      "sha256": "d6223d563ef4ef76405dc503dae0c569d7b0b2f31165f8604240b7bd06eded6e",
+      "scope": "147-189 actual test preservation gate."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "c78c86675ca6c72adb30d0f59727509486b582ef2c7f3318bf14e61745eff055",
+      "scope": "Current303-307 actual gate."
+    },
+    "edgion-gateway/src/routes/http/proxy_http/pg_logging.rs": {
+      "sha256": "972f72ec7371c3ab876bfa12957eb70559e31aaa9d25f8f2078c24e197523a6a",
+      "scope": "110-150 actual terminal log/store projection."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

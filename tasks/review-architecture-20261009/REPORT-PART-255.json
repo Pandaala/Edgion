@@ -1,0 +1,36 @@
+{
+  "partition": "PART-255",
+  "analyst": "/root/analyze_adapter",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-gateway/src/backends/outlier_detection/config.rs",
+      "sha256": "df65bae8e42f5c412902469474c0343712f2807065d89d81086f5132043ee03c",
+      "fully_read": true,
+      "disposition": "Canonical resource re-export."
+    },
+    {
+      "path": "edgion-gateway/src/backends/outlier_detection/mod.rs",
+      "sha256": "93b6bfa5865d16905f9001daa4f49809bddc1d223e1e577ada7304221c7191b1",
+      "fully_read": true,
+      "disposition": "Exports and consumers checked."
+    },
+    {
+      "path": "edgion-gateway/src/backends/outlier_detection/state.rs",
+      "sha256": "12e77ec3406348f81fbf8eb95f81759bf8af51f4cfcec6cc864801b3f2f3c273",
+      "fully_read": true,
+      "disposition": "Generation, backoff, expiry, reset, AI half-open ownership coherent."
+    },
+    {
+      "path": "edgion-gateway/src/backends/outlier_detection/store.rs",
+      "sha256": "6a5a5b3576efc11db6332880e7d17eef3413d6c40d5f3b7a3c79ddbd10b74fc0",
+      "fully_read": true,
+      "disposition": "Unused socket-hash execution/test owner: ARCH018; identity fences coherent."
+    }
+  ],
+  "candidates": [
+    "ARCH-018"
+  ],
+  "support_scope": "Actual callers, original rules/index/review-routing/topic decisions and existing tests inspected; secondary reads confer no primary coverage. Detailed candidate evidence in corresponding issue files.",
+  "limitations": "Read-only static review, no checks/builds/tests/Git mutation or performance evidence."
+}

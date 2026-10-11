@@ -1,0 +1,99 @@
+{
+  "partition": "PART-234",
+  "supplement": "ARCH-178",
+  "analyst": "/root/analyze_conversion",
+  "complete": true,
+  "primary_coverage": 0,
+  "primary_existing": "edgion-cli/src/cli/client.rs",
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full personal original retained/fresh unchanged/root-only rules."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original retained."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original retained,40-66 redaction/binary rows reread."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full original retained/current dedup."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full1-78 original personally reread."
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full original retained."
+    },
+    "edgion-cli/src/cli/client.rs": {
+      "sha256": "ce62f4a6d129f0b96d1e8400faf6dcece962c1b3e14c72eef55fe4356a86e962",
+      "scope": "Retained full1-458 frozen primary;130-160,195-224,360-458 actual diagnostic owners reread; zero new coverage."
+    },
+    "edgion-cli/src/cli/commands/get.rs": {
+      "sha256": "609d33c9a9cb1bedc9b176bd671bb91a21a04fd10afd95d4b442d62ffb6de891",
+      "scope": "Full1-355;50-63 diagnostic consumer and error branches."
+    },
+    "edgion-cli/src/cli/commands/login.rs": {
+      "sha256": "b38862a9dc500abb69e514fc3c6a34b287353a7d5d3b453ddde191d66a476e73",
+      "scope": "Full1-63 probe warnings/token-save contract."
+    },
+    "edgion-cli/src/cli/mod.rs": {
+      "sha256": "8feafddf836ec2f4f305808ba874743903b6bc5c4a5b9298fadb68d2de6c3a98",
+      "scope": "Retained full1-324 argument/dispatch."
+    },
+    "edgion-cli/tests/unit/cli/client_test/ensure_auth_tests.rs": {
+      "sha256": "887d037ac5b17382b1311d74dff693fd6aab1759a15eb3510ec7226ffc29c9f4",
+      "scope": "Retained full1-203 actual auth/readiness/sensitivity tests."
+    },
+    "edgion-cli/tests/unit/cli/commands/get_test.rs": {
+      "sha256": "2336a3a14007c3f1527f40961112023f4826386ae86570214e79260ba28c4300",
+      "scope": "Retained full1-139 actual tests."
+    },
+    "edgion-cli/tests/unit/cli/commands/login_test.rs": {
+      "sha256": "413ef2639914c9a3cfe0957dc72e739d51b0b15d3d98b2f10d6bab36f2450aac",
+      "scope": "Retained full1-37 actual tests."
+    },
+    "Cargo.lock": {
+      "sha256": "18b7b7dee01e024ab6d21f5692ce04a343c4fb265092c7f587099e91c28bea17",
+      "scope": "5539-5547,7211-7218 exact SDK/URL pins."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/reqwest-0.12.28/src/async_impl/request.rs": {
+      "sha256": "22bb3a3810cfe505a1eb34e4bf6f16db9f9dbcfb7ec79d1652996e72a6738fd3",
+      "scope": "158-185,579-605 actual userinfo extraction/parsedURL cleaning."
+    },
+    "/Users/caohao/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/reqwest-0.12.28/src/error.rs": {
+      "sha256": "4f2ffac588056f8d98f8619fa4046e66efee97c0faef51ddce9c07ea0a46601b",
+      "scope": "1-23,70-96,228-280 URL sensitivity/without_url/Display."
+    },
+    "skills/01-architecture/04-ctl/00-overview.md": {
+      "sha256": "0a2acdc3bd1339ae674a569674cdf47d1b33be3c387011e9a942606dfe5b30fc",
+      "scope": "Retained full1-177, reread1-115 transport/diagnostic contract."
+    },
+    "skills/03-coding/01-log-safety.md": {
+      "sha256": "74591411c294befded433b7c2be571202deb22ef36030a704caa60055f214863",
+      "scope": "1-100 mandatory sensitive-data/origin diagnostics."
+    },
+    "skills/04-review/wasm/regression-guards/wasm-url-source-identity-redaction.md": {
+      "sha256": "06e82e64bdc297a07d4ffd9cde9f56016b3c2565a0cc99411c49e318baee46c1",
+      "scope": "Full1-71 original observability URL policy/limits."
+    },
+    "skills/04-review/tls/regression-guards/tls-log-address-redaction.md": {
+      "sha256": "c6af088a6f86773d93cd50c10e55c96c5d393dce684ada1dc6c75c70d1687892",
+      "scope": "Full1-88 useful diagnostics/proven sensitive fragments."
+    },
+    "tasks/review-architecture-20261009/ARCH-066-wasm-callout-origin-diagnostic-redaction.md": {
+      "sha256": "aa5c6993d0dfd704d1ac9efe87bd328556310a8ef4dc7ac7b7dce5e493d539e1",
+      "scope": "Full1-106 current dedup cause comparison."
+    },
+    "tasks/review-architecture-20261009/ARCH-076-httpdns-transport-error-url-redaction.md": {
+      "sha256": "2339d21859370d4387da8edb61926131d3e7a16b3e079f300f01a6f058661562",
+      "scope": "Full1-37 current dedup cause comparison."
+    }
+  },
+  "limits": "Static supplemental review on unchanged already fully-read primary. No requests/builds/tests/network/Git/writes; no runtime incident or wire disclosure claim."
+}

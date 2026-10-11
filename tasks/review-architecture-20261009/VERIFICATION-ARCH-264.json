@@ -1,0 +1,233 @@
+{
+  "candidate": "ARCH-264",
+  "complete": true,
+  "verifier": "/root/verify_ip_union",
+  "decision": "confirmed-with-revision",
+  "input_sha256": "8199f33f4e5514c488bbe0889e08b5842be44379c2132555b5bb010ab7a746f5",
+  "approved_claim_sha256": "63f66dc26a677a099218625d3f9111b57fca0dd54e0fe29db8400ba74eecfe8b",
+  "evidence": [
+    "Restoration missing on success or skipped by earlier transition errors, verified actual business phases and same-key authored updates.",
+    "Qualification preserves existing ConditionRefs initial setup and K8s before/after reset; full reload sweeps only.",
+    "Exact complete approved revision requires all owned restoration attempts and original behavior checks; ARCH265/266 independent."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original personally read by verifier"
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original personally read by verifier"
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full original personally read by verifier"
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full original personally read by verifier"
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original personally read by verifier"
+    },
+    "skills/05-testing/01-integration-testing.md": {
+      "sha256": "e260042b508fa0956873d1b3c059531f1733a7c15423c548081afb71703a10e1",
+      "scope": "349\u2013441 direct/dynamic state and cleanup"
+    },
+    "skills/04-review/testing/mandatory-design/dynamic-secret-fixtures-must-be-tracked.md": {
+      "sha256": "89fb8808ce4ed6f005da1af4612e6732a851726a44b52de96fc9f35accf284dc",
+      "scope": "Full"
+    },
+    "skills/04-review/testing/intentional-design/local-shared-topology-single-owner-takeover.md": {
+      "sha256": "eae06ba0841415879d938c00bd164b14596a613e085ee3897df49dfa86af8135",
+      "scope": "Full"
+    },
+    "skills/04-review/testing/intentional-design/kubernetes-integration-cleanup-ownership-boundary.md": {
+      "sha256": "58f3ff582b3e244431bfbca1303134e7e59583cd5aff983e1a354f619b47876d",
+      "scope": "Full"
+    },
+    "edgion-tests/src/client/dynamic/ctx.rs": {
+      "sha256": "f37853b6b736f31472cc3a0a5a0a16501898b4160647ec5ca4d0f6a69e3e8866",
+      "scope": "Full"
+    },
+    "edgion-tests/src/client/dynamic/apply.rs": {
+      "sha256": "4824e28e2358c529c27c22e21c7a43dff06734cb792d6befd0d9840da99dbbb8",
+      "scope": "Complete production helpers, recovered clipped middle and selected ordering/failure/redaction test bodies"
+    },
+    "edgion-tests/src/client/dynamic/scenarios/allowed_san_regex_ignore_case.rs": {
+      "sha256": "1225d683d44fb2dcf2e8074e0b740ed502e94cb76265f5b96bd0a7e984dcc90a",
+      "scope": "110\u2013148 complete run"
+    },
+    "edgion-tests/src/client/dynamic/scenarios/all_endpoint_status_tls.rs": {
+      "sha256": "44522137784ad1388dba6c7c852098240a9443fbaf2b29e699ee60cfa78f3728",
+      "scope": "190\u2013274 cleanup/run and selected actual fixture test"
+    },
+    "edgion-tests/src/client/test_client.rs": {
+      "sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
+      "scope": "3678\u20133768 complete run_dynamic_scenario"
+    },
+    "edgion-tests/integration/scripts/integration/run_integration.sh": {
+      "sha256": "5a6df789c2a894150691b3f50edf85f7ac055961ee0b1cc230291a6b90f85b76",
+      "scope": "608\u2013640 enumeration, full/Gateway branches,3260\u20133294,3350\u20133372 full reload rounds"
+    },
+    "edgion-tests/integration/scripts/utils/load_conf.sh": {
+      "sha256": "6ee424b07a4b8791ebc124be54cc6b95b04fcdbbb368e11feb5eac9b79a51b70",
+      "scope": "185\u2013212 startup initial/update/deletion filter"
+    },
+    "edgion-tests/k8s/scripts/common/run_k8s_dynamic_scenarios.sh": {
+      "sha256": "edf8aa9859ebef675ec7ea8441ca54095b434043f1d7f01cc4adda91a3fdc5f6",
+      "scope": "478\u2013550,850\u2013905,914\u2013996 reset/trap/failure ownership"
+    },
+    "edgion-tests/k8s/scripts/common/k8s_dynamic_scenarios.tsv": {
+      "sha256": "bb7bd55699de2cd7f27e6f11416de8fda6bdad85af1b1dbf6b82d9a0b46b39f9",
+      "scope": "23\u201331 mappings/reset including Body to_reset"
+    },
+    "edgion-controller/src/conf_mgr/conf_center/file_system/storage.rs": {
+      "sha256": "160b51c73737d2d6188d3f4b5991589443aeaae6ce723829fbe382ac371fbdc1",
+      "scope": "236\u2013277 complete update; retained full original source"
+    },
+    "edgion-controller/src/conf_mgr/conf_center/file_system/file_watcher.rs": {
+      "sha256": "db5980226663f13119f56f2b0c6d0b27cecd3266c2ebfad2a8227f262a1e0d95",
+      "scope": "124\u2013212 reads current authored files"
+    },
+    "edgion-controller/src/conf_mgr/conf_center/non_kube_common.rs": {
+      "sha256": "58b9f4e3f396edc3edc5b501a5caf89864c55a1409c4fb95899b1269084adf4b",
+      "scope": "171\u2013338 reload lifecycle; retained full source"
+    },
+    "edgion-gateway/src/plugins/http/plugin_store.rs": {
+      "sha256": "9aac57eba6c1392b1938cc473937c0f253ccd78e933b2ddfa96dabbd0ede2d24",
+      "scope": "45\u201393 valid/retained generation"
+    },
+    "edgion-gateway/src/plugins/publication/publisher.rs": {
+      "sha256": "ad317dc250d7eae46decb51ed2484aadbc8d21ce449b3fbef292ed1f10f45983",
+      "scope": "470\u2013507 compilation/same-policy retained generation"
+    },
+    "edgion-tests/src/client/suites/edgion_plugins/basic_auth/dynamic.rs": {
+      "sha256": "c6114a09b38b466dd6dd98a1f7aceeb904a299e70914fc459dfa0f49b96a682b",
+      "scope": "Full actual phase test file"
+    },
+    "edgion-tests/src/client/suites/edgion_plugins/canary/dynamic.rs": {
+      "sha256": "592b319256a68fe7b1eff0176c4559ccbee18ddda36ba8c294d566f6e8350ee1",
+      "scope": "Full actual phase test file"
+    },
+    "edgion-tests/src/client/suites/edgion_plugins/condition_refs_dynamic.rs": {
+      "sha256": "6adfc570a1a7ddaceaa14bdef427b2705470a8701a7e04cefe9d2deea387ee20",
+      "scope": "Full actual phase test file"
+    },
+    "edgion-tests/src/client/suites/status/backend_tls/dynamic.rs": {
+      "sha256": "72832d5406b5cf0e29ca2dda8bed30aba5efff75e4d35f9a9a876c8aa88ab49e",
+      "scope": "Full actual phase test file"
+    },
+    "edgion-tests/src/client/suites/edgion_plugins/body_plugins.rs": {
+      "sha256": "2d9b243fdf9e8b22e3260283f93747fd4f8a2bd3ed5cd1f2e83c5179d35410c4",
+      "scope": "Relevant complete helpers/functions/suites around1760\u20132035"
+    },
+    "edgion-tests/src/client/dynamic/scenarios/basic_auth_dynamic.rs": {
+      "sha256": "ad4a80de2ce2ebfc86e0b7a115307c7ccc362097349922a8adbc29bebc3665f8",
+      "scope": "Full independently read affected owner"
+    },
+    "edgion-tests/src/client/dynamic/scenarios/body_dynamic.rs": {
+      "sha256": "b8254e32c33d002376c88af48add48b428e0db792524de7c0b529a14c4b134ad",
+      "scope": "Full independently read affected owner"
+    },
+    "edgion-tests/src/client/dynamic/scenarios/btlsp_ref_flap.rs": {
+      "sha256": "694a77b5029a9375e2366e3999ea815cbc1502d2725ffd7286b415af3ab24014",
+      "scope": "Full independently read affected owner"
+    },
+    "edgion-tests/src/client/dynamic/scenarios/canary_hot_swap.rs": {
+      "sha256": "c1a7efbdf27cf55a187346416172d4f77070b1a0b5030ad0efc1fc7e94a5c624",
+      "scope": "Full independently read affected owner"
+    },
+    "edgion-tests/src/client/dynamic/scenarios/condition_refs_dynamic.rs": {
+      "sha256": "55dd4c6d390bf181d49293870f9d9507fad8a77a10b70e7873e886b2176b6b59",
+      "scope": "Full independently read affected owner"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/BasicAuth/DynamicTest/initial/EdgionPlugins_basic-auth-dynamic.yaml": {
+      "sha256": "92de9079c656d77b4266d1a2a31bfd6ae3aa11b4a59952ea5da33db32871c89f",
+      "scope": "Full individual fixture independently read"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/BasicAuth/DynamicTest/updates/EdgionPlugins_basic-auth-dynamic.yaml": {
+      "sha256": "c8373b2cf2af384df394a4533eb4c6b1dba8fac1652d7b62ac4539ac4120bce4",
+      "scope": "Full individual fixture independently read"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/BasicAuth/DynamicTest/initial_grouped/EdgionPlugins_basic-auth-dynamic-grouped.yaml": {
+      "sha256": "73918c3141bd33b4899ed6544f3e617f9e02e234e764127a37d37b5606cb8b88",
+      "scope": "Full individual fixture independently read"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/BasicAuth/DynamicTest/updates_grouped/EdgionPlugins_basic-auth-dynamic-grouped.yaml": {
+      "sha256": "01587bc02ee1e75ff446504159c78cc1ce808befccd508c89c5a7d5645ff9140",
+      "scope": "Full individual fixture independently read"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/ConditionRefsDynamic/DynamicTest/initial/00_Secret_condition-refs-dynamic.yaml": {
+      "sha256": "69b174b3d08297de0d07b59be5da704ee7a5602968aad019063ffd2e6f924d5d",
+      "scope": "Full individual fixture independently read"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/ConditionRefsDynamic/DynamicTest/initial/01_EdgionPlugins_condition-refs-dynamic.yaml": {
+      "sha256": "c4dd4c73e48410c741bbda9f997df96eb7df3e4427e6a8edfd60c4ef0705d87e",
+      "scope": "Full individual fixture independently read"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/ConditionRefsDynamic/DynamicTest/updates/00_Secret_condition-refs-dynamic.yaml": {
+      "sha256": "408ac7d5b9d2326ed2f73051b7a4d92750f43ae25cf2a1a269d3895d68d908c6",
+      "scope": "Full individual fixture independently read"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/ConditionRefsDynamic/DynamicTest/delete/secret.txt": {
+      "sha256": "eabc54d000e5abb73cb6b8d9ffedeaf9d93fb9dc34e15286dae69d30e40ad053",
+      "scope": "Full individual fixture independently read"
+    },
+    "edgion-tests/integration/conf/Status/BackendTLSPolicy/RefFlap/DynamicTest/initial/BackendTLSPolicy_edgion-test_btlsp-flap.yaml": {
+      "sha256": "937523b10a926256bf0463d50e75649809cbfdfe62fc132a1cd20e3f60d1bc05",
+      "scope": "Full individual fixture independently read"
+    },
+    "edgion-tests/integration/conf/Status/BackendTLSPolicy/RefFlap/DynamicTest/updates/to_invalid/BackendTLSPolicy_edgion-test_btlsp-flap.yaml": {
+      "sha256": "84ec79352c9309c5393f9b730d2e58792f57de1c55485ab60d53d1a6a2a6938a",
+      "scope": "Full individual fixture independently read"
+    },
+    "edgion-tests/integration/conf/Status/BackendTLSPolicy/RefFlap/DynamicTest/updates/to_valid/BackendTLSPolicy_edgion-test_btlsp-flap.yaml": {
+      "sha256": "937523b10a926256bf0463d50e75649809cbfdfe62fc132a1cd20e3f60d1bc05",
+      "scope": "Full individual fixture independently read"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/Canary/HotSwap/DynamicTest/initial/EdgionConfigData_default_canary-hotswap-selector.yaml": {
+      "sha256": "1e59855e30d41a7769bc3ffea9800a36d86bbacfda80a51e2578d28d72bb0da2",
+      "scope": "Full individual fixture independently read"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/Canary/HotSwap/DynamicTest/updates/flip_to_v2/EdgionConfigData_default_canary-hotswap-selector.yaml": {
+      "sha256": "9c11a3d8b364996ec843fd5cc88dc119ab3bdf291311dc3c7d46d9e883ddd36d",
+      "scope": "Full individual fixture independently read"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/Canary/HotSwap/DynamicTest/initial/EdgionPlugins_default_canary-hotswap-switch.yaml": {
+      "sha256": "daba2f7795969a9355310e82203b1b44f43a2e8522ebd5beee8381db80bfd9ed",
+      "scope": "Full individual fixture independently read"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/Canary/HotSwap/DynamicTest/updates/flip_to_v2/EdgionPlugins_default_canary-hotswap-switch.yaml": {
+      "sha256": "bd025a3de782bbff0ec8486d705a1a4f44852d8579cbe7e47978135fd6c25a20",
+      "scope": "Full individual fixture independently read"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/BodyDynamic/DynamicTest/initial/EdgionPlugins_body-dynamic.yaml": {
+      "sha256": "590040f7d7006a4cc771a299fd21e9d6a0a6118084c76cf38e9496beeaa2cb10",
+      "scope": "Full individual fixture independently read"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/BodyDynamic/DynamicTest/updates/to_invalid/EdgionPlugins_body-dynamic.yaml": {
+      "sha256": "2e0bd465379cbe8d8c64a7b7228878642444c6512bfb34dd9df4b9799ac2e736",
+      "scope": "Full individual fixture independently read"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/BodyDynamic/DynamicTest/updates/to_capped/EdgionGatewayConfig_example-gateway.yaml": {
+      "sha256": "e4072a395fa9dc26f206ed34c594eea7b52103a711a69aa328fde40cc9ab4bed",
+      "scope": "Full individual fixture independently read"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/BodyDynamic/DynamicTest/updates/to_restored/EdgionGatewayConfig_example-gateway.yaml": {
+      "sha256": "9fba7cadeabc9606d91ff8bbf7cc184cd443e75e965933732d22d4a4cfeac173",
+      "scope": "Full individual fixture independently read"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/BodyDynamic/DynamicTest/updates/to_capped/EdgionPlugins_body-dynamic.yaml": {
+      "sha256": "8a85746ebe19a96b0e8c513d1d4d01b7480e531657c478f2ecbe46162163d68b",
+      "scope": "Full independently read fixture/intent"
+    },
+    "edgion-tests/integration/conf/EdgionPlugins/BodyDynamic/DynamicTest/README.md": {
+      "sha256": "a78d86b73f45ca1a1fd6e6460b28769ea42eaf2aab3877fb93c0d3950405f92a",
+      "scope": "Full independently read fixture/intent"
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

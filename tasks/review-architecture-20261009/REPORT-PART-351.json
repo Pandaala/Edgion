@@ -1,0 +1,36 @@
+{
+  "partition": "PART-351",
+  "reviewer": "/root/analyze_session",
+  "complete": true,
+  "files": {
+    "edgion-gateway/src/plugins/runtime/edgion_config_data/conf_handler.rs": {
+      "sha256": "1417737fc1627a07c2d8adefa4db153587b9b3dc79afaf450d008183a466ab7f",
+      "disposition": "no-finding",
+      "reason": "Atomic raw/index publication, affected-key rebuilding and pinned matcher ownership already bound publication cost.",
+      "fully_read": true
+    },
+    "edgion-gateway/src/plugins/runtime/edgion_config_data/mod.rs": {
+      "sha256": "abec687747f8d4ba51508aa57976bd1f0696d3c6de986738c12f2b28e5704edc",
+      "disposition": "no-finding",
+      "reason": "Public and internal exports have concrete ownership boundaries; no actionable restructuring.",
+      "fully_read": true
+    }
+  },
+  "candidate_count": 0,
+  "evidence": {
+    "skills/01-architecture/05-resources/15-edgion-config-data.md": "fa43b5425b617f7e7a640f182dd527721d77dc939b56d4a2d0d25cb33c42d02e",
+    "skills/04-review/plugin-runtime/regression-guards/edgion-config-data-incremental-atomic-publication.md": "4e64433873c84174f051edd06c6559df69d7c6d4bbe852cd42272432e50f0f61",
+    "edgion-gateway/src/response/driver.rs": "1bf18b498c8cf2c6c6c29633f019b581e8e9c39d51fc8e965f87e67364eae50f",
+    "edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_trailer_filter.rs": "00562fce6b1f8067558da3434c338547e2213b94676841362abfee7e119c78d9",
+    "edgion-gateway/src/plugins/http/ext_proc/streamed.rs": "46f79d392cceb48df758b89152dbe21d74c649826b679dbcdbf30b140a89cb17",
+    "edgion-gateway/src/plugins/http/ext_proc/response_trailer.rs": "84c4772b0cc7e74dcb66604e0e760c430896ea7a279f6494172058cd56a55a64",
+    "edgion-gateway/src/plugins/http/ip_restriction/plugin.rs": "f2737aa2f7772cafc79af9a744e3e356ded91d4212b1e30008b124d10deaab7b",
+    "edgion-gateway/src/plugins/stream/global_connection_ip_restriction/plugin.rs": "29dd1fac332a8aafab8ef4151a461bb5fe43779fe9be4fa48ec03633d4199492",
+    "edgion-gateway/src/plugins/http/region_route/plugin.rs": "709bebcc52cf4341ea8875eef4f37e3b9e81f3952275a85734b7a3ae852d1898",
+    "edgion-gateway/tests/unit/response/driver_test.rs": "60e8048b458c689f478da43f385086f4e41e347c6a8e65a4cf756e3550c9b3ad",
+    "edgion-gateway/tests/unit/routes/http/proxy_http/pg_upstream_response_trailer_filter_test.rs": "3c0567ee08d4f28e22cfa1007bb5b646643d68e7a3ac176d0cfcb2843365827e"
+  },
+  "limitations": [
+    "Static contextual review; tests inspected, not executed; secondary reads do not count toward primary coverage."
+  ]
+}

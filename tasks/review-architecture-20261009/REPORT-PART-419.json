@@ -1,0 +1,220 @@
+{
+  "partition": "PART-419",
+  "analyst": "/root/verify_ip_union",
+  "complete": true,
+  "primary": [
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/basic_auth.rs",
+      "sha256": "65a16c063b9a86d62c3f793d85ed275c1e17b99c2d4a3ad9966bede4efd76632",
+      "fully_read": true,
+      "disposition": "No finding: clearbeforetypedloan/firstwins; acceptedcoldtemporaryidentity map."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/credential_injector.rs",
+      "sha256": "9422f1c8398497bd2ffe4499a0ffcb1c58f2d2d65c038124fdf1f0eff7ee0d83",
+      "fully_read": true,
+      "disposition": "No finding: activityclear/managedSecretUID-generation-binding/expiry/headercaps/readonly and distinctGateway owner."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/csrf.rs",
+      "sha256": "ae21036361fa73c351bd026ca1c335de9f8f3087d7ef1c44284aabc006b7f687",
+      "fully_read": true,
+      "disposition": "No finding: canonicalborrowedUTF8 exactnonblankbytes andrequiredownedmaterial/inactiveclear."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/ext_proc.rs",
+      "sha256": "ca14e7b6a6e175e48e15c456a1264b648043f3c0229207d51218549cebc903a1",
+      "fully_read": true,
+      "disposition": "No finding: every-stageclear andtypedTLS gates; distincttonictransportowner legitimate."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/header_cert_auth.rs",
+      "sha256": "d724e6d758a18058720351e99dba57d8ff1d4bb25e6345ff346e60196285d089",
+      "fully_read": true,
+      "disposition": "No finding: mode/activityCArole; acceptedSecretprojection/Gatewaycompileowners."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/hmac.rs",
+      "sha256": "0ea0bd5993631f583248d997583c9161d589695aa02a42fcd6cfd60b7a866977",
+      "fully_read": true,
+      "disposition": "No finding: sharedborrowedfixedYAMLdecoder; deliberatemetadata differences/firstwinsmap retained."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/jwe.rs",
+      "sha256": "e2001b88ffa0229bc21a9cda129d6894cd1e1d472b2756ab17798657b6342887",
+      "fully_read": true,
+      "disposition": "No finding: clearstale, typedstatus differentiatesabsence/key/decode nosecretvalue orGatewayfallback."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/jwt.rs",
+      "sha256": "d20b82ec822b7df8add985420b21ddd8e8bd550a9003c29185acd48e9920a84d",
+      "fully_read": true,
+      "disposition": "No finding: trimonce/groupfirstwins/defaultalgorithm/empty-audienceoverride; perissuerowner accepted."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/key_auth.rs",
+      "sha256": "31204f72195dd040e198c8d6342d2e7dc8314c6bb0ff579a85295b8383b65051",
+      "fully_read": true,
+      "disposition": "No finding: moveentrymetadata/exactkeys; mapentryduplicates owns detection, whitespace/emptyintentional."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/ldap_auth.rs",
+      "sha256": "d26e5748e1a54debbe0276ba051e1e7b0e1b04e5918552c2d89f4ffd8960ef9e",
+      "fully_read": true,
+      "disposition": "No finding: clearbeforetypedactiveTLS acquisition; clientmaterial ownerlegitimate."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/managed_http.rs",
+      "sha256": "58cd45788f46946fc975fd4f87d767383d222af3f98f9e73b2a592b9c8ee0bc3",
+      "fully_read": true,
+      "disposition": "No new finding: canonicaltemplate/TLS independentactivity; discardedstatusmap alreadyARCH108."
+    },
+    {
+      "path": "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/mod.rs",
+      "sha256": "8c80f278c5c1a7594a7a6c57aedf50495887c73abfc0fbdd9a4e0adbbb1f5236",
+      "fully_read": true,
+      "disposition": "No finding: canonicalborrowedUTF8 andcurrentowningfieldreadonlystatus; materiallydifferenttypepolicies."
+    }
+  ],
+  "candidates": [],
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original retained; fresh hash; only root AGENTS."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full retained; progressive navigation."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full retained; refreshed applicable gates."
+    },
+    "skills/04-review/SKILL.md": {
+      "sha256": "4cae300d6c62ad45dff96f71e32b9f28d3bbf527a7499b8ce33df6151b0d584c",
+      "scope": "Full retained; fresh hash."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original authority/revalidation."
+    },
+    "/Users/caohao/.codex/skills/edgion-architecture-review/SKILL.md": {
+      "sha256": "c13b81dec1b5c63ae58fd5057742cc34d09bf64f7b68e2b0c42b66425b02567f",
+      "scope": "Full original read-only coverage/verification rules."
+    },
+    "skills/01-architecture/05-resources/SKILL.md": {
+      "sha256": "dae4740e05545a9d674199070cc49a6559fd921e69ae0d08dab19dc51d3efef6",
+      "scope": "Full currenttask index."
+    },
+    "skills/01-architecture/05-resources/13-edgion-plugins.md": {
+      "sha256": "176b34ceae236190b76fd70c9fa3543cbbdee97ed8223420f8dc1379d480b35d",
+      "scope": "Full currenttask; readonly/material/status owners."
+    },
+    "skills/01-architecture/02-gateway/12-edgion-plugin-dev.md": {
+      "sha256": "6ab38a79d35a35280c1dbf845518da14a2d05a0d55acba1ff7db8dc7e40e4c70",
+      "scope": "Selected152\u2013178,239\u2013254; credential ownership."
+    },
+    "skills/02-features/03-resources/13-edgion-plugins.md": {
+      "sha256": "b705aa0b53914467b4028f84f0fbcb6e55c68913a347a7314fbe8109aa9e9e30",
+      "scope": "SelectedCredentialInjector count/dependency table; supersededformats distinguished."
+    },
+    "skills/04-review/security/intentional-design/credential-copy-retention.md": {
+      "sha256": "10a0159a28ac80b65e5fb4225f67a47a84a72acbfad7254e8506eae5e78f350c",
+      "scope": "Full currenttask; acceptedmaps/JWT/TLS andtriggers."
+    },
+    "skills/04-review/security/review-evidence/credential-copy-ownership.md": {
+      "sha256": "221bdd4cc792434bb20d60ab60a7e65f61c2a3e11fa3039860f111cd05e4e31c",
+      "scope": "Selected70\u201388 actualownertable, recoveredtruncation."
+    },
+    "skills/04-review/hmac-auth/regression-guards/credential-yaml-borrowed-decoding.md": {
+      "sha256": "d42129c7b439a5143b8aaf4be62fe4fcf64367292602eea4763b4c608df632e3",
+      "scope": "Full; canonicalborrowedfixedYAML."
+    },
+    "skills/04-review/deserialization/regression-guards/plugin-auth-resolved-credentials-clear-before-resolve.md": {
+      "sha256": "d8f661e96497b757c1e3aba86e62c7fecf151010519d4bd60f5167411dcdf5f2",
+      "scope": "Full; allstageclearing."
+    },
+    "skills/04-review/plugin-runtime/regression-guards/request-template-policy-unification.md": {
+      "sha256": "413004f76a11df4ef914bc1fb625dba4fa25602d6bf8ac8b25b66d62c3d49e7a",
+      "scope": "Selected1\u2013124; actualowner/TLSactivity/readonly."
+    },
+    "skills/04-review/handler-requeue/regression-guards/reference-grant-dependency-before-authorization.md": {
+      "sha256": "53f1c5febed6161b22954ec3c508e7042c7a4b0f0c38998d28722ebb8f403792",
+      "scope": "Full; typedloans/dependencyandEGCexception."
+    },
+    "tasks/pending/resource-reference-contract/01-spec.md": {
+      "sha256": "a01c94e7b47eba2046275fdaafde4be16b71ae053a8ba619dec8656a723a8678",
+      "scope": "Selected78\u2013105; managedownership/exclusions; oldinventoryhistorical."
+    },
+    "tasks/pending/resource-reference-contract/02-field-manifest.md": {
+      "sha256": "6799d52b46163b7b02f7336d316e4733ab6bf8fb4154d0699c1396d4681d96a5",
+      "scope": "Selected128\u2013180/managedHTTP; actualsourcechecked."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs": {
+      "sha256": "9a6ed6dbb4caa2a8a6a5b9bee0e9a9d75344edd9aad3b9eeee5dccc6413dc16a",
+      "scope": "Selected170\u2013280,374\u2013411,438\u2013515; parse/status/delete."
+    },
+    "edgion-controller/src/conf_mgr/sync_runtime/resource_processor/credential/pipeline.rs": {
+      "sha256": "4a48be638ba31b9d21a04a7ac09aae33af71d88ceb6be561460b3925b5d1683d",
+      "scope": "Selected135\u2013391,615\u2013654; readonly/Grant/material acquisition."
+    },
+    "edgion-resources/src/resources/refs/plugin_fields.rs": {
+      "sha256": "4c3c891758ab704386c68867060669adc42636e92fdf6dee7b787aa4e6145307",
+      "scope": "Selected875\u2013982,1121\u20131284; stage/enabledrole/TLSindependence."
+    },
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/hmac_auth.rs": {
+      "sha256": "c3ce51abe3b4bdcf2a902b80eba311186e4b231fdcdd2766c4f97fb4136090d4",
+      "scope": "Selectedschema/wireadapter/validation; transportredaction distinctflattening."
+    },
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/credential_injector.rs": {
+      "sha256": "72e3487e40d4c180fa700892de2b2f2a06e42e4d0ca8771bed4ea967ccefbadf",
+      "scope": "Selected38\u201358; schema/redaction."
+    },
+    "edgion-resources/src/resources/edgion_plugins/plugin_configs/jwe_decrypt.rs": {
+      "sha256": "53ef7a871b68d44b8a92b4dd988a2bacb973e1f97f9c4b0e6be104e53f016031",
+      "scope": "Selected150\u2013174; schema/transport."
+    },
+    "edgion-gateway/src/plugins/http/credential_injector/plugin.rs": {
+      "sha256": "773f8ab10eb5e5ab24eb0e6b2edda6673641aba8a76d727697c5a20f86da72c5",
+      "scope": "Full; preparedheader/expiry/deferredinjection actualconsumer."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins_test.rs": {
+      "sha256": "3cd131fcab4e744691ed943db288c06d1a35cd30197b751138282983f5a015f8",
+      "scope": "Actualbodies selected248\u2013321,409\u2013503,605\u2013655,860\u2013961,1275\u20131405,1465\u20131660,1787\u20131847,7432\u20137623; identity/Grant/status/rotation/clear/redaction."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/basic_auth_test.rs": {
+      "sha256": "76d018e904f1aa78396c497c5c3f18fc79b1254db16966fe77a54fcca1edf8f9",
+      "scope": "Fullactualbodies."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/hmac_test.rs": {
+      "sha256": "3a7dd18247e7d8612b5e6f1e27a63eeacc0288f5d0226368cd0396dd30837d5e",
+      "scope": "Fullactualbodies."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/jwt_test.rs": {
+      "sha256": "5f070f173efbb2d444104432a6881a5befaa50610448fa9ad5a74ebaa74c23aa",
+      "scope": "Fullactualbodies; localmirroredlogic supplementedactualhandler."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/jwe_test.rs": {
+      "sha256": "dd5fb2e0c1f9db40dc53cd1ec504996ee5136d13d998f98c6aa32cb4c6d09e8b",
+      "scope": "Fullactualbodies; actualhandler supplement."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/mod_test.rs": {
+      "sha256": "1d51db33afcd80ef2511ae04b1a3db2c17ea7f2c94b1eb6683d08537e39720f3",
+      "scope": "Fullactualborrowedpointer/whitespace tests."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/key_auth_test.rs": {
+      "sha256": "da42333e6d39ffbf8006668ff6f6b47fee2e3dbac93b7f21cca0d1d290524ca9",
+      "scope": "Fullactualresolver metadata/keys/redaction/rotation/clear."
+    },
+    "edgion-controller/tests/unit/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/credential_injector_test.rs": {
+      "sha256": "c11861f1da5d16774d901b80012f53c8f0e590cb0738fc9e123d43028b3d75e1",
+      "scope": "Full583actualbodies; managedidentity/memory/expiry/caps/readonly/stale."
+    }
+  },
+  "limits": [
+    "All12primaries2041lines77128bytesfullyread freshfrozenhashmatch; secondarycoveragezero.",
+    "Actualboundrefsstage/enabledgate explainsresolvers lacking localenablebranch. Legitimatecredentialformat/metadata/whitespace/group/TLS differences do notjustifygenericframework.",
+    "No scale/exposure/hotpathtrigger to reconsideracceptedcoldcopies; no physicalzeroization/globalfence/performance claim. Noexecution/mutations; historicaltests notfresh.",
+    "Stalefeatureformat prose distinguishedfrom currentowningfieldsource/specificguards;108deduplicated."
+  ]
+}

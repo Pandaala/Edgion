@@ -1,0 +1,41 @@
+{
+  "partition": "GW-SESSION",
+  "reviewer": "/root/analyze_session",
+  "complete": true,
+  "current_revalidated": true,
+  "reviewed_file_count": 7,
+  "candidate_count": 1,
+  "candidates": [
+    "ARCH-002"
+  ],
+  "files": {
+    "edgion-gateway/src/plugins/runtime/traits/session.rs": "reviewed original snapshot; current state separately tracked",
+    "edgion-gateway/src/plugins/runtime/traits/header_ext.rs": "reviewed original snapshot; current state separately tracked",
+    "edgion-gateway/src/plugins/runtime/traits/request_filter.rs": "reviewed original snapshot; current state separately tracked",
+    "edgion-gateway/src/plugins/runtime/traits/upstream_response_filter.rs": "reviewed original snapshot; current state separately tracked",
+    "edgion-gateway/src/plugins/runtime/traits/upstream_response.rs": "reviewed original snapshot; current state separately tracked",
+    "edgion-gateway/src/plugins/runtime/traits/upstream_response_body_filter.rs": "reviewed original snapshot; current state separately tracked",
+    "edgion-gateway/src/plugins/runtime/traits/mod.rs": "reviewed original snapshot; current state separately tracked"
+  },
+  "decisive_notes": [
+    "Seven traits fully read with call chains and relevant original knowledge/tests.",
+    "Borrowed headers, separate stage boundaries and read-only chunk contracts remain justified.",
+    "Body-contract candidate distinct from feature growth. New adapter capture hunks revalidated by analyst."
+  ],
+  "evidence": {
+    "edgion-gateway/src/plugins/runtime/session_adapter.rs": "22bc7321945dff10b68b785c78ae650aefd7263e89fa0fc626f9354cd3df0aa7",
+    "edgion-gateway/src/plugins/runtime/plugin_runtime.rs": "39903de5943e29c8fae2ecdbf982672977824c4a248af2ca4a0b947583c22eec",
+    "edgion-gateway/src/ctx.rs": "9d43ee4beb709de5354ca9c56dd0350ffdeba95dfe181bc4c8dea73bc2a4e3b9",
+    "edgion-gateway/src/request_body/storage.rs": "e4b3f891f138f1bff617c95d5b3293151467c01707d71530db50eaeaaf8f0dac",
+    "edgion-gateway/src/request_body/state.rs": "47e036ef9a725668ee7b052ae2bb26c76c2baf98f49d830617fbb933cc8e91da",
+    "edgion-gateway/src/request_body/operation.rs": "e7bd43f32b45613ee6bc425e696f8a8b2be531dda7cd91e867aadf0881c6b534",
+    "edgion-gateway/src/request_body/body_scanners.rs": "a54fba94ea1ee34d21f45e54c9d7687a3e6483e48ccbccaf5f87509fe5fcc95c",
+    "edgion-gateway/src/request_body/state/enabled.rs": "92e0ba87c8851d29fc01ee51def141662f16b0550db11c2c9fb875b41071850a",
+    "edgion-gateway/src/plugins/http/request_mirror/plugin.rs": "fd1f288cef9740573b8c73733a7fab83b22da97ef548c9ccff54d4f605b0e2ad",
+    "skills/04-review/request-mirror/regression-guards/request-mirror-committed-body-snapshot.md": "6de304ef4ff4ce90df01c730d722411502f0d3b6e46cff24eb9b9e38740e0161",
+    "tasks/pending/waf-optimization-design/01-spec.md": "657aaa3f67f3de385674df6ca986ce9c0a12e1effcb0773b509272bc83f74fef"
+  },
+  "limitations": [
+    "Source/existing tests only; no checks or wire execution; secondary reads not primary coverage."
+  ]
+}

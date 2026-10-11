@@ -1,0 +1,75 @@
+{
+  "candidate": "ARCH-083",
+  "complete": true,
+  "verifier": "/root",
+  "decision": "confirmed",
+  "input_sha256": "7b0632e34568afd02fa6e21743ef0ef2cf0db70d17334337c89e398bae870083",
+  "approved_claim_sha256": "47260acc9212802ae1ce5a2edc935b887d2e1e2282499fd893e16d9ea530ffe5",
+  "evidence": [
+    "Independent falsification of unchanged analyst body: supervisor current cfg determines restart but spawn signature accepts receiver only.",
+    "Actual CLI factory captures boot CenterConfig; address-only valid-TLS A-to-B reload/promotion still starts A.",
+    "Reload loads/sends B and supervisor remembers B; no config read in factory/client closes gap.",
+    "Explicit current immutable snapshot input feasible, preserves single policy writer/coalescing/leader/stop gates; security/env/tag restart extensions excluded.",
+    "Full supervisor595-line test bodies assert fake lifecycle counts/shutdown, never delivered configuration."
+  ],
+  "primary_coverage": 0,
+  "support_selected": {
+    "AGENTS.md": {
+      "sha256": "b607e2e063c549109e4843100faae93ba46d79076f8cac542b5f402bfceec0d7",
+      "scope": "Full original personally read in continuous run."
+    },
+    "skills/SKILL.md": {
+      "sha256": "f0dfcd1ba9ddb16e1042dcadb9edcb1b9a33ad1e146b9ed45eb80522375f32a6",
+      "scope": "Full original personally read."
+    },
+    "skills/00-design-rules.md": {
+      "sha256": "b6c5b8e5eb1c98431aeb03c0c9388428079fad0ad5efc848eb078e02592c68c6",
+      "scope": "Full graded original gates personally read."
+    },
+    "skills/04-review/knowledge-routing.md": {
+      "sha256": "b4e5658c454ae3378d1ff71722cecf46e07543329eca849766ee7e9676634a08",
+      "scope": "Full original routing personally read."
+    },
+    "skills/01-architecture/01-controller/11-authentication-authorization.md": {
+      "sha256": "9e3878e3dac96ccb305f0373f4cead3e009f5cd58ebc216332dd482072abf2f2",
+      "scope": "Full original personally read."
+    },
+    "skills/04-review/federation/SKILL.md": {
+      "sha256": "46b5edea80b72169dd56b613105d4a545f6c4b0799f7e28e9b114db4b059dbde",
+      "scope": "Full original personally read."
+    },
+    "skills/04-review/federation/regression-guards/fed-proxy-mtls-fail-close.md": {
+      "sha256": "9da3adf99b55e896e6a324d972f9a21f6c3e9c1f75dee80e4ca52e1fc41da626",
+      "scope": "Full original personally read."
+    },
+    "skills/02-features/02-config/00-controller-config.md": {
+      "sha256": "07a601d4f500f3466f0556cd58e6fae88fe444994280d22a999d1a6a9b07dbd2",
+      "scope": "645-730 Center fields/RBAC required policy."
+    },
+    "edgion-controller/src/fed_sync/supervisor.rs": {
+      "sha256": "50964ce261d22e6dd8021439399c30cef94b4ba7d32b8fc9adb6f1184241ea63",
+      "scope": "Full291-line source independently read."
+    },
+    "edgion-controller/src/cli/mod.rs": {
+      "sha256": "e6a99b22317b82b315c7a9e9c26b67c58de82e00687dc05eb4d34031829d41af",
+      "scope": "Full primary retained and718-805 fresh factory/leader inspection."
+    },
+    "edgion-controller/src/api/mod.rs": {
+      "sha256": "9320b3b8da4191ad7317024052c8db9c4da21835721ec26cd051105dabb0d1d6",
+      "scope": "274-365 actual reload load/policy/send."
+    },
+    "edgion-controller/src/config/mod.rs": {
+      "sha256": "54e60befbad30bec131ef6142715e1158b99155194bac7c77e22cc181fe49405",
+      "scope": "462-490 full load,532-624 full merge,737-792 identity; no override reinjects startup Center."
+    },
+    "edgion-controller/src/fed_sync/fed_client/mod.rs": {
+      "sha256": "b677aece92cd9df4e97b1d8f2bbcf849907681a75f99b3d4c03eaeed20051ccb",
+      "scope": "125-320 validated TLS, actual endpoint/register consumer."
+    },
+    "edgion-controller/tests/unit/fed_sync/supervisor_test.rs": {
+      "sha256": "2668399b8717cf1c2065393b738415b3a4b195ff5e286b8515a63fc2c4e860b5",
+      "scope": "Full595-line bodies personally independently read."
+    }
+  },
+  "limits": "Static independent review; no builds/tests/network/mutations; external consumers unaudited."
+}

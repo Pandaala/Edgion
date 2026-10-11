@@ -1,0 +1,16 @@
+{
+  "partition": "GW-SESSION",
+  "reviewer": "/root/analyze_session",
+  "complete": true,
+  "kind": "primary-coverage-scoped-revalidation",
+  "changed_sources": {
+    "edgion-gateway/src/plugins/runtime/traits/session.rs": "df61ce697bef246477efa045afd23d5667309c8c010026ecbe971f9d36344b3b"
+  },
+  "notes": [
+    "Previously complete primary implementations assessed with full current delta and original WAF06 design/callers.",
+    "New inspection stop/source-window/complete-capture ownership assessed; no extra candidate. Existing roots remain."
+  ],
+  "limitations": [
+    "Active WAF changes are not functionally accepted; no tests/builds."
+  ]
+}
