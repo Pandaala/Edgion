@@ -162,5 +162,5 @@ partial_update:
 | EdgionAcme | B | Incremental challenge store |
 | EdgionConfigData | B | Incremental runtime data-store update |
 | Gateway | B | Incremental updates to GatewayStore + ListenerGatewayInfoStore; full TLS matcher rebuild (with short-circuit optimization) |
-| GatewayClass | C | Linear Vec scan, acceptable due to very small count |
-| EdgionGatewayConfig | C | Same as GatewayClass |
+| GatewayClass | C | Stateless Arc forwarding to canonical PluginPublisher; received inventory belongs to ClientCache |
+| EdgionGatewayConfig | C | Clone-modify-publish configuration snapshot, refresh bound handles and publish scoped policy inputs |

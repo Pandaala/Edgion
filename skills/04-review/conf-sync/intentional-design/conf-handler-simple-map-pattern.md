@@ -10,11 +10,25 @@ knowledge_type: intentional-design
 **Linked issue**: infra-cluster-F012 (closed, ⚠️ accepted tradeoff, no code change)
 **Conclusion**: Extracting a generic `SimpleMapConfHandler<T>` wrapper around the
 `LazyLock<RwLock<HashMap<String, T>>>` + three-arm `add` / `update` / `remove` loop is
-declined. Only two production handlers (`GatewayClassHandler`,
+declined. At the original audit, only two production handlers (`GatewayClassHandler`,
 `EdgionGatewayConfigHandler`) actually implement this exact shape; the issue's
 "routes subtree multiple copies" premise is wrong.
 
-## The two real sites
+## Current ownership after ARCH-014
+
+ARCH-014 removes the otherwise unused owned GatewayClass diagnostic mirror.
+ConfigClient ClientCache owns received resources and provides the diagnostic
+count; the stateless GatewayClass handler forwards Arcs to PluginPublisher before
+adaptive reconciliation. It no longer implements the simple-map pattern below.
+EdgionGatewayConfig now publishes immutable runtime snapshots and bound handles,
+so the old description of its exact lock and side effect is historical too.
+
+The original infra-cluster-F012 rejection of generic extraction remains useful
+history; it does not reject removal of redundant ownership. Re-evaluation must
+inspect current actual consumers and demonstrate a real coupling/change cost,
+rather than assuming either historical handler still has this shape.
+
+## Historical evidence: the two real sites
 
 - `edgion-gateway/src/config/gateway_class/conf_handler_impl.rs:57-104`
   (`GatewayClassHandler::partial_update`)
@@ -111,7 +125,7 @@ itself is not a defect), `plugins-runtime-F003` (don't extract
 `add_plugins_inner` even with four sites). Refactor declined; pure no-behavior
 change DRY with no real maintenance evidence and no measurable runtime impact.
 
-## Re-evaluate only on
+## Historical re-evaluation criteria
 
 - A **third** ConfHandler<T> impl using the exact `LazyLock<RwLock<HashMap>>` +
   three-arm `add` / `update` / `remove` shape appears (routes/plugins/backends do
@@ -123,7 +137,7 @@ change DRY with no real maintenance evidence and no measurable runtime impact.
   `key_diff(&self, ...) -> ...`) forcing both handlers to re-implement the same
   adapter code.
 
-Re-reports of the "extract `SimpleMapConfHandler<T>`" / "fold partial_update into
+Historically, re-reports of the "extract `SimpleMapConfHandler<T>`" / "fold partial_update into
 a generic wrapper with `on_add` / `on_update` hooks" / "this pattern is also
 copied across routes/plugins/backends" form are not accepted; verify the actual
 shape of routes/* and the absence of a third LazyLock-RwLock-HashMap simple-map

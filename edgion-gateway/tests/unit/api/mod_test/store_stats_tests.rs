@@ -24,6 +24,9 @@ fn ai_runtime_store_collector_reports_populated_stores() {
 
 #[test]
 fn store_stats_response_serializes() {
+    let client_caches = ClientCachesStats {
+        by_kind: std::collections::BTreeMap::from([("GatewayClass".to_string(), 3)]),
+    };
     let resp = StoreStatsResponse {
         wasm_shared_data_metrics: Default::default(),
         plugin_publication: Default::default(),
@@ -83,12 +86,10 @@ fn store_stats_response_serializes() {
             reverse_index_targets: 0,
             invalid_index_targets: 0,
         },
-        gateway_class_store: SimpleCountStats { count: 0 },
+        gateway_class_store: client_caches.gateway_class_stats(),
         edgion_gateway_config_store: SimpleCountStats { count: 0 },
         egc_bindings: Default::default(),
-        client_caches: ClientCachesStats {
-            by_kind: std::collections::BTreeMap::new(),
-        },
+        client_caches,
         service_discovery: crate::backends::discovery::ServiceDiscoveryStatsSnapshot::default(),
         health_status_store: SimpleCountStats { count: 0 },
         outlier_detection_store: SimpleCountStats { count: 0 },
@@ -130,6 +131,8 @@ fn store_stats_response_serializes() {
     assert_eq!(json["tls_routes"]["total_candidate_entries_in_tables"], 0);
     assert_eq!(json["udp_routes"]["total_routes_in_tables"], 0);
     assert!(json.get("client_caches").is_some());
+    assert_eq!(json["gateway_class_store"]["count"], 3);
+    assert_eq!(json["client_caches"]["by_kind"]["GatewayClass"], 3);
     assert!(json.get("service_discovery").is_some());
     assert!(json.get("service_store").is_none());
     assert!(json.get("ep_slice_store").is_none());
@@ -147,4 +150,25 @@ fn store_stats_response_serializes() {
     assert!(json.get("stream_plugin_store_v2").is_some());
     assert!(json.get("plugin_store").is_none());
     assert!(json.get("stream_plugin_store").is_none());
+}
+
+#[test]
+fn gateway_class_diagnostic_uses_received_inventory_membership() {
+    for (received, expected) in [(None, 0), (Some(3), 3), (Some(0), 0), (Some(1), 1)] {
+        let mut by_kind = std::collections::BTreeMap::from([("Gateway".to_string(), 17)]);
+        if let Some(count) = received {
+            by_kind.insert("GatewayClass".to_string(), count);
+        }
+        let client_caches = ClientCachesStats { by_kind };
+        let gateway_class_store = client_caches.gateway_class_stats();
+        assert_eq!(gateway_class_store.count, expected);
+        let json = serde_json::json!({
+            "gateway_class_store": gateway_class_store,
+            "client_caches": client_caches,
+        });
+        assert_eq!(json["gateway_class_store"]["count"], expected);
+        if received.is_some() {
+            assert_eq!(json["client_caches"]["by_kind"]["GatewayClass"], expected);
+        }
+    }
 }

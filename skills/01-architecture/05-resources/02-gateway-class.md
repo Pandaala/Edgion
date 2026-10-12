@@ -90,7 +90,20 @@ whether the EGC's new processed object has already been published. See the
 
 ## Gateway-side processing
 
-After GatewayClass is synced to the Gateway side, it is stored in the GatewayClass cache (`edgion-gateway/src/config/gateway_class/`) and used for class-matching validation of Gateway resources.
+ConfigClient's typed ClientCache owns received GatewayClass resources. Gateway startup
+reads that cache to resolve each Gateway's class. The stateless handler in
+`edgion-gateway/src/config/gateway_class/` forwards full and incremental Arc inputs
+to the canonical PluginPublisher, which validates class parameters and builds
+immutable policy scopes, then reconciles adaptive dependents. Captured in-flight
+scopes retain their original generation.
+
+There is no separate owned GatewayClass diagnostic mirror. The testing-mode
+`gateway_class_store.count` field derives from the same `client_cache_stats()`
+sample as `client_caches.by_kind.GatewayClass`. It reports received membership,
+which may precede debounced runtime publication; the pair is not a cross-kind
+or cache/runtime transaction. Diagnostics read ClientCache separately, never
+from its write-locked handler callback. This ownership simplification closes
+ARCH-014 without introducing a new counter or store.
 
 `runtime/server/base.rs` resolves each Gateway's class and that class's own
 parametersRef. Multiple classes require no array-valued sync message. This does

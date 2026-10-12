@@ -478,6 +478,15 @@ struct ClientCachesStats {
     by_kind: std::collections::BTreeMap<String, usize>,
 }
 
+impl ClientCachesStats {
+    /// Received membership may precede debounced runtime publication.
+    fn gateway_class_stats(&self) -> SimpleCountStats {
+        SimpleCountStats {
+            count: self.by_kind.get("GatewayClass").copied().unwrap_or(0),
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct LinkSysRuntimeStats {
     count: usize,
@@ -536,9 +545,6 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
 
     let backend_tls_policy = crate::backends::policy::get_global_backend_tls_policy_store().stats();
 
-    let gateway_class_store = SimpleCountStats {
-        count: crate::config::gateway_class::count_gateway_classes(),
-    };
     let edgion_gateway_config_store = SimpleCountStats {
         count: crate::config::edgion_gateway::count_edgion_gateway_configs(),
     };
@@ -546,6 +552,7 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
     let client_caches = ClientCachesStats {
         by_kind: client.client_cache_stats(),
     };
+    let gateway_class_store = client_caches.gateway_class_stats();
 
     let service_discovery = crate::backends::get_service_discovery_coordinator().stats();
 
