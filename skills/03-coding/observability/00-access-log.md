@@ -28,6 +28,18 @@ Each access log entry must contain enough information for an operator to locate 
 
 ---
 
+## GeoIP projection ownership
+
+The optional `geo` block projects only already-resolved `remote` and `direct_peer`
+slots through `RequestInfo::resolved_geo()`. Logging neither queries GeoIP nor
+allocates optional geo state. Dimension strings borrow the request-retained
+`GeoInfo` through the entry's lifetime; only the computed coordinate string is
+owned and uses the canonical masked serializer. Serialize while the context is
+alive: `to_json()` returns an owned string that can outlive the entry and context
+for asynchronous sink or debug-header use. See the [GeoIP lazy-slot regression
+boundary](../../04-review/observability/regression-guards/geoip-no-global-enabled-switch-access-log-lazy.md)
+for ARCH-019 ownership evidence and verification limits.
+
 ## AccessLogEntry fields
 
 `edgion-gateway/src/observe/access_log/entry.rs` — produced by `AccessLogEntry::from_context(ctx)` during the `logging()` phase of `pg_logging.rs`:

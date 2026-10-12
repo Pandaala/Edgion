@@ -28,26 +28,21 @@ enum GeoSlotStatus {
 /// `status` is always present; the dimension fields are present only when
 /// `status == "found"` and the underlying `GeoInfo` field is `Some`.
 ///
-/// Fields are owned `String`s, not `&str` borrows off the `GeoLookup`
-/// argument: `GeoLookup::Found` carries an `Arc<GeoInfo>`, and cloning its
-/// (at most four, short) string fields out is cheap — well short of the
-/// "newly-allocated geo struct" the request-body/response-buffering
-/// invariants warn against, and consistent with `request_uri` on this same
-/// struct, which is likewise an owned `Option<String>` computed per request.
-/// Owning also keeps `from_slots` usable with a short-lived `&GeoLookup`
-/// (e.g. one built from a temporary in a test) rather than requiring the
-/// caller's `GeoLookup` value to outlive the returned block.
+/// Dimensions borrow the immutable facts retained by the request's lookup
+/// slot. The slot must outlive this projection; serialization produces an
+/// owned JSON string before that string is handed to an asynchronous sink.
+/// Only the computed coordinate string needs separate ownership.
 #[derive(Serialize)]
-struct GeoSlotLog {
+struct GeoSlotLog<'a> {
     status: GeoSlotStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
-    country: Option<String>,
+    country: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    continent: Option<String>,
+    continent: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    subdivision: Option<String>,
+    subdivision: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    city: Option<String>,
+    city: Option<&'a str>,
     /// A single `"lat,lon"` string rather than two `f64` fields: the masking
     /// pipeline operates on strings, and this reuses the same `masked`
     /// serializer `direct_peer_ip`/`remote_ip` get. Present only when
@@ -60,8 +55,8 @@ struct GeoSlotLog {
     coord: Option<String>,
 }
 
-impl GeoSlotLog {
-    fn from_lookup(lookup: &GeoLookup) -> Self {
+impl<'a> GeoSlotLog<'a> {
+    fn from_lookup(lookup: &'a GeoLookup) -> Self {
         match lookup {
             GeoLookup::Unavailable => Self {
                 status: GeoSlotStatus::Unavailable,
@@ -89,10 +84,10 @@ impl GeoSlotLog {
             },
             GeoLookup::Found(info) => Self {
                 status: GeoSlotStatus::Found,
-                country: info.country_iso.clone(),
-                continent: info.continent.clone(),
-                subdivision: info.subdivision.clone(),
-                city: info.city.clone(),
+                country: info.country_iso.as_deref(),
+                continent: info.continent.as_deref(),
+                subdivision: info.subdivision.as_deref(),
+                city: info.city.as_deref(),
                 coord: match (info.latitude, info.longitude) {
                     (Some(lat), Some(lon)) => Some(format!("{lat},{lon}")),
                     _ => None,
@@ -110,17 +105,17 @@ impl GeoSlotLog {
 /// entry is not a reason to query the database. A slot nobody consulted is
 /// simply absent from the output.
 #[derive(Serialize)]
-pub struct GeoLogBlock {
+pub struct GeoLogBlock<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    remote: Option<GeoSlotLog>,
+    remote: Option<GeoSlotLog<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    direct_peer: Option<GeoSlotLog>,
+    direct_peer: Option<GeoSlotLog<'a>>,
 }
 
-impl GeoLogBlock {
+impl<'a> GeoLogBlock<'a> {
     /// `None` when neither slot was resolved, so the `geo` key is omitted
     /// entirely rather than emitted empty.
-    pub fn from_slots(remote: Option<&GeoLookup>, direct_peer: Option<&GeoLookup>) -> Option<Self> {
+    pub fn from_slots(remote: Option<&'a GeoLookup>, direct_peer: Option<&'a GeoLookup>) -> Option<Self> {
         if remote.is_none() && direct_peer.is_none() {
             return None;
         }
@@ -203,7 +198,7 @@ pub struct AccessLogEntry<'a> {
     /// triggers a lookup, so an unresolved slot stays unresolved rather than
     /// being forced here.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub geo: Option<GeoLogBlock>,
+    pub geo: Option<GeoLogBlock<'a>>,
 
     /// Operator-declared fields (`AccessLogExtern`), nested one level deep.
     ///

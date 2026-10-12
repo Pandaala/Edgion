@@ -1,9 +1,10 @@
 use super::*;
-use crate::ctx::{WafLogMode, WafLogSource, WafSelection};
-use crate::geoip::GeoInfo;
+use crate::ctx::{RequestGeoInfo, WafLogMode, WafLogSource, WafSelection};
+use crate::geoip::{GeoInfo, GeoIpProvider};
 use crate::request_trace_id::CompiledRequestIdRule;
 use edgion_resources::{EdgionErrorCode, EdgionInfoCode};
 use http::{HeaderMap, HeaderValue};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 #[test]
@@ -112,8 +113,10 @@ fn serialization_fallback_uses_the_diagnostic_schema() {
 #[test]
 fn geo_block_is_omitted_when_no_geo_lookup_ran() {
     let ctx = EdgionHttpContext::default();
+    assert!(ctx.request_info.geo.get().is_none());
     let entry = AccessLogEntry::from_context(&ctx);
     assert!(!entry.to_json().contains("\"geo\""));
+    assert!(ctx.request_info.geo.get().is_none());
 }
 
 /// A slot nobody resolved is ABSENT, which is what distinguishes it from a
@@ -171,7 +174,8 @@ fn coordinates_are_emitted_masked_when_the_record_carries_them() {
         longitude: Some(116.4),
         ..Default::default()
     });
-    let block = GeoLogBlock::from_slots(Some(&GeoLookup::Found(with_coords)), None).unwrap();
+    let with_coords = GeoLookup::Found(with_coords);
+    let block = GeoLogBlock::from_slots(Some(&with_coords), None).unwrap();
     let json = serde_json::to_string(&block).unwrap();
     assert!(
         json.contains("coord"),
@@ -188,8 +192,124 @@ fn coordinates_are_emitted_masked_when_the_record_carries_them() {
         country_iso: Some("CN".into()),
         ..Default::default()
     });
-    let block = GeoLogBlock::from_slots(Some(&GeoLookup::Found(without)), None).unwrap();
+    let without = GeoLookup::Found(without);
+    let block = GeoLogBlock::from_slots(Some(&without), None).unwrap();
     assert!(!serde_json::to_string(&block).unwrap().contains("coord"));
+}
+
+#[test]
+fn geo_dimensions_borrow_both_context_slots_and_preserve_json_escaping() {
+    let remote = Arc::new(GeoInfo {
+        country_iso: Some("GB".into()),
+        continent: Some("EU".into()),
+        subdivision: Some("ENG".into()),
+        city: Some("City \"quoted\" / path\\line\nCafé".into()),
+        ..Default::default()
+    });
+    let direct_peer = Arc::new(GeoInfo {
+        country_iso: Some("US".into()),
+        continent: Some("NA".into()),
+        subdivision: Some("CA".into()),
+        city: Some("San José".into()),
+        ..Default::default()
+    });
+    let geo = RequestGeoInfo::default();
+    geo.remote.set(GeoLookup::Found(Arc::clone(&remote))).unwrap();
+    geo.direct_peer.set(GeoLookup::Found(Arc::clone(&direct_peer))).unwrap();
+    let ctx = EdgionHttpContext::new();
+    ctx.request_info.geo.set(Box::new(geo)).unwrap();
+
+    let entry = AccessLogEntry::from_context(&ctx);
+    let block = entry.geo.as_ref().unwrap();
+    for (slot, info) in [
+        (block.remote.as_ref().unwrap(), remote.as_ref()),
+        (block.direct_peer.as_ref().unwrap(), direct_peer.as_ref()),
+    ] {
+        for (projected, source) in [
+            (slot.country, info.country_iso.as_deref()),
+            (slot.continent, info.continent.as_deref()),
+            (slot.subdivision, info.subdivision.as_deref()),
+            (slot.city, info.city.as_deref()),
+        ] {
+            let (projected, source) = (projected.unwrap(), source.unwrap());
+            assert_eq!(projected.as_ptr(), source.as_ptr());
+            assert_eq!(projected.len(), source.len());
+        }
+    }
+    let value: serde_json::Value = serde_json::from_str(&entry.to_json()).unwrap();
+    assert_eq!(
+        value["geo"],
+        serde_json::json!({
+            "remote": {
+                "status": "found", "country": "GB", "continent": "EU", "subdivision": "ENG",
+                "city": "City \"quoted\" / path\\line\nCafé"
+            },
+            "direct_peer": {
+                "status": "found", "country": "US", "continent": "NA", "subdivision": "CA",
+                "city": "San José"
+            }
+        })
+    );
+}
+
+#[test]
+fn partial_geo_dimensions_and_coordinates_leave_the_other_slot_unresolved() {
+    for (latitude, longitude) in [(None, None), (Some(1.0), None), (None, Some(2.0))] {
+        let geo = RequestGeoInfo::default();
+        geo.remote
+            .set(GeoLookup::Found(Arc::new(GeoInfo {
+                city: Some("City".into()),
+                latitude,
+                longitude,
+                ..Default::default()
+            })))
+            .unwrap();
+        let ctx = EdgionHttpContext::new();
+        ctx.request_info.geo.set(Box::new(geo)).unwrap();
+
+        let value: serde_json::Value = serde_json::from_str(&AccessLogEntry::from_context(&ctx).to_json()).unwrap();
+        assert_eq!(
+            value["geo"],
+            serde_json::json!({
+                "remote": {"status": "found", "city": "City"}
+            })
+        );
+        assert!(ctx.request_info.geo.get().unwrap().direct_peer.get().is_none());
+    }
+}
+
+#[test]
+fn captured_geo_survives_provider_replacement_and_json_outlives_context() {
+    let json = {
+        let provider = GeoIpProvider::new();
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../edgion-tests/geoip/edgion-test-city.mmdb");
+        provider.load_from(&fixture).unwrap();
+        let lookup = provider.lookup("203.0.113.7".parse().unwrap());
+        let GeoLookup::Found(info) = &lookup else {
+            panic!("fixture address must resolve before replacement");
+        };
+        assert_eq!(info.country_iso.as_deref(), Some("GB"));
+        let geo = RequestGeoInfo::default();
+        geo.remote.set(lookup).unwrap();
+        let ctx = EdgionHttpContext::new();
+        ctx.request_info.geo.set(Box::new(geo)).unwrap();
+
+        provider.load_from(&fixture).unwrap();
+        provider.clear();
+        assert_eq!(provider.lookup("203.0.113.7".parse().unwrap()), GeoLookup::Unavailable);
+        let entry = AccessLogEntry::from_context(&ctx);
+        let (Some(GeoLookup::Found(retained)), None) = ctx.request_info.resolved_geo() else {
+            panic!("captured slot must remain found and other slot unresolved");
+        };
+        let country = entry.geo.as_ref().unwrap().remote.as_ref().unwrap().country.unwrap();
+        assert_eq!(country.as_ptr(), retained.country_iso.as_ref().unwrap().as_ptr());
+        entry.to_json()
+    };
+    // Only the serialized string remains; no context, entry or provider owns it.
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(value["geo"]["remote"]["status"], "found");
+    assert_eq!(value["geo"]["remote"]["country"], "GB");
+    assert!(value["geo"].get("direct_peer").is_none());
 }
 
 #[test]
