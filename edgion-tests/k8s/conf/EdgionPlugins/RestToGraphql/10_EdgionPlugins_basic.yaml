@@ -1,0 +1,102 @@
+{
+  "apiVersion": "edgion.io/v1",
+  "kind": "EdgionPlugins",
+  "metadata": {
+    "name": "rest-graphql-basic",
+    "namespace": "edgion-default"
+  },
+  "spec": {
+    "requestPlugins": [
+      {
+        "type": "CtxSet",
+        "config": {
+          "vars": [
+            {
+              "name": "rest_id",
+              "from": {
+                "type": "path"
+              },
+              "extract": {
+                "regex": "^/users/([^/]+)$",
+                "group": 1
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "RestToGraphql",
+        "config": {
+          "query": "query Read($id:ID!,$n:Int!=2){user(id:$id,n:$n){id}}",
+          "operationName": "Read",
+          "path": "/webhook/resolve",
+          "variables": [
+            {
+              "name": "id",
+              "from": {
+                "type": "ctx",
+                "name": "rest_id"
+              }
+            },
+            {
+              "name": "n",
+              "from": {
+                "type": "query",
+                "name": "n"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "GraphqlGuard",
+        "config": {
+          "schema": "type Query { user(id:ID,n:Int):User } type User { id:ID }",
+          "maxCost": 10,
+          "showQueryCost": true,
+          "costRules": [
+            {
+              "field": "Query.user",
+              "multipliers": [
+                "n"
+              ],
+              "defaultMultiplier": 2
+            }
+          ],
+          "rootFields": {
+            "query": {
+              "allow": [
+                "user"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "type": "GraphqlSafelist",
+        "config": {
+          "operations": [
+            {
+              "query": "query Read($id:ID!,$n:Int!=2){user(id:$id,n:$n){id}}",
+              "operationName": "Read"
+            }
+          ]
+        }
+      },
+      {
+        "type": "GraphqlOperationRouter",
+        "config": {
+          "rules": [
+            {
+              "operationType": "query",
+              "operationName": "Read",
+              "backendRef": {
+                "name": "rest-graphql"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

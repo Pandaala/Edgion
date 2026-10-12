@@ -64,3 +64,4 @@ DslXmlDynamic	EdgionPlugins/DslBody/DynamicTest	initial	edgionplugins.edgion.io	
 WafExpensiveChecks	EdgionPlugins/Waf/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	waf-dynamic
 AiMessagesBinding	EdgionBackend/Messages/DynamicTest	updates/reset	edgionbackends.edgion.io	edgionbackend	edgion-test	messages-provider
 AiResponsesContinuation	EdgionBackend/Responses/DynamicTest	updates/reset	edgionbackends.edgion.io	edgionbackend	edgion-test	responses-provider
+RestToGraphqlDynamic	EdgionPlugins/RestToGraphql/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	rest-graphql-dynamic

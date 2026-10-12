@@ -58,6 +58,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "GraphqlGuardDynamic",
     "GraphqlSafelistDynamic",
     "FormJsonTransformDynamic",
+    "RestToGraphqlDynamic",
     "BasicAuthDynamic",
     "BasicAuthDynamicGrouped",
     "RateLimitLocalDynamic",
@@ -1714,6 +1715,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         | "DslXmlDynamic"
         | "DslTerminateDynamic"
         | "FormJsonTransformDynamic"
+        | "RestToGraphqlDynamic"
         | "GrpcJsonTranscoderDynamic"
         | "GraphqlRateLimitDynamic"
         | "GraphqlGuardDynamic"

@@ -210,6 +210,7 @@ async fn main() {
         {
             Ok(snap) => {
                 if snap.is_empty() {
+                    eprintln!("[PASS] All checked caches are empty");
                     process::exit(0);
                 }
                 if Instant::now() >= deadline {
