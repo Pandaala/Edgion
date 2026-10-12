@@ -55,8 +55,7 @@ until the user completes the merge checkpoint.
 
 ## Preservation and merge requirements
 
-Do not overwrite unrelated review-results/ or
- tasks/todo/resource-reference-abstraction-simplification.md. Preserve the existing
+Do not overwrite unrelated review-results/. Preserve the existing
 uncommitted 07-progress.md continuation and this checkpoint across the merge.
 Resolve each conflict semantically against both sides and relevant caller/tests;
 do not select ours/theirs wholesale. Remote changes may supersede inventory

@@ -161,6 +161,18 @@ filtered external set; deny-only failed external sets are dropped. Invalid ownin
 bindings reject reference-bearing construction independently of target availability.
 Existing disabled-entry policy and structural config validation remain unchanged.
 
+Cold preparation has useful work to retain: `PreparedSlot::new` caches each target
+identity result, and `BoundIpListRefs::side` pairs prepared slots with actual fields
+through a linear zip. Twenty IP sources in one list require twenty slot visits,
+not twenty searches of that list. The Gateway then compiles canonical keys for
+runtime use. Controller preparation and Gateway cold compilation are distinct
+steps; this does not claim that the Controller serializes `PreparedSlot` objects.
+On 2026-10-12, the user chose to retain the current preparation/binding mechanism
+and close the proposed simplification follow-up without production changes.
+The bounded source analysis established no measured benefit sufficient to justify
+a binding/lifetime refactor. This is not whole-contract acceptance or a prohibition
+on future evidence-backed optimization of cold traversal.
+
 The Gateway retains only canonical target keys in the compiled plugin. It continues
 to capture one immutable ConfigData snapshot per decision, preserving atomic IpList
 updates and live content refresh for pinned plugin generations. Selector and other

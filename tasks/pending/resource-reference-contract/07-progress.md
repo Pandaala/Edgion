@@ -337,9 +337,8 @@ Current evidence:
   documentation cleanup, fresh real-environment admission/dynamic/conformance
   verification, and original issue closure are open. Scoped passes do not prove
   whole-task completion.
-- No agent push. Protected unrelated untracked paths: review-results/ and
-  tasks/todo/resource-reference-abstraction-simplification.md. Exclude them from
-  batch commits unless separately assigned.
+- No agent push. Protected unrelated untracked path: review-results/. Exclude it
+  from batch commits unless separately assigned.
 
 The entries below retain historical checkpoints; older pending labels describe
 those checkpoints and are superseded by later accepted batch records.
