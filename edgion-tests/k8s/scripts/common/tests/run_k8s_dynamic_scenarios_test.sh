@@ -141,10 +141,52 @@ metadata:
   name: forbidden-local-fixture
 EOF
 
+PEER_TEST_ROOT="${TEMP_DIR}"
+PEER_CONF_ROOT="${SAFE_CONF}"
+
+export FAKE_PEER_STORE="${PEER_TEST_ROOT}/peer-store"
+mkdir -p "${FAKE_PEER_STORE}"
+python3 - "${SCRIPT_DIR}/../render_test_client_peer_fixtures.py" "${SCRIPT_DIR}/../../../conf" "${FAKE_PEER_STORE}" "${PEER_CONF_ROOT}" <<'PEERPY'
+import importlib.util
+import json
+from pathlib import Path
+import shutil
+import sys
+spec = importlib.util.spec_from_file_location("renderer", sys.argv[1])
+r = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(r)
+root, store, staged = map(Path, sys.argv[2:])
+for row in r.CATALOG:
+    if staged != root:
+        path = staged / "EdgionPlugins" / row[0]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(root / "EdgionPlugins" / row[0], path)
+for doc in r.render(root, "peer-uid", "10.244.0.7"):
+    if doc["kind"] == "EdgionConfigData":
+        doc["spec"].setdefault("enable", True)
+        doc["spec"].setdefault("visibility", "Namespace")
+    (store / (doc["metadata"]["name"] + ".json")).write_text(json.dumps(doc))
+identity = {"metadata": {"annotations": {"edgion.io/test-client-pod-uid": "peer-uid", "edgion.io/test-client-pod-ip": "10.244.0.7"}}, "spec": {"data": {"config": {"items": [{"name": "test-client", "cidrs": ["10.244.0.7/32"]}]}}}}
+(store / "k8s-test-client-peer.json").write_text(json.dumps(identity))
+PEERPY
+
 mkdir -p "${FAKE_BIN}"
 cat > "${FAKE_BIN}/kubectl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+
+if [[ "${1:-}" == get && "${2:-}" == pods && "$*" == *"--output json"* ]]; then
+  echo '{"items":[{"metadata":{"name":"fake-pod","uid":"peer-uid"},"status":{"phase":"Running","podIP":"10.244.0.7","conditions":[{"type":"Ready","status":"True"}]}}]}'
+  exit 0
+fi
+if [[ "${1:-}" == get && "${2:-}" == pod ]]; then
+  printf '{"metadata":{"uid":"%s"},"status":{"podIP":"10.244.0.7"}}\n' "${FAKE_SELECTED_UID:-peer-uid}"
+  exit 0
+fi
+if [[ "${1:-}" == get && ( "${2:-}" == EdgionConfigData || "${2:-}" == EdgionPlugins || ( "${2:-}" == edgionconfigdata && "${3:-}" == k8s-test-client-peer ) ) ]]; then
+  cat "${FAKE_PEER_STORE}/${3}.json"
+  exit 0
+fi
 
 printf 'CALL:%s\n' "$*" >> "${KUBECTL_LOG}"
 if [[ "${FAKE_TERMINATE_FAILURE:-false}" == "true" && "$*" == *"--request-timeout=10s exec"* ]]; then
@@ -325,6 +367,7 @@ assert_contains "${KUBECTL_LOG}" "STAGED:./EdgionPlugins/RateLimitLocal/DynamicT
 assert_contains "${KUBECTL_LOG}" "TAR_ARGS:--no-xattrs --exclude=._* --exclude=__MACOSX"
 assert_contains "${KUBECTL_LOG}" "RUN:BasicAuthDynamic"
 assert_contains "${KUBECTL_LOG}" "EDGION_TEST_GATEWAY_CAPABILITIES=body-buffering"
+assert_contains "${KUBECTL_LOG}" "EDGION_TEST_DNS_FLAP_SERVER_HOST=test-http-retry.edgion-test.svc.cluster.local"
 assert_contains "${KUBECTL_LOG}" "RUN:BasicAuthDynamicGrouped"
 assert_contains "${KUBECTL_LOG}" "RUN:RateLimitLocalDynamic"
 assert_not_contains "${KUBECTL_LOG}" "Endpoint"
@@ -338,7 +381,7 @@ assert_not_contains "${KUBECTL_LOG}" "Endpoint"
 
 : > "${KUBECTL_LOG}"
 for repeat_run in 1 2; do
-  PATH="${FAKE_BIN}:${PATH}" POD=fake-pod KUBECTL_LOG="${KUBECTL_LOG}" PORTS_CONFIG="${PORTS_CONFIG}" \
+  EDGION_TEST_DNS_FLAP_SERVER_HOST="override.dns.test" PATH="${FAKE_BIN}:${PATH}" POD=fake-pod KUBECTL_LOG="${KUBECTL_LOG}" PORTS_CONFIG="${PORTS_CONFIG}" \
     SYNC_TIMEOUT_SECONDS=2 SYNC_POLL_INTERVAL_SECONDS=1 \
     "${RUNNER}" --conf-root "${SAFE_CONF}" --scenario RateLimitLocalDynamic \
     > "${TEMP_DIR}/repeat-${repeat_run}.log" 2>&1 \
@@ -346,6 +389,7 @@ for repeat_run in 1 2; do
 done
 [[ "$(grep -c 'RESET:.*RateLimitLocal/DynamicTest/initial$' "${KUBECTL_LOG}")" -eq 4 ]] \
   || fail "repeat runs did not each reset before and after execution"
+assert_contains "${KUBECTL_LOG}" "EDGION_TEST_DNS_FLAP_SERVER_HOST=override.dns.test"
 [[ "$(grep -c 'RUN:RateLimitLocalDynamic' "${KUBECTL_LOG}")" -eq 2 ]] \
   || fail "repeat runs did not each execute the scenario"
 
@@ -394,6 +438,7 @@ PATH="${FAKE_BIN}:${PATH}" POD=fake-pod KUBECTL_LOG="${KUBECTL_LOG}" PORTS_CONFI
   > "${TEMP_DIR}/endpoint-phases.log" 2>&1 \
   || fail "EndpointSlice phase barriers did not run"
 assert_contains "${TEMP_DIR}/endpoint-phases.log" "@@DYNAMIC_RESULT SpWeighted PASS 0"
+assert_contains "${KUBECTL_LOG}" "EDGION_TEST_DNS_FLAP_SERVER_HOST=test-http-retry.edgion-test.svc.cluster.local"
 [[ "$(grep -c '^INVENTORY:' "${KUBECTL_LOG}")" -eq 6 ]] \
   || fail "live EndpointSlice inventory was not re-read for every phase and Service"
 [[ "$(grep -c '^ACK:@@DYNAMIC_PHASE_ACK SpWeighted ' "${KUBECTL_LOG}")" -eq 3 ]] \
@@ -402,6 +447,17 @@ assert_contains "${KUBECTL_LOG}" "INVENTORY:--namespace edgion-default --service
 assert_contains "${KUBECTL_LOG}" "--expected-count 0"
 assert_contains "${KUBECTL_LOG}" "RENDERED:        image: registry.test/test-server:current"
 assert_contains "${KUBECTL_LOG}" "RENDERED:        imagePullPolicy: Never"
+
+: > "${KUBECTL_LOG}"
+PATH="${FAKE_BIN}:${PATH}" POD=fake-pod KUBECTL_LOG="${KUBECTL_LOG}" PORTS_CONFIG="${PORTS_CONFIG}" \
+  DYNAMIC_MANIFEST="${ENDPOINT_DYNAMIC_MANIFEST}" ENDPOINT_INVENTORY="${FAKE_ENDPOINT_INVENTORY}" \
+  EDGION_TEST_DNS_FLAP_SERVER_HOST="override.dns.test" FAKE_DYNAMIC_REGISTRY="SpWeighted" \
+  SYNC_TIMEOUT_SECONDS=2 SYNC_POLL_INTERVAL_SECONDS=1 \
+  "${RUNNER}" --conf-root "${SAFE_CONF}" --scenario SpWeighted \
+  > "${TEMP_DIR}/endpoint-peer-override.log" 2>&1 \
+  || fail "phase runner DNS host override did not run"
+assert_contains "${KUBECTL_LOG}" "EDGION_TEST_DNS_FLAP_SERVER_HOST=override.dns.test"
+
 
 : > "${KUBECTL_LOG}"
 cp "${SAFE_CONF}/HTTPRoute/Backend/SessionPersistenceWeighted/DynamicTest/endpoint-inventory.tsv" \

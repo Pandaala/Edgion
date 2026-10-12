@@ -160,6 +160,13 @@ spec:
 }
 
 async fn apply_geo_rr(ctx: &TestContext, config_yaml: &str) -> Result<(), String> {
+    let rendered;
+    let config_yaml = if k8s_mode() {
+        rendered = crate::suites::k8s_peer_identity::render_geo_template(config_yaml)?;
+        rendered.as_str()
+    } else {
+        config_yaml
+    };
     ctx.apply_yaml(&geo_rr_yaml(config_yaml)).await
 }
 
@@ -181,7 +188,9 @@ async fn wait_for_accepted(ctx: &TestContext, name: &str, want_status: &str) -> 
         match req.send().await {
             Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
                 Ok(body) if body["success"].as_bool().unwrap_or(false) => {
-                    if let Some(conditions) = body["data"]["status"]["conditions"].as_array() {
+                    if let Some(conditions) =
+                        crate::suites::status::helpers::controller_local_conditions(&body["data"]["status"])
+                    {
                         if let Some(accepted) = conditions.iter().find(|c| c["type"].as_str() == Some("Accepted")) {
                             if accepted["status"].as_str() == Some(want_status) {
                                 return Ok(());

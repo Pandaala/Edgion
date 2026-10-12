@@ -12,8 +12,9 @@ set -euo pipefail
 # Outputs per-suite results as tagged lines for the caller to parse:
 #   @@SUITE_START resource|item
 #   ... test output ...
-#   @@SUITE_RESULT resource|item PASS|FAIL exit_code
-#   @@BATCH_SUMMARY total=N failed=M
+#   @@SUITE_RESULT resource|item PASS|FAIL|SKIP exit_code
+#   @@BATCH_SUMMARY total=N failed=M skipped=S
+# SKIP requires the exact canonical TLSRoute Terminate reason in a broad scan.
 
 NAMESPACE="${NAMESPACE:-edgion-test}"
 POD="${POD:-}"
@@ -40,6 +41,7 @@ if [[ ! -x "${ENDPOINT_INVENTORY}" ]]; then
 fi
 # shellcheck source=endpoint_inventory.sh
 source "${ENDPOINT_INVENTORY}"
+source "${SCRIPT_DIR}/validate_batch_results.sh"
 
 # --- Resolve Pod name (once) ---
 if [[ -z "${POD}" ]]; then
@@ -142,6 +144,11 @@ if [[ -z "${GATEWAY_CAPABILITIES}" ]]; then
   exit 1
 fi
 
+IFS=$'\t' read -r PEER_UID PEER_IP PEER_HIT_CIDR PEER_MISS_CIDR < <(TEST_CLIENT_NAMESPACE="${NAMESPACE}" "${SCRIPT_DIR}/test_client_peer_identity.sh" environment)
+[[ -n "${PEER_UID}" && -n "${PEER_IP}" && -n "${PEER_HIT_CIDR}" && -n "${PEER_MISS_CIDR}" ]] || { echo "Missing prepared peer identity" >&2; exit 1; }
+SELECTED_PEER="$(kubectl get pod "${POD}" --namespace "${NAMESPACE}" --output json --request-timeout=5s | jq -r '[.metadata.uid, .status.podIP] | @tsv')"
+[[ "${SELECTED_PEER}" == "${PEER_UID}"$'\t'"${PEER_IP}" ]] || { echo "Selected Pod does not match prepared Ready peer identity" >&2; exit 1; }
+
 # --- Build in-pod script from suites file, pipe via stdin ---
 # Using heredoc-via-stdin avoids shell quoting/escaping issues with large scripts.
 generate_inner_script() {
@@ -153,7 +160,12 @@ export EDGION_TOKEN="${EDGION_TOKEN:-${EDGION_TEST_ADMIN_TOKEN}}"
 export EDGION_GATEWAY_ADMIN_TOKEN="${EDGION_GATEWAY_ADMIN_TOKEN:-}"
 export EDGION_TEST_GATEWAY_CAPABILITIES="${GATEWAY_CAPABILITIES}"
 export EDGION_TEST_K8S_ADMISSION_VERIFIED="${K8S_ADMISSION_VERIFIED}"
+export EDGION_TEST_K8S_PEER_UID="${PEER_UID}"
+export EDGION_TEST_K8S_PEER_IP="${PEER_IP}"
+export EDGION_TEST_K8S_PEER_HIT_CIDR="${PEER_HIT_CIDR}"
+export EDGION_TEST_K8S_PEER_MISS_CIDR="${PEER_MISS_CIDR}"
 export EDGION_TEST_K8S_MODE="true"
+export EDGION_INTEGRATION_EXPLICIT_TARGET="${EDGION_INTEGRATION_EXPLICIT_TARGET:-1}"
 export TEST_SERVER_HOST="${TEST_SERVER_HOST:-edgion-test-server.edgion-test.svc.cluster.local}"
 export EDGION_TEST_DIRECT_ENDPOINT_IP="${DIRECT_ENDPOINT_IP}"
 export EDGION_TEST_BACKEND_ENDPOINT_IPS="${TEST_SERVER_ENDPOINT_IPS}"
@@ -172,8 +184,15 @@ TEST_BIN="${TEST_CLIENT_BIN_PATH}"
 TARGET="${TARGET_HOST}"
 TOTAL=0
 FAIL=0
+SKIP=0
 cd /usr/local/edgion || exit 1
 HEADER
+
+  declare -f edgion_tls_terminate_skip_reason edgion_classify_k8s_suite_output
+  cat <<'SETUP'
+SUITE_OUTPUT=$(mktemp /tmp/edgion-k8s-suite-output.XXXXXX) || exit 1
+trap 'rm -f "$SUITE_OUTPUT"' EXIT
+SETUP
 
   while IFS='|' read -r resource item || [[ -n "${resource}" ]]; do
     [[ -z "${resource}" || "${resource}" == "#"* ]] && continue
@@ -183,18 +202,22 @@ HEADER
     cat <<SUITE
 echo '@@SUITE_START ${resource}|${item}'
 TOTAL=\$((TOTAL + 1))
-if "\${TEST_BIN}" -g --target-host "\${TARGET}" -r '${resource}' -i '${item}'; then
-  echo '@@SUITE_RESULT ${resource}|${item} PASS 0'
-else
-  _rc=\$?
-  echo "@@SUITE_RESULT ${resource}|${item} FAIL \${_rc}"
+_rc=0
+"\${TEST_BIN}" -g --target-host "\${TARGET}" -r '${resource}' -i '${item}' > "\${SUITE_OUTPUT}" 2>&1 || _rc=\$?
+cat "\${SUITE_OUTPUT}"
+_status=\$(edgion_classify_k8s_suite_output '${resource}|${item}' "\${SUITE_OUTPUT}" "\${_rc}" "\${EDGION_INTEGRATION_EXPLICIT_TARGET}")
+if [ "\${_status}" = FAIL ]; then
+  [ "\${_rc}" -ne 0 ] || _rc=1
   FAIL=\$((FAIL + 1))
+elif [ "\${_status}" = SKIP ]; then
+  SKIP=\$((SKIP + 1))
 fi
+echo "@@SUITE_RESULT ${resource}|${item} \${_status} \${_rc}"
 SUITE
   done < "${SUITES_FILE}"
 
   cat <<'FOOTER'
-echo "@@BATCH_SUMMARY total=$TOTAL failed=$FAIL"
+echo "@@BATCH_SUMMARY total=$TOTAL failed=$FAIL skipped=$SKIP"
 if [ "$FAIL" -gt 0 ]; then
   exit 1
 fi

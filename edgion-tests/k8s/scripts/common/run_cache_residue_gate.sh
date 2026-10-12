@@ -22,7 +22,7 @@ GATEWAY_ADDR="${GATEWAY_ADDR:-}"
 GATEWAY_ADMIN_TOKEN="${EDGION_GATEWAY_ADMIN_TOKEN:-integration-gateway-admin-token-0123456789}"
 INVENTORY_TIMEOUT_SECS="${INVENTORY_TIMEOUT_SECS:-30}"
 VALIDATOR_TIMEOUT_SECS="${VALIDATOR_TIMEOUT_SECS:-75}"
-WIPE_TIMEOUT_SECS="${WIPE_TIMEOUT_SECS:-300}"
+WIPE_TIMEOUT_SECS="${WIPE_TIMEOUT_SECS:-600}"
 ROOT_CA_DESCRIPTION='Contains a CA bundle that can be used to verify the kube-apiserver when using internal endpoints such as the internal service IP or kubernetes.default.svc. No other usage is guaranteed across distributions of Kubernetes clusters.'
 
 usage() {
@@ -31,7 +31,7 @@ Usage: run_cache_residue_gate.sh [options]
 
 Run cache_residue inside the K8s test-client Pod against the Controller and
 Gateway Pod Admin APIs discovered through EndpointSlices. The validator always
-runs with --mode fail. Explicit address options override discovery.
+runs with --mode fail. Explicit addresses must match the discovered Pod endpoints.
 
 Options:
   --test-client-pod POD       Use this test-client Pod instead of discovering one
@@ -42,7 +42,7 @@ Options:
   --gateway-token TOKEN       Gateway test admin bearer token
   --inventory-timeout-secs N  EndpointSlice wait deadline (default: 30)
   --validator-timeout-secs N  cache_residue poll deadline (default: 75)
-  --wipe-timeout-secs N       Single wipe request deadline (default: 300)
+  --wipe-timeout-secs N       Total staged cleanup deadline (default: 600)
   -h, --help                  Show this help
 
 Runtime stdout protocol:
@@ -301,11 +301,95 @@ if [ -z "$GATEWAY_ADDR" ]; then
   GATEWAY_ADDR="http://${gateway_hostport}"
 fi
 
+# Bind each direct Admin address to its original running process container.
+# Services disappear during cleanup, so the final check rereads these Pods.
+pod_identity() {
+  local namespace="$1" name="$2" uid="$3" address="$4" container="$5"
+  kubectl get pod "$name" --namespace "$namespace" --output json --request-timeout=10s \
+    | jq -ce --arg ns "$namespace" --arg name "$name" --arg uid "$uid" \
+        --arg ip "$address" --arg container "$container" '
+        select(.metadata.namespace == $ns and .metadata.name == $name and .metadata.uid == $uid)
+        | select(.metadata.deletionTimestamp == null and .metadata.labels.app == $container)
+        | select(.status.phase == "Running" and .status.podIP == $ip)
+        | select(any(.status.conditions[]?; .type == "Ready" and .status == "True"))
+        | [.status.containerStatuses[]? | select(.name == $container)]
+        | select(length == 1) | .[0]
+        | select(.ready == true and (.state.running | type) == "object")
+        | select((.containerID | type) == "string" and (.containerID | length) > 0)
+        | select((.restartCount | type) == "number" and .restartCount >= 0 and (.restartCount | floor) == .restartCount)
+        | {namespace:$ns,name:$name,uid:$uid,address:$ip,container:$container,
+           containerID:.containerID,restartCount:.restartCount}'
+}
+
+capture_admin_identity() {
+  local namespace="$1" service="$2" hostport="$3" container="$4"
+  local address="${hostport%:*}" port="${hostport##*:}" target
+  address="${address#[}"; address="${address%]}"
+  target="$(kubectl get endpointslices --namespace "$namespace" \
+    --selector "kubernetes.io/service-name=$service" --output json --request-timeout=10s \
+    | jq -ce --arg ns "$namespace" --arg ip "$address" --argjson port "$port" '
+        [.items[] | select(any(.ports[]?; .port == $port and (.protocol // "TCP") == "TCP"))
+         | .endpoints[]? | select(.conditions.ready == true and .conditions.terminating != true)
+         | select(any(.addresses[]?; . == $ip)) | .targetRef
+         | select(.kind == "Pod" and .namespace == $ns)
+         | select((.name | type) == "string" and (.name | length) > 0)
+         | select((.uid | type) == "string" and (.uid | length) > 0)]
+        | select(length == 1) | .[0]')" || return 1
+  pod_identity "$namespace" "$(jq -r .name <<< "$target")" \
+    "$(jq -r .uid <<< "$target")" "$address" "$container"
+}
+
+verify_admin_identity() {
+  local original="$1" current
+  current="$(pod_identity "$(jq -r .namespace <<< "$original")" \
+    "$(jq -r .name <<< "$original")" "$(jq -r .uid <<< "$original")" \
+    "$(jq -r .address <<< "$original")" "$(jq -r .container <<< "$original")")" || return 1
+  [ "$current" = "$original" ]
+}
+
+if [ "$CONTROLLER_ADDR" != "http://${controller_hostport}" ] \
+  || [ "$GATEWAY_ADDR" != "http://${gateway_hostport}" ] \
+  || ! CONTROLLER_IDENTITY="$(capture_admin_identity "$CONTROLLER_NAMESPACE" "$CONTROLLER_SERVICE" "$controller_hostport" edgion-controller)" \
+  || ! GATEWAY_IDENTITY="$(capture_admin_identity "$GATEWAY_NAMESPACE" "$GATEWAY_SERVICE" "$gateway_hostport" edgion-gateway)"; then
+  error "Admin addresses must bind to the original Ready Controller and Gateway Pods"
+  emit_result FAIL not-run runtime-identity
+  exit 1
+fi
+
+STAGED_OUTPUT="$(mktemp /tmp/edgion-cache-residue-staged.XXXXXX)"
 VALIDATOR_OUTPUT="$(mktemp /tmp/edgion-cache-residue-output.XXXXXX)"
 cleanup() {
-  rm -f "$VALIDATOR_OUTPUT"
+  rm -f "$STAGED_OUTPUT" "$VALIDATOR_OUTPUT"
 }
 trap cleanup EXIT INT TERM
+
+# Keep the channel credentials and leader DNS alive until ordinary delete
+# events reach the Gateway. The final validator performs no second wipe.
+set +e
+kubectl exec \
+  --namespace "$TEST_CLIENT_NAMESPACE" \
+  --container "$TEST_CLIENT_CONTAINER" \
+  "$TEST_CLIENT_POD" -- \
+  "$CACHE_RESIDUE_BIN" \
+  --controller-addr "$CONTROLLER_ADDR" \
+  --gateway-addr "$GATEWAY_ADDR" \
+  --controller-token "$CONTROLLER_ADMIN_TOKEN" \
+  --gateway-token "$GATEWAY_ADMIN_TOKEN" \
+  --wipe-timeout-secs "$WIPE_TIMEOUT_SECS" \
+  --k8s-staged-wipe \
+  --k8s-leader-service "${CONTROLLER_NAMESPACE}/edgion-controller-leader" \
+  "${IGNORE_CONTROLLER_CONFIGMAP_ARGS[@]}" \
+  "${IGNORE_CONTROLLER_CONF_SYNC_SECRET_ARGS[@]}" \
+  --mode fail > "$STAGED_OUTPUT" 2>&1
+staged_rc=$?
+set -e
+if [ "$staged_rc" -ne 0 ] || [ ! -s "$STAGED_OUTPUT" ]; then
+  error "Kubernetes staged cleanup failed; no destructive request will be replayed"
+  sed 's/^/  /' "$STAGED_OUTPUT" >&2
+  emit_result FAIL not-run staged-cleanup
+  exit 1
+fi
+sed 's/^/  /' "$STAGED_OUTPUT" >&2
 
 set +e
 kubectl exec \
@@ -319,7 +403,7 @@ kubectl exec \
   --gateway-token "$GATEWAY_ADMIN_TOKEN" \
   --timeout-secs "$VALIDATOR_TIMEOUT_SECS" \
   --wipe-timeout-secs "$WIPE_TIMEOUT_SECS" \
-  --report-wipe-inventory \
+  --no-wipe \
   "${IGNORE_CONTROLLER_CONFIGMAP_ARGS[@]}" \
   "${IGNORE_CONTROLLER_CONF_SYNC_SECRET_ARGS[@]}" \
   --mode fail > "$VALIDATOR_OUTPUT" 2>&1
@@ -334,6 +418,11 @@ fi
 
 case "$validator_rc" in
   0)
+    if ! verify_admin_identity "$CONTROLLER_IDENTITY" || ! verify_admin_identity "$GATEWAY_IDENTITY"; then
+      error "Controller or Gateway Pod container identity changed during cleanup"
+      emit_result FAIL 0 runtime-identity
+      exit 1
+    fi
     emit_result PASS 0 clean
     ;;
   1)

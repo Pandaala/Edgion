@@ -179,4 +179,59 @@ cat > "$STDOUT_FILE" <<'EOF'
 EOF
 expect_invalid "duplicate expected suite" 0
 
+cat > "$EXPECTED" <<'EOF'
+HTTPRoute|Basic
+TLSRoute|Basic
+EOF
+cat > "$STDOUT_FILE" <<'EOF'
+@@SUITE_START HTTPRoute|Basic
+DEFERRED: DuplexBackpressure/Terminate upload: TLSRouteModeTerminate is not currently supported
+@@SUITE_RESULT HTTPRoute|Basic PASS 0
+@@SUITE_START TLSRoute|Basic
+SKIPPED: suite `TLSRoute/Basic` requires TLSRouteModeTerminate, which is not currently supported
+@@SUITE_RESULT TLSRoute|Basic SKIP 0
+@@BATCH_SUMMARY total=2 failed=0 skipped=1
+EOF
+export EDGION_INTEGRATION_EXPLICIT_TARGET=0
+edgion_validate_k8s_batch_results "$EXPECTED" "$STDOUT_FILE" 0 allow-tls-terminate-skip >/dev/null
+[ "$EDGION_K8S_BATCH_EXECUTED" -eq 1 ]
+[ "$EDGION_K8S_BATCH_SKIPPED" -eq 1 ]
+[ "$EDGION_K8S_BATCH_PASSED" -eq 1 ]
+expect_invalid "generic protocols reject TLS skip" 0
+export EDGION_INTEGRATION_EXPLICIT_TARGET=1
+if edgion_validate_k8s_batch_results "$EXPECTED" "$STDOUT_FILE" 0 allow-tls-terminate-skip >/dev/null 2>&1; then
+    echo "ERROR: explicit target accepted skip" >&2
+    exit 1
+fi
+export EDGION_INTEGRATION_EXPLICIT_TARGET=0
+cp "$STDOUT_FILE" "${TEMP_DIR}/valid-skip.txt"
+for mutation in missing duplicate wrong_suite wrong_reason nonzero summary forged_pass; do
+    python3 - "${TEMP_DIR}/valid-skip.txt" "$STDOUT_FILE" "$mutation" <<'PY'
+import pathlib, sys
+text = pathlib.Path(sys.argv[1]).read_text()
+reason = 'SKIPPED: suite `TLSRoute/Basic` requires TLSRouteModeTerminate, which is not currently supported\n'
+changes = {
+    'missing': (reason, ''),
+    'duplicate': (reason, reason + reason),
+    'wrong_suite': ('`TLSRoute/Basic`', '`TLSRoute/ProxyProtocol`'),
+    'wrong_reason': ('requires TLSRouteModeTerminate', 'requires OtherCapability'),
+    'nonzero': ('Basic SKIP 0', 'Basic SKIP 7'),
+    'summary': ('skipped=1', 'skipped=0'),
+    'forged_pass': ('Basic SKIP 0', 'Basic PASS 0'),
+}
+a, b = changes[sys.argv[3]]
+pathlib.Path(sys.argv[2]).write_text(text.replace(a, b))
+PY
+    if edgion_validate_k8s_batch_results "$EXPECTED" "$STDOUT_FILE" 0 allow-tls-terminate-skip >/dev/null 2>&1; then
+        echo "ERROR: invalid TLS skip accepted: $mutation" >&2
+        exit 1
+    fi
+done
+
+for suite in 'Dynamic|TlsRouteAttachments' 'Isolated|controller_auth' 'Final|CacheResidue'; do
+    printf '%s\n' "$suite" > "$EXPECTED"
+    printf '@@SUITE_RESULT %s SKIP 0\n@@BATCH_SUMMARY total=1 failed=0 skipped=1\n' "$suite" > "$STDOUT_FILE"
+    expect_invalid "generic execution must reject skip: $suite" 0
+done
+
 echo "OK: K8s batch result protocol validation tests passed"

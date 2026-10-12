@@ -63,10 +63,20 @@ impl RateLimitRedisTestSuite {
                         }
                         // Observe the new header selection with fresh probe identities,
                         // then verify a previously exhausted named bucket survives reordering.
-                        let original = include_str!(concat!(
-                            env!("CARGO_MANIFEST_DIR"),
-                            "/integration/conf/EdgionPlugins/RateLimitRedis/06_EdgionPlugins_multi-quota.yaml"
-                        ))
+                        let original = if std::env::var("EDGION_TEST_K8S_MODE")
+                            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+                            .unwrap_or(false)
+                        {
+                            include_str!(concat!(
+                                env!("CARGO_MANIFEST_DIR"),
+                                "/k8s/conf/EdgionPlugins/RateLimitRedis/06_EdgionPlugins_multi-quota.yaml"
+                            ))
+                        } else {
+                            include_str!(concat!(
+                                env!("CARGO_MANIFEST_DIR"),
+                                "/integration/conf/EdgionPlugins/RateLimitRedis/06_EdgionPlugins_multi-quota.yaml"
+                            ))
+                        }
                         .split("\n---\n")
                         .next()
                         .ok_or("Missing multi-quota resource")?;

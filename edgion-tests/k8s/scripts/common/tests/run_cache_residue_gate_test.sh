@@ -27,6 +27,35 @@ case "${1:-}" in
           echo 'client-a <none>'
         fi
         ;;
+      pod)
+        name="$3"
+        role="${name%-pod}"
+        address=10.0.0.10
+        [ "$role" != edgion-gateway ] || address=10.0.0.20
+        count_file="${FAKE_KUBECTL_LOG}.${name}"
+        count=0; [ ! -f "$count_file" ] || count="$(cat "$count_file")"
+        count=$((count + 1)); echo "$count" > "$count_file"
+        uid="${role}-uid"; container_id="container://${role}"; restarts=0; ready=True
+        if [ "${FAKE_BAD_TARGET_UID:-false}" = true ]; then uid=wrong-uid; fi
+        if [ "${FAKE_POD_NOT_READY:-false}" = true ]; then ready=False; fi
+        if [ "$count" -gt 1 ] && [ "$role" = edgion-gateway ]; then
+          case "${FAKE_RUNTIME_CHANGE:-}" in
+            uid) uid=replacement-uid ;;
+            container) container_id=container://replacement ;;
+            restarts) restarts=1 ;;
+          esac
+        fi
+        printf '{"metadata":{"namespace":"edgion-system","name":"%s","uid":"%s","labels":{"app":"%s"}},"status":{"phase":"Running","podIP":"%s","conditions":[{"type":"Ready","status":"%s"}],"containerStatuses":[{"name":"%s","ready":true,"containerID":"%s","restartCount":%s,"state":{"running":{}}}]}}\n' \
+          "$name" "$uid" "$role" "$address" "$ready" "$role" "$container_id" "$restarts"
+        ;;
+      endpointslices)
+        if [[ "$*" == *service-name=edgion-controller* ]]; then
+          role=edgion-controller; port=12101; address=10.0.0.10
+        else
+          role=edgion-gateway; port=12001; address=10.0.0.20
+        fi
+        printf '{"items":[{"ports":[{"protocol":"TCP","port":%s}],"endpoints":[{"addresses":["%s"],"conditions":{"ready":true},"targetRef":{"kind":"Pod","namespace":"edgion-system","name":"%s-pod","uid":"%s-uid"}}]}]}\n' "$port" "$address" "$role" "$role"
+        ;;
       configmaps)
         if [ "${FAKE_ROOT_CA_QUERY_FAIL:-false}" = "true" ]; then
           exit 8
@@ -81,9 +110,7 @@ JSON
           '--gateway-addr http://10.0.0.20:12001' \
           '--controller-token integration-controller-admin-token-0123456789' \
           '--gateway-token integration-gateway-admin-token-0123456789' \
-          '--timeout-secs 75' \
-          "--wipe-timeout-secs ${FAKE_EXPECTED_WIPE_TIMEOUT:-300}" \
-          '--report-wipe-inventory' \
+          "--wipe-timeout-secs ${FAKE_EXPECTED_WIPE_TIMEOUT:-600}" \
           '--ignore-controller-configmap app/kube-root-ca.crt' \
           '--ignore-controller-configmap app2/kube-root-ca.crt' \
           '--ignore-controller-conf-sync-secret edgion-system/edgion-conf-sync-ca' \
@@ -92,8 +119,19 @@ JSON
           echo "$args" | grep -q -- "$expected" \
             || { echo "missing validator argument: $expected" >&2; exit 9; }
         done
+        if [[ "$args" == *" --k8s-staged-wipe "* ]]; then
+          [[ "$args" == *" --k8s-leader-service edgion-system/edgion-controller-leader "* ]] || exit 9
+          [[ "$args" != *" --no-wipe "* ]] || exit 9
+          if [[ "${FAKE_STAGED_FAILURE:-false}" == true ]]; then
+            echo '[ERROR] staged cleanup stopped after an ambiguous mutation'
+            exit 2
+          fi
+          echo '[INFO] staged cleanup complete'
+          exit 0
+        fi
+        [[ "$args" == *" --no-wipe "* && "$args" == *" --timeout-secs 75 "* ]] || exit 9
         case "${FAKE_VALIDATOR_MODE:-clean}" in
-          clean) echo '[INFO] wipe-all: total=2 errors=0 duration_ms=1'; exit 0 ;;
+          clean) echo '[INFO] strict no-wipe validation complete'; exit 0 ;;
           residue) echo 'Cache residue detected after 30s'; exit 1 ;;
           infrastructure) echo '[ERROR] collect failed'; exit 2 ;;
           unexpected) echo 'unexpected validator failure'; exit 7 ;;
@@ -123,6 +161,7 @@ run_case() {
   local output_file="$2"
   local error_file="$3"
   shift 3
+  rm -f "${CALL_LOG}.edgion-controller-pod" "${CALL_LOG}.edgion-gateway-pod"
   set +e
   "$HELPER" "$@" > "$output_file" 2> "$error_file"
   local actual_rc=$?
@@ -161,6 +200,40 @@ ERROR_FILE="${TEST_ROOT}/stderr"
 unset FAKE_VALIDATOR_MODE FAKE_MISSING_BINARY FAKE_NO_CLIENT_POD FAKE_MISSING_ENDPOINTS FAKE_ROOT_CA_QUERY_FAIL FAKE_CONF_SYNC_SECRET_QUERY_FAIL
 run_case 0 "$OUTPUT_FILE" "$ERROR_FILE"
 assert_protocol PASS 0 clean "$OUTPUT_FILE"
+[ "$(grep -c -- ' -- /usr/local/bin/cache_residue ' "$CALL_LOG")" -eq 2 ]
+first_invocation="$(grep -- ' -- /usr/local/bin/cache_residue ' "$CALL_LOG" | head -n 1)"
+last_invocation="$(grep -- ' -- /usr/local/bin/cache_residue ' "$CALL_LOG" | tail -n 1)"
+[[ "$first_invocation" == *" --k8s-staged-wipe "* ]]
+[[ "$last_invocation" == *" --no-wipe "* && "$last_invocation" != *" --k8s-staged-wipe "* ]]
+
+: > "$CALL_LOG"
+export FAKE_STAGED_FAILURE=true
+run_case 1 "$OUTPUT_FILE" "$ERROR_FILE"
+assert_protocol FAIL not-run staged-cleanup "$OUTPUT_FILE"
+[ "$(grep -c -- ' -- /usr/local/bin/cache_residue ' "$CALL_LOG")" -eq 1 ]
+! grep -q -- ' --no-wipe ' "$CALL_LOG"
+unset FAKE_STAGED_FAILURE
+
+
+# A replacement or restarted container cannot turn a cleared cache into PASS.
+for change in uid container restarts; do
+  export FAKE_RUNTIME_CHANGE="$change"
+  run_case 1 "$OUTPUT_FILE" "$ERROR_FILE"
+  assert_protocol FAIL 0 runtime-identity "$OUTPUT_FILE"
+done
+unset FAKE_RUNTIME_CHANGE
+for guard in FAKE_BAD_TARGET_UID FAKE_POD_NOT_READY; do
+  export "$guard=true"
+  : > "$CALL_LOG"
+  run_case 1 "$OUTPUT_FILE" "$ERROR_FILE"
+  assert_protocol FAIL not-run runtime-identity "$OUTPUT_FILE"
+  ! grep -q -- ' -- /usr/local/bin/cache_residue ' "$CALL_LOG"
+  unset "$guard"
+done
+: > "$CALL_LOG"
+run_case 1 "$OUTPUT_FILE" "$ERROR_FILE" --gateway-addr http://10.0.0.99:12001
+assert_protocol FAIL not-run runtime-identity "$OUTPUT_FILE"
+! grep -q -- ' -- /usr/local/bin/cache_residue ' "$CALL_LOG"
 
 # A custom wipe deadline does not change the polling deadline.
 export FAKE_EXPECTED_WIPE_TIMEOUT=420
@@ -187,7 +260,7 @@ export FAKE_VALIDATOR_MODE=infrastructure
 : > "$CALL_LOG"
 run_case 1 "$OUTPUT_FILE" "$ERROR_FILE"
 assert_protocol FAIL 2 infrastructure "$OUTPUT_FILE"
-[ "$(grep -c -- ' -- /usr/local/bin/cache_residue ' "$CALL_LOG")" -eq 1 ]
+[ "$(grep -c -- ' -- /usr/local/bin/cache_residue ' "$CALL_LOG")" -eq 2 ]
 
 export FAKE_VALIDATOR_MODE=unexpected
 run_case 1 "$OUTPUT_FILE" "$ERROR_FILE"

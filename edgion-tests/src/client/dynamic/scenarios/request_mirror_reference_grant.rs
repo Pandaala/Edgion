@@ -267,6 +267,7 @@ async fn traffic(ctx: &TestContext, allowed: bool, case: &str, invalid: bool) ->
 
 #[derive(Clone, Copy)]
 enum Expected {
+    Restored,
     Absent,
     Denied,
     NativeAllowed,
@@ -277,6 +278,27 @@ enum Expected {
 struct MirrorSuite(Expected);
 
 async fn check(ctx: &TestContext, expected: Expected) -> Result<()> {
+    if matches!(expected, Expected::Restored) {
+        ensure!(k8s_mode(), "restored Service readiness is Kubernetes-only");
+        for (namespace, port) in [(NS, 30001), (TARGET_NS, 30002)] {
+            let response = ctx
+                .http_client
+                .get(format!("http://{NAME}.{namespace}.svc.cluster.local:{port}/health"))
+                .timeout(Duration::from_secs(3))
+                .send()
+                .await?;
+            ensure!(
+                response.status() == 200,
+                "{namespace}: restored Service health status {}",
+                response.status()
+            );
+            ensure!(
+                response.text().await? == "OK",
+                "{namespace}: wrong restored Service health body"
+            );
+        }
+        return Ok(());
+    }
     if matches!(expected, Expected::Absent) {
         let response = ctx
             .http_client
@@ -295,25 +317,23 @@ async fn check(ctx: &TestContext, expected: Expected) -> Result<()> {
             .await
             .map_err(anyhow::Error::msg)?;
         let conditions = if kind == "HTTPRoute" {
-            &processed["status"]["parents"][0]["conditions"]
+            processed["status"]["parents"][0]["conditions"].as_array()
         } else {
-            &processed["status"]["conditions"]
+            helpers::controller_local_conditions(&processed["status"])
         };
         ensure!(
-            conditions
-                .as_array()
-                .is_some_and(|cs| cs.iter().any(|c| c["type"] == "ResolvedRefs"
-                    && c["status"] == if allowed { "True" } else { "False" }
-                    && (allowed || c["reason"] == "RefNotPermitted"))),
-            "{kind}: wrong reference status: {conditions}"
+            conditions.is_some_and(|cs| cs.iter().any(|c| c["type"] == "ResolvedRefs"
+                && c["status"] == if allowed { "True" } else { "False" }
+                && (allowed || c["reason"] == "RefNotPermitted"))),
+            "{kind}: wrong reference status: {conditions:?}"
         );
         if kind == "EdgionPlugins" {
             let invalid = matches!(expected, Expected::InvalidAllowed | Expected::InvalidDenied);
             ensure!(
-                conditions.as_array().is_some_and(|cs| cs
+                conditions.is_some_and(|cs| cs
                     .iter()
                     .any(|c| c["type"] == "Accepted" && c["status"] == if invalid { "False" } else { "True" })),
-                "wrong plugin validation status: {conditions}"
+                "wrong plugin validation status: {conditions:?}"
             );
         }
         let synced = gateway(ctx, kind).await?;
@@ -386,6 +406,9 @@ impl TestSuite for MirrorSuite {
         .with_timeout(Duration::from_secs(25))]
     }
 }
+fn restored() -> Box<dyn TestSuite> {
+    Box::new(MirrorSuite(Expected::Restored))
+}
 fn absent() -> Box<dyn TestSuite> {
     Box::new(MirrorSuite(Expected::Absent))
 }
@@ -405,6 +428,10 @@ fn invalid_denied() -> Box<dyn TestSuite> {
     Box::new(MirrorSuite(Expected::InvalidDenied))
 }
 static PHASES: &[PhaseSuite] = &[
+    PhaseSuite {
+        name: "restored",
+        factory: restored,
+    },
     PhaseSuite {
         name: "invalid-allowed",
         factory: invalid_allowed,
@@ -467,6 +494,9 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
             ctx.wait_phase(SCENARIO, "absent", Duration::from_secs(15)).await?;
             if k8s_mode() {
                 ctx.apply_dir("DynamicTest/initial/").await?;
+                // Service recreation needs live DNS/health and exact EndpointSlice
+                // readiness before the one-shot POST receipt controls below.
+                ctx.wait_phase(SCENARIO, "restored", Duration::from_secs(30)).await?;
             }
             // Prove both listeners and the shared receipt store before testing non-delivery.
             for port in [30001, 30002] {

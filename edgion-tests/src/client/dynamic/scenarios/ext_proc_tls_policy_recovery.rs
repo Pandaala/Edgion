@@ -326,7 +326,8 @@ async fn probe(ctx: &TestContext, phase: Phase) -> Result<()> {
         } else {
             ensure!(
                 status == 200 && response_marker,
-                "supported policy did not recover {name}: status={status}"
+                "supported policy did not recover {name}: phase={}, status={status}",
+                phase.name()
             );
             let echoed: Value = serde_json::from_str(&body)?;
             ensure!(
@@ -336,6 +337,124 @@ async fn probe(ctx: &TestContext, phase: Phase) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum SupportedAttempt {
+    Ready,
+    Sealed,
+}
+
+fn classify_supported_response(status: u16, marker: Option<&str>, body: &str) -> Result<SupportedAttempt> {
+    if status == 500 {
+        ensure!(
+            marker.is_none() && body == r#"{"message":"plugin configuration error"}"#,
+            "supported policy returned a noncanonical rejection"
+        );
+        return Ok(SupportedAttempt::Sealed);
+    }
+    ensure!(
+        status == 200 && marker == Some("external-go"),
+        "supported policy did not recover"
+    );
+    let echoed: Value = serde_json::from_str(body)?;
+    ensure!(
+        echoed["headers"]["x-ext-proc-req"] == "external-go",
+        "request mutation absent"
+    );
+    Ok(SupportedAttempt::Ready)
+}
+
+fn verify_retry_evidence(baseline: (u64, u64), current: (u64, u64), case_status: u16) -> Result<()> {
+    ensure!(case_status == 404, "sealed policy created a Process observation");
+    ensure!(current == baseline, "sealed policy dialed or called the processor");
+    Ok(())
+}
+
+async fn wait_supported_owner<F, Fut>(mut attempt: F) -> Result<()>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<SupportedAttempt>>,
+{
+    loop {
+        match attempt().await? {
+            SupportedAttempt::Ready => return Ok(()),
+            SupportedAttempt::Sealed => tokio::time::sleep(Duration::from_millis(100)).await,
+        }
+    }
+}
+
+fn supported_case_complete(snapshot: &Value) -> Result<bool> {
+    let streams = snapshot["streams"]
+        .as_array()
+        .context("missing processor stream inventory")?;
+    ensure!(streams.len() == 1, "recovery must produce exactly one Process stream");
+    Ok(streams[0]["client_half_closed"] == true && streams[0]["active"] == false)
+}
+
+async fn probe_supported(ctx: &TestContext, phase: Phase) -> Result<()> {
+    // One deadline covers both owners, request bodies, retry evidence and final
+    // stream completion. Cancellation never starts another attempt.
+    tokio::time::timeout(TIMEOUT, async {
+        for name in NAMES {
+            // The preceding owner's successful stream is already in these
+            // cumulative counters. Never compare the next owner to phase start.
+            let baseline = accepted_connections(ctx).await?;
+            wait_supported_owner(|| async {
+                let response = ctx
+                    .http_client
+                    .get(format!("{}/headers", ctx.http_url()))
+                    .header("host", format!("{name}.example.com"))
+                    .header("x-ext-proc-case-id", case_id(phase, name))
+                    .header("x-ext-proc-test-mode", "interop")
+                    .timeout(Duration::from_secs(5))
+                    .send()
+                    .await?;
+                let status = response.status().as_u16();
+                let marker = response
+                    .headers()
+                    .get("x-ext-proc-resp")
+                    .map(|value| value.to_str())
+                    .transpose()?;
+                let marker = marker.map(str::to_owned);
+                let body = response.text().await?;
+                let outcome = classify_supported_response(status, marker.as_deref(), &body)
+                    .with_context(|| format!("supported phase {} owner {name}", phase.name()))?;
+                if outcome == SupportedAttempt::Sealed {
+                    let base = std::env::var("EDGION_EXT_PROC_EXTERNAL_ADMIN_URL")?;
+                    let response = ctx
+                        .http_client
+                        .get(format!(
+                            "{}/v1/cases/{}",
+                            base.trim_end_matches('/'),
+                            case_id(phase, name)
+                        ))
+                        .timeout(Duration::from_secs(3))
+                        .send()
+                        .await?;
+                    let case_status = response.status().as_u16();
+                    let current = accepted_connections(ctx).await?;
+                    verify_retry_evidence(baseline, current, case_status)?;
+                }
+                Ok(outcome)
+            })
+            .await?;
+        }
+        loop {
+            let mut complete = true;
+            for name in NAMES {
+                let snapshot = fixture(ctx, &format!("/v1/cases/{}", case_id(phase, name))).await?;
+                complete &= supported_case_complete(&snapshot)?;
+            }
+            if complete {
+                // Keep the original exact TLS transport, phase and stream assertions.
+                return observe_cases(ctx, phase).await;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .with_context(|| format!("supported phase {} convergence timed out", phase.name()))?
 }
 
 async fn observe_cases(ctx: &TestContext, phase: Phase) -> Result<()> {
@@ -406,7 +525,8 @@ async fn publish_plugins(ctx: &ScenarioCtx, phase: Phase, target: &str) -> Resul
     }
     ctx.wait_phase(SCENARIO, phase.name(), TIMEOUT).await?;
     // ConfigClient exposes raw arrivals before its debounced handler runs.
-    // The publisher's new IDs appear only after compilation and atomic publication.
+    // New publisher IDs show rebuild/publication progress, not acknowledgment
+    // of this source or its effective TLS policy. Supported traffic supplies that evidence.
     wait_runtime(ctx, |stats| {
         let current = generations(stats)?;
         ensure!(
@@ -649,6 +769,10 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
                 }
                 // A local whole-block override recovers while the unsupported global block remains.
                 publish_plugins(&ctx, phase, &target).await?;
+                if !phase.rejected() {
+                    probe_supported(&ctx.test_ctx, phase).await?;
+                    continue;
+                }
                 probe(&ctx.test_ctx, phase).await?;
                 let deadline = Instant::now() + TIMEOUT;
                 loop {
@@ -739,3 +863,128 @@ pub static SCENARIO: &Scenario = &Scenario {
         },
     ],
 };
+
+#[cfg(test)]
+mod supported_convergence_tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::future::{pending, ready};
+
+    const SEALED: &str = r#"{"message":"plugin configuration error"}"#;
+    const SUCCESS: &str = r#"{"headers":{"x-ext-proc-req":"external-go"}}"#;
+
+    #[test]
+    fn only_canonical_sealed_rejection_can_wait() {
+        assert_eq!(
+            classify_supported_response(500, None, SEALED).unwrap(),
+            SupportedAttempt::Sealed
+        );
+        for (status, marker, body) in [
+            (500, Some("external-go"), SEALED),
+            (500, Some("wrong-marker"), SEALED),
+            (500, Some(""), SEALED),
+            (500, None, "different error"),
+            (503, None, SEALED),
+            (200, None, SUCCESS),
+            (200, Some("wrong-marker"), SUCCESS),
+            (200, Some("external-go"), r#"{"headers":{}}"#),
+            (200, Some("external-go"), "invalid JSON"),
+        ] {
+            assert!(classify_supported_response(status, marker, body).is_err());
+        }
+        assert_eq!(
+            classify_supported_response(200, Some("external-go"), SUCCESS).unwrap(),
+            SupportedAttempt::Ready
+        );
+    }
+
+    #[test]
+    fn retry_requires_absent_case_and_unchanged_cumulative_activity() {
+        verify_retry_evidence((12, 4), (12, 4), 404).unwrap();
+        for (current, case_status) in [
+            ((13, 4), 404),
+            ((12, 5), 404),
+            ((11, 4), 404),
+            ((12, 4), 200),
+            ((12, 4), 503),
+        ] {
+            assert!(verify_retry_evidence((12, 4), current, case_status).is_err());
+        }
+        // The second owner's baseline includes the first owner's successful RPC.
+        verify_retry_evidence((13, 5), (13, 5), 404).unwrap();
+        assert!(verify_retry_evidence((12, 4), (13, 5), 404).is_err());
+    }
+
+    #[tokio::test]
+    async fn successful_owner_is_never_replayed_while_next_owner_waits() {
+        let close_calls = Cell::new(0);
+        let open_calls = Cell::new(0);
+        wait_supported_owner(|| {
+            close_calls.set(close_calls.get() + 1);
+            ready(Ok(SupportedAttempt::Ready))
+        })
+        .await
+        .unwrap();
+        wait_supported_owner(|| {
+            open_calls.set(open_calls.get() + 1);
+            assert_eq!(close_calls.get(), 1);
+            ready(Ok(if open_calls.get() == 1 {
+                SupportedAttempt::Sealed
+            } else {
+                SupportedAttempt::Ready
+            }))
+        })
+        .await
+        .unwrap();
+        assert_eq!((close_calls.get(), open_calls.get()), (1, 2));
+    }
+
+    #[tokio::test]
+    async fn ambiguous_attempt_error_never_retries() {
+        let calls = Cell::new(0);
+        let result = wait_supported_owner(|| {
+            calls.set(calls.get() + 1);
+            ready(Err(anyhow::anyhow!("ambiguous request or observation failure")))
+        })
+        .await;
+        assert!(result.is_err());
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[tokio::test]
+    async fn deadline_cancels_pending_attempt_and_retry_sleep_without_replay() {
+        let calls = Cell::new(0);
+        let result = tokio::time::timeout(
+            Duration::from_millis(10),
+            wait_supported_owner(|| {
+                calls.set(calls.get() + 1);
+                pending::<Result<SupportedAttempt>>()
+            }),
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(calls.get(), 1);
+
+        let calls = Cell::new(0);
+        let result = tokio::time::timeout(
+            Duration::from_millis(10),
+            wait_supported_owner(|| {
+                calls.set(calls.get() + 1);
+                ready(Ok(SupportedAttempt::Sealed))
+            }),
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn completion_requires_exactly_one_stream() {
+        assert!(
+            !supported_case_complete(&json!({"streams": [{"client_half_closed": false, "active": true}]})).unwrap()
+        );
+        assert!(supported_case_complete(&json!({"streams": [{"client_half_closed": true, "active": false}]})).unwrap());
+        assert!(supported_case_complete(&json!({"streams": []})).is_err());
+        assert!(supported_case_complete(&json!({"streams": [{}, {}]})).is_err());
+    }
+}

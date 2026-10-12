@@ -40,5 +40,6 @@ spec:
     namespace: edgion-default
   requestBody:
     enabled: true
-    defaultMemoryBufferSize: 128KiB
-    defaultMaxBodySize: 32MiB
+    maxBodySize: 32MiB
+    storage:
+      memoryLimit: 128KiB

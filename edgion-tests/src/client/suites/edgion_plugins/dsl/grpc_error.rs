@@ -34,7 +34,6 @@ impl DslGrpcErrorTestSuite {
         let (mut client, connection) = h2::client::handshake(tcp)
             .await
             .map_err(|error| format!("native gRPC H2 handshake: {error}"))?;
-        let driver = tokio::spawn(connection);
 
         let message = HelloRequest {
             name: "terminate-contract".to_string(),
@@ -64,6 +63,7 @@ impl DslGrpcErrorTestSuite {
         request_body
             .send_data(Bytes::from(frame), true)
             .map_err(|error| format!("send native gRPC message: {error}"))?;
+        let driver = tokio::spawn(connection);
         let response = response
             .await
             .map_err(|error| format!("receive native gRPC response: {error}"))?;

@@ -73,8 +73,14 @@ run_manifest_dynamic_scenarios() {
 if ! run_manifest_dynamic_scenarios; then
   exit 1
 fi
-# suite-parity: isolated auth_check
-# suite-parity: isolated docker_check
+run_all_isolated_scenarios() {
+  # suite-parity: isolated auth_check
+  # suite-parity: isolated docker_check
+  printf '%s\n' 'Isolated|auth_check' 'Isolated|docker_check' > jobs.expected
+  run_isolated_helper_group jobs jobs.expected helper \
+    --job auth_check \
+    --job docker_check
+}
 # suite-parity: final-gate MetricsLabelWhitelist
 # suite-parity: final-gate UnknownConfigFields
 # suite-parity: final-gate RequeueDeadLoop
@@ -118,6 +124,46 @@ write_k8s_runner "$TEST_ROOT/k8s.sh" true
 pass_output="$(run_validator)"
 printf '%s\n' "$pass_output" | grep -q 'PASS: K8s integration inventory covers every canonical entry.'
 
+sed -i.bak '/--job docker_check/d' "$TEST_ROOT/k8s.sh"
+rm "$TEST_ROOT/k8s.sh.bak"
+set +e
+missing_job_output="$(run_validator 2>&1)"
+missing_job_rc=$?
+set -e
+[ "$missing_job_rc" -eq 2 ]
+printf '%s\n' "$missing_job_output" | grep -q 'isolated invocations and expected results do not match'
+
+write_k8s_runner "$TEST_ROOT/k8s.sh" true
+sed -i.bak 's/--job docker_check/--job auth_check/' "$TEST_ROOT/k8s.sh"
+rm "$TEST_ROOT/k8s.sh.bak"
+set +e
+duplicate_job_output="$(run_validator 2>&1)"
+duplicate_job_rc=$?
+set -e
+[ "$duplicate_job_rc" -eq 2 ]
+printf '%s\n' "$duplicate_job_output" | grep -q 'isolated invocations: duplicate entries'
+
+write_k8s_runner "$TEST_ROOT/k8s.sh" true
+sed -i.bak "s/ 'Isolated|docker_check'//" "$TEST_ROOT/k8s.sh"
+rm "$TEST_ROOT/k8s.sh.bak"
+set +e
+missing_expected_output="$(run_validator 2>&1)"
+missing_expected_rc=$?
+set -e
+[ "$missing_expected_rc" -eq 2 ]
+printf '%s\n' "$missing_expected_output" | grep -q 'isolated invocations and expected results do not match'
+
+write_k8s_runner "$TEST_ROOT/k8s.sh" true
+sed -i.bak '/--job /d' "$TEST_ROOT/k8s.sh"
+rm "$TEST_ROOT/k8s.sh.bak"
+set +e
+marker_only_output="$(run_validator 2>&1)"
+marker_only_rc=$?
+set -e
+[ "$marker_only_rc" -eq 2 ]
+printf '%s\n' "$marker_only_output" | grep -q 'isolated invocations and expected results do not match'
+
+write_k8s_runner "$TEST_ROOT/k8s.sh" true
 sed -i.bak '/suite-parity: final-gate/d' "$TEST_ROOT/k8s.sh"
 rm "$TEST_ROOT/k8s.sh.bak"
 set +e

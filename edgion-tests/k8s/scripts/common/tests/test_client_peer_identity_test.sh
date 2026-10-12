@@ -46,6 +46,10 @@ case "${1:-}" in
       esac
       exit 0
     fi
+    if [[ "${2:-}" == EdgionConfigData || "${2:-}" == EdgionPlugins ]]; then
+      cat "${FAKE_STORE_DIR}/${3}.json"
+      exit 0
+    fi
     if [ "${2:-}" = "edgionconfigdata" ]; then
       namespace=""
       while [ "$#" -gt 0 ]; do
@@ -103,19 +107,55 @@ for namespace in edgion-test edgion-default; do
 done
 "${HELPER}" assert >/dev/null
 
+# Environment transport requires all nine current fixture contracts, not just
+# the published identity. Missing or stale generated provenance fails closed.
+if "${HELPER}" environment >/dev/null 2>&1; then
+  echo "unprepared fixtures unexpectedly produced an environment" >&2
+  exit 1
+fi
+python3 - "${SCRIPT_DIR}/../render_test_client_peer_fixtures.py" "${SCRIPT_DIR}/../../../conf" "${STORE_DIR}" <<'PYTEST'
+import importlib.util
+import json
+from pathlib import Path
+import sys
+spec = importlib.util.spec_from_file_location("renderer", sys.argv[1])
+r = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(r)
+for doc in r.render(Path(sys.argv[2]), "uid-v4", "10.20.30.40"):
+    if doc["kind"] == "EdgionConfigData":
+        doc["spec"].setdefault("enable", True)
+        doc["spec"].setdefault("visibility", "Namespace")
+    (Path(sys.argv[3]) / (doc["metadata"]["name"] + ".json")).write_text(json.dumps(doc))
+PYTEST
+prepared="$(${HELPER} environment)"
+[ "${prepared}" = $'uid-v4\t10.20.30.40\t10.20.30.40/32\t198.51.100.0/24' ]
+python3 - "${STORE_DIR}/ipref-allowlist.json" <<'PYTEST'
+import json
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+doc = json.loads(p.read_text())
+doc["metadata"]["annotations"]["edgion.io/test-client-pod-uid"] = "stale-uid"
+p.write_text(json.dumps(doc))
+PYTEST
+if "${HELPER}" environment >/dev/null 2>&1; then
+  echo "stale fixture provenance unexpectedly produced an environment" >&2
+  exit 1
+fi
+
 export FAKE_POD_CASE=stale
 if "${HELPER}" assert >/dev/null 2>&1; then
   echo "stale identity unexpectedly passed" >&2
   exit 1
 fi
 
-rm -f "${STORE_DIR}"/*.yaml
+rm -f "${STORE_DIR}"/*.yaml "${STORE_DIR}"/*.json
 export FAKE_POD_CASE=ipv6
 "${HELPER}" publish >/dev/null
 grep -q '"2001:db8::20/128"' "${STORE_DIR}/edgion-test.yaml"
 
 for pod_case in zero multiple invalid; do
-  rm -f "${STORE_DIR}"/*.yaml
+  rm -f "${STORE_DIR}"/*.yaml "${STORE_DIR}"/*.json
   export FAKE_POD_CASE="${pod_case}"
   if "${HELPER}" publish >/dev/null 2>&1; then
     echo "${pod_case} Pod inventory unexpectedly published an identity" >&2

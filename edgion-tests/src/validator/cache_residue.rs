@@ -7,6 +7,7 @@
 //! See spec: docs/superpowers/specs/2026-04-26-cache-residue-detection-design.md
 
 use clap::Parser;
+use edgion_resources::{resource_defs::ALL_RESOURCE_INFOS, ResourceKind};
 use reqwest::Client;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -42,6 +43,14 @@ struct Args {
 
     #[arg(long, default_value_t = false)]
     no_wipe: bool,
+
+    /// Kubernetes-only staged cleanup; never invoke the concurrent wipe API.
+    #[arg(long, conflicts_with = "no_wipe")]
+    k8s_staged_wipe: bool,
+
+    /// Exact live conf-sync leader Service retained until ordinary caches converge.
+    #[arg(long, requires = "k8s_staged_wipe")]
+    k8s_leader_service: Option<String>,
 
     /// Deadline for the single destructive wipe request, independent of polling.
     #[arg(long, default_value_t = DEFAULT_WIPE_TIMEOUT_SECS, value_parser = clap::value_parser!(u64).range(1..))]
@@ -161,6 +170,21 @@ async fn main() {
         .timeout(HTTP_REQUEST_TIMEOUT)
         .build()
         .expect("reqwest client");
+
+    if args.k8s_staged_wipe {
+        if let Err(error) = staged_wipe(
+            &client,
+            &args,
+            &ignored_controller_configmaps,
+            &ignored_controller_conf_sync_secrets,
+        )
+        .await
+        {
+            eprintln!("[ERROR] staged cleanup failed: {error}");
+            process::exit(2);
+        }
+        process::exit(0);
+    }
 
     // Step 1: wipe-all (unless --no-wipe)
     if let Err(error) = wipe_and_report(&client, &args).await {
@@ -969,6 +993,8 @@ mod e2e_tests {
             controller_token: None,
             gateway_token: None,
             no_wipe: true,
+            k8s_staged_wipe: false,
+            k8s_leader_service: None,
             wipe_timeout_secs: DEFAULT_WIPE_TIMEOUT_SECS,
             report_wipe_inventory: false,
             timeout_secs: 1,
@@ -1013,6 +1039,8 @@ mod e2e_tests {
             controller_token: None,
             gateway_token: None,
             no_wipe: true,
+            k8s_staged_wipe: false,
+            k8s_leader_service: None,
             wipe_timeout_secs: DEFAULT_WIPE_TIMEOUT_SECS,
             report_wipe_inventory: false,
             timeout_secs: 1,
@@ -1099,6 +1127,8 @@ mod e2e_tests {
             controller_token: None,
             gateway_token: None,
             no_wipe: true,
+            k8s_staged_wipe: false,
+            k8s_leader_service: None,
             wipe_timeout_secs: DEFAULT_WIPE_TIMEOUT_SECS,
             report_wipe_inventory: false,
             timeout_secs: 1,
@@ -1179,6 +1209,8 @@ mod e2e_tests {
             controller_token: None,
             gateway_token: None,
             no_wipe: true,
+            k8s_staged_wipe: false,
+            k8s_leader_service: None,
             wipe_timeout_secs: DEFAULT_WIPE_TIMEOUT_SECS,
             report_wipe_inventory: false,
             timeout_secs: 1,
@@ -1257,6 +1289,8 @@ mod e2e_tests {
             controller_token: None,
             gateway_token: None,
             no_wipe: true,
+            k8s_staged_wipe: false,
+            k8s_leader_service: None,
             wipe_timeout_secs: DEFAULT_WIPE_TIMEOUT_SECS,
             report_wipe_inventory: false,
             timeout_secs: 1,
@@ -1312,6 +1346,8 @@ mod e2e_tests {
             controller_token: None,
             gateway_token: None,
             no_wipe: true,
+            k8s_staged_wipe: false,
+            k8s_leader_service: None,
             wipe_timeout_secs: DEFAULT_WIPE_TIMEOUT_SECS,
             report_wipe_inventory: false,
             timeout_secs: 1,
@@ -1601,5 +1637,1116 @@ mod walk_tests {
         ] {
             assert!(!is_verified_root_ca_configmap(&invalid, key));
         }
+    }
+}
+
+const STAGED_BODY_CAP: usize = 8 * 1024 * 1024;
+const STAGED_PAGE_SIZE: usize = 500;
+const STAGED_MAX_PAGES: usize = 100;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StagedKey {
+    kind: ResourceKind,
+    namespace: Option<String>,
+    name: String,
+    version: String,
+    service_label: Option<String>,
+}
+
+impl StagedKey {
+    fn identity(&self) -> String {
+        self.namespace
+            .as_ref()
+            .map_or_else(|| self.name.clone(), |ns| format!("{ns}/{}", self.name))
+    }
+}
+
+fn staged_tier(kind: ResourceKind) -> u8 {
+    use ResourceKind::*;
+    match kind {
+        HTTPRoute
+        | GRPCRoute
+        | TCPRoute
+        | UDPRoute
+        | TLSRoute
+        | EdgionPlugins
+        | EdgionStreamPlugins
+        | BackendTLSPolicy
+        | EdgionBackendTrafficPolicy => 1,
+        Gateway | GatewayClass | EdgionGatewayConfig | EdgionTls | EdgionAcme | EdgionConfigData | LinkSys
+        | EdgionBackend | ReferenceGrant => 2,
+        Service => 3,
+        EndpointSlice => 4,
+        Secret | ConfigMap => 5,
+        Unspecified => 0,
+    }
+}
+
+fn staged_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.'))
+}
+
+fn staged_page(body: &Value, kind: ResourceKind) -> anyhow::Result<(Vec<StagedKey>, Option<String>)> {
+    anyhow::ensure!(body["success"] == true, "metadata inventory API failed");
+    let items = body["data"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("metadata inventory omitted data array"))?;
+    anyhow::ensure!(
+        body["count"].as_u64() == Some(items.len() as u64) && items.len() <= STAGED_PAGE_SIZE,
+        "metadata inventory count or page size is invalid"
+    );
+    let info = ALL_RESOURCE_INFOS
+        .iter()
+        .find(|info| info.kind == kind)
+        .ok_or_else(|| anyhow::anyhow!("metadata inventory kind is not canonical"))?;
+    let mut keys = Vec::new();
+    let mut seen = BTreeSet::new();
+    for item in items {
+        anyhow::ensure!(
+            item["kind"] == kind.as_str() && item["apiVersion"] == "meta.k8s.io/v1",
+            "metadata inventory resource type is invalid"
+        );
+        let metadata = &item["metadata"];
+        let name = metadata["name"]
+            .as_str()
+            .filter(|v| staged_identifier(v))
+            .ok_or_else(|| anyhow::anyhow!("metadata inventory resource name is invalid"))?;
+        let namespace = match metadata.get("namespace") {
+            None if info.cluster_scoped => None,
+            Some(Value::String(value)) if !info.cluster_scoped && staged_identifier(value) => Some(value.clone()),
+            _ => anyhow::bail!("metadata inventory resource scope is invalid"),
+        };
+        let version = metadata["resourceVersion"]
+            .as_str()
+            .filter(|v| !v.is_empty() && v.bytes().all(|byte| byte.is_ascii_digit()))
+            .ok_or_else(|| anyhow::anyhow!("metadata inventory resourceVersion is invalid"))?;
+        let key = StagedKey {
+            kind,
+            namespace,
+            name: name.into(),
+            version: version.into(),
+            service_label: metadata["labels"]["kubernetes.io/service-name"]
+                .as_str()
+                .map(str::to_owned),
+        };
+        anyhow::ensure!(
+            seen.insert(key.identity()),
+            "metadata inventory contains duplicate identities"
+        );
+        keys.push(key);
+    }
+    let next = match body.get("continue_token") {
+        None => None,
+        Some(Value::String(value)) if !value.is_empty() => Some(value.clone()),
+        _ => anyhow::bail!("metadata inventory continuation token is invalid"),
+    };
+    anyhow::ensure!(
+        next.is_none() || !keys.is_empty(),
+        "metadata inventory continuation made no progress"
+    );
+    Ok((keys, next))
+}
+
+struct StagedCleanup<'a> {
+    client: &'a Client,
+    args: &'a Args,
+    deadline: Instant,
+    configmaps: BTreeSet<String>,
+    secrets: &'a BTreeSet<String>,
+    leader: String,
+    leader_uid: String,
+    server_id: String,
+}
+
+impl StagedCleanup<'_> {
+    fn remaining(&self) -> anyhow::Result<Duration> {
+        self.deadline
+            .checked_duration_since(Instant::now())
+            .filter(|duration| !duration.is_zero())
+            .ok_or_else(|| anyhow::anyhow!("staged cleanup exceeded its total deadline"))
+    }
+
+    fn url(&self, base: &str, segments: &[&str]) -> anyhow::Result<reqwest::Url> {
+        let mut url = reqwest::Url::parse(base)?;
+        anyhow::ensure!(
+            url.query().is_none() && url.fragment().is_none() && url.username().is_empty() && url.password().is_none(),
+            "staged cleanup API address contains unsupported components"
+        );
+        let mut path = url
+            .path_segments_mut()
+            .map_err(|_| anyhow::anyhow!("invalid staged API address"))?;
+        path.pop_if_empty();
+        path.extend(segments.iter().copied());
+        drop(path);
+        Ok(url)
+    }
+
+    async fn json(&self, request: reqwest::RequestBuilder) -> anyhow::Result<Value> {
+        let mut response = request
+            .timeout(self.remaining()?.min(HTTP_REQUEST_TIMEOUT))
+            .send()
+            .await?
+            .error_for_status()?;
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await? {
+            self.remaining()?;
+            anyhow::ensure!(
+                chunk.len() <= STAGED_BODY_CAP.saturating_sub(bytes.len()),
+                "staged API response exceeded its body cap"
+            );
+            bytes.extend_from_slice(&chunk);
+        }
+        serde_json::from_slice(&bytes).map_err(|_| anyhow::anyhow!("staged API response is not valid JSON"))
+    }
+
+    fn object_url(&self, key: &StagedKey) -> anyhow::Result<reqwest::Url> {
+        match &key.namespace {
+            Some(ns) => self.url(
+                &self.args.controller_addr,
+                &["api", "v1", "namespaced", key.kind.as_str(), ns, &key.name],
+            ),
+            None => self.url(
+                &self.args.controller_addr,
+                &["api", "v1", "cluster", key.kind.as_str(), &key.name],
+            ),
+        }
+    }
+
+    async fn inventory(&self, kind: ResourceKind) -> anyhow::Result<Vec<StagedKey>> {
+        let info = ALL_RESOURCE_INFOS
+            .iter()
+            .find(|info| info.kind == kind)
+            .ok_or_else(|| anyhow::anyhow!("noncanonical inventory kind"))?;
+        let scope = if info.cluster_scoped { "cluster" } else { "namespaced" };
+        let url = self.url(&self.args.controller_addr, &["api", "v1", "keys", scope, kind.as_str()])?;
+        let mut token: Option<String> = None;
+        let mut tokens = BTreeSet::new();
+        let mut identities = BTreeSet::new();
+        let mut keys = Vec::new();
+        let mut restarts = 0;
+        for _ in 0..STAGED_MAX_PAGES {
+            let mut request = with_bearer(self.client.get(url.clone()), self.args.controller_token.as_deref())
+                .query(&[("limit", STAGED_PAGE_SIZE.to_string())]);
+            if let Some(value) = &token {
+                request = request.query(&[("continue", value)]);
+            }
+            let body = match self.json(request).await {
+                Ok(body) => body,
+                Err(error)
+                    if token.is_some()
+                        && error.downcast_ref::<reqwest::Error>().and_then(|error| error.status())
+                            == Some(reqwest::StatusCode::GONE) =>
+                {
+                    anyhow::ensure!(
+                        restarts < 2,
+                        "metadata inventory exhausted its stale pagination restarts"
+                    );
+                    restarts += 1;
+                    keys.clear();
+                    identities.clear();
+                    tokens.clear();
+                    token = None;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            let (page, next) = staged_page(&body, kind)?;
+            for key in page {
+                anyhow::ensure!(
+                    identities.insert(key.identity()),
+                    "metadata inventory repeated an identity across pages"
+                );
+                keys.push(key);
+            }
+            match next {
+                None => return Ok(keys),
+                Some(next) => {
+                    anyhow::ensure!(
+                        tokens.insert(next.clone()),
+                        "metadata inventory repeated a continuation token"
+                    );
+                    token = Some(next);
+                }
+            }
+        }
+        anyhow::bail!("metadata inventory exceeded its page limit")
+    }
+
+    async fn object(&self, key: &StagedKey) -> anyhow::Result<Value> {
+        self.json(with_bearer(
+            self.client.get(self.object_url(key)?),
+            self.args.controller_token.as_deref(),
+        ))
+        .await
+    }
+
+    fn refreshed_key(&self, key: &StagedKey, object: &Value) -> anyhow::Result<StagedKey> {
+        let metadata = &object["metadata"];
+        let namespace_matches = match &key.namespace {
+            Some(namespace) => metadata["namespace"].as_str() == Some(namespace.as_str()),
+            None => metadata.get("namespace").is_none(),
+        };
+        anyhow::ensure!(
+            object["kind"].as_str() == Some(key.kind.as_str())
+                && metadata["name"].as_str() == Some(key.name.as_str())
+                && namespace_matches,
+            "fresh deletion observation has a different resource identity"
+        );
+        let uid = metadata["uid"]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("fresh deletion observation omitted resource UID"))?;
+        let version = metadata["resourceVersion"]
+            .as_str()
+            .filter(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+            .ok_or_else(|| anyhow::anyhow!("fresh deletion observation has an invalid resourceVersion"))?;
+        if key.kind == ResourceKind::Service && key.identity() == self.leader {
+            anyhow::ensure!(
+                uid == self.leader_uid
+                    && object["spec"]["selector"]
+                        == serde_json::json!({"app":"edgion-controller", "edgion.io/leader":"true"}),
+                "leader Service identity or selector changed before deletion"
+            );
+        }
+        let mut refreshed = key.clone();
+        refreshed.version = version.into();
+        Ok(refreshed)
+    }
+
+    async fn delete(&self, key: &StagedKey) -> anyhow::Result<()> {
+        // Earlier deletions requeue dependents and change their status RVs.
+        // Read the current RV before the first mutation, retaining native CAS.
+        let object = match self.object(key).await {
+            Ok(object) => object,
+            Err(error)
+                if error.downcast_ref::<reqwest::Error>().and_then(|error| error.status())
+                    == Some(reqwest::StatusCode::NOT_FOUND) =>
+            {
+                eprintln!(
+                    "[INFO] staged absent: kind={} key={}",
+                    key.kind.as_str(),
+                    key.identity()
+                );
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+        let key = self.refreshed_key(key, &object)?;
+        let url = self.object_url(&key)?;
+        // One request only: timeouts and version conflicts must never replay a mutation.
+        let response = with_bearer(self.client.delete(url.clone()), self.args.controller_token.as_deref())
+            .header(reqwest::header::IF_MATCH, format!("\"{}\"", key.version))
+            .timeout(self.remaining()?.min(HTTP_REQUEST_TIMEOUT))
+            .send()
+            .await?;
+        let status = response.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            let observed = with_bearer(self.client.get(url), self.args.controller_token.as_deref())
+                .timeout(self.remaining()?.min(HTTP_REQUEST_TIMEOUT))
+                .send()
+                .await?;
+            anyhow::ensure!(
+                observed.status() == reqwest::StatusCode::NOT_FOUND,
+                "delete 404 was not confirmed by a fresh absence observation"
+            );
+        } else {
+            anyhow::ensure!(
+                status == reqwest::StatusCode::NO_CONTENT,
+                "versioned deletion failed for {} {}: status={status}",
+                key.kind.as_str(),
+                key.identity()
+            );
+        }
+        eprintln!(
+            "[INFO] staged delete: kind={} key={} resourceVersion={}",
+            key.kind.as_str(),
+            key.identity(),
+            key.version
+        );
+        Ok(())
+    }
+
+    fn baseline(&self, key: &StagedKey) -> bool {
+        (key.kind == ResourceKind::Secret && self.secrets.contains(&key.identity()))
+            || (key.kind == ResourceKind::ConfigMap && self.configmaps.contains(&key.identity()))
+    }
+
+    fn leader_slice(&self, key: &StagedKey) -> bool {
+        key.kind == ResourceKind::EndpointSlice
+            && key.namespace.as_deref() == self.leader.split_once('/').map(|pair| pair.0)
+            && key.service_label.as_deref() == self.leader.split_once('/').map(|pair| pair.1)
+    }
+
+    async fn verify_slice(&self, key: &StagedKey) -> anyhow::Result<()> {
+        let object = self.object(key).await?;
+        let name = self.leader.split_once('/').unwrap().1;
+        anyhow::ensure!(
+            object["metadata"]["ownerReferences"]
+                .as_array()
+                .is_some_and(|owners| owners.iter().any(|owner| owner["kind"] == "Service"
+                    && owner["name"] == name
+                    && owner["uid"] == self.leader_uid
+                    && owner["controller"] == true)),
+            "leader EndpointSlice does not belong to the verified live Service"
+        );
+        Ok(())
+    }
+
+    async fn verify_baseline(&self, key: &StagedKey) -> anyhow::Result<()> {
+        let object = self.object(key).await?;
+        let valid = match key.kind {
+            ResourceKind::Secret => is_verified_conf_sync_secret(&object, &key.identity()),
+            ResourceKind::ConfigMap => is_verified_root_ca_configmap(&object, &key.identity()),
+            _ => false,
+        };
+        anyhow::ensure!(valid, "retained baseline failed its existing fixture profile");
+        Ok(())
+    }
+
+    async fn ordinary_converged(&self) -> anyhow::Result<bool> {
+        let mut retained = BTreeMap::new();
+        for info in ALL_RESOURCE_INFOS {
+            let keys = self.inventory(info.kind).await?;
+            let mut expected = BTreeSet::new();
+            for key in &keys {
+                if self.baseline(key) {
+                    self.verify_baseline(key).await?;
+                } else if key.kind == ResourceKind::Service && key.identity() == self.leader {
+                } else if self.leader_slice(key) {
+                    self.verify_slice(key).await?;
+                } else {
+                    return Ok(false);
+                }
+                expected.insert(key.identity());
+            }
+            if info.kind == ResourceKind::Secret && expected != *self.secrets {
+                return Ok(false);
+            }
+            if info.kind == ResourceKind::ConfigMap && expected != self.configmaps {
+                return Ok(false);
+            }
+            if info.kind == ResourceKind::Service && expected != BTreeSet::from([self.leader.clone()]) {
+                return Ok(false);
+            }
+            if info.kind == ResourceKind::EndpointSlice && expected.is_empty() {
+                return Ok(false);
+            }
+            retained.insert(info.kind.as_str(), expected);
+        }
+        for info in ALL_RESOURCE_INFOS.iter().filter(|info| {
+            info.in_registry && !edgion_resources::resource_defs::DEFAULT_NO_SYNC_KINDS.contains(&info.kind.as_str())
+        }) {
+            let url = self.url(&self.args.gateway_addr, &["configclient", info.kind.as_str(), "list"])?;
+            let body = self
+                .json(with_bearer(self.client.get(url), self.args.gateway_token.as_deref()))
+                .await?;
+            anyhow::ensure!(body["success"] == true, "Gateway cache inventory API failed");
+            let items = body["data"]
+                .as_array()
+                .ok_or_else(|| anyhow::anyhow!("Gateway cache inventory omitted array"))?;
+            let mut actual = BTreeSet::new();
+            for item in items {
+                let metadata = &item["metadata"];
+                let name = metadata["name"].as_str().filter(|name| staged_identifier(name));
+                let namespace = metadata.get("namespace").and_then(Value::as_str);
+                anyhow::ensure!(
+                    name.is_some()
+                        && if info.cluster_scoped {
+                            metadata.get("namespace").is_none()
+                        } else {
+                            namespace.is_some_and(staged_identifier)
+                        },
+                    "Gateway cache inventory identity is invalid"
+                );
+                let key =
+                    resource_key(item).ok_or_else(|| anyhow::anyhow!("Gateway cache inventory identity is invalid"))?;
+                anyhow::ensure!(actual.insert(key), "Gateway cache inventory duplicated identity");
+            }
+            if Some(&actual) != retained.get(info.kind.as_str()) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    async fn server_identity(&self) -> anyhow::Result<String> {
+        let url = self.url(&self.args.controller_addr, &["api", "v1", "server-info"])?;
+        let body = self
+            .json(with_bearer(self.client.get(url), self.args.controller_token.as_deref()))
+            .await?;
+        anyhow::ensure!(
+            body["success"] == true && body["data"]["ready"] == true,
+            "Controller is not ready for staged cleanup"
+        );
+        body["data"]["server_id"]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow::anyhow!("Controller server identity is missing"))
+    }
+}
+
+async fn staged_wipe(
+    client: &Client,
+    args: &Args,
+    configmaps: &BTreeSet<String>,
+    secrets: &BTreeSet<String>,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        args.skip.is_none() && args.mode == "fail",
+        "staged cleanup requires both validators in fail mode"
+    );
+    let leader = args
+        .k8s_leader_service
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("staged cleanup requires an exact leader Service"))?;
+    let (namespace, name) = leader
+        .split_once('/')
+        .filter(|(ns, name)| staged_identifier(ns) && staged_identifier(name))
+        .ok_or_else(|| anyhow::anyhow!("invalid staged leader Service identity"))?;
+    anyhow::ensure!(
+        name == "edgion-controller-leader",
+        "staged cleanup only accepts the canonical conf-sync leader Service"
+    );
+    anyhow::ensure!(
+        secrets
+            == &BTreeSet::from([
+                format!("{namespace}/edgion-conf-sync-ca"),
+                format!("{namespace}/edgion-conf-sync-certs")
+            ]),
+        "staged cleanup requires exactly the two verified conf-sync Secrets"
+    );
+    let mut cleanup = StagedCleanup {
+        client,
+        args,
+        deadline: Instant::now() + Duration::from_secs(args.wipe_timeout_secs),
+        configmaps: configmaps.clone(),
+        secrets,
+        leader: leader.into(),
+        leader_uid: String::new(),
+        server_id: String::new(),
+    };
+    cleanup.server_id = cleanup.server_identity().await?;
+    let leader_key = cleanup
+        .inventory(ResourceKind::Service)
+        .await?
+        .into_iter()
+        .find(|key| key.identity() == leader)
+        .ok_or_else(|| anyhow::anyhow!("leader Service is absent from Controller inventory"))?;
+    let service = cleanup.object(&leader_key).await?;
+    anyhow::ensure!(
+        service["spec"]["selector"] == serde_json::json!({"app":"edgion-controller", "edgion.io/leader":"true"}),
+        "leader Service selector differs from the canonical fixture"
+    );
+    cleanup.leader_uid = service["metadata"]["uid"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("leader Service UID is missing"))?;
+    // The gate also verifies roots outside the Controller's watch namespaces.
+    // Retain only the exact already-visible intersection, never require unseen keys.
+    let visible_roots = cleanup.inventory(ResourceKind::ConfigMap).await?;
+    cleanup.configmaps = visible_roots
+        .iter()
+        .filter(|key| configmaps.contains(&key.identity()))
+        .map(StagedKey::identity)
+        .collect();
+    for key in visible_roots
+        .iter()
+        .filter(|key| cleanup.configmaps.contains(&key.identity()))
+    {
+        cleanup.verify_baseline(key).await?;
+    }
+    let secret_keys = cleanup.inventory(ResourceKind::Secret).await?;
+    let retained_secrets = secret_keys
+        .iter()
+        .filter(|key| secrets.contains(&key.identity()))
+        .collect::<Vec<_>>();
+    anyhow::ensure!(
+        retained_secrets.len() == 2,
+        "verified conf-sync Secrets are not both Controller-visible"
+    );
+    for key in retained_secrets {
+        cleanup.verify_baseline(key).await?;
+    }
+    let leader_slices = cleanup.inventory(ResourceKind::EndpointSlice).await?;
+    let leader_slices = leader_slices
+        .iter()
+        .filter(|key| cleanup.leader_slice(key))
+        .collect::<Vec<_>>();
+    anyhow::ensure!(
+        !leader_slices.is_empty(),
+        "leader Service has no Controller-visible EndpointSlice"
+    );
+    for key in leader_slices {
+        cleanup.verify_slice(key).await?;
+    }
+    // Sequential deletion keeps the mutation journal and ambiguous failures bounded.
+    for tier in 1..=5 {
+        let mut inventory = Vec::new();
+        for info in ALL_RESOURCE_INFOS.iter().filter(|info| staged_tier(info.kind) == tier) {
+            inventory.extend(cleanup.inventory(info.kind).await?);
+        }
+        for key in &inventory {
+            eprintln!(
+                "[INFO] staged inventory: tier={tier} kind={} key={} resourceVersion={}",
+                key.kind.as_str(),
+                key.identity(),
+                key.version
+            );
+        }
+        for key in inventory {
+            if cleanup.baseline(&key) {
+                cleanup.verify_baseline(&key).await?;
+            } else if key.kind == ResourceKind::Service && key.identity() == leader {
+            } else if cleanup.leader_slice(&key) {
+                cleanup.verify_slice(&key).await?;
+            } else {
+                cleanup.delete(&key).await?;
+            }
+        }
+    }
+    loop {
+        anyhow::ensure!(
+            cleanup.server_identity().await? == cleanup.server_id,
+            "Controller restarted during staged cleanup"
+        );
+        if cleanup.ordinary_converged().await? {
+            break;
+        }
+        tokio::time::sleep(cleanup.remaining()?.min(Duration::from_millis(args.poll_interval_ms))).await;
+    }
+    // Re-inventory immediately before the last mutation; never delete leader slices.
+    let remaining = cleanup.inventory(ResourceKind::Service).await?;
+    anyhow::ensure!(
+        remaining.len() == 1 && remaining[0].identity() == leader,
+        "ordinary Services did not remain empty"
+    );
+    cleanup.delete(&remaining[0]).await?;
+    eprintln!("[INFO] staged cleanup complete; leader EndpointSlices must disappear through real Kubernetes GC");
+    Ok(())
+}
+
+#[cfg(test)]
+mod staged_cleanup_tests {
+    use super::*;
+    use serde_json::json;
+    use wiremock::{
+        matchers::{any, header, method, path, query_param},
+        Mock, MockServer, Request, Respond, ResponseTemplate,
+    };
+
+    fn key(kind: ResourceKind, namespace: Option<&str>, name: &str) -> Value {
+        let mut value = json!({"kind":kind.as_str(), "apiVersion":"meta.k8s.io/v1", "metadata":{"name":name,"resourceVersion":"123","uid":"test-uid"}});
+        if let Some(ns) = namespace {
+            value["metadata"]["namespace"] = json!(ns);
+        }
+        value
+    }
+
+    fn page(items: Vec<Value>) -> Value {
+        json!({"success":true,"count":items.len(),"data":items})
+    }
+
+    fn args(server: &MockServer) -> Args {
+        Args::try_parse_from([
+            "cache_residue",
+            "--controller-addr",
+            &server.uri(),
+            "--gateway-addr",
+            &server.uri(),
+            "--controller-token",
+            "test-token",
+            "--gateway-token",
+            "test-token",
+            "--mode",
+            "fail",
+            "--k8s-staged-wipe",
+            "--k8s-leader-service",
+            "system/edgion-controller-leader",
+        ])
+        .unwrap()
+    }
+
+    fn context<'a>(client: &'a Client, args: &'a Args, secrets: &'a BTreeSet<String>) -> StagedCleanup<'a> {
+        StagedCleanup {
+            client,
+            args,
+            deadline: Instant::now() + Duration::from_secs(2),
+            configmaps: BTreeSet::new(),
+            secrets,
+            leader: "system/edgion-controller-leader".into(),
+            leader_uid: "leader-uid".into(),
+            server_id: "s1".into(),
+        }
+    }
+
+    #[test]
+    fn metadata_contract_rejects_foreign_types_missing_versions_scopes_and_duplicates() {
+        let valid = key(ResourceKind::Service, Some("test"), "backend");
+        assert!(staged_page(&page(vec![valid.clone()]), ResourceKind::Service).is_ok());
+        for (pointer, invalid) in [
+            ("/kind", json!("Secret")),
+            ("/apiVersion", json!("v1")),
+            ("/metadata/resourceVersion", json!("")),
+            ("/metadata/resourceVersion", json!("*")),
+            ("/metadata/namespace", Value::Null),
+            ("/metadata/name", json!("bad/name")),
+        ] {
+            let mut item = valid.clone();
+            *item.pointer_mut(pointer).unwrap() = invalid;
+            assert!(staged_page(&page(vec![item]), ResourceKind::Service).is_err());
+        }
+        assert!(staged_page(&page(vec![valid.clone(), valid]), ResourceKind::Service).is_err());
+        let mut invalid = page(vec![]);
+        invalid["count"] = json!(1);
+        assert!(staged_page(&invalid, ResourceKind::Service).is_err());
+        let cluster = key(ResourceKind::GatewayClass, None, "class");
+        assert!(staged_page(&page(vec![cluster.clone()]), ResourceKind::GatewayClass).is_ok());
+        let mut invalid = cluster;
+        invalid["metadata"]["namespace"] = json!("test");
+        assert!(staged_page(&page(vec![invalid]), ResourceKind::GatewayClass).is_err());
+        assert!(ALL_RESOURCE_INFOS.iter().all(|info| staged_tier(info.kind) > 0));
+        assert_eq!(
+            ALL_RESOURCE_INFOS
+                .iter()
+                .filter(|info| staged_tier(info.kind) == 1)
+                .count(),
+            9
+        );
+    }
+
+    #[tokio::test]
+    async fn metadata_pagination_validates_each_page_and_rejects_repeated_tokens_or_keys() {
+        for duplicate in [false, true] {
+            let server = MockServer::start().await;
+            let mut first = page(vec![key(ResourceKind::Service, Some("test"), "one")]);
+            first["continue_token"] = json!("next");
+            Mock::given(method("GET"))
+                .and(path("/api/v1/keys/namespaced/Service"))
+                .and(query_param("limit", "500"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(first))
+                .mount(&server)
+                .await;
+            let mut second = page(vec![key(
+                ResourceKind::Service,
+                Some("test"),
+                if duplicate { "one" } else { "two" },
+            )]);
+            if !duplicate {
+                second["continue_token"] = json!("next");
+            }
+            Mock::given(method("GET"))
+                .and(query_param("continue", "next"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(second))
+                .with_priority(1)
+                .expect(1)
+                .mount(&server)
+                .await;
+            let args = args(&server);
+            let client = Client::new();
+            let secrets = BTreeSet::new();
+            assert!(context(&client, &args, &secrets)
+                .inventory(ResourceKind::Service)
+                .await
+                .is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn metadata_expired_cursor_discards_the_entire_previous_snapshot() {
+        let server = MockServer::start().await;
+        let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = requests.clone();
+        Mock::given(method("GET"))
+            .and(path("/api/v1/keys/namespaced/Service"))
+            .and(query_param("limit", "500"))
+            .respond_with(move |request: &Request| {
+                let index = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let continued = request
+                    .url
+                    .query_pairs()
+                    .any(|(name, value)| name == "continue" && value == "next");
+                assert_eq!(continued, index % 2 == 1);
+                if index == 1 {
+                    return ResponseTemplate::new(410);
+                }
+                let mut shared = key(ResourceKind::Service, Some("test"), "shared");
+                shared["metadata"]["resourceVersion"] = json!(if index == 0 { "123" } else { "124" });
+                let mut body = match index {
+                    0 => page(vec![key(ResourceKind::Service, Some("test"), "obsolete"), shared]),
+                    2 => page(vec![shared]),
+                    3 => page(vec![key(ResourceKind::Service, Some("test"), "current")]),
+                    _ => panic!("unexpected inventory request"),
+                };
+                if index != 3 {
+                    body["continue_token"] = json!("next");
+                }
+                ResponseTemplate::new(200).set_body_json(body)
+            })
+            .expect(4)
+            .mount(&server)
+            .await;
+        let args = args(&server);
+        let client = Client::new();
+        let secrets = BTreeSet::new();
+        let keys = context(&client, &args, &secrets)
+            .inventory(ResourceKind::Service)
+            .await
+            .unwrap();
+        assert_eq!(keys.len(), 2);
+        assert_eq!((&*keys[0].name, &*keys[0].version), ("shared", "124"));
+        assert_eq!(keys[1].name, "current");
+        assert_eq!(server.received_requests().await.unwrap().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn metadata_cursor_restarts_are_bounded_and_only_apply_to_continued_gone() {
+        for (status, continued, expected_requests) in [(410, true, 6), (410, false, 1), (500, true, 2)] {
+            let server = MockServer::start().await;
+            let mut first = page(vec![key(ResourceKind::Service, Some("test"), "one")]);
+            first["continue_token"] = json!("next");
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(first))
+                .mount(&server)
+                .await;
+            let mut failing = Mock::given(method("GET"));
+            if continued {
+                failing = failing.and(query_param("continue", "next"));
+            }
+            failing
+                .respond_with(ResponseTemplate::new(status))
+                .with_priority(1)
+                .mount(&server)
+                .await;
+            let args = args(&server);
+            let client = Client::new();
+            let secrets = BTreeSet::new();
+            let error = context(&client, &args, &secrets)
+                .inventory(ResourceKind::Service)
+                .await
+                .unwrap_err();
+            if continued && status == 410 {
+                assert!(error.to_string().contains("exhausted"));
+            }
+            let requests = server.received_requests().await.unwrap();
+            assert_eq!(requests.len(), expected_requests);
+            assert!(requests.iter().all(|request| request.method == "GET"));
+        }
+    }
+
+    #[tokio::test]
+    async fn guarded_delete_never_replays_conflicts_timeouts_or_unconfirmed_gc() {
+        for status in [204, 409, 500, 404] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/namespaced/Service/test/backend"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(key(
+                    ResourceKind::Service,
+                    Some("test"),
+                    "backend",
+                )))
+                .expect(if status == 404 { 2 } else { 1 })
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .and(path("/api/v1/namespaced/Service/test/backend"))
+                .and(header("if-match", "\"123\""))
+                .and(header("authorization", "Bearer test-token"))
+                .respond_with(ResponseTemplate::new(status))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let args = args(&server);
+            let client = Client::new();
+            let secrets = BTreeSet::new();
+            let keys = staged_page(
+                &page(vec![key(ResourceKind::Service, Some("test"), "backend")]),
+                ResourceKind::Service,
+            )
+            .unwrap()
+            .0;
+            assert_eq!(
+                context(&client, &args, &secrets).delete(&keys[0]).await.is_ok(),
+                status == 204
+            );
+        }
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(key(ResourceKind::Service, Some("test"), "backend")))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204).set_delay(Duration::from_millis(100)))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let args = args(&server);
+        let client = Client::new();
+        let secrets = BTreeSet::new();
+        let mut cleanup = context(&client, &args, &secrets);
+        cleanup.deadline = Instant::now() + Duration::from_millis(20);
+        let keys = staged_page(
+            &page(vec![key(ResourceKind::Service, Some("test"), "backend")]),
+            ResourceKind::Service,
+        )
+        .unwrap()
+        .0;
+        assert!(cleanup.delete(&keys[0]).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn deletion_uses_current_rv_once_instead_of_the_stale_tier_snapshot() {
+        let server = MockServer::start().await;
+        let original = key(ResourceKind::HTTPRoute, Some("test"), "parent");
+        let mut current = original.clone();
+        current["metadata"]["resourceVersion"] = json!("124");
+        Mock::given(method("GET"))
+            .and(path("/api/v1/namespaced/HTTPRoute/test/parent"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(current))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/api/v1/namespaced/HTTPRoute/test/parent"))
+            .and(header("if-match", "\"124\""))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let args = args(&server);
+        let client = Client::new();
+        let secrets = BTreeSet::new();
+        let selected = staged_page(&page(vec![original]), ResourceKind::HTTPRoute).unwrap().0;
+        context(&client, &args, &secrets).delete(&selected[0]).await.unwrap();
+        assert_eq!(selected[0].version, "123");
+    }
+
+    #[tokio::test]
+    async fn malformed_current_identity_uid_or_rv_never_mutates() {
+        for (pointer, invalid) in [
+            ("/kind", json!("Secret")),
+            ("/metadata/name", json!("different")),
+            ("/metadata/namespace", json!("different")),
+            ("/metadata/uid", json!("")),
+            ("/metadata/uid", Value::Null),
+            ("/metadata/resourceVersion", json!("")),
+            ("/metadata/resourceVersion", json!("124\"")),
+        ] {
+            let server = MockServer::start().await;
+            let original = key(ResourceKind::Service, Some("test"), "backend");
+            let mut current = original.clone();
+            *current.pointer_mut(pointer).unwrap() = invalid;
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(current))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(0)
+                .mount(&server)
+                .await;
+            let args = args(&server);
+            let client = Client::new();
+            let secrets = BTreeSet::new();
+            let selected = staged_page(&page(vec![original]), ResourceKind::Service).unwrap().0;
+            assert!(context(&client, &args, &secrets).delete(&selected[0]).await.is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn initial_absence_requires_no_delete_request() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let args = args(&server);
+        let client = Client::new();
+        let secrets = BTreeSet::new();
+        let selected = staged_page(
+            &page(vec![key(ResourceKind::Service, Some("test"), "backend")]),
+            ResourceKind::Service,
+        )
+        .unwrap()
+        .0;
+        context(&client, &args, &secrets).delete(&selected[0]).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn replacement_leader_or_changed_selector_is_preserved_without_delete() {
+        for change_uid in [false, true] {
+            let server = MockServer::start().await;
+            let original = key(ResourceKind::Service, Some("system"), "edgion-controller-leader");
+            let mut current = original.clone();
+            current["metadata"]["uid"] = json!(if change_uid { "replacement-uid" } else { "leader-uid" });
+            current["spec"]["selector"] =
+                json!({"app":"edgion-controller", "edgion.io/leader":if change_uid { "true" } else { "false" }});
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(current))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("DELETE"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(0)
+                .mount(&server)
+                .await;
+            let args = args(&server);
+            let client = Client::new();
+            let secrets = BTreeSet::new();
+            let selected = staged_page(&page(vec![original]), ResourceKind::Service).unwrap().0;
+            assert!(context(&client, &args, &secrets).delete(&selected[0]).await.is_err());
+        }
+    }
+
+    #[derive(Clone)]
+    struct Fixture(std::sync::Arc<parking_lot::Mutex<BTreeMap<(String, String), Value>>>);
+    impl Respond for Fixture {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let segments = request.url.path().trim_matches('/').split('/').collect::<Vec<_>>();
+            let mut objects = self.0.lock();
+            if request.url.path() == "/api/v1/server-info" {
+                return ResponseTemplate::new(200)
+                    .set_body_json(json!({"success":true,"data":{"ready":true,"server_id":"s1"}}));
+            }
+            if segments.get(2) == Some(&"keys") {
+                let kind = segments[4];
+                let items = objects
+                    .iter()
+                    .filter(|((k, _), _)| k == kind)
+                    .map(|(_, object)| json!({"kind":kind,"apiVersion":"meta.k8s.io/v1","metadata":object["metadata"]}))
+                    .collect();
+                return ResponseTemplate::new(200).set_body_json(page(items));
+            }
+            if segments.first() == Some(&"configclient") {
+                let kind = segments[1];
+                let items = objects
+                    .iter()
+                    .filter(|((k, _), _)| k == kind)
+                    .map(|(_, v)| v.clone())
+                    .collect::<Vec<_>>();
+                return ResponseTemplate::new(200).set_body_json(json!({"success":true,"data":items}));
+            }
+            let kind = segments[3];
+            let identity = if segments[2] == "namespaced" {
+                format!("{}/{}", segments[4], segments[5])
+            } else {
+                segments[4].into()
+            };
+            let tuple = (kind.into(), identity.clone());
+            if request.method.as_str() == "DELETE" {
+                if objects.remove(&tuple).is_none() {
+                    return ResponseTemplate::new(404);
+                }
+                if kind == "Service" {
+                    objects.retain(|(k, _), object| {
+                        !(k == "EndpointSlice"
+                            && object["metadata"]["labels"]["kubernetes.io/service-name"] == segments[5])
+                    });
+                }
+                return ResponseTemplate::new(204);
+            }
+            objects.get(&tuple).map_or_else(
+                || ResponseTemplate::new(404),
+                |object| ResponseTemplate::new(200).set_body_json(object),
+            )
+        }
+    }
+
+    #[tokio::test]
+    async fn real_service_gc_order_retains_only_visible_baselines_and_deletes_leader_last() {
+        let server = MockServer::start().await;
+        let mut objects = BTreeMap::new();
+        for (kind, name, ns) in [
+            ("Service", "edgion-controller-leader", "system"),
+            ("Service", "ordinary", "test"),
+            ("EndpointSlice", "leader-slice", "system"),
+            ("EndpointSlice", "ordinary-slice", "test"),
+            ("HTTPRoute", "consumer", "test"),
+            ("Secret", "edgion-conf-sync-ca", "system"),
+            ("Secret", "edgion-conf-sync-certs", "system"),
+            ("Secret", "ordinary-secret", "test"),
+            ("ConfigMap", "kube-root-ca.crt", "test"),
+        ] {
+            let mut object = json!({"kind":kind,"metadata":{"namespace":ns,"name":name,"resourceVersion":"123","uid":format!("{ns}-{name}-uid")}});
+            match (kind, name) {
+                ("Service", "edgion-controller-leader") => {
+                    object["metadata"]["uid"] = json!("leader-uid");
+                    object["spec"] = json!({"selector":{"app":"edgion-controller","edgion.io/leader":"true"}});
+                }
+                ("EndpointSlice", _) => {
+                    let service = if ns == "system" {
+                        "edgion-controller-leader"
+                    } else {
+                        "ordinary"
+                    };
+                    object["metadata"]["labels"] = json!({"kubernetes.io/service-name":service});
+                    let owner_uid = if ns == "system" {
+                        "leader-uid"
+                    } else {
+                        "test-ordinary-uid"
+                    };
+                    object["metadata"]["ownerReferences"] =
+                        json!([{"kind":"Service","name":service,"uid":owner_uid,"controller":true}]);
+                }
+                ("Secret", "edgion-conf-sync-ca" | "edgion-conf-sync-certs") => {
+                    object["metadata"]["labels"] = json!({"edgion.io/managed-by":"conf-sync-ca"});
+                    object["type"] = json!("Opaque");
+                    object["data"] = if name == "edgion-conf-sync-ca" {
+                        json!({"ca.crt":"test","ca.key":"test"})
+                    } else {
+                        json!({"ca.crt":"test","client.crt":"test","client.key":"test"})
+                    };
+                }
+                ("ConfigMap", _) => {
+                    object["metadata"]["annotations"] = json!({"kubernetes.io/description":ROOT_CA_DESCRIPTION});
+                    object["data"] = json!({"ca.crt":"test"});
+                }
+                _ => {}
+            }
+            objects.insert((kind.into(), format!("{ns}/{name}")), object);
+        }
+        let fixture = Fixture(std::sync::Arc::new(parking_lot::Mutex::new(objects)));
+        Mock::given(any()).respond_with(fixture.clone()).mount(&server).await;
+        let args = args(&server);
+        let client = Client::new();
+        let roots = BTreeSet::from(["test/kube-root-ca.crt".into(), "unwatched/kube-root-ca.crt".into()]);
+        let secrets = BTreeSet::from([
+            "system/edgion-conf-sync-ca".into(),
+            "system/edgion-conf-sync-certs".into(),
+        ]);
+        staged_wipe(&client, &args, &roots, &secrets).await.unwrap();
+        let requests = server.received_requests().await.unwrap();
+        let deletes = requests
+            .iter()
+            .filter(|request| request.method.as_str() == "DELETE")
+            .collect::<Vec<_>>();
+        assert!(deletes.first().unwrap().url.path().contains("HTTPRoute"));
+        assert!(deletes
+            .last()
+            .unwrap()
+            .url
+            .path()
+            .ends_with("/Service/system/edgion-controller-leader"));
+        assert!(!deletes
+            .iter()
+            .any(|request| request.url.path().contains("EndpointSlice")));
+        let remaining = fixture.0.lock();
+        assert_eq!(remaining.len(), 3);
+        assert!(remaining
+            .keys()
+            .all(|(kind, _)| kind == "Secret" || kind == "ConfigMap"));
     }
 }

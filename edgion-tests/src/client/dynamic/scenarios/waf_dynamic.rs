@@ -639,7 +639,15 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
         let scenario = SCENARIO;
         delete_original_bundle(&ctx).await?;
         delete_supported_resources(&ctx).await?;
-        ctx.assert_phase(scenario, "initial").await?;
+        if std::env::var("EDGION_TEST_K8S_MODE")
+            .is_ok_and(|mode| matches!(mode.to_ascii_lowercase().as_str(), "true" | "1" | "yes"))
+        {
+            // Replace prior dynamic API fields that server-side apply may retain.
+            ctx.apply_dir("initial/").await?;
+            ctx.wait_phase(scenario, "initial", Duration::from_secs(15)).await?;
+        } else {
+            ctx.assert_phase(scenario, "initial").await?;
+        }
         ctx.apply_dir("updates/to_v2").await?;
         ctx.wait_phase(scenario, "updated", Duration::from_secs(15)).await?;
         ctx.apply_dir("updates/to_invalid").await?;
@@ -1014,13 +1022,24 @@ async fn run_inspection_policy_updates(ctx: &ScenarioCtx, scenario: &'static Sce
     let apply = |resource: Value| {
         let client = &client;
         async move {
+            // The Controller reads raw Kubernetes objects, while the Gateway
+            // publishes the typed resource with canonical serde defaults.
+            let body: edgion_resources::resources::RequestBodyConfig = serde_json::from_value(
+                resource["spec"]
+                    .get("requestBody")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({})),
+            )?;
+            let expected_body = serde_json::to_value(body)?;
+            let refs: Option<Vec<edgion_resources::resources::PluginReference>> =
+                serde_json::from_value(resource["spec"]["globalPluginsRef"].clone())?;
+            let expected_refs = serde_json::to_value(refs)?;
             crate::dynamic::apply::apply_yaml_documents(
                 client,
                 &ctx.resolve("inspection-storage-policy"),
                 &serde_yaml::to_string(&resource)?,
             )
             .await?;
-            let expected = &resource["spec"]["requestBody"];
             tokio::time::timeout(Duration::from_secs(30), async {
                 loop {
                     let url = format!(
@@ -1032,7 +1051,10 @@ async fn run_inspection_policy_updates(ctx: &ScenarioCtx, scenario: &'static Sce
                         request = request.bearer_auth(token);
                     }
                     let value: Value = request.send().await?.error_for_status()?.json().await?;
-                    if value["success"] == true && value["data"]["spec"]["requestBody"] == *expected {
+                    if value["success"] == true
+                        && value["data"]["spec"]["requestBody"] == expected_body
+                        && value["data"]["spec"]["globalPluginsRef"] == expected_refs
+                    {
                         break;
                     }
                     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1045,7 +1067,16 @@ async fn run_inspection_policy_updates(ctx: &ScenarioCtx, scenario: &'static Sce
         }
     };
     let result = async {
-        let mut disk = baseline.clone();
+        let mut inspection = baseline.clone();
+        // The shared GlobalPluginsSnapshot fixture has a conservative complete-
+        // body consumer. Isolate the early-dispatch probes from that reference;
+        // restoration below retains the complete original global reference list.
+        if let Some(refs) = inspection["spec"]["globalPluginsRef"].as_array_mut() {
+            refs.retain(|reference| {
+                !(reference["name"] == "gp-resp-header-modifier" && reference["namespace"] == "edgion-default")
+            });
+        }
+        let mut disk = inspection.clone();
         disk["spec"]["requestBody"] = serde_json::json!({
             "enabled": true, "maxBodySize": "1MiB",
             "storage": { "memoryLimit": "1", "spillToDisk": true, "maxBufferedSize": "32", "operationTimeout": "5s" }
@@ -1056,7 +1087,7 @@ async fn run_inspection_policy_updates(ctx: &ScenarioCtx, scenario: &'static Sce
             ctx.wait_phase(scenario, &format!("inspection-{action}"), Duration::from_secs(30))
                 .await?;
         }
-        let mut ordinary = baseline.clone();
+        let mut ordinary = inspection;
         ordinary["spec"]["requestBody"] = serde_json::json!({
             "enabled": false, "maxBodySize": "128",
             "storage": { "memoryLimit": "128", "spillToDisk": false, "maxBufferedSize": "128", "operationTimeout": "5s" }

@@ -114,13 +114,21 @@ async fn request_openai_protocol(ctx: &TestContext, host: &str, h2: bool) -> Res
     if !h2 {
         return request(ctx, host).await;
     }
-    let address = format!("{}:{}", ctx.target_host, ctx.http_port)
-        .parse()
-        .map_err(|error| format!("invalid test address: {error}"))?;
+    let addresses = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        tokio::net::lookup_host((ctx.target_host.as_str(), ctx.http_port)),
+    )
+    .await
+    .map_err(|_| "fixture target lookup timed out".to_owned())?
+    .map_err(|error| format!("fixture target lookup failed: {error}"))?
+    .collect::<Vec<_>>();
+    if addresses.is_empty() {
+        return Err("fixture target resolved to no addresses".into());
+    }
     let client = reqwest::Client::builder()
         .no_proxy()
         .http2_prior_knowledge()
-        .resolve(host, address)
+        .resolve_to_addrs(host, &addresses)
         .build()
         .map_err(|error| error.to_string())?;
     client

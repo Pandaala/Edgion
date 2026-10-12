@@ -1,4 +1,5 @@
 // Test suite module
+pub(crate) mod k8s_peer_identity;
 
 pub mod edgion_backend;
 pub mod edgion_backend_traffic_policy;

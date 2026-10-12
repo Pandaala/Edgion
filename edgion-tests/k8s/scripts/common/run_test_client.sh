@@ -64,6 +64,11 @@ for ((idx=0; idx<${#ARGS[@]}; idx++)); do
   esac
 done
 
+IFS=$'\t' read -r PEER_UID PEER_IP PEER_HIT_CIDR PEER_MISS_CIDR < <(TEST_CLIENT_NAMESPACE="${NAMESPACE}" "${SCRIPT_DIR}/test_client_peer_identity.sh" environment)
+[[ -n "${PEER_UID}" && -n "${PEER_IP}" && -n "${PEER_HIT_CIDR}" && -n "${PEER_MISS_CIDR}" ]] || { echo "Missing prepared peer identity" >&2; exit 1; }
+SELECTED_PEER="$(kubectl get pod "${POD}" --namespace "${NAMESPACE}" --output json --request-timeout=5s | jq -r '[.metadata.uid, .status.podIP] | @tsv')"
+[[ "${SELECTED_PEER}" == "${PEER_UID}"$'\t'"${PEER_IP}" ]] || { echo "Selected Pod does not match prepared Ready peer identity" >&2; exit 1; }
+
 TEST_TARGET_HOST="${TARGET_HOST}"
 K8S_ADMISSION_VERIFIED="${EDGION_TEST_K8S_ADMISSION_VERIFIED:-}"
 
@@ -297,7 +302,10 @@ kubectl exec -n "${NAMESPACE}" -c "${CONTAINER}" "${POD}" -- \
   env EDGION_TEST_AI_PROVIDER_MTLS_BASE="${EDGION_TEST_AI_PROVIDER_MTLS_BASE:-}" \
   env EDGION_TEST_AI_PROVIDER_SNI_BASE="${EDGION_TEST_AI_PROVIDER_SNI_BASE:-}" \
   env EDGION_TEST_AI_GATEWAY_NAME="${EDGION_TEST_AI_GATEWAY_NAME:-}" \
+  env EDGION_TEST_K8S_PEER_UID="${PEER_UID}" EDGION_TEST_K8S_PEER_IP="${PEER_IP}" \
+  env EDGION_TEST_K8S_PEER_HIT_CIDR="${PEER_HIT_CIDR}" EDGION_TEST_K8S_PEER_MISS_CIDR="${PEER_MISS_CIDR}" \
   env EDGION_TEST_K8S_MODE="true" \
+  env EDGION_INTEGRATION_EXPLICIT_TARGET="${EDGION_INTEGRATION_EXPLICIT_TARGET:-1}" \
   env TEST_SERVER_HOST="${TEST_SERVER_HOST:-edgion-test-server.edgion-test.svc.cluster.local}" \
   env EDGION_TEST_DIRECT_ENDPOINT_IP="${DIRECT_ENDPOINT_IP}" \
   env EDGION_TEST_BACKEND_ENDPOINT_IPS="${TEST_SERVER_ENDPOINT_IPS}" \

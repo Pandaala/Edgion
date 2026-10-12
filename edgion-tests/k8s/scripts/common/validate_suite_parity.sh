@@ -148,6 +148,24 @@ def parse_k8s_static(text):
     return require_unique(suite_keys, "K8s static inventory")
 
 
+def parse_k8s_isolated(text):
+    body = between(text, "run_all_isolated_scenarios() {", "\n}\n", "K8s isolated inventory")
+    jobs = require_unique(
+        re.findall(r'^\s*--job\s+([A-Za-z][A-Za-z0-9_]*)\s*\\?\s*$', body, re.MULTILINE),
+        "K8s isolated invocations",
+    )
+    expected = require_unique(
+        re.findall(r"['\"]Isolated\|([A-Za-z][A-Za-z0-9_]*)['\"]", body),
+        "K8s isolated expected results",
+    )
+    if not jobs or jobs != expected:
+        raise InventoryError("K8s isolated invocations and expected results do not match")
+    declared = set(marker_ids(body, "isolated"))
+    if declared - jobs:
+        raise InventoryError("K8s isolated declarations have no invocation: " + ", ".join(sorted(declared - jobs)))
+    return jobs
+
+
 def parse_dynamic_manifest(text):
     match = re.search(
         r'const\s+EXPECTED_DYNAMIC_SCENARIO_IDS\s*:\s*&\[&str\]\s*=\s*&\[(.*?)\];',
@@ -386,8 +404,7 @@ def main():
     k8s_dynamic = parse_k8s_dynamic(k8s_text)
     k8s_dynamic.update(parse_k8s_dynamic_manifest(k8s_dynamic_text))
     local_isolated = parse_local_isolated(local_text)
-    k8s_isolated = set(marker_ids(k8s_text, "isolated"))
-    k8s_isolated.update(re.findall(r'report_test\s+"Isolated_([A-Za-z][A-Za-z0-9_]*)"', k8s_text))
+    k8s_isolated = parse_k8s_isolated(k8s_text)
     local_final = parse_local_final(local_text)
     k8s_final = set(marker_ids(k8s_text, "final-gate"))
     k8s_final.update(re.findall(r'report_test\s+"Final_([A-Za-z][A-Za-z0-9_]*)"', k8s_text))
@@ -402,7 +419,7 @@ def main():
     print(f"  K8s dynamic manifest: {k8s_dynamic_path}")
     print(f"  deliberate scope exceptions: {exception_path}")
     print("K8s gate declaration sources:")
-    print("  isolated: literal Isolated_ report_test entries or '# suite-parity: isolated <id>'")
+    print("  isolated: actual --job invocations with matching expected result records")
     print("  final: literal Final_ report_test entries or '# suite-parity: final-gate <id>'")
 
     has_missing = False

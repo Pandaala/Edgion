@@ -260,6 +260,7 @@ fi
 FILTERED_MODE=false
 SELECTED_COUNT=0
 EXECUTED_COUNT=0
+SKIPPED_COUNT=0
 MISSING_COUNT=0
 FAIL_COUNT=0
 HARNESS_FAILED=false
@@ -475,6 +476,11 @@ fi
 
 if [[ -n "${ONLY_RESOURCE}" ]]; then
   FILTERED_MODE=true
+fi
+if [[ -n "${ONLY_RESOURCE}" && -n "${ONLY_ITEM}" ]]; then
+  export EDGION_INTEGRATION_EXPLICIT_TARGET=1
+else
+  export EDGION_INTEGRATION_EXPLICIT_TARGET=0
 fi
 
 if [[ "${SKIP_PREPARE}" == "true" && "${PREPARE_ONLY}" == "true" ]]; then
@@ -1065,6 +1071,7 @@ compute_prepare_conf_hash() {
     "${DEPLOY_SCRIPT}" \
     "${APPLY_ALL_SCRIPT}" \
     "${TEST_CLIENT_PEER_IDENTITY}" \
+    "${COMMON_SCRIPT_DIR}/render_test_client_peer_fixtures.py" \
     "${GENERATE_CERTS_SCRIPT}" \
     "${BASH_SOURCE[0]}"; do
     if [[ ! -f "${f}" ]]; then
@@ -1285,7 +1292,7 @@ verify_prepared_runtime_readiness() {
     "${K8S_DEPLOY_ROOT}/gateway/service.yaml" || return 1
   verify_service_manifest_ports edgion-test edgion-test-server \
     "${K8S_DEPLOY_ROOT}/test/test-server/service.yaml" || return 1
-  "${TEST_CLIENT_PEER_IDENTITY}" assert >/dev/null || return 1
+  CONF_ROOT="${CONF_ROOT}" "${TEST_CLIENT_PEER_IDENTITY}" assert-prepared >/dev/null || return 1
 }
 
 verify_skip_prepare_preconditions() {
@@ -1384,6 +1391,51 @@ wait_gateway_stable() {
   done
 }
 
+wait_for_test_server_image_rollout() {
+  local ns="$1" deployment="$2" snapshot identity start_ts
+  start_ts="$(date +%s)"
+  snapshot="$(kubectl --request-timeout=10s get deployment "${deployment}" -n "${ns}" -o json)" || return 1
+  identity="$(jq -er --arg image "${TEST_SERVER_IMAGE}" '
+    select(.metadata.deletionTimestamp == null)
+    | select((.metadata.uid | type) == "string" and (.metadata.uid | length) > 0)
+    | select((.metadata.generation | type) == "number")
+    | select([.spec.template.spec.containers[] | select(.name == "test-server" and .image == $image)] | length == 1)
+    | [.metadata.uid, .metadata.generation] | @tsv
+  ' <<<"${snapshot}")" || return 1
+  while true; do
+    if (( $(date +%s) - start_ts >= 300 )); then
+      echo "Timed out waiting for ${ns}/${deployment} current image rollout" >&2
+      return 1
+    fi
+    if ! jq -e --arg identity "${identity}" --arg image "${TEST_SERVER_IMAGE}" '
+      .metadata.deletionTimestamp == null
+      and ([.metadata.uid, .metadata.generation] | @tsv) == $identity
+      and ([.spec.template.spec.containers[] | select(.name == "test-server" and .image == $image)] | length == 1)
+    ' <<<"${snapshot}" >/dev/null; then
+      echo "Deployment ${ns}/${deployment} identity or overridden image changed during rollout" >&2
+      return 1
+    fi
+    # An old ProgressDeadlineExceeded condition can remain briefly after set image.
+    # Observe the current generation's complete rollout without replaying mutations.
+    if jq -e '
+      (.spec.replicas // 1) as $desired
+      | .status.observedGeneration == .metadata.generation
+        and (.status.updatedReplicas // 0) == $desired
+        and (.status.readyReplicas // 0) == $desired
+        and (.status.availableReplicas // 0) == $desired
+        and (.status.replicas // 0) == $desired
+        and (.status.unavailableReplicas // 0) == 0
+        and any(.status.conditions[]?; .type == "Available" and .status == "True")
+        and any(.status.conditions[]?; .type == "Progressing" and .status == "True")
+    ' <<<"${snapshot}" >/dev/null; then
+      echo "Deployment ${ns}/${deployment} completed the overridden image rollout"
+      return 0
+    fi
+    sleep 2
+    snapshot="$(kubectl --request-timeout=10s get deployment "${deployment}" -n "${ns}" -o json)" || return 1
+  done
+}
+
 override_suite_test_server_images() {
   if [[ "${SKIP_DEPLOY}" == "true" ]]; then
     return 0
@@ -1404,7 +1456,7 @@ override_suite_test_server_images() {
           >/dev/null 2>&1 || true
       fi
       kubectl rollout restart deployment/lb-multi-test-server -n "${ns}"
-      kubectl rollout status deployment/lb-multi-test-server -n "${ns}" --timeout=300s
+      wait_for_test_server_image_rollout "${ns}" lb-multi-test-server
     fi
   done
   while IFS=$'\t' read -r ns deployment rollout_ready; do
@@ -1435,13 +1487,14 @@ override_suite_test_server_images() {
         sleep 2
       done
     else
-      kubectl rollout status "deployment/${deployment}" -n "${ns}" --timeout=300s
+      wait_for_test_server_image_rollout "${ns}" "${deployment}"
     fi
   done < <(kubectl get deployments --all-namespaces -l edgion.io/test-server-image=true -o json \
     | jq -r '.items[] | [.metadata.namespace, .metadata.name, (.metadata.labels["edgion.io/test-server-rollout-ready"] // "")] | @tsv')
 }
 
 restart_secret_dependent_workloads() {
+  local deployment
   if kubectl get deployment edgion-test-server -n edgion-test >/dev/null 2>&1; then
     echo "Restarting edgion-test/edgion-test-server to reload runtime TLS certs..."
     kubectl rollout restart deployment/edgion-test-server -n edgion-test
@@ -1450,6 +1503,15 @@ restart_secret_dependent_workloads() {
   if kubectl get deployment edgion-test-openldap-tls -n edgion-test >/dev/null 2>&1; then
     echo "Waiting for edgion-test/edgion-test-openldap-tls startup..."
     kubectl rollout status deployment/edgion-test-openldap-tls -n edgion-test --timeout=300s
+  fi
+  # These backends load the generated certificate and client CA only at startup.
+  # Local binary injection starts fresh processes after copying the executables.
+  if ! local_test_binary_mode; then
+    for deployment in aes-tls-dynamic-tls aes-tls-dynamic-mtls; do
+      echo "Restarting edgion-test/${deployment} to reload runtime TLS certs..."
+      kubectl rollout restart "deployment/${deployment}" -n edgion-test
+      kubectl rollout status "deployment/${deployment}" -n edgion-test --timeout=300s
+    done
   fi
 }
 
@@ -2292,7 +2354,9 @@ run_all_isolated_scenarios() {
     'Isolated|geoip_db_states' \
     'Isolated|plugin_policy' \
     'Isolated|unknown_config_fields' \
-    'Isolated|udp_process_shutdown' > "${jobs_expected}"
+    'Isolated|proxy_protocol_policy_lifecycle' \
+    'Isolated|udp_process_shutdown' \
+    'Isolated|oidc_egress' > "${jobs_expected}"
 
   run_isolated_helper_group jobs "${jobs_expected}" \
     "${RUN_ISOLATED_JOBS_SCRIPT}" \
@@ -2306,7 +2370,9 @@ run_all_isolated_scenarios() {
     --job geoip_db_states \
     --job plugin_policy \
     --job unknown_config_fields \
+    --job proxy_protocol_policy_lifecycle \
     --job udp_process_shutdown \
+    --job oidc_egress \
     || isolated_harness_failed=true
 
   # suite-parity: isolated proxy_protocol_inbound
@@ -2717,7 +2783,7 @@ run_all_selected_suites() {
       $1 == "@@SUITE_RESULT" { close(output); output = "" }
     ' "${batch_output_file}"
 
-    if ! edgion_validate_k8s_batch_results "${batch_tmp}" "${batch_output_file}" "${batch_rc}"; then
+    if ! edgion_validate_k8s_batch_results "${batch_tmp}" "${batch_output_file}" "${batch_rc}" allow-tls-terminate-skip; then
       echo "Batch execution returned an incomplete or invalid result protocol"
       HARNESS_FAILED=true
     else
@@ -2725,7 +2791,11 @@ run_all_selected_suites() {
         local result_key result_status
         result_key="$(printf '%s\n' "${line}" | awk '{print $2}')"
         result_status="$(printf '%s\n' "${line}" | awk '{print $3}')"
-        EXECUTED_COUNT=$((EXECUTED_COUNT + 1))
+        if [[ "${result_status}" == SKIP ]]; then
+          SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+        else
+          EXECUTED_COUNT=$((EXECUTED_COUNT + 1))
+        fi
         if [[ "${result_status}" == "FAIL" ]]; then
           FAIL_COUNT=$((FAIL_COUNT + 1))
           FAILED_SUITES+=("${result_key/|//}")
@@ -2912,6 +2982,8 @@ if should_run_prepare; then
 
   restart_gateway_after_initial_fixtures
 
+  CONF_ROOT="${CONF_ROOT}" "${TEST_CLIENT_PEER_IDENTITY}" prepare
+
   force_sync_secrets
 
   write_prepare_state_marker "${PREPARE_CONF_HASH}"
@@ -2933,7 +3005,7 @@ if [[ "${PREPARE_ONLY}" == "true" ]]; then
 fi
 
 echo "Phase 2/2: Run tests"
-"${TEST_CLIENT_PEER_IDENTITY}" assert
+CONF_ROOT="${CONF_ROOT}" "${TEST_CLIENT_PEER_IDENTITY}" assert-prepared
 if [[ "${FULL_TEST}" == "true" ]]; then
   echo "Mode: Full test (includes slow suites)"
 else
@@ -2995,7 +3067,7 @@ if [[ "${WITH_RELOAD}" == "true" ]]; then
 
   echo "Test round #2"
   CURRENT_ROUND="round-2"
-  "${TEST_CLIENT_PEER_IDENTITY}" assert
+  CONF_ROOT="${CONF_ROOT}" "${TEST_CLIENT_PEER_IDENTITY}" assert-prepared
   run_all_selected_suites "false"
 else
   echo "Rounds: 1"
@@ -3008,7 +3080,7 @@ if [[ "${FILTERED_MODE}" == "false" ]]; then
   echo "=============================="
   echo "Running manifest-backed K8s dynamic scenarios"
   echo "=============================="
-  "${TEST_CLIENT_PEER_IDENTITY}" assert
+  CONF_ROOT="${CONF_ROOT}" "${TEST_CLIENT_PEER_IDENTITY}" assert-prepared
   if ! run_manifest_dynamic_scenarios; then
     HARNESS_FAILED=true
   fi
@@ -3039,8 +3111,8 @@ fi
 if [[ "${EXECUTED_COUNT}" -eq 0 ]]; then
   echo "No suites executed; refusing to report a successful empty run"
   HARNESS_FAILED=true
-elif [[ "${EXECUTED_COUNT}" -ne "${SELECTED_COUNT}" ]]; then
-  echo "Suite accounting mismatch: selected=${SELECTED_COUNT} executed=${EXECUTED_COUNT}"
+elif [[ $((EXECUTED_COUNT + SKIPPED_COUNT)) -ne "${SELECTED_COUNT}" ]]; then
+  echo "Suite accounting mismatch: selected=${SELECTED_COUNT} executed=${EXECUTED_COUNT} skipped=${SKIPPED_COUNT}"
   HARNESS_FAILED=true
 fi
 
@@ -3052,8 +3124,8 @@ else
   echo "Skip final validation gates in filtered mode"
 fi
 
-if [[ "${EXECUTED_COUNT}" -ne "${SELECTED_COUNT}" ]]; then
-  echo "Final accounting mismatch: selected=${SELECTED_COUNT} executed=${EXECUTED_COUNT}"
+if [[ $((EXECUTED_COUNT + SKIPPED_COUNT)) -ne "${SELECTED_COUNT}" ]]; then
+  echo "Final accounting mismatch: selected=${SELECTED_COUNT} executed=${EXECUTED_COUNT} skipped=${SKIPPED_COUNT}"
   HARNESS_FAILED=true
 fi
 
@@ -3072,7 +3144,7 @@ echo "  Selected : ${SELECTED_COUNT} suites"
 echo "  Executed : ${EXECUTED_COUNT} suites"
 echo "  Passed   : ${PASS_COUNT}"
 echo "  Failed   : ${FAIL_COUNT}"
-echo "  Skipped  : $((SELECTED_COUNT - EXECUTED_COUNT))"
+echo "  Skipped  : ${SKIPPED_COUNT}"
 echo "  Harness  : $(if [[ "${HARNESS_FAILED}" == "true" ]]; then echo FAIL; else echo PASS; fi)"
 if [[ "${MISSING_COUNT}" -gt 0 ]]; then
   echo "  Missing  : ${MISSING_COUNT} (no conf dir)"

@@ -9,23 +9,55 @@
 #   EDGION_K8S_BATCH_TOTAL
 #   EDGION_K8S_BATCH_FAILED
 #   EDGION_K8S_BATCH_PASSED
+#   EDGION_K8S_BATCH_SKIPPED / EDGION_K8S_BATCH_EXECUTED
+# Only static broad scans may opt into allow-tls-terminate-skip as argument 4.
 #
 # The expected-suites file uses one resource|item pair per line. Blank lines and
 # lines whose first non-whitespace character is # are ignored.
 
+edgion_tls_terminate_skip_reason() {
+    case "$1" in
+        'TLSRoute|Basic'|'TLSRoute|ProxyProtocol'|'TLSRoute|StreamPlugins'|'TLSRoute|MultiSNI'|'TLSRoute|BothAbsentParentRef'|'TLSRoute|GeoRestriction')
+            printf 'SKIPPED: suite `%s` requires TLSRouteModeTerminate, which is not currently supported\n' "${1%|*}/${1#*|}"
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+# This function is also embedded in the Pod's POSIX shell batch script.
+edgion_classify_k8s_suite_output() {
+    local suite="$1" output="$2" rc="$3" explicit="$4" reason count
+    if [ "$rc" -ne 0 ]; then
+        echo FAIL
+    elif grep -q '^SKIPPED:' "$output"; then
+        count="$(grep -c '^SKIPPED:' "$output")"
+        if [ "$explicit" = 0 ] && [ "$count" -eq 1 ] \
+            && reason="$(edgion_tls_terminate_skip_reason "$suite")" \
+            && grep -Fxq "$reason" "$output"; then
+            echo SKIP
+        else
+            echo FAIL
+        fi
+    else
+        echo PASS
+    fi
+}
+
 edgion_validate_k8s_batch_results() {
-    if [ "$#" -ne 3 ]; then
-        echo "ERROR: batch validation requires expected-suites, stdout, and process-rc arguments" >&2
+    if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then
+        echo "ERROR: batch validation requires expected-suites, stdout, process-rc, and optional skip policy" >&2
         return 1
     fi
 
     local expected_file="$1"
     local stdout_file="$2"
     local process_rc="$3"
+    local skip_policy="${4:-reject-skip}"
     local line compact resource item suite
     local marker status suite_rc extra
-    local expected_count=0 result_count=0 failed_count=0 summary_count=0
-    local summary_total="" summary_failed=""
+    local expected_count=0 result_count=0 failed_count=0 skipped_count=0 summary_count=0
+    local summary_total="" summary_failed="" summary_skipped=""
+    local current_suite="" skip_evidence="" skip_markers=0 reason
     local found seen
     local expected_suites=()
     local seen_suites=()
@@ -33,6 +65,13 @@ edgion_validate_k8s_batch_results() {
     EDGION_K8S_BATCH_TOTAL=0
     EDGION_K8S_BATCH_FAILED=0
     EDGION_K8S_BATCH_PASSED=0
+    EDGION_K8S_BATCH_SKIPPED=0
+    EDGION_K8S_BATCH_EXECUTED=0
+
+    case "$skip_policy" in
+        reject-skip|allow-tls-terminate-skip) ;;
+        *) echo "ERROR: unknown skip policy: $skip_policy" >&2; return 1 ;;
+    esac
 
     if [ ! -f "$expected_file" ]; then
         echo "ERROR: expected-suites file not found: $expected_file" >&2
@@ -88,6 +127,29 @@ edgion_validate_k8s_batch_results() {
 
     while IFS= read -r line || [ -n "$line" ]; do
         case "$line" in
+            '@@SUITE_START '*)
+                if [ -n "$current_suite" ]; then
+                    echo "ERROR: unfinished or duplicate suite start tag" >&2
+                    return 1
+                fi
+                read -r marker current_suite extra <<EOF
+$line
+EOF
+                if [ -n "$extra" ] || [ -z "$current_suite" ]; then
+                    echo "ERROR: malformed suite start tag" >&2
+                    return 1
+                fi
+                skip_evidence=""
+                skip_markers=0
+                ;;
+            'SKIPPED:'*)
+                if [ -z "$current_suite" ]; then
+                    echo "ERROR: skip evidence outside a suite" >&2
+                    return 1
+                fi
+                skip_markers=$((skip_markers + 1))
+                skip_evidence="$line"
+                ;;
             '@@SUITE_RESULT'*)
                 marker=""
                 suite=""
@@ -100,6 +162,10 @@ EOF
                 if [ "$marker" != "@@SUITE_RESULT" ] || [ -z "$suite" ] \
                     || [ -z "$status" ] || [ -z "$suite_rc" ] || [ -n "$extra" ]; then
                     echo "ERROR: malformed suite result tag: $line" >&2
+                    return 1
+                fi
+                if [ -n "$current_suite" ] && [ "$current_suite" != "$suite" ]; then
+                    echo "ERROR: suite result does not match its start tag" >&2
                     return 1
                 fi
 
@@ -130,7 +196,7 @@ EOF
                 esac
                 case "$status" in
                     PASS)
-                        if [ "$suite_rc" -ne 0 ]; then
+                        if [ "$suite_rc" -ne 0 ] || [ "$skip_markers" -ne 0 ]; then
                             echo "ERROR: PASS suite has a non-zero rc for $suite: $suite_rc" >&2
                             return 1
                         fi
@@ -142,6 +208,18 @@ EOF
                         fi
                         failed_count=$((failed_count + 1))
                         ;;
+                    SKIP)
+                        if [ "$skip_policy" != allow-tls-terminate-skip ] \
+                            || [ "${EDGION_INTEGRATION_EXPLICIT_TARGET:-1}" != 0 ] \
+                            || [ "$suite_rc" -ne 0 ] || [ "$current_suite" != "$suite" ] \
+                            || [ "$skip_markers" -ne 1 ] \
+                            || ! reason="$(edgion_tls_terminate_skip_reason "$suite")" \
+                            || [ "$skip_evidence" != "$reason" ]; then
+                            echo "ERROR: unsupported or unproven suite skip: $suite" >&2
+                            return 1
+                        fi
+                        skipped_count=$((skipped_count + 1))
+                        ;;
                     *)
                         echo "ERROR: invalid suite result status for $suite: $status" >&2
                         return 1
@@ -150,13 +228,17 @@ EOF
 
                 seen_suites+=("$suite")
                 result_count=$((result_count + 1))
+                current_suite=""
+                skip_markers=0
+                skip_evidence=""
                 ;;
             '@@BATCH_SUMMARY'*)
                 marker=""
                 summary_total=""
                 summary_failed=""
                 extra=""
-                read -r marker summary_total summary_failed extra <<EOF
+                summary_skipped=""
+                read -r marker summary_total summary_failed summary_skipped extra <<EOF
 $line
 EOF
                 if [ "$marker" != "@@BATCH_SUMMARY" ] || [ -z "$summary_total" ] \
@@ -195,10 +277,25 @@ EOF
                         return 1
                         ;;
                 esac
+                if [ -n "$summary_skipped" ]; then
+                    case "$summary_skipped" in
+                        skipped=*) summary_skipped="${summary_skipped#skipped=}" ;;
+                        *) echo "ERROR: malformed skipped count" >&2; return 1 ;;
+                    esac
+                    case "$summary_skipped" in
+                        ''|*[!0-9]*) echo "ERROR: invalid skipped count" >&2; return 1 ;;
+                    esac
+                else
+                    summary_skipped=0
+                fi
                 ;;
         esac
     done < "$stdout_file"
 
+    if [ -n "$current_suite" ] || [ "$skip_markers" -ne 0 ]; then
+        echo "ERROR: unfinished suite output" >&2
+        return 1
+    fi
     if [ "$summary_count" -ne 1 ]; then
         echo "ERROR: expected exactly one batch summary tag, found $summary_count" >&2
         return 1
@@ -227,6 +324,10 @@ EOF
         echo "ERROR: batch summary failed mismatch: summary=$summary_failed actual=$failed_count" >&2
         return 1
     fi
+    if [ "$summary_skipped" -ne "$skipped_count" ]; then
+        echo "ERROR: batch summary skipped mismatch" >&2
+        return 1
+    fi
 
     if [ "$failed_count" -eq 0 ]; then
         if [ "$process_rc" -ne 0 ]; then
@@ -240,7 +341,9 @@ EOF
 
     EDGION_K8S_BATCH_TOTAL="$result_count"
     EDGION_K8S_BATCH_FAILED="$failed_count"
-    EDGION_K8S_BATCH_PASSED=$((result_count - failed_count))
+    EDGION_K8S_BATCH_SKIPPED="$skipped_count"
+    EDGION_K8S_BATCH_EXECUTED=$((result_count - skipped_count))
+    EDGION_K8S_BATCH_PASSED=$((result_count - failed_count - skipped_count))
     echo "Batch result protocol valid: total=$result_count failed=$failed_count process_rc=$process_rc"
     return 0
 }

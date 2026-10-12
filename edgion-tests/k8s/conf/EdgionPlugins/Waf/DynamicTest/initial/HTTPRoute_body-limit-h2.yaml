@@ -11,5 +11,6 @@ spec:
     - body-limit-h2.example.com
   rules:
     - backendRefs:
-        - name: waf-transport-h2
+        - name: test-transport-h2
+          namespace: edgion-test
           port: 30031

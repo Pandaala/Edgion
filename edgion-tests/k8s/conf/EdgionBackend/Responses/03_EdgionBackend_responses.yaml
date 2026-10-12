@@ -6,7 +6,7 @@ metadata:
 spec:
   ai:
     provider: OpenAI
-    endpoint: http://test-http.edgion-test.svc.cluster.local:30001/ai/responses
+    endpoint: http://edgion-test-server.edgion-test.svc.cluster.local:30001/ai/responses
     allowInsecureHttp: true
     credentialPool:
       credentials:

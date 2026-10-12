@@ -173,8 +173,20 @@ async fn status_probe(ctx: &TestContext, path: &str, strict: bool, detection: bo
             )
             .header("access_log", "test_store")
             .header("traceparent", crate::access_log_client::traceparent_for_marker(&trace));
+        let k8s_peer = if dummy
+            && std::env::var("EDGION_TEST_K8S_MODE").is_ok_and(|mode| matches!(mode.as_str(), "true" | "1" | "yes"))
+        {
+            Some(crate::suites::k8s_peer_identity::current()?)
+        } else {
+            None
+        };
         if dummy {
             request = request.header("cookie", "probe=phar://payload");
+            if k8s_peer.is_some() {
+                // The fixture already trusts this physical Pod; only RemoteIp
+                // is resolved from this header. Never replace DirectPeerIp.
+                request = request.header("x-forwarded-for", "127.0.0.1");
+            }
         }
         let response = request
             .version(reqwest::Version::HTTP_11)
@@ -217,6 +229,16 @@ async fn status_probe(ctx: &TestContext, path: &str, strict: bool, detection: bo
                 .ok_or("Apache probe remote IP missing")?
                 .parse::<std::net::IpAddr>()
                 .map_err(|e| e.to_string())?;
+            if let Some(peer) = &k8s_peer {
+                let direct = log.data["request_info"]["direct_peer_ip"]
+                    .as_str()
+                    .ok_or("Apache probe physical peer missing")?
+                    .parse::<std::net::IpAddr>()
+                    .map_err(|error| error.to_string())?;
+                if direct != peer.ip || remote != std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST) {
+                    return Err("Apache probe must retain the actual Pod peer and trusted loopback RemoteIp".into());
+                }
+            }
             if !remote.is_loopback() || log.data["request_info"]["path"] != "/" {
                 return Err("Apache probe did not satisfy loopback/root conditions".into());
             }

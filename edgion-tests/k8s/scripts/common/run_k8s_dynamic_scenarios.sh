@@ -233,6 +233,11 @@ if [[ -z "${POD}" ]]; then
   )"
 fi
 
+IFS=$'\t' read -r PEER_UID PEER_IP PEER_HIT_CIDR PEER_MISS_CIDR < <(CONF_ROOT="${CONF_ROOT}" TEST_CLIENT_NAMESPACE="${NAMESPACE}" "${SCRIPT_DIR}/test_client_peer_identity.sh" environment)
+[[ -n "${PEER_UID}" && -n "${PEER_IP}" && -n "${PEER_HIT_CIDR}" && -n "${PEER_MISS_CIDR}" ]] || { echo "Missing prepared peer identity" >&2; exit 1; }
+SELECTED_PEER="$(kubectl get pod "${POD}" --namespace "${NAMESPACE}" --output json --request-timeout=5s | jq -r '[.metadata.uid, .status.podIP] | @tsv')"
+[[ "${SELECTED_PEER}" == "${PEER_UID}"$'\t'"${PEER_IP}" ]] || { echo "Selected Pod does not match prepared Ready peer identity" >&2; exit 1; }
+
 DIRECT_ENDPOINT_IP="127.0.0.1"
 DIRECT_UNREADY_ENDPOINT_IP="127.0.0.1"
 REGION_BACKEND_IP="127.0.0.1"
@@ -683,7 +688,12 @@ run_scenario_with_phase_barriers() {
     EDGION_GATEWAY_ADMIN_TOKEN="${GATEWAY_ADMIN_TOKEN}" \
     EDGION_TEST_GATEWAY_ADMIN_URL="${GATEWAY_ADMIN_URL}" \
     EDGION_TEST_GATEWAY_CAPABILITIES="${GATEWAY_CAPABILITIES}" \
+    EDGION_TEST_K8S_PEER_UID="${PEER_UID}" \
+    EDGION_TEST_K8S_PEER_IP="${PEER_IP}" \
+    EDGION_TEST_K8S_PEER_HIT_CIDR="${PEER_HIT_CIDR}" \
+    EDGION_TEST_K8S_PEER_MISS_CIDR="${PEER_MISS_CIDR}" \
     EDGION_TEST_K8S_MODE=true \
+    EDGION_TEST_DNS_FLAP_SERVER_HOST="${EDGION_TEST_DNS_FLAP_SERVER_HOST:-test-http-retry.edgion-test.svc.cluster.local}" \
     EDGION_EXT_PROC_EXTERNAL_REQUIRED=1 \
     EDGION_EXT_PROC_EXTERNAL_ADMIN_URL="http://ext-proc-external.edgion-test.svc.cluster.local:30045" \
     EDGION_TEST_DIRECT_ENDPOINT_IP="${DIRECT_ENDPOINT_IP}" \
@@ -959,7 +969,12 @@ for scenario_id in "${SELECTED_SCENARIOS[@]}"; do
       EDGION_GATEWAY_ADMIN_TOKEN="${GATEWAY_ADMIN_TOKEN}" \
       EDGION_TEST_GATEWAY_ADMIN_URL="${GATEWAY_ADMIN_URL}" \
       EDGION_TEST_GATEWAY_CAPABILITIES="${GATEWAY_CAPABILITIES}" \
+      EDGION_TEST_K8S_PEER_UID="${PEER_UID}" \
+      EDGION_TEST_K8S_PEER_IP="${PEER_IP}" \
+      EDGION_TEST_K8S_PEER_HIT_CIDR="${PEER_HIT_CIDR}" \
+      EDGION_TEST_K8S_PEER_MISS_CIDR="${PEER_MISS_CIDR}" \
       EDGION_TEST_K8S_MODE=true \
+      EDGION_TEST_DNS_FLAP_SERVER_HOST="${EDGION_TEST_DNS_FLAP_SERVER_HOST:-test-http-retry.edgion-test.svc.cluster.local}" \
       EDGION_EXT_PROC_EXTERNAL_REQUIRED=1 \
       EDGION_EXT_PROC_EXTERNAL_ADMIN_URL="http://ext-proc-external.edgion-test.svc.cluster.local:30045" \
       EDGION_TEST_DIRECT_ENDPOINT_IP="${DIRECT_ENDPOINT_IP}" \

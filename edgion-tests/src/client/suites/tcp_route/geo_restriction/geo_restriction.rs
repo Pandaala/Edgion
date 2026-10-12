@@ -310,6 +310,13 @@ async fn wait_for_esp_accepted(ctx: &TestContext, want_status: &str) -> Result<S
 }
 
 async fn apply_esp(ctx: &TestContext, plugins_yaml: &str) -> Result<(), String> {
+    let rendered;
+    let plugins_yaml = if k8s_mode() {
+        rendered = crate::suites::k8s_peer_identity::render_geo_template(plugins_yaml)?;
+        rendered.as_str()
+    } else {
+        plugins_yaml
+    };
     let yaml = format!(
         r#"apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
