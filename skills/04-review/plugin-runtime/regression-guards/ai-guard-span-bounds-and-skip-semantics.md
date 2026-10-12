@@ -1,6 +1,6 @@
 ---
 name: ai-guard-span-bounds-and-skip-semantics
-description: Use when reviewing AiGuard span selection bounds, message/part skip-versus-unguardable semantics, or the paired ai-guard user documentation.
+description: Use when reviewing AiGuard span selection bounds, message/part skip-versus-unguardable semantics, final composed replacement budgets, or the paired ai-guard user documentation.
 knowledge_type: regression-guards
 ---
 
@@ -53,8 +53,8 @@ Trigger: the Chinese guide collapsed every missing/duplicate/ambiguous `role` or
 `content` case into "unguardable" and documented an 8 KiB/64 KiB `maxSpanBytes`
 pair. Root cause was translation drift, not a code defect — the English guide
 already matched the source. Fixed by restating both semantics in
-`docs/zh-CN/.../ai-guard.md`. This page records documentation parity for these
-two behaviors only; it does not freeze the ordering contract, which is owned by
+`docs/zh-CN/.../ai-guard.md`. This original correction records documentation parity for these
+two span-selection behaviors; it does not freeze the ordering contract, which is owned by
 [AiGuard ordering errors fail closed at publication](ai-guard-ordering-publication.md).
 
 ## Verification and re-evaluation
@@ -67,8 +67,53 @@ Reconsider if span selection starts rejecting a currently skipped shape, if
 either span cap gains a concrete default, or if the default request-body cap
 changes — each requires updating both language guides together.
 
+## Final composed replacement budget
+
+`AiGuardConfig.max_replacement_bytes` is one inclusive aggregate decoded UTF-8
+replacement-text ceiling. Local rules and the evaluator retain their independent
+early admission checks, but these do not prove the composed total: with cap 3,
+local A="aaa" and external B="bbb" independently fit while their union totals 6.
+ARCH-011 corrects this logical-limit gap in request `plugin.rs`; the physical
+request-body cap is a separate boundary, not the proof of this limit.
+
+`AiGuard::finish_decision` validates every final Replace decision before edit
+encoding/publication. `validate_replacements` first establishes selected-key
+membership and uniqueness, with a selected-count check before quadratic scans,
+then checks the surviving decoded-byte sum with checked arithmetic. Same-key
+external overrides replace the local charge; smaller overrides release budget.
+JSON quotes/escapes and unchanged spans are not charged. Invalid keys and budget
+failures use existing dependency failure handling, record the retry latch with
+no settled generation, and publish no masks. Both failure-policy modes retain
+the original body; fail-close renders the existing selected refusal dialect.
+
+Local Reject still suppresses evaluator egress. The evaluator projection keeps
+borrowing post-local-mask text. Success continues through one whole-token,
+generation-checked BodyStorage edit batch; generation and physical-body-cap
+faults retain their stricter fixed errors. No response-side storage, protocol,
+schema, metric, tracing or text-copy mechanism is added.
+
+Private `plugin_test.rs` adds direct merge/validation boundaries (inclusive cap,
+over-cap disjoint union, shrinking/expanding/empty overrides, empty set/zero cap,
+invalid/duplicate keys and decoded UTF-8/escape counting). Publication wiring uses
+MockPluginSession with real BodyStorage for zero-publication failures under both
+failOpen values and refusal modes, and one successful composed atomic batch.
+Existing full run_request/projection/producer/strict-envelope tests remain intact.
+Composed generation and physical-cap failure tests preserve the stricter mapping.
+Practical allocated strings cannot produce a usize sum overflow in these tests;
+that branch is protected by the checked arithmetic, not claimed as executed.
+
+Fresh verification on 2026-10-12: `cargo test -p edgion-gateway --lib
+ai::guards::request` passed all 56 tests (0 failed, 0 ignored), including the six
+new private plugin cases. `cargo fmt --all` and `git diff --check` passed.
+No fresh integration,
+full workspace test suite or performance result is claimed. Re-evaluate if a new
+replacement producer, override semantics, final-decision publication entry point
+or failure policy changes; keep the paired bounds guides aligned.
+
 ## Resolution references
 
 - `align-ai-guard-chinese-body-semantics` (docs task, created 2026-09-10, closed
   2026-09-23) — pre-existing translation drift surfaced by the D0082 independent
   review; closed as documentation-only.
+
+- ARCH-011 / final AiGuard replacement budget — final composition ownership correction; fresh verification is recorded above.

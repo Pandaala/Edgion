@@ -230,6 +230,12 @@ When `maxSpanBytes` or `maxTotalSpanBytes` is omitted, it inherits the resolved
 gateway physical request-body cap and may therefore exceed the explicit 8 MiB
 configuration maximum. The default physical request-body cap is 32 MiB.
 
+`maxReplacementBytes` is an inclusive limit on the sum of decoded UTF-8 bytes
+in the final replacement set, after evaluator replacements override local masks
+for the same span. JSON quoting and escaping do not count toward this limit.
+The guard checks the composed total before publishing any mask; an overflow or
+above-limit total follows `failOpen` and leaves the original body unmasked.
+
 Rule count is capped at 64 and a pattern at 4096 bytes.
 
 ## Observability

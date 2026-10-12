@@ -280,23 +280,65 @@ impl RequestFilter for AiGuard {
             }
         }
 
+        self.finish_decision(
+            session,
+            log,
+            FinalDecision {
+                body: &body,
+                spans: &spans,
+                generation,
+                decision,
+                flagged,
+            },
+        )
+        .await
+    }
+}
+
+/// Request-local inputs retained until the final decision is settled.
+struct FinalDecision<'a> {
+    body: &'a [u8],
+    spans: &'a [GuardSpan],
+    generation: u64,
+    decision: GuardDecision<GuardSpanKey>,
+    flagged: usize,
+}
+
+impl AiGuard {
+    /// Admit the final replacement set before encoding or publishing any mask.
+    async fn finish_decision(
+        &self,
+        session: &mut dyn PluginSession,
+        log: &mut PluginLog,
+        input: FinalDecision<'_>,
+    ) -> PluginRunningResult {
+        let FinalDecision {
+            body,
+            spans,
+            generation,
+            decision,
+            flagged,
+        } = input;
         let outcome = match decision {
             GuardDecision::Reject => Outcome::Reject,
             GuardDecision::Pass => Outcome::Pass,
             GuardDecision::Replace(items) => {
+                if let Err(kind) = validate_replacements(spans, &items, self.max_replacement_bytes) {
+                    return self.dependency_failure(session, log, kind, body);
+                }
                 let mut edits: Vec<(std::ops::Range<u64>, Bytes)> = Vec::with_capacity(items.len());
                 for (key, text) in &items {
                     let Some(span) = spans.iter().find(|span| span.key == *key) else {
                         // An evaluator naming a span that was never sent is a
                         // dependency protocol error, so it follows the failure
                         // policy rather than being reported as a gateway fault.
-                        return self.dependency_failure(session, log, "evaluator bad key", &body);
+                        return self.dependency_failure(session, log, "evaluator bad key", body);
                     };
                     // Whole quoted tokens in, whole quoted tokens out: the mask
                     // never addresses an interior byte, so a code point cannot
                     // be split and the body stays valid JSON.
                     let Ok(encoded) = serde_json::to_string(text) else {
-                        return self.dependency_failure(session, log, "replacement encode", &body);
+                        return self.dependency_failure(session, log, "replacement encode", body);
                     };
                     edits.push((span.token.clone(), Bytes::from(encoded)));
                 }
@@ -323,7 +365,7 @@ impl RequestFilter for AiGuard {
                         log.push_err("mask exceeds body cap");
                         return openai_error_response(session, AiProxyError::RequestTooLarge);
                     }
-                    Err(_) => return self.dependency_failure(session, log, "mask failed", &body),
+                    Err(_) => return self.dependency_failure(session, log, "mask failed", body),
                 }
             }
         };
@@ -338,7 +380,7 @@ impl RequestFilter for AiGuard {
         match outcome {
             Outcome::Reject => {
                 log.push("Deny content filter");
-                self.refuse(session, &body)
+                self.refuse(session, body)
             }
             Outcome::Masked(count) => {
                 log.push_fmt(
@@ -360,6 +402,31 @@ impl RequestFilter for AiGuard {
             }
         }
     }
+}
+
+/// Validate the final decoded text after evaluator overrides have resolved.
+fn validate_replacements(
+    spans: &[GuardSpan],
+    items: &[(GuardSpanKey, String)],
+    max_replacement_bytes: usize,
+) -> Result<(), &'static str> {
+    // Establish the selected-span bound before quadratic key comparisons.
+    if items.len() > spans.len() {
+        return Err("evaluator bad key");
+    }
+    for (index, (key, _)) in items.iter().enumerate() {
+        if !spans.iter().any(|span| span.key == *key) || items[..index].iter().any(|(previous, _)| previous == key) {
+            return Err("evaluator bad key");
+        }
+    }
+    let mut total = 0_usize;
+    for (_, text) in items {
+        total = total.checked_add(text.len()).ok_or("replacement bounds")?;
+        if total > max_replacement_bytes {
+            return Err("replacement bounds");
+        }
+    }
+    Ok(())
 }
 
 /// Borrow the post-local-mask text of every span for the evaluator.

@@ -1,4 +1,5 @@
 use super::*;
+use pingora_core::protocols::http::RequestBodyBuffer;
 use std::sync::Arc;
 
 use super::super::spans::GuardPart;
@@ -423,4 +424,261 @@ fn detached_ai_guard_cannot_construct_an_external_evaluator() {
         serde_json::from_value(serde_json::json!({"evaluator":{"target":{"name":"decision","port":8080},"request":{"path":{"template":"/decision"}}}})).unwrap();
     assert!(AiGuard::create(&external, "tenant/guard/#0").is_none());
     assert!(AiGuard::create(&config(reject_rule(), ""), "tenant/guard/#0").is_some());
+}
+
+const TWO_PROMPTS: &str =
+    r#"{"model":"m","messages":[{"role":"user","content":"first"},{"role":"user","content":"second"}]}"#;
+
+fn selected_prompts() -> Vec<GuardSpan> {
+    select_spans(
+        TWO_PROMPTS.as_bytes(),
+        SpanLimits {
+            max_spans: 512,
+            max_span_bytes: 1024,
+            max_total_span_bytes: 1024,
+        },
+    )
+    .unwrap()
+}
+
+fn replacement_items(decision: &GuardDecision<GuardSpanKey>) -> &[(GuardSpanKey, String)] {
+    match decision {
+        GuardDecision::Replace(items) => items,
+        GuardDecision::Pass => &[],
+        GuardDecision::Reject => panic!("expected a replacement or pass"),
+    }
+}
+
+#[test]
+fn composed_disjoint_replacements_share_one_inclusive_budget() {
+    let spans = selected_prompts();
+    let decision = merge(
+        GuardDecision::Replace(vec![(spans[0].key, "aaa".into())]),
+        vec![(spans[1].key, "bbb".into())],
+    );
+    assert_eq!(validate_replacements(&spans, replacement_items(&decision), 6), Ok(()));
+    assert_eq!(
+        validate_replacements(&spans, replacement_items(&decision), 5),
+        Err("replacement bounds")
+    );
+    // Each producer independently fits this cap, but the composed set does not.
+    assert_eq!(
+        validate_replacements(&spans, replacement_items(&decision), 3),
+        Err("replacement bounds")
+    );
+}
+
+#[test]
+fn same_key_overrides_charge_only_the_surviving_text() {
+    let spans = selected_prompts();
+    for (external, cap, expected) in [
+        ("a", 1, Ok(())),
+        ("aaaa", 4, Ok(())),
+        ("aaaa", 3, Err("replacement bounds")),
+        ("", 0, Ok(())),
+    ] {
+        let decision = merge(
+            GuardDecision::Replace(vec![(spans[0].key, "aaa".into())]),
+            vec![(spans[0].key, external.into())],
+        );
+        let items = replacement_items(&decision);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].1, external);
+        assert_eq!(validate_replacements(&spans, items, cap), expected);
+    }
+    assert_eq!(merge(GuardDecision::Pass, vec![]), GuardDecision::Pass);
+    assert_eq!(validate_replacements(&spans, &[], 0), Ok(()));
+}
+
+#[test]
+fn final_admission_checks_keys_before_counting_decoded_utf8_bytes() {
+    let spans = selected_prompts();
+    let mut unknown = spans[0].key;
+    unknown.message_index = 9;
+    assert_eq!(
+        validate_replacements(&spans, &[(unknown, "too large".into())], 0),
+        Err("evaluator bad key")
+    );
+    assert_eq!(
+        validate_replacements(&spans, &[(spans[0].key, "".into()), (spans[0].key, "".into())], 0),
+        Err("evaluator bad key")
+    );
+    assert_eq!(
+        validate_replacements(&spans, &vec![(spans[0].key, String::new()); 3], 0),
+        Err("evaluator bad key")
+    );
+    // Order need not be canonical. UTF-8 bytes count, JSON quoting/escapes do not.
+    let items = vec![(spans[1].key, "é€".into()), (spans[0].key, "\n\"".into())];
+    assert_eq!(validate_replacements(&spans, &items, 7), Ok(()));
+    assert_eq!(validate_replacements(&spans, &items, 6), Err("replacement bounds"));
+    assert_eq!(
+        validate_replacements(&spans, &[(spans[0].key, String::new())], 0),
+        Ok(())
+    );
+}
+
+#[tokio::test]
+async fn a_composed_budget_failure_never_publishes_and_latches_none() {
+    let spans = selected_prompts();
+    for fail_open in [false, true] {
+        for (mode, status) in [("error", 403), ("contentFilter", 200)] {
+            let guard = guard(
+                reject_rule(),
+                &format!("maxReplacementBytes: 3\nfailOpen: {fail_open}\nrejectionMode: {mode}\n"),
+            );
+            let (mut storage, view) = BodyStorage::new(1024, 4096);
+            storage
+                .write(&Bytes::from_static(TWO_PROMPTS.as_bytes()))
+                .await
+                .unwrap();
+            storage.finish().await.unwrap();
+            let mut ctx = EdgionHttpContext::new();
+            ctx.request_body.install(Arc::clone(&view));
+            let generation = view.generation();
+            let mut session = MockPluginSession::new();
+            session.expect_ctx().return_const(ctx);
+            session.expect_replace_request_body_spans().never();
+            session.expect_set_response_header().returning(|_, _| Ok(()));
+            let mut ai = crate::plugins::runtime::traits::ai_session::MockAiSessionCapability::new();
+            ai.expect_record_ai_guard_decision()
+                .times(1)
+                .withf(|id, generation| id == "test/requestPlugins/#0" && generation.is_none())
+                .returning(|_, _| ());
+            session
+                .expect_ai()
+                .return_var(Box::new(ai) as Box<dyn crate::plugins::runtime::traits::AiSessionCapability>);
+            let decision = merge(
+                GuardDecision::Replace(vec![(spans[0].key, "aaa".into())]),
+                vec![(spans[1].key, "bbb".into())],
+            );
+            let result = guard
+                .finish_decision(
+                    &mut session,
+                    &mut PluginLog::new("AiGuard"),
+                    FinalDecision {
+                        body: TWO_PROMPTS.as_bytes(),
+                        spans: &spans,
+                        generation,
+                        decision,
+                        flagged: 0,
+                    },
+                )
+                .await;
+            if fail_open {
+                assert_eq!(result, PluginRunningResult::GoodNext);
+            } else {
+                assert!(matches!(result, PluginRunningResult::ErrResponse { status: actual, .. } if actual == status));
+            }
+            assert_eq!(view.generation(), generation);
+            assert!(!view.is_modified());
+            assert_eq!(
+                view.read_all().await.unwrap(),
+                Bytes::from_static(TWO_PROMPTS.as_bytes())
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_admitted_composed_decision_publishes_one_generation_bound_batch() {
+    let spans = selected_prompts();
+    let guard = guard(reject_rule(), "maxReplacementBytes: 4\n");
+    let (mut storage, view) = BodyStorage::new(1024, 4096);
+    storage
+        .write(&Bytes::from_static(TWO_PROMPTS.as_bytes()))
+        .await
+        .unwrap();
+    storage.finish().await.unwrap();
+    let generation = view.generation();
+    let mut ctx = EdgionHttpContext::new();
+    ctx.request_body.install(Arc::clone(&view));
+    let mut session = MockPluginSession::new();
+    session.expect_ctx().return_const(ctx);
+    let publish_view = Arc::clone(&view);
+    session
+        .expect_replace_request_body_spans()
+        .times(1)
+        .returning(move |expected, edits| {
+            assert_eq!(expected, generation);
+            assert_eq!(edits.len(), 2);
+            assert_eq!(edits[0].1, Bytes::from_static(b"\"a\""));
+            assert_eq!(edits[1].1, Bytes::from_static(b"\"bbb\""));
+            publish_view
+                .replace_spans(expected, edits)
+                .map_err(|_| BodyReadError::Incomplete)
+        });
+    let mut ai = crate::plugins::runtime::traits::ai_session::MockAiSessionCapability::new();
+    ai.expect_record_ai_guard_decision()
+        .times(1)
+        .withf(move |_, settled| *settled == Some(generation + 1))
+        .returning(|_, _| ());
+    session
+        .expect_ai()
+        .return_var(Box::new(ai) as Box<dyn crate::plugins::runtime::traits::AiSessionCapability>);
+    let decision = merge(
+        GuardDecision::Replace(vec![(spans[0].key, "aaa".into())]),
+        vec![(spans[0].key, "a".into()), (spans[1].key, "bbb".into())],
+    );
+    assert_eq!(
+        guard
+            .finish_decision(
+                &mut session,
+                &mut PluginLog::new("AiGuard"),
+                FinalDecision {
+                    body: TWO_PROMPTS.as_bytes(),
+                    spans: &spans,
+                    generation,
+                    decision,
+                    flagged: 0,
+                }
+            )
+            .await,
+        PluginRunningResult::GoodNext
+    );
+    let settled: serde_json::Value = serde_json::from_slice(&view.read_all().await.unwrap()).unwrap();
+    assert_eq!(settled["messages"][0]["content"], "a");
+    assert_eq!(settled["messages"][1]["content"], "bbb");
+    assert_eq!(view.generation(), generation + 1);
+}
+
+#[tokio::test]
+async fn composed_publication_faults_remain_stricter_than_fail_open() {
+    let spans = selected_prompts();
+    for (failure, status) in [
+        (BodyReadError::GenerationConflict, 500),
+        (BodyReadError::BufferLimitExceeded { limit: 1 }, 413),
+    ] {
+        let guard = guard(reject_rule(), "maxReplacementBytes: 6\nfailOpen: true\n");
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(ctx_with_body());
+        session.expect_record_error().returning(|_| ());
+        session.expect_set_response_header().returning(|_, _| Ok(()));
+        session
+            .expect_replace_request_body_spans()
+            .times(1)
+            .return_once(move |_, _| Err(failure));
+        let mut ai = crate::plugins::runtime::traits::ai_session::MockAiSessionCapability::new();
+        ai.expect_record_ai_guard_decision().never();
+        session
+            .expect_ai()
+            .return_var(Box::new(ai) as Box<dyn crate::plugins::runtime::traits::AiSessionCapability>);
+        let decision = merge(
+            GuardDecision::Replace(vec![(spans[0].key, "aaa".into())]),
+            vec![(spans[1].key, "bbb".into())],
+        );
+        let result = guard
+            .finish_decision(
+                &mut session,
+                &mut PluginLog::new("AiGuard"),
+                FinalDecision {
+                    body: TWO_PROMPTS.as_bytes(),
+                    spans: &spans,
+                    generation: 0,
+                    decision,
+                    flagged: 0,
+                },
+            )
+            .await;
+        assert!(matches!(result, PluginRunningResult::ErrResponse { status: actual, .. } if actual == status));
+    }
 }
