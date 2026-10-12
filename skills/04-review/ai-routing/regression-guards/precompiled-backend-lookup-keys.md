@@ -47,14 +47,21 @@ old generations, repeated key pointer reuse and zero measured allocations in
 candidate lookup projections. Passthrough checks cover disabled-path laziness,
 missing entries, provider restrictions, nonpositive weights and the empty-set
 case. Existing model-list, captured-skew and continuation regressions remain.
-Fresh execution results are recorded in the implementation task; this page does
-not substitute historical acceptance for current verification.
+Verification on 2026-10-12 passed 176 distinct Gateway library tests across
+AI proxy, backend runtime, HTTP match-unit, AI dispatch and upstream peer scopes.
+Workspace check/clippy, formatting and the applicable static guards passed;
+clippy retained existing unrelated REST-to-GraphQL test warnings. An existing
+Service-policy fixture was corrected to declare System CA consistently with its
+resolved flag, preserving its assertions. No full workspace test, live integration
+or throughput measurement was run. These results are historical evidence, not a
+substitute for verification after subsequent changes.
 
 Re-evaluate when target identity, snapshot lifetime, retained candidate shape,
 ReferenceGrant authorization, continuation fences or passthrough semantics change.
 
 ## Resolution references
 
-- ARCH-008: implemented ownership correction; independent result approval and
-  fresh-check completion are tracked in
-  [the implementation task](../../../../tasks/pending/architecture-ai-backend-lookup-key/architecture-ai-backend-lookup-key.md).
+- ARCH-008: implemented ownership correction, independently approved by
+  `/root/result_review` after the verification above. Completed implementation
+  task records were removed at the user's request; the original architecture
+  review snapshot remains intact.

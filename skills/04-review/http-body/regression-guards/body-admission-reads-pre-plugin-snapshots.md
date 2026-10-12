@@ -235,11 +235,11 @@ integration-test files changed, and no full test suite was run.
 
 ## Entry-method consolidation
 
-T01 of [request identity](../../../../tasks/pending/http-request-identity/http-request-identity.md)
+The [entry and current request identity contract](../../../01-architecture/02-gateway/12-edgion-plugin-dev.md#entry-and-current-request-identity)
 replaces stored HEAD/CONNECT booleans with queries derived from the canonical
 entry Method; the live-plus-entry AND and missing HEAD false policy are preserved.
 Existing HEAD test identities remain, including both rewrite directions. The
 new missing-entry/live-HEAD test explicitly rejects silent admission. This is an
 ownership consolidation, not permission to buffer main upstream responses.
-Fresh verification and independent result review are recorded in the task; do not
-infer their completion from this architectural description.
+The completed request-identity task records have been removed. This documentation
+link repair does not rerun runtime verification or establish new acceptance.
