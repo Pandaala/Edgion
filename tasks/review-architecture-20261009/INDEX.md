@@ -28,7 +28,7 @@ Source reviewed: 512 / 1676; 467 primary partitions.
 | ARCH-017 | candidate | architecture-debt | [Prepare immutable native backend TLS components with their publishing generation](ARCH-017-prepared-native-backend-tls-generation.md) |
 | ARCH-018 | resolved | architecture-debt | [Closed outlier production identity owner finding; acceptance evidence](TASK-ACCEPTANCE-ARCH-018-20261012.json) |
 | ARCH-019 | candidate | architecture-debt | [Borrow resolved GeoIP dimensions when projecting an access log](ARCH-019-borrowed-geo-access-log-projection.md) |
-| ARCH-020 | confirmed | architecture-debt | [Normalize discovery geometry without constructing provisional runtime selectors](ARCH-020-discovery-normalized-geometry-owner.md) |
+| ARCH-020 | resolved | architecture-debt | [Closed discovery normalized-geometry ownership finding; acceptance evidence](TASK-ACCEPTANCE-ARCH-020-20261012.json) |
 | ARCH-021 | candidate | architecture-debt | [Keep ready Service endpoints numeric across the shared outbound boundary](ARCH-021-numeric-outbound-service-endpoints.md) |
 | ARCH-022 | candidate | architecture-debt | [Keep health status markers without a second threshold engine](ARCH-022-active-health-marker-only-store.md) |
 | ARCH-023 | candidate | architecture-debt | [Share prepared policy ownership across the target index](ARCH-023-shared-prepared-policy-target-index.md) |

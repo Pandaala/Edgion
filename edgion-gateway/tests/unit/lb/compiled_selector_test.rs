@@ -64,3 +64,15 @@ fn rr_select_returns_live_arc() {
     let picked = sel.select(None, |_| true, 0).expect("must pick");
     assert!(Arc::ptr_eq(&picked, &b), "must return the original Arc, not a rewrap");
 }
+
+thread_local! {
+    static SELECTOR_SET_BUILD_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+pub(crate) fn selector_set_build_count_for_test() -> usize {
+    SELECTOR_SET_BUILD_COUNT.with(std::cell::Cell::get)
+}
+
+pub(super) fn record_selector_set_build() {
+    SELECTOR_SET_BUILD_COUNT.with(|count| count.set(count.get() + 1));
+}

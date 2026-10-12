@@ -1,0 +1,41 @@
+{
+  "finding": "ARCH-020",
+  "disposition": "fixed-and-verified",
+  "authorization": "User explicitly requested deletion of the original ARCH-020 finding after completed implementation-task cleanup.",
+  "finding_sha256": "a2e9b691ff3abda5109623c93c53978ec7879b9b1c0cd4d42500a782404ed910",
+  "current_head": "f497ee98b5a771035218c76eb23a25b66cdf81a2",
+  "independent_reviewer": "/root/result_review",
+  "model": "gpt-6-astra",
+  "reasoning_effort": "medium",
+  "decision": "PASS",
+  "reviewed_implementation_digest": "ab3af8800e17936f999d9ae8a14f228d7c2a700492b5f0f1abd524d9625ba927",
+  "approved_plan_sha256": "165f7ec8f4ada3eb6780af40d9a1a7ac9d20cf0ce82dc1f8c07592fc4ed3cf0d",
+  "cleanup_knowledge_review_sha256": "aa7f0fe7d26def88a8ba7b6f3aa20a6e8a8e92808f4abc03f3fce0b22409088d",
+  "result_files": {
+    "cicd/checks/check_unit_test_layout.py": "d160dbebd7cb54253f8a968cb12434a5e2a28edd7206f36854cd87e07cf13ee0",
+    "edgion-gateway/src/backends/discovery/coordinator.rs": "e8ca6d1953d82c489b40db9d8f5296544e7f0a2d77a43c11257497b540aba240",
+    "edgion-gateway/src/lb/compiled_selector.rs": "927b0e2dedc960f240bb4a9f2d5f74b973ac945bfe8fa59b903886389701488a",
+    "edgion-gateway/tests/unit/backends/discovery/coordinator_test.rs": "b44f2ddf39cc4c2da2230cc146431cbd6cb0afbd31c2f7d321cc66cde3b88fd4",
+    "edgion-gateway/tests/unit/backends/policy/mod_test.rs": "062d6d9029bc8b9728e97207c004415417c92c7db9c1697179bb67acdd3b745d",
+    "edgion-gateway/tests/unit/backends/validation_test.rs": "9acf83615e008a361bf81b372ce7061916caa2a3766a41558b662a91eeaea5f3",
+    "edgion-gateway/tests/unit/lb/compiled_selector_test.rs": "9eb0219e2f16cc9aeb3b9968867065e3e6ae873e49be9639cfb208369bd8ce55",
+    "skills/01-architecture/02-gateway/07-backends.md": "6891bf2333cdfcfab10152c5186f1ea2fa29d07c859a88ab02d6ed65afde6477",
+    "skills/04-review/backends/SKILL.md": "c3c1ab74ac2bc49946b28c36ec7afb17823bb8338ec9150cd52b5c243794b277",
+    "skills/04-review/backends/regression-guards/discovery-normalized-geometry-ownership.md": "aa7f0fe7d26def88a8ba7b6f3aa20a6e8a8e92808f4abc03f3fce0b22409088d",
+    "skills/04-review/backends/regression-guards/ep-slice-no-port-fail-closed.md": "21e0e5185850007294c561ed0e4402658205cf61796e45cd92fc2e63a99c2136",
+    "skills/04-review/backends/regression-guards/named-port-resolve-against-originating-slice.md": "8c6382c64d445ad7e834694f921662ea5478ee8aeada4969bfd874af4aa6e8a3"
+  },
+  "knowledge": "../../skills/04-review/backends/regression-guards/discovery-normalized-geometry-ownership.md",
+  "acceptance": "Private pure normalized discovery geometry replaces discarded provisional runtime assembly. Only final materialization constructs backend wrappers, direct indexes and eager selectors; exact epoch demand, aliases, fingerprints, fresh runtime state and transport-counter reuse remain intact. Coherent System-CA fixture correction preserves production admission and test assertions.",
+  "reported_execution": {
+    "policy_mapping": "8 passed",
+    "direct_authorization": "3 passed",
+    "backends": "307 passed, including all 33 coordinator tests and the eight repaired fixture cases",
+    "lb": "122 passed",
+    "workspace_check_and_clippy": "PASS without warnings",
+    "format_and_guards": "PASS: format, unit layout, SSA, metrics, Pingora source, Gateway API transform, tracing and diff checks"
+  },
+  "cleanup_verification": "Fresh agent-doc validation passed after the external WAF link blocker was resolved. Other eleven reviewed result files remain unchanged; the owning knowledge evidence appendix received independent renewed approval.",
+  "limits": "Rust checks/tests ran earlier in this conversation and remain content-bound; task-only cleanup did not rerun them. No full workspace tests, integration, benchmark or new primary coverage.",
+  "preservation": "Product code, tests, canonical knowledge, original verification receipt, partition reports, coverage and historical state snapshots retained. Implementation-task records and exclusive temporary logs removed separately."
+}

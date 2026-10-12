@@ -13,9 +13,10 @@ knowledge_type: regression-guards
 
 The Gateway still **fails closed** when no EndpointSlice declares the requested Service port, but
 the active implementation is no longer `get_backends_for_service` or lazy selector hydration.
-`discovery/coordinator.rs::build_section` skips each slice that has no matching port. If none match,
-it publishes a resolved section with empty `all_slots` and `ready_slots`, plus
-`CompiledSelectors::build(empty)`, as part of the joint immutable discovery generation. No address
+`discovery/coordinator.rs::normalize_section` skips each slice that has no matching port. If none match,
+normalization yields an empty resolved geometry. Final materialization alone
+publishes empty `all_slots` and `ready_slots` plus `CompiledSelectors::build(empty)`
+as part of the joint immutable discovery generation. Preflight constructs no selectors. No address
 or fallback port is fabricated.
 
 On a request, `selector.rs::select_service_endpoint` captures the available Service projection and
@@ -31,7 +32,7 @@ The resulting diagnostic is owned by the normal request failure/access-log path.
 fail-close behavior without sending traffic to a guessed port.
 
 Re-reports of the form "the Gateway still falls back to port 8080" or "a no-port slice is dialed
-using a magic default" are **not accepted** unless current `build_section` again fabricates a port.
+using a magic default" are **not accepted** unless current `normalize_section` again fabricates a port.
 
 ## What was wrong before the fix
 
@@ -72,7 +73,7 @@ hydration, or selector rebuild.
 
 Re-open only if:
 
-- `build_section` starts fabricating a port or admits a slice that does not match the requested
+- `normalize_section` starts fabricating a port or admits a slice that does not match the requested
   Service section.
 - A future requirement introduces an explicit default target-port policy; it must preserve schema,
   publication, and observability boundaries rather than reviving an implicit constant.
@@ -80,7 +81,7 @@ Re-open only if:
 ## Reference cases
 
 - backends-F013 (review finding, 2026-05-24).
-- `edgion-gateway/src/backends/discovery/coordinator.rs` — `build_section` and joint section
+- `edgion-gateway/src/backends/discovery/coordinator.rs` — `normalize_section` and joint section
   publication.
 - `edgion-gateway/src/backends/selector.rs` — `load_active_projection`,
   `select_service_endpoint`, and current error mapping.

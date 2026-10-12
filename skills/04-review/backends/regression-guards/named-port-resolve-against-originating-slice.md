@@ -21,7 +21,9 @@ AllEndpointStatus consumes ready slots and section-scoped TLS policy as describe
 DirectEndpoint borrows `CompiledBackend::permitted_service()` from the actual
 Route compiler: the same private Service key, checked port section and policy
 target used by ordinary native HTTP selection, with no second classifier. The section's numeric IP/port index is
-compiled from `all_slots` in both initial compilation and runtime materialization.
+compiled from final `all_slots` only during runtime materialization. Pure normalized
+geometry retains numeric sockets and originating proofs without executable wrappers
+or an authorization index; exact preflight and publication share that normalization.
 Explicit endpoint ports must belong to the authorized section; absent explicit ports require
 a unique serving port for that IP. Missing Service/section, zero/overflow/negative backendRef
 ports, unproved endpoint ports, and ambiguous IP mappings cannot authorize a direct dial.

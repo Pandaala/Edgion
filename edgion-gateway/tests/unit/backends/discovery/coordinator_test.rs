@@ -1318,3 +1318,138 @@ fn dns_candidate_is_cold_and_published_with_its_actual_service_generation() {
         new.dns_resolver_candidate
     );
 }
+
+#[test]
+fn selector_sets_are_built_only_for_unique_final_resolved_sections() {
+    use crate::lb::compiled_selector::selector_set_build_count_for_test as builds;
+
+    let coordinator = ServiceDiscoveryCoordinator::new();
+    let sources = HashMap::from([(
+        "default/backend".to_string(),
+        service(Some("service-uid"), IntOrString::Int(8080)),
+    )]);
+    let before = builds();
+    coordinator.replace_services(&sources);
+    assert_eq!(builds() - before, 1, "empty final section still compiles eagerly");
+    let slices = HashMap::from([(
+        "default/backend-a".to_string(),
+        slice("backend-a", Some("slice-a"), true),
+    )]);
+    let before = builds();
+    coordinator.replace_endpoint_slices(&slices);
+    assert_eq!(builds() - before, 1, "number/name aliases share one selector set");
+    let old = coordinator.load_generation();
+    let before = builds();
+    let mut changed_state = coordinator.state.lock().clone();
+    changed_state
+        .endpoint_slices
+        .get_mut("default/backend-a")
+        .unwrap()
+        .resource = slice("backend-a", Some("slice-a"), false);
+    let demand = projection_epoch_requirement("default/backend", &changed_state, old.service("default/backend"));
+    assert_eq!(demand, 1);
+    assert_eq!(builds(), before, "preflight never constructs selectors");
+    coordinator.replace_endpoint_slices(&slices);
+    assert_eq!(builds(), before, "semantic no-op never constructs selectors");
+    assert!(Arc::ptr_eq(&old, &coordinator.load_generation()));
+
+    let mut dual = (*sources["default/backend"]).clone();
+    dual.spec.as_mut().unwrap().ports.as_mut().unwrap().push(ServicePort {
+        name: Some("metrics".to_string()),
+        port: 81,
+        ..Default::default()
+    });
+    coordinator.replace_services(&HashMap::from([("default/backend".to_string(), Arc::new(dual))]));
+    assert_eq!(
+        builds() - before,
+        2,
+        "every resolved section of a changed Service materializes"
+    );
+
+    let before = builds();
+    coordinator.replace_services(&HashMap::from([(
+        "default/backend".to_string(),
+        service(Some("service-uid"), IntOrString::String(String::new())),
+    )]));
+    assert_eq!(builds(), before, "invalid sections have no selectors");
+    assert_eq!(coordinator.load_generation().stats.invalid_sections, 1);
+    let invalid = coordinator.load_generation();
+    let invalid = invalid.available("default/backend").unwrap();
+    assert!(Arc::ptr_eq(
+        invalid
+            .sections
+            .get(&ServiceSectionKey::Number(NonZeroU16::new(80).unwrap()))
+            .unwrap(),
+        invalid
+            .sections
+            .get(&ServiceSectionKey::Name(Arc::from("http")))
+            .unwrap(),
+    ));
+    coordinator.set_next_epoch_for_test(u64::MAX);
+    coordinator.replace_services(&HashMap::from([(
+        "default/backend".to_string(),
+        service(Some("replacement-uid"), IntOrString::Int(8080)),
+    )]));
+    assert_eq!(
+        builds(),
+        before,
+        "failed whole-transaction reservation constructs no selectors"
+    );
+    assert!(matches!(
+        coordinator.load_generation().service("default/backend"),
+        Some(ServicePublishedState::Unavailable(
+            ServiceUnavailableReason::InvalidEpoch
+        ))
+    ));
+}
+
+#[test]
+fn terminal_epoch_exact_fit_counts_aliases_once_and_invalid_sections_zero() {
+    use crate::lb::compiled_selector::selector_set_build_count_for_test as builds;
+
+    let coordinator = ServiceDiscoveryCoordinator::new();
+    publish_base(&coordinator);
+    let mut updated = (*service(Some("service-uid"), IntOrString::Int(8080))).clone();
+    updated
+        .spec
+        .as_mut()
+        .unwrap()
+        .ports
+        .as_mut()
+        .unwrap()
+        .push(ServicePort {
+            name: Some("invalid".to_string()),
+            port: 81,
+            target_port: Some(IntOrString::String(String::new())),
+            ..Default::default()
+        });
+    coordinator.set_next_epoch_for_test(u64::MAX);
+    let before = builds();
+    coordinator.replace_services(&HashMap::from([("default/backend".to_string(), Arc::new(updated))]));
+    assert_eq!(builds() - before, 1);
+    let generation = coordinator.load_generation();
+    let available = generation
+        .available("default/backend")
+        .expect("one slot exactly fits terminal epoch");
+    let numbered = available
+        .resolve_section(&ServiceSectionKey::Number(NonZeroU16::new(80).unwrap()))
+        .unwrap();
+    let named = available
+        .resolve_section(&ServiceSectionKey::Name(Arc::from("http")))
+        .unwrap();
+    assert!(Arc::ptr_eq(&numbered, &named));
+    assert_eq!(
+        numbered.all_slots[0].backend.runtime_identity().unwrap().incarnation,
+        u64::MAX
+    );
+    for key in [
+        ServiceSectionKey::Number(NonZeroU16::new(81).unwrap()),
+        ServiceSectionKey::Name(Arc::from("invalid")),
+    ] {
+        assert!(matches!(
+            available.resolve_section(&key),
+            Err(ServiceSectionInvalid::InvalidServicePort)
+        ));
+    }
+    assert!(coordinator.state.lock().exhausted);
+}

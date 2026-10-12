@@ -277,8 +277,13 @@ pub struct CompiledSelectors {
     pub ewma: Arc<CompiledSelector>,
 }
 
+#[cfg(test)]
+pub(crate) use tests::selector_set_build_count_for_test;
+
 impl CompiledSelectors {
     pub(crate) fn build(backends: Arc<[Arc<LbBackend>]>) -> Self {
+        #[cfg(test)]
+        tests::record_selector_set_build();
         Self {
             round_robin: Arc::new(compile(PolicyKind::RoundRobin, backends.clone())),
             consistent_hash: Arc::new(compile(PolicyKind::ConsistentHash, backends.clone())),

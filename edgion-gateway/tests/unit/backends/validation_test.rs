@@ -56,12 +56,12 @@ fn policy_store(valid: bool) -> BackendTLSPolicyStore {
         "metadata": {"name": "app-tls", "namespace": "default"},
         "spec": {
             "targetRefs": [{"group": "", "kind": "Service", "name": "app", "sectionName": "https"}],
-            "validation": {"hostname": "backend.example.com"}
+            "validation": {"hostname": "backend.example.com", "wellKnownCACertificates": "System"}
         }
     }))
     .unwrap();
     policy.spec.resolved_target_class = Some(ResolvedPolicyTargetClass::Service);
-    policy.spec.use_system_ca = valid;
+    policy.spec.use_system_ca = true;
     if !valid {
         policy.spec.validation.hostname = "invalid hostname".to_owned();
     }

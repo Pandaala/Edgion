@@ -40,6 +40,19 @@ needs a new identity is published unavailable; source identities are never parti
 unavailable or unidentified Service has no raw view that a consumer can use to bypass the
 fail-closed projection.
 
+The coordinator's private normalized geometry contains checked port identities,
+numeric sockets, readiness, merged origins and proofs, or typed invalid outcomes.
+Exact epoch preflight and publication use the same pure normalization in two
+passes; neither pass constructs backend wrappers, direct indexes or selectors.
+Content fingerprints preserve deterministic section/proof ordering. Final
+materialization alone assigns fresh runtime identities and constructs all/ready
+slot arrays, the direct endpoint index and all four eager selectors once per
+unique resolved section. Number/name aliases share that section. A changed
+Service rematerializes all its resolved sections; a semantic no-op reuses the old
+projection without constructing selectors. Empty resolved sections still compile
+eagerly. Only transport counters may be reused from old same-socket backends.
+See the [normalization ownership guard](../../04-review/backends/regression-guards/discovery-normalized-geometry-ownership.md).
+
 Canonical section keys are only Service port number or name. Every valid section contains exact
 all/ready endpoint slots plus eagerly compiled RoundRobin, ConsistentHash, LeastConn, and EWMA
 selectors. Equivalent same-socket origins merge into a deterministic sorted origin set. The

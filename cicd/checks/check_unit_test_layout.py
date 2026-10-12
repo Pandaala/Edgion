@@ -101,6 +101,9 @@ GATEWAY_ASSOCIATED_TEST_HELPERS = {
 # Source-local test instrumentation, fields, initializers, and branches cannot
 # be moved without changing the production item they instrument.
 GATEWAY_SOURCE_LOCAL = {
+    Path('lb/compiled_selector.rs'): (
+        'tests::record_selector_set_build();',
+    ),
     Path('ai/runtime/attempt_runtime.rs'): (
         'self.settlement_decisions.push(operation);',
         'settlement_decisions: Vec<SettlementOperation>,',

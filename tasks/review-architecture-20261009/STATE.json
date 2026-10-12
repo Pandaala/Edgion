@@ -30569,7 +30569,7 @@
     },
     "ARCH-020": {
       "path": "ARCH-020-discovery-normalized-geometry-owner.md",
-      "status": "confirmed",
+      "status": "resolved",
       "kind": "architecture-debt",
       "partition": "PART-253",
       "sha256": "a2e9b691ff3abda5109623c93c53978ec7879b9b1c0cd4d42500a782404ed910",
@@ -30586,7 +30586,21 @@
         },
         "limits": "Independent original rules/current implementation/caller/test review; static only, no executions/primary credit/measurements. Keep explicit preserved invariants and proposed implementation verification."
       },
-      "verifier": "/root/verify_seed"
+      "verifier": "/root/verify_seed",
+      "previous_status": "confirmed",
+      "finding_removed": true,
+      "removed_finding_path": "ARCH-020-discovery-normalized-geometry-owner.md",
+      "current_implementation_acceptance": "TASK-ACCEPTANCE-ARCH-020-20261012.json",
+      "closure": {
+        "date": "2026-10-12",
+        "disposition": "fixed-and-verified",
+        "authorization": "User explicitly requested deletion of the original ARCH-020 finding after completed implementation-task cleanup.",
+        "independent_reviewer": "/root/result_review",
+        "reviewed_finding_sha256": "a2e9b691ff3abda5109623c93c53978ec7879b9b1c0cd4d42500a782404ed910",
+        "acceptance_evidence": "TASK-ACCEPTANCE-ARCH-020-20261012.json",
+        "index_title": "Closed discovery normalized-geometry ownership finding; acceptance evidence",
+        "preservation": "Product code, tests, canonical knowledge, original verification receipt, partition reports, coverage and historical state snapshots retained. Implementation-task records and exclusive temporary logs removed separately."
+      }
     },
     "ARCH-021": {
       "path": "ARCH-021-numeric-outbound-service-endpoints.md",

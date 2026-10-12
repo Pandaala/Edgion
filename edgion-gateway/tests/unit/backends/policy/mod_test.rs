@@ -27,13 +27,13 @@ fn policy(name: &str, refs: &[(&str, Option<&str>)]) -> Arc<BackendTLSPolicy> {
             validation: BackendTLSPolicyValidation {
                 ca_certificate_refs: None,
                 hostname: "backend.example.com".to_string(),
-                well_known_ca_certificates: None,
+                well_known_ca_certificates: Some(WellKnownCACertificates::System),
                 subject_alt_names: None,
             },
             options: None,
             resolved_ca_certificates: None,
             resolved_client_certificate: None,
-            use_system_ca: false,
+            use_system_ca: true,
         },
         status: None,
     })

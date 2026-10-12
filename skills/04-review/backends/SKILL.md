@@ -21,6 +21,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Pure discovery geometry and final runtime materialization](regression-guards/discovery-normalized-geometry-ownership.md)
+
 - [Active health-check port validation](regression-guards/active-health-port-validation.md)
 - [AllEndpointStatus backend TLS and endpoint identity](regression-guards/all-endpoint-status-tls-identity.md)
 

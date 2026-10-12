@@ -85,6 +85,24 @@ pub struct EndpointOrigin {
     pub ready: bool,
 }
 
+// Pure discovery geometry has no executable selectors or runtime identity.
+struct NormalizedBackendSlot {
+    socket: SocketAddr,
+    ready: bool,
+    origin_set: Arc<[EndpointOrigin]>,
+    proof: [u8; 32],
+}
+
+struct NormalizedServiceSection {
+    identity: ServicePortIdentity,
+    slots: Vec<NormalizedBackendSlot>,
+}
+
+enum NormalizedSectionOutcome {
+    Resolved(Arc<NormalizedServiceSection>),
+    Invalid(ServiceSectionInvalid),
+}
+
 pub struct ResolvedBackendSlot {
     pub backend: Arc<LbBackend>,
     pub ready: bool,
@@ -1359,7 +1377,7 @@ fn build_service_projection(
         ));
     }
 
-    let geometry = build_sections(&service_record, &slices);
+    let geometry = normalize_sections(&service_record, &slices);
     let raw = Arc::new(LegacyRawProjection {
         service: Arc::clone(&service_record.resource),
         endpoint_slices: slices
@@ -1429,20 +1447,20 @@ fn projection_epoch_requirement(
     if slices.iter().any(|(_, slice)| slice.identity.is_none()) {
         return 0;
     }
-    let sections = build_sections(service, &slices);
+    let sections = normalize_sections(service, &slices);
     let fingerprint = service_content_fingerprint(service, &slices, &sections);
     if matches!(old, Some(ServicePublishedState::Available(old)) if old.content_fingerprint == fingerprint) {
         return 0;
     }
-    unique_resolved_slot_count(&sections)
+    unique_normalized_slot_count(&sections)
 }
 
-fn build_sections(
+fn normalize_sections(
     service: &LiveSourceRecord<Service>,
     slices: &[(String, LiveSourceRecord<EndpointSlice>)],
-) -> BTreeMap<ServiceSectionKey, Arc<ServiceSectionOutcome>> {
-    let mut aliases: BTreeMap<ServiceSectionKey, Vec<Arc<ServiceSectionOutcome>>> = BTreeMap::new();
-    let mut sections = HashMap::<ServicePortIdentity, Arc<ServiceSectionOutcome>>::new();
+) -> BTreeMap<ServiceSectionKey, Arc<NormalizedSectionOutcome>> {
+    let mut aliases: BTreeMap<ServiceSectionKey, Vec<Arc<NormalizedSectionOutcome>>> = BTreeMap::new();
+    let mut sections = HashMap::<ServicePortIdentity, Arc<NormalizedSectionOutcome>>::new();
     let ports = service
         .resource
         .spec
@@ -1455,9 +1473,9 @@ fn build_sections(
         let outcome = match identity.as_ref() {
             Some(identity) => sections
                 .entry(identity.clone())
-                .or_insert_with(|| Arc::new(build_section(service, identity, slices)))
+                .or_insert_with(|| Arc::new(normalize_section(service, identity, slices)))
                 .clone(),
-            None => Arc::new(ServiceSectionOutcome::Invalid(
+            None => Arc::new(NormalizedSectionOutcome::Invalid(
                 ServiceSectionInvalid::InvalidServicePort,
             )),
         };
@@ -1480,7 +1498,7 @@ fn build_sections(
         .map(|(key, identities)| {
             let outcome = match identities.as_slice() {
                 [outcome] => Arc::clone(outcome),
-                _ => Arc::new(ServiceSectionOutcome::Invalid(
+                _ => Arc::new(NormalizedSectionOutcome::Invalid(
                     ServiceSectionInvalid::AmbiguousServicePort,
                 )),
             };
@@ -1510,11 +1528,11 @@ fn normalize_service_port(port: &ServicePort) -> Option<ServicePortIdentity> {
     })
 }
 
-fn build_section(
+fn normalize_section(
     service: &LiveSourceRecord<Service>,
     identity: &ServicePortIdentity,
     slices: &[(String, LiveSourceRecord<EndpointSlice>)],
-) -> ServiceSectionOutcome {
+) -> NormalizedSectionOutcome {
     let mut grouped: BTreeMap<SocketAddr, BTreeSet<EndpointOrigin>> = BTreeMap::new();
     for (slice_key, slice) in slices {
         let ports = slice.resource.ports.as_deref().unwrap_or(&[]);
@@ -1526,15 +1544,15 @@ fn build_section(
             continue;
         }
         if matching.len() != 1 {
-            return ServiceSectionOutcome::Invalid(ServiceSectionInvalid::AmbiguousEndpointPort);
+            return NormalizedSectionOutcome::Invalid(ServiceSectionInvalid::AmbiguousEndpointPort);
         }
         let Some(port) = matching[0].port.and_then(checked_port) else {
-            return ServiceSectionOutcome::Invalid(ServiceSectionInvalid::InvalidServicePort);
+            return NormalizedSectionOutcome::Invalid(ServiceSectionInvalid::InvalidServicePort);
         };
         let expected_v6 = match slice.resource.address_type.as_str() {
             "IPv4" => false,
             "IPv6" => true,
-            _ => return ServiceSectionOutcome::Invalid(ServiceSectionInvalid::AddressFamilyConflict),
+            _ => return NormalizedSectionOutcome::Invalid(ServiceSectionInvalid::AddressFamilyConflict),
         };
         let source_identity = slice.identity.as_ref().expect("identified slices are prevalidated");
         for endpoint in &slice.resource.endpoints {
@@ -1545,10 +1563,10 @@ fn build_section(
                 .unwrap_or(false);
             for address in &endpoint.addresses {
                 let Ok(ip) = address.parse::<IpAddr>() else {
-                    return ServiceSectionOutcome::Invalid(ServiceSectionInvalid::InvalidEndpointAddress);
+                    return NormalizedSectionOutcome::Invalid(ServiceSectionInvalid::InvalidEndpointAddress);
                 };
                 if ip.is_ipv6() != expected_v6 {
-                    return ServiceSectionOutcome::Invalid(ServiceSectionInvalid::AddressFamilyConflict);
+                    return NormalizedSectionOutcome::Invalid(ServiceSectionInvalid::AddressFamilyConflict);
                 }
                 let socket = SocketAddr::new(ip, port.get());
                 grouped.entry(socket).or_default().insert(EndpointOrigin {
@@ -1567,36 +1585,16 @@ fn build_section(
         let ready = origins.iter().any(|origin| origin.ready);
         let origin_set: Arc<[EndpointOrigin]> = origins.into_iter().collect::<Vec<_>>().into();
         let proof = slot_proof(service, identity, socket, ready, &origin_set);
-        let backend = Arc::new(LbBackend::new(Backend {
-            addr: PingoraSocketAddr::Inet(socket),
-            weight: 1,
-            ext: Default::default(),
-        }));
-        all.push(Arc::new(ResolvedBackendSlot {
-            backend,
+        all.push(NormalizedBackendSlot {
+            socket,
             ready,
             origin_set,
             proof,
-        }));
+        });
     }
-    let all_slots: Arc<[Arc<ResolvedBackendSlot>]> = all.into();
-    let ready_slots: Arc<[Arc<ResolvedBackendSlot>]> = all_slots
-        .iter()
-        .filter(|slot| slot.ready)
-        .cloned()
-        .collect::<Vec<_>>()
-        .into();
-    let ready_backends = ready_slots
-        .iter()
-        .map(|slot| Arc::clone(&slot.backend))
-        .collect::<Vec<_>>()
-        .into();
-    ServiceSectionOutcome::Resolved(Arc::new(ResolvedServiceSection {
+    NormalizedSectionOutcome::Resolved(Arc::new(NormalizedServiceSection {
         identity: identity.clone(),
-        direct_endpoint_ports: compile_direct_endpoint_ports(&all_slots),
-        all_slots,
-        ready_slots,
-        selectors: CompiledSelectors::build(ready_backends),
+        slots: all,
     }))
 }
 
@@ -1690,17 +1688,33 @@ fn unique_resolved_sections(
     out
 }
 
-fn unique_resolved_slot_count(sections: &BTreeMap<ServiceSectionKey, Arc<ServiceSectionOutcome>>) -> usize {
-    unique_resolved_sections(sections)
+fn unique_normalized_sections(
+    sections: &BTreeMap<ServiceSectionKey, Arc<NormalizedSectionOutcome>>,
+) -> Vec<Arc<NormalizedServiceSection>> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for outcome in sections.values() {
+        let NormalizedSectionOutcome::Resolved(section) = outcome.as_ref() else {
+            continue;
+        };
+        if seen.insert(Arc::as_ptr(section)) {
+            out.push(Arc::clone(section));
+        }
+    }
+    out
+}
+
+fn unique_normalized_slot_count(sections: &BTreeMap<ServiceSectionKey, Arc<NormalizedSectionOutcome>>) -> usize {
+    unique_normalized_sections(sections)
         .iter()
-        .map(|section| section.all_slots.len())
+        .map(|section| section.slots.len())
         .sum()
 }
 
-fn projection_membership_identity(sections: &BTreeMap<ServiceSectionKey, Arc<ServiceSectionOutcome>>) -> u64 {
-    let mut proofs: Vec<[u8; 32]> = unique_resolved_sections(sections)
+fn projection_membership_identity(sections: &BTreeMap<ServiceSectionKey, Arc<NormalizedSectionOutcome>>) -> u64 {
+    let mut proofs: Vec<[u8; 32]> = unique_normalized_sections(sections)
         .iter()
-        .flat_map(|section| section.all_slots.iter().map(|slot| slot.proof))
+        .flat_map(|section| section.slots.iter().map(|slot| slot.proof))
         .collect();
     proofs.sort_unstable();
     let mut digest = Sha256::new();
@@ -1735,15 +1749,15 @@ fn identified_backends_for_reuse(
 fn materialize_section(
     service_key: &str,
     membership_identity: u64,
-    section: &ResolvedServiceSection,
+    section: &NormalizedServiceSection,
     old_by_proof: &HashMap<[u8; 32], Arc<LbBackend>>,
     old_by_socket: &HashMap<SocketAddr, Arc<LbBackend>>,
     epochs: &mut impl Iterator<Item = u64>,
 ) -> Option<ResolvedServiceSection> {
-    let mut all = Vec::with_capacity(section.all_slots.len());
-    for slot in section.all_slots.iter() {
+    let mut all = Vec::with_capacity(section.slots.len());
+    for slot in section.slots.iter() {
         let incarnation = epochs.next()?;
-        let socket = slot.backend.addr.as_inet().copied()?;
+        let socket = slot.socket;
         let counters = old_by_proof
             .get(&slot.proof)
             .or_else(|| old_by_socket.get(&socket))
@@ -1797,17 +1811,22 @@ fn materialize_section(
 fn materialize_sections(
     service_key: &str,
     membership_identity: u64,
-    sections: BTreeMap<ServiceSectionKey, Arc<ServiceSectionOutcome>>,
+    sections: BTreeMap<ServiceSectionKey, Arc<NormalizedSectionOutcome>>,
     old: Option<&ServicePublishedState>,
     epochs: &mut impl Iterator<Item = u64>,
 ) -> Option<BTreeMap<ServiceSectionKey, Arc<ServiceSectionOutcome>>> {
     let (old_by_proof, old_by_socket) = identified_backends_for_reuse(old);
     let mut remapped_unique = HashMap::new();
+    let mut remapped_invalid = HashMap::new();
     let mut out = BTreeMap::new();
     for (key, outcome) in sections {
         let remapped = match outcome.as_ref() {
-            ServiceSectionOutcome::Invalid(_) => Arc::clone(&outcome),
-            ServiceSectionOutcome::Resolved(section) => {
+            NormalizedSectionOutcome::Invalid(reason) => Arc::clone(
+                remapped_invalid
+                    .entry(Arc::as_ptr(&outcome))
+                    .or_insert_with(|| Arc::new(ServiceSectionOutcome::Invalid(reason.clone()))),
+            ),
+            NormalizedSectionOutcome::Resolved(section) => {
                 let ptr = Arc::as_ptr(section) as usize;
                 if let Some(existing) = remapped_unique.get(&ptr) {
                     Arc::clone(existing)
@@ -1834,7 +1853,7 @@ fn materialize_sections(
 fn service_content_fingerprint(
     service: &LiveSourceRecord<Service>,
     slices: &[(String, LiveSourceRecord<EndpointSlice>)],
-    sections: &BTreeMap<ServiceSectionKey, Arc<ServiceSectionOutcome>>,
+    sections: &BTreeMap<ServiceSectionKey, Arc<NormalizedSectionOutcome>>,
 ) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(PROOF_DOMAIN);
@@ -1848,12 +1867,12 @@ fn service_content_fingerprint(
     for (key, outcome) in sections {
         digest.update(format!("{key:?}").as_bytes());
         match outcome.as_ref() {
-            ServiceSectionOutcome::Resolved(section) => {
-                for slot in section.all_slots.iter() {
+            NormalizedSectionOutcome::Resolved(section) => {
+                for slot in section.slots.iter() {
                     digest.update(slot.proof);
                 }
             }
-            ServiceSectionOutcome::Invalid(reason) => digest.update(format!("{reason:?}").as_bytes()),
+            NormalizedSectionOutcome::Invalid(reason) => digest.update(format!("{reason:?}").as_bytes()),
         }
     }
     digest.finalize().into()
