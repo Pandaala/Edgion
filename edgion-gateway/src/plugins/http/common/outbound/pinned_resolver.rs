@@ -73,27 +73,20 @@ impl AnchorPinnedResolver {
     /// itself, spread steady-state request load across already-open
     /// connections.
     fn addrs(&self) -> Vec<SocketAddr> {
-        let eps = get_roundrobin_store().ready_endpoints_for_port(&self.service_key, self.port);
-        if eps.is_empty() {
-            return Vec::new();
+        let mut addrs = get_roundrobin_store().ready_endpoints_for_port(&self.service_key, self.port);
+        addrs.retain(|address| {
+            crate::backends::validate_endpoint_backend_addr(
+                &pingora_core::protocols::l4::socket::SocketAddr::Inet(*address),
+                false,
+            )
+            .is_ok()
+        });
+        if addrs.is_empty() {
+            return addrs;
         }
-        let mut parsed: Vec<SocketAddr> = eps
-            .iter()
-            .filter_map(|endpoint| endpoint.parse().ok())
-            .filter(|address| {
-                crate::backends::validate_endpoint_backend_addr(
-                    &pingora_core::protocols::l4::socket::SocketAddr::Inet(*address),
-                    false,
-                )
-                .is_ok()
-            })
-            .collect();
-        if parsed.is_empty() {
-            return Vec::new();
-        }
-        let shift = self.cursor.fetch_add(1, Ordering::Relaxed) % parsed.len();
-        parsed.rotate_left(shift);
-        parsed
+        let shift = self.cursor.fetch_add(1, Ordering::Relaxed) % addrs.len();
+        addrs.rotate_left(shift);
+        addrs
     }
 
     #[cfg(test)]

@@ -3,6 +3,7 @@
 //! [`ResolvedTarget`] is the canonical target representation for the shared
 //! outbound-call engine.
 
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::backends::discovery::endpoint_slice::get_roundrobin_store;
@@ -62,9 +63,9 @@ impl ResolvedTarget {
     }
 }
 
-/// Round-robin one `"ip:port"` from `eps` and format `"{scheme}://{ep}"`.
+/// Round-robin one socket from `eps` and format `"{scheme}://{ep}"`.
 /// Returns `None` for an empty list. Pure (no global state) for testability.
-pub fn rr_pick(eps: &[String], cursor: &AtomicUsize, scheme: &str) -> Option<String> {
+pub fn rr_pick(eps: &[SocketAddr], cursor: &AtomicUsize, scheme: &str) -> Option<String> {
     if eps.is_empty() {
         return None;
     }

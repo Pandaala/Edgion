@@ -77,3 +77,25 @@ selector compilation moves, or reservation/activation ownership changes.
 
 - ARCH-020: provisional executable discovery state replaced by private pure geometry
   and final-only eager runtime materialization.
+
+## Numeric outbound endpoint facade (ARCH-021)
+
+`EpSliceStore::ready_endpoints_for_port` returns an owned numeric socket vector
+from one loaded generation, preserving readiness order and actual EndpointSlice
+serving ports for the checked Service port. Unexpected non-inet slots fail the
+whole collection closed. `target::rr_pick` formats only the selected socket
+at the URL boundary; `SocketAddr` Display supplies IPv6 brackets.
+`AnchorPinnedResolver` retains canonically safe sockets in that same vector before
+rotating it with its own cursor. An empty safe pool does not advance the cursor,
+and queried authority names remain ignored without DNS fallback.
+
+This removes pool-wide string formatting, reparsing and the second resolver
+vector while retaining O(N) discovery copying. No cache, borrowed-generation
+API, selector change or measured performance improvement is claimed. Relevant
+regressions are the facade inventory, outbound target/resolver and webhook runtime
+unit tests. Fresh targeted execution on 2026-10-12 passed 4 facade inventory,
+107 shared outbound and 45 webhook tests with serial test threads, using the same
+freshly compiled Gateway library test binary. Workspace checks and independent
+result review remain pending at this implementation checkpoint; full workspace
+tests, integrations and performance measurements were not run. Re-evaluate if
+facade representation, URL presentation, safety filtering or cursor ownership changes.

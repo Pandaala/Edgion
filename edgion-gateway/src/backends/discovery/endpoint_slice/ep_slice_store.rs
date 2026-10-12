@@ -3,6 +3,7 @@ use pingora_load_balancing::selection::{BackendSelection, RoundRobin};
 #[cfg(test)]
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
+use std::net::SocketAddr;
 use std::num::NonZeroU16;
 use std::sync::{Arc, LazyLock};
 
@@ -51,7 +52,7 @@ where
     /// The requested port identifies `ServicePort.port`; each returned socket
     /// retains the serving port compiled from the matching EndpointSlice
     /// section. Invalid or unavailable sections fail closed.
-    pub fn ready_endpoints_for_port(&self, service_key: &str, service_port: Option<i32>) -> Vec<String> {
+    pub fn ready_endpoints_for_port(&self, service_key: &str, service_port: Option<i32>) -> Vec<SocketAddr> {
         let Some(service_port) = service_port
             .and_then(|port| u16::try_from(port).ok())
             .and_then(NonZeroU16::new)
@@ -69,7 +70,7 @@ where
         section
             .ready_slots
             .iter()
-            .map(|slot| slot.backend.addr.as_inet().map(ToString::to_string))
+            .map(|slot| slot.backend.addr.as_inet().copied())
             .collect::<Option<Vec<_>>>()
             .unwrap_or_default()
     }

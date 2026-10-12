@@ -281,7 +281,10 @@ fn concurrent_rotation_preserves_weighted_quota() {
 fn rr_pick_rotates_and_handles_empty() {
     use std::sync::atomic::AtomicUsize;
     let cursor = AtomicUsize::new(0);
-    let eps = vec!["10.0.0.1:8080".to_string(), "[2001:db8::1]:8080".to_string()];
+    let eps = vec![
+        "10.0.0.1:8080".parse::<std::net::SocketAddr>().unwrap(),
+        "[2001:db8::1]:8080".parse::<std::net::SocketAddr>().unwrap(),
+    ];
 
     let a = super::rr_pick(&eps, &cursor, "http");
     let b = super::rr_pick(&eps, &cursor, "https");
@@ -290,8 +293,9 @@ fn rr_pick_rotates_and_handles_empty() {
     assert_eq!(b.as_deref(), Some("https://[2001:db8::1]:8080"));
     assert_eq!(c.as_deref(), Some("http://10.0.0.1:8080")); // wrapped around
 
-    let empty: Vec<String> = vec![];
+    let empty: Vec<std::net::SocketAddr> = vec![];
     assert_eq!(super::rr_pick(&empty, &cursor, "http"), None);
+    assert_eq!(cursor.load(std::sync::atomic::Ordering::Relaxed), 3);
 }
 
 /// `ResolvedTarget::Service` resolves from the global EpSliceStore.

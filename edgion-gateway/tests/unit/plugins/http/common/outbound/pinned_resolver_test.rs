@@ -106,6 +106,7 @@ async fn seeded_endpoints_are_pinned_and_rotate_regardless_of_queried_name() {
     add.insert(format!("{ns}/anchor-svc-eps1"), slice);
     get_roundrobin_store().update_data_only(add, HashMap::new(), &HashSet::new());
 
+    let independent_resolver = AnchorPinnedResolver::new(service_key.clone(), Some(8080));
     let resolver = AnchorPinnedResolver::new(service_key, Some(8080));
 
     let expected: HashSet<SocketAddr> = ["10.1.0.1:8080", "10.1.0.2:8080", "10.1.0.3:8080"]
@@ -138,6 +139,15 @@ async fn seeded_endpoints_are_pinned_and_rotate_regardless_of_queried_name() {
     let mut rotated_first = first.clone();
     rotated_first.rotate_left(1);
     assert_eq!(second, rotated_first, "rotation must advance by one position per call");
+    assert_eq!(resolver.cursor.load(Ordering::Relaxed), 2);
+    let independent: Vec<SocketAddr> = independent_resolver
+        .resolve(Name::from_str("independent-name.example").unwrap())
+        .await
+        .unwrap()
+        .collect();
+    assert_eq!(independent, first, "each resolver must own an independent cursor");
+    assert_eq!(independent_resolver.cursor.load(Ordering::Relaxed), 1);
+    assert_eq!(resolver.cursor.load(Ordering::Relaxed), 2);
 }
 
 #[tokio::test]

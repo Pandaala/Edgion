@@ -104,8 +104,8 @@ fn service_port_selects_its_canonical_serving_port_not_a_sibling_number() {
     let store = EpSliceStore::<RoundRobin>::new(coordinator);
 
     let endpoints = store.ready_endpoints_for_port("default/backend", Some(443));
-    assert_eq!(endpoints, ["10.0.0.1:8443"]);
-    assert!(!endpoints.iter().any(|endpoint| endpoint.ends_with(":443")));
+    assert_eq!(endpoints, ["10.0.0.1:8443".parse::<SocketAddr>().unwrap()]);
+    assert!(!endpoints.iter().any(|endpoint| endpoint.port() == 443));
 }
 
 #[test]
@@ -124,7 +124,7 @@ fn service_port_lookup_filters_readiness_formats_ips_and_refreshes_generation() 
     let store = EpSliceStore::<RoundRobin>::new(Arc::clone(&coordinator));
     assert_eq!(
         store.ready_endpoints_for_port("default/backend", Some(443)),
-        ["10.0.0.1:8443"]
+        ["10.0.0.1:8443".parse::<SocketAddr>().unwrap()]
     );
 
     coordinator.replace_endpoint_slices(&HashMap::from([(
@@ -139,7 +139,7 @@ fn service_port_lookup_filters_readiness_formats_ips_and_refreshes_generation() 
 
     assert_eq!(
         store.ready_endpoints_for_port("default/backend", Some(443)),
-        ["[2001:db8::1]:9443"]
+        ["[2001:db8::1]:9443".parse::<SocketAddr>().unwrap()]
     );
 
     coordinator.replace_endpoint_slices(&HashMap::from([(

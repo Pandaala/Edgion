@@ -9,9 +9,10 @@ knowledge_type: superseded
 > (`docs/superpowers/specs/2026-06-20-linksys-webhook-endpoint-decouple-design.md`).
 > Both `extract_ready_ips` and `resolve_endpoints` no longer exist in
 > `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs`.
-> IPv6 bracketing is now handled uniformly by the gateway-side
-> `EpSliceStore::ready_endpoints_for_port`
-> (`edgion-gateway/src/backends/discovery/endpoint_slice/ep_slice_store.rs`).
+> Gateway discovery now returns numeric sockets through
+> `EpSliceStore::ready_endpoints_for_port`. IPv6 URL brackets are supplied by
+> `SocketAddr` Display in `target::rr_pick`
+> (`edgion-gateway/src/plugins/http/common/outbound/target.rs`; ARCH-021).
 > The original finding text is preserved below for historical reference.
 
 # LinkSys webhook `extract_ready_ips` IPv6 bracketing (link-sys-F001, controller path)
@@ -22,6 +23,6 @@ When reviewing LinkSys webhook-service endpoint findings of the form "`extract_r
 
 `extract_ready_ips` and `resolve_endpoints` no longer exist — the entire controller-side webhook
 endpoint injection path was removed by the 2026-06-20 endpoint-decouple refactor. If a suspected
-IPv6 bracketing gap is found, look at `EpSliceStore::ready_endpoints_for_port`
-(`edgion-gateway/src/backends/discovery/endpoint_slice/ep_slice_store.rs`), which now handles
-IPv6 bracketing uniformly for all gateway endpoint consumers.
+IPv6 bracketing gap is found, inspect the selected-socket URL formatting in
+`target::rr_pick` (`edgion-gateway/src/plugins/http/common/outbound/target.rs`).
+The discovery facade retains numeric sockets; URL consumers own presentation.
