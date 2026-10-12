@@ -15,3 +15,8 @@
 !edgion-tests/wasm/
 !edgion-tests/wasm/artifacts/
 !edgion-tests/wasm/artifacts/header_demo.wasm
+
+!edgion-waf/
+!edgion-waf/licenses/
+!edgion-waf/licenses/*.txt
+!edgion-waf/INJECTION.md

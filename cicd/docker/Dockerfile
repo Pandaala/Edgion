@@ -206,6 +206,10 @@ EXPOSE 80 443 10080 10443 18443 19000 19002 19010 12151 12101
 ENTRYPOINT ["/bin/sh", "-c"]
 CMD ["while true; do /usr/local/edgion/${BINARY}; echo '[edgion] process exited, restarting in 1s...'; sleep 1; done"]
 
+# Preserve the native WAF attribution in the final image.
+COPY edgion-waf/licenses/ /usr/share/doc/edgion/waf/licenses/
+COPY edgion-waf/INJECTION.md /usr/share/doc/edgion/waf/INJECTION.md
+
 # Labels
 LABEL maintainer="Edgion Team"
 LABEL org.opencontainers.image.source="https://github.com/Pandaala/Edgion"

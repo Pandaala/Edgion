@@ -92,6 +92,14 @@ jobs:
         # root Cargo.toml). Output lands in target/<triple>/production/.
         run: cargo build --locked --profile production -p edgion-gateway -p edgion-controller -p edgion-cli --bin edgion-gateway --bin edgion-controller --bin edgion-cli --target ${{ matrix.target }}
 
+      - name: Include and verify WAF notices
+        run: |
+          bundle=target/${{ matrix.target }}/production
+          mkdir -p "$bundle/waf/licenses"
+          cp edgion-waf/INJECTION.md "$bundle/waf/INJECTION.md"
+          cp edgion-waf/licenses/*.txt "$bundle/waf/licenses/"
+          python3 cicd/checks/check_waf_distribution_notices.py --directory "$bundle" --prefix waf
+
       - name: Upload binary artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -100,6 +108,7 @@ jobs:
             target/${{ matrix.target }}/production/edgion-gateway
             target/${{ matrix.target }}/production/edgion-controller
             target/${{ matrix.target }}/production/edgion-cli
+            target/${{ matrix.target }}/production/waf/
 
   build-and-push-images:
     needs: build-binaries
@@ -140,19 +149,25 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Build, verify notices, and push
+        shell: bash
         run: |
           for binary in gateway controller; do
-            docker buildx build \
-              --file ./cicd/docker/Dockerfile.runtime \
-              --build-arg BINARY=$binary \
-              --build-arg BINARY_PATH=target/${{ matrix.target }}/production \
-              --platform linux/${{ matrix.arch }} \
-              --push \
-              -t ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/edgion-$binary:${{ github.ref_name }}_${{ matrix.arch }} \
-              --cache-from type=gha \
-              --cache-to type=gha,mode=max \
-              .
+            image=${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/edgion-$binary:${{ github.ref_name }}_${{ matrix.arch }}
+            build_args=(
+              --file ./cicd/docker/Dockerfile.runtime
+              --build-arg "BINARY=$binary"
+              --build-arg "BINARY_PATH=target/${{ matrix.target }}/production"
+              --platform "linux/${{ matrix.arch }}"
+              -t "$image"
+              --cache-from type=gha
+              --cache-to type=gha,mode=max
+            )
+            docker buildx build "${build_args[@]}" --load .
+            python3 cicd/checks/check_waf_distribution_notices.py --image "$image"
+            # Keep the registry exporter and its provenance attestations. The
+            # second solve reuses the layers checked above through BuildKit cache.
+            docker buildx build "${build_args[@]}" --push .
           done
 
   create-release:

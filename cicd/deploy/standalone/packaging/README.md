@@ -186,3 +186,8 @@ Data/log deletion is a separate operator action on named paths after backup.
 Package hooks never apply sysctls, PAM limits, container-runtime limits, or
 unrelated service policy. [Optional shared tuning](../../linux-tuning/README.md)
 ships only as inert documentation.
+
+Gateway packages include native WAF provenance and complete third-party license
+texts in `/usr/share/doc/edgion-gateway/waf/`. See
+[`edgion-waf/INJECTION.md`](../../../../edgion-waf/INJECTION.md) for pinned
+sources and artifact verification commands.

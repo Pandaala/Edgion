@@ -34,6 +34,34 @@ prevent overflow from becoming an apparently valid smaller usage/cost result.
 
 - `test-05` — 2026-08-09.
 
+## Shared AI JSON syntax whitespace
+
+The shared offset-reporting parser `ai/protocols/json_span.rs::Parser::ws`
+accepts only space, horizontal tab, line feed and carriage return, as specified
+by [RFC 8259 section 2](https://www.rfc-editor.org/rfc/rfc8259.html#section-2).
+This rule applies to both eager and offset-only parsing. Escaped `\f` inside a
+JSON string remains valid, with the original quoted token offsets preserved.
+
+ARCH-010 corrected the use of general ASCII whitespace, which includes form
+feed. In the canonical Chat SSE path, `SseEventRef::semantic_data` retains that
+valid UTF-8 byte and `observe_event` delegates to the shared parser. An invalid
+JSON usage envelope now takes the existing default observation path and cannot
+contribute reported counters or semantic fragments. Raw SSE bytes remain intact.
+This is distinct from invalid UTF-8 poisoning an SSE event; the decoder's
+malformed-event tolerance and quota termination gates remain unchanged.
+
+Mirrored parser tests cover form feed before, within and after a document in
+both modes, all four legal whitespace bytes, and escaped form-feed decoding and
+offsets. The canonical SSE regression drives the real decoder and observer,
+asserting empty usage/semantic observation, one unpoisoned event and exact raw
+bytes. These tests define the acceptance boundary; fresh execution results belong
+to the [implementation task](../../../../tasks/pending/architecture-json-span-whitespace/02-implementation.md).
+This correction makes no quota-bypass, provider-conformance or complete strict
+validation claim; offset-only unselected-string validation is outside its scope.
+Re-evaluate if the whitespace helper or parsing-mode ownership changes.
+
+- `ARCH-010` — shared JSON whitespace correction, 2026-10-12.
+
 ## Native Responses distinction
 
 Responses advances the watermark only with reliable typed-terminal provider output totals.

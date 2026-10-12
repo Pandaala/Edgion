@@ -11,6 +11,25 @@ fn observe(raw: &'static [u8]) -> CanonicalEventObservation {
 }
 
 #[test]
+fn form_feed_in_json_syntax_cannot_report_usage_and_preserves_raw_sse() {
+    let raw = b"data: {\"usage\":\x0c{\"prompt_tokens\":7,\"completion_tokens\":9}}\n\n";
+    let mut decoder = SseDecoder::with_default_limit();
+    let mut events = 0;
+    decoder.feed_each_bytes(Bytes::from_static(raw), |event| {
+        events += 1;
+        assert_eq!(event.raw().to_bytes().as_ref(), raw);
+        let observed = observe_canonical_event(&event);
+        assert_eq!(observed.usage, CanonicalUsageObservation::default());
+        assert_eq!(observed.output_units, 0);
+        assert!(observed.fragments.is_empty());
+        assert!(!observed.semantic_available);
+    });
+    assert_eq!(events, 1);
+    assert!(!decoder.malformed());
+    assert_eq!(decoder.malformed_events(), 0);
+}
+
+#[test]
 fn one_pass_observation_reports_usage_and_all_semantic_tokens() {
     let observed = observe(b"data: {\"choices\":[{\"index\":2,\"delta\":{\"content\":\"a\\\\u00e9\",\"reasoning_content\":\"r\",\"tool_calls\":[{\"index\":3,\"function\":{\"arguments\":\"{}\"}}]}}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":9,\"prompt_tokens_details\":{\"cached_tokens\":2}}}\n\n");
     assert!(observed.semantic_available);

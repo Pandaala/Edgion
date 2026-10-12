@@ -54,6 +54,10 @@ EXPOSE 80 443 12100 12101 12151
 
 ENTRYPOINT ["/usr/local/bin/controller-gateway-entrypoint.sh"]
 
+# Preserve the native WAF attribution in the final image.
+COPY edgion-waf/licenses/ /usr/share/doc/edgion/waf/licenses/
+COPY edgion-waf/INJECTION.md /usr/share/doc/edgion/waf/INJECTION.md
+
 # Labels
 LABEL maintainer="Edgion Team"
 LABEL org.opencontainers.image.source="https://github.com/Pandaala/Edgion"

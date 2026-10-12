@@ -41,3 +41,8 @@ docker run --rm --platform "linux/$arch" \
         rustc --version > /artifacts/rust-version.txt
         rpm -q glibc > /artifacts/build-libc.txt
     '
+
+mkdir -p "$output/waf/licenses"
+cp "$repo_root/edgion-waf/INJECTION.md" "$output/waf/INJECTION.md"
+cp "$repo_root/edgion-waf/licenses/"*.txt "$output/waf/licenses/"
+python3 "$repo_root/cicd/checks/check_waf_distribution_notices.py" --directory "$output" --prefix waf

@@ -111,6 +111,11 @@ def manifest(stage, name, format_name, args, metadata):
     contents = [content(stage, args.binaries / name, f"/usr/bin/{name}", 0o755),
                 content(stage, ROOT / "LICENSE", f"/usr/share/doc/{name}/LICENSE"),
                 content(stage, PACKAGING / "README.md", f"/usr/share/doc/{name}/packaging.md")]
+    if name == "edgion-gateway":
+        waf = ROOT / "edgion-waf"
+        contents.append(content(stage, waf / "INJECTION.md", f"/usr/share/doc/{name}/waf/INJECTION.md"))
+        for source in sorted((waf / "licenses").glob("*.txt")):
+            contents.append(content(stage, source, f"/usr/share/doc/{name}/waf/licenses/{source.name}"))
     if name != "edgion-cli":
         role = name.removeprefix("edgion-")
         config_group = "root" if format_name == "deb" else name

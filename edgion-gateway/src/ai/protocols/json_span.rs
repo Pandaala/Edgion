@@ -264,7 +264,11 @@ impl<'a> Parser<'a> {
     }
 
     fn ws(&mut self) {
-        while self.input.get(self.offset).is_some_and(u8::is_ascii_whitespace) {
+        while self
+            .input
+            .get(self.offset)
+            .is_some_and(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))
+        {
             self.offset += 1;
         }
     }
@@ -282,3 +286,7 @@ impl<'a> Parser<'a> {
 pub(crate) fn decode_json_string(token: &[u8]) -> Option<String> {
     serde_json::from_slice::<String>(token).ok()
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/ai/protocols/json_span_test.rs"]
+mod tests;

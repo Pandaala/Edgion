@@ -21,3 +21,8 @@
 !cicd/
 !cicd/docker/
 !cicd/docker/controller-gateway-entrypoint.sh
+
+!edgion-waf/
+!edgion-waf/licenses/
+!edgion-waf/licenses/*.txt
+!edgion-waf/INJECTION.md

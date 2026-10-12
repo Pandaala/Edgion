@@ -73,3 +73,7 @@ LICENSE-*
 *.bak
 *.backup
 *.old
+
+# Native WAF attribution is shipped in the final image.
+!edgion-waf/licenses/*.txt
+!edgion-waf/INJECTION.md

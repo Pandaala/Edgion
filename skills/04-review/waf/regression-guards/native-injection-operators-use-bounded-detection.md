@@ -54,8 +54,10 @@ Hyperscan and VectorScan remain a separate investigation. The work charge is a
 bounded accounting model, not a CPU instruction or wall-clock limit. The
 4 MiB cap can reject a selected value even if a surrounding request limit is
 larger. The selected production profile is narrower than full CRS coverage.
-Third-party notice inclusion in binary distribution remains tracked in
-`tasks/todo/waf-third-party-license-distribution.md`.
+Third-party notices and pinned provenance are shipped with container images,
+Gateway DEB/RPM packages, and binary artifact directories. Distribution locations
+and the byte-comparison check are documented in `edgion-waf/INJECTION.md`.
+Edgion's project license does not replace the retained upstream licenses.
 
 ## Verification and re-evaluation
 
@@ -76,7 +78,18 @@ The later high-byte and cumulative-work corrections have targeted tokenizer,
 public transaction, and multi-rule/phase/chain tests; the historical counts
 above predate those corrections.
 
+Notice-distribution verification on 2026-10-12 built the runtime and combined
+images using existing Linux binaries and compared their shipped notice bytes.
+Representative Gateway DEB/RPM packages built through the current nFPM manifest
+also contained matching notices. Directory/archive checks passed and missing or
+modified notices were rejected. These packaging checks do not establish fresh
+detector behavior, Rocky 9 ELF compatibility, or package lifecycle acceptance;
+the existing smoke binaries did not satisfy the Rocky 9 glibc baseline. Release
+CI checks actual images before push and extracted Gateway packages before upload.
+
 ## Resolution references
 
 - `waf-sqli-xss-rule-operators`: added native, bounded SQLi and XSS operators
   with strict compilation and Gateway acceptance on 2026-09-24.
+- `waf-third-party-license-distribution`: retained upstream attribution is now
+  included in the supported packaging paths, with artifact-content checks.

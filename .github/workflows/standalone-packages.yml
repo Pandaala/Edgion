@@ -28,6 +28,21 @@ jobs:
               --output tmp/standalone-packaging/packages
           done
 
+      - name: Verify notices in built Gateway packages
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm2cpio cpio
+          for package in tmp/standalone-packaging/packages/edgion-gateway*.deb tmp/standalone-packaging/packages/edgion-gateway*.rpm; do
+            extracted=$(mktemp -d)
+            case "$package" in
+              *.deb) dpkg-deb --extract "$package" "$extracted" ;;
+              *.rpm) rpm2cpio "$package" | (cd "$extracted" && cpio -idm --quiet) ;;
+            esac
+            python3 cicd/checks/check_waf_distribution_notices.py --directory "$extracted" --prefix usr/share/doc/edgion-gateway/waf
+            rm -rf "$extracted"
+          done
+
       - name: Verify Debian, Ubuntu and Rocky package lifecycles
         run: |
           cicd/deploy/standalone/tests/run-arm64.sh \
