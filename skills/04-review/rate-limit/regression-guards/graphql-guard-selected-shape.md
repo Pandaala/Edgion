@@ -87,3 +87,14 @@ mode-hot-reload and canonical quota/header tests.
 Guard optional SDL costing shares the canonical strict standard metadata compiler
 with GraphqlRateLimit. Accepted deprecated/specifiedBy metadata grants no root
 permission, cost exception or executable directive support.
+
+## Canonical body admission freeze
+
+Successful canonical GraphQL evaluation now calls the existing RequestBodyState
+mutation freeze, preserving the inspected body and propagating refusal to a
+subsequently installed bodyless replay owner. Guard measure mode also freezes
+a successfully inspected body. Failed or skipped evaluation does not freeze.
+Later body mutation through DSL/ProxyRewrite/Wasm or REST adaptation is refused;
+multiple adapters before inspection remain allowed. Query/URI/method/header
+changes still require the documented trusted-chain ordering. See the
+[adapter/body ownership contract](../../http-body/regression-guards/rest-to-graphql-request-adaptation.md).

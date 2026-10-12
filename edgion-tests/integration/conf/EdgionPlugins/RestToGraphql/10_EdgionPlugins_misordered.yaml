@@ -1,0 +1,23 @@
+{
+  "apiVersion": "edgion.io/v1",
+  "kind": "EdgionPlugins",
+  "metadata": {
+    "name": "rest-graphql-misordered",
+    "namespace": "edgion-default"
+  },
+  "spec": {
+    "requestPlugins": [
+      {
+        "type": "GraphqlGuard",
+        "config": {}
+      },
+      {
+        "type": "RestToGraphql",
+        "config": {
+          "query": "{ping}",
+          "path": "/webhook/resolve"
+        }
+      }
+    ]
+  }
+}

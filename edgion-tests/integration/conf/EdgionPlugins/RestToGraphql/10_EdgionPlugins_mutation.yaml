@@ -1,0 +1,25 @@
+{
+  "apiVersion": "edgion.io/v1",
+  "kind": "EdgionPlugins",
+  "metadata": {
+    "name": "rest-graphql-mutation",
+    "namespace": "edgion-default"
+  },
+  "spec": {
+    "requestPlugins": [
+      {
+        "type": "ProxyRewrite",
+        "config": {
+          "method": "POST"
+        }
+      },
+      {
+        "type": "RestToGraphql",
+        "config": {
+          "query": "mutation Write{write}",
+          "path": "/webhook/resolve"
+        }
+      }
+    ]
+  }
+}

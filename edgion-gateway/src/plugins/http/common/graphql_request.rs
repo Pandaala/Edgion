@@ -73,6 +73,20 @@ pub(crate) fn record_cost(session: &mut dyn PluginSession, log: &mut PluginLog, 
     }
 }
 
+/// Shared protocol boundary for GraphQL inspection and request adaptation.
+pub(crate) fn unsupported_protocol(session: &dyn PluginSession) -> bool {
+    let ctx = session.ctx();
+    ctx.request_info.is_grpc_request
+        || ctx.is_grpc_route_matched
+        || matches!(
+            ctx.request_info.discover_protocol.as_deref(),
+            Some("grpc-web" | "websocket")
+        )
+        || ctx.has_request_body_stream_handlers()
+        || ctx.grpc_transcoding.is_some()
+        || session.request_header_map().contains_key(http::header::UPGRADE)
+}
+
 pub(crate) async fn evaluate<T, F>(
     session: &mut dyn PluginSession,
     log: &mut PluginLog,
@@ -87,16 +101,7 @@ where
         log.push_err("invalid request stage");
         return Err(reject(session, 500));
     }
-    if ctx.request_info.is_grpc_request
-        || ctx.is_grpc_route_matched
-        || matches!(
-            ctx.request_info.discover_protocol.as_deref(),
-            Some("grpc-web" | "websocket")
-        )
-        || ctx.has_request_body_stream_handlers()
-        || ctx.grpc_transcoding.is_some()
-        || session.request_header_map().contains_key(http::header::UPGRADE)
-    {
+    if unsupported_protocol(session) {
         log.push("deny protocol");
         return Err(reject(session, 400));
     }
@@ -164,7 +169,10 @@ where
         })
     };
     match result {
-        Ok(Ok(value)) => Ok(value),
+        Ok(Ok(value)) => {
+            session.ctx().request_body.freeze_mutation();
+            Ok(value)
+        }
         Ok(Err(GraphqlError::TooLarge)) => {
             session.record_error(EdgionErrorCode::BodyReadTooLarge);
             log.push("deny envelope cap");

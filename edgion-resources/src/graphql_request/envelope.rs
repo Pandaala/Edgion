@@ -41,7 +41,7 @@ fn strict_json(bytes: &[u8]) -> Result<Value, GraphqlError> {
         .map(|p| p.into_value())
         .map_err(|_| GraphqlError::Invalid)
 }
-fn decode(source: &str, remaining: &mut usize) -> Result<String, GraphqlError> {
+pub(crate) fn decode(source: &str, remaining: &mut usize) -> Result<String, GraphqlError> {
     let source = source.as_bytes();
     let mut result = Vec::new();
     let mut i = 0;

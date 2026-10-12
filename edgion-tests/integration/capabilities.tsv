@@ -24,3 +24,5 @@ suite	EdgionBackend/Messages	body-buffering
 dynamic	AiMessagesBinding	body-buffering
 suite	EdgionPlugins/GraphqlOperationRouter	body-buffering
 dynamic	GraphqlOperationRouterDynamic	body-buffering
+suite	EdgionPlugins/RestToGraphql	body-buffering
+dynamic	RestToGraphqlDynamic	body-buffering

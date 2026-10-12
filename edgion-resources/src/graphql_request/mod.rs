@@ -1,6 +1,8 @@
 //! Canonical bounded GraphQL parsing and verified operation selection.
 
-mod envelope;
+pub(crate) mod envelope;
+mod input_type;
+pub(crate) use input_type::TypeRef;
 mod guard;
 mod safelist;
 mod selection;

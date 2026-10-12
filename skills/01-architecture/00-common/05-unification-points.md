@@ -299,7 +299,7 @@ denied. See [HTTP DNS endpoint policy](../../04-review/ssrf/regression-guards/ht
 - **Canon**: `edgion-resources/src/common/key_accessor.rs`. Used by 10+
   plugin configs (key_auth, rate_limit, rate_limit_redis, ctx_set,
   region_route, direct_endpoint, dynamic_*_upstream, conditions, ...).
-- **Contract**: nine local variants (includes `RequestPath` after S12); one synchronous `key_get`; no I/O.
+- **Contract**: twelve local variants; one synchronous `key_get`; no I/O.
   Outbound resolution is the `WebhookKeyGet` plugin writing `KeyGet::Ctx`.
 - **Rule**: any new "take a key from header/query/cookie/path/..." field
   MUST reuse `KeyGet` — never a plugin-local source enum. A new outbound

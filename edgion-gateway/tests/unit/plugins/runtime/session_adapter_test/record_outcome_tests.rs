@@ -190,6 +190,30 @@ pub(crate) async fn test_session() -> Session {
 }
 
 #[tokio::test]
+async fn graphql_bodyless_get_inspection_freezes_future_replay_owner() {
+    use crate::plugins::http::common::graphql_request;
+    let _lock = graphql_request::EVALUATION_TEST_LOCK.lock().await;
+    let mut session = test_session().await;
+    let mut ctx = EdgionHttpContext::default();
+    ctx.request_info.body_declared = Some(false);
+    ctx.request_info.in_request_body_stage = true;
+    let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+    adapter.set_request_query("query=%7Bping%7D").unwrap();
+    assert!(
+        graphql_request::evaluate(&mut adapter, &mut PluginLog::new("GraphqlGuard"), 65536, |_| Ok(()))
+            .await
+            .is_ok()
+    );
+    assert!(!adapter.ctx().request_body.has_cached_body());
+    assert_eq!(
+        adapter
+            .overwrite_request_body(Bytes::from_static(br#"{"query":"{pong}"}"#))
+            .await,
+        Err(BodyReadError::GenerationConflict)
+    );
+}
+
+#[tokio::test]
 async fn response_condition_source_allocation_inventory() {
     use crate::ctx::{ClientCertInfo, NormalizedHostname};
     use crate::plugins::runtime::conditions::{extract_jwt_claim_values, extract_mtls_values, MtlsField, SanType};

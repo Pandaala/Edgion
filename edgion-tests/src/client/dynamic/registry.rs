@@ -5,6 +5,7 @@ use crate::dynamic::scenario::Scenario;
 /// All registered dynamic scenarios.
 pub fn all() -> Vec<&'static Scenario> {
     vec![
+        crate::dynamic::scenarios::rest_to_graphql::SCENARIO,
         crate::dynamic::scenarios::ai_messages_binding::SCENARIO,
         crate::dynamic::scenarios::grpc_json_transcoder::SCENARIO,
         crate::dynamic::scenarios::graphql_rate_limit::SCENARIO,

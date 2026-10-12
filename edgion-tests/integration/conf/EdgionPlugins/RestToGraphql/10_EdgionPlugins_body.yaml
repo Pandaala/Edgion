@@ -1,0 +1,32 @@
+{
+  "apiVersion": "edgion.io/v1",
+  "kind": "EdgionPlugins",
+  "metadata": {
+    "name": "rest-graphql-body",
+    "namespace": "edgion-default"
+  },
+  "spec": {
+    "requestPlugins": [
+      {
+        "type": "RestToGraphql",
+        "config": {
+          "query": "mutation Create($input:CreateInput!,$flag:Boolean!){create(input:$input,flag:$flag){id}}",
+          "path": "/webhook/resolve",
+          "variables": [
+            {
+              "name": "input",
+              "bodyPointer": "/payload"
+            },
+            {
+              "name": "flag",
+              "from": {
+                "type": "header",
+                "name": "X-Flag"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

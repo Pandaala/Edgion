@@ -178,3 +178,6 @@ mod graphql_guard;
 mod graphql_safelist;
 pub use graphql_guard::{GraphqlGuardDynamicSuite, GraphqlGuardTestSuite};
 pub use graphql_safelist::{GraphqlSafelistDynamicSuite, GraphqlSafelistTestSuite};
+
+mod rest_to_graphql;
+pub use rest_to_graphql::{RestToGraphqlDynamicSuite, RestToGraphqlTestSuite};

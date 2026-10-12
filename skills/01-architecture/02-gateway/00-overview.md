@@ -289,6 +289,18 @@ relative extension extendees are rejected; supplied reserved field shapes are ch
 against the trusted schema. HTTP annotation descendants consume the cold depth/node
 budget. The operator guide describes these descriptor restrictions.
 
+## HTTPRoute REST-to-GraphQL adaptation
+
+RestToGraphql runs after HTTPRoute matching and before executed GraphQL consumers.
+It reuses KeyGet/CtxSet, strict JSON/JSON Pointer compilation, shared TypeRef parsing,
+BodyStorage/replay, GraphQL frontend admission and upstream framing. A pre-plugin
+method snapshot preserves GET mutation restrictions. Successful GraphQL evaluation
+freezes the canonical body owner, including future bodyless storage. It rejects late
+adapter/body writes without new context flags; other mutation surfaces remain trusted-chain
+responsibility. Multiple adaptations before final inspection are allowed. No backend
+publisher, route table or response owner is added. See the
+[operator contract](../../../docs/en/user-guide/http-route/filters/edgion-plugins/rest-to-graphql.md).
+
 ## HTTPRoute GraphQL operation routing
 
 GraphqlOperationRouter selects a declared Service backend inside an already

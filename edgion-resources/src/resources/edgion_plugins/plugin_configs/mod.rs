@@ -23,6 +23,11 @@ pub mod geo_rule;
 mod geoip_location;
 mod graphql_operation_router;
 mod graphql_rate_limit;
+mod rest_to_graphql;
+pub use rest_to_graphql::{
+    validate_rest_query, CompiledRestToGraphql, GraphqlVariableBinding, GraphqlVariableFormat, RestToGraphqlConfig,
+    REST_GRAPHQL_MAX_VALUE_BYTES,
+};
 mod guardrail;
 mod header_cert_auth;
 mod hmac_auth;

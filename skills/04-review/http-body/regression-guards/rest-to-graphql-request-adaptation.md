@@ -1,0 +1,63 @@
+---
+name: rest-to-graphql-request-adaptation
+description: Verify static GraphQL adaptation, canonical KeyGet/body replay and original-method/inspection ordering.
+knowledge_type: regression-guards
+---
+
+# REST-to-GraphQL request adaptation
+
+RestToGraphql is a request-stage adapter attached through existing HTTPRoute and
+EdgionPlugins mechanisms. It introduces no path matcher, routing table, backend
+publisher, GraphQL-specific KeySet target, variable cache or response owner.
+Canonical KeyGet supplies local values; CtxSet/DSL prepare complex values.
+Native body bindings reuse strict JSON and ProxyRewrite's compiled JSON pointers.
+The cost compiler and adapter share canonical TypeRef parsing.
+
+Snapshot the original Method before plugins. A live method rewritten from GET to
+POST cannot authorize mutation, and an original physical GET body rejects.
+Successful canonical GraphQL evaluation freezes mutation through the existing
+RequestBodyState owner, which propagates to future bodyless storage. Every
+adapter must publish through this owner; a late adapter therefore fails closed.
+No GraphQL execution flags are added to EdgionHttpContext. Multiple adapters
+before final inspection are allowed. Failed/skipped consumers do not freeze.
+The freeze also applies to subsequent DSL/ProxyRewrite/Wasm body mutations,
+enforcing the existing documented rewrites-before-inspection contract. It is
+body-only; query/URI/method/header mutations retain trusted-chain restrictions.
+
+Query KeyGet observes the entry query. Strict preflight checks encoded length,
+percent/UTF-8 validity and decoded duplicates before information-losing lookup.
+Mapped header duplicates/non-UTF-8 values reject before KeyGet reads. Every
+nonempty logical body requires supported JSON media/identity encoding and strict
+parsing, even when ignored. No body-backed KeyGet I/O variant is introduced.
+
+Missing nullable/defaulted variables are omitted, preserving defaults. Explicit
+null remains distinct and rejects non-null wrappers. Builtin scalar and bounded
+list types are checked; custom SDL/default-literal semantics remain the upstream's
+responsibility. All selected variable wrappers enforce the same eight-level bound,
+including optional/defaulted variables without mappings. Per-value, binding,
+input and final-envelope caps are independent; the complete generated envelope
+is checked by the canonical frontend before mutation. CappedWriter prevents an
+oversized serialized output allocation. Four shared nonwaiting permits bound
+construction; parsed owners and permits are dropped before publication.
+
+Publish only through canonical BodyStorage/replay, method/URI/header mutations.
+Consume REST query parameters. Upstream framing owns Content-Length and removes
+Transfer-Encoding on each attempt. Any publication failure terminates before
+upstream work; rollback is not a reason to continue with a partial request.
+Use fixed GraphQL errors and static log decisions, never reflect query/variables
+or runtime error text. Main upstream responses continue streaming.
+
+Sources and focused tests:
+
+- [Shared config and binding compiler](../../../../edgion-resources/src/resources/edgion_plugins/plugin_configs/rest_to_graphql.rs)
+- [Adapter runtime](../../../../edgion-gateway/src/plugins/http/rest_to_graphql/mod.rs)
+- [Resources tests](../../../../edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/rest_to_graphql_test.rs)
+- [Gateway tests](../../../../edgion-gateway/tests/unit/plugins/http/rest_to_graphql/mod_test.rs)
+- [Shared static/dynamic probes](../../../../edgion-tests/src/client/suites/edgion_plugins/rest_to_graphql/mod.rs)
+- [Current verification record](../../../../tasks/pending/rest-to-graphql/rest-to-graphql.md)
+
+Re-evaluate source timing, accessor contracts, method snapshots, canonical body-freeze ownership,
+custom input validation, bound changes, body publication/framing and hot reload
+against fresh tests. The implementation plan passed independent review; final
+delivery verification remains in progress in the linked task. This page is not
+substitute evidence for a successful live run.

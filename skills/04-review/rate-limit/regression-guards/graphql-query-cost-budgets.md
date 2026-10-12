@@ -166,3 +166,14 @@ Total and active root capacity checks precede all Redis work. Absent roots skip
 identity resolution and debit. Total is checked first, followed by roots in order;
 later denial retains earlier total debit. Numeric cost visibility is not a debit
 receipt. See [named quota ownership](redis-named-quotas.md).
+
+## Canonical body admission freeze
+
+Successful canonical GraphQL evaluation now calls the existing RequestBodyState
+mutation freeze, preserving the inspected body and propagating refusal to a
+subsequently installed bodyless replay owner. Guard measure mode also freezes
+a successfully inspected body. Failed or skipped evaluation does not freeze.
+Later body mutation through DSL/ProxyRewrite/Wasm or REST adaptation is refused;
+multiple adapters before inspection remain allowed. Query/URI/method/header
+changes still require the documented trusted-chain ordering. See the
+[adapter/body ownership contract](../../http-body/regression-guards/rest-to-graphql-request-adaptation.md).

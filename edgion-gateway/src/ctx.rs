@@ -1081,6 +1081,9 @@ pub struct RequestInfo {
     /// run the plugin without one".
     #[serde(skip)]
     pub body_declared: Option<bool>,
+    /// Original client method, frozen before any plugin rewrite.
+    #[serde(skip)]
+    pub(crate) original_method: Option<http::Method>,
     /// Whether the request is currently within the request-processing stage,
     /// where the client body (if any) has not yet been proxied upstream.
     ///

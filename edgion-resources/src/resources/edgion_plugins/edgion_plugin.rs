@@ -1,5 +1,6 @@
 //! Gateway API standard edgion_plugins and custom Edgion edgion_plugins
 
+use super::plugin_configs::RestToGraphqlConfig;
 use edgion_dsl::bytecode::BuiltinId;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -106,6 +107,7 @@ pub enum EdgionPlugin {
     /// Validate a bounded JSON request body against an inline JSON Schema.
     JsonSchemaValidation(JsonSchemaValidationConfig),
     /// Schema-aware GraphQL query-cost budgets using the canonical Redis limiter.
+    RestToGraphql(RestToGraphqlConfig),
     GraphqlGuard(GraphqlGuardConfig),
     GraphqlSafelist(GraphqlSafelistConfig),
     GraphqlRateLimit(GraphqlRateLimitConfig),
@@ -209,6 +211,7 @@ impl EdgionPlugin {
             | Self::RequestRestriction(_)
             | Self::RequestBodyBuffer(_)
             | Self::JsonSchemaValidation(_)
+            | Self::RestToGraphql(_)
             | Self::GraphqlGuard(_)
             | Self::GraphqlSafelist(_)
             | Self::GraphqlRateLimit(_)
@@ -286,7 +289,11 @@ impl EdgionPlugin {
                 max_body_size: Some(DEFAULT_INSTANCE_MAX_BYTES.to_string()),
                 ..BodyRequirement::fail_close()
             }),
-            GraphqlGuard(_) | GraphqlSafelist(_) | GraphqlRateLimit(_) | GraphqlOperationRouter(_)
+            RestToGraphql(_)
+            | GraphqlGuard(_)
+            | GraphqlSafelist(_)
+            | GraphqlRateLimit(_)
+            | GraphqlOperationRouter(_)
                 if stage == BodyStage::Request =>
             {
                 Some(BodyRequirement {
@@ -353,6 +360,7 @@ impl EdgionPlugin {
             | RequestBodyBuffer(_)
             | GrpcJsonTranscoder(_)
             | JsonSchemaValidation(_)
+            | RestToGraphql(_)
             | GraphqlGuard(_)
             | GraphqlSafelist(_)
             | GraphqlRateLimit(_)
@@ -403,7 +411,8 @@ impl EdgionPlugin {
     pub fn structured_body_validation_errors(&self, body: &super::BodyRequirement) -> Vec<String> {
         if matches!(
             self,
-            Self::GraphqlGuard(_)
+            Self::RestToGraphql(_)
+                | Self::GraphqlGuard(_)
                 | Self::GraphqlSafelist(_)
                 | Self::GraphqlRateLimit(_)
                 | Self::GraphqlOperationRouter(_)
@@ -440,6 +449,7 @@ impl EdgionPlugin {
             EdgionPlugin::ProxyRewrite(_) => "ProxyRewrite",
             EdgionPlugin::RequestBodyBuffer(_) => "RequestBodyBuffer",
             EdgionPlugin::JsonSchemaValidation(_) => "JsonSchemaValidation",
+            EdgionPlugin::RestToGraphql(_) => "RestToGraphql",
             EdgionPlugin::GraphqlGuard(_) => "GraphqlGuard",
             EdgionPlugin::GraphqlSafelist(_) => "GraphqlSafelist",
             EdgionPlugin::GraphqlRateLimit(_) => "GraphqlRateLimit",
@@ -528,7 +538,8 @@ impl EdgionPlugin {
                 OnRedisFailure::Allow => DYE_FAIL_OPEN_ONLY,
                 OnRedisFailure::Deny => DYE_FAIL_CLOSE_ONLY,
             },
-            EdgionPlugin::GraphqlGuard(_)
+            EdgionPlugin::RestToGraphql(_)
+            | EdgionPlugin::GraphqlGuard(_)
             | EdgionPlugin::GraphqlSafelist(_)
             | EdgionPlugin::GraphqlOperationRouter(_) => &[],
             EdgionPlugin::GraphqlRateLimit(c) => match c.on_redis_failure {
@@ -629,6 +640,7 @@ impl EdgionPlugin {
             EdgionPlugin::DirectEndpoint(_) => "direct_endpoint",
             EdgionPlugin::RegionRoute(_) => "region_route",
             EdgionPlugin::RateLimitRedis(_) => "rate_limit_redis",
+            EdgionPlugin::RestToGraphql(_) => "rest_to_graphql",
             EdgionPlugin::GraphqlGuard(_) => "graphql_guard",
             EdgionPlugin::GraphqlSafelist(_) => "graphql_safelist",
             EdgionPlugin::GraphqlRateLimit(_) => "graphql_rate_limit",
@@ -731,6 +743,7 @@ impl EdgionPlugin {
                 }
                 names
             }
+            EdgionPlugin::RestToGraphql(c) => headers_of(c.variables.iter().filter_map(|v| v.from.as_ref())),
             EdgionPlugin::GraphqlGuard(_)
             | EdgionPlugin::GraphqlSafelist(_)
             | EdgionPlugin::GraphqlOperationRouter(_) => Vec::new(),
@@ -808,6 +821,7 @@ impl EdgionPlugin {
             EdgionPlugin::ProxyRewrite(c) => c.validation_error(),
             EdgionPlugin::RequestBodyBuffer(c) => c.validation_error(),
             EdgionPlugin::JsonSchemaValidation(c) => c.validation_error(),
+            EdgionPlugin::RestToGraphql(c) => c.validation_error(),
             EdgionPlugin::GraphqlGuard(c) => c.validation_error(),
             EdgionPlugin::GraphqlSafelist(c) => c.validation_error(),
             EdgionPlugin::GraphqlRateLimit(c) => c.validation_error(),

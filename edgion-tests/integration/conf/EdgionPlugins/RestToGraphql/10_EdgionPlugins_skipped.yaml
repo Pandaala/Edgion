@@ -1,0 +1,36 @@
+{
+  "apiVersion": "edgion.io/v1",
+  "kind": "EdgionPlugins",
+  "metadata": {
+    "name": "rest-graphql-skipped",
+    "namespace": "edgion-default"
+  },
+  "spec": {
+    "requestPlugins": [
+      {
+        "type": "GraphqlGuard",
+        "config": {},
+        "conditions": {
+          "skip": {
+            "allOf": [
+              {
+                "type": "keyExist",
+                "key": {
+                  "type": "header",
+                  "name": "host"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "type": "RestToGraphql",
+        "config": {
+          "query": "{ping}",
+          "path": "/webhook/resolve"
+        }
+      }
+    ]
+  }
+}

@@ -82,6 +82,7 @@ pub use plugin_configs::{
     RequestIdGeneratorKind, RequestIdRule, REQUEST_ID_MAX_COUNT, REQUEST_ID_MAX_HEADER_LEN, REQUEST_ID_MAX_PREFIX_LEN,
     REQUEST_ID_MAX_TOTAL_VALUE_LEN, REQUEST_ID_MAX_VALUE_LEN,
 };
+pub use plugin_configs::{GraphqlVariableBinding, GraphqlVariableFormat, RestToGraphqlConfig};
 pub use plugin_validation::PluginValidation;
 pub use validate::{applicable_stages_by_name, StageSet, HTTP_PLUGIN_STAGE_EXCEPTIONS};
 

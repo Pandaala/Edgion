@@ -32,3 +32,14 @@ See [user contract](../../../../docs/en/user-guide/http-route/filters/edgion-plu
 and [runtime](../../../../edgion-gateway/src/plugins/http/graphql_safelist/mod.rs).
 Re-evaluate lexer/parser upgrades, token representation, digest boundaries,
 selection semantics, mutation ordering and retention changes against these gates.
+
+## Canonical body admission freeze
+
+Successful canonical GraphQL evaluation now calls the existing RequestBodyState
+mutation freeze, preserving the inspected body and propagating refusal to a
+subsequently installed bodyless replay owner. Guard measure mode also freezes
+a successfully inspected body. Failed or skipped evaluation does not freeze.
+Later body mutation through DSL/ProxyRewrite/Wasm or REST adaptation is refused;
+multiple adapters before inspection remain allowed. Query/URI/method/header
+changes still require the documented trusted-chain ordering. See the
+[adapter/body ownership contract](../../http-body/regression-guards/rest-to-graphql-request-adaptation.md).

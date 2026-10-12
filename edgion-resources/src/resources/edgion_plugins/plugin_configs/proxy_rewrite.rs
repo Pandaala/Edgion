@@ -342,7 +342,7 @@ impl JsonBodyRewrite {
     }
 }
 
-fn compile_pointer(pointer: &str, field: &str) -> Result<PointerBuf, String> {
+pub(super) fn compile_pointer(pointer: &str, field: &str) -> Result<PointerBuf, String> {
     if pointer.len() > MAX_JSON_POINTER_BYTES {
         return Err(format!(
             "{field} must not exceed {MAX_JSON_POINTER_BYTES} encoded bytes"

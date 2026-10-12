@@ -161,4 +161,5 @@ pub use edgion_plugins::{GraphqlOperationRouterDynamicSuite, GraphqlOperationRou
 pub use edgion_plugins::{GraphqlGuardDynamicSuite, GraphqlGuardTestSuite};
 pub use edgion_plugins::{GraphqlSafelistDynamicSuite, GraphqlSafelistTestSuite};
 
+pub use edgion_plugins::{RestToGraphqlDynamicSuite, RestToGraphqlTestSuite};
 pub use grpc_route::GrpcTerminalHeadersWireTestSuite;

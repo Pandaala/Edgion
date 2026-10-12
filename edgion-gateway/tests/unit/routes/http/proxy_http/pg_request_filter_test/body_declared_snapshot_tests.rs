@@ -1,6 +1,16 @@
 use super::*;
 use tokio::io::AsyncWriteExt;
 
+#[tokio::test]
+async fn original_method_snapshot_survives_live_method_rewrite() {
+    let mut session = session_from_request(b"GET /users/42 HTTP/1.1\r\nHost: test\r\n\r\n").await;
+    let mut ctx = EdgionHttpContext::default();
+    snapshot_body_declared(&mut session, &mut ctx);
+    session.req_header_mut().set_method(http::Method::POST);
+    assert_eq!(ctx.request_info.original_method, Some(http::Method::GET));
+    assert_eq!(session.req_header().method, http::Method::POST);
+}
+
 /// Build a real HTTP/1.1 `Session` from literal request bytes.
 ///
 /// `pub(super)` so `protocol_detection_tests` (a sibling module) can reuse

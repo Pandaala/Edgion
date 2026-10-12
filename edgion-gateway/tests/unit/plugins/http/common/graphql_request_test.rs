@@ -6,9 +6,12 @@ use http::{HeaderMap, HeaderValue};
 pub(crate) static EVALUATION_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn session(body: &'static [u8]) -> MockPluginSession {
+    session_with_context(body, EdgionHttpContext::default())
+}
+
+fn session_with_context(body: &'static [u8], mut ctx: EdgionHttpContext) -> MockPluginSession {
     let mut session = MockPluginSession::new();
     session.expect_set_response_header().returning(|_, _| Ok(()));
-    let mut ctx = EdgionHttpContext::default();
     ctx.request_info.in_request_body_stage = true;
     session.expect_ctx().return_const(ctx);
     session.expect_get_method().return_const("POST".to_owned());
@@ -25,6 +28,57 @@ fn session(body: &'static [u8]) -> MockPluginSession {
         .expect_read_request_body()
         .return_once(move |_| Ok(Bytes::from_static(body)));
     session
+}
+
+#[tokio::test]
+async fn successful_graphql_evaluation_freezes_body_but_failed_evaluation_does_not() {
+    use crate::request_body::BodyStorage;
+    use pingora_core::protocols::http::RequestBodyBuffer;
+    let _lock = EVALUATION_TEST_LOCK.lock().await;
+    for (body, allowed) in [
+        (br#"{"query":"{ping}"}"#.as_slice(), true),
+        (br#"{"query":"invalid @@"}"#.as_slice(), false),
+    ] {
+        let (mut storage, view) = BodyStorage::new(65536, 65536);
+        storage.write(&Bytes::from_static(body)).await.unwrap();
+        storage.finish().await.unwrap();
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_body.install(view.clone());
+        let mut session = session_with_context(body, ctx);
+        let result = evaluate(&mut session, &mut PluginLog::new("GraphqlGuard"), 65536, |_| Ok(())).await;
+        assert_eq!(result.is_ok(), allowed);
+        let mutation = view.overwrite_body(Bytes::from_static(b"changed"));
+        assert_eq!(mutation.is_err(), allowed);
+    }
+}
+
+#[tokio::test]
+async fn graphql_measurement_freezes_the_same_admitted_body_as_enforcement() {
+    use crate::request_body::BodyStorage;
+    use edgion_resources::plugin_configs::GraphqlGuardConfig;
+    use pingora_core::protocols::http::RequestBodyBuffer;
+    let _lock = EVALUATION_TEST_LOCK.lock().await;
+    let body = br#"{"query":"{a:ping}"}"#;
+    for mode in ["measure", "enforce"] {
+        let guard: GraphqlGuardConfig =
+            serde_json::from_value(serde_json::json!({"mode":mode,"maxAliases":0})).unwrap();
+        let guard = guard.compile().unwrap();
+        let (mut storage, view) = BodyStorage::new(65536, 65536);
+        storage.write(&Bytes::from_static(body)).await.unwrap();
+        storage.finish().await.unwrap();
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_body.install(view.clone());
+        let mut session = session_with_context(body, ctx);
+        let result = evaluate(&mut session, &mut PluginLog::new("GraphqlGuard"), 65536, |parsed| {
+            guard.inspect(parsed)
+        })
+        .await;
+        assert_eq!(result.is_ok(), mode == "measure");
+        assert_eq!(
+            view.overwrite_body(Bytes::from_static(b"changed")).is_err(),
+            mode == "measure"
+        );
+    }
 }
 #[tokio::test]
 async fn shared_evaluation_releases_all_permits_after_parse_failure_panic_and_success() {

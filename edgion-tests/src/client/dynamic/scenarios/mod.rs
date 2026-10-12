@@ -70,3 +70,5 @@ pub mod graphql_operation_router;
 
 pub mod graphql_guard;
 pub mod graphql_safelist;
+
+pub mod rest_to_graphql;

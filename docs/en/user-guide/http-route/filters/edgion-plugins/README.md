@@ -47,6 +47,7 @@ rule without echoing the realm. Disabled entries remain inert.
 | [request-access-policy.md](request-access-policy.md) | L7 host/path/IP access policies with Secret/HMAC conditions and profile hot-swap |
 | [guardrail.md](guardrail.md) | Bounded unary Pass/Replace/Reject decisions for canonical semantic AI SSE windows |
 | [grpc-json-transcoder.md](grpc-json-transcoder.md) | Descriptor-backed REST JSON to native gRPC over mandatory upstream HTTP/2 |
+| [rest-to-graphql.md](rest-to-graphql.md) | Static GraphQL request adaptation with shared KeyGet variable bindings |
 | [graphql-operation-router.md](graphql-operation-router.md) | Exact operation selection among declared HTTPRoute Service backends |
 | [graphql-rate-limit.md](graphql-rate-limit.md) | Static SDL query-cost budgets through Redis |
 | [graphql-guard.md](graphql-guard.md) | Independent shape and introspection protection with optional SDL cost ceiling |

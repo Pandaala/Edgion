@@ -24,6 +24,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [REST-to-GraphQL request adaptation](regression-guards/rest-to-graphql-request-adaptation.md)
+
 - [Streamed request cap, trailer rejection, and ordered mirror publication](regression-guards/streamed-request-body-admission.md)
 
 - [WAF prefix admission before backend dispatch](regression-guards/waf-prefix-before-dispatch.md)

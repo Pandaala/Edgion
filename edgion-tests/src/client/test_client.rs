@@ -3100,6 +3100,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::GraphqlGuardTestSuite));
         }
+        "EdgionPlugins/RestToGraphql" => {
+            if !gateway {
+                eprintln!("RestToGraphql requires --gateway");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::RestToGraphqlTestSuite));
+        }
         "EdgionPlugins/GraphqlSafelist" => {
             if !gateway {
                 eprintln!("GraphqlSafelist requires --gateway");

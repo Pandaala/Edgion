@@ -49,6 +49,7 @@ pub mod request_id;
 pub mod request_mirror;
 pub mod request_restriction;
 pub mod response_rewrite;
+pub mod rest_to_graphql;
 pub mod waf;
 pub mod wasm;
 pub mod webhook_key_get;

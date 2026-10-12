@@ -1,0 +1,19 @@
+{
+  "apiVersion": "edgion.io/v1",
+  "kind": "EdgionPlugins",
+  "metadata": {
+    "name": "rest-graphql-simple",
+    "namespace": "edgion-default"
+  },
+  "spec": {
+    "requestPlugins": [
+      {
+        "type": "RestToGraphql",
+        "config": {
+          "query": "{ping}",
+          "path": "/webhook/resolve"
+        }
+      }
+    ]
+  }
+}

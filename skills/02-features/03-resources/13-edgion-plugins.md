@@ -117,6 +117,7 @@ runtime before its body reads, not at cross-resource publication. See
 | `ProxyRewrite` | Proxy rewrite (advanced path/header rewriting and JSON request-body transforms) |
 | `ResponseRewrite` | Response rewrite (status code/headers/body) |
 | `RealIp` | Real IP extraction |
+| `RestToGraphql` | Static GraphQL request adaptation with shared KeyGet variables |
 | `CtxSet` | Set context variables |
 | `CredentialInjector` | Inject an upstream bearer or custom header from a Secret or a `credentialSource` LinkSys (`credentialRef.group: edgion.io`, `kind: LinkSys`). Default publication writes a generated Secret; `publication.persist: false` keeps one active token per source identity in Controller memory (no generated Secret; see [18-link-sys.md](18-link-sys.md)). Header names and prefixes are static and never evaluate expressions. One EdgionPlugins resource may contain at most one enabled LinkSys-backed injector; static Secret-backed entries do not count toward that limit. |
 | `WebhookKeyGet` | Resolve webhook vars into request context (once per request). Addressable in EdgionGatewayConfig `spec.pluginPolicy` allow/deny lists. |
