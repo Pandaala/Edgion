@@ -35,6 +35,7 @@ contiguous-input implementation and its verification limits.
 ## Remaining standalone tasks
 
 - [Trusted language policy profiles](../../../tasks/todo/waf-language-policy-profiles.md)
+- [Deferred transformation reuse and matcher investigation](../../../tasks/todo/waf-transformation-reuse-follow-ups.md)
 - Representative Gateway performance, Kubernetes admission/reload and x86-64
   verification require fresh evidence via the
   [testing guide](../../05-testing/01-integration-testing.md). Their historical

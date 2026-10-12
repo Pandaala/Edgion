@@ -432,8 +432,8 @@ canonical transformation plan and without multiMatch. The inline signature
 retains no bytes and has zero Vec capacity. Different source ranges, profiles,
 uncacheable operands and common phase entry invalidate it; the direct prefix
 matcher writer also invalidates it before touching scratch. Collector stage
-caches remain separate. Transformations, logical charges, negation and ordered
-rule/TX effects execute normally. A marker publishes only after successful scan
+caches remain separate. Logical charges, negation and ordered rule/TX effects
+execute normally. A marker publishes only after successful scan
 and range validation. Scratch/generation ownership belongs to the transaction;
 range checks alone do not authenticate arbitrary same-shaped foreign scratch.
 
@@ -441,6 +441,32 @@ Directed transaction tests compare physical scan counts and ordered outcomes
 against Reference, and cover duplicate fields, profile switches, TX/captures,
 multiMatch and prefix/phase invalidation. Re-evaluate on any new direct scratch
 writer, mutable request arena or non-deterministic transformation.
+
+Ordinary Accelerated evaluation also has a separate one-slot borrowed-transform
+memo. It records only a successful complete `Cow::Borrowed` identity walk for a
+checked immutable request range, a canonical nonempty transformation plan and
+the exact output/work limits. A hit borrows that input and enters the original
+predicate, capture and accounting path. A miss clears the previous proof before
+the canonical walker; owned outputs and failed walks never publish. Empty plans,
+multiMatch, Reference and non-request values bypass it; ineligible inputs and
+phase/prefix entry clear it. Its inline key retains no bytes and introduces no
+heap allocation. Ordinary transform work is local to each walk, and materializing
+observer checkpoints have no persistent effect, so a successful equal-limit
+identity proof can replace a repeated walk without changing downstream charges.
+
+The source argument removes repeated identity scans on exact hits, not existing
+allocations or a proved percentage of request latency. One-slot alternating
+inputs can miss every time. Tests and benchmarks for this addition are omitted
+at the user's explicit request; historical scan-cache tests are not evidence for
+the new memo. Re-evaluate when borrowed-result meaning, transform determinism,
+request-arena mutability, limit/checkpoint semantics or memo eligibility changes.
+
+The 2026-10-12 scoped memo implementation passed independent plan and final
+source review, format, workspace compile/clippy and static repository guards.
+These results apply to that implementation; cleanup reused them without rerunning
+code checks. Broader owned-output retention, prefix reuse and remaining matcher
+candidates are deferred in the
+[follow-up investigation](../../../../tasks/todo/waf-transformation-reuse-follow-ups.md).
 
 Current raw-name selector admission and subscription dispatch reuse successful
 boolean results within one collect_value call using two inline u64 words. The

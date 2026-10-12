@@ -1178,6 +1178,7 @@ pub enum RequestBodyPrefixCompletion {
 
 pub struct Transaction<'generation> {
     ordinary_scan_cache: OrdinaryScanCache,
+    borrowed_transform_memo: BorrowedTransformMemo,
     generation: GenerationHandle<'generation>,
     request: RequestState<'generation>,
     json_budget: Option<InspectionBudget>,
@@ -1403,6 +1404,7 @@ impl<'generation> Transaction<'generation> {
         let scratch_bytes = actual_scratch;
         Ok(Self {
             ordinary_scan_cache: OrdinaryScanCache::new(),
+            borrowed_transform_memo: BorrowedTransformMemo::default(),
             generation,
             request,
             json_budget: None,
@@ -1652,6 +1654,7 @@ impl<'generation> Transaction<'generation> {
 
     fn evaluate_prefix_member(&mut self, id: usize, prefix: &[u8], work: &mut usize) -> Result<bool, RuntimeError> {
         self.ordinary_scan_cache.clear();
+        self.borrowed_transform_memo.clear();
         let member = self.generation.members[id];
         let transformations = member
             .transformation_plan
@@ -1983,6 +1986,7 @@ impl<'generation> Transaction<'generation> {
         prefix: Option<&[u8]>,
     ) -> Result<PhaseOutcome, RuntimeError> {
         self.ordinary_scan_cache.clear();
+        self.borrowed_transform_memo.clear();
         self.ensure_json_healthy()?;
         let mut prefix_work = 0_usize;
         let expected = self.next_phase();
@@ -2477,6 +2481,13 @@ impl<'generation> Transaction<'generation> {
                 })
                 .unwrap_or_default();
             let multi_match = member_has_action(&self.generation, member, super::super::ActionKind::MultiMatch)?;
+            // The checked nonempty slice above authenticates the canonical plan ID.
+            let memo_plan_id =
+                if self.evaluation_mode == EvaluationMode::Accelerated && !multi_match && !transformations.is_empty() {
+                    member.transformation_plan
+                } else {
+                    None
+                };
             let mut work = 0_usize;
             let match_limit = if stop_after_first { 1 } else { selected.len() };
             let match_storage = match summary_match_storage {
@@ -2484,6 +2495,9 @@ impl<'generation> Transaction<'generation> {
                 None => self.match_storage(tx, match_limit)?,
             };
             for selected in selected.iter().copied() {
+                let transform_memo =
+                    self.borrowed_transform_memo
+                        .prepare(selected.value, memo_plan_id, &self.request, self.limits);
                 let scan_cache = self.ordinary_scan_cache.prepare(
                     selected.value,
                     member.transformation_plan,
@@ -2536,7 +2550,7 @@ impl<'generation> Transaction<'generation> {
                         self.response.as_ref(),
                         context.json_budget.as_deref_mut(),
                     )?;
-                    evaluate_single_input(
+                    evaluate_single_input_with_transform_memo(
                         &mut context,
                         SingleInputPlan {
                             operator,
@@ -2553,6 +2567,7 @@ impl<'generation> Transaction<'generation> {
                         |transformed, budget| {
                             matched_variable(&self.request, tx, self.response.as_ref(), selected, transformed, budget)
                         },
+                        transform_memo,
                     )?
                 };
                 if let Some(matched) = matched {
@@ -3013,13 +3028,51 @@ fn evaluate_single_input(
     matched_count: usize,
     make_matched: impl Fn(&[u8], Option<&mut InspectionBudget>) -> Result<(Vec<u8>, Vec<u8>), RuntimeError>,
 ) -> Result<Option<MemberMatch>, RuntimeError> {
+    evaluate_single_input_with_transform_memo(
+        context,
+        plan,
+        value,
+        work,
+        detector_work_bytes,
+        matched_count,
+        make_matched,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_single_input_with_transform_memo(
+    context: &mut SingleInputContext<'_>,
+    plan: SingleInputPlan<'_>,
+    value: &[u8],
+    work: &mut usize,
+    detector_work_bytes: &mut usize,
+    matched_count: usize,
+    make_matched: impl Fn(&[u8], Option<&mut InspectionBudget>) -> Result<(Vec<u8>, Vec<u8>), RuntimeError>,
+    transform_memo: Option<(&mut BorrowedTransformMemo, BorrowedTransformKey)>,
+) -> Result<Option<MemberMatch>, RuntimeError> {
     let transform_limits = TransformLimits {
         max_output_bytes: plan.limits.max_transformation_output_bytes,
         max_work_bytes: plan.limits.max_transformation_work_bytes,
     };
     if !plan.multi_match {
-        let transformed = apply_transformations_borrowed(value, plan.transformations, transform_limits)
-            .map_err(map_transform_error)?;
+        let transformed = match transform_memo {
+            Some((memo, key)) if memo.key == Some(key) => Cow::Borrowed(value),
+            Some((memo, key)) => {
+                memo.clear();
+                let transformed = apply_transformations_borrowed(value, plan.transformations, transform_limits)
+                    .map_err(map_transform_error)?;
+                // Borrowed proves complete validation and identity for every step.
+                // Local transform limits are part of the key; downstream charges
+                // still execute below even when a subsequent call reuses this proof.
+                if matches!(&transformed, Cow::Borrowed(_)) {
+                    memo.key = Some(key);
+                }
+                transformed
+            }
+            None => apply_transformations_borrowed(value, plan.transformations, transform_limits)
+                .map_err(map_transform_error)?,
+        };
         return evaluate_transformed_input(
             context,
             &plan,
@@ -4738,6 +4791,53 @@ impl StageScanCache {
             ScanCacheStorage::Inline { bits, .. } => *bits = 0,
             ScanCacheStorage::Overflow(scanned) => scanned.clear(),
         }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct BorrowedTransformKey {
+    range: ByteRange,
+    plan_id: usize,
+    max_output_bytes: usize,
+    max_work_bytes: usize,
+}
+
+/// One successful identity walk over immutable request bytes. No payload is retained.
+#[derive(Default)]
+struct BorrowedTransformMemo {
+    key: Option<BorrowedTransformKey>,
+}
+
+impl BorrowedTransformMemo {
+    fn clear(&mut self) {
+        self.key = None;
+    }
+
+    fn prepare(
+        &mut self,
+        value: SelectedBytes,
+        plan_id: Option<usize>,
+        request: &RequestState<'_>,
+        limits: RuntimeLimits,
+    ) -> Option<(&mut Self, BorrowedTransformKey)> {
+        let key = (|| {
+            let SelectedBytes::Request(range) = value else {
+                return None;
+            };
+            let plan_id = plan_id?;
+            let end = range.start.checked_add(range.len)?;
+            request.bytes.get(range.start..end)?;
+            Some(BorrowedTransformKey {
+                range,
+                plan_id,
+                max_output_bytes: limits.max_transformation_output_bytes,
+                max_work_bytes: limits.max_transformation_work_bytes,
+            })
+        })();
+        if key.is_none() {
+            self.clear();
+        }
+        key.map(|key| (self, key))
     }
 }
 
