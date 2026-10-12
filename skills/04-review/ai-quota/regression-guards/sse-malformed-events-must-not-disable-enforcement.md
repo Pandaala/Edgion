@@ -11,10 +11,16 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
-An invalid UTF-8 field line poisons its current SSE event, and the decoder drops
-that event before invoking the usage visitor. Because incremental quota units
-are added only inside that visitor, an upstream could poison every event and
-freeze the quota accumulator indefinitely without degrading the decoder.
+The original D1b defect occurred when an invalid UTF-8 field line poisoned its
+current SSE event and the decoder dropped that event before invoking the usage
+visitor. An upstream could freeze incremental quota accounting without degrading
+the decoder. That dropped-visitor description is historical: the current typed
+record API exposes Poisoned blocks. Canonical Chat observation still observes
+any parseable data payload for usage/output units, then marks semantic fragments
+unavailable. Poisoned non-data lines can therefore retain valid payload accounting;
+poisoned data may remain unparseable. Semantic availability is independent of
+accounting availability and of the cumulative quota termination threshold.
+See [canonical Chat classification](../../sse/regression-guards/canonical-chat-block-classification.md).
 
 The decoder now counts completed poisoned events cumulatively for its lifetime.
 One event is tolerated. The second event in the same response makes quota
@@ -85,9 +91,10 @@ at EOS or gateway termination. Transport certainty alone is insufficient.
   several tolerances even though the parser's behavioral unit is the event.
 - **Reset after a valid event:** creates a deterministic alternating-event
   bypass.
-- **Estimate quota units for poisoned events:** invents a second incremental
-  accounting policy and keeps proxying a stream whose precise output is hidden
-  from enforcement.
+- **Invent quota units for unreadable poisoned payloads:** would create a second
+  incremental accounting policy. Current canonical Chat observation may retain
+  the same payload-derived units as Data when the payload is readable; it does
+  not synthesize units for bytes the payload observer cannot interpret.
 - **Terminate without quota or under non-Reject actions:** changes established
   degradation and exceeded-action semantics and invalidates the declared body
   mutation gate.

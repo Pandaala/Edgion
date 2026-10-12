@@ -12,7 +12,7 @@ use pingora_proxy::ResponseBodySink;
 use crate::ai::protocols::json_span::{field, last_field, Field, Node, Parser, StringToken};
 use crate::sse::chain::SliceChain;
 use crate::sse::window::{LogicalBucketKey, LogicalField, SemanticFragment, SemanticSource, WindowRecord};
-use crate::sse::{ByteRange, SseDecoder, SseEventRef, SseRecordRef};
+use crate::sse::{ByteRange, SseBlockStatus, SseDecoder, SseEventRef, SseRecordRef};
 use serde_json::Value;
 
 pub(crate) const MAX_CANONICAL_BATCH_RECORDS: usize = 1_024;
@@ -289,8 +289,24 @@ impl ValueWriter {
     }
 }
 
-pub(crate) fn observe_canonical_event(event: &SseEventRef<'_>) -> CanonicalEventObservation {
-    observe_event(event, true)
+/// Preserve framing eligibility independently of payload-derived accounting.
+pub(crate) fn observe_canonical_block(
+    status: SseBlockStatus,
+    event: &SseEventRef<'_>,
+    account_usage: bool,
+) -> CanonicalEventObservation {
+    if status == SseBlockStatus::Dataless {
+        return CanonicalEventObservation {
+            semantic_available: true,
+            ..Default::default()
+        };
+    }
+    let mut observation = observe_event(event, account_usage);
+    if status == SseBlockStatus::Poisoned {
+        observation.semantic_available = false;
+        observation.fragments.clear();
+    }
+    observation
 }
 
 fn observe_event(event: &SseEventRef<'_>, account_usage: bool) -> CanonicalEventObservation {
@@ -534,7 +550,7 @@ impl StreamingResponseProcessor for SemanticSseSource {
             if self.identity_encoded {
                 self.decoder.feed_records(bytes, |record| {
                     let observation = match &record {
-                        SseRecordRef::Block { event, .. } => Some(observe_event(event, false)),
+                        SseRecordRef::Block { status, event } => Some(observe_canonical_block(*status, event, false)),
                         _ => None,
                     };
                     if batch.push_observed(record, observation).is_err() {

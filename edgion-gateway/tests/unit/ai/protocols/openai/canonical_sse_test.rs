@@ -4,8 +4,10 @@ use crate::sse::SseDecoder;
 fn observe(raw: &'static [u8]) -> CanonicalEventObservation {
     let mut decoder = SseDecoder::with_default_limit();
     let mut result = None;
-    decoder.feed_each_bytes(Bytes::from_static(raw), |event| {
-        result = Some(observe_canonical_event(&event))
+    decoder.feed_records(Bytes::from_static(raw), |record| {
+        if let SseRecordRef::Block { status, event } = record {
+            result = Some(observe_canonical_block(status, &event, true));
+        }
     });
     result.unwrap()
 }
@@ -18,7 +20,7 @@ fn form_feed_in_json_syntax_cannot_report_usage_and_preserves_raw_sse() {
     decoder.feed_each_bytes(Bytes::from_static(raw), |event| {
         events += 1;
         assert_eq!(event.raw().to_bytes().as_ref(), raw);
-        let observed = observe_canonical_event(&event);
+        let observed = observe_canonical_block(SseBlockStatus::Data, &event, true);
         assert_eq!(observed.usage, CanonicalUsageObservation::default());
         assert_eq!(observed.output_units, 0);
         assert!(observed.fragments.is_empty());
@@ -152,4 +154,36 @@ async fn semantic_only_source_preserves_split_raw_records_without_usage_counting
         .flat_map(|batch| batch.into_raw_bytes().unwrap().to_vec())
         .collect();
     assert_eq!(raw_bytes, raw);
+}
+
+#[test]
+fn typed_controls_and_poison_preserve_distinct_semantic_and_accounting_contracts() {
+    for raw in [b": ping\n\n".as_slice(), b"id: cursor\n\n", b"event: heartbeat\n\n"] {
+        let observed = observe(raw);
+        assert!(observed.semantic_available);
+        assert_eq!(observed.usage, CanonicalUsageObservation::default());
+        assert_eq!(observed.output_units, 0);
+        assert!(observed.fragments.is_empty());
+    }
+    for raw in [b"data:\n\n".as_slice(), b"data\n\n"] {
+        assert!(!observe(raw).semantic_available);
+    }
+    let raw = b"id: \xff\ndata: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"text\"}}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":9}}\n\n";
+    let mut decoder = SseDecoder::with_default_limit();
+    decoder.feed_records(Bytes::from_static(raw), |record| {
+        let SseRecordRef::Block { status, event } = record else {
+            panic!("expected complete block")
+        };
+        assert_eq!(status, SseBlockStatus::Poisoned);
+        assert_eq!(event.raw().to_bytes().as_ref(), raw);
+        for account_usage in [false, true] {
+            let observed = observe_canonical_block(status, &event, account_usage);
+            assert!(!observed.semantic_available);
+            assert!(observed.fragments.is_empty());
+            assert_eq!(observed.output_units, 1);
+            assert_eq!(observed.usage.prompt_tokens, account_usage.then_some(7));
+            assert_eq!(observed.usage.completion_tokens, account_usage.then_some(9));
+        }
+    });
+    assert_eq!(decoder.malformed_events(), 1);
 }

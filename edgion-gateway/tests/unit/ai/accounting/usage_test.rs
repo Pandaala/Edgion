@@ -1237,3 +1237,51 @@ async fn responses_heartbeat_blocks_do_not_invalidate_usage_or_trigger_active_re
         assert!(shared.permits_provider_success());
     }
 }
+
+#[tokio::test]
+async fn poisoned_chat_payload_keeps_accounting_with_or_without_guarding() {
+    use crate::ai::protocols::openai::canonical_sse::CanonicalSourceStatus;
+    use parking_lot::Mutex;
+    for guarding in [false, true] {
+        let shared = Arc::new(AiUsageShared::default());
+        let quota = Arc::new(QuotaAccumulator::new_for_test(16));
+        let mut processor = UsageExtractionProcessor::new_with_quota(shared.clone(), Some(quota.clone()), true, true);
+        let batches = Arc::new(Mutex::new(Vec::new()));
+        let captured = batches.clone();
+        let mut ai = crate::plugins::runtime::traits::ai_session::MockAiSessionCapability::new();
+        ai.expect_semantic_guard_active().return_const(guarding);
+        ai.expect_publish_canonical_records().returning(move |batch| {
+            captured.lock().push(batch);
+            Ok(())
+        });
+        let mut session = MockPluginSession::new();
+        session
+            .expect_ai()
+            .return_var(Box::new(ai) as Box<dyn crate::plugins::runtime::traits::AiSessionCapability>);
+        session
+            .expect_record_error()
+            .withf(|code| *code == EdgionErrorCode::AiSseDecodeMalformed)
+            .times(1)
+            .return_const(());
+        let raw = Bytes::from_static(b"id: \xff\ndata: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"text\"}}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":9}}\n\n");
+        let mut chunk = Some(raw.clone());
+        let mut sink = ResponseBodySink::new();
+        processor
+            .on_chunk(&mut chunk, false, ResponseStreamKind::Sse, &mut sink, &mut session)
+            .await;
+        assert_eq!(shared.reported_tokens(), Some((7, 9)));
+        assert_eq!(quota.observed_output_for_test(), 1);
+        assert_eq!(processor.sse.malformed_events(), 1);
+        assert!(!shared.observation_unavailable());
+        assert!(!sink.is_terminated());
+        if guarding {
+            assert!(chunk.is_none());
+            let batch = batches.lock().pop().unwrap();
+            assert_eq!(batch.status(), CanonicalSourceStatus::Unavailable);
+            assert_eq!(batch.into_raw_bytes().unwrap(), raw);
+        } else {
+            assert_eq!(chunk, Some(raw));
+            assert!(batches.lock().is_empty());
+        }
+    }
+}

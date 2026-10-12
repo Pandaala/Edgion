@@ -12,9 +12,12 @@ data buffer and dispatches an event whose data becomes the empty string after th
 removed. Two empty data fields dispatch one event containing a single newline. A block with no data
 field does not dispatch.
 
-`SseDecoder` represents the unmaterialized trailing LF with `cur_has_data` and stores separators
-only between multiple fields. Do not replace that predicate with `!cur_data.is_empty()`; doing so
-would incorrectly drop a standard empty-data event.
+`SseDecoder` preserves one raw data range per field, including a zero-length range for an
+empty field. Completed blocks classify as Data when `parsed.data` has a range, and Dataless
+when no data field exists; `semantic_data` inserts separators only between fields.
+Do not infer classification from semantic payload length: that would drop a standard
+empty-data event. Canonical Chat observation preserves this typed distinction; see
+[the regression contract](../regression-guards/canonical-chat-block-classification.md).
 
 Anthropic response translation remains stricter than generic SSE framing. Anthropic Messages events
 carry named JSON payloads, including ping events. An empty-data event cannot be parsed as that

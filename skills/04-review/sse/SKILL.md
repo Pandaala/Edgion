@@ -15,5 +15,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Canonical Chat sources preserve typed block classification](regression-guards/canonical-chat-block-classification.md)
+
 - [Window context follows emitted text](regression-guards/window-emitted-context.md)
 - [Window capacity admission precedes allocation](regression-guards/window-capacity-admission.md)

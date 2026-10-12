@@ -809,3 +809,156 @@ async fn cancelling_driver_await_releases_real_guardrail_window_permit_and_owner
     assert!(summary.contains("reason=callback-dropped"));
     assert!(owner.take_summary_line().is_none());
 }
+
+fn chat_source_session() -> MockPluginSession {
+    use parking_lot::Mutex;
+    let batch = Arc::new(Mutex::new(None));
+    let published = batch.clone();
+    let taken = batch.clone();
+    let mut ai = crate::plugins::runtime::traits::ai_session::MockAiSessionCapability::new();
+    ai.expect_semantic_guard_active().return_const(true);
+    ai.expect_publish_canonical_records().returning(move |value| {
+        assert!(published.lock().replace(value).is_none());
+        Ok(())
+    });
+    ai.expect_take_canonical_records()
+        .returning(move || taken.lock().take());
+    let mut session = MockPluginSession::new();
+    session
+        .expect_ai()
+        .return_var(Box::new(ai) as Box<dyn crate::plugins::runtime::traits::AiSessionCapability>);
+    session.expect_try_claim_response_terminal().return_const(true);
+    session.expect_mark_response_terminal_emission().return_const(());
+    session.expect_record_error().return_const(());
+    session
+}
+
+fn chat_source(usage: bool) -> Box<dyn StreamingResponseProcessor> {
+    if usage {
+        Box::new(crate::ai::accounting::usage::UsageExtractionProcessor::new(Arc::new(
+            crate::ai::accounting::usage::AiUsageShared::default(),
+        )))
+    } else {
+        Box::new(crate::ai::protocols::openai::canonical_sse::SemanticSseSource::new())
+    }
+}
+
+async fn drive_chat_source(
+    source: &mut dyn StreamingResponseProcessor,
+    guard: &mut GuardrailResponseProcessor,
+    session: &mut MockPluginSession,
+    raw: &[u8],
+    eos: bool,
+    sink: &mut ResponseBodySink,
+) -> Vec<u8> {
+    let mut output = Vec::new();
+    let count = raw.len().div_ceil(7);
+    for (index, part) in raw.chunks(7).enumerate() {
+        let final_chunk = eos && index + 1 == count;
+        let mut chunk = Some(Bytes::copy_from_slice(part));
+        source
+            .on_chunk(&mut chunk, final_chunk, ResponseStreamKind::Sse, sink, session)
+            .await;
+        assert!(chunk.is_none(), "the actual source owns the raw handoff");
+        guard
+            .on_chunk(&mut chunk, final_chunk, ResponseStreamKind::Sse, sink, session)
+            .await;
+        if let Some(bytes) = chunk {
+            output.extend_from_slice(&bytes);
+        }
+    }
+    output
+}
+
+#[tokio::test]
+async fn actual_chat_controls_flush_at_eos_without_guard_dependency_or_disable() {
+    let raw = b": heartbeat\n\nid: cursor\n\nevent: heartbeat\n\ndata: [DONE]\n\n: trailing";
+    for usage in [false, true] {
+        for fail_open in [false, true] {
+            let mut source = chat_source(usage);
+            let mut guard = processor(fail_open);
+            guard.permits.close();
+            let mut session = chat_source_session();
+            let mut sink = ResponseBodySink::new();
+            let output = drive_chat_source(&mut *source, &mut guard, &mut session, raw, true, &mut sink).await;
+            assert_eq!(output, raw);
+            assert!(!sink.is_terminated());
+            assert!(!guard.disabled);
+            assert_eq!(guard.summary.windows, 0);
+            assert!(guard.owner.take_summary_line().unwrap().contains("outcome=pass"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn actual_chat_interleaved_controls_preserve_content_and_continued_guarding() {
+    let raw = b": heartbeat\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"first\"}}]}\n\nid: cursor\n\nevent: heartbeat\n\n";
+    let next = b"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"later\"}}]}\n\n";
+    for usage in [false, true] {
+        for fail_open in [false, true] {
+            let mut source = chat_source(usage);
+            let mut guard = processor(fail_open);
+            guard.window_bytes = 4096;
+            guard.permits.close();
+            let mut session = chat_source_session();
+            let mut sink = ResponseBodySink::new();
+            assert!(
+                drive_chat_source(&mut *source, &mut guard, &mut session, raw, false, &mut sink)
+                    .await
+                    .is_empty()
+            );
+            assert!(!guard.disabled);
+            assert!(!sink.is_terminated());
+            assert_eq!(guard.summary.windows, 0);
+            assert_eq!(guard.window.snapshot_all().unwrap()[0].current, "first");
+            let (released, reject) = guard.apply_decision(ParsedDecision::Pass).unwrap();
+            assert!(!reject);
+            let WindowOutput::Release(slices) = released else {
+                panic!("expected unchanged raw release")
+            };
+            assert_eq!(slices.concat(), raw);
+            guard.window.start_next().unwrap();
+            guard.window_bytes = 1;
+            let output = drive_chat_source(&mut *source, &mut guard, &mut session, next, false, &mut sink).await;
+            assert_eq!(sink.is_terminated(), !fail_open);
+            assert_eq!(guard.disabled, fail_open);
+            if fail_open {
+                assert_eq!(output, next);
+            } else {
+                assert!(output.is_empty());
+            }
+            // Closed admission fails before any outbound call. Reaching that
+            // reason proves controls did not disable subsequent guarding.
+            assert!(guard.owner.take_summary_line().unwrap().contains("concurrency-closed"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn actual_chat_empty_data_and_poisoned_payload_obey_guard_failure_policy() {
+    for raw in [
+        b"data:\n\n".as_slice(),
+        b"id: \xff\ndata: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"text\"}}]}\n\n",
+    ] {
+        for usage in [false, true] {
+            for fail_open in [false, true] {
+                let mut source = chat_source(usage);
+                let mut guard = processor(fail_open);
+                guard.permits.close();
+                let mut session = chat_source_session();
+                let mut sink = ResponseBodySink::new();
+                let output = drive_chat_source(&mut *source, &mut guard, &mut session, raw, false, &mut sink).await;
+                assert_eq!(sink.is_terminated(), !fail_open);
+                assert_eq!(guard.disabled, fail_open);
+                assert_eq!(guard.summary.windows, 0);
+                assert_eq!(guard.window.snapshot_all().unwrap_err(), WindowError::NotCollecting);
+                if fail_open {
+                    assert_eq!(output, raw);
+                } else {
+                    assert!(output.is_empty());
+                }
+                assert!(guard.owner.take_summary_line().unwrap().contains("semantic-source"));
+            }
+        }
+    }
+}

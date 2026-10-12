@@ -14,7 +14,7 @@ use pingora_proxy::ResponseBodySink;
 use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::Serialize;
 
-use crate::ai::protocols::openai::canonical_sse::{observe_canonical_event, CanonicalRecordBatch};
+use crate::ai::protocols::openai::canonical_sse::{observe_canonical_block, CanonicalRecordBatch};
 use crate::ai::protocols::openai::error::render_openai_error;
 use crate::ai::protocols::openai::json_usage::{JsonUsageObserver, JsonUsageOutcome, ResponseOutcome};
 use crate::ai::quota::{AiQuotaRequest, QuotaAccumulator};
@@ -846,7 +846,7 @@ impl UsageExtractionProcessor {
                             }
                             return;
                         }
-                        let observation = observe_canonical_event(&event);
+                        let observation = observe_canonical_block(status, &event, true);
                         if let Some(quota) = quota {
                             quota.add_output_units(observation.output_units);
                         }

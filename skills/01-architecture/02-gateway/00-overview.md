@@ -148,6 +148,15 @@ must not retain a borrowed event across an `await`. It transfers raw slices and
 stable fragment ranges into `RawWindow`, then consumes one explicit
 release/replace/discard decision per generation and one final decision at EOS.
 
+Both canonical Chat sources preserve decoder classification through
+`openai::canonical_sse::observe_canonical_block`. Data receives the existing
+payload observation, including unavailable semantics for explicit empty data.
+Dataless comments, IDs and event controls remain available raw records without
+text or accounting. Poisoned blocks keep payload-derived usage/output units
+but carry unavailable semantics without fragments. This semantic trust decision
+is independent of malformed-SSE quota tolerance and termination gates. See the
+[Chat classification regression](../../04-review/sse/regression-guards/canonical-chat-block-classification.md).
+
 The window independently bounds logical raw bytes, visible resident capacity,
 slice handles, ranges, lines, complete events, metadata, logical buckets,
 fragments, semantic snapshots, replacement bytes, global overlap, and combined
