@@ -17,6 +17,13 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 
+source "${SCRIPT_DIR}/artifact_paths.sh"
+edgion_resolve_artifacts
+BIN_DIR="$EDGION_TEST_BIN_DIR"
+if [ "$EDGION_TEST_PROFILE" = release ]; then
+    echo "Legacy start_all.sh does not support release; use the canonical AI performance runner" >&2
+    exit 2
+fi
 # Coverage mode: switch to instrumented binary directory and export coverage env to children.
 # LLVM_PROFILE_FILE override is critical: show-env defaults to target/Edgion-*.profraw,
 # but cargo llvm-cov report only scans target/llvm-cov-target/*.profraw — keep them aligned.
@@ -24,9 +31,6 @@ if [ "${EDGION_COVERAGE:-0}" = "1" ]; then
     eval $(cargo llvm-cov show-env --export-prefix 2>/dev/null)
     export CARGO_TARGET_DIR="${PROJECT_ROOT}/target/llvm-cov-target"
     export LLVM_PROFILE_FILE="${PROJECT_ROOT}/target/llvm-cov-target/Edgion-%p-%10m.profraw"
-    BIN_DIR="${PROJECT_ROOT}/target/llvm-cov-target/debug"
-else
-    BIN_DIR="${PROJECT_ROOT}/target/debug"
 fi
 
 # Workdirectory

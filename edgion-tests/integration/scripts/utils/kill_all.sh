@@ -16,6 +16,8 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 
+source "${SCRIPT_DIR}/artifact_paths.sh"
+
 # =============================================================================
 # log
 # =============================================================================
@@ -201,17 +203,76 @@ cleanup_work_dir() {
     fi
 }
 
+stop_owned_release() {
+    local work_dir="${EDGION_TEST_OWNED_WORK_DIR:-}"
+    edgion_validate_owned_work_dir "$work_dir" || return 2
+    [ -f "$work_dir/artifact-profile" ] || return 0
+    [ "$(cat "$work_dir/artifact-profile")" = release ] || return 2
+    local role binary pid pid_file waited failed=0
+    for role in gateway controller test_server; do
+        case "$role" in
+            gateway) binary=edgion-gateway ;;
+            controller) binary=edgion-controller ;;
+            test_server) binary=test_server ;;
+        esac
+        binary="${PROJECT_ROOT}/target/release/${binary}"
+        pid_file="$work_dir/pids/$role.pid"
+        [ -f "$pid_file" ] || continue
+        pid=$(cat "$pid_file")
+        case "$pid" in ''|*[!0-9]*) failed=1; continue ;; esac
+        if [ "$pid" -le 1 ]; then failed=1; continue; fi
+        kill -0 "$pid" 2>/dev/null || continue
+        if ! process_matches_binary "$pid" "$binary"; then
+            log_warning "Owned PID $pid has changed identity; refusing to signal"
+            failed=1
+            continue
+        fi
+        if ! process_matches_work_dir "$pid" "$work_dir/logs/$role.log"; then
+            log_warning "Owned PID $pid has changed work directory; refusing to signal"
+            failed=1
+            continue
+        fi
+        kill -TERM "$pid" 2>/dev/null || { failed=1; continue; }
+        waited=0
+        while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 5 ]; do
+            sleep 1
+            waited=$((waited + 1))
+        done
+        if kill -0 "$pid" 2>/dev/null; then
+            if ! process_matches_binary "$pid" "$binary" \
+                || ! process_matches_work_dir "$pid" "$work_dir/logs/$role.log"; then
+                failed=1
+                continue
+            fi
+            kill -KILL "$pid" 2>/dev/null || failed=1
+            sleep 1
+            if kill -0 "$pid" 2>/dev/null; then failed=1; fi
+        fi
+    done
+    return "$failed"
+}
+
 # =============================================================================
 # 
 # =============================================================================
 main() {
+    edgion_resolve_artifacts || return $?
     if [ "${1:-}" = "--work-dir" ] && [ "$#" -eq 2 ]; then
-        cleanup_work_dir "$2"
+        if [ "$EDGION_TEST_PROFILE" = release ]; then
+            [ "$2" = "${EDGION_TEST_OWNED_WORK_DIR:-}" ] || return 2
+            stop_owned_release
+        else
+            cleanup_work_dir "$2"
+        fi
         return $?
     fi
     if [ "$#" -ne 0 ]; then
         log_warning "Usage: kill_all.sh [--work-dir <integration work directory>]"
         return 2
+    fi
+    if [ "$EDGION_TEST_PROFILE" = release ]; then
+        stop_owned_release
+        return $?
     fi
     echo ""
     echo -e "${BLUE}========================================${NC}"
@@ -257,4 +318,4 @@ main() {
     log_success "allservicealreadyStop"
 }
 
-main "$@"
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then main "$@"; fi

@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # Edgion TestPreparescript
-# BuildallTest（debug ）
+# Build integration artifacts for the selected profile
 # =============================================================================
 
 set -eo pipefail
@@ -67,7 +67,11 @@ main() {
     echo ""
     echo -e "${BLUE}Edgion TestPrepare - Build${NC}"
     echo -e "Project: ${PROJECT_ROOT}"
-    echo -e "Mode: Debug"
+    source "${SCRIPT_DIR}/artifact_paths.sh"
+    edgion_resolve_artifacts
+    echo -e "Profile: ${EDGION_TEST_PROFILE}"
+    local profile_args=()
+    if [ "$EDGION_TEST_PROFILE" = release ]; then profile_args=(--release); fi
     
     cd "$PROJECT_ROOT"
 
@@ -80,7 +84,7 @@ main() {
     if [ "${EDGION_COVERAGE:-0}" = "1" ]; then
         log_info "Coverage mode enabled — using cargo-llvm-cov instrumentation"
         eval $(cargo llvm-cov show-env --export-prefix 2>/dev/null)
-        export CARGO_TARGET_DIR="${PROJECT_ROOT}/target/llvm-cov-target"
+        export CARGO_TARGET_DIR="$EDGION_TEST_TARGET_DIR"
         # show-env's LLVM_PROFILE_FILE points to target/Edgion-*.profraw, but cargo llvm-cov
         # report only scans target/llvm-cov-target/*.profraw. Force LLVM_PROFILE_FILE into
         # the right directory so report can find runtime profraw.
@@ -91,14 +95,14 @@ main() {
         # Runtime scripts resolve artifacts from the project-local target tree.
         # Ignore an inherited custom target dir so producer and consumers cannot
         # silently disagree about the prepared artifact set.
-        export CARGO_TARGET_DIR="${PROJECT_ROOT}/target"
+        export CARGO_TARGET_DIR="$EDGION_TEST_TARGET_DIR"
     fi
 
     # One Cargo invocation lets Cargo schedule the complete dependency graph
     # once and guarantees that --no-prepare child jobs consume a coherent set
     # of binaries from the same source revision.
     log_section "Build integration binaries"
-    if ! cargo build \
+    if ! cargo build "${profile_args[@]}" \
         -p edgion-controller --bin edgion-controller \
         -p edgion-gateway --bin edgion-gateway \
         -p edgion-cli --bin edgion-cli \
@@ -117,11 +121,10 @@ main() {
     # Cargo test artifact to a stable execution-phase path. Runtime scripts
     # must never invoke Cargo after services or test scenarios have started.
     log_section "Build ignored integration test executables"
-    local target_root="${CARGO_TARGET_DIR:-${PROJECT_ROOT}/target}"
     local ignored_test
     for ignored_test in credential_reservation_redis token_bucket_partial_refill_redis; do
         local ignored_test_bin
-        if ! ignored_test_bin=$(cargo test \
+        if ! ignored_test_bin=$(cargo test "${profile_args[@]}" \
             -p edgion-tests \
             --test "$ignored_test" \
             --no-run \
@@ -152,7 +155,7 @@ print(executables[-1])
             log_error "Ignored integration test executable is missing: ${ignored_test_bin}"
             exit 1
         fi
-        local stable_ignored_test_bin="${target_root}/debug/${ignored_test}"
+        local stable_ignored_test_bin="${EDGION_TEST_BIN_DIR}/${ignored_test}"
         cp -f "$ignored_test_bin" "$stable_ignored_test_bin"
         chmod 755 "$stable_ignored_test_bin"
         log_success "Ignored integration test executable prepared: ${stable_ignored_test_bin}"
@@ -160,16 +163,16 @@ print(executables[-1])
 
     log_section "Build OIDC system resolver fixture"
     bash "${PROJECT_ROOT}/edgion-tests/integration/scripts/integration/test_oidc_egress.sh" \
-        --build-resolver-only "${target_root}/debug"
+        --build-resolver-only "${EDGION_TEST_BIN_DIR}"
 
     if $FULL_TEST; then
         log_section "Build LDAP system resolver fixture"
         bash "${PROJECT_ROOT}/edgion-tests/integration/scripts/integration/test_ldap_auth_egress.sh" \
-            --build-resolver-only "${target_root}/debug"
+            --build-resolver-only "${EDGION_TEST_BIN_DIR}"
 
         log_section "Build external ExtProc fixture"
         local fixture_dir="${PROJECT_ROOT}/edgion-tests/integration/fixtures/ext_proc_external"
-        local fixture_bin="${target_root}/debug/ext_proc_external_processor"
+        local fixture_bin="${EDGION_TEST_BIN_DIR}/ext_proc_external_processor"
         if [ ! -f "${fixture_dir}/go.mod" ] || [ ! -f "${fixture_dir}/go.sum" ]; then
             log_error "External ExtProc fixture module is incomplete: ${fixture_dir}"
             exit 1

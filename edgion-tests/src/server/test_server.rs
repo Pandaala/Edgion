@@ -23,6 +23,7 @@ use tracing::{error, info};
 // Transport-shape backends + the transport event recorder. Lives in its own
 // module tree because it is a self-contained protocol harness (raw H1, raw H2,
 // a global event log) rather than another axum endpoint.
+mod ai_performance;
 mod l4_duplex;
 #[path = "transport/mod.rs"]
 mod transport;
@@ -142,6 +143,9 @@ struct AiCredentialExhaustionObservation {
 #[derive(Clone, Debug, Default, serde::Serialize)]
 struct AiLongStreamObservation {
     chunks_queued: u64,
+    bytes_queued: u64,
+    pending_send: bool,
+    deadline_expired: bool,
     upstream_cancelled: bool,
     provider_completed: bool,
 }
@@ -577,6 +581,10 @@ async fn start_http_server(port: u16) -> Result<()> {
 
 fn create_echo_router(server_addr_str: String) -> Router {
     Router::new()
+        .route(
+            "/ai-performance/v1/chat/completions",
+            axum::routing::post(ai_performance::handler),
+        )
         .route("/health", get(health_handler))
         .route("/version", get(version_handler))
         .route("/echo", get(echo_handler).post(echo_post_handler))
@@ -658,7 +666,7 @@ fn create_echo_router(server_addr_str: String) -> Router {
         )
         .route(
             "/ai-long-stream/observation/{trace_id}",
-            get(ai_long_stream_observation_handler),
+            get(ai_long_stream_observation_handler).delete(ai_performance::delete_observation),
         )
         // Native Anthropic Messages fixture. Its observation endpoint exposes
         // only a monotonically increasing count, never headers or bodies.
@@ -2459,7 +2467,7 @@ async fn ai_long_stream_observation_handler(Path(trace_id): Path<String>) -> imp
         let observation = observations.get(&trace_id).cloned();
         if observation
             .as_ref()
-            .is_some_and(|state| state.upstream_cancelled || state.provider_completed)
+            .is_some_and(|state| state.upstream_cancelled || state.provider_completed || state.deadline_expired)
         {
             observations.remove(&trace_id);
         }

@@ -22,6 +22,9 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 CERTS_DIR="${SCRIPT_DIR}/../gen_certs"
 source "${SCRIPT_DIR}/conf_sync_certs.sh"
 
+source "${SCRIPT_DIR}/artifact_paths.sh"
+edgion_resolve_artifacts
+BIN_DIR="$EDGION_TEST_BIN_DIR"
 # Coverage mode: switch to instrumented binary directory and export coverage env to children.
 # LLVM_PROFILE_FILE override is critical: show-env defaults to target/Edgion-*.profraw,
 # but cargo llvm-cov report only scans target/llvm-cov-target/*.profraw — keep them aligned.
@@ -29,15 +32,17 @@ if [ "${EDGION_COVERAGE:-0}" = "1" ]; then
     eval $(cargo llvm-cov show-env --export-prefix 2>/dev/null)
     export CARGO_TARGET_DIR="${PROJECT_ROOT}/target/llvm-cov-target"
     export LLVM_PROFILE_FILE="${PROJECT_ROOT}/target/llvm-cov-target/Edgion-%p-%10m.profraw"
-    BIN_DIR="${PROJECT_ROOT}/target/llvm-cov-target/debug"
-else
-    BIN_DIR="${PROJECT_ROOT}/target/debug"
 fi
 GATEWAY_BIN="${EDGION_GATEWAY_BIN:-${BIN_DIR}/edgion-gateway}"
 
 # Workdirectory
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 WORK_DIR="${PROJECT_ROOT}/tmp/integration_testing/testing_${TIMESTAMP}"
+if [ "$EDGION_TEST_PROFILE" = release ]; then
+    edgion_validate_owned_work_dir "${EDGION_TEST_OWNED_WORK_DIR:-}"
+    WORK_DIR="$EDGION_TEST_OWNED_WORK_DIR"
+    if [ "$GATEWAY_BIN" != "$BIN_DIR/edgion-gateway" ]; then exit 2; fi
+fi
 GENERATED_SECRET_DIR="${WORK_DIR}/generated-secrets"
 WORK_DIR_HANDOFF=""
 
@@ -199,6 +204,10 @@ show_help() {
 kill_all_processes() {
     log_section "Cleanupallprocess"
     
+    if [ "$EDGION_TEST_PROFILE" = release ]; then
+        edgion_refuse_existing_topology || exit $?
+        return 0
+    fi
     #  kill allprocess
     pkill -9 -f "debug/edgion-controller" 2>/dev/null && log_info "alreadyStop edgion-controller" || true
     pkill -9 -f "debug/edgion-gateway" 2>/dev/null && log_info "alreadyStop edgion-gateway" || true
@@ -1343,6 +1352,11 @@ main() {
     fi
     log_success "Workdirectorycompleted: $WORK_DIR"
 
+    if [ "$EDGION_TEST_PROFILE" = release ]; then
+        printf 'release\n' > "$WORK_DIR/artifact-profile"
+        printf '%s\n' "$BIN_DIR" > "$WORK_DIR/artifact-bin-dir"
+        trap '"${SCRIPT_DIR}/kill_all.sh" || exit 1' EXIT
+    fi
     start_external_ext_proc
     
     # :  CRD schemas 

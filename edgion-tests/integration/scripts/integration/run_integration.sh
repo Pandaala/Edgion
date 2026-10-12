@@ -20,6 +20,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 SHELL_COMPAT="${UTILS_DIR}/shell_compat.sh"
 # shellcheck source=../utils/shell_compat.sh
 source "$SHELL_COMPAT"
+source "${UTILS_DIR}/artifact_paths.sh"
 
 # Whether to cleanup at end
 DO_CLEANUP=true
@@ -27,6 +28,9 @@ DO_CLEANUP=true
 # Whether to run full tests including slow tests (default: false for faster iteration)
 FULL_TEST=false
 AI_CONFORMANCE=false
+AI_PERFORMANCE=false
+EDGION_TEST_OWNED_WORK_DIR=""
+export EDGION_TEST_OWNED_WORK_DIR
 
 # Required open files limit for integration run.
 REQUIRED_NOFILE=65535
@@ -828,6 +832,12 @@ adopt_startup_work_dir() {
     [ -n "$STARTUP_WORK_DIR_HANDOFF" ] && [ -f "$STARTUP_WORK_DIR_HANDOFF" ] && [ ! -L "$STARTUP_WORK_DIR_HANDOFF" ] || return 1
     local candidate suffix
     candidate=$(cat "$STARTUP_WORK_DIR_HANDOFF")
+    if [ "${EDGION_TEST_PROFILE:-debug}" = release ]; then
+        [ "$candidate" = "${EDGION_TEST_OWNED_WORK_DIR:-}" ] || return 1
+        edgion_validate_owned_work_dir "$candidate" || return 1
+        WORK_DIR="$candidate"
+        return 0
+    fi
     case "$candidate" in
         "${PROJECT_ROOT}/tmp/integration_testing/testing_"*) ;;
         *) return 1 ;;
@@ -883,7 +893,14 @@ cleanup() {
             docker compose -f "${REDIS_COMPOSE_FILE}" rm -f -s \
                 "${REDIS_STARTED_SERVICES[@]}" >/dev/null 2>&1 || true
         fi
-        if [ -n "$WORK_DIR" ]; then
+        if [ "${EDGION_TEST_PROFILE:-debug}" = release ]; then
+            if [ -n "$EDGION_TEST_OWNED_WORK_DIR" ] && ! "${UTILS_DIR}/kill_all.sh"; then
+                report_test "Owned_Release_Cleanup" "FAIL" "0" "owned process teardown failed"
+                write_report "FAIL"
+                trap - EXIT
+                exit 1
+            fi
+        elif [ -n "$WORK_DIR" ]; then
             "${UTILS_DIR}/kill_all.sh" --work-dir "$WORK_DIR" 2>&1 || true
         fi
     else
@@ -1687,6 +1704,7 @@ show_help() {
     echo "  --no-prepare           Skip build step"
     echo "  --no-start             Skip start step"
     echo "  --keep-alive           Keep services running after end (default will stop)"
+    echo "  --ai-performance       Release-integration Chat H1 measurements (SingleProvider; HTTPX 0.28.1)"
     echo "  --ai-conformance       Local native AI matrix (requires Messages target and both SDK interpreters)"
     echo "  --full-test            Run all tests including slow tests (timeout, etc.)"
     echo "  --jobs <N>             Max parallel isolated scenarios (default: 4)"
@@ -2383,6 +2401,17 @@ run_all_tests() {
         run_test "OpenAI_SDK" "run_openai_sdk" || test_failed=true
     fi
 
+    if $AI_PERFORMANCE; then
+        run_ai_performance() {
+            python3 "$DEADLINE_RUNNER" --timeout-secs 900 --grace-secs "$DEADLINE_GRACE_SECONDS" -- \
+                "$EDGION_AI_PERF_PYTHON" "$SCRIPT_DIR/benchmark_ai_native.py" \
+                --ports "$PROJECT_ROOT/edgion-tests/integration/conf/ports.json" --work-dir "$WORK_DIR"
+        }
+        run_test "AI_Native_Performance" "run_ai_performance" || test_failed=true
+        run_test "Performance_Control_Http" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Basic" || test_failed=true
+        run_test "Performance_Control_Sse" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i SseStreaming" || test_failed=true
+    fi
+
     # A resource-wide Gateway sweep loads the dynamic fixtures. An exact
     # Gateway item only loads that item's fixtures and must remain isolated.
     if [ "$G_RESOURCE" = "Gateway" ] && [ -z "$G_ITEM" ]; then
@@ -2437,6 +2466,10 @@ main() {
                 DO_CLEANUP=false
                 shift
                 ;;
+            --ai-performance)
+                AI_PERFORMANCE=true
+                shift
+                ;;
             --ai-conformance)
                 AI_CONFORMANCE=true
                 shift
@@ -2486,6 +2519,26 @@ main() {
                 ;;
         esac
     done
+
+    if $AI_PERFORMANCE; then
+        export EDGION_TEST_PROFILE="${EDGION_TEST_PROFILE:-release}"
+        if [ "$EDGION_TEST_PROFILE" != release ] || $AI_CONFORMANCE || $FULL_TEST || $with_reload \
+            || [ "$G_RESOURCE" != EdgionBackend ] || [ "$G_ITEM" != SingleProvider ] \
+            || [ -n "$suites" ] || ! $do_start || ! $DO_CLEANUP || $SKIP_RESIDUE_CHECK \
+            || [ "${RESIDUE_MODE:-fail}" != fail ] || [ "$INTEGRATION_JOBS" != 1 ]; then
+            log_error "--ai-performance requires the owned release SingleProvider topology, one job, default cleanup and strict residue"
+            exit 2
+        fi
+        if [ -z "${EDGION_AI_PERF_PYTHON:-}" ] || ! "$EDGION_AI_PERF_PYTHON" -c 'import httpx; assert httpx.__version__ == "0.28.1"'; then
+            log_error "Set EDGION_AI_PERF_PYTHON to an interpreter with HTTPX 0.28.1"
+            exit 2
+        fi
+    elif [ "${EDGION_TEST_PROFILE:-debug}" = release ]; then
+        log_error "Release runner support currently requires --ai-performance"
+        exit 2
+    fi
+    edgion_resolve_artifacts || exit $?
+    if $AI_PERFORMANCE; then edgion_refuse_existing_topology || exit $?; fi
 
     if $AI_CONFORMANCE; then
         if [ "$G_RESOURCE" != "EdgionBackend" ] || [ "$G_ITEM" != "Messages" ] || [ -n "$suites" ] || ! $do_start || ! $DO_CLEANUP || $SKIP_RESIDUE_CHECK || [ "${RESIDUE_MODE:-fail}" != "fail" ]; then
@@ -2641,6 +2694,8 @@ main() {
                 if $AI_CONFORMANCE; then
                     suites="${suites},EdgionBackend/Resilience,EdgionBackend/CredentialExhaustion,EdgionBackend/Lifecycle/DynamicTest,EdgionBackend/Weighted,EdgionBackend/PolicyIntegration,EdgionPlugins/AiGuardOrdering/DynamicTest"
                 fi
+            elif $AI_PERFORMANCE; then
+                suites="${base_suites},LinkSys/Redis,EdgionBackend/SingleProvider,EdgionBackend/Performance,HTTPRoute/Basic,HTTPRoute/SseStreaming"
             elif [ "$G_RESOURCE" = "EdgionBackend" ] && [ "$G_ITEM" = "Responses" ]; then
                 suites="${base_suites},LinkSys/Redis,EdgionBackend/Responses"
             elif [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "WafDynamic" ]; then
@@ -2764,10 +2819,7 @@ main() {
     
     cd "$PROJECT_ROOT"
 
-    local gateway_bin_dir="${PROJECT_ROOT}/target/debug"
-    if [ "${EDGION_COVERAGE:-0}" = "1" ]; then
-        gateway_bin_dir="${PROJECT_ROOT}/target/llvm-cov-target/debug"
-    fi
+    local gateway_bin_dir="$EDGION_TEST_BIN_DIR"
     export EDGION_GATEWAY_BIN="${gateway_bin_dir}/edgion-gateway"
     export EDGION_TEST_CLIENT_BIN="${gateway_bin_dir}/test_client"
     export EDGION_CACHE_RESIDUE_BIN="${gateway_bin_dir}/cache_residue"
@@ -3112,6 +3164,12 @@ main() {
 
         # Build start command without shell re-parsing, preserving every path
         # and suite list as one argument.
+        if $AI_PERFORMANCE; then
+            edgion_refuse_existing_topology || exit $?
+            mkdir -p "${PROJECT_ROOT}/tmp/integration_testing"
+            EDGION_TEST_OWNED_WORK_DIR=$(mktemp -d "${PROJECT_ROOT}/tmp/integration_testing/ai-performance.XXXXXX")
+            export EDGION_TEST_OWNED_WORK_DIR
+        fi
         STARTUP_WORK_DIR_HANDOFF=$(mktemp "${PROJECT_ROOT}/tmp/integration_testing/startup-workdir.XXXXXX")
         local start_args=("${UTILS_DIR}/start_all_with_conf.sh" "--work-dir-handoff" "$STARTUP_WORK_DIR_HANDOFF")
         if [ -n "$suites" ]; then
