@@ -60,6 +60,24 @@ of a normal deployment incident. The misleading new-only Add comment in the shar
 ConfHandler interface is corrected without changing compression or its write lock.
 Prepared-value replication and outer-map cloning remain separate costs.
 
+ARCH-023 removes nested prepared-value replication: the resource map and reverse
+candidate lists share one immutable `Arc<PreparedPolicy>` per resource. The
+complete deduplicated target list is owned once, even for unrestricted Service
+fanout. Existing semantic raw-resource retention runs before prepared-owner reuse,
+including active health configuration, resolved material/errors and resource
+identity. A real resource change replaces the prepared owner while retained
+snapshots remain valid. Raw-policy pointer predicates, delta ordering and request
+capture remain unchanged by the sharing refactor; ARCH-024 owns the delta
+normalization described above. Sharing does not establish measured heap,
+throughput or latency gains.
+
+`distinct_service_fanout_shares_prepared_owner_across_publications` exercises 24
+distinct Services, unique prepared target-list storage, unrelated partial updates,
+equivalent newly allocated full/partial replay, true replacement and retained old
+snapshots. The existing AI handle regression directly checks logical circuit-breaker
+retention and replacement, and the health winner regression checks prepared-owner
+retention on equivalent replay and replacement on health-error repair and resolved CA material change.
+
 **2. Capture is per request, not per TCP keepalive**
 
 A new request on a reused connection loads the current snapshot. A retry of the
@@ -129,6 +147,8 @@ Re-evaluate against current evidence, including:
 
 - L4 or `request_mirror` grow a `BackendContext` and need the same capture
   contract (separate task; do not silently change L4 LB away from RoundRobin).
+- Prepared fields, raw-resource equivalence or candidate ownership change; verify
+  shared allocation, health material/error replacement and retained generations.
 - A new Service request reader is added that loads policy configuration after
   `begin_upstream_attempt` without using the captured Arc.
 - Attempt counting or capture initialization changes, including the case where

@@ -35,8 +35,7 @@ pub struct BackendTrafficPolicyStore {
     effective: ArcSwap<EffectivePolicySnapshotData>,
 }
 
-/// Prepared resource entry published with the generation.
-#[derive(Clone)]
+/// Immutable prepared resource shared by the resource map and target index.
 struct PreparedPolicy {
     key: String,
     policy: Arc<EdgionBackendTrafficPolicy>,
@@ -78,8 +77,8 @@ impl std::fmt::Debug for EffectiveBackendTrafficPolicy {
 
 struct EffectivePolicySnapshotData {
     generation: u64,
-    policies: HashMap<String, PreparedPolicy>,
-    reverse_index: HashMap<PolicyTargetKey, Vec<PreparedPolicy>>,
+    policies: HashMap<String, Arc<PreparedPolicy>>,
+    reverse_index: HashMap<PolicyTargetKey, Vec<Arc<PreparedPolicy>>>,
     effective: HashMap<PolicyTargetKey, Arc<EffectiveBackendTrafficPolicy>>,
 }
 
@@ -148,8 +147,8 @@ fn effective_snapshot_eq(
 }
 
 fn reverse_index_equivalent(
-    left: &HashMap<PolicyTargetKey, Vec<PreparedPolicy>>,
-    right: &HashMap<PolicyTargetKey, Vec<PreparedPolicy>>,
+    left: &HashMap<PolicyTargetKey, Vec<Arc<PreparedPolicy>>>,
+    right: &HashMap<PolicyTargetKey, Vec<Arc<PreparedPolicy>>>,
 ) -> bool {
     left.len() == right.len()
         && right.iter().all(|(target, policies)| {
@@ -164,8 +163,8 @@ fn reverse_index_equivalent(
 }
 
 fn policies_pointer_equivalent(
-    left: &HashMap<String, PreparedPolicy>,
-    right: &HashMap<String, PreparedPolicy>,
+    left: &HashMap<String, Arc<PreparedPolicy>>,
+    right: &HashMap<String, Arc<PreparedPolicy>>,
 ) -> bool {
     left.len() == right.len()
         && right.iter().all(|(key, prepared)| {
@@ -279,19 +278,33 @@ impl BackendTrafficPolicyStore {
             .unwrap_or(incoming)
     }
 
+    fn retain_or_prepare_policy(
+        previous: &EffectivePolicySnapshotData,
+        key: &str,
+        incoming: Arc<EdgionBackendTrafficPolicy>,
+    ) -> Arc<PreparedPolicy> {
+        let policy = Self::retain_policy_arc(previous, key, incoming);
+        if let Some(prepared) = previous.policies.get(key) {
+            if Arc::ptr_eq(&prepared.policy, &policy) {
+                return Arc::clone(prepared);
+            }
+        }
+        Arc::new(Self::prepare_policy(key.to_owned(), policy))
+    }
+
     fn build_reverse_index(
-        policies: &HashMap<String, PreparedPolicy>,
-    ) -> HashMap<PolicyTargetKey, Vec<PreparedPolicy>> {
+        policies: &HashMap<String, Arc<PreparedPolicy>>,
+    ) -> HashMap<PolicyTargetKey, Vec<Arc<PreparedPolicy>>> {
         #[cfg(test)]
         publish_counters::FULL_INDEX_BUILDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
-        let mut index: HashMap<PolicyTargetKey, Vec<PreparedPolicy>> = HashMap::new();
+        let mut index: HashMap<PolicyTargetKey, Vec<Arc<PreparedPolicy>>> = HashMap::new();
         for prepared in policies.values() {
             if !prepared.eligible {
                 continue;
             }
             for target in &prepared.target_keys {
-                index.entry(target.clone()).or_default().push(prepared.clone());
+                index.entry(target.clone()).or_default().push(Arc::clone(prepared));
             }
         }
         for candidates in index.values_mut() {
@@ -301,9 +314,9 @@ impl BackendTrafficPolicyStore {
     }
 
     fn patch_reverse_index(
-        index: &mut HashMap<PolicyTargetKey, Vec<PreparedPolicy>>,
-        old_prepared: Option<&PreparedPolicy>,
-        new_prepared: Option<&PreparedPolicy>,
+        index: &mut HashMap<PolicyTargetKey, Vec<Arc<PreparedPolicy>>>,
+        old_prepared: Option<&Arc<PreparedPolicy>>,
+        new_prepared: Option<&Arc<PreparedPolicy>>,
     ) {
         if let Some(old) = old_prepared {
             for key in &old.target_keys {
@@ -319,7 +332,7 @@ impl BackendTrafficPolicyStore {
             for key in &new.target_keys {
                 let list = index.entry(key.clone()).or_default();
                 if !list.iter().any(|prepared| Arc::ptr_eq(&prepared.policy, &new.policy)) {
-                    list.push(new.clone());
+                    list.push(Arc::clone(new));
                 }
                 list.sort_by_key(|prepared| prepared.precedence.clone());
             }
@@ -546,8 +559,8 @@ impl BackendTrafficPolicyStore {
     fn publish_generation(
         &self,
         previous: &EffectivePolicySnapshotData,
-        next_policies: HashMap<String, PreparedPolicy>,
-        reverse_index: HashMap<PolicyTargetKey, Vec<PreparedPolicy>>,
+        next_policies: HashMap<String, Arc<PreparedPolicy>>,
+        reverse_index: HashMap<PolicyTargetKey, Vec<Arc<PreparedPolicy>>>,
         affected: HashSet<PolicyTargetKey>,
     ) -> usize {
         let affected_len = affected.len();
@@ -622,8 +635,7 @@ impl BackendTrafficPolicyStore {
         }
         let mut next_policies = HashMap::with_capacity(data.len());
         for (key, policy) in data {
-            let policy = Self::retain_policy_arc(&previous, &key, policy);
-            let prepared = Self::prepare_policy(key.clone(), policy);
+            let prepared = Self::retain_or_prepare_policy(&previous, &key, policy);
             affected.extend(prepared.target_keys.iter().cloned());
             next_policies.insert(key, prepared);
         }
@@ -656,10 +668,7 @@ impl BackendTrafficPolicyStore {
             if let Some(old) = old {
                 affected.extend(old.target_keys.iter().cloned());
             }
-            let prepared = incoming.map(|policy| {
-                let policy = Self::retain_policy_arc(&previous, &key, policy);
-                Self::prepare_policy(key.clone(), policy)
-            });
+            let prepared = incoming.map(|policy| Self::retain_or_prepare_policy(&previous, &key, policy));
             if let Some(prepared) = &prepared {
                 affected.extend(prepared.target_keys.iter().cloned());
             }

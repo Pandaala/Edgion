@@ -338,7 +338,15 @@ policy/
 `BackendTrafficPolicyStore` (`get_backend_traffic_policy_store()`, global
 singleton) is the single owner of typed Service and EdgionBackend policy
 config. One `ArcSwap` generation publishes `{generation, policies, reverse_index,
-effective}` together. Equivalent effective-policy `Arc`s (retry budget,
+effective}` together. The resource map and each target candidate list share one
+immutable `Arc<PreparedPolicy>` per resource, including its complete deduplicated
+target list. Equivalent raw-resource replay retains the prepared owner according
+to the existing semantic comparison, including active health configuration and
+resolved TLS material/errors. A changed resource creates a new prepared owner;
+older snapshots retain their original owners. Partial publication still clones
+outer maps and candidate vectors; sharing removes attachment-count copies of the
+prepared target list without making publication O(delta). Equivalent
+effective-policy `Arc`s (retry budget,
 logical CB, AI outlier handle) are retained across no-op resyncs. AI planning
 captures one effective Arc before candidate iteration. HTTP/gRPC Service
 requests capture the same Arc at first `begin_upstream_attempt` onto

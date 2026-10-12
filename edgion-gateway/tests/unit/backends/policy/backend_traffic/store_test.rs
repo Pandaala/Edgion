@@ -772,6 +772,7 @@ fn equivalent_ai_update_keeps_retry_handle_and_field_update_is_atomic() {
     store.full_set_policies(initial);
     let first_snapshot = store.snapshot();
     let first = first_snapshot.get_effective(&target).expect("initial snapshot");
+    let first_cb = first.logical_circuit_breaker.as_ref().expect("logical CB");
     let first_budget = first.retry_budget.as_ref().expect("retry budget");
     let first_outlier = first.ai_credential_outlier.as_ref().expect("AI outlier generation");
 
@@ -785,6 +786,7 @@ fn equivalent_ai_update_keeps_retry_handle_and_field_update_is_atomic() {
     let second = equivalent_snapshot.get_effective(&target).expect("equivalent snapshot");
     assert_eq!(first_snapshot.generation(), equivalent_snapshot.generation());
     assert!(Arc::ptr_eq(&first, &second), "equivalent outer Arc retained");
+    assert!(Arc::ptr_eq(first_cb, second.logical_circuit_breaker.as_ref().unwrap()));
     assert!(Arc::ptr_eq(
         first_budget,
         second.retry_budget.as_ref().expect("retry budget retained")
@@ -801,6 +803,7 @@ fn equivalent_ai_update_keeps_retry_handle_and_field_update_is_atomic() {
     changed.insert(policy_key, ai_policy("typed-update", "policy", "models", 20, "2s"));
     store.full_set_policies(changed);
     let third = store.get_effective(&target).expect("updated snapshot");
+    assert!(Arc::ptr_eq(first_cb, third.logical_circuit_breaker.as_ref().unwrap()));
     assert_eq!(third.connect_timeout, Some(std::time::Duration::from_secs(2)));
     assert_eq!(third.circuit_breaker_limit, Some(7));
     assert!(third.outlier_detection.is_some());
@@ -826,6 +829,34 @@ fn equivalent_ai_update_keeps_retry_handle_and_field_update_is_atomic() {
     assert!(!Arc::ptr_eq(
         third.ai_credential_outlier.as_ref().unwrap(),
         fourth.ai_credential_outlier.as_ref().unwrap()
+    ));
+
+    assert!(Arc::ptr_eq(first_cb, fourth.logical_circuit_breaker.as_ref().unwrap()));
+    let mut cb_changed = ai_policy("typed-update", "policy", "models", 20, "2s");
+    Arc::get_mut(&mut cb_changed)
+        .unwrap()
+        .spec
+        .circuit_breaker
+        .as_mut()
+        .unwrap()
+        .max_parallel_requests = 9;
+    store.partial_update_policies(
+        HashMap::new(),
+        HashMap::from([("typed-update/policy".into(), cb_changed)]),
+        HashSet::new(),
+    );
+    let fifth = store.get_effective(&target).unwrap();
+    assert_eq!(fifth.circuit_breaker_limit, Some(9));
+    assert!(!Arc::ptr_eq(first_cb, fifth.logical_circuit_breaker.as_ref().unwrap()));
+    assert_eq!(first.circuit_breaker_limit, Some(7));
+    assert!(Arc::ptr_eq(
+        first_cb,
+        first_snapshot
+            .get_effective(&target)
+            .unwrap()
+            .logical_circuit_breaker
+            .as_ref()
+            .unwrap()
     ));
 
     store.full_set_policies(HashMap::new());
@@ -1705,6 +1736,17 @@ fn health_snapshot_keeps_actual_invalid_winner_and_repairs_without_policy_fallba
         ("health-owned/first".into(), first.clone()),
         ("health-owned/second".into(), sibling.clone()),
     ]));
+    let pinned_policy = store.snapshot();
+    let prepared = &pinned_policy.inner.policies["health-owned/first"];
+    store.partial_update_policies(
+        HashMap::new(),
+        HashMap::from([("health-owned/first".into(), Arc::new(winner.clone()))]),
+        HashSet::new(),
+    );
+    assert!(Arc::ptr_eq(
+        prepared,
+        &store.snapshot().inner.policies["health-owned/first"]
+    ));
     let snapshot = get_hc_config_store().resolve_policy("health-owned/svc").unwrap();
     assert!(std::ptr::eq(snapshot.owner(), first.as_ref()));
     assert!(snapshot.config().resolved_tls_error.is_some());
@@ -1718,13 +1760,225 @@ fn health_snapshot_keeps_actual_invalid_winner_and_repairs_without_policy_fallba
         .unwrap()
         .resolved_tls_error = None;
     store.full_set_policies(HashMap::from([
-        ("health-owned/first".into(), Arc::new(winner)),
+        ("health-owned/first".into(), Arc::new(winner.clone())),
         ("health-owned/second".into(), sibling),
     ]));
+    assert!(!Arc::ptr_eq(
+        prepared,
+        &store.snapshot().inner.policies["health-owned/first"]
+    ));
+    assert!(prepared
+        .policy
+        .spec
+        .health_check
+        .as_ref()
+        .unwrap()
+        .active
+        .as_ref()
+        .unwrap()
+        .resolved_tls_error
+        .is_some());
     let repaired = get_hc_config_store().resolve_policy("health-owned/svc").unwrap();
     assert_eq!(repaired.owner().metadata.name.as_deref(), Some("first"));
     assert!(repaired.config().resolved_tls_error.is_none());
     assert!(!Arc::ptr_eq(&snapshot.identity, &repaired.identity));
     assert!(snapshot.config().resolved_tls_error.is_some());
+    let before_material = store.snapshot();
+    winner
+        .spec
+        .health_check
+        .as_mut()
+        .unwrap()
+        .active
+        .as_mut()
+        .unwrap()
+        .resolved_ca_certificates = Some(vec![k8s_openapi::api::core::v1::Secret {
+        metadata: ObjectMeta {
+            name: Some("probe-ca".into()),
+            namespace: Some("health-owned".into()),
+            ..Default::default()
+        },
+        data: Some(std::collections::BTreeMap::from([(
+            "ca.crt".into(),
+            k8s_openapi::ByteString(b"test-only-material".to_vec()),
+        )])),
+        ..Default::default()
+    }]);
+    store.partial_update_policies(
+        HashMap::new(),
+        HashMap::from([("health-owned/first".into(), Arc::new(winner.clone()))]),
+        HashSet::new(),
+    );
+    let after_material = store.snapshot();
+    assert!(!Arc::ptr_eq(
+        &before_material.inner.policies["health-owned/first"],
+        &after_material.inner.policies["health-owned/first"]
+    ));
+    let material_owner = &after_material.inner.policies["health-owned/first"];
+    assert!(before_material.inner.policies["health-owned/first"]
+        .policy
+        .spec
+        .health_check
+        .as_ref()
+        .unwrap()
+        .active
+        .as_ref()
+        .unwrap()
+        .resolved_ca_certificates
+        .is_none());
+    let health_material = get_hc_config_store().resolve_policy("health-owned/svc").unwrap();
+    assert!(health_material.config().resolved_ca_certificates.is_some());
+    store.partial_update_policies(
+        HashMap::new(),
+        HashMap::from([("health-owned/first".into(), Arc::new(winner))]),
+        HashSet::new(),
+    );
+    assert!(Arc::ptr_eq(
+        material_owner,
+        &store.snapshot().inner.policies["health-owned/first"]
+    ));
     store.full_set_policies(HashMap::new());
+}
+
+#[test]
+fn distinct_service_fanout_shares_prepared_owner_across_publications() {
+    let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+    for full in [false, true] {
+        let store = BackendTrafficPolicyStore::new();
+        let key = "shared/fanout".to_string();
+        let mut resource = (*policy(
+            "shared",
+            "fanout",
+            "svc0",
+            None,
+            Some(LoadBalancerType::LeastConn),
+            None,
+            false,
+            false,
+        ))
+        .clone();
+        resource.spec.target_refs = (0..24)
+            .map(|i| PolicyTargetRef {
+                group: Some(String::new()),
+                kind: "Service".into(),
+                name: format!("svc{i}"),
+            })
+            .collect();
+        store.full_set_policies(HashMap::from([(key.clone(), Arc::new(resource.clone()))]));
+        let pinned = store.snapshot();
+        let owner = pinned.inner.policies.get(&key).unwrap();
+        assert_eq!(owner.target_keys.len(), 24);
+        assert_eq!(pinned.inner.reverse_index.len(), 24);
+        let mut unique = HashMap::new();
+        for prepared in pinned
+            .inner
+            .policies
+            .values()
+            .chain(pinned.inner.reverse_index.values().flatten())
+        {
+            unique.insert(Arc::as_ptr(prepared), prepared.target_keys.len());
+        }
+        assert_eq!(unique.len(), 1);
+        assert_eq!(unique.values().sum::<usize>(), 24, "one owned target list");
+        for target in &owner.target_keys {
+            let candidates = &pinned.inner.reverse_index[target];
+            assert_eq!(candidates.len(), 1);
+            assert!(Arc::ptr_eq(owner, &candidates[0]));
+            let effective = pinned.get_effective(target).unwrap();
+            assert_eq!(effective.winning_policy_key, key);
+            assert_eq!(effective.load_balancer, Some(ParsedLBPolicy::LeastConn));
+        }
+
+        let unrelated = policy(
+            "shared",
+            "other",
+            "other-svc",
+            None,
+            Some(LoadBalancerType::LeastConn),
+            None,
+            false,
+            false,
+        );
+        store.partial_update_policies(
+            HashMap::from([("shared/other".into(), unrelated.clone())]),
+            HashMap::new(),
+            HashSet::new(),
+        );
+        let mut changed_other = (*unrelated).clone();
+        changed_other.spec.load_balancer.as_mut().unwrap().r#type = LoadBalancerType::Ewma;
+        let changed_other = Arc::new(changed_other);
+        store.partial_update_policies(
+            HashMap::new(),
+            HashMap::from([("shared/other".into(), changed_other.clone())]),
+            HashSet::new(),
+        );
+        let unrelated_snapshot = store.snapshot();
+        assert!(Arc::ptr_eq(owner, &unrelated_snapshot.inner.policies[&key]));
+        let generation = unrelated_snapshot.generation();
+        publish_counters::reset();
+        let replay = Arc::new(resource.clone());
+        assert!(!Arc::ptr_eq(&owner.policy, &replay));
+        if full {
+            store.full_set_policies(HashMap::from([
+                (key.clone(), replay),
+                ("shared/other".into(), changed_other),
+            ]));
+        } else {
+            store.partial_update_policies(HashMap::new(), HashMap::from([(key.clone(), replay)]), HashSet::new());
+        }
+        let equivalent = store.snapshot();
+        assert_eq!(equivalent.generation(), generation);
+        assert!(Arc::ptr_eq(owner, &equivalent.inner.policies[&key]));
+        assert!(Arc::ptr_eq(&owner.policy, &equivalent.inner.policies[&key].policy));
+        assert_eq!(
+            publish_counters::SIDE_EFFECT_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        for target in &owner.target_keys {
+            assert!(Arc::ptr_eq(
+                &pinned.get_effective(target).unwrap(),
+                &equivalent.get_effective(target).unwrap()
+            ));
+        }
+
+        resource.spec.load_balancer.as_mut().unwrap().r#type = LoadBalancerType::Ewma;
+        if full {
+            store.full_set_policies(HashMap::from([
+                (key.clone(), Arc::new(resource)),
+                (
+                    "shared/other".into(),
+                    Arc::clone(&equivalent.inner.policies["shared/other"].policy),
+                ),
+            ]));
+        } else {
+            store.partial_update_policies(
+                HashMap::new(),
+                HashMap::from([(key.clone(), Arc::new(resource))]),
+                HashSet::new(),
+            );
+        }
+        let replaced = store.snapshot();
+        let new_owner = &replaced.inner.policies[&key];
+        assert_eq!(replaced.generation(), generation + 1);
+        assert!(!Arc::ptr_eq(owner, new_owner));
+        assert!(!Arc::ptr_eq(&owner.policy, &new_owner.policy));
+        assert_eq!(owner.target_keys, new_owner.target_keys);
+        assert_eq!(
+            owner.policy.spec.load_balancer.as_ref().unwrap().r#type,
+            LoadBalancerType::LeastConn
+        );
+        for target in &owner.target_keys {
+            assert!(Arc::ptr_eq(new_owner, &replaced.inner.reverse_index[target][0]));
+            assert!(Arc::ptr_eq(owner, &pinned.inner.reverse_index[target][0]));
+            assert_eq!(
+                replaced.get_effective(target).unwrap().load_balancer,
+                Some(ParsedLBPolicy::Ewma)
+            );
+            assert_eq!(
+                pinned.get_effective(target).unwrap().load_balancer,
+                Some(ParsedLBPolicy::LeastConn)
+            );
+        }
+        store.full_set_policies(HashMap::new());
+    }
 }
