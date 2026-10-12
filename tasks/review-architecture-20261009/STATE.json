@@ -30325,8 +30325,8 @@
       }
     },
     "ARCH-011": {
-      "path": "ARCH-011-ai-guard-final-replacement-budget.md",
-      "status": "candidate",
+      "path": null,
+      "status": "resolved",
       "kind": "behavior-defect",
       "partition": "PART-241",
       "sha256": "c7a73dea4143759a93ea4f251f66fce2531334ea037205c41a696868be6632fb",
@@ -30348,8 +30348,30 @@
       },
       "verifier": "/root/verify_seed",
       "previous_status": "confirmed",
-      "revalidation_pending": true,
-      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
+      "revalidation_pending": false,
+      "revalidation_reason": "Implemented under user-confirmed AIMPL-C; current result and check receipt hashes revalidated before explicit DELTASK cleanup.",
+      "finding_removed": true,
+      "removed_finding_path": "ARCH-011-ai-guard-final-replacement-budget.md",
+      "closure": {
+        "date": "2026-10-12",
+        "disposition": "implemented",
+        "authorization": "User explicitly requested deletion of ARCH-011 task after completed AIMPL-C implementation.",
+        "reviewed_finding_sha256": "c7a73dea4143759a93ea4f251f66fce2531334ea037205c41a696868be6632fb",
+        "independent_reviewer": "/root/arch011_result_review",
+        "approved_plan_sha256": "7ff52df30ad20088991178afbbf7d763d8111cd9c0515cc30837a72b13c0c247",
+        "reviewed_diff_sha256": "74d306e1f9d0bcceca44f086b825cbd77d4c25c640e0a843a0e4a43fe1ac650c",
+        "reviewed_content_hashes": {
+          "docs/en/user-guide/http-route/filters/edgion-plugins/ai-guard.md": "259a69ab2ed26d51584c9681292312a97a3bca885c39cf5182b80129b55d121d",
+          "docs/zh-CN/user-guide/http-route/filters/edgion-plugins/ai-guard.md": "5b73f360996dd4e74ab82b122e9859960e23fe5ef48d3fa9bc068401549bfc35",
+          "edgion-gateway/src/ai/guards/request/plugin.rs": "0097cf849a963bcd1b78febd06a3c09afbe86d40440cf94193dc3ceb16539bde",
+          "edgion-gateway/tests/unit/ai/guards/request/plugin_test.rs": "f7b5c29bd1b728d673d60e9bc25bc892a03c834cfa887c5c3de77bb482cebfa2",
+          "skills/04-review/plugin-runtime/regression-guards/ai-guard-span-bounds-and-skip-semantics.md": "9feb1415d7c647ab10b9d56f03e2072a5a0fea7201d768b6832861a195a29507"
+        },
+        "verification_receipt_sha256": "4d06b4579c26ecbf9a75bbf10d60a1601a768520dac5c81644d012a80d5345ea",
+        "verification": "56 targeted request-guard tests passed; workspace check/Clippy, format and project guards passed. Existing evidence revalidated unchanged; cleanup runs documentation and diff checks only.",
+        "knowledge": "../../skills/04-review/plugin-runtime/regression-guards/ai-guard-span-bounds-and-skip-semantics.md",
+        "preservation": "Production/tests/docs and reusable semantic knowledge retained. Original inline verification, coverage, partition reports and drift history preserved; no new primary coverage claimed. Dedicated implementation artifacts and source finding/receipt removed."
+      }
     },
     "ARCH-012": {
       "path": "ARCH-012-native-json-utf8-admission-owner.md",
