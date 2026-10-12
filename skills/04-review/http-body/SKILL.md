@@ -16,6 +16,7 @@ before applying a decision to current code.
 
 ## Intentional design
 
+- [Request-body error diagnostics have one runtime classifier](intentional-design/request-body-error-diagnostic-classification.md)
 - [Request-body read contracts belong to the body subsystem](intentional-design/request-body-read-contract-ownership.md)
 
 - [Plugin body filter is read-only by design (bandwidth-throttle only) — DESIGN-TRADEOFF](intentional-design/body-filter-read-only-by-design.md)

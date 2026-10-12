@@ -15,6 +15,7 @@ use serde_json::{Map, Value};
 use crate::plugins::http::common::{
     form_request_headers_are_supported, json_request_headers_are_supported, CappedWriter,
 };
+use crate::plugins::runtime::body_gate::record_body_read_error_status;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::request_body::BodyReadError;
 
@@ -66,23 +67,6 @@ impl FormJsonTransform {
         }
     }
 
-    fn record_body_error(session: &mut dyn PluginSession, error: &BodyReadError) {
-        let status = match error {
-            BodyReadError::BufferLimitExceeded { .. } | BodyReadError::TooLarge { .. } => {
-                Some(EdgionErrorCode::BodyReadTooLarge)
-            }
-            BodyReadError::Timeout => Some(EdgionErrorCode::BodyReadTimeout),
-            BodyReadError::Incomplete => Some(EdgionErrorCode::BodyReadAborted),
-            BodyReadError::Unimplemented => Some(EdgionErrorCode::BodyReadUnimplemented),
-            BodyReadError::NotBuffered => None,
-            BodyReadError::StorageFailure => Some(EdgionErrorCode::BodyCaptureStorageFailed),
-            BodyReadError::GenerationConflict => Some(EdgionErrorCode::BodyMutationConflict),
-        };
-        if let Some(status) = status {
-            session.record_error(status);
-        }
-    }
-
     fn media_supported(&self, session: &dyn PluginSession) -> bool {
         match self.direction {
             FormJsonDirection::FormToJson => form_request_headers_are_supported(session.request_header_map()),
@@ -125,7 +109,7 @@ impl RequestFilter for FormJsonTransform {
         let body_len = match session.request_body_available_len(known_bodyless) {
             Ok(length) => length,
             Err(error) => {
-                Self::record_body_error(session, &error);
+                record_body_read_error_status(session, &error);
                 log.push_err("body length unavailable");
                 return Self::reject(500, None);
             }
@@ -139,7 +123,7 @@ impl RequestFilter for FormJsonTransform {
         let original = match session.read_request_body(None).await {
             Ok(body) => body,
             Err(error) => {
-                Self::record_body_error(session, &error);
+                record_body_read_error_status(session, &error);
                 return match error {
                     BodyReadError::BufferLimitExceeded { .. } | BodyReadError::TooLarge { .. } => {
                         log.push("deny body too large");
@@ -176,7 +160,7 @@ impl RequestFilter for FormJsonTransform {
         };
 
         if let Err(error) = session.overwrite_request_body(transformed).await {
-            Self::record_body_error(session, &error);
+            record_body_read_error_status(session, &error);
             return match error {
                 BodyReadError::BufferLimitExceeded { .. } | BodyReadError::TooLarge { .. } => {
                     log.push("deny output too large");
@@ -193,7 +177,7 @@ impl RequestFilter for FormJsonTransform {
             .is_err()
         {
             if let Err(error) = session.overwrite_request_body(original).await {
-                Self::record_body_error(session, &error);
+                record_body_read_error_status(session, &error);
                 log.push_err("body rollback failed");
             } else {
                 log.push_err("content type update failed");

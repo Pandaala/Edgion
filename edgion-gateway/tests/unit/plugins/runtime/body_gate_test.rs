@@ -695,3 +695,22 @@ fn resolved_logical_limit_checks_exact_u64_lengths() {
         Some(BodyReadError::TooLarge { limit: 4 })
     );
 }
+
+#[test]
+fn physical_buffer_limit_records_too_large_diagnostic_once() {
+    let mut session = session_expecting_error(EdgionErrorCode::BodyReadTooLarge);
+    record_body_read_error_status(&mut session, &BodyReadError::BufferLimitExceeded { limit: 1024 });
+}
+
+#[test]
+fn generation_conflict_records_mutation_conflict_diagnostic_once() {
+    let mut session = session_expecting_error(EdgionErrorCode::BodyMutationConflict);
+    record_body_read_error_status(&mut session, &BodyReadError::GenerationConflict);
+}
+
+#[test]
+fn direct_not_buffered_classification_records_no_additional_diagnostic() {
+    let mut session = MockPluginSession::new();
+    session.expect_record_error().times(0);
+    record_body_read_error_status(&mut session, &BodyReadError::NotBuffered);
+}
