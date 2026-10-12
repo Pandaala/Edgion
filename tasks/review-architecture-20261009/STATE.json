@@ -30185,8 +30185,8 @@
       }
     },
     "ARCH-008": {
-      "path": "ARCH-008-precompiled-ai-backend-lookup-key.md",
-      "status": "candidate",
+      "path": null,
+      "status": "resolved",
       "kind": "architecture-debt",
       "partition": "PART-242",
       "sha256": "9492499a8b8197da10fa3dd25807c97b6a9ab83679f2770858eb426d4a5f1ec2",
@@ -30214,8 +30214,21 @@
       },
       "verifier": "/root/verify_seed",
       "previous_status": "confirmed",
-      "revalidation_pending": true,
-      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
+      "revalidation_pending": false,
+      "revalidation_reason": "Already resolved; current source independently revalidated under AIMPL-C.",
+      "finding_removed": true,
+      "removed_finding_path": "ARCH-008-precompiled-ai-backend-lookup-key.md",
+      "closure": {
+        "date": "2026-10-12",
+        "disposition": "already-resolved; source finding removed at explicit user request",
+        "authorization": "User explicitly requested deletion of the original task file after AIMPL-C revalidation.",
+        "reviewed_finding_sha256": "9492499a8b8197da10fa3dd25807c97b6a9ab83679f2770858eb426d4a5f1ec2",
+        "acceptance_evidence": "../pending/architecture-ai-backend-lookup-key/architecture-ai-backend-lookup-key.md",
+        "independent_reviewer": "/root/arch008_value_review",
+        "knowledge": "../../skills/04-review/ai-routing/regression-guards/precompiled-backend-lookup-keys.md",
+        "verification_limits": "Fresh static inspection; no builds, tests or performance measurements executed. No new primary coverage.",
+        "preservation": "Original verification receipt, source hashes, coverage, partition reports and drift history retained. No production/test/knowledge changes or Git publication."
+      }
     },
     "ARCH-009": {
       "path": "ARCH-009-prepared-ai-admission-input-owner.md",

@@ -16,7 +16,7 @@ Source reviewed: 512 / 1676; 467 primary partitions.
 | ARCH-005 | resolved | architecture-debt | [Closed typed transport admission finding; acceptance evidence](TASK-ACCEPTANCE-ARCH-005-20261012.json) |
 | ARCH-006 | resolved | architecture-debt | [Closed resolved logical body-limit finding; acceptance evidence](TASK-ACCEPTANCE-ARCH-006-20261012.json) |
 | ARCH-007 | implemented | architecture-debt | [Implemented borrowed mTLS candidates; cleanup and verification evidence](TASK-ACCEPTANCE-ARCH-007-20261012.json) |
-| ARCH-008 | candidate | architecture-debt | [Borrow precompiled AI backend lookup keys during request planning](ARCH-008-precompiled-ai-backend-lookup-key.md) |
+| ARCH-008 | resolved | architecture-debt | [Precompiled AI backend lookup keys; maintained resolution evidence](../../skills/04-review/ai-routing/regression-guards/precompiled-backend-lookup-keys.md) |
 | ARCH-009 | candidate | architecture-debt | [Keep credential-admission projection inside the prepared AI attempt](ARCH-009-prepared-ai-admission-input-owner.md) |
 | ARCH-010 | candidate | behavior-defect | [Restrict the shared AI JSON parser to JSON whitespace](ARCH-010-json-span-format-whitespace.md) |
 | ARCH-011 | candidate | behavior-defect | [Give AiGuard composition ownership of the final replacement budget](ARCH-011-ai-guard-final-replacement-budget.md) |
