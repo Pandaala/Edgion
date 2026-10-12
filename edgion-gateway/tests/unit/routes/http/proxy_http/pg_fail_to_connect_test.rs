@@ -1,7 +1,5 @@
-use super::{
-    connect_retry_continuation, finish_ai_connect_failure, finish_expired_connect_deadline,
-    select_expired_connect_deadline, ConnectRetryContinuation::*, ExpiredConnectDeadline,
-};
+use super::{finish_expired_connect_deadline, select_expired_connect_deadline, ExpiredConnectDeadline};
+use crate::ai::http::attempt::on_connect_failure;
 use crate::ai::runtime::attempt::{AttemptScheduler, BackendCredentials, NextStep, SchedulerError};
 use crate::ai::{AiAttemptPlan, AiBackendStore, ReadyAiAttemptPlan};
 use crate::observe::RequestDiagnostic;
@@ -127,12 +125,9 @@ fn assert_deadline_outcome(deadline: ExpiredConnectDeadline, expected_diagnostic
 
 #[test]
 fn disabled_relay_settles_ai_without_selecting_a_successor() {
-    assert_eq!(connect_retry_continuation(true, false), SettleAiOnly);
-    assert_eq!(connect_retry_continuation(true, true), SettleAiAndSelectSuccessor);
-
     let mut ctx = ctx_with_selected_ai_target();
     let mut error = Error::new_up(ErrorType::ConnectError);
-    finish_ai_connect_failure(&mut ctx, SettleAiOnly, &mut error);
+    on_connect_failure(&mut ctx, false, &mut error);
 
     assert!(!error.retry());
     let Some(AiAttemptPlan::Ready(ready)) = ctx.ai_state().and_then(|state| state.attempt_plan.as_ref()) else {
@@ -154,7 +149,7 @@ fn retryable_ai_connect_failure_skips_the_failed_service() {
     let mut ctx = ctx_with_selected_ai_target();
     let mut error = Error::new_up(ErrorType::ConnectError);
 
-    finish_ai_connect_failure(&mut ctx, SettleAiAndSelectSuccessor, &mut error);
+    on_connect_failure(&mut ctx, true, &mut error);
 
     assert!(error.retry());
     let Some(AiAttemptPlan::Ready(ready)) = ctx.ai_state_mut().and_then(|state| state.attempt_plan.as_mut()) else {
@@ -182,15 +177,39 @@ fn ai_connect_failure_without_scheduler_advancement_is_not_retryable() {
     let mut ctx = EdgionHttpContext::new();
     let mut error = Error::new_up(ErrorType::ConnectError);
 
-    finish_ai_connect_failure(&mut ctx, SettleAiAndSelectSuccessor, &mut error);
+    on_connect_failure(&mut ctx, true, &mut error);
 
     assert!(!error.retry());
 }
 
 #[test]
 fn disabled_relay_stops_before_ordinary_retry_budget() {
-    assert_eq!(connect_retry_continuation(false, false), Stop);
-    assert_eq!(connect_retry_continuation(false, true), EvaluateOrdinaryBudget);
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            use tokio::io::AsyncWriteExt;
+            let (mut client, server) = tokio::io::duplex(4096);
+            client.write_all(b"GET / HTTP/1.1\r\nHost: test\r\n\r\n").await.unwrap();
+            let stream: pingora_core::protocols::Stream = Box::new(server);
+            let mut session = pingora_proxy::Session::new_h1(stream);
+            assert!(session.read_request().await.unwrap());
+            assert!(!session.request_relay_retry_state().can_start_next_attempt());
+            let mut ctx = ctx_with_attempt();
+            let proxy = crate::ai::http::attempt::tests::proxy_fixture();
+            let peer = pingora_core::prelude::HttpPeer::new("127.0.0.1:30001", false, String::new());
+            let error = super::fail_to_connect(
+                &proxy,
+                &mut session,
+                &peer,
+                &mut ctx,
+                Error::new_up(ErrorType::ConnectError),
+            );
+            assert!(!error.retry());
+            assert!(ctx.ai_state().is_none());
+            assert!(!ctx.diagnostics.contains_error(EdgionErrorCode::RetryBudgetExhausted));
+        });
 }
 
 #[test]

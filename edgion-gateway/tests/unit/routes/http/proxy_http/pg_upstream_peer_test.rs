@@ -1,12 +1,9 @@
 use super::{
-    ai_predispatch_deadline_mapping, ai_predispatch_error, apply_upstream_authority_decision,
-    apply_upstream_read_timeout_override, backend_select_status, backoff_action, choose_typed_retry_budget,
-    decide_upstream_authority, decide_want_raw, direct_backend_metadata, finalize_request_uri, fold_peer_timeouts,
-    init_backend_context_if_needed, pick_backend_ref, replay_write_floor, sp_should_refresh_on_cross_attempt_retry,
-    sp_should_repin_on_strict_retry, stop_ai_predispatch_if_expired, AuthorityDecision, BackoffAction,
+    apply_upstream_authority_decision, apply_upstream_read_timeout_override, backend_select_status, backoff_action,
+    choose_typed_retry_budget, decide_upstream_authority, decide_want_raw, direct_backend_metadata,
+    finalize_request_uri, fold_peer_timeouts, init_backend_context_if_needed, pick_backend_ref, replay_write_floor,
+    sp_should_refresh_on_cross_attempt_retry, sp_should_repin_on_strict_retry, AuthorityDecision, BackoffAction,
 };
-use crate::ai::runtime::dispatch::AiDispatchError;
-use crate::ai::{render_openai_error, AiProxyError};
 use crate::backends::policy::backend_traffic::authority::AuthorityError;
 use crate::backends::policy::backend_traffic::RetryBudget;
 use crate::backends::runtime::CompiledBackendTarget;
@@ -29,140 +26,22 @@ use tokio::io::AsyncWriteExt;
 
 #[tokio::test]
 async fn ai_predispatch_error_writes_current_request_ids_on_wire() {
-    use tokio::io::AsyncReadExt;
-    let proxy = super::EdgionHttpProxy {
-        listener_port: 80,
-        is_https_listener: false,
-        listener_key: edgion_resources::ListenerKey("ai-id-test/HTTP".to_string()),
-        server_header_opts: Default::default(),
-        access_logger: Arc::new(crate::observe::AccessLogger::default()),
-        egc: crate::config::bind_gateway_config(None),
-        enable_http2: false,
-        preflight_handler: super::super::PreflightHandler,
-        http_route_manager: Arc::new(crate::routes::http::routes_mgr::HttpPortRouteManager::default()),
-        grpc_route_manager: Arc::new(crate::routes::grpc::GrpcPortRouteManager::default()),
-    };
-    for disable_default in [false, true] {
-        let (mut client, server) = tokio::io::duplex(8192);
-        client
-            .write_all(b"POST /v1/chat/completions HTTP/1.1\r\nHost: test\r\nContent-Length: 0\r\n\r\n")
-            .await
-            .unwrap();
-        let stream: pingora_core::protocols::Stream = Box::new(server);
-        let mut session = Session::new_h1(stream);
-        assert!(session.read_request().await.unwrap());
-        let mut ctx = EdgionHttpContext::default();
-        ctx.request_info.trace_id.initialize(&session.req_header().headers);
-        let expected = ctx.request_info.trace_id.standard_trace_id().unwrap().to_owned();
-        if disable_default {
-            let config = serde_json::from_value(serde_json::json!({
-                "defaultId":{"enabled":false},
-                "ids":[{"header":"x-ai-correlation-id","source":{"type":"traceId"}}]
-            }))
-            .unwrap();
-            let plugin = edgion_resources::EdgionPlugins::new(
-                "ai-ids",
-                edgion_resources::EdgionPluginsSpec {
-                    current_status: None,
-                    request_plugins: Some(vec![edgion_resources::RequestFilterEntry::new(
-                        edgion_resources::EdgionPlugin::RequestId(config),
-                    )]),
-                    ..Default::default()
-                },
-            );
-            crate::plugins::http::compile_plugins(&plugin)
-                .plugin_runtime
-                .run_request_plugins(&mut session, &mut ctx)
-                .await;
-        }
-        super::end_ai_predispatch_error(&proxy, &mut session, &mut ctx, AiProxyError::BackendUnavailable)
-            .await
-            .unwrap();
-        let mut bytes = vec![0; 4096];
-        let count = tokio::time::timeout(Duration::from_secs(1), client.read(&mut bytes))
-            .await
-            .unwrap()
-            .unwrap();
-        let wire = std::str::from_utf8(&bytes[..count]).unwrap();
-        let headers = wire.split("\r\n\r\n").next().unwrap().to_ascii_lowercase();
-        assert!(headers.starts_with("http/1.1 503"));
-        assert!(headers.contains("content-type: application/json"));
-        if disable_default {
-            assert!(!headers.contains("x-trace-id:"));
-            assert!(headers.contains(&format!("x-ai-correlation-id: {expected}")));
-        } else {
-            assert!(headers.contains(&format!("x-trace-id: {expected}")));
-        }
-        assert!(!headers.contains("traceparent:"));
-    }
+    crate::ai::http::attempt::tests::ai_predispatch_error_writes_current_request_ids_on_wire().await;
 }
 
 #[test]
 fn ai_unavailable_maps_to_fixed_openai_backend_unavailable() {
-    assert_eq!(
-        ai_predispatch_error(AiDispatchError::Unavailable),
-        Some(AiProxyError::BackendUnavailable)
-    );
-    assert_eq!(
-        ai_predispatch_error(AiDispatchError::Client(AiProxyError::UnsupportedParameter)),
-        Some(AiProxyError::UnsupportedParameter)
-    );
-    assert_eq!(
-        ai_predispatch_error(AiDispatchError::Client(AiProxyError::MalformedBody)),
-        Some(AiProxyError::MalformedBody)
-    );
-    assert_eq!(ai_predispatch_error(AiDispatchError::Rejected), None);
-    assert_eq!(ai_predispatch_error(AiDispatchError::InvalidConfiguration), None);
-    assert_eq!(ai_predispatch_error(AiDispatchError::RequestDeadlineExceeded), None);
-    assert_eq!(ai_predispatch_error(AiDispatchError::GrpcDeadlineExceeded), None);
-
-    let (status, body) = render_openai_error(AiProxyError::BackendUnavailable);
-    let body: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(status, 503);
-    assert_eq!(body["error"]["type"], "api_error");
-    assert_eq!(body["error"]["code"], "service_unavailable");
-    assert_eq!(body["error"].as_object().unwrap().len(), 3);
-
-    let (status, body) = render_openai_error(AiProxyError::MalformedBody);
-    let body: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(status, 400);
-    assert_eq!(body["error"]["type"], "invalid_request_error");
-    assert_eq!(body["error"]["code"], "invalid_request_body");
+    crate::ai::http::attempt::tests::ai_unavailable_maps_to_fixed_openai_backend_unavailable();
 }
 
 #[test]
 fn ai_predispatch_deadlines_map_to_standard_gateway_statuses() {
-    assert_eq!(
-        ai_predispatch_deadline_mapping(&AiDispatchError::RequestDeadlineExceeded),
-        Some((
-            EdgionErrorCode::RequestTimeoutExceeded,
-            "Request timeout exceeded during AI predispatch selection",
-        ))
-    );
-    assert_eq!(
-        ai_predispatch_deadline_mapping(&AiDispatchError::GrpcDeadlineExceeded),
-        Some((
-            EdgionErrorCode::GrpcClientDeadlineExceeded,
-            "gRPC client deadline exceeded during AI predispatch selection",
-        ))
-    );
-    assert_eq!(ai_predispatch_deadline_mapping(&AiDispatchError::Unavailable), None);
+    crate::ai::http::attempt::tests::ai_predispatch_deadlines_map_to_standard_gateway_statuses();
 }
 
 #[tokio::test]
 async fn post_io_predispatch_gate_returns_standard_deadline_error() {
-    let mut ctx = EdgionHttpContext::new();
-    ctx.request_info
-        .set_grpc_client_deadline(Instant::now() - Duration::from_secs(1));
-
-    let response = stop_ai_predispatch_if_expired(&mut ctx)
-        .await
-        .expect("expired gRPC deadline must stop predispatch");
-
-    assert_eq!(response.etype(), &ErrorType::HTTPStatus(504));
-    assert!(ctx
-        .diagnostics
-        .contains_error(EdgionErrorCode::GrpcClientDeadlineExceeded));
+    crate::ai::http::attempt::tests::post_io_predispatch_gate_returns_standard_deadline_error().await;
 }
 
 #[test]

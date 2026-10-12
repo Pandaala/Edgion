@@ -1,13 +1,6 @@
 use super::EdgionHttpProxy;
-use crate::ai::protocols::error::render_ai_error;
-use crate::ai::runtime::dispatch::{
-    ai_predispatch_deadline, commit_ai_attempt_context, prepare_first_attempt, AiDispatchError,
-    AiPeerPredispatchFailure, PreparedAiAttempt,
-};
-use crate::ai::AiProxyError;
-use crate::backends::peer_builder::{
-    apply_backend_app_protocol, create_tls_peer, extract_tls_config, parse_backend_app_protocol,
-};
+use crate::ai::http::attempt;
+use crate::backends::peer_builder::{apply_backend_app_protocol, extract_tls_config, parse_backend_app_protocol};
 use crate::backends::policy::backend_traffic::authority::{render_authority, AuthorityError};
 use crate::backends::policy::backend_traffic::store::get_backend_traffic_policy_store;
 use crate::backends::policy::backend_traffic::RetryBudget;
@@ -17,7 +10,6 @@ use crate::backends::{get_peer, try_get_peer};
 use crate::backends::{SelectedHttpBackend, SelectedLogicalBackend, SelectedServiceBackend};
 use crate::ctx::BackendSource;
 use crate::observe::metrics::record_authority_rejected;
-use crate::plugins::http::common::outbound::egress::{default_block_private, filter_resolved_addrs, EgressPolicy};
 use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
 use crate::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::routes::grpc::handle_grpc_upstream;
@@ -26,84 +18,15 @@ use crate::routes::http::session_persistence;
 use crate::util::net::{classify_backend_addr, resolve_domain, BlockedBackendReason};
 use crate::{end_response_500, end_response_503, end_response_grpc_unavailable, terminate_with_fallback};
 use crate::{EdgionHttpContext, SessionPersistenceState, UpstreamJumpTarget};
-use bytes::Bytes;
-use edgion_common::dns::resolve;
 use edgion_resources::err::EdError;
 use edgion_resources::path_normalization::get_path_normalization_config;
 use edgion_resources::EdgionErrorCode;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
 use pingora_core::upstreams::peer::Peer;
-use pingora_core::{BError, Error as PingoraError, ErrorType};
-use pingora_http::ResponseHeader;
+use pingora_core::{Error as PingoraError, ErrorType};
 use pingora_proxy::Session;
 use std::sync::Arc;
-
-fn ai_predispatch_error(error: AiDispatchError) -> Option<AiProxyError> {
-    match error {
-        AiDispatchError::Unavailable => Some(AiProxyError::BackendUnavailable),
-        AiDispatchError::Client(error) => Some(error),
-        AiDispatchError::Rejected
-        | AiDispatchError::InvalidConfiguration
-        | AiDispatchError::RequestDeadlineExceeded
-        | AiDispatchError::GrpcDeadlineExceeded => None,
-    }
-}
-
-fn ai_predispatch_deadline_mapping(error: &AiDispatchError) -> Option<(EdgionErrorCode, &'static str)> {
-    match error {
-        AiDispatchError::RequestDeadlineExceeded => Some((
-            EdgionErrorCode::RequestTimeoutExceeded,
-            "Request timeout exceeded during AI predispatch selection",
-        )),
-        AiDispatchError::GrpcDeadlineExceeded => Some((
-            EdgionErrorCode::GrpcClientDeadlineExceeded,
-            "gRPC client deadline exceeded during AI predispatch selection",
-        )),
-        _ => None,
-    }
-}
-
-fn ai_predispatch_deadline_response(error: &AiDispatchError, ctx: &mut EdgionHttpContext) -> Option<BError> {
-    let (status, detail) = ai_predispatch_deadline_mapping(error)?;
-    ctx.record_error(status);
-    if let Some(upstream) = ctx.get_current_upstream_mut() {
-        upstream.status = Some(504);
-    }
-    Some(PingoraError::explain(ErrorType::HTTPStatus(504), detail))
-}
-
-/// Stop after an I/O-bearing predispatch step if either end-to-end deadline
-/// expired while it was in flight. An installed admission remains
-/// predispatch, so release and drain it before returning the timeout.
-async fn stop_ai_predispatch_if_expired(ctx: &mut EdgionHttpContext) -> Option<BError> {
-    let error = ai_predispatch_deadline(ctx)?;
-    let response = ai_predispatch_deadline_response(&error, ctx)?;
-    if let Some(state) = ctx.ai_state_mut() {
-        state.attempt_runtime.finish_predispatch();
-        state.attempt_runtime.drain_pending().await;
-    }
-    Some(response)
-}
-
-async fn end_ai_predispatch_error(
-    edgion_http: &EdgionHttpProxy,
-    session: &mut Session,
-    ctx: &mut EdgionHttpContext,
-    error: AiProxyError,
-) -> pingora_core::Result<()> {
-    let (status, body) = render_ai_error(ctx, error);
-    let mut response = ResponseHeader::build(status, None)?;
-    edgion_http.server_header_opts.apply_to_response(&mut response);
-    response.insert_header("content-type", "application/json")?;
-    response.insert_header("content-length", body.len().to_string())?;
-    if !ctx.claim_final_response(status) {
-        return Ok(());
-    }
-    ctx.request_info.trace_id.reconcile_response(&mut response);
-    session.write_response_header(Box::new(response), false).await?;
-    session.write_response_body(Some(Bytes::from(body)), true).await
-}
 
 /// Outcome of the retry-backoff minimum-wait decision (GEP-1731 conformance).
 #[derive(Debug, PartialEq, Eq)]
@@ -545,87 +468,7 @@ pub async fn upstream_peer_http(
     // AI forwarding owns a typed external peer path and never writes the
     // generic first-write-wins upstream-jump slot.
     if ctx.has_ai_attempt_plan() {
-        let entropy = uuid::Uuid::new_v4().as_u128();
-        let route_retry_cap = ctx.retry_attempts();
-        if let Some(state) = ctx.ai_state_mut() {
-            state.attempt_runtime.drain_pending().await;
-        }
-        loop {
-            let mut target = match prepare_first_attempt(session, ctx, entropy, route_retry_cap, ctx.egc.retry_attempts)
-            {
-                Ok(target) => target,
-                Err(error) => {
-                    if let Some(response) = ai_predispatch_deadline_response(&error, ctx) {
-                        return Err(response);
-                    }
-                    if let Some(error) = ai_predispatch_error(error) {
-                        end_ai_predispatch_error(edgion_http, session, ctx, error).await?;
-                    } else {
-                        end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
-                    }
-                    return Err(PingoraError::new(ErrorType::InternalError));
-                }
-            };
-            let admission_input = target
-                .admission_input()
-                .map_err(|_| PingoraError::new(ErrorType::InternalError))?;
-            let admission = ctx.ensure_ai_state().attempt_runtime.admit(admission_input).await;
-            match admission {
-                crate::ai::runtime::attempt_runtime::AiAttemptAdmission::Ready(runtime) => {
-                    ctx.ensure_ai_state().attempt_runtime.install(runtime);
-                    if let Some(response) = stop_ai_predispatch_if_expired(ctx).await {
-                        return Err(response);
-                    }
-                    let peer = try_ai_backend_peer(edgion_http, ctx, &target).await;
-                    if let Some(response) = stop_ai_predispatch_if_expired(ctx).await {
-                        return Err(response);
-                    }
-                    match peer {
-                        Ok(peer) => {
-                            commit_ai_attempt_context(ctx, &mut target)
-                                .map_err(|_| PingoraError::new(ErrorType::InternalError))?;
-                            return Ok(peer);
-                        }
-                        Err(failure) => {
-                            if !failure.finish(ctx) {
-                                end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
-                                return Err(PingoraError::new(ErrorType::InternalError));
-                            }
-                            if let Some(state) = ctx.ai_state_mut() {
-                                state.attempt_runtime.drain_pending().await;
-                            }
-                        }
-                    }
-                }
-                crate::ai::runtime::attempt_runtime::AiAttemptAdmission::Skip => {
-                    if let Some(response) = stop_ai_predispatch_if_expired(ctx).await {
-                        return Err(response);
-                    }
-                    if !crate::ai::runtime::dispatch::handle_ai_predispatch_failure(ctx, true) {
-                        end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
-                        return Err(PingoraError::new(ErrorType::InternalError));
-                    }
-                }
-                crate::ai::runtime::attempt_runtime::AiAttemptAdmission::SkipBackend => {
-                    if let Some(response) = stop_ai_predispatch_if_expired(ctx).await {
-                        return Err(response);
-                    }
-                    if !crate::ai::runtime::dispatch::handle_ai_predispatch_service_failure(ctx) {
-                        end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
-                        return Err(PingoraError::new(ErrorType::InternalError));
-                    }
-                }
-                crate::ai::runtime::attempt_runtime::AiAttemptAdmission::DependencyDenied => {
-                    if let Some(response) = stop_ai_predispatch_if_expired(ctx).await {
-                        return Err(response);
-                    }
-                    if !crate::ai::runtime::dispatch::handle_ai_predispatch_failure(ctx, true) {
-                        end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
-                        return Err(PingoraError::new(ErrorType::InternalError));
-                    }
-                }
-            }
-        }
+        return attempt::select_peer(edgion_http, session, ctx).await;
     }
 
     // 0/1. Upstream-jump slot (Direct/External bypass; Internal falls through to LB).
@@ -1359,107 +1202,6 @@ fn finish_static_peer(
     configure_peer_timeouts(edgion_http, &mut peer, ctx);
     backfill_upstream_addr(&peer, ctx);
     Ok(peer)
-}
-
-async fn try_ai_backend_peer(
-    edgion_http: &EdgionHttpProxy,
-    ctx: &mut EdgionHttpContext,
-    target: &PreparedAiAttempt,
-) -> Result<Box<HttpPeer>, AiPeerPredispatchFailure> {
-    let endpoint = &target.selected.backend.endpoint;
-    let addr = resolve_ai_endpoint(ctx, &endpoint.domain, endpoint.port).await?;
-    let compiled_target = match target.selected.logical().target() {
-        CompiledBackendTarget::EdgionBackend(target) => target,
-        CompiledBackendTarget::Service(_) | CompiledBackendTarget::Invalid { .. } => {
-            return Err(AiPeerPredispatchFailure::Endpoint);
-        }
-    };
-    let (namespace, name) = (compiled_target.namespace(), compiled_target.name());
-    ctx.backend_context = Some(crate::ctx::BackendContext {
-        source: Some(BackendSource::AiBackend),
-        rsc: Some(crate::Rsc::new("EdgionBackend", namespace, name)),
-        service_key: Some(compiled_target.key().to_owned()),
-        service_kind: None,
-        upstreams: Vec::new(),
-        current_upstream_id: None,
-        backend_ref_idx: Some(target.selected.logical().slot()),
-        effective_policy: None,
-    });
-    ctx.ensure_ai_state().effective_policy = target.selected.effective_policy.clone();
-
-    if target.selected.backend_tls_policy.is_invalid() {
-        ctx.record_error(edgion_resources::EdgionErrorCode::BackendTlsPolicyInvalid);
-        return Err(AiPeerPredispatchFailure::Endpoint);
-    }
-    if target.selected.backend_tls_policy.effective().is_some() && !endpoint.use_tls {
-        return Err(AiPeerPredispatchFailure::Endpoint);
-    }
-    let mut peer = match &target.selected.backend_tls_policy {
-        crate::backends::policy::BackendTlsPolicyLookup::Effective(effective) => {
-            create_tls_peer(PingoraSocketAddr::Inet(addr), effective, None).map_err(|status| {
-                ctx.record_error(status);
-                AiPeerPredispatchFailure::Endpoint
-            })?
-        }
-        crate::backends::policy::BackendTlsPolicyLookup::Absent => {
-            Box::new(HttpPeer::new(addr, endpoint.use_tls, endpoint.sni.clone()))
-        }
-        crate::backends::policy::BackendTlsPolicyLookup::Invalid => {
-            ctx.record_error(edgion_resources::EdgionErrorCode::BackendTlsPolicyInvalid);
-            return Err(AiPeerPredispatchFailure::Endpoint);
-        }
-    };
-    begin_ai_peer_attempt(ctx);
-    let (use_tls, sni) = match &target.selected.backend_tls_policy {
-        crate::backends::policy::BackendTlsPolicyLookup::Effective(_) => {
-            extract_tls_config(&target.selected.backend_tls_policy)
-        }
-        crate::backends::policy::BackendTlsPolicyLookup::Absent => (endpoint.use_tls, endpoint.sni.clone()),
-        crate::backends::policy::BackendTlsPolicyLookup::Invalid => {
-            ctx.record_error(edgion_resources::EdgionErrorCode::BackendTlsPolicyInvalid);
-            return Err(AiPeerPredispatchFailure::Endpoint);
-        }
-    };
-    crate::backends::peer_builder::record_tls_to_upstream(ctx, use_tls, &sni);
-    configure_peer_timeouts(edgion_http, &mut peer, ctx);
-    backfill_upstream_addr(&peer, ctx);
-    Ok(peer)
-}
-
-async fn resolve_ai_endpoint(
-    ctx: &EdgionHttpContext,
-    domain: &str,
-    port: u16,
-) -> Result<std::net::SocketAddr, AiPeerPredispatchFailure> {
-    let spec = crate::backends::compute_routed_external_resolver(ctx);
-    let addrs = resolve(&spec, domain)
-        .await
-        .map_err(|_| AiPeerPredispatchFailure::Endpoint)?;
-    filter_resolved_addrs(
-        addrs,
-        EgressPolicy {
-            block_private: default_block_private(),
-        },
-        ctx.allow_loopback_upstream,
-    )
-    .into_iter()
-    .next()
-    .map(|ip| std::net::SocketAddr::new(ip, port))
-    .ok_or(AiPeerPredispatchFailure::Endpoint)
-}
-
-/// Record pre-connect AI peer selection without crossing the AI dispatch or
-/// retry-budget boundary. The upstream-request hook marks dispatch after a
-/// successful connect, immediately before request headers/body are written.
-fn begin_ai_peer_attempt(ctx: &mut EdgionHttpContext) {
-    if let Some(upstream) = ctx.get_current_upstream_mut() {
-        crate::lb::finalize_attempt(upstream);
-    }
-    ctx.try_cnt += 1;
-    ctx.push_upstream(None, None);
-    if ctx.upstream_start_time.is_none() {
-        ctx.upstream_start_time = Some(std::time::Instant::now());
-    }
 }
 
 /// DirectEndpoint bypass path (exact IP set by a plugin, e.g. dynamic_endpoint).

@@ -11,7 +11,9 @@ knowledge_type: intentional-design
 The AI portion of ARCH-001 uses one required `PluginSession::ai()` accessor
 returning `&mut dyn AiSessionCapability`. Twelve operations live in
 `plugins/runtime/traits/ai_session.rs`; PingoraSessionAdapter implements the trait
-directly and returns itself. This removes AI operation growth from the common
+directly and returns itself. The implementation lives physically in
+`ai/http/session.rs`, mounted only as a private child of `session_adapter.rs`;
+parent fields keep their original visibility. This removes AI operation growth from the common
 trait/mock without claiming whole-crate isolation: ctx() and Gateway integration
 still expose feature dependencies. The separately accepted WAF decision retains
 its scope and contracts.

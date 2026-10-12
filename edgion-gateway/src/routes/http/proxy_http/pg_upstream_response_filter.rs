@@ -1,5 +1,6 @@
 use super::pg_upstream_response_body_filter::{enforce_stream_processor_framing, run_stream_processor_headers};
 use super::EdgionHttpProxy;
+use crate::ai::http::attempt::{self, RetryTransportFacts};
 use crate::routes::http::session_persistence;
 use crate::runtime::server::server_header::ServerHeaderOpts;
 use crate::{EdgionHttpContext, ResponseStageDenial, SessionPersistenceState};
@@ -178,64 +179,14 @@ pub fn upstream_response_filter(
     }
 
     if ctx.has_ai_attempt_plan() {
-        let wants_retry = status_code != 101
-            && ctx
-                .route_unit
-                .as_ref()
-                .and_then(|route| route.rule.parsed_retry.as_ref())
-                .and_then(|retry| retry.codes.as_ref())
-                .is_some_and(|codes| codes.contains(&status_code));
-        if status_code == 429 {
-            crate::ai::http::response::apply_provider_cooldown(ctx, upstream_response);
-        }
-        let failure_class = crate::backends::FailureClass::from_http_status(status_code)
-            .or_else(|| (status_code == 429 || wants_retry).then_some(crate::backends::FailureClass::Application));
-        if let Some(active) = ctx.ai_state_mut().and_then(|state| state.attempt_runtime.active_mut()) {
-            active.record_response(status_code, failure_class);
-        }
-        let buffer_ok = session.request_relay_retry_state().can_start_next_attempt();
-        let gates_allow_retry = !ctx.request_timeout_exceeded()
-            && !ctx.grpc_deadline_exceeded()
-            && !ctx.response_write_started()
-            && !has_final_response_written(session)
-            && buffer_ok;
-        match crate::ai::runtime::dispatch::handle_ai_response(ctx, wants_retry, gates_allow_retry)
-            .map_err(|_| pingora_core::Error::new(pingora_core::ErrorType::InternalError))?
-        {
-            crate::ai::runtime::dispatch::AiRetryDecision::Retry => {
-                if let Some(state) = ctx.ai_state_mut() {
-                    state
-                        .attempt_runtime
-                        .finish_failure(crate::ai::runtime::attempt_runtime::AiAttemptFailure::Known(
-                            failure_class.unwrap_or(crate::backends::FailureClass::Application),
-                        ));
-                }
-                ctx.retry_on_status = true;
-                if let Some(upstream) = ctx.get_current_upstream_mut() {
-                    upstream.err.push("AiRetryOnStatus".to_string());
-                }
-                return Err(pingora_core::Error::explain(
-                    pingora_core::ErrorType::HTTPStatus(status_code),
-                    "AI retry on upstream status",
-                ));
-            }
-            crate::ai::runtime::dispatch::AiRetryDecision::BudgetDenied => {
-                if let Some(state) = ctx.ai_state_mut() {
-                    state
-                        .attempt_runtime
-                        .finish_failure(crate::ai::runtime::attempt_runtime::AiAttemptFailure::Known(
-                            failure_class.unwrap_or(crate::backends::FailureClass::Application),
-                        ));
-                }
-                crate::observe::metrics::record_retry_budget_denied();
-                ctx.record_error(EdgionErrorCode::RetryBudgetExhausted);
-                return Err(pingora_core::Error::explain(
-                    pingora_core::ErrorType::HTTPStatus(503),
-                    "AI retry budget exhausted",
-                ));
-            }
-            crate::ai::runtime::dispatch::AiRetryDecision::Final => {}
-        }
+        attempt::on_raw_response(
+            ctx,
+            upstream_response,
+            RetryTransportFacts {
+                relay_allows_retry: session.request_relay_retry_state().can_start_next_attempt(),
+                final_response_written: has_final_response_written(session),
+            },
+        )?;
     } else {
         // Check if status code triggers retry based on rule.retry.codes
         if let Some(route_unit) = ctx.route_unit.as_ref() {

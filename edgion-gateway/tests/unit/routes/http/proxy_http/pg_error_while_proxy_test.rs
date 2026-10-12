@@ -1,7 +1,6 @@
 use super::{
-    ai_dispatch_should_retry, ai_failure_wants_retry, ambiguous_decided_h2_retry_allowed, classify_ai_proxy_failure,
-    decide_retry, is_backend_request_timeout_retry_candidate, pingora_decided_retry_exhausted,
-    should_record_local_origin_failure, AiProxyFailureClass, MAX_PINGORA_DECIDED_RETRIES,
+    ambiguous_decided_h2_retry_allowed, decide_retry, is_backend_request_timeout_retry_candidate,
+    pingora_decided_retry_exhausted, should_record_local_origin_failure, MAX_PINGORA_DECIDED_RETRIES,
 };
 use crate::EdgionHttpContext;
 use crate::PeerTimeoutSource;
@@ -98,15 +97,7 @@ fn ambiguous_decided_h2_retry_requires_every_safety_gate() {
 
 #[test]
 fn ai_final_and_dispatch_error_clear_incoming_retry_decision() {
-    use crate::ai::runtime::dispatch::AiRetryDecision;
-    let retry: Result<_, ()> = Ok(AiRetryDecision::Retry);
-    let final_decision: Result<_, ()> = Ok(AiRetryDecision::Final);
-    let budget_denied: Result<_, ()> = Ok(AiRetryDecision::BudgetDenied);
-    let dispatch_error: Result<AiRetryDecision, _> = Err(());
-    assert!(ai_dispatch_should_retry(&retry));
-    assert!(!ai_dispatch_should_retry(&final_decision));
-    assert!(!ai_dispatch_should_retry(&budget_denied));
-    assert!(!ai_dispatch_should_retry(&dispatch_error));
+    crate::ai::http::attempt::tests::ai_final_and_dispatch_error_clear_incoming_retry_decision();
 }
 
 async fn write_response_status(session: &mut Session, status: u16) {
@@ -154,58 +145,12 @@ fn local_origin_recording_excludes_status_control_flow() {
 
 #[test]
 fn ai_failure_classification_excludes_control_flow_and_non_upstream_errors() {
-    assert_eq!(
-        classify_ai_proxy_failure(
-            &ErrorType::HTTPStatus(503),
-            &ErrorSource::Upstream,
-            Some(PeerTimeoutSource::BackendRequest),
-        ),
-        None
-    );
-    assert_eq!(
-        classify_ai_proxy_failure(&ErrorType::ReadError, &ErrorSource::Downstream, None),
-        None
-    );
-    assert_eq!(
-        classify_ai_proxy_failure(&ErrorType::ReadError, &ErrorSource::Upstream, None),
-        Some(AiProxyFailureClass::AmbiguousUpstream)
-    );
-    assert_eq!(
-        classify_ai_proxy_failure(&ErrorType::InternalError, &ErrorSource::Upstream, None),
-        None
-    );
-    assert_eq!(
-        classify_ai_proxy_failure(
-            &ErrorType::ReadTimedout,
-            &ErrorSource::Upstream,
-            Some(PeerTimeoutSource::BackendRequest),
-        ),
-        Some(AiProxyFailureClass::BackendRequestTimeout)
-    );
+    crate::ai::http::attempt::tests::ai_failure_classification_excludes_control_flow_and_non_upstream_errors();
 }
 
 #[test]
 fn ambiguous_upstream_requires_explicit_replay_opt_in() {
-    assert!(!ai_failure_wants_retry(
-        AiProxyFailureClass::AmbiguousUpstream,
-        true,
-        false
-    ));
-    assert!(ai_failure_wants_retry(
-        AiProxyFailureClass::AmbiguousUpstream,
-        true,
-        true
-    ));
-    assert!(ai_failure_wants_retry(
-        AiProxyFailureClass::BackendRequestTimeout,
-        true,
-        false
-    ));
-    assert!(!ai_failure_wants_retry(
-        AiProxyFailureClass::BackendRequestTimeout,
-        false,
-        true
-    ));
+    crate::ai::http::attempt::tests::ambiguous_upstream_requires_explicit_replay_opt_in();
 }
 
 #[tokio::test]

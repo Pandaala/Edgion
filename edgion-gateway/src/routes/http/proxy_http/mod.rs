@@ -52,6 +52,7 @@ pub(crate) use global_plugins_resolve::select_waf_owner;
 pub(crate) use global_plugins_resolve::{resolve_gateway_plugins, resolve_global_plugins, resolve_route_ext_refs};
 pub use parse_timeout::{ParsedBackendTimeout, ParsedClientTimeout, ParsedTimeouts};
 pub(crate) use pg_early_request_filter::apply_client_policy;
+pub(crate) use pg_upstream_peer::{backfill_upstream_addr, configure_peer_timeouts};
 pub use preflight_handler::PreflightHandler;
 
 /// Returns whether the configured retry budget permits another upstream attempt.

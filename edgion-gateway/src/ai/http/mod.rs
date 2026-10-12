@@ -1,5 +1,6 @@
 //! AI HTTP lifecycle integration.
 
+pub(crate) mod attempt;
 pub(crate) mod proxy;
 pub(crate) mod response;
 
@@ -20,6 +21,27 @@ pub(crate) async fn finalize(ctx: &mut EdgionHttpContext) {
         state.unary_owner = None;
     }
     crate::ai::accounting::finalize::finalize(ctx).await;
+}
+
+/// Finalize semantic processing at the late logging boundary, after stream logs.
+pub(crate) async fn finalize_semantic_for_logging(
+    ctx: &mut EdgionHttpContext,
+    error_source: Option<&pingora_core::ErrorSource>,
+) {
+    use pingora_core::ErrorSource;
+
+    let (outcome, reason) = match error_source {
+        Some(ErrorSource::Upstream) => ("upstream-abort", "stream-error"),
+        Some(ErrorSource::Downstream) | None => ("cancelled", "downstream-cancel"),
+        Some(ErrorSource::Internal | ErrorSource::Unset) => ("fail-close", "internal-stream-error"),
+    };
+    if let Some(driver) = ctx.response_processor_driver() {
+        driver.finalize_semantic_incomplete(outcome, reason).await;
+    } else if let Some(processor) = ctx.ai_state_mut().and_then(|state| state.semantic_processor.as_mut()) {
+        // Local replies and response-stage denials can finish before the final
+        // response header freezes the builder slots into a driver.
+        processor.finalize_incomplete(outcome, reason);
+    }
 }
 
 pub(crate) fn finalize_guardrail_log(ctx: &mut EdgionHttpContext) {
@@ -50,3 +72,7 @@ pub(crate) fn finalize_guardrail_log(ctx: &mut EdgionHttpContext) {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/ai/http/mod_test.rs"]
+mod tests;

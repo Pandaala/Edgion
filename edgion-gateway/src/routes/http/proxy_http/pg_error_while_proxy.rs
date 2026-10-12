@@ -1,5 +1,6 @@
 use super::pg_upstream_response_filter::has_final_response_written;
 use super::EdgionHttpProxy;
+use crate::ai::http::attempt::{self, RetryTransportFacts};
 use crate::{EdgionHttpContext, PeerTimeoutSource};
 use edgion_resources::EdgionErrorCode;
 use pingora_core::prelude::HttpPeer;
@@ -17,28 +18,6 @@ fn should_record_local_origin_failure(
         && !matches!(error_source, ErrorSource::Downstream)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AiProxyFailureClass {
-    BackendRequestTimeout,
-    AmbiguousUpstream,
-}
-
-fn ai_failure_wants_retry(
-    class: AiProxyFailureClass,
-    retry_configured: bool,
-    retry_allow_non_idempotent: bool,
-) -> bool {
-    match class {
-        AiProxyFailureClass::BackendRequestTimeout => retry_configured,
-        AiProxyFailureClass::AmbiguousUpstream => retry_allow_non_idempotent,
-    }
-}
-
-#[inline]
-fn ai_dispatch_should_retry<E>(decision: &Result<crate::ai::runtime::dispatch::AiRetryDecision, E>) -> bool {
-    matches!(decision, Ok(crate::ai::runtime::dispatch::AiRetryDecision::Retry))
-}
-
 #[inline]
 fn ambiguous_decided_h2_retry_allowed(
     error: &Error,
@@ -50,30 +29,6 @@ fn ambiguous_decided_h2_retry_allowed(
     (matches!(error.retry, pingora_core::RetryType::Decided(true))
         && matches!(error.etype(), ErrorType::InvalidH2 | ErrorType::H2Downgrade))
     .then_some(replayable && method_allowed && attempts_allowed && !deadline_exceeded)
-}
-
-fn classify_ai_proxy_failure(
-    error_type: &ErrorType,
-    error_source: &ErrorSource,
-    timeout_source: Option<PeerTimeoutSource>,
-) -> Option<AiProxyFailureClass> {
-    if !matches!(error_source, ErrorSource::Upstream) {
-        return None;
-    }
-    match error_type {
-        ErrorType::ReadTimedout | ErrorType::WriteTimedout => (timeout_source
-            == Some(PeerTimeoutSource::BackendRequest))
-        .then_some(AiProxyFailureClass::BackendRequestTimeout),
-        ErrorType::InvalidHTTPHeader
-        | ErrorType::H1Error
-        | ErrorType::H2Error
-        | ErrorType::H2Downgrade
-        | ErrorType::InvalidH2
-        | ErrorType::ReadError
-        | ErrorType::WriteError
-        | ErrorType::ConnectionClosed => Some(AiProxyFailureClass::AmbiguousUpstream),
-        _ => None,
-    }
 }
 
 #[inline]
@@ -196,72 +151,14 @@ fn decide_retry(
     let buffer_ok = session.request_relay_retry_state().can_start_next_attempt();
 
     if ctx.has_ai_attempt_plan() {
-        // A status retry was decided and transitioned exactly once in the
-        // response-header hook. This callback only asks Pingora to re-enter
-        // upstream_peer; it must not touch scheduler or budget state again.
-        if ctx.retry_on_status && buffer_ok {
-            ctx.retry_on_status = false;
-            e.set_retry(true);
-            return e;
-        }
-
-        let failure_class = classify_ai_proxy_failure(e.etype(), e.esource(), ctx.peer_timeout_source);
-        let retry_allow_non_idempotent = ctx.retry_allow_non_idempotent();
-        let common_retry_gates = buffer_ok
-            && !ctx.request_timeout_exceeded()
-            && !ctx.grpc_deadline_exceeded()
-            && !ctx.response_write_started()
-            && !has_final_response_written(session);
-        let Some(failure_class) = failure_class else {
-            return e;
-        };
-        let wants_retry = ai_failure_wants_retry(failure_class, ctx.retry_configured(), retry_allow_non_idempotent);
-        let gates_allow_retry = common_retry_gates
-            && (failure_class == AiProxyFailureClass::BackendRequestTimeout || retry_allow_non_idempotent);
-        let decision = crate::ai::runtime::dispatch::handle_ai_transport_failure(
+        return attempt::on_transport_failure(
             ctx,
-            wants_retry,
-            gates_allow_retry,
-            failure_class == AiProxyFailureClass::AmbiguousUpstream,
+            RetryTransportFacts {
+                relay_allows_retry: buffer_ok,
+                final_response_written: has_final_response_written(session),
+            },
+            e,
         );
-        e.set_retry(ai_dispatch_should_retry(&decision));
-        if let Some(state) = ctx.ai_state_mut() {
-            state.attempt_runtime.finish_failure(match failure_class {
-                AiProxyFailureClass::BackendRequestTimeout => {
-                    crate::ai::runtime::attempt_runtime::AiAttemptFailure::BackendRequestTimeout
-                }
-                AiProxyFailureClass::AmbiguousUpstream => {
-                    crate::ai::runtime::attempt_runtime::AiAttemptFailure::Ambiguous(
-                        crate::backends::FailureClass::LocalOrigin,
-                    )
-                }
-            });
-        }
-        match decision {
-            Ok(crate::ai::runtime::dispatch::AiRetryDecision::Retry) => {
-                if let Some(upstream) = ctx.get_current_upstream_mut() {
-                    match failure_class {
-                        AiProxyFailureClass::BackendRequestTimeout => {
-                            upstream.status = Some(504);
-                            upstream.err.push("AiBackendRequestTimeoutRetry".to_string());
-                        }
-                        AiProxyFailureClass::AmbiguousUpstream => {
-                            upstream.err.push("AiAmbiguousUpstreamRetry".to_string());
-                        }
-                    }
-                }
-                if failure_class == AiProxyFailureClass::BackendRequestTimeout {
-                    ctx.record_error(EdgionErrorCode::BackendRequestTimeoutRetry);
-                }
-            }
-            Ok(crate::ai::runtime::dispatch::AiRetryDecision::BudgetDenied) => {
-                crate::observe::metrics::record_retry_budget_denied();
-                ctx.record_error(EdgionErrorCode::RetryBudgetExhausted);
-                return Error::explain(ErrorType::HTTPStatus(503), "AI retry budget exhausted");
-            }
-            Ok(crate::ai::runtime::dispatch::AiRetryDecision::Final) | Err(_) => {}
-        }
-        return e;
     }
 
     // Case 1: status code triggered retry (set by upstream_response_filter)

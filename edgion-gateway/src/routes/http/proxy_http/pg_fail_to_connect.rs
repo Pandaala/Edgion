@@ -1,19 +1,11 @@
 use super::EdgionHttpProxy;
-use crate::ai::runtime::dispatch::AiPeerPredispatchFailure;
+use crate::ai::http::attempt;
 use crate::EdgionHttpContext;
 use edgion_resources::EdgionErrorCode;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::{Error, ErrorType};
 use pingora_proxy::Session;
 use std::time::Instant;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ConnectRetryContinuation {
-    Stop,
-    SettleAiOnly,
-    SettleAiAndSelectSuccessor,
-    EvaluateOrdinaryBudget,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ExpiredConnectDeadline {
@@ -76,31 +68,6 @@ fn finish_expired_connect_deadline(
     );
     timeout_error.set_retry(false);
     timeout_error
-}
-
-fn connect_retry_continuation(is_ai: bool, relay_allows_retry: bool) -> ConnectRetryContinuation {
-    match (is_ai, relay_allows_retry) {
-        (true, false) => ConnectRetryContinuation::SettleAiOnly,
-        (true, true) => ConnectRetryContinuation::SettleAiAndSelectSuccessor,
-        (false, false) => ConnectRetryContinuation::Stop,
-        (false, true) => ConnectRetryContinuation::EvaluateOrdinaryBudget,
-    }
-}
-
-fn finish_ai_connect_failure(ctx: &mut EdgionHttpContext, continuation: ConnectRetryContinuation, error: &mut Error) {
-    match continuation {
-        ConnectRetryContinuation::SettleAiOnly => {
-            if let Some(state) = ctx.ai_state_mut() {
-                state.attempt_runtime.finish_predispatch();
-            }
-        }
-        ConnectRetryContinuation::SettleAiAndSelectSuccessor => {
-            if AiPeerPredispatchFailure::Endpoint.finish(ctx) {
-                error.set_retry(true);
-            }
-        }
-        ConnectRetryContinuation::Stop | ConnectRetryContinuation::EvaluateOrdinaryBudget => {}
-    }
 }
 
 #[inline]
@@ -171,23 +138,13 @@ pub fn fail_to_connect(
 
     let relay_allows_retry = session.request_relay_retry_state().can_start_next_attempt();
 
-    let continuation = connect_retry_continuation(ctx.has_ai_attempt_plan(), relay_allows_retry);
-
-    if matches!(
-        continuation,
-        ConnectRetryContinuation::SettleAiOnly | ConnectRetryContinuation::SettleAiAndSelectSuccessor
-    ) {
-        // A relay veto releases only the current reservation. When a retry is
-        // structurally possible, the typed endpoint failure owns both that
-        // release and service-wide scheduler advancement. Neither path consumes
-        // a dispatch slot, failure-ledger entry, or retry-budget numerator.
-        finish_ai_connect_failure(ctx, continuation, &mut e);
+    if ctx.has_ai_attempt_plan() {
+        attempt::on_connect_failure(ctx, relay_allows_retry, &mut e);
         return e;
     }
 
-    // Apply the structural relay gate before ordinary retry-budget
-    // consumption so a retry Pingora cannot start has no retry-owned effects.
-    if continuation == ConnectRetryContinuation::Stop {
+    // A retry Pingora cannot start must not consume the ordinary budget.
+    if !relay_allows_retry {
         return e;
     }
 

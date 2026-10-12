@@ -12,6 +12,10 @@ whole service for the current scheduler round. Connection establishment is
 still predispatch: credentials are not dispatched until the upstream request
 hook runs after the connection succeeds.
 
+AI HTTP integration is owned by `edgion-gateway/src/ai/http/attempt.rs`: the
+common peer/connect hooks delegate to named phase operations and retain their
+transport accounting/deadline ordering. No ordinary retry policy moves into AI.
+
 Peer construction and connection-failure handling use a typed predispatch
 failure whose variant owns this scope decision. Its `finish()` method releases
 the active reservation and advances the scheduler to service selection. The

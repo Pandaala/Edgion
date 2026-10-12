@@ -82,9 +82,9 @@ fn ai_baseline_captures_once_and_clears_attempt_local_deferred_headers() {
 #[test]
 fn ordinary_context_size_stays_within_budget() {
     // The audited 64-bit layout includes immutable body declaration, storage
-    // policy, transcoder ownership and aligned hot flags. See the context
+    // policy, frozen entry method, transcoder ownership and aligned hot flags. See the context
     // layout ledger in skills/04-review/cpu-memory/intentional-design/.
-    let budget = if cfg!(target_pointer_width = "64") { 1304 } else { 1280 };
+    let budget = if cfg!(target_pointer_width = "64") { 1328 } else { 1280 };
     let actual = std::mem::size_of::<EdgionHttpContext>();
     assert!(
         actual <= budget,

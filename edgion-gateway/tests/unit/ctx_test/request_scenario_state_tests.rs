@@ -6,11 +6,12 @@ fn ordinary_request_keeps_tls_and_grpc_state_absent() {
 
     assert!(!info.has_tls_info());
     assert!(!info.has_grpc_info());
-    // Immutable Content-Length adds 16 bytes; CONNECT identity uses padding.
+    // Immutable Content-Length and the frozen entry Method retain their audited
+    // inline storage; HEAD and CONNECT facts derive from that single snapshot.
     #[cfg(target_pointer_width = "64")]
     assert_eq!(
         std::mem::size_of::<RequestInfo>(),
-        408,
+        432,
         "RequestInfo exceeds its audited layout"
     );
 }

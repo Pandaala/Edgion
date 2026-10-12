@@ -65,18 +65,7 @@ pub async fn logging(
     // stage logs before the access-log entry is assembled.
     super::pg_request_body_filter_action::drain_leftover_stream_logs(ctx);
     super::pg_request_body_filter_action::drain_request_body_observer_logs(ctx);
-    let (outcome, reason) = match _e.map(PingoraError::esource) {
-        Some(ErrorSource::Upstream) => ("upstream-abort", "stream-error"),
-        Some(ErrorSource::Downstream) | None => ("cancelled", "downstream-cancel"),
-        Some(ErrorSource::Internal | ErrorSource::Unset) => ("fail-close", "internal-stream-error"),
-    };
-    if let Some(driver) = ctx.response_processor_driver() {
-        driver.finalize_semantic_incomplete(outcome, reason).await;
-    } else if let Some(processor) = ctx.ai_state_mut().and_then(|state| state.semantic_processor.as_mut()) {
-        // Local replies and response-stage denials can finish before the final
-        // response header freezes the builder slots into a driver.
-        processor.finalize_incomplete(outcome, reason);
-    }
+    crate::ai::http::finalize_semantic_for_logging(ctx, _e.map(PingoraError::esource)).await;
     finalize_attached_ext_proc_logs(ctx).await;
     crate::ai::http::finalize_guardrail_log(ctx);
 

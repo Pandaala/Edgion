@@ -54,7 +54,7 @@ fn semantic_record(text: &str) -> WindowRecord {
 fn mock_request_session() -> MockPluginSession {
     let mut session = MockPluginSession::new();
     let mut ai = crate::plugins::runtime::traits::ai_session::MockAiSessionCapability::new();
-    session.expect_get_method().return_const("GET".to_string());
+    session.expect_get_request_method().return_const(Some("GET"));
     session.expect_get_request_path().return_const("/".to_string());
     session.expect_try_claim_response_terminal().return_const(true);
     session.expect_mark_response_terminal_emission().return_const(());
@@ -788,6 +788,8 @@ async fn cancelling_driver_await_releases_real_guardrail_window_permit_and_owner
     ))));
     state.semantic_processor = Some(Box::new(processor));
     let mut session = live_session().await;
+    // Mirror the private request-entry capture before driving a later response phase.
+    ctx.request_info.method = Some(session.req_header().method.clone());
     let mut body = Some(Bytes::from_static(
         b"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"cancel-driver\"}}]}\n\n",
     ));

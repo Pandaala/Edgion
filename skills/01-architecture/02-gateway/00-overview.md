@@ -23,7 +23,7 @@ named domain types and functions; internal consumers use the canonical modules:
 | `ai/protocols/` | Shared AI JSON spans and existing OpenAI wire/event/error helpers |
 | `ai/conversion/chat_to_anthropic/` | Existing OpenAI Chat Completions to/from Anthropic Messages conversion, not native Messages ingress |
 | `ai/connectors/` | Existing provider URI, host and credential/version header preparation |
-| `ai/http/` | AI proxy implementation, provider cooldown handling and HTTP lifecycle integration |
+| `ai/http/` | AI proxy implementation, attempt lifecycle policy, provider cooldown and terminal integration |
 | `ai/guards/` | Request guard and semantic response Guardrail implementations |
 
 `plugins/http/{ai_proxy,ai_guard,guardrail}/mod.rs` are registration facades for
@@ -34,7 +34,19 @@ The single driver preserves AI, semantic and ordinary processor order, execution
 leases, cancellation cleanup and trailer ownership. OpenAI terminal event rendering
 stays in `ai/protocols/openai/terminal.rs`.
 
-Generic proxy callbacks retain transport and retry control flow. The universal
+Generic proxy callbacks retain transport accounting, replay/final-writer evidence,
+ordinary retry policy and Pingora's decided-retry ceiling. AI attempt policy lives
+in `ai/http/attempt.rs`: named peer selection, connect failure, proxy failure and
+raw response operations call the existing scheduler/attempt runtime. Candidate
+admission, endpoint-scoped skips, provider cooldown, typed deadline mapping and
+AI failure classification stay inside that owner. Common timeout/address helpers
+are reused through the proxy module; no dispatcher, second state owner, extra
+request allocation or copied transport mechanism is introduced. The actual
+AI dispatch mark stays after successful fallible upstream header preparation;
+status retry advances only in the raw response operation, with the later error
+operation acknowledging re-entry without another transition.
+
+The universal
 logging callback first releases AI processor/exchange state through the existing
 driver lease before any accounting await, then invokes AI settlement at its
 existing position: active attempt
@@ -104,6 +116,16 @@ the unrelated global WAF documentation exception. Its path was
 the task file is absent from the current tree, so that historical evidence is
 not available here for independent inspection. The upstream-H2 wire wrapper is
 test-only; production AI peers use H1.
+
+The direct `AiSessionCapability` implementation is physically owned by
+`ai/http/session.rs`, mounted as a child of the common session adapter so its
+private context access and direct `PluginSession::ai()` identity stay intact.
+This is code ownership, not an additional capability interface or wrapper.
+Late semantic logging cleanup calls `ai/http::finalize_semantic_for_logging`
+after metrics, terminal classification and leftover stream-log drainage, before
+ExtProc and guardrail summaries. Earlier AI accounting finalization remains at
+its existing phase; common logging still assembles the sole access-log entry.
+
 
 ## Canonical SSE substrate
 

@@ -107,7 +107,12 @@ The most complex phase, responsible for request parsing and route matching:
 **File**: `pg_upstream_peer.rs`
 **Signature**: `async fn upstream_peer(session, ctx) -> Result<Box<HttpPeer>>`
 
-Selects the upstream backend and builds an HttpPeer:
+Selects the upstream backend and builds an HttpPeer. After strict-jump checks
+and URI finalization, an installed AI plan delegates to
+`ai/http/attempt.rs::select_peer`. That operation owns AI admission/scan policy
+while reusing shared DNS, egress, TLS, timeout and address bookkeeping. It checks
+request then gRPC deadlines before plan mutation and after I/O; an endpoint skip
+remains predispatch. The list below describes ordinary route selection:
 
 1. **Request timeout check**: check the route-level `request_timeout`; on timeout return 504.
 2. **Route routing**: gRPC routes go to `upstream_peer_grpc()`, HTTP routes go to `upstream_peer_http()`.
@@ -139,7 +144,11 @@ Callback after the upstream connection is established:
 
 HTTP and gRPC peer selection both call `begin_upstream_attempt`; before pushing
 the next attempt, it finalizes the previous guard through `lb::finalize_attempt`.
-The AI retry transition performs the same prior-attempt cleanup. Terminal logging
+The AI retry transition performs the same prior-attempt cleanup. Named connect,
+transport-failure and raw-response operations in `ai/http/attempt.rs` own feature
+policy; the common hooks retain transport accounting and vetoes. Raw status retry
+advances exactly once, and the proxy-error operation only acknowledges that
+transition when Pingora can replay. Terminal logging
 finalizes the last attempt. Finalization consumes the guard and is idempotent;
 if cancellation bypasses logging, dropping an unresolved guard decrements exactly
 once. Failed connects that never commit do not decrement another request's count.
