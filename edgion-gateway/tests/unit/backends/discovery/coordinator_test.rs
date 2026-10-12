@@ -93,6 +93,179 @@ fn health_policy(generation: u64) -> Arc<HealthPolicyIdentity> {
     Arc::new(HealthPolicyIdentity { generation })
 }
 
+struct ActiveHealthFixture {
+    coordinator: ServiceDiscoveryCoordinator,
+    policy: Arc<HealthPolicyIdentity>,
+    backend: Arc<LbBackend>,
+}
+
+impl ActiveHealthFixture {
+    fn new() -> Self {
+        let coordinator = ServiceDiscoveryCoordinator::new();
+        let policy = health_policy(1);
+        coordinator.set_health_policy("default/backend", Some(Arc::clone(&policy)));
+        publish_base(&coordinator);
+        let backend = Arc::clone(
+            &coordinator
+                .load_generation()
+                .available("default/backend")
+                .unwrap()
+                .canonical_probe_backends()[0],
+        );
+        Self {
+            coordinator,
+            policy,
+            backend,
+        }
+    }
+
+    fn complete(&self, success: bool, healthy: u32, unhealthy: u32) {
+        assert!(self.coordinator.record_health_completion(
+            &self.policy,
+            self.backend.runtime_membership_identity().unwrap(),
+            self.backend.runtime_identity().unwrap(),
+            success,
+            healthy,
+            unhealthy
+        ));
+    }
+
+    fn eligible(&self) -> bool {
+        self.coordinator
+            .runtime_cell("default/backend")
+            .unwrap()
+            .active
+            .load()
+            .entries[self.backend.runtime_identity().unwrap().as_ref()]
+        .health_eligible()
+    }
+}
+
+#[test]
+fn fresh_canonical_endpoint_is_health_eligible() {
+    let fixture = ActiveHealthFixture::new();
+    assert!(fixture.eligible());
+    fixture.complete(true, 2, 3);
+    assert!(fixture.eligible());
+}
+
+#[test]
+fn test_consecutive_failures_trigger_unhealthy() {
+    let fixture = ActiveHealthFixture::new();
+    for _ in 0..2 {
+        fixture.complete(false, 2, 3);
+        assert!(fixture.eligible());
+    }
+    fixture.complete(false, 2, 3);
+    assert!(!fixture.eligible());
+}
+
+#[test]
+fn test_consecutive_successes_trigger_healthy() {
+    let fixture = ActiveHealthFixture::new();
+    fixture.complete(false, 2, 1);
+    assert!(!fixture.eligible());
+    fixture.complete(true, 2, 1);
+    assert!(!fixture.eligible());
+    fixture.complete(true, 2, 1);
+    assert!(fixture.eligible());
+}
+
+#[test]
+fn test_success_resets_failure_counter() {
+    let fixture = ActiveHealthFixture::new();
+    fixture.complete(false, 2, 3);
+    fixture.complete(false, 2, 3);
+    fixture.complete(true, 2, 3);
+    for _ in 0..2 {
+        fixture.complete(false, 2, 3);
+        assert!(fixture.eligible());
+    }
+    fixture.complete(false, 2, 3);
+    assert!(!fixture.eligible());
+}
+
+#[test]
+fn test_failure_resets_success_counter() {
+    let fixture = ActiveHealthFixture::new();
+    fixture.complete(false, 2, 1);
+    fixture.complete(true, 2, 1);
+    fixture.complete(false, 2, 1);
+    fixture.complete(true, 2, 1);
+    assert!(!fixture.eligible());
+    fixture.complete(true, 2, 1);
+    assert!(fixture.eligible());
+}
+
+#[test]
+fn test_cross_service_backend_isolation() {
+    let coordinator = ServiceDiscoveryCoordinator::new();
+    let first_policy = health_policy(1);
+    let second_policy = health_policy(2);
+    coordinator.set_health_policy("default/first", Some(Arc::clone(&first_policy)));
+    coordinator.set_health_policy("default/second", Some(Arc::clone(&second_policy)));
+    coordinator.replace_services(&HashMap::from([
+        ("default/first".to_string(), named_service("first", "first-uid")),
+        ("default/second".to_string(), named_service("second", "second-uid")),
+    ]));
+    coordinator.replace_endpoint_slices(&HashMap::from([
+        (
+            "default/first-a".to_string(),
+            owned_slice("first-a", "first-slice", "first", "10.0.0.1"),
+        ),
+        (
+            "default/second-a".to_string(),
+            owned_slice("second-a", "second-slice", "second", "10.0.0.1"),
+        ),
+    ]));
+    let generation = coordinator.load_generation();
+    let first = &generation
+        .available("default/first")
+        .unwrap()
+        .canonical_probe_backends()[0];
+    let second = &generation
+        .available("default/second")
+        .unwrap()
+        .canonical_probe_backends()[0];
+    assert_eq!(first.addr, second.addr);
+    assert_ne!(first.runtime_identity(), second.runtime_identity());
+    assert!(coordinator.record_health_completion(
+        &first_policy,
+        first.runtime_membership_identity().unwrap(),
+        first.runtime_identity().unwrap(),
+        false,
+        1,
+        1
+    ));
+    assert!(
+        !coordinator.runtime_cell("default/first").unwrap().active.load().entries
+            [first.runtime_identity().unwrap().as_ref()]
+        .health_eligible()
+    );
+    assert!(coordinator
+        .runtime_cell("default/second")
+        .unwrap()
+        .active
+        .load()
+        .entries[second.runtime_identity().unwrap().as_ref()]
+    .health_eligible());
+    assert!(coordinator.record_health_completion(
+        &second_policy,
+        second.runtime_membership_identity().unwrap(),
+        second.runtime_identity().unwrap(),
+        false,
+        1,
+        1
+    ));
+    assert!(!coordinator
+        .runtime_cell("default/second")
+        .unwrap()
+        .active
+        .load()
+        .entries[second.runtime_identity().unwrap().as_ref()]
+    .health_eligible());
+}
+
 #[test]
 fn degrade_threshold_resolver_runs_under_coordinator_lock() {
     let coordinator = Arc::new(ServiceDiscoveryCoordinator::new());
@@ -1452,4 +1625,76 @@ fn terminal_epoch_exact_fit_counts_aliases_once_and_invalid_sections_zero() {
         ));
     }
     assert!(coordinator.state.lock().exhausted);
+}
+
+#[test]
+fn active_health_isolated_across_same_socket_sections() {
+    let coordinator = ServiceDiscoveryCoordinator::new();
+    let policy = health_policy(1);
+    coordinator.set_health_policy("default/backend", Some(Arc::clone(&policy)));
+    let mut service = (*service(Some("service-uid"), IntOrString::String("web".to_string()))).clone();
+    service
+        .spec
+        .as_mut()
+        .unwrap()
+        .ports
+        .as_mut()
+        .unwrap()
+        .push(ServicePort {
+            name: Some("metrics".to_string()),
+            port: 81,
+            protocol: Some("TCP".to_string()),
+            target_port: Some(IntOrString::String("web".to_string())),
+            ..Default::default()
+        });
+    coordinator.replace_services(&HashMap::from([("default/backend".to_string(), Arc::new(service))]));
+    let mut dual = (*slice("backend-a", Some("slice-a"), true)).clone();
+    dual.ports = Some(slice_ports(&[("http", 8080), ("metrics", 8080)]));
+    coordinator.replace_endpoint_slices(&HashMap::from([("default/backend-a".to_string(), Arc::new(dual))]));
+
+    let generation = coordinator.load_generation();
+    let available = generation.available("default/backend").unwrap();
+    let first = available
+        .resolve_section(&ServiceSectionKey::Number(NonZeroU16::new(80).unwrap()))
+        .unwrap();
+    let second = available
+        .resolve_section(&ServiceSectionKey::Number(NonZeroU16::new(81).unwrap()))
+        .unwrap();
+    let first_backend = &first.ready_slots[0].backend;
+    let second_backend = &second.ready_slots[0].backend;
+    assert_eq!(first_backend.addr, second_backend.addr);
+    assert!(!Arc::ptr_eq(first_backend, second_backend));
+    let first_identity = first_backend.runtime_identity().expect("section slot is identified");
+    let second_identity = second_backend.runtime_identity().expect("section slot is identified");
+    assert_ne!(first_identity.as_ref(), second_identity.as_ref());
+    let active = available.runtime_cell.active.load_full();
+    assert!(coordinator.record_health_completion(
+        &policy,
+        first_backend.runtime_membership_identity().unwrap(),
+        first_identity,
+        false,
+        1,
+        1
+    ));
+    assert!(!active.entries[first_identity.as_ref()].health_eligible());
+    assert!(active.entries[second_identity.as_ref()].health_eligible());
+    assert!(coordinator.record_health_completion(
+        &policy,
+        second_backend.runtime_membership_identity().unwrap(),
+        second_identity,
+        false,
+        1,
+        1
+    ));
+    assert!(!active.entries[second_identity.as_ref()].health_eligible());
+    assert!(coordinator.record_health_completion(
+        &policy,
+        first_backend.runtime_membership_identity().unwrap(),
+        first_identity,
+        true,
+        1,
+        1
+    ));
+    assert!(active.entries[first_identity.as_ref()].health_eligible());
+    assert!(!active.entries[second_identity.as_ref()].health_eligible());
 }

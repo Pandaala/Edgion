@@ -50,17 +50,23 @@ points, and the Coordinator independently validates every result. Keeping one
 generation field in the legacy status store would duplicate ownership without
 improving routing correctness.
 
-`HealthStatusStore::record_check` and its hash-keyed state remain for isolated
-compatibility tests, but production active-health routing does not write or read
-them. The store's production role is the bounded Service marker exposed by admin
-statistics. This rule does not change probe concurrency, startup jitter, ticker
+ARCH-022 removed the former `HealthStatusStore::record_check`/`is_healthy`
+APIs and hash-keyed threshold state. Their earlier retention for isolated tests
+was historical duplicate ownership, not a routing invariant. The store now holds
+only a Service-key set in one `ArcSwap` with serialized membership writers.
+Threshold transitions, opposite-counter resets and same-socket isolation tests
+exercise real Coordinator completions and identity-bound runtime state.
+The store's role remains the bounded Service marker exposed by admin statistics. This rule does not change probe concurrency, startup jitter, ticker
 cadence, transport policy, or the global semaphore.
 
 ## Verification and re-evaluation
 
 The focused manager lifecycle test verifies that reconciliation creates the
 marker for an active policy, removes it with the policy, and leaves no task entry
-after cancellation. The Coordinator policy-generation test verifies that policy
+after cancellation. Replacement checks observe old-task completion; synchronous
+no-runtime reconciliation cancels a seeded dormant task and clears count/keys.
+Concurrent registry writers retain all expected keys and remove them to zero.
+The Coordinator policy-generation test verifies that policy
 removal and replacement reject an old probe while accepting the current one.
 Repository-wide closing checks are reported by the issue runner.
 
@@ -74,3 +80,6 @@ validation stops checking policy, membership, or endpoint identity.
   to serialized reconciliation; the original high-severity threshold-pollution
   claim had already been eliminated by Coordinator generation ownership, leaving
   a low-frequency admin-statistics residue race.
+
+- `ARCH-022` — removed the unused hash-keyed threshold engine while preserving
+  marker ownership and moving meaningful algorithm coverage to the Coordinator.

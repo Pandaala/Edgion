@@ -13,7 +13,7 @@ knowledge_type: intentional-design
 
 `health_check_loop` (`edgion-gateway/src/backends/health/check/manager.rs`) now acquires the
 `PROBE_SEMAPHORE` permit **inside the `for backend in backends` loop**, scoped to a single probe
-call and released (`drop(permit)`) immediately after the probe returns and before `record_check`.
+call and released (`drop(permit)`) immediately after the probe returns and before Coordinator `record_health_completion`.
 The global cap (renamed `MAX_CONCURRENT_PROBES`, value 50) therefore bounds the number of
 **in-flight individual probes** across all services, not the number of concurrent probe cycles.
 
@@ -36,8 +36,9 @@ services rather than rate-limiting single probes.
 
 ## Why the fix is correct
 
-A single service still probes its backends sequentially, so it never holds more than one permit at a
-time — the same as before. The change is the **hold duration and interleaving**: with per-probe
+Historically, at the F016 fix, a single service still probed its backends sequentially, so it held
+no more than one permit at a time. The later lb-06 parallelism replaces that sequential shape while
+preserving per-probe permit ownership. The change is the **hold duration and interleaving**: with per-probe
 acquisition the permit is released after each ~timeout-bounded probe, so a busy service yields the
 permit between probes and Tokio's FIFO-fair `Semaphore` lets waiting services interleave instead of
 blocking for a full cycle. There is no deadlock risk (each task holds at most one permit and releases

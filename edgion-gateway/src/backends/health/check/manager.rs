@@ -99,7 +99,7 @@ impl HealthCheckManager {
         // Status-marker ownership stays in the serialized reconciliation path.
         // A task aborted during synchronous work must not be able to recreate a
         // marker after removal.
-        self.health_store.register_service(&service_key, Vec::new());
+        self.health_store.register_service(&service_key);
         let handle = runtime_handle.spawn(async move {
             health_check_loop(task_service_key, policy).await;
         });

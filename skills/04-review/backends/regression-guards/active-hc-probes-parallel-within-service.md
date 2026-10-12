@@ -53,8 +53,10 @@ an old probe cannot update a removed endpoint or replacement policy.
 `HealthStatusStore` no longer participates in routing-health publication. Its
 Service marker is owned by serialized reconciliation rather than a probe cycle;
 see [active health task status-marker ownership](active-health-task-status-ownership.md).
-The historical unlocked `unhealthy_backends` concern applies only if the legacy
-hash-keyed `record_check` API is restored to a concurrent production path.
+The historical unlocked `unhealthy_backends` concern belonged to the former
+hash-keyed engine, removed under ARCH-022. Current threshold/reset/isolation tests
+exercise Coordinator completion handling; the marker registry has no endpoint
+health algorithm or publication API.
 
 **3. Global semaphore semantics unchanged (backends-F016 preserved)**
 

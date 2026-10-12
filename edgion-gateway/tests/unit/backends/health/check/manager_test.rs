@@ -16,12 +16,47 @@ async fn reconciliation_owns_status_marker_lifecycle() {
     manager.reconcile_service(service_key);
     assert!(health_store.has_service(service_key));
 
+    let old_task = manager.tasks.read()[service_key].abort_handle();
+    manager.reconcile_service(service_key);
+    tokio::task::yield_now().await;
+    assert!(old_task.is_finished());
+    assert_eq!(health_store.tracked_service_count(), 1);
+
     config_store.remove_service(service_key);
     manager.reconcile_service(service_key);
     tokio::task::yield_now().await;
 
     assert!(!health_store.has_service(service_key));
     assert!(!manager.tasks.read().contains_key(service_key));
+    assert_eq!(health_store.tracked_service_count(), 0);
+    assert!(health_store.keys().is_empty());
+}
+
+#[test]
+fn reconciliation_without_runtime_cancels_task_and_clears_marker() {
+    let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+    let health_store = Arc::new(HealthStatusStore::new());
+    let config_store = Arc::new(HealthCheckConfigStore::new());
+    let manager = HealthCheckManager {
+        tasks: RwLock::new(HashMap::new()),
+        health_store: Arc::clone(&health_store),
+        config_store: Arc::clone(&config_store),
+        reconcile_lock: Mutex::new(()),
+    };
+    let service_key = "health-status-no-runtime/service";
+    let task = runtime.spawn(std::future::pending::<()>());
+    let abort = task.abort_handle();
+    manager.tasks.write().insert(service_key.to_string(), task);
+    health_store.register_service(service_key);
+    config_store.set_service_config(service_key, Some(test_owner(ActiveHealthCheckConfig::default())));
+    manager.reconcile_service(service_key);
+    assert!(!manager.tasks.read().contains_key(service_key));
+    assert_eq!(health_store.tracked_service_count(), 0);
+    assert!(health_store.keys().is_empty());
+    runtime.block_on(tokio::task::yield_now());
+    assert!(abort.is_finished());
+    config_store.remove_service(service_key);
+    manager.reconcile_service(service_key);
 }
 
 #[test]

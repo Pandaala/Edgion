@@ -139,7 +139,7 @@ health/
 │   ├── manager.rs        # HealthCheckManager — manages a check task per service
 │   ├── probes.rs         # Plaintext probe implementations (HTTP/TCP/gRPC)
 │   ├── config_store.rs   # HealthCheckConfigStore — health-check configuration store
-│   └── status_store.rs   # HealthStatusStore — health status store
+│   └── status_store.rs   # HealthStatusStore — Service marker registry
 └── mod.rs
 ```
 
@@ -157,7 +157,12 @@ health/
   `hc_manager.reconcile_service(key)`. There is no annotation-parsing path —
   `health/check/annotation.rs` and the EndpointSlice-tier override were
   removed; see [Backend Traffic Policy](#backend-traffic-policy-edgionbackendtrafficpolicy) below.
-- Without configuration, deletes the task and unregisters health status.
+- Without configuration, deletes the task and unregisters the Service marker.
+- `HealthStatusStore` retains only an immutable `ArcSwap<HashSet<String>>` marker
+  snapshot with serialized membership writers. Reconciliation owns registration
+  and removal; probes never write markers. Admin count/keys expose zero residue
+  after removal. Endpoint health counters and eligibility belong exclusively to
+  `ServiceDiscoveryCoordinator`; ARCH-022 removed the unused hash-keyed engine.
 
 ### Probe types
 
