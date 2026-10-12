@@ -1623,6 +1623,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/JsonSchemaValidation"
         | "EdgionPlugins/GrpcJsonTranscoder"
         | "EdgionPlugins/GraphqlGuard"
+        | "EdgionPlugins/RestToGraphql"
         | "EdgionPlugins/GraphqlSafelist"
         | "EdgionPlugins/GraphqlOperationRouter"
         | "EdgionPlugins/GraphqlRateLimit" => "EdgionPlugins",
