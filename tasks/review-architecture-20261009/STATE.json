@@ -14936,7 +14936,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-442.json",
       "reviewer": "/root/analyze_outbound",
-      "disposition": "Full 1\u2013115. Supplement ARCH264 state lifecycle; preserve seven phases and explicit K8s status-seeding exception.",
+      "disposition": "Full 1–115. Supplement ARCH264 state lifecycle; preserve seven phases and explicit K8s status-seeding exception.",
       "previous_reviewed_sha256": "4e569970ddd1a79c81847f2243d973f8e3d24ad5359f2d11ac888ec4a967340d",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
     },
@@ -14949,7 +14949,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-442.json",
       "reviewer": "/root/analyze_outbound",
-      "disposition": "Full 1\u20131065 including actual embedded tests. ARCH296 listener scalar; supplemental ARCH265 cleanup and ARCH266 scoped status projection; no generic framework.",
+      "disposition": "Full 1–1065 including actual embedded tests. ARCH296 listener scalar; supplemental ARCH265 cleanup and ARCH266 scoped status projection; no generic framework.",
       "previous_reviewed_sha256": "34d6b0aa1963bbb5cf288a0f8c45f46fcc51721c3736cbafc044de1fde6d66e4",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
     },
@@ -14962,7 +14962,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-442.json",
       "reviewer": "/root/analyze_outbound",
-      "disposition": "Full 1\u20131208 including actual embedded tests. ARCH296 listener scalar; supplemental ARCH265/266; preserve real captured retry/cancellation/weighted/publication assertions and direct K8s registration.",
+      "disposition": "Full 1–1208 including actual embedded tests. ARCH296 listener scalar; supplemental ARCH265/266; preserve real captured retry/cancellation/weighted/publication assertions and direct K8s registration.",
       "previous_reviewed_sha256": "6d6f02aa276ceb76ccdc1fcc857bb91c0d99e0c0650ec69b8580f77250765d4a",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
     },
@@ -14975,7 +14975,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-442.json",
       "reviewer": "/root/analyze_outbound",
-      "disposition": "Full 1\u2013132 including real fixture test. Retain explicit setup/restore, discriminating credential generations, actual admin redaction and required compared server IDs.",
+      "disposition": "Full 1–132 including real fixture test. Retain explicit setup/restore, discriminating credential generations, actual admin redaction and required compared server IDs.",
       "previous_reviewed_sha256": "6e66c27dd2f4665844b976a9dae220fa26d7ed497fca7deca5d700aafa15d1bb",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
     },
@@ -14988,7 +14988,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-443.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full 1\u2013493. ARCH-265: discarded deletion errors; weighted assertions retained.",
+      "disposition": "Full 1–493. ARCH-265: discarded deletion errors; weighted assertions retained.",
       "previous_reviewed_sha256": "c2d43afbb51ea03f63a3d864784f56e12813c44d3dab9680349a8672a9f66269",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json"
     },
@@ -15001,7 +15001,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-443.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full 1\u2013262. Retain explicit generation/status, skips, traffic/provider counts/redacted rejection and fallible unconditional cleanup.",
+      "disposition": "Full 1–262. Retain explicit generation/status, skips, traffic/provider counts/redacted rejection and fallible unconditional cleanup.",
       "previous_reviewed_sha256": "152f11ba87a4e1b413c15e0845c4dd443898cafdc72925ead6ebc4a1f82f24d2",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json"
     },
@@ -15014,7 +15014,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-443.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full 1\u2013105. Retain A/B/A rotation, in-flight generation, unresolved declaration fencing, ordinary access and restoration.",
+      "disposition": "Full 1–105. Retain A/B/A rotation, in-flight generation, unresolved declaration fencing, ordinary access and restoration.",
       "previous_reviewed_sha256": "b036d3290ec6f82e7eaec5ff5edb29825345bcd27bf7ac7cf3955b7b150e0352",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json"
     },
@@ -15027,7 +15027,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-443.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full 1\u201360. Retain both continuation identifiers, stateless access and restoration after either result.",
+      "disposition": "Full 1–60. Retain both continuation identifiers, stateless access and restoration after either result.",
       "previous_reviewed_sha256": "0e7e476003265d1dac7d0d0eacadbe83dc571c2a5ccddc42db644cb2176bb7d2",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json"
     },
@@ -15040,7 +15040,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-443.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full 1\u2013307 including actual fixture test. Retain exact observations, bounded retries, generation resets, plaintext rejection, idempotent cleanup/absence polling.",
+      "disposition": "Full 1–307 including actual fixture test. Retain exact observations, bounded retries, generation resets, plaintext rejection, idempotent cleanup/absence polling.",
       "previous_reviewed_sha256": "44522137784ad1388dba6c7c852098240a9443fbaf2b29e699ee60cfa78f3728",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json"
     },
@@ -15053,7 +15053,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-443.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full 1\u2013150. Retain fresh TLS clients, positive control, unrelated-SAN rejection and restoration; restoration-content verification limitation remains explicit.",
+      "disposition": "Full 1–150. Retain fresh TLS clients, positive control, unrelated-SAN rejection and restoration; restoration-content verification limitation remains explicit.",
       "previous_reviewed_sha256": "1225d683d44fb2dcf2e8074e0b740ed502e94cb76265f5b96bd0a7e984dcc90a",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json"
     },
@@ -15066,7 +15066,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-443.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full 1\u201385. ARCH-264 ordinary/grouped initial and completion-state ownership.",
+      "disposition": "Full 1–85. ARCH-264 ordinary/grouped initial and completion-state ownership.",
       "previous_reviewed_sha256": "ad4a80de2ce2ebfc86e0b7a115307c7ccc362097349922a8adbc29bebc3665f8",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json"
     },
@@ -15079,7 +15079,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-443.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full 1\u201363. ARCH-264 restoration; ARCH-266 rejected-phase status projection, independent causes.",
+      "disposition": "Full 1–63. ARCH-264 restoration; ARCH-266 rejected-phase status projection, independent causes.",
       "previous_reviewed_sha256": "b8254e32c33d002376c88af48add48b428e0db792524de7c0b529a14c4b134ad",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json"
     },
@@ -15092,7 +15092,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-443.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full 1\u201360. ARCH-264 failure before restoration; successful final state equals initial.",
+      "disposition": "Full 1–60. ARCH-264 failure before restoration; successful final state equals initial.",
       "previous_reviewed_sha256": "694a77b5029a9375e2366e3999ea815cbc1502d2725ffd7286b415af3ab24014",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json"
     },
@@ -15105,7 +15105,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-443.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full 1\u201350. ARCH-264 final Selector/dye restoration; retain both assertions.",
+      "disposition": "Full 1–50. ARCH-264 final Selector/dye restoration; retain both assertions.",
       "previous_reviewed_sha256": "c1a7efbdf27cf55a187346416172d4f77070b1a0b5030ad0efc1fc7e94a5c624",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json"
     },
@@ -15118,7 +15118,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-443.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full 1\u201356. ARCH-264 rotation/delete failure bypasses restoration; retain fail-closed and marker assertions.",
+      "disposition": "Full 1–56. ARCH-264 rotation/delete failure bypasses restoration; retain fail-closed and marker assertions.",
       "previous_reviewed_sha256": "55dd4c6d390bf181d49293870f9d9507fad8a77a10b70e7873e886b2176b6b59",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json"
     },
@@ -15131,7 +15131,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-443.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full 1\u2013281. Retain token/regex/disabled admission, exact wire fields, recovery and fallible cleanup.",
+      "disposition": "Full 1–281. Retain token/regex/disabled admission, exact wire fields, recovery and fallible cleanup.",
       "previous_reviewed_sha256": "4c9ff216ef88a0f448da3b5f6683ee112b2bd1fbb554c894bd66e45353571acf",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json"
     },
@@ -15144,7 +15144,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-444.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full1\u201372. Retain explicit initial, rotated/deleted business assertions and unconditional restoration.",
+      "disposition": "Full1–72. Retain explicit initial, rotated/deleted business assertions and unconditional restoration.",
       "previous_reviewed_sha256": "4e8457ce0222826e4d17794a127e08bc1195a292bd6f3016998d4b364088a08c",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
     },
@@ -15157,7 +15157,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-444.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full1\u2013146. Retain fresh/stale/deleted token/credential checks, token cleanup and generation restoration.",
+      "disposition": "Full1–146. Retain fresh/stale/deleted token/credential checks, token cleanup and generation restoration.",
       "previous_reviewed_sha256": "45246d05964d5616c33bc7a7aa34e83a42dd8ca93af1e4f32c27c518486b1740",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
     },
@@ -15170,7 +15170,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-444.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full1\u2013684. Retain HTTP/gRPC identity/generation/delegation/direct-access assertions; bootstrap Gateway correctly outside runtime initialization.",
+      "disposition": "Full1–684. Retain HTTP/gRPC identity/generation/delegation/direct-access assertions; bootstrap Gateway correctly outside runtime initialization.",
       "previous_reviewed_sha256": "23ff344e5d8cd9d15b98e27eb70d134db67b7e1e4a81354dafceca98808e1d91",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
     },
@@ -15183,7 +15183,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-444.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full1\u2013366. Retain originating port, sibling/unready rejection, TLS preparation failure and aggregated cleanup errors.",
+      "disposition": "Full1–366. Retain originating port, sibling/unready rejection, TLS preparation failure and aggregated cleanup errors.",
       "previous_reviewed_sha256": "363f517b24ceb5ef36e55bf98de261d4cd18619c8f3d8e47c87717d5804199b5",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
     },
@@ -15196,7 +15196,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-444.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full1\u201379. Supplemental ARCH264 success-state Service drift/failure restoration; preserve all DNS/egress/cap checks.",
+      "disposition": "Full1–79. Supplemental ARCH264 success-state Service drift/failure restoration; preserve all DNS/egress/cap checks.",
       "previous_reviewed_sha256": "194e6b3a78b75ba68b08aed93ef6e985b2fcd23486a46031aa0e4c8f09326fb1",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
     },
@@ -15209,7 +15209,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-444.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full1\u201349. Supplemental ARCH264 retained v2 conflicts with repeated initial v1 assertion.",
+      "disposition": "Full1–49. Supplemental ARCH264 retained v2 conflicts with repeated initial v1 assertion.",
       "previous_reviewed_sha256": "8f23c7600cc968a4b669e1fe7291927e315ff08ca2722b9569603447b20f8ce4",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
     },
@@ -15222,7 +15222,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-444.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full1\u201372. Retain captured-result restoration and next/empty/local-response semantics.",
+      "disposition": "Full1–72. Retain captured-result restoration and next/empty/local-response semantics.",
       "previous_reviewed_sha256": "3c0cc1508baf0008e498340d5e4049f778a22a3ad6bec633991d51306604b738",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
     },
@@ -15235,7 +15235,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-444.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full1\u201389. Retain explicit body policy/v1/v2/cap/output failure checks and restoration.",
+      "disposition": "Full1–89. Retain explicit body policy/v1/v2/cap/output failure checks and restoration.",
       "previous_reviewed_sha256": "9077ed371e59c73dd3047b9d591aa04bd7add66224f085fb4d07f9d73eba9d53",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
     },
@@ -15248,7 +15248,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-444.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full1\u2013162. Retain protocol duplicate-Host rejection preceding EGC processing; unsupported opt-out unnecessary.",
+      "disposition": "Full1–162. Retain protocol duplicate-Host rejection preceding EGC processing; unsupported opt-out unnecessary.",
       "previous_reviewed_sha256": "0f93b9a686ffd7f7b5c6a3ce339595094db9eaae4a0d936b542ff62485d5d828",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
     },
@@ -15261,7 +15261,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-444.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full1\u201360. Supplemental ARCH264 failure restoration and ARCH266 projection; successful final state matches initial, K8s projection failure limits later phase reachability.",
+      "disposition": "Full1–60. Supplemental ARCH264 failure restoration and ARCH266 projection; successful final state matches initial, K8s projection failure limits later phase reachability.",
       "previous_reviewed_sha256": "4587ccd98eefb3ad9768db6872a5dbff85af129b72c757ed5fbee5f17b64c356",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
     },
@@ -15274,7 +15274,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-444.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full1\u2013184. ARCH288 live synchronous OpenSSL child lifetime inside nominally timed async tests.",
+      "disposition": "Full1–184. ARCH288 live synchronous OpenSSL child lifetime inside nominally timed async tests.",
       "previous_reviewed_sha256": "328569727113cff6b3dd782d8a623875917bdfac1f11181e28288deb4b86c98b",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
     },
@@ -15287,7 +15287,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-444.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full1\u2013249. Retain live XFF/compression/deleted-parameter checks and restoration; TLS Terminate capability-gated/deferred.",
+      "disposition": "Full1–249. Retain live XFF/compression/deleted-parameter checks and restoration; TLS Terminate capability-gated/deferred.",
       "previous_reviewed_sha256": "9e60c79b639ff9215c309e3d76acfaa822f30ace2bd115f2685847a9b000d7aa",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
     },
@@ -17795,7 +17795,7 @@
       "status": "reviewed",
       "evidence": "REPORT-PART-523.json",
       "reviewer": "/root",
-      "disposition": "Full 1\u2013120 actual case. Retain context-selected TLS port, explicit trusted CA/domain_name/origin and RPC content/status/error assertions under async case timeout. Aggregate wrong child context is already ARCH272 at CLI owner, not a new duplicate.",
+      "disposition": "Full 1–120 actual case. Retain context-selected TLS port, explicit trusted CA/domain_name/origin and RPC content/status/error assertions under async case timeout. Aggregate wrong child context is already ARCH272 at CLI owner, not a new duplicate.",
       "previous_reviewed_sha256": "314587ff3422bd1d6bed5262ec6481f66904607deb54c08585daa8609b00d165",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json",
       "revalidated_baseline": "BASELINE-AUDIT-20261011-H.json",
@@ -17944,7 +17944,7 @@
       "status": "reviewed",
       "evidence": "REPORT-PART-528.json",
       "reviewer": "/root",
-      "disposition": "Full1\u201360 sole actual business case. Retain context-selected host/HTTPS port and status/body/error assertion for port-only parent binding; fixtures have no Gateway-owned certificateRef. Aggregate wrong child context already ARCH272 at CLI selection owner, not a duplicate."
+      "disposition": "Full1–60 sole actual business case. Retain context-selected host/HTTPS port and status/body/error assertion for port-only parent binding; fixtures have no Gateway-owned certificateRef. Aggregate wrong child context already ARCH272 at CLI selection owner, not a duplicate."
     },
     "edgion-tests/src/client/suites/edgion_tls/sni_collision/mod.rs": {
       "sha256": "05834debf4506f95ad34e04fc4751c07e65d1ac5ee91fec14d86aeb73e02f155",
@@ -17968,7 +17968,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-529.json",
       "reviewer": "/root",
-      "disposition": "Full1\u2013144 case/helper implementation re-read on primary promotion. Retain real SNI/IP/ALPN handshake and selected certificate-subject outcome; blocking child operations supplement ARCH288, aggregate context already ARCH272. Original collision-topic explicit LibreSSL exception remains, no executed coverage claimed for skipped path.",
+      "disposition": "Full1–144 case/helper implementation re-read on primary promotion. Retain real SNI/IP/ALPN handshake and selected certificate-subject outcome; blocking child operations supplement ARCH288, aggregate context already ARCH272. Original collision-topic explicit LibreSSL exception remains, no executed coverage claimed for skipped path.",
       "previous_reviewed_sha256": "6e106537e04f5c6842560410f0728de7c4284c618ca77751f63aa4c8787cb3fe",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
     },
@@ -18722,7 +18722,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-555.json",
       "reviewer": "/root",
-      "disposition": "Full 1\u2013276 including actual recorder-host unit test. Retain exact downstream 100/final200/body/close, two trace-keyed recorder attempts, canonical access log, bounded evidence and unconditional fallible cleanup.",
+      "disposition": "Full 1–276 including actual recorder-host unit test. Retain exact downstream 100/final200/body/close, two trace-keyed recorder attempts, canonical access log, bounded evidence and unconditional fallible cleanup.",
       "previous_reviewed_sha256": "e31a22b0f3dcc933077fbac50a2e8e93a7a159774741345152bcd3b3f0746d93",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json"
     },
@@ -18735,7 +18735,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-555.json",
       "reviewer": "/root",
-      "disposition": "Full 1\u2013459. ARCH280 ignored generated request failures and lifetime keyed observations; five intended hash cases retained.",
+      "disposition": "Full 1–459. ARCH280 ignored generated request failures and lifetime keyed observations; five intended hash cases retained.",
       "previous_reviewed_sha256": "40834efd5923e4f1510adfecbf53d940db265b894d7eb70966c71bcbe73dce38",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json"
     },
@@ -18748,7 +18748,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-555.json",
       "reviewer": "/root",
-      "disposition": "Full 1\u2013153. ARCH280 lifetime endpoint evidence; actual error checks/concurrency retained, no strict equality requirement.",
+      "disposition": "Full 1–153. ARCH280 lifetime endpoint evidence; actual error checks/concurrency retained, no strict equality requirement.",
       "previous_reviewed_sha256": "8fabcb802b7ac6c1ec3d070e9efc3b62442a8dc0b2ec43810329bdaed65a42ef",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json"
     },
@@ -18761,7 +18761,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-555.json",
       "reviewer": "/root",
-      "disposition": "Full 1\u2013122. Retain exact unique canonical access-log four-attempt 503/Ewma/RetryOnStatus contract; internal ledger unit contract remains separate.",
+      "disposition": "Full 1–122. Retain exact unique canonical access-log four-attempt 503/Ewma/RetryOnStatus contract; internal ledger unit contract remains separate.",
       "previous_reviewed_sha256": "e26568838d42e5f176d94e532b828483cc995c33532d9007ff0ae2ed1b6b7d22",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json"
     },
@@ -18774,7 +18774,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-555.json",
       "reviewer": "/root",
-      "disposition": "Full 1\u2013153. ARCH280 lifetime endpoint evidence; actual status/errors/concurrency retained.",
+      "disposition": "Full 1–153. ARCH280 lifetime endpoint evidence; actual status/errors/concurrency retained.",
       "previous_reviewed_sha256": "d2adae19db9318084884af1c7a1a06259bf0589fbadd258e28edfa57c83b65e1",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json"
     },
@@ -18787,7 +18787,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-555.json",
       "reviewer": "/root",
-      "disposition": "Full 1\u2013204. ARCH280 healthy phase metric window; ARCH281 independent missing attempt-chain observer. Preserve both traffic phases and live assertions.",
+      "disposition": "Full 1–204. ARCH280 healthy phase metric window; ARCH281 independent missing attempt-chain observer. Preserve both traffic phases and live assertions.",
       "previous_reviewed_sha256": "02737ec724ec1e0b9cbc689bb1b66119bf7eaa08c90e1296dc51654c8bf331e9",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json"
     },
@@ -18800,7 +18800,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-555.json",
       "reviewer": "/root",
-      "disposition": "Full 1\u2013385 including five actual unit tests. Retain authoritative endpoints, sequential successes, exact Service/endpoint/count/warmup deltas and reset/error rejection.",
+      "disposition": "Full 1–385 including five actual unit tests. Retain authoritative endpoints, sequential successes, exact Service/endpoint/count/warmup deltas and reset/error rejection.",
       "previous_reviewed_sha256": "f73adca9d4b1feca3955ce1474c2d63382ab2d7b6f4c306783da7c477c7b20a4",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json"
     },
@@ -18813,7 +18813,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-555.json",
       "reviewer": "/root",
-      "disposition": "Full 1\u201354; actual CLI/public suite exports checked. Retain bounded static module/export ownership.",
+      "disposition": "Full 1–54; actual CLI/public suite exports checked. Retain bounded static module/export ownership.",
       "previous_reviewed_sha256": "4e61d4fcabbfaae1111f2a7e53b0c06b13f79223a01e1ed0ced993ded54a2f72",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json"
     },
@@ -18826,7 +18826,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-555.json",
       "reviewer": "/root",
-      "disposition": "Full 1\u2013148. Retain actual fixed 200/500 cases, legitimate invalid-slot behavior and Gateway fixture. Fixture comments disagree with current intended outcomes; narrow documentation follow-up only.",
+      "disposition": "Full 1–148. Retain actual fixed 200/500 cases, legitimate invalid-slot behavior and Gateway fixture. Fixture comments disagree with current intended outcomes; narrow documentation follow-up only.",
       "previous_reviewed_sha256": "49f50f1f70c276d013b741c7b777541d2897c4f7714ff170d64e69b8f15285d6",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-C.json"
     },
@@ -19943,7 +19943,7 @@
       "status": "reviewed",
       "evidence": "REPORT-PART-439.json",
       "reviewer": "/root/analyze_outbound",
-      "disposition": "Full 1\u20133964 implementation and actual embedded tests in contiguous bounded reads. ARCH-272 direct EdgionTls aggregate complete child-context ownership; retain static dispatch, capability/inventory/dynamic failure contracts and reporting.",
+      "disposition": "Full 1–3964 implementation and actual embedded tests in contiguous bounded reads. ARCH-272 direct EdgionTls aggregate complete child-context ownership; retain static dispatch, capability/inventory/dynamic failure contracts and reporting.",
       "previous_reviewed_sha256": "3f5afa96d10ac15f54b32df48c90af4e862cbf64a4942370f63540298eb80e0b",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json",
       "revalidated_baseline": "BASELINE-AUDIT-20261011-B.json"
@@ -20390,7 +20390,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-161.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full 1\u2013765 read. No actionable issue: bounded borrowed lexical action metadata and provenance match actual syntax/semantic consumers and full tests.",
+      "disposition": "Full 1–765 read. No actionable issue: bounded borrowed lexical action metadata and provenance match actual syntax/semantic consumers and full tests.",
       "previous_reviewed_sha256": "6f5d3b9569ef4b86fdfaa3f892ac3f78ecf3ed5f8e57f2509ac1db898d520b56",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
     },
@@ -20403,7 +20403,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-161.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full 1\u2013890 read. ARCH226 candidate: plain form decoding owns disposable vectors before required final publication copies. Private borrowed intermediates can remove this request-path ownership without changing tolerant byte semantics or logical accounting.",
+      "disposition": "Full 1–890 read. ARCH226 candidate: plain form decoding owns disposable vectors before required final publication copies. Private borrowed intermediates can remove this request-path ownership without changing tolerant byte semantics or logical accounting.",
       "previous_reviewed_sha256": "71c4cc48562788cd1abad101bdf38198a2ffcac4f988aad1fe99c0db5f5a765d",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
     },
@@ -20416,7 +20416,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-161.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Full 1\u2013505 read. No actionable issue: optional bounded preparation preserves alias ownership, fallback/splitting, capacity admission and runtime eligibility. Actual compiler/fused collector/JSON/XML capture tests support accepted design.",
+      "disposition": "Full 1–505 read. No actionable issue: optional bounded preparation preserves alias ownership, fallback/splitting, capacity admission and runtime eligibility. Actual compiler/fused collector/JSON/XML capture tests support accepted design.",
       "previous_reviewed_sha256": "03c47ee03f70a3a4e3d9185cd255a51e9a81ca592b2dd8e8fce2f75c5d604e7d",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
     },
@@ -20429,7 +20429,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-162.json",
       "reviewer": "/root/analyze_outbound",
-      "disposition": "Complete contiguous 1\u20135618 read, fresh frozen hash matched. ARCH231 candidate: five published canonical target/transformation arenas reserve occurrence-sized capacity but charge unique inserted lengths; retained backing ownership lacks matching admission. Other stage/publication/body/classifier/capture complexity has legitimate required boundaries.",
+      "disposition": "Complete contiguous 1–5618 read, fresh frozen hash matched. ARCH231 candidate: five published canonical target/transformation arenas reserve occurrence-sized capacity but charge unique inserted lengths; retained backing ownership lacks matching admission. Other stage/publication/body/classifier/capture complexity has legitimate required boundaries.",
       "previous_reviewed_sha256": "6259ebaf9e73726d5989f08d7a48d74320183ddd419fda5c6659ded5835a3404",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-D.json"
     },
@@ -20442,7 +20442,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-163.json",
       "reviewer": "/root/analyze_outbound",
-      "disposition": "Fully read 1\u2013775. No actionable issue: envelope arity/quotes/bounded selector metadata are owned here; nested grammar belongs to syntax/semantic. Borrowed immutable records preserve source identity, checked admission and privacy-safe errors.",
+      "disposition": "Fully read 1–775. No actionable issue: envelope arity/quotes/bounded selector metadata are owned here; nested grammar belongs to syntax/semantic. Borrowed immutable records preserve source identity, checked admission and privacy-safe errors.",
       "previous_reviewed_sha256": "8017d1425e6576e7a14931b117d6e910d6b0bb513801bf13c316ad7b500f5e24",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-D.json"
     },
@@ -20455,7 +20455,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-163.json",
       "reviewer": "/root/analyze_outbound",
-      "disposition": "Fully read 1\u2013366. No actionable issue: deliberately exact typed CRS 4.25.1 dependency signatures retain modified/unknown rules. These are not another parser or runtime matcher; no established change scenario supports a generic framework.",
+      "disposition": "Fully read 1–366. No actionable issue: deliberately exact typed CRS 4.25.1 dependency signatures retain modified/unknown rules. These are not another parser or runtime matcher; no established change scenario supports a generic framework.",
       "previous_reviewed_sha256": "4f1b0d426d5259e2bae846622ba8e0c26119101153d823703a5c941d20465eed",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-D.json"
     },
@@ -20468,7 +20468,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-163.json",
       "reviewer": "/root/analyze_outbound",
-      "disposition": "Fully read 1\u2013523. No actionable issue: bounded cold CanonicalWork classification proves exact optional families conservatively, rejects aliases/dynamic writers/unproven observers, preserves original schedules and collector captures while suppressing only proven aggregate actions.",
+      "disposition": "Fully read 1–523. No actionable issue: bounded cold CanonicalWork classification proves exact optional families conservatively, rejects aliases/dynamic writers/unproven observers, preserves original schedules and collector captures while suppressing only proven aggregate actions.",
       "previous_reviewed_sha256": "d2a5bddcc1df8659f1f58def06564731f69d558d5d193ad37dbeb96f38bf0168",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-D.json"
     },
@@ -20614,7 +20614,7 @@
       "status": "reviewed",
       "evidence": "REPORT-PART-168.json",
       "reviewer": "/root",
-      "disposition": "Full implementation 1\u2013814 read. No actionable issue: source-borrowed views and flat escape offsets own lexical operator spelling separately from semantic interpretation. Immutable mappings justify private expects; fallible pre-admission covers operators/escape metadata/decoded and retained counts. Identity or logarithmic decoded-range mapping avoids rescans. Actual semantic consumers borrow unchanged arguments and allocate decoded bytes only after preparation; test-specific inspection stays out of production visibility."
+      "disposition": "Full implementation 1–814 read. No actionable issue: source-borrowed views and flat escape offsets own lexical operator spelling separately from semantic interpretation. Immutable mappings justify private expects; fallible pre-admission covers operators/escape metadata/decoded and retained counts. Identity or logarithmic decoded-range mapping avoids rescans. Actual semantic consumers borrow unchanged arguments and allocate decoded bytes only after preparation; test-specific inspection stays out of production visibility."
     },
     "edgion-waf/src/seclang/semantic.rs": {
       "sha256": "044053c001d934ddae1b5c343df1beab078641a8364b817190366f63ea754303",
@@ -20625,7 +20625,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-169.json",
       "reviewer": "/root/analyze_conversion",
-      "disposition": "Complete sequential1\u20138436 implementation read, fresh frozen hash matched. ARCH227 P3 candidate: final-effective count/reserve pass followed by materialization and truncation of reset-discarded indices, retaining unnecessary cold frontend high-water. Operator case lead rejected: canonical rx accepted and RX rejected by intentional explicit test. Other source-borrowed/canonical typed semantic scans and strict graph ownership are legitimate.",
+      "disposition": "Complete sequential1–8436 implementation read, fresh frozen hash matched. ARCH227 P3 candidate: final-effective count/reserve pass followed by materialization and truncation of reset-discarded indices, retaining unnecessary cold frontend high-water. Operator case lead rejected: canonical rx accepted and RX rejected by intentional explicit test. Other source-borrowed/canonical typed semantic scans and strict graph ownership are legitimate.",
       "previous_reviewed_sha256": "044053c001d934ddae1b5c343df1beab078641a8364b817190366f63ea754303",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-D.json"
     },
@@ -20638,7 +20638,7 @@
       "status": "reviewed",
       "evidence": "REPORT-PART-170.json",
       "reviewer": "/root/analyze_outbound",
-      "disposition": "Fully read 1\u2013591. No actionable issue: canonical bounded scanner owns UTF-8, normalization and original-byte provenance; checks before copying/growth, tested directional logarithmic mapping and privacy-safe coordinates."
+      "disposition": "Fully read 1–591. No actionable issue: canonical bounded scanner owns UTF-8, normalization and original-byte provenance; checks before copying/growth, tested directional logarithmic mapping and privacy-safe coordinates."
     },
     "edgion-waf/src/seclang/syntax.rs": {
       "sha256": "3d21ae3b44c1f75ce47e1c46ecf8b44044fd5a3438132064c7b4100310d5c949",
@@ -20649,7 +20649,7 @@
       "status": "reviewed",
       "evidence": "REPORT-PART-170.json",
       "reviewer": "/root/analyze_outbound",
-      "disposition": "Fully read 1\u2013358. No actionable issue: ordered grammar orchestration releases tokenizer metadata, admits aggregate retained bytes and validates aligned mappings. Immutable borrowed owners preserve empty/absent actions and typed error precedence."
+      "disposition": "Fully read 1–358. No actionable issue: ordered grammar orchestration releases tokenizer metadata, admits aggregate retained bytes and validates aligned mappings. Immutable borrowed owners preserve empty/absent actions and typed error precedence."
     },
     "edgion-waf/src/seclang/tag_selection.rs": {
       "sha256": "234699b72a8edc1e5e1231dd96d30f12e5996974de21d4aafa8c4932d8e28245",
@@ -20660,7 +20660,7 @@
       "status": "reviewed",
       "evidence": "REPORT-PART-170.json",
       "reviewer": "/root/analyze_outbound",
-      "disposition": "Fully read 1\u2013904. No actionable issue: bounded immutable decoding and prepared configuration-only programs use fixed scratch, canonical work and profile binding. Whole-unit exclusion cannot reactivate source-removed units; no runtime request condition duplicate. Actual two-pass compile boundaries agree with accepted strict original admission."
+      "disposition": "Fully read 1–904. No actionable issue: bounded immutable decoding and prepared configuration-only programs use fixed scratch, canonical work and profile binding. Whole-unit exclusion cannot reactivate source-removed units; no runtime request condition duplicate. Actual two-pass compile boundaries agree with accepted strict original admission."
     },
     "edgion-waf/src/seclang/target.rs": {
       "sha256": "70ee749fe99cd7e0f07b7cd85f0345dd5b0eb73ee6194693be634e48c44b2959",
@@ -20671,7 +20671,7 @@
       "status": "reviewed",
       "evidence": "REPORT-PART-170.json",
       "reviewer": "/root/analyze_outbound",
-      "disposition": "Fully read 1\u2013868. No actionable issue: borrowed flat target syntax and compact ID selectors preserve independently bounded grammar/error order and transactional publication. Shared single-target parsing serves control validation/commit; no range expansion."
+      "disposition": "Fully read 1–868. No actionable issue: borrowed flat target syntax and compact ID selectors preserve independently bounded grammar/error order and transactional publication. Shared single-target parsing serves control validation/commit; no range expansion."
     },
     "edgion-waf/src/seclang/tokenizer.rs": {
       "sha256": "69e8c2e40691b9b756b44e28352674888c21b01ebfedafcf9a3b410a351a5f09",
@@ -20706,7 +20706,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-173.json",
       "reviewer": "/root",
-      "disposition": "Full 1\u2013962 read. No actionable issue: one fallibly bounded walker serves ordinary materialization and provisional observers, reuses two buffers and borrows identity results while preserving work/checkpoints and later validation. Observer physical failures remain distinct from provisional predicate errors. Byte decoders and normalization stay private canonical implementations; explicit dispatch and deliberate multiMatch stage retention are required semantics.",
+      "disposition": "Full 1–962 read. No actionable issue: one fallibly bounded walker serves ordinary materialization and provisional observers, reuses two buffers and borrows identity results while preserving work/checkpoints and later validation. Observer physical failures remain distinct from provisional predicate errors. Byte decoders and normalization stay private canonical implementations; explicit dispatch and deliberate multiMatch stage retention are required semantics.",
       "previous_reviewed_sha256": "e98a4845150656ca245598eaae790200e300c6b9e9e9563da5a9b43184785fd6",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-D.json"
     },
@@ -20719,7 +20719,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-173.json",
       "reviewer": "/root",
-      "disposition": "Full 1\u201312 read. No actionable issue: small typed unsupported capability findings are attributed to original rule/member and consumed by compiler/resource/runtime admission, with no generic plugin leakage.",
+      "disposition": "Full 1–12 read. No actionable issue: small typed unsupported capability findings are attributed to original rule/member and consumed by compiler/resource/runtime admission, with no generic plugin leakage.",
       "previous_reviewed_sha256": "26d65208b22dd9a829a36ef1cff292077e2511c65b7caa9c9826f904a905fc6b",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-D.json"
     },
@@ -20732,7 +20732,7 @@
       "status": "needs-revalidation",
       "evidence": "REPORT-PART-173.json",
       "reviewer": "/root",
-      "disposition": "Full 1\u2013437 read. No actionable issue: scoped transaction loan owns source parity/completion/abandonment, shared collector and logical accounting, while parser owns grammar. Malformed DetectionOnly fallback discards provisional facts; sticky physical limits survive later syntax errors. Raw-source policy is explicit; atomically sealed publication admits aggregate ownership before committing, and incomplete Drop poisons the transaction.",
+      "disposition": "Full 1–437 read. No actionable issue: scoped transaction loan owns source parity/completion/abandonment, shared collector and logical accounting, while parser owns grammar. Malformed DetectionOnly fallback discards provisional facts; sticky physical limits survive later syntax errors. Raw-source policy is explicit; atomically sealed publication admits aggregate ownership before committing, and incomplete Drop poisons the transaction.",
       "previous_reviewed_sha256": "48bf05b57500fc5336c128d7812b20b035297d8ae863d9c93c368a6c2b1bbd0f",
       "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-D.json"
     },
@@ -20745,7 +20745,7 @@
       "status": "reviewed",
       "evidence": "REPORT-PART-174.json",
       "reviewer": "/root",
-      "disposition": "Complete 1\u20131515 implementation read. No actionable issue: explicit incremental UTF-8/XML states validate ignored markup and borrow contiguous values synchronously; bounded reusable token/name/structural ownership and charged namespace/identity checks avoid DOM accumulation. Independent logical source/token/decoded/name/event/depth/structure and actual retained-capacity/overlap/work gates admit mutations and preserve sticky failures. In-place attribute sort additionally charges swaps and caller-specific domain comparisons; comparator-only bounded_sort cannot preserve this contract by direct substitution, so textual similarity alone is not a finding."
+      "disposition": "Complete 1–1515 implementation read. No actionable issue: explicit incremental UTF-8/XML states validate ignored markup and borrow contiguous values synchronously; bounded reusable token/name/structural ownership and charged namespace/identity checks avoid DOM accumulation. Independent logical source/token/decoded/name/event/depth/structure and actual retained-capacity/overlap/work gates admit mutations and preserve sticky failures. In-place attribute sort additionally charges swaps and caller-specific domain comparisons; comparator-only bounded_sort cannot preserve this contract by direct substitution, so textual similarity alone is not a finding."
     },
     "edgion-waf/src/sqli/blacklist.rs": {
       "sha256": "032db94c447b37b8641672448105ec1cadda5ebdc39bf51799d86bb13e53b8da",
@@ -30470,7 +30470,6 @@
         "preservation": "Code, tests, canonical knowledge, original verification receipt, coverage, reports and historical drift snapshots retained."
       }
     },
-
     "ARCH-017": {
       "path": "ARCH-017-prepared-native-backend-tls-generation.md",
       "status": "candidate",
@@ -30502,7 +30501,7 @@
     },
     "ARCH-018": {
       "path": "ARCH-018-outlier-production-identity-owner.md",
-      "status": "confirmed",
+      "status": "resolved",
       "kind": "architecture-debt",
       "partition": "PART-255",
       "sha256": "d2bc1d6bb23edc0bb5c2b1180c86756e9e74397779127a1b996a3cb50e2878ee",
@@ -30524,7 +30523,21 @@
         },
         "limits": "Independent original rules/current implementation/caller/test review; static only, no executions/primary credit/measurements. Keep explicit preserved invariants and proposed implementation verification."
       },
-      "verifier": "/root/verify_seed"
+      "verifier": "/root/verify_seed",
+      "previous_status": "confirmed",
+      "finding_removed": true,
+      "removed_finding_path": "ARCH-018-outlier-production-identity-owner.md",
+      "current_implementation_acceptance": "TASK-ACCEPTANCE-ARCH-018-20261012.json",
+      "closure": {
+        "date": "2026-10-12",
+        "disposition": "fixed-and-verified",
+        "authorization": "User explicitly requested deletion of original ARCH-018 after accepting its implementation.",
+        "independent_reviewer": "/root/result_review",
+        "reviewed_finding_sha256": "d2bc1d6bb23edc0bb5c2b1180c86756e9e74397779127a1b996a3cb50e2878ee",
+        "acceptance_evidence": "TASK-ACCEPTANCE-ARCH-018-20261012.json",
+        "index_title": "Closed outlier production identity owner finding; acceptance evidence",
+        "preservation": "Code, tests, canonical knowledge, original verification receipt, coverage, reports and historical drift snapshots retained."
+      }
     },
     "ARCH-019": {
       "path": "ARCH-019-borrowed-geo-access-log-projection.md",

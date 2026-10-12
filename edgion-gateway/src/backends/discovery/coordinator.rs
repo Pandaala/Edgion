@@ -383,6 +383,20 @@ impl EndpointRuntimeState {
         false
     }
 
+    /// Expire both deadline representations without performing recovery itself.
+    #[cfg(test)]
+    pub(crate) fn expire_outlier_deadlines_for_test(&self) {
+        if let Some(passive) = self.passive_outlier.load_full() {
+            passive.expire_deadlines_for_test();
+        }
+        // Zero means no deadline. Wait only for the clock origin's first
+        // millisecond so 1 is an already-elapsed, non-sentinel deadline.
+        while runtime_now_millis() < 1 {
+            std::thread::yield_now();
+        }
+        self.outlier_until_millis.store(1, Ordering::Release);
+    }
+
     pub(crate) fn set_health_eligible(&self, eligible: bool) {
         self.health_eligible.store(eligible, Ordering::Release);
     }

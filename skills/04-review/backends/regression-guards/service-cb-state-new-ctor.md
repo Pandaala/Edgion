@@ -1,13 +1,22 @@
 ---
 name: service-cb-state-new-ctor
-description: Read when reviewing set_service_config constructing Arc<ServiceCbState> with an identical field list in both the Occupied-changed swap and the Vacant insert / the two insert sites duplicate the struct literal (backends-F010).
+description: Current identity-bound Service outlier ownership and preserved regression boundary.
 knowledge_type: regression-guards
 ---
 
-# backends-F010 — set_service_config duplicate ServiceCbState literal
+# Canonical Service outlier state construction
 
-**Status / verdict**: fixed (backends-F010, 2026-05-24)
+`ServiceCbState::new(config, policy_identity) -> Arc<Self>` is the one
+construction site for normalized configuration, captured policy identity,
+identity-keyed passive states and service arbitration mutex. No socket-hash
+execution map remains (ARCH-018). Config publication invokes this constructor
+only for a new or changed policy; identical config preserves the current Arc.
 
-When reviewing findings of the form "`set_service_config` constructs `Arc<ServiceCbState>` with an identical field list in both the Occupied-changed swap and the Vacant insert / the two insert sites duplicate the struct literal / a future `ServiceCbState` field could be added to one branch but missed in the other (backends-F010)": fixed (backends-F010, 2026-05-24).
+The historical backends-F010 correction removed duplicated struct literals in
+Occupied/Vacant entry branches. Those branches are superseded, while the useful
+single-constructor boundary remains. Re-evaluate if additional construction sites
+or another execution map are introduced. Source: outlier_detection/store.rs;
+coverage: config replacement/no-op store tests. No performance measurement is
+claimed by the structural removal.
 
-`ServiceCbState::new(config) -> Arc<Self>` (`edgion-gateway/src/backends/outlier_detection/store.rs`) is now the single canonical construction site; both `set_service_config` branches call `occ.insert(ServiceCbState::new(cfg))` / `vac.insert(ServiceCbState::new(cfg))`, so a future field is added in exactly one place. Pure no-behavior-change DRY refactor (byte-for-byte identical construction; private struct, private method). Same class as backends-F007 / backends-F008 / backends-F009. Re-reports of the duplicate-literal form are not accepted; verify `ServiceCbState::new` exists before re-reporting.
+Provenance: backends-F010 (2026-05-24); ARCH-018.

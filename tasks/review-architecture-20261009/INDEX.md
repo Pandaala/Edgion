@@ -26,7 +26,7 @@ Source reviewed: 512 / 1676; 467 primary partitions.
 | ARCH-015 | confirmed | behavior-defect | [Bind persisted GeoIP validators to their update source](ARCH-015-geoip-validator-source-identity.md) |
 | ARCH-016 | resolved | architecture-debt | [Closed immutable backendRef selector finding; acceptance evidence](TASK-ACCEPTANCE-ARCH-016-20261012.json) |
 | ARCH-017 | candidate | architecture-debt | [Prepare immutable native backend TLS components with their publishing generation](ARCH-017-prepared-native-backend-tls-generation.md) |
-| ARCH-018 | confirmed | architecture-debt | [Retire the unused socket-hash outlier execution owner](ARCH-018-outlier-production-identity-owner.md) |
+| ARCH-018 | resolved | architecture-debt | [Closed outlier production identity owner finding; acceptance evidence](TASK-ACCEPTANCE-ARCH-018-20261012.json) |
 | ARCH-019 | candidate | architecture-debt | [Borrow resolved GeoIP dimensions when projecting an access log](ARCH-019-borrowed-geo-access-log-projection.md) |
 | ARCH-020 | confirmed | architecture-debt | [Normalize discovery geometry without constructing provisional runtime selectors](ARCH-020-discovery-normalized-geometry-owner.md) |
 | ARCH-021 | candidate | architecture-debt | [Keep ready Service endpoints numeric across the shared outbound boundary](ARCH-021-numeric-outbound-service-endpoints.md) |

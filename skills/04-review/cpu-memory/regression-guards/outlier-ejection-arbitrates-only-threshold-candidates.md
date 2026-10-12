@@ -22,7 +22,8 @@ keeping the common failure path free of the service-wide O(N) critical section.
 
 ## Regression coverage
 
-- Service-level coverage counts percent arbitrations and requires zero before
+- Service-level identity/token coverage counts percent arbitrations in the actual
+  production identity branch and requires zero before
   the threshold, one at the threshold, and no additional arbitration after the
   endpoint opens.
 - State-machine coverage records a candidate, applies a success, and requires
@@ -33,3 +34,14 @@ keeping the common failure path free of the service-wide O(N) critical section.
 ## Resolution references
 
 - `gw-10` — 2026-08-09.
+
+## Ownership correction
+
+ARCH-018 removed the unused socket-hash execution wrapper whose instrumentation
+previously made the named store regression green without exercising production
+arbitration. The counter is test-only and now sits under the actual identity
+branch's service lock. Store fixtures publish real isolated coordinator
+membership and capture real policy tokens; they implement no second algorithm.
+Historical zero-count tests now verify empty-membership rejection and the
+coordinator-owned count. The shared passive kernel and AI consumer stay unchanged.
+No throughput or allocation improvement is claimed without measurement.

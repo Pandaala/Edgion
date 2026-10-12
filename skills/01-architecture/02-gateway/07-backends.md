@@ -216,28 +216,48 @@ Passive ejection mechanism to prevent cascading failures. References a slimmed-d
 ### Component layout
 
 ```
-circuit_breaker/
-├── config.rs     # re-exports CircuitBreakerConfig / OutlierDetectionConfig
-│                 # (the struct + normalize()/validate() now live in
-│                 # edgion-resources::resources::outlier_detection)
-├── store.rs      # CircuitBreakerStore — DashMap-based ejection state store
+outlier_detection/
+├── config.rs     # shared resource configuration re-exports
+├── state.rs      # metric-free PassiveEjectionState shared with AI credentials
+├── store.rs      # OutlierDetectionStore policy and identity-state owner
 └── mod.rs
 ```
 
-### Core mechanics
+### Core mechanics and ownership
 
-- **Consecutive failure counting**: connect failures / proxy errors / upstream 5xx each count as one; non-5xx responses reset the counter.
-- **Auto ejection**: once consecutive failures hit the threshold, mark `ejected_at`; LB selection skips the backend.
-- **Auto recovery**: when `is_ejected()` is checked and the cooldown has expired, the ejection state is cleared automatically.
-- **Maximum ejection ratio**: prevents all backends from being ejected at once (0 = no limit).
+`OutlierDetectionStore` is a global LazyLock singleton with an outer
+`DashMap<String, Arc<ServiceCbState>>` for normalized configuration and policy
+identity. Each service owns exactly one identity-keyed
+`DashMap<EndpointRuntimeIdentity, Arc<PassiveEjectionState>>`. The former
+socket-hash execution container and methods were removed under ARCH-018.
 
-### Data store
+Completion paths capture `OutlierCompletionToken` from the selected actual
+backend. `record_failure_for_backend_with_token` and
+`record_success_for_backend_with_token` delegate to coordinator validation of
+current membership, endpoint proof and exact policy identity. Late completions
+cannot register retired state or change a replacement socket occupant.
 
-`CircuitBreakerStore` (global LazyLock singleton):
-- Outer `DashMap<String, Arc<ServiceCbState>>`: service_key → configuration + endpoint state.
-- Inner `DashMap<u64, EndpointState>`: backend_hash → consecutive-failure count + ejection time.
-- `record_success` deletes the entry directly (not reset to 0) to prevent memory growth.
-- Services without CB configuration have no entry; `has_service()` returns false and skips immediately.
+Application, gateway and local-origin failures have independent counters.
+Endpoint-local failure accounting returns before service arbitration unless a
+threshold is reached. Candidates enter the service percent mutex, scan the one
+identity map, and revalidate/commit under that same guard. The denominator is
+the coordinator's current active endpoint count; callers supply no count.
+Zero percent disables arbitration. A positive percentage permits at least one
+ejection, including single-endpoint Services.
+
+Success resets counters and clears runtime ejection while retaining passive
+backoff history. Cooldown is linear base duration times ejection count, capped
+by the maximum. Lazy runtime selection recovery and failure-completion expiry
+close passive state and runtime eligibility together. The coordinator runtime
+owns exactly-once recovery gauge settlement; retirement settles the gauge but
+freezes detached eligibility. No response/transport or AI half-open ownership
+changes follow from this Service wrapper removal.
+
+Config publication uses the store config mutex to serialize equality checking,
+policy identity allocation, coordinator policy publication and service-map
+replacement. Identical config preserves state and token identity. Changed or
+removed policy clears active runtime ejections and invalidates old tokens.
+Services without outlier configuration have no store entry.
 
 ### Failure-counting hooks
 
@@ -249,11 +269,11 @@ circuit_breaker/
 
 ### LB integration
 
-`is_backend_healthy()` adds a CB ejection check after the health check; it applies automatically to all LB algorithms.
+All shared Service selector variants consult live identity-bound runtime health/outlier eligibility.
 
 ### Lifecycle
 
-- `CircuitBreakerStore.set_service_config` is written **only** by the
+- `OutlierDetectionStore.set_service_config` is written **only** by the
   `EdgionBackendTrafficPolicy` policy store (oldest-wins winner's
   `spec.outlierDetection`, normalized) — see
   [Backend Traffic Policy](#backend-traffic-policy-edgionbackendtrafficpolicy)
@@ -280,7 +300,7 @@ including owners retained by in-flight old snapshots. See
 
 | Metric | Type | Label | Recorded when |
 |--------|------|-------|---------------|
-| `edgion_circuit_breaker_ejections_total` | Counter | `service` | An ejection succeeds |
+| `edgion_circuit_breaker_ejections_total` | Counter | `service`, bounded `class` | An ejection succeeds |
 | `edgion_circuit_breaker_ejected_endpoints` | Gauge | `service` | +1 on ejection, -1 on recovery / cleanup |
 | `edgion_circuit_breaker_rejections_total` | Counter | `service` | LB selection hits an ejected backend |
 
@@ -442,7 +462,7 @@ edgion-gateway/src/backends/
 │   └── coordinator.rs        # Joint source, selector, proof, and runtime generation
 ├── health/                   # health checks
 │   └── check/                # check system
-├── circuit_breaker/          # circuit breaker (passive ejection)
+├── outlier_detection/        # passive ejection policy and shared kernel
 ├── degrade_threshold.rs        # degrade-threshold store + resolution
 ├── policy/                   # backend policies
 │   ├── backend_tls/          # BackendTLSPolicy (upstream mTLS)

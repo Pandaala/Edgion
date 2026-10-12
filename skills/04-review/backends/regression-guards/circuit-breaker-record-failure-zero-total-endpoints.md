@@ -1,54 +1,33 @@
 ---
 name: circuit-breaker-record-failure-zero-total-endpoints
-description: Use when reviewing circuit-breaker findings of the form "record_failure bypasses the percent cap when total_endpoints == 0" — already fixed.
+description: Current identity-bound Service outlier ownership and preserved regression boundary.
 status: fixed
 finding_id: g7-006 Issue B
 closed: 2026-05-29
 knowledge_type: regression-guards
 ---
 
-# Circuit Breaker record_failure total_endpoints == 0 Bypass — FIXED
+# Percent caps use current coordinator membership
 
-## Conclusion
+Current Service failure completion accepts an actual backend and captured policy
+token. The coordinator verifies endpoint identity and membership under the
+endpoint completion lock, then supplies `current.entries.len()` to the single
+identity arbitration branch. An empty/absent membership rejects the completion
+before identity-state registration; callers cannot supply a stale or zero count.
+Concurrent admitted candidates serialize the cap check and final open under the
+service ejection mutex. Positive percentages retain the minimum-one allowance.
 
-The circuit-breaker `record_failure` `total_endpoints == 0` bypass is fixed: when the caller-supplied total is 0, it now falls back to `svc.endpoints.len().max(1)`, so the percent-cap is always applied with a non-zero denominator.
+The historical g7-006 Issue B fix used `svc.endpoints.len().max(1)` when a
+hash-wrapper caller supplied zero. That wrapper, caller count and fallback were
+removed under ARCH-018. They are historical evidence, not current guidance.
 
-Re-reports of "record_failure skips the ejection percent cap when total_endpoints is 0" are **not accepted**; verify the `svc.endpoints.len().max(1)` fallback before re-reporting.
+The preserved `test_percent_cap_applies_when_total_endpoints_is_zero` and
+`test_percent_cap_applies_concurrently_when_total_endpoints_is_zero` names now
+pin the successor boundary: old completions at empty membership cannot recreate
+state, then republished four-endpoint membership enforces a two-endpoint 50% cap.
+Normal sequential and concurrent percent tests exercise the same owner.
 
-## Core Rationale
-
-**1. The bypass**
-
-`record_failure` computed the maximum-ejection percent cap against a caller-supplied `total_endpoints`; when that value was 0, the cap computation divided/bounded against zero and the cap was effectively bypassed.
-
-**2. The fix**
-
-When the caller-supplied total is 0, the code falls back to `svc.endpoints.len().max(1)`, guaranteeing a sane non-zero denominator so the percent cap applies as intended.
-
-**3. Regression coverage**
-
-Unit regression `test_percent_cap_applies_when_total_endpoints_is_zero` pins the fallback behaviour.
-
-## Fix Suggestions Not Accepted
-
-- Re-reporting the cap bypass without checking the zero-total fallback.
-
-## Re-evaluation Triggers
-
-Re-open only if:
-
-- A new caller path supplies a total that can be 0 *and* the service endpoint set is also empty (the `.max(1)` already guards this).
-
-## Reference Cases
-
-- Source: 2026-05-29 circuit-breaker review (g7-006 Issue B).
-- Regression: `test_percent_cap_applies_when_total_endpoints_is_zero`.
-- Companion finding: `backends/circuit-breaker-record-success-gauge-leak.md` (g7-006 Issue A).
-
-## Historical resolution evidence: g7-006 Issue A
-
-`record_success` gauge leak fixed: removed entry with `ejected_at.is_some()` now calls `record_cb_recovery`; unit regression `test_record_success_on_ejected_does_not_leak_gauge`
-
-## Resolution references
-
-- `g7-006 Issue A` — —.
+Re-evaluate if coordinator validation stops preceding state registration, if a
+caller count reappears, or if final candidate commit escapes arbitration.
+Source: outlier_detection/store.rs and discovery/coordinator.rs.
+Provenance: g7-006 Issue B (2026-05-29); ARCH-018.

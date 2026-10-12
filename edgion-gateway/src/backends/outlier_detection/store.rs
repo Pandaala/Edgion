@@ -1,6 +1,4 @@
 use super::config::OutlierDetectionResolved;
-#[cfg(test)]
-use super::state::ejection_duration;
 use super::state::{FailureClass, FailureTransition, PassiveEjectionState};
 use crate::backends::discovery::{get_service_discovery_coordinator, OutlierPolicyIdentity};
 use crate::lb::{EndpointRuntimeIdentity, LbBackend};
@@ -24,9 +22,8 @@ pub struct OutlierCompletionToken {
 struct ServiceCbState {
     config: OutlierDetectionResolved,
     policy_identity: Arc<OutlierPolicyIdentity>,
-    endpoints: DashMap<u64, Arc<PassiveEjectionState>>,
     identity_endpoints: DashMap<EndpointRuntimeIdentity, Arc<PassiveEjectionState>>,
-    /// Serializes the percent-check + ejection steps in `record_failure` to prevent
+    /// Serializes the percent-check + ejection steps in identity-bound failure completion to prevent
     /// concurrent calls for distinct backends from both passing the max-ejection-percent
     /// guard simultaneously and over-ejecting beyond the configured limit.
     eject_lock: parking_lot::Mutex<()>,
@@ -41,7 +38,6 @@ impl ServiceCbState {
         Arc::new(Self {
             config,
             policy_identity,
-            endpoints: DashMap::new(),
             identity_endpoints: DashMap::new(),
             eject_lock: parking_lot::Mutex::new(()),
             #[cfg(test)]
@@ -102,22 +98,16 @@ impl OutlierDetectionStore {
                 }
                 let Some(policy_identity) = self.allocate_policy_identity() else {
                     coordinator.set_outlier_policy(service_key, None);
-                    if let Some((_, old)) = self.services.remove(service_key) {
-                        Self::drain_ejected_gauge(service_key, &old);
-                    }
+                    self.services.remove(service_key);
                     return;
                 };
                 let next = ServiceCbState::new(cfg, Arc::clone(&policy_identity));
                 coordinator.set_outlier_policy(service_key, Some(policy_identity));
-                if let Some(old) = self.services.insert(service_key.to_string(), next) {
-                    Self::drain_ejected_gauge(service_key, &old);
-                }
+                self.services.insert(service_key.to_string(), next);
             }
             None => {
                 coordinator.set_outlier_policy(service_key, None);
-                if let Some((_, old_svc)) = self.services.remove(service_key) {
-                    Self::drain_ejected_gauge(service_key, &old_svc);
-                }
+                self.services.remove(service_key);
             }
         }
     }
@@ -127,93 +117,6 @@ impl OutlierDetectionStore {
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| current.checked_add(1))
             .ok()
             .map(|generation| Arc::new(OutlierPolicyIdentity { generation }))
-    }
-
-    #[inline]
-    pub fn is_ejected(&self, service_key: &str, backend_hash: u64) -> bool {
-        let svc = match self.services.get(service_key) {
-            Some(s) => Arc::clone(&s),
-            None => return false,
-        };
-
-        let Some(endpoint) = svc.endpoints.get(&backend_hash).map(|entry| Arc::clone(entry.value())) else {
-            return false;
-        };
-        let (ejected, recovered) = endpoint.legacy_ejection_status();
-        if recovered {
-            crate::observe::metrics::record_cb_recovery(service_key);
-        }
-        ejected
-    }
-
-    /// Backoff-scaled ejection duration: `min(ejection_seconds * num_ejections, max)`.
-    #[cfg(test)]
-    #[inline]
-    fn ejection_duration(config: &OutlierDetectionResolved, num_ejections: u32) -> std::time::Duration {
-        ejection_duration(config, num_ejections)
-    }
-
-    pub fn record_failure(&self, service_key: &str, backend_hash: u64, total_endpoints: usize, class: FailureClass) {
-        let svc = match self.services.get(service_key) {
-            Some(s) => Arc::clone(&s),
-            None => return,
-        };
-
-        let endpoint = Arc::clone(
-            svc.endpoints
-                .entry(backend_hash)
-                .or_insert_with(|| PassiveEjectionState::new(Some(svc.config.clone())))
-                .value(),
-        );
-
-        let Some(candidate) = endpoint.record_failure_candidate(class) else {
-            return;
-        };
-
-        if svc.config.max_ejection_percent == 0 {
-            if endpoint.finish_failure(candidate, true) == FailureTransition::Opened {
-                crate::observe::metrics::record_cb_ejection(service_key, class.metric_label());
-            }
-            return;
-        }
-
-        // Percent check + open stay under eject_lock so concurrent candidates
-        // for distinct backends cannot exceed max_ejection_percent.
-        let _eject_guard = svc.eject_lock.lock();
-        #[cfg(test)]
-        svc.percent_arbitrations.fetch_add(1, Ordering::Relaxed);
-        let effective_total = if total_endpoints > 0 {
-            total_endpoints
-        } else {
-            svc.endpoints.len().max(1)
-        };
-        let currently_ejected = svc.endpoints.iter().filter(|entry| entry.value().is_open()).count();
-        let max_ejectable = (effective_total as u64 * svc.config.max_ejection_percent as u64 / 100) as usize;
-        let allow_ejection = currently_ejected < max_ejectable.max(1);
-
-        if endpoint.finish_failure(candidate, allow_ejection) == FailureTransition::Opened {
-            crate::observe::metrics::record_cb_ejection(service_key, class.metric_label());
-        }
-    }
-
-    pub fn record_success(&self, service_key: &str, backend_hash: u64) {
-        let svc = match self.services.get(service_key) {
-            Some(s) => Arc::clone(&s),
-            None => return,
-        };
-
-        // Reset both counters and clear ejection, but RETAIN num_ejections so
-        // backoff history survives. Only operate on an existing entry — a
-        // never-failed endpoint needs no allocation. If it had been ejected,
-        // fire record_cb_recovery to keep the gauge balanced.
-        // Trailing `;` keeps the Option<RefMut> temporary's drop before `svc` is
-        // released — without it the if-let is the function's trailing expression and
-        // the borrow of `svc.endpoints` outlives `svc`.
-        if let Some(endpoint) = svc.endpoints.get(&backend_hash) {
-            if endpoint.record_success() {
-                crate::observe::metrics::record_cb_recovery(service_key);
-            }
-        };
     }
 
     pub fn capture_completion_token(&self, backend: &LbBackend) -> Option<OutlierCompletionToken> {
@@ -281,6 +184,8 @@ impl OutlierDetectionStore {
                     // share one service-policy lock. Dropping this guard before
                     // finish_failure lets concurrent identities over-eject.
                     let _guard = svc.eject_lock.lock();
+                    #[cfg(test)]
+                    svc.percent_arbitrations.fetch_add(1, Ordering::Relaxed);
                     let currently_ejected = svc
                         .identity_endpoints
                         .iter()
@@ -360,38 +265,6 @@ impl OutlierDetectionStore {
     #[inline]
     pub fn has_service(&self, service_key: &str) -> bool {
         self.services.contains_key(service_key)
-    }
-
-    /// Decrement gauge for any currently-ejected endpoints in a service state.
-    fn drain_ejected_gauge(service_key: &str, svc: &ServiceCbState) {
-        let ejected = svc.endpoints.iter().filter(|entry| entry.value().is_open()).count();
-        for _ in 0..ejected {
-            crate::observe::metrics::record_cb_recovery(service_key);
-        }
-    }
-
-    pub fn remove_service(&self, service_key: &str) {
-        if let Some((_, svc)) = self.services.remove(service_key) {
-            Self::drain_ejected_gauge(service_key, &svc);
-        }
-    }
-
-    /// Remove a single backend endpoint's CB state (called when endpoint is removed from EP/EPS).
-    pub fn remove_backend(&self, service_key: &str, addr: &pingora_core::protocols::l4::socket::SocketAddr) {
-        let Some(svc) = self.services.get(service_key) else {
-            return;
-        };
-        let backend = pingora_load_balancing::Backend {
-            addr: addr.clone(),
-            weight: 1,
-            ext: Default::default(),
-        };
-        let hash = crate::backends::health::check::backend_hash(&backend);
-        if let Some((_, endpoint)) = svc.endpoints.remove(&hash) {
-            if endpoint.is_open() {
-                crate::observe::metrics::record_cb_recovery(service_key);
-            }
-        }
     }
 }
 
