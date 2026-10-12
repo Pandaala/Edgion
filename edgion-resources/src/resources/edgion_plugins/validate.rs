@@ -150,13 +150,9 @@ pub fn collect_grpc_transcoding_errors(entries: &[RequestFilterEntry]) -> Vec<St
         errors.push("requestPlugins: at most one GrpcJsonTranscoder plugin is allowed".into());
     }
     if count != 0
-        && entries.iter().any(|entry| {
-            entry.is_enabled()
-                && matches!(
-                    entry.plugin,
-                    EdgionPlugin::AiProxy(_) | EdgionPlugin::AiGuard(_) | EdgionPlugin::Guardrail(_)
-                )
-        })
+        && entries
+            .iter()
+            .any(|entry| entry.is_enabled() && entry.plugin.is_ai_conversion_owner())
     {
         errors.push("requestPlugins: GrpcJsonTranscoder conflicts with AI conversion owners".into());
     }

@@ -79,6 +79,26 @@ registration/mutation conflicts are checked through replacement consumption, and
 one final PluginLog outcome is added at universal logging. See the
 [transcoder regression boundary](../../04-review/h2-grpc/regression-guards/grpc-json-transcoder-admission-and-outcomes.md).
 
+Transport admission reads two immutable facts from the effective PluginRuntime.
+Resources owns the exhaustive `EdgionPlugin::is_ai_conversion_owner` classification
+(AiProxy, AiGuard and Guardrail), shared by resource validation and Gateway
+construction. Gateway publishes it only when the request executable is constructed,
+including Guardrail's attached request/response companion path. The response-body
+factory supplies an explicit unary conflict fact with each successful construction;
+BandwidthLimit and response-body Wasm conflict, while request/header Wasm does not.
+EntryBundle carries these facts through the existing source-generation cache and
+ORs them only into admitted views. Disabled and policy-masked slots contribute
+neither fact; conditions remain conservative. A Failed bundle's facts describe
+its successful executable members, rather than its failure label or raw config.
+Demand release and retained in-flight views preserve existing Arc lifetimes.
+
+These cold facts replace name-based scans only for these two decisions. Actual
+selected-backend ExtensionRef targets remain request-pinned, and dynamic ExtProc
+effective modes and installed processors retain their context checks. An outer
+ExtensionRef body trait is not evidence of an incompatible target. This boundary
+adds no request state, lock, allocation, response aggregation or dispatch wrapper.
+
+
 ### Request-body read contract ownership
 
 `request_body/contracts.rs` defines `BodyReadError`, `BodyReadResult`,

@@ -181,6 +181,65 @@ pub enum BodyStage {
 }
 
 impl EdgionPlugin {
+    /// Whether this typed plugin conflicts with a separate protocol conversion owner.
+    /// Gateway publication additionally requires successful executable construction.
+    pub fn is_ai_conversion_owner(&self) -> bool {
+        match self {
+            Self::AiProxy(_) | Self::AiGuard(_) | Self::Guardrail(_) => true,
+            Self::RequestHeaderModifier(_)
+            | Self::ResponseHeaderModifier(_)
+            | Self::RequestRedirect(_)
+            | Self::UrlRewrite(_)
+            | Self::RequestMirror(_)
+            | Self::BasicAuth(_)
+            | Self::CredentialInjector(_)
+            | Self::Cors(_)
+            | Self::Csrf(_)
+            | Self::IpRestriction(_)
+            | Self::JwtAuth(_)
+            | Self::JweDecrypt(_)
+            | Self::HmacAuth(_)
+            | Self::HeaderCertAuth(_)
+            | Self::KeyAuth(_)
+            | Self::LdapAuth(_)
+            | Self::Mock(_)
+            | Self::FaultInjection(_)
+            | Self::DebugAccessLogToHeader(_)
+            | Self::ProxyRewrite(_)
+            | Self::RequestRestriction(_)
+            | Self::RequestBodyBuffer(_)
+            | Self::JsonSchemaValidation(_)
+            | Self::GraphqlGuard(_)
+            | Self::GraphqlSafelist(_)
+            | Self::GraphqlRateLimit(_)
+            | Self::GraphqlOperationRouter(_)
+            | Self::GrpcJsonTranscoder(_)
+            | Self::FormJsonTransform(_)
+            | Self::ResponseRewrite(_)
+            | Self::RateLimitLocal(_)
+            | Self::RateLimitRedis(_)
+            | Self::CtxSet(_)
+            | Self::WebhookKeyGet(_)
+            | Self::RealIp(_)
+            | Self::ForwardAuth(_)
+            | Self::OpenidConnect(_)
+            | Self::BandwidthLimit(_)
+            | Self::DirectEndpoint(_)
+            | Self::AllEndpointStatus(_)
+            | Self::DynamicInternalUpstream(_)
+            | Self::DynamicExternalUpstream(_)
+            | Self::Dsl(_)
+            | Self::RegionRoute(_)
+            | Self::RequestId(_)
+            | Self::ExtProc(_)
+            | Self::RequestAccessPolicy(_)
+            | Self::GeoIpLocation(_)
+            | Self::Canary(_)
+            | Self::Wasm(_)
+            | Self::Unsupported => false,
+        }
+    }
+
     /// The plugin's intrinsic body requirement, derived from its own config, for
     /// the given async body stage.
     ///
@@ -834,3 +893,7 @@ mod wasm_body_gate_tests;
 #[cfg(test)]
 #[path = "../../../tests/unit/resources/edgion_plugins/edgion_plugin_test/request_body_plugin_requirement_tests.rs"]
 mod request_body_plugin_requirement_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/unit/resources/edgion_plugins/edgion_plugin_test/transport_admission_tests.rs"]
+mod transport_admission_tests;

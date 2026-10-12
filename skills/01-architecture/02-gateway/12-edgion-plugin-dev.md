@@ -125,8 +125,8 @@ You typically touch at least these locations:
 2. `edgion-resources/src/resources/edgion_plugins/plugin_configs/mod.rs`
 3. `edgion-resources/src/resources/edgion_plugins/mod.rs`
 4. `edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs` — the enum variant plus
-   **six** exhaustive matches: `type_name`, `validation_error`, `body_requirement`,
-   `dye_capabilities`, `dye_type_prefix`, `key_header_names`. All six are exhaustive, so the
+   **seven** exhaustive matches: `type_name`, `validation_error`, `body_requirement`,
+   `dye_capabilities`, `dye_type_prefix`, `key_header_names`, `is_ai_conversion_owner`. All seven are exhaustive, so the
    compiler tells you if you miss one.
 5. `edgion-gateway/src/plugins/http/<your_plugin>/mod.rs`
 6. `edgion-gateway/src/plugins/http/<your_plugin>/plugin.rs`
@@ -141,6 +141,18 @@ One more that the compiler does **not** catch:
    request-stage-only.** `HTTP_PLUGIN_STAGE_EXCEPTIONS` is the stage authority; request-only
    is the default. `stage_exception_keys_are_real_variants` validates its keys against the
    supported enum schema.
+
+For transport admission, classify every new variant explicitly in
+`is_ai_conversion_owner`; resource validation and Gateway successful request
+construction share this category. A supported response-body factory arm must
+return its filter with an explicit unary-response conflict fact. The separate
+managed Wasm body construction does the same; Wasm in other stages does not
+publish that fact. Publish metadata only alongside successful executable insertion,
+including attached request/response companions, then transfer it through EntryBundle.
+Never infer these facts from trait names, raw config, a Ready/Failed label or an
+ExtensionRef wrapper's stage traits. Disabled/policy-masked entries remain inert,
+and conditions do not weaken conservative construction-time admission. Dynamic
+ExtProc modes and installed processor checks remain separate request-state checks.
 
 Adding a plugin type does not require a CRD change. All stage-entry `type` fields are open
 strings and `config` preserves unknown fields. The Controller rejects unsupported types with

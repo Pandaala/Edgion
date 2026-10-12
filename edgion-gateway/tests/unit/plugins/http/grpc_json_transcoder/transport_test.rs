@@ -162,7 +162,9 @@ fn correction_scoped_body_consumers_preserve_header_only_targets() {
     use crate::plugins::runtime::PluginRuntime;
     use edgion_resources::resources::edgion_plugins::EdgionPlugins;
     fn runtime(consumer: u8) -> Arc<PluginRuntime> {
-        let spec = if consumer == 2 {
+        let spec = if consumer == 3 {
+            serde_json::json!({"upstreamResponseFilterPlugins":[{"type":"Wasm","config":{"source":{"file":concat!(env!("CARGO_MANIFEST_DIR"),"/../edgion-tests/wasm/artifacts/header_demo.wasm")},"pluginConfig":{"string":"header-only-transport-probe"}}}]})
+        } else if consumer == 2 {
             serde_json::json!({"upstreamResponseBodyFilterPlugins":[{"type":"Wasm","config":{"source":{"file":concat!(env!("CARGO_MANIFEST_DIR"),"/../edgion-tests/wasm/artifacts/header_demo.wasm")},"pluginConfig":{"string":"response-body-probe"}}}]})
         } else if consumer == 1 {
             serde_json::json!({"upstreamResponseBodyFilterPlugins":[{"type":"BandwidthLimit","config":{"rate":"100kb"}}]})
@@ -176,7 +178,7 @@ fn correction_scoped_body_consumers_preserve_header_only_targets() {
             .clone()
     }
     for scope in 0..3 {
-        for consumer in 0..3 {
+        for consumer in 0..4 {
             let mut ctx = context();
             ctx.grpc_transcoding.take();
             let r = runtime(consumer);
@@ -186,7 +188,11 @@ fn correction_scoped_body_consumers_preserve_header_only_targets() {
                 1 => ctx.install_resolved_gateway_plugins(vec![r]),
                 _ => ctx.install_resolved_route_ext_refs(vec![Some(r)]),
             }
-            assert_eq!(ctx.grpc_response_owner_compatible(false), consumer == 0);
+            assert_eq!(
+                ctx.grpc_response_owner_compatible(false),
+                consumer == 0 || consumer == 3
+            );
+            assert!(ctx.grpc_response_owner_compatible(true));
         }
     }
 }
@@ -209,8 +215,20 @@ fn correction_backend_checks_actual_pinned_target_not_wrapper_shape() {
             false,
         ),
         (
+            serde_json::json!({"requestPlugins":[{"type":"AiGuard","config":{"rules":[{"name":"tripwire","match":{"type":"regex","pattern":"private"},"action":"reject"}]}}]}),
+            false,
+        ),
+        (
+            serde_json::json!({"requestPlugins":[{"type":"Guardrail","config":{"target":{"name":"guard","port":8080},"request":{"path":{"template":"/decision"}}}}]}),
+            false,
+        ),
+        (
             serde_json::json!({"upstreamResponseBodyFilterPlugins":[{"type":"BandwidthLimit","config":{"rate":"100kb"}}]}),
             false,
+        ),
+        (
+            serde_json::json!({"upstreamResponseFilterPlugins":[{"type":"Wasm","config":{"source":{"file":concat!(env!("CARGO_MANIFEST_DIR"),"/../edgion-tests/wasm/artifacts/header_demo.wasm")},"pluginConfig":{"string":"backend-header-transport-probe"}}}]}),
+            true,
         ),
         (
             serde_json::json!({"upstreamResponseFilterPlugins":[{"type":"Dsl","config":{"name":"header-companion","source":"resp.set_header(\"x-test\", \"ok\")"}}]}),
@@ -224,7 +242,10 @@ fn correction_backend_checks_actual_pinned_target_not_wrapper_shape() {
             .clone();
         assert!(!target.rejects_invalid_config());
         let mut ctx = context();
-        ctx.pinned_backend_ext_ref("default/companion", || Some(target));
+        ctx.pinned_backend_ext_ref("default/companion", || Some(target.clone()));
+        let empty = Arc::new(PluginRuntime::new());
+        let still_pinned = ctx.pinned_backend_ext_ref("default/companion", || Some(empty));
+        assert!(Arc::ptr_eq(still_pinned.as_ref().unwrap(), &target));
         assert_eq!(outer.backend_compatible(&mut ctx), compatible);
         assert_eq!(
             ctx.grpc_transcoding.as_ref().unwrap().conflict.load(Ordering::Acquire),

@@ -130,6 +130,9 @@ impl WafCandidate {
 pub struct PluginRuntime {
     /// Conservative construction-time capability, including conditional/nested consumers.
     requires_complete_request_body: bool,
+    /// Effective executable membership, published only by successful typed construction.
+    has_ai_conversion_owner: bool,
+    has_unary_body_consumer: bool,
     rate_limit_local_outcome_slots: usize,
     has_upstream_jump_plugin: bool,
     has_grpc_transcoder: bool,
@@ -305,6 +308,8 @@ impl PluginRuntime {
             policy_blocks: Vec::new(),
             policy_bypassed: Vec::new(),
             requires_complete_request_body: false,
+            has_ai_conversion_owner: false,
+            has_unary_body_consumer: false,
             waf_candidate: None,
             has_request_id: false,
             invalid_early_request_id: false,
@@ -316,6 +321,8 @@ impl PluginRuntime {
         let failed = !self.invalid_plugins.is_empty();
         let bundle = EntryBundle {
             requires_complete_request_body: self.requires_complete_request_body,
+            has_ai_conversion_owner: self.has_ai_conversion_owner,
+            has_unary_body_consumer: self.has_unary_body_consumer,
             request: self.request_plugins,
             response_filter: self.upstream_response_plugins,
             response_body: self.upstream_response_body_plugins,
@@ -334,6 +341,8 @@ impl PluginRuntime {
 
     fn append_entry_bundle(&mut self, bundle: &EntryBundle) {
         self.requires_complete_request_body |= bundle.requires_complete_request_body;
+        self.has_ai_conversion_owner |= bundle.has_ai_conversion_owner;
+        self.has_unary_body_consumer |= bundle.has_unary_body_consumer;
         self.has_graphql_operation_router |= bundle.request.iter().any(|f| f.name() == "GraphqlOperationRouter");
         self.has_grpc_transcoder |= bundle
             .request
@@ -469,9 +478,7 @@ impl PluginRuntime {
     }
 
     pub(crate) fn has_unary_body_consumer(&self) -> bool {
-        self.upstream_response_body_plugins
-            .iter()
-            .any(|plugin| matches!(plugin.name(), "BandwidthLimit" | "Wasm"))
+        self.has_unary_body_consumer
     }
 
     /// Inspect the same pinned target that ExtensionRef executes, before any
@@ -509,9 +516,7 @@ impl PluginRuntime {
     }
 
     pub(crate) fn has_ai_conversion_owner(&self) -> bool {
-        self.request_plugins
-            .iter()
-            .any(|plugin| matches!(plugin.name(), "AiProxy" | "AiGuard" | "Guardrail"))
+        self.has_ai_conversion_owner
     }
 
     pub(crate) fn has_upstream_jump_plugin(&self) -> bool {
@@ -1539,6 +1544,7 @@ impl PluginRuntime {
                             .and_then(|input| Guardrail::create_attached(input, identity))
                         {
                             Some((request, response)) => {
+                                entry_runtime.has_ai_conversion_owner = entry.plugin.is_ai_conversion_owner();
                                 entry_runtime.add_request_filter(Box::new(
                                     ConditionalRequestFilter::with_alias_and_dye(
                                         request,
@@ -1684,6 +1690,7 @@ impl PluginRuntime {
                             );
                             conditional_filter.bind_rate_limit_dependencies(&outcome_aliases);
                             entry_runtime.add_request_filter(Box::new(conditional_filter));
+                            entry_runtime.has_ai_conversion_owner = entry.plugin.is_ai_conversion_owner();
                         }
                         CreateResult::Ok(None) => {
                             // Applicable stage but the constructor declined to build the
@@ -2251,13 +2258,14 @@ impl PluginRuntime {
                             bound_entries
                                 .get(index)
                                 .zip(wasm_defaults.as_deref())
-                                .and_then(|(entry, defaults)| WasmPlugin::create_body_filter(entry, defaults)),
+                                .and_then(|(entry, defaults)| WasmPlugin::create_body_filter(entry, defaults))
+                                .map(|filter| (filter, true)),
                         )
                     } else {
                         Self::create_upstream_response_body_filter_from_edgion(&entry.plugin, namespace)
                     };
                     match created {
-                        CreateResult::Ok(Some(filter)) => {
+                        CreateResult::Ok(Some((filter, has_unary_body_consumer))) => {
                             // Wrap with ConditionalUpstreamResponseBodyFilter to support condition evaluation
                             let conditional_filter = ConditionalUpstreamResponseBodyFilter::with_alias_and_dye(
                                 filter,
@@ -2266,6 +2274,7 @@ impl PluginRuntime {
                                 dye_plan,
                             );
                             entry_runtime.add_upstream_response_body_filter(Box::new(conditional_filter));
+                            entry_runtime.has_unary_body_consumer = has_unary_body_consumer;
                         }
                         CreateResult::Ok(None) => {
                             // Applicable stage but the constructor declined to build the
@@ -2647,14 +2656,14 @@ impl PluginRuntime {
         }
     }
 
-    /// Create an UpstreamResponseBodyFilter instance from EdgionPlugin enum
+    /// Create a body filter together with its explicit unary-response conflict fact.
     fn create_upstream_response_body_filter_from_edgion(
         plugin: &EdgionPlugin,
         _namespace: &str,
-    ) -> CreateResult<Box<dyn UpstreamResponseBodyFilter>> {
+    ) -> CreateResult<(Box<dyn UpstreamResponseBodyFilter>, bool)> {
         match plugin {
             EdgionPlugin::Unsupported => CreateResult::WrongStage,
-            EdgionPlugin::BandwidthLimit(config) => CreateResult::Ok(Some(BandwidthLimit::create(config))),
+            EdgionPlugin::BandwidthLimit(config) => CreateResult::Ok(Some((BandwidthLimit::create(config), true))),
             EdgionPlugin::Wasm(_) => CreateResult::WrongStage,
             // Not body-filter plugins
             EdgionPlugin::RequestHeaderModifier(_)
@@ -3310,3 +3319,7 @@ mod header_modifier_validation_tests;
 #[cfg(test)]
 #[path = "../../../tests/unit/plugins/runtime/plugin_runtime_test/ext_ref_index_tests.rs"]
 mod ext_ref_index_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/unit/plugins/runtime/plugin_runtime_test/transport_admission_tests.rs"]
+mod transport_admission_tests;

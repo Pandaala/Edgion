@@ -29920,7 +29920,7 @@
     },
     "ARCH-005": {
       "path": "ARCH-005-typed-transport-admission-capabilities.md",
-      "status": "candidate",
+      "status": "resolved",
       "kind": "architecture-debt",
       "partition": "GW-DISPATCH",
       "analyst": "/root/analyze_adapter",
@@ -30008,9 +30008,23 @@
           "limitations": "Scoped source review; no primary coverage credit, executed checks, performance evidence or claim about unfinished Stage D."
         }
       ],
-      "previous_status": "confirmed",
-      "revalidation_pending": true,
-      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
+      "previous_status": "candidate",
+      "revalidation_pending": false,
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json",
+      "finding_removed": true,
+      "removed_finding_path": "ARCH-005-typed-transport-admission-capabilities.md",
+      "current_implementation_acceptance": "TASK-ACCEPTANCE-ARCH-005-20261012.json",
+      "closure": {
+        "date": "2026-10-12",
+        "disposition": "fixed-and-verified",
+        "authorization": "User explicitly authorized deleting the completed ARCH-005 finding; other batch findings and coverage remain unchanged.",
+        "independent_reviewer": "/root/arch005_result_review",
+        "reviewed_finding_sha256": "4238029097b3ba7fedd40256a591b8ea19ab2064dfecdd919953ddb0815f4134",
+        "acceptance_evidence": "TASK-ACCEPTANCE-ARCH-005-20261012.json",
+        "implementation_review": "../pending/architecture-typed-transport-admission/02-implementation.md",
+        "index_title": "Closed typed transport admission finding; acceptance evidence",
+        "preservation": "Original finding hash, verification history, primary coverage, drift history and all unrelated candidates retained."
+      }
     },
     "ARCH-006": {
       "path": "ARCH-006-resolved-logical-body-limit.md",

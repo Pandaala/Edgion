@@ -15,6 +15,33 @@ backendRef targets. Header-only ExtensionRefs must not be rejected merely becaus
 an outer wrapper implements the body trait. WAF's intentional empty phase-four window
 is unchanged. This correction introduces no full-body replay or new response cache.
 
+## Typed transport classification (ARCH-005)
+
+Resources owns the exhaustive typed AI conversion-conflict category through
+`EdgionPlugin::is_ai_conversion_owner`; both resource validation and Gateway
+successful request construction use it. The Gateway response-body factory returns
+an explicit unary conflict fact alongside each successful filter, including the
+separate Wasm body construction. Existing EntryBundle cache publication transfers
+both facts into effective immutable runtime views. Admission getters read those
+facts rather than scanning trait names.
+
+Executable membership is authoritative: disabled, Block/Bypass, wrong-stage and
+failed constructions do not publish phantom members. Conditions remain conservative.
+Ready/Failed alone is not a membership proof; a failed bundle may carry successful
+executables alongside an independent failure. Wasm runtime construction can succeed
+while its best-effort preload or later module load fails; that executable still
+publishes its stage-specific conflict fact under the existing failure policy. Policy views do not acquire flags
+from cached slots they omit. Released source slots do not erase flags or filters
+from captured runtime Arcs, and replacement generations construct their own facts.
+
+Header/request Wasm, header-only DSL and outer ExtensionRef wrappers remain
+compatible. The selected-backend check still resolves the exact request-pinned
+target. ExtProc effective-mode and installed-processor checks stay dynamic, and
+sticky conflicts, installation ordering and WAF's empty phase-four window are
+unchanged. This is a bounded ownership refactor, without a throughput claim or
+new response buffering/dispatch mechanism. Re-evaluate when adding AI owners,
+response-body factory outcomes or changing effective-view publication.
+
 ## Rationale and evidence
 
 Task 09-grpc-json-transcoding completed its second Astra review against baseline

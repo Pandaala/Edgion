@@ -693,3 +693,139 @@ async fn owning_ip_generation_defaults_namespace_keeps_pinned_target_and_live_co
         PluginRunningResult::ErrTerminateRequest
     );
 }
+
+#[test]
+fn transport_facts_follow_policy_views_cache_release_and_retained_generations() {
+    for (stage, entry, ai, unary) in [
+        (
+            "requestPlugins",
+            json!({"type":"AiProxy","config":{"api":"openaiChat"}}),
+            true,
+            false,
+        ),
+        (
+            "requestPlugins",
+            json!({"type":"AiGuard","config":{"rules":[{"name":"tripwire","match":{"type":"regex","pattern":"private"},"action":"reject"}]}}),
+            true,
+            false,
+        ),
+        (
+            "requestPlugins",
+            json!({"type":"Guardrail","config":{"target":{"name":"guard","port":8080},"request":{"path":{"template":"/decision"}}}}),
+            true,
+            false,
+        ),
+        (
+            "upstreamResponseBodyFilterPlugins",
+            json!({"type":"BandwidthLimit","config":{"rate":"100kb"}}),
+            false,
+            true,
+        ),
+        (
+            "upstreamResponseBodyFilterPlugins",
+            json!({"type":"Wasm","config":{"source":{"file":concat!(env!("CARGO_MANIFEST_DIR"),"/../edgion-tests/wasm/artifacts/header_demo.wasm")},"pluginConfig":{"string":"generation-transport-probe"}}}),
+            false,
+            true,
+        ),
+    ] {
+        let name = entry["type"].as_str().unwrap();
+        for action in [PolicyActionKind::Block, PolicyActionKind::Bypass] {
+            let policy = restriction(&[name], action);
+            let source = resource(json!({stage:[entry.clone()]}));
+            let mut generation = PluginGeneration::new(source.clone());
+            let masked_first = generation.compile(Some(&policy));
+            assert!(masked_first.is_activatable, "{:?}", masked_first.preparse_errors);
+            assert_eq!(generation.cached_entry_count(), 0);
+            assert!(!masked_first.plugin_runtime.has_ai_conversion_owner());
+            assert!(!masked_first.plugin_runtime.has_unary_body_consumer());
+            let active = generation.compile(None);
+            assert!(active.is_activatable, "{name}: {:?}", active.preparse_errors);
+            assert_eq!(active.plugin_runtime.has_ai_conversion_owner(), ai);
+            assert_eq!(active.plugin_runtime.has_unary_body_consumer(), unary);
+            let masked_again = generation.compile(Some(&policy));
+            assert!(!masked_again.plugin_runtime.has_ai_conversion_owner());
+            assert!(!masked_again.plugin_runtime.has_unary_body_consumer());
+            let reopened = generation.compile(None);
+            assert_eq!(reopened.plugin_runtime.has_ai_conversion_owner(), ai);
+            assert_eq!(reopened.plugin_runtime.has_unary_body_consumer(), unary);
+            if ai {
+                let filter = request_filter(&active, name);
+                assert!(Arc::ptr_eq(&filter, &request_filter(&reopened, name)));
+                let weak = Arc::downgrade(&filter);
+                generation.release_unneeded_entries(&generation.demand(Some(&policy)));
+                assert_eq!(generation.cached_entry_count(), 0);
+                drop(filter);
+                drop(reopened);
+                assert!(weak.upgrade().is_some());
+                assert!(active.plugin_runtime.has_ai_conversion_owner());
+                drop(active);
+                assert!(weak.upgrade().is_none());
+            } else {
+                let filter = active
+                    .plugin_runtime
+                    .upstream_response_body_plugins_iter()
+                    .next()
+                    .unwrap()
+                    .clone();
+                assert!(Arc::ptr_eq(
+                    &filter,
+                    reopened
+                        .plugin_runtime
+                        .upstream_response_body_plugins_iter()
+                        .next()
+                        .unwrap()
+                ));
+                let weak = Arc::downgrade(&filter);
+                generation.release_unneeded_entries(&generation.demand(Some(&policy)));
+                assert_eq!(generation.cached_entry_count(), 0);
+                drop(filter);
+                drop(reopened);
+                assert!(weak.upgrade().is_some());
+                assert!(active.plugin_runtime.has_unary_body_consumer());
+                drop(active);
+                assert!(weak.upgrade().is_none());
+            }
+            let latest = PluginGeneration::new(resource(
+                json!({"requestPlugins":[{"type":"RequestHeaderModifier","config":{}}]}),
+            ));
+            let latest_actions =
+                latest.policy_actions(Some(&restriction(&["RequestHeaderModifier"], PolicyActionKind::Block)));
+            let retained = generation.compile_with_additional_actions(Some(&policy), &latest_actions);
+            assert!(!retained.plugin_runtime.has_ai_conversion_owner());
+            assert!(!retained.plugin_runtime.has_unary_body_consumer());
+            let old_allowed = generation.compile(None);
+            let replacement = PluginGeneration::new(resource(json!({}))).compile(None);
+            assert_eq!(old_allowed.plugin_runtime.has_ai_conversion_owner(), ai);
+            assert_eq!(old_allowed.plugin_runtime.has_unary_body_consumer(), unary);
+            assert!(!replacement.plugin_runtime.has_ai_conversion_owner());
+            assert!(!replacement.plugin_runtime.has_unary_body_consumer());
+        }
+    }
+}
+
+#[test]
+fn failed_transport_entries_never_publish_cached_raw_category() {
+    for (stage, entry) in [
+        (
+            "requestPlugins",
+            json!({"type":"AiProxy","config":{"api":"anthropicMessages","conversion":"chatToAnthropic"}}),
+        ),
+        (
+            "upstreamResponseBodyFilterPlugins",
+            json!({"type":"Wasm","config":{"source":{}}}),
+        ),
+    ] {
+        let name = entry["type"].as_str().unwrap();
+        let mut generation = PluginGeneration::new(resource(json!({stage:[entry.clone()]})));
+        for _ in 0..2 {
+            let failed = generation.compile(None);
+            assert!(!failed.is_activatable);
+            assert!(!failed.plugin_runtime.has_ai_conversion_owner());
+            assert!(!failed.plugin_runtime.has_unary_body_consumer());
+        }
+        let masked = generation.compile(Some(&restriction(&[name], PolicyActionKind::Bypass)));
+        assert!(masked.is_activatable);
+        assert!(!masked.plugin_runtime.has_ai_conversion_owner());
+        assert!(!masked.plugin_runtime.has_unary_body_consumer());
+    }
+}

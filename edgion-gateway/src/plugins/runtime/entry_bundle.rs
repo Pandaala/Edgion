@@ -29,6 +29,8 @@ pub(crate) type EntryDemand = HashSet<EntrySlot>;
 /// cached and selected together; no extra dispatch wrapper is introduced.
 pub(crate) struct EntryBundle {
     pub requires_complete_request_body: bool,
+    pub has_ai_conversion_owner: bool,
+    pub has_unary_body_consumer: bool,
     pub request: Vec<Arc<dyn RequestFilter>>,
     pub response_filter: Vec<Arc<dyn UpstreamResponseFilter>>,
     pub response_body: Vec<Arc<dyn UpstreamResponseBodyFilter>>,

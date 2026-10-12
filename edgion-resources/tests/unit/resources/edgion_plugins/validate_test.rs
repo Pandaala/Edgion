@@ -695,3 +695,29 @@ fn native_messages_rejects_enabled_guard_capabilities_in_both_orders() {
         .iter()
         .any(|error| error.contains("native Responses/Messages does not support")));
 }
+
+#[test]
+fn grpc_conversion_conflict_classification_preserves_disabled_ai_inertness() {
+    let transcoder: RequestFilterEntry = serde_json::from_value(json!({
+        "type":"GrpcJsonTranscoder","config":{
+            "descriptor":{"type":"configMapRef","name":"schema","key":"test.pb"},
+            "services":["test.TestService"]
+        }
+    }))
+    .unwrap();
+    let guardrail: RequestFilterEntry = serde_json::from_value(json!({
+        "type":"Guardrail","config":{"target":{"name":"guard","port":8080},"request":{"path":{"template":"/decision"}}}
+    }))
+    .unwrap();
+    for mut ai in [ai_proxy_entry(), ai_guard_entry(), guardrail] {
+        assert_eq!(
+            collect_grpc_transcoding_errors(&[transcoder.clone(), ai.clone()]),
+            vec!["requestPlugins: GrpcJsonTranscoder conflicts with AI conversion owners"]
+        );
+        ai.enable = false;
+        assert!(collect_grpc_transcoding_errors(&[transcoder.clone(), ai]).is_empty());
+    }
+    let mut inactive_transcoder = transcoder;
+    inactive_transcoder.enable = false;
+    assert!(collect_grpc_transcoding_errors(&[inactive_transcoder, ai_proxy_entry()]).is_empty());
+}
