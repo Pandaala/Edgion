@@ -47,26 +47,23 @@ fn buffer_cap(session: &dyn PluginSession) -> u64 {
     session.ctx().request_body_config.max_body_size_bytes
 }
 
-/// The per-plugin body-size limit in bytes, if set and valid. A zero/unparseable
+/// Resolve the per-plugin body-size limit once during runtime construction.
+/// Returns bytes if set and valid. A zero/unparseable
 /// value was already surfaced at preparse, so it is ignored here (treated as no
 /// limit) rather than rejecting all traffic.
-fn plugin_limit_bytes(requirement: &BodyRequirement) -> Option<u64> {
+pub(crate) fn plugin_limit_bytes(requirement: &BodyRequirement) -> Option<u64> {
     match requirement.max_body_size_bytes() {
         Some(Ok(v)) if v > 0 => Some(v),
         _ => None,
     }
 }
 
-fn over_limit_len(limit: Option<u64>, body_len: u64) -> Option<BodyReadError> {
-    limit.and_then(|limit| (body_len > limit).then_some(BodyReadError::TooLarge { limit }))
-}
-
-/// Apply the per-plugin `maxBodySize` limit to an already-captured body: if the
+/// Apply an already-resolved per-plugin `maxBodySize` limit to a captured body: if the
 /// body is larger than the plugin's own limit, that plugin (and only that
 /// plugin) treats it as too-large. `None` = within the limit / no limit, run
 /// the plugin.
-pub(crate) fn over_plugin_limit_len(requirement: &BodyRequirement, body_len: u64) -> Option<BodyReadError> {
-    over_limit_len(plugin_limit_bytes(requirement), body_len)
+pub(crate) fn over_plugin_limit_len(limit_bytes: Option<u64>, body_len: u64) -> Option<BodyReadError> {
+    limit_bytes.and_then(|limit| (body_len > limit).then_some(BodyReadError::TooLarge { limit }))
 }
 
 /// Compact, immutable policy used by a body gate at runtime.
@@ -95,7 +92,7 @@ impl BodyGatePolicy {
     }
 
     fn over_limit_len(&self, body_len: u64) -> Option<BodyReadError> {
-        over_limit_len(self.logical_limit_bytes, body_len)
+        over_plugin_limit_len(self.logical_limit_bytes, body_len)
     }
 
     fn body_read_failure_result(

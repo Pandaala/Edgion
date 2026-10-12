@@ -414,6 +414,14 @@ fn hmac_hit_log_contains_group_and_user() {
 /// for user "alice", plus the given `digest` header and buffered `body`.
 /// `signed_headers` are the lowercased names (e.g. `["@request-target","date","digest"]`).
 fn signed_session(signed_headers: &[&str], digest: Option<&str>, body: &'static [u8]) -> MockPluginSession {
+    let mut session = signed_session_without_digest_read(signed_headers, digest);
+    session
+        .expect_request_body_sha256()
+        .returning(move || Ok(Sha256::digest(body).into()));
+    session
+}
+
+fn signed_session_without_digest_read(signed_headers: &[&str], digest: Option<&str>) -> MockPluginSession {
     let secret = b"alice-super-secret-key".to_vec();
     let date = rfc2822_now();
     let path = "/v1/items";
@@ -446,9 +454,6 @@ fn signed_session(signed_headers: &[&str], digest: Option<&str>, body: &'static 
     session.expect_get_path().return_const(path.to_string());
     session.expect_get_query().returning(|| None);
     session.expect_get_method().return_const("POST".to_string());
-    session
-        .expect_request_body_sha256()
-        .returning(move || Ok(Sha256::digest(body).into()));
     session.expect_set_request_header_value().returning(|_, value| {
         assert!(value.is_sensitive());
         Ok(())
@@ -498,6 +503,10 @@ fn enforce_headers_are_prepared_once_in_order_with_configured_error_spelling() {
 }
 
 fn plugin_validate_body() -> HmacAuth {
+    plugin_validate_body_with_requirement(None)
+}
+
+fn plugin_validate_body_with_requirement(body_requirement: Option<BodyRequirement>) -> HmacAuth {
     let mut config = HmacAuthConfig {
         match_config: HmacMatchConfig {
             clock_skew: 600,
@@ -516,7 +525,7 @@ fn plugin_validate_body() -> HmacAuth {
         },
     );
     config.resolved_credentials = Some(credentials);
-    HmacAuth::new(&config)
+    HmacAuth::with_body_requirement(&config, body_requirement)
 }
 
 fn body_digest(body: &[u8]) -> String {
@@ -587,12 +596,18 @@ async fn validate_body_rejects_tampered_body() {
 #[tokio::test]
 async fn validate_body_enforces_plugin_limit_after_capture() {
     let body = b"12345";
-    let mut plugin = plugin_validate_body();
-    plugin.verifier.body_requirement.max_body_size = Some("4".to_string());
-    let mut session = signed_session(&["@request-target", "date", "digest"], Some(&body_digest(body)), body);
+    let plugin = plugin_validate_body_with_requirement(Some(BodyRequirement {
+        max_body_size: Some("4".to_string()),
+        ..BodyRequirement::fail_close()
+    }));
+    let mut session =
+        signed_session_without_digest_read(&["@request-target", "date", "digest"], Some(&body_digest(body)));
     session
         .expect_ensure_request_body()
+        .withf(Option::is_none)
+        .times(1)
         .returning(move |_| Ok(body.len() as u64));
+    session.expect_request_body_sha256().times(0);
     session
         .expect_record_error()
         .withf(|status| *status == EdgionErrorCode::BodyReadTooLarge)
@@ -655,4 +670,77 @@ async fn validate_body_fails_closed_without_buffering_capability() {
             body: None
         }
     );
+}
+
+#[tokio::test]
+async fn validate_body_allows_exact_resolved_limit() {
+    let body = b"12345";
+    let plugin = plugin_validate_body_with_requirement(Some(BodyRequirement {
+        max_body_size: Some("5".to_string()),
+        ..BodyRequirement::fail_close()
+    }));
+    let mut session = signed_session(&["@request-target", "date", "digest"], Some(&body_digest(body)), body);
+    session
+        .expect_ensure_request_body()
+        .withf(Option::is_none)
+        .times(1)
+        .returning(move |_| Ok(body.len() as u64));
+    let mut log = PluginLog::new("HmacAuth");
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::GoodNext
+    );
+}
+
+#[tokio::test]
+async fn invalid_direct_constructor_limits_preserve_intrinsic_fail_close() {
+    use edgion_resources::resources::edgion_plugins::conditions::PluginConditions;
+    use edgion_resources::resources::edgion_plugins::BodyReadFailureMode;
+
+    for limit in ["invalid", "0"] {
+        let plugin = plugin_validate_body_with_requirement(Some(BodyRequirement {
+            max_body_size: Some(limit.to_string()),
+            on_read_failure: BodyReadFailureMode::FailOpen,
+            conditions: Some(PluginConditions::default()),
+        }));
+        assert_eq!(plugin.verifier.logical_limit_bytes, None);
+        assert!(plugin.verifier.body_requirement.is_fail_close());
+        assert!(plugin.verifier.body_requirement.conditions.is_none());
+        let body = b"12345";
+        let mut session =
+            signed_session_without_digest_read(&["@request-target", "date", "digest"], Some(&body_digest(body)));
+        session
+            .expect_ensure_request_body()
+            .withf(Option::is_none)
+            .times(1)
+            .returning(|_| Err(BodyReadError::Timeout));
+        session.expect_request_body_sha256().times(0);
+        session
+            .expect_record_error()
+            .withf(|status| *status == EdgionErrorCode::BodyReadTimeout)
+            .times(1)
+            .returning(|_| ());
+        let mut log = PluginLog::new("HmacAuth");
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse {
+                status: 408,
+                body: None
+            }
+        );
+    }
+}
+
+#[test]
+fn rebuilt_hmac_verifier_resolves_the_new_generation_limit() {
+    let original = plugin_validate_body_with_requirement(Some(BodyRequirement {
+        max_body_size: Some("1k".to_string()),
+        ..BodyRequirement::fail_close()
+    }));
+    let replacement = plugin_validate_body_with_requirement(Some(BodyRequirement {
+        max_body_size: Some("2K".to_string()),
+        ..BodyRequirement::fail_close()
+    }));
+    assert_eq!(original.verifier.logical_limit_bytes, Some(1024));
+    assert_eq!(replacement.verifier.logical_limit_bytes, Some(2048));
 }

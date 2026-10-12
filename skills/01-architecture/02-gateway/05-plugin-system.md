@@ -335,6 +335,18 @@ runtime snapshot. Entry wrappers, secondary body gates, dye rules, RequestRestri
 and RequestAccessPolicy must use this compiled representation; constructing an HMAC
 verifier from schema configuration during request evaluation is a hot-path bug.
 
+Request-body logical limits are also resolved during runtime construction.
+`body_gate::plugin_limit_bytes` uses the schema's canonical byte-size parser;
+`BodyGatePolicy` and `HmacVerifier` retain the resulting `Option<u64>`. The shared
+`over_plugin_limit_len` runtime API accepts only that numeric policy and the exact
+captured length, allowing equality and rejecting larger bodies without parsing.
+HMAC resolves the limit after merging its intrinsic fail-close requirement with
+operator tuning. It still authenticates headers before capture, uses the gateway
+physical cap for shared storage, checks its independent logical cap, then hashes
+the immutable body view without materializing a disk spill. Body-aware HMAC
+predicates keep their existing no-match/negate handling for logical-limit outcomes.
+See [ARCH-006's regression boundary](../../04-review/hmac-auth/regression-guards/request-body-hash-after-cheap-auth.md).
+
 Compiled set evaluation exposes log-less and detailed synchronous paths plus a
 body-aware asynchronous path. They share the same ordered short-circuit
 semantics. The body phase and dye use the log-less path; request/response

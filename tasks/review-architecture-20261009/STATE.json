@@ -30055,7 +30055,7 @@
     },
     "ARCH-006": {
       "path": "ARCH-006-resolved-logical-body-limit.md",
-      "status": "confirmed",
+      "status": "resolved",
       "kind": "architecture-debt",
       "partition": "GW-COMPOSITION",
       "analyst": "/root/analyze_session",
@@ -30076,7 +30076,20 @@
         },
         "drift_at_checkpoint": []
       },
-      "verifier": "/root/verify_seed"
+      "verifier": "/root/verify_seed",
+      "finding_removed": true,
+      "removed_finding_path": "ARCH-006-resolved-logical-body-limit.md",
+      "current_implementation_acceptance": "TASK-ACCEPTANCE-ARCH-006-20261012.json",
+      "closure": {
+        "date": "2026-10-12",
+        "disposition": "fixed-and-verified",
+        "authorization": "User explicitly requested another Astra review and deletion of the completed task files upon a clean result; closure is limited to ARCH-006.",
+        "independent_reviewer": "/root/astra_rereview",
+        "reviewed_finding_sha256": "906c7dd442e6b040f155f2597b74bfff2208ee6167ebc1354be1dc30ffc43bc6",
+        "acceptance_evidence": "TASK-ACCEPTANCE-ARCH-006-20261012.json",
+        "index_title": "Closed resolved logical body-limit finding; acceptance evidence",
+        "preservation": "Original finding hash, independent verification receipt/history, coverage, drift history and unrelated findings/tasks retained; canonical ARCH-006 knowledge remains."
+      }
     },
     "ARCH-007": {
       "path": "ARCH-007-borrowed-mtls-condition-candidates.md",

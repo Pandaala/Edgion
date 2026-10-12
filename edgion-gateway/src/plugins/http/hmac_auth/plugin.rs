@@ -21,7 +21,7 @@ use sha2::{Sha256, Sha384, Sha512};
 
 use crate::plugins::http::common::auth_common::{apply_auth_failure_delay, send_gateway_auth_error_response};
 use crate::plugins::runtime::body_gate::{
-    body_read_failure_result, over_plugin_limit_len, record_body_read_error_status,
+    body_read_failure_result, over_plugin_limit_len, plugin_limit_bytes, record_body_read_error_status,
 };
 use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
@@ -73,6 +73,7 @@ pub(crate) struct HmacVerifier {
     validate_request_body: bool,
     credentials: Arc<HashMap<String, HmacCredential>>,
     body_requirement: BodyRequirement,
+    logical_limit_bytes: Option<u64>,
 }
 
 pub(crate) enum HmacVerifyOutcome {
@@ -121,6 +122,7 @@ impl HmacVerifier {
         let intrinsic = config.validate_request_body.then(BodyRequirement::fail_close);
         let body_requirement =
             BodyRequirement::resolve(body_requirement, intrinsic).unwrap_or_else(BodyRequirement::fail_close);
+        let logical_limit_bytes = plugin_limit_bytes(&body_requirement);
         Self {
             algorithms: config.algorithms.clone(),
             clock_skew: config.clock_skew,
@@ -136,6 +138,7 @@ impl HmacVerifier {
             validate_request_body: config.validate_request_body,
             credentials: Arc::new(config.resolved_credentials.clone().unwrap_or_default()),
             body_requirement,
+            logical_limit_bytes,
         }
     }
 
@@ -241,7 +244,7 @@ impl HmacVerifier {
                 Ok(len) => len,
                 Err(error) => return HmacVerifyOutcome::CaptureFailure(error),
             };
-            if let Some(error) = over_plugin_limit_len(&self.body_requirement, body_len) {
+            if let Some(error) = over_plugin_limit_len(self.logical_limit_bytes, body_len) {
                 return HmacVerifyOutcome::LogicalBodyLimit(error);
             }
             match HmacAuth::verify_body_digest_expected(session, &expected).await {

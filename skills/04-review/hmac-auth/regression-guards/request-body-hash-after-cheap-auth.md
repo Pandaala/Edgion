@@ -41,6 +41,31 @@ per-plugin cap is checked against the captured length, and capture failures use
 the existing 413/408/500 status mapping. HMAC's intrinsic requirement remains
 fail-close even when construction bypasses the normal runtime wiring.
 
+## ARCH-006 — Resolve logical limits during construction
+
+`HmacVerifier::new` resolves `maxBodySize` after `BodyRequirement::resolve` and
+retains an immutable numeric `Option<u64>` for its generation. Generic gates use
+the same cold `plugin_limit_bytes` resolver. The shared runtime comparator
+`over_plugin_limit_len` accepts resolved bytes and exact captured length only;
+no byte-size parser or schema requirement is reachable from that check.
+
+This closes repeated configuration parsing and temporary lowercase allocation for
+authenticated body requests. It establishes a source-visible boundary, with no
+throughput or memory-reduction benchmark claim. A reconstructed verifier resolves
+the new generation independently. Direct construction retains the historical
+invalid/zero optional-limit fallback (`None`); it does not weaken intrinsic
+fail-close or permit operator body conditions to bypass authentication. Normal
+resource validation continues to reject invalid limits.
+
+Regression coverage in `hmac_auth/plugin_test.rs` configures requirements before
+construction and covers logical rejection before hashing, equality, invalid/zero
+fallback with timeout fail-close, and generation reconstruction. Generic gate
+boundary/condition tests and the storage memory/disk digest test retain the
+physical-cap, error-policy, and non-materializing hashing boundaries. Standalone
+HMAC logical failures retain 413; body-aware condition consumers retain their
+no-match semantics and `negate` behavior. Fresh command results belong to the
+implementation task; the BODY-006 historical date is not a new verification date.
+
 ## Fix Suggestions Not Accepted
 
 - Put HMAC behind `BodyGatedRequestFilter` — this restores eager capture before
@@ -71,3 +96,4 @@ Re-open this decision only if:
 ## Resolution references
 
 - `BODY-006` — 2026-07-27.
+- `ARCH-006` — cold logical-limit resolution and numeric runtime comparison.

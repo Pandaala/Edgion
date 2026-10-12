@@ -1,0 +1,50 @@
+{
+  "finding": "ARCH-006",
+  "disposition": "fixed-and-verified",
+  "authorization": "User explicitly requested another Astra review and deletion of the completed task files upon a clean result; closure is limited to ARCH-006.",
+  "independent_reviewer": "/root/astra_rereview",
+  "model": "gpt-6-astra",
+  "reasoning_effort": "medium",
+  "decision": "PASS",
+  "finding_sha256": "906c7dd442e6b040f155f2597b74bfff2208ee6167ebc1354be1dc30ffc43bc6",
+  "tracked_diff_sha256": "685594bc04e022a88e22fca9fd521ef749ddba30332a10de71b77b82847fafcf",
+  "current_head": "5cc27dbee86b86e093207bf8513f27e0fed0cbe1",
+  "approved_plan_sha256": "af5309ecf3aff2a5a3d0772379f1663c5c36129d816b8b1410f59c3c22d01713",
+  "baseline_manifest_sha256": "8160697a6765f1bd96b7009b48b4e4145e417f7f45e04f378c5ac62f55c9f413",
+  "result_files": {
+    "edgion-gateway/src/plugins/runtime/body_gate.rs": "31312eb77116ba73faf2db026820b60820be3cb1861abd56c3475e12d4abf34f",
+    "edgion-gateway/src/plugins/http/hmac_auth/plugin.rs": "c922f4f03bbb41e703045583327cd5f0a8eef85028ff36c132579c034c86c218",
+    "edgion-gateway/tests/unit/plugins/runtime/body_gate_test.rs": "59c8e80dfc7093491d4b991d69e72d3c6a121ad65ff672e0aae09ea4a0ccfeb3",
+    "edgion-gateway/tests/unit/plugins/http/hmac_auth/plugin_test.rs": "04081e32771c80c12f83527b8b2f0c97f198a3761cf1e9d5b498b0d29ad8c4a7",
+    "skills/01-architecture/02-gateway/05-plugin-system.md": "10f1240113c3d32e4173e2634dec4e8d9591574ee4f16fdea263d5ce1940892b",
+    "skills/01-architecture/02-gateway/12-edgion-plugin-dev.md": "bd7f1db853a1ced2191513f5fb33d7675b575deaed8df1e9e7bd4c60182e96d6",
+    "skills/04-review/hmac-auth/regression-guards/request-body-hash-after-cheap-auth.md": "be65b57ed4df89ab71b4f31d4b1be60c35a08e6763cdd38bcf54846a5026b649"
+  },
+  "knowledge": "../../skills/04-review/hmac-auth/regression-guards/request-body-hash-after-cheap-auth.md",
+  "acceptance": "Shared runtime comparison accepts resolved numeric limits; HMAC resolves once after intrinsic requirement merging. Cheap authentication, independent physical/logical bounds, equality, invalid/zero fallback, fail-close, standalone and condition outcomes, and non-materializing digest remain preserved.",
+  "reported_execution": {
+    "cargo test -p edgion-gateway --lib plugins::http::hmac_auth::plugin::tests": "PASS: 27 tests",
+    "cargo test -p edgion-gateway --lib plugins::runtime::body_gate::tests": "PASS: 28 tests",
+    "cargo test -p edgion-gateway --lib plugins::runtime::conditions::evaluator::tests": "PASS: 45 tests",
+    "cargo test -p edgion-gateway --lib request_body::storage::tests::sha256_cache_scans_each_memory_or_disk_snapshot_once": "PASS: 1 test",
+    "cargo check --workspace --all-targets": "PASS",
+    "cargo clippy --workspace --all-targets": "PASS",
+    "cargo fmt --all -- --check": "PASS",
+    "guards": "PASS: validate_agent_docs, check_ssa_force, check_metrics_inventory, check_pingora_source_policy, generate_gateway_api_transform_contract --check, check_unit_test_layout, check_gateway_no_tracing"
+  },
+  "verification_limits": "This fresh read-only re-review checked unchanged scoped source and prior bound successful execution records; it did not rerun long builds. No full workspace test suite, live integration topology or benchmark. Closure adds no primary coverage.",
+  "removed_implementation_records": {
+    "tasks/pending/architecture-resolved-logical-body-limit/00-context.md": "f30ef76be939eec23c3ddda41243f742f79fea88f1e96fd214733a6aa3e0360f",
+    "tasks/pending/architecture-resolved-logical-body-limit/01-design.md": "af5309ecf3aff2a5a3d0772379f1663c5c36129d816b8b1410f59c3c22d01713",
+    "tasks/pending/architecture-resolved-logical-body-limit/02-implementation.md": "08acbda60046fd7bb926009143d0718df1074a3a70f02dc87ac1c6d74065ee47",
+    "tasks/pending/architecture-resolved-logical-body-limit/architecture-resolved-logical-body-limit.md": "41319a07b2778b19a41e6238c9371bfbec00f7093f484487be36ed21ad14bc47",
+    "tasks/pending/architecture-resolved-logical-body-limit/baseline.json": "8160697a6765f1bd96b7009b48b4e4145e417f7f45e04f378c5ac62f55c9f413",
+    "tasks/pending/architecture-resolved-logical-body-limit/result-binding.json": "ed5e145a3d6fb64fb2d7fcd56747be154f13d3976ead0cb9ce3e69e8c63d6f6d"
+  },
+  "preservation": "Original finding hash, independent verification receipt/history, coverage, drift history and unrelated findings/tasks retained; canonical ARCH-006 knowledge remains.",
+  "closure_verification": {
+    "scoped_state_and_content": "PASS: only ARCH-006 state changed; source bindings, knowledge and acceptance link valid; expected task files absent",
+    "git_diff_check": "PASS",
+    "post_closure_agent_docs": "FAIL: pre-existing HEAD link in skills/04-review/http-body/regression-guards/rest-to-graphql-request-adaptation.md to absent tasks/pending/rest-to-graphql/rest-to-graphql.md; unrelated to ARCH-006 cleanup and unchanged"
+  }
+}

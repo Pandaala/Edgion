@@ -684,3 +684,14 @@ async fn not_buffered_never_records_error_diagnostic() {
         }
     );
 }
+
+#[test]
+fn resolved_logical_limit_checks_exact_u64_lengths() {
+    assert_eq!(over_plugin_limit_len(None, u64::MAX), None);
+    assert_eq!(over_plugin_limit_len(Some(u64::MAX), u64::MAX), None);
+    assert_eq!(over_plugin_limit_len(Some(4), 4), None);
+    assert_eq!(
+        over_plugin_limit_len(Some(4), 5),
+        Some(BodyReadError::TooLarge { limit: 4 })
+    );
+}

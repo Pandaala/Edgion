@@ -14,7 +14,7 @@ Source reviewed: 512 / 1676; 467 primary partitions.
 | ARCH-003 | resolved | architecture-debt | [Closed terminal gRPC header preparation finding; acceptance evidence](TASK-ACCEPTANCE-ARCH-003-20261012.json) |
 | ARCH-004 | resolved | architecture-debt | [Closed context query-cache source ownership finding; acceptance evidence](TASK-ACCEPTANCE-ARCH-004-20261012.json) |
 | ARCH-005 | resolved | architecture-debt | [Closed typed transport admission finding; acceptance evidence](TASK-ACCEPTANCE-ARCH-005-20261012.json) |
-| ARCH-006 | confirmed | architecture-debt | [Resolve logical body limits before exposing the runtime limit-check API](ARCH-006-resolved-logical-body-limit.md) |
+| ARCH-006 | resolved | architecture-debt | [Closed resolved logical body-limit finding; acceptance evidence](TASK-ACCEPTANCE-ARCH-006-20261012.json) |
 | ARCH-007 | candidate | architecture-debt | [Match mTLS conditions through borrowed certificate candidates](ARCH-007-borrowed-mtls-condition-candidates.md) |
 | ARCH-008 | candidate | architecture-debt | [Borrow precompiled AI backend lookup keys during request planning](ARCH-008-precompiled-ai-backend-lookup-key.md) |
 | ARCH-009 | candidate | architecture-debt | [Keep credential-admission projection inside the prepared AI attempt](ARCH-009-prepared-ai-admission-input-owner.md) |

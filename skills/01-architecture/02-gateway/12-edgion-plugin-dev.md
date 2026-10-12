@@ -539,6 +539,18 @@ If the plugin will call external HTTP services, prefer reusing:
 - `edgion-gateway/src/plugins/http/common/http_client.rs`
 - `edgion-gateway/src/plugins/http/common/auth_common.rs`
 
+### Request-body logical limits
+
+Prefer the generic body gate for complete-body consumers. Its constructor resolves
+`BodyRequirement.maxBodySize` once; request checks use a numeric `Option<u64>`.
+If a feature owns admission, as HMAC does to authenticate headers before capture,
+resolve its effective requirement first and call `body_gate::plugin_limit_bytes`
+once in the long-lived constructor. Retain the numeric limit and use
+`over_plugin_limit_len` on the captured `u64` length. Do not parse size strings in
+a request callback or pass a plugin logical cap to shared physical capture.
+Preserve the feature's failure and storage-read semantics; this boundary does not
+change generic gate materialization defaults or secondary conditions.
+
 ### Feature-specific WAF session operations
 
 Use `session.waf().claim_phase(...)`, transaction transfer, summary and admission
