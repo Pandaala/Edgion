@@ -6,6 +6,8 @@ pub mod health;
 pub mod outlier_detection;
 pub(crate) mod peer_builder;
 pub mod policy;
+#[cfg(feature = "boringssl")]
+mod prepared_backend_tls;
 pub mod runtime;
 pub mod selector;
 pub mod service_kind;

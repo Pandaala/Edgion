@@ -205,3 +205,178 @@ fn pool_isolation_composes_gateway_rotation_and_policy_precedence() {
     store.remove(gateway.0);
     assert_eq!(anonymous.reuse_hash(), peer(base, Some(gateway.0)).reuse_hash());
 }
+
+#[test]
+fn prepared_peers_share_components_and_keep_per_handshake_results() {
+    let key = rcgen::KeyPair::generate().unwrap();
+    let cert = certificate(&key, "backend.example.com");
+    let mut policy = policy();
+    policy.spec.use_system_ca = false;
+    policy.spec.resolved_ca_certificates = Some(vec![secret(&[(CA_CERT, &cert)])]);
+    policy.spec.resolved_client_certificate = Some(secret(&[(CERT, &cert), (KEY, &key.serialize_pem())]));
+    policy.spec.validation.subject_alt_names = Some(
+        serde_json::from_value(serde_json::json!([
+            {"type":"Hostname","hostname":"backend.example.com"}
+        ]))
+        .unwrap(),
+    );
+    let effective = EffectiveBackendTlsPolicy::from_policy(Arc::new(policy));
+    let make = || create_tls_peer(SocketAddr::Inet("127.0.0.1:443".parse().unwrap()), &effective, None).unwrap();
+    let first = make();
+    let second = make();
+    assert!(Arc::ptr_eq(
+        first.client_cert_key.as_ref().unwrap(),
+        second.client_cert_key.as_ref().unwrap()
+    ));
+    assert!(Arc::ptr_eq(
+        first.options.ca.as_ref().unwrap(),
+        second.options.ca.as_ref().unwrap()
+    ));
+    let hook = first.options.upstream_tls_handshake_complete_hook.as_ref().unwrap();
+    assert!(Arc::ptr_eq(
+        hook,
+        second.options.upstream_tls_handshake_complete_hook.as_ref().unwrap()
+    ));
+    let ctx = pingora_core::tls::ssl::SslContextBuilder::new(pingora_core::tls::ssl::SslMethod::tls())
+        .unwrap()
+        .build();
+    let ssl = pingora_core::tls::ssl::Ssl::new(&ctx).unwrap();
+    let first_result = hook(&ssl).unwrap();
+    let second_result = hook(&ssl).unwrap();
+    assert!(!Arc::ptr_eq(&first_result, &second_result));
+    assert!(
+        !first_result
+            .downcast_ref::<crate::tls::validation::backend_san::BackendSanValidationResult>()
+            .unwrap()
+            .passed
+    );
+    assert_eq!(first.reuse_hash(), second.reuse_hash());
+}
+
+#[test]
+fn prepared_identity_errors_precede_custom_ca_and_policy_overrides_failed_gateway() {
+    let gateway = GatewayIdentityGuard("test/prepared-error-priority");
+    let store = get_global_gateway_backend_tls_store();
+    store.update_from_gateway(
+        gateway.0,
+        &super::tests::gateway_identity_owner("test", "prepared-error-priority", Secret::default()),
+    );
+    let addr = SocketAddr::Inet("127.0.0.1:443".parse().unwrap());
+    let mut raw = policy();
+    raw.spec.use_system_ca = false;
+    raw.spec.resolved_ca_certificates = Some(vec![secret(&[(CA_CERT, "invalid")])]);
+    let make = |raw: BackendTLSPolicy| {
+        create_tls_peer(
+            addr.clone(),
+            &EffectiveBackendTlsPolicy::from_policy(Arc::new(raw)),
+            Some(gateway.0),
+        )
+    };
+    assert_eq!(make(raw.clone()).unwrap_err(), EdgionErrorCode::Unknown);
+    raw.spec.resolved_client_certificate = Some(Secret::default());
+    assert_eq!(make(raw.clone()).unwrap_err(), EdgionErrorCode::Unknown);
+    let key = rcgen::KeyPair::generate().unwrap();
+    let cert = certificate(&key, "client.example.com");
+    raw.spec.resolved_client_certificate = Some(secret(&[(CERT, &cert), (KEY, &key.serialize_pem())]));
+    assert_eq!(make(raw.clone()).unwrap_err(), EdgionErrorCode::BackendTlsCaInvalid);
+    raw.spec.use_system_ca = true;
+    assert!(make(raw.clone()).unwrap().client_cert_key.is_some());
+    raw.spec.resolved_client_certificate = Some(secret(&[(CERT, "bad"), (KEY, "bad")]));
+    assert_eq!(make(raw).unwrap_err(), EdgionErrorCode::Unknown);
+}
+
+#[test]
+fn cold_gateway_digest_preserves_legacy_encoding_and_covers_extra_data() {
+    let gateway = GatewayIdentityGuard("test/prepared-digest");
+    let store = get_global_gateway_backend_tls_store();
+    let key = rcgen::KeyPair::generate().unwrap();
+    let cert = certificate(&key, "client.example.com");
+    let identity = secret(&[(CERT, &cert), (KEY, &key.serialize_pem()), ("extra", "one")]);
+    store.update_from_gateway(
+        gateway.0,
+        &super::tests::gateway_identity_owner("test", "prepared-digest", identity.clone()),
+    );
+    let effective = EffectiveBackendTlsPolicy::from_policy(Arc::new(policy()));
+    let actual = create_tls_peer(
+        SocketAddr::Inet("127.0.0.1:443".parse().unwrap()),
+        &effective,
+        Some(gateway.0),
+    )
+    .unwrap();
+    // Independently encode the former hot-path protocol over every BTreeMap entry.
+    let data = identity.data.as_ref().unwrap();
+    let mut secret_digest = Sha256::new();
+    secret_digest.update((data.len() as u64).to_be_bytes());
+    for (name, value) in data {
+        secret_digest.update((name.len() as u64).to_be_bytes());
+        secret_digest.update(name.as_bytes());
+        secret_digest.update((value.0.len() as u64).to_be_bytes());
+        secret_digest.update(&value.0);
+    }
+    let mut profile_digest = Sha256::new();
+    profile_digest.update(BACKEND_TLS_PROFILE_DOMAIN);
+    profile_digest.update(effective.profile.fingerprint);
+    profile_digest.update(32u64.to_be_bytes());
+    profile_digest.update(secret_digest.finalize());
+    let encoded: [u8; 32] = profile_digest.finalize().into();
+    assert_eq!(actual.group_key, u64::from_be_bytes(encoded[..8].try_into().unwrap()));
+    let mut expected = actual.clone();
+    expected.group_key = u64::from_be_bytes(encoded[..8].try_into().unwrap());
+    assert_eq!(actual.reuse_hash(), expected.reuse_hash());
+    let mut changed = identity;
+    changed
+        .data
+        .as_mut()
+        .unwrap()
+        .insert("extra".into(), ByteString(b"two".to_vec()));
+    store.update_from_gateway(
+        gateway.0,
+        &super::tests::gateway_identity_owner("test", "prepared-digest", changed),
+    );
+    let rotated = create_tls_peer(
+        SocketAddr::Inet("127.0.0.1:443".parse().unwrap()),
+        &effective,
+        Some(gateway.0),
+    )
+    .unwrap();
+    assert_isolated(&actual, &rotated);
+}
+
+#[test]
+fn captured_policy_uses_live_prepared_gateway_replacement_and_recovers_after_bad_material() {
+    let gateway = GatewayIdentityGuard("test/prepared-live-fallback");
+    let store = get_global_gateway_backend_tls_store();
+    let captured = EffectiveBackendTlsPolicy::from_policy(Arc::new(policy()));
+    let make = || {
+        create_tls_peer(
+            SocketAddr::Inet("127.0.0.1:443".parse().unwrap()),
+            &captured,
+            Some(gateway.0),
+        )
+    };
+    let key = rcgen::KeyPair::generate().unwrap();
+    let cert = certificate(&key, "first.example.com");
+    let valid = secret(&[(CERT, &cert), (KEY, &key.serialize_pem())]);
+    let owner = |identity| super::tests::gateway_identity_owner("test", "prepared-live-fallback", identity);
+    store.update_from_gateway(gateway.0, &owner(valid.clone()));
+    let first = make().unwrap();
+    let mut rotated = valid.clone();
+    rotated.data.as_mut().unwrap().insert(
+        CERT.into(),
+        ByteString(certificate(&key, "next.example.com").into_bytes()),
+    );
+    store.update_from_gateway(gateway.0, &owner(rotated));
+    let next = make().unwrap();
+    assert_isolated(&first, &next);
+    assert!(!Arc::ptr_eq(
+        first.client_cert_key.as_ref().unwrap(),
+        next.client_cert_key.as_ref().unwrap()
+    ));
+    store.update_from_gateway(gateway.0, &owner(Secret::default()));
+    assert_eq!(make().unwrap_err(), EdgionErrorCode::Unknown);
+    assert!(first.client_cert_key.is_some());
+    store.update_from_gateway(gateway.0, &owner(valid));
+    assert_eq!(first.reuse_hash(), make().unwrap().reuse_hash());
+    store.remove(gateway.0);
+    assert!(make().unwrap().client_cert_key.is_none());
+}

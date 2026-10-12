@@ -1,6 +1,6 @@
 ---
 name: backend-ca-bundle-multi-pem
-description: Backend (upstream) TLS CA loading now parses every PEM block via X509::stack_from_pem and fails closed when use_system_ca=false yields no CA. Reject re-reports claiming only the first block / intermediates are dropped, or that a missing CA silently falls back to the system store.
+description: Backend TLS preparation parses every PEM block and preserves custom-trust fail-closed behavior during generation publication.
 knowledge_type: regression-guards
 ---
 
@@ -11,7 +11,7 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
-`build_ca_chain` in `edgion-gateway/src/backends/peer_builder.rs` (the trust anchors
+`build_ca_chain` in `edgion-gateway/src/backends/prepared_backend_tls.rs` (the trust anchors
 used to verify the **backend** server cert under `BackendTLSPolicy`) now:
 
 - parses the whole `ca.crt` bundle with `X509::stack_from_pem` and `extend`s the
@@ -24,11 +24,6 @@ used to verify the **backend** server cert under `BackendTLSPolicy`) now:
 `BackendTlsCaInvalid` instead of leaving `peer.options.ca` unset and silently
 falling back to the system trust store the operator opted out of.
 
-Re-reports of the form "backend CA bundle loads only the first PEM block",
-"intermediates in `ca.crt` are silently discarded", "use `X509::stack_from_pem`",
-or "missing/garbage backend CA silently uses the system store" are **not
-accepted** — they are no longer true.
-
 ## Why the fix is correct / safe
 
 - Loading more CAs is a **superset** of the old trust set: a single-cert bundle
@@ -39,27 +34,28 @@ accepted** — they are no longer true.
   errors clearly. `use_system_ca == true` is completely unchanged.
 - Mirrors the frontend tls-06 policy (empty/garbage stays fail-closed); the two
   paths now diverge nowhere semantically.
-- Runs at peer-build time (not added to any hot path); no `tracing::*` added.
+- ARCH-017 moves parsing from peer construction to winning-policy publication; no `tracing::*` is added.
 - Gateway API conformance unaffected: BackendTLSPolicy conformance (including
   `SupportBackendTLSPolicySANValidation`, which **is** declared in
   `conformance_test.go`) exercises a valid single-block CA that parses
   identically and never hits the fail-closed branch; the SAN-validation hook in
-  `create_tls_peer` is independent of CA loading and untouched.
+  publication is independent of CA loading. Each handshake still computes its own verdict.
 
 ## Code shape today
 
-- `peer_builder.rs` `build_ca_chain` → `Result<Option<Arc<CaType>>, EdgionErrorCode>`,
+- `prepared_backend_tls.rs` `build_ca_chain` → `Result<Option<Arc<CaType>>, EdgionErrorCode>`,
   `X509::stack_from_pem` + `extend`, empty/unparseable `ca.crt` → `BackendTlsCaInvalid`.
-- `peer_builder.rs` `create_tls_peer` → `match build_ca_chain(policy)? { None => Err(BackendTlsCaInvalid), .. }` under `!use_system_ca`.
+- `PreparedBackendTls` retains an independent CA outcome; `create_tls_peer` reads it under `!use_system_ca`, mapping missing combined trust to `BackendTlsCaInvalid`.
 - `EdgionErrorCode::BackendTlsCaInvalid` is recorded when this error reaches the request path.
 
-## Out of scope (intentional)
+## Verification boundary
 
-No integration/unit test added: `build_ca_chain` takes a fully-resolved
-`BackendTLSPolicy` and the backend leaf-only scenario needs a test server
-configured to withhold its intermediate (high setup, low value — real servers
-present their full chain). The valid-CA happy path stays covered by the existing
-BackendTLSPolicy conformance suite.
+The original tls-08 correction added no focused parser test. ARCH-017 adds a
+native preparation unit test for complete multi-PEM bundles, malformed/empty
+bundles, missing effective material and system trust ignoring unused invalid CA.
+The real BackendTLS suite remains the handshake coverage; parser tests do not
+establish certificate-chain handshake acceptance. Fresh execution results are
+recorded in the active prepared-generation task, separate from historical evidence.
 
 ## Re-evaluation triggers
 
@@ -88,8 +84,8 @@ namespace equality and their existing error priority after sharing the material
 identity comparator.
 
 This gate establishes reference/material identity, not PEM validity or live TLS
-handshake success. Existing peer PEM-stack parsing and pool-profile ownership
-remain unchanged. Re-evaluate if the material transport shape, supported source
+handshake success. PEM-stack semantics and pool-profile identity remain unchanged; native parsing
+is now owned by winning-generation preparation. Re-evaluate if the material transport shape, supported source
 kinds, local namespace projection, or cold publication boundary changes. Native
 CRDs do not declare CA-list uniqueness; duplicate declaration rejection remains
 existing Edgion handler behavior and requires separate conformance analysis.

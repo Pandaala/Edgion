@@ -1,13 +1,27 @@
 ---
 name: build-client-cert-key-dedup
-description: Read when reviewing build_client_cert_key and build_client_cert_key_from_secret sharing an identical PEM-parse block / both copies of the secret.data → X509::from_pem + PKey logic must be fixed twice (backends-F008).
+description: Native policy and Gateway fallback identities share one generation-time PEM parser.
 knowledge_type: regression-guards
 ---
 
-# backends-F008 — build_client_cert_key duplicate PEM-parse block
+# One native backend identity parser
 
-**Status / verdict**: fixed (backends-F008, 2026-05-24)
+The historical backends-F008 correction (2026-05-24) removed duplicate policy
+and Gateway identity parsing. ARCH-017 moves the remaining canonical
+`build_client_cert_key_from_secret` to
+`edgion-gateway/src/backends/prepared_backend_tls.rs`. Both publication owners
+call it once when native material changes; peer construction clones its outcome.
+There is no production forwarding helper or request-time PEM parser.
 
-When reviewing findings of the form "`build_client_cert_key` and `build_client_cert_key_from_secret` share an identical PEM-parse block / both copies of the `secret.data` → `X509::from_pem` + `PKey::private_key_from_pem` → `CertKey::new` logic must be fixed twice / extract a `parse_cert_key_from_secret_data` helper (backends-F008)": fixed (backends-F008, 2026-05-24).
+The parser preserves full certificate chains, missing/empty/malformed-material
+`Unknown` failures, and existing private-key decoding. It does not introduce
+certificate/key matching validation. Failed outcomes remain present and are
+checked before custom trust errors. Existing protected identity parser and pool
+isolation tests retain their test identities and mismatched-key hash fixtures.
 
-`build_client_cert_key` (`edgion-gateway/src/backends/peer_builder.rs`) now unwraps `policy.spec.resolved_client_certificate` (an `Option<Secret>`) and delegates to the existing `build_client_cert_key_from_secret(secret)` — both fields/params are the same `k8s_openapi::api::core::v1::Secret` type, so the prologue is the only real difference. The issue's suggested new `parse_cert_key_from_secret_data(&BTreeMap<..>)` helper is **not accepted**: delegating to the already-present `build_client_cert_key_from_secret` removes more duplication (including the `secret.data.as_ref()` line) without introducing a third function. Pure no-behavior-change DRY refactor (byte-for-byte identical output). Same class as backends-F007. Re-reports of the duplicate-block form are not accepted; verify `build_client_cert_key` delegates to `build_client_cert_key_from_secret` before re-reporting.
+The former `build_client_cert_key` and peer-local helper descriptions are historical
+source shapes. Re-evaluate duplication and publication ownership when new native
+identity sources or validation requirements are introduced. General Common rustls
+outbound clients and independent active-health transport keep their own boundaries.
+Fresh verification is recorded in the active task; this page does not reuse the
+historical correction date as evidence of current test execution.

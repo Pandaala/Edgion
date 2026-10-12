@@ -94,9 +94,9 @@ current mechanics as supported enforcement.
 
 ### BoringSSL verification flow
 
-1. When `create_tls_peer()` detects non-empty `subjectAltNames`, it sets Pingora's `upstream_tls_handshake_complete_hook`.
+1. Policy publication prepares one immutable hook for non-empty `subjectAltNames`; `create_tls_peer()` clones it into Pingora's `upstream_tls_handshake_complete_hook`.
 2. After the TLS handshake, the hook extracts backend certificate SANs via `extract_sans_from_ssl()`.
-3. `validate_backend_sans()` compares the certificate SANs with the policy (any match passes).
+3. `validate_backend_sans()` compares the certificate SANs with the policy (any match passes). Extraction and validation run inside `catch_redacted_panic`; a panic produces a typed failed result with a fixed reason. Each invocation creates its own result.
 4. The verification result is stored in `SslDigest.extension`.
 5. `connected_to_upstream()` reads the result and disconnects if it does not match.
 
@@ -105,8 +105,9 @@ current mechanics as supported enforcement.
 Under BoringSSL, `create_tls_peer` sets `group_key` from the effective TLS profile
 even without `subjectAltNames`. Policy publication fingerprints the trust mode,
 complete custom CA payloads, hostname, typed SANs, and policy client Secret data
-(full certificate chain and private key). Peer construction combines any selected
-Gateway fallback Secret with that profile. Pingora includes `group_key` in the
+(full certificate chain and private key). Gateway identity publication prepares a complete Secret-data digest alongside its
+native identity and fresh raw Secret Arc. Peer construction combines that selected
+fixed-size digest with the profile. Pingora includes `group_key` in the
 connection reuse hash, so changed policy material selects another pool bucket.
 Existing streams are not forcibly terminated. See the
 [pool isolation regression guard](../../../04-review/tls/regression-guards/backend-tls-pool-isolation.md)
@@ -137,3 +138,21 @@ The `tls/validation/` module provides certificate validity checks:
 | `edgion-gateway/src/tls/validation/cert.rs` | Certificate validity checks |
 | `edgion-gateway/src/tls/validation/mtls.rs` | mTLS-related validation |
 | `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs` | BackendTLSPolicy lookup and upstream TLS connection |
+
+## Native preparation ownership
+
+Under the supported BoringSSL build, `backends/prepared_backend_tls.rs` parses
+identity chains/private keys and complete custom CA bundles synchronously before
+publication. Effective policy generations retain independent identity and CA
+outcomes plus an immutable SAN hook. Only winning target/section candidates are
+prepared; equivalent resources retain their effective Arc, and metadata-only
+changes can share prepared components through exact input equality.
+
+Gateway backend identity entries publish raw Secret Arc, prepared identity outcome
+and full Secret-data digest together. Identical data reuses preparation, while
+every valid publication still replaces the raw Arc for AllEndpointStatus freshness.
+The native builder reads the live Gateway fallback only without policy identity.
+It checks selected identity errors before CA errors; failed preparation stays
+present and fails closed, and system trust ignores unused custom CA material.
+Captured generations and peers retain old objects until their handles are released.
+Preparation uses the existing owners, with no extra cache or lazy request parsing.

@@ -1,24 +1,22 @@
+#[cfg(all(test, feature = "boringssl"))]
+use super::prepared_backend_tls::build_client_cert_key_from_secret;
 #[cfg(any(feature = "boringssl", test))]
 use crate::backends::gateway_backend_tls_store::get_global_gateway_backend_tls_store;
 use crate::backends::policy::backend_tls::backend_tls_policy_store::BACKEND_TLS_PROFILE_DOMAIN;
 use crate::backends::policy::{BackendTlsPolicyLookup, BackendTlsProfileIdentity, EffectiveBackendTlsPolicy};
 use crate::util::net::{classify_backend_addr, BlockedBackendReason};
 use crate::EdgionHttpContext;
-#[cfg(feature = "boringssl")]
+#[cfg(all(test, feature = "boringssl"))]
 use edgion_resources::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
+#[cfg(test)]
 use edgion_resources::resources::BackendTLSPolicy;
 use edgion_resources::EdgionErrorCode;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::l4::socket::SocketAddr;
-#[cfg(feature = "boringssl")]
-use pingora_core::protocols::tls::CaType;
-#[cfg(feature = "boringssl")]
-use pingora_core::tls::pkey::PKey;
-#[cfg(feature = "boringssl")]
+#[cfg(all(test, feature = "boringssl"))]
 use pingora_core::tls::x509::X509;
-#[cfg(feature = "boringssl")]
-use pingora_core::utils::tls::CertKey;
 use sha2::{Digest, Sha256};
+#[cfg(test)]
 use std::sync::Arc;
 
 // Focused pool-isolation tests exercise the final Pingora reuse hash.
@@ -106,59 +104,6 @@ fn select_client_identity_source(
     }
 }
 
-#[cfg(feature = "boringssl")]
-fn build_client_cert_key_from_secret(
-    secret: &k8s_openapi::api::core::v1::Secret,
-) -> Result<Arc<CertKey>, EdgionErrorCode> {
-    let data = secret.data.as_ref().ok_or(EdgionErrorCode::Unknown)?;
-    let cert_pem = data.get(CERT).ok_or(EdgionErrorCode::Unknown)?;
-    let key_pem = data.get(KEY).ok_or(EdgionErrorCode::Unknown)?;
-
-    let certs = X509::stack_from_pem(cert_pem.0.as_slice()).map_err(|_| EdgionErrorCode::Unknown)?;
-    if certs.is_empty() {
-        return Err(EdgionErrorCode::Unknown);
-    }
-    let key = PKey::private_key_from_pem(key_pem.0.as_slice()).map_err(|_| EdgionErrorCode::Unknown)?;
-
-    Ok(Arc::new(CertKey::new(certs, key)))
-}
-
-#[cfg(feature = "boringssl")]
-fn build_ca_chain(policy: &BackendTLSPolicy) -> Result<Option<Arc<CaType>>, EdgionErrorCode> {
-    let Some(secrets) = policy.spec.resolved_ca_certificates.as_ref() else {
-        return Ok(None);
-    };
-    let mut ca_chain = Vec::new();
-    for secret in secrets {
-        let Some(data) = &secret.data else {
-            continue;
-        };
-        let Some(ca_pem) = data.get(CA_CERT) else {
-            continue;
-        };
-        // `stack_from_pem` parses every block of a `root + intermediate` bundle
-        // (RFC 5280 §6.1 needs the full chain); `from_pem` would keep only the
-        // first. A present-but-unparseable/empty `ca.crt` is fail-closed instead
-        // of silently swallowed.
-        let certs = X509::stack_from_pem(ca_pem.0.as_slice()).map_err(|_| EdgionErrorCode::BackendTlsCaInvalid)?;
-        if certs.is_empty() {
-            return Err(EdgionErrorCode::BackendTlsCaInvalid);
-        }
-        ca_chain.extend(certs);
-    }
-
-    if ca_chain.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(Arc::new(ca_chain.into_boxed_slice())))
-    }
-}
-
-#[cfg(not(feature = "boringssl"))]
-fn build_ca_chain(_policy: &BackendTLSPolicy) -> Result<Option<Arc<()>>, EdgionErrorCode> {
-    Ok(None)
-}
-
 pub(crate) fn peer_from_backend_tls_lookup(
     addr: SocketAddr,
     lookup: &BackendTlsPolicyLookup,
@@ -186,23 +131,27 @@ pub(crate) fn create_tls_peer(
     let gateway_identity = if policy_identity_present {
         None
     } else {
-        gateway_key.and_then(|key| get_global_gateway_backend_tls_store().get(key))
+        gateway_key.and_then(|key| get_global_gateway_backend_tls_store().get_prepared(key))
     };
 
     #[cfg(feature = "boringssl")]
     let mut peer = match select_client_identity_source(true, policy_identity_present, gateway_identity.is_some()) {
         Some(ClientIdentitySource::Policy) => {
-            let secret = policy
-                .spec
-                .resolved_client_certificate
+            let cert_key = effective
+                .prepared
+                .identity
                 .as_ref()
-                .ok_or(EdgionErrorCode::Unknown)?;
-            let cert_key = build_client_cert_key_from_secret(secret)?;
+                .ok_or(EdgionErrorCode::Unknown)?
+                .clone()?;
             HttpPeer::new_mtls(addr, sni, cert_key)
         }
         Some(ClientIdentitySource::Gateway) => {
-            let secret = gateway_identity.as_ref().ok_or(EdgionErrorCode::Unknown)?;
-            let cert_key = build_client_cert_key_from_secret(secret)?;
+            let cert_key = gateway_identity
+                .as_ref()
+                .ok_or(EdgionErrorCode::Unknown)?
+                .prepared
+                .identity
+                .clone()?;
             HttpPeer::new_mtls(addr, sni, cert_key)
         }
         None => HttpPeer::new(addr, true, sni),
@@ -218,7 +167,7 @@ pub(crate) fn create_tls_peer(
     if !policy.spec.use_system_ca {
         // Operator opted out of the system trust store, so a missing/empty CA
         // bundle must fail-closed rather than silently fall back to it.
-        match build_ca_chain(policy)? {
+        match effective.prepared.ca.clone()? {
             Some(ca_chain) => peer.options.ca = Some(ca_chain),
             None => return Err(EdgionErrorCode::BackendTlsCaInvalid),
         }
@@ -226,19 +175,11 @@ pub(crate) fn create_tls_peer(
 
     #[cfg(feature = "boringssl")]
     {
-        peer.group_key = backend_tls_group_key(&effective.profile, gateway_identity.as_deref());
-        if let Some(ref policy_sans) = policy.spec.validation.subject_alt_names {
-            if !policy_sans.is_empty() {
-                let policy_sans = policy_sans.clone();
-                peer.options.upstream_tls_handshake_complete_hook = Some(std::sync::Arc::new(
-                    move |ssl: &pingora_core::tls::ssl::SslRef| -> Option<std::sync::Arc<dyn std::any::Any + Send + Sync>> {
-                        let cert_sans = crate::tls::runtime::backend::cert_extractor::extract_sans_from_ssl(ssl);
-                        let result = crate::tls::validation::backend_san::validate_backend_sans(&cert_sans, &policy_sans);
-                        Some(std::sync::Arc::new(result))
-                    },
-                ));
-            }
-        }
+        peer.group_key = backend_tls_group_key(
+            &effective.profile,
+            gateway_identity.as_ref().map(|entry| &entry.prepared.fingerprint),
+        );
+        peer.options.upstream_tls_handshake_complete_hook = effective.prepared.san_hook.clone();
     }
 
     #[cfg(not(feature = "boringssl"))]
@@ -249,40 +190,17 @@ pub(crate) fn create_tls_peer(
     Ok(Box::new(peer))
 }
 
-fn backend_tls_group_key(
-    profile: &BackendTlsProfileIdentity,
-    gateway_secret: Option<&k8s_openapi::api::core::v1::Secret>,
-) -> u64 {
-    let Some(secret) = gateway_secret else {
+fn backend_tls_group_key(profile: &BackendTlsProfileIdentity, gateway_fingerprint: Option<&[u8; 32]>) -> u64 {
+    let Some(secret_fp) = gateway_fingerprint else {
         return profile.group_key();
     };
     let mut digest = Sha256::new();
     digest.update(BACKEND_TLS_PROFILE_DOMAIN);
     digest.update(profile.fingerprint);
-    let secret_fp = secret_data_fingerprint(secret);
     digest.update((secret_fp.len() as u64).to_be_bytes());
     digest.update(secret_fp);
     let out: [u8; 32] = digest.finalize().into();
     u64::from_be_bytes(out[..8].try_into().expect("sha256 is 32 bytes"))
-}
-
-fn secret_data_fingerprint(secret: &k8s_openapi::api::core::v1::Secret) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    if let Some(data) = secret.data.as_ref() {
-        let mut keys: Vec<_> = data.keys().collect();
-        keys.sort();
-        digest.update((keys.len() as u64).to_be_bytes());
-        for key in keys {
-            digest.update((key.len() as u64).to_be_bytes());
-            digest.update(key.as_bytes());
-            let value = &data[key].0;
-            digest.update((value.len() as u64).to_be_bytes());
-            digest.update(value);
-        }
-    } else {
-        digest.update(0u64.to_be_bytes());
-    }
-    digest.finalize().into()
 }
 
 /// Record TLS configuration to upstream context.

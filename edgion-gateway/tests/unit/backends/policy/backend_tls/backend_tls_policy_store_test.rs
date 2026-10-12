@@ -1415,3 +1415,77 @@ fn cold_backend_tls_eight_reference_boundary_and_default_material_are_exact() {
     store.replace_all(HashMap::from([("paired".into(), candidate)]));
     assert!(store.snapshot().lookup(&target, None).is_invalid());
 }
+
+#[cfg(feature = "boringssl")]
+#[test]
+fn winner_preparation_is_shared_across_noops_metadata_and_losing_candidate_changes() {
+    let store = BackendTLSPolicyStore::new();
+    let winner = policy(
+        "a-winner",
+        PolicyTargetKind::Service,
+        "prepared",
+        None,
+        Some(ResolvedPolicyTargetClass::Service),
+    );
+    let loser = policy(
+        "z-loser",
+        PolicyTargetKind::Service,
+        "prepared",
+        None,
+        Some(ResolvedPolicyTargetClass::Service),
+    );
+    let target = target_named(PolicyTargetKind::Service, "prepared");
+    store.replace_all(HashMap::from([
+        ("a-winner".into(), winner.clone()),
+        ("z-loser".into(), loser.clone()),
+    ]));
+    let first = store.snapshot().lookup(&target, None).effective().unwrap().clone();
+    store.replace_all(HashMap::from([
+        ("a-winner".into(), Arc::new((*winner).clone())),
+        ("z-loser".into(), loser.clone()),
+    ]));
+    let noop = store.snapshot().lookup(&target, None).effective().unwrap().clone();
+    assert!(Arc::ptr_eq(&first, &noop));
+    let mut updated = (*loser).clone();
+    updated.metadata.resource_version = Some("changed-loser".into());
+    store.update(
+        HashMap::new(),
+        HashMap::from([("z-loser".into(), Arc::new(updated))]),
+        &HashSet::new(),
+    );
+    let still_winner = store.snapshot().lookup(&target, None).effective().unwrap().clone();
+    assert!(Arc::ptr_eq(&first, &still_winner));
+    let mut metadata = (*winner).clone();
+    metadata.metadata.resource_version = Some("metadata-only".into());
+    store.update(
+        HashMap::new(),
+        HashMap::from([("a-winner".into(), Arc::new(metadata))]),
+        &HashSet::new(),
+    );
+    let next = store.snapshot().lookup(&target, None).effective().unwrap().clone();
+    assert!(!Arc::ptr_eq(&first, &next));
+    assert!(Arc::ptr_eq(&first.prepared, &next.prepared));
+    assert_eq!(first.policy.metadata.resource_version, None);
+    assert_eq!(next.policy.metadata.resource_version.as_deref(), Some("metadata-only"));
+    store.update(HashMap::new(), HashMap::new(), &HashSet::from(["a-winner".into()]));
+    let promoted = store.snapshot().lookup(&target, None).effective().unwrap().clone();
+    assert_eq!(promoted.policy.metadata.name.as_deref(), Some("z-loser"));
+    // Winner identity changed, but equal native inputs may reuse preparation.
+    assert!(Arc::ptr_eq(&next.prepared, &promoted.prepared));
+    let mut rotated = (*promoted.policy).clone();
+    rotated.spec.validation.subject_alt_names = Some(vec![SubjectAltName {
+        san_type: SubjectAltNameType::Hostname,
+        hostname: Some("backend.example.com".into()),
+        uri: None,
+    }]);
+    store.update(
+        HashMap::new(),
+        HashMap::from([("z-loser".into(), Arc::new(rotated))]),
+        &HashSet::new(),
+    );
+    let rotated = store.snapshot().lookup(&target, None).effective().unwrap().clone();
+    assert!(!Arc::ptr_eq(&promoted.prepared, &rotated.prepared));
+    assert!(rotated.prepared.san_hook.is_some());
+    assert!(promoted.prepared.san_hook.is_none());
+    assert_eq!(first.policy.metadata.name.as_deref(), Some("a-winner"));
+}

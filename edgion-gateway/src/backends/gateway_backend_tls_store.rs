@@ -19,8 +19,14 @@ pub fn get_global_gateway_backend_tls_store() -> Arc<GatewayBackendTlsStore> {
     GLOBAL_GATEWAY_BACKEND_TLS_STORE.clone()
 }
 
+pub(crate) struct GatewayBackendTlsEntry {
+    raw: Arc<Secret>,
+    #[cfg(feature = "boringssl")]
+    pub(in crate::backends) prepared: Arc<super::prepared_backend_tls::PreparedGatewayIdentity>,
+}
+
 pub struct GatewayBackendTlsStore {
-    store: ArcSwap<HashMap<String, Arc<Secret>>>,
+    store: ArcSwap<HashMap<String, Arc<GatewayBackendTlsEntry>>>,
 }
 
 impl GatewayBackendTlsStore {
@@ -32,6 +38,11 @@ impl GatewayBackendTlsStore {
 
     /// Get the resolved client certificate Secret for a gateway.
     pub fn get(&self, gateway_key: &str) -> Option<Arc<Secret>> {
+        self.store.load().get(gateway_key).map(|entry| Arc::clone(&entry.raw))
+    }
+
+    #[cfg(feature = "boringssl")]
+    pub(crate) fn get_prepared(&self, gateway_key: &str) -> Option<Arc<GatewayBackendTlsEntry>> {
         self.store.load().get(gateway_key).cloned()
     }
 
@@ -55,7 +66,20 @@ impl GatewayBackendTlsStore {
         };
         let current = self.store.load();
         let mut new_map = (**current).clone();
-        new_map.insert(gateway_key.to_string(), Arc::new(secret));
+        #[cfg(feature = "boringssl")]
+        let prepared = current
+            .get(gateway_key)
+            .filter(|entry| entry.raw.data == secret.data)
+            .map(|entry| Arc::clone(&entry.prepared))
+            .unwrap_or_else(|| Arc::new(super::prepared_backend_tls::PreparedGatewayIdentity::new(&secret)));
+        new_map.insert(
+            gateway_key.to_string(),
+            Arc::new(GatewayBackendTlsEntry {
+                raw: Arc::new(secret),
+                #[cfg(feature = "boringssl")]
+                prepared,
+            }),
+        );
         self.store.store(Arc::new(new_map));
     }
 

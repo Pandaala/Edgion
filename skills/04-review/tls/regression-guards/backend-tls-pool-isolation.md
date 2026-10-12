@@ -15,8 +15,9 @@ hash used by its HTTP/1 idle pool and HTTP/2 in-use and idle pools.
 
 The original `backend-tls-policy-connection-pool-isolation` task described a
 SAN-only discriminator. That production defect was already corrected before
-this verification work; this change adds regression evidence and updates stale
-knowledge, without changing production TLS behavior.
+the September 2026 verification; that historical closure added regression evidence
+without changing production TLS behavior. ARCH-017 subsequently moves preparation
+to publication while preserving those trust and pool contracts.
 
 ## Rationale and evidence
 
@@ -29,13 +30,13 @@ knowledge, without changing production TLS behavior.
   CA payloads are sorted and deduplicated; variable-length values are framed.
 - `edgion-gateway/src/backends/peer_builder.rs`: `create_tls_peer` selects policy
   identity first, otherwise a Gateway identity, otherwise no identity.
-  `backend_tls_group_key` combines the profile fingerprint with all selected
-  Gateway Secret data. The same captured Secret is parsed for the peer and
-  hashed, so a concurrent store replacement cannot mix those two inputs.
+  `backend_tls_group_key` combines the profile fingerprint with the selected
+  Gateway entry's precomputed complete Secret-data digest. Cold publication
+  prepares identity and digest together; a captured entry cannot mix generations.
 - `peer_from_backend_tls_lookup` and direct `create_tls_peer` consumers in
   `backends/mod.rs` and `routes/http/proxy_http/pg_upstream_peer.rs` share this
   construction. SAN hook installation does not replace the profile key.
-- The Cargo.lock-resolved Pingora revision `518f7274eb9fbd68f3f55e85b8c86a9e4a59e95e`
+- The current Cargo.lock-resolved Pingora revision `1aaa45cc70430bc782990bc20ddee3fef36d6b99`
   has `HttpPeer::hash` include `group_key`. Its BoringSSL `CertKey::hash` hashes
   the serial of each certificate, not the complete certificate/key material.
   A changed chain with the same serial sequence therefore needs Edgion's key.
@@ -46,9 +47,11 @@ isolation. See the [upstream TLS architecture](../../../01-architecture/02-gatew
 ## Alternatives and limits
 
 - Fingerprinting borrows existing Secret data and retains only a digest; it
-  neither logs nor serializes plaintext key material. Gateway fallback
-  fingerprinting still happens during peer construction; this verification
-  does not claim to have optimized that existing cost.
+  neither logs nor serializes plaintext key material. ARCH-017 moves Gateway
+  fingerprinting and native identity/CA/SAN preparation to their existing
+  publication owners. Peer construction hashes only fixed-size digests. The
+  original byte framing, source distinction and resulting group keys are preserved;
+  no numerical performance or retained-memory benefit has been measured.
 - Group keys and the final Pingora reuse hash are 64-bit. This is protection
   against omitted policy inputs, not a mathematical no-collision guarantee.
 - Policy and Gateway sources are conservatively separated even for identical
@@ -133,3 +136,14 @@ policy publication, peer constructors, or Pingora hashing/pooling change.
   The separate historical endpoint findings cited the removed `endpoint/`
   implementation (removal commit `43acc97`); that history is not fresh evidence
   about today's EndpointSlice port resolution.
+
+## Prepared-generation regression boundary
+
+ARCH-017 retains separate identity and trust outcomes, exact input-based prepared
+Arc reuse, full-data fallback fingerprints, and winner-before-preparation policy
+arbitration. Raw Gateway Secret Arcs still replace on every valid publication,
+including identical data, so independent probe freshness remains unchanged.
+Tests additionally assert shared native component Arcs, independently encoded
+legacy group keys/final reuse hashes, extra Secret-data isolation, identity-before-CA
+error priority and per-invocation SAN results. Historical verification above does
+not establish current test execution; fresh results belong to the active task.

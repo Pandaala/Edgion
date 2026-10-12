@@ -384,8 +384,9 @@ Accepted residuals (not mixed-generation Service HTTP/gRPC reads):
 ## BackendTLSPolicy
 
 Manages upstream TLS policy configuration, stored in `BackendTLSPolicyStore`.
-BoringSSL supports custom CA trust and client-certificate authentication; rustls
-currently supports only the system CA store and standard hostname verification:
+BoringSSL is the only supported Gateway TLS backend and supports custom CA trust
+and client-certificate authentication. The dormant Gateway rustls feature has no
+supported BackendTLSPolicy contract:
 
 ```
 policy/
@@ -432,9 +433,13 @@ policy/
 - The Controller publishes `resolvedTargetClass` only after target and TLS
   references are valid. Marker-absent, class-mismatch, multi-`targetRef`,
   identity errors, and incomplete custom CA are invalid-applicable, not omitted.
-- Configure the HttpPeer's TLS connection parameters. Custom CA certificates and
-  client certificate/key identity are applied only by the BoringSSL build; they
-  are outside the current rustls support boundary.
+- Effective winning policies prepare native identity, full custom CA and immutable
+  SAN hook components before publication. Peer construction clones those Arcs;
+  selected identity errors precede custom CA errors and failures stay fail-closed.
+  System trust ignores unused custom CA material. Gateway fallback entries publish
+  prepared identity and complete Secret-data digest with a fresh raw Secret Arc.
+  Identical data reuses preparation without weakening raw probe freshness.
+  Gateway fallback selection stays live, while captured policy objects remain valid.
 - BackendTLS hostname controls certificate verification and SNI; it does not
   rewrite the HTTP Host authority.
 - Secret key constants: `CA_CERT`, `CERT`, `KEY`.

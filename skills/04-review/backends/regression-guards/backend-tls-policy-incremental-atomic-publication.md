@@ -121,3 +121,14 @@ the existing 16-target and uniqueness limits. BTP still requires one eligible
 target and preserves invalid exact/whole occupancy for canonical target slots.
 Gateway target indexes share these loans without changing atomic publication,
 precedence, captured snapshots, or TLS/material ownership.
+
+## Native winning-generation preparation (ARCH-017)
+
+Target arbitration chooses each valid exact/whole winner before constructing its
+native TLS preparation. Losing candidates remain available for local promotion,
+but incur no native parsing or hook preparation until selected. No-op resource
+publication still preserves the effective Arc. Metadata/status changes publish
+the new raw policy while exact identity/CA/SAN input equality permits prepared
+Arc reuse. Native outcomes, raw policy and complete profile stay in the same
+immutable effective object; preparation adds no cache, second publication or
+unrelated-target scan. Existing captured handles retain their original objects.

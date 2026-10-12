@@ -132,7 +132,8 @@ the existing slot. Omitted material namespace is default only for this finite
 Gateway backend field, matching Controller acquisition; explicit empty namespace
 is invalid. Raw publication keys retain their existing key_name form.
 
-Both ordinary peers and AllEndpointStatus probes read the resulting Arc<Secret>.
+Ordinary peers read a coherent entry containing native preparation and digest;
+AllEndpointStatus continues to read its raw Arc<Secret>.
 No request-path owner lookup or new Grant policy is introduced. Withdrawal leaves
 the existing fallback behavior: BTP still selects TLS and its own identity takes
 precedence; without either identity it uses TLS without a client certificate.
@@ -141,3 +142,12 @@ Arc freshness rejects a replaced/withdrawn generation while its captured bytes
 remain immutable. Focused owner/store/peer/probe and full/partial handler tests
 cover these boundaries; historical network results above are not a fresh live
 conformance or handshake claim for this change.
+
+## Prepared identity selection (ARCH-017)
+
+Cold parsing stores an explicit failed identity outcome rather than withdrawing
+validly paired malformed bytes. Policy identity presence still prevents Gateway
+lookup even when parsing failed. Selected policy or Gateway identity errors remain
+`Unknown` and precede custom CA errors. An absent policy selects plaintext without
+consulting prepared fallback entries. Preparation reuse on identical Gateway data
+never reuses the raw Secret Arc, preserving the probe's pointer freshness contract.

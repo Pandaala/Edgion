@@ -77,6 +77,8 @@ impl std::fmt::Debug for BackendTlsPolicyLookup {
 pub struct EffectiveBackendTlsPolicy {
     pub policy: Arc<BackendTLSPolicy>,
     pub profile: Arc<BackendTlsProfileIdentity>,
+    #[cfg(feature = "boringssl")]
+    pub(in crate::backends) prepared: Arc<crate::backends::prepared_backend_tls::PreparedBackendTls>,
 }
 
 pub struct BackendTlsProfileIdentity {
@@ -88,6 +90,8 @@ impl EffectiveBackendTlsPolicy {
     pub(crate) fn from_policy(policy: Arc<BackendTLSPolicy>) -> Arc<Self> {
         Arc::new(Self {
             profile: BackendTLSPolicyStore::profile_identity(&policy),
+            #[cfg(feature = "boringssl")]
+            prepared: Arc::new(crate::backends::prepared_backend_tls::PreparedBackendTls::new(&policy)),
             policy,
         })
     }
@@ -355,6 +359,16 @@ impl BackendTLSPolicyStore {
         Arc::new(EffectiveBackendTlsPolicy {
             policy: Arc::clone(policy),
             profile: Self::profile_identity(policy),
+            #[cfg(feature = "boringssl")]
+            prepared: existing
+                .filter(|existing| {
+                    crate::backends::prepared_backend_tls::PreparedBackendTls::inputs_equivalent(
+                        &existing.policy,
+                        policy,
+                    )
+                })
+                .map(|existing| Arc::clone(&existing.prepared))
+                .unwrap_or_else(|| Arc::new(crate::backends::prepared_backend_tls::PreparedBackendTls::new(policy))),
         })
     }
 
@@ -379,15 +393,24 @@ impl BackendTLSPolicyStore {
         for policy in ordered {
             if Self::valid_target_key(&policy).as_ref() == Some(target) {
                 let section = policy.spec.target_refs[0].section_name.clone();
-                let effective =
-                    Self::reuse_or_build_effective(current.map(|current| &current.valid), section.as_deref(), &policy);
                 match section {
                     Some(section) if !section.is_empty() => {
-                        valid.exact.entry(Arc::from(section)).or_insert(effective);
+                        if !valid.exact.contains_key(section.as_str()) {
+                            let effective = Self::reuse_or_build_effective(
+                                current.map(|current| &current.valid),
+                                Some(&section),
+                                &policy,
+                            );
+                            valid.exact.insert(Arc::from(section), effective);
+                        }
                     }
                     _ => {
                         if valid.whole.is_none() {
-                            valid.whole = Some(effective);
+                            valid.whole = Some(Self::reuse_or_build_effective(
+                                current.map(|current| &current.valid),
+                                None,
+                                &policy,
+                            ));
                         }
                     }
                 }
