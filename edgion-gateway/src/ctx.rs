@@ -1032,7 +1032,8 @@ pub struct RequestInfo {
     /// Canonical W3C context and managed correlation identifiers.
     #[serde(flatten, skip_serializing_if = "crate::request_trace_id::RequestTraceId::is_empty")]
     pub trace_id: crate::request_trace_id::RequestTraceId,
-    /// Normalized hostname from the Host header (lowercased, port-stripped).
+    /// Normalized entry hostname, selected from URI host, then Host, then `:authority`.
+    /// Upstream Host rewrites do not refresh this value.
     /// Construct via `NormalizedHostname::new()` — never apply `to_lowercase()` again.
     #[serde(rename = "host")]
     pub hostname: NormalizedHostname,
