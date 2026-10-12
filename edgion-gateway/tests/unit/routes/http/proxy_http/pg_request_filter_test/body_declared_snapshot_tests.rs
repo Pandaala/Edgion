@@ -7,7 +7,7 @@ async fn original_method_snapshot_survives_live_method_rewrite() {
     let mut ctx = EdgionHttpContext::default();
     snapshot_body_declared(&mut session, &mut ctx);
     session.req_header_mut().set_method(http::Method::POST);
-    assert_eq!(ctx.request_info.original_method, Some(http::Method::GET));
+    assert_eq!(ctx.request_info.method, Some(http::Method::GET));
     assert_eq!(session.req_header().method, http::Method::POST);
 }
 

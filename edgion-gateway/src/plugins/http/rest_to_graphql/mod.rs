@@ -102,7 +102,7 @@ impl RequestFilter for RestToGraphql {
             log.push_err("invalid request stage");
             return graphql_request::reject(session, 500);
         }
-        let Some(method) = ctx.request_info.original_method.as_ref() else {
+        let Some(method) = ctx.request_info.method.as_ref() else {
             log.push_err("missing client method");
             return graphql_request::reject(session, 500);
         };

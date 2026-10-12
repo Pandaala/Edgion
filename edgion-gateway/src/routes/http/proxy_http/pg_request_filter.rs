@@ -592,7 +592,7 @@ async fn build_request_metadata(
 /// belong here for physical admission. These writes share the same reason:
 /// this is the one point that runs before any plugin can mutate the request.
 fn snapshot_body_declared(session: &mut Session, ctx: &mut EdgionHttpContext) {
-    ctx.request_info.original_method = Some(session.req_header().method.clone());
+    ctx.request_info.method = Some(session.req_header().method.clone());
     ctx.request_info.body_declared = Some(!session.is_body_empty());
     ctx.request_info.in_request_body_stage = true;
     ctx.request_info.method_is_head = session.req_header().method == http::Method::HEAD;

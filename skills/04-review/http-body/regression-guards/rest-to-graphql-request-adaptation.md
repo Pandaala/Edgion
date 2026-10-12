@@ -13,7 +13,8 @@ Canonical KeyGet supplies local values; CtxSet/DSL prepare complex values.
 Native body bindings reuse strict JSON and ProxyRewrite's compiled JSON pointers.
 The cost compiler and adapter share canonical TypeRef parsing.
 
-Snapshot the original Method before plugins. A live method rewritten from GET to
+`request_info.method` snapshots the client method before plugins and remains
+frozen. Ordinary method reads use the live session. A live method rewritten from GET to
 POST cannot authorize mutation, and an original physical GET body rejects.
 Successful canonical GraphQL evaluation freezes mutation through the existing
 RequestBodyState owner, which propagates to future bodyless storage. Every
@@ -54,10 +55,10 @@ Sources and focused tests:
 - [Resources tests](../../../../edgion-resources/tests/unit/resources/edgion_plugins/plugin_configs/rest_to_graphql_test.rs)
 - [Gateway tests](../../../../edgion-gateway/tests/unit/plugins/http/rest_to_graphql/mod_test.rs)
 - [Shared static/dynamic probes](../../../../edgion-tests/src/client/suites/edgion_plugins/rest_to_graphql/mod.rs)
-- [Current verification record](../../../../tasks/pending/rest-to-graphql/rest-to-graphql.md)
+- [Current architecture contract](../../../01-architecture/02-gateway/00-overview.md#httproute-rest-to-graphql-adaptation)
 
 Re-evaluate source timing, accessor contracts, method snapshots, canonical body-freeze ownership,
 custom input validation, bound changes, body publication/framing and hot reload
-against fresh tests. The implementation plan passed independent review; final
-delivery verification remains in progress in the linked task. This page is not
-substitute evidence for a successful live run.
+against fresh tests. The former implementation task is no longer present; use
+the linked architecture, sources and tests for current evidence. This page does
+not establish a successful live run.

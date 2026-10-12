@@ -29,7 +29,7 @@ async fn unused_body_media_encoding_caps_and_physical_get_are_enforced() {
         let mut session = MockPluginSession::new();
         let mut ctx = EdgionHttpContext::default();
         ctx.request_info.in_request_body_stage = true;
-        ctx.request_info.original_method = Some(method);
+        ctx.request_info.method = Some(method);
         ctx.request_info.body_declared = Some(declared);
         session.expect_ctx().return_const(ctx);
         session.expect_declares_body().return_const(Some(declared));
@@ -57,7 +57,7 @@ async fn unused_body_media_encoding_caps_and_physical_get_are_enforced() {
 fn session(method: Method, query: Option<&str>) -> MockPluginSession {
     let mut session = MockPluginSession::new();
     let mut ctx = EdgionHttpContext::default();
-    ctx.request_info.original_method = Some(method);
+    ctx.request_info.method = Some(method);
     ctx.request_info.entry_raw_query = query.map(str::to_owned);
     ctx.request_info.body_declared = Some(false);
     ctx.request_info.in_request_body_stage = true;
@@ -106,7 +106,7 @@ async fn native_json_body_publishes_approved_value_only_and_releases_admission()
     let mut session = MockPluginSession::new();
     let mut ctx = EdgionHttpContext::default();
     ctx.request_info.in_request_body_stage = true;
-    ctx.request_info.original_method = Some(Method::POST);
+    ctx.request_info.method = Some(Method::POST);
     ctx.request_info.body_declared = Some(true);
     session.expect_ctx().return_const(ctx);
     session.expect_declares_body().return_const(Some(true));
