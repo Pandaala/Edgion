@@ -93,8 +93,10 @@ provides the same audited-budget and independent-allocation-guard precedent.
   tasks/pending/architecture-plugin-session-ai-capability/.
 
 - AI isolation follow-up: eight failing regression tests were explicitly approved
-  for repair by the user. Layout evidence, independently approved alternatives
-  and fresh verification are recorded in
-  tasks/pending/architecture-ai-http-isolation/07-failure-repair-plan.md and
-  08-failure-repair-results.md. The semantic fixture repair supplies the same
-  frozen-method contract; it does not alter production transport policy.
+  for repair by the user. Independent Astra review accepted the measured tight
+  1328/432 limits and the alternatives documented above. All eight exact tests
+  and 324 related tests passed; workspace check, clippy and static guards passed.
+  These are the repair-time receipts, not a new verification after task cleanup.
+  The semantic fixture repair supplies the same frozen-method contract without
+  altering production transport policy. Completed temporary task records were
+  removed; the current layout decision and regression tests remain canonical.

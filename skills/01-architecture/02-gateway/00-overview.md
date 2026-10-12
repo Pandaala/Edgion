@@ -46,6 +46,17 @@ AI dispatch mark stays after successful fallible upstream header preparation;
 status retry advances only in the raw response operation, with the later error
 operation acknowledging re-entry without another transition.
 
+The AI-ISO-01/05 ownership refactors claim maintainability, not measured ordinary
+throughput gains. The independent value review deferred a generic head registry
+and an AI/semantic composite (AI-ISO-02/03): existing head contracts, fixed slots
+and cancellation leases already own those mechanisms. Additional publication
+aggregation (AI-ISO-04) requires repeated-cost and generation evidence and cannot
+replace selected-backend checks. The invocation latch (AI-ISO-06) stays inline
+to distinguish a skipped guard invocation from active AI state without allocating
+an AI box. Retry-payload retirement (AI-ISO-07) requires separate exclusive-owner,
+accounting and actual-head-commit evidence. These conditional candidates are not
+outstanding acceptance requirements of the completed refactor.
+
 The universal
 logging callback first releases AI processor/exchange state through the existing
 driver lease before any accounting await, then invokes AI settlement at its
