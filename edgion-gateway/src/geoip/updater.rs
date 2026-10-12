@@ -23,6 +23,8 @@ use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use sha2::{Digest, Sha256};
+
 use reqwest::header::{
     HeaderValue, AUTHORIZATION, CONTENT_ENCODING, ETAG, IF_MODIFIED_SINCE, IF_NONE_MATCH, LAST_MODIFIED,
 };
@@ -273,43 +275,94 @@ impl UpdateError {
     }
 }
 
+/// Opaque equality metadata for the exact configured representation inputs.
+/// Computed once at updater construction; never log this digest or its inputs.
+/// SHA-256 does not encrypt credentials or protect against offline guessing.
+fn source_identity(url: &str, auth_header: Option<&HeaderValue>) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"edgion-geoip-update-source-v1\0");
+    digest.update((url.len() as u64).to_be_bytes());
+    digest.update(url.as_bytes());
+    match auth_header {
+        Some(value) => {
+            digest.update([1]);
+            digest.update((value.as_bytes().len() as u64).to_be_bytes());
+            digest.update(value.as_bytes());
+        }
+        None => digest.update([0]),
+    }
+    hex::encode(digest.finalize())
+}
+
 /// The conditional-GET validator (ETag / Last-Modified), persisted next to the
 /// database as `<db_path>.meta`.
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct UpdateState {
+    #[serde(default)]
+    pub(crate) source_identity: Option<String>,
     pub(crate) etag: Option<String>,
     pub(crate) last_modified: Option<String>,
 }
 
 impl UpdateState {
-    /// Load the persisted validator only when a regular durable database and
-    /// an active provider both exist. When
-    /// `meta_path` is absent in that usable state, seed `last_modified` from
-    /// the database file's mtime so the first cycle can still be conditional.
-    /// A valid empty sidecar deliberately suppresses this mtime fallback.
-    pub(crate) fn load(meta_path: &Path, db_path: &Path, provider_active: bool) -> Self {
+    /// Recover validators only for the current source and usable local state.
+    /// Only an absent sidecar permits the deliberate same-source mtime fallback;
+    /// existing untrusted metadata must not regain eligibility through mtime.
+    pub(crate) fn load(meta_path: &Path, db_path: &Path, provider_active: bool, current_source: &str) -> Self {
         if !validator_context_ready(db_path, provider_active) {
             let state = Self::default();
             state.persist(meta_path);
             return state;
         }
-        if let Ok(bytes) = std::fs::read(meta_path) {
-            if let Ok(state) = serde_json::from_slice::<UpdateState>(&bytes) {
-                return state;
+        match std::fs::read(meta_path) {
+            Ok(bytes) => {
+                let mut state = serde_json::from_slice::<Self>(&bytes).unwrap_or_default();
+                if !state.matches_source(current_source) {
+                    state.clear_and_persist(meta_path);
+                }
+                state
             }
-        }
-        let last_modified = std::fs::metadata(db_path)
-            .and_then(|m| m.modified())
-            .ok()
-            .map(httpdate::fmt_http_date);
-        Self {
-            etag: None,
-            last_modified,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let last_modified = std::fs::metadata(db_path)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .map(httpdate::fmt_http_date);
+                Self {
+                    source_identity: Some(current_source.to_string()),
+                    etag: None,
+                    last_modified,
+                }
+            }
+            Err(_) => {
+                let state = Self::default();
+                state.persist(meta_path);
+                state
+            }
         }
     }
 
-    /// Persist the validator. Best-effort: a failed write only costs the next
-    /// cycle a conditional GET turning unconditional, not correctness.
+    fn matches_source(&self, current_source: &str) -> bool {
+        self.source_identity.as_deref() == Some(current_source)
+    }
+
+    /// Called only after validation, rename and successful provider publication.
+    fn record_swap(
+        &mut self,
+        meta_path: &Path,
+        current_source: &str,
+        etag: Option<String>,
+        last_modified: Option<String>,
+    ) {
+        self.source_identity = Some(current_source.to_string());
+        self.etag = etag;
+        self.last_modified = last_modified;
+        self.persist(meta_path);
+    }
+
+    /// Persist source-bound validators best-effort. This is not a transaction
+    /// with the database rename: a failed write may lose restart optimization.
+    /// Untrusted existing metadata stays unconditional; absent metadata retains
+    /// the explicitly documented same-source mtime assumption.
     pub(crate) fn persist(&self, meta_path: &Path) {
         if let Ok(bytes) = serde_json::to_vec(self) {
             let _ = std::fs::write(meta_path, bytes);
@@ -340,6 +393,7 @@ pub struct GeoIpUpdater {
     cfg: GeoIpConfig,
     db_path: PathBuf,
     url: String,
+    source_identity: String,
     auth_header: Option<HeaderValue>,
     client: reqwest::Client,
     provider: &'static GeoIpProvider,
@@ -366,6 +420,8 @@ impl GeoIpUpdater {
             }
             None => None,
         };
+
+        let source_identity = source_identity(&url, auth_header.as_ref());
 
         // `classify_literal_destination` above only sees IP-literal hosts;
         // reqwest never runs a literal through DNS. A hostname `update_url`
@@ -399,6 +455,7 @@ impl GeoIpUpdater {
             cfg,
             db_path,
             url,
+            source_identity,
             auth_header,
             client,
             provider,
@@ -411,7 +468,7 @@ impl GeoIpUpdater {
 
     async fn run(self) {
         let meta = meta_path(&self.db_path);
-        let mut state = UpdateState::load(&meta, &self.db_path, self.provider.is_loaded());
+        let mut state = UpdateState::load(&meta, &self.db_path, self.provider.is_loaded(), &self.source_identity);
         let mut cold_attempt = 0u32;
 
         loop {
@@ -529,7 +586,8 @@ impl GeoIpUpdater {
         // Re-check on every cycle. Suppressing conditional headers is not
         // enough: stale in-memory state could otherwise become eligible again
         // after a failed fetch if the database/provider recovered.
-        let mut validators_eligible = validator_context_ready(&self.db_path, self.provider.is_loaded());
+        let mut validators_eligible = validator_context_ready(&self.db_path, self.provider.is_loaded())
+            && state.matches_source(&self.source_identity);
         prepare_validator_state(state, &meta, validators_eligible);
 
         // Refuse to start a download the volume cannot hold a full swap of. Not
@@ -544,7 +602,8 @@ impl GeoIpUpdater {
         // The free-space check above is synchronous but the local state may
         // still have changed since the first eligibility read. Revalidate at
         // the request-construction boundary and clear again if needed.
-        validators_eligible = validator_context_ready(&self.db_path, self.provider.is_loaded());
+        validators_eligible = validator_context_ready(&self.db_path, self.provider.is_loaded())
+            && state.matches_source(&self.source_identity);
         prepare_validator_state(state, &meta, validators_eligible);
         let (req, sent_validator) = build_request(
             &self.client,
@@ -634,9 +693,7 @@ impl GeoIpUpdater {
 
         self.provider.load_from(&self.db_path).map_err(UpdateError::Rename)?;
 
-        state.etag = new_etag;
-        state.last_modified = new_last_modified;
-        state.persist(&meta);
+        state.record_swap(&meta, &self.source_identity, new_etag, new_last_modified);
 
         crate::observe::metrics::set_geoip_db_loaded(true);
         if let Some(epoch) = self.provider.build_epoch() {

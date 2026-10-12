@@ -50,6 +50,7 @@ before applying a decision to current code.
 - [`GET /geoip` admin endpoint removed — metrics and the access log already cover it — FIXED](regression-guards/geoip-admin-endpoint-removed-metrics-and-access-log-cover-it.md)
 - [GeoIP lookup failures follow failOpen — FIXED](regression-guards/geoip-lookup-failures-follow-fail-open.md)
 - [GeoIP has no global `enabled` switch; the access log never forces a lookup — FIXED](regression-guards/geoip-no-global-enabled-switch-access-log-lazy.md)
+- [GeoIP validators are bound to the configured update source](regression-guards/geoip-validators-bound-to-update-source.md)
 - [GeoIP updater success test uses a fixture-scale cap — FIXED](regression-guards/geoip-updater-success-test-fixture-scale-cap.md)
 - [EgressResolver blocked-address tracing is removed — FIXED](regression-guards/gw-plugin-outbound-01-egress-resolver-tracing-removed.md)
 - [link-sys F-020 (local_file) — background write errors are surfaced, `current_size` no longer drifts](regression-guards/local-file-write-error-surfaced.md)

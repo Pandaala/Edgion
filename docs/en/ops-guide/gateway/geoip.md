@@ -579,19 +579,31 @@ minutes. After the first success, ordinary failures use `retry_interval_sec` plu
 rolling restart issues 200 simultaneous unconditional GETs against the mirror. Jitter alone
 doesn't make those conditional, though — that's the job of the `.meta` file below.
 
-**`<db_path>.meta` persists the ETag/Last-Modified validator** used to make requests conditional.
-A validator is eligible only while `db_path` is a regular file and the provider has an active
-database. If both are usable but `.meta` is absent or unreadable, the updater seeds
-`If-Modified-Since` from the database file's mtime. A valid empty sidecar deliberately suppresses
-that fallback and keeps the next request unconditional.
+**`<db_path>.meta` persists ETag/Last-Modified with an opaque update-source identity.**
+The identity is computed once at startup from the exact configured URL and resolved
+Authorization value. Changing either makes the first update unconditional, even when two
+sources use the same ETag. Changing only the credential environment variable name while
+retaining its value does not change the identity. Plaintext URLs and credentials are never
+written to the sidecar or logged. The digest is equality metadata, not encryption; protect the
+sidecar as trusted local state, since guessed inputs can be checked against it offline.
 
-If either the durable file or active provider is missing, the updater clears both its in-memory
-validator and the sidecar before constructing an unconditional request. A `304` is accepted only
-when that request actually carried a validator and both local conditions still hold when the
+Validators require a matching source identity, a regular `db_path` file and an active provider.
+A mismatched, identity-less, malformed or unreadable existing sidecar suppresses both validators
+and the mtime fallback until a structurally validated download is renamed and successfully
+swapped into the provider. Failed updates keep the last-good database available and do not
+promote the new identity. A valid empty sidecar also keeps requests unconditional.
+
+Only a genuinely absent sidecar with a usable local database seeds `If-Modified-Since` from
+the database file's mtime. This deliberately assumes the retained database belongs to the
+configured source; deleting the sidecar removes source history, so retain it with the database
+when changing sources. Sidecar persistence is best-effort and is not a crash-consistent
+transaction with the database rename.
+
+If the durable file or active provider is missing, the updater clears its in-memory validators
+and sidecar before constructing an unconditional request. A `304` is accepted only when that
+request actually carried an eligible validator and both local conditions still hold when the
 response arrives. Any other `304` is a bounded `fetch` failure: validators are cleared, cold
-backoff is used, and the next request is unconditional. Thus losing `.meta` alone while a usable
-database remains produces an mtime-based conditional request; losing the usable local database
-state produces an unconditional request.
+backoff is used, and the next request is unconditional.
 
 ## Troubleshooting
 

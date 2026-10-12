@@ -1,5 +1,7 @@
 use super::*;
 
+const TEST_SOURCE: &str = "test-source";
+
 fn fixture_city_db() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../edgion-tests/geoip/edgion-test-city.mmdb")
 }
@@ -249,6 +251,7 @@ async fn not_modified_with_usable_database_leaves_disk_untouched() {
     u.provider.load_from(&u.db_path).unwrap();
     let before = std::fs::read(&u.db_path).unwrap();
     let mut state = UpdateState {
+        source_identity: Some(u.source_identity.clone()),
         etag: Some("\"abc\"".into()),
         last_modified: None,
     };
@@ -264,6 +267,7 @@ fn invalid_not_modified_clears_validators_and_next_request_is_unconditional() {
     let db = dir.path().join("db.mmdb");
     let meta = meta_path(&db);
     let mut state = UpdateState {
+        source_identity: Some(TEST_SOURCE.to_string()),
         etag: Some("\"stale\"".into()),
         last_modified: Some("Tue, 15 Aug 2026 00:00:00 GMT".into()),
     };
@@ -278,7 +282,7 @@ fn invalid_not_modified_clears_validators_and_next_request_is_unconditional() {
     // A valid empty sidecar is loadable and intentionally suppresses the
     // database-mtime fallback after local eligibility returns.
     std::fs::write(&db, b"regular database placeholder").unwrap();
-    let reloaded = UpdateState::load(&meta, &db, true);
+    let reloaded = UpdateState::load(&meta, &db, true, TEST_SOURCE);
     assert!(reloaded.etag.is_none());
     assert!(reloaded.last_modified.is_none());
 
@@ -372,6 +376,11 @@ async fn successful_cycle_renames_swaps_and_persists_meta() {
     assert!(!dir.path().join("db.mmdb.tmp").exists());
     assert!(dir.path().join("db.mmdb.meta").exists());
     assert_eq!(state.etag.as_deref(), Some("\"v1\""));
+    assert!(state.matches_source(&u.source_identity));
+    assert!(
+        UpdateState::load(&meta_path(&u.db_path), &u.db_path, true, &u.source_identity)
+            .matches_source(&u.source_identity)
+    );
     assert!(u.provider.is_loaded());
 }
 
@@ -383,6 +392,7 @@ async fn stale_tmp_is_removed_at_cycle_start() {
     let url = serve_once(304, &[], Vec::new()).await;
     let u = updater_for(dir.path(), url, 1 << 20);
     let mut state = UpdateState {
+        source_identity: Some(TEST_SOURCE.to_string()),
         etag: Some("\"abc\"".into()),
         last_modified: None,
     };
@@ -399,9 +409,10 @@ fn load_seeds_last_modified_from_db_mtime_when_meta_is_absent() {
     let db = dir.path().join("db.mmdb");
     std::fs::write(&db, b"placeholder").unwrap();
 
-    let state = UpdateState::load(&meta_path(&db), &db, true);
+    let state = UpdateState::load(&meta_path(&db), &db, true, TEST_SOURCE);
     assert!(state.etag.is_none());
     assert!(state.last_modified.is_some());
+    assert!(state.matches_source(TEST_SOURCE));
 }
 
 /// With neither `.meta` nor a database present (first-ever start), there is
@@ -410,7 +421,7 @@ fn load_seeds_last_modified_from_db_mtime_when_meta_is_absent() {
 fn load_is_empty_when_neither_meta_nor_db_exist() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("db.mmdb");
-    let state = UpdateState::load(&meta_path(&db), &db, false);
+    let state = UpdateState::load(&meta_path(&db), &db, false, TEST_SOURCE);
     assert!(state.etag.is_none());
     assert!(state.last_modified.is_none());
 }
@@ -423,12 +434,13 @@ fn persist_then_load_round_trips() {
     std::fs::write(&db, b"regular database placeholder").unwrap();
     let meta = meta_path(&db);
     let state = UpdateState {
+        source_identity: Some(TEST_SOURCE.to_string()),
         etag: Some("\"v2\"".into()),
         last_modified: Some("Tue, 15 Aug 2026 00:00:00 GMT".into()),
     };
     state.persist(&meta);
 
-    let reloaded = UpdateState::load(&meta, &db, true);
+    let reloaded = UpdateState::load(&meta, &db, true, TEST_SOURCE);
     assert_eq!(reloaded.etag, state.etag);
     assert_eq!(reloaded.last_modified, state.last_modified);
 }
@@ -439,26 +451,27 @@ fn persisted_validators_require_both_regular_database_and_active_provider() {
     let db = dir.path().join("db.mmdb");
     let meta = meta_path(&db);
     let state = UpdateState {
+        source_identity: Some(TEST_SOURCE.to_string()),
         etag: Some("\"v3\"".into()),
         last_modified: Some("Tue, 15 Aug 2026 00:00:00 GMT".into()),
     };
     state.persist(&meta);
 
-    let missing_db = UpdateState::load(&meta, &db, true);
+    let missing_db = UpdateState::load(&meta, &db, true, TEST_SOURCE);
     assert!(missing_db.etag.is_none());
     assert!(missing_db.last_modified.is_none());
 
     std::fs::write(&db, b"regular database placeholder").unwrap();
-    let restored_after_missing_db = UpdateState::load(&meta, &db, true);
+    let restored_after_missing_db = UpdateState::load(&meta, &db, true, TEST_SOURCE);
     assert!(restored_after_missing_db.etag.is_none());
     assert!(restored_after_missing_db.last_modified.is_none());
 
     state.persist(&meta);
-    let inactive_provider = UpdateState::load(&meta, &db, false);
+    let inactive_provider = UpdateState::load(&meta, &db, false, TEST_SOURCE);
     assert!(inactive_provider.etag.is_none());
     assert!(inactive_provider.last_modified.is_none());
 
-    let restored_after_inactive_provider = UpdateState::load(&meta, &db, true);
+    let restored_after_inactive_provider = UpdateState::load(&meta, &db, true, TEST_SOURCE);
     assert!(restored_after_inactive_provider.etag.is_none());
     assert!(restored_after_inactive_provider.last_modified.is_none());
 }
@@ -487,7 +500,7 @@ fn valid_empty_sidecar_suppresses_mtime_seed_when_context_is_usable() {
 
     let meta = meta_path(&db);
     UpdateState::default().persist(&meta);
-    let state = UpdateState::load(&meta, &db, provider.is_loaded());
+    let state = UpdateState::load(&meta, &db, provider.is_loaded(), TEST_SOURCE);
     assert!(state.etag.is_none());
     assert!(state.last_modified.is_none());
 }
@@ -498,6 +511,7 @@ fn request_time_ineligibility_clears_memory_and_persists_empty_sidecar() {
     let db = dir.path().join("db.mmdb");
     let meta = meta_path(&db);
     let mut state = UpdateState {
+        source_identity: Some(TEST_SOURCE.to_string()),
         etag: Some("\"stale\"".into()),
         last_modified: Some("Tue, 15 Aug 2026 00:00:00 GMT".into()),
     };
@@ -508,7 +522,7 @@ fn request_time_ineligibility_clears_memory_and_persists_empty_sidecar() {
     assert!(state.last_modified.is_none());
 
     std::fs::write(&db, b"regular database placeholder").unwrap();
-    let restored = UpdateState::load(&meta, &db, true);
+    let restored = UpdateState::load(&meta, &db, true, TEST_SOURCE);
     let client = reqwest::Client::new();
     let (request, sent_validator) = build_request(&client, "http://example.invalid/geo.mmdb", None, &restored, true);
     assert!(!sent_validator);
@@ -554,4 +568,168 @@ async fn hostname_update_url_resolves_and_completes_a_cycle_through_egress_resol
         "validation",
         "a fetch/connect-stage failure would indicate the resolver never connected"
     );
+}
+
+fn assert_unconditional(state: &UpdateState) {
+    let (request, sent_validator) = build_request(
+        &reqwest::Client::new(),
+        "https://example.invalid/geo.mmdb",
+        None,
+        state,
+        true,
+    );
+    assert!(!sent_validator);
+    let request = request.build().unwrap();
+    assert!(request.headers().get(IF_NONE_MATCH).is_none());
+    assert!(request.headers().get(IF_MODIFIED_SINCE).is_none());
+}
+
+#[test]
+fn matching_source_restart_reuses_etag_before_last_modified() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("db.mmdb");
+    std::fs::write(&db, b"regular database placeholder").unwrap();
+    let meta = meta_path(&db);
+    let mut state = UpdateState::default();
+    state.record_swap(&meta, TEST_SOURCE, Some("\"same-tag\"".into()), Some("date".into()));
+    let restored = UpdateState::load(&meta, &db, true, TEST_SOURCE);
+    let (request, sent) = build_request(
+        &reqwest::Client::new(),
+        "https://example.invalid/geo.mmdb",
+        None,
+        &restored,
+        true,
+    );
+    assert!(sent);
+    let request = request.build().unwrap();
+    assert_eq!(request.headers()[IF_NONE_MATCH], "\"same-tag\"");
+    assert!(request.headers().get(IF_MODIFIED_SINCE).is_none());
+}
+
+#[test]
+fn changed_source_same_etag_stays_unconditional_across_failures_and_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("db.mmdb");
+    std::fs::copy(fixture_city_db(), &db).unwrap();
+    let provider = GeoIpProvider::new();
+    provider.load_from(&db).unwrap();
+    let before = std::fs::read(&db).unwrap();
+    let source_a = source_identity("https://a.invalid/db.mmdb", None);
+    let source_b = source_identity("https://b.invalid/db.mmdb", None);
+    let meta = meta_path(&db);
+    let mut state = UpdateState::default();
+    state.record_swap(&meta, &source_a, Some("\"same-tag\"".into()), Some("date".into()));
+    let mut changed = UpdateState::load(&meta, &db, provider.is_loaded(), &source_b);
+    for _ in 0..2 {
+        let eligible = validator_context_ready(&db, provider.is_loaded()) && changed.matches_source(&source_b);
+        prepare_validator_state(&mut changed, &meta, eligible);
+        assert_unconditional(&changed);
+        changed = UpdateState::load(&meta, &db, provider.is_loaded(), &source_b);
+    }
+    assert!(!changed.matches_source(&source_b));
+    assert_eq!(changed.source_identity.as_deref(), Some(source_a.as_str()));
+    assert!(provider.is_loaded());
+    assert_eq!(std::fs::read(&db).unwrap(), before);
+
+    changed.record_swap(&meta, &source_b, Some("\"same-tag\"".into()), None);
+    let promoted = UpdateState::load(&meta, &db, true, &source_b);
+    assert!(promoted.matches_source(&source_b));
+    assert_eq!(promoted.etag.as_deref(), Some("\"same-tag\""));
+}
+
+#[test]
+fn legacy_or_malformed_existing_sidecars_never_seed_mtime() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("db.mmdb");
+    std::fs::write(&db, b"regular database placeholder").unwrap();
+    let meta = meta_path(&db);
+    for bytes in [br#"{"etag":"same-tag","last_modified":"date"}"#.as_slice(), b"{partial"] {
+        std::fs::write(&meta, bytes).unwrap();
+        let state = UpdateState::load(&meta, &db, true, TEST_SOURCE);
+        assert_unconditional(&state);
+        assert!(!state.matches_source(TEST_SOURCE));
+        assert_unconditional(&UpdateState::load(&meta, &db, true, TEST_SOURCE));
+    }
+}
+
+#[test]
+fn unreadable_existing_sidecar_never_seeds_mtime() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("db.mmdb");
+    std::fs::write(&db, b"regular database placeholder").unwrap();
+    let meta = meta_path(&db);
+    std::fs::create_dir(&meta).unwrap();
+    let state = UpdateState::load(&meta, &db, true, TEST_SOURCE);
+    assert_unconditional(&state);
+    assert!(!state.matches_source(TEST_SOURCE));
+}
+
+#[test]
+fn source_identity_includes_url_and_resolved_authorization_without_plaintext() {
+    let url = "https://user:private-password@example.invalid/db.mmdb?token=private-query";
+    let auth = sensitive_authorization_header("GEOIP_AUTH", "Bearer private-token").unwrap();
+    let same_auth = sensitive_authorization_header("RENAMED_ENV", "Bearer private-token").unwrap();
+    let identity = source_identity(url, Some(&auth));
+    assert_eq!(identity, source_identity(url, Some(&same_auth)));
+    assert_eq!(identity.len(), 64);
+    for alternative in [
+        "https://other:private-password@example.invalid/db.mmdb?token=private-query",
+        "https://user:private-password@example.invalid/db.mmdb?token=changed-query",
+        "https://user:private-password@other.invalid/db.mmdb?token=private-query",
+    ] {
+        assert_ne!(identity, source_identity(alternative, Some(&auth)));
+    }
+    assert_ne!(identity, source_identity(url, None));
+    assert_ne!(
+        identity,
+        source_identity(url, Some(&HeaderValue::from_static("Bearer changed-token")))
+    );
+    let state = UpdateState {
+        source_identity: Some(identity),
+        ..Default::default()
+    };
+    let serialized = serde_json::to_string(&state).unwrap();
+    let debug = format!("{state:?}");
+    for secret in [url, "private-password", "private-query", "private-token"] {
+        assert!(!serialized.contains(secret));
+        assert!(!debug.contains(secret));
+    }
+}
+
+#[test]
+fn failed_metadata_write_cannot_enable_surviving_old_source_validators() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("db.mmdb");
+    std::fs::write(&db, b"regular database placeholder").unwrap();
+    let meta = meta_path(&db);
+    let mut state = UpdateState::default();
+    state.record_swap(&meta, "source-a", Some("\"same-tag\"".into()), Some("date".into()));
+    let impossible_meta = dir.path().join("missing-directory/db.mmdb.meta");
+    state.record_swap(&impossible_meta, "source-b", Some("\"same-tag\"".into()), None);
+    assert!(!impossible_meta.exists());
+    let restored = UpdateState::load(&meta, &db, true, "source-b");
+    assert_unconditional(&restored);
+    assert!(!restored.matches_source("source-b"));
+}
+
+#[tokio::test]
+async fn changed_source_disk_failure_preserves_last_good_provider_and_unconditional_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let updater = updater_for(dir.path(), "https://b.invalid/db.mmdb".into(), u64::MAX / 2);
+    std::fs::copy(fixture_city_db(), &updater.db_path).unwrap();
+    updater.provider.load_from(&updater.db_path).unwrap();
+    let before = std::fs::read(&updater.db_path).unwrap();
+    let meta = meta_path(&updater.db_path);
+    let mut state = UpdateState::default();
+    state.record_swap(&meta, "source-a", Some("\"same-tag\"".into()), Some("date".into()));
+    for _ in 0..2 {
+        let error = updater.run_cycle(&mut state).await.unwrap_err();
+        assert_eq!(error.reason(), "disk");
+        assert!(!state.matches_source(&updater.source_identity));
+        assert_unconditional(&state);
+        assert!(updater.provider.is_loaded());
+        assert_eq!(std::fs::read(&updater.db_path).unwrap(), before);
+        state = UpdateState::load(&meta, &updater.db_path, true, &updater.source_identity);
+        assert_unconditional(&state);
+    }
 }
