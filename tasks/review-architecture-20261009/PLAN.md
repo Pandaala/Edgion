@@ -1,5 +1,14 @@
 # Edgion architecture and maintainability review
 
+## Current finding lifecycle
+
+The user now requires independent file-based closure. Follow the local
+`AGENTS.md`: existing ARCH finding files are the open-task set; deleting a
+verified completed finding closes it without updating this plan, INDEX, STATE,
+coverage, counts or receipts. Do not restore deleted findings from review state.
+The original review plan and checkpoints below are historical evidence, not a
+task-closure procedure or a current task registry.
+
 ## Objective and authority
 
 Review every repository-owned `src` file with its relevant callers, consumers,

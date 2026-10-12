@@ -1,5 +1,12 @@
 {
   "schema": 1,
+  "finding_lifecycle": {
+    "mode": "file-existence",
+    "policy": "AGENTS.md",
+    "open_tasks": "Existing ARCH finding Markdown files only",
+    "closure": "Delete the selected finding after required gates pass; do not update shared state, indexes, plans, counts or receipts",
+    "record_semantics": "Candidate paths, statuses, hashes and decisions below are historical review evidence, not live task state; missing finding files are intentional after closure"
+  },
   "repository": "/Volumes/ExtStore/ws6/Edgion",
   "result_directory": "/Volumes/ExtStore/ws6/Edgion/tasks/review-architecture-20261009",
   "head": "a85aed2fbb73df274dea2932eef8b1be2f9152a2",

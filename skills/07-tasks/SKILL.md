@@ -29,6 +29,13 @@ The `tasks/` layout has two independent axes:
 **Review-batch axis** — global review passes:
 - `tasks/review-<batch-or-slug>/` — one file per finding from a global review pass; consumed by `04-review/fix-review-issue.skill`; finding files are deleted as each issue is closed.
 
+A batch may define independent file-existence closure in its local `AGENTS.md`.
+For such a batch, existing finding files are the open-task set. After required
+workflow gates pass, deletion closes the selected finding without updating shared
+INDEX, PLAN, STATE, coverage, counts or closure receipts. Shared review artifacts
+retain historical provenance; do not restore deleted tasks from them. This local
+policy overrides the default per-finding index maintenance requirement.
+
 Task granularity is flexible: a single file `<task-name>.md` or a separate directory works. Use kebab-case for names (e.g., `log-tracing-optimization`); for complex tasks (multi-document set), use a directory.
 
 ## Task profiles
