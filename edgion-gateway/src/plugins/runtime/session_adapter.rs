@@ -1017,6 +1017,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.inner.req_header().method.as_str()
     }
 
+    fn get_request_method(&self) -> Option<&str> {
+        self.ctx.request_info.request_method().map(http::Method::as_str)
+    }
+
     fn get_http_protocol(&self) -> String {
         match self.inner.req_header().version {
             http::Version::HTTP_09 => "HTTP/0.9",
@@ -1908,7 +1912,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         // The mutable fact can only ever NARROW `PassThrough`, never widen it —
         // the mirror of `request_admission`'s gRPC OR, where a client-controlled
         // fact can only widen a refusal. See `method_is_head`'s doc.
-        let is_head = self.ctx.request_info.method_is_head && self.inner.req_header().method == http::Method::HEAD;
+        let is_head = self.ctx.request_info.method_is_head() && self.inner.req_header().method == http::Method::HEAD;
 
         match response_admission(self.ctx, status, is_head, bodyless_agreed) {
             RequestAdmission::PassThrough => Ok(bytes::Bytes::new()),

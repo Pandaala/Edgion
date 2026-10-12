@@ -30,7 +30,7 @@ silent answer, so **both** of its inputs are pre-agreed by the caller:
 
 | input | live (mutable) fact | pre-plugin snapshot | mutated by |
 |---|---|---|---|
-| `is_head` | `req_header().method` | `RequestInfo::method_is_head` | `set_upstream_method` |
+| `is_head` | `req_header().method` | `RequestInfo::method_is_head()` | `set_upstream_method` |
 | `bodyless_agreed` | bound response header status | `ctx.pre_plugin_response_status` | `set_response_status` |
 
 Each is the AND of the two columns. After the refusal checks, `PassThrough`
@@ -109,14 +109,16 @@ never widen it. When reviewing any new admission input, ask which disposition a
 hostile or merely-careless value steers toward, not whether the value is
 "trusted"; if the answer is `PassThrough`, it needs a snapshot to AND against.
 
-**3. The safe default belongs in the field, not at the call site**
+**3. The canonical entry method derives a safe HEAD default**
 
-`RequestInfo::method_is_head` is a plain `bool` defaulting to `false` (= not
-HEAD = `Buffer` = an attempted read that can fail loudly), matching
-`in_request_body_stage`'s "default to the safe direction" precedent.
-`body_declared` needs `Option<bool>` only because *its* `false` happens to be
-the unsafe direction. Pick the representation from which default is safe, not
-by symmetry with the neighbouring field.
+`RequestInfo::method_is_head()` derives a Boolean from the sole stored
+`method: Option<Method>`. Missing entry metadata returns `false` (= not
+HEAD = `Buffer` = an attempted read that can fail loudly); it never substitutes
+the live method. This preserves the former stored HEAD flag's safe default and
+`in_request_body_stage`'s "default to the safe direction" precedent. CONNECT is
+also derived from this method, with missing metadata keeping physical-cap
+enforcement enabled. `body_declared` remains `Option<bool>` because *its* false
+happens to be the unsafe direction. No extra Boolean snapshots remain.
 
 **4. (F5) A bug signal must not share an `EdgionErrorCode` with expected traffic**
 
@@ -143,7 +145,7 @@ one is alertable.
   this regresses. `is_bodyless_status` is module-private precisely so this is not
   reachable; a new caller must build the AND from both facts, or not call the
   predicate at all.
-- "Make `method_is_head` an `Option<bool>` for symmetry with `body_declared`" —
+- "Make `method_is_head()` return `Option<bool>` for symmetry with `body_declared`" —
   adds a third refusal path for no gain; `false` is already the safe default
   here.
 - "Give `response_admission` the whole `Session` so it can decide for itself" —
@@ -153,8 +155,8 @@ one is alertable.
   `read_response_body` call site for the same reason.
 - "Snapshot the method in the plugin runtime instead of `snapshot_body_declared`" —
   the runtime already runs after plugins can mutate; `snapshot_body_declared`
-  (`routes/http/proxy_http/pg_request_filter.rs`) is the one point guaranteed to
-  precede every plugin.
+  (`routes/http/proxy_http/pg_request_filter.rs`) runs after early RequestId-only
+  handling and Pingora modules, before routing and ordinary rewrite plugins.
 
 ## Re-evaluation Triggers
 
@@ -198,7 +200,7 @@ Re-evaluate when:
   (R5 refusal semantics).
 - Source: `edgion-gateway/src/plugins/runtime/session_adapter.rs`
   (`request_admission`, `response_admission`, `read_response_body`),
-  `edgion-gateway/src/ctx.rs` (`RequestInfo::method_is_head`,
+  `edgion-gateway/src/ctx.rs` (`RequestInfo::method_is_head()`,
   `EdgionHttpContext::pre_plugin_response_status`),
   `edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_filter.rs`
   (`select_normalized_upstream_candidate`),
@@ -230,3 +232,14 @@ integration-test files changed, and no full test suite was run.
 ## Resolution references
 
 - `response-body-gate-sync-stage F3+F5` — 2026-07-26.
+
+## Entry-method consolidation
+
+T01 of [request identity](../../../../tasks/pending/http-request-identity/http-request-identity.md)
+replaces stored HEAD/CONNECT booleans with queries derived from the canonical
+entry Method; the live-plus-entry AND and missing HEAD false policy are preserved.
+Existing HEAD test identities remain, including both rewrite directions. The
+new missing-entry/live-HEAD test explicitly rejects silent admission. This is an
+ownership consolidation, not permission to buffer main upstream responses.
+Fresh verification and independent result review are recorded in the task; do not
+infer their completion from this architectural description.

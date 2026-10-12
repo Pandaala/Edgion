@@ -198,9 +198,9 @@ fn make_client() -> ManagedOutboundClient {
     ManagedOutboundClient::test_with_static_target("http://10.0.0.1:8080")
 }
 
-fn session(method: &str, path: &str) -> MockPluginSession {
+fn session(method: &'static str, path: &str) -> MockPluginSession {
     let mut session = MockPluginSession::new();
-    session.expect_get_method().return_const(method.to_string());
+    session.expect_get_request_method().return_const(Some(method));
     session.expect_get_request_path().return_const(path.to_string());
     session
 }

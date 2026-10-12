@@ -19,6 +19,16 @@ Edgion enforces path normalization at every request entry (cannot be disabled), 
 | **current view** (default name) | post-rewrite current path/uri, normalized | Yes (the adapter automatically refreshes inside `set_upstream_uri`) | Route matching, ACL decisions, default access_log |
 | **entry view** (`request_` prefix) | raw form at the client entry, **frozen** | No | Audit, logging, special raw-deny scenarios |
 
+Method identity follows the same entry/current distinction without changing URI
+ownership: `session.get_method()` borrows the current rewritten method, while
+`session.get_request_method()` borrows `Option<&str>` from the canonical entry
+Method in `RequestInfo`. Missing entry metadata is explicit and never falls back
+to the current method. `${method}` and `KeyGet::Method` remain current; omitted
+outbound method uses the entry view. Method capture follows early RequestId-only
+handling and Pingora request modules, before routing and ordinary rewrite plugins.
+The [plugin identity contract](../12-edgion-plugin-dev.md#entry-and-current-request-identity)
+describes HEAD/CONNECT admission and caller-specific missing policies.
+
 **Conceptual layering**:
 
 ```

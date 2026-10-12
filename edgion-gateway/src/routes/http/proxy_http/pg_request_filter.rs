@@ -46,7 +46,7 @@ fn allows_partial_body_capture<'a>(
 
 /// An Upgrade request remains an HTTP entity until an actual 101 is written.
 fn finite_http_request_body(ctx: &EdgionHttpContext) -> bool {
-    !ctx.request_info.method_is_connect && !ctx.request_info.is_grpc_request && !ctx.is_grpc_route_matched
+    !ctx.request_info.method_is_connect() && !ctx.request_info.is_grpc_request && !ctx.is_grpc_route_matched
 }
 
 /// ACME HTTP-01 challenge path prefix
@@ -476,7 +476,7 @@ async fn build_request_metadata(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<bool> {
-    // Snapshot whether the client declared a body, BEFORE any plugin runs.
+    // Snapshot whether the client declared a body, before ordinary request plugin rewrites.
     // See `snapshot_body_declared` for why this must not be deferred.
     snapshot_body_declared(session, ctx);
 
@@ -570,7 +570,7 @@ async fn build_request_metadata(
     Ok(false) // Continue processing
 }
 
-/// Snapshot whether the client declared a request body, BEFORE any plugin runs.
+/// Snapshot whether the client declared a request body, before ordinary request plugin rewrites.
 ///
 /// This must not be deferred to the body gate. `is_body_empty()` is pingora's
 /// transport-aware predicate (H1: RFC 9112 6.3; h2: END_STREAM / content-length
@@ -586,17 +586,16 @@ async fn build_request_metadata(
 /// Also marks entry into the request-processing stage (`in_request_body_stage`)
 /// -- see that field's doc for why this is the paired entry point and where the
 /// matching exit write lives -- and snapshots whether the DOWNSTREAM method was
-/// `HEAD` (`method_is_head`), which the response-side admission predicate reads
-/// instead of the live request header a request-stage plugin can rewrite via
+/// `HEAD` through the canonical method, which response admission ANDs
+/// with the live request header a request-stage plugin can rewrite via
 /// `set_upstream_method`. Original CONNECT identity and declared length likewise
 /// belong here for physical admission. These writes share the same reason:
-/// this is the one point that runs before any plugin can mutate the request.
+/// this point follows early RequestId handling and request modules, but precedes
+/// routing and ordinary request plugins that can rewrite the request.
 fn snapshot_body_declared(session: &mut Session, ctx: &mut EdgionHttpContext) {
     ctx.request_info.method = Some(session.req_header().method.clone());
     ctx.request_info.body_declared = Some(!session.is_body_empty());
     ctx.request_info.in_request_body_stage = true;
-    ctx.request_info.method_is_head = session.req_header().method == http::Method::HEAD;
-    ctx.request_info.method_is_connect = session.req_header().method == http::Method::CONNECT;
     ctx.request_info.declared_content_length = session
         .req_header()
         .headers

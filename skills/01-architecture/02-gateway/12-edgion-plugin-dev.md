@@ -60,6 +60,29 @@ The most common pitfall is mixing the two paths:
 - Looking only at route filter preparse and ignoring `PluginStore` and `ExtensionRef`.
 - Changing only the Gateway side without letting the Controller's `preparse()` / `update_status()` surface validation issues.
 
+## Entry and current request identity
+
+`PluginSession::get_method()` borrows the current mutable method, including trusted
+rewrites; `KeyGet::Method` and `${method}` use that same view.
+`get_request_method()` borrows the frozen entry method and returns `None` if entry
+capture never ran. Never substitute the live method for missing entry metadata.
+Capture occurs in `build_request_metadata` after early RequestId-only execution
+and Pingora request modules, before routing and ordinary request plugin rewrites.
+It is not a complete unmodified wire snapshot.
+
+`RequestInfo::method` is the sole stored entry method. HEAD and CONNECT
+facts are derived from it. Missing HEAD is false and cannot authorize silent
+response-body admission; that admission also requires the live method to be HEAD.
+Missing CONNECT keeps physical request-cap enforcement enabled. RestToGraphql
+method admission uses the entry accessor; retry safety uses the actual current
+origin method. Outbound requests with omitted method reuse entry identity and
+fail explicitly when it is missing; an explicit `${method}` template stays current.
+
+URI, query, Host and body views retain their existing owners; see the
+[identity views](uri-normalization/SKILL.md#concept-dual-view-architecture).
+Headers and cookies remain execution-time reads. This method accessor adds no
+original header/body cache, request sealing or method mutation permission.
+
 ## Plugin type decision
 
 | Scenario | Choose `EdgionPlugin` | Choose Gateway API filter |

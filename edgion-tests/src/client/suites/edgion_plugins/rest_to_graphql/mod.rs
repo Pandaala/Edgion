@@ -90,7 +90,8 @@ async fn probe(
     }
     let envelope = &value["data"]["echo_body"];
     let bytes = serde_json::to_vec(envelope).map_err(|e| e.to_string())?;
-    if value["data"]["echo_headers"]["content-length"] != bytes.len().to_string()
+    let expected_length = bytes.len().to_string();
+    if value["data"]["echo_headers"]["content-length"].as_str() != Some(expected_length.as_str())
         || !value["data"]["echo_headers"]["transfer-encoding"].is_null()
     {
         return Err("Wrong canonical upstream body framing".into());

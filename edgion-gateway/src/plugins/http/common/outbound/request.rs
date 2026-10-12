@@ -288,7 +288,10 @@ impl CompiledRequest {
         // ── 2. Determine method ───────────────────────────────────────────
         let final_method = match &self.method {
             Some(method_tpl) => evaluate_template(method_tpl, session, resolved)?,
-            None => session.get_method().to_string(),
+            None => session
+                .get_request_method()
+                .ok_or_else(|| "missing incoming request method".to_string())?
+                .to_string(),
         };
 
         // ── 3. Collect query args ─────────────────────────────────────────

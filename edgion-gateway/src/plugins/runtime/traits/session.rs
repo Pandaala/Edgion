@@ -58,9 +58,10 @@ pub trait PluginSession: Send + Sync {
     /// matter how rich that extension trait becomes.
     ///
     /// A bare reference keeps mock expectations backed by owned header maps.
-    /// Mockall rejects elided lifetimes in nested reference returns; explicitly
-    /// named self lifetimes work, but their expectations require static fixtures.
-    /// Borrowed header views therefore remain in the extension trait.
+    /// Nested optional borrows use explicitly named self lifetimes, as in
+    /// `request_query`, `get_request_method`, and `client_cert_info`; their
+    /// mock expectations require static fixtures. Borrowed header views remain
+    /// in the extension trait; richer borrowed views need feasibility checks.
     ///
     /// Request-header writes go straight into the live header map
     /// (`set_request_header` / `append_request_header` / `remove_request_header`),
@@ -147,8 +148,13 @@ pub trait PluginSession: Send + Sync {
     #[allow(clippy::needless_lifetimes)]
     fn request_query<'a>(&'a self) -> Option<&'a str>;
 
-    /// Get the HTTP method as &str (zero-copy)
+    /// Borrow the current HTTP method, including trusted plugin rewrites.
     fn get_method(&self) -> &str;
+
+    /// Borrow the frozen entry method. None means entry capture never ran;
+    /// callers must select an explicit missing-metadata policy, never a live fallback.
+    #[allow(clippy::needless_lifetimes)]
+    fn get_request_method<'a>(&'a self) -> Option<&'a str>;
 
     /// Get the wire HTTP version used to build SecLang REQUEST_PROTOCOL.
     fn get_http_protocol(&self) -> String {

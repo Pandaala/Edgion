@@ -209,8 +209,11 @@ async fn graphql_bodyless_get_inspection_freezes_future_replay_owner() {
         adapter
             .overwrite_request_body(Bytes::from_static(br#"{"query":"{pong}"}"#))
             .await,
-        Err(BodyReadError::GenerationConflict)
+        Err(BodyReadError::NotBuffered)
     );
+    assert!(adapter.ctx().request_body.has_cached_body());
+    assert_eq!(adapter.ctx().request_body.cached_len(), Ok(Some(0)));
+    assert_eq!(adapter.ctx().request_body.read_all().await.unwrap(), Some(Bytes::new()));
 }
 
 #[tokio::test]
@@ -1993,8 +1996,8 @@ async fn read_response_body_ignores_bodyless_snapshot_when_status_rewritten_away
 
 /// Buffer path: an ordinary 200 on a non-HEAD, non-gRPC request must
 /// reach the `Buffer` arm and fail with `Unimplemented` (real chunk
-/// buffering is not wired up yet). `method_is_head` is left at its
-/// `false` default, so this also pins the `is_head` routing: an inverted
+/// buffering is not wired up yet). the entry method is left missing, which derives
+/// `false` for HEAD, so this also pins the `is_head` routing: an inverted
 /// read would misroute this case to `PassThrough` instead.
 #[tokio::test]
 async fn read_response_body_ordinary_200_is_unimplemented() {
@@ -2015,7 +2018,7 @@ async fn read_response_body_ordinary_200_is_unimplemented() {
 async fn read_response_body_genuine_head_passes_through_empty() {
     let mut session = test_session().await;
     let mut ctx = EdgionHttpContext::default();
-    ctx.request_info.method_is_head = true;
+    ctx.request_info.method = Some(http::Method::HEAD);
     session.req_header_mut().set_method(http::Method::HEAD);
     let mut response_header = ResponseHeader::build(200, None).unwrap();
 
@@ -2039,7 +2042,7 @@ async fn read_response_body_ignores_plugin_rewritten_head_method() {
     let mut session = test_session().await;
     let mut ctx = EdgionHttpContext::default();
     // The snapshot ran on the real downstream GET.
-    ctx.request_info.method_is_head = false;
+    ctx.request_info.method = Some(http::Method::GET);
     let mut response_header = ResponseHeader::build(200, None).unwrap();
 
     let result = {
@@ -2066,7 +2069,7 @@ async fn read_response_body_ignores_head_snapshot_when_method_rewritten_away() {
     let mut session = test_session().await;
     let mut ctx = EdgionHttpContext::default();
     // The client really did send HEAD.
-    ctx.request_info.method_is_head = true;
+    ctx.request_info.method = Some(http::Method::HEAD);
     let mut response_header = ResponseHeader::build(200, None).unwrap();
 
     let result = {
@@ -2712,4 +2715,18 @@ async fn borrowed_client_certificate_absent_without_exposed_record() {
     assert!(PingoraSessionAdapter::new(&mut session, &mut ctx)
         .client_cert_info()
         .is_none());
+}
+
+#[tokio::test]
+async fn read_response_body_missing_entry_method_cannot_claim_live_head() {
+    let mut session = test_session().await;
+    session.req_header_mut().set_method(http::Method::HEAD);
+    let mut ctx = EdgionHttpContext::default();
+    let mut response_header = ResponseHeader::build(200, None).unwrap();
+    let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response_header);
+    assert!(adapter.get_request_method().is_none());
+    assert!(matches!(
+        adapter.read_response_body(None).await,
+        Err(BodyReadError::Unimplemented)
+    ));
 }

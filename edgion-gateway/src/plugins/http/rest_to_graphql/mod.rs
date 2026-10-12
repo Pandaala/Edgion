@@ -102,17 +102,17 @@ impl RequestFilter for RestToGraphql {
             log.push_err("invalid request stage");
             return graphql_request::reject(session, 500);
         }
-        let Some(method) = ctx.request_info.method.as_ref() else {
+        let Some(method) = session.get_request_method() else {
             log.push_err("missing client method");
             return graphql_request::reject(session, 500);
         };
-        if !matches!(method.as_str(), "GET" | "POST" | "PUT" | "PATCH" | "DELETE")
-            || (method == http::Method::GET && self.compiled.operation_type == GraphqlOperationType::Mutation)
+        if !matches!(method, "GET" | "POST" | "PUT" | "PATCH" | "DELETE")
+            || (method == "GET" && self.compiled.operation_type == GraphqlOperationType::Mutation)
         {
             log.push("deny method");
             return graphql_request::reject(session, 405);
         }
-        if method == http::Method::GET && ctx.request_info.body_declared != Some(false) {
+        if method == "GET" && ctx.request_info.body_declared != Some(false) {
             log.push("deny GET body");
             return graphql_request::reject(session, 400);
         }

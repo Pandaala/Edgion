@@ -13,14 +13,22 @@ Canonical KeyGet supplies local values; CtxSet/DSL prepare complex values.
 Native body bindings reuse strict JSON and ProxyRewrite's compiled JSON pointers.
 The cost compiler and adapter share canonical TypeRef parsing.
 
-`request_info.method` snapshots the client method before plugins and remains
-frozen. Ordinary method reads use the live session. A live method rewritten from GET to
+`RequestInfo::method` snapshots the entry Method after early RequestId handling
+and request modules, before routing and ordinary rewrite plugins, and remains
+frozen. RestToGraphql reads the generic borrowed
+`PluginSession::get_request_method()`; missing capture fails closed without a
+live fallback. Ordinary method reads use the live session. A live method rewritten from GET to
 POST cannot authorize mutation, and an original physical GET body rejects.
 Successful canonical GraphQL evaluation freezes mutation through the existing
 RequestBodyState owner, which propagates to future bodyless storage. Every
 adapter must publish through this owner; a late adapter therefore fails closed.
 No GraphQL execution flags are added to EdgionHttpContext. Multiple adapters
 before final inspection are allowed. Failed/skipped consumers do not freeze.
+The current frozen-owner publication refusal is `BodyReadError::NotBuffered`;
+`GenerationConflict` denotes a stale logical generation in the storage owner.
+The bodyless GET regression verifies that a future replay owner is installed,
+retains length zero and empty bytes, and refuses replacement after inspection.
+It therefore distinguishes an enforced freeze from a missing-cache refusal.
 The freeze also applies to subsequent DSL/ProxyRewrite/Wasm body mutations,
 enforcing the existing documented rewrites-before-inspection contract. It is
 body-only; query/URI/method/header mutations retain trusted-chain restrictions.

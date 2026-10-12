@@ -783,3 +783,60 @@ fn json_body_content_type_overrides_forwarded_incoming() {
         Some("10")
     );
 }
+
+#[test]
+fn outbound_default_method_uses_entry_while_method_template_uses_current() {
+    use edgion_resources::resources::common::outbound_request::MethodSpec;
+    for (entry, current) in [("GET", "POST"), ("POST", "GET"), ("GET", "GET"), ("REPORT", "PATCH")] {
+        for template in [None, Some("${method}"), Some("PUT")] {
+            let spec = OutboundRequestSpec {
+                method: template.map(|template| MethodSpec {
+                    template: template.into(),
+                }),
+                ..Default::default()
+            };
+            let compiled = CompiledRequest::from_spec(&spec).unwrap();
+            let mut session = MockPluginSession::new();
+            session.expect_get_request_path().return_const("/entry".to_owned());
+            session.expect_get_request_method().return_const(Some(entry));
+            session.expect_get_method().return_const(current.to_owned());
+            let request = compiled
+                .build_request(&session, None, "http://upstream.test", None, &mut Default::default())
+                .unwrap();
+            assert_eq!(
+                request.method().as_str(),
+                match template {
+                    None => entry,
+                    Some("${method}") => current,
+                    Some(_) => "PUT",
+                }
+            );
+            assert_eq!(request.url().path(), "/entry");
+            assert!(request.body().is_none());
+        }
+    }
+}
+
+#[test]
+fn outbound_missing_entry_method_fails_without_live_fallback_but_explicit_method_works() {
+    use edgion_resources::resources::common::outbound_request::MethodSpec;
+    for template in [None, Some("${method}"), Some("PUT")] {
+        let spec = OutboundRequestSpec {
+            method: template.map(|template| MethodSpec {
+                template: template.into(),
+            }),
+            ..Default::default()
+        };
+        let compiled = CompiledRequest::from_spec(&spec).unwrap();
+        let mut session = MockPluginSession::new();
+        session.expect_get_request_path().return_const("/entry".to_owned());
+        session.expect_get_request_method().return_const(None);
+        session.expect_get_method().return_const("POST".to_owned());
+        let result = compiled.build_request(&session, None, "http://upstream.test", None, &mut Default::default());
+        match template {
+            None => assert_eq!(result.unwrap_err(), "missing incoming request method"),
+            Some("${method}") => assert_eq!(result.unwrap().method().as_str(), "POST"),
+            Some(_) => assert_eq!(result.unwrap().method().as_str(), "PUT"),
+        }
+    }
+}

@@ -65,7 +65,7 @@ async fn head_request_snapshots_method_is_head() {
 
     snapshot_body_declared(&mut session, &mut ctx);
 
-    assert!(ctx.request_info.method_is_head);
+    assert!(ctx.request_info.method_is_head());
 }
 
 #[tokio::test]
@@ -75,7 +75,7 @@ async fn non_head_request_snapshots_method_is_head_false() {
 
     snapshot_body_declared(&mut session, &mut ctx);
 
-    assert!(!ctx.request_info.method_is_head);
+    assert!(!ctx.request_info.method_is_head());
 }
 
 #[tokio::test]
@@ -102,4 +102,30 @@ async fn physical_admission_uses_original_method_length_and_canonical_grpc_facts
     snapshot_body_declared(&mut session, &mut ctx);
     session.req_header_mut().set_method(http::Method::POST);
     assert!(!finite_http_request_body(&ctx));
+}
+
+#[tokio::test]
+async fn method_snapshot_preserves_reverse_rewrite_and_extension_methods() {
+    for (entry, rewritten) in [("POST", "GET"), ("HEAD", "GET"), ("REPORT", "POST")] {
+        let request = format!("{entry} /entry HTTP/1.1\r\nHost: test\r\n\r\n");
+        let mut session = session_from_request(request.as_bytes()).await;
+        let mut ctx = EdgionHttpContext::default();
+        snapshot_body_declared(&mut session, &mut ctx);
+        session
+            .req_header_mut()
+            .set_method(http::Method::from_bytes(rewritten.as_bytes()).unwrap());
+        assert_eq!(ctx.request_info.request_method().unwrap().as_str(), entry);
+        assert_eq!(ctx.request_info.method_is_head(), entry == "HEAD");
+        assert!(!ctx.request_info.method_is_connect());
+        assert_eq!(session.req_header().method.as_str(), rewritten);
+    }
+}
+
+#[test]
+fn missing_method_snapshot_keeps_physical_cap_and_cannot_claim_head() {
+    let ctx = EdgionHttpContext::default();
+    assert!(ctx.request_info.request_method().is_none());
+    assert!(!ctx.request_info.method_is_head());
+    assert!(!ctx.request_info.method_is_connect());
+    assert!(finite_http_request_body(&ctx));
 }

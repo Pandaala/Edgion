@@ -2,8 +2,9 @@ use super::*;
 use crate::plugins::runtime::traits::session::MockPluginSession;
 use crate::EdgionHttpContext;
 use http::{HeaderMap, HeaderValue, Method};
+use parking_lot::Mutex;
 use serde_json::json;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 fn adapter(value: Value) -> RestToGraphql {
     RestToGraphql {
@@ -29,7 +30,12 @@ async fn unused_body_media_encoding_caps_and_physical_get_are_enforced() {
         let mut session = MockPluginSession::new();
         let mut ctx = EdgionHttpContext::default();
         ctx.request_info.in_request_body_stage = true;
-        ctx.request_info.method = Some(method);
+        ctx.request_info.method = Some(method.clone());
+        session.expect_get_request_method().return_const(Some(match method {
+            Method::GET => "GET",
+            Method::POST => "POST",
+            _ => panic!("unsupported test method"),
+        }));
         ctx.request_info.body_declared = Some(declared);
         session.expect_ctx().return_const(ctx);
         session.expect_declares_body().return_const(Some(declared));
@@ -57,7 +63,12 @@ async fn unused_body_media_encoding_caps_and_physical_get_are_enforced() {
 fn session(method: Method, query: Option<&str>) -> MockPluginSession {
     let mut session = MockPluginSession::new();
     let mut ctx = EdgionHttpContext::default();
-    ctx.request_info.method = Some(method);
+    ctx.request_info.method = Some(method.clone());
+    session.expect_get_request_method().return_const(Some(match method {
+        Method::GET => "GET",
+        Method::POST => "POST",
+        _ => panic!("unsupported test method"),
+    }));
     ctx.request_info.entry_raw_query = query.map(str::to_owned);
     ctx.request_info.body_declared = Some(false);
     ctx.request_info.in_request_body_stage = true;
@@ -86,6 +97,7 @@ async fn admission_and_missing_entry_identity_fail_closed_without_publication() 
     let mut ctx = EdgionHttpContext::default();
     ctx.request_info.in_request_body_stage = true;
     missing.expect_ctx().return_const(ctx);
+    missing.expect_get_request_method().returning(|| None);
     missing.expect_set_response_header().returning(|_, _| Ok(()));
     assert!(matches!(
         filter
@@ -107,6 +119,7 @@ async fn native_json_body_publishes_approved_value_only_and_releases_admission()
     let mut ctx = EdgionHttpContext::default();
     ctx.request_info.in_request_body_stage = true;
     ctx.request_info.method = Some(Method::POST);
+    session.expect_get_request_method().returning(|| Some("POST"));
     ctx.request_info.body_declared = Some(true);
     session.expect_ctx().return_const(ctx);
     session.expect_declares_body().return_const(Some(true));
@@ -158,7 +171,7 @@ async fn bodyless_get_maps_canonical_keys_and_publishes_exact_post_before_guard(
         .expect_overwrite_request_body()
         .times(1)
         .return_once(move |body| {
-            *captured.lock().unwrap() = body;
+            *captured.lock() = body;
             Ok(())
         });
     session.expect_set_upstream_method().times(1).returning(|method| {
@@ -179,7 +192,7 @@ async fn bodyless_get_maps_canonical_keys_and_publishes_exact_post_before_guard(
             .await,
         PluginRunningResult::GoodNext
     );
-    let output = output.lock().unwrap().clone();
+    let output = output.lock().clone();
     assert_eq!(
         serde_json::from_slice::<Value>(&output).unwrap(),
         json!({"query":filter.compiled.query,"variables":{"id":"42","n":3}})
@@ -198,6 +211,7 @@ async fn bodyless_get_maps_canonical_keys_and_publishes_exact_post_before_guard(
 async fn original_get_cannot_mutate_even_when_live_method_would_be_post() {
     let filter = adapter(json!({"query":"mutation {write}"}));
     let mut session = session(Method::GET, None);
+    session.expect_get_method().times(0).return_const("POST".to_owned());
     // No live method read or publication is allowed on this rejection path.
     assert!(matches!(
         filter
@@ -286,4 +300,30 @@ fn repeated_headers_and_bounded_serialization_reject_before_mutation() {
     let mut session = MockPluginSession::new();
     session.expect_key_get().return_const(Some("42".into()));
     assert_eq!(filter.construct(&session, None).unwrap_err(), GraphqlError::TooLarge);
+}
+
+#[tokio::test]
+async fn original_post_can_publish_mutation_when_live_method_would_be_get() {
+    let _lock = graphql_request::EVALUATION_TEST_LOCK.lock().await;
+    let filter = adapter(json!({"query":"mutation {write}"}));
+    let mut session = session(Method::POST, None);
+    session.expect_get_method().times(0).return_const("GET".to_owned());
+    session.expect_overwrite_request_body().times(1).return_once(|body| {
+        let envelope: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(envelope["query"], "mutation {write}");
+        Ok(())
+    });
+    session
+        .expect_set_upstream_method()
+        .times(1)
+        .withf(|method| method == "POST")
+        .returning(|_| Ok(()));
+    session.expect_set_upstream_uri().returning(|_| Ok(()));
+    session.expect_set_request_header().returning(|_, _| Ok(()));
+    assert_eq!(
+        filter
+            .run_request(&mut session, &mut PluginLog::new("RestToGraphql"))
+            .await,
+        PluginRunningResult::GoodNext
+    );
 }
