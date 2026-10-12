@@ -632,44 +632,45 @@ impl BackendTrafficPolicyStore {
     }
 
     /// Incremental cache diff: recompute only the typed targets touched by the
-    /// changed policies (old target keys of update/remove ∪ new target keys of
-    /// add/update). Returns the affected-key count (metadata only).
+    /// changed policies (previous ∪ final target keys), regardless of event
+    /// classification. Overlapping inputs use remove > update > add priority.
+    /// Returns the affected-key count (metadata only).
     pub fn partial_update_policies(
         &self,
         add: HashMap<String, Arc<EdgionBackendTrafficPolicy>>,
         update: HashMap<String, Arc<EdgionBackendTrafficPolicy>>,
         remove: HashSet<String>,
     ) -> usize {
+        let mut changes: HashMap<String, Option<Arc<EdgionBackendTrafficPolicy>>> =
+            add.into_iter().map(|(key, policy)| (key, Some(policy))).collect();
+        changes.extend(update.into_iter().map(|(key, policy)| (key, Some(policy))));
+        changes.extend(remove.into_iter().map(|key| (key, None)));
+
         let previous = self.effective.load_full();
         let mut affected = HashSet::new();
-        for key in update.keys().chain(remove.iter()) {
-            if let Some(old) = previous.policies.get(key) {
-                affected.extend(old.target_keys.iter().cloned());
-            }
-        }
-        for policy in add.values().chain(update.values()) {
-            affected.extend(Self::dedup_target_keys(Self::canonical_target_keys(policy)));
-        }
-
         let mut next_policies = previous.policies.clone();
         let mut reverse_index = previous.reverse_index.clone();
 
-        for (key, policy) in add {
-            let policy = Self::retain_policy_arc(&previous, &key, policy);
-            let prepared = Self::prepare_policy(key.clone(), policy);
-            Self::patch_reverse_index(&mut reverse_index, None, Some(&prepared));
-            next_policies.insert(key, prepared);
-        }
-        for (key, policy) in update {
-            let policy = Self::retain_policy_arc(&previous, &key, policy);
-            let prepared = Self::prepare_policy(key.clone(), policy);
+        for (key, incoming) in changes {
             let old = previous.policies.get(&key);
-            Self::patch_reverse_index(&mut reverse_index, old, Some(&prepared));
-            next_policies.insert(key, prepared);
-        }
-        for key in &remove {
-            if let Some(old) = next_policies.remove(key) {
-                Self::patch_reverse_index(&mut reverse_index, Some(&old), None);
+            if let Some(old) = old {
+                affected.extend(old.target_keys.iter().cloned());
+            }
+            let prepared = incoming.map(|policy| {
+                let policy = Self::retain_policy_arc(&previous, &key, policy);
+                Self::prepare_policy(key.clone(), policy)
+            });
+            if let Some(prepared) = &prepared {
+                affected.extend(prepared.target_keys.iter().cloned());
+            }
+            Self::patch_reverse_index(&mut reverse_index, old, prepared.as_ref());
+            match prepared {
+                Some(prepared) => {
+                    next_policies.insert(key, prepared);
+                }
+                None => {
+                    next_policies.remove(&key);
+                }
             }
         }
 

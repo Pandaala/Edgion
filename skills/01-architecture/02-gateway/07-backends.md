@@ -367,6 +367,10 @@ request-visible DashMaps.
   index lists touched by the changed policies' old ∪ new `targetRefs`, then
   publishes all affected targets together. Side effects run after
   `ArcSwap::store` and read the passed `next` snapshot.
+  Add and Update both replace any previous key ownership. EBTP normalizes each
+  changed key to one final value before touching candidates; defensive overlap
+  uses remove > update > add. Only previous/final targets enter reconciliation,
+  so discarded intermediate inputs cannot leave candidates or background state.
 - **EPS rebuild on LB change**: when a Service winner's LB algorithm changes,
   publication triggers
   `config_client.trigger_endpoint_slice_update_event(service_key)` so

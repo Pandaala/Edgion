@@ -41,9 +41,13 @@ pub trait ConfHandler<T>: Send + Sync {
     fn full_set(&self, data: &HashMap<String, Arc<T>>);
 
     /// Handle partial configuration updates (add/update/remove)
-    /// - add: new resources that didn't exist before
-    /// - update: existing resources that are being modified
+    /// - add/update: final values for present keys; either may replace a key
+    ///   already held by the handler. Compression classifies a present key as
+    ///   add when its event history contains an add, including delete-to-add.
     /// - remove: keys of resources to be removed
+    ///
+    /// Handlers must use their previous stored value to retire replaced state,
+    /// rather than infer previous ownership from the add/update classification.
     fn partial_update(&self, add: HashMap<String, Arc<T>>, update: HashMap<String, Arc<T>>, remove: HashSet<String>);
 }
 

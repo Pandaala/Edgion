@@ -1219,6 +1219,270 @@ fn prepare_policy_dedups_repeated_service_target_refs() {
 }
 
 #[test]
+fn overlapping_deltas_use_only_previous_and_final_policy_ownership() {
+    let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+    configure_lb_degrade_default(0);
+    for removed in [false, true] {
+        let store = BackendTrafficPolicyStore::new();
+        let make = |target| {
+            policy(
+                "overlap-ebtp",
+                "p",
+                target,
+                None,
+                Some(LoadBalancerType::LeastConn),
+                Some(40),
+                true,
+                true,
+            )
+        };
+        store.full_set_policies(HashMap::from([("overlap-ebtp/p".into(), make("a"))]));
+        let pinned = store.snapshot();
+        publish_counters::reset();
+        let affected = store.partial_update_policies(
+            HashMap::from([("overlap-ebtp/p".into(), make("b"))]),
+            HashMap::from([("overlap-ebtp/p".into(), make("c"))]),
+            if removed {
+                HashSet::from(["overlap-ebtp/p".into()])
+            } else {
+                HashSet::new()
+            },
+        );
+        assert_eq!(affected, if removed { 1 } else { 2 });
+        assert_eq!(
+            publish_counters::PREPARE_POLICY_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            usize::from(!removed)
+        );
+        assert_eq!(
+            publish_counters::FULL_INDEX_BUILDS.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        assert_eq!(
+            publish_counters::SIDE_EFFECT_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert_eq!(store.snapshot().generation(), pinned.generation() + 1);
+        for name in ["a", "b"] {
+            assert!(store
+                .snapshot()
+                .candidates(&service_target("overlap-ebtp", name))
+                .is_empty());
+            assert!(store.get_effective(&service_target("overlap-ebtp", name)).is_none());
+            let key = format!("overlap-ebtp/{name}");
+            assert!(get_hc_config_store().resolve_policy(&key).is_none());
+            assert!(!get_outlier_detection_store().keys().contains(&key));
+            assert_eq!(resolve_degrade_threshold(&key), 0);
+        }
+        let final_target = service_target("overlap-ebtp", "c");
+        assert_eq!(store.snapshot().candidates(&final_target).len(), usize::from(!removed));
+        assert_eq!(store.get_effective(&final_target).is_some(), !removed);
+        assert_eq!(
+            get_hc_config_store().resolve_policy("overlap-ebtp/c").is_some(),
+            !removed
+        );
+        assert_eq!(
+            get_outlier_detection_store().keys().contains(&"overlap-ebtp/c".into()),
+            !removed
+        );
+        assert_eq!(
+            resolve_degrade_threshold("overlap-ebtp/c"),
+            if removed { 0 } else { 40 }
+        );
+        assert!(pinned.get_effective(&service_target("overlap-ebtp", "a")).is_some());
+        store.full_set_policies(HashMap::new());
+        let generation = store.snapshot().generation();
+        publish_counters::reset();
+        assert_eq!(
+            store.partial_update_policies(
+                HashMap::new(),
+                HashMap::new(),
+                HashSet::from(["overlap-ebtp/missing".into()])
+            ),
+            0
+        );
+        assert_eq!(store.snapshot().generation(), generation);
+        assert_eq!(
+            publish_counters::SIDE_EFFECT_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+    }
+}
+
+#[test]
+fn invalid_replacement_add_withdraws_previous_winner_and_promotes_sibling() {
+    let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+    configure_lb_degrade_default(0);
+    let store = BackendTrafficPolicyStore::new();
+    let first = policy(
+        "invalid-add",
+        "first",
+        "svc",
+        Some(ts("2026-01-01T00:00:00Z")),
+        Some(LoadBalancerType::LeastConn),
+        Some(40),
+        true,
+        true,
+    );
+    let second = policy(
+        "invalid-add",
+        "second",
+        "svc",
+        Some(ts("2026-02-01T00:00:00Z")),
+        Some(LoadBalancerType::Ewma),
+        Some(60),
+        true,
+        true,
+    );
+    store.full_set_policies(HashMap::from([
+        ("invalid-add/first".into(), first.clone()),
+        ("invalid-add/second".into(), second.clone()),
+    ]));
+    let old = store.snapshot();
+    for (key, policy, remaining) in [("invalid-add/first", first, 1), ("invalid-add/second", second, 0)] {
+        let mut invalid = (*policy).clone();
+        invalid.spec.resolved_target_class = None;
+        store.partial_update_policies(
+            HashMap::from([(key.into(), Arc::new(invalid))]),
+            HashMap::new(),
+            HashSet::new(),
+        );
+        let target = service_target("invalid-add", "svc");
+        assert_eq!(store.snapshot().candidates(&target).len(), remaining);
+        assert_eq!(
+            get_hc_config_store().resolve_policy("invalid-add/svc").is_some(),
+            remaining > 0
+        );
+        assert_eq!(
+            get_outlier_detection_store().keys().contains(&"invalid-add/svc".into()),
+            remaining > 0
+        );
+        assert_eq!(
+            resolve_degrade_threshold("invalid-add/svc"),
+            if remaining > 0 { 60 } else { 0 }
+        );
+        if remaining > 0 {
+            assert_eq!(
+                store.get_effective(&target).unwrap().winning_policy_key,
+                "invalid-add/second"
+            );
+            assert_eq!(store.get_lb_policy("invalid-add/svc"), Some(ParsedLBPolicy::Ewma));
+        } else {
+            assert!(store.get_effective(&target).is_none());
+        }
+    }
+    assert_eq!(
+        old.get_effective(&service_target("invalid-add", "svc"))
+            .unwrap()
+            .winning_policy_key,
+        "invalid-add/first"
+    );
+    store.full_set_policies(HashMap::new());
+}
+
+#[test]
+fn replacement_ai_add_retains_equivalent_handles_and_retires_old_typed_target() {
+    let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+    let store = BackendTrafficPolicyStore::new();
+    let target = |name: &str| PolicyTargetKey {
+        target_kind: PolicyTargetKind::EdgionBackend,
+        namespace: "ai-add".into(),
+        name: name.into(),
+    };
+    let ai = ai_policy("ai-add", "ai", "a", 20, "250ms");
+    let service = policy(
+        "ai-add",
+        "service",
+        "a",
+        None,
+        Some(LoadBalancerType::LeastConn),
+        None,
+        false,
+        false,
+    );
+    store.full_set_policies(HashMap::from([
+        ("ai-add/ai".into(), ai.clone()),
+        ("ai-add/service".into(), service),
+    ]));
+    let pinned = store.snapshot();
+    let first = pinned.get_effective(&target("a")).unwrap();
+    let service_effective = pinned.get_effective(&service_target("ai-add", "a")).unwrap();
+    publish_counters::reset();
+    assert_eq!(
+        store.partial_update_policies(
+            HashMap::from([("ai-add/ai".into(), ai_policy("ai-add", "ai", "a", 20, "250ms"))]),
+            HashMap::new(),
+            HashSet::new()
+        ),
+        1
+    );
+    let repeated = store.snapshot();
+    assert_eq!(repeated.generation(), pinned.generation());
+    assert!(Arc::ptr_eq(&ai, &repeated.candidates(&target("a"))[0]));
+    let kept = repeated.get_effective(&target("a")).unwrap();
+    assert!(Arc::ptr_eq(&first, &kept));
+    assert!(Arc::ptr_eq(
+        first.retry_budget.as_ref().unwrap(),
+        kept.retry_budget.as_ref().unwrap()
+    ));
+    assert!(Arc::ptr_eq(
+        first.logical_circuit_breaker.as_ref().unwrap(),
+        kept.logical_circuit_breaker.as_ref().unwrap()
+    ));
+    assert!(Arc::ptr_eq(
+        first.ai_credential_outlier.as_ref().unwrap(),
+        kept.ai_credential_outlier.as_ref().unwrap()
+    ));
+    assert_eq!(
+        publish_counters::SIDE_EFFECT_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+
+    store.partial_update_policies(
+        HashMap::from([("ai-add/ai".into(), ai_policy("ai-add", "ai", "a", 20, "2s"))]),
+        HashMap::new(),
+        HashSet::new(),
+    );
+    let changed = store.get_effective(&target("a")).unwrap();
+    assert_eq!(store.snapshot().candidates(&target("a")).len(), 1);
+    assert_eq!(changed.connect_timeout, Some(std::time::Duration::from_secs(2)));
+    assert!(Arc::ptr_eq(
+        first.retry_budget.as_ref().unwrap(),
+        changed.retry_budget.as_ref().unwrap()
+    ));
+
+    store.partial_update_policies(
+        HashMap::from([("ai-add/ai".into(), ai_policy("ai-add", "ai", "b", 20, "2s"))]),
+        HashMap::new(),
+        HashSet::new(),
+    );
+    assert_eq!(store.snapshot().generation(), pinned.generation() + 2);
+    assert!(store.snapshot().candidates(&target("a")).is_empty());
+    assert!(store.get_effective(&target("a")).is_none());
+    assert!(get_ai_credential_outlier_store()
+        .effective_handle_for_test(&target("a"))
+        .is_none());
+    let new = store.get_effective(&target("b")).unwrap();
+    assert!(Arc::ptr_eq(
+        new.ai_credential_outlier.as_ref().unwrap(),
+        &get_ai_credential_outlier_store()
+            .effective_handle_for_test(&target("b"))
+            .unwrap()
+    ));
+    assert!(Arc::ptr_eq(
+        &service_effective,
+        &store.get_effective(&service_target("ai-add", "a")).unwrap()
+    ));
+    assert_eq!(
+        pinned.get_effective(&target("a")).unwrap().connect_timeout,
+        Some(std::time::Duration::from_millis(250))
+    );
+    store.full_set_policies(HashMap::new());
+    assert!(get_ai_credential_outlier_store()
+        .effective_handle_for_test(&target("b"))
+        .is_none());
+}
+
+#[test]
 fn partial_update_does_not_scan_all_policies() {
     let _guard = GLOBAL_STORE_TEST_LOCK.lock();
     let store = BackendTrafficPolicyStore::new();

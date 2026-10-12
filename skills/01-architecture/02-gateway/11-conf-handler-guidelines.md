@@ -15,6 +15,14 @@ Controller → gRPC Watch/List → ClientCache → ConfHandler<T>.full_set / par
 
 Each K8s / CRD resource registers one `ConfHandler` in `ConfigClient::new()`.
 
+Add and Update both carry the final value for a present key and can replace a
+resource already held by the handler. Compression classifies a key as Add if
+its history contains Add, including repeated Add and delete-to-Add; that label
+does not prove the handler has no previous value. Retire previous derived state
+using the handler's stored owner, then establish the final resource's state.
+Normal compressed batches assign each key to one classification. Defensive
+overlap rules for direct calls are defined by each owning handler.
+
 ## 2. Resource categories
 
 | Category | Characteristics | Representative resources | Update strategy |

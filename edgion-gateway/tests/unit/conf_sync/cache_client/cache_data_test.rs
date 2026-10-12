@@ -277,3 +277,130 @@ fn compressed_events_publish_final_values_without_reclassifying_adds() {
     expect("full", None);
     assert!(cache.read().is_empty());
 }
+
+#[test]
+fn compressed_replacement_add_reconciles_backend_traffic_policy_ownership() {
+    use crate::backends::degrade_threshold::{configure_lb_degrade_default, resolve_degrade_threshold};
+    use crate::backends::health::check::get_hc_config_store;
+    use crate::backends::outlier_detection::get_outlier_detection_store;
+    use crate::backends::policy::backend_traffic::store::{BackendTrafficPolicyStore, GLOBAL_STORE_TEST_LOCK};
+    use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
+    use edgion_resources::resources::lb_policy::ParsedLBPolicy;
+    use edgion_resources::EdgionBackendTrafficPolicy;
+
+    let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+    configure_lb_degrade_default(0);
+    let make_policy = |target: &str, algorithm: &str, threshold: u8| {
+        serde_json::from_value::<EdgionBackendTrafficPolicy>(serde_json::json!({
+            "metadata": {"namespace": "compressed-ebtp", "name": "policy"},
+            "spec": {
+                "targetRefs": [{"kind": "Service", "name": target}],
+                "resolvedTargetClass": "service",
+                "loadBalancer": {"type": algorithm, "degradeThreshold": threshold},
+                "healthCheck": {"active": {"type": "http"}},
+                "outlierDetection": {"consecutiveErrors": 3, "ejectionTime": "30s", "maxEjectionPercent": 50}
+            }
+        }))
+        .expect("valid policy fixture")
+    };
+    let target = |name: &str| PolicyTargetKey {
+        target_kind: PolicyTargetKind::Service,
+        namespace: "compressed-ebtp".into(),
+        name: name.into(),
+    };
+    let store = Arc::new(BackendTrafficPolicyStore::new());
+    let cache = Arc::new(RwLock::new(CacheData::new()));
+    cache.write().set_conf_processor_for_test(Box::new(store.clone()));
+    cache.write().reset(vec![make_policy("a", "LeastConn", 40)], 1);
+    let old = store.snapshot();
+    assert!(get_hc_config_store().resolve_policy("compressed-ebtp/a").is_some());
+    assert!(get_outlier_detection_store()
+        .keys()
+        .contains(&"compressed-ebtp/a".into()));
+    {
+        let mut data = cache.write();
+        data.remove("compressed-ebtp/policy");
+        data.add_compress_event("compressed-ebtp/policy".into(), ResourceChange::EventDelete);
+        data.insert("compressed-ebtp/policy".into(), make_policy("b", "Ewma", 60));
+        data.add_compress_event("compressed-ebtp/policy".into(), ResourceChange::EventAdd);
+    }
+    assert!(CacheData::flush_compressed_events_for_test(&cache));
+    assert_eq!(store.snapshot().generation(), old.generation() + 1);
+    assert!(store.snapshot().candidates(&target("a")).is_empty());
+    assert!(store.get_effective(&target("a")).is_none());
+    assert!(get_hc_config_store().resolve_policy("compressed-ebtp/a").is_none());
+    assert!(!get_outlier_detection_store()
+        .keys()
+        .contains(&"compressed-ebtp/a".into()));
+    assert_eq!(resolve_degrade_threshold("compressed-ebtp/a"), 0);
+    assert_eq!(store.get_lb_policy("compressed-ebtp/b"), Some(ParsedLBPolicy::Ewma));
+    assert_eq!(resolve_degrade_threshold("compressed-ebtp/b"), 60);
+    assert!(old.get_effective(&target("a")).is_some());
+
+    // Add to an already published key must also replace the same-target value.
+    cache
+        .write()
+        .insert("compressed-ebtp/policy".into(), make_policy("b", "LeastConn", 20));
+    cache
+        .write()
+        .add_compress_event("compressed-ebtp/policy".into(), ResourceChange::EventAdd);
+    assert!(CacheData::flush_compressed_events_for_test(&cache));
+    assert_eq!(store.snapshot().candidates(&target("b")).len(), 1);
+    assert_eq!(
+        store.get_lb_policy("compressed-ebtp/b"),
+        Some(ParsedLBPolicy::LeastConn)
+    );
+    assert_eq!(resolve_degrade_threshold("compressed-ebtp/b"), 20);
+    let current = store.snapshot();
+    let raw = current.candidates(&target("b"))[0].clone();
+    let effective = current.get_effective(&target("b")).unwrap();
+    let hc = get_hc_config_store().resolve_policy("compressed-ebtp/b").unwrap();
+    cache
+        .write()
+        .insert("compressed-ebtp/policy".into(), make_policy("b", "LeastConn", 20));
+    cache
+        .write()
+        .add_compress_event("compressed-ebtp/policy".into(), ResourceChange::EventAdd);
+    assert!(CacheData::flush_compressed_events_for_test(&cache));
+    assert_eq!(store.snapshot().generation(), current.generation());
+    assert!(Arc::ptr_eq(&raw, &store.snapshot().candidates(&target("b"))[0]));
+    assert!(Arc::ptr_eq(&effective, &store.get_effective(&target("b")).unwrap()));
+    assert!(Arc::ptr_eq(
+        &hc,
+        &get_hc_config_store().resolve_policy("compressed-ebtp/b").unwrap()
+    ));
+
+    // Compare the same final state via full_set, including shared background stores.
+    let final_policy = make_policy("b", "LeastConn", 20);
+    cache.write().reset(Vec::new(), 2);
+    let full = BackendTrafficPolicyStore::new();
+    full.full_set_policies(HashMap::from([(
+        "compressed-ebtp/policy".into(),
+        Arc::new(final_policy.clone()),
+    )]));
+    assert!(full.snapshot().candidates(&target("a")).is_empty());
+    assert_eq!(full.get_lb_policy("compressed-ebtp/b"), effective.load_balancer);
+    assert_eq!(resolve_degrade_threshold("compressed-ebtp/b"), 20);
+    assert!(get_hc_config_store().resolve_policy("compressed-ebtp/b").is_some());
+    assert!(get_outlier_detection_store()
+        .keys()
+        .contains(&"compressed-ebtp/b".into()));
+    full.full_set_policies(HashMap::new());
+
+    cache.write().reset(vec![final_policy.clone()], 3);
+    let mut invalid = final_policy;
+    invalid.spec.resolved_target_class = None;
+    cache.write().insert("compressed-ebtp/policy".into(), invalid);
+    cache
+        .write()
+        .add_compress_event("compressed-ebtp/policy".into(), ResourceChange::EventAdd);
+    assert!(CacheData::flush_compressed_events_for_test(&cache));
+    assert!(store.snapshot().candidates(&target("b")).is_empty());
+    assert!(store.get_effective(&target("b")).is_none());
+    assert!(get_hc_config_store().resolve_policy("compressed-ebtp/b").is_none());
+    assert!(!get_outlier_detection_store()
+        .keys()
+        .contains(&"compressed-ebtp/b".into()));
+    assert_eq!(resolve_degrade_threshold("compressed-ebtp/b"), 0);
+    cache.write().reset(Vec::new(), 4);
+}

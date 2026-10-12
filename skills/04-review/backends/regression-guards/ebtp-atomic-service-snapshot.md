@@ -43,6 +43,23 @@ The immutable generation is stored before health-check and Service outlier/degra
 side effects are reconciled. Map cloning remains part of publication; this is not
 a claim that the entire incremental update is independent of total store size.
 
+ARCH-024 adds a previous-to-final key boundary to partial publication. Add and
+Update classifications both allow replacement of a previously published key:
+Gateway compression preserves Add for repeated Add and delete-to-Add histories.
+EBTP normalizes direct overlapping inputs with remove > update > add, prepares
+only the final present value, withdraws previous candidates and reconciles the
+previous/final target union once. Invalid replacements withdraw prior eligibility;
+equivalent replacements retain raw/effective/live-handle identity and skip
+publication and background reconciliation. Health-TLS-invalid winners retain
+their separate fail-probe contract; they are not ineligible attachment replacements.
+
+The original defect treated Add as having no previous owner, leaving old candidates
+and, on retarget, effective/background state. Ordinary Controller runtime saves
+emit Update; this correction concerns supported replacement Add input, not evidence
+of a normal deployment incident. The misleading new-only Add comment in the shared
+ConfHandler interface is corrected without changing compression or its write lock.
+Prepared-value replication and outer-map cloning remain separate costs.
+
 **2. Capture is per request, not per TCP keepalive**
 
 A new request on a reused connection loads the current snapshot. A retry of the
@@ -141,6 +158,16 @@ Re-evaluate against current evidence, including:
   verified 2026-09-08.
 
 ## Verification
+
+ARCH-024 regression coverage uses the actual EBTP ConfHandler through CacheData's
+synchronous flush seam in `compressed_replacement_add_reconciles_backend_traffic_policy_ownership`.
+It covers delete-to-Add retarget, same-target changed Add, equivalent replay,
+invalid replacement, retained old snapshot and HC/outlier/degrade lifecycle, with
+sequential full/partial final-state comparison. Store regressions cover direct
+overlap, sibling promotion and typed AI replacement/handle retention. The new
+CacheData regression failed against the original implementation at the stale
+old-target candidate assertion before the fix. Fresh post-fix results are recorded
+in the implementation task; historical results below do not validate this change.
 
 Task cleanup verification on 2026-09-10: independent read-only review confirmed
 the original defect is already fixed and the selected task materials contain no
