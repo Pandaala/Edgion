@@ -16,6 +16,13 @@ use std::{
     sync::{atomic::Ordering, Arc},
 };
 
+#[cfg(not(test))]
+fn callback_writer() -> CappedWriter {
+    CappedWriter::new(1024 * 1024)
+}
+#[cfg(test)]
+use tests::callback_writer;
+
 pub(crate) const ERROR_JSON: &[u8] = b"{\"error\":\"gRPC upstream exchange failed\"}";
 fn status(headers: &HeaderMap) -> Result<Option<u8>, ()> {
     let mut all = headers.get_all("grpc-status").iter();
@@ -139,7 +146,7 @@ impl GrpcResponseProcessor {
         }
     }
     fn feed(&mut self, chunk: Bytes) -> Result<Vec<u8>, ()> {
-        let mut output = CappedWriter::new(1024 * 1024);
+        let mut output = None;
         let mut pos = 0;
         let mut records = 0usize;
         while pos < chunk.len() {
@@ -198,7 +205,10 @@ impl GrpcResponseProcessor {
                     else {
                         return Err(());
                     };
-                    output.write_all(&json).map_err(|_| ())?;
+                    output
+                        .get_or_insert_with(callback_writer)
+                        .write_all(&json)
+                        .map_err(|_| ())?;
                     self.window.start_next().map_err(|_| ())?;
                 }
                 self.prefix_len = 0;
@@ -206,7 +216,7 @@ impl GrpcResponseProcessor {
                 self.received = 0;
             }
         }
-        Ok(output.into_bytes())
+        Ok(output.map_or_else(Vec::new, CappedWriter::into_bytes))
     }
     fn settle(&mut self, code: Option<u8>) -> pingora_core::Result<()> {
         if self.finished {

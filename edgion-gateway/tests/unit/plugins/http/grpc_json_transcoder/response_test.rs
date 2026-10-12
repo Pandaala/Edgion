@@ -8,11 +8,11 @@ fn processor(streaming: bool, format: GrpcJsonStreamFormat) -> GrpcResponseProce
     let descriptor = include_bytes!("../../../../../../edgion-tests/proto/grpc_json_transcoding/test.pb");
     let mut config: GrpcJsonTranscoderConfig = serde_json::from_value(serde_json::json!({ "descriptor":{"type":"inline","base64":STANDARD.encode(descriptor)},"services":["test.TestService"] })).unwrap();
     config.stream_format = format;
+    processor_from_config(config, "GET", if streaming { "/v1/numbers" } else { "/v1/hello/name" })
+}
+fn processor_from_config(config: GrpcJsonTranscoderConfig, method: &str, path: &str) -> GrpcResponseProcessor {
     let compiled = Arc::new(config.compile().unwrap());
-    let binding = compiled
-        .bind("GET", if streaming { "/v1/numbers" } else { "/v1/hello/name" }, None)
-        .unwrap()
-        .binding;
+    let binding = compiled.bind(method, path, None).unwrap().binding;
     let reservation = Reservation::acquire_from(&Arc::new(Semaphore::new(1))).unwrap();
     let plan = Arc::new(GrpcTranscodingPlan::new(compiled, binding, reservation, 5));
     let mut processor = GrpcResponseProcessor::new(plan);
@@ -305,5 +305,170 @@ async fn correction_stream_failures_keep_the_first_bounded_diagnostic() {
         let log = serde_json::to_string(ctx.stage_logs_mut()).unwrap();
         assert_eq!(log.matches(expected).count(), 1, "{log}");
         drop(queued);
+    }
+}
+
+thread_local! {
+    static CALLBACK_WRITERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+pub(super) fn callback_writer() -> CappedWriter {
+    CALLBACK_WRITERS.with(|count| count.set(count.get() + 1));
+    CappedWriter::new(1024 * 1024)
+}
+fn callback_writers() -> usize {
+    CALLBACK_WRITERS.with(std::cell::Cell::get)
+}
+
+#[test]
+fn callback_writer_follows_completed_stream_output() {
+    let mut unary = processor(false, GrpcJsonStreamFormat::Ndjson);
+    let before = callback_writers();
+    assert!(unary.feed(Bytes::new()).unwrap().is_empty());
+    let input = frame(&[10, 2, b'o', b'k']);
+    for byte in 0..input.len() {
+        assert!(unary.feed(input.slice(byte..byte + 1)).unwrap().is_empty());
+    }
+    assert_eq!(callback_writers() - before, 0);
+
+    for format in [GrpcJsonStreamFormat::Ndjson, GrpcJsonStreamFormat::Sse] {
+        let mut p = processor(true, format);
+        let before = callback_writers();
+        assert!(p.feed(Bytes::new()).unwrap().is_empty());
+        let input = frame(&[8, 3]);
+        for byte in 0..input.len() - 1 {
+            assert!(p.feed(input.slice(byte..byte + 1)).unwrap().is_empty());
+            assert_eq!(callback_writers() - before, 0);
+        }
+        let output = p.feed(input.slice(input.len() - 1..)).unwrap();
+        let expected = match format {
+            GrpcJsonStreamFormat::Ndjson => b"{\"type\":\"message\",\"data\":{\"number\":3}}\n".as_slice(),
+            GrpcJsonStreamFormat::Sse => b"event: rpc_message\ndata: {\"number\":3}\n\n".as_slice(),
+        };
+        assert_eq!(output, expected);
+        assert_eq!(callback_writers() - before, 1);
+        let mut coalesced = frame(&[]).to_vec();
+        coalesced.extend_from_slice(&frame(&[8, 3]));
+        let output = p.feed(Bytes::from(coalesced)).unwrap();
+        let empty = match format {
+            GrpcJsonStreamFormat::Ndjson => b"{\"type\":\"message\",\"data\":{}}\n".as_slice(),
+            GrpcJsonStreamFormat::Sse => b"event: rpc_message\ndata: {}\n\n".as_slice(),
+        };
+        assert_eq!(output, [empty, expected].concat());
+        assert_eq!(callback_writers() - before, 2);
+        assert!(p.feed(Bytes::new()).unwrap().is_empty());
+        assert_eq!(callback_writers() - before, 2);
+    }
+}
+
+#[test]
+fn callback_writer_preserves_completed_record_work_bound() {
+    for format in [GrpcJsonStreamFormat::Ndjson, GrpcJsonStreamFormat::Sse] {
+        let expected = match format {
+            GrpcJsonStreamFormat::Ndjson => b"{\"type\":\"message\",\"data\":{}}\n".as_slice(),
+            GrpcJsonStreamFormat::Sse => b"event: rpc_message\ndata: {}\n\n".as_slice(),
+        };
+        for records in [256, 257] {
+            let mut p = processor(true, format);
+            let before = callback_writers();
+            let output = p.feed(Bytes::from(frame(&[]).repeat(records)));
+            if records == 256 {
+                assert_eq!(output.unwrap(), expected.repeat(records));
+            } else {
+                assert!(output.is_err());
+            }
+            assert_eq!(callback_writers() - before, 1);
+        }
+    }
+}
+
+fn string_stream_processor(format: GrpcJsonStreamFormat) -> GrpcResponseProcessor {
+    use prost::Message;
+    // Inferred descriptor types avoid adding a direct prost-types dependency.
+    // Reserialization omits custom HTTP options; auto mapping supplies this fixture's binding.
+    #[derive(prost::Message)]
+    struct DescriptorSet {
+        #[prost(bytes = "vec", repeated, tag = "1")]
+        file: Vec<Vec<u8>>,
+    }
+    let source = processor(false, format);
+    let mut changed = false;
+    let file = source
+        .plan
+        .binding
+        .method
+        .parent_pool()
+        .file_descriptor_protos()
+        .map(|file| {
+            let mut file = file.clone();
+            for service in &mut file.service {
+                for method in &mut service.method {
+                    if file.package.as_deref() == Some("test")
+                        && service.name.as_deref() == Some("TestService")
+                        && method.name.as_deref() == Some("SayHello")
+                    {
+                        method.server_streaming = Some(true);
+                        changed = true;
+                    }
+                }
+            }
+            file.encode_to_vec()
+        })
+        .collect();
+    assert!(changed);
+    let descriptor = DescriptorSet { file }.encode_to_vec();
+    let mut config: GrpcJsonTranscoderConfig = serde_json::from_value(serde_json::json!({
+        "descriptor": {"type": "inline", "base64": STANDARD.encode(descriptor)},
+        "services": ["test.TestService"],
+        "autoMapping": true
+    }))
+    .unwrap();
+    config.stream_format = format;
+    processor_from_config(config, "POST", "/test.TestService/SayHello")
+}
+
+#[test]
+fn callback_writer_preserves_aggregate_and_message_json_caps() {
+    use prost::Message;
+    #[derive(prost::Message)]
+    struct HelloResponse {
+        #[prost(string, tag = "1")]
+        message: String,
+    }
+    for format in [GrpcJsonStreamFormat::Ndjson, GrpcJsonStreamFormat::Sse] {
+        let mut p = string_stream_processor(format);
+        let payload = HelloResponse {
+            message: "\0".repeat(100 * 1024),
+        }
+        .encode_to_vec();
+        let expected = p
+            .plan
+            .binding
+            .decode(&payload, p.plan.compiled.limits, Some(format))
+            .unwrap();
+        assert!(expected.len() > 512 * 1024);
+        assert!(expected.len() <= 1024 * 1024);
+        let before = callback_writers();
+        assert_eq!(p.feed(frame(&payload)).unwrap(), expected);
+        assert_eq!(callback_writers() - before, 1);
+        let mut coalesced = frame(&payload).to_vec();
+        coalesced.extend_from_slice(&frame(&payload));
+        assert!(coalesced.len() < 512 * 1024);
+        assert!(p.feed(Bytes::from(coalesced)).is_err());
+        assert_eq!(callback_writers() - before, 2);
+
+        let mut p = string_stream_processor(format);
+        let payload = HelloResponse {
+            message: "\0".repeat(180 * 1024),
+        }
+        .encode_to_vec();
+        assert!(payload.len() < 512 * 1024);
+        assert!(p
+            .plan
+            .binding
+            .decode(&payload, p.plan.compiled.limits, Some(format))
+            .is_err());
+        let before = callback_writers();
+        assert!(p.feed(frame(&payload)).is_err());
+        assert_eq!(callback_writers() - before, 0);
     }
 }

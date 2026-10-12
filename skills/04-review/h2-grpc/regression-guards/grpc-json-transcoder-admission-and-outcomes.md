@@ -109,6 +109,41 @@ describes configuration and scope. H1.1/H2 downstream selection is independent o
 mandatory H2 upstream; canonical backend/TLS/egress and pool owners are preserved.
 Unary Hold replacement currently abandons the origin connection.
 
+## Callback output acquisition (ARCH-033)
+
+`GrpcResponseProcessor::feed` owns an optional callback-local canonical CappedWriter.
+The first completed streaming message acquires its 1 MiB capacity after successful
+ProtoJSON conversion and RawWindow Replace; subsequent messages in that callback
+share it. Empty feeds, fragmented unary input and incomplete streaming messages
+return an empty Vec without constructing the callback writer. Unary retention and
+status-before-publication remain independent. Error paths drop callback scratch;
+no writer is retained between callbacks and no response cache is added.
+
+The former eager constructor requested unused 1 MiB scratch on every zero-output
+feed. This change removes that request at the framing owner, without changing the
+Resources writer or claiming measured allocator latency, RSS or throughput gains.
+Per-message JSON, aggregate callback output, 256-record callback work and actual
+outstanding Vec-capacity credits remain independent bounds; the reviewed exchange
+and process reservations below are unchanged.
+
+The mirrored `response_test.rs` constructor observer uses a thread-local counter
+only in test builds. `callback_writer_follows_completed_stream_output` distinguishes
+eager construction from lazy acquisition and covers empty, fragmented, completed
+and coalesced NDJSON/SSE messages, including empty protobuf messages and later
+callbacks. `callback_writer_preserves_completed_record_work_bound` checks 256/257
+records. `callback_writer_preserves_aggregate_and_message_json_caps` checks valid
+individual messages whose coalesced JSON exceeds the callback cap, using escaped
+string output while keeping raw coalesced wire below 512 KiB, and independent
+per-message overflow. Returned empty Vec capacity alone is insufficient evidence
+because the canonical writer compacts on return. On 2026-10-12 the distinguishing
+regression failed with eager acquisition through the same constructor seam (10
+constructions versus zero), then passed with lazy acquisition. All 25 focused
+Gateway transcoder tests passed, including the 11 retained response identities
+and these three added tests. All 25 focused Resources grpc_transcoding tests
+also passed. These checks do not measure allocator latency or
+rerun the full suite/live topology. Re-evaluate when changing the constructor
+seam, streaming output owner, cap or callback work bound.
+
 ## Memory and time ledger
 
 Use one process-wide 64 MiB conversion budget, shared across plugin instances and
