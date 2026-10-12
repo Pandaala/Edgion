@@ -30430,7 +30430,7 @@
     },
     "ARCH-016": {
       "path": "ARCH-016-immutable-backend-ref-selector.md",
-      "status": "candidate",
+      "status": "resolved",
       "kind": "architecture-debt",
       "partition": "PART-266",
       "sha256": "c347ad0c4588fab349f4d1a71f37bd850fda25436723e092183319d12dfb6160",
@@ -30454,9 +30454,23 @@
       },
       "verifier": "/root/verify_seed",
       "previous_status": "confirmed",
-      "revalidation_pending": true,
-      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
+      "revalidation_pending": false,
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json",
+      "finding_removed": true,
+      "removed_finding_path": "ARCH-016-immutable-backend-ref-selector.md",
+      "current_implementation_acceptance": "TASK-ACCEPTANCE-ARCH-016-20261012.json",
+      "closure": {
+        "date": "2026-10-12",
+        "disposition": "fixed-and-verified",
+        "authorization": "User explicitly requested deletion of original ARCH-016 after accepting its implementation.",
+        "independent_reviewer": "/root/result_reviewer",
+        "reviewed_finding_sha256": "c347ad0c4588fab349f4d1a71f37bd850fda25436723e092183319d12dfb6160",
+        "acceptance_evidence": "TASK-ACCEPTANCE-ARCH-016-20261012.json",
+        "index_title": "Closed immutable backendRef selector finding; acceptance evidence",
+        "preservation": "Code, tests, canonical knowledge, original verification receipt, coverage, reports and historical drift snapshots retained."
+      }
     },
+
     "ARCH-017": {
       "path": "ARCH-017-prepared-native-backend-tls-generation.md",
       "status": "candidate",

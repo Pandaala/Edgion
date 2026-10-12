@@ -150,7 +150,7 @@ fn http_route_unit(runtime: Arc<PluginRuntime>) -> Arc<HttpRouteRuleUnit> {
         metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::empty()),
         plugin_runtime: runtime,
         backends: Arc::from(Vec::new()),
-        backend_finder: Arc::new(crate::lb::BackendSelector::new()),
+        backend_finder: Arc::new(crate::lb::BackendSelector::new(vec![], vec![])),
     })
 }
 

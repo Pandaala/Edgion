@@ -164,8 +164,7 @@ impl CompiledL4Backends {
                 target: CompiledBackendTarget::from_reference(reference, HTTPBackendRefKind::Unsupported),
             })
             .collect();
-        let selector = BackendSelector::new();
-        selector.init(
+        let selector = BackendSelector::new(
             (0..slots.len()).collect(),
             slots.iter().map(|slot| slot.weight).collect(),
         );

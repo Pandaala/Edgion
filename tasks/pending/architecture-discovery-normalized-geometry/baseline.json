@@ -1,0 +1,16 @@
+{
+  "head": "fb6bebb93c53792c31147f18f2d9500febdf198b",
+  "hashes": {
+    "tasks/review-architecture-20261009/ARCH-020-discovery-normalized-geometry-owner.md": "a2e9b691ff3abda5109623c93c53978ec7879b9b1c0cd4d42500a782404ed910",
+    "tasks/review-architecture-20261009/VERIFICATION-ARCH-020.json": "172aefbe94f79f9c40bf05f8d5e2e8d335d3db50e7ee639655c45cc060d2ecb0",
+    "AGENTS.md": "cba9f532fa1c9f70e6a921e1a2331e7ca78c8210981a072a74cdebf4d85d3e42",
+    "skills/00-design-rules.md": "c78c86675ca6c72adb30d0f59727509486b582ef2c7f3318bf14e61745eff055",
+    "edgion-gateway/src/backends/discovery/coordinator.rs": "1869a0e26ecb55c60a4c9535be48ae2db1774e2b64c9f885f99533a1236b91f4",
+    "edgion-gateway/src/lb/compiled_selector.rs": "7d8e4fd31fa19bb1efe68c2c00a6a4074248cdbe7f657837aba719009fdb2a2f",
+    "edgion-gateway/tests/unit/backends/discovery/coordinator_test.rs": "4660e36d90e747ab3536bde49464a2dc111aabe7cf161bb5f1922af3dacf3f74",
+    "skills/01-architecture/02-gateway/07-backends.md": "cbbe12b7dd9ce629cdbd8afe02ef98e37b0f50e7397df049429c1560c16d6096",
+    "skills/04-review/backends/SKILL.md": "08b91977e02ddf2ad6b95b951a8738062065838d6dcadcf827f8af91bb848325",
+    "skills/04-review/backends/regression-guards/named-port-resolve-against-originating-slice.md": "e6de87d8d80ef970dcbc3c5cc36dce29a160d5a1b2893368a7060d23d2adafe3"
+  },
+  "external_status": "M  edgion-gateway/src/backends/runtime.rs\nM  edgion-gateway/src/lb/backend_selector/selector.rs\nM  edgion-gateway/src/lb/backend_selector/weighted_selector.rs\nM  edgion-gateway/src/routes/grpc/match_unit.rs\nM  edgion-gateway/src/routes/http/match_unit.rs\nM  edgion-gateway/tests/unit/ai/http/attempt_test.rs\nM  edgion-gateway/tests/unit/ai/http/proxy_test.rs\nM  edgion-gateway/tests/unit/ai/runtime/dispatch_test.rs\nM  edgion-gateway/tests/unit/backends/runtime_test.rs\nM  edgion-gateway/tests/unit/lb/backend_selector/mod_test.rs\nM  edgion-gateway/tests/unit/plugins/http/direct_endpoint/plugin_test.rs\nM  edgion-gateway/tests/unit/routes/grpc/conf_handler_impl_test.rs\nM  edgion-gateway/tests/unit/routes/grpc/match_engine_test.rs\nM  edgion-gateway/tests/unit/routes/grpc/routes_mgr_test.rs\nM  edgion-gateway/tests/unit/routes/http/conf_handler_impl_test.rs\nM  edgion-gateway/tests/unit/routes/http/proxy_http/pg_upstream_response_body_filter_test.rs\nM  edgion-gateway/tests/unit/routes/http/proxy_http/pg_upstream_response_filter_test/lb_sample_tests.rs\nM  skills/01-architecture/02-gateway/06-load-balancing.md\nM  skills/04-review/concurrency/review-evidence/lb-false-positives.md\nM  skills/04-review/lb/SKILL.md\nA  skills/04-review/lb/regression-guards/backend-ref-selector-generation-ownership.md\nM  skills/04-review/lb/regression-guards/wrr-new-result-api.md\n"
+}

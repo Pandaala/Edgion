@@ -145,7 +145,7 @@ fn test_route_unit(ns: &str, backend_refs: Vec<HTTPBackendRef>) -> HttpRouteRule
         metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::empty()),
         plugin_runtime: Arc::new(crate::plugins::PluginRuntime::new()),
         backends: Arc::from(backends),
-        backend_finder: Arc::new(crate::lb::BackendSelector::new()),
+        backend_finder: Arc::new(crate::lb::BackendSelector::new(vec![], vec![])),
     }
 }
 

@@ -24,7 +24,7 @@ Source reviewed: 512 / 1676; 467 primary partitions.
 | ARCH-013 | candidate | behavior-defect | [Preserve typed SSE classification at canonical semantic handoff](ARCH-013-canonical-sse-block-classification.md) |
 | ARCH-014 | candidate | architecture-debt | [Remove the complete GatewayClass mirror maintained only for diagnostics](ARCH-014-gateway-class-diagnostic-mirror.md) |
 | ARCH-015 | confirmed | behavior-defect | [Bind persisted GeoIP validators to their update source](ARCH-015-geoip-validator-source-identity.md) |
-| ARCH-016 | candidate | architecture-debt | [Compile BackendSelector as immutable generation-owned state](ARCH-016-immutable-backend-ref-selector.md) |
+| ARCH-016 | resolved | architecture-debt | [Closed immutable backendRef selector finding; acceptance evidence](TASK-ACCEPTANCE-ARCH-016-20261012.json) |
 | ARCH-017 | candidate | architecture-debt | [Prepare immutable native backend TLS components with their publishing generation](ARCH-017-prepared-native-backend-tls-generation.md) |
 | ARCH-018 | confirmed | architecture-debt | [Retire the unused socket-hash outlier execution owner](ARCH-018-outlier-production-identity-owner.md) |
 | ARCH-019 | candidate | architecture-debt | [Borrow resolved GeoIP dimensions when projecting an access log](ARCH-019-borrowed-geo-access-log-projection.md) |

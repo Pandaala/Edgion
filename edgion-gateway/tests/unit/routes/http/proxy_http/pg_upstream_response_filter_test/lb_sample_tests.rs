@@ -120,7 +120,7 @@ fn route_unit_with_retry_codes(codes: Vec<u16>) -> HttpRouteRuleUnit {
         metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::empty()),
         plugin_runtime: Arc::new(crate::plugins::PluginRuntime::new()),
         backends: Arc::from(vec![]),
-        backend_finder: Arc::new(crate::lb::BackendSelector::new()),
+        backend_finder: Arc::new(crate::lb::BackendSelector::new(vec![], vec![])),
     }
 }
 

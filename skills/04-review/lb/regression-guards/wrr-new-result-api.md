@@ -7,7 +7,7 @@ knowledge_type: regression-guards
 # lb-FB01 — `WeightedRoundRobin::new` returns `Result`, not panic — FIXED
 
 **Status:** ✅ fixed · 2026-05-25 · code change
-**Severity:** Low (BadLogic / fail-fast vs graceful-degrade) — was dormant (no caller could trigger it)
+**Historical severity:** Low (BadLogic / fail-fast vs graceful-degrade). The original dormant-path assessment is superseded by current evidence that BackendSelector can reach TooManyItems.
 
 ## Conclusion
 
@@ -17,11 +17,12 @@ construction invariants with unconditional `assert!` (real `assert!`, **not** co
 release): non-empty items, `items.len() == weights.len()`, `items.len() <= u16::MAX`, and
 `total_weight > 0`. They now return `Result<Self, WrrError>` where `WrrError` is a four-variant
 enum (`EmptyItems` / `LengthMismatch` / `TooManyItems` / `ZeroTotalWeight`, `impl Display +
-Error`). The two callers degrade gracefully (fail-close):
+Error`). The BackendRef selection owner degrades gracefully (fail-close):
 
 - `BackendSelector::create_state` (`selector.rs`) maps any `Err` to `SelectorState::Error(ERR_WRR_BUILD_FAILED)`
   (new code `3`), so `select()` returns `Err(code)` and the data plane serves an error response
-  instead of panicking. No `tracing::` is added here — this path is request-triggered lazy init.
+  instead of panicking. Construction runs during route-generation compilation; selection
+  reads the captured state. No request-time initialization or tracing is introduced.
 - The webhook path (`link_sys/providers/webhook/manager.rs`) has been migrated (2026-06-20
   endpoint-decouple refactor) and **no longer uses WRR**. `WebhookManager::upsert` now constructs
   `WebhookResolvedTarget::Service { service_key, port, scheme, cursor: AtomicUsize }` for
@@ -30,9 +31,12 @@ Error`). The two callers degrade gracefully (fail-close):
   targets map to `WebhookResolvedTarget::Static(String)`. The `Pending` and `Endpoints(WRR)`
   variants have been removed. This bullet is preserved for historical reference only.
 
-Both call sites still pre-validate their inputs, so `WrrError` is currently unreachable in
-production — the conversion is forward-looking hardening for a future in-crate caller that forgets
-to pre-validate.
+`BackendSelector::create_state` pre-validates emptiness, lengths and positive weights,
+but does not pre-validate WRR's item-count limit. More than 65535 positive backend slots
+reaches `WrrError::TooManyItems` and is captured as `ERR_WRR_BUILD_FAILED`. The previous
+claim that every WRR error was unreachable was too broad. The selector regression
+`selector_weighted_constructor_failure_is_selection_error` checks this mapping without
+constructing a smooth sequence. The historical webhook path above is not a current WRR caller.
 
 Re-reports of the form "`WeightedRoundRobin::new` panics via `assert!` on invalid input" are **not
 accepted** (fixed); verify the current `new` returns `Result<_, WrrError>` before re-reporting.
@@ -40,12 +44,12 @@ accepted** (fixed); verify the current `new` returns `Result<_, WrrError>` befor
 ## Core Rationale
 
 **1. Aligns with the project's "graceful-degrade on long-running paths, no data-plane panic" rule.**
-`new` runs at construction (lazy route init / webhook resolve), a long-lived path. A `Result` lets
-the caller fail-close (error code / `Pending`) instead of aborting the task on a future misuse.
+`new` runs during route-generation construction. A `Result` lets
+BackendSelector capture ERR_WRR_BUILD_FAILED instead of aborting construction on invalid input.
 
-**2. The fix is at the origin, the behavior change is confined to unreachable paths.**
-For valid inputs the behavior is byte-for-byte identical; only the (currently dead) invalid-input
-arms changed from `panic!` to `Err`.
+**2. Constructor validation preserves valid selection and fails closed on invalid inputs.**
+For valid inputs the selection behavior is preserved; invalid-input arms return `Err`
+instead of panicking. Item-count failure remains reachable through BackendSelector.
 
 ## Fix Suggestions Not Accepted
 
@@ -73,3 +77,9 @@ arms changed from `panic!` to `Err`.
 - `edgion-gateway/src/lb/backend_selector/selector.rs` — `ERR_WRR_BUILD_FAILED`, `create_state`
 - `edgion-gateway/src/link_sys/providers/webhook/manager.rs` — migrated away from WRR (2026-06-20 endpoint-decouple refactor); `Pending` and `Endpoints(WRR)` variants removed
 - Sibling LB hardening: `weighted_selector.rs::normalize_weights` (lb-F005 weight-cap, orthogonal OOM guard)
+
+## Current ownership boundary
+
+ARCH-016 removes BackendSelector's obsolete initialization/swap lifecycle. Its constructor
+captures immutable state and preserves all error codes, including TooManyItems mapping.
+See [BackendRef selector generation ownership](backend-ref-selector-generation-ownership.md).

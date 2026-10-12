@@ -429,12 +429,8 @@ impl GrpcRouteRuleUnit {
     /// Build a WRR selector over original backend slot indexes.
     /// All matches and hostname indexes share this one selector per rule.
     pub fn build_backend_selector(backends: &[CompiledGrpcBackend]) -> Arc<BackendSelector<usize>> {
-        let selector = BackendSelector::new();
-        if !backends.is_empty() {
-            let weights: Vec<Option<i32>> = backends.iter().map(|b| b.schema.weight.or(Some(1))).collect();
-            selector.init((0..backends.len()).collect(), weights);
-        }
-        Arc::new(selector)
+        let weights = backends.iter().map(|b| b.schema.weight.or(Some(1))).collect();
+        Arc::new(BackendSelector::new((0..backends.len()).collect(), weights))
     }
 
     /// Deep match: check hostname, Gateway/sectionName, and headers.

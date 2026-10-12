@@ -16,6 +16,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [ARCH-016 — BackendRef selector generation ownership](regression-guards/backend-ref-selector-generation-ownership.md)
+
 - [Service degrade selection Counter ownership and lifecycle](regression-guards/degrade-selection-counter-ownership.md)
 - [Service selection captures one live runtime snapshot](regression-guards/service-runtime-snapshot-selection.md)
 

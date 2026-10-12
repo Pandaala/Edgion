@@ -750,7 +750,8 @@ fn metric_handles_are_shared_within_each_rule_only() {
     let mut route: GRPCRoute = crate::test_current_status::from_value(json).expect("Failed to build GRPCRoute");
     route.pre_parse();
 
-    let units = parse_route_to_units("route-ns/metric-sharing", &Arc::new(route));
+    let route = Arc::new(route);
+    let units = parse_route_to_units("route-ns/metric-sharing", &route);
     assert_eq!(units.len(), 3);
     assert!(Arc::ptr_eq(&units[0].metric_handles, &units[1].metric_handles));
     assert!(!Arc::ptr_eq(&units[0].metric_handles, &units[2].metric_handles));
@@ -784,4 +785,23 @@ fn metric_handles_are_shared_within_each_rule_only() {
         .expect("second rule gateway metrics");
     assert_eq!(first_rule_metrics.counters.len(), 2);
     assert_eq!(second_rule_metrics.counters.len(), 1);
+
+    let retained = Arc::clone(&units[1]);
+    assert!(Arc::ptr_eq(&units[0].backend_finder, &retained.backend_finder));
+    assert!(!Arc::ptr_eq(&retained.backend_finder, &units[2].backend_finder));
+    assert_eq!(units[0].backend_finder.select(), Ok(0));
+    assert_eq!(retained.backend_finder.select(), Ok(1));
+    assert_eq!(units[0].backend_finder.select(), Ok(0));
+    let replacement = parse_route_to_units("route-ns/metric-sharing", &route);
+    assert!(!Arc::ptr_eq(&retained.backend_finder, &replacement[0].backend_finder));
+    drop(units);
+    assert_eq!(replacement[0].backend_finder.select(), Ok(0));
+    assert_eq!(retained.backend_finder.select(), Ok(1));
+    assert_eq!(replacement[1].backend_finder.select(), Ok(1));
+}
+
+#[test]
+fn compiled_grpc_empty_backend_selector_retains_no_backend_error() {
+    let selector = GrpcRouteRuleUnit::build_backend_selector(&[]);
+    assert_eq!(selector.select(), Err(crate::lb::ERR_NO_BACKEND_REFS));
 }

@@ -18,22 +18,32 @@ knowledge_type: review-evidence
 
 **Rule**: If a reviewer finds `rwlock.write()` scope drops before `arc_swap.store()` where the two structures are semantically linked (e.g., a forward map and its reverse index), treat it as a real confirmed bug. The `ArcSwap::store` is lock-free and safe to call inside any RwLock write scope.
 
-**Contrast with single-structure ArcSwap TOCTOU** (e.g., `BackendSelector::init`): those are false positives because all concurrent writers produce identical results and the extra store is harmless. Cross-structure races are different — readers can observe the new state of one field but the old state of the other.
+**Historical contrast with single-structure ArcSwap TOCTOU**: the old `BackendSelector::init` discussion below concerns a removed lifecycle. It is not current guidance for shared-state initialization. Cross-structure races remain different: readers can observe the new state of one field but the old state of the other.
 
 ---
 
-## BackendSelector ArcSwap Initialization TOCTOU is Not a Real Issue
+## Historical BackendSelector initialization evidence
 
-**False-positive scenario**: `BackendSelector::init` uses `load` to check then `store`; combined with the caller's `is_initialized()` + `init()` it forms a TOCTOU; multiple threads may execute `create_state` repeatedly and overwrite the result.
+> Inactive implementation premise. ARCH-016 removes BackendSelector's `init`,
+> `is_initialized` and inner ArcSwapOption. Route-generation builders compile the
+> selection plan before publication; requests only select from its private state.
+> See [BackendRef selector generation ownership](../../lb/regression-guards/backend-ref-selector-generation-ownership.md).
 
-**Reality**:
+The April 2026 review considered a lazy `is_initialized`/`init` check-then-store
+race. Its evidence was that concurrent initializers derived the same immutable
+route inputs, replacement created a fresh route generation, and ArcSwap prevented
+tearing or use-after-free. That historical review rejected the reported race;
+it did not require the initialization API or approve future in-place writes.
 
-1. **Inputs are identical**: All concurrent `init` data comes from the same `Arc<HTTPRouteRule>`'s immutable field `backend_refs`; inputs are completely identical and `create_state` produces logically equivalent results.
-2. **Whole replacement**: On config update a brand new `RouteRules` is created (containing a new `BackendSelector`); there is no scenario of "reinit the same selector with different parameters".
-3. **Window is tiny**: The race only fires the first time a route is requested; afterwards `is_initialized()` returns true directly and the fast path is taken. Extra cost is just a few clones + one redundant store.
-4. **Memory safety**: `ArcSwap` guarantees atomicity, no data tearing or UAF.
+Before ARCH-016, current HTTP/gRPC/L4 builders already initialized on the cold path,
+so the original request-triggered race premise no longer matched the call chain.
+The refactor removes that unused lifecycle as architecture debt, without claiming
+a newly observed race. WRR's atomic cursor remains legitimate request-time state
+shared by matches and hostname groups within an owning rule generation.
 
-**Verdict**: Theoretically a classic TOCTOU pattern, but combined with project constraints (same-source inputs, whole replacement, one-shot trigger) there is no observable negative consequence; no fix needed. If we ever switch to in-place reinit or support second-time initialization with different parameters, introduce CAS or `OnceLock`.
+Re-evaluate any future proposal for in-place selector replacement against its
+actual publication owner, weight/error contracts and cursor lifetimes; the old
+same-input reasoning is not approval for a new mutable configuration path.
 
 ---
 

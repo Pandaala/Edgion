@@ -462,3 +462,34 @@ fn compiled_ai_identity_key_and_retained_generation_agree() {
     };
     assert_eq!(target.key(), "route-ns/provider");
 }
+
+#[test]
+fn l4_compiled_generations_capture_errors_and_independent_cursors() {
+    use serde_json::json;
+    for family in ["TCP", "TLS", "UDP"] {
+        let empty = l4_generation(family, json!({"name": "route"}), vec![]).unwrap();
+        assert_eq!(empty.select().err(), Some(crate::lb::ERR_NO_BACKEND_REFS));
+        let partial = l4_generation(
+            family,
+            json!({"name": "route"}),
+            vec![
+                json!({"name": "a", "port": 80, "weight": 1}),
+                json!({"name": "b", "port": 80}),
+            ],
+        )
+        .unwrap();
+        assert_eq!(partial.select().err(), Some(crate::lb::ERR_INCONSISTENT_WEIGHT));
+
+        let refs = vec![json!({"name": "a", "port": 80}), json!({"name": "b", "port": 80})];
+        let old = Arc::new(l4_generation(family, json!({"name": "route"}), refs.clone()).unwrap());
+        let retained = Arc::clone(&old);
+        assert_eq!(old.select().unwrap().slot(), 0);
+        assert_eq!(retained.select().unwrap().slot(), 1);
+        assert_eq!(old.select().unwrap().slot(), 0);
+        let replacement = l4_generation(family, json!({"name": "route"}), refs).unwrap();
+        drop(old);
+        assert_eq!(replacement.select().unwrap().slot(), 0);
+        assert_eq!(retained.select().unwrap().slot(), 1);
+        assert_eq!(replacement.select().unwrap().slot(), 1);
+    }
+}

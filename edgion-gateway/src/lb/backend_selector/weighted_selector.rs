@@ -65,8 +65,8 @@ fn normalize_weights(mut weights: Vec<usize>) -> Vec<usize> {
 /// Construction-time invariant violation for [`WeightedRoundRobin`].
 ///
 /// Returned by [`WeightedRoundRobin::new`] / [`WeightedRoundRobin::with_equal_weights`]
-/// instead of panicking, so callers on long-running paths (lazy route init, webhook
-/// resolve) can fail gracefully (fail-close) rather than abort the process.
+/// instead of panicking, so route-generation compilation can capture a fail-closed
+/// selection error rather than abort the process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WrrError {
     /// `items` was empty.

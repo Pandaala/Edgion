@@ -77,7 +77,7 @@ fn make_route(
         },
         metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::empty()),
         plugin_runtime: Arc::new(PluginRuntime::new()),
-        backend_finder: Arc::new(BackendSelector::new()),
+        backend_finder: Arc::new(BackendSelector::new(vec![], vec![])),
         backends: Arc::from(Vec::new()),
     })
 }
@@ -351,7 +351,7 @@ fn make_header_only_route(
         },
         metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::empty()),
         plugin_runtime: Arc::new(PluginRuntime::new()),
-        backend_finder: Arc::new(BackendSelector::new()),
+        backend_finder: Arc::new(BackendSelector::new(vec![], vec![])),
         backends: Arc::from(Vec::new()),
     })
 }

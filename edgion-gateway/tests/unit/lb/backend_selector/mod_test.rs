@@ -1,50 +1,45 @@
 use super::*;
 use std::collections::HashMap;
 
-// ── BackendSelector dispatch & lazy-init coverage ──────────────────────────
+// ── BackendSelector construction and selection coverage ────────────────────
 
 #[test]
-fn selector_select_before_init_returns_no_backend_refs_error() {
-    let s: BackendSelector<u32> = BackendSelector::new();
-    assert!(!s.is_initialized());
-    let err = s.select().expect_err("uninit selector must error");
-    assert_eq!(err, ERR_NO_BACKEND_REFS);
+fn selector_default_weights_distribute_evenly() {
+    let s = BackendSelector::new(vec![0, 1], vec![None, None]);
+    assert_eq!(s.select(), Ok(0));
+    assert_eq!(s.select(), Ok(1));
+    assert_eq!(s.select(), Ok(0));
+    assert_eq!(s.select(), Ok(1));
 }
 
 #[test]
 fn selector_init_with_empty_items_records_error() {
-    let s: BackendSelector<u32> = BackendSelector::new();
-    s.init(vec![], vec![]);
-    assert!(s.is_initialized());
+    let s: BackendSelector<u32> = BackendSelector::new(vec![], vec![]);
     assert_eq!(s.select().unwrap_err(), ERR_NO_BACKEND_REFS);
 }
 
 #[test]
 fn selector_rejects_more_items_than_weights() {
-    let s: BackendSelector<&'static str> = BackendSelector::new();
-    s.init(vec!["a", "b"], vec![Some(1)]);
+    let s: BackendSelector<&'static str> = BackendSelector::new(vec!["a", "b"], vec![Some(1)]);
     assert_eq!(s.select().unwrap_err(), ERR_WRR_BUILD_FAILED);
 }
 
 #[test]
 fn selector_rejects_more_weights_than_items() {
-    let s: BackendSelector<&'static str> = BackendSelector::new();
-    s.init(vec!["a"], vec![Some(1), Some(2)]);
+    let s: BackendSelector<&'static str> = BackendSelector::new(vec!["a"], vec![Some(1), Some(2)]);
     assert_eq!(s.select().unwrap_err(), ERR_WRR_BUILD_FAILED);
 }
 
 #[test]
 fn selector_init_partial_weights_is_inconsistent_error() {
     // Mixed Some/None weights: the selector must reject the configuration.
-    let s: BackendSelector<&'static str> = BackendSelector::new();
-    s.init(vec!["a", "b"], vec![Some(1), None]);
+    let s: BackendSelector<&'static str> = BackendSelector::new(vec!["a", "b"], vec![Some(1), None]);
     assert_eq!(s.select().unwrap_err(), ERR_INCONSISTENT_WEIGHT);
 }
 
 #[test]
 fn selector_single_valid_item_returns_it() {
-    let s: BackendSelector<&'static str> = BackendSelector::new();
-    s.init(vec!["only"], vec![None]);
+    let s: BackendSelector<&'static str> = BackendSelector::new(vec!["only"], vec![None]);
     assert_eq!(s.select().unwrap(), "only");
     // Repeated calls keep returning the same one (Single state).
     assert_eq!(s.select().unwrap(), "only");
@@ -53,8 +48,7 @@ fn selector_single_valid_item_returns_it() {
 #[test]
 fn selector_zero_weight_filters_item_out() {
     // Three items, but two have weight 0 → should collapse to single item.
-    let s: BackendSelector<&'static str> = BackendSelector::new();
-    s.init(vec!["a", "b", "c"], vec![Some(0), Some(0), Some(2)]);
+    let s: BackendSelector<&'static str> = BackendSelector::new(vec!["a", "b", "c"], vec![Some(0), Some(0), Some(2)]);
     for _ in 0..5 {
         assert_eq!(s.select().unwrap(), "c");
     }
@@ -62,15 +56,13 @@ fn selector_zero_weight_filters_item_out() {
 
 #[test]
 fn selector_all_zero_weights_yields_no_backend_refs_error() {
-    let s: BackendSelector<&'static str> = BackendSelector::new();
-    s.init(vec!["a", "b"], vec![Some(0), Some(0)]);
+    let s: BackendSelector<&'static str> = BackendSelector::new(vec!["a", "b"], vec![Some(0), Some(0)]);
     assert_eq!(s.select().unwrap_err(), ERR_NO_BACKEND_REFS);
 }
 
 #[test]
 fn selector_multiple_items_dispatch_to_weighted_round_robin() {
-    let s: BackendSelector<&'static str> = BackendSelector::new();
-    s.init(vec!["a", "b", "c"], vec![Some(1), Some(2), Some(5)]);
+    let s: BackendSelector<&'static str> = BackendSelector::new(vec!["a", "b", "c"], vec![Some(1), Some(2), Some(5)]);
 
     let mut counts: HashMap<&'static str, usize> = HashMap::new();
     let total = 1 + 2 + 5;
@@ -83,12 +75,33 @@ fn selector_multiple_items_dispatch_to_weighted_round_robin() {
 }
 
 #[test]
-fn selector_init_is_idempotent() {
-    let s: BackendSelector<&'static str> = BackendSelector::new();
-    s.init(vec!["a"], vec![None]);
-    // Second init must be ignored — the second config should NOT replace.
-    s.init(vec!["b"], vec![None]);
-    assert_eq!(s.select().unwrap(), "a");
+fn selector_captured_generation_shares_cursor_and_replacement_is_independent() {
+    let old = std::sync::Arc::new(BackendSelector::new(vec![0, 1], vec![None, None]));
+    let captured = std::sync::Arc::clone(&old);
+    assert_eq!(old.select(), Ok(0));
+    assert_eq!(captured.select(), Ok(1));
+    assert_eq!(old.select(), Ok(0));
+    let replacement = BackendSelector::new(vec![0, 1], vec![None, None]);
+    drop(old);
+    assert_eq!(replacement.select(), Ok(0));
+    assert_eq!(captured.select(), Ok(1));
+    assert_eq!(replacement.select(), Ok(1));
+}
+
+#[test]
+fn selector_negative_weights_filter_items_out() {
+    let s = BackendSelector::new(vec![0, 1, 2], vec![Some(-1), Some(0), Some(3)]);
+    assert_eq!(s.select(), Ok(2));
+    assert_eq!(s.select(), Ok(2));
+    let empty = BackendSelector::new(vec![0], vec![Some(-1)]);
+    assert_eq!(empty.select(), Err(ERR_NO_BACKEND_REFS));
+}
+
+#[test]
+fn selector_weighted_constructor_failure_is_selection_error() {
+    let count = u16::MAX as usize + 1;
+    let s = BackendSelector::new((0..count).collect(), vec![Some(1); count]);
+    assert_eq!(s.select(), Err(ERR_WRR_BUILD_FAILED));
 }
 
 // ── WeightedRoundRobin direct coverage ────────────────────────────────────

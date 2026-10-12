@@ -332,19 +332,18 @@ impl HttpRouteRuleUnit {
     /// Build a per-rule LB selector over original backend slots. Its WRR cursor
     /// and indexes are shared across the rule's match items and hostname groups.
     pub fn build_backend_selector(backends: &[CompiledBackend]) -> Arc<BackendSelector<usize>> {
-        let selector = BackendSelector::new();
         let generic_backends = backends
             .iter()
             .filter(|backend| backend.is_generic_selectable())
             .collect::<Vec<_>>();
-        if !generic_backends.is_empty() {
-            let weights = generic_backends
-                .iter()
-                .map(|backend| backend.schema.weight.or(Some(1)))
-                .collect();
-            selector.init(generic_backends.iter().map(|backend| backend.slot).collect(), weights);
-        }
-        Arc::new(selector)
+        let weights = generic_backends
+            .iter()
+            .map(|backend| backend.schema.weight.or(Some(1)))
+            .collect();
+        Arc::new(BackendSelector::new(
+            generic_backends.iter().map(|backend| backend.slot).collect(),
+            weights,
+        ))
     }
 
     /// Pre-compile RegularExpression regexes for header and query param matchers.

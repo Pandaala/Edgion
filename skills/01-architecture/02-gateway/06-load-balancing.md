@@ -67,7 +67,7 @@ RoundRobin (`select_roundrobin_backend_key`).
 
 ```rust
 pub struct BackendSelector<T> {
-    state: ArcSwap<Option<SelectorState<T>>>,
+    state: SelectorState<T>,
 }
 
 enum SelectorState<T> {
@@ -78,10 +78,18 @@ enum SelectorState<T> {
 ```
 
 Characteristics:
-- Route compilation initializes the selector with `init(items, weights)` before the unit is published;
-  request handling only selects from the compiled state.
-- Thread-safe: uses ArcSwap internally.
-- Weight validation: weights must be configured for all or for none; backends with weight 0 are filtered out.
+- Route compilation constructs the complete plan with `BackendSelector::new(items, weights)`
+  before publication. Private immutable state has no initialization or replacement API;
+  empty inputs capture the existing no-backend error.
+- HTTP/gRPC rule units share one `Arc<BackendSelector<usize>>` across matches and
+  hostname indexes. L4 owns its selector in `CompiledL4Backends`. WRR's atomic cursor
+  remains shared within that owner; new compiled generations receive independent
+  cursors, while captured or reused old units retain their existing cursor.
+- Selection reads the plan directly. Outer route snapshots own publication; no inner
+  swap, request initialization, additional lock or request copy is needed.
+- Weight validation: weights must be configured for all or for none; nonpositive weights
+  are filtered out. HTTP/gRPC builders default omitted weights to 1. Original slot
+  indices, invalid/denied weighted shares and HTTP AI dispatch classification are preserved.
 - Error codes include `ERR_NO_BACKEND_REFS`, `ERR_INCONSISTENT_WEIGHT`, and
   `ERR_WRR_BUILD_FAILED`.
 

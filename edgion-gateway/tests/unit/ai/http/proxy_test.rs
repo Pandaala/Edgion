@@ -795,7 +795,7 @@ fn native_admission_route() -> Arc<crate::routes::http::match_unit::HttpRouteRul
         metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::empty()),
         plugin_runtime: Arc::new(PluginRuntime::new()),
         backends: Arc::from(vec![compiled_ai_backend(None)]),
-        backend_finder: Arc::new(crate::lb::BackendSelector::new()),
+        backend_finder: Arc::new(crate::lb::BackendSelector::new(vec![], vec![])),
     })
 }
 

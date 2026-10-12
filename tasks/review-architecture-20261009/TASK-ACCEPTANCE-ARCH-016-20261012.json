@@ -1,0 +1,42 @@
+{
+  "finding": "ARCH-016",
+  "disposition": "fixed-and-verified",
+  "authorization": "User explicitly requested deletion of original ARCH-016 after accepting its implementation.",
+  "finding_sha256": "c347ad0c4588fab349f4d1a71f37bd850fda25436723e092183319d12dfb6160",
+  "current_head": "fb6bebb93c53792c31147f18f2d9500febdf198b",
+  "independent_reviewer": "/root/result_reviewer",
+  "model": "gpt-6-astra",
+  "reasoning_effort": "medium",
+  "decision": "PASS",
+  "reviewed_implementation_digest": "bf8c9ff628ed38cab9824faa9e7307b2cdeb68bfe27d6d0c09e39f90c0d46274",
+  "approved_plan_sha256": "7e90f40d417b0b3b7427d6c8a524b64d0ddfe8dd38e1245103f74f76bde4183b",
+  "result_files": {
+    "edgion-gateway/src/backends/runtime.rs": "520932593b64b59fe6cb01a7233048666d0dee8f8d63de173f8e2300bc8eeadc",
+    "edgion-gateway/src/lb/backend_selector/selector.rs": "7e96943d3666a7f83e4f4c23ddc5f8220b65ba0224d24b7d4729218cc3bfda6c",
+    "edgion-gateway/src/lb/backend_selector/weighted_selector.rs": "3e11b520e32d8cf0a675efd10789fc139dffdf0cd9ce265e43522a41b610139b",
+    "edgion-gateway/src/routes/grpc/match_unit.rs": "188f2c02eeda74bec33d9f2c56b0df0b008b2e7914b0ae6992447c738bdc0790",
+    "edgion-gateway/src/routes/http/match_unit.rs": "c67bc90444d9edbe8aa2ceaec2a93ca4c30f7556b25a021a3c5ca40ce0f99806",
+    "edgion-gateway/tests/unit/ai/http/attempt_test.rs": "785302b4467128045f0ac49bff27db407dae5dc7b02af7e6dfce21ae616c6a84",
+    "edgion-gateway/tests/unit/ai/http/proxy_test.rs": "8fadf40ac364606f569f8091427f19e0392e72556900656251f751852984e813",
+    "edgion-gateway/tests/unit/ai/runtime/dispatch_test.rs": "a794251680b22dfd07c1cf8c20874757f8509f68e7f9d5f200a84fbe486194c5",
+    "edgion-gateway/tests/unit/backends/runtime_test.rs": "2a29fc0f7e80748849170da12074e6be85a6f1f30dcb15dfd32755522230387f",
+    "edgion-gateway/tests/unit/lb/backend_selector/mod_test.rs": "a4c3ef886224da1ae2c9aae097a3dd30619b777621d5ef41746fc0d5001e4ddb",
+    "edgion-gateway/tests/unit/plugins/http/direct_endpoint/plugin_test.rs": "cb42db5955fc24628c8bc20deb8346005a0e09196625b1d2cde5c3307dca0728",
+    "edgion-gateway/tests/unit/routes/grpc/conf_handler_impl_test.rs": "5feba1680bafc14d37d484ed8f3b608ca5d958f1fbed81bc9589bddacfbb5d1f",
+    "edgion-gateway/tests/unit/routes/grpc/match_engine_test.rs": "d181a793727de9c909623a02ab686a2017eedbcc4b4c80b236bcef780b5acdf1",
+    "edgion-gateway/tests/unit/routes/grpc/routes_mgr_test.rs": "000f6e9a0df7bc2f5c7c7ac576bedf5ac4b3ebfae967c394e8569091105970ce",
+    "edgion-gateway/tests/unit/routes/http/conf_handler_impl_test.rs": "11979ce2a83da8fbbc242f3b9c45ba91079897c0ca8273bb6fa8693e25baf62e",
+    "edgion-gateway/tests/unit/routes/http/proxy_http/pg_upstream_response_body_filter_test.rs": "a3994364fbaf85c54f81d6ca077c5368b8a44a89ba7cd081356686f246bf3147",
+    "edgion-gateway/tests/unit/routes/http/proxy_http/pg_upstream_response_filter_test/lb_sample_tests.rs": "f1b63946df5a12baeed8b47975512bfb5b4830244c05eaa769f55b770da60582"
+  },
+  "knowledge": "../../skills/04-review/lb/regression-guards/backend-ref-selector-generation-ownership.md",
+  "acceptance": "Immutable generation-owned backendRef plan replaces unused initialization/swap lifecycle. Errors, weights, raw slots, denied/AI shares, rule cursor sharing and retained-generation lifetimes preserved.",
+  "reported_execution": {
+    "implementation_targeted_tests": "PASS: 126 tests across six filters",
+    "supplemental_retry_peer_endpoint_tests": "PASS: 127 tests across four filters",
+    "workspace_check_and_clippy": "PASS; Clippy without warnings",
+    "format_and_guards": "PASS: fmt, agent docs, SSA, metrics, Pingora source, transform contract, unit layout, no-tracing"
+  },
+  "limits": "Checks executed earlier in this conversation; unchanged relevant content revalidated during cleanup. No full suite, live integration or benchmark; no new primary coverage.",
+  "preservation": "Code, tests, canonical knowledge, original verification receipt, coverage, reports and historical drift snapshots retained."
+}

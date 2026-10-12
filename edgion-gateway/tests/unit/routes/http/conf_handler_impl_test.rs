@@ -1330,6 +1330,23 @@ fn rule_and_metric_handles_share_across_fanout_but_selectors_stay_per_hostname()
         !Arc::ptr_eq(&a00.backend_finder, &a10.backend_finder),
         "different rules must retain independent selector state"
     );
+
+    // Rule 1 has two equally weighted backends; hostname and match fan-out
+    // must advance one shared cursor. A newly compiled generation starts fresh.
+    assert_eq!(a10.backend_finder.select(), Ok(0));
+    assert_eq!(b11.backend_finder.select(), Ok(1));
+    assert_eq!(a10.backend_finder.select(), Ok(0));
+    let replacement = parse_http_routes_to_domain_rules(&data);
+    let new_unit = replacement["a.example.com"]
+        .0
+        .iter()
+        .find(|unit| unit.matched_info.rule_id == 1)
+        .expect("replacement retains rule 1");
+    assert!(!Arc::ptr_eq(&a10.backend_finder, &new_unit.backend_finder));
+    drop(domain_rules);
+    assert_eq!(new_unit.backend_finder.select(), Ok(0));
+    assert_eq!(b11.backend_finder.select(), Ok(1));
+    assert_eq!(new_unit.backend_finder.select(), Ok(1));
 }
 
 #[test]
@@ -1848,4 +1865,10 @@ fn long_kubernetes_route_owner_compiles_backend_rules_without_losing_attribution
             assert_eq!(unit.backends[0].schema().name, "svc");
         }
     }
+}
+
+#[test]
+fn compiled_http_empty_backend_selector_retains_no_backend_error() {
+    let selector = HttpRouteRuleUnit::build_backend_selector(&[]);
+    assert_eq!(selector.select(), Err(crate::lb::ERR_NO_BACKEND_REFS));
 }
