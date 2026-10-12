@@ -1530,8 +1530,8 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         within_limit
     }
 
-    fn client_cert_info(&self) -> Option<crate::ctx::ClientCertInfo> {
-        self.ctx.request_info.client_cert_info().cloned()
+    fn client_cert_info(&self) -> Option<&crate::ctx::ClientCertInfo> {
+        self.ctx.request_info.client_cert_info()
     }
 
     fn downstream_is_tls(&self) -> Option<bool> {

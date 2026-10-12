@@ -29940,9 +29940,10 @@
         "independent_reviewer": "/root/query_result_review",
         "reviewed_finding_sha256": "794243ee014b2b713e61edaee37c5d11cec67f575ccd5882638d920f6aa268e6",
         "acceptance_evidence": "TASK-ACCEPTANCE-ARCH-004-20261012.json",
-        "implementation_review": "../pending/architecture-context-query-cache-source/02-implementation.md",
+        "implementation_review": "TASK-ACCEPTANCE-ARCH-004-20261012.json",
         "index_title": "Closed context query-cache source ownership finding; acceptance evidence",
-        "preservation": "Original claim hash, independent verification history, primary coverage and all unrelated candidates retained."
+        "preservation": "Original claim hash, independent verification history, primary coverage and all unrelated candidates retained.",
+        "working_records_removed": true
       }
     },
     "ARCH-005": {
@@ -30094,7 +30095,7 @@
     "ARCH-007": {
       "path": "ARCH-007-borrowed-mtls-condition-candidates.md",
       "sha256": "d9c4646079700c3e62265c2b5f405fd8de808ee42239bd3666d6d7474ec2393d",
-      "status": "candidate",
+      "status": "implemented",
       "kind": "architecture-debt",
       "partition": "PART-350",
       "analyst": "/root/analyze_adapter",
@@ -30170,7 +30171,18 @@
       ],
       "previous_status": "confirmed",
       "revalidation_pending": true,
-      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json",
+      "finding_removed": true,
+      "removed_finding_path": "ARCH-007-borrowed-mtls-condition-candidates.md",
+      "current_implementation_acceptance": "TASK-ACCEPTANCE-ARCH-007-20261012.json",
+      "closure": {
+        "date": "2026-10-12",
+        "disposition": "implemented; source removed at user request; overall repository verification unresolved",
+        "authorization": "User requested cleanup of implementation records and then explicitly requested deletion of the original source finding. No production source deletion authorized.",
+        "reviewed_finding_sha256": "d9c4646079700c3e62265c2b5f405fd8de808ee42239bd3666d6d7474ec2393d",
+        "acceptance_evidence": "TASK-ACCEPTANCE-ARCH-007-20261012.json",
+        "preservation": "Original hashes, verification receipts/history, primary coverage, drift history and unrelated changes retained. No production/test/knowledge edits or Git publication."
+      }
     },
     "ARCH-008": {
       "path": "ARCH-008-precompiled-ai-backend-lookup-key.md",

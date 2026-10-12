@@ -374,6 +374,17 @@ Gateway API standard filters (added through the private `add_from_httproute_filt
 
 Skip log format: `"skip:keyExist,hdr:X-Internal"` or `"!run:keyMatch,method"`.
 
+mTLS conditions borrow `ClientCertInfo` from the live session for one synchronous
+predicate evaluation. Subject/CN and lazily filtered SAN candidates are borrowed
+slices; typed URI/email SANs strip display prefixes and DNS uses the canonical
+prefix classifier. Any matching candidate determines the base result before one
+final negation. Empty candidate sets suppress uncompiled-regex diagnostics.
+Response-body conditions continue to read live inputs for every callback without
+per-chunk logs or result caching. HeaderCertAuth explicitly clones the complete
+record when it must retain ownership across mutable header operations; DSL copies
+only the selected CN/fingerprint into owned VM values. See the
+[ARCH-007 regression evidence](../../04-review/cpu-memory/regression-guards/response-condition-live-input-borrowing.md).
+
 ### ⚠️ Critical constraint: regex must be compiled during runtime construction
 
 `KeyMatch` supports a `regex` field. The `compiled_regex` field is annotated with `#[serde(skip)]` and is `None` after deserialization. **`compile()` MUST run before the runtime is published**; otherwise every request that hits the fallback path will execute `Regex::new()`, causing significant CPU overhead. The Controller validates the schema for status but does not build a runtime. The Gateway compiles conditions while building each EdgionPlugins resource generation.

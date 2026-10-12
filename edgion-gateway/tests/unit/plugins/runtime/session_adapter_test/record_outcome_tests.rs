@@ -300,7 +300,7 @@ async fn response_condition_source_allocation_inventory() {
     );
 
     let (sans, mtls_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
-        std::hint::black_box(extract_mtls_values(&adapter, MtlsField::San, Some(&SanType::Uri)))
+        std::hint::black_box(extract_mtls_values(&adapter, MtlsField::San, Some(&SanType::Uri)).collect::<Vec<_>>())
     });
     assert_eq!(sans, ["spiffe://example.com/alice"]);
     eprintln!(
@@ -2630,4 +2630,86 @@ async fn terminal_grpc_adapter_failure_keeps_outcome_and_duplicate_queue() {
         assert_eq!(ctx.diagnostics.entries().len(), 1);
         assert!(ctx.diagnostics.contains_error(EdgionErrorCode::ClientClosed));
     }
+}
+
+#[tokio::test]
+async fn borrowed_mtls_conditions_ignore_unrelated_san_allocation_cost() {
+    use crate::ctx::ClientCertInfo;
+    use crate::plugins::runtime::conditions::{CompiledPluginConditions, EvaluationResult};
+    use edgion_resources::resources::edgion_plugins::conditions::{
+        Condition, ConditionSet, MatchCore, MtlsField, MtlsMatchCondition, PluginConditions, SanType,
+    };
+
+    for unrelated_sans in [0, 4096] {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        let mut sans = vec!["uri:spiffe://example.com/first".to_string()];
+        sans.extend((0..unrelated_sans).map(|index| format!("unrelated-{index}.example.com")));
+        ctx.request_info.install_tls_info(
+            None,
+            None,
+            Some(ClientCertInfo {
+                subject: "CN=alice".to_string(),
+                cn: Some("alice".to_string()),
+                sans,
+                fingerprint: "ab:cd".to_string(),
+            }),
+            None,
+            None,
+        );
+        let stored = ctx.request_info.client_cert_info().unwrap() as *const ClientCertInfo;
+        let predicates = [
+            (MtlsField::Cn, None, "alice"),
+            (MtlsField::San, Some(SanType::Uri), "spiffe://example.com/first"),
+        ]
+        .map(|(field, san_type, value)| {
+            let mut condition = MtlsMatchCondition {
+                field,
+                san_type,
+                core: MatchCore {
+                    values: Some(vec![value.to_string()]),
+                    ..Default::default()
+                },
+                negate: false,
+                descriptor: Box::from(""),
+            };
+            condition.compile().unwrap();
+            CompiledPluginConditions::new(PluginConditions {
+                skip: None,
+                run: Some(ConditionSet::all_of(vec![Condition::MtlsMatch(condition)])),
+            })
+        });
+        let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        assert_eq!(adapter.client_cert_info().unwrap() as *const ClientCertInfo, stored);
+        let (owned, clone_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+            std::hint::black_box(adapter.client_cert_info().cloned())
+        });
+        assert_eq!(owned.as_ref().unwrap().sans.len(), unrelated_sans + 1);
+        assert!(clone_stats.calls >= unrelated_sans + 5);
+        eprintln!(
+            "mTLS owned certificate baseline {unrelated_sans} unrelated SANs: {} allocations, {} requested bytes",
+            clone_stats.calls, clone_stats.requested_bytes
+        );
+        for condition in predicates {
+            let (result, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+                std::hint::black_box(condition.evaluate(&adapter))
+            });
+            assert_eq!(result, EvaluationResult::Run);
+            assert_eq!(stats.calls, 0);
+            assert_eq!(stats.requested_bytes, 0);
+        }
+    }
+}
+
+#[tokio::test]
+async fn borrowed_client_certificate_absent_without_exposed_record() {
+    let mut session = test_session().await;
+    let mut ctx = EdgionHttpContext::default();
+    assert!(PingoraSessionAdapter::new(&mut session, &mut ctx)
+        .client_cert_info()
+        .is_none());
+    ctx.request_info.install_tls_info(None, None, None, None, None);
+    assert!(PingoraSessionAdapter::new(&mut session, &mut ctx)
+        .client_cert_info()
+        .is_none());
 }

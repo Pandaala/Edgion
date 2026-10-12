@@ -57,11 +57,10 @@ pub trait PluginSession: Send + Sync {
     /// is derived from it, so the mock surface grows by this one method no
     /// matter how rich that extension trait becomes.
     ///
-    /// It must be a bare `&` return: `mockall` rejects any return type that
-    /// nests a non-`'static` lifetime (`Option<&[u8]>`, `Option<&HeaderValue>`,
-    /// a borrowed view struct) as well as `Fn`-object parameters, so neither an
-    /// `Option`-returning accessor nor a visitor callback can live on this
-    /// trait.
+    /// A bare reference keeps mock expectations backed by owned header maps.
+    /// Mockall rejects elided lifetimes in nested reference returns; explicitly
+    /// named self lifetimes work, but their expectations require static fixtures.
+    /// Borrowed header views therefore remain in the extension trait.
     ///
     /// Request-header writes go straight into the live header map
     /// (`set_request_header` / `append_request_header` / `remove_request_header`),
@@ -375,7 +374,13 @@ pub trait PluginSession: Send + Sync {
     /// - request is plain HTTP (no TLS)
     /// - connection is TLS without client cert
     /// - EdgionTls did not enable `edgion.io/expose-client-cert`
-    fn client_cert_info(&self) -> Option<ClientCertInfo> {
+    ///
+    /// Gateway frontendValidation retains its existing certificate extraction.
+    /// The borrow ends before mutable session operations; clone explicitly when
+    /// a consumer needs to retain the complete record across those operations.
+    // Mockall requires a named self lifetime for a reference nested in Option.
+    #[allow(clippy::needless_lifetimes)]
+    fn client_cert_info<'a>(&'a self) -> Option<&'a ClientCertInfo> {
         None
     }
 

@@ -1,9 +1,10 @@
 //! Borrowed header accessors for [`PluginSession`].
 //!
 //! These live outside the `#[cfg_attr(test, mockall::automock)]` trait on
-//! purpose. `mockall` 0.14 accepts only bare-reference (`&T`) or owned returns;
-//! it rejects any return type nesting a non-`'static` lifetime (`Option<&str>`,
-//! `Option<&[u8]>`, a borrowed view struct) and rejects `Fn`-object parameters.
+//! purpose. `mockall` 0.14 rejects elided lifetimes in nested reference returns.
+//! Explicitly named self lifetimes support `Option<&T>`, but mock expectations
+//! then require static referenced fixtures. Bare header-map references instead
+//! let expectations own their mutable header fixtures.
 //! Request and response accessors derive from the corresponding bare-reference
 //! [`PluginSession::request_header_map`] and [`PluginSession::response_header_map`]
 //! methods. This trait can use ergonomic borrowed shapes while each side adds only

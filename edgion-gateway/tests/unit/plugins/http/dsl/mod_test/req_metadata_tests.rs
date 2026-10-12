@@ -122,12 +122,13 @@ fn test_req_client_cert_cn() {
     "#;
     let mut session = MockPluginSession::new();
     session.expect_client_cert_info().returning(|| {
-        Some(ClientCertInfo {
+        static CERT: std::sync::OnceLock<ClientCertInfo> = std::sync::OnceLock::new();
+        Some(CERT.get_or_init(|| ClientCertInfo {
             subject: "CN=my-service".to_string(),
             sans: vec![],
             cn: Some("my-service".to_string()),
             fingerprint: "abc123".to_string(),
-        })
+        }))
     });
     session
         .expect_set_request_header()
@@ -143,12 +144,13 @@ fn test_req_client_cert_fingerprint() {
     let source = r#"req.set_header("X-FP", req.client_cert_fingerprint)"#;
     let mut session = MockPluginSession::new();
     session.expect_client_cert_info().returning(|| {
-        Some(ClientCertInfo {
+        static CERT: std::sync::OnceLock<ClientCertInfo> = std::sync::OnceLock::new();
+        Some(CERT.get_or_init(|| ClientCertInfo {
             subject: "CN=svc".to_string(),
             sans: vec![],
             cn: Some("svc".to_string()),
             fingerprint: "sha256:deadbeef".to_string(),
-        })
+        }))
     });
     session
         .expect_set_request_header()
@@ -204,22 +206,24 @@ fn test_req_metadata_string_byte_limits() {
                 }
                 "client_cert_cn" => {
                     session.expect_client_cert_info().times(1).returning(move || {
-                        Some(ClientCertInfo {
+                        static CERT: std::sync::OnceLock<ClientCertInfo> = std::sync::OnceLock::new();
+                        Some(CERT.get_or_init(|| ClientCertInfo {
                             subject: "CN=test".to_string(),
                             sans: vec![],
                             cn: Some(value.to_string()),
                             fingerprint: "unrelated-fingerprint".to_string(),
-                        })
+                        }))
                     });
                 }
                 "client_cert_fingerprint" => {
                     session.expect_client_cert_info().times(1).returning(move || {
-                        Some(ClientCertInfo {
+                        static CERT: std::sync::OnceLock<ClientCertInfo> = std::sync::OnceLock::new();
+                        Some(CERT.get_or_init(|| ClientCertInfo {
                             subject: "CN=test".to_string(),
                             sans: vec![],
                             cn: Some("unrelated-cn".to_string()),
                             fingerprint: value.to_string(),
-                        })
+                        }))
                     });
                 }
                 _ => unreachable!("the table contains only the five string metadata getters"),
@@ -280,12 +284,13 @@ fn test_req_client_cert_present_without_cn() {
     "#;
     let mut session = MockPluginSession::new();
     session.expect_client_cert_info().times(1).returning(|| {
-        Some(ClientCertInfo {
+        static CERT: std::sync::OnceLock<ClientCertInfo> = std::sync::OnceLock::new();
+        Some(CERT.get_or_init(|| ClientCertInfo {
             subject: "O=example".to_string(),
             sans: vec!["service.example".to_string()],
             cn: None,
             fingerprint: "sha256:deadbeef".to_string(),
-        })
+        }))
     });
     session
         .expect_set_request_header()

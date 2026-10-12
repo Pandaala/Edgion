@@ -5,6 +5,7 @@ use crate::request_body::BodyReadError;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use edgion_resources::common::KeyGet;
+use edgion_resources::resources::edgion_plugins::conditions::{MtlsField, SanType};
 use edgion_resources::resources::edgion_plugins::{HmacCredential, HmacMatchConfig};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
@@ -1039,14 +1040,15 @@ fn jwt_claim_match_present_absent_and_negated() {
     assert!(negated_present.evaluate(&absent, Some(&mut log)));
 }
 
-fn cert_session(cert: Option<crate::ctx::ClientCertInfo>) -> MockPluginSession {
+fn cert_session(cert: Option<&'static crate::ctx::ClientCertInfo>) -> MockPluginSession {
     let mut s = MockPluginSession::new();
-    s.expect_client_cert_info().returning(move || cert.clone());
+    s.expect_client_cert_info().return_const(cert);
     s
 }
 
-fn multi_san_cert() -> crate::ctx::ClientCertInfo {
-    crate::ctx::ClientCertInfo {
+fn multi_san_cert() -> &'static crate::ctx::ClientCertInfo {
+    static CERT: std::sync::OnceLock<crate::ctx::ClientCertInfo> = std::sync::OnceLock::new();
+    CERT.get_or_init(|| crate::ctx::ClientCertInfo {
         subject: "CN=alice, O=acme".to_string(),
         sans: vec![
             "alice.example.com".to_string(),
@@ -1055,7 +1057,7 @@ fn multi_san_cert() -> crate::ctx::ClientCertInfo {
         ],
         cn: Some("alice".to_string()),
         fingerprint: "ab:cd".to_string(),
-    }
+    })
 }
 
 fn mtls_match(
@@ -1231,4 +1233,65 @@ fn invalid_ip_reference_payload_is_unresolved_even_with_inline_ips_and_negation(
         assert!(condition.has_unresolved_refs());
         assert!(!condition.evaluate(&MockPluginSession::new(), None));
     }
+}
+
+#[test]
+fn mtls_regex_any_match_and_final_negation() {
+    let session = cert_session(Some(multi_san_cert()));
+    let mut condition = MtlsMatchCondition {
+        field: MtlsField::San,
+        san_type: Some(SanType::Uri),
+        core: core_regex(vec!["^spiffe://edgion[.]io/"]),
+        negate: false,
+        descriptor: Box::from(""),
+    };
+    condition.compile().unwrap();
+    assert!(evaluate_mtls_match(&condition, &session, None));
+    condition.negate = true;
+    assert!(!evaluate_mtls_match(&condition, &session, None));
+    condition.san_type = Some(SanType::Email);
+    assert!(evaluate_mtls_match(&condition, &session, None));
+}
+
+#[test]
+fn mtls_missing_candidates_suppress_uncompiled_regex_diagnostic() {
+    static CERT: std::sync::OnceLock<crate::ctx::ClientCertInfo> = std::sync::OnceLock::new();
+    let cert = CERT.get_or_init(|| crate::ctx::ClientCertInfo {
+        subject: "O=example".to_string(),
+        cn: None,
+        sans: vec!["IP:192.0.2.1".to_string()],
+        fingerprint: "ab:cd".to_string(),
+    });
+    for (session, field, san_type) in [
+        (cert_session(None), MtlsField::Subject, None),
+        (cert_session(Some(cert)), MtlsField::Cn, None),
+        (cert_session(Some(cert)), MtlsField::San, Some(SanType::Uri)),
+    ] {
+        for negate in [false, true] {
+            let condition = MtlsMatchCondition {
+                field,
+                san_type,
+                core: core_regex(vec!["example"]),
+                negate,
+                descriptor: Box::from(""),
+            };
+            let mut log = PluginLog::new("test");
+            assert_eq!(evaluate_mtls_match(&condition, &session, Some(&mut log)), negate);
+            assert!(log.log.is_none());
+        }
+    }
+    let condition = MtlsMatchCondition {
+        field: MtlsField::Subject,
+        san_type: None,
+        core: core_regex(vec!["missing"]),
+        negate: false,
+        descriptor: Box::from(""),
+    };
+    let mut log = PluginLog::new("test");
+    assert!(!evaluate_mtls_match(
+        &condition,
+        &cert_session(Some(cert)),
+        Some(&mut log)
+    ));
+    assert!(serde_json::to_string(&log).unwrap().contains("regex not compiled"));
 }

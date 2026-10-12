@@ -28,13 +28,37 @@ pub fn extract_jwt_claim_values(session: &dyn PluginSession, claim: &str) -> Vec
 }
 
 /// mTLS client-certificate candidates. Subject / CN yield 0 or 1 value; SAN
-/// yields every matching entry (optionally filtered by `san_type`).
-pub fn extract_mtls_values(session: &dyn PluginSession, field: MtlsField, san_type: Option<&SanType>) -> Vec<String> {
-    match field {
-        MtlsField::Subject => single(session.client_cert_info().map(|c| c.subject)),
-        MtlsField::Cn => single(session.client_cert_info().and_then(|c| c.cn)),
-        MtlsField::San => extract_san_values(session, san_type),
-    }
+/// lazily yields matching borrowed entries (optionally filtered by `san_type`).
+/// Untyped SANs retain raw display prefixes; typed URI/email values strip them.
+/// DNS classification uses the canonical typed-SAN display-prefix helper.
+pub fn extract_mtls_values<'a>(
+    session: &'a dyn PluginSession,
+    field: MtlsField,
+    san_type: Option<&SanType>,
+) -> impl Iterator<Item = &'a str> {
+    let san_type = san_type.copied();
+    session.client_cert_info().into_iter().flat_map(move |cert| {
+        let single = match field {
+            MtlsField::Subject => Some(cert.subject.as_str()),
+            MtlsField::Cn => cert.cn.as_deref(),
+            MtlsField::San => None,
+        };
+        let sans = if matches!(field, MtlsField::San) {
+            cert.sans.as_slice()
+        } else {
+            &[]
+        };
+        single
+            .into_iter()
+            .chain(sans.iter().filter_map(move |san| match san_type {
+                None => Some(san.as_str()),
+                Some(SanType::Dns) => {
+                    (!edgion_common::allowed_san::has_typed_san_display_prefix(san)).then_some(san.as_str())
+                }
+                Some(SanType::Uri) => san.strip_prefix("uri:"),
+                Some(SanType::Email) => san.strip_prefix("email:"),
+            }))
+    })
 }
 
 /// Flatten a JSON node into match candidates. Scalars yield one value; arrays
@@ -56,41 +80,6 @@ fn json_node_to_candidates(node: &serde_json::Value) -> Vec<String> {
             .collect(),
         _ => Vec::new(),
     }
-}
-
-fn single(v: Option<String>) -> Vec<String> {
-    match v {
-        Some(s) => vec![s],
-        None => Vec::new(),
-    }
-}
-
-/// SAN candidate values, optionally filtered/normalized by type.
-///
-/// SAN storage format (see `tls/runtime/backend/cert_extractor.rs`): DNS names
-/// are bare; `IP:` / `email:` / `uri:` / `otherName:` carry a type prefix.
-/// Untyped matching returns the raw stored strings; typed matching filters by
-/// prefix and strips it. `DNS` = entries with no known prefix.
-fn extract_san_values(session: &dyn PluginSession, san_type: Option<&SanType>) -> Vec<String> {
-    let Some(cert) = session.client_cert_info() else {
-        return Vec::new();
-    };
-    match san_type {
-        None => cert.sans,
-        Some(SanType::Dns) => cert
-            .sans
-            .into_iter()
-            .filter(|s| !edgion_common::allowed_san::has_typed_san_display_prefix(s))
-            .collect(),
-        Some(SanType::Uri) => strip_san_prefix(cert.sans, "uri:"),
-        Some(SanType::Email) => strip_san_prefix(cert.sans, "email:"),
-    }
-}
-
-fn strip_san_prefix(sans: Vec<String>, prefix: &str) -> Vec<String> {
-    sans.into_iter()
-        .filter_map(|s| s.strip_prefix(prefix).map(|v| v.to_string()))
-        .collect()
 }
 
 #[cfg(test)]

@@ -868,12 +868,18 @@ fn evaluate_mtls_match(
 
 /// Any candidate matching MatchCore is base true. Empty candidates are missing
 /// (base false), then negate.
-fn evaluate_multi_match(core: &MatchCore, candidates: Vec<String>, negate: bool, log: Option<&mut PluginLog>) -> bool {
-    if candidates.is_empty() {
-        return apply_negate(false, negate);
-    }
-    let base = candidates.iter().any(|value| core.matches(value));
-    if !base && core.has_uncompiled_regex() {
+fn evaluate_multi_match(
+    core: &MatchCore,
+    candidates: impl IntoIterator<Item = impl AsRef<str>>,
+    negate: bool,
+    log: Option<&mut PluginLog>,
+) -> bool {
+    let mut present = false;
+    let base = candidates.into_iter().any(|value| {
+        present = true;
+        core.matches(value.as_ref())
+    });
+    if present && !base && core.has_uncompiled_regex() {
         if let Some(log) = log {
             log.push_err("regex not compiled");
         }

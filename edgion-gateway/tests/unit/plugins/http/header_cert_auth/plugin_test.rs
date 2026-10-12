@@ -102,7 +102,7 @@ async fn subject_only_identity_strategies_fail_closed_with_exact_response() {
         session
             .expect_client_cert_info()
             .times(1)
-            .return_const(Some(subject_only_cert_info()));
+            .return_const(Some(subject_only_cert_fixture()));
 
         let mut sequence = Sequence::new();
         session
@@ -156,7 +156,7 @@ async fn subject_only_identity_strategies_allow_exact_anonymous_result() {
         session
             .expect_client_cert_info()
             .times(1)
-            .return_const(Some(subject_only_cert_info()));
+            .return_const(Some(subject_only_cert_fixture()));
 
         let mut sequence = Sequence::new();
         session
@@ -194,7 +194,7 @@ async fn test_connection_mode_success() {
     session
         .expect_client_cert_info()
         .times(1)
-        .return_const(Some(sample_cert_info()));
+        .return_const(Some(sample_cert_fixture()));
     session
         .expect_set_request_header_value()
         .times(2)
@@ -456,4 +456,14 @@ fn actual_ca_identity_filters_before_crypto_and_preserves_partial_success() {
         }
         assert!(plugin.config.resolved_ca_secrets.is_none());
     }
+}
+
+fn subject_only_cert_fixture() -> &'static ClientCertInfo {
+    static CERT: std::sync::OnceLock<ClientCertInfo> = std::sync::OnceLock::new();
+    CERT.get_or_init(subject_only_cert_info)
+}
+
+fn sample_cert_fixture() -> &'static ClientCertInfo {
+    static CERT: std::sync::OnceLock<ClientCertInfo> = std::sync::OnceLock::new();
+    CERT.get_or_init(sample_cert_info)
 }

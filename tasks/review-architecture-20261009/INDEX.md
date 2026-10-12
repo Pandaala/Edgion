@@ -15,7 +15,7 @@ Source reviewed: 512 / 1676; 467 primary partitions.
 | ARCH-004 | resolved | architecture-debt | [Closed context query-cache source ownership finding; acceptance evidence](TASK-ACCEPTANCE-ARCH-004-20261012.json) |
 | ARCH-005 | resolved | architecture-debt | [Closed typed transport admission finding; acceptance evidence](TASK-ACCEPTANCE-ARCH-005-20261012.json) |
 | ARCH-006 | resolved | architecture-debt | [Closed resolved logical body-limit finding; acceptance evidence](TASK-ACCEPTANCE-ARCH-006-20261012.json) |
-| ARCH-007 | candidate | architecture-debt | [Match mTLS conditions through borrowed certificate candidates](ARCH-007-borrowed-mtls-condition-candidates.md) |
+| ARCH-007 | implemented | architecture-debt | [Implemented borrowed mTLS candidates; cleanup and verification evidence](TASK-ACCEPTANCE-ARCH-007-20261012.json) |
 | ARCH-008 | candidate | architecture-debt | [Borrow precompiled AI backend lookup keys during request planning](ARCH-008-precompiled-ai-backend-lookup-key.md) |
 | ARCH-009 | candidate | architecture-debt | [Keep credential-admission projection inside the prepared AI attempt](ARCH-009-prepared-ai-admission-input-owner.md) |
 | ARCH-010 | candidate | behavior-defect | [Restrict the shared AI JSON parser to JSON whitespace](ARCH-010-json-span-format-whitespace.md) |

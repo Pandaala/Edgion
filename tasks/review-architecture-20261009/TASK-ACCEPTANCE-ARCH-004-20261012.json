@@ -5,8 +5,6 @@
   "finding_sha256": "794243ee014b2b713e61edaee37c5d11cec67f575ccd5882638d920f6aa268e6",
   "independent_reviewer": "/root/query_result_review",
   "decision": "PASS",
-  "implementation_task": "../pending/architecture-context-query-cache-source/architecture-context-query-cache-source.md",
-  "implementation_review": "../pending/architecture-context-query-cache-source/02-implementation.md",
   "knowledge": "../../skills/04-review/uri-normalization/mandatory-design/normalization-contract.md",
   "base_head": "c0282197e4dbebb4db47bb2940b9b06d12d7c41a",
   "scoped_diff_sha256": "ab3cc6f207e957ef990b7493d1b66d267b430b872ba08825031b9b89090a2f74",
@@ -22,5 +20,102 @@
   },
   "implementation_review_sha256": "dbf07ba9007a8c227b3cc24dca0539f6b356e2534c1bb3be115b203f086e7482",
   "reported_execution": "31 targeted tests passed; workspace all-targets check and Clippy, formatting, document consistency, SSA force, metrics inventory, Pingora source, Gateway API transform, unit-test layout and no-tracing guards passed. Independent final review PASS.",
-  "limits": "No full test suite, end-to-end integration run or performance claim. Closure adds no primary review coverage. Original verification history, coverage and unrelated candidates remain unchanged; implementation task records are retained."
+  "limits": "No full test suite, end-to-end integration run or performance claim. Closure adds no primary review coverage. Original verification history, coverage and unrelated candidates remain unchanged; completed working records removed after preserving verification and deferred follow-up in this receipt.",
+  "scoped_drift_revalidation": {
+    "edgion-gateway/src/ctx.rs": {
+      "accepted_sha256": "b91ff87641477d9afb044bd65155cd8e8234b8a9c7c4fbe7debeeffba2ae9327",
+      "current_sha256": "710ff08ec304695d5b73b0e9a6e0d86408eb95b0dc4a84340944bd2cf5ceb792",
+      "reason": "Later original-method snapshot field added; removing that exact insertion reproduces the accepted full-file hash. Query-cache implementation unchanged."
+    },
+    "edgion-gateway/tests/unit/plugins/runtime/session_adapter_test/record_outcome_tests.rs": {
+      "accepted_sha256": "99f692964986834ece998d2cd9aa9c2f6a071a3c9b6759520f720fe21a810976",
+      "current_sha256": "c3ac32cb9e72fabe866ef256fa587388373c5039049e67271b56f3c622bf8fe7",
+      "reason": "Later GraphQL bodyless GET regression added; removing that exact insertion reproduces the accepted full-file hash. Query cache priming unchanged."
+    }
+  },
+  "retired_working_records": {
+    "directory": "tasks/pending/architecture-context-query-cache-source",
+    "authorization": "User requested removing completed implementation working records.",
+    "implementation_task": "../pending/architecture-context-query-cache-source/architecture-context-query-cache-source.md",
+    "implementation_review": "../pending/architecture-context-query-cache-source/02-implementation.md",
+    "record_hashes": {
+      "result-binding.json": "eb9fb5fa68cd12a4913afe92a9da53ee6109f24072e85fac1d41338433187c63",
+      "intake-baseline.json": "2e1682bd6a413c4b44587c343cf3f43e77c4a5ea6236e5f979ac6f8c9317bf51",
+      "00-context.md": "3fe628fbbb84a489971e2b77a8eead76901193e432b0b23215f3e90e362ff728",
+      "05-issues.md": "290456c510269490a71ff9af7380e1159cb7aff52329c1feb07bff30e2034d87",
+      "03-subtasks.md": "bdfee3e8eef03056bec4711fdc0be9d6870692424e7c68d338fd080a4d6f2cac",
+      "01-design.md": "8101d5da14500ba34d3db89a8f17c255a151cc2c5bf07c1551c018a229a53b26",
+      "02-implementation.md": "dbf07ba9007a8c227b3cc24dca0539f6b356e2534c1bb3be115b203f086e7482",
+      "architecture-context-query-cache-source.md": "bca1c1d544312f7ca529808a339a15a7f4f4358ce0f9ae4d5a7d5846fe0342a3"
+    }
+  },
+  "verification": {
+    "checks": {
+      "cargo fmt --all": 0,
+      "cargo check --workspace --all-targets": 0,
+      "cargo clippy --workspace --all-targets": 0,
+      "git diff --check": 0,
+      "python3 cicd/checks/validate_agent_docs.py": 0,
+      "python3 cicd/checks/check_ssa_force.py": 0,
+      "python3 cicd/checks/check_metrics_inventory.py": 0,
+      "python3 cicd/checks/check_pingora_source_policy.py": 0,
+      "python3 cicd/checks/generate_gateway_api_transform_contract.py --check": 0,
+      "python3 cicd/checks/check_unit_test_layout.py": 0,
+      "python3 cicd/checks/check_gateway_no_tracing.py": 0
+    },
+    "targeted_tests": {
+      "cargo test -p edgion-gateway --lib ctx::cached_query_tests": {
+        "exit_code": 0,
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0
+      },
+      "cargo test -p edgion-gateway --lib ctx::path_view_tests": {
+        "exit_code": 0,
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0
+      },
+      "cargo test -p edgion-gateway --lib response_condition_source_allocation_inventory": {
+        "exit_code": 0,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      "cargo test -p edgion-gateway --lib observe::access_log::log_ext::tests": {
+        "exit_code": 0,
+        "passed": 15,
+        "failed": 0,
+        "ignored": 0
+      },
+      "cargo test -p edgion-gateway --lib stripping_query_credential_preserves": {
+        "exit_code": 0,
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      "cargo test -p edgion-gateway --lib path_only_rewrite_keeps": {
+        "exit_code": 0,
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    "scope": "Historical executed checks for the independently accepted ARCH-004 result; not a fresh whole-repository verification after later changes.",
+    "precision": "Adapter allocation inventory is a smoke/inventory test; context empty-view regression enforces zero allocation calls and bytes. No measured runtime improvement claimed."
+  },
+  "deferred_followup": {
+    "status": "deferred",
+    "scope": "Existing URI-writer documentation discrepancy; unrelated to ARCH-004.",
+    "source": "skills/01-architecture/02-gateway/uri-normalization/SKILL.md",
+    "evidence": "Unchanged set_upstream_uri section claims one URI writer and uses obsolete refresh signature; later v4 section and normalization contract describe the additional forwarding writer.",
+    "action": "Reconcile against current adapter/forwarding source in a separately scoped documentation change.",
+    "blocks_arch_004": false
+  },
+  "working_record_cleanup_check": {
+    "command": "python3 cicd/checks/validate_agent_docs.py",
+    "exit_code": 1,
+    "unrelated_failure": "Broken existing link in skills/04-review/http-body/regression-guards/rest-to-graphql-request-adaptation.md -> ../../../../tasks/pending/rest-to-graphql/rest-to-graphql.md",
+    "introduced_by_cleanup": false
+  }
 }

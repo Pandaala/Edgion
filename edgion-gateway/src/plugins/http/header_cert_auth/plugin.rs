@@ -160,7 +160,7 @@ impl HeaderCertAuth {
     }
 
     fn extract_from_connection(&self, session: &dyn PluginSession) -> Result<ClientCertInfo, &'static str> {
-        session.client_cert_info().ok_or("no-client-cert")
+        session.client_cert_info().cloned().ok_or("no-client-cert")
     }
 
     fn decode_header_cert_to_pem(&self, raw_value: &str) -> Result<Vec<u8>, &'static str> {
