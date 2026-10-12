@@ -749,3 +749,161 @@ fn canonical_responses_invalid_utf8_is_a_client_error_before_model_or_observatio
         ));
     }
 }
+
+fn native_admission_route() -> Arc<crate::routes::http::match_unit::HttpRouteRuleUnit> {
+    use crate::routes::http::match_unit::{HttpRouteRuleUnit, MatchSpecificity};
+    use crate::{MatchInfo, Rsc};
+    use edgion_resources::{HTTPRouteMatch, HTTPRouteRule};
+    Arc::new(HttpRouteRuleUnit {
+        resource_key: "tenant-a/native-route".into(),
+        matched_info: MatchInfo {
+            rsc: Rsc::new("HTTPRoute", "tenant-a", "native-route"),
+            rule_id: 0,
+            match_id: 0,
+            sv: 0,
+            m: HTTPRouteMatch {
+                path: None,
+                headers: None,
+                query_params: None,
+                method: None,
+            },
+            labels_meta: None,
+            annotations_meta: None,
+        },
+        rule: Arc::new(
+            serde_json::from_value::<HTTPRouteRule>(serde_json::json!({
+                "resolvedTerminalRouteUid": "native-route-uid",
+                "resolvedTerminalRuleIdentity": "name:native"
+            }))
+            .unwrap(),
+        ),
+        route: None,
+        path_regex: None,
+        parent_refs: None,
+        compiled_header_regexes: vec![],
+        compiled_query_regexes: vec![],
+        has_query_matchers: false,
+        specificity: MatchSpecificity {
+            has_method: false,
+            header_count: 0,
+            query_count: 0,
+            creation_ts_ms: 0,
+            route_key: "tenant-a/native-route".into(),
+            rule_index: 0,
+            match_index: 0,
+        },
+        metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::empty()),
+        plugin_runtime: Arc::new(PluginRuntime::new()),
+        backends: Arc::from(vec![compiled_ai_backend(None)]),
+        backend_finder: Arc::new(crate::lb::BackendSelector::new()),
+    })
+}
+
+#[tokio::test]
+async fn messages_invalid_utf8_is_fixed_400_before_request_plan_independent_of_policy() {
+    use crate::plugins::runtime::traits::ai_session::{AiSessionCapability, MockAiSessionCapability};
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::EdgionHttpContext;
+    use edgion_resources::resources::edgion_backend::EdgionBackend;
+    let mut declared: EdgionBackend = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"provider","namespace":"tenant-b"},
+        "spec":{"ai":{"provider":"Anthropic","endpoint":"https://provider.example.com","credentialPool":{"credentials":[{"name":"key","secretRef":{"name":"key"}}]},"models":[{"name":"m","aliases":["alias"]}]}}
+    })).unwrap();
+    declared.spec.ai.credential_pool.credentials[0].credential.secret = Some(k8s_openapi::api::core::v1::Secret {
+        metadata: kube::api::ObjectMeta {
+            name: Some("key".into()),
+            namespace: Some("tenant-b".into()),
+            ..Default::default()
+        },
+        data: Some(std::collections::BTreeMap::from([(
+            "api-key".into(),
+            k8s_openapi::ByteString(b"native-fixture-key".to_vec()),
+        )])),
+        ..Default::default()
+    });
+    let store = AiBackendStore::new();
+    store.full_set(&HashMap::from([("tenant-b/provider".into(), Arc::new(declared))]));
+    let runtime = store.snapshot().get_by_key("tenant-b/provider").unwrap();
+    assert_eq!(runtime.provider, AiProvider::Anthropic);
+    assert_eq!(runtime.resolve_model("m").unwrap().canonical_name, "m");
+    assert_eq!(runtime.resolve_model("alias").unwrap().canonical_name, "m");
+    let route = native_admission_route();
+    for observation in [AiUsageObservation::Off, AiUsageObservation::Provider] {
+        for selection in [AiBackendSelection::Weighted, AiBackendSelection::CostWeighted] {
+            for model in ["m", "alias"] {
+                for extension in [
+                    "\"extension\":\"INVALID\"",
+                    "\"extension\":{\"nested\":[\"INVALID\"]}",
+                    "\"messages\":[{\"content\":\"INVALID\"}]",
+                ] {
+                    let mut cfg = config();
+                    cfg.api = AiApi::AnthropicMessages;
+                    cfg.usage_observation = observation;
+                    cfg.backend_selection.selection_type = selection;
+                    cfg.inject_usage_tracking = false;
+                    let proxy = AiProxy::from_config(&cfg, "test/native/#0").unwrap();
+                    let mut body = format!(r#"{{"model":"{model}","max_tokens":1,{extension}}}"#).into_bytes();
+                    let invalid = body.windows(7).position(|bytes| bytes == b"INVALID").unwrap();
+                    body.splice(invalid..invalid + 7, [0xff]);
+                    let body = Bytes::from(body);
+                    let mut ctx = EdgionHttpContext::new();
+                    ctx.route_unit = Some(route.clone());
+                    // The renderer reads the same client API captured at request entry.
+                    assert!(ctx.capture_ai_client_api(AiApi::AnthropicMessages));
+                    let mut session = MockPluginSession::new();
+                    session.expect_ctx().return_const(ctx);
+                    session.expect_get_method().return_const("POST".to_string());
+                    session.expect_get_path().return_const("/v1/messages".to_string());
+                    session.expect_declares_body().return_const(Some(true));
+                    session
+                        .expect_read_request_body()
+                        .times(1)
+                        .returning(move |_| Ok(body.clone()));
+                    session
+                        .expect_set_response_header()
+                        .withf(|name, value| name == "content-type" && value == "application/json")
+                        .times(1)
+                        .returning(|_, _| Ok(()));
+                    let mut ai = MockAiSessionCapability::new();
+                    ai.expect_capture_ai_client_api()
+                        .with(mockall::predicate::eq(AiApi::AnthropicMessages))
+                        .times(1)
+                        .return_const(true);
+                    ai.expect_set_ai_attempt_plan().never();
+                    ai.expect_set_ai_request_context().never();
+                    session
+                        .expect_ai()
+                        .return_var(Box::new(ai) as Box<dyn AiSessionCapability>);
+                    let mut log = PluginLog::new("AiProxy");
+                    let result = proxy
+                        .run_request_with_store_and_entropy(&store, 0, &mut session, &mut log)
+                        .await;
+                    let PluginRunningResult::ErrResponse { status, body } = result else {
+                        panic!("invalid native body must reject locally")
+                    };
+                    assert_eq!(status, 400);
+                    assert_eq!(
+                        serde_json::from_slice::<Value>(&body.unwrap()).unwrap(),
+                        serde_json::json!({"type":"error","error":{"type":"invalid_request_error","message":"The request body must be a valid JSON object."}})
+                    );
+                    assert!(!session.ctx().has_ai_attempt_plan());
+                    let state = session.ctx().ai_state().unwrap();
+                    assert!(state.request.is_none());
+                    assert!(!state.attempt_runtime.ever_dispatched());
+                    assert!(state.attempt_runtime.attempts().is_empty());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn canonical_messages_preserves_sliced_native_multibyte_bytes() {
+    let padded = Bytes::copy_from_slice(r#"xx {"model":"m","max_tokens":1,"extension":"é€"} yy"#.as_bytes());
+    let body = padded.slice(2..padded.len() - 2);
+    let witness = body.clone();
+    let canonical = canonical_messages_request(body).unwrap();
+    assert_eq!(canonical.body.as_ptr(), witness.as_ptr());
+    assert_eq!(canonical.body.len(), witness.len());
+    assert_eq!(canonical.body, witness);
+}

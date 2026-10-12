@@ -1,5 +1,5 @@
 //! Borrowed routing metadata and bounded native capability inspection.
-use crate::ai::protocols::request::{decode_model, patch, raw_field, span};
+use crate::ai::protocols::request::{decode_model, native_json_utf8, patch, raw_field, span};
 use crate::ai::AiProxyError;
 use bytes::Bytes;
 use serde::de::{SeqAccess, Visitor};
@@ -54,10 +54,11 @@ pub(crate) struct MessagesMetadata {
     pub composite: bool,
 }
 fn fields(body: &[u8]) -> Result<Fields<'_>, AiProxyError> {
+    let text = native_json_utf8(body)?;
     if body.iter().find(|b| !b.is_ascii_whitespace()) != Some(&b'{') {
         return Err(AiProxyError::MalformedBody);
     }
-    serde_json::from_slice(body).map_err(|_| AiProxyError::MalformedBody)
+    serde_json::from_str(text).map_err(|_| AiProxyError::MalformedBody)
 }
 fn item(raw: &RawValue) -> Result<Item<'_>, AiProxyError> {
     serde_json::from_str(raw.get()).map_err(|_| AiProxyError::MalformedBody)

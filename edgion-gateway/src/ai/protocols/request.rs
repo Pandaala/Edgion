@@ -7,6 +7,12 @@ use serde::{Deserialize, Deserializer};
 use serde_json::value::RawValue;
 use std::ops::Range;
 
+/// Validate the complete native body without copying it before selective parsing.
+/// Protocol parsers retain ownership of JSON syntax and field semantics.
+pub(crate) fn native_json_utf8(body: &[u8]) -> Result<&str, AiProxyError> {
+    std::str::from_utf8(body).map_err(|_| AiProxyError::MalformedBody)
+}
+
 pub(crate) fn raw_field<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<&'de RawValue>, D::Error> {
     <&RawValue>::deserialize(deserializer).map(Some)
 }
@@ -52,3 +58,7 @@ pub(crate) fn patch(body: &Bytes, range: Range<usize>, replacement: &[u8]) -> Re
     output.extend_from_slice(&body[range.end..]);
     Ok(output.freeze())
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/ai/protocols/request_test.rs"]
+mod tests;

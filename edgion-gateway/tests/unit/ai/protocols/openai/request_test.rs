@@ -167,3 +167,23 @@ fn responses_rejects_invalid_utf8_in_ignored_strings() {
         assert!(matches!(responses_metadata(body), Err(AiProxyError::MalformedBody)));
     }
 }
+
+#[test]
+fn chat_metadata_and_mutations_reject_invalid_utf8_in_ignored_strings() {
+    for body in [
+        b"{\"model\":\"m\",\"stream\":true,\"extension\":\"\xff\"}".as_slice(),
+        b"{\"model\":\"m\",\"extension\":{\"items\":[\"\xff\"]}}",
+    ] {
+        assert!(matches!(metadata(body), Err(AiProxyError::MalformedBody)));
+        assert!(matches!(
+            inject_usage(&Bytes::copy_from_slice(body)),
+            Err(AiProxyError::MalformedBody)
+        ));
+        for selected in ["m", "alias"] {
+            assert!(matches!(
+                rewrite_model(&Bytes::copy_from_slice(body), selected),
+                Err(AiProxyError::MalformedBody)
+            ));
+        }
+    }
+}

@@ -68,8 +68,15 @@ failure. The deferred-protocol-header skip/retry test uses the canonical project
 with its explicit test breaker override. Existing admission, deadline, endpoint,
 retry-budget and converter tests remain in place.
 
-Fresh command results are recorded in the implementation task. These structural
-and focused tests do not establish live Redis cancellation behavior, shared-topology
+At ARCH-009 acceptance, focused Gateway library tests passed: dispatch 34,
+attempt runtime 23 and HTTP upstream peer 101. Workspace check and clippy
+(`--workspace --all-targets`), formatting, agent-document consistency,
+unit-test layout and Gateway no-tracing checks passed. Independent AIMPL design
+and final result reviews approved the implementation; cleanup verified that the
+current source and tests still match the approved content hashes. These are
+completion evidence, not new test executions during task cleanup.
+
+These structural and focused tests do not establish live Redis cancellation behavior, shared-topology
 failover acceptance or measured throughput/allocation improvements. Re-evaluate
 when selection becomes mutable across admission, admission ownership changes,
 policy gains generation-sensitive fields, or transport ordering changes.

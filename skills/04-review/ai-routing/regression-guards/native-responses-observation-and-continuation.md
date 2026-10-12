@@ -43,8 +43,10 @@ reserved-target validation also rejects them to prevent later reconcile_request 
 A one-binding check alone does not isolate a legacy key with caller-controlled project selectors.
 Use fixed operator-owned principals/project-scoped keys; no selector override config is introduced.
 
-Responses request validation checks the complete byte slice with `from_utf8` before
-selective serde deserialization. Skipping ignored string fields does not establish
+Responses request validation checks the complete byte slice through the shared
+`ai/protocols/request.rs::native_json_utf8` borrowed admission owner before
+selective serde deserialization. ARCH-012 unifies the existing Chat/Responses
+checks with native Messages; protocol grammar and field semantics remain local. Skipping ignored string fields does not establish
 UTF-8 validity in the locked serde_json visitor. Invalid input/extension strings are
 MalformedBody (400) before observation, model rewrite or dispatch, including nested
 ignored values. Parser and canonical-request unit regressions and the Responses

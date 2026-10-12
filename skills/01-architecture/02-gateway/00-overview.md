@@ -69,7 +69,13 @@ introduces no provider support or new wire behavior. Native POST /v1/responses
 (OpenAI) and POST /v1/messages (Anthropic) are now implemented by their protocol owners.
 Both omit conversion and usage injection and currently reject AiGuard/Guardrail.
 Observation defaults off; enabled observation reuses bounded JSON/SSE parsing and
-canonical settlement with valid provider-reported consumption only. Gemini and
+canonical settlement with valid provider-reported consumption only. Native request
+UTF-8 admission belongs to `ai/protocols/request.rs::native_json_utf8`: Chat,
+Responses and Messages validate the complete bounded body before selective
+metadata parsing. The borrowed string retains the original RawValue spans and
+Bytes storage; invalid bytes in opaque extensions return fixed MalformedBody
+400 before optional observation, model routing or attempt-plan publication.
+Protocol parsers retain JSON grammar, selected-key and capability ownership. Gemini and
 Bedrock remain pending product tasks. Task 02 removed usage-only
 JSON retention; Task 03 completed bounded unary conversion and final acceptance.
 

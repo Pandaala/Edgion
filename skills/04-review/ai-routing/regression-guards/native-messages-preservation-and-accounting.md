@@ -71,6 +71,36 @@ existing lazy AI state; ordinary requests allocate no AI state. The supporting
 pg_upstream_peer error site delegates to the AI renderer. Generic transport,
 physical body-cap and 504 deadline errors retain their HTTP contract.
 
+## Native request UTF-8 admission (ARCH-012)
+
+Chat, Responses and Messages share the allocation-free borrowed
+`ai/protocols/request.rs::native_json_utf8` admission owner before selective
+metadata parsing. Ignoring provider strings in the locked serde_json visitor
+does not validate their UTF-8. Messages previously omitted the complete scan,
+so observation Off could forward malformed opaque strings unchanged, while
+optional character counting under Provider/CostWeighted classified them as
+BackendUnavailable. Optional accounting and model rewrites cannot own ingress
+validity. Invalid bytes anywhere now produce MalformedBody and the fixed native
+400 envelope before request-plan publication.
+
+The helper returns the original borrowed string; each protocol retains its
+root/syntax, selected-key duplication, field-type and bounded capability checks.
+The change adds one linear scan per Messages metadata/rewrite parse of the
+physically bounded canonical body, with no body copy, AST, cache or new state.
+Existing Chat/Responses full-slice scans are replaced rather than duplicated.
+
+Private protocol tests cover invalid ignored top-level/nested/message strings,
+unchanged/aliased rewrites, valid multibyte opaque fields, borrowed model spans
+and the existing 256 KiB preservation case. Shared helper tests assert original
+pointer/length and zero allocations. AiProxy request-stage tests cross
+Off/Provider observation, Weighted/CostWeighted selection and unchanged/aliased
+models with fixed native 400, no plan/context publication, no dispatched marker
+and an empty attempt ledger.
+Canonical sliced-Bytes tests assert retained pointer/length. These are local
+parser/request-stage assertions; they do not claim fresh real-wire or live-provider
+acceptance. Re-evaluate when native parsers, serde ignored-value handling,
+canonical body ownership or predispatch ordering changes.
+
 ## Owners and discriminating coverage
 
 Owners: ai/protocols/anthropic, canonical ai/connectors/provider, shared usage and

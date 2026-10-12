@@ -1,6 +1,6 @@
 //! Selective Chat metadata and byte-preserving, explicitly authorized mutations.
 
-use crate::ai::protocols::request::{decode_model, patch, raw_field, span};
+use crate::ai::protocols::request::{decode_model, native_json_utf8, patch, raw_field, span};
 use bytes::Bytes;
 use serde::Deserialize;
 use serde_json::value::RawValue;
@@ -35,11 +35,11 @@ pub(crate) struct ChatMetadata {
 }
 
 fn fields(body: &[u8]) -> Result<Fields<'_>, AiProxyError> {
-    std::str::from_utf8(body).map_err(|_| AiProxyError::MalformedBody)?;
+    let text = native_json_utf8(body)?;
     if body.iter().find(|byte| !byte.is_ascii_whitespace()) != Some(&b'{') {
         return Err(AiProxyError::MalformedBody);
     }
-    serde_json::from_slice(body).map_err(|_| AiProxyError::MalformedBody)
+    serde_json::from_str(text).map_err(|_| AiProxyError::MalformedBody)
 }
 
 fn model(fields: &Fields<'_>) -> Result<String, AiProxyError> {
@@ -153,11 +153,11 @@ fn optional_bool(raw: Option<&RawValue>) -> Result<bool, AiProxyError> {
 }
 
 pub(crate) fn responses_metadata(body: &[u8]) -> Result<ResponsesMetadata, AiProxyError> {
-    std::str::from_utf8(body).map_err(|_| AiProxyError::MalformedBody)?;
+    let text = native_json_utf8(body)?;
     if body.iter().find(|byte| !byte.is_ascii_whitespace()) != Some(&b'{') {
         return Err(AiProxyError::MalformedBody);
     }
-    let fields: ResponsesFields<'_> = serde_json::from_slice(body).map_err(|_| AiProxyError::MalformedBody)?;
+    let fields: ResponsesFields<'_> = serde_json::from_str(text).map_err(|_| AiProxyError::MalformedBody)?;
     let model = decode_model(fields.model)?;
     if optional_bool(fields.background)? {
         return Err(AiProxyError::UnsupportedParameter);

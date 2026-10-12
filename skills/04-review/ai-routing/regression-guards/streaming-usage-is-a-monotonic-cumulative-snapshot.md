@@ -54,8 +54,9 @@ Mirrored parser tests cover form feed before, within and after a document in
 both modes, all four legal whitespace bytes, and escaped form-feed decoding and
 offsets. The canonical SSE regression drives the real decoder and observer,
 asserting empty usage/semantic observation, one unpoisoned event and exact raw
-bytes. These tests define the acceptance boundary; fresh execution results belong
-to the [implementation task](../../../../tasks/pending/architecture-json-span-whitespace/02-implementation.md).
+bytes. These tests define the acceptance boundary; execution results were attributed
+to the historical task `tasks/pending/architecture-json-span-whitespace/02-implementation.md`,
+which is absent from the current tree and unavailable for independent verification.
 This correction makes no quota-bypass, provider-conformance or complete strict
 validation claim; offset-only unselected-string validation is outside its scope.
 Re-evaluate if the whitespace helper or parsing-mode ownership changes.

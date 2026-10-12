@@ -80,3 +80,36 @@ fn nested_tool_result_file_reference_requires_one_binding() {
     let body=br#"{"model":"m","max_tokens":1,"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_fixture","content":[{"type":"document","source":{"type":"file","file_id":"f"}}]}]}]}"#;
     assert!(metadata(body).unwrap().binding);
 }
+
+#[test]
+fn messages_metadata_and_rewrite_reject_invalid_utf8_in_ignored_strings() {
+    for body in [
+        b"{\"model\":\"m\",\"max_tokens\":1,\"extension\":\"\xff\"}".as_slice(),
+        b"{\"model\":\"m\",\"max_tokens\":1,\"extension\":{\"items\":[\"\xff\"]}}",
+        b"{\"model\":\"m\",\"max_tokens\":1,\"messages\":[{\"content\":\"\xff\"}]}",
+    ] {
+        assert!(matches!(metadata(body), Err(AiProxyError::MalformedBody)));
+        for selected in ["m", "alias"] {
+            assert!(matches!(
+                rewrite_model(&Bytes::copy_from_slice(body), selected),
+                Err(AiProxyError::MalformedBody)
+            ));
+        }
+    }
+}
+
+#[test]
+fn messages_fields_borrow_original_multibyte_native_spans() {
+    let padded = Bytes::copy_from_slice(r#"xx {"model":"m","max_tokens":1,"extension":{"text":"é€"}} yy"#.as_bytes());
+    let body = padded.slice(2..padded.len() - 2);
+    let parsed = fields(&body).unwrap();
+    let raw = parsed.model.unwrap();
+    let range = span(&body, raw).unwrap();
+    assert_eq!(raw.get().as_ptr(), body[range].as_ptr());
+    assert!(rewrite_model(&body, "m").unwrap().is_none());
+    let changed = rewrite_model(&body, "alias").unwrap().unwrap();
+    assert_eq!(
+        changed.as_ref(),
+        r#" {"model":"alias","max_tokens":1,"extension":{"text":"é€"}} "#.as_bytes()
+    );
+}
