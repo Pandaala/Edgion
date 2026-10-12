@@ -18,7 +18,7 @@ Source reviewed: 512 / 1676; 467 primary partitions.
 | ARCH-007 | implemented | architecture-debt | [Implemented borrowed mTLS candidates; cleanup and verification evidence](TASK-ACCEPTANCE-ARCH-007-20261012.json) |
 | ARCH-008 | resolved | architecture-debt | [Precompiled AI backend lookup keys; maintained resolution evidence](../../skills/04-review/ai-routing/regression-guards/precompiled-backend-lookup-keys.md) |
 | ARCH-009 | resolved | architecture-debt | [Closed prepared AI admission-input ownership finding; current-source evidence](TASK-ACCEPTANCE-ARCH-009-20261012.json) |
-| ARCH-010 | candidate | behavior-defect | [Restrict the shared AI JSON parser to JSON whitespace](ARCH-010-json-span-format-whitespace.md) |
+| ARCH-010 | resolved | behavior-defect | [Already-resolved JSON whitespace finding; source verification evidence](TASK-ACCEPTANCE-ARCH-010-20261012.json) |
 | ARCH-011 | candidate | behavior-defect | [Give AiGuard composition ownership of the final replacement budget](ARCH-011-ai-guard-final-replacement-budget.md) |
 | ARCH-012 | candidate | behavior-defect | [Own native JSON UTF-8 admission independently of observation](ARCH-012-native-json-utf8-admission-owner.md) |
 | ARCH-013 | candidate | behavior-defect | [Preserve typed SSE classification at canonical semantic handoff](ARCH-013-canonical-sse-block-classification.md) |

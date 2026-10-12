@@ -30277,7 +30277,7 @@
     },
     "ARCH-010": {
       "path": "ARCH-010-json-span-format-whitespace.md",
-      "status": "candidate",
+      "status": "resolved",
       "kind": "behavior-defect",
       "partition": "PART-243",
       "sha256": "a1c57c00b16f481ee4aaee48124bbe7c6f877716a6d88dc2e76ccd4d3fa192b4",
@@ -30308,8 +30308,21 @@
       },
       "verifier": "/root/verify_seed",
       "previous_status": "confirmed",
-      "revalidation_pending": true,
-      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-E.json"
+      "revalidation_pending": false,
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-E.json",
+      "finding_removed": true,
+      "removed_finding_path": "ARCH-010-json-span-format-whitespace.md",
+      "current_implementation_acceptance": "TASK-ACCEPTANCE-ARCH-010-20261012.json",
+      "closure": {
+        "date": "2026-10-12",
+        "disposition": "already-resolved",
+        "authorization": "User explicitly requested deletion of the original ARCH-010 task and closure after independent already-resolved revalidation.",
+        "independent_reviewer": "/root/arch010_value_review",
+        "reviewed_finding_sha256": "a1c57c00b16f481ee4aaee48124bbe7c6f877716a6d88dc2e76ccd4d3fa192b4",
+        "acceptance_evidence": "TASK-ACCEPTANCE-ARCH-010-20261012.json",
+        "index_title": "Already-resolved JSON whitespace finding; source verification evidence",
+        "preservation": "Original verification receipt, primary coverage, historical reports/drift snapshots and unrelated findings retained. Closure grants no primary coverage."
+      }
     },
     "ARCH-011": {
       "path": "ARCH-011-ai-guard-final-replacement-budget.md",
