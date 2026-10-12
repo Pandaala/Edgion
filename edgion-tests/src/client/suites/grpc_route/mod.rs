@@ -25,3 +25,6 @@ pub use r#match::GrpcMatchTestSuite;
 pub use rate_limit_local::GrpcRateLimitLocalTestSuite;
 pub use timeout_rewrite_wire::GrpcTimeoutRewriteWireTestSuite;
 pub use unmatched_route::GrpcUnmatchedRouteTestSuite;
+
+mod terminal_headers_wire;
+pub use terminal_headers_wire::GrpcTerminalHeadersWireTestSuite;

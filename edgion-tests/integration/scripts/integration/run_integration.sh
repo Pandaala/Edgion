@@ -1804,6 +1804,7 @@ run_all_tests() {
                     run_test "GRPCRoute_Match" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Match" || test_failed=true
                     run_test "GRPCRoute_RateLimitLocal" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i RateLimitLocal" || test_failed=true
                     run_test "GRPCRoute_TimeoutRewriteWire" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i TimeoutRewriteWire" || test_failed=true
+                    run_test "GRPCRoute_TerminalHeadersWire" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i TerminalHeadersWire" || test_failed=true
                     run_test "GRPCRoute_Backend_SessionPersistence" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Backend/SessionPersistence" || test_failed=true
                     run_test "GRPCRoute_Backend_SessionPersistenceWeighted" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Backend/SessionPersistenceWeighted" || test_failed=true
                 else
@@ -2165,6 +2166,7 @@ run_all_tests() {
         run_test "GRPCRoute_Match" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Match" || test_failed=true
         run_test "GRPCRoute_RateLimitLocal" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i RateLimitLocal" || test_failed=true
         run_test "GRPCRoute_TimeoutRewriteWire" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i TimeoutRewriteWire" || test_failed=true
+        run_test "GRPCRoute_TerminalHeadersWire" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i TerminalHeadersWire" || test_failed=true
         run_test "GRPCRoute_Backend_SessionPersistence" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Backend/SessionPersistence" || test_failed=true
         run_test "GRPCRoute_Backend_SessionPersistenceWeighted" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Backend/SessionPersistenceWeighted" || test_failed=true
         run_test "GRPCRoute_Delegation" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Delegation" || test_failed=true

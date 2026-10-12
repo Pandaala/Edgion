@@ -3850,6 +3850,45 @@ mod ext_proc_server {
         }
     }
 
+    // Opt-in terminal-envelope fixtures; existing ExtProc modes are unchanged.
+    fn terminal_grpc_reply() -> ProcessingResponse {
+        let option = |key: &str, value: &str, action: HeaderAppendAction| {
+            let mut opt = set_opt(key, value);
+            opt.append_action = action as i32;
+            opt
+        };
+        ProcessingResponse {
+            response: Some(processing_response::Response::ImmediateResponse(ImmediateResponse {
+                status: Some(HttpStatus { code: 403 }),
+                headers: Some(HeaderMutation {
+                    set_headers: vec![
+                        option("server", "adapter-default", HeaderAppendAction::AddIfAbsent),
+                        option(
+                            "strict-transport-security",
+                            "terminal-custom",
+                            HeaderAppendAction::OverwriteIfExists,
+                        ),
+                        option("x-terminal-order", "first", HeaderAppendAction::AddIfAbsent),
+                        option("x-terminal-order", "last", HeaderAppendAction::OverwriteIfExists),
+                        option("set-cookie", "arch-first=1", HeaderAppendAction::AppendIfExistsOrAdd),
+                        option("set-cookie", "arch-second=2", HeaderAppendAction::AppendIfExistsOrAdd),
+                        set_opt("x-trace-id", "stale-trace"),
+                        set_opt("x-arch-request-id", "stale-custom"),
+                        set_opt("content-type", "text/plain"),
+                        option("grpc-status", "0", HeaderAppendAction::AppendIfExistsOrAdd),
+                        option("grpc-status", "1", HeaderAppendAction::AppendIfExistsOrAdd),
+                        set_opt("grpc-message", "stale-message"),
+                    ],
+                    remove_headers: Vec::new(),
+                }),
+                body: Vec::new(),
+                grpc_status: Some(edgion_common::ext_proc::proto::GrpcStatus { status: 8 }),
+                details: String::new(),
+            })),
+            mode_override: None,
+        }
+    }
+
     fn request_body_verdict_with(body: &[u8]) -> ProcessingResponse {
         ProcessingResponse {
             response: Some(processing_response::Response::RequestBody(BodyResponse {
@@ -3969,6 +4008,7 @@ mod ext_proc_server {
                     );
                 }
                 match mode.as_deref() {
+                    Some("terminal-grpc-request") => (Some(terminal_grpc_reply()), false),
                     Some("wrong-order") => (Some(request_body_verdict_with(b"wrong-phase-body")), false),
                     Some("missing-body") => (Some(headers_verdict(true, "x-ext-proc-req")), true),
                     Some("close-before-verdict") => (None, true),
@@ -3990,6 +4030,7 @@ mod ext_proc_server {
                 }
             }
             processing_request::Request::ResponseHeaders(_) if *request_phase_seen => match mode.as_deref() {
+                Some("terminal-grpc-response") => (Some(terminal_grpc_reply()), false),
                 Some("close-on-response-headers") => (None, true),
                 _ => (Some(headers_verdict(false, "x-ext-proc-resp")), false),
             },

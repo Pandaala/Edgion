@@ -1,0 +1,230 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: terminal-grpc-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: grpc
+      protocol: HTTP
+      port: 32001
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: terminal-grpc-backend
+  namespace: edgion-test
+spec:
+  ports:
+    - port: 30021
+      targetPort: 30021
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: terminal-grpc-backend
+  namespace: edgion-test
+  labels:
+    kubernetes.io/service-name: terminal-grpc-backend
+addressType: IPv4
+ports:
+  - port: 30021
+    protocol: TCP
+endpoints:
+  - addresses: ["127.0.0.1"]
+    conditions:
+      ready: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: terminal-auth-backend
+  namespace: edgion-test
+spec:
+  ports:
+    - port: 30040
+      targetPort: 30040
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: terminal-auth-backend
+  namespace: edgion-test
+  labels:
+    kubernetes.io/service-name: terminal-auth-backend
+addressType: IPv4
+ports:
+  - port: 30040
+    protocol: TCP
+endpoints:
+  - addresses: ["127.0.0.1"]
+    conditions:
+      ready: true
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: terminal-grpc-request
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: RequestId
+      config:
+        ids:
+          - header: x-arch-request-id
+            generateWhenMissing: false
+    - type: ExtProc
+      config:
+        grpcService:
+          target: "127.0.0.1:30041"
+          timeoutMs: 2000
+        processingMode:
+          requestHeaderMode: SEND
+          responseHeaderMode: SEND
+        failureModeAllow: false
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: terminal-grpc-request
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: terminal-grpc-gateway
+      sectionName: grpc
+  hostnames: ["terminal-grpc-request.example.com"]
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+            method: SayHello
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: terminal-grpc-request
+      backendRefs:
+        - name: terminal-grpc-backend
+          port: 30021
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: terminal-grpc-mapped
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: RequestId
+      config:
+        ids:
+          - header: x-arch-request-id
+            generateWhenMissing: false
+    - type: Dsl
+      config:
+        name: terminal-mapped-queue
+        source: |
+          resp.set_header("x-terminal-order", "first")
+          resp.set_header("x-terminal-order", "last")
+          resp.append_header("set-cookie", "arch-first=1")
+          resp.append_header("set-cookie", "arch-second=2")
+          resp.set_header("x-terminal-removed", "temporary")
+          resp.remove_header("x-terminal-removed")
+          resp.set_header("x-trace-id", "stale-trace")
+          resp.set_header("x-arch-request-id", "stale-custom")
+          resp.append_header("grpc-status", "0")
+          resp.append_header("grpc-status", "1")
+          resp.set_header("grpc-message", "stale-message")
+          resp.set_header("content-type", "text/plain")
+        errorPolicy: deny
+    - type: ForwardAuth
+      config:
+        target:
+          name: terminal-auth-backend
+          namespace: edgion-test
+          port: 30040
+        timeoutMs: 2000
+        decision: {}
+        request:
+          path:
+            template: "/verify-deny-multivalue"
+          method:
+            template: GET
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: terminal-grpc-mapped
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: terminal-grpc-gateway
+      sectionName: grpc
+  hostnames: ["terminal-grpc-mapped.example.com"]
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+            method: SayHello
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: terminal-grpc-mapped
+      backendRefs:
+        - name: terminal-grpc-backend
+          port: 30021
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: terminal-grpc-response
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: RequestId
+      config:
+        ids:
+          - header: x-arch-request-id
+            generateWhenMissing: false
+    - type: ExtProc
+      config:
+        grpcService:
+          target: "127.0.0.1:30041"
+          timeoutMs: 2000
+        processingMode:
+          requestHeaderMode: SEND
+          responseHeaderMode: SEND
+        failureModeAllow: false
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: terminal-grpc-response
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: terminal-grpc-gateway
+      sectionName: grpc
+  hostnames: ["terminal-grpc-response.example.com"]
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+            method: SayHello
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: terminal-grpc-response
+      backendRefs:
+        - name: terminal-grpc-backend
+          port: 30021

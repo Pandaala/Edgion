@@ -409,6 +409,7 @@
     "UDPRoute/DeniedBackendRef": {
       "udp": 31955
     },
+    "GRPCRoute/TerminalHeadersWire": {"grpc": 32001},
     "GRPCRoute/TimeoutRewriteWire": {
       "grpc": 31972
     },

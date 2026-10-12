@@ -72,3 +72,29 @@ codec coverage is not full proxy, cross-process, or hot-reload coverage.
   cover ordered conditions, trace reconciliation, failed delivery and duplicate
   claims; existing native/gRPC-Web status-field tests retain codec coverage.
   This refactor claims reduced policy duplication, not a measured speedup.
+
+## Real shared-stack integration coverage
+
+`GRPCRoute/TerminalHeadersWire` supplements ARCH-003 with native H2 and gRPC-Web
+cases for the request exact adapter, HTTP-mapped ForwardAuth self-write adapter,
+and response-stage exact framework writer. Opt-in ExtProc immediate replies
+exercise real lazy conditional queue operations on the exact paths. The mapped
+path exercises ordinary DSL queue operations; it has no nonterminal producer for
+those lazy conditional variants and makes no such coverage claim.
+
+The native test client scans bounded raw H2 framing alongside h2's actual decoder,
+requiring one HEADERS with END_STREAM, no DATA/RST and clean EOS. Web tests require
+one complete 0x80 trailer frame with no initial terminal fields. Header assertions
+cover queue order, duplicate cookies, trace/custom identity reconciliation,
+canonical status/message and framework defaults before conditional operations.
+These fixtures use HTTP listeners: Server distinguishes framework defaults from
+adapter headers; HSTS is absent, so its OverwriteIfExists is a no-op on every path.
+The ordered ordinary-header conditions separately prove queue ordering.
+Access-log upstream counts distinguish request/local denial from response denial.
+The fixtures use the single canonical shared topology. Fresh run results are
+recorded in the ARCH-003 task; the suite's existence is not evidence it passed.
+
+This does not replace failed-delivery/duplicate-claim unit coverage, establish
+forbidden framing mutation reachability, or test hot reload. Web checks observe
+semantic frame bytes rather than raw transfer-chunk boundaries. Raw H2 claims
+apply only to the completed exchange observed within the client's hard caps.

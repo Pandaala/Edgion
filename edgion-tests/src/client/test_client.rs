@@ -1357,6 +1357,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "grpc" => "GRPCRoute/Basic".to_string(),
             "grpc-match" | "grpcmatch" => "GRPCRoute/Match".to_string(),
             "grpc-rate-limit" | "grpcratelimit" => "GRPCRoute/RateLimitLocal".to_string(),
+            "grpc-terminal-headers-wire" => "GRPCRoute/TerminalHeadersWire".to_string(),
             "grpc-timeout-wire" | "grpctimeoutwire" => "GRPCRoute/TimeoutRewriteWire".to_string(),
             "grpc-sp" | "grpcsp" => "GRPCRoute/Backend/SessionPersistence".to_string(),
             "grpc-tls" | "grpctls" => "EdgionTls/grpctls".to_string(),
@@ -1519,6 +1520,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "GRPCRoute/Match" => "GRPCRoute/Match",
         "GRPCRoute/UnmatchedRoute" => "GRPCRoute/UnmatchedRoute",
         "GRPCRoute/RateLimitLocal" => "GRPCRoute/RateLimitLocal",
+        "GRPCRoute/TerminalHeadersWire" => "GRPCRoute/TerminalHeadersWire",
         "GRPCRoute/TimeoutRewriteWire" => "GRPCRoute/TimeoutRewriteWire",
         "GRPCRoute/TLS" => "EdgionTls/grpctls",
         "GRPCRoute/Backend/SessionPersistence" => "GRPCRoute/Backend/SessionPersistence",
@@ -2294,6 +2296,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::GrpcRateLimitLocalTestSuite));
+        }
+        "GRPCRoute/TerminalHeadersWire" => {
+            if !gateway {
+                eprintln!("Error: GRPCRoute/TerminalHeadersWire tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::GrpcTerminalHeadersWireTestSuite));
         }
         "GRPCRoute/TimeoutRewriteWire" => {
             if !gateway {

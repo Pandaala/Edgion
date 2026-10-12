@@ -339,3 +339,12 @@ or named SSE, tool/thinking/signature blocks, cache totals and late cumulative d
 mock_mode selects split, pause, iterations, composite, error, malformed, oversized,
 encoded, abort or long. Fake credentials are exposed only as A/B/invalid labels.
 The fixture never contacts a provider.
+
+## Terminal gRPC ExtProc fixture modes
+
+`x-ext-proc-test-mode: terminal-grpc-request` returns an exact-status
+ImmediateResponse at RequestHeaders. `terminal-grpc-response` allows the request
+and returns it at ResponseHeaders. Both return gRPC status 8, an empty body and
+ordered local-reply mutations including AddIfAbsent/OverwriteIfExists. These
+opt-in modes preserve the existing fixture behaviors; see the
+[terminal envelope suite](../../../edgion-tests/integration/conf/GRPCRoute/TerminalHeadersWire/README.md).
