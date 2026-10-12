@@ -60,7 +60,7 @@ fn compile_http_rule_preserves_slots_and_types_backends() {
     );
     assert!(
         matches!(&runtime.backends[3].target, CompiledBackendTarget::EdgionBackend(target)
-        if target.namespace == "route-ns" && target.name == "ai-a")
+        if target.namespace() == "route-ns" && target.name() == "ai-a")
     );
     assert_eq!(
         runtime.backends[4].target,

@@ -11,6 +11,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Precompiled backend lookup keys](regression-guards/precompiled-backend-lookup-keys.md): ARCH-008 cold identity ownership, borrowed planning projections and retained plan lifetimes.
+
 - [AI stores expose one count and key accessor per snapshot](regression-guards/ai-store-single-count-accessors.md)
 - [gw-01 — CostWeighted read only `max_tokens` — FIXED](regression-guards/ai-cost-weighted-request-output-bound-parsing.md)
 - [AI endpoint failure skips the service](regression-guards/ai-endpoint-failure-skips-the-service.md)

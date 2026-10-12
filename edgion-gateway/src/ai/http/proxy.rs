@@ -28,16 +28,14 @@ use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 
 const DEFAULT_MAXIMUM_REQUEST_DURATION: Duration = Duration::from_secs(300);
 
-fn ai_candidate_spec(backend: &crate::routes::http::match_unit::CompiledBackend) -> Option<(usize, i32, String)> {
+fn ai_candidate_spec(backend: &crate::routes::http::match_unit::CompiledBackend) -> Option<(usize, i32, &str)> {
     if !backend.is_permitted_ai_backend() {
         return None;
     }
     match backend.target() {
-        CompiledBackendTarget::EdgionBackend(target) => Some((
-            backend.slot(),
-            backend.schema().weight.unwrap_or(1),
-            format!("{}/{}", target.namespace, target.name),
-        )),
+        CompiledBackendTarget::EdgionBackend(target) => {
+            Some((backend.slot(), backend.schema().weight.unwrap_or(1), target.key()))
+        }
         CompiledBackendTarget::Service(_) | CompiledBackendTarget::Invalid { .. } => None,
     }
 }
@@ -71,7 +69,7 @@ fn visible_model_ids(
         let Some((_, _, key)) = ai_candidate_spec(backend) else {
             continue;
         };
-        if let Some(runtime) = lookup(&key) {
+        if let Some(runtime) = lookup(key) {
             proposed.extend(runtime.public_model_ids.iter().cloned());
         }
     }
@@ -94,7 +92,7 @@ fn visible_model_ids(
                 let Some((_, _, key)) = ai_candidate_spec(backend) else {
                     return false;
                 };
-                lookup(&key).is_some_and(|runtime| {
+                lookup(key).is_some_and(|runtime| {
                     let resolved = runtime.resolve_model(&decision.identity_model);
                     let has_symbolic_owner = !model_id.ends_with('*')
                         || decision.rewrite_requires_canonical
@@ -112,25 +110,16 @@ fn visible_model_ids(
         .collect()
 }
 
-#[allow(clippy::type_complexity)]
-fn unknown_model_passthrough_allowed(
+fn unknown_model_passthrough_allowed<'a>(
     rewrite_requires_canonical: bool,
     configured: OnUnknownModel,
-    candidates: &[(
-        (usize, i32, String),
-        Option<std::sync::Arc<crate::ai::RuntimeAiBackend>>,
-    )],
+    candidates: impl Iterator<Item = (i32, Option<&'a crate::ai::RuntimeAiBackend>)>,
 ) -> bool {
     !rewrite_requires_canonical
         && configured == OnUnknownModel::Passthrough
-        && candidates
-            .iter()
-            .filter(|((_, weight, _), _)| *weight > 0)
-            .all(|(_, backend)| {
-                backend.as_ref().is_some_and(|backend| {
-                    matches!(backend.provider, AiProvider::OpenAI | AiProvider::OpenAICompatible)
-                })
-            })
+        && candidates.filter(|(weight, _)| *weight > 0).all(|(_, backend)| {
+            backend.is_some_and(|backend| matches!(backend.provider, AiProvider::OpenAI | AiProvider::OpenAICompatible))
+        })
 }
 
 fn has_positive_weight_service_backend(backends: &[crate::routes::http::match_unit::CompiledBackend]) -> bool {
@@ -159,7 +148,7 @@ fn captured_backend_contract_valid(
             continue;
         }
         if let Some((_, _, key)) = ai_candidate_spec(backend) {
-            if let Some(runtime) = snapshot.get_by_key(&key) {
+            if let Some(runtime) = snapshot.get_by_key(key) {
                 if !config.accepts_provider(runtime.provider)
                     || (runtime.has_credential_tpm && config.usage_observation == AiUsageObservation::Off)
                 {
@@ -396,7 +385,7 @@ impl AiProxy {
         let mut gate_candidates = Vec::with_capacity(backends.len());
         for (order, backend) in backends.iter().enumerate() {
             let runtime_available = ai_candidate_spec(backend)
-                .and_then(|(_, _, key)| snapshot.get_by_key(&key))
+                .and_then(|(_, _, key)| snapshot.get_by_key(key))
                 .is_some();
             let Ok(mut candidate) = gate_candidate(order, backend, runtime_available) else {
                 return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration);
@@ -432,7 +421,7 @@ impl AiProxy {
                     .filter(|b| decision.weights.get(b.slot()).copied().unwrap_or(0) > 0)
                     .any(|b| {
                         ai_candidate_spec(b)
-                            .and_then(|(_, _, k)| snapshot.get_by_key(&k))
+                            .and_then(|(_, _, k)| snapshot.get_by_key(k))
                             .is_some_and(|b| b.has_credential_tpm)
                     }))
         {
@@ -455,16 +444,14 @@ impl AiProxy {
                 Some((logical, slot, decision.weights.get(slot).copied().unwrap_or(0), key))
             })
             .collect();
-        let resolved = snapshot.get_many_by_key(candidate_specs.iter().map(|(_, _, _, key)| key.as_str()));
-        let passthrough_inputs = candidate_specs
-            .iter()
-            .map(|(_, slot, weight, key)| (*slot, *weight, key.clone()))
-            .zip(resolved.iter().cloned())
-            .collect::<Vec<_>>();
+        let resolved = snapshot.get_many_by_key(candidate_specs.iter().map(|(_, _, _, key)| *key));
         let passthrough_allowed = unknown_model_passthrough_allowed(
             decision.rewrite_requires_canonical,
             self.config.on_unknown_model,
-            &passthrough_inputs,
+            candidate_specs
+                .iter()
+                .zip(&resolved)
+                .map(|((_, _, weight, _), backend)| (*weight, backend.as_deref())),
         );
         let mut candidates = candidate_specs
             .into_iter()
@@ -503,7 +490,7 @@ impl AiProxy {
                     slot,
                     order: u8::try_from(order).expect("AI route candidates are bounded before body read"),
                     weight,
-                    backend_key,
+                    backend_key: backend_key.to_owned(),
                     backend,
                     model: None,
                     effective_policy,
@@ -967,7 +954,7 @@ fn validate_continuation(
         return Err(AiProxyError::UnsupportedParameter);
     }
     let (_, _, key) = ai_candidate_spec(&backends[0]).ok_or(AiProxyError::UnsupportedParameter)?;
-    let backend = snapshot.get_by_key(&key).ok_or(AiProxyError::BackendUnavailable)?;
+    let backend = snapshot.get_by_key(key).ok_or(AiProxyError::BackendUnavailable)?;
     let expected_provider = if config.api == AiApi::AnthropicMessages {
         AiProvider::Anthropic
     } else {

@@ -2,7 +2,7 @@ use super::*;
 use crate::backends::policy::backend_tls::BackendTLSPolicyStore;
 use crate::plugins::PluginRuntime;
 use edgion_resources::resources::backend_tls_policy::{
-    BackendTLSPolicySpec, BackendTLSPolicyTargetRef, BackendTLSPolicyValidation,
+    BackendTLSPolicySpec, BackendTLSPolicyTargetRef, BackendTLSPolicyValidation, WellKnownCACertificates,
 };
 use edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass;
 use edgion_resources::resources::BackendTLSPolicy;
@@ -56,7 +56,7 @@ fn tls_policy(name: &str, hostname: &str) -> Arc<BackendTLSPolicy> {
                 ca_certificate_refs: None,
                 hostname: hostname.to_string(),
                 subject_alt_names: None,
-                well_known_ca_certificates: None,
+                well_known_ca_certificates: Some(WellKnownCACertificates::System),
             },
             options: None,
             resolved_ca_certificates: None,
@@ -411,4 +411,54 @@ impl SelectedL4Backend<'_> {
     pub(crate) fn slot(self) -> usize {
         self.slot.slot
     }
+}
+
+#[test]
+fn compiled_ai_identity_key_and_retained_generation_agree() {
+    let compile = |namespace: Option<&str>, name: &str| {
+        let mut schema = compiled("api", 0, Some(0)).schema().clone();
+        schema.group = Some("edgion.io".into());
+        schema.kind = Some("EdgionBackend".into());
+        schema.namespace = namespace.map(str::to_owned);
+        schema.name = name.into();
+        schema.port = None;
+        crate::routes::http::match_unit::compile_http_backend_fixture(
+            schema,
+            "route-ns",
+            0,
+            Arc::new(PluginRuntime::new()),
+        )
+    };
+    let old = logical(compile(None, "provider"));
+    let replacement = logical(compile(Some("backend-ns"), "next-provider"));
+    for (logical, namespace, name, key) in [
+        (&old, "route-ns", "provider", "route-ns/provider"),
+        (&replacement, "backend-ns", "next-provider", "backend-ns/next-provider"),
+    ] {
+        let CompiledBackendTarget::EdgionBackend(target) = logical.target() else {
+            panic!("compiled AI fixture must have an AI target");
+        };
+        assert_eq!(target.key(), key);
+        assert_eq!((target.namespace(), target.name()), (namespace, name));
+        assert_eq!(
+            target.policy_target(),
+            &PolicyTargetKey {
+                target_kind: PolicyTargetKind::EdgionBackend,
+                namespace: namespace.into(),
+                name: name.into(),
+            }
+        );
+        assert!(std::ptr::eq(
+            logical.policy_target_key().unwrap(),
+            target.policy_target()
+        ));
+        assert_eq!(logical.slot(), 0);
+        assert_eq!(logical.declared_weight(), 0);
+        assert!(logical.compiled().is_permitted_ai_backend());
+    }
+    drop(replacement);
+    let CompiledBackendTarget::EdgionBackend(target) = old.target() else {
+        panic!("retained AI target must preserve its variant");
+    };
+    assert_eq!(target.key(), "route-ns/provider");
 }

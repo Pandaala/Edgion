@@ -1393,16 +1393,17 @@ async fn try_ai_backend_peer(
 ) -> Result<Box<HttpPeer>, AiPeerPredispatchFailure> {
     let endpoint = &target.selected.backend.endpoint;
     let addr = resolve_ai_endpoint(ctx, &endpoint.domain, endpoint.port).await?;
-    let (namespace, name) = match target.selected.logical().target() {
-        CompiledBackendTarget::EdgionBackend(target) => (target.namespace.as_str(), target.name.as_str()),
+    let compiled_target = match target.selected.logical().target() {
+        CompiledBackendTarget::EdgionBackend(target) => target,
         CompiledBackendTarget::Service(_) | CompiledBackendTarget::Invalid { .. } => {
             return Err(AiPeerPredispatchFailure::Endpoint);
         }
     };
+    let (namespace, name) = (compiled_target.namespace(), compiled_target.name());
     ctx.backend_context = Some(crate::ctx::BackendContext {
         source: Some(BackendSource::AiBackend),
         rsc: Some(crate::Rsc::new("EdgionBackend", namespace, name)),
-        service_key: Some(format!("{namespace}/{name}")),
+        service_key: Some(compiled_target.key().to_owned()),
         service_kind: None,
         upstreams: Vec::new(),
         current_upstream_id: None,

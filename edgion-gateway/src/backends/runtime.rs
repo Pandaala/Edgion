@@ -49,10 +49,33 @@ impl CompiledServiceTarget {
     }
 }
 
+/// An immutable AI resource identity and its cold-compiled store lookup key.
+/// The identity does not itself grant ReferenceGrant authority.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompiledAiTarget {
+    policy_target: PolicyTargetKey,
+    key: String,
+}
+
+impl CompiledAiTarget {
+    pub fn policy_target(&self) -> &PolicyTargetKey {
+        &self.policy_target
+    }
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+    pub fn namespace(&self) -> &str {
+        &self.policy_target.namespace
+    }
+    pub fn name(&self) -> &str {
+        &self.policy_target.name
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CompiledBackendTarget {
     Service(CompiledServiceTarget),
-    EdgionBackend(PolicyTargetKey),
+    EdgionBackend(CompiledAiTarget),
     Invalid { classified_kind: HTTPBackendRefKind },
 }
 
@@ -76,7 +99,10 @@ impl CompiledBackendTarget {
             name: identity.name().to_owned(),
         };
         if target_kind == PolicyTargetKind::EdgionBackend {
-            return Self::EdgionBackend(policy_target);
+            return Self::EdgionBackend(CompiledAiTarget {
+                key: format!("{}/{}", policy_target.namespace, policy_target.name),
+                policy_target,
+            });
         }
         let section = crate::backends::service_section_key_from_port(reference.port())
             .expect("the canonical Service target validated its required numeric port");
@@ -90,7 +116,7 @@ impl CompiledBackendTarget {
     pub fn policy_target(&self) -> Option<&PolicyTargetKey> {
         match self {
             Self::Service(service) => Some(service.policy_target()),
-            Self::EdgionBackend(target) => Some(target),
+            Self::EdgionBackend(target) => Some(target.policy_target()),
             Self::Invalid { .. } => None,
         }
     }

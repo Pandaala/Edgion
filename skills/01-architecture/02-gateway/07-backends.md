@@ -60,6 +60,19 @@ the proven section, not a live ServiceStore scan. Health probes use
 `AvailableServiceProjection::canonical_probe_backends()` (union of Resolved `all_slots`,
 deduped by runtime identity). Session persistence is keyed per section.
 
+The same cold compiler owns `CompiledAiTarget` for an effective EdgionBackend
+reference: its private typed `PolicyTargetKey` and namespace/name lookup key are
+published together in the immutable route generation. `ai_candidate_spec` borrows
+that key for contract validation, availability admission, model listing, composite
+checks and continuation validation. Candidate projection borrows through the
+request's route-generation Arc; retained `AiPlanCandidate` keys and peer context
+keys take owned copies at their existing lifetime boundaries. Passthrough checks
+consume borrowed weight/runtime projections only when enabled, without a temporary
+key or runtime-Arc copy. Target identity never grants reference authorization;
+permitted-target and final dispatch checks remain separate. Planning passes retain
+their different admission and captured-generation contracts. See the
+[ARCH-008 ownership regression guard](../../04-review/ai-routing/regression-guards/precompiled-backend-lookup-keys.md).
+
 DirectEndpoint borrows `CompiledBackend::permitted_service()`, the same private
 compiled Service target used by ordinary HTTP selection and final peer resolution. Denied refs and invalid/missing
 Service ports have no permission. One captured discovery generation supplies the section's

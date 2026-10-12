@@ -95,10 +95,50 @@ fn denied_ai_backend_is_invalid_and_never_materialized() {
     assert_eq!(invalid_weight_gate(&gate_candidates, 0), Ok(ConformanceGate::Invalid));
     assert!(ai_candidate_spec(&denied).is_none());
     let (slot, weight, key) = ai_candidate_spec(&allowed).unwrap();
-    assert_eq!((slot, weight, key), (0, 1, "tenant-b/provider".to_string()));
+    assert_eq!((slot, weight, key), (0, 1, "tenant-b/provider"));
     let generation = Arc::from(vec![allowed.clone()]);
     let logical = crate::backends::LogicalBackendHandle::new(generation, 0).unwrap();
     assert_eq!(logical.identity(), allowed.identity());
+}
+
+#[test]
+fn ai_candidate_lookup_borrows_compiled_key_without_allocating() {
+    let backend = compiled_ai_backend(None);
+    let CompiledBackendTarget::EdgionBackend(target) = backend.target() else {
+        panic!("AI fixture must have an AI target");
+    };
+    let (_, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+        for _ in 0..32 {
+            let (slot, weight, key) = ai_candidate_spec(std::hint::black_box(&backend)).unwrap();
+            assert_eq!((slot, weight, key), (0, 1, "tenant-b/provider"));
+            assert!(std::ptr::eq(key, target.key()));
+        }
+    });
+    assert_eq!(stats.calls, 0);
+    assert_eq!(stats.requested_bytes, 0);
+    assert!(ai_candidate_spec(&compiled_service_backend(1)).is_none());
+    let mut schema = backend.schema().clone();
+    schema.group = Some("unsupported.example".into());
+    let invalid = crate::routes::http::match_unit::compile_http_backend_fixture(
+        schema,
+        "tenant-a",
+        0,
+        Arc::new(PluginRuntime::new()),
+    );
+    assert!(ai_candidate_spec(&invalid).is_none());
+}
+
+#[test]
+fn passthrough_disabled_paths_do_not_inspect_candidates() {
+    for (rewrite, configured) in [(false, OnUnknownModel::Reject), (true, OnUnknownModel::Passthrough)] {
+        let reads = std::cell::Cell::new(0);
+        let candidates = std::iter::once_with(|| {
+            reads.set(reads.get() + 1);
+            (1, None)
+        });
+        assert!(!unknown_model_passthrough_allowed(rewrite, configured, candidates));
+        assert_eq!(reads.get(), 0);
+    }
 }
 
 #[test]
@@ -446,27 +486,53 @@ fn downgrade_re_resolves_models_from_captured_candidates_without_passthrough() {
     assert_eq!(adaptive.count(), 1);
     assert!(candidates[0].adaptive.is_some());
 
-    let passthrough_inputs = vec![((0, 1, "tenant/backend".to_string()), candidates[0].backend.clone())];
+    let passthrough_inputs = [(1, candidates[0].backend.as_deref())];
     assert!(unknown_model_passthrough_allowed(
         false,
         OnUnknownModel::Passthrough,
-        &passthrough_inputs
+        passthrough_inputs.into_iter()
     ));
     assert!(!unknown_model_passthrough_allowed(
         true,
         OnUnknownModel::Passthrough,
-        &passthrough_inputs
+        passthrough_inputs.into_iter()
     ));
     assert!(!unknown_model_passthrough_allowed(
         false,
         OnUnknownModel::Reject,
-        &passthrough_inputs
+        passthrough_inputs.into_iter()
     ));
     assert!(!unknown_model_passthrough_allowed(
         false,
         OnUnknownModel::Passthrough,
-        &[((0, 1, "missing/backend".to_string()), None)]
+        [(1, None)].into_iter()
     ));
+    assert!(unknown_model_passthrough_allowed(
+        false,
+        OnUnknownModel::Passthrough,
+        [(0, None), (-1, None)].into_iter()
+    ));
+    assert!(unknown_model_passthrough_allowed(
+        false,
+        OnUnknownModel::Passthrough,
+        std::iter::empty()
+    ));
+    for provider in [AiProvider::OpenAICompatible, AiProvider::Anthropic] {
+        let runtime = candidates[0].backend.as_mut().unwrap();
+        Arc::get_mut(runtime).unwrap().provider = provider;
+        let (_, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+            assert_eq!(
+                unknown_model_passthrough_allowed(
+                    false,
+                    OnUnknownModel::Passthrough,
+                    [(0, None), (1, Some(runtime.as_ref()))].into_iter()
+                ),
+                provider == AiProvider::OpenAICompatible
+            );
+        });
+        assert_eq!(stats.calls, 0);
+        assert_eq!(stats.requested_bytes, 0);
+    }
 }
 
 #[test]
