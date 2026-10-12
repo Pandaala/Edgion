@@ -254,10 +254,33 @@ fn test_current_index_name_format() {
         index_prefix: "test-logs".to_string(),
         date_pattern: "%Y.%m.%d".to_string(),
     };
-    let name = config.current_index_name();
+    let name = config.current_index_name().unwrap();
     assert!(name.starts_with("test-logs-"));
     // Format: test-logs-YYYY.MM.DD (20 chars)
     assert_eq!(name.len(), "test-logs-2026.02.11".len());
+}
+
+#[test]
+fn current_index_name_returns_format_errors() {
+    let mut config = EsBulkConfig::from_crd(&ElasticsearchClientConfig::default());
+    for pattern in ["%", "suffix%", "%Q", "%#z"] {
+        config.date_pattern = pattern.into();
+        assert!(config.current_index_name().is_err(), "{pattern}");
+    }
+}
+
+#[test]
+fn current_index_name_preserves_valid_utc_output() {
+    let mut config = EsBulkConfig::from_crd(&ElasticsearchClientConfig::default());
+    for (pattern, suffix) in [("", ""), ("literal", "literal"), ("%%", "%"), ("%Z %:z", "UTC +00:00")] {
+        config.date_pattern = pattern.into();
+        assert_eq!(config.current_index_name().unwrap(), format!("edgion-logs-{suffix}"));
+    }
+    config.date_pattern = "%Y.%m.%d".into();
+    let before = chrono::Utc::now().format(&config.date_pattern).to_string();
+    let actual = config.current_index_name().unwrap();
+    let after = chrono::Utc::now().format(&config.date_pattern).to_string();
+    assert!(actual == format!("edgion-logs-{before}") || actual == format!("edgion-logs-{after}"));
 }
 
 /// `tls.enabled = false` must NOT inject TLS material even when `verify=false`

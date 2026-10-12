@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::Client;
+use std::fmt;
 use std::time::Duration;
 
 use crate::link_sys::credential::{CredentialState, ResolvedCredential};
@@ -226,10 +227,11 @@ impl EsBulkConfig {
 
     /// Generate index name for the current timestamp.
     /// e.g., "edgion-logs-2026.02.11"
-    pub fn current_index_name(&self) -> String {
-        let now = chrono::Utc::now();
-        let date_suffix = now.format(&self.date_pattern).to_string();
-        format!("{}-{}", self.index_prefix, date_suffix)
+    pub fn current_index_name(&self) -> Result<String, fmt::Error> {
+        let mut name = self.index_prefix.clone();
+        name.push('-');
+        chrono::Utc::now().format(&self.date_pattern).write_to(&mut name)?;
+        Ok(name)
     }
 }
 

@@ -225,6 +225,14 @@ spec:
 
 - Auth tagged-enum: `type: basic` → `BasicAuthResolver`, `type: apiKey` → `EsApiKeyResolver`, `type: bearer` → `BearerResolver`.
 - At runtime, requests are issued via reqwest directly over HTTP, without depending on the official `elasticsearch` crate; OpenSearch-compatible.
+- `index.datePattern` is a UTC strftime output pattern (default `%Y.%m.%d`).
+  Controller reports `Accepted=False/Invalid` and Gateway rejects candidate
+  construction when the pattern cannot format, including `%`, trailing `%`,
+  unsupported directives and parsing-only `%#z`. Empty patterns, literals and
+  `%%` remain valid. This checks format capability, not Elasticsearch index-name
+  restrictions. An unexpected runtime formatting failure drops the current batch
+  without an ES request/retry and keeps the worker running; transport health and
+  first-healthy fallback are unchanged.
 - `bulk.maxRetries` is one shared per-sub-batch budget for transport failures, HTTP 5xx responses,
   and item-level 429 rejections. A parsed partial response retries only its 429 documents, in
   request order; later documents wait up to the bounded `bulk.channelSize` capacity. Entries

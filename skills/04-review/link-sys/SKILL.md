@@ -25,6 +25,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Elasticsearch date patterns are validated before runtime reuse](regression-guards/elasticsearch-date-pattern-admission.md)
+
 - [CredentialSource memory publication retains one active token](regression-guards/credential-source-single-active-memory.md)
 
 - [HTTPDNS clients are prepared and owned by configuration generations](regression-guards/httpdns-prepared-runtime.md)

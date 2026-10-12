@@ -79,7 +79,11 @@ The LinkSys CRD and the log-output / rotation configuration (used by link_sys ru
 
 - Calls `LinkSys::validate_config()`:
   - Redis validates its complete endpoint contract before publication: standalone has exactly one top-level endpoint, cluster has at least one, and sentinel has no top-level endpoints plus a non-empty `topology.sentinel.sentinels` list and `masterName`. Every active endpoint must parse, inactive topology blocks are rejected, and mixed TLS/plaintext schemes require `tls.enabled=true`. Validation errors identify only the field/index and never echo endpoint input.
-  - Elasticsearch with empty `endpoints` → error
+  - Elasticsearch with empty `endpoints` → error. Its resources-owned
+    `ElasticsearchClientConfig::validate_date_pattern` also rejects an explicit
+    `index.datePattern` that cannot format a UTC timestamp, including parsing-only
+    `%#z`. Gateway candidate preparation calls the same validator before
+    fingerprint reuse or construction; Controller status alone is advisory.
   - Etcd validates endpoints, timeouts and keepalive through shared pure rules.
     Connection options use the upstream SDK;
     custom message limits, version admission, discovery and operation observations

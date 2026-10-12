@@ -1,5 +1,28 @@
 use super::*;
 
+#[test]
+fn elasticsearch_date_pattern_errors_flow_through_shared_validation() {
+    for pattern in ["%", "%#z"] {
+        let spec: LinkSysSpec = serde_json::from_value(serde_json::json!({
+            "type": "elasticsearch", "config": {"endpoints": [], "index": {"datePattern": pattern}}
+        }))
+        .unwrap();
+        let errors = make_link_sys("es", spec).validate_config();
+        assert_eq!(
+            errors,
+            vec![
+                "Elasticsearch configuration has no endpoints",
+                "Elasticsearch index.datePattern must be a strftime pattern that supports UTC formatting",
+            ]
+        );
+    }
+    let spec: LinkSysSpec = serde_json::from_value(serde_json::json!({
+        "type": "elasticsearch", "config": {"endpoints": ["http://es.example:9200"], "index": {"datePattern": "%%"}}
+    }))
+    .unwrap();
+    assert!(make_link_sys("es", spec).validate_config().is_empty());
+}
+
 fn make_link_sys(name: &str, spec: LinkSysSpec) -> LinkSys {
     LinkSys {
         metadata: kube::api::ObjectMeta {

@@ -1,5 +1,187 @@
 use super::*;
 
+// Observe only this worker's provider diagnostics while its future is polled
+// under a scoped subscriber. No socket or server is needed for failure tests.
+#[derive(Clone, Default)]
+struct BulkEvents(Arc<parking_lot::Mutex<Vec<BulkEvent>>>);
+
+#[derive(Default, Debug)]
+struct BulkEvent {
+    message: String,
+    key_name: String,
+    component: String,
+    dropped_documents: Option<u64>,
+}
+
+impl tracing::field::Visit for BulkEvent {
+    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+        if field.name() == "dropped_documents" {
+            self.dropped_documents = Some(value);
+        }
+    }
+
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        match field.name() {
+            "message" => self.message = format!("{value:?}"),
+            "key_name" => self.key_name = format!("{value:?}"),
+            "component" => self.component = format!("{value:?}"),
+            _ => {}
+        }
+    }
+}
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for BulkEvents {
+    fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
+        if event.metadata().target() == "edgion_gateway::link_sys::providers::elasticsearch::bulk" {
+            let mut observed = BulkEvent::default();
+            event.record(&mut observed);
+            self.0.lock().push(observed);
+        }
+    }
+}
+
+fn assert_date_format_drop(event: &BulkEvent, count: u64) {
+    assert_eq!(
+        event.message,
+        "Elasticsearch index date formatting failed; dropping batch"
+    );
+    assert_eq!(event.key_name, "test/es");
+    assert_eq!(event.component, "\"link_sys\"");
+    assert_eq!(event.dropped_documents, Some(count));
+}
+
+#[tokio::test]
+async fn invalid_date_format_drops_batch_without_request_retry_or_health_change() {
+    use tracing_subscriber::layer::SubscriberExt;
+    for initial_health in [false, true] {
+        for pattern in ["%", "%#z"] {
+            let events = BulkEvents::default();
+            let subscriber = tracing_subscriber::registry().with(events.clone());
+            let _guard = tracing::subscriber::set_default(subscriber);
+            let mut config = test_bulk_config(10, std::time::Duration::from_secs(30));
+            config.date_pattern = pattern.into();
+            let health = Arc::new(PublishedHealth::new(initial_health));
+            let last_flip = AtomicU64::new(0);
+            let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+            // reqwest rejects this sentinel before DNS/dialing if a regression
+            // reaches the send path. The exact event count rejects that path.
+            tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                flush_batch(
+                    &Client::new(),
+                    "not a URL",
+                    &config,
+                    &health,
+                    &last_flip,
+                    "test/es",
+                    vec!["private-document-one".into(), "private-document-two".into()],
+                    &shutdown_rx,
+                    &AtomicBool::new(false),
+                ),
+            )
+            .await
+            .unwrap();
+            assert_eq!(health.load(), initial_health);
+            assert_eq!(last_flip.load(Ordering::Relaxed), 0);
+            let observed = events.0.lock();
+            assert_eq!(observed.len(), 1, "no request or retry diagnostics: {observed:?}");
+            assert_date_format_drop(&observed[0], 2);
+        }
+    }
+}
+
+#[tokio::test]
+async fn invalid_date_format_worker_processes_later_batches_and_channel_close() {
+    use tracing_subscriber::layer::SubscriberExt;
+    for initial_health in [false, true] {
+        let events = BulkEvents::default();
+        let subscriber = tracing_subscriber::registry().with(events.clone());
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let mut config = test_bulk_config(10, std::time::Duration::from_secs(30));
+        config.batch_size = 1;
+        config.flush_interval = std::time::Duration::from_secs(3600);
+        config.date_pattern = "%#z".into();
+        let health = Arc::new(PublishedHealth::new(initial_health));
+        let last_flip = Arc::new(AtomicU64::new(0));
+        let (tx, rx) = mpsc::channel(1);
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let worker = bulk_ingest_loop(
+            Client::new(),
+            vec!["not a URL".into()],
+            config,
+            Arc::clone(&health),
+            Arc::clone(&last_flip),
+            "test/es".into(),
+            rx,
+            shutdown_rx,
+            Arc::new(AtomicBool::new(false)),
+        );
+        tokio::pin!(worker);
+        for _ in 0..2 {
+            tx.try_send("private-document".into()).unwrap();
+            assert!(futures::poll!(&mut worker).is_pending());
+        }
+        drop(tx);
+        tokio::time::timeout(std::time::Duration::from_secs(1), &mut worker)
+            .await
+            .unwrap();
+        let observed = events.0.lock();
+        assert_eq!(
+            observed.len(),
+            3,
+            "two drops and normal channel-close exit: {observed:?}"
+        );
+        assert_date_format_drop(&observed[0], 1);
+        assert_date_format_drop(&observed[1], 1);
+        assert!(observed[2].message.contains("channel closed"));
+        assert_eq!(health.load(), initial_health);
+        assert_eq!(last_flip.load(Ordering::Relaxed), 0);
+    }
+}
+
+#[tokio::test]
+async fn invalid_date_format_shutdown_drops_buffered_batch_and_exits() {
+    use tracing_subscriber::layer::SubscriberExt;
+    let events = BulkEvents::default();
+    let subscriber = tracing_subscriber::registry().with(events.clone());
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let mut config = test_bulk_config(10, std::time::Duration::from_secs(30));
+    config.flush_interval = std::time::Duration::from_secs(3600);
+    config.date_pattern = "%".into();
+    let health = Arc::new(PublishedHealth::new(true));
+    let last_flip = Arc::new(AtomicU64::new(0));
+    let (tx, rx) = mpsc::channel(1);
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let worker = bulk_ingest_loop(
+        Client::new(),
+        vec!["not a URL".into()],
+        config,
+        Arc::clone(&health),
+        Arc::clone(&last_flip),
+        "test/es".into(),
+        rx,
+        shutdown_rx,
+        Arc::new(AtomicBool::new(false)),
+    );
+    tokio::pin!(worker);
+    // First poll consumes the initial empty interval tick. The next poll
+    // consumes the document below the batch threshold with no pending tick.
+    assert!(futures::poll!(&mut worker).is_pending());
+    tx.try_send("private-document".into()).unwrap();
+    assert!(futures::poll!(&mut worker).is_pending());
+    assert!(events.0.lock().is_empty());
+    shutdown_tx.send(true).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(1), &mut worker)
+        .await
+        .unwrap();
+    let observed = events.0.lock();
+    assert_eq!(observed.len(), 2, "buffer drop and normal shutdown exit: {observed:?}");
+    assert_date_format_drop(&observed[0], 1);
+    assert!(observed[1].message.contains("shutdown"));
+    assert!(health.load());
+    assert_eq!(last_flip.load(Ordering::Relaxed), 0);
+}
+
 fn test_bulk_config(max_retries: u32, backoff: std::time::Duration) -> EsBulkConfig {
     EsBulkConfig {
         batch_size: 500,

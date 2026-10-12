@@ -479,7 +479,19 @@ Multiple endpoints are used for round-robin load balancing. This connector is al
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `index.prefix` | String | `"edgion-logs"` | Index name prefix. |
-| `index.datePattern` | String | `"%Y.%m.%d"` | strftime date pattern appended to the index name. Produces indices like `edgion-logs-2026.05.29`. |
+| `index.datePattern` | String | `"%Y.%m.%d"` | UTC strftime output pattern appended to the index name. Produces indices like `edgion-logs-2026.05.29`. |
+
+Patterns must support UTC formatting. A lone or trailing `%`, unsupported directives,
+and parsing-only `%#z` are rejected: the Controller reports `Accepted=False/Invalid`
+and the Gateway refuses the candidate before starting background tasks. Empty
+patterns, literal text and `%%` (a literal percent) remain accepted. This does not
+validate Elasticsearch's own index-name restrictions.
+
+If formatting unexpectedly fails at runtime, the connector drops that batch without
+sending or retrying it and continues processing later batches. A fixed error reports
+the connector key and dropped-document count. Transport health is unchanged, so
+this local failure does not trigger access-log fallback. Already queued documents
+are not recovered by fallback.
 
 ### Bulk loader
 

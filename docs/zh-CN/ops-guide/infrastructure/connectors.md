@@ -450,7 +450,16 @@ spec:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `index.prefix` | String | `"edgion-logs"` | 索引名称前缀。 |
-| `index.datePattern` | String | `"%Y.%m.%d"` | 附加到索引名称的 strftime 日期格式。生成的索引如 `edgion-logs-2026.05.29`。 |
+| `index.datePattern` | String | `"%Y.%m.%d"` | 附加到索引名称的 UTC strftime 输出格式。生成的索引如 `edgion-logs-2026.05.29`。 |
+
+格式必须支持 UTC 时间输出。单独或末尾的 `%`、不支持的指令，以及仅用于解析的
+`%#z` 会被拒绝：Controller 报告 `Accepted=False/Invalid`，Gateway 在启动后台任务
+前拒绝候选配置。空格式、普通文本和 `%%`（输出一个百分号）仍然有效。此校验不检查
+Elasticsearch 自身的索引名称限制。
+
+若运行时仍出现意外的格式化失败，连接器会丢弃当前批次，不发送或重试该批次，并继续
+处理后续批次。固定错误日志只报告连接器标识和丢弃的文档数量。传输健康状态保持不变，
+因此该本地失败不会触发访问日志 fallback；fallback 不会恢复已进入队列的文档。
 
 ### 批量写入
 

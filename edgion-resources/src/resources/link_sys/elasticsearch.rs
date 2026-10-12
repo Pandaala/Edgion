@@ -4,6 +4,9 @@
 //! Uses reqwest HTTP client internally — no `elasticsearch` crate dependency.
 //! Compatible with Elasticsearch 7.x / 8.x and OpenSearch.
 
+use std::fmt;
+
+use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -40,6 +43,32 @@ pub struct ElasticsearchClientConfig {
     /// Index naming configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index: Option<EsIndex>,
+}
+
+impl ElasticsearchClientConfig {
+    /// Validate that the explicit date pattern can format a UTC timestamp.
+    ///
+    /// Formatting is required in addition to parsing: Chrono accepts some
+    /// parsing-only directives, such as `%#z`, that cannot produce output.
+    /// This cold check discards output rather than constructing an index name.
+    pub fn validate_date_pattern(&self) -> Result<(), &'static str> {
+        let Some(pattern) = self.index.as_ref().and_then(|index| index.date_pattern.as_deref()) else {
+            return Ok(());
+        };
+        let timestamp = DateTime::<Utc>::default();
+        timestamp
+            .format(pattern)
+            .write_to(&mut DiscardFormatOutput)
+            .map_err(|_| "Elasticsearch index.datePattern must be a strftime pattern that supports UTC formatting")
+    }
+}
+
+struct DiscardFormatOutput;
+
+impl fmt::Write for DiscardFormatOutput {
+    fn write_str(&mut self, _: &str) -> fmt::Result {
+        Ok(())
+    }
 }
 
 /// Elasticsearch authentication configuration.
@@ -135,7 +164,8 @@ pub struct EsIndex {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefix: Option<String>,
 
-    /// Date pattern for time-based indices (strftime format, default: "%Y.%m.%d").
+    /// Date pattern for time-based indices (UTC strftime format, default: "%Y.%m.%d").
+    /// Must support formatting, not only parsing.
     /// Produces indices like "edgion-logs-2026.02.11"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub date_pattern: Option<String>,

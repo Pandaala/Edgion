@@ -6,6 +6,61 @@ fn fingerprint_es(owner: &LinkSys) -> anyhow::Result<RuntimeFingerprint> {
     fingerprint_es_fields(owner, |_| Ok(()))
 }
 
+#[test]
+fn invalid_date_pattern_is_rejected_before_same_rv_reuse_or_construction() {
+    use edgion_common::link_sys_core::outbound_tls::GlobalOutboundTlsSnapshot;
+    use edgion_resources::resources::link_sys::elasticsearch::EsIndex;
+    let defaults = Arc::new(GlobalOutboundTlsSnapshot::from_configs([]));
+    let valid = es_ls(vec!["http://es.example:9200"], Some("42"));
+    let admitted = candidate(valid.clone(), Arc::clone(&defaults)).unwrap();
+    let ready = EsLinkClient::from_candidate("fp/es", &admitted).unwrap();
+    assert!(ready.runtime_fingerprint().rv_skip_allows_reuse(admitted.fingerprint()));
+    for pattern in ["%", "suffix%", "%Q", "%#z"] {
+        let mut invalid = valid.clone();
+        let SystemConfig::Elasticsearch(config) = &mut invalid.spec.config else {
+            unreachable!()
+        };
+        config.index = Some(EsIndex {
+            prefix: None,
+            date_pattern: Some(pattern.into()),
+        });
+        assert_eq!(
+            config.validate_date_pattern().unwrap_err(),
+            invalid.validate_config()[0]
+        );
+        let error = candidate(invalid.clone(), Arc::clone(&defaults)).err().unwrap();
+        assert!(error.to_string().contains("index.datePattern"));
+        assert!(EsApply::prepare(Arc::new(invalid.clone())).is_err());
+        assert!(EsLinkClient::from_link_sys(Arc::new(invalid)).is_err());
+    }
+}
+
+#[test]
+fn admitted_date_patterns_preserve_effective_fingerprint_identity() {
+    use edgion_common::link_sys_core::outbound_tls::GlobalOutboundTlsSnapshot;
+    use edgion_resources::resources::link_sys::elasticsearch::EsIndex;
+    let defaults = Arc::new(GlobalOutboundTlsSnapshot::from_configs([]));
+    let base = es_ls(vec!["http://es.example:9200"], None);
+    let baseline = candidate(base.clone(), Arc::clone(&defaults)).unwrap();
+    for pattern in ["", "literal", "%%", "%Y.%m.%d", "%Z %:z"] {
+        let mut explicit = base.clone();
+        let SystemConfig::Elasticsearch(config) = &mut explicit.spec.config else {
+            unreachable!()
+        };
+        config.index = Some(EsIndex {
+            prefix: None,
+            date_pattern: Some(pattern.into()),
+        });
+        let incoming = candidate(explicit, Arc::clone(&defaults)).unwrap();
+        assert_eq!(
+            baseline.fingerprint().equal_runtime(incoming.fingerprint()),
+            pattern == "%Y.%m.%d"
+        );
+        let ready = EsLinkClient::from_candidate("fp/es", &incoming).unwrap();
+        assert!(ready.runtime_fingerprint().equal_runtime(incoming.fingerprint()));
+    }
+}
+
 fn candidate(
     owner: LinkSys,
     defaults: Arc<edgion_common::link_sys_core::outbound_tls::GlobalOutboundTlsSnapshot>,

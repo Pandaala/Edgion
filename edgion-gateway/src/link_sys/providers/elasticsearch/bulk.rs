@@ -202,7 +202,15 @@ async fn flush_batch(
     shutdown: &watch::Receiver<bool>,
     retired: &AtomicBool,
 ) {
-    let index_name = config.current_index_name();
+    let Ok(index_name) = config.current_index_name() else {
+        tracing::error!(
+            component = "link_sys",
+            key_name = %name,
+            dropped_documents = docs.len(),
+            "Elasticsearch index date formatting failed; dropping batch"
+        );
+        return;
+    };
     let bulk_url = format!("{}/_bulk", endpoint);
 
     // Per-document wire cost: header line + '\n' + doc + '\n'. The header line

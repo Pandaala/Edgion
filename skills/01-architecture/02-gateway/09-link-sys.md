@@ -25,6 +25,20 @@ provider; its key-only OtlpLogSender never owns an exporter or probe.
 
 ### Elasticsearch
 
+The resources-owned UTC date-pattern validator is shared by Controller LinkSys
+validation and `EsCandidate::from_prepared`. Candidate admission runs before
+fingerprint/resourceVersion reuse, construction and background task startup.
+It tests actual formatting through Chrono's fallible `write_to`, not only parsing.
+Default, empty, literal and escaped-percent patterns retain their meaning.
+
+At bulk flush time, `EsBulkConfig::current_index_name` writes directly into the
+final String and returns a formatting Result. An unexpected failure drops only
+the current owned batch before any ES call or retry, emits a fixed background
+diagnostic with the connector key and document count, and lets the worker continue.
+Transport health and first-healthy fallback remain unchanged; this is no delivery
+acknowledgement or fallback guarantee. Validation runs at configuration time and
+index naming remains once per flush, with no new request-path work.
+
 ```
 providers/elasticsearch/
 ├── apply.rs           # EsApply fingerprint / coverage / build for the runner

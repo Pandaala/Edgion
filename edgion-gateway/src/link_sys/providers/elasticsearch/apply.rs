@@ -28,10 +28,10 @@ impl EsCandidate {
         Self::from_prepared(PreparedLinkSysTls::from_link_sys(owner)?)
     }
     pub(super) fn from_prepared(tls: PreparedLinkSysTls) -> anyhow::Result<Self> {
-        anyhow::ensure!(
-            matches!(&tls.owner().spec.config, SystemConfig::Elasticsearch(_)),
-            "Elasticsearch candidate requires an actual Elasticsearch LinkSys"
-        );
+        let SystemConfig::Elasticsearch(config) = &tls.owner().spec.config else {
+            anyhow::bail!("Elasticsearch candidate requires an actual Elasticsearch LinkSys");
+        };
+        config.validate_date_pattern().map_err(anyhow::Error::msg)?;
         tls.validate_active_inheritance()?;
         let fingerprint = fingerprint_es_fields(tls.owner(), |hasher| tls.hash_active_inheritance(hasher))?;
         Ok(Self { tls, fingerprint })

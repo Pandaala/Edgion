@@ -90,6 +90,16 @@ Where:
 
 because it also serves `DataSender<String>` scenarios such as logs.
 
+Elasticsearch date-pattern admission has one owner in resources:
+`ElasticsearchClientConfig::validate_date_pattern`. Keep both Controller
+`LinkSys::validate_config` and Gateway `EsCandidate::from_prepared` on that
+contract, with Gateway admission before fingerprint reuse/build/init. Test actual
+UTC formatting, because a parser-only check accepts unsupported output directives
+such as `%#z`. Bulk index formatting must remain fallible: an unexpected error
+drops the current batch before send/retry, records only a fixed provider diagnostic
+with key/count, and keeps the worker running without changing transport health.
+See the [date-pattern regression guard](../../04-review/link-sys/regression-guards/elasticsearch-date-pattern-admission.md).
+
 ### 2. Webhook
 
 Webhook is a compiled outbound-request provider. The resource owns both the backend target and the

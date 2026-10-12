@@ -237,6 +237,9 @@ impl LinkSys {
                 if es_config.endpoints.is_empty() {
                     errors.push("Elasticsearch configuration has no endpoints".to_string());
                 }
+                if let Err(error) = es_config.validate_date_pattern() {
+                    errors.push(error.to_string());
+                }
             }
             SystemConfig::Webhook(webhook_config) => {
                 if let Some(err) = webhook_config.get_validation_error() {

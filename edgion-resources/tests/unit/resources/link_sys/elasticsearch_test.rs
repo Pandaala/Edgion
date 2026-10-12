@@ -1,6 +1,46 @@
 use super::*;
 
 #[test]
+fn date_pattern_accepts_defaults_literals_and_utc_formats() {
+    let mut config = ElasticsearchClientConfig::default();
+    assert_eq!(config.validate_date_pattern(), Ok(()));
+    config.index = Some(EsIndex {
+        prefix: None,
+        date_pattern: None,
+    });
+    assert_eq!(config.validate_date_pattern(), Ok(()));
+    for pattern in [
+        "",
+        "literal",
+        "%%",
+        "%Y.%m.%d",
+        "%Y-%m-%dT%H:%M:%S%.f%:z",
+        "%Z %z %s %+",
+    ] {
+        config.index.as_mut().unwrap().date_pattern = Some(pattern.into());
+        assert_eq!(config.validate_date_pattern(), Ok(()), "{pattern}");
+    }
+}
+
+#[test]
+fn date_pattern_rejects_malformed_and_parsing_only_directives_without_echoing_input() {
+    for pattern in ["%", "private-literal%", "%Q", "%#z"] {
+        let config = ElasticsearchClientConfig {
+            index: Some(EsIndex {
+                prefix: None,
+                date_pattern: Some(pattern.into()),
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.validate_date_pattern(),
+            Err("Elasticsearch index.datePattern must be a strftime pattern that supports UTC formatting"),
+            "{pattern}"
+        );
+    }
+}
+
+#[test]
 fn test_serde_simple_config() {
     let yaml = r#"
 endpoints:
