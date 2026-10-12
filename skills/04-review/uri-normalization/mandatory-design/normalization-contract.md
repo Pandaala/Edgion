@@ -141,6 +141,42 @@ without that local admin capability.
 
 ---
 
+## Frozen query cache source
+
+The canonical [URI dual-view contract](../../../01-architecture/02-gateway/uri-normalization/SKILL.md)
+requires decoded single-key query reads to use the frozen entry snapshot, while
+whole-string query reads remain live and raw. `EdgionHttpContext::cached_query()`
+owns source selection from `request_info.entry_raw_query`; routing, plugin
+`get_query_param` and access-log query projection share that no-argument accessor.
+Selecting the live rewritten query for this cache would make all later key reads
+observe the wrong generation. Access-log masking remains independently required.
+
+ARCH-004 identified the former caller-selected `raw_query` parameter: all three
+production callers passed the correct snapshot, but a future reader could seed
+the permanent cache from a rewritten URI or arbitrary `None`. Removing the
+parameter places that existing invariant with the context that already owns
+both source and cache. Keep lazy canonical percent/plus decoding, init-once
+borrowed-map identity, optional boxed nonempty maps and the allocation-free static
+empty view. This correction establishes no throughput or memory improvement.
+
+Source evidence is `edgion-gateway/src/ctx.rs::cached_query` and its consumers in
+`routes/http/match_unit.rs`, `plugins/runtime/session_adapter.rs` and
+`observe/access_log/log_ext.rs`. Focused regressions in
+`edgion-gateway/tests/unit/ctx_test/cached_query_tests.rs` cover live rewrites before
+and after initialization, decoding, lazy initialization, stable identity and
+empty allocations. Existing adapter allocation and access-log projection tests
+cover their consumer boundaries; historical integration results are not fresh
+verification of this correction.
+
+The entry snapshot remains publicly mutable, and early RequestId/preflight gates
+still precede metadata capture. Reading before capture can initialize an empty
+cache permanently; the no-argument API does not solve that lifecycle boundary.
+Re-evaluate this decision if entry capture ordering, snapshot mutability, query
+view semantics or cache lifetime changes. Decoder token allocation (ARCH-048)
+is a separate concern.
+
+---
+
 ## Commitment Scope Summary
 
 | Attack type | Default coverage | High-security hardening |
@@ -154,6 +190,8 @@ without that local admin capability.
 | Non-compliant upstream parsing divergence | ❌ outside our control | Operator writes ACL rules per upstream behavior |
 
 ## Resolution references
+
+- `ARCH-004` — 2026-10-12; the context owns frozen query-cache source selection.
 
 - `g8-005` — —.
 - `path-norm-F001` — 2026-05-26.

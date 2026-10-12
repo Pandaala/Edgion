@@ -249,7 +249,7 @@ async fn response_condition_source_allocation_inventory() {
     );
     // Prime the once-per-request query parse so this measures only the
     // per-chunk value extraction cost.
-    ctx.cached_query(ctx.request_info.entry_raw_query.as_deref());
+    ctx.cached_query();
     let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
     let cases = [
         ("traceId", KeyGet::TraceId),

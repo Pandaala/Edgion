@@ -258,10 +258,7 @@ fn resolve_field(field: &AccessLogExternField, session: &Session, ctx: &EdgionHt
         // Entry-time raw query, NOT the rewritten URI — same init-once cache the
         // plugins and the `${query:...}` template already share, so the parse is
         // paid at most once per request.
-        LogExtSource::Query => ctx
-            .cached_query(ctx.request_info.entry_raw_query.as_deref())
-            .get(&field.name)
-            .cloned(),
+        LogExtSource::Query => ctx.cached_query().get(&field.name).cloned(),
         LogExtSource::Cookie => {
             crate::plugins::runtime::session_adapter::cookie_value(&session.req_header().headers, &field.name)
         }

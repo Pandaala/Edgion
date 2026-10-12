@@ -1,0 +1,26 @@
+{
+  "finding": "ARCH-004",
+  "disposition": "fixed-and-verified",
+  "authorization": "User explicitly requested closing and deleting the completed ARCH-004 finding.",
+  "finding_sha256": "794243ee014b2b713e61edaee37c5d11cec67f575ccd5882638d920f6aa268e6",
+  "independent_reviewer": "/root/query_result_review",
+  "decision": "PASS",
+  "implementation_task": "../pending/architecture-context-query-cache-source/architecture-context-query-cache-source.md",
+  "implementation_review": "../pending/architecture-context-query-cache-source/02-implementation.md",
+  "knowledge": "../../skills/04-review/uri-normalization/mandatory-design/normalization-contract.md",
+  "base_head": "c0282197e4dbebb4db47bb2940b9b06d12d7c41a",
+  "scoped_diff_sha256": "ab3cc6f207e957ef990b7493d1b66d267b430b872ba08825031b9b89090a2f74",
+  "accepted_result_hashes": {
+    "edgion-gateway/src/ctx.rs": "b91ff87641477d9afb044bd65155cd8e8234b8a9c7c4fbe7debeeffba2ae9327",
+    "edgion-gateway/src/routes/http/match_unit.rs": "c2e4644662a7171bbb57ddcabdded2ff6c708d500f4f4b6caa4bb16a9126d0f1",
+    "edgion-gateway/src/plugins/runtime/session_adapter.rs": "c50c033289e6479729763f5b80cfa162a22a3ca4b6693596ac63000fc5265c00",
+    "edgion-gateway/src/observe/access_log/log_ext.rs": "5d97b177fac1240ff4e84affc10f521fcccbbb7e46a47585223e2ee67061120e",
+    "edgion-gateway/tests/unit/ctx_test/cached_query_tests.rs": "5646136a20f581a24229c1d06d9dd0f889b5cf5ecfc5755284100b0932a6d915",
+    "edgion-gateway/tests/unit/plugins/runtime/session_adapter_test/record_outcome_tests.rs": "99f692964986834ece998d2cd9aa9c2f6a071a3c9b6759520f720fe21a810976",
+    "skills/01-architecture/02-gateway/uri-normalization/SKILL.md": "59d1c9848d9d31fd88ffbad014be72544d2a10bc84b9cbbaeba1e187cef2115a",
+    "skills/04-review/uri-normalization/mandatory-design/normalization-contract.md": "e8704bbd5f3f47a9f882ae5538db00cf09ae775f6e5173b0b565302e2770cfc3"
+  },
+  "implementation_review_sha256": "dbf07ba9007a8c227b3cc24dca0539f6b356e2534c1bb3be115b203f086e7482",
+  "reported_execution": "31 targeted tests passed; workspace all-targets check and Clippy, formatting, document consistency, SSA force, metrics inventory, Pingora source, Gateway API transform, unit-test layout and no-tracing guards passed. Independent final review PASS.",
+  "limits": "No full test suite, end-to-end integration run or performance claim. Closure adds no primary review coverage. Original verification history, coverage and unrelated candidates remain unchanged; implementation task records are retained."
+}

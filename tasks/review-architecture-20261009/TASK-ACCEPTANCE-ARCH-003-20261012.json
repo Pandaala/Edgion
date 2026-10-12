@@ -1,0 +1,46 @@
+{
+  "finding": "ARCH-003",
+  "disposition": "fixed-and-verified",
+  "authorization": "User explicitly authorized deleting the completed implementation task directory and original finding.",
+  "finding_sha256": "591664709492832abeedf4a962a00faf3c7a75d41d28293cf76f923cc49ac42e",
+  "independent_reviewers": [
+    "/root/result_review",
+    "/root/integration_result_review"
+  ],
+  "decision": "PASS",
+  "knowledge": "../../skills/04-review/h2-grpc/regression-guards/terminal-status-field-ownership.md",
+  "reported_execution": "171 Gateway focused tests, 3 scanner tests, 6 registration tests and 6 native H2/gRPC-Web real terminal cases passed. Workspace check, warning-free Clippy, formatting, prescribed guards and final integration gates passed.",
+  "integration_report": "../../tmp/integration_testing/testing_20261012_085003/report.log",
+  "integration_report_sha256": "88dad8905bf3030def278eb02621de0cfe62d255ed31ff7a6b5f42ffac12dbf1",
+  "accepted_result_hashes": {
+    "edgion-gateway/src/runtime/server/mod.rs": "7aa81f5ef8e4f667d2f6ba918d4bfcab2cc880c1f400daa9631f3d658cdf1dd9",
+    "edgion-gateway/src/runtime/server/error_response.rs": "fbd97cbbc2089c4de28c9bbbc19e6946f4b427d805ace3706f59915bc7d5554f",
+    "edgion-gateway/src/plugins/runtime/session_adapter.rs": "6085b041ce19a7548dbd82dc0f95adef8184838e71380911e9240585c25f137c",
+    "edgion-gateway/tests/unit/runtime/server/error_response_test.rs": "5750e6e20dc920bc391b2e10bd4a7d9d3166be470ec575d2b2785c86702d5215",
+    "edgion-gateway/tests/unit/plugins/runtime/session_adapter_test/record_outcome_tests.rs": "1011ea44e39c5ef99b077c6e10f31f8e6925c03cafc8287b599d0ed10720294d",
+    "skills/01-architecture/02-gateway/02-pingora-lifecycle.md": "b87c215df1e079863a92c2a599461f912304102672eb3eba41dd767142ad6404",
+    "skills/04-review/h2-grpc/regression-guards/terminal-status-field-ownership.md": "d939afe0e77a5b54b500a1ad103c77f6e65a29243da1ef3bef955d011e453331",
+    "edgion-tests/src/client/suites/grpc_route/terminal_headers_wire.rs": "0c9a4def9615e2646a6c1dd1134851e29427e40c925d995626e29b6a658091d3",
+    "edgion-tests/src/client/suites/grpc_route/mod.rs": "2aef0b3c6616e26bb2f691b3a5bd5f48d8bf0c8665159c6a26d2f9cbe68eba73",
+    "edgion-tests/src/client/suites/mod.rs": "20dcb73df0e36b5220e62ff41aca13f3b803d45b88a913183d6371c8b9dded7b",
+    "edgion-tests/src/client/test_client.rs": "ac8281b31adc8ccc39a80da4be58625e173d33efae2b56df32a24300e8086a5b",
+    "edgion-tests/src/server/test_server.rs": "f9fc8127bff016216faefb4238cd1b4aa041e4aee88a13265a3c7b50104f48fd",
+    "edgion-tests/integration/conf/ports.json": "f3f111312b749c1c5cd5d2760666d5bd04263d2686dfcaf89b5de7c80b870a5d",
+    "edgion-tests/integration/conf/GRPCRoute/TerminalHeadersWire/00_resources.yaml": "ac4b13baec71224679c55ce77bd02f03ce6a34ba5ed39ed626954870bf6aad18",
+    "edgion-tests/integration/conf/GRPCRoute/TerminalHeadersWire/README.md": "d4483346170b693b0a63a4f09f467bbe358dd0031e4dc44d7ef13c8efcce465f",
+    "skills/05-testing/references/test-server-capabilities.md": "9917f1c9e6f425a31d1258f43a72dd6236e981b88cee1898c73e5e814d8e45f1"
+  },
+  "scoped_drift_revalidation": {
+    "edgion-gateway/src/plugins/runtime/session_adapter.rs": {
+      "accepted_sha256": "6085b041ce19a7548dbd82dc0f95adef8184838e71380911e9240585c25f137c",
+      "current_sha256": "c50c033289e6479729763f5b80cfa162a22a3ca4b6693596ac63000fc5265c00",
+      "reason": "Concurrent ARCH-004 query-cache edits; ARCH-003 terminal methods/tests independently checked unchanged against accepted source."
+    },
+    "edgion-gateway/tests/unit/plugins/runtime/session_adapter_test/record_outcome_tests.rs": {
+      "accepted_sha256": "1011ea44e39c5ef99b077c6e10f31f8e6925c03cafc8287b599d0ed10720294d",
+      "current_sha256": "99f692964986834ece998d2cd9aa9c2f6a071a3c9b6759520f720fe21a810976",
+      "reason": "Concurrent ARCH-004 query-cache edits; ARCH-003 terminal methods/tests independently checked unchanged against accepted source."
+    }
+  },
+  "limits": "Narrow cleartext coverage; no full suite, hot reload or performance claim. Original verification and primary coverage preserved. Working records deleted at user request; canonical knowledge and scoped closure evidence retained."
+}

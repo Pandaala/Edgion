@@ -29824,7 +29824,7 @@
     },
     "ARCH-003": {
       "path": "ARCH-003-grpc-terminal-header-preparation.md",
-      "status": "candidate",
+      "status": "resolved",
       "kind": "architecture-debt",
       "partition": "GW-ADAPTER",
       "analyst": "/root/analyze_adapter",
@@ -29865,12 +29865,25 @@
         }
       ],
       "previous_status": "confirmed",
-      "revalidation_pending": true,
-      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
+      "revalidation_pending": false,
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json",
+      "finding_removed": true,
+      "removed_finding_path": "ARCH-003-grpc-terminal-header-preparation.md",
+      "current_implementation_acceptance": "TASK-ACCEPTANCE-ARCH-003-20261012.json",
+      "closure": {
+        "date": "2026-10-12",
+        "disposition": "fixed-and-verified",
+        "authorization": "User explicitly authorized deleting the completed implementation task directory and original finding.",
+        "independent_reviewer": "/root/integration_result_review",
+        "reviewed_finding_sha256": "591664709492832abeedf4a962a00faf3c7a75d41d28293cf76f923cc49ac42e",
+        "acceptance_evidence": "TASK-ACCEPTANCE-ARCH-003-20261012.json",
+        "index_title": "Closed terminal gRPC header preparation finding; acceptance evidence",
+        "preservation": "Original independent verification history, primary coverage and unrelated candidates retained."
+      }
     },
     "ARCH-004": {
       "path": "ARCH-004-context-query-cache-source.md",
-      "status": "candidate",
+      "status": "resolved",
       "kind": "architecture-debt",
       "partition": "GW-CONTEXT",
       "analyst": "/root/analyze_session",
@@ -29915,8 +29928,22 @@
         }
       ],
       "previous_status": "confirmed",
-      "revalidation_pending": true,
-      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
+      "revalidation_pending": false,
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json",
+      "finding_removed": true,
+      "removed_finding_path": "ARCH-004-context-query-cache-source.md",
+      "current_implementation_acceptance": "TASK-ACCEPTANCE-ARCH-004-20261012.json",
+      "closure": {
+        "date": "2026-10-12",
+        "disposition": "fixed-and-verified",
+        "authorization": "User explicitly requested closing and deleting the completed ARCH-004 finding.",
+        "independent_reviewer": "/root/query_result_review",
+        "reviewed_finding_sha256": "794243ee014b2b713e61edaee37c5d11cec67f575ccd5882638d920f6aa268e6",
+        "acceptance_evidence": "TASK-ACCEPTANCE-ARCH-004-20261012.json",
+        "implementation_review": "../pending/architecture-context-query-cache-source/02-implementation.md",
+        "index_title": "Closed context query-cache source ownership finding; acceptance evidence",
+        "preservation": "Original claim hash, independent verification history, primary coverage and all unrelated candidates retained."
+      }
     },
     "ARCH-005": {
       "path": "ARCH-005-typed-transport-admission-capabilities.md",

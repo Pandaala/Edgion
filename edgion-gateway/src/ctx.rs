@@ -3462,23 +3462,21 @@ impl EdgionHttpContext {
 
     /// Get (and lazily build) the per-request decoded query parameter map.
     ///
-    /// Callers should pass `self.request_info.entry_raw_query.as_deref()` —
-    /// the entry-time frozen query — so the cache is order-independent: any
-    /// reader (route matcher or plugin) sees the same client-sent query
-    /// regardless of whether an earlier plugin called `set_upstream_uri` and
-    /// rewrote the live URI.
-    ///
-    /// `raw_query` is consulted only on first access. Subsequent calls return
-    /// the already-cached map regardless of the argument.
+    /// The context's entry-time query snapshot is consulted only on first
+    /// access. Every reader sees the same client-sent query regardless of
+    /// whether an earlier plugin rewrote the live URI. Subsequent calls return
+    /// the already-cached map.
     ///
     /// Decoding follows `edgion_resources::uri_utils::parse_query_string` —
     /// `%XX` percent-decoded and `+` translated to space, matching what the
     /// route matcher sees in `queryParams`.
-    pub fn cached_query(&self, raw_query: Option<&str>) -> &HashMap<String, String> {
+    pub fn cached_query(&self) -> &HashMap<String, String> {
         self.parsed_request_caches
             .query
             .get_or_init(|| {
-                raw_query
+                self.request_info
+                    .entry_raw_query
+                    .as_deref()
                     .map(uri_utils::parse_query_string)
                     .filter(|params| !params.is_empty())
                     .map(Box::new)

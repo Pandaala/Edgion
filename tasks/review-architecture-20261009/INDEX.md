@@ -11,8 +11,8 @@ Source reviewed: 512 / 1676; 467 primary partitions.
 | --- | --- | --- | --- |
 | ARCH-001 | resolved | architecture-debt | [Closed feature-operation coupling finding; acceptance evidence](TASK-ACCEPTANCE-AI-20261011-G.json) |
 | ARCH-002 | resolved | architecture-debt | [Closed request-body contract ownership finding; acceptance evidence](TASK-ACCEPTANCE-ARCH-002-20261011.json) |
-| ARCH-003 | candidate | architecture-debt | [gRPC terminal-header preparation has three owners above the shared wire writer](ARCH-003-grpc-terminal-header-preparation.md) |
-| ARCH-004 | candidate | architecture-debt | [Make the context own the frozen source of its query cache](ARCH-004-context-query-cache-source.md) |
+| ARCH-003 | resolved | architecture-debt | [Closed terminal gRPC header preparation finding; acceptance evidence](TASK-ACCEPTANCE-ARCH-003-20261012.json) |
+| ARCH-004 | resolved | architecture-debt | [Closed context query-cache source ownership finding; acceptance evidence](TASK-ACCEPTANCE-ARCH-004-20261012.json) |
 | ARCH-005 | resolved | architecture-debt | [Closed typed transport admission finding; acceptance evidence](TASK-ACCEPTANCE-ARCH-005-20261012.json) |
 | ARCH-006 | confirmed | architecture-debt | [Resolve logical body limits before exposing the runtime limit-check API](ARCH-006-resolved-logical-body-limit.md) |
 | ARCH-007 | candidate | architecture-debt | [Match mTLS conditions through borrowed certificate candidates](ARCH-007-borrowed-mtls-condition-candidates.md) |

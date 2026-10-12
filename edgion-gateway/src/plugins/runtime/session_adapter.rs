@@ -981,13 +981,8 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         // Decoded values (percent-decoded, '+' → ' ') shared with the route
         // matcher via EdgionHttpContext::cached_query. Parsed at most once
         // per request regardless of how many plugins call this method.
-        // Use entry_raw_query (frozen at request entry) so plugins observe
-        // the client-sent query, not any rewritten upstream URI — keeps the
-        // cache order-independent across plugin reads.
-        self.ctx
-            .cached_query(self.ctx.request_info.entry_raw_query.as_deref())
-            .get(name)
-            .cloned()
+        // The context owns the frozen entry query, independent of live rewrites.
+        self.ctx.cached_query().get(name).cloned()
     }
 
     fn get_cookie(&self, name: &str) -> Option<String> {

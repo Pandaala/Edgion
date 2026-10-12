@@ -36,7 +36,7 @@ EdgionHttpContext canonical API:
                       ctx.path()                     (current view, read from cache)
                       ctx.request_path()             (entry view, frozen)
                       ctx.query(req)                 (current view, whole-string passthrough)
-                      ctx.cached_query(raw_query)    (entry view, single-key decoded, init-once)
+                      ctx.cached_query()    (entry view, single-key decoded, init-once)
                       ctx.uri(req)                   (current path + current query)
                       ctx.request_uri()              (entry path + entry query)
                       ctx.refresh_normalized_path(req)(refresh current cache;
@@ -55,7 +55,7 @@ pingora field:        req_header().uri
 |-------|--------------|----------------------|
 | **EdgionHttpContext methods** (canonical) | `ctx.path() -> &str` | `ctx.request_path() -> &str` |
 | | `ctx.uri(req) -> String` | `ctx.request_uri() -> String` |
-| | `ctx.query(req) -> Option<&str>` (whole, raw, passthrough) | `ctx.cached_query(entry_raw_query) -> &HashMap<String,String>` (single-key, decoded, frozen) |
+| | `ctx.query(req) -> Option<&str>` (whole, raw, passthrough) | `ctx.cached_query() -> &HashMap<String,String>` (single-key, decoded, frozen) |
 | **EdgionHttpContext write methods** (only used by the adapter) | `ctx.refresh_normalized_path(req)` | — |
 | **pingora raw fields** (business code MUST NOT read directly; allowlist below) | — | `req_header().uri` |
 | **session trait** | `get_path() -> &str` | `get_request_path() -> &str` |
@@ -85,7 +85,19 @@ The query string has two access shapes that follow different views:
 | Whole string (`session.get_query()` / `req.query_string`) | current | raw (no decode) | `req_header().uri.query()` (live) |
 | Single key (`session.get_query_param(name)` / `req.query("name")` / `ctx_set TemplateVarType::Query` / `request_restriction` `key: { type: query, name }`) | **entry (frozen)** | **percent-decoded** (`+` → space) | `entry_raw_query` via `EdgionHttpContext::cached_query` |
 
-Single-key accessors share one per-request `OnceLock<HashMap>` cache (`EdgionHttpContext::cached_query_cell`) seeded from `entry_raw_query`. Result: the route matcher and every plugin reading by key see the same decoded value, regardless of read order or any in-request `set_upstream_uri` rewrite.
+Single-key accessors share one per-request cache at
+`EdgionHttpContext::parsed_request_caches.query`, represented as
+`OnceLock<Option<Box<HashMap<String, String>>>>`. The no-argument
+`ctx.cached_query()` borrows the context's `request_info.entry_raw_query` only
+when initializing; callers cannot choose a different source. Nonempty maps are
+boxed, while absent or empty queries use a shared static empty map without
+allocation. Parsing remains lazy, and subsequent reads borrow the same map.
+The route matcher, plugins and access-log query projection therefore share decoded
+entry values across live URI rewrites. Capture order remains unchanged: a read
+before entry metadata capture can still initialize the empty cache; the API does
+not enforce snapshot-field immutability. See the
+[query-source contract](../../../04-review/uri-normalization/mandatory-design/normalization-contract.md#frozen-query-cache-source)
+for the ARCH-004 ownership correction and its limits.
 
 ### query view asymmetry (whole-string only — partially closed)
 
