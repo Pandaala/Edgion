@@ -30232,7 +30232,7 @@
     },
     "ARCH-009": {
       "path": "ARCH-009-prepared-ai-admission-input-owner.md",
-      "status": "candidate",
+      "status": "resolved",
       "kind": "architecture-debt",
       "partition": "PART-249",
       "sha256": "8eb8e86b37dbb4253286e6ec4dd8649db3c58a5a953ed9e83decca950362a1ce",
@@ -30259,8 +30259,21 @@
       },
       "verifier": "/root/verify_seed",
       "previous_status": "confirmed",
-      "revalidation_pending": true,
-      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-E.json"
+      "revalidation_pending": false,
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-E.json",
+      "finding_removed": true,
+      "removed_finding_path": "ARCH-009-prepared-ai-admission-input-owner.md",
+      "current_implementation_acceptance": "TASK-ACCEPTANCE-ARCH-009-20261012.json",
+      "closure": {
+        "date": "2026-10-12",
+        "disposition": "already-resolved",
+        "authorization": "User explicitly requested deletion of the original ARCH-009 task and closure after current-source independent revalidation.",
+        "independent_reviewer": "/root/arch009_revalidate",
+        "reviewed_finding_sha256": "8eb8e86b37dbb4253286e6ec4dd8649db3c58a5a953ed9e83decca950362a1ce",
+        "acceptance_evidence": "TASK-ACCEPTANCE-ARCH-009-20261012.json",
+        "index_title": "Closed prepared AI admission-input ownership finding; current-source evidence",
+        "preservation": "Original verification history, primary coverage, drift history and unrelated findings retained. No new source reading credit or executed code validation."
+      }
     },
     "ARCH-010": {
       "path": "ARCH-010-json-span-format-whitespace.md",
