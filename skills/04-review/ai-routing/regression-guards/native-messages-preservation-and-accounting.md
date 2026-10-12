@@ -101,6 +101,13 @@ parser/request-stage assertions; they do not claim fresh real-wire or live-provi
 acceptance. Re-evaluate when native parsers, serde ignored-value handling,
 canonical body ownership or predispatch ordering changes.
 
+Local verification on 2026-10-12 passed 66 protocol tests and 21 proxy tests,
+workspace check/clippy, formatting, agent-doc consistency, unit-test layout and
+the recorded static guards. Independent AIMPL result review passed the final
+implementation, including the resolved-Secret request fixture, at scoped content
+fingerprint `e40ec63a23a0ceaceca09ac7ef76fd44e2e4d80323df63d1a4ab5484cfdb6c82`.
+These results establish the local acceptance above, without live-provider evidence.
+
 ## Owners and discriminating coverage
 
 Owners: ai/protocols/anthropic, canonical ai/connectors/provider, shared usage and
