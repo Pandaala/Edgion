@@ -566,35 +566,10 @@ pub async fn upstream_peer_http(
                     return Err(PingoraError::new(ErrorType::InternalError));
                 }
             };
-            let selected_identity = target.selected.logical().identity();
-            let selected_backend_key = format!("{}/{}", selected_identity.namespace, selected_identity.name);
-            let admission = ctx
-                .ensure_ai_state()
-                .attempt_runtime
-                .admit(crate::ai::runtime::attempt_runtime::AiAttemptAdmissionInput {
-                    namespace: selected_identity.namespace.clone(),
-                    backend_uid: target.selected.backend.uid.clone(),
-                    credential_alias: target.selected.credential_alias.clone(),
-                    backend_name: selected_backend_key,
-                    provider: target.provider,
-                    pricing: target.pricing,
-                    redis_ref: target.redis_ref.clone(),
-                    on_redis_failure: target.on_redis_failure.clone(),
-                    limits: target.credential_limits.clone(),
-                    estimated_input_tokens: target.estimated_input_tokens,
-                    max_output_tokens: target.max_output_tokens,
-                    usage: std::sync::Arc::clone(&target.usage),
-                    eos: std::sync::Arc::clone(&target.eos),
-                    outlier: target.selected.credential_outlier.clone(),
-                    adaptive: target.selected.adaptive.clone(),
-                    circuit_breaker: target
-                        .selected
-                        .effective_policy
-                        .as_ref()
-                        .and_then(|policy| policy.logical_circuit_breaker.clone()),
-                    limiter_core: std::sync::Arc::clone(&target.limiter_core),
-                })
-                .await;
+            let admission_input = target
+                .admission_input()
+                .map_err(|_| PingoraError::new(ErrorType::InternalError))?;
+            let admission = ctx.ensure_ai_state().attempt_runtime.admit(admission_input).await;
             match admission {
                 crate::ai::runtime::attempt_runtime::AiAttemptAdmission::Ready(runtime) => {
                     ctx.ensure_ai_state().attempt_runtime.install(runtime);

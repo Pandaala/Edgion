@@ -11,6 +11,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Prepared attempt owns admission input](regression-guards/prepared-attempt-owns-admission-input.md): ARCH-009 selected-generation policy projection and transport sequencing.
+
 - [Precompiled backend lookup keys](regression-guards/precompiled-backend-lookup-keys.md): ARCH-008 cold identity ownership, borrowed planning projections and retained plan lifetimes.
 
 - [AI stores expose one count and key accessor per snapshot](regression-guards/ai-store-single-count-accessors.md)

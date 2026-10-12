@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::ai::protocols::openai::canonical_sse::SemanticSseSource;
 use crate::ai::protocols::openai::request;
 use crate::ai::runtime::attempt_plan::AiOperation;
+use crate::ai::runtime::attempt_runtime::AiAttemptAdmissionInput;
 use async_trait::async_trait;
 use bytes::Bytes;
 use edgion_resources::resources::edgion_backend::AiProvider;
@@ -38,19 +39,49 @@ use pingora_proxy::Session;
 
 pub struct PreparedAiAttempt {
     pub selected: SelectedAiBackend,
-    pub provider: AiProviderLabel,
-    pub pricing: Option<edgion_resources::resources::edgion_backend::ParsedAiModelPricing>,
-    pub redis_ref: Option<String>,
-    pub on_redis_failure: edgion_resources::resources::edgion_plugins::OnRedisFailure,
-    pub credential_limits: Option<edgion_resources::resources::edgion_backend::AiCredentialLimits>,
-    pub estimated_input_tokens: u64,
-    pub max_output_tokens: u64,
-    pub usage: Arc<AiUsageShared>,
-    pub eos: Arc<AtomicBool>,
-    pub limiter_core: Arc<crate::plugins::common::redis_rate_limiter::RedisRateLimiter>,
+    estimated_input_tokens: u64,
+    max_output_tokens: u64,
+    eos: Arc<AtomicBool>,
     ai_context: Option<AiRequestContext>,
     response_processor: Option<Box<dyn StreamingResponseProcessor>>,
     unary_owner: Option<Arc<crate::ai::conversion::chat_to_anthropic::head::UnaryHead>>,
+}
+
+impl PreparedAiAttempt {
+    /// Project admission from the same selected generation and pending context
+    /// that will be committed after successful peer construction.
+    pub(crate) fn admission_input(&self) -> Result<AiAttemptAdmissionInput, AiDispatchError> {
+        let context = self.ai_context.as_ref().ok_or(AiDispatchError::InvalidConfiguration)?;
+        let selected = &self.selected;
+        let identity = selected.logical().identity();
+        let pool = &selected.backend.credential_pool;
+        let credential = pool
+            .credentials
+            .get(selected.credential_index)
+            .ok_or(AiDispatchError::InvalidConfiguration)?;
+        Ok(AiAttemptAdmissionInput {
+            namespace: identity.namespace.clone(),
+            backend_uid: selected.backend.uid.clone(),
+            credential_alias: selected.credential_alias.clone(),
+            backend_name: format!("{}/{}", identity.namespace, identity.name),
+            provider: context.provider,
+            pricing: context.pricing,
+            redis_ref: pool.redis_ref.clone(),
+            on_redis_failure: pool.on_redis_failure.clone(),
+            limits: credential.limits.clone(),
+            estimated_input_tokens: self.estimated_input_tokens,
+            max_output_tokens: self.max_output_tokens,
+            usage: Arc::clone(&context.usage),
+            eos: Arc::clone(&self.eos),
+            outlier: selected.credential_outlier.clone(),
+            adaptive: selected.adaptive.clone(),
+            circuit_breaker: selected
+                .effective_policy
+                .as_ref()
+                .and_then(|policy| policy.logical_circuit_breaker.clone()),
+            limiter_core: Arc::clone(&pool.limiter_core),
+        })
+    }
 }
 
 pub fn commit_ai_attempt_context(
@@ -604,19 +635,12 @@ fn prepare_ready_attempt(
     ctx.selected_backend = Some(SelectedHttpBackend::Ai(selected_backend.logical().clone()));
     let target = PreparedAiAttempt {
         selected: selected_backend,
-        provider,
-        pricing: model.pricing,
-        redis_ref: ai_backend.credential_pool.redis_ref.clone(),
-        on_redis_failure: ai_backend.credential_pool.on_redis_failure.clone(),
-        credential_limits: credential.limits.clone(),
         estimated_input_tokens: plan.input_chars.saturating_add(3) / 4,
         max_output_tokens: plan
             .request_max_output_tokens
             .or(ai_backend.max_output_tokens.map(u64::from))
             .unwrap_or(0),
-        usage,
         eos,
-        limiter_core: Arc::clone(&ai_backend.credential_pool.limiter_core),
         ai_context: Some(context),
         response_processor: Some(response_processor),
         unary_owner,

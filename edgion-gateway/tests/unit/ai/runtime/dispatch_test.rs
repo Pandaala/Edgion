@@ -1117,7 +1117,13 @@ async fn native_off_preserves_bytes_generation_encoding_and_rejects_later_mutati
     );
     assert!(prepared.unary_owner.is_none());
     assert_eq!(
-        prepared.usage.accounting_snapshot(10, true).source,
+        prepared
+            .ai_context
+            .as_ref()
+            .unwrap()
+            .usage
+            .accounting_snapshot(10, true)
+            .source,
         crate::ai::GenAiAttemptUsageSource::NotObserved
     );
     let mut response = ResponseHeader::build(200, None).unwrap();
@@ -1139,7 +1145,7 @@ async fn native_off_preserves_bytes_generation_encoding_and_rejects_later_mutati
         .await;
     assert_eq!(response_chunk, Some(raw));
     assert!(prepared.eos.load(std::sync::atomic::Ordering::Acquire));
-    assert!(!prepared.usage.observation_unavailable());
+    assert!(!prepared.ai_context.as_ref().unwrap().usage.observation_unavailable());
     ctx.overwrite_request_body(Bytes::from_static(br#"{"model":"unauthorized"}"#))
         .unwrap();
     assert!(matches!(
@@ -1194,7 +1200,7 @@ async fn dispatcher_owned_retry_rewrite_restores_the_original_extension_bytes() 
 #[tokio::test]
 async fn native_deferred_protocol_headers_survive_backend_skip_and_retry() {
     use crate::ai::runtime::attempt::DispatchOutcome;
-    use crate::ai::runtime::attempt_runtime::{AiAttemptAdmission, AiAttemptAdmissionInput};
+    use crate::ai::runtime::attempt_runtime::AiAttemptAdmission;
     use crate::ai::runtime::circuit_breaker::LogicalBackendCircuitBreaker;
     use pingora_core::protocols::http::RequestBodyBuffer;
     for operation in ["set", "add", "remove"] {
@@ -1304,29 +1310,9 @@ async fn native_deferred_protocol_headers_survive_backend_skip_and_retry() {
                         .unwrap()
                         .apply_cooldown(Duration::from_secs(60));
                 }
-                let admission = ctx
-                    .ensure_ai_state()
-                    .attempt_runtime
-                    .admit(AiAttemptAdmissionInput {
-                        namespace: "default".into(),
-                        backend_uid: first.selected.backend.uid.clone(),
-                        credential_alias: first.selected.credential_alias.clone(),
-                        backend_name: "default/provider-a".into(),
-                        provider: first.provider,
-                        pricing: first.pricing,
-                        redis_ref: first.redis_ref.clone(),
-                        on_redis_failure: first.on_redis_failure.clone(),
-                        limits: first.credential_limits.clone(),
-                        estimated_input_tokens: first.estimated_input_tokens,
-                        max_output_tokens: first.max_output_tokens,
-                        usage: first.usage.clone(),
-                        eos: first.eos.clone(),
-                        outlier: first.selected.credential_outlier.clone(),
-                        adaptive: None,
-                        circuit_breaker: (transition == "skip_backend").then_some(breaker),
-                        limiter_core: first.limiter_core.clone(),
-                    })
-                    .await;
+                let mut input = first.admission_input().unwrap();
+                input.circuit_breaker = (transition == "skip_backend").then_some(breaker);
+                let admission = ctx.ensure_ai_state().attempt_runtime.admit(input).await;
                 if transition == "skip_backend" {
                     assert!(matches!(admission, AiAttemptAdmission::SkipBackend));
                     assert!(handle_ai_predispatch_service_failure(&mut ctx));
@@ -1445,4 +1431,189 @@ async fn native_responses_dispatch_strips_client_and_backend_principal_selectors
         assert_eq!(session.req_header().uri.to_string(), "/v1/responses?trace=1");
         assert_eq!(ctx.request_body.read_all().await.unwrap().unwrap(), body);
     }
+}
+
+#[tokio::test]
+async fn prepared_admission_projects_selected_credential_and_retained_generation() {
+    use crate::ai::routing::adaptive::{AdaptiveTelemetryKey, AdaptiveTelemetryStore};
+    use crate::ai::runtime::circuit_breaker::LogicalBackendCircuitBreaker;
+    use crate::backends::outlier_detection::EjectionAdmission;
+    use edgion_resources::resources::edgion_backend::AiModelPricing;
+    use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
+    use pingora_core::protocols::http::RequestBodyBuffer;
+
+    let mut plan = selectable_plan(vec![
+        RuntimeAiCredential {
+            name: "unselected".into(),
+            weight: 0,
+            credential: "first-test-key".into(),
+            limits: Some(AiCredentialLimits {
+                requests_per_minute: Some(11),
+                tokens_per_minute: Some(101),
+            }),
+        },
+        RuntimeAiCredential {
+            name: "selected".into(),
+            weight: 1,
+            credential: "second-test-key".into(),
+            limits: Some(AiCredentialLimits {
+                requests_per_minute: Some(22),
+                tokens_per_minute: Some(202),
+            }),
+        },
+    ]);
+    let backend = Arc::get_mut(plan.candidates[0].backend.as_mut().unwrap()).unwrap();
+    backend.credential_pool.redis_ref = Some("default/quota-redis".into());
+    backend.credential_pool.on_redis_failure = OnRedisFailure::Allow;
+    let pricing = AiModelPricing {
+        input_per_million_usd: "1.25".into(),
+        output_per_million_usd: "2.5".into(),
+        cache_read_input_per_million_usd: None,
+        cache_write_input_per_million_usd: None,
+    }
+    .parsed()
+    .unwrap();
+    plan.candidates[0].model.as_mut().unwrap().pricing = Some(pricing);
+    let (mut policy, _) = retry_policy(10);
+    let breaker = LogicalBackendCircuitBreaker::new(2);
+    Arc::get_mut(&mut policy).unwrap().logical_circuit_breaker = Some(Arc::clone(&breaker));
+    plan.candidates[0].effective_policy = Some(policy);
+    let store = AdaptiveTelemetryStore::new();
+    let key = AdaptiveTelemetryKey {
+        terminal_route_uid: "route-uid".into(),
+        rule_name: "rule".into(),
+        target: PolicyTargetKey {
+            target_kind: PolicyTargetKind::EdgionBackend,
+            namespace: "default".into(),
+            name: "provider".into(),
+        },
+        logical_model: "logical".into(),
+    };
+    store.reconcile_keys(&HashSet::from([key.clone()]));
+    let adaptive = store.get(&key).unwrap();
+    plan.candidates[0].adaptive = Some(Arc::clone(&adaptive));
+    let mut ctx = EdgionHttpContext::new();
+    let (mut storage, view) = crate::request_body::BodyStorage::new(65536, 1024 * 1024);
+    storage.write(&plan.request_body).await.unwrap();
+    storage.finish().await.unwrap();
+    ctx.request_body.install(view);
+    plan.body_generation = ctx.request_body.generation();
+    plan.body_is_current = true;
+    let mut session = test_session().await;
+    let prepared = prepare_ready_attempt(&mut session, &mut ctx, &mut plan, 0).unwrap();
+    assert_eq!(prepared.selected.credential_index, 1);
+    // A later publication cannot replace the backend or credential policy held
+    // by this prepared attempt, even when the new candidate has no limits.
+    plan.candidates = selectable_plan(vec![RuntimeAiCredential {
+        name: "replacement".into(),
+        weight: 1,
+        credential: "replacement-test-key".into(),
+        limits: None,
+    }])
+    .candidates;
+    let input = prepared.admission_input().unwrap();
+    assert_eq!(input.namespace, "default");
+    assert_eq!(input.backend_name, "default/provider");
+    assert_eq!(input.backend_uid, "backend-uid");
+    assert_eq!(input.credential_alias, "selected");
+    assert_eq!(input.provider, AiProviderLabel::OpenAiCompatible);
+    assert_eq!(input.pricing, Some(pricing));
+    assert_eq!(input.redis_ref.as_deref(), Some("default/quota-redis"));
+    assert_eq!(input.on_redis_failure, OnRedisFailure::Allow);
+    let limits = input.limits.as_ref().unwrap();
+    assert_eq!(limits.requests_per_minute, Some(22));
+    assert_eq!(limits.tokens_per_minute, Some(202));
+    assert!(Arc::ptr_eq(
+        &input.limiter_core,
+        &prepared.selected.backend.credential_pool.limiter_core
+    ));
+    assert!(Arc::ptr_eq(&input.usage, &prepared.ai_context.as_ref().unwrap().usage));
+    assert!(Arc::ptr_eq(&input.eos, &prepared.eos));
+    assert!(Arc::ptr_eq(input.adaptive.as_ref().unwrap(), &adaptive));
+    assert!(Arc::ptr_eq(input.circuit_breaker.as_ref().unwrap(), &breaker));
+    prepared
+        .selected
+        .credential_outlier
+        .as_ref()
+        .unwrap()
+        .apply_cooldown(Duration::from_secs(60));
+    assert!(matches!(
+        input.outlier.as_ref().unwrap().admit(),
+        EjectionAdmission::Rejected
+    ));
+}
+
+#[tokio::test]
+async fn prepared_admission_preserves_token_bound_precedence_and_saturation() {
+    use pingora_core::protocols::http::RequestBodyBuffer;
+    for (request_bound, backend_bound, chars, expected_output, expected_input) in [
+        (Some(17), Some(256), 19, 17, 5),
+        (Some(0), Some(256), 0, 0, 0),
+        (None, Some(256), 4, 256, 1),
+        (None, None, u64::MAX, 0, u64::MAX / 4),
+    ] {
+        let mut plan = selectable_plan(vec![RuntimeAiCredential {
+            name: "primary".into(),
+            weight: 1,
+            credential: "test-key".into(),
+            limits: None,
+        }]);
+        plan.request_max_output_tokens = request_bound;
+        plan.input_chars = chars;
+        Arc::get_mut(plan.candidates[0].backend.as_mut().unwrap())
+            .unwrap()
+            .max_output_tokens = backend_bound;
+        let mut ctx = EdgionHttpContext::new();
+        let (mut storage, view) = crate::request_body::BodyStorage::new(65536, 1024 * 1024);
+        storage.write(&plan.request_body).await.unwrap();
+        storage.finish().await.unwrap();
+        ctx.request_body.install(view);
+        plan.body_generation = ctx.request_body.generation();
+        plan.body_is_current = true;
+        let mut session = test_session().await;
+        let prepared = prepare_ready_attempt(&mut session, &mut ctx, &mut plan, 0).unwrap();
+        let input = prepared.admission_input().unwrap();
+        assert_eq!(input.max_output_tokens, expected_output);
+        assert_eq!(input.estimated_input_tokens, expected_input);
+        assert!(input.limits.is_none());
+        assert!(input.redis_ref.is_none());
+        assert_eq!(input.on_redis_failure, OnRedisFailure::Deny);
+        assert!(input.adaptive.is_none());
+        assert!(input.circuit_breaker.is_none());
+    }
+}
+
+#[tokio::test]
+async fn prepared_admission_rejects_invalid_selection_and_committed_context() {
+    use pingora_core::protocols::http::RequestBodyBuffer;
+    let mut plan = selectable_plan(vec![RuntimeAiCredential {
+        name: "primary".into(),
+        weight: 1,
+        credential: "test-key".into(),
+        limits: Some(AiCredentialLimits {
+            requests_per_minute: Some(1),
+            tokens_per_minute: Some(10),
+        }),
+    }]);
+    let mut ctx = EdgionHttpContext::new();
+    let (mut storage, view) = crate::request_body::BodyStorage::new(65536, 1024 * 1024);
+    storage.write(&plan.request_body).await.unwrap();
+    storage.finish().await.unwrap();
+    ctx.request_body.install(view);
+    plan.body_generation = ctx.request_body.generation();
+    plan.body_is_current = true;
+    let mut session = test_session().await;
+    let mut prepared = prepare_ready_attempt(&mut session, &mut ctx, &mut plan, 0).unwrap();
+    prepared.selected.credential_index = usize::MAX;
+    assert!(matches!(
+        prepared.admission_input(),
+        Err(AiDispatchError::InvalidConfiguration)
+    ));
+    prepared.selected.credential_index = 0;
+    assert!(prepared.admission_input().unwrap().limits.is_some());
+    commit_ai_attempt_context(&mut ctx, &mut prepared).unwrap();
+    assert!(matches!(
+        prepared.admission_input(),
+        Err(AiDispatchError::InvalidConfiguration)
+    ));
 }

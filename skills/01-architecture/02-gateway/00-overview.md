@@ -44,6 +44,24 @@ assembly. Provider response cooldown and endpoint/auth preparation execute at th
 original callback positions through AI helpers; this boundary adds no second client,
 body cache or request-path wrapper. Explicit bounded unary conversion is described below.
 
+`ai/runtime/dispatch.rs::PreparedAiAttempt` projects credential admission from
+its retained selected backend/credential generation and private pending request
+context. HTTP peer selection asks for the owned admission input; it does not
+reconstruct Redis policy, credential limits or logical circuit-breaker state.
+Only resolved per-plan token bounds and the processor-shared EOS latch remain
+additional private prepared admission state. Request output bounds override the
+selected backend default, then fall back to zero. The projection rejects an invalid
+credential index or an already committed context instead of dropping policy.
+
+The HTTP transport loop retains admission, deadline checks, endpoint resolution
+and delayed context commit as distinct steps. Credential and backend skips retain
+their scheduler scopes; dispatch begins only immediately before upstream writing.
+Cancellation retains existing lease cleanup and conservative Redis TTL fallback,
+not a new immediate Redis-release promise. The projection adds no body/credential
+copy, lock or allocation beyond the previous owned input construction. See the
+[prepared admission boundary](../../04-review/ai-routing/regression-guards/prepared-attempt-owns-admission-input.md)
+for ARCH-009 evidence and re-evaluation conditions.
+
 Logical backend identities, shared backend policy/retry budgets, BodyStorage, the
 SSE decoder/RawWindow, clients/TLS/egress/DNS, Redis limiter, key extraction,
 conditions and observability retain their canonical shared owners. The refactor
