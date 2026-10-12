@@ -1721,6 +1721,10 @@ All `redis.*` functions are backed by a pre-configured LinkSys Redis connection 
 |-------|------|----------|-------------|
 | `linkSysRefs` | Vec<{namespace, name}> | Required when `redis.*` is used | List of LinkSys Redis resource references. Each element has `namespace` and `name` fields; the `name` is the alias used in `redis.*` calls. Configuring this field is mandatory if any `redis.*` builtin appears in the script; a missing `linkSysRefs` causes the plugin to fail at load time. |
 
+Indexed Boolean results use explicit comparisons: `r["ok"] == false` or
+`r["value"]["allowed"] == false`. In the current grammar, unary `!` binds
+before indexing; do not write `!r["ok"]`.
+
 ### redis.get
 
 **Signature**: `redis.get(link, key)` → `Map { ok: Bool, value: Str | Nil, error: Str | Nil }`
@@ -1736,7 +1740,7 @@ The returned `value` is silently truncated at `max_string_len` (default 8 KiB, t
 **Example — fail-close**:
 ```
 let r = redis.get("cache", "feature:dark-mode")
-if !r["ok"] {
+if r["ok"] == false {
   log_warn("redis error: " + r["error"])
   return deny(503, "service unavailable")
 }
@@ -1762,7 +1766,7 @@ Sets a string key. Optionally sets a TTL in milliseconds.
 **Example**:
 ```
 let r = redis.set("cache", "session:" + req.header("X-Session-Id"), "active", 300000)
-if !r["ok"] {
+if r["ok"] == false {
   log_warn("redis set failed: " + r["error"])
 }
 ```
@@ -1840,7 +1844,7 @@ Atomically increments the integer value of a key by 1. Creates the key with valu
 `redis.rate_limit` below for rate limiting):
 ```
 let r = redis.incr("cache", "rate:" + req.remote_ip)
-if !r["ok"] {
+if r["ok"] == false {
   log_warn("redis unavailable")
   return deny(503, "service unavailable")
 }
@@ -1884,11 +1888,11 @@ spec:
             timeoutMs: 500
         source: |
           let r = redis.rate_limit("cache", "requests", req.remote_ip, 1)
-          if !r["ok"] {
+          if r["ok"] == false {
             log_warn("rate limit unavailable")
             return deny(503, "service unavailable")
           }
-          if !r["value"]["allowed"] {
+          if r["value"]["allowed"] == false {
             return deny(429, "rate limit exceeded")
           }
           return next()
@@ -2472,3 +2476,80 @@ return next()
 `resp.set_header`, `resp.append_header`, and `resp.remove_header` check dynamic names against the shared policy and keep their existing error semantics.
 
 [Response header policy](../../gateway-api/response-header-modifier.md#response-header-policy).
+
+### Strict JSON reconstruction
+
+These functions operate on explicitly encoded JSON strings. They do not treat an
+ordinary string value as encoded JSON implicitly. Raw subtrees retain their
+original numeric spelling, including integers above `u64` and precise decimals.
+Duplicate decoded object keys are rejected recursively, including escaped aliases.
+
+| Function | Result |
+| --- | --- |
+| `json.read(source)` | Validates a `Str` or complete request `Body`; returns the exact source string, or `nil` for malformed JSON, duplicate keys or invalid Body UTF-8 |
+| `json.get_raw(document, key)` | Returns the encoded top-level member as `Str`; missing/non-object/malformed input returns `nil`; JSON null returns the string `"null"` |
+| `json.get_string(document, key)` | Decodes a top-level JSON string; missing, non-string, non-object or malformed input returns `nil` |
+| `json.keys(document)` | Returns decoded top-level member names as a `List`; non-object or malformed input returns `nil` |
+| `json.set_raw(document, key, encoded_value)` | Inserts/replaces one top-level member with an explicitly validated JSON value; returns a complete JSON object string |
+| `json.set_string(document, key, string)` | Inserts/replaces one top-level member with a safely escaped JSON string; returns a complete JSON object string |
+| `json.set_body(document)` | Validates a complete JSON string, then atomically publishes it through the canonical request-body owner; returns `true` |
+
+Keys are decoded names, not JSON Pointers. Construction requires an object and
+rejects malformed input with a fixed `ApiError`. Incompatible arguments use
+`TypeError`, except every `json.set_body` failure uses fixed request-body failure
+HTTP 500 regardless of `errorPolicy`. String-only operations obey ordinary DSL
+error policy for structural/work/string limits. Getters preserve missing versus
+null; they never silently truncate a value.
+
+Source and output are independently bounded by `min(64 KiB, maxStringLen)`, depth
+32 and 4,096 nodes. `json.keys` also obeys `maxListLen`. Repeated parsing,
+construction, escaped-key decoding and output copying consume one cumulative
+execution work account. Body reads additionally consume the existing body scan
+account and physical cap. Resource/scan/storage failures are fixed body failures;
+malformed input remains `nil` so a script can issue its explicit 400.
+
+`json.set_body` is request-stage only. It completes validation before one overwrite
+and cannot modify a body frozen by an earlier security/GraphQL inspection. Place
+reconstruction before all such inspectors, including Global/Gateway consumers.
+It does not set framing headers; the Gateway owns Content-Length and
+Transfer-Encoding. Set JSON Content-Type separately if the application requires it.
+
+```text
+let stored = json.read("{\"query\":\"query Q { a }\",\"operationName\":\"Q\"}")
+let input = json.read(req.body)
+if input == nil { return deny(400, "Invalid input") }
+let variables = json.get_raw(input, "variables")
+let envelope = stored
+if variables != nil { envelope = json.set_raw(stored, "variables", variables) }
+json.set_body(envelope)
+req.set_header("Content-Type", "application/json")
+```
+
+This example demonstrates typed reconstruction only; it does not implement an
+authorized registration endpoint or validate GraphQL syntax.
+
+### Entry method and bounded Redis lookup
+
+`req.request_method` returns the borrowed entry method captured before request
+plugins rewrite the method, or `nil` if unavailable. Case is preserved. `req.method`
+continues to return the live method. Admission depending on the original method
+must compare the entry view before trusted rewrites.
+
+`redis.get_bounded(alias, key, max_bytes)` returns the existing
+`{ok, value, error}` map. A missing key succeeds with `value: nil`. The bound must
+be a positive `Int` representable as `usize`; invalid bounds return
+`invalid_argument` before provider lookup or I/O. The effective cap is
+`min(max_bytes, maxStringLen, 65536)`; larger requested bounds are clamped.
+An oversized value returns `result_too_large`, never a partial success.
+Non-string or invalid UTF-8 replies return `invalid_response`. Typed provider
+command timeouts return `timeout`; other command failures return
+`dependency_error`. Errors are fixed classes, with the existing `e` fallback
+when `maxStringLen` cannot hold the class.
+
+The live LinkSys client is resolved on each call. This operation reuses its pool
+and configured command timeout; there is no general VM wall-clock timeout.
+Caller cancellation drops the await. Raw replies are checked before allocating
+DSL text, but Fred has already aggregated the complete Redis reply: this is a
+conversion bound, not a Redis transport memory cap. Existing `redis.get` retains
+its documented truncation behavior. Publication can use existing
+`redis.set(alias, key, value, 604800000)` for a seven-day TTL; reads do not renew it.

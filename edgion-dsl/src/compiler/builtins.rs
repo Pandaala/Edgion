@@ -99,6 +99,16 @@ pub(super) fn resolve_namespace_method(namespace: &str, method: &str) -> Option<
         // http.*
         ("http", "call") => Some(BuiltinId::HttpCall),
 
+        ("req", "request_method") => Some(BuiltinId::ReqRequestMethod),
+        ("json", "read") => Some(BuiltinId::JsonRead),
+        ("json", "get_raw") => Some(BuiltinId::JsonGetRaw),
+        ("json", "get_string") => Some(BuiltinId::JsonGetString),
+        ("json", "keys") => Some(BuiltinId::JsonKeys),
+        ("json", "set_raw") => Some(BuiltinId::JsonSetRaw),
+        ("json", "set_body") => Some(BuiltinId::JsonSetBody),
+        ("json", "set_string") => Some(BuiltinId::JsonSetString),
+        ("redis", "get_bounded") => Some(BuiltinId::RedisGetBounded),
+
         // xml.*
         ("xml", "parse") => Some(BuiltinId::XmlParse),
         ("xml", "kind") => Some(BuiltinId::XmlKind),
@@ -142,6 +152,10 @@ pub(crate) fn builtin_arity(id: &BuiltinId) -> BuiltinArity {
     use BuiltinArity::{Exact, RangeInclusive};
 
     match id {
+        BuiltinId::JsonRead | BuiltinId::JsonKeys | BuiltinId::JsonSetBody => Exact(1),
+        BuiltinId::JsonGetRaw | BuiltinId::JsonGetString => Exact(2),
+        BuiltinId::JsonSetRaw | BuiltinId::JsonSetString | BuiltinId::RedisGetBounded => Exact(3),
+        BuiltinId::ReqRequestMethod => Exact(0),
         BuiltinId::XmlParse
         | BuiltinId::XmlKind
         | BuiltinId::XmlName

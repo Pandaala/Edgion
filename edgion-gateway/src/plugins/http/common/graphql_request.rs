@@ -152,6 +152,18 @@ where
         log.push_err("query budget exhausted");
         return Err(reject(session, 503));
     };
+    let evaluate = |parsed: ParsedGraphqlRequest| {
+        use sha2::{Digest, Sha256};
+        let mut digest = Sha256::new();
+        digest.update(b"edgion response cache selected operation\0");
+        digest.update([u8::from(parsed.operation_name().is_some())]);
+        if let Some(name) = parsed.operation_name() {
+            digest.update(name.as_bytes());
+        }
+        let operation = parsed.operation_type();
+        let name_digest: [u8; 32] = digest.finalize().into();
+        compute(parsed).map(|value| (value, operation, name_digest))
+    };
     let result = if is_post {
         let body = match session.read_request_body(None).await {
             Ok(body) => body,
@@ -161,15 +173,29 @@ where
                 return Err(reject(session, 500));
             }
         };
-        catch_redacted_panic(|| ParsedGraphqlRequest::parse_post(&body, envelope_limit).and_then(compute))
+        catch_redacted_panic(|| ParsedGraphqlRequest::parse_post(&body, envelope_limit).and_then(evaluate))
     } else {
         catch_redacted_panic(|| {
             ParsedGraphqlRequest::parse_get(session.request_query().unwrap_or_default(), envelope_limit)
-                .and_then(compute)
+                .and_then(evaluate)
         })
     };
     match result {
-        Ok(Ok(value)) => {
+        Ok(Ok((value, operation, name_digest))) => {
+            if is_post {
+                if let Some(generation) = session.ctx().request_body.generation() {
+                    // Fixed inline evidence only; parser/DOM remains inside the
+                    // existing evaluation admission and is never retained.
+                    let _ = session
+                        .ctx()
+                        .response_cache_graphql_proof
+                        .set(crate::response_cache::GraphqlProof {
+                            generation,
+                            operation,
+                            name_digest,
+                        });
+                }
+            }
             session.ctx().request_body.freeze_mutation();
             Ok(value)
         }

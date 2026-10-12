@@ -111,3 +111,21 @@ After implementing, add a lock-in test to the appropriate file (mirroring the ex
 - Engine architecture & error policy → `skills/01-architecture/02-gateway/dsl-engine.md`
 - User-facing function reference → `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/api-reference.md`
 - Test helpers → `edgion-gateway/tests/unit/plugins/http/dsl/mod_test.rs`
+
+## Strict JSON contract
+
+`json.read`, `get_raw`, `get_string` and `keys` return nil for malformed/duplicate
+input; getters also return nil for absent/non-object/type-mismatched JSON values.
+Raw JSON null is the explicit string `"null"`, distinct from missing nil.
+Wrong DSL argument types raise TypeError. Construction requires a JSON object and
+explicitly valid raw values; invalid construction uses fixed ApiError. Structural
+bounds use JsonLimitExceeded, output bounds StringTooLong and cumulative work
+ValueWorkLimitExceeded. Never turn resource limits into malformed nil.
+
+Body JSON read storage/scan/work failures and every json.set_body failure use
+BodyAccess fixed500 regardless of Ignore. Body malformed JSON/UTF-8 is nil so the
+caller can deny400. set_body validates before one overwrite, checks the existing
+request-stage flag and preserves the canonical frozen-body contract. No response
+aggregation is introduced. redis.get_bounded returns the existing non-throwing
+map, with fixed result_too_large/invalid_response/timeout classes; old get retains
+its separate truncation contract.

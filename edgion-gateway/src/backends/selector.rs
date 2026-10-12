@@ -231,6 +231,13 @@ pub(crate) struct CapturedServiceSelection {
 }
 
 impl CapturedServiceSelection {
+    pub(crate) fn response_cache_stamp(
+        &self,
+        target: &CompiledServiceTarget,
+    ) -> Option<crate::response_cache::DiscoveryStamp> {
+        crate::response_cache::discovery_stamp(target, &self.available, &self.section)
+    }
+
     pub(crate) fn capture(
         coordinator: &ServiceDiscoveryCoordinator,
         target: &CompiledServiceTarget,

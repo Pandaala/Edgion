@@ -1,13 +1,11 @@
 //! Bounded Draft 2020-12 JSON Schema validation shared by Controller and Gateway.
 
 use std::collections::HashSet;
-use std::fmt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use jsonschema::{Draft, PatternOptions, Retrieve, Uri, Validator};
 use schemars::JsonSchema;
-use serde::de::{DeserializeSeed, Error as _, MapAccess, SeqAccess, Visitor};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::resources::edgion_plugins::{BodyRequirement, PluginValidation};
@@ -106,12 +104,12 @@ impl CompiledJsonSchema {
         let node_work = self
             .profile
             .node_ops
-            .checked_mul(instance.node_count)
+            .checked_mul(instance.node_count())
             .ok_or(InstanceValidationError::WorkBudgetExceeded)?;
         let scan_work = self
             .profile
             .scan_ops
-            .checked_mul(instance.text_bytes)
+            .checked_mul(instance.text_bytes())
             .ok_or(InstanceValidationError::WorkBudgetExceeded)?;
         let total = node_work
             .checked_add(scan_work)
@@ -120,7 +118,7 @@ impl CompiledJsonSchema {
             return Err(InstanceValidationError::WorkBudgetExceeded);
         }
 
-        catch_unwind(AssertUnwindSafe(|| self.validator.is_valid(&instance.value)))
+        catch_unwind(AssertUnwindSafe(|| self.validator.is_valid(instance.value())))
             .map_err(|_| InstanceValidationError::ValidatorPanicked)
     }
 }
@@ -133,31 +131,7 @@ pub enum InstanceValidationError {
     ValidatorPanicked,
 }
 
-/// Strictly parsed JSON plus the accounting needed by the work budget.
-#[derive(Debug)]
-pub struct ParsedJsonInstance {
-    value: Value,
-    node_count: u64,
-    text_bytes: u64,
-}
-
-impl ParsedJsonInstance {
-    pub fn value(&self) -> &Value {
-        &self.value
-    }
-
-    pub fn node_count(&self) -> u64 {
-        self.node_count
-    }
-
-    pub fn text_bytes(&self) -> u64 {
-        self.text_bytes
-    }
-
-    pub fn into_value(self) -> Value {
-        self.value
-    }
-}
+pub use edgion_dsl::json::ParsedJsonInstance;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct JsonValueProfile {
@@ -192,29 +166,20 @@ pub fn parse_json_instance_with_limits(
     depth: usize,
     nodes: u64,
 ) -> Result<ParsedJsonInstance, StrictJsonError> {
-    if bytes.len() as u64 > ABSOLUTE_INSTANCE_MAX_BYTES {
-        return Err(StrictJsonError::TooLarge);
-    }
-
-    let mut state = ParseState {
-        max_depth: depth.min(MAX_JSON_INSTANCE_DEPTH),
-        max_nodes: nodes.min(MAX_JSON_INSTANCE_NODES),
-        ..ParseState::default()
-    };
-    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
-    let value = ValueSeed {
-        state: &mut state,
-        depth: 1,
-    }
-    .deserialize(&mut deserializer)
-    .map_err(|_| state.failure.unwrap_or(StrictJsonError::Malformed))?;
-    deserializer
-        .end()
-        .map_err(|_| state.failure.unwrap_or(StrictJsonError::Malformed))?;
-    Ok(ParsedJsonInstance {
-        value,
-        node_count: state.node_count,
-        text_bytes: state.text_bytes,
+    edgion_dsl::json::parse_dom(
+        bytes,
+        edgion_dsl::json::JsonLimits {
+            bytes: ABSOLUTE_INSTANCE_MAX_BYTES as usize,
+            depth: depth.min(MAX_JSON_INSTANCE_DEPTH),
+            nodes: nodes.min(MAX_JSON_INSTANCE_NODES),
+        },
+    )
+    .map_err(|error| match error {
+        edgion_dsl::json::StrictJsonError::TooLarge => StrictJsonError::TooLarge,
+        edgion_dsl::json::StrictJsonError::Malformed => StrictJsonError::Malformed,
+        edgion_dsl::json::StrictJsonError::DuplicateKey => StrictJsonError::DuplicateKey,
+        edgion_dsl::json::StrictJsonError::DepthLimit => StrictJsonError::DepthLimit,
+        edgion_dsl::json::StrictJsonError::NodeLimit => StrictJsonError::NodeLimit,
     })
 }
 
@@ -258,131 +223,6 @@ pub fn profile_json_value(value: &Value) -> Result<JsonValueProfile, StrictJsonE
         text_bytes,
         max_depth,
     })
-}
-
-#[derive(Default)]
-struct ParseState {
-    max_depth: usize,
-    max_nodes: u64,
-    node_count: u64,
-    text_bytes: u64,
-    failure: Option<StrictJsonError>,
-}
-
-struct ValueSeed<'a> {
-    state: &'a mut ParseState,
-    depth: usize,
-}
-
-impl<'de> DeserializeSeed<'de> for ValueSeed<'_> {
-    type Value = Value;
-
-    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        if self.depth > self.state.max_depth {
-            self.state.failure = Some(StrictJsonError::DepthLimit);
-            return Err(D::Error::custom("JSON nesting limit exceeded"));
-        }
-        self.state.node_count = self.state.node_count.saturating_add(1);
-        if self.state.node_count > self.state.max_nodes {
-            self.state.failure = Some(StrictJsonError::NodeLimit);
-            return Err(D::Error::custom("JSON node limit exceeded"));
-        }
-        deserializer.deserialize_any(ValueVisitor {
-            state: self.state,
-            depth: self.depth,
-        })
-    }
-}
-
-struct ValueVisitor<'a> {
-    state: &'a mut ParseState,
-    depth: usize,
-}
-
-impl<'de> Visitor<'de> for ValueVisitor<'_> {
-    type Value = Value;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("one JSON value")
-    }
-
-    fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
-        Ok(Value::Bool(value))
-    }
-
-    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
-        Ok(Value::Number(value.into()))
-    }
-
-    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
-        Ok(Value::Number(value.into()))
-    }
-
-    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
-    where
-        E: serde::de::Error,
-    {
-        serde_json::Number::from_f64(value)
-            .map(Value::Number)
-            .ok_or_else(|| E::custom("non-finite JSON number"))
-    }
-
-    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
-        self.state.text_bytes = self.state.text_bytes.saturating_add(value.len() as u64);
-        Ok(Value::String(value.to_string()))
-    }
-
-    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
-        self.state.text_bytes = self.state.text_bytes.saturating_add(value.len() as u64);
-        Ok(Value::String(value))
-    }
-
-    fn visit_none<E>(self) -> Result<Self::Value, E> {
-        Ok(Value::Null)
-    }
-
-    fn visit_unit<E>(self) -> Result<Self::Value, E> {
-        Ok(Value::Null)
-    }
-
-    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        let mut values = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(self.state.max_nodes as usize));
-        while let Some(value) = seq.next_element_seed(ValueSeed {
-            state: self.state,
-            depth: self.depth + 1,
-        })? {
-            values.push(value);
-        }
-        Ok(Value::Array(values))
-    }
-
-    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        let capacity = map.size_hint().unwrap_or(0).min(self.state.max_nodes as usize);
-        let mut values = Map::with_capacity(capacity);
-        let mut keys = HashSet::with_capacity(capacity);
-        while let Some(key) = map.next_key::<String>()? {
-            self.state.text_bytes = self.state.text_bytes.saturating_add(key.len() as u64);
-            if !keys.insert(key.clone()) {
-                self.state.failure = Some(StrictJsonError::DuplicateKey);
-                return Err(A::Error::custom("duplicate JSON object key"));
-            }
-            let value = map.next_value_seed(ValueSeed {
-                state: self.state,
-                depth: self.depth + 1,
-            })?;
-            values.insert(key, value);
-        }
-        Ok(Value::Object(values))
-    }
 }
 
 #[derive(Debug)]

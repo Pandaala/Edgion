@@ -134,3 +134,5 @@ DSL 插件在两个独立阶段运行，分别对应 `EdgionPlugins` 的不同�
 
 - [过滤器总览](../../overview.md)
 - [插件组合与引用](../../plugin-composition.md)
+
+[认证查询 ID 查找](query-id-lookup.md)：Secret 发布认证、有界 Redis 重建与缓存顺序。

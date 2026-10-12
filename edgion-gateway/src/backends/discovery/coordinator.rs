@@ -169,6 +169,11 @@ pub struct AvailableServiceProjection {
 }
 
 impl AvailableServiceProjection {
+    /// Full canonical live-source/geometry proof, borrowed from this projection.
+    pub(crate) fn content_fingerprint(&self) -> &[u8; 32] {
+        &self.content_fingerprint
+    }
+
     pub fn resolve_section(
         &self,
         key: &ServiceSectionKey,

@@ -1,0 +1,52 @@
+{
+  "apiVersion": "edgion.io/v1",
+  "kind": "EdgionPlugins",
+  "metadata": {
+    "name": "dsl-query-publisher",
+    "namespace": "edgion-default"
+  },
+  "spec": {
+    "requestPlugins": [
+      {
+        "type": "KeyAuth",
+        "config": {
+          "keySources": [
+            {
+              "type": "header",
+              "name": "x-dsl-query-key"
+            }
+          ],
+          "hideCredentials": true,
+          "upstreamHeaderFields": [],
+          "secretGroups": [
+            {
+              "name": "default",
+              "secretRefs": [
+                {
+                  "name": "dsl-query-publisher",
+                  "namespace": "edgion-default"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "type": "Dsl",
+        "config": {
+          "name": "dsl-query-publisher",
+          "source": "resp.set_header(\"X-Dsl-Query-Stage\", \"publisher\")\nreq.set_header(\"x-response-cache-fixture\", \"dsl-query-lookup-static\")\nif req.request_method != \"POST\" { return deny(405, \"Method not allowed\") }\nif req.content_type != \"application/json\" { return deny(415, \"Unsupported media type\") }\nlet encoding = req.header(\"Content-Encoding\")\nif encoding != nil && encoding != \"identity\" { return deny(415, \"Unsupported media type\") }\nif req.query_string != nil && req.query_string != \"\" { return deny(400, \"Invalid input\") }\nif req.body.byte_len() > 65536 { return deny(413, \"Payload too large\") }\nlet input = json.read(req.body)\nif input == nil { return deny(400, \"Invalid input\") }\nlet keys = json.keys(input)\nif input == nil || keys == nil { return deny(400, \"Invalid input\") }\nfor key in keys {\n  if key != \"query\" && key != \"operationName\" { return deny(400, \"Invalid input\") }\n}\nlet query = json.get_string(input, \"query\")\nif query == nil || query == \"\" { return deny(400, \"Invalid input\") }\nlet selection = json.get_raw(input, \"operationName\")\nlet name = json.get_string(input, \"operationName\")\nif selection != nil && (name == nil || name == \"\") { return deny(400, \"Invalid input\") }\nlet mut record = json.set_string(\"{}\", \"query\", query)\nif selection != nil { record = json.set_string(record, \"operationName\", name) }\nlet id = sha256(record)\nlet result = redis.set(\"redis-test\", \"edgion:dsl:query:v1:example-static:\" + id, record, 604800000)\nif result[\"ok\"] == false { return deny(503, \"Query store unavailable\") }\nresp.set_header(\"Content-Type\", \"application/json\")\nreturn deny(201, json.set_string(\"{}\", \"id\", id))\n",
+          "maxStringLen": 65536,
+          "maxBodyScanPasses": 4,
+          "errorPolicy": "deny",
+          "linkSysRefs": [
+            {
+              "namespace": "default",
+              "name": "redis-test"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

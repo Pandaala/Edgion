@@ -65,14 +65,18 @@ a specific class only when their configured string budget can hold it.
 ```dsl
 // Configure the requests policy and set errorPolicy: deny; see the API reference.
 let r = redis.rate_limit("ratelimit", "requests", req.remote_ip, 1)
-if !r["ok"] {
+if r["ok"] == false {
   log_warn("redis unavailable")
   return deny(503, "service unavailable")
 }
-if !r["value"]["allowed"] {
+if r["value"]["allowed"] == false {
   return deny(429, "rate limit exceeded")
 }
 ```
+
+For indexed Boolean fields, use `r["ok"] == false` and
+`r["value"]["allowed"] == false`. Unary `!` binds before indexing in the
+current grammar, so `!r["ok"]` does not negate the selected field.
 
 ## Atomic rate limiting
 
@@ -117,3 +121,17 @@ or alias-map construction. Intrinsically invalid source identity is
 non-retainable; ordinary invalid scripts under a valid owner retain the existing
 key-scoped policy. Alias and authored namespace grammar are unchanged, and
 per-call typed Redis lookup remains live.
+
+## Nontruncating GET
+
+`redis.get_bounded(alias,key,max_bytes)` uses the same live per-call resolution,
+GET ACL and Fred pool as other reads, with raw `custom_raw` / `FirstKey` dispatch.
+Its positive usize-representable Int bound is admitted before provider lookup;
+effective cap is min(requested,maxStringLen,65536). Borrowed frame length and UTF-8
+are checked before owned DSL conversion; oversize is result_too_large and invalid
+reply is the new fixed invalid_response class. Fred's full reply aggregation is
+outside this conversion bound. Missing is successful nil; old get remains
+truncating. Classify Fred ErrorKind::Timeout before wrapping errors; reuse the
+pool's configured default_command_timeout and caller cancellation, not a claimed
+VM wall-clock timeout. Charge final Arc text before copying. Keep all eight
+RedisFailure tags and their small-string fallback lock-in tests exhaustive.

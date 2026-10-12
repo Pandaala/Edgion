@@ -1169,7 +1169,7 @@ is_redis_service_required() {
     fi
 
     if [ "$G_RESOURCE" = "EdgionPlugins" ]; then
-        if [ -z "$G_ITEM" ] || [ "$G_ITEM" = "Dsl" ] || [ "$G_ITEM" = "RateLimitRedis" ] || [ "$G_ITEM" = "GraphqlRateLimit" ]; then
+        if [ -z "$G_ITEM" ] || [ "$G_ITEM" = "Dsl" ] || [ "$G_ITEM" = "DslQueryLookupDynamic" ] || [ "$G_ITEM" = "RateLimitRedis" ] || [ "$G_ITEM" = "GraphqlRateLimit" ]; then
             return 0
         fi
     fi
@@ -1193,7 +1193,7 @@ is_redis_service_required() {
     fi
 
     case ",${explicit_suites}," in
-        *,EdgionPlugins/Dsl,*|*,EdgionPlugins/RateLimitRedis,*|*,EdgionPlugins/GraphqlRateLimit,*|*,EdgionBackend/SingleProvider,*|*,EdgionBackend/Responses,*|*,EdgionBackend/Messages,*|*,EdgionBackend/CredentialExhaustion,*|*,LinkSys/Redis,*|*,LinkSys/RedisTls,*|*,TCPRoute/StreamPlugins,*)
+        *,EdgionPlugins/Dsl,*|*,EdgionPlugins/DslQueryLookupDynamic,*|*,EdgionPlugins/RateLimitRedis,*|*,EdgionPlugins/GraphqlRateLimit,*|*,EdgionBackend/SingleProvider,*|*,EdgionBackend/Responses,*|*,EdgionBackend/Messages,*|*,EdgionBackend/CredentialExhaustion,*|*,LinkSys/Redis,*|*,LinkSys/RedisTls,*|*,TCPRoute/StreamPlugins,*)
             return 0
             ;;
     esac
@@ -1942,6 +1942,7 @@ run_all_tests() {
                     run_test "EdgionPlugins_GraphqlRateLimit" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GraphqlRateLimit" || test_failed=true
                     run_test "EdgionPlugins_RestToGraphql" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RestToGraphql" || test_failed=true
                     run_test "EdgionPlugins_GraphqlGuard" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GraphqlGuard" || test_failed=true
+                    run_test "EdgionPlugins_ResponseCache" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i ResponseCache" || test_failed=true
                     run_test "EdgionPlugins_GraphqlSafelist" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GraphqlSafelist" || test_failed=true
                     run_test "EdgionPlugins_GraphqlOperationRouter" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GraphqlOperationRouter" || test_failed=true
                     run_token_bucket_partial_refill_redis_test || test_failed=true
@@ -1992,7 +1993,9 @@ run_all_tests() {
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
                     local test_name="EdgionPlugins_${item_safe}"
-                    if [ "$G_ITEM" = "DslXmlDynamic" ]; then
+                    if [ "$G_ITEM" = "DslQueryLookupDynamic" ]; then
+                        run_test "Dyn_DslQueryLookupDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario DslQueryLookupDynamic" || test_failed=true
+                    elif [ "$G_ITEM" = "DslXmlDynamic" ]; then
                         run_test "Dyn_DslXmlDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario DslXmlDynamic" || test_failed=true
                     elif ! should_skip_test "$test_name"; then
                         if $FULL_TEST && [ "$G_ITEM" = "ExtProc" ]; then
@@ -2008,6 +2011,12 @@ run_all_tests() {
                     fi
                     if [ "$G_ITEM" = "GraphqlGuard" ]; then
                         run_test "Dyn_GraphqlGuardDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario GraphqlGuardDynamic" || test_failed=true
+                    fi
+                    if [ "$G_ITEM" = "ResponseCache" ]; then
+                        run_test "Dyn_ResponseCacheDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario ResponseCacheDynamic" || test_failed=true
+                    fi
+                    if [ "$G_ITEM" = "Dsl" ]; then
+                        run_test "Dyn_DslQueryLookupDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario DslQueryLookupDynamic" || test_failed=true
                     fi
                     if [ "$G_ITEM" = "RestToGraphql" ]; then
                         run_test "Dyn_RestToGraphqlDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario RestToGraphqlDynamic" || test_failed=true
@@ -2263,6 +2272,7 @@ run_all_tests() {
         run_test "EdgionPlugins_RateLimitRedis" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RateLimitRedis" || test_failed=true
         run_test "EdgionPlugins_GraphqlRateLimit" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GraphqlRateLimit" || test_failed=true
         run_test "EdgionPlugins_GraphqlGuard" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GraphqlGuard" || test_failed=true
+        run_test "EdgionPlugins_ResponseCache" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i ResponseCache" || test_failed=true
         run_test "EdgionPlugins_GraphqlSafelist" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GraphqlSafelist" || test_failed=true
         run_test "EdgionPlugins_GraphqlOperationRouter" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GraphqlOperationRouter" || test_failed=true
         run_token_bucket_partial_refill_redis_test || test_failed=true
@@ -2385,6 +2395,10 @@ run_all_tests() {
         else
             report_test "Messages_SDK" "SKIP" "0" "set EDGION_MESSAGES_SDK_PYTHON to an interpreter with the official anthropic SDK"
         fi
+    fi
+
+    if [ "$G_RESOURCE" = "EdgionPlugins" ] && [ -z "$G_ITEM" ]; then
+        run_test "Dyn_ResponseCacheDynamic" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario ResponseCacheDynamic" || test_failed=true
     fi
 
     run_openai_sdk() {
@@ -2624,7 +2638,7 @@ main() {
                 # must be present or the suite either cannot connect or falls
                 # through to an unrelated GRPCRoute.
                 base_suites="${base_suites},GRPCRoute/Basic,LinkSys/Redis"
-                suites="${base_suites},EdgionBackend/SingleProvider,EdgionPlugins/DebugAccessLog,EdgionPlugins/Csrf,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/CredentialInjector,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimitLocal,EdgionPlugins/RateLimitRedis,EdgionPlugins/GraphqlRateLimit,EdgionPlugins/GraphqlOperationRouter,EdgionPlugins/GraphqlGuard,EdgionPlugins/GraphqlSafelist,EdgionPlugins/RestToGraphql,EdgionPlugins/RealIp,EdgionPlugins/RequestMirror,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/RequestAccessPolicy,EdgionPlugins/Canary,EdgionPlugins/IpRestriction,EdgionPlugins/IpRestrictionPartialGood,EdgionPlugins/PathNormalization,EdgionPlugins/PathNormalization/ForwardView,EdgionPlugins/FaultInjection,EdgionPlugins/ForwardAuth,EdgionPlugins/ExtProc,EdgionPlugins/AiGuard,EdgionPlugins/Guardrail,EdgionPlugins/GuardrailEncoding,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/RegionRoute,EdgionPlugins/GlobalConnectionIpRestriction,EdgionPlugins/EdgionConfigDataStatus,EdgionPlugins/ResolvedRefs,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Cors,EdgionPlugins/Dsl,EdgionPlugins/DslBody,EdgionPlugins/BodyPlugins,EdgionPlugins/JsonSchemaValidation,EdgionPlugins/GrpcJsonTranscoder,EdgionPlugins/AllEndpointStatus,EdgionPlugins/Wasm,EdgionPlugins/RequestId,EdgionPlugins/AccessLogExtern,EdgionPlugins/MatchedRouteMeta,EdgionPlugins/IpRestrictionRefs,EdgionPlugins/PluginValidationStatus,EdgionPlugins/GlobalPluginsSnapshot,EdgionPlugins/EdgionConfigDataManaged,EdgionPlugins/PathNormalization/PreserveParam,EdgionPlugins/GeoRestriction"
+                suites="${base_suites},EdgionBackend/SingleProvider,EdgionPlugins/DebugAccessLog,EdgionPlugins/Csrf,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/CredentialInjector,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimitLocal,EdgionPlugins/RateLimitRedis,EdgionPlugins/GraphqlRateLimit,EdgionPlugins/GraphqlOperationRouter,EdgionPlugins/GraphqlGuard,EdgionPlugins/ResponseCache,EdgionPlugins/GraphqlSafelist,EdgionPlugins/RestToGraphql,EdgionPlugins/RealIp,EdgionPlugins/RequestMirror,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/RequestAccessPolicy,EdgionPlugins/Canary,EdgionPlugins/IpRestriction,EdgionPlugins/IpRestrictionPartialGood,EdgionPlugins/PathNormalization,EdgionPlugins/PathNormalization/ForwardView,EdgionPlugins/FaultInjection,EdgionPlugins/ForwardAuth,EdgionPlugins/ExtProc,EdgionPlugins/AiGuard,EdgionPlugins/Guardrail,EdgionPlugins/GuardrailEncoding,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/RegionRoute,EdgionPlugins/GlobalConnectionIpRestriction,EdgionPlugins/EdgionConfigDataStatus,EdgionPlugins/ResolvedRefs,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Cors,EdgionPlugins/Dsl,EdgionPlugins/DslBody,EdgionPlugins/BodyPlugins,EdgionPlugins/JsonSchemaValidation,EdgionPlugins/GrpcJsonTranscoder,EdgionPlugins/AllEndpointStatus,EdgionPlugins/Wasm,EdgionPlugins/RequestId,EdgionPlugins/AccessLogExtern,EdgionPlugins/MatchedRouteMeta,EdgionPlugins/IpRestrictionRefs,EdgionPlugins/PluginValidationStatus,EdgionPlugins/GlobalPluginsSnapshot,EdgionPlugins/EdgionConfigDataManaged,EdgionPlugins/PathNormalization/PreserveParam,EdgionPlugins/GeoRestriction"
                 if $FULL_TEST; then
                     suites="${suites},EdgionPlugins/LdapAuth,EdgionPlugins/LdapAuthTls"
                 fi
@@ -2640,8 +2654,8 @@ main() {
                     suites="${base_suites},GRPCRoute/Basic,LinkSys/Redis,EdgionPlugins/Dsl"
                 elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/DslXmlDynamic" ]; then
                     suites="${base_suites},EdgionPlugins/DslBody"
-                elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/Dsl" ]; then
-                    suites="${base_suites},LinkSys/Redis,EdgionPlugins/Dsl"
+                elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/Dsl" ] || [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/DslQueryLookupDynamic" ]; then
+                    suites="${base_suites},LinkSys/Redis,EdgionPlugins/ResponseCache,EdgionPlugins/Dsl"
                 elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/RateLimitRedis" ]; then
                     # The scenario exercises real Redis counters, so a targeted
                     # run needs both the Redis process and its LinkSys + Secret.
@@ -2990,7 +3004,7 @@ main() {
         || { [ "$G_RESOURCE" = "GRPCRoute" ] && [ "$G_ITEM" = "TimeoutRewriteWire" ]; } \
         || { [ "$G_RESOURCE" = "HTTPRoute" ] && { [ "$G_ITEM" = "Backend/InformationalRetry" ] || [ "$G_ITEM" = "Transport" ]; }; } \
         || { [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "WafDynamic" ]; } \
-        || { [ "$G_RESOURCE" = "EdgionPlugins" ] && { [ "$G_ITEM" = "Waf" ] || [ "$G_ITEM" = "ForwardAuth" ] || [ "$G_ITEM" = "ExtProc" ] || [ "$G_ITEM" = "BandwidthLimit" ] || [ "$G_ITEM" = "GrpcJsonTranscoder" ] || [ "$G_ITEM" = "GraphqlRateLimit" ] || [ "$G_ITEM" = "RateLimitRedis" ] || [ "$G_ITEM" = "DslBody" ] || [ "$G_ITEM" = "DslXmlDynamic" ] || [ "$G_ITEM" = "GraphqlOperationRouter" ] || [ "$G_ITEM" = "GraphqlGuard" ] || [ "$G_ITEM" = "GraphqlSafelist" ] || [ "$G_ITEM" = "RestToGraphql" ]; }; }; then
+        || { [ "$G_RESOURCE" = "EdgionPlugins" ] && { [ "$G_ITEM" = "Waf" ] || [ "$G_ITEM" = "ForwardAuth" ] || [ "$G_ITEM" = "ExtProc" ] || [ "$G_ITEM" = "BandwidthLimit" ] || [ "$G_ITEM" = "GrpcJsonTranscoder" ] || [ "$G_ITEM" = "GraphqlRateLimit" ] || [ "$G_ITEM" = "RateLimitRedis" ] || [ "$G_ITEM" = "Dsl" ] || [ "$G_ITEM" = "DslQueryLookupDynamic" ] || [ "$G_ITEM" = "DslBody" ] || [ "$G_ITEM" = "DslXmlDynamic" ] || [ "$G_ITEM" = "GraphqlOperationRouter" ] || [ "$G_ITEM" = "GraphqlGuard" ] || [ "$G_ITEM" = "ResponseCache" ] || [ "$G_ITEM" = "GraphqlSafelist" ] || [ "$G_ITEM" = "RestToGraphql" ]; }; }; then
         log_info "Skipping loopback-alias check for ${G_RESOURCE}${G_ITEM:+/${G_ITEM}}"
         report_test "Preflight_LoopbackAliases" "SKIP" "0" "not required by selected suites"
     elif ! ensure_loopback_aliases; then

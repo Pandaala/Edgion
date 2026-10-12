@@ -46,6 +46,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "GatewayDynamic",
     "DslDynamic",
     "DslXmlDynamic",
+    "DslQueryLookupDynamic",
     "DslTerminateDynamic",
     "BodyDynamic",
     "ConditionRefsDynamic",
@@ -56,6 +57,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "GraphqlRateLimitDynamic",
     "GraphqlOperationRouterDynamic",
     "GraphqlGuardDynamic",
+    "ResponseCacheDynamic",
     "GraphqlSafelistDynamic",
     "FormJsonTransformDynamic",
     "RestToGraphqlDynamic",
@@ -1623,6 +1625,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/JsonSchemaValidation"
         | "EdgionPlugins/GrpcJsonTranscoder"
         | "EdgionPlugins/GraphqlGuard"
+        | "EdgionPlugins/ResponseCache"
         | "EdgionPlugins/RestToGraphql"
         | "EdgionPlugins/GraphqlSafelist"
         | "EdgionPlugins/GraphqlOperationRouter"
@@ -1714,12 +1717,14 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         | "CsrfSecretRotation"
         | "DslDynamic"
         | "DslXmlDynamic"
+        | "DslQueryLookupDynamic"
         | "DslTerminateDynamic"
         | "FormJsonTransformDynamic"
         | "RestToGraphqlDynamic"
         | "GrpcJsonTranscoderDynamic"
         | "GraphqlRateLimitDynamic"
         | "GraphqlGuardDynamic"
+        | "ResponseCacheDynamic"
         | "GraphqlSafelistDynamic"
         | "GraphqlOperationRouterDynamic"
         | "JsonSchemaValidationDynamic"
@@ -3102,6 +3107,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::GraphqlGuardTestSuite));
+        }
+        "EdgionPlugins/ResponseCache" => {
+            if !gateway {
+                eprintln!("ResponseCache requires --gateway");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::edgion_plugins::ResponseCacheTestSuite));
         }
         "EdgionPlugins/RestToGraphql" => {
             if !gateway {

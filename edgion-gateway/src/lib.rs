@@ -83,6 +83,7 @@ pub mod observe;
 pub mod plugins;
 pub mod request_body;
 mod response;
+mod response_cache;
 pub mod routes;
 pub mod runtime;
 pub mod services;

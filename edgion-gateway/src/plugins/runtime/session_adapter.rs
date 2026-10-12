@@ -470,6 +470,14 @@ pub(crate) fn build_response_local_reply(
 }
 
 impl<'a> PingoraSessionAdapter<'a> {
+    fn nominate_response_cache_in(
+        &mut self,
+        policy: &Arc<crate::plugins::http::response_cache::ResponseCachePolicy>,
+        store: &Arc<crate::response_cache::Store>,
+    ) -> super::traits::session::ResponseCacheIntentAdmission {
+        crate::response_cache::nominate(self.ctx, policy, store)
+    }
+
     pub(crate) fn set_response_processor_slot(&mut self, slot: crate::response::terminal::ResponseProcessorSlot) {
         self.response_processor_slot = Some(slot);
     }
@@ -939,6 +947,16 @@ pub(crate) fn resolve_cap(max_bytes: Option<u64>, ctx_cap: u64) -> u64 {
 
 #[async_trait]
 impl<'a> PluginSession for PingoraSessionAdapter<'a> {
+    fn nominate_response_cache(
+        &mut self,
+        policy: &Arc<crate::plugins::http::response_cache::ResponseCachePolicy>,
+    ) -> super::traits::session::ResponseCacheIntentAdmission {
+        let Some(store) = crate::response_cache::process_store() else {
+            return super::traits::session::ResponseCacheIntentAdmission::Bypassed;
+        };
+        self.nominate_response_cache_in(policy, store)
+    }
+
     fn request_header_map(&self) -> &http::HeaderMap {
         &self.inner.req_header().headers
     }
@@ -2438,3 +2456,7 @@ impl WafSessionCapability for PingoraSessionAdapter<'_> {
 
 #[path = "../../ai/http/session.rs"]
 mod ai_session;
+
+#[cfg(test)]
+#[path = "../../../tests/unit/plugins/runtime/session_adapter_test/response_cache_intent_tests.rs"]
+mod response_cache_intent_tests;

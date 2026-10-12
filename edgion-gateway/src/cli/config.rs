@@ -89,6 +89,10 @@ pub const DEFAULT_GATEWAY_PROBE_LISTEN: &str = "0.0.0.0:12000";
 #[derive(Debug, Clone, Serialize, Deserialize, Args, Default)]
 #[serde(default)]
 pub struct EdgionGatewayConfig {
+    /// Restart-only physical limits for the single optional response cache.
+    #[arg(skip)]
+    #[serde(default)]
+    pub response_cache: ResponseCacheLimits,
     #[arg(skip)]
     #[serde(default)]
     pub ai: crate::ai::config::AiConfig,
@@ -237,6 +241,76 @@ pub struct EdgionGatewayConfig {
     #[arg(skip)]
     #[serde(default)]
     pub path_normalization: edgion_resources::path_normalization::PathNormalizationConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct ResponseCacheLimits {
+    pub max_entries: usize,
+    pub shards: usize,
+    pub max_body_bytes: usize,
+    pub max_metadata_bytes: usize,
+    pub total_bytes: usize,
+    pub pending_bytes: usize,
+}
+
+impl Default for ResponseCacheLimits {
+    fn default() -> Self {
+        Self {
+            max_entries: 64,
+            shards: 16,
+            max_body_bytes: 1_048_576,
+            max_metadata_bytes: 16_384,
+            total_bytes: 134_217_728,
+            pending_bytes: 16_777_216,
+        }
+    }
+}
+
+impl ResponseCacheLimits {
+    pub(crate) fn validate(&self) -> Result<usize, &'static str> {
+        let maxima = Self::default();
+        if [
+            self.max_entries,
+            self.shards,
+            self.max_body_bytes,
+            self.max_metadata_bytes,
+            self.total_bytes,
+            self.pending_bytes,
+        ]
+        .contains(&0)
+            || self.max_entries > maxima.max_entries
+            || self.shards > maxima.shards
+            || self.max_body_bytes > maxima.max_body_bytes
+            || self.max_metadata_bytes > maxima.max_metadata_bytes
+            || self.total_bytes > maxima.total_bytes
+            || self.pending_bytes > maxima.pending_bytes
+            || validate_effective_lru_cache_limits(self.max_entries, self.shards).is_err()
+        {
+            return Err("response_cache physical limits are invalid");
+        }
+        let infrastructure = self
+            .max_entries
+            .checked_mul(4096)
+            .and_then(|n| self.shards.checked_mul(4096).and_then(|shards| n.checked_add(shards)))
+            .and_then(|n| n.checked_add(4096))
+            .and_then(|n| n.checked_add(crate::response_cache::epoch_control_bytes()))
+            .ok_or("response_cache infrastructure limit overflow")?;
+        let population = self
+            .max_body_bytes
+            .checked_add(self.max_metadata_bytes)
+            .and_then(|n| n.checked_add(1024))
+            .and_then(|n| n.checked_mul(self.max_entries))
+            .ok_or("response_cache population limit overflow")?;
+        let required = infrastructure
+            .checked_add(population)
+            .and_then(|n| n.checked_add(self.pending_bytes))
+            .ok_or("response_cache total limit overflow")?;
+        if required > self.total_bytes {
+            return Err("response_cache total_bytes cannot admit its configured index and pending budgets");
+        }
+        Ok(infrastructure)
+    }
 }
 
 /// Gateway configuration

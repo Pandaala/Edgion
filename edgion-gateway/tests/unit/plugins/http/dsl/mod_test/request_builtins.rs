@@ -368,3 +368,23 @@ fn test_req_path_param_absent() {
     );
     assert_eq!(result, good_next());
 }
+
+#[test]
+fn request_method_uses_entry_view_and_preserves_absence() {
+    let mut session = MockPluginSession::new();
+    session.expect_get_method().return_const("POST".to_string());
+    session.expect_get_request_method().return_const(Some("GET"));
+    assert_eq!(
+        run(
+            "if req.method != \"POST\" || req.request_method != \"GET\" { return deny(500, \"failed\") }",
+            session
+        ),
+        good_next()
+    );
+    let mut session = MockPluginSession::new();
+    session.expect_get_request_method().return_const(None);
+    assert_eq!(
+        run("if req.request_method != nil { return deny(500, \"failed\") }", session),
+        good_next()
+    );
+}

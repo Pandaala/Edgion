@@ -1,3 +1,5 @@
+pub(crate) static GLOBAL_TLS_STORE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 use super::*;
 use edgion_resources::resources::backend_tls_policy::*;
 use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKind, ResolvedPolicyTargetClass};

@@ -15,6 +15,7 @@ pub mod ast;
 pub mod bytecode;
 pub mod compiler;
 pub mod error;
+pub mod json;
 pub mod json_path;
 pub mod parser;
 mod script;

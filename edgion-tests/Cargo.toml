@@ -89,6 +89,7 @@ rustls.workspace = true
 rustls-native-certs.workspace = true
 h2.workspace = true
 http.workspace = true
+http-body.workspace = true
 tokio-tungstenite.workspace = true
 proxy-header.workspace = true
 

@@ -188,3 +188,65 @@ fn test_lock_options_default() {
     assert_eq!(opts.max_wait, Duration::from_secs(5));
     assert_eq!(opts.retry_interval, Duration::from_millis(50));
 }
+
+#[test]
+fn bounded_get_checks_original_bytes_before_text_conversion() {
+    assert!(matches!(bounded_get_result(bulk("é"), 2), Ok(BoundedGet::Value(_))));
+    assert!(matches!(bounded_get_result(bulk("é"), 1), Ok(BoundedGet::TooLarge)));
+    assert!(matches!(
+        bounded_get_result(bulk(vec![0xff; 4]), 3),
+        Ok(BoundedGet::TooLarge)
+    ));
+    assert!(matches!(
+        bounded_get_result(bulk(vec![0xff; 4]), 4),
+        Err(BoundedGetError::InvalidResponse)
+    ));
+    assert!(matches!(
+        bounded_get_result(Resp3Frame::Null, 0),
+        Ok(BoundedGet::Missing)
+    ));
+    assert!(matches!(
+        bounded_get_result(
+            Resp3Frame::Number {
+                data: 1,
+                attributes: None
+            },
+            4
+        ),
+        Err(BoundedGetError::InvalidResponse)
+    ));
+}
+
+#[test]
+fn bounded_get_timeout_classification_uses_typed_error_kind() {
+    assert!(matches!(
+        bounded_get_error(fred::error::Error::new(
+            fred::error::ErrorKind::Timeout,
+            "private detail"
+        )),
+        BoundedGetError::Timeout
+    ));
+    assert!(matches!(
+        bounded_get_error(fred::error::Error::new(fred::error::ErrorKind::Unknown, "timeout text")),
+        BoundedGetError::Dependency(_)
+    ));
+}
+
+#[test]
+fn bounded_get_server_error_frames_are_private_dependency_failures() {
+    for frame in [
+        Resp3Frame::SimpleError {
+            data: "WRONGTYPE private value".into(),
+            attributes: None,
+        },
+        Resp3Frame::BlobError {
+            data: bytes::Bytes::from(vec![b'x'; 128 * 1024]),
+            attributes: None,
+        },
+    ] {
+        let Err(BoundedGetError::Dependency(error)) = bounded_get_result(frame, 64) else {
+            panic!("expected dependency failure");
+        };
+        assert_eq!(error.details(), "Redis GET returned a command error");
+    }
+}

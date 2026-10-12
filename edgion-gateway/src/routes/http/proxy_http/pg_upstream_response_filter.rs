@@ -259,6 +259,8 @@ pub fn upstream_response_filter(
         return Ok(());
     }
 
+    crate::response_cache::lifecycle::capture_headers(ctx, upstream_response);
+
     // Private response processors see only the final, non-retried response.
     // They may normalize a provider status/content type and retain the body
     // mode they will use later. Per-attempt upstream bookkeeping above keeps
@@ -346,6 +348,29 @@ pub fn upstream_response_filter(
         }
     }
 
+    run_response_header_sync_tail(edgion_http, session, upstream_response, ctx)
+}
+
+/// Replay only source-independent header duties. Origin timing, retry, health and
+/// persistence remain exclusively in upstream_response_filter.
+pub(super) fn cached_response_filter(
+    edgion_http: &EdgionHttpProxy,
+    session: &mut Session,
+    response: &mut ResponseHeader,
+    ctx: &mut EdgionHttpContext,
+) -> pingora_core::Result<()> {
+    ctx.reset_response_override();
+    normalize_final_response_headers(response, ctx, &edgion_http.server_header_opts);
+    select_normalized_upstream_candidate(ctx, response.status.as_u16());
+    run_response_header_sync_tail(edgion_http, session, response, ctx)
+}
+
+fn run_response_header_sync_tail(
+    _edgion_http: &EdgionHttpProxy,
+    session: &mut Session,
+    upstream_response: &mut ResponseHeader,
+    ctx: &mut EdgionHttpContext,
+) -> pingora_core::Result<()> {
     // filter-04c: apply request-stage-queued response-header ops onto the
     // upstream header NON-DESTRUCTIVELY (queue kept intact). Placed before the
     // sync runners so response-stage plugins observe the merged headers. If a

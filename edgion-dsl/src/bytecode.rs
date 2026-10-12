@@ -300,9 +300,31 @@ pub enum BuiltinId {
     XmlElement,
     XmlStringify,
     XmlSetBody,
+    JsonRead,
+    JsonGetRaw,
+    JsonGetString,
+    JsonKeys,
+    JsonSetRaw,
+    JsonSetString,
+    JsonSetBody,
+    ReqRequestMethod,
+    RedisGetBounded,
 }
 
 impl BuiltinId {
+    pub fn is_json_builtin(self) -> bool {
+        matches!(
+            self,
+            Self::JsonRead
+                | Self::JsonGetRaw
+                | Self::JsonGetString
+                | Self::JsonKeys
+                | Self::JsonSetRaw
+                | Self::JsonSetString
+                | Self::JsonSetBody
+        )
+    }
+
     pub fn is_xml_builtin(self) -> bool {
         matches!(
             self,
@@ -335,6 +357,7 @@ impl BuiltinId {
         matches!(
             self,
             BuiltinId::RedisGet
+                | BuiltinId::RedisGetBounded
                 | BuiltinId::RedisSet
                 | BuiltinId::RedisDel
                 | BuiltinId::RedisExists
@@ -372,6 +395,7 @@ impl OpCode {
                 | OpCode::BodyRemove
                 | OpCode::BodyReplace
                 | OpCode::CallBuiltin(BuiltinId::XmlSetBody, _)
+                | OpCode::CallBuiltin(BuiltinId::JsonSetBody, _)
         )
     }
 }
@@ -495,7 +519,9 @@ impl CompiledScript {
 
     /// True when the script evaluates the opaque request-body value.
     pub fn references_request_body(&self) -> bool {
-        self.references_builtin(BuiltinId::ReqBody) || self.references_builtin(BuiltinId::XmlSetBody)
+        self.references_builtin(BuiltinId::ReqBody)
+            || self.references_builtin(BuiltinId::XmlSetBody)
+            || self.references_builtin(BuiltinId::JsonSetBody)
     }
 
     /// True when the script contains an opcode that can mutate the request body.

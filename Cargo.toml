@@ -80,7 +80,7 @@ futures = "0.3.31"
 
 # Serialization / schema
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["raw_value"] }
 serde_yaml = "0.9"
 serde_ignored = "0.1.14"
 schemars = "=1.2.1"
@@ -134,6 +134,7 @@ axum = { version = "0.8.8", features = ["macros", "ws"] }
 axum-server = { version = "0.8", features = ["tls-rustls"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots", "http2", "stream"] }
 http = "1.4.0"
+http-body = "=1.1.0"
 httpdate = "1"
 h2 = "0.4"
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio"] }

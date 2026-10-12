@@ -464,8 +464,31 @@ pub async fn request_filter(
     crate::plugins::http::grpc_json_transcoder::validate_request(session.req_header(), ctx)?;
     ctx.request_info.in_request_body_stage = false;
 
+    crate::response_cache::lifecycle::bind_request(session, ctx).await;
+    respond_from_cache(edgion_http, session, ctx).await
+}
+
+/// The optional hit enters the same response onion and final-writer claim as an
+/// origin response, without creating an upstream attempt.
+async fn respond_from_cache(
+    edgion_http: &EdgionHttpProxy,
+    session: &mut Session,
+    ctx: &mut EdgionHttpContext,
+) -> pingora_core::Result<bool> {
+    if let Some(mut hit) = crate::response_cache::lifecycle::prepare_hit(session, ctx) {
+        super::pg_upstream_response_filter::cached_response_filter(edgion_http, session, &mut hit.header, ctx)?;
+        super::pg_response_filter::response_filter(edgion_http, session, &mut hit.header, ctx).await?;
+        super::pg_response_head::response_head_will_commit(session, &hit.header, ctx)?;
+        crate::response_cache::lifecycle::deliver_hit(session, ctx, hit).await?;
+        return Ok(true);
+    }
+
     Ok(false)
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/unit/routes/http/proxy_http/pg_request_filter_test/response_cache_tests.rs"]
+mod response_cache_tests;
 
 /// Build request metadata: client addresses, hostname, path, trace_id, x-forwarded-for, and protocol detection (inline for performance)
 /// Also validates X-Forwarded-For header length against security_protect configuration.

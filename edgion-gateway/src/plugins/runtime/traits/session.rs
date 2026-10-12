@@ -18,6 +18,16 @@ use edgion_resources::EdgionErrorCode;
 use pingora_http::ResponseHeader;
 use std::sync::Arc;
 
+/// Optional cache nomination never changes ordinary request handling.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ResponseCacheIntentAdmission {
+    Admitted,
+    AlreadyAdmitted,
+    Bypassed,
+    #[default]
+    Unsupported,
+}
+
 pub type PluginSessionError = Box<dyn std::error::Error + Send + Sync>;
 pub type PluginSessionResult<T> = Result<T, PluginSessionError>;
 
@@ -428,6 +438,14 @@ pub trait PluginSession: Send + Sync {
 
     /// Get reference to EdgionHttpContext (for access log generation)
     fn ctx(&self) -> &EdgionHttpContext;
+
+    /// Nominate an immutable policy only from an actually executed request filter.
+    fn nominate_response_cache(
+        &mut self,
+        _policy: &Arc<crate::plugins::http::response_cache::ResponseCachePolicy>,
+    ) -> ResponseCacheIntentAdmission {
+        ResponseCacheIntentAdmission::Unsupported
+    }
 
     /// Borrow the selected-WAF integration capability for one operation.
     /// The adapter retains ownership; callers must release this borrow before

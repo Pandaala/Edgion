@@ -352,3 +352,27 @@ response is returned directly to the script.
 - `Value::Map` boxing rationale (24 B `Value` invariant): `skills/04-review/dsl/intentional-design/map-variant-is-boxed.md`
 - Per-builtin implementation guides (where each cap is wired in): `skills/03-coding/dsl/` (`http-call.md`, `redis-builtin.md`, `builtins-path.md`)
 - Plugin lifecycle (how `DslPlugin` reaches `Vm::execute`): `skills/01-architecture/02-gateway/05-plugin-system.md`
+
+## Strict JSON reconstruction and nontruncating Redis GET
+
+`edgion-dsl::json` is the canonical strict JSON policy owner with two materializers.
+Resources retains its former DOM visitor ordering, f64 interpretation, profiles
+and 1 MiB/depth64/nodes20000 limits; DSL raw strings retain number lexemes under
+64 KiB/depth32/nodes4096 and maxStringLen. Both share node/depth and decoded-key
+duplicate admission. Raw mode has documented syntax-first precedence; it does not
+replace Resources DOM parsing or silently tighten its limits.
+
+Raw producer parsing/scratch, decoded names/duplicate copies, container growth,
+node visits and output/Arc copies are charged before allocation through the live
+ValueWorkBudget, including repeated nested RawValue scans. Gateway DslBodyOps
+owns Body scans and budgets; no second BodyStorage is added. JsonSetBody is both
+capture-dependent and a mutation for source and independently validated bytecode.
+Its runtime stage check precedes allocation; validation precedes one canonical
+session overwrite. Frozen-body/publication errors retain fixed BodyAccess500.
+String-only JSON reads need no body capture and response bodies remain streaming.
+
+RedisGetBounded resolves each live LinkSys client, checks raw GET type/length/UTF-8
+before DSL text allocation and classifies typed Fred timeout before error wrapping.
+It bounds conversion only: Fred aggregates the complete RESP reply first. Existing
+pool command deadlines and caller cancellation apply; there is no general VM
+execution timeout. See [the maintained JSON/Redis guard](../../04-review/dsl/regression-guards/bounded-json-reconstruction.md).

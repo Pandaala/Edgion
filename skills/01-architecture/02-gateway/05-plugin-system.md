@@ -671,3 +671,19 @@ remove authentication. Existing route generation/captured-request behavior,
 egress policy, body forwarding, retry and deadlines are unchanged. No route entry
 cache, Service grant policy, new Service recovery edge or live conformance claim
 is added.
+
+## ResponseCache intent and certificates
+
+ResponseCache's public PluginSession seam accepts only an opaque cold-compiled
+policy and reports Admitted, AlreadyAdmitted, Bypassed or Unsupported. The default
+capability is Unsupported with no state allocation. The real adapter delegates
+to the canonical private RequestState admission owner; it exposes no mutable ctx
+or Store API. Repeated equivalent intents allocate nothing; conflicts are sticky
+bypass. Lookup occurs at the successful request tail, never during nomination.
+
+Cold EntryBundle certificates include companion filters and propagate through
+reuse, outcomes and policy selection. Conditions cannot erase unsafe ownership.
+Monotonic runtime identities distinguish replacements even when filter Arcs are
+shared. Publisher retirement clears index visibility and fences pending commits.
+Actual discovery, TLS, traffic and eligible literal authority reports describe
+consumed reads, without selecting another backend or loading another snapshot.

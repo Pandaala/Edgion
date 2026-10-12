@@ -323,3 +323,36 @@ See the [XML API contract](api-reference.md#bounded-xml-primitives).
 - [Language Syntax Reference](./language-syntax.md) — Type system, operators, and control flow
 - [Practical Examples](./examples.md) — Real-world script examples including security-related use cases
 - [Bytecode Guide](./bytecode.md) — Using pre-compiled bytecode to eliminate compile-time overhead
+
+### Strict raw JSON producer bounds
+
+`json.*` reconstruction keeps encoded JSON explicit and preserves number lexemes.
+It adds no new DSL value type, mutable DOM, response-body reader or response
+aggregation mode. One document has a 64 KiB hard source/output ceiling, lowered
+by `maxStringLen`, plus depth 32 and 4,096 nodes. Duplicate decoded keys reject
+at every nesting level. Request Body input additionally obeys physical body and
+scan limits; invalid UTF-8 is rejected instead of decoded lossily.
+
+Before each serde parse, the execution work account reserves four units per span
+byte for traversal and another four for escaped-token scratch/capacity overlap.
+Nested RawValue reparsing repeats both reservations: work is not assumed linear
+and is never refunded. Node admission, decoded-key strings, duplicate sets,
+member vectors, returned key lists and Arc copies are separately charged before
+retention/allocation. Output writer growth and appends are charged and capped
+while writing; escaped output cannot allocate an unbounded temporary. Highly
+nested or repeated operations can exhaust cumulative work below the scalar cap.
+These are producer/cumulative allocation bounds, not a process-wide memory claim
+or an allocator-rounding guarantee.
+
+Body scans use the canonical blocking scanner lane; cancellation retains the
+bounded worker permit until it exits. Atomic `json.set_body` checks the existing
+request stage, validates the whole output before one canonical overwrite and
+preserves security-inspection freeze. Every publication failure is fixed HTTP
+500, even under `errorPolicy: Ignore`; no partially reconstructed generation is
+published. Canonical transport code remains the framing owner.
+
+`redis.get_bounded` checks raw reply type, bytes and UTF-8 before making a DSL
+string. Fred's preceding complete-frame aggregation is outside this bound. It
+uses the LinkSys pool command timeout and caller cancellation; the VM has no
+general execution wall-clock timeout. Oversized/corrupt records return fixed
+error classes without exposing keys, values, aliases or dependency detail.

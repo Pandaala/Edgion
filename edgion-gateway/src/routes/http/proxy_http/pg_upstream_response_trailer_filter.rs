@@ -25,6 +25,9 @@ pub(crate) async fn dispatch_upstream_response_trailers(
     ctx: &mut EdgionHttpContext,
     mut trailers: Option<&mut HeaderMap>,
 ) -> pingora_core::Result<()> {
+    if trailers.is_some() {
+        crate::response_cache::lifecycle::abandon(ctx);
+    }
     if !ctx.response_processors_frozen() {
         return Err(trailer_processing_error());
     }

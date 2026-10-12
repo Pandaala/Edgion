@@ -26,6 +26,8 @@ pub async fn logging(
     // releases the active-context gauge charge.
     let _active_context_release = global_metrics().active_context_release_guard();
 
+    crate::response_cache::lifecycle::finalize(session, ctx, _e).await;
+
     if ctx.grpc_transcoding.is_some() {
         if let Some(driver) = ctx.response_processor_driver() {
             driver.finalize_ordinary_incomplete().await;

@@ -220,6 +220,7 @@ pub fn check_plugins_san(ep: &EdgionPlugins) -> Vec<String> {
                         | EdgionPlugin::ProxyRewrite(_)
                         | EdgionPlugin::RequestRestriction(_)
                         | EdgionPlugin::RequestBodyBuffer(_)
+                        | EdgionPlugin::ResponseCache(_)
                         | EdgionPlugin::GrpcJsonTranscoder(_)
                         | EdgionPlugin::JsonSchemaValidation(_)
                         | EdgionPlugin::RestToGraphql(_)

@@ -136,3 +136,5 @@ In `requestPlugins`, `grpc_error()` sends a direct trailers-only gRPC response t
 
 - [Filters Overview](../../overview.md)
 - [Plugin Composition and References](../../plugin-composition.md)
+
+[Authenticated query-ID lookup](query-id-lookup.md): Secret-backed publication, bounded Redis reconstruction and cache placement.

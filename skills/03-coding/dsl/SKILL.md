@@ -48,3 +48,8 @@ current generation rather than retaining a snapshot or implicit cursor.
 - Adding or debugging an outbound HTTP call from a script → `http-call.md`
 - Adding or debugging a `redis.*` function (or wiring a new `redis.*` op end-to-end) → `redis-builtin.md`
 - Anything touching the VM, bytecode, or compiler (not just a builtin) → fall back to `dsl-engine.md` first
+
+Strict JSON reconstruction is owned by `edgion-dsl/src/json.rs` (shared strict
+DOM/raw policy) and Gateway `lang/json_builtins.rs` / `lang/body_ops.rs` (body
+policy/publication). Read [the JSON ownership guard](../../04-review/dsl/regression-guards/bounded-json-reconstruction.md)
+before changing those primitives or their allocation/error contracts.

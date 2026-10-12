@@ -304,3 +304,5 @@ impl EdgionPlugins {
         self.spec.access_log_extern.as_deref().unwrap_or(&[])
     }
 }
+
+pub use plugin_configs::ResponseCacheConfig;

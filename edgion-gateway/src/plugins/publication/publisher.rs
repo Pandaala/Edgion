@@ -140,7 +140,10 @@ impl PluginPublisher {
         drop(HttpListenerPublication::empty());
         Self {
             state: Mutex::new(Inputs::default()),
-            publication: ArcSwap::from_pointee(PluginPublication::default()),
+            publication: ArcSwap::from_pointee(PluginPublication {
+                cache_epoch: crate::response_cache::current_epoch(),
+                ..PluginPublication::default()
+            }),
         }
     }
 
@@ -156,7 +159,8 @@ impl PluginPublisher {
         let mut state = self.state.lock();
         edit(&mut state);
         let previous = self.publication.load_full();
-        let next = state.compose(&previous);
+        let mut next = state.compose(&previous);
+        next.stamp_cache_epoch(crate::response_cache::advance_epoch());
         self.publication.store(Arc::new(next));
     }
 
@@ -952,3 +956,7 @@ fn rule_admission(
         graphql_allowed,
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/plugins/publication/publisher_test/response_cache_epoch_tests.rs"]
+mod response_cache_epoch_tests;

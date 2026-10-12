@@ -51,6 +51,7 @@ rule without echoing the realm. Disabled entries remain inert.
 | [graphql-operation-router.md](graphql-operation-router.md) | Exact operation selection among declared HTTPRoute Service backends |
 | [graphql-rate-limit.md](graphql-rate-limit.md) | Static SDL query-cost budgets through Redis |
 | [graphql-guard.md](graphql-guard.md) | Independent shape and introspection protection with optional SDL cost ceiling |
+| [response-cache.md](response-cache.md) | Bounded public-origin replay after current authentication and quota checks |
 | [graphql-safelist.md](graphql-safelist.md) | Static trusted GraphQL documents |
 | [header-cert-auth.md](header-cert-auth.md) | Header/certificate authentication |
 | [hmac-auth.md](hmac-auth.md) | HMAC signature verification |

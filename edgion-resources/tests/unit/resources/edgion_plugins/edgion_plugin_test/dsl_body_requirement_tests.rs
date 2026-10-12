@@ -76,3 +76,25 @@ fn dsl_body_requirement_is_fail_close_regardless_of_error_policy() {
         );
     }
 }
+
+#[test]
+fn strict_json_string_reads_are_not_gated_but_publication_is() {
+    assert!(dsl("json.read(\"{}\")", None)
+        .body_requirement(BodyStage::Request)
+        .is_none());
+    for policy in [None, Some(DslErrorPolicy::Ignore)] {
+        let plugin = dsl("json.set_body(\"{}\")", policy);
+        assert_eq!(
+            plugin.body_requirement(BodyStage::Request).unwrap().on_read_failure,
+            BodyReadFailureMode::FailClose
+        );
+        assert!(plugin.body_requirement(BodyStage::Response).is_none());
+        let EdgionPlugin::Dsl(config) = plugin else {
+            unreachable!()
+        };
+        let mut wire = config.clone();
+        wire.bytecode = Some(config.compile_and_validate().unwrap().serialize_base64().unwrap());
+        wire.source = None;
+        assert!(EdgionPlugin::Dsl(wire).body_requirement(BodyStage::Request).is_some());
+    }
+}

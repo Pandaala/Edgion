@@ -186,3 +186,25 @@ fn test_const_str_cache_arc_content_equality() {
     assert_eq!(arc1.as_ref(), arc2.as_ref(), "Arc content should be equal");
     // Pointer identity is NOT asserted — they are independent Vms.
 }
+
+#[tokio::test]
+async fn json_publication_work_exhaustion_never_calls_overwrite() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::EdgionHttpContext;
+    use edgion_dsl::value::MAX_VALUE_WORK_UNITS;
+    let vm = Vm::new(script_with_constants(vec![]), VmLimits::default()).unwrap();
+    let mut state = VmState::new(0, &vm.limits);
+    state.push(Value::Str("{}".into()), vm.limits.max_stack_depth).unwrap();
+    state.value_work_budget.charge(MAX_VALUE_WORK_UNITS).unwrap();
+    let mut ctx = EdgionHttpContext::new();
+    ctx.request_info.in_request_body_stage = true;
+    ctx.request_body_config.max_body_size_bytes = 64;
+    let mut session = MockPluginSession::new();
+    session.expect_ctx().return_const(ctx);
+    session.expect_overwrite_request_body().times(0);
+    assert!(matches!(
+        vm.call_builtin_json(BuiltinId::JsonSetBody, &mut state, &mut session, &DslRuntime::default())
+            .await,
+        Err(RuntimeError::BodyAccess { .. })
+    ));
+}

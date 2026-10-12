@@ -15,11 +15,68 @@ use fred::types::{ClusterHash, CustomCommand, Resp3Frame, Value as RedisValue};
 use super::client::RedisLinkClient;
 use crate::link_sys::LinkSysHealth;
 
+/// A raw GET result admitted before owned text conversion. Fred has already
+/// aggregated the reply; this is not a network-frame memory cap.
+pub(crate) enum BoundedGet {
+    Missing,
+    TooLarge,
+    Value(bytes::Bytes),
+}
+#[derive(Debug)]
+pub(crate) enum BoundedGetError {
+    Timeout,
+    InvalidResponse,
+    Dependency(fred::error::Error),
+}
+fn bounded_get_error(error: fred::error::Error) -> BoundedGetError {
+    if matches!(error.kind(), fred::error::ErrorKind::Timeout) {
+        BoundedGetError::Timeout
+    } else {
+        BoundedGetError::Dependency(error)
+    }
+}
+fn bounded_get_result(frame: Resp3Frame, limit: usize) -> std::result::Result<BoundedGet, BoundedGetError> {
+    let data = match frame {
+        Resp3Frame::Null => return Ok(BoundedGet::Missing),
+        Resp3Frame::BlobString { data, .. } | Resp3Frame::SimpleString { data, .. } => data,
+        Resp3Frame::SimpleError { .. } | Resp3Frame::BlobError { .. } => {
+            // Avoid copying a potentially large/sensitive server error. A raw
+            // command-error reply is a dependency failure, not invalid success.
+            return Err(BoundedGetError::Dependency(fred::error::Error::new(
+                fred::error::ErrorKind::Unknown,
+                "Redis GET returned a command error",
+            )));
+        }
+        _ => return Err(BoundedGetError::InvalidResponse),
+    };
+    if data.len() > limit {
+        return Ok(BoundedGet::TooLarge);
+    }
+    std::str::from_utf8(&data).map_err(|_| BoundedGetError::InvalidResponse)?;
+    Ok(BoundedGet::Value(data))
+}
+
 // ============================================================================
 // Basic Key-Value Operations
 // ============================================================================
 
 impl RedisLinkClient {
+    pub(crate) async fn get_bounded(
+        &self,
+        key: &str,
+        limit: usize,
+    ) -> std::result::Result<BoundedGet, BoundedGetError> {
+        let frame = self
+            .pool()
+            .custom_raw(
+                CustomCommand::new_static("GET", ClusterHash::FirstKey, false),
+                vec![key],
+            )
+            .await
+            .map_err(bounded_get_error)?;
+        bounded_get_result(frame, limit)
+    }
+
     /// GET key → Option<String>
     pub async fn get(&self, key: &str) -> Result<Option<String>> {
         let val: Option<String> = self

@@ -277,7 +277,9 @@ pub async fn upstream_response_body_filter(
     // e.g. bandwidth limiting sees post-mutation bytes.
     run_stream_processors(session, ctx, body, end_of_stream, sink).await;
 
-    Ok(run_read_only_body_plugins(session, ctx, body, end_of_stream))
+    let delay = run_read_only_body_plugins(session, ctx, body, end_of_stream);
+    crate::response_cache::lifecycle::capture_body(ctx, body.as_ref(), end_of_stream);
+    Ok(delay)
 }
 
 /// Adapt the fork's typed response lifecycle without collapsing the
@@ -314,9 +316,11 @@ pub async fn upstream_response_body_filter_event(
             let delay = run_read_only_body_plugins(session, ctx, body, true);
             super::pg_upstream_response_trailer_filter::dispatch_upstream_response_trailers(session, ctx, None).await?;
             emit_grpc_terminal(ctx, sink)?;
+            crate::response_cache::lifecycle::capture_body(ctx, body.as_ref(), true);
             Ok(delay)
         }
         UpstreamResponseBodyEvent::TerminalBeforeTrailers => {
+            crate::response_cache::lifecycle::abandon(ctx);
             record_first_body_time(ctx, body.as_ref());
             run_stream_processors_event(session, ctx, body, StreamingResponseEvent::TerminalBeforeTrailers, sink).await;
             // A processor may flush its final bytes here. They still pass through

@@ -15,7 +15,8 @@ use super::plugin_configs::{
     IpRestrictionConfig, JsonSchemaValidationConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig,
     MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitLocalConfig, RateLimitRedisConfig, RealIpConfig,
     RegionRouteConfig, RequestAccessPolicyConfig, RequestBodyBufferConfig, RequestIdConfig, RequestMirrorPluginConfig,
-    RequestRestrictionConfig, ResponseRewriteConfig, WasmConfig, WebhookKeyGetConfig, DEFAULT_INSTANCE_MAX_BYTES,
+    RequestRestrictionConfig, ResponseCacheConfig, ResponseRewriteConfig, WasmConfig, WebhookKeyGetConfig,
+    DEFAULT_INSTANCE_MAX_BYTES,
 };
 use crate::resources::http_route::{HTTPHeaderFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter};
 
@@ -104,6 +105,8 @@ pub enum EdgionPlugin {
     RequestRestriction(RequestRestrictionConfig),
     /// Buffer the proxied request body for later-stage consumers.
     RequestBodyBuffer(RequestBodyBufferConfig),
+    /// Cache explicitly public finite responses after all request admission.
+    ResponseCache(ResponseCacheConfig),
     /// Validate a bounded JSON request body against an inline JSON Schema.
     JsonSchemaValidation(JsonSchemaValidationConfig),
     /// Schema-aware GraphQL query-cost budgets using the canonical Redis limiter.
@@ -209,6 +212,7 @@ impl EdgionPlugin {
             | Self::DebugAccessLogToHeader(_)
             | Self::ProxyRewrite(_)
             | Self::RequestRestriction(_)
+            | Self::ResponseCache(_)
             | Self::RequestBodyBuffer(_)
             | Self::JsonSchemaValidation(_)
             | Self::RestToGraphql(_)
@@ -329,7 +333,8 @@ impl EdgionPlugin {
             // ordinary script runtime errors.
             Dsl(cfg) if stage == BodyStage::Request => {
                 let script = cfg.compile_and_validate().ok()?;
-                if !script.references_builtin(BuiltinId::ReqBody) {
+                if !script.references_builtin(BuiltinId::ReqBody) && !script.references_builtin(BuiltinId::JsonSetBody)
+                {
                     return None;
                 }
                 Some(BodyRequirement::fail_close())
@@ -357,6 +362,7 @@ impl EdgionPlugin {
             | Mock(_)
             | DebugAccessLogToHeader(_)
             | ProxyRewrite(_)
+            | ResponseCache(_)
             | RequestBodyBuffer(_)
             | GrpcJsonTranscoder(_)
             | JsonSchemaValidation(_)
@@ -447,6 +453,7 @@ impl EdgionPlugin {
             EdgionPlugin::Mock(_) => "Mock",
             EdgionPlugin::DebugAccessLogToHeader(_) => "DebugAccessLogToHeader",
             EdgionPlugin::ProxyRewrite(_) => "ProxyRewrite",
+            EdgionPlugin::ResponseCache(_) => "ResponseCache",
             EdgionPlugin::RequestBodyBuffer(_) => "RequestBodyBuffer",
             EdgionPlugin::JsonSchemaValidation(_) => "JsonSchemaValidation",
             EdgionPlugin::RestToGraphql(_) => "RestToGraphql",
@@ -610,6 +617,7 @@ impl EdgionPlugin {
             | EdgionPlugin::DebugAccessLogToHeader(_)
             | EdgionPlugin::ProxyRewrite(_)
             | EdgionPlugin::RequestRestriction(_)
+            | EdgionPlugin::ResponseCache(_)
             | EdgionPlugin::RequestBodyBuffer(_)
             | EdgionPlugin::GrpcJsonTranscoder(_)
             | EdgionPlugin::JsonSchemaValidation(_)
@@ -675,6 +683,7 @@ impl EdgionPlugin {
             | EdgionPlugin::DebugAccessLogToHeader(_)
             | EdgionPlugin::ProxyRewrite(_)
             | EdgionPlugin::RequestRestriction(_)
+            | EdgionPlugin::ResponseCache(_)
             | EdgionPlugin::RequestBodyBuffer(_)
             | EdgionPlugin::GrpcJsonTranscoder(_)
             | EdgionPlugin::JsonSchemaValidation(_)
@@ -775,6 +784,7 @@ impl EdgionPlugin {
             | EdgionPlugin::DebugAccessLogToHeader(_)
             | EdgionPlugin::ProxyRewrite(_)
             | EdgionPlugin::RequestRestriction(_)
+            | EdgionPlugin::ResponseCache(_)
             | EdgionPlugin::RequestBodyBuffer(_)
             | EdgionPlugin::GrpcJsonTranscoder(_)
             | EdgionPlugin::JsonSchemaValidation(_)
@@ -819,6 +829,7 @@ impl EdgionPlugin {
             EdgionPlugin::KeyAuth(c) => c.validation_error(),
             EdgionPlugin::ResponseRewrite(c) => c.validation_error(),
             EdgionPlugin::ProxyRewrite(c) => c.validation_error(),
+            EdgionPlugin::ResponseCache(c) => c.validation_error(),
             EdgionPlugin::RequestBodyBuffer(c) => c.validation_error(),
             EdgionPlugin::JsonSchemaValidation(c) => c.validation_error(),
             EdgionPlugin::RestToGraphql(c) => c.validation_error(),

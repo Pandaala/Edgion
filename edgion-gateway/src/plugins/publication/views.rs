@@ -21,6 +21,7 @@ pub(crate) struct HttpListenerPublication {
     pub(super) grpc_manager: Weak<GrpcPortRouteManager>,
     pub index: Arc<GatewayInfoIndex>,
     owners: ListenerOwners,
+    pub(crate) cache_epoch: crate::response_cache::PublicationEpoch,
 }
 
 enum ListenerOwners {
@@ -40,6 +41,7 @@ impl HttpListenerPublication {
                 grpc: Arc::new(DomainGrpcRouteRules::new()),
                 index: Arc::new(GatewayInfoIndex::from_entries(Vec::new())),
                 owners: ListenerOwners::Empty,
+                cache_epoch: crate::response_cache::PublicationEpoch::default(),
             })
         });
         Arc::clone(&EMPTY)
@@ -66,6 +68,7 @@ impl HttpListenerPublication {
                             grpc: Arc::clone(&grpc),
                             index: Arc::clone(&index),
                             owners: ListenerOwners::Unique(scope),
+                            cache_epoch: crate::response_cache::PublicationEpoch::default(),
                         });
                         (key, child)
                     })
@@ -79,6 +82,31 @@ impl HttpListenerPublication {
             grpc,
             index,
             owners,
+            cache_epoch: crate::response_cache::PublicationEpoch::default(),
+        })
+    }
+
+    /// Cold publication stamping shares routing and scope allocations. Children
+    /// receive the same complete token before the new snapshot becomes visible.
+    fn with_cache_epoch(&self, epoch: &crate::response_cache::PublicationEpoch) -> Arc<Self> {
+        let owners = match &self.owners {
+            ListenerOwners::Empty => ListenerOwners::Empty,
+            ListenerOwners::Unique(scope) => ListenerOwners::Unique(Arc::clone(scope)),
+            ListenerOwners::Shared(children) => ListenerOwners::Shared(
+                children
+                    .iter()
+                    .map(|(key, child)| (key.clone(), child.with_cache_epoch(epoch)))
+                    .collect(),
+            ),
+        };
+        Arc::new(Self {
+            http: Arc::clone(&self.http),
+            grpc: Arc::clone(&self.grpc),
+            http_manager: self.http_manager.clone(),
+            grpc_manager: self.grpc_manager.clone(),
+            index: Arc::clone(&self.index),
+            owners,
+            cache_epoch: epoch.clone(),
         })
     }
 
@@ -209,6 +237,7 @@ pub(crate) struct PublicationInventory {
 
 #[derive(Default)]
 pub(crate) struct PluginPublication {
+    pub(crate) cache_epoch: crate::response_cache::PublicationEpoch,
     pub(super) gateways: HashMap<String, Arc<GatewayScope>>,
     pub(super) http_listeners: HashMap<ListenerKey, Arc<HttpListenerPublication>>,
     pub(super) scopes: HashMap<String, Arc<PluginScope>>,
@@ -223,6 +252,16 @@ pub(crate) struct PluginPublication {
 }
 
 impl PluginPublication {
+    pub(super) fn stamp_cache_epoch(&mut self, epoch: crate::response_cache::PublicationEpoch) {
+        if epoch.id == 0 && !epoch.is_initialized() {
+            return;
+        }
+        for view in self.http_listeners.values_mut() {
+            *view = view.with_cache_epoch(&epoch);
+        }
+        self.cache_epoch = epoch;
+    }
+
     pub fn http_listener(&self, key: &ListenerKey) -> Arc<HttpListenerPublication> {
         self.http_listeners
             .get(key)

@@ -1,0 +1,76 @@
+{
+  "apiVersion": "edgion.io/v1",
+  "kind": "EdgionPlugins",
+  "metadata": {
+    "name": "dsl-query-executor-dynamic",
+    "namespace": "edgion-default"
+  },
+  "spec": {
+    "requestPlugins": [
+      {
+        "type": "KeyAuth",
+        "config": {
+          "keySources": [
+            {
+              "type": "header",
+              "name": "x-dsl-query-key"
+            }
+          ],
+          "hideCredentials": true,
+          "upstreamHeaderFields": [],
+          "secretGroups": [
+            {
+              "name": "default",
+              "secretRefs": [
+                {
+                  "name": "dsl-query-executor-dynamic",
+                  "namespace": "edgion-default"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "type": "Dsl",
+        "config": {
+          "name": "query-method-rewrite",
+          "errorPolicy": "deny",
+          "source": "if req.path == \"/graphql/rewritten-get\" { req.set_method(\"POST\")\nreq.set_uri(\"/graphql/by-id\") }\nreturn next()"
+        }
+      },
+      {
+        "type": "Dsl",
+        "config": {
+          "name": "dsl-query-executor-dynamic",
+          "source": "unknown_query_builtin()",
+          "maxStringLen": 65536,
+          "maxBodyScanPasses": 4,
+          "errorPolicy": "deny",
+          "linkSysRefs": [
+            {
+              "namespace": "default",
+              "name": "redis-test"
+            }
+          ]
+        }
+      },
+      {
+        "type": "GraphqlGuard",
+        "config": {
+          "maxDepth": 8,
+          "maxFields": 64,
+          "maxAliases": 16,
+          "maxRootFields": 16
+        }
+      },
+      {
+        "type": "ResponseCache",
+        "config": {
+          "maxTtl": "60s",
+          "graphqlQueries": true
+        }
+      }
+    ]
+  }
+}

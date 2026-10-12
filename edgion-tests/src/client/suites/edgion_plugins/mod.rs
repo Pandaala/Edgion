@@ -59,7 +59,9 @@ mod request_id;
 mod request_mirror;
 mod request_restriction;
 mod resolved_refs;
+pub(crate) mod response_cache;
 mod response_rewrite;
+pub use response_cache::ResponseCacheTestSuite;
 mod waf;
 mod wasm;
 mod webhook_key_get;
@@ -181,3 +183,5 @@ pub use graphql_safelist::{GraphqlSafelistDynamicSuite, GraphqlSafelistTestSuite
 
 mod rest_to_graphql;
 pub use rest_to_graphql::{RestToGraphqlDynamicSuite, RestToGraphqlTestSuite};
+
+pub(crate) use dsl::query_lookup;

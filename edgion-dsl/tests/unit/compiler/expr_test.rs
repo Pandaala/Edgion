@@ -396,3 +396,46 @@ fn test_body_replace_rejects_literal_empty_search() {
     let error = Compiler::new().compile(&program).unwrap_err().to_string();
     assert!(error.contains("must not be empty"));
 }
+
+#[test]
+fn strict_json_builtins_have_wire_arity_and_body_analysis_parity() {
+    use crate::bytecode::{BuiltinId, CompiledScript};
+    use crate::validator::{ValidationLimits, Validator};
+    for (method, id, argc) in [
+        ("read", BuiltinId::JsonRead, 1),
+        ("keys", BuiltinId::JsonKeys, 1),
+        ("get_raw", BuiltinId::JsonGetRaw, 2),
+        ("get_string", BuiltinId::JsonGetString, 2),
+        ("set_raw", BuiltinId::JsonSetRaw, 3),
+        ("set_string", BuiltinId::JsonSetString, 3),
+    ] {
+        let args = std::iter::repeat_n("nil", argc).collect::<Vec<_>>().join(",");
+        let source = format!("json.{method}({args})");
+        let script = Compiler::new().compile(&parse_program(&source).unwrap()).unwrap();
+        assert!(script.references_builtin(id));
+        assert!(!script.references_request_body());
+        assert!(!script.references_request_body_mutation());
+        let mut decoded = CompiledScript::deserialize_base64(&script.serialize_base64().unwrap()).unwrap();
+        assert!(Validator::new(ValidationLimits::default())
+            .validate(&decoded)
+            .is_empty());
+        for op in &mut decoded.code {
+            if let OpCode::CallBuiltin(_, argc) = op {
+                *argc += 1;
+            }
+        }
+        assert!(!Validator::new(ValidationLimits::default())
+            .validate(&decoded)
+            .is_empty());
+    }
+    for source in ["json.read(req.body)", "let x = json.read(req.body)\njson.set_body(x)"] {
+        let script = Compiler::new().compile(&parse_program(source).unwrap()).unwrap();
+        assert!(script.references_request_body());
+    }
+    let script = Compiler::new()
+        .compile(&parse_program("redis.get_bounded(\"cache\", \"key\", 65536)\nlet m = req.request_method").unwrap())
+        .unwrap();
+    assert!(script.references_builtin(BuiltinId::RedisGetBounded));
+    assert!(BuiltinId::RedisGetBounded.is_redis_builtin());
+    assert!(script.references_builtin(BuiltinId::ReqRequestMethod));
+}

@@ -139,6 +139,7 @@ fn test_reverse_index_lookup() {
 
 #[test]
 fn test_handler_via_create_function() {
+    let _tls_serial = crate::backends::policy::GLOBAL_TLS_STORE_TEST_LOCK.blocking_lock();
     let handler = create_backend_tls_policy_handler();
 
     let mut data = HashMap::new();

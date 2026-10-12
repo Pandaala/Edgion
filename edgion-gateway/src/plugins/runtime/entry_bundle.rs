@@ -25,9 +25,89 @@ pub(crate) struct EntrySlot {
 
 pub(crate) type EntryDemand = HashSet<EntrySlot>;
 
+/// Conservative certificate from successful typed stage construction. Dynamic
+/// conditions cannot remove an unsafe companion from this cold certificate.
+#[derive(Clone)]
+pub(crate) struct CacheCapabilities {
+    pub safe: bool,
+    pub credential_headers: Vec<String>,
+}
+
+impl Default for CacheCapabilities {
+    fn default() -> Self {
+        Self {
+            safe: true,
+            credential_headers: Vec::new(),
+        }
+    }
+}
+
+impl CacheCapabilities {
+    pub(crate) fn for_constructed(plugin: &EdgionPlugin, stage: EntryStage) -> Self {
+        use edgion_resources::common::KeyGet;
+        let mut certificate = Self::default();
+        certificate.safe = match stage {
+            EntryStage::Request => match plugin {
+                EdgionPlugin::RequestHeaderModifier(_)
+                | EdgionPlugin::RequestRedirect(_)
+                | EdgionPlugin::ProxyRewrite(_)
+                | EdgionPlugin::RequestBodyBuffer(_)
+                | EdgionPlugin::ResponseCache(_)
+                | EdgionPlugin::RequestRestriction(_)
+                | EdgionPlugin::RateLimitLocal(_)
+                | EdgionPlugin::RateLimitRedis(_)
+                | EdgionPlugin::RealIp(_)
+                | EdgionPlugin::RequestId(_)
+                | EdgionPlugin::Cors(_)
+                | EdgionPlugin::CtxSet(_)
+                | EdgionPlugin::GraphqlGuard(_)
+                | EdgionPlugin::Dsl(_) => true,
+                EdgionPlugin::KeyAuth(config) => {
+                    let safe = config.hide_credentials
+                        && config.anonymous.is_none()
+                        && config.upstream_header_fields.is_empty()
+                        && !config.key_sources.is_empty()
+                        && config
+                            .key_sources
+                            .iter()
+                            .all(|source| matches!(source, KeyGet::Header { .. }));
+                    if safe {
+                        certificate.credential_headers = config
+                            .key_sources
+                            .iter()
+                            .filter_map(|source| match source {
+                                KeyGet::Header { name } => Some(name.to_ascii_lowercase()),
+                                _ => None,
+                            })
+                            .collect();
+                    }
+                    safe
+                }
+                _ => false,
+            },
+            EntryStage::ResponseFilter | EntryStage::Response => matches!(
+                plugin,
+                EdgionPlugin::ResponseHeaderModifier(_) | EdgionPlugin::Cors(_) | EdgionPlugin::RequestId(_)
+            ),
+            EntryStage::ResponseBody | EntryStage::Waf => false,
+        };
+        certificate
+    }
+
+    pub(crate) fn combine(&mut self, other: &Self) {
+        self.safe &= other.safe;
+        for name in &other.credential_headers {
+            if !self.credential_headers.contains(name) {
+                self.credential_headers.push(name.clone());
+            }
+        }
+    }
+}
+
 /// A request entry may also own a response companion. These filters are always
 /// cached and selected together; no extra dispatch wrapper is introduced.
 pub(crate) struct EntryBundle {
+    pub cache_capabilities: CacheCapabilities,
     pub requires_complete_request_body: bool,
     pub has_ai_conversion_owner: bool,
     pub has_unary_body_consumer: bool,
@@ -123,3 +203,7 @@ impl EntryCache {
         self.slots.keys().copied()
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/plugins/runtime/entry_bundle_test.rs"]
+mod tests;

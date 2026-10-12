@@ -1187,7 +1187,9 @@ impl Vm {
                 // ===== Builtin Calls =====
                 OpCode::CallBuiltin(id, argc) => {
                     state.tick_call()?;
-                    let result = if id.is_xml_builtin() {
+                    let result = if id.is_json_builtin() {
+                        self.call_builtin_json(id, &mut state, session, runtime).await?
+                    } else if id.is_xml_builtin() {
                         self.call_builtin_xml(id, &mut state, session, runtime).await?
                     } else if id == BuiltinId::HttpCall {
                         self.call_builtin_http(argc, &mut state, session, runtime).await?
@@ -1315,6 +1317,7 @@ pub async fn execute_safe(
                 RuntimeError::ValueTooManyItems { .. } => "value item limit exceeded",
                 RuntimeError::ValueKeysTooLong { .. } => "value map-key byte limit exceeded",
                 RuntimeError::ValueWorkLimitExceeded { .. } => "value work limit exceeded",
+                RuntimeError::JsonLimitExceeded { .. } => "JSON limit exceeded",
                 RuntimeError::XmlLimitExceeded { .. } => "XML limit exceeded",
                 RuntimeError::ApiError { .. } => "api error",
                 RuntimeError::BodyAccess { .. } => unreachable!("handled above"),

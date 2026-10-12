@@ -377,7 +377,9 @@ denied. See [HTTP DNS endpoint policy](../../04-review/ssrf/regression-guards/ht
   `Bytes::from(String)`, which is a move. The enum deliberately derives no
   `Serialize`/`Deserialize`/`JsonSchema` — it is a process-local return value,
   never a config or wire type. Do not add a second body representation, a
-  plugin-local body wrapper, or a response-side cache.
+  plugin-local body wrapper, or an ErrResponse-side cache. The explicitly selected
+  bounded public-origin ResponseCache has a separate private streaming arena;
+  it does not change ErrResponse representation or introduce response BodyStorage.
 - **gRPC text boundary**: the request-stage and request-body local-reply
   writers accept only UTF-8 for `grpc-message`; absent or invalid bytes use
   the HTTP-mapped default message. An ExtProc exact gRPC status (including

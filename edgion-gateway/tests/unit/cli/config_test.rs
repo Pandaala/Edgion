@@ -790,3 +790,39 @@ fn gateway_config_deserializes_fips_policy() {
     let yaml = "fips_policy: true\n";
     assert!(serde_yaml::from_str::<GatewayConfig>(yaml).is_err());
 }
+
+#[test]
+fn response_cache_restart_limits_include_standing_epoch_and_reject_partial_population_budget() {
+    let limits = ResponseCacheLimits::default();
+    let infrastructure = limits.validate().unwrap();
+    assert_eq!(
+        infrastructure,
+        limits.max_entries * 4096 + limits.shards * 4096 + 4096 + crate::response_cache::epoch_control_bytes()
+    );
+    let mut reduced = ResponseCacheLimits {
+        max_entries: 2,
+        shards: 1,
+        max_body_bytes: 64,
+        max_metadata_bytes: 256,
+        total_bytes: 65536,
+        pending_bytes: 16384,
+    };
+    let infrastructure = reduced.validate().unwrap();
+    let exact = infrastructure
+        + reduced.max_entries * (reduced.max_body_bytes + reduced.max_metadata_bytes + 1024)
+        + reduced.pending_bytes;
+    reduced.total_bytes = exact;
+    assert!(reduced.validate().is_ok());
+    reduced.total_bytes -= 1;
+    assert!(reduced.validate().is_err());
+    reduced.total_bytes = 65536;
+    reduced.shards = 3;
+    assert!(reduced.validate().is_err());
+    reduced.shards = 1;
+    reduced.max_body_bytes = 0;
+    assert!(reduced.validate().is_err());
+    reduced.max_body_bytes = 64;
+    reduced.pending_bytes = usize::MAX;
+    assert!(reduced.validate().is_err());
+    assert!(serde_yaml::from_str::<EdgionGatewayConfig>("response_cache:\n  unknown: 1\n").is_err());
+}

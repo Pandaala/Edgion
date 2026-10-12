@@ -809,3 +809,45 @@ fn capture_fixture(service_key: &str, port: u16) -> Result<CapturedServiceSelect
         compiled.permitted_service().unwrap(),
     )
 }
+
+#[test]
+fn response_cache_actual_retained_discovery_stamp_survives_reload_and_recreation_changes_full_proof() {
+    let namespace = "cache-discovery-proof";
+    let name = "retained-selection";
+    let source = publish_service(
+        namespace,
+        name,
+        vec![service_port("http", 80, IntOrString::Int(8080), None)],
+        vec![("http", 8080)],
+        "10.9.0.7",
+    );
+    let compiled = crate::routes::http::match_unit::compile_http_backend_fixture(
+        serde_json::from_value(serde_json::json!({"name":name,"port":80})).unwrap(),
+        namespace,
+        0,
+        Arc::new(crate::plugins::PluginRuntime::new()),
+    );
+    let target = compiled.permitted_service().unwrap();
+    let captured = CapturedServiceSelection::capture(&get_service_discovery_coordinator(), target).unwrap();
+    let old = captured.response_cache_stamp(target).unwrap();
+    drop(source);
+    let replacement = publish_service(
+        namespace,
+        name,
+        vec![service_port("http", 80, IntOrString::Int(8080), None)],
+        vec![("http", 8080)],
+        "10.9.0.7",
+    );
+    let later = CapturedServiceSelection::capture(&get_service_discovery_coordinator(), target).unwrap();
+    let fresh = later.response_cache_stamp(target).unwrap();
+    assert!(
+        old.fingerprint != fresh.fingerprint,
+        "identical recreated content has a new live-source proof"
+    );
+    assert!(
+        old == captured.response_cache_stamp(target).unwrap(),
+        "actual retained selection never reloads current discovery"
+    );
+    assert!(old.service == fresh.service && old.section == fresh.section);
+    drop(replacement);
+}

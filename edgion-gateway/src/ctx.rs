@@ -2056,6 +2056,10 @@ pub(crate) struct ResponseHeadHoldClaim {
 }
 
 pub struct EdgionHttpContext {
+    /// Optional bounded cache owner; absent until explicit request policy admission.
+    pub(crate) response_cache: Option<Box<crate::response_cache::RequestState>>,
+    pub(crate) response_cache_bypassed: bool,
+    pub(crate) response_cache_graphql_proof: std::sync::OnceLock<crate::response_cache::GraphqlProof>,
     /// One immutable EGC generation captured at the start of this request.
     pub(crate) egc: Arc<crate::config::ResolvedGatewayConfig>,
     pub(crate) downstream_keepalive_initialized: bool,
@@ -2806,7 +2810,6 @@ impl EdgionHttpContext {
         state.active_sources |= REQUEST_BODY_SOURCE_OBSERVER;
     }
 
-    #[cfg(test)]
     #[inline]
     pub(crate) fn has_request_body_observers(&self) -> bool {
         self.request_body_plugins
@@ -3269,6 +3272,9 @@ impl EdgionHttpContext {
     pub(crate) fn with_gateway_config(egc: Arc<crate::config::ResolvedGatewayConfig>) -> Self {
         Self {
             egc,
+            response_cache: None,
+            response_cache_bypassed: false,
+            response_cache_graphql_proof: std::sync::OnceLock::new(),
             downstream_keepalive_initialized: false,
             start_time: Instant::now(),
             gateway_info: None,

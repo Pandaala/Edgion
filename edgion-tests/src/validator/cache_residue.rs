@@ -1,8 +1,10 @@
 //! Cache Residue Validator
 //!
-//! Asserts that all in-memory caches in controller and gateway reach zero
+//! Asserts that removable cache state in controller and gateway reaches zero
 //! after `wipe-all`. Used as the final step of `run_integration.sh` to
 //! detect leaks across all integration scenarios.
+//! ResponseCache retains its admitted numeric infrastructure baseline; only
+//! allocated-minus-infrastructure and pending/entries/reader pins must be zero.
 //!
 //! See spec: docs/superpowers/specs/2026-04-26-cache-residue-detection-design.md
 
@@ -728,6 +730,43 @@ fn apply_raw_fixture_exclusions(data: &Value, kind: &str, verified: &BTreeSet<St
 }
 
 fn walk_json(prefix: &str, value: &Value, snap: &mut Snapshot) {
+    if prefix == "gateway.response_cache" {
+        let Some(map) = value.as_object() else {
+            snap.residue.insert("gateway.response_cache.contract".into(), 1);
+            return;
+        };
+        if map.len() != 5 {
+            snap.residue.insert("gateway.response_cache.contract".into(), 1);
+            return;
+        }
+        let number = |name: &str| map.get(name).and_then(Value::as_u64);
+        let Some((allocated, infrastructure)) = number("allocated_bytes").zip(number("infrastructure_bytes")) else {
+            snap.residue.insert("gateway.response_cache.contract".into(), 1);
+            return;
+        };
+        match allocated.checked_sub(infrastructure) {
+            Some(0) => {}
+            Some(removable) => {
+                snap.residue
+                    .insert("gateway.response_cache.removable_bytes".into(), removable);
+            }
+            None => {
+                snap.residue.insert("gateway.response_cache.contract".into(), 1);
+            }
+        }
+        for name in ["pending_bytes", "entries", "reader_pins"] {
+            match number(name) {
+                Some(0) => {}
+                Some(count) => {
+                    snap.residue.insert(format!("gateway.response_cache.{name}"), count);
+                }
+                None => {
+                    snap.residue.insert("gateway.response_cache.contract".into(), 1);
+                }
+            }
+        }
+        return;
+    }
     match value {
         Value::Number(n) => {
             if let Some(u) = n.as_u64() {
@@ -934,6 +973,42 @@ mod exit_tests {
         assert!(wipe_and_report(&Client::new(), &inventory_args(&server.uri()))
             .await
             .is_err());
+    }
+
+    #[test]
+    fn response_cache_residue_subtracts_only_numeric_infrastructure_and_preserves_retired_leases() {
+        let mut clean = Snapshot::default();
+        walk_json(
+            "gateway",
+            &serde_json::json!({"response_cache": {
+                "infrastructure_bytes": 8192, "allocated_bytes": 8192,
+                "pending_bytes": 0, "entries": 0, "reader_pins": 0
+            }}),
+            &mut clean,
+        );
+        assert!(clean.residue.is_empty());
+        let mut retained = Snapshot::default();
+        walk_json(
+            "gateway",
+            &serde_json::json!({"response_cache": {
+                "infrastructure_bytes": 8192, "allocated_bytes": 8300,
+                "pending_bytes": 12, "entries": 1, "reader_pins": 2
+            }}),
+            &mut retained,
+        );
+        assert_eq!(retained.residue["gateway.response_cache.removable_bytes"], 108);
+        assert_eq!(retained.residue["gateway.response_cache.pending_bytes"], 12);
+        assert_eq!(retained.residue["gateway.response_cache.entries"], 1);
+        assert_eq!(retained.residue["gateway.response_cache.reader_pins"], 2);
+        for value in [
+            serde_json::json!({"allocated_bytes": 0, "infrastructure_bytes": 1}),
+            serde_json::json!({"allocated_bytes": "8192", "infrastructure_bytes": 8192}),
+            serde_json::json!({}),
+        ] {
+            let mut malformed = Snapshot::default();
+            walk_json("gateway.response_cache", &value, &mut malformed);
+            assert_eq!(malformed.residue["gateway.response_cache.contract"], 1);
+        }
     }
 
     #[test]

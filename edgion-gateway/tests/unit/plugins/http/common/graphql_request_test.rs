@@ -47,6 +47,15 @@ async fn successful_graphql_evaluation_freezes_body_but_failed_evaluation_does_n
         let mut session = session_with_context(body, ctx);
         let result = evaluate(&mut session, &mut PluginLog::new("GraphqlGuard"), 65536, |_| Ok(())).await;
         assert_eq!(result.is_ok(), allowed);
+        let proof = session.ctx().response_cache_graphql_proof.get();
+        assert_eq!(proof.is_some(), allowed);
+        if let Some(proof) = proof {
+            assert_eq!(Some(proof.generation), session.ctx().request_body.generation());
+            assert_eq!(
+                proof.operation,
+                edgion_resources::graphql_request::GraphqlOperationType::Query
+            );
+        }
         let mutation = view.overwrite_body(Bytes::from_static(b"changed"));
         assert_eq!(mutation.is_err(), allowed);
     }
@@ -74,6 +83,10 @@ async fn graphql_measurement_freezes_the_same_admitted_body_as_enforcement() {
         })
         .await;
         assert_eq!(result.is_ok(), mode == "measure");
+        assert_eq!(
+            session.ctx().response_cache_graphql_proof.get().is_some(),
+            mode == "measure"
+        );
         assert_eq!(
             view.overwrite_body(Bytes::from_static(b"changed")).is_err(),
             mode == "measure"
@@ -162,4 +175,41 @@ fn cost_logging_and_header_are_bounded_numeric_and_opt_in() {
         assert!(log.contains("cost=4294967295"));
         assert!(log.ulog.is_none());
     }
+}
+
+#[tokio::test]
+async fn response_cache_graphql_proof_records_actual_kind_and_selected_name_without_retaining_dom() {
+    use crate::request_body::BodyStorage;
+    use pingora_core::protocols::http::RequestBodyBuffer;
+    let _lock = EVALUATION_TEST_LOCK.lock().await;
+    let mut digests = Vec::new();
+    for (body, expected) in [
+        (
+            br#"{"query":"query First { ping }","operationName":"First"}"#.as_slice(),
+            edgion_resources::graphql_request::GraphqlOperationType::Query,
+        ),
+        (
+            br#"{"query":"query Other { ping }","operationName":"Other"}"#.as_slice(),
+            edgion_resources::graphql_request::GraphqlOperationType::Query,
+        ),
+        (
+            br#"{"query":"mutation Change { ping }","operationName":"Change"}"#.as_slice(),
+            edgion_resources::graphql_request::GraphqlOperationType::Mutation,
+        ),
+    ] {
+        let (mut storage, view) = BodyStorage::new(65536, 65536);
+        storage.write(&Bytes::from_static(body)).await.unwrap();
+        storage.finish().await.unwrap();
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_body.install(view);
+        let mut session = session_with_context(body, ctx);
+        evaluate(&mut session, &mut PluginLog::new("GraphqlGuard"), 65536, |_| Ok(()))
+            .await
+            .unwrap();
+        let proof = session.ctx().response_cache_graphql_proof.get().unwrap();
+        assert_eq!(proof.operation, expected);
+        assert_eq!(Some(proof.generation), session.ctx().request_body.generation());
+        digests.push(proof.name_digest);
+    }
+    assert!(digests[0] != digests[1] && digests[1] != digests[2]);
 }

@@ -9,6 +9,7 @@ use edgion_resources::resources::refs::plugin_fields::{
 };
 use edgion_resources::resources::refs::route_fields::{EffectiveMirrorField, HttpRouteMirrorRefs};
 use edgion_resources::EdgionPlugins;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -128,7 +129,11 @@ impl WafCandidate {
     }
 }
 
+static NEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(0);
+
 pub struct PluginRuntime {
+    cache_identity: u64,
+    cache_capabilities: super::entry_bundle::CacheCapabilities,
     /// Conservative construction-time capability, including conditional/nested consumers.
     requires_complete_request_body: bool,
     /// Effective executable membership, published only by successful typed construction.
@@ -292,6 +297,11 @@ impl Default for PluginRuntime {
 impl PluginRuntime {
     pub fn new() -> Self {
         Self {
+            cache_identity: NEXT_RUNTIME_ID
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |id| id.checked_add(1))
+                .ok()
+                .map_or(0, |id| id + 1),
+            cache_capabilities: super::entry_bundle::CacheCapabilities::default(),
             has_upstream_jump_plugin: false,
             has_grpc_transcoder: false,
             has_graphql_operation_router: false,
@@ -321,6 +331,14 @@ impl PluginRuntime {
     fn into_entry_outcome(self, errors: Vec<String>) -> EntryOutcome {
         let failed = !self.invalid_plugins.is_empty();
         let bundle = EntryBundle {
+            cache_capabilities: if failed || !errors.is_empty() {
+                super::entry_bundle::CacheCapabilities {
+                    safe: false,
+                    credential_headers: Vec::new(),
+                }
+            } else {
+                self.cache_capabilities
+            },
             requires_complete_request_body: self.requires_complete_request_body,
             has_ai_conversion_owner: self.has_ai_conversion_owner,
             has_unary_body_consumer: self.has_unary_body_consumer,
@@ -341,6 +359,7 @@ impl PluginRuntime {
     }
 
     fn append_entry_bundle(&mut self, bundle: &EntryBundle) {
+        self.cache_capabilities.combine(&bundle.cache_capabilities);
         self.requires_complete_request_body |= bundle.requires_complete_request_body;
         self.has_ai_conversion_owner |= bundle.has_ai_conversion_owner;
         self.has_unary_body_consumer |= bundle.has_unary_body_consumer;
@@ -422,6 +441,7 @@ impl PluginRuntime {
     /// request-body, response-header, response-window and logging phases.
     /// Invalid updates retain the last known-good generation.
     pub fn add_waf(&mut self, config: &WafConfig) -> Result<(), String> {
+        self.cache_capabilities.safe = false;
         match WafPlugin::try_new(config) {
             Ok(plugin) => {
                 self.waf_candidate = Some(WafCandidate {
@@ -742,6 +762,15 @@ impl PluginRuntime {
             return;
         }
         for (filter_index, filter) in filters.iter().enumerate() {
+            self.cache_capabilities.safe &= matches!(
+                filter.filter_type,
+                HTTPRouteFilterType::RequestHeaderModifier
+                    | HTTPRouteFilterType::ResponseHeaderModifier
+                    | HTTPRouteFilterType::RequestRedirect
+                    | HTTPRouteFilterType::URLRewrite
+                    | HTTPRouteFilterType::CORS
+                    | HTTPRouteFilterType::ExtensionRef
+            );
             match filter.filter_type {
                 HTTPRouteFilterType::RequestHeaderModifier => {
                     if let Some(config) = &filter.request_header_modifier {
@@ -1719,6 +1748,8 @@ impl PluginRuntime {
                         }
                     }
                 }
+                entry_runtime.cache_capabilities =
+                    super::entry_bundle::CacheCapabilities::for_constructed(&entry.plugin, slot.stage);
                 let outcome = entry_runtime.into_entry_outcome(errors[errors_before..].to_vec());
                 self.append_entry_bundle(outcome.bundle());
                 cache.insert(slot, outcome);
@@ -1933,6 +1964,8 @@ impl PluginRuntime {
                         }
                     }
                 }
+                entry_runtime.cache_capabilities =
+                    super::entry_bundle::CacheCapabilities::for_constructed(&entry.plugin, slot.stage);
                 let outcome = entry_runtime.into_entry_outcome(errors[errors_before..].to_vec());
                 self.append_entry_bundle(outcome.bundle());
                 cache.insert(slot, outcome);
@@ -2109,6 +2142,8 @@ impl PluginRuntime {
                         }
                     }
                 }
+                entry_runtime.cache_capabilities =
+                    super::entry_bundle::CacheCapabilities::for_constructed(&entry.plugin, slot.stage);
                 let outcome = entry_runtime.into_entry_outcome(errors[errors_before..].to_vec());
                 self.append_entry_bundle(outcome.bundle());
                 cache.insert(slot, outcome);
@@ -2303,6 +2338,8 @@ impl PluginRuntime {
                         }
                     }
                 }
+                entry_runtime.cache_capabilities =
+                    super::entry_bundle::CacheCapabilities::for_constructed(&entry.plugin, slot.stage);
                 let outcome = entry_runtime.into_entry_outcome(errors[errors_before..].to_vec());
                 self.append_entry_bundle(outcome.bundle());
                 cache.insert(slot, outcome);
@@ -2485,6 +2522,9 @@ impl PluginRuntime {
                 CreateResult::Ok(ProxyRewrite::create(config, body_requirement).map(|plugin| Box::new(plugin) as _))
             }
             EdgionPlugin::RequestBodyBuffer(_) => CreateResult::Ok(Some(RequestBodyBuffer::create())),
+            EdgionPlugin::ResponseCache(config) => {
+                CreateResult::Ok(crate::plugins::http::response_cache::ResponseCache::create(config))
+            }
             EdgionPlugin::RequestRestriction(config) => {
                 CreateResult::Ok(Some(RequestRestriction::create_with_body(config, body_requirement)))
             }
@@ -2566,6 +2606,7 @@ impl PluginRuntime {
             | EdgionPlugin::Mock(_)
             | EdgionPlugin::ProxyRewrite(_)
             | EdgionPlugin::RequestBodyBuffer(_)
+            | EdgionPlugin::ResponseCache(_)
             | EdgionPlugin::RequestRestriction(_)
             | EdgionPlugin::RateLimitLocal(_)
             | EdgionPlugin::RateLimitRedis(_)
@@ -2629,6 +2670,7 @@ impl PluginRuntime {
             | EdgionPlugin::ProxyRewrite(_)
             | EdgionPlugin::RequestRestriction(_)
             | EdgionPlugin::RequestBodyBuffer(_)
+            | EdgionPlugin::ResponseCache(_)
             | EdgionPlugin::GrpcJsonTranscoder(_)
             | EdgionPlugin::JsonSchemaValidation(_)
             | EdgionPlugin::RestToGraphql(_)
@@ -2700,6 +2742,7 @@ impl PluginRuntime {
             | EdgionPlugin::DebugAccessLogToHeader(_)
             | EdgionPlugin::ProxyRewrite(_)
             | EdgionPlugin::RequestBodyBuffer(_)
+            | EdgionPlugin::ResponseCache(_)
             | EdgionPlugin::RequestRestriction(_)
             | EdgionPlugin::ResponseRewrite(_)
             | EdgionPlugin::RateLimitLocal(_)
@@ -2759,6 +2802,7 @@ impl PluginRuntime {
             EdgionPlugin::Mock(_) => "Mock",
             EdgionPlugin::ProxyRewrite(_) => "ProxyRewrite",
             EdgionPlugin::RequestBodyBuffer(_) => "RequestBodyBuffer",
+            EdgionPlugin::ResponseCache(_) => "ResponseCache",
             EdgionPlugin::RequestRestriction(_) => "RequestRestriction",
             EdgionPlugin::RateLimitLocal(_) => "RateLimitLocal",
             EdgionPlugin::RateLimitRedis(_) => "RateLimitRedis",
@@ -2838,6 +2882,28 @@ impl PluginRuntime {
     fn add_upstream_response(&mut self, filter: Box<dyn UpstreamResponse>) {
         self.requires_complete_request_body = true;
         self.upstream_response_async_plugins.push(Arc::from(filter));
+    }
+
+    pub(crate) fn cache_identity(&self) -> u64 {
+        self.cache_identity
+    }
+
+    pub(crate) fn cache_capabilities(&self) -> &super::entry_bundle::CacheCapabilities {
+        &self.cache_capabilities
+    }
+
+    pub(crate) fn cache_safe(&self) -> bool {
+        self.cache_identity != 0
+            && self.cache_capabilities.safe
+            && self.invalid_plugins.is_empty()
+            && !self.invalid_config_sealed
+            && self.policy_blocks.is_empty()
+            && self.waf_candidate.is_none()
+            && !self.has_ai_conversion_owner
+            && !self.has_unary_body_consumer
+            && !self.has_upstream_jump_plugin
+            && !self.has_grpc_transcoder
+            && !self.has_graphql_operation_router
     }
 
     pub(crate) fn requires_complete_request_body(&self) -> bool {
@@ -3330,3 +3396,7 @@ mod ext_ref_index_tests;
 #[cfg(test)]
 #[path = "../../../tests/unit/plugins/runtime/plugin_runtime_test/transport_admission_tests.rs"]
 mod transport_admission_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/unit/plugins/runtime/plugin_runtime_test/response_cache_tests.rs"]
+pub(crate) mod response_cache_tests;

@@ -579,6 +579,323 @@ async fn start_http_server(port: u16) -> Result<()> {
     Ok(())
 }
 
+// Fixed fixture slots are owned by one sequential static case or dynamic
+// scenario. Reset is a linearizable swap, not an in-flight request barrier.
+const CACHE_FIXTURE_HEADER: &str = "x-response-cache-fixture";
+const CACHE_FIXTURE_IDS: [&str; 4] = [
+    "response-cache-static",
+    "response-cache-dynamic",
+    "dsl-query-lookup-static",
+    "dsl-query-lookup-dynamic",
+];
+static CACHE_ORIGIN_COUNTS: [std::sync::atomic::AtomicU64; 8] = [const { std::sync::atomic::AtomicU64::new(0) }; 8];
+
+fn cache_fixture_id(value: &str) -> Option<usize> {
+    CACHE_FIXTURE_IDS.iter().position(|id| *id == value)
+}
+fn cache_fixture_tag(headers: &http::HeaderMap) -> Option<usize> {
+    let mut values = headers.get_all(CACHE_FIXTURE_HEADER).iter();
+    let value = values.next()?;
+    if values.next().is_some() || !value.as_bytes().is_ascii() {
+        return None;
+    }
+    cache_fixture_id(value.to_str().ok()?)
+}
+fn cache_fixture_port(address: &str) -> Option<(usize, u16)> {
+    match address.rsplit_once(':')?.1.parse().ok()? {
+        30001 => Some((0, 30001)),
+        30002 => Some((1, 30002)),
+        _ => None,
+    }
+}
+fn cache_observation_path(path: &str) -> bool {
+    let Some(suffix) = path.strip_prefix("/response-cache/observations/") else {
+        return false;
+    };
+    let mut parts = suffix.split('/');
+    let Some(id) = parts.next().filter(|id| !id.is_empty()) else {
+        return false;
+    };
+    let _ = id;
+    matches!((parts.next(), parts.next()), (None, None) | (Some("reset"), None))
+}
+fn cache_fixture_error(status: http::StatusCode) -> axum::response::Response {
+    (
+        status,
+        [("cache-control", "no-store")],
+        "cache fixture request rejected",
+    )
+        .into_response()
+}
+#[derive(Clone, Copy)]
+struct CacheOriginOrdinal(u64);
+
+async fn cache_fixture_ingress(mut request: AxumRequest, next: axum::middleware::Next) -> axum::response::Response {
+    use std::sync::atomic::Ordering;
+    if !cache_observation_path(request.uri().path()) {
+        if let Some((tag, (port, _))) = cache_fixture_tag(request.headers()).zip(
+            request
+                .extensions()
+                .get::<String>()
+                .and_then(|address| cache_fixture_port(address)),
+        ) {
+            let Ok(previous) =
+                CACHE_ORIGIN_COUNTS[tag * 2 + port]
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |old| old.checked_add(1))
+            else {
+                return cache_fixture_error(http::StatusCode::INTERNAL_SERVER_ERROR);
+            };
+            if tag == 1 {
+                let Some(ordinal) = previous.checked_add(1) else {
+                    return cache_fixture_error(http::StatusCode::INTERNAL_SERVER_ERROR);
+                };
+                request.extensions_mut().insert(CacheOriginOrdinal(ordinal));
+            }
+        }
+    }
+    next.run(request).await
+}
+#[derive(serde::Serialize)]
+struct CacheOriginCount {
+    count: u64,
+}
+fn cache_count_response(count: u64) -> axum::response::Response {
+    ([("cache-control", "no-store")], axum::Json(CacheOriginCount { count })).into_response()
+}
+async fn cache_origin_count(Path(id): Path<String>, Extension(address): Extension<String>) -> axum::response::Response {
+    let Some(tag) = cache_fixture_id(&id) else {
+        return cache_fixture_error(http::StatusCode::BAD_REQUEST);
+    };
+    let Some((port, _)) = cache_fixture_port(&address) else {
+        return cache_fixture_error(http::StatusCode::NOT_FOUND);
+    };
+    cache_count_response(CACHE_ORIGIN_COUNTS[tag * 2 + port].load(std::sync::atomic::Ordering::Relaxed))
+}
+async fn cache_origin_reset(
+    Path(id): Path<String>,
+    Extension(address): Extension<String>,
+    request: AxumRequest,
+) -> axum::response::Response {
+    let Some(tag) = cache_fixture_id(&id) else {
+        return cache_fixture_error(http::StatusCode::BAD_REQUEST);
+    };
+    let Some((port, _)) = cache_fixture_port(&address) else {
+        return cache_fixture_error(http::StatusCode::NOT_FOUND);
+    };
+    match tokio::time::timeout(Duration::from_secs(3), axum::body::to_bytes(request.into_body(), 1)).await {
+        Ok(Ok(body)) if body.is_empty() => {}
+        _ => return cache_fixture_error(http::StatusCode::BAD_REQUEST),
+    }
+    CACHE_ORIGIN_COUNTS[tag * 2 + port].swap(0, std::sync::atomic::Ordering::Relaxed);
+    cache_count_response(0)
+}
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CacheGraphqlReply {
+    body_sha256: String,
+    body_bytes: usize,
+    method: &'static str,
+    path: &'static str,
+    query_credential_absent: bool,
+    backend_port: u16,
+}
+
+async fn cache_graphql_origin(Extension(address): Extension<String>, request: AxumRequest) -> axum::response::Response {
+    use futures::StreamExt;
+    use sha2::{Digest, Sha256};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let Some((_, port)) = cache_fixture_port(&address) else {
+        return cache_fixture_error(http::StatusCode::NOT_FOUND);
+    };
+    if cache_fixture_tag(request.headers()).is_none() {
+        return cache_fixture_error(http::StatusCode::BAD_REQUEST);
+    }
+    let credential_absent = !request.headers().contains_key("x-dsl-query-key");
+    // One bounded control flag classifies overrun separately from transport
+    // errors; the hard to_bytes limit still applies while receiving chunks.
+    let overrun = Arc::new(AtomicBool::new(false));
+    let observed = Arc::clone(&overrun);
+    let mut received = 0usize;
+    let stream = request.into_body().into_data_stream().map(move |chunk| {
+        if let Ok(bytes) = &chunk {
+            received = received.checked_add(bytes.len()).unwrap_or(65537).min(65537);
+            if received > 65536 {
+                observed.store(true, Ordering::Relaxed);
+            }
+        }
+        chunk
+    });
+    let bytes = match tokio::time::timeout(
+        Duration::from_secs(3),
+        axum::body::to_bytes(Body::from_stream(stream), 65536),
+    )
+    .await
+    {
+        Err(_) => return cache_fixture_error(http::StatusCode::REQUEST_TIMEOUT),
+        Ok(Err(_)) if overrun.load(Ordering::Relaxed) => {
+            return cache_fixture_error(http::StatusCode::PAYLOAD_TOO_LARGE)
+        }
+        Ok(Err(_)) => return cache_fixture_error(http::StatusCode::BAD_REQUEST),
+        Ok(Ok(bytes)) => bytes,
+    };
+    let reply = CacheGraphqlReply {
+        body_sha256: hex::encode(Sha256::digest(&bytes)),
+        body_bytes: bytes.len(),
+        method: "POST",
+        path: "/graphql",
+        query_credential_absent: credential_absent,
+        backend_port: port,
+    };
+    let Ok(encoded) = serde_json::to_vec(&reply) else {
+        return cache_fixture_error(http::StatusCode::INTERNAL_SERVER_ERROR);
+    };
+    if encoded.len() > 512 {
+        return cache_fixture_error(http::StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    (
+        [
+            ("content-type", "application/json"),
+            ("cache-control", "public, max-age=60"),
+        ],
+        encoded,
+    )
+        .into_response()
+}
+
+/// A real finite HTTP body: data followed by one terminal trailer frame.
+/// Hyper H1 sends the trailer only when the peer negotiates TE: trailers.
+struct CacheTrailerBody {
+    phase: u8,
+    empty: bool,
+}
+impl http_body::Body for CacheTrailerBody {
+    type Data = Bytes;
+    type Error = std::convert::Infallible;
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        let frame = match self.phase {
+            0 => Some(http_body::Frame::data(Bytes::from_static(b"public trailer fixture"))),
+            1 => {
+                let mut trailers = http::HeaderMap::new();
+                if !self.empty {
+                    trailers.insert("x-cache-terminal", http::HeaderValue::from_static("present"));
+                }
+                Some(http_body::Frame::trailers(trailers))
+            }
+            _ => None,
+        };
+        self.phase = self.phase.saturating_add(1);
+        std::task::Poll::Ready(frame.map(Ok))
+    }
+}
+
+async fn cache_finite_origin(Extension(address): Extension<String>, request: AxumRequest) -> axum::response::Response {
+    let Some((_, port)) = cache_fixture_port(&address) else {
+        return cache_fixture_error(http::StatusCode::NOT_FOUND);
+    };
+    if cache_fixture_tag(request.headers()).is_none() {
+        return cache_fixture_error(http::StatusCode::BAD_REQUEST);
+    }
+    let variant = request
+        .uri()
+        .query()
+        .and_then(|query| query.strip_prefix("variant="))
+        .unwrap_or("finite");
+    let mut response = match variant {
+        "finite" if cache_fixture_tag(request.headers()) == Some(1) => {
+            let Some(ordinal) = request.extensions().get::<CacheOriginOrdinal>() else {
+                return cache_fixture_error(http::StatusCode::INTERNAL_SERVER_ERROR);
+            };
+            format!("public cache fixture backend {port} origin {}", ordinal.0).into_response()
+        }
+        "finite" => format!("public cache fixture backend {port}").into_response(),
+        "empty" => Bytes::new().into_response(),
+        "no-store" => "public non-cache fixture".into_response(),
+        "trailer" | "empty-trailer" => {
+            let mut response = http::Response::new(Body::new(CacheTrailerBody {
+                phase: 0,
+                empty: variant == "empty-trailer",
+            }));
+            response
+                .headers_mut()
+                .insert("trailer", http::HeaderValue::from_static("x-cache-terminal"));
+            response
+        }
+        "overflow" => {
+            let chunks = (0..17).map(|index| {
+                Ok::<Bytes, std::io::Error>(if index == 16 {
+                    Bytes::from_static(b"x")
+                } else {
+                    Bytes::from(vec![b'x'; 65536])
+                })
+            });
+            http::Response::new(Body::from_stream(futures::stream::iter(chunks)))
+        }
+        "body-error" => http::Response::new(Body::from_stream(futures::stream::unfold(0u8, |state| async move {
+            match state {
+                0 => Some((Ok(Bytes::from_static(b"public incomplete fixture")), 1)),
+                1 => {
+                    // Yield once so the native origin writer can flush the
+                    // selected header/data before the incomplete-body error.
+                    tokio::task::yield_now().await;
+                    Some((
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::UnexpectedEof,
+                            "cache fixture body failed",
+                        )),
+                        2,
+                    ))
+                }
+                _ => None,
+            }
+        }))),
+        "vary" => {
+            let color = match request
+                .headers()
+                .get("x-cache-vary")
+                .and_then(|value| value.to_str().ok())
+            {
+                Some("blue") => "blue",
+                Some("red") => "red",
+                None => "absent",
+                _ => return cache_fixture_error(http::StatusCode::BAD_REQUEST),
+            };
+            let mut response = format!("public cache variation {color}").into_response();
+            response
+                .headers_mut()
+                .insert("vary", http::HeaderValue::from_static("x-cache-vary"));
+            response
+        }
+        "unsupported-vary" | "trace-vary" | "vary-star" => {
+            let mut response = "public unsupported variation".into_response();
+            response.headers_mut().insert(
+                "vary",
+                http::HeaderValue::from_static(match variant {
+                    "trace-vary" => "x-trace-id",
+                    "vary-star" => "*",
+                    _ => "x-cache-unkeyed",
+                }),
+            );
+            response
+        }
+        _ => return cache_fixture_error(http::StatusCode::BAD_REQUEST),
+    };
+    response.headers_mut().insert(
+        "cache-control",
+        http::HeaderValue::from_static(if variant == "no-store" {
+            "no-store"
+        } else {
+            "public, max-age=60"
+        }),
+    );
+    response
+        .headers_mut()
+        .insert("content-type", http::HeaderValue::from_static("text/plain"));
+    response
+}
+
 fn create_echo_router(server_addr_str: String) -> Router {
     Router::new()
         .route(
@@ -720,6 +1037,13 @@ fn create_echo_router(server_addr_str: String) -> Router {
         // --- Fake HTTP DNS endpoint (for httpdns resolver integration tests) ---
         // GET /dns/resolve?host=<domain>[&ip=<ip>[,<ip>...]]: returns the generic
         // httpdns JSON body {"ips":[...]} and counts one resolution for <host>.
+        .route("/response-cache/observations/{fixture_id}", get(cache_origin_count))
+        .route(
+            "/response-cache/observations/{fixture_id}/reset",
+            axum::routing::post(cache_origin_reset),
+        )
+        .route("/graphql", axum::routing::post(cache_graphql_origin))
+        .route("/cache", get(cache_finite_origin))
         .route("/dns/resolve", get(dns_resolve_handler))
         // GET /dns/hits/{host}: how many times <host> has been resolved (caching assertions).
         .route("/dns/hits/{host}", get(dns_hits_handler))
@@ -727,6 +1051,7 @@ fn create_echo_router(server_addr_str: String) -> Router {
         .route("/dns/reset", get(dns_reset_handler))
         .route("/test/waf-dynamic", get(catch_all_handler).post(catch_all_handler))
         .route("/{*path}", get(catch_all_handler))
+        .layer(axum::middleware::from_fn(cache_fixture_ingress))
         .layer(Extension(server_addr_str))
 }
 
@@ -5047,6 +5372,277 @@ async fn start_https_backend_wildcard_server(port: u16, cert_path: String, key_p
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn cache_request(
+        address: &str,
+        method: &str,
+        path: &str,
+        tags: &[&str],
+        body: Body,
+    ) -> axum::response::Response {
+        use tower::ServiceExt;
+        let mut request = http::Request::builder().method(method).uri(path).body(body).unwrap();
+        for tag in tags {
+            request.headers_mut().append(CACHE_FIXTURE_HEADER, tag.parse().unwrap());
+        }
+        create_echo_router(address.to_owned())
+            .layer(Extension(ConnectInfo("127.0.0.1:12345".parse::<SocketAddr>().unwrap())))
+            .oneshot(request)
+            .await
+            .unwrap()
+    }
+    async fn cache_count(address: &str) -> u64 {
+        let response = cache_request(
+            address,
+            "GET",
+            "/response-cache/observations/response-cache-static",
+            &["response-cache-static"],
+            Body::empty(),
+        )
+        .await;
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 256).await.unwrap();
+        serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["count"]
+            .as_u64()
+            .unwrap()
+    }
+    async fn cache_reset(address: &str) {
+        let response = cache_request(
+            address,
+            "POST",
+            "/response-cache/observations/response-cache-static/reset",
+            &["response-cache-static"],
+            Body::empty(),
+        )
+        .await;
+        assert_eq!(response.status(), http::StatusCode::OK);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+    }
+
+    #[tokio::test]
+    async fn response_cache_fixed_ingress_counter_raw_digest_caps_and_real_frames_are_independent() {
+        use http_body::Body as _;
+        use sha2::{Digest, Sha256};
+        use std::sync::atomic::Ordering;
+        let address = "127.0.0.1:30001";
+        cache_reset(address).await;
+        cache_reset("127.0.0.1:30002").await;
+        assert_eq!(cache_count(address).await, 0);
+        for (method, path) in [
+            ("GET", "/graphql"),
+            ("POST", "/graphql/by-id"),
+            ("POST", "/graphql/operations"),
+            ("POST", "/unknown-cache-path"),
+        ] {
+            let before = cache_count(address).await;
+            let response = cache_request(address, method, path, &["response-cache-static"], Body::empty()).await;
+            assert_eq!(response.status(), http::StatusCode::METHOD_NOT_ALLOWED);
+            assert_eq!(
+                cache_count(address).await,
+                before + 1,
+                "ingress counts before handler/method dispatch"
+            );
+        }
+        let before = cache_count(address).await;
+        for tags in [
+            vec![],
+            vec!["unknown"],
+            vec!["response-cache-static", "response-cache-static"],
+        ] {
+            let response = cache_request(address, "POST", "/graphql", &tags, Body::empty()).await;
+            assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
+            assert_eq!(response.headers()["cache-control"], "no-store");
+        }
+        assert_eq!(cache_count(address).await, before);
+        let mut invalid = http::Request::builder()
+            .method("POST")
+            .uri("/graphql")
+            .body(Body::empty())
+            .unwrap();
+        invalid
+            .headers_mut()
+            .insert(CACHE_FIXTURE_HEADER, http::HeaderValue::from_bytes(&[0xff]).unwrap());
+        use tower::ServiceExt;
+        let response = create_echo_router(address.to_owned()).oneshot(invalid).await.unwrap();
+        assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
+        assert_eq!(cache_count(address).await, before);
+        let response = cache_request(
+            address,
+            "POST",
+            "/response-cache/observations/response-cache-static/reset",
+            &["response-cache-static"],
+            Body::from("x"),
+        )
+        .await;
+        assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
+        assert_eq!(cache_count(address).await, before);
+        assert_eq!(cache_count("127.0.0.1:30002").await, 0);
+        // IPv6 metadata shares the fixed slot for the same process/listener port.
+        assert_eq!(cache_count("[::1]:30001").await, before);
+        cache_reset(address).await;
+        for (raw, credential) in [
+            (
+                br#"{"query":"{f}","variables":{"n":9007199254740993,"ratio":1.2300}}"#.as_slice(),
+                false,
+            ),
+            ("{\"query\":\"{f}\",\"variables\":{\"title\":\"é\"}}".as_bytes(), true),
+            (&[0xff, 0x00, 0x7f], false),
+        ] {
+            let mut request = http::Request::builder()
+                .method("POST")
+                .uri("/graphql")
+                .header(CACHE_FIXTURE_HEADER, "response-cache-static")
+                .body(Body::from(raw.to_vec()))
+                .unwrap();
+            if credential {
+                request
+                    .headers_mut()
+                    .insert("x-dsl-query-key", http::HeaderValue::from_static("never-reflected"));
+            }
+            let response = create_echo_router(address.to_owned()).oneshot(request).await.unwrap();
+            assert_eq!(response.status(), http::StatusCode::OK);
+            assert_eq!(response.headers()["cache-control"], "public, max-age=60");
+            let bytes = axum::body::to_bytes(response.into_body(), 512).await.unwrap();
+            let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(reply["bodySha256"], hex::encode(Sha256::digest(raw)));
+            assert_eq!(reply["bodyBytes"], raw.len());
+            assert_eq!(reply["method"], "POST");
+            assert_eq!(reply["path"], "/graphql");
+            assert_eq!(reply["backendPort"], 30001);
+            assert_eq!(reply["queryCredentialAbsent"], !credential);
+            assert!(!String::from_utf8(bytes.to_vec()).unwrap().contains("never-reflected"));
+        }
+        assert_eq!(cache_count(address).await, 3);
+        let response = cache_request(
+            address,
+            "POST",
+            "/graphql",
+            &["response-cache-static"],
+            Body::from(vec![b'x'; 65536]),
+        )
+        .await;
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let oversized = Body::from_stream(futures::stream::iter([
+            Ok::<Bytes, std::io::Error>(Bytes::from(vec![b'x'; 65536])),
+            Ok(Bytes::from_static(b"x")),
+        ]));
+        let response = cache_request(address, "POST", "/graphql", &["response-cache-static"], oversized).await;
+        assert_eq!(response.status(), http::StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        let failed = Body::from_stream(futures::stream::iter([Err::<Bytes, _>(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "fixture transport failed",
+        ))]));
+        let response = cache_request(address, "POST", "/graphql", &["response-cache-static"], failed).await;
+        assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        let stalled = Body::from_stream(futures::stream::pending::<Result<Bytes, std::io::Error>>());
+        let response = cache_request(address, "POST", "/graphql", &["response-cache-static"], stalled).await;
+        assert_eq!(response.status(), http::StatusCode::REQUEST_TIMEOUT);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        assert_eq!(cache_count(address).await, 7);
+        let response = cache_request(
+            "127.0.0.1:30002",
+            "GET",
+            "/cache",
+            &["response-cache-static"],
+            Body::empty(),
+        )
+        .await;
+        assert_eq!(response.status(), http::StatusCode::OK);
+        assert_eq!(cache_count("127.0.0.1:30002").await, 1);
+        assert_eq!(cache_count(address).await, 7);
+        let response = cache_request(
+            "127.0.0.1:30003",
+            "GET",
+            "/cache",
+            &["response-cache-static"],
+            Body::empty(),
+        )
+        .await;
+        assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
+        for empty in [false, true] {
+            let mut body = CacheTrailerBody { phase: 0, empty };
+            let data = futures::future::poll_fn(|cx| std::pin::Pin::new(&mut body).poll_frame(cx))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(data.into_data().unwrap(), Bytes::from_static(b"public trailer fixture"));
+            let terminal = futures::future::poll_fn(|cx| std::pin::Pin::new(&mut body).poll_frame(cx))
+                .await
+                .unwrap()
+                .unwrap();
+            let trailers = terminal.into_trailers().unwrap();
+            assert_eq!(trailers.is_empty(), empty);
+            if !empty {
+                assert_eq!(trailers["x-cache-terminal"], "present");
+            }
+            assert!(
+                futures::future::poll_fn(|cx| std::pin::Pin::new(&mut body).poll_frame(cx))
+                    .await
+                    .is_none()
+            );
+        }
+        let response = cache_request(
+            address,
+            "GET",
+            "/cache?variant=body-error",
+            &["response-cache-static"],
+            Body::empty(),
+        )
+        .await;
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let mut body = response.into_body();
+        let data = futures::future::poll_fn(|cx| std::pin::Pin::new(&mut body).poll_frame(cx))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            data.into_data().unwrap(),
+            Bytes::from_static(b"public incomplete fixture")
+        );
+        assert!(
+            futures::future::poll_fn(|cx| std::pin::Pin::new(&mut body).poll_frame(cx))
+                .await
+                .unwrap()
+                .is_err()
+        );
+        // The ordinal belongs to this ingress attempt, not a later counter load.
+        CACHE_ORIGIN_COUNTS[2].store(0, Ordering::Relaxed);
+        for ordinal in [1, 2] {
+            let response = cache_request(address, "GET", "/cache", &["response-cache-dynamic"], Body::empty()).await;
+            assert_eq!(response.status(), http::StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), 128).await.unwrap();
+            assert_eq!(
+                bytes.as_ref(),
+                format!("public cache fixture backend 30001 origin {ordinal}").as_bytes()
+            );
+        }
+        let captured = http::Request::builder().uri("/cache").body(Body::empty()).unwrap();
+        let mut captured = captured;
+        captured.headers_mut().insert(
+            CACHE_FIXTURE_HEADER,
+            http::HeaderValue::from_static("response-cache-dynamic"),
+        );
+        captured.extensions_mut().insert(CacheOriginOrdinal(2));
+        CACHE_ORIGIN_COUNTS[2].store(9, Ordering::Relaxed);
+        let response = cache_finite_origin(Extension(address.to_owned()), captured).await;
+        let bytes = axum::body::to_bytes(response.into_body(), 128).await.unwrap();
+        assert_eq!(bytes.as_ref(), b"public cache fixture backend 30001 origin 2");
+        CACHE_ORIGIN_COUNTS[2].store(u64::MAX, Ordering::Relaxed);
+        let response = cache_request(address, "GET", "/cache", &["response-cache-dynamic"], Body::empty()).await;
+        assert_eq!(response.status(), http::StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        CACHE_ORIGIN_COUNTS[2].store(0, Ordering::Relaxed);
+        CACHE_ORIGIN_COUNTS[0].store(u64::MAX, Ordering::Relaxed);
+        let response = cache_request(address, "GET", "/cache", &["response-cache-static"], Body::empty()).await;
+        assert_eq!(response.status(), http::StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        assert_eq!(cache_count(address).await, u64::MAX);
+        cache_reset(address).await;
+        cache_reset("127.0.0.1:30002").await;
+        assert_eq!(cache_count(address).await, 0);
+    }
 
     #[test]
     fn oauth2_fixture_accepts_only_expected_grant_scope_and_bootstrap_pairs() {

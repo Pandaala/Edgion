@@ -28,6 +28,7 @@ fn store_stats_response_serializes() {
         by_kind: std::collections::BTreeMap::from([("GatewayClass".to_string(), 3)]),
     };
     let resp = StoreStatsResponse {
+        response_cache: Default::default(),
         wasm_shared_data_metrics: Default::default(),
         plugin_publication: Default::default(),
         plugin_publication_inventory: Default::default(),

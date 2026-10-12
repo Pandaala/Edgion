@@ -160,6 +160,12 @@ impl RequestTraceId {
         self.w3c.as_ref().map(|w| w.trace_id)
     }
 
+    /// Borrow managed correlation names for bounded key exclusion. No identity
+    /// value, owned header list or copy is exposed.
+    pub(crate) fn managed_header_names(&self) -> impl Iterator<Item = &HeaderName> {
+        self.correlation_ids.iter().map(|id| &id.key)
+    }
+
     pub fn correlation_id(&self, name: &str) -> Option<&str> {
         self.correlation_ids
             .iter()

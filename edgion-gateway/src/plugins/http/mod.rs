@@ -48,6 +48,7 @@ pub mod request_body_buffer;
 pub mod request_id;
 pub mod request_mirror;
 pub mod request_restriction;
+pub mod response_cache;
 pub mod response_rewrite;
 pub mod rest_to_graphql;
 pub mod waf;

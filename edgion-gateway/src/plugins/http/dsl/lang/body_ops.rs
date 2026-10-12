@@ -53,6 +53,20 @@ pub(crate) struct DslBodyOps<'a> {
 }
 
 impl<'a> DslBodyOps<'a> {
+    pub(crate) async fn read_json(
+        &mut self,
+        work: ValueWorkBudget,
+    ) -> Result<super::json_builtins::JsonScanOutcome, RuntimeError> {
+        let len = self.byte_len()?;
+        let limit = self.limits.max_string_len.min(edgion_dsl::json::MAX_DSL_JSON_BYTES);
+        let cap = self.session.ctx().request_body_config.max_body_size_bytes;
+        if len > cap || len > limit as u64 {
+            return Err(body_access_error("JSON source exceeds the request JSON byte limit"));
+        }
+        self.scan_with(async { Ok(super::json_builtins::JsonBodyScanner::new(work, limit)) })
+            .await
+    }
+
     pub(crate) async fn parse_xml(&mut self, work: ValueWorkBudget) -> Result<XmlScanOutcome, RuntimeError> {
         let len = self.byte_len()?;
         let cap = self.session.ctx().request_body_config.max_body_size_bytes;

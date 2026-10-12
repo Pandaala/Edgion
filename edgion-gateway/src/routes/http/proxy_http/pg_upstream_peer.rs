@@ -370,6 +370,9 @@ fn apply_upstream_authority(
     peer: &mut HttpPeer,
 ) -> pingora_core::Result<()> {
     if ctx.selected_backend.as_ref().is_some_and(SelectedHttpBackend::is_ai) {
+        if let Some(cache) = ctx.response_cache.as_mut() {
+            cache.observe_authority(Err(()));
+        }
         ctx.upstream_authority = None;
         return Ok(());
     }
@@ -382,6 +385,9 @@ fn apply_upstream_authority(
         .and_then(|bc| bc.effective_policy.as_ref())
         .and_then(|policy| policy.upstream_authority.clone())
     else {
+        if let Some(cache) = ctx.response_cache.as_mut() {
+            cache.observe_authority(Ok(None));
+        }
         ctx.upstream_authority = None;
         return Ok(());
     };
@@ -391,6 +397,14 @@ fn apply_upstream_authority(
         render_authority(&compiled, &adapter)
     };
 
+    if let Some(cache) = ctx.response_cache.as_mut() {
+        cache.observe_authority(
+            rendered
+                .as_ref()
+                .map(|authority| Some(authority.as_str()))
+                .map_err(|_| ()),
+        );
+    }
     apply_upstream_authority_decision(decide_upstream_authority(Some(rendered)), ctx, peer)
 }
 
@@ -634,7 +648,17 @@ pub async fn select_http_backend(
         }
         CompiledBackendTarget::Service(_) => {}
     }
-    let backend_tls_policy = crate::backends::query_backend_tls_policy_for_logical_backend(&backend_ref);
+    let backend_tls_policy = if ctx.response_cache.is_some() {
+        if let Some(service) = backend_ref.service_target() {
+            let (lookup, report) = crate::backends::policy::query_backend_tls_policy_for_service_report(service);
+            crate::response_cache::record_tls(ctx, report);
+            lookup
+        } else {
+            crate::backends::query_backend_tls_policy_for_logical_backend(&backend_ref)
+        }
+    } else {
+        crate::backends::query_backend_tls_policy_for_logical_backend(&backend_ref)
+    };
 
     let backend_plugin_runtime = Arc::clone(&backend_ref.compiled().plugin_runtime);
     if !backend_plugin_runtime.backend_compatible(ctx) {
@@ -1144,9 +1168,24 @@ fn selected_service_target(ctx: &EdgionHttpContext) -> Option<&CompiledServiceTa
 }
 
 fn capture_service_effective_policy(ctx: &mut EdgionHttpContext) {
+    let observe = ctx.response_cache.is_some();
+    let mut observed = None;
     capture_service_effective_policy_with(ctx, |target| {
-        get_backend_traffic_policy_store().snapshot().get_effective(target)
+        // This closure runs only after all ordinary lookup guards pass. An
+        // absent result remains eligible for a later ordinary real lookup.
+        let snapshot = get_backend_traffic_policy_store().snapshot();
+        let policy = snapshot.get_effective(target);
+        if observe {
+            observed = Some(crate::response_cache::traffic_stamp(
+                snapshot.generation(),
+                policy.as_deref(),
+            ));
+        }
+        policy
     });
+    if let Some(report) = observed {
+        crate::response_cache::record_traffic(ctx, report);
+    }
 }
 
 fn capture_service_effective_policy_with(

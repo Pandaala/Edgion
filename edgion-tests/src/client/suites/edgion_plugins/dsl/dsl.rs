@@ -2512,6 +2512,7 @@ impl TestSuite for DslTestSuite {
             // Scenario 28: time_format ApiError path — deny vs ignore error policy
             Self::test_time_format_deny_returns_500(),
             Self::test_time_format_ignore_passes_through(),
+            super::query_lookup::static_case(),
         ]
     }
 }

@@ -331,11 +331,12 @@ enum RedisFailure {
     DependencyError,
     Timeout,
     ResultTooLarge,
+    InvalidResponse,
 }
 
 impl RedisFailure {
     #[cfg(test)]
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::InvalidArgument,
         Self::UnknownPolicy,
         Self::UnknownLink,
@@ -343,6 +344,7 @@ impl RedisFailure {
         Self::DependencyError,
         Self::Timeout,
         Self::ResultTooLarge,
+        Self::InvalidResponse,
     ];
 
     const fn tag(self) -> &'static str {
@@ -354,7 +356,17 @@ impl RedisFailure {
             Self::DependencyError => "dependency_error",
             Self::Timeout => "timeout",
             Self::ResultTooLarge => "result_too_large",
+            Self::InvalidResponse => "invalid_response",
         }
+    }
+}
+
+fn bounded_redis_get_limit(value: &Value, max_string_len: usize) -> Option<usize> {
+    match value {
+        Value::Int(n) if *n > 0 => usize::try_from(*n)
+            .ok()
+            .map(|n| n.min(max_string_len).min(edgion_dsl::json::MAX_DSL_JSON_BYTES)),
+        _ => None,
     }
 }
 
@@ -624,6 +636,13 @@ impl Vm {
                 checked_value_opt_str(session.header_value(&name), self.limits.max_string_len)
             }
             BuiltinId::ReqMethod => checked_value_str(session.get_method().to_string(), self.limits.max_string_len),
+            BuiltinId::ReqRequestMethod => match session.get_request_method() {
+                Some(method) => {
+                    check_string_len(method, self.limits.max_string_len)?;
+                    Ok(Value::Str(Arc::from(method)))
+                }
+                None => Ok(Value::Nil),
+            },
             BuiltinId::ReqPath => checked_value_str(session.get_path().to_string(), self.limits.max_string_len),
             BuiltinId::ReqQuery => {
                 let name = state.pop()?.runtime_string()?;
@@ -1344,7 +1363,14 @@ impl Vm {
                 Ok(Value::Nil)
             }
 
-            BuiltinId::XmlParse
+            BuiltinId::JsonRead
+            | BuiltinId::JsonGetRaw
+            | BuiltinId::JsonGetString
+            | BuiltinId::JsonKeys
+            | BuiltinId::JsonSetRaw
+            | BuiltinId::JsonSetString
+            | BuiltinId::JsonSetBody
+            | BuiltinId::XmlParse
             | BuiltinId::XmlKind
             | BuiltinId::XmlName
             | BuiltinId::XmlNamespace
@@ -1370,6 +1396,7 @@ impl Vm {
 
             // redis.* builtins are dispatched asynchronously by the VM before reaching call_builtin
             BuiltinId::RedisGet
+            | BuiltinId::RedisGetBounded
             | BuiltinId::RedisSet
             | BuiltinId::RedisDel
             | BuiltinId::RedisExists
@@ -1752,6 +1779,42 @@ impl Vm {
                 decision.insert("retry_ms".into(), Value::Int(result.retry_ms));
                 Ok(redis_ok(Value::Map(Box::new(decision))))
             }
+            BuiltinId::RedisGetBounded => {
+                use crate::link_sys::providers::redis::ops::{BoundedGet, BoundedGetError};
+                let requested = state.pop()?;
+                let key = state.pop()?;
+                let link = state.pop()?;
+                let Some(cap) = bounded_redis_get_limit(&requested, self.limits.max_string_len) else {
+                    return Ok(redis_err(RedisFailure::InvalidArgument, self.limits.max_string_len));
+                };
+                let key = key.runtime_string()?;
+                let link = link.runtime_string()?;
+                let client = match resolve_redis_client(&link, runtime, self.limits.max_string_len, log) {
+                    Ok(client) => client,
+                    Err(result) => return Ok(result),
+                };
+                match client.get_bounded(&key, cap).await {
+                    Ok(BoundedGet::Missing) => Ok(redis_ok(Value::Nil)),
+                    Ok(BoundedGet::TooLarge) => Ok(redis_err(RedisFailure::ResultTooLarge, self.limits.max_string_len)),
+                    Ok(BoundedGet::Value(bytes)) => {
+                        // Provider preflight checked UTF-8 without allocating an owned String.
+                        let text = std::str::from_utf8(&bytes).map_err(|_| RuntimeError::Internal {
+                            message: "admitted Redis text is invalid".into(),
+                        })?;
+                        state.value_work_budget.charge(text.len() as u64 * 2)?;
+                        Ok(redis_ok(Value::Str(Arc::from(text))))
+                    }
+                    Err(BoundedGetError::Timeout) => Ok(redis_err(RedisFailure::Timeout, self.limits.max_string_len)),
+                    Err(BoundedGetError::InvalidResponse) => {
+                        Ok(redis_err(RedisFailure::InvalidResponse, self.limits.max_string_len))
+                    }
+                    Err(BoundedGetError::Dependency(error)) => Ok(redis_dependency_err(
+                        &anyhow::Error::new(error),
+                        self.limits.max_string_len,
+                        log,
+                    )),
+                }
+            }
             BuiltinId::RedisGet => {
                 // redis.get(link, key)
                 let key = state.pop()?.runtime_string()?;
@@ -1972,7 +2035,14 @@ impl Vm {
             // All non-Redis builtins are dispatched via call_builtin / call_builtin_http and
             // must not reach here. Listed explicitly (no `_ =>` catch-all) so adding a new
             // BuiltinId variant fails to compile until it is routed to the right dispatcher.
-            BuiltinId::XmlParse
+            BuiltinId::JsonRead
+            | BuiltinId::JsonGetRaw
+            | BuiltinId::JsonGetString
+            | BuiltinId::JsonKeys
+            | BuiltinId::JsonSetRaw
+            | BuiltinId::JsonSetString
+            | BuiltinId::JsonSetBody
+            | BuiltinId::XmlParse
             | BuiltinId::XmlKind
             | BuiltinId::XmlName
             | BuiltinId::XmlNamespace
@@ -1990,6 +2060,7 @@ impl Vm {
             | BuiltinId::XmlSetBody
             | BuiltinId::ReqHeader
             | BuiltinId::ReqMethod
+            | BuiltinId::ReqRequestMethod
             | BuiltinId::ReqPath
             | BuiltinId::ReqQuery
             | BuiltinId::ReqQueryString

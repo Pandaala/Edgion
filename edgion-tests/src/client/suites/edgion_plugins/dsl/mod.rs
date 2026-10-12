@@ -5,6 +5,7 @@ mod context;
 mod dsl;
 mod dynamic;
 mod grpc_error;
+pub(crate) mod query_lookup;
 mod response_http_timeout;
 mod terminate;
 mod terminate_dynamic;

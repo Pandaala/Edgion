@@ -368,3 +368,10 @@ fn check_skips_direct_unvalidated_invalid_jump_target() {
     };
     assert!(check_redis_link_names(&script, &HashSet::from(["cache"])).is_ok());
 }
+
+#[test]
+fn bounded_redis_get_uses_the_existing_alias_validation() {
+    let script = compile("redis.get_bounded(\"cache\",\"key\",65536)");
+    assert!(check_redis_link_names(&script, &std::collections::HashSet::from(["cache"])).is_ok());
+    assert!(check_redis_link_names(&script, &std::collections::HashSet::new()).is_err());
+}

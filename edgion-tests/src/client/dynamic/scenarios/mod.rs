@@ -70,5 +70,8 @@ pub mod graphql_operation_router;
 
 pub mod graphql_guard;
 pub mod graphql_safelist;
+pub mod response_cache;
 
 pub mod rest_to_graphql;
+
+pub mod dsl_query_lookup;

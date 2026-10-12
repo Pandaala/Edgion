@@ -821,3 +821,15 @@ restriction on legacy LinkSys target strings. Low-level config constructors are
 not independently actual-owner APIs. Disabled/policy-masked entries remain inert;
 no-reference DSL/AiProxy remain inline. Runtime lookups still use current typed
 providers, with no new request-path parsing or client snapshots.
+
+## ResponseCache extension boundary
+
+Use the narrow `nominate_response_cache` capability with an opaque compiled policy.
+Do not add lookup, body arenas, cache maps, mutable context access or parsing to
+plugin dispatch. Construct and validate policies cold; default/mock sessions
+return Unsupported. Real adapter admission is precharged and lookup stays behind
+ordinary request-stage success at the canonical tail. A new plugin or companion
+requires an explicit cold cache capability assessment; unknown ownership bypasses.
+Response body processors, protocol conversions and contextual upstream-authority
+templates are outside the initial cache profile. See the owning cache review guard
+for allocation, current-response effects and terminal transport acceptance.

@@ -372,3 +372,25 @@ fn profiles_unique_items_pairwise_comparison_fanout() {
         Err(InstanceValidationError::WorkBudgetExceeded)
     );
 }
+
+#[test]
+fn extracted_strict_parser_preserves_resource_limits_and_error_priority() {
+    assert_eq!(
+        parse_json_instance_with_limits(br#"{"a":0,"a": }"#, 64, 20_000).unwrap_err(),
+        StrictJsonError::DuplicateKey
+    );
+    assert_eq!(
+        parse_json_instance_with_limits(br#"{"a":0,"b": }"#, 64, 2).unwrap_err(),
+        StrictJsonError::NodeLimit
+    );
+    assert_eq!(
+        parse_json_instance_with_limits(br#"{"a": }"#, 1, 20_000).unwrap_err(),
+        StrictJsonError::DepthLimit
+    );
+    let large = format!("\"{}\"", "a".repeat(70 * 1024));
+    assert!(parse_json_instance(large.as_bytes()).is_ok());
+    let deeper = format!("{}0{}", "[".repeat(40), "]".repeat(40));
+    assert!(parse_json_instance(deeper.as_bytes()).is_ok());
+    let many = format!("[{}]", std::iter::repeat_n("0", 5000).collect::<Vec<_>>().join(","));
+    assert!(parse_json_instance(many.as_bytes()).is_ok());
+}

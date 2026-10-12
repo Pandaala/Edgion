@@ -1,3 +1,6 @@
+#[cfg(test)]
+pub(crate) use tests::GLOBAL_TLS_STORE_TEST_LOCK;
+
 pub mod backend_tls;
 pub mod backend_traffic;
 
@@ -26,23 +29,55 @@ pub fn query_backend_tls_policy_for_logical_backend(logical: &LogicalBackendHand
 }
 
 pub(crate) fn query_backend_tls_policy_for_service(service: &CompiledServiceTarget) -> BackendTlsPolicyLookup {
+    query_backend_tls_policy_for_service_canonical(service, false).0
+}
+
+/// The report and lookup consume the same TLS and discovery reads. Ordinary
+/// callers retain the canonical wrapper; cache evidence never reloads stores.
+pub(crate) fn query_backend_tls_policy_for_service_report(
+    service: &CompiledServiceTarget,
+) -> (BackendTlsPolicyLookup, crate::response_cache::TlsStamp) {
+    query_backend_tls_policy_for_service_canonical(service, true)
+}
+
+fn query_backend_tls_policy_for_service_canonical(
+    service: &CompiledServiceTarget,
+    observe: bool,
+) -> (BackendTlsPolicyLookup, crate::response_cache::TlsStamp) {
     let snapshot = get_global_backend_tls_policy_store().snapshot();
     let generation = get_service_discovery_coordinator().load_generation();
-    match generation.service(service.key()) {
+    let (lookup, discovery) = match generation.service(service.key()) {
         Some(ServicePublishedState::Available(available)) => match available.resolve_section(service.section()) {
             Ok(section) => {
                 let mapping = match section.identity.name.as_deref() {
                     Some(name) => ServiceTlsSectionMapping::Named(name),
                     None => ServiceTlsSectionMapping::NumberOnly,
                 };
-                lookup_for_service_mapping(&snapshot, service.policy_target(), mapping)
+                (
+                    lookup_for_service_mapping(&snapshot, service.policy_target(), mapping),
+                    if observe {
+                        crate::response_cache::discovery_stamp(service, available, &section)
+                    } else {
+                        None
+                    },
+                )
             }
-            Err(_) => {
-                lookup_for_service_mapping(&snapshot, service.policy_target(), ServiceTlsSectionMapping::Unproven)
-            }
+            Err(_) => (
+                lookup_for_service_mapping(&snapshot, service.policy_target(), ServiceTlsSectionMapping::Unproven),
+                None,
+            ),
         },
-        _ => lookup_for_service_mapping(&snapshot, service.policy_target(), ServiceTlsSectionMapping::Unproven),
-    }
+        _ => (
+            lookup_for_service_mapping(&snapshot, service.policy_target(), ServiceTlsSectionMapping::Unproven),
+            None,
+        ),
+    };
+    let report = crate::response_cache::TlsStamp {
+        generation: snapshot.generation(),
+        discovery,
+        result: crate::response_cache::tls_result(&lookup),
+    };
+    (lookup, report)
 }
 
 #[derive(Clone, Copy)]

@@ -229,3 +229,19 @@ fn redis_error_for_oversized_alias_uses_generic_tag_under_tiny_string_limit() {
     assert_eq!(result.expect("Redis failures remain script-visible"), good_next());
     assert!(!log.render_for_test().contains(&alias));
 }
+
+#[test]
+fn bounded_redis_invalid_bounds_precede_provider_resolution() {
+    for bound in ["0", "-1", "nil", "\"x\""] {
+        let source = format!("let r = redis.get_bounded(\"not-configured\", \"key\", {bound})\nif r[\"error\"] != \"invalid_argument\" {{ return deny(500, \"bad admission\") }}");
+        assert_eq!(
+            run_with_runtime(&source, MockPluginSession::new(), DslRuntime::default()),
+            good_next()
+        );
+    }
+    let source = "let r = redis.get_bounded(\"not-configured\", \"key\", 9223372036854775807)\nif r[\"error\"] != \"unknown_link\" { return deny(500, \"bad positive bound\") }";
+    assert_eq!(
+        run_with_runtime(source, MockPluginSession::new(), DslRuntime::default()),
+        good_next()
+    );
+}

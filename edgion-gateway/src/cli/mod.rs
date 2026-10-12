@@ -588,6 +588,7 @@ impl EdgionGatewayCli {
         edgion_resources::rate_limit_local_config::init_rate_limit_local_global_config(&config.rate_limit_local);
         config::init_lru_cache_global_config(&config.lru_cache)
             .map_err(|error| anyhow::anyhow!("Invalid lru_cache configuration: {error}"))?;
+        crate::response_cache::initialize(&config.response_cache).map_err(anyhow::Error::msg)?;
         config::init_tiny_ufo_ttl_cache_global_config(&config.tiny_ufo_ttl_cache)
             .map_err(|error| anyhow::anyhow!("Invalid tiny_ufo_ttl_cache configuration: {error}"))?;
         edgion_resources::sensitive::init_sensitive(config.access_log_sensitive.clone());

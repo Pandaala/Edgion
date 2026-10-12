@@ -8,6 +8,7 @@ pub(crate) mod body_ops;
 pub(crate) mod body_scan_budget;
 pub(crate) mod body_scanners;
 pub mod builtins;
+pub(crate) mod json_builtins;
 pub mod vm;
 pub(crate) mod xml_builtins;
 

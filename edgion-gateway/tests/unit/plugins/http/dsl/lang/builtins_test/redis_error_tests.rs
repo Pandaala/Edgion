@@ -1,4 +1,6 @@
-use super::{redis_dependency_err, redis_err, redis_hash_result, PluginLog, RedisFailure, Value};
+use super::{
+    bounded_redis_get_limit, redis_dependency_err, redis_err, redis_hash_result, PluginLog, RedisFailure, Value,
+};
 
 #[test]
 fn oversized_hash_uses_existing_bounded_failure_map() {
@@ -71,5 +73,26 @@ fn dependency_detail_is_not_script_visible_and_diagnostic_is_bounded() {
         assert!(!format!("{value:?}").contains(&sentinel));
         assert!(log.contains("err:"));
         assert!(log.render_for_test().len() <= 128);
+    }
+}
+
+#[test]
+fn invalid_response_is_a_fixed_bounded_public_class() {
+    assert_eq!(
+        error_text(&redis_err(RedisFailure::InvalidResponse, 16)),
+        "invalid_response"
+    );
+    assert_eq!(error_text(&redis_err(RedisFailure::InvalidResponse, 1)), "e");
+    assert_eq!(RedisFailure::ALL.len(), 8);
+}
+
+#[test]
+fn bounded_get_cap_admission_is_independent_of_provider_io() {
+    assert_eq!(bounded_redis_get_limit(&Value::Int(65536), 65536), Some(65536));
+    assert_eq!(bounded_redis_get_limit(&Value::Int(65537), 65536), Some(65536));
+    assert_eq!(bounded_redis_get_limit(&Value::Int(i64::MAX), 65536), Some(65536));
+    assert_eq!(bounded_redis_get_limit(&Value::Int(65536), 8), Some(8));
+    for value in [Value::Nil, Value::Int(0), Value::Int(-1), Value::Str("8".into())] {
+        assert_eq!(bounded_redis_get_limit(&value, 65536), None);
     }
 }

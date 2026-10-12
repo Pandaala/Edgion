@@ -56,3 +56,5 @@ before applying a decision to current code.
 - [Bounded XML parsing, values, work and request-body publication](regression-guards/bounded-xml-primitives.md)
 - [DSL `http.call` response aggregation is bounded while streaming](regression-guards/http-call-full-body-read-before-truncate.md)
 - [`redis.get` / `redis.hget` / `redis.hgetall` values: silent truncation at `max_string_len` — RAISING IS NOT ACCEPTED](regression-guards/redis-read-values-truncate-to-max-string-len.md)
+
+- [Strict JSON reconstruction and nontruncating Redis lookup](regression-guards/bounded-json-reconstruction.md)

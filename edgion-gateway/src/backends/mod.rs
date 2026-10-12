@@ -183,6 +183,9 @@ where
         return Err(EdgionErrorCode::BackendTlsPolicyInvalid);
     }
     let captured = capture(input.service)?;
+    if ctx.response_cache.is_some() {
+        crate::response_cache::record_discovery(ctx, captured.response_cache_stamp(input.service));
+    }
     let degrade_policy = captured_degrade_policy(ctx.backend_context.as_ref());
     match native_service_path(&captured)? {
         ExternalNamePath::EndpointSlice => {

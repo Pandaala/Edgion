@@ -400,3 +400,15 @@ retain stale whole-resource DSL/WAF last-known-good routing policy.
 
 See [operator configuration](../../../docs/en/user-guide/http-route/filters/edgion-plugins/graphql-operation-router.md)
 and [review guard](../../04-review/routing/regression-guards/graphql-operation-router-declared-backends.md).
+
+## Explicit bounded public-origin response caching
+
+`response_cache` owns an optional private cache for selected finite public origin
+responses. A request-stage plugin nominates immutable intent; the canonical
+request tail binds final inputs after authentication, quota and body handling.
+Ordinary responses still stream. Header-stage admission reserves the full bounded
+arena and metadata before chunk copies; typed EOS and bounded native finish
+precede publication. No response BodyStorage or whole-response plugin API exists.
+Hits execute the current source-independent response onion and retain decoded
+header/body leases through Session and downstream slice lifetimes. See the
+[owning guard](../../04-review/http-body/regression-guards/bounded-response-cache-capture.md).

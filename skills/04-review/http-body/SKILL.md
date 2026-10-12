@@ -11,6 +11,8 @@ before applying a decision to current code.
 
 ## Mandatory design
 
+- [Bounded public-origin ResponseCache ownership](regression-guards/bounded-response-cache-capture.md)
+
 - [Explicit Request-Body Prebuffering for Late Reads](mandatory-design/explicit-request-body-prebuffer-for-late-read.md)
 - [BF-01 — Request-Body Policy Uses an Atomic EGC Snapshot](mandatory-design/request-body-policy-egc-hot-reload.md)
 

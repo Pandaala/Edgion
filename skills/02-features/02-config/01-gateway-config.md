@@ -789,3 +789,28 @@ their early return; a failing fallback retains the primary. SSL ES/Kafka outputs
 remain unsupported with a bounded warning and no logger, while invalid OTLP
 references retain their constructor error before the unsupported-output decision.
 See [LinkSys DataSender ownership](../../01-architecture/02-gateway/09-link-sys.md#datasender).
+
+## Local `response_cache` physical limits
+
+The Gateway file configuration has one strict `response_cache` object. These are
+process physical bounds; EdgionPlugins supplies logical TTL/query/vary policy.
+There is no separate cache CLI or environment override. Defaults are:
+
+```yaml
+response_cache:
+  max_entries: 64
+  shards: 16
+  max_body_bytes: 1048576
+  max_metadata_bytes: 16384
+  total_bytes: 134217728
+  pending_bytes: 16777216
+```
+
+Bounds must be positive, satisfy canonical sharded LRU constraints and fit the
+admitted index/epoch infrastructure plus configured population/pending capacity.
+Unsupported sizes fail startup. Budget refusal bypasses optional caching.
+Diagnostic statistics are numeric: allocated/infrastructure/pending bytes, entries
+and reader pins. Empty index does not imply zero allocated bytes: admitted index
+and current epoch remain standing infrastructure. After retirement and release,
+allocated minus infrastructure, pending bytes, entries and reader pins reach zero.
+Arc aliases do not add memory charges; distinct pinned retired guards do.
