@@ -464,9 +464,7 @@ request-arena mutability, limit/checkpoint semantics or memo eligibility changes
 The 2026-10-12 scoped memo implementation passed independent plan and final
 source review, format, workspace compile/clippy and static repository guards.
 These results apply to that implementation; cleanup reused them without rerunning
-code checks. Broader owned-output retention, prefix reuse and remaining matcher
-candidates are deferred in the
-[follow-up investigation](../../../../tasks/todo/waf-transformation-reuse-follow-ups.md).
+code checks.
 
 Current raw-name selector admission and subscription dispatch reuse successful
 boolean results within one collect_value call using two inline u64 words. The
