@@ -15,23 +15,6 @@
 [advisories]
 yanked = "deny"
 ignore = [
-    # Wasmtime46 component dynamic-record lifting can bypass hostcall fuel.
-    # Edgion accepts core Proxy-Wasm modules only: edgion-wasm::analyze rejects
-    # Encoding::Component before vm_manager compiles via core Module::new.
-    # There is no wasmtime::component::Val lifting API in the host. This is an
-    # unreachable-path triage, not a claim that Wasmtime46 fixes the advisory.
-    # RE-EVALUATE: any component or component::Val support, analyzer bypass,
-    # or Wasmtime upgrade; remove when the dependency is patched.
-    { id = "RUSTSEC-2026-0316", reason = "component::Val lifting is unreachable in the validated core-only Proxy-Wasm host" },
-
-    # Wasmtime46 async component callbacks can overflow the native stack.
-    # The same pre-compilation Component rejection and core Module-only host
-    # exclude component-model-async callbacks, even though upstream's default
-    # Cargo features compile their implementation. No affected component is
-    # instantiated. RE-EVALUATE: enabling any component execution path,
-    # weakening the compatibility analyzer, or upgrading Wasmtime.
-    { id = "RUSTSEC-2026-0327", reason = "component async callbacks are unreachable; Component input is rejected before core Module compilation" },
-
     # hickory-proto 0.24 message-encoding CPU exhaustion. Fred 10.1's `dns`
     # feature is required only to expose Pool::set_resolver, but it also pulls
     # hickory-resolver 0.24. Fred does not call that resolver implementation;
