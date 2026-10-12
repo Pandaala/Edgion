@@ -409,3 +409,16 @@ The Gateway provides standardized error response generators, all defined in `run
 | `end_response_503` | 503 | Service unavailable |
 
 All error responses inject a custom Server header via `ServerHeaderOpts`.
+
+## Terminal gRPC local replies
+
+`runtime/server/error_response.rs::prepare_grpc_terminal_headers` owns ordered
+preparation of fresh HTTP-200 terminal envelopes: drain queued response-header
+operations once, reconcile request identity, remove Content-Length and
+Transfer-Encoding, then restore application/grpc. Framework writers apply
+ServerHeaderOpts before preparation, so queue conditions see those defaults;
+adapter exact-status and HTTP-mapped writers start without those defaults.
+Claims, selected HTTP/gRPC outcomes and adapter termination/delivery diagnostics
+remain with the callers. The separate `send_grpc_trailers_only_frame` owns
+canonical status/message replacement and native versus gRPC-Web encoding.
+This boundary adds no body aggregation or protocol-pump ownership (ARCH-003).

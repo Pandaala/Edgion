@@ -128,7 +128,13 @@ unrelated changes. No commit, push, PR or external-change authority is granted.
 
 Disposition: ARCH-002 implemented and independently accepted; exact reviewed
 bytes integrated locally into feature-08-30. All 42 transferred file hashes match
-the reviewed manifest, with diff hygiene and canonical ownership checks passing. The original finding stays a source-review input snapshot.
+the reviewed manifest, with diff hygiene and canonical ownership checks passing.
+The user then explicitly authorized deleting the closed source finding. Its file
+was removed after all 42 current result hashes were revalidated; the source batch
+now marks ARCH-002 resolved and indexes its acceptance receipt. Original claim
+hashes, independent verification history, unrelated candidates and primary
+coverage remain intact. Closure receipt:
+`tasks/review-architecture-20261009/TASK-ACCEPTANCE-ARCH-002-20261011.json`.
 Searchable semantic ownership decision:
 `skills/04-review/http-body/intentional-design/request-body-read-contract-ownership.md`.
 

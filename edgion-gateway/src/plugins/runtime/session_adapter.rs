@@ -18,7 +18,7 @@ use crate::link_sys::template::evaluate_template;
 use crate::request_body::{BodyOperationError, BodyScanResult};
 use crate::request_body::{BodyReadError, BodyReadResult, RequestBodyChunkConsumer, RequestBodySnapshotReader};
 use crate::request_body::{BodyStorage, BodyStorageView};
-use crate::runtime::server::{http_to_grpc_status, send_grpc_trailers_only_frame};
+use crate::runtime::server::{http_to_grpc_status, prepare_grpc_terminal_headers, send_grpc_trailers_only_frame};
 use crate::{EdgionHttpContext, MirrorState, PendingHeaderOp, ResponseStageDenial, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::common::{KeyGet, KeySet};
 #[cfg(test)]
@@ -732,17 +732,7 @@ impl<'a> PingoraSessionAdapter<'a> {
         self.ctx.request_info.set_grpc_status(grpc_status);
 
         let mut resp = ResponseHeader::build(200, None).map_err(|e| Box::new(e) as PluginSessionError)?;
-        // Apply queued ops first so request-stage plugins (e.g. cookie issuance) still land
-        // their headers, then strip framing headers and re-assert content-type LAST so a queued
-        // Set cannot break the gRPC contract. On a body-less single HEADERS+END_STREAM frame a
-        // queued content-length / transfer-encoding would be a framing inconsistency strict
-        // clients reject, so remove them after draining.
-        self.ctx.drain_pending_response_header_ops(&mut resp);
-        self.ctx.request_info.trace_id.reconcile_response(&mut resp);
-        resp.remove_header(&http::header::CONTENT_LENGTH);
-        resp.remove_header(&http::header::TRANSFER_ENCODING);
-        resp.insert_header("content-type", "application/grpc")
-            .map_err(|e| Box::new(e) as PluginSessionError)?;
+        prepare_grpc_terminal_headers(self.ctx, &mut resp).map_err(|e| Box::new(e) as PluginSessionError)?;
         let result = send_grpc_trailers_only_frame(self.inner, resp, grpc_status, message)
             .await
             .map_err(|e| Box::new(e) as PluginSessionError);
@@ -793,14 +783,7 @@ impl<'a> PingoraSessionAdapter<'a> {
         self.ctx.request_info.set_grpc_status(grpc_status);
 
         let mut resp = ResponseHeader::build(200, None).map_err(|e| Box::new(e) as PluginSessionError)?;
-        // Drain queued response-header ops, strip framing headers, then re-assert content-type
-        // LAST. See send_grpc_error_direct for why content-length / transfer-encoding are removed.
-        self.ctx.drain_pending_response_header_ops(&mut resp);
-        self.ctx.request_info.trace_id.reconcile_response(&mut resp);
-        resp.remove_header(&http::header::CONTENT_LENGTH);
-        resp.remove_header(&http::header::TRANSFER_ENCODING);
-        resp.insert_header("content-type", "application/grpc")
-            .map_err(|e| Box::new(e) as PluginSessionError)?;
+        prepare_grpc_terminal_headers(self.ctx, &mut resp).map_err(|e| Box::new(e) as PluginSessionError)?;
         let result = send_grpc_trailers_only_frame(self.inner, resp, grpc_status, Some(grpc_message))
             .await
             .map_err(|e| Box::new(e) as PluginSessionError);

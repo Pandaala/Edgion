@@ -10,7 +10,7 @@ Source reviewed: 512 / 1676; 467 primary partitions.
 | ID | Status | Kind | Optimization |
 | --- | --- | --- | --- |
 | ARCH-001 | resolved | architecture-debt | [Closed feature-operation coupling finding; acceptance evidence](TASK-ACCEPTANCE-AI-20261011-G.json) |
-| ARCH-002 | candidate | architecture-debt | [Canonical request-body contracts are owned by the plugin-session module](ARCH-002-request-body-contract-ownership.md) |
+| ARCH-002 | resolved | architecture-debt | [Closed request-body contract ownership finding; acceptance evidence](TASK-ACCEPTANCE-ARCH-002-20261011.json) |
 | ARCH-003 | candidate | architecture-debt | [gRPC terminal-header preparation has three owners above the shared wire writer](ARCH-003-grpc-terminal-header-preparation.md) |
 | ARCH-004 | candidate | architecture-debt | [Make the context own the frozen source of its query cache](ARCH-004-context-query-cache-source.md) |
 | ARCH-005 | candidate | architecture-debt | [Publish transport admission capabilities from typed source entries](ARCH-005-typed-transport-admission-capabilities.md) |

@@ -47,6 +47,21 @@ async fn shutdown_after_error_response(session: &mut Session) {
 
 // ─── gRPC error response (Trailers-Only single frame) ────────────────────────
 
+/// Prepare a fresh terminal gRPC envelope after caller-owned defaults and claims.
+///
+/// Queue conditions observe those defaults before trace reconciliation and
+/// protocol-owned framing repair. Terminal status fields belong to the frame writer.
+pub(crate) fn prepare_grpc_terminal_headers(
+    ctx: &mut EdgionHttpContext,
+    resp: &mut ResponseHeader,
+) -> pingora_core::Result<()> {
+    ctx.drain_pending_response_header_ops(resp);
+    ctx.request_info.trace_id.reconcile_response(resp);
+    resp.remove_header(&http::header::CONTENT_LENGTH);
+    resp.remove_header(&http::header::TRANSFER_ENCODING);
+    resp.insert_header("content-type", "application/grpc")
+}
+
 /// Send a single-frame gRPC Trailers-Only response: one HEADERS frame with END_STREAM set,
 /// carrying content-type (already on `resp`) plus grpc-status / grpc-message as ordinary
 /// header fields. Uses `write_response_tasks` so the `end=true` flag reaches the H2 layer —
@@ -154,18 +169,7 @@ pub(crate) async fn send_grpc_status_trailers_only(
 
     let mut resp = ResponseHeader::build(200, None)?;
     server_header_opts.apply_to_response(&mut resp);
-    // Response-stage plugin mutations target this fresh local reply, not the
-    // discarded upstream response. Apply them after gateway defaults so
-    // conditional operations observe the reply's real initial header set.
-    ctx.drain_pending_response_header_ops(&mut resp);
-    ctx.request_info.trace_id.reconcile_response(&mut resp);
-    // The local-reply queue is shared by all plugins. Reassert the mandatory
-    // trailers-only framing and media type even if a non-ExtProc producer
-    // queued an unsafe operation.
-    resp.remove_header(&http::header::CONTENT_LENGTH);
-    resp.remove_header(&http::header::TRANSFER_ENCODING);
-    resp.insert_header("content-type", "application/grpc")
-        .expect("static ASCII header literal, cannot fail");
+    prepare_grpc_terminal_headers(ctx, &mut resp)?;
     send_grpc_trailers_only_frame(session, resp, grpc_status, grpc_message).await
 }
 

@@ -16,8 +16,12 @@ message must remain absent, not inherit a plugin-queued value.
 
 This applies to the direct Session status writer and both PluginSessionAdapter
 writers. Ordinary queued headers remain intact. Framing and Content-Type are
-still repaired by the existing callers, while status-field ownership is enforced
-once at the shared terminal dispatch point.
+repaired by `prepare_grpc_terminal_headers`, shared by all three entry points.
+It drains the queue once, reconciles trace identity, strips framing and restores
+application/grpc, in that order. Framework defaults remain caller-owned and
+precede conditional queue operations; adapters retain their empty initial header
+set. Claims, status persistence and delivery failure policy remain caller-owned.
+Status-field ownership is enforced once at the shared terminal dispatch point.
 
 ## Rationale and evidence
 
@@ -61,3 +65,10 @@ codec coverage is not full proxy, cross-process, or hot-reload coverage.
 - `reconcile-dsl-terminate-contract` — Astra review found this regression while
   reviewing the explicit DSL response; the user authorized the shared-writer
   correction on 2026-09-13.
+
+- `ARCH-003` — terminal envelope preparation is shared beside the wire writer;
+  exact and HTTP-mapped adapter entry points and the framework writer retain
+  their separate lifecycle and default-header contracts. Owning regressions
+  cover ordered conditions, trace reconciliation, failed delivery and duplicate
+  claims; existing native/gRPC-Web status-field tests retain codec coverage.
+  This refactor claims reduced policy duplication, not a measured speedup.

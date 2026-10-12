@@ -203,6 +203,40 @@ async fn html_error_helper_preserves_existing_response_owner() {
 async fn response_stage_exact_grpc_reply_drains_allowed_ops_and_reasserts_invariants() {
     let (mut session, _client) = live_downstream_session().await;
     let mut ctx = EdgionHttpContext::new();
+    ctx.request_info.trace_id.initialize(&session.req_header().headers);
+    let trace_id = ctx.request_info.trace_id.standard_trace_id().unwrap().to_owned();
+    for op in [
+        PendingHeaderOp::AddIfAbsent {
+            name: "server".into(),
+            value: http::HeaderValue::from_static("unexpected"),
+        },
+        PendingHeaderOp::OverwriteIfExists {
+            name: "strict-transport-security".into(),
+            value: http::HeaderValue::from_static("custom"),
+        },
+        PendingHeaderOp::Set {
+            name: "x-order".into(),
+            value: http::HeaderValue::from_static("first"),
+        },
+        PendingHeaderOp::OverwriteIfExists {
+            name: "x-order".into(),
+            value: http::HeaderValue::from_static("last"),
+        },
+        PendingHeaderOp::Set {
+            name: "x-trace-id".into(),
+            value: http::HeaderValue::from_static("stale"),
+        },
+        PendingHeaderOp::Append {
+            name: "grpc-status".into(),
+            value: http::HeaderValue::from_static("0"),
+        },
+        PendingHeaderOp::Append {
+            name: "grpc-status".into(),
+            value: http::HeaderValue::from_static("1"),
+        },
+    ] {
+        ctx.queue_pending_response_header_op(op);
+    }
     ctx.queue_pending_response_header_op(PendingHeaderOp::Append {
         name: "x-ext-proc".to_string(),
         value: http::HeaderValue::from_static("allowed"),
@@ -227,6 +261,11 @@ async fn response_stage_exact_grpc_reply_drains_allowed_ops_and_reasserts_invari
     assert!(written.headers.get("content-length").is_none());
     assert!(written.headers.get("transfer-encoding").is_none());
     assert_eq!(written.headers.get("grpc-status").unwrap(), "8");
+    assert_eq!(written.headers["server"], "Edgion");
+    assert_eq!(written.headers["strict-transport-security"], "custom");
+    assert_eq!(written.headers["x-order"], "last");
+    assert_eq!(written.headers["x-trace-id"], trace_id);
+    assert_eq!(written.headers.get_all("grpc-status").iter().count(), 1);
     assert!(!ctx.has_pending_response_header_ops());
 }
 
@@ -478,4 +517,26 @@ fn percent_encode_grpc_message_percent_encoded() {
     );
     // A literal percent-escape in the input must be double-encoded, not passed through.
     assert_eq!(percent_encode_grpc_message("%41"), "%2541");
+}
+
+#[tokio::test]
+async fn grpc_framework_preserves_claim_and_outcome_after_delivery_failure() {
+    let mut session = closed_downstream_session().await;
+    let mut ctx = EdgionHttpContext::default();
+    assert!(
+        send_grpc_status_trailers_only(&mut session, &mut ctx, &ServerHeaderOpts::default(), 8, None)
+            .await
+            .is_err()
+    );
+    assert_eq!(ctx.final_downstream_status(), Some(200));
+    assert_eq!(ctx.request_info.grpc_status(), Some(8));
+    ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
+        name: "x-unconsumed".into(),
+        value: http::HeaderValue::from_static("pending"),
+    });
+    send_grpc_status_trailers_only(&mut session, &mut ctx, &ServerHeaderOpts::default(), 13, None)
+        .await
+        .unwrap();
+    assert_eq!(ctx.request_info.grpc_status(), Some(8));
+    assert_eq!(ctx.pending_response_header_ops().len(), 1);
 }

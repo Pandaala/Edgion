@@ -11,6 +11,7 @@ pub use error_response::{
     end_response_grpc_unavailable, end_response_grpc_unimplemented, http_to_grpc_status, terminate_with_fallback,
 };
 pub(crate) use error_response::{
-    send_grpc_status_trailers_only, send_grpc_trailers_only, send_grpc_trailers_only_frame,
+    prepare_grpc_terminal_headers, send_grpc_status_trailers_only, send_grpc_trailers_only,
+    send_grpc_trailers_only_frame,
 };
 pub use server_header::ServerHeaderOpts;

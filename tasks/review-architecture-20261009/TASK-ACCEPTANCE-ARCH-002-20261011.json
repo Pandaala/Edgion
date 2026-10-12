@@ -1,0 +1,34 @@
+{
+  "finding": "ARCH-002",
+  "disposition": "fixed-and-verified",
+  "authorization": "User explicitly authorized closing and deleting the completed ARCH-002 finding.",
+  "independent_reviewer": "/root/body_contract_final_review",
+  "decision": "PASS",
+  "finding_sha256": "d358331fbd1262ba6c376773a3b09607dd7f16b976b7b2b04320c259ac387c09",
+  "manifest_sha256": "056eaf01062106f8d3f4206ed412060bdeb088391b1bf45363ae16fc5a744993",
+  "tracked_diff_sha256": "7cd8c9c64f5768331a4f938292a126745819a69884aa56964ff9b672f57db935",
+  "current_result_file_hash_matches": 42,
+  "implementation_task": "../pending/architecture-request-body-contract-ownership/architecture-request-body-contract-ownership.md",
+  "implementation_review": "../pending/architecture-request-body-contract-ownership/02-implementation.md",
+  "integration_evidence": "../pending/architecture-request-body-contract-ownership/integration-result.json",
+  "knowledge": "../../skills/04-review/http-body/intentional-design/request-body-read-contract-ownership.md",
+  "reported_execution": "Fresh isolated-worktree workspace check and Clippy passed with zero warnings; formatting and seven project guards passed; eight focused runs passed 275 tests, zero failures/ignored/empty filters. Exact reviewed bytes were integrated locally and all 42 hashes revalidated before closure.",
+  "limits": "No full workspace test suite or integration topology was run; closure adds no primary review coverage. Original independent finding receipts and unrelated candidates/coverage are preserved.",
+  "support_selected": {
+    "tasks/pending/architecture-request-body-contract-ownership/result-manifest.json": {
+      "sha256": "056eaf01062106f8d3f4206ed412060bdeb088391b1bf45363ae16fc5a744993"
+    },
+    "tasks/pending/architecture-request-body-contract-ownership/verification-results.json": {
+      "sha256": "36c9ecf281a2f30531c0002a1717d308aae170d4dd35d6b8f1186538aa28471f"
+    },
+    "tasks/pending/architecture-request-body-contract-ownership/integration-result.json": {
+      "sha256": "dde498c9da76970737f53591923c2dd37607195d98813dfc042132dd3ec9c5e0"
+    },
+    "tasks/pending/architecture-request-body-contract-ownership/02-implementation.md": {
+      "sha256": "825f5d2badda08a96531c195aebe517b949081da917b243588300170f8212b8c"
+    },
+    "skills/04-review/http-body/intentional-design/request-body-read-contract-ownership.md": {
+      "sha256": "5d8bb42ee1f380d8f2d0c928959d92d7a85b0f48f2cd03fbf6f269e2ae03418d"
+    }
+  }
+}

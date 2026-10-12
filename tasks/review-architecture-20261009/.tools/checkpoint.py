@@ -71,7 +71,7 @@ for ident, candidate in sorted(state['candidates'].items()):
     if candidate.get('finding_removed'):
         lines.append('| %s | resolved | %s | [%s](%s) |' % (
             ident, candidate.get('kind', 'architecture-debt'),
-            'Closed feature-operation coupling finding; acceptance evidence',
+            candidate['closure'].get('index_title', 'Closed feature-operation coupling finding; acceptance evidence'),
             candidate['closure']['acceptance_evidence']))
         continue
     content = (RUN/candidate['path']).read_text()

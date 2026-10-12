@@ -2483,3 +2483,127 @@ async fn waf_capability_rejected_install_keeps_resident_transaction() {
         403
     );
 }
+
+#[tokio::test]
+async fn terminal_grpc_adapter_paths_preserve_order_trace_and_status() {
+    for exact in [true, false] {
+        let (mut session, _client) = test_session_with_client().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.is_grpc_request = true;
+        ctx.request_info.trace_id.initialize(&session.req_header().headers);
+        let trace_id = ctx.request_info.trace_id.standard_trace_id().unwrap().to_owned();
+        for op in [
+            PendingHeaderOp::OverwriteIfExists {
+                name: "server".into(),
+                value: http::HeaderValue::from_static("unexpected"),
+            },
+            PendingHeaderOp::AddIfAbsent {
+                name: "x-order".into(),
+                value: http::HeaderValue::from_static("first"),
+            },
+            PendingHeaderOp::OverwriteIfExists {
+                name: "x-order".into(),
+                value: http::HeaderValue::from_static("last"),
+            },
+            PendingHeaderOp::Set {
+                name: "x-trace-id".into(),
+                value: http::HeaderValue::from_static("stale"),
+            },
+            PendingHeaderOp::Set {
+                name: "content-type".into(),
+                value: http::HeaderValue::from_static("text/plain"),
+            },
+            PendingHeaderOp::Append {
+                name: "grpc-status".into(),
+                value: http::HeaderValue::from_static("0"),
+            },
+            PendingHeaderOp::Append {
+                name: "grpc-status".into(),
+                value: http::HeaderValue::from_static("1"),
+            },
+            PendingHeaderOp::Set {
+                name: "grpc-message".into(),
+                value: http::HeaderValue::from_static("stale"),
+            },
+        ] {
+            ctx.queue_pending_response_header_op(op);
+        }
+        {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            if exact {
+                adapter.send_grpc_error_direct(8, None).await.unwrap();
+            } else {
+                adapter
+                    .write_response_header(Box::new(ResponseHeader::build(404, None).unwrap()), false)
+                    .await
+                    .unwrap();
+            }
+            assert!(adapter.grpc_response_terminated);
+            adapter
+                .write_response_body(Some(Bytes::from_static(b"must not escape")), true)
+                .await
+                .unwrap();
+        }
+        let written = session.response_written().unwrap();
+        assert_eq!(written.status.as_u16(), 200);
+        assert_eq!(written.headers["grpc-status"], if exact { "8" } else { "5" });
+        assert_eq!(written.headers.get_all("grpc-status").iter().count(), 1);
+        if exact {
+            assert!(!written.headers.contains_key("grpc-message"));
+        } else {
+            assert_eq!(written.headers["grpc-message"], "not found");
+        }
+        assert_eq!(written.headers["x-order"], "last");
+        assert_eq!(written.headers["x-trace-id"], trace_id);
+        assert_eq!(written.headers["content-type"], "application/grpc");
+        assert!(!written.headers.contains_key("server"));
+        assert!(!written.headers.contains_key("strict-transport-security"));
+        assert!(!written.headers.contains_key("content-length"));
+        assert!(!written.headers.contains_key("transfer-encoding"));
+        assert!(ctx.pending_response_header_ops().is_empty());
+        assert_eq!(ctx.request_info.grpc_status(), Some(if exact { 8 } else { 5 }));
+    }
+}
+
+#[tokio::test]
+async fn terminal_grpc_adapter_failure_keeps_outcome_and_duplicate_queue() {
+    for exact in [true, false] {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.is_grpc_request = true;
+        {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            let result = if exact {
+                adapter.send_grpc_error_direct(8, None).await
+            } else {
+                adapter
+                    .write_response_header(Box::new(ResponseHeader::build(404, None).unwrap()), false)
+                    .await
+            };
+            assert!(result.is_err());
+            assert!(adapter.delivery_failure_recorded);
+            assert!(adapter.grpc_response_terminated);
+            adapter
+                .write_response_body(Some(Bytes::from_static(b"suppressed")), true)
+                .await
+                .unwrap();
+            adapter.ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
+                name: "x-unconsumed".into(),
+                value: http::HeaderValue::from_static("pending"),
+            });
+            let duplicate = if exact {
+                adapter.send_grpc_error_direct(13, None).await
+            } else {
+                adapter
+                    .write_response_header(Box::new(ResponseHeader::build(503, None).unwrap()), false)
+                    .await
+            };
+            assert!(duplicate.is_err());
+        }
+        assert_eq!(ctx.final_downstream_status(), Some(200));
+        assert_eq!(ctx.request_info.grpc_status(), Some(if exact { 8 } else { 5 }));
+        assert_eq!(ctx.pending_response_header_ops().len(), 1);
+        assert_eq!(ctx.diagnostics.entries().len(), 1);
+        assert!(ctx.diagnostics.contains_error(EdgionErrorCode::ClientClosed));
+    }
+}

@@ -29737,7 +29737,7 @@
     },
     "ARCH-002": {
       "path": "ARCH-002-request-body-contract-ownership.md",
-      "status": "candidate",
+      "status": "resolved",
       "kind": "architecture-debt",
       "partition": "GW-SESSION",
       "analyst": "/root/analyze_session",
@@ -29804,9 +29804,23 @@
           "limitations": "Scoped source review; no primary coverage credit, executed checks, performance evidence or claim about unfinished Stage D."
         }
       ],
-      "previous_status": "confirmed",
-      "revalidation_pending": true,
-      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json"
+      "previous_status": "candidate",
+      "revalidation_pending": false,
+      "revalidation_reason": "DRIFT-DEPENDENCIES-20261011-B.json",
+      "finding_removed": true,
+      "removed_finding_path": "ARCH-002-request-body-contract-ownership.md",
+      "current_implementation_acceptance": "TASK-ACCEPTANCE-ARCH-002-20261011.json",
+      "closure": {
+        "date": "2026-10-11",
+        "disposition": "fixed-and-verified",
+        "authorization": "User explicitly authorized closing and deleting the completed ARCH-002 finding.",
+        "independent_reviewer": "/root/body_contract_final_review",
+        "reviewed_finding_sha256": "d358331fbd1262ba6c376773a3b09607dd7f16b976b7b2b04320c259ac387c09",
+        "acceptance_evidence": "TASK-ACCEPTANCE-ARCH-002-20261011.json",
+        "implementation_review": "../pending/architecture-request-body-contract-ownership/02-implementation.md",
+        "index_title": "Closed request-body contract ownership finding; acceptance evidence",
+        "preservation": "Original claim hash, independent verification history, primary coverage and all unrelated candidates retained."
+      }
     },
     "ARCH-003": {
       "path": "ARCH-003-grpc-terminal-header-preparation.md",
