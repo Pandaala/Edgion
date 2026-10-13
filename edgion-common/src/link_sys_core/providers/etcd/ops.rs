@@ -446,6 +446,7 @@ pub struct EtcdLockGuard {
     client: etcd_client::Client,
     lock_key: Vec<u8>,
     lease_id: i64,
+    released: bool,
 }
 
 impl EtcdLockGuard {
@@ -459,12 +460,17 @@ impl EtcdLockGuard {
             .lease_revoke(self.lease_id)
             .await
             .map_err(|e| anyhow::anyhow!("Etcd LEASE REVOKE (unlock): {:?}", e))?;
+        // Stay armed across both awaits, including cancellation and partial failure.
+        self.released = true;
         Ok(())
     }
 }
 
 impl Drop for EtcdLockGuard {
     fn drop(&mut self) {
+        if self.released {
+            return;
+        }
         // Best-effort release via spawned task.
         // If the task can't run (runtime shutting down), the lock expires via lease TTL.
         let mut client = self.client.clone();
@@ -510,6 +516,7 @@ impl EtcdLinkClient {
             client,
             lock_key: lock_resp.key().to_vec(),
             lease_id,
+            released: false,
         })
     }
 

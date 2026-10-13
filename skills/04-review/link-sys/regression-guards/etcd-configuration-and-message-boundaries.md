@@ -33,6 +33,13 @@ CI, measurements and acceptance matrix are superseded by the user's scope change
 Historical SDK test counts do not describe the upstream dependency now selected.
 
 Normal KV, Watch, Lease, Lock and election operations use upstream SDK semantics.
+ARCH-079 gives the native lock guard a completion bit: explicit release disarms
+its drop fallback only after both Unlock and LeaseRevoke succeed. Either error
+or cancellation during either RPC leaves fallback armed, including retries of
+an already successful first step. This is local completion bookkeeping, not an
+exactly-once network guarantee. Controlled SDK integration tests cover successful
+release, ordinary drop, both errors and both cancellation points; absence of
+duplicate requests is observed over a bounded interval.
 There is no Edgion-configurable all-service pre-encoding or pre-buffer message cap,
 and no server-version or cluster-identity policy. DNS, dialing and transparent
 connection recovery are SDK-owned, without Edgion dial-time egress classification.
