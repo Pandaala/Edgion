@@ -66,3 +66,20 @@ Re-open this decision only if:
 ## Resolution references
 
 - `BODY-010` — 2026-07-27.
+
+## Background tick observation windows
+
+The separate `Wasm` tick/shared-data and tick-callout cases take a successful
+baseline and require a positive checked delta from later probes (ARCH-401).
+The guest's counters belong to the request-stage runtime lifetime; an unchanged
+positive value can outlive the tick or a healthy callout dependency. Both probes
+retain their own marker/header and the advanced fixture host. Missing, malformed
+or reset counters fail, as do HTTP/JSON/request errors. A ten-second deadline
+covers the baseline and all subsequent probes, with 200 ms between observations.
+An unchanged value at the deadline fails; the harness never resets shared state.
+
+This proves background progress during the observation window, not attribution
+to a particular request or sustained service health. The pure `tick_tests` cover
+numeric parsing and checked deltas, including nonzero baselines and resets; they
+do not establish a fresh live Gateway/Kubernetes tick or callout run. Runtime
+ownership, tick cancellation, egress permissions and guest code are unchanged.

@@ -39,6 +39,51 @@ fn callout_origin() -> String {
     std::env::var("EDGION_TEST_WASM_CALLOUT_ORIGIN").unwrap_or_else(|_| CALLOUT_ORIGIN.to_string())
 }
 
+fn tick_counter(body: &Value, counter_header: &str) -> Result<u64, String> {
+    body["headers"][counter_header]
+        .as_str()
+        .and_then(|value| value.parse().ok())
+        .ok_or_else(|| format!("Missing or invalid {counter_header} counter"))
+}
+
+fn tick_counter_delta(baseline: u64, current: u64) -> Result<u64, String> {
+    current
+        .checked_sub(baseline)
+        .ok_or_else(|| "Wasm tick counter reset".to_string())
+}
+
+async fn probe_tick_counter(ctx: &TestContext, marker: &str, counter_header: &str) -> Result<u64, String> {
+    let response = ctx
+        .http_client
+        .get(format!("{}/headers", ctx.http_url()))
+        .header("host", ADV_HOST)
+        .header(marker, "1")
+        .send()
+        .await
+        .map_err(|_| "Wasm tick probe request failed")?;
+    if response.status() != 200 {
+        return Err(format!("Expected tick probe HTTP 200, got {}", response.status()));
+    }
+    let body = response.json::<Value>().await.map_err(|_| "Invalid tick probe JSON")?;
+    tick_counter(&body, counter_header)
+}
+
+async fn wait_for_tick_progress(ctx: &TestContext, marker: &str, counter_header: &str) -> Result<u64, String> {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        let baseline = probe_tick_counter(ctx, marker, counter_header).await?;
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            let current = probe_tick_counter(ctx, marker, counter_header).await?;
+            let delta = tick_counter_delta(baseline, current)?;
+            if delta > 0 {
+                return Ok(delta);
+            }
+        }
+    })
+    .await
+    .map_err(|_| format!("No fresh {counter_header} progress within 10 seconds"))?
+}
+
 pub struct WasmPluginTestSuite;
 
 impl WasmPluginTestSuite {
@@ -431,39 +476,12 @@ impl WasmPluginTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let url = format!("{}/headers", ctx.http_url());
-                    // The guest tick period is 1s; give it a couple of ticks.
-                    tokio::time::sleep(std::time::Duration::from_millis(2300)).await;
-                    let resp = ctx
-                        .http_client
-                        .get(&url)
-                        .header("host", ADV_HOST)
-                        .header("x-wasm-read-ticks", "1")
-                        .send()
-                        .await;
-                    match resp {
-                        Ok(r) if r.status() == 200 => match r.json::<Value>().await {
-                            Ok(body) => {
-                                let ticks = body["headers"]["x-wasm-ticks"]
-                                    .as_str()
-                                    .and_then(|s| s.parse::<u64>().ok())
-                                    .unwrap_or(0);
-                                if ticks >= 1 {
-                                    TestResult::passed_with_message(
-                                        start.elapsed(),
-                                        format!("on_tick fired; shared counter x-wasm-ticks={}", ticks),
-                                    )
-                                } else {
-                                    TestResult::failed(
-                                        start.elapsed(),
-                                        "x-wasm-ticks is 0 or missing (tick task not running?)".to_string(),
-                                    )
-                                }
-                            }
-                            Err(e) => TestResult::failed(start.elapsed(), format!("JSON parse: {}", e)),
-                        },
-                        Ok(r) => TestResult::failed(start.elapsed(), format!("Expected 200, got {}", r.status())),
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    match wait_for_tick_progress(&ctx, "x-wasm-read-ticks", "x-wasm-ticks").await {
+                        Ok(delta) => TestResult::passed_with_message(
+                            start.elapsed(),
+                            format!("Fresh x-wasm-ticks progress: {delta}"),
+                        ),
+                        Err(error) => TestResult::failed(start.elapsed(), error),
                     }
                 })
             },
@@ -478,41 +496,12 @@ impl WasmPluginTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let url = format!("{}/headers", ctx.http_url());
-                    // The guest polls <pluginConfig>/verify every 1s tick and
-                    // bumps shared "calloutticks" on each 200. Give it a
-                    // couple of ticks (callouts included) to complete.
-                    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
-                    let resp = ctx
-                        .http_client
-                        .get(&url)
-                        .header("host", ADV_HOST)
-                        .header("x-wasm-read-callout", "1")
-                        .send()
-                        .await;
-                    match resp {
-                        Ok(r) if r.status() == 200 => match r.json::<Value>().await {
-                            Ok(body) => {
-                                let n = body["headers"]["x-wasm-calloutticks"]
-                                    .as_str()
-                                    .and_then(|s| s.parse::<u64>().ok())
-                                    .unwrap_or(0);
-                                if n >= 1 {
-                                    TestResult::passed_with_message(
-                                        start.elapsed(),
-                                        format!("tick callouts completed; x-wasm-calloutticks={}", n),
-                                    )
-                                } else {
-                                    TestResult::failed(
-                                        start.elapsed(),
-                                        "x-wasm-calloutticks is 0 or missing (tick callout not running?)".to_string(),
-                                    )
-                                }
-                            }
-                            Err(e) => TestResult::failed(start.elapsed(), format!("JSON parse: {}", e)),
-                        },
-                        Ok(r) => TestResult::failed(start.elapsed(), format!("Expected 200, got {}", r.status())),
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    match wait_for_tick_progress(&ctx, "x-wasm-read-callout", "x-wasm-calloutticks").await {
+                        Ok(delta) => TestResult::passed_with_message(
+                            start.elapsed(),
+                            format!("Fresh x-wasm-calloutticks progress: {delta}"),
+                        ),
+                        Err(error) => TestResult::failed(start.elapsed(), error),
                     }
                 })
             },
@@ -537,5 +526,38 @@ impl TestSuite for WasmPluginTestSuite {
             Self::test_tick_shared_data(),
             Self::test_tick_callout(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tick_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn tick_observations_require_numeric_headers() {
+        for header in ["x-wasm-ticks", "x-wasm-calloutticks"] {
+            assert_eq!(tick_counter(&json!({"headers": {header: "41"}}), header), Ok(41));
+            assert!(tick_counter(&json!({}), header).is_err());
+            for value in [
+                Value::Null,
+                json!(41),
+                json!("bad"),
+                json!("-1"),
+                json!("18446744073709551616"),
+            ] {
+                assert!(tick_counter(&json!({"headers": {header: value}}), header).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn tick_progress_requires_growth_from_the_observed_baseline() {
+        assert_eq!(tick_counter_delta(41, 41), Ok(0));
+        assert_eq!(tick_counter_delta(41, 42), Ok(1));
+        assert_eq!(tick_counter_delta(0, 1), Ok(1));
+        assert!(tick_counter_delta(41, 0).is_err());
+        assert!(tick_counter_delta(u64::MAX, 0).is_err());
+        assert_eq!(tick_counter_delta(u64::MAX - 1, u64::MAX), Ok(1));
     }
 }
