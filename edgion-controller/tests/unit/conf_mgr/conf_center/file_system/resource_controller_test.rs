@@ -877,3 +877,73 @@ async fn valid_to_identity_mismatch_to_repair_revokes_then_recovers_via_worker()
     shutdown.shutdown();
     assert!(controller_task.await.unwrap().is_ok());
 }
+
+#[tokio::test]
+async fn worker_read_failure_removes_raw_generation_and_plain_requeue_repairs_it() {
+    use crate::conf_mgr::sync_runtime::resource_processor::raw_store::RawStore;
+    use crate::conf_mgr::sync_runtime::resource_processor::ProcessorObj;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let (processor, registry, raw_store, status_handler, invalid, worker) = fs_worker_test_harness(tmp.path());
+    processor.set_raw_store(raw_store.clone());
+    let key = "default/r1";
+    let path = tmp.path().join("source").join("HTTPRoute_default_r1.yaml");
+    tokio::fs::create_dir_all(path.parent().unwrap()).await.unwrap();
+    registry.record(ResourceKey::new("HTTPRoute".to_string(), key.to_string()), path.clone());
+    let prior = make_route("default", "r1");
+    tokio::fs::write(&path, serde_yaml::to_string(&prior).unwrap())
+        .await
+        .unwrap();
+    raw_store.upsert(key.to_string(), Arc::new(prior.clone()));
+    processor.save(prior, None);
+    assert!(processor.get_raw_any(key).is_some());
+    assert!(processor.get(key).is_some());
+
+    // The existing winner still exists, but the worker cannot decode its bytes.
+    tokio::fs::write(&path, [0xff]).await.unwrap();
+    processor.on_event_key(key.to_string()).await;
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let status = status_handler.read_status_json("HTTPRoute", key).await;
+            if status.is_some_and(|status| status.contains("ParseError"))
+                && processor.get(key).is_none()
+                && raw_store.get(key).is_none()
+                && processor.get_raw_any(key).is_none()
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("worker must withdraw both generations and persist ParseError");
+    assert!(invalid.read().is_empty(), "read failures must not block later rereads");
+
+    let mut repaired = make_route("default", "r1");
+    repaired.spec.hostnames = Some(vec!["repaired.example.com".to_string()]);
+    tokio::fs::write(&path, serde_yaml::to_string(&repaired).unwrap())
+        .await
+        .unwrap();
+    // No Apply, raw upsert or invalid-envelope clear: ordinary requeue must recover.
+    processor.requeue(key.to_string()).await;
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let matches_repair = |route: &HTTPRoute| route.spec.hostnames == repaired.spec.hostnames;
+            let raw = processor
+                .get_raw_any(key)
+                .and_then(|obj| obj.downcast::<HTTPRoute>().ok());
+            if processor.get(key).as_ref().is_some_and(matches_repair)
+                && raw.as_deref().is_some_and(matches_repair)
+                && status_handler.read_status_json("HTTPRoute", key).await.is_none()
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("plain requeue must restore raw/cache state and clear the error sidecar");
+    assert!(invalid.read().is_empty());
+    worker.abort();
+    assert!(worker.await.unwrap_err().is_cancelled());
+}

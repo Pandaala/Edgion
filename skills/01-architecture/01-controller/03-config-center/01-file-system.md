@@ -190,9 +190,20 @@ Phase 2 waits on `runtime.processor_registry` for Phase 1 readiness — a **real
 | `Apply` parsed successfully (runtime phase, main loop) | `upsert(key, Arc::new(obj))` |
 | `Delete` | `remove(&key)` |
 | Worker: file exists and parsed successfully | `upsert(key, Arc::new(obj))` — ensure consistency with the version actually processed by the worker |
+| Worker: file read fails | `remove(&key)` before the existing processed-cache revocation and inline `ParseError` status |
 | Worker: file does not exist | `remove(&key)` — fallback in case a Delete event was lost (channel lagged) |
 
 Maintaining via both the main loop and the worker is necessary: the main loop guarantees timely response, while the worker uses the freshest version re-read from disk to correct potential version drift, and also serves as a Delete fallback when the channel is lagged.
+
+ARCH-096 keeps raw input consistent with the worker's existing read-failure
+revocation policy. A read error (including invalid UTF-8 in an existing winner
+file) removes the previous raw generation without adding a runtime-invalid
+envelope. A repaired file can therefore recover through an ordinary requeue,
+without an Apply event or manual envelope clearing. The mirrored worker test
+checks RawStore and `get_raw_any` withdrawal, processed-cache revocation, persisted
+`ParseError`, and subsequent raw/cache recovery with sidecar removal. RawStore
+remains the canonical unfiltered input view; this does not change its consumers
+or promise cross-kind atomicity.
 
 ## Differences from KubernetesCenter
 

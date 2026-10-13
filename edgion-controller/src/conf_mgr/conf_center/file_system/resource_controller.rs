@@ -732,6 +732,7 @@ where
                                 }
                             },
                             Err(e) => {
+                                fs_raw_store.remove(&work_item.key);
                                 let error_msg = e.to_string();
                                 tracing::warn!(
                                     component = "fs_resource_controller",
