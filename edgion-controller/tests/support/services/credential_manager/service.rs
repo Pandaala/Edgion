@@ -4,7 +4,7 @@ use super::*;
 pub(super) static TEST_SERVICE_LOCK: Mutex<()> = Mutex::new(());
 
 #[cfg(test)]
-pub(super) fn lock_test_service() -> parking_lot::MutexGuard<'static, ()> {
+pub(crate) fn lock_test_service() -> parking_lot::MutexGuard<'static, ()> {
     TEST_SERVICE_LOCK.lock()
 }
 

@@ -1745,3 +1745,6 @@ mod tests_memory;
 mod test_support;
 #[cfg(test)]
 use test_support::*;
+
+#[cfg(test)]
+pub(crate) use test_support::lock_test_service;

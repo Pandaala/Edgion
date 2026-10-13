@@ -9,3 +9,6 @@ mod service;
 pub use service::{
     start_credential_manager_service, start_memory_credential_manager_service, stop_credential_manager_service,
 };
+
+#[cfg(test)]
+pub(crate) use service::lock_test_service;

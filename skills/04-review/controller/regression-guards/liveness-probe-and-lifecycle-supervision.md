@@ -77,6 +77,24 @@ the pod so another replica can take over. All-serve mode previously had no give-
 (fixed 1 s/5 s sleep loop forever); it now shares the same failure-counter + backoff +
 give-up logic via an `ServingFlowExit` failure-vs-benign split.
 
+## Local backend error-channel closure
+
+ARCH-092 applies the existing local-backend failure cleanup to an unexpectedly
+closed backend error channel in `CenterBase::run_lifecycle_gated`. After readiness,
+closure without process shutdown selects the existing Error action with a fixed
+reason. The iteration signals shutdown, stops its credential service, withdraws
+the CSS before clearing stores, aborts the controller, resets runtime state and
+clears reload admission before waiting for process shutdown. Closure during an
+already-requested shutdown keeps the normal Shutdown action. There is no new
+automatic restart or live-task watchdog.
+
+The mirrored `non_kube_common` tests drive the actual lifecycle with a spawned
+backend owning the sender. They check unexpected closure and reported failure,
+orderly shutdown, readiness withdrawal and fresh CSS identity after reload.
+A real ready HTTPRoute processor with no objects isolates lifecycle behavior without network I/O;
+the tests share the credential service's existing test mutex. Abort requests do
+not prove descendant drain, and this correction does not extend teardown guarantees.
+
 ## Fix Suggestions Not Accepted
 
 - **Naive `is_leader()` recheck before starting leader jobs** — the flag is 2–10 s stale by

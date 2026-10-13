@@ -290,10 +290,8 @@ impl CenterBase {
                 result = &mut error_rx => {
                     match result {
                         Ok(msg) => LoopAction::Error(msg),
-                        Err(_) => {
-                            global_shutdown.wait().await;
-                            LoopAction::Shutdown
-                        }
+                        Err(_) if global_shutdown.is_shutdown() => LoopAction::Shutdown,
+                        Err(_) => LoopAction::Error("Backend controller error channel closed unexpectedly".to_string()),
                     }
                 }
             };
