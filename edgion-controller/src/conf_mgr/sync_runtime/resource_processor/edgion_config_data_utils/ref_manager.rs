@@ -30,9 +30,10 @@ impl EdgionConfigDataRefManager {
     /// Remove all references owned by a dependent on update or delete.
     pub fn clear_refs_from(&self, dependent_key: &str) {
         let mut map = self.refs.write();
-        for refs in map.values_mut() {
+        map.retain(|_, refs| {
             refs.remove(dependent_key);
-        }
+            !refs.is_empty()
+        });
     }
 
     /// Get all dependent keys that reference a given `ed_key`.
@@ -46,8 +47,8 @@ impl EdgionConfigDataRefManager {
 
     /// Remove the entire forward-direction entry for an EdgionConfigData key.
     ///
-    /// Call this when the EdgionConfigData itself is deleted so stale dependents
-    /// do not linger and get spuriously requeued if the key is later reused.
+    /// This explicitly drops all incoming dependencies. Ordinary target deletion
+    /// must retain them so recreation can wake unchanged consumers.
     pub fn remove_edgion_config_data(&self, ed_key: &str) {
         self.refs.write().remove(ed_key);
     }
@@ -63,3 +64,7 @@ impl Default for EdgionConfigDataRefManager {
         Self::new()
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../tests/unit/conf_mgr/sync_runtime/resource_processor/edgion_config_data_utils/ref_manager_test.rs"]
+mod tests;

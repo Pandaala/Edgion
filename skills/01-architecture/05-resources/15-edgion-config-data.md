@@ -220,6 +220,11 @@ Namespace-visible targets require an exact grant from `gateway.networking.k8s.io
 
 - Removes from `EdgionConfigDataStore`.
 - Requeues all dependents so their `ResolvedRefs` is recomputed.
+- Clears the deleted owner's outgoing references but retains nonempty incoming
+  references, so recreation can wake unchanged consumers. Owner replacement or
+  deletion removes empty target buckets in the existing reference-manager write
+  section; shared targets retain their other dependents. This tracks current
+  edges without periodic GC and does not promise shrinking HashMap capacity.
 
 ### update_status
 

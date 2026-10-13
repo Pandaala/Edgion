@@ -80,6 +80,13 @@ async fn config_data_apply_and_delete_requeue_request_access_policy_dependents()
         runtime.edgion_config_data_refs.get_refs("default/url-list"),
         ["EdgionPlugins:default/policy"]
     );
+    // Clearing another owner must preserve the deleted target's live incoming
+    // edge: recreation wakes the unchanged consumer without re-registration.
+    runtime
+        .edgion_config_data_refs
+        .clear_refs_from("EdgionPlugins:default/other");
+    EdgionConfigDataHandler::new().on_change(&resource, &ctx).await;
+    assert_plugins_requeued(&processor).await;
 }
 
 #[tokio::test]
