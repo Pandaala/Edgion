@@ -46,7 +46,7 @@ fn validate_domain(domain: &str) -> Result<(), DnsError> {
 ///
 /// An explicit `urlTemplate` always wins — it lets an operator supply an
 /// account-scoped / signed / correct-scheme endpoint while still reusing a
-/// preset's response format (see [`effective_response_format`], which keeps the
+/// preset's response format (see [`PreparedResponse::from_config`], which keeps the
 /// preset's format). A preset's built-in URL is only the fallback when no
 /// `urlTemplate` is given.
 pub fn render_url(cfg: &HttpDnsResolverConfig, domain: &str) -> Result<String, DnsError> {
@@ -63,12 +63,40 @@ pub fn render_url(cfg: &HttpDnsResolverConfig, domain: &str) -> Result<String, D
     Err(DnsError::Parse("no urlTemplate and no preset configured".into()))
 }
 
-/// The response format to parse with: a preset's format wins over the
-/// user-supplied `response` (the preset knows the vendor's wire shape).
-fn effective_response_format(cfg: &HttpDnsResolverConfig) -> HttpDnsResponseFormat {
-    match &cfg.preset {
-        Some(preset) => preset.response_format(),
-        None => cfg.response.clone(),
+/// Immutable interpretation metadata owned by one prepared query generation.
+pub(super) enum PreparedResponse {
+    Json {
+        path: String,
+        pointer: String,
+        delimiter: Option<String>,
+    },
+    Delimited {
+        delimiter: Option<String>,
+    },
+}
+
+impl PreparedResponse {
+    /// Preset response policy wins independently of an explicit URL template.
+    pub(super) fn from_config(config: &HttpDnsResolverConfig) -> Self {
+        match &config.preset {
+            Some(preset) => Self::from_format(&preset.response_format()),
+            None => Self::from_format(&config.response),
+        }
+    }
+
+    fn from_format(format: &HttpDnsResponseFormat) -> Self {
+        let delimiter = format.delimiter.clone();
+        match format.kind {
+            HttpDnsBodyKind::Json => {
+                let path = format.ip_path.as_deref().unwrap_or("ips");
+                Self::Json {
+                    path: path.to_string(),
+                    pointer: json_pointer_path(path),
+                    delimiter,
+                }
+            }
+            HttpDnsBodyKind::Delimited => Self::Delimited { delimiter },
+        }
     }
 }
 
@@ -102,25 +130,34 @@ fn require_non_empty_delimiter(delimiter: Option<&str>) -> Result<&str, DnsError
 /// Parse the response body into a de-duplicated IP list, capped at
 /// [`MAX_HTTP_DNS_ADDRS`].
 pub fn parse_body(fmt: &HttpDnsResponseFormat, body: &str) -> Result<Vec<IpAddr>, DnsError> {
-    match fmt.kind {
-        HttpDnsBodyKind::Json => {
-            let v: serde_json::Value = serde_json::from_str(body).map_err(|e| DnsError::Parse(e.to_string()))?;
-            let path = fmt.ip_path.as_deref().unwrap_or("ips");
-            let node = v
-                .pointer(&json_pointer_path(path))
-                .ok_or_else(|| DnsError::Parse(format!("ipPath '{path}' not found in response")))?;
-            match node {
-                serde_json::Value::Array(items) => parse_ip_candidates(items.iter().filter_map(|i| i.as_str())),
-                serde_json::Value::String(s) => {
-                    let delim = require_non_empty_delimiter(fmt.delimiter.as_deref())?;
-                    parse_ip_candidates(s.split(delim).map(str::trim))
+    PreparedResponse::from_format(fmt).parse(body)
+}
+
+impl PreparedResponse {
+    fn parse(&self, body: &str) -> Result<Vec<IpAddr>, DnsError> {
+        match self {
+            Self::Json {
+                path,
+                pointer,
+                delimiter,
+            } => {
+                let v: serde_json::Value = serde_json::from_str(body).map_err(|e| DnsError::Parse(e.to_string()))?;
+                let node = v
+                    .pointer(pointer)
+                    .ok_or_else(|| DnsError::Parse(format!("ipPath '{path}' not found in response")))?;
+                match node {
+                    serde_json::Value::Array(items) => parse_ip_candidates(items.iter().filter_map(|i| i.as_str())),
+                    serde_json::Value::String(s) => {
+                        let delim = require_non_empty_delimiter(delimiter.as_deref())?;
+                        parse_ip_candidates(s.split(delim).map(str::trim))
+                    }
+                    _ => Err(DnsError::Parse("ipPath did not point to array/string".into())),
                 }
-                _ => Err(DnsError::Parse("ipPath did not point to array/string".into())),
             }
-        }
-        HttpDnsBodyKind::Delimited => {
-            let delim = require_non_empty_delimiter(fmt.delimiter.as_deref())?;
-            parse_ip_candidates(body.split(delim).map(str::trim))
+            Self::Delimited { delimiter } => {
+                let delim = require_non_empty_delimiter(delimiter.as_deref())?;
+                parse_ip_candidates(body.split(delim).map(str::trim))
+            }
         }
     }
 }
@@ -188,10 +225,20 @@ pub async fn resolve_http_dns_with<F: HttpDnsFetcher + ?Sized>(
     cfg: &HttpDnsResolverConfig,
     domain: &str,
 ) -> Result<Vec<IpAddr>, DnsError> {
+    let response = PreparedResponse::from_config(cfg);
+    resolve_http_dns_prepared(fetcher, cfg, &response, domain).await
+}
+
+pub(super) async fn resolve_http_dns_prepared<F: HttpDnsFetcher + ?Sized>(
+    fetcher: &F,
+    cfg: &HttpDnsResolverConfig,
+    response: &PreparedResponse,
+    domain: &str,
+) -> Result<Vec<IpAddr>, DnsError> {
     let attempt = async {
         let url = render_url(cfg, domain)?;
         let body = fetcher.get(&url).await?;
-        parse_body(&effective_response_format(cfg), &body)
+        response.parse(&body)
     }
     .await;
 

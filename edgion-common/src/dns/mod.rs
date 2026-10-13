@@ -23,6 +23,7 @@ use edgion_resources::LinkSys;
 /// Configuration-owned HTTP DNS generation. Querying never builds clients or
 /// reads inherited TLS policy; an unusable generation retains its own fallback.
 pub struct PreparedHttpDns {
+    response: httpdns::PreparedResponse,
     config: HttpDnsResolverConfig,
     fetcher: Option<http_fetcher::ReqwestHttpDnsFetcher>,
     address_fingerprint: String,
@@ -131,6 +132,7 @@ impl HttpDnsCandidate {
             connection: None,
         };
         Arc::new(PreparedHttpDns {
+            response: httpdns::PreparedResponse::from_config(config),
             config: query,
             fetcher,
             address_fingerprint,
@@ -268,7 +270,9 @@ pub async fn resolve(spec: &ResolverSpec, domain: &str) -> Result<Vec<IpAddr>, D
         }
         ResolverSpec::StandardDns { servers } => standard::resolve_standard(servers, domain).await,
         ResolverSpec::HttpDns(prepared) => match prepared.fetcher.as_ref() {
-            Some(fetcher) => httpdns::resolve_http_dns_with(fetcher, &prepared.config, domain).await,
+            Some(fetcher) => {
+                httpdns::resolve_http_dns_prepared(fetcher, &prepared.config, &prepared.response, domain).await
+            }
             None => httpdns::resolve_via_fallback(&prepared.config, domain).await,
         },
     }

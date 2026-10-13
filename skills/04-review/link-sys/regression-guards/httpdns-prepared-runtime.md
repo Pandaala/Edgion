@@ -14,6 +14,14 @@ resolution only queries that handle or runs its configured fallback. Gateway
 ExternalName and AI external backend lookups consume the same prepared core.
 No client construction, TLS policy resolution, or tracing belongs to a query.
 
+ARCH-077: Each prepared generation also owns its effective response mode, authored
+diagnostic path, encoded JSON pointer and delimiter. Production queries borrow this
+metadata; they do not clone response-format strings or rebuild the pointer. Deriving
+metadata is infallible and does not consume TTL fields or alter authored cache
+identity. Empty delimiters still reject only when splitting string/delimited bodies;
+JSON arrays and the existing syntax/path/type error order remain unchanged. Old
+borrowed generations retain their interpretation after a replacement is prepared.
+
 Gateway publishes HTTPDNS in the existing typed LinkSys runtime table. All
 provider dispatch is synchronous configuration work under the source-event lock
 before source publication. Rebuilds, admission retries, and synchronous OTLP

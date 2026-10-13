@@ -373,3 +373,32 @@ fn borrowed_candidates_preserve_format_specific_whitespace_and_order() {
         vec!["192.0.2.1".parse::<IpAddr>().unwrap(), "::1".parse().unwrap()]
     );
 }
+
+#[test]
+fn prepared_response_keeps_branch_local_delimiter_checks_and_error_order() {
+    let mut format = HttpDnsResponseFormat {
+        kind: HttpDnsBodyKind::Json,
+        ip_path: Some("data.ips".into()),
+        delimiter: Some(String::new()),
+        ttl_path: Some("unused.ttl".into()),
+    };
+    let response = PreparedResponse::from_format(&format);
+    format.ip_path = Some("changed".into());
+    for _ in 0..3 {
+        assert_eq!(
+            response.parse(r#"{"data":{"ips":["192.0.2.1"]}}"#).unwrap(),
+            vec!["192.0.2.1".parse::<IpAddr>().unwrap()]
+        );
+    }
+    for (body, expected) in [
+        (
+            "{",
+            serde_json::from_str::<serde_json::Value>("{").unwrap_err().to_string(),
+        ),
+        ("{}", "ipPath 'data.ips' not found in response".into()),
+        (r#"{"data":{"ips":1}}"#, "ipPath did not point to array/string".into()),
+        (r#"{"data":{"ips":"192.0.2.1"}}"#, "delimiter must not be empty".into()),
+    ] {
+        assert!(matches!(response.parse(body), Err(DnsError::Parse(message)) if message == expected));
+    }
+}

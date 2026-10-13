@@ -562,3 +562,60 @@ async fn signed_urls_are_sent_unchanged_but_transport_errors_are_redacted() {
         }
     }
 }
+
+#[tokio::test]
+async fn response_metadata_changes_with_generation_while_borrowed_generation_survives() {
+    use edgion_common::dns::{resolve, HttpDnsCandidate, ResolverSpec};
+    use edgion_resources::resources::link_sys::HttpDnsResolverConfig;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/d?host={{domain}}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        for _ in 0..3 {
+            let (mut socket, _) = tokio::time::timeout(Duration::from_secs(3), listener.accept())
+                .await
+                .unwrap()
+                .unwrap();
+            let mut request = [0u8; 1024];
+            assert!(
+                tokio::time::timeout(Duration::from_secs(2), socket.read(&mut request))
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    > 0
+            );
+            let body = r#"{"old":["192.0.2.1"],"new":["192.0.2.2"]}"#;
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            tokio::time::timeout(Duration::from_secs(2), socket.write_all(reply.as_bytes()))
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    });
+    let mut config: HttpDnsResolverConfig = serde_json::from_value(serde_json::json!({
+        "urlTemplate": url, "response": {"kind": "json", "ipPath": "old"},
+        "fallback": {"type": "none"}, "connection": {"allowLoopback": true}
+    }))
+    .unwrap();
+    let old = prepare(config.clone());
+    assert!(old.is_ready());
+    assert!(HttpDnsCandidate::from_link_sys(owner(config.clone()))
+        .unwrap()
+        .matches(&old));
+    config.response.ip_path = Some("new".into());
+    let candidate = HttpDnsCandidate::from_link_sys(owner(config)).unwrap();
+    assert!(!candidate.matches(&old));
+    let new = candidate.prepare();
+    assert!(new.is_ready());
+    for (generation, expected) in [(&old, "192.0.2.1"), (&new, "192.0.2.2"), (&old, "192.0.2.1")] {
+        assert_eq!(
+            resolve(&ResolverSpec::HttpDns(generation.clone()), "example.com")
+                .await
+                .unwrap(),
+            vec![expected.parse::<std::net::IpAddr>().unwrap()]
+        );
+    }
+    server.await.unwrap();
+}
