@@ -159,3 +159,22 @@ per-consumer bounds when changing store reuse projections.
 ### Override identity boundary
 
 RegionRoute override lookup keys now come from an actual EP entry loan. Invalid owner identity prevents reference-bearing construction; an invalid, denied or unavailable target leaves the validated base table in force. Cold cache eligibility checks this distinction before reuse. Readonly Controller diagnostics validate current identity and permission for enabled RegionRoute entries. This does not change base-table validation, effective-table proof publication, or the Gateway paired raw/proof snapshot lookup.
+
+## Canonical failover mutation table (ARCH-146)
+
+The dedicated Controller command mutates only the matching `RegionRouteOverride`
+entry at `spec.data`, the same table checked by `validate_failover_resource` and
+consumed by effective routing. An obsolete `spec.plugins` array in a raw filesystem
+resource is preserved as unrelated input; it cannot select the mutation target or
+produce an already-applied success while the canonical table is unchanged.
+Missing/wrong-type canonical entries and missing canonical regions retain the
+existing not-found outcome. Complete-table validation still applies before writes
+and before an idempotent success. Locking, conditional writes, retries and version
+allocation are unchanged.
+
+The in-process filesystem regressions in `failover_version_tests.rs` exercise a
+mixed old/new document through the real helper: set, repeat, clear and repeat;
+they compare the complete stored spec and version behavior. Rejected invalid-target
+and idempotent-invalid-table commands return 422; missing/wrong-type/table-region
+cases return 404. All rejected cases preserve stored bytes, including the version.
+These tests cover the storage command boundary, not new Gateway traffic behavior.

@@ -443,33 +443,16 @@ fn patch_failover_resource(
     region_name: &str,
     failover_to: &str,
 ) -> FailoverPatch {
-    let mut matched = false;
-    let mut changed = false;
-
-    if let Some(plugins) = resource.pointer_mut("/spec/plugins").and_then(Value::as_array_mut) {
-        for plugin in plugins.iter_mut() {
-            if plugin.get("type").and_then(Value::as_str) != Some(plugin_type) {
-                continue;
-            }
-            if let Some(regions) = plugin.pointer_mut("/config/regions").and_then(Value::as_array_mut) {
-                let result = patch_region_failover(regions, region_name, failover_to);
-                matched |= result.matched;
-                changed |= result.changed;
-            }
-        }
+    let Some(data) = resource.pointer_mut("/spec/data") else {
+        return FailoverPatch::Missing;
+    };
+    if data.get("type").and_then(Value::as_str) != Some(plugin_type) {
+        return FailoverPatch::Missing;
     }
-
-    if !matched {
-        if let Some(data) = resource.pointer_mut("/spec/data") {
-            if data.get("type").and_then(Value::as_str) == Some(plugin_type) {
-                if let Some(regions) = data.pointer_mut("/config/regions").and_then(Value::as_array_mut) {
-                    let result = patch_region_failover(regions, region_name, failover_to);
-                    matched = result.matched;
-                    changed = result.changed;
-                }
-            }
-        }
-    }
+    let Some(regions) = data.pointer_mut("/config/regions").and_then(Value::as_array_mut) else {
+        return FailoverPatch::Missing;
+    };
+    let RegionPatch { matched, changed } = patch_region_failover(regions, region_name, failover_to);
 
     match (matched, changed) {
         (false, _) => FailoverPatch::Missing,

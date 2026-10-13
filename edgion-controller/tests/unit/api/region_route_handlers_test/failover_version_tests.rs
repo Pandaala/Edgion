@@ -158,3 +158,130 @@ async fn failover_rejects_malformed_complete_table_even_when_already_applied() {
         assert!(matches!(result, Err(FailoverError::InvalidTable(_))), "field={field}");
     }
 }
+
+fn mixed_override_body() -> Value {
+    let mut seed: Value = serde_json::from_str(&override_body("42")).unwrap();
+    let mut legacy = seed["spec"]["data"].clone();
+    legacy["config"]["regions"][0]["failoverTo"] = serde_json::json!("west");
+    seed["spec"]["plugins"] = serde_json::json!([legacy]);
+    seed["spec"]["unrelated"] = serde_json::json!({"keep": [1, 2]});
+    seed
+}
+
+#[tokio::test]
+async fn mixed_raw_failover_mutates_only_canonical_table_and_preserves_idempotence() {
+    let (state, _tmp) = make_fs_state().await;
+    let seed = mixed_override_body();
+    state
+        .conf_center()
+        .create_one("EdgionConfigData", Some("default"), "override", seed.to_string())
+        .await
+        .unwrap();
+    let mut previous: Value = serde_yaml::from_str(
+        &state
+            .conf_center()
+            .get_one("EdgionConfigData", Some("default"), "override")
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    for (target, changed) in [("west", true), ("west", false), ("", true), ("", false)] {
+        assert!(patch_edgion_config_data_failover(
+            &state,
+            "default",
+            "override",
+            "RegionRouteOverride",
+            "east",
+            target
+        )
+        .await
+        .unwrap());
+        let stored = state
+            .conf_center()
+            .get_one("EdgionConfigData", Some("default"), "override")
+            .await
+            .unwrap();
+        let stored: Value = serde_yaml::from_str(&stored).unwrap();
+        let region = &stored["spec"]["data"]["config"]["regions"][0];
+        if target.is_empty() {
+            assert!(region.get("failoverTo").is_none());
+        } else {
+            assert_eq!(region["failoverTo"], target);
+        }
+        let mut expected_spec = seed["spec"].clone();
+        if !target.is_empty() {
+            expected_spec["data"]["config"]["regions"][0]["failoverTo"] = serde_json::json!(target);
+        }
+        assert_eq!(stored["spec"], expected_spec);
+        if changed {
+            assert_ne!(
+                stored["metadata"]["resourceVersion"],
+                previous["metadata"]["resourceVersion"]
+            );
+        } else {
+            assert_eq!(stored, previous);
+        }
+        previous = stored;
+    }
+}
+
+#[tokio::test]
+async fn mixed_raw_failover_rejects_invalid_or_missing_canonical_table_without_writing() {
+    for case in [
+        "target",
+        "idempotent-invalid-table",
+        "missing",
+        "wrong-type",
+        "missing-region",
+    ] {
+        let (state, _tmp) = make_fs_state().await;
+        let mut seed = mixed_override_body();
+        let (target, status) = match case {
+            "target" => ("unknown", StatusCode::UNPROCESSABLE_ENTITY),
+            "idempotent-invalid-table" => {
+                seed["spec"]["data"]["config"]["regions"][0]["backendEndpoint"] = serde_json::json!("host:abc");
+                ("", StatusCode::UNPROCESSABLE_ENTITY)
+            }
+            "missing" => {
+                seed["spec"].as_object_mut().unwrap().remove("data");
+                ("west", StatusCode::NOT_FOUND)
+            }
+            "wrong-type" => {
+                seed["spec"]["data"]["type"] = serde_json::json!("Misc");
+                ("west", StatusCode::NOT_FOUND)
+            }
+            "missing-region" => {
+                seed["spec"]["data"]["config"]["regions"][0]["name"] = serde_json::json!("north");
+                ("west", StatusCode::NOT_FOUND)
+            }
+            _ => unreachable!(),
+        };
+        state
+            .conf_center()
+            .create_one("EdgionConfigData", Some("default"), "override", seed.to_string())
+            .await
+            .unwrap();
+        let before = state
+            .conf_center()
+            .get_one("EdgionConfigData", Some("default"), "override")
+            .await
+            .unwrap();
+        let result = cluster_edgion_config_data_failover(
+            State(state.clone()),
+            Json(EdgionConfigDataFailoverRequest {
+                namespace: "default".into(),
+                name: "override".into(),
+                region_name: "east".into(),
+                failover_to: target.into(),
+            }),
+        )
+        .await;
+        assert_eq!(result.unwrap_err(), status, "case={case}");
+        let after = state
+            .conf_center()
+            .get_one("EdgionConfigData", Some("default"), "override")
+            .await
+            .unwrap();
+        assert_eq!(after, before, "case={case}");
+    }
+}
