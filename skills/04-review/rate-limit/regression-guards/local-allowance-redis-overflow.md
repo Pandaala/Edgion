@@ -55,6 +55,14 @@ billing, or exact sliding-window bound from a token-bucket capacity.
 
 ## Verification and re-evaluation
 
+ARCH-073: Per-plugin `estimatorSlotsK` conversion uses saturating multiplication
+before applying the existing minimum and global maximum. Values beyond the
+representable slot count therefore cap at the valid global maximum rather than
+panicking or wrapping to the minimum. Default inheritance, zero/minimum handling,
+source validation and cold warning/compilation order remain unchanged. This does
+not normalize independently configured global capacities or change request-time
+CMS, instance-count, Continue/Reject or Redis overflow behavior.
+
 Current implementation verification: resource overflow tests (5), existing
 condition tests (27), Gateway runtime tests (364), request-state tests (7), and
 the real Redis integration test (1) passed. The Redis test lives in

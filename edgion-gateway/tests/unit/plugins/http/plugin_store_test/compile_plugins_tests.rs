@@ -3022,3 +3022,22 @@ async fn authentication_header_names_match_transport_admission_and_fail_closed()
         }
     }
 }
+
+#[test]
+fn local_rate_limit_extreme_estimator_capacity_publishes_real_runtime() {
+    use edgion_resources::rate_limit_local_config::SLOTS_K;
+    for slots_k in [usize::MAX / SLOTS_K + 1, usize::MAX] {
+        let resource: EdgionPlugins = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "local-capacity", "namespace": "default"},
+            "spec": {"requestPlugins": [{"type": "RateLimitLocal", "config": {
+                "rate": 10, "estimatorSlotsK": slots_k
+            }}]}
+        }))
+        .unwrap();
+        assert!(resource.validate_plugins().is_empty());
+        let compiled = compile_plugins(&resource);
+        assert!(compiled.preparse_errors.is_empty());
+        assert!(compiled.is_activatable);
+        assert_eq!(first_filter(&compiled.plugin_runtime).name(), "RateLimitLocal");
+    }
+}

@@ -567,3 +567,56 @@ fn test_effective_rate_dynamic_count_change() {
         assert_eq!(config.get_effective_rate(), 3);
     });
 }
+
+#[test]
+fn estimator_capacity_caps_before_machine_integer_overflow() {
+    let default_slots = 64 * SLOTS_K;
+    let max_slots = 256 * SLOTS_K;
+    for (configured, expected) in [
+        (None, default_slots),
+        (Some(0), get_min_estimator_slots()),
+        (Some(1), SLOTS_K),
+        (Some(16), 16 * SLOTS_K),
+        (Some(256), max_slots),
+        (Some(257), max_slots),
+        (Some(2048), max_slots),
+        (Some(usize::MAX / SLOTS_K), max_slots),
+        (Some(usize::MAX / SLOTS_K + 1), max_slots),
+        (Some(usize::MAX), max_slots),
+    ] {
+        let mut config = RateLimitLocalConfig {
+            rate: 10,
+            estimator_slots_k: configured,
+            ..Default::default()
+        };
+        let wire = serde_json::to_value(&config).unwrap();
+        assert_eq!(config.validation_error(), None);
+        assert!(config.effective_slots.is_none());
+        config.validate_with_global_config(default_slots, max_slots).unwrap();
+        assert_eq!(config.get_effective_slots(), expected, "{configured:?}");
+        assert_eq!(serde_json::to_value(&config).unwrap(), wire);
+    }
+}
+
+#[test]
+fn invalid_fields_still_precede_extreme_capacity_preparation() {
+    let mut config = RateLimitLocalConfig {
+        rate: 0,
+        estimator_slots_k: Some(usize::MAX),
+        skew_tolerance: 0.5,
+        ..Default::default()
+    };
+    assert_eq!(
+        config.validation_error().as_deref(),
+        Some("rate must be greater than 0")
+    );
+    assert_eq!(
+        config
+            .validate_with_global_config(64 * SLOTS_K, 256 * SLOTS_K)
+            .unwrap_err(),
+        "rate must be greater than 0"
+    );
+    assert!(config.effective_slots.is_none());
+    assert!(config.interval_duration.is_none());
+    assert_eq!(config.skew_tolerance, 0.5);
+}

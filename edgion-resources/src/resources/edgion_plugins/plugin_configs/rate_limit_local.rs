@@ -575,7 +575,10 @@ impl RateLimitLocalConfig {
         // Compute effective estimator slots
         // Plugin config is in K units, convert to actual slots
         let min_slots = get_min_estimator_slots();
-        let configured_slots = self.estimator_slots_k.map(|k| k * SLOTS_K).unwrap_or(default_slots);
+        let configured_slots = self
+            .estimator_slots_k
+            .map(|k| k.saturating_mul(SLOTS_K))
+            .unwrap_or(default_slots);
         let effective = configured_slots
             .max(min_slots) // At least minimum
             .min(max_slots); // At most maximum
