@@ -208,13 +208,12 @@ async fn echo(conn: &mut HeldConn) -> Result<()> {
                 .await
                 .context("echo write timed out")?
                 .context("echo write failed")?;
-            let mut buf = [0u8; 64];
-            let n = timeout(IO_TIMEOUT, conn.stream.read(&mut buf))
+            let mut buf = [0u8; TCP_ECHO.len()];
+            timeout(IO_TIMEOUT, conn.stream.read_exact(&mut buf))
                 .await
                 .context("echo read timed out")?
                 .context("echo read failed")?;
-            ensure!(n > 0, "echo closed with no data");
-            ensure!(&buf[..n] == TCP_ECHO, "echo payload mismatch");
+            ensure!(buf == TCP_ECHO, "echo payload mismatch");
         }
         PathKind::Passthrough => {
             timeout(IO_TIMEOUT, conn.stream.write_all(HEALTH_REQUEST))
@@ -421,3 +420,82 @@ pub static SCENARIO: &Scenario = &Scenario {
     run,
     phases: PHASES,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn fragmented_exchange(kind: PathKind, response: &[u8], fragment_size: usize) -> Result<()> {
+        let (client, mut peer) = tokio::io::duplex(fragment_size);
+        let response = response.to_vec();
+        let sender = tokio::spawn(async move {
+            let mut request = [0u8; TCP_ECHO.len()];
+            peer.read_exact(&mut request).await.unwrap();
+            assert_eq!(request, TCP_ECHO);
+            for fragment in response.chunks(fragment_size) {
+                if peer.write_all(fragment).await.is_err() {
+                    // A rejected echo closes the caller's stream.
+                    break;
+                }
+            }
+        });
+        let mut conn = HeldConn {
+            kind,
+            stream: Box::new(client),
+        };
+        let result = echo(&mut conn).await;
+        drop(conn);
+        sender.await.unwrap();
+        result
+    }
+
+    #[tokio::test]
+    async fn fixed_echo_accepts_fragmented_and_complete_payloads_on_both_stream_branches() {
+        for kind in [PathKind::Tcp, PathKind::Terminate] {
+            for fragment_size in [1, 5, TCP_ECHO.len()] {
+                fragmented_exchange(kind, TCP_ECHO, fragment_size).await.unwrap();
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn fixed_echo_rejects_mismatch_and_premature_eof() {
+        for kind in [PathKind::Tcp, PathKind::Terminate] {
+            let mut wrong = TCP_ECHO.to_vec();
+            wrong[0] = b'x';
+            let mismatch = fragmented_exchange(kind, &wrong, 5).await.unwrap_err();
+            assert_eq!(mismatch.to_string(), "echo payload mismatch");
+            for prefix in [&TCP_ECHO[..0], &TCP_ECHO[..5]] {
+                let closed = fragmented_exchange(kind, prefix, 5).await.unwrap_err();
+                assert_eq!(closed.to_string(), "echo read failed");
+                assert_eq!(
+                    closed.downcast_ref::<std::io::Error>().unwrap().kind(),
+                    std::io::ErrorKind::UnexpectedEof
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn fixed_echo_partial_read_expires_under_one_operation_budget() {
+        let (client, mut peer) = tokio::io::duplex(TCP_ECHO.len());
+        let sender = tokio::spawn(async move {
+            let mut request = [0u8; TCP_ECHO.len()];
+            peer.read_exact(&mut request).await.unwrap();
+            assert_eq!(request, TCP_ECHO);
+            peer.write_all(&TCP_ECHO[..5]).await.unwrap();
+            // Keep the stream open without completing the authored message.
+            std::future::pending::<()>().await;
+            drop(peer);
+        });
+        let mut conn = HeldConn {
+            kind: PathKind::Tcp,
+            stream: Box::new(client),
+        };
+        let result = echo(&mut conn).await;
+        drop(conn);
+        sender.abort();
+        assert!(sender.await.unwrap_err().is_cancelled());
+        assert_eq!(result.unwrap_err().to_string(), "echo read timed out");
+    }
+}

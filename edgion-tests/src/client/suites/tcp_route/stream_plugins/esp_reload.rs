@@ -29,25 +29,22 @@ impl TcpEspReloadAllowTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let addr = format!("{}:{}", ctx.target_host, PORT);
-                    let test_data = b"Hello EspReload";
+                    const TEST_DATA: &[u8] = b"Hello EspReload";
 
                     match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await {
                         Ok(Ok(mut stream)) => {
-                            if let Err(e) = stream.write_all(test_data).await {
+                            if let Err(e) = stream.write_all(TEST_DATA).await {
                                 return TestResult::failed(start.elapsed(), format!("Write failed: {}", e));
                             }
-                            let mut buf = vec![0u8; 1024];
-                            match tokio::time::timeout(Duration::from_secs(3), stream.read(&mut buf)).await {
-                                Ok(Ok(n)) if n > 0 && buf[..n] == test_data[..] => TestResult::passed_with_message(
+                            let mut buf = [0u8; TEST_DATA.len()];
+                            match tokio::time::timeout(Duration::from_secs(3), stream.read_exact(&mut buf)).await {
+                                Ok(Ok(_)) if buf == TEST_DATA => TestResult::passed_with_message(
                                     start.elapsed(),
                                     "TCP echo succeeded — ESP allow-list permitted localhost".to_string(),
                                 ),
-                                Ok(Ok(n)) if n > 0 => {
-                                    TestResult::failed(start.elapsed(), format!("Echo data mismatch ({} bytes)", n))
-                                }
                                 Ok(Ok(_)) => TestResult::failed(
                                     start.elapsed(),
-                                    "Connection closed (0 bytes) — ESP may be denying".to_string(),
+                                    format!("Echo data mismatch ({} bytes)", buf.len()),
                                 ),
                                 Ok(Err(e)) => TestResult::failed(
                                     start.elapsed(),

@@ -110,6 +110,28 @@ EGC reference becomes dynamically retargetable, another L4 proxy is introduced,
 a timeout must change an already established connection, or a deterministic
 cross-platform connect-timeout fixture becomes available.
 
+## Fixed echo framing in the live guard
+
+ARCH-312 makes the TCP and Terminate branches of `L4TimeoutHotReload::echo`
+read exactly the authored payload length under one existing operation timeout,
+then compare every byte. The ESP reload allow-phase echo uses the same fixed
+message rule. TCP/TLS stream segmentation cannot itself mean an echo mismatch;
+premature EOF, mismatched bytes, read errors and timeout remain failures.
+
+Network-free tests drive the actual L4 helper with capacity-limited duplex
+streams, including one-byte fragments, a five-byte prefix, complete payloads,
+mismatches, premature EOF and a partial response that never finishes. Exercising
+the Terminate branch this way is framing evidence, not a TLS handshake test.
+The existing live generation assertions, HTTP passthrough reader, restoration
+path and ESP phase identities remain intact. The ESP denial-evidence and
+all-outcome restoration questions remain separate.
+
+An exact-read timeout may consume a prefix. Its callers abandon that probe or
+exit the captured transition before restoration; they must not retry the echo
+on the partially consumed stream. No live hot-reload or TLS run is established
+by these in-memory tests. Re-evaluate framing if the authored echo protocol
+changes to variable-length messages.
+
 ## Resolution references
 
 - `pre-resolve-l4-listener-timeouts` — corrected the startup-frozen policy and
