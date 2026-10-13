@@ -123,6 +123,49 @@ fn test_unknown_operator_returns_false() {
 
 // ---- NamespaceStore tests ----
 
+#[test]
+fn expression_values_reject_invalid_shapes_and_cardinality() {
+    use serde_json::json;
+    for labels in [BTreeMap::new(), BTreeMap::from([("team".into(), "restricted".into())])] {
+        for operator in ["In", "NotIn", "Exists", "DoesNotExist"] {
+            let mut invalid_values = vec![
+                json!(null),
+                json!("restricted"),
+                json!({}),
+                json!(true),
+                json!(1),
+                json!(["restricted", 1]),
+            ];
+            if matches!(operator, "In" | "NotIn") {
+                invalid_values.push(json!([]));
+                let missing = json!({"matchExpressions": [{"key": "team", "operator": operator}]});
+                assert!(!label_selector_matches(&missing, &labels), "missing {operator}");
+            } else {
+                invalid_values.push(json!(["restricted"]));
+            }
+            for values in invalid_values {
+                let selector = json!({"matchExpressions": [{"key": "team", "operator": operator, "values": values}]});
+                assert!(!label_selector_matches(&selector, &labels), "{selector} / {labels:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn valid_expression_cardinality_preserves_missing_label_and_empty_array_semantics() {
+    use serde_json::json;
+    let empty = BTreeMap::new();
+    let present = BTreeMap::from([("team".into(), "restricted".into())]);
+    let not_in = json!({"matchExpressions": [{"key": "team", "operator": "NotIn", "values": ["restricted"]}]});
+    assert!(label_selector_matches(&not_in, &empty));
+    assert!(!label_selector_matches(&not_in, &present));
+    for (operator, expected_present) in [("Exists", true), ("DoesNotExist", false)] {
+        let selector = json!({"matchExpressions": [{"key": "team", "operator": operator, "values": []}]});
+        assert_eq!(label_selector_matches(&selector, &present), expected_present);
+        assert_eq!(label_selector_matches(&selector, &empty), !expected_present);
+    }
+}
+
 fn make_namespace(name: &str, labels: BTreeMap<String, String>) -> Namespace {
     Namespace {
         metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {

@@ -457,6 +457,64 @@ fn test_ns_policy_selector_with_store() {
     runtime.namespace_store.remove("denied-ns");
 }
 
+#[tokio::test]
+async fn cross_namespace_parent_rejects_invalid_not_in_values() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::GatewayHandler;
+    use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+    use serde_json::json;
+
+    let runtime = Arc::new(ControllerRuntime::default());
+    let processor = Arc::new(ResourceProcessor::<Gateway>::new(
+        "Gateway",
+        16,
+        Arc::new(GatewayHandler::new(None, None)),
+        runtime.clone(),
+    ));
+    let raw = Arc::new(LocalRawStore::new());
+    processor.set_raw_store(raw.clone());
+    runtime.processor_registry.register(processor);
+    let set_namespace = |team: &str| {
+        runtime.namespace_store.upsert(
+            serde_json::from_value(json!({
+                "metadata": {"name": "apps", "labels": {"team": team}}
+            }))
+            .unwrap(),
+        );
+    };
+    set_namespace("restricted");
+    let parent: ParentReference = serde_json::from_value(json!({"name": "gateway", "namespace": "infra"})).unwrap();
+    for (expression, expected) in [
+        (json!({"key": "team", "operator": "NotIn"}), false),
+        (json!({"key": "team", "operator": "NotIn", "values": []}), false),
+        (json!({"key": "team", "operator": "NotIn", "values": ["other"]}), true),
+    ] {
+        let gateway: Gateway = serde_json::from_value(json!({
+            "metadata": {"namespace": "infra", "name": "gateway"},
+            "spec": {"gatewayClassName": "test", "listeners": [{
+                "name": "http", "port": 80, "protocol": "HTTP",
+                "allowedRoutes": {"namespaces": {"from": "Selector", "selector": {"matchExpressions": [expression]}}}
+            }]}
+        }))
+        .unwrap();
+        raw.upsert("infra/gateway".into(), Arc::new(gateway));
+        let result = validate_parent_ref_accepted("apps", &parent, None, "HTTPRoute", &runtime);
+        if expected {
+            assert!(result.errors.is_empty());
+            assert_eq!(result.matched_listeners, ["http"]);
+        } else {
+            assert_eq!(result.errors.len(), 1);
+            assert_eq!(result.errors[0].reason(), "NotAllowedByListeners");
+            assert!(result.matched_listeners.is_empty());
+        }
+    }
+    // Re-evaluation uses the refreshed committed labels with the valid selector.
+    set_namespace("other");
+    let result = validate_parent_ref_accepted("apps", &parent, None, "HTTPRoute", &runtime);
+    assert_eq!(result.errors.len(), 1);
+    assert_eq!(result.errors[0].reason(), "NotAllowedByListeners");
+    assert!(result.matched_listeners.is_empty());
+}
+
 fn backend_extension_owner(reference: &LocalObjectReference, index: usize) -> edgion_resources::HTTPRoute {
     let mut backends = vec![serde_json::json!({"name":"service","port":80}); index + 1];
     backends[index]["filters"] = serde_json::json!([{"type":"ExtensionRef","extensionRef":reference}]);

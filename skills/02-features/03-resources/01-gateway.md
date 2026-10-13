@@ -131,6 +131,11 @@ allowedRoutes:
 | `All` | Allow routes from all namespaces |
 | `Selector` | Filter namespaces by label selector |
 
+When evaluating expressions against stored Namespace labels, `In` and `NotIn`
+require a nonempty array of strings; `Exists` and `DoesNotExist` accept omitted
+values or an empty array. Invalid values shapes or cardinalities do not match.
+A valid `NotIn` still matches a Namespace without the selected label key.
+
 ## Status Schema
 
 ```yaml

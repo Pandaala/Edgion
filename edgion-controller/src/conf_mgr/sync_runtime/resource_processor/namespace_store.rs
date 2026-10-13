@@ -120,17 +120,27 @@ pub fn label_selector_matches(selector: &serde_json::Value, labels: &BTreeMap<St
 fn evaluate_expression(expr: &serde_json::Value, labels: &BTreeMap<String, String>) -> bool {
     let key = expr.get("key").and_then(|v| v.as_str()).unwrap_or("");
     let operator = expr.get("operator").and_then(|v| v.as_str()).unwrap_or("");
-    let values: Vec<&str> = expr
-        .get("values")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
-        .unwrap_or_default();
+    let values = match expr.get("values") {
+        None => &[][..],
+        Some(serde_json::Value::Array(values)) if values.iter().all(serde_json::Value::is_string) => values.as_slice(),
+        _ => return false,
+    };
 
     match operator {
-        "In" => labels.get(key).is_some_and(|v| values.contains(&v.as_str())),
-        "NotIn" => labels.get(key).is_none_or(|v| !values.contains(&v.as_str())),
-        "Exists" => labels.contains_key(key),
-        "DoesNotExist" => !labels.contains_key(key),
+        "In" => {
+            !values.is_empty()
+                && labels
+                    .get(key)
+                    .is_some_and(|v| values.iter().any(|value| value.as_str() == Some(v.as_str())))
+        }
+        "NotIn" => {
+            !values.is_empty()
+                && labels
+                    .get(key)
+                    .is_none_or(|v| !values.iter().any(|value| value.as_str() == Some(v.as_str())))
+        }
+        "Exists" => values.is_empty() && labels.contains_key(key),
+        "DoesNotExist" => values.is_empty() && !labels.contains_key(key),
         unknown => {
             tracing::warn!(operator = %unknown, key = %key, "Unknown LabelSelector operator");
             false
