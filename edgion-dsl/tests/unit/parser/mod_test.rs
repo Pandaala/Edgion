@@ -66,3 +66,16 @@ fn test_span_binary_op_position() {
         _ => panic!("expected ExprStmt"),
     }
 }
+
+#[test]
+fn repeated_map_keys_are_charged_before_crossing_program_limit() {
+    let statement = "{\"a\":1,\"b\":2,\"c\":3}\n";
+    let exact = format!("{}nil\n", statement.repeat(222));
+    assert_eq!(parse_program(&exact).unwrap().stmts.len(), 223);
+    for source in [statement.repeat(223), statement.repeat(333), format!("{exact}nil\n")] {
+        assert_eq!(
+            parse_program(&source).unwrap_err().message,
+            "too many AST nodes: 2001 (max 2000)"
+        );
+    }
+}

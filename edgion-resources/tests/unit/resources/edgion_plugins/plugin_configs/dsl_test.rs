@@ -323,3 +323,24 @@ fn compile_and_validate_reports_link_format_error_when_script_compiles() {
     let err = config.compile_and_validate().expect_err("invalid link name must fail");
     assert!(err.contains("invalid name"), "got: {err}");
 }
+
+#[test]
+fn map_heavy_source_hits_parser_budget_and_bytecode_keeps_precedence() {
+    let valid = DslConfig {
+        name: "valid".into(),
+        source: Some("return next()".into()),
+        ..Default::default()
+    };
+    let bytecode = valid.compile_and_validate().unwrap().serialize_base64().unwrap();
+    let mut config = DslConfig {
+        name: "map-budget".into(),
+        source: Some("{\"a\":1,\"b\":2,\"c\":3}\n".repeat(333)),
+        ..Default::default()
+    };
+    let error = config.compile_and_validate().unwrap_err();
+    assert!(error.contains("too many AST nodes: 2001 (max 2000)"), "{error}");
+    assert_eq!(config.validation_error(), Some(error));
+    config.bytecode = Some(bytecode);
+    assert!(config.compile_and_validate().is_ok());
+    assert_eq!(config.validation_error(), None);
+}

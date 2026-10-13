@@ -220,3 +220,60 @@ fn test_valid_unary_ast_and_bytecode() {
         .windows(3)
         .any(|ops| matches!(ops, [OpCode::LoadConst(_), OpCode::Neg, OpCode::Not])));
 }
+
+#[test]
+fn map_key_nodes_share_the_existing_ast_account() {
+    for (source, expected) in [
+        ("{}", 2),
+        (r#""plain""#, 1),
+        (r#"{"a":1}"#, 4),
+        (r#"{"outer":{"a":1}}"#, 7),
+    ] {
+        let mut ctx = ParseCtx::new(source);
+        assert!(super::parse_expr(source, &mut ctx).is_ok());
+        assert_eq!(ctx.ast_node_count, expected, "{source}");
+    }
+    let source = "{\"line\nkey\":1,\"line\\nkey\":2}";
+    let mut ctx = ParseCtx::new(source);
+    let (_, expression) = super::parse_expr(source, &mut ctx).unwrap();
+    let ExprKind::MapLiteral(pairs) = expression.kind else {
+        panic!("expected map");
+    };
+    assert_eq!(pairs.len(), 2);
+    for ((key, value), expected) in pairs.iter().zip([1, 2]) {
+        assert!(matches!(&key.kind, ExprKind::StringLit(text) if text == "line\nkey"));
+        assert!(matches!(value.kind, ExprKind::IntLit(number) if number == expected));
+        assert!(key.span.is_some());
+    }
+    assert_eq!(ctx.ast_node_count, 6);
+}
+
+#[test]
+fn map_key_admission_precedes_literal_decode() {
+    let source = "{\"unfinished";
+    let mut ctx = ParseCtx::new(source);
+    ctx.max_ast_nodes = 1;
+    let Err(nom::Err::Failure(error)) = super::parse_expr(source, &mut ctx) else {
+        panic!("expected node limit");
+    };
+    assert_eq!(error.message, "too many AST nodes: 2 (max 1)");
+    assert_eq!(ctx.nesting_depth, 0);
+}
+
+#[test]
+fn key_heavy_maps_obey_exact_ast_limit() {
+    for (count, success) in [(999, true), (1000, false)] {
+        let source = format!("{{{}}}", vec![r#""key":0"#; count].join(","));
+        let mut ctx = ParseCtx::new(&source);
+        let result = super::parse_expr(&source, &mut ctx);
+        if success {
+            assert!(result.is_ok());
+            assert_eq!(ctx.ast_node_count, 2000);
+        } else {
+            let Err(nom::Err::Failure(error)) = result else {
+                panic!("expected node limit");
+            };
+            assert_eq!(error.message, "too many AST nodes: 2001 (max 2000)");
+        }
+    }
+}

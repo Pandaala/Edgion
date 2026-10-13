@@ -113,6 +113,15 @@ Adding a new runtime limit requires:
 
 ## 3. Compile-time limits — source map
 
+Map key expressions participate in the parser's existing AST-node account
+(ARCH-211). The map-key branch charges before decoding its quoted literal;
+ordinary strings retain their existing `parse_atom` charge. The conservative
+extra map charge remains. Key-heavy and repeated-map sources therefore fail at
+the parser ceiling before extra AST/compiler work, independently of later
+instruction limits. Focused parser and schema tests cover exact admission,
+unchanged key values/order, and configured-bytecode precedence.
+
+
 XML has fixed producer bounds in `edgion-dsl/src/xml.rs`: source/output/decoded
 subtree bytes 1 MiB, depth 32, expanded nodes/attributes 4,096, ordinary
 attributes/declarations 64 each per element, names 256 bytes and URI 1,024 bytes.

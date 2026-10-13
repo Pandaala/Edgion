@@ -224,6 +224,7 @@ fn parse_atom<'a>(input: &'a str, ctx: &mut ParseCtx<'a>) -> IResult<&'a str, Ex
                 if !input.starts_with('"') {
                     return Err(nom::Err::Failure(ParseError::new("map key must be a string literal")));
                 }
+                ctx.add_node().map_err(nom::Err::Failure)?;
                 let key_span = ctx.current_span(input);
                 let (rest, mut key_expr) = lit::parse_string_literal(input, ctx)?;
                 key_expr.span = Some(key_span);
