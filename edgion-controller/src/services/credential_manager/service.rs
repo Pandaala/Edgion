@@ -94,19 +94,23 @@ fn spawn_worker(backend: CredentialManagerBackend, runtime: Arc<ControllerRuntim
     drop(service);
     crate::conf_mgr::sync_runtime::metrics::leader_job_gauge("credential_manager").set(1.0);
 
-    crate::services::supervision::observe_worker("credential_manager", task, move || {
-        let current = SERVICE.lock().as_ref().map(|handle| handle.generation) == Some(generation);
-        if current {
-            crate::conf_mgr::sync_runtime::metrics::leader_job_gauge("credential_manager").set(0.0);
-        }
-        current
-    });
+    crate::services::supervision::observe_worker("credential_manager", task, move || confirm_dead_current(generation));
     tracing::info!(
         component = "credential_manager",
         generation,
         kube,
         "Credential manager started"
     );
+}
+
+// Keep classification and publication atomic with service replacement.
+fn confirm_dead_current(generation: u64) -> bool {
+    let service = SERVICE.lock();
+    let current = service.as_ref().map(|handle| handle.generation) == Some(generation);
+    if current {
+        crate::conf_mgr::sync_runtime::metrics::leader_job_gauge("credential_manager").set(0.0);
+    }
+    current
 }
 
 /// Stop the current generation. Aborting the worker also cancels all issuer and

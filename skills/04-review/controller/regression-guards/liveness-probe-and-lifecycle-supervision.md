@@ -133,6 +133,22 @@ not prove descendant drain, and this correction does not extend teardown guarant
   to avoid minting a forbidden 0-series for a job that was never spawned (e.g.
   `conf_sync_rotation` on a non-auto_ca leader).
 
+## Credential observer atomicity
+
+ARCH-094 corrects the CredentialManager callback to retain `SERVICE` across both
+captured-generation comparison and its conditional Gauge-0 publication. The
+private `confirm_dead_current` owner follows the existing observer contract and
+DNS resolver precedent. Stale or absent generations return false without metric
+registration. A replacement cannot enter between a current-generation verdict
+and that zero write.
+
+Mirrored service tests use a thread-local Recorder on each participating thread,
+pause the real Gauge setter, and verify the service lock is held before allowing
+a replacement to publish Gauge=1. They also cover current, stale and absent
+classification; existing supervision tests retain cancellation/panic/return
+wiring coverage. This is not a claim of general start/stop atomicity, synchronous
+abort, descendant drain or automatic restart.
+
 ## Re-evaluation Triggers
 
 Re-open this decision only if:
