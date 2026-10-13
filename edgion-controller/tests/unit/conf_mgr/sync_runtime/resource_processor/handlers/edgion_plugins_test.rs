@@ -8898,3 +8898,42 @@ fn ext_proc_invalid_target_uri_is_rejected_in_controller_status() {
         assert_eq!(accepted.message, errors[0]);
     }
 }
+
+#[test]
+fn authentication_invalid_header_names_are_rejected_in_controller_status() {
+    let (ctx, _) = make_ctx_with_secrets(HashMap::new());
+    for (kind, config) in [
+        (
+            "HeaderCertAuth",
+            serde_json::json!({"mode": "Connection", "certificateHeaderName": "private:name"}),
+        ),
+        (
+            "HmacAuth",
+            serde_json::json!({"anonymous": "anon", "upstreamHeaderFields": ["private name"]}),
+        ),
+    ] {
+        let mut resource: EdgionPlugins = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "auth-header-names", "namespace": "default", "generation": 1},
+            "spec": {"requestPlugins": [{"type": kind, "config": config}]}
+        }))
+        .unwrap();
+        let errors = EdgionPluginsHandler.preparse(&mut resource, &ctx);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("must be a valid HTTP header name"));
+        assert!(!errors[0].contains("private"));
+        EdgionPluginsHandler.update_status(&mut resource, &ctx, &errors);
+        let accepted = resource
+            .status
+            .as_ref()
+            .unwrap()
+            .as_local()
+            .unwrap()
+            .conditions
+            .iter()
+            .find(|c| c.type_ == "Accepted")
+            .unwrap();
+        assert_eq!(accepted.status, "False");
+        assert_eq!(accepted.reason, "Invalid");
+        assert_eq!(accepted.message, errors[0]);
+    }
+}

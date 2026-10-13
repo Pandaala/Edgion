@@ -218,6 +218,19 @@ impl HeaderCertAuthConfig {
                 return Some("upstreamHeaders entries contain invalid control characters".to_string());
             }
         }
+        if !crate::gwapi_types::is_valid_header_token(&self.certificate_header_name) {
+            return Some("certificateHeaderName must be a valid HTTP header name".to_string());
+        }
+        for (field, name) in [
+            ("consumerHeader", &self.upstream_headers.consumer_header),
+            ("dnHeader", &self.upstream_headers.dn_header),
+            ("sanHeader", &self.upstream_headers.san_header),
+            ("fingerprintHeader", &self.upstream_headers.fingerprint_header),
+        ] {
+            if !crate::gwapi_types::is_valid_header_token(name) {
+                return Some(format!("upstreamHeaders.{field} must be a valid HTTP header name"));
+            }
+        }
         if self.mode == CertSourceMode::Header {
             let has_ca_refs = !self.ca_secret_refs.is_empty();
             let has_resolved = self.resolved_ca_secrets.as_ref().is_some_and(|v| !v.is_empty());

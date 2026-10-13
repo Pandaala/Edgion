@@ -221,6 +221,15 @@ impl HmacAuthConfig {
         {
             return Some("upstreamHeaderFields contains invalid control characters".to_string());
         }
+        if let Some(index) = self
+            .upstream_header_fields
+            .iter()
+            .position(|name| !crate::gwapi_types::is_valid_header_token(name))
+        {
+            return Some(format!(
+                "upstreamHeaderFields[{index}] must be a valid HTTP header name"
+            ));
+        }
         if self.anonymous.is_none() && !self.match_config.has_credentials_source() {
             return Some("secretGroups (or resolvedCredentials) is required when anonymous is not set".to_string());
         }

@@ -43,6 +43,15 @@ a successful write.
 
 ## Alternatives and limits
 
+ARCH-070: HeaderCertAuth's certificate source and four configured upstream header
+names, plus HmacAuth's upstreamHeaderFields, use the canonical Resources HTTP token
+check during shared Controller/Gateway admission. Existing empty/control checks
+retain precedence; new diagnostics identify only the field or index. HMAC metadata
+selection preserves exact whitelist spelling, and signed-header pseudo names are
+outside this check. These producers do not adopt claim-projection normalization,
+collision rules or sanitization: valid-name writes and skipped-write behavior remain
+unchanged. This is character admission, not an additional header-length policy.
+
 - Appending or joining competing claims into one header was rejected because the mapping expresses
   one source per destination; implicit multi-value semantics would change what an upstream
   authorization service receives.

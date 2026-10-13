@@ -2968,3 +2968,57 @@ fn wasm_callout_rejection_is_redacted_and_fails_closed() {
         assert_leading_reject(&compiled);
     }
 }
+
+#[tokio::test]
+async fn authentication_header_names_match_transport_admission_and_fail_closed() {
+    for name in [
+        "private name",
+        "private\tname",
+        "private:name",
+        "private-é",
+        "X-Mixed!#$%&'*+-.^_`|~09",
+    ] {
+        let valid = name.starts_with("X-Mixed");
+        let mut request = pingora_http::RequestHeader::build("GET", b"/", None).unwrap();
+        assert_eq!(request.insert_header(name.to_string(), "identity").is_ok(), valid);
+        for (kind, config) in [
+            (
+                "HeaderCertAuth",
+                serde_json::json!({"mode": "Connection", "upstreamHeaders": {"consumerHeader": name}}),
+            ),
+            (
+                "HmacAuth",
+                serde_json::json!({"anonymous": "anon", "upstreamHeaderFields": [name]}),
+            ),
+        ] {
+            let mut resource: EdgionPlugins = serde_json::from_value(serde_json::json!({
+                "metadata": {"name": "auth-header-names", "namespace": "default"},
+                "spec": {"requestPlugins": [
+                    {"type": kind, "enable": false, "config": config},
+                    {"type": kind, "config": config}
+                ]}
+            }))
+            .unwrap();
+            let errors = resource.validate_plugins();
+            let compiled = compile_plugins(&resource);
+            assert_eq!(compiled.preparse_errors, errors);
+            assert_eq!(compiled.is_activatable, valid);
+            if !valid {
+                assert_eq!(errors.len(), 1);
+                assert!(errors[0].starts_with(&format!("requestPlugins[1] ({kind}):")));
+                assert!(!errors[0].contains("private"));
+                assert_leading_reject(&compiled);
+                let reject = first_filter(&compiled.plugin_runtime);
+                let mut session = MockPluginSession::new();
+                let mut log = PluginLog::new(reject.name());
+                assert!(matches!(
+                    reject.run_request(&mut session, &mut log).await,
+                    PluginRunningResult::ErrResponse { status: 500, .. }
+                ));
+            }
+            resource.spec.request_plugins.as_mut().unwrap()[1].enable = false;
+            assert!(resource.validate_plugins().is_empty());
+            assert!(compile_plugins(&resource).is_activatable);
+        }
+    }
+}

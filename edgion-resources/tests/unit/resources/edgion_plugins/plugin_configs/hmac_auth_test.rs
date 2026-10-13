@@ -253,3 +253,59 @@ fn resolved_credentials_round_trip_outside_admin_redaction() {
         Some(b"conf-sync-secret".as_slice())
     );
 }
+
+#[test]
+fn upstream_header_names_require_tokens_and_preserve_exact_whitelist() {
+    for name in [
+        "private name",
+        "private\tname",
+        "private:name",
+        "private-é",
+        "X-Mixed!#$%&'*+-.^_`|~09",
+    ] {
+        let config = HmacAuthConfig {
+            anonymous: Some("anon".into()),
+            upstream_header_fields: vec!["X-Valid".into(), name.into()],
+            ..Default::default()
+        };
+        let before = serde_json::to_value(&config).unwrap();
+        if name.starts_with("X-Mixed") {
+            assert_eq!(config.detect_validation_error(), None);
+        } else {
+            assert_eq!(
+                config.detect_validation_error().as_deref(),
+                Some("upstreamHeaderFields[1] must be a valid HTTP header name")
+            );
+        }
+        assert_eq!(serde_json::to_value(&config).unwrap(), before);
+    }
+}
+
+#[test]
+fn upstream_header_names_preserve_empty_control_and_match_error_precedence() {
+    let mut config = HmacAuthConfig {
+        upstream_header_fields: vec!["private name".into(), " ".into()],
+        ..Default::default()
+    };
+    assert_eq!(
+        config.detect_validation_error().as_deref(),
+        Some("upstreamHeaderFields contains empty header name")
+    );
+    for control in ["private\rname", "private\nname", "private\0name"] {
+        config.upstream_header_fields[1] = control.into();
+        assert_eq!(
+            config.detect_validation_error().as_deref(),
+            Some("upstreamHeaderFields contains invalid control characters")
+        );
+    }
+    config.upstream_header_fields.pop();
+    assert_eq!(
+        config.detect_validation_error().as_deref(),
+        Some("upstreamHeaderFields[0] must be a valid HTTP header name")
+    );
+    config.algorithms.clear();
+    assert_eq!(
+        config.detect_validation_error().as_deref(),
+        Some("algorithms cannot be empty")
+    );
+}
