@@ -3,14 +3,17 @@ use parking_lot::RwLock;
 use serde::Serialize;
 use std::sync::Arc;
 use std::time::SystemTime;
+use tokio::sync::futures::Notified;
 use tokio::sync::{mpsc, Notify};
 
 use super::store::EventStore;
-use super::types::{EventType, ListData, WatchClient, WatchResponse};
+use super::types::{EventType, ListData, WatchClient, WatchResponse, WatcherEvent};
 use crate::conf_mgr::sync_runtime::resource_version;
 use crate::conf_sync::conf_server::{WatchObj, WatchResponseSimple};
 use edgion_common::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use edgion_resources::ResourceMeta;
+
+type PreparedWatchScan<'a, T> = (Notified<'a>, Result<(u64, Option<Vec<WatcherEvent<T>>>), String>);
 
 pub struct ServerCache<T: ResourceMeta + Resource + Send + Sync> {
     // wait for init complete
@@ -23,6 +26,21 @@ pub struct ServerCache<T: ResourceMeta + Resource + Send + Sync> {
 }
 
 impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
+    fn prepare_watch_scan<'a>(
+        store: &RwLock<EventStore<T>>,
+        notify: &'a Notify,
+        from_version: u64,
+    ) -> PreparedWatchScan<'a, T>
+    where
+        T: Clone,
+    {
+        // Broadcasts must be observable from before the scan, including before
+        // the future is polled. Otherwise the last update can leave us asleep.
+        let notified = notify.notified();
+        let result = store.read().get_events_from_sync_version(from_version);
+        (notified, result)
+    }
+
     pub fn new(capacity: u32) -> Self
     where
         T: Clone,
@@ -101,10 +119,7 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
             let last_send_time = watcher.last_send_time;
 
             loop {
-                let result = {
-                    let store_guard = store.read();
-                    store_guard.get_events_from_sync_version(from_version)
-                };
+                let (notified, result) = Self::prepare_watch_scan(&store, &notify, from_version);
 
                 match result {
                     Ok((current_version, maybe_events)) => match maybe_events {
@@ -141,7 +156,7 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
                                 // Wait for notification OR receiver drop (via sender.closed())
                                 // This ensures the task exits when gRPC layer detects server_id change
                                 tokio::select! {
-                                    _ = notify.notified() => {
+                                    _ = notified => {
                                         // New data may be available, continue loop
                                     }
                                     _ = sender.closed() => {

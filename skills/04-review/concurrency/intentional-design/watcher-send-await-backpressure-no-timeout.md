@@ -32,6 +32,22 @@ Fix suggestions of the form "replace the unconditional `send(...).await` with `s
 'events dropped for slow client' metric, close the watcher, and rely on the Gateway's reconnect
 to relist (Envoy management-plane style)" are **not accepted** as a narrow review fix.
 
+### Scan-to-wait notification ordering
+
+Accepted send backpressure does not permit an idle, up-to-date watcher to miss
+the last update in the same generation. ARCH-087 prepares one `Notified` future
+before reading EventStore and retains that exact future for the no-events wait.
+Tokio's `notify_waiters()` observes future construction even before polling: an
+earlier update is visible in the scan, and a later update is visible in the scan
+or wakes the retained future. Broadcast, version recovery and reload polling are
+unchanged; no send timeout or new lifecycle mechanism is introduced.
+
+The cache regression publishes one event after the real empty scan returns and
+before two retained futures are polled, then verifies both wake and the event is
+available. Separate spawned-watcher coverage checks delivery and receiver-drop
+cleanup. The boundary test does not inject a write inside the scan helper;
+source review must also preserve future construction before the store read.
+
 ## Core Rationale
 
 **1. Watchers are already per-client isolated; a slow Gateway does not stall others.**

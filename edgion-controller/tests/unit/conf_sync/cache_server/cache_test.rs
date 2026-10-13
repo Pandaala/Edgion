@@ -238,3 +238,64 @@ async fn current_version_tracks_store_version() {
     let (_json, v) = cache.list_json().unwrap();
     assert_eq!(v, 42);
 }
+
+#[tokio::test]
+async fn scan_wait_boundary_retains_one_broadcast_for_all_unpolled_watchers() {
+    let cache = ServerCache::<TestResource>::new(10);
+    CacheEventDispatch::set_ready(&cache);
+    let (first, initial) = ServerCache::prepare_watch_scan(&cache.store, &cache.notify, 0);
+    assert!(matches!(initial, Ok((0, None))));
+    let (second, initial) = ServerCache::prepare_watch_scan(&cache.store, &cache.notify, 0);
+    assert!(matches!(initial, Ok((0, None))));
+
+    // Publish exactly once after the empty scan and before either future is polled.
+    let resource = make_resource("single-update", 1);
+    cache.apply_change(ResourceChange::EventAdd, resource.clone(), Some(1));
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        tokio::join!(first, second);
+    })
+    .await
+    .expect("both pre-scan futures must retain the single broadcast");
+
+    let (_next_notification, result) = ServerCache::prepare_watch_scan(&cache.store, &cache.notify, 0);
+    let (version, events) = result.unwrap();
+    assert_eq!(version, 1);
+    let events = events.unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].data, resource);
+    assert_eq!(events[0].sync_version, 1);
+}
+
+#[tokio::test]
+async fn spawned_watchers_deliver_one_event_and_release_closed_receivers() {
+    let cache = ServerCache::<TestResource>::new(10);
+    CacheEventDispatch::set_ready(&cache);
+    let baseline_store_owners = Arc::strong_count(&cache.store);
+    let baseline_notify_owners = Arc::strong_count(&cache.notify);
+    let mut first = cache.watch("first".into(), "first".into(), 0);
+    let mut second = cache.watch("second".into(), "second".into(), 0);
+    let resource = make_resource("broadcast", 1);
+    cache.apply_change(ResourceChange::EventAdd, resource.clone(), Some(1));
+    for receiver in [&mut first, &mut second] {
+        let response = tokio::time::timeout(std::time::Duration::from_secs(1), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(response.err.is_none());
+        assert_eq!(response.sync_version, 1);
+        assert_eq!(response.events.len(), 1);
+        assert_eq!(response.events[0].data, resource);
+    }
+    // No further event or generation change is needed to release either task.
+    drop(first);
+    drop(second);
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while Arc::strong_count(&cache.store) != baseline_store_owners
+            || Arc::strong_count(&cache.notify) != baseline_notify_owners
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("closed receivers must release watcher-owned store and Notify handles");
+}
