@@ -1403,7 +1403,10 @@ impl PluginRuntime {
                 {
                     self.invalid_plugins.record_non_retainable("IpRestriction");
                     errors.push(format!(
-                        "requestPlugins[{index}] (IpRestriction): invalid owning IP reference"
+                        "requestPlugins[{index}] (IpRestriction): {}",
+                        config_validation_errors[index]
+                            .as_deref()
+                            .unwrap_or("invalid owning IP reference")
                     ));
                     continue;
                 }
@@ -2652,7 +2655,11 @@ impl PluginRuntime {
             EdgionPlugin::ExtProc(_) => CreateResult::WrongStage,
             EdgionPlugin::Guardrail(_) => CreateResult::WrongStage,
             EdgionPlugin::ForwardAuth(_) => CreateResult::WrongStage,
-            EdgionPlugin::AllEndpointStatus(config) => CreateResult::Ok(Some(Box::new(AllEndpointStatus::new(config)))),
+            EdgionPlugin::AllEndpointStatus(config) => CreateResult::Ok(
+                AllEndpointStatus::new(config)
+                    .ok()
+                    .map(|plugin| Box::new(plugin) as Box<dyn RequestFilter>),
+            ),
             EdgionPlugin::OpenidConnect(_) => CreateResult::WrongStage,
             EdgionPlugin::Dsl(config) => CreateResult::Ok(DslPlugin::from_config(config)),
             EdgionPlugin::RegionRoute(config) => CreateResult::Ok(RegionRoute::create_inline(config)),

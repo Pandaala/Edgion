@@ -16,12 +16,11 @@
 //! | Escape hatch | `Misc` | Third-party / unknown payloads |
 //!
 //! The top-level envelope carries `enable` (kill switch, default `true`) and
-//! `active` (profile selector, optional).  See [`effective_switch`].
+//! `active` (profile selector, optional). Consumers own their switch semantics.
 
 pub mod ip_group;
 pub mod ip_list;
 pub mod key_list;
-pub mod overlay;
 pub mod region_route;
 pub mod request_access_url_allow_list;
 pub mod selector;
@@ -33,8 +32,7 @@ pub use waf_tags::{inspect_local_waf_tags, WafTagQuery, WafTagReport, MAX_WAF_TA
 pub use ip_group::IpGroup;
 pub use ip_list::IpListData;
 pub use key_list::{KeyGroup, KeyListData, KeyMatchMode, MetaDataItem};
-pub use overlay::{apply_override, OverlaySignal};
-pub use region_route::{merge_region_route_override, validate_regions, RegionRouteOverride, RegionTableValidation};
+pub use region_route::{validate_regions, RegionRouteOverride, RegionTableValidation};
 pub use request_access_url_allow_list::RequestAccessUrlAllowListData;
 pub use selector::Selector;
 pub use waf_policy::{
@@ -428,30 +426,6 @@ impl EdgionConfigData {
             self.metadata.name.as_deref().unwrap_or("").to_string()
         }
     }
-}
-
-/// Compute the effective switch values from a resolved [`EdgionConfigDataSpec`].
-///
-/// Returns `(effective_enable, effective_active)`:
-/// - `effective_enable`: `false` means consumers must skip this overlay entirely
-///   and fall back to base defaults (the kill switch).
-/// - `effective_active`: optional profile selector; `None` means no profile override
-///   (consumers that support profiles keep their own base default).
-///
-/// Consumers should call this helper before applying any data-level overrides.
-/// If `effective_enable` is `false`, skip the overlay; do not call
-/// [`apply_override`] in that case.
-///
-/// # Example
-/// ```rust,ignore
-/// let (enable, active) = effective_switch(&edgion_config_data.spec);
-/// if !enable {
-///     return base_config;
-/// }
-/// // ... proceed to apply_override ...
-/// ```
-pub fn effective_switch(spec: &EdgionConfigDataSpec) -> (bool, Option<&str>) {
-    (spec.enable, spec.active.as_deref())
 }
 
 #[cfg(test)]

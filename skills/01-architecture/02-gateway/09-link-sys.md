@@ -130,6 +130,25 @@ Characteristics:
 - `SyncSender<String>` queue with default size `available_cpu_cores * 10,000`.
 - `LogType` enum distinguishes log types (Access / Ssl / Tcp / Tls / Udp), used for metric stats.
 
+The worker owns native Rust size/time rotation: flush retained bytes, archive the
+active file without overwriting an existing archive, open the append/create base
+file, install the new writer, then clean up old archives. No external rotation
+utility or notification endpoint is required. A failed replacement retains the
+old writer; rotation attempts to restore the archived base without overwriting a
+concurrent replacement.
+
+The same worker checks active attachment before batches and during existing idle
+recovery ticks. On Unix, its private descriptor-derived device/inode identity is
+compared with current base-path metadata, so a stable rename plus recreation is
+detected even while the old file remains writable. Recovery flushes retained
+bytes to the old file before installing a descriptor whose identity matches the
+current base. Metadata/open failures keep attachment unhealthy until a later
+checkpoint succeeds; failed recovery also prevents internal rotation from
+archiving another generation's base. These checks do not make concurrent
+external renames atomic: a change after validation is detected at a later
+checkpoint. Non-Unix targets retain presence-only recovery and do not guarantee
+same-path replacement detection. Use one rotation owner per file.
+
 ## LinkSysStore
 
 `LinkSysStore` is the unified management hub for all LinkSys resources:

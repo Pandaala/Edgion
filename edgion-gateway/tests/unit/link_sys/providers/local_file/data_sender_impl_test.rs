@@ -32,11 +32,13 @@ fn reopen_sink_if_renamed_recreates_after_external_rename() {
     let dir = tempfile::tempdir().unwrap();
     let base = dir.path().join("es_fallback.log");
     let file = open_log_file(&base).unwrap();
+    let identity = Some(opened_file_state(&file).unwrap().0);
     let mut sink = BatchSink::new(
         BufWriter::new(file),
         LogType::Access,
         0,
         Arc::new(AtomicBool::new(true)),
+        identity,
     );
 
     // Intact active file: no reopen needed.
@@ -75,6 +77,7 @@ fn batch_sink_flips_unhealthy_after_threshold_flush_failures() {
         LogType::Access,
         0,
         Arc::clone(&healthy),
+        None,
     );
 
     for _ in 0..2 {
@@ -97,6 +100,7 @@ fn batch_sink_recovers_on_successful_flush() {
         LogType::Access,
         0,
         Arc::clone(&healthy),
+        None,
     );
     // Simulate a prior degraded state.
     sink.consecutive_flush_errors = 5;
@@ -131,6 +135,7 @@ fn batch_sink_write_line_error_debounces() {
         LogType::Access,
         0,
         Arc::clone(&healthy),
+        None,
     );
     sink.write_line("a");
     assert!(sink.buffer_error_logged, "first buffer error sets the debounce flag");
@@ -153,6 +158,7 @@ fn batch_sink_disk_signal_flips_health() {
         LogType::Access,
         0,
         Arc::clone(&healthy),
+        None,
     );
     sink.set_disk_ok(false);
     assert!(!healthy.load(Ordering::Relaxed), "disk over threshold -> unhealthy");
@@ -189,6 +195,7 @@ fn batch_sink_idle_retry_recovers_after_failures_clear() {
     let healthy = Arc::new(AtomicBool::new(true));
     let fail = Arc::new(AtomicBool::new(true));
     let file = tempfile::tempfile().unwrap();
+    let identity = Some(opened_file_state(&file).unwrap().0);
     let inspect_file = file.try_clone().unwrap();
     let mut sink = BatchSink::new(
         BufWriter::new(ToggleFailWriter {
@@ -198,6 +205,7 @@ fn batch_sink_idle_retry_recovers_after_failures_clear() {
         LogType::Access,
         0,
         Arc::clone(&healthy),
+        identity,
     );
 
     // Three failed flushes drive the sink unhealthy.
@@ -227,7 +235,8 @@ fn size_rotation_keeps_base_path_active_when_archive_is_backfilled() {
     let base = dir.path().join("es_fallback.log");
     let healthy = Arc::new(AtomicBool::new(true));
     let file = open_log_file(&base).unwrap();
-    let mut sink = BatchSink::new(BufWriter::new(file), LogType::Access, 0, healthy);
+    let identity = Some(opened_file_state(&file).unwrap().0);
+    let mut sink = BatchSink::new(BufWriter::new(file), LogType::Access, 0, healthy, identity);
 
     sink.write_line("before rotation");
     assert!(sink.flush());
@@ -259,6 +268,7 @@ fn batch_sink_idle_retry_is_noop_when_not_in_error() {
         LogType::Access,
         0,
         Arc::clone(&healthy),
+        None,
     );
     sink.retry_flush_for_recovery();
     assert!(healthy.load(Ordering::Relaxed));
@@ -272,6 +282,7 @@ fn external_rename_waits_for_failed_buffer_to_flush_before_reopen() {
     let renamed = dir.path().join("fallback.log.backfilled-1");
     let fail = Arc::new(AtomicBool::new(true));
     let file = open_log_file(&base).unwrap();
+    let identity = Some(opened_file_state(&file).unwrap().0);
     let mut sink = BatchSink::new(
         BufWriter::new(ToggleFailWriter {
             fail: Arc::clone(&fail),
@@ -280,6 +291,7 @@ fn external_rename_waits_for_failed_buffer_to_flush_before_reopen() {
         LogType::Access,
         0,
         Arc::new(AtomicBool::new(true)),
+        identity,
     );
 
     sink.write_line("retained");
@@ -314,7 +326,8 @@ fn missing_base_reopen_failure_marks_attachment_unhealthy() {
     let renamed = dir.path().join("fallback.log.backfilled-1");
     let healthy = Arc::new(AtomicBool::new(true));
     let file = open_log_file(&base).unwrap();
-    let mut sink = BatchSink::new(BufWriter::new(file), LogType::Access, 0, Arc::clone(&healthy));
+    let identity = Some(opened_file_state(&file).unwrap().0);
+    let mut sink = BatchSink::new(BufWriter::new(file), LogType::Access, 0, Arc::clone(&healthy), identity);
 
     sink.write_line("retained");
     fs::rename(&base, &renamed).unwrap();
@@ -339,7 +352,8 @@ fn unhealthy_attachment_reopens_externally_recreated_base_and_recovers() {
     let renamed = dir.path().join("fallback.log.backfilled-1");
     let healthy = Arc::new(AtomicBool::new(true));
     let file = open_log_file(&base).unwrap();
-    let mut sink = BatchSink::new(BufWriter::new(file), LogType::Access, 0, Arc::clone(&healthy));
+    let identity = Some(opened_file_state(&file).unwrap().0);
+    let mut sink = BatchSink::new(BufWriter::new(file), LogType::Access, 0, Arc::clone(&healthy), identity);
 
     fs::rename(&base, &renamed).unwrap();
     fs::File::create(&base).unwrap();
@@ -356,6 +370,266 @@ fn unhealthy_attachment_reopens_externally_recreated_base_and_recovers() {
     assert_eq!(fs::read_to_string(&base).unwrap(), "canonical\n");
 }
 
+#[cfg(unix)]
+#[test]
+fn healthy_attachment_reopens_recreated_base_and_preserves_retained_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("access.log");
+    let archived = dir.path().join("access.archived.log");
+    let file = open_log_file(&base).unwrap();
+    let identity = Some(opened_file_state(&file).unwrap().0);
+    let healthy = Arc::new(AtomicBool::new(true));
+    let mut sink = BatchSink::new(BufWriter::new(file), LogType::Access, 0, Arc::clone(&healthy), identity);
+    sink.write_line("retained");
+    fs::rename(&base, &archived).unwrap();
+    fs::write(&base, "existing\n").unwrap();
+    assert!(sink.path_ok && healthy.load(Ordering::Relaxed));
+
+    assert!(reopen_sink_if_renamed_with(
+        &mut sink,
+        &base,
+        |path| {
+            assert!(
+                !healthy.load(Ordering::Relaxed),
+                "old flush cannot restore attachment health"
+            );
+            open_log_file(path)
+        },
+        |file| file,
+    ));
+    assert_ne!(sink.identity, identity);
+    assert_eq!(sink.current_size, 9);
+    assert!(sink.path_ok && healthy.load(Ordering::Relaxed));
+    assert_eq!(fs::read_to_string(&archived).unwrap(), "retained\n");
+    sink.write_line("canonical");
+    assert!(sink.flush());
+    assert_eq!(fs::read_to_string(&base).unwrap(), "existing\ncanonical\n");
+    assert!(!reopen_sink_if_renamed_with(
+        &mut sink,
+        &base,
+        |_| panic!("matching attachment must not reopen"),
+        |file| file,
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn recreated_base_waits_for_failed_flush_and_recovers_without_new_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("access.log");
+    let archived = dir.path().join("access.archived.log");
+    let file = open_log_file(&base).unwrap();
+    let identity = Some(opened_file_state(&file).unwrap().0);
+    let fail = Arc::new(AtomicBool::new(true));
+    let healthy = Arc::new(AtomicBool::new(true));
+    let mut sink = BatchSink::new(
+        BufWriter::new(ToggleFailWriter {
+            fail: Arc::clone(&fail),
+            file,
+        }),
+        LogType::Access,
+        0,
+        Arc::clone(&healthy),
+        identity,
+    );
+    sink.write_line("retained");
+    fs::rename(&base, &archived).unwrap();
+    fs::write(&base, "existing\n").unwrap();
+    assert!(!reopen_sink_if_renamed_with(
+        &mut sink,
+        &base,
+        |_| panic!("failed old flush must block open"),
+        |file| ToggleFailWriter {
+            fail: Arc::clone(&fail),
+            file
+        },
+    ));
+    assert_eq!(sink.identity, identity);
+    assert!(!sink.path_ok && !healthy.load(Ordering::Relaxed));
+    assert!(!sink.file.buffer().is_empty());
+    fail.store(false, Ordering::Relaxed);
+    assert!(reopen_sink_if_renamed(&mut sink, &base, |file| ToggleFailWriter {
+        fail: Arc::clone(&fail),
+        file,
+    }));
+    assert_eq!(fs::read_to_string(&archived).unwrap(), "retained\n");
+    assert_eq!(fs::read_to_string(&base).unwrap(), "existing\n");
+    assert_eq!(sink.current_size, 9);
+    assert!(sink.path_ok && healthy.load(Ordering::Relaxed));
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_recreated_base_open_blocks_rotation_and_later_recovers() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("access.log");
+    let old = dir.path().join("old.log");
+    let archive = dir.path().join("access.1.log");
+    let file = open_log_file(&base).unwrap();
+    let identity = Some(opened_file_state(&file).unwrap().0);
+    let healthy = Arc::new(AtomicBool::new(true));
+    let mut sink = BatchSink::new(BufWriter::new(file), LogType::Access, 0, Arc::clone(&healthy), identity);
+    sink.write_line("retained");
+    fs::rename(&base, &old).unwrap();
+    fs::write(&base, "new generation\n").unwrap();
+    // Rotation itself must refuse to archive a detached writer's newer base.
+    assert_eq!(
+        rotate_active_file(&mut sink, &base, &archive, 0, true, |file| file),
+        RotationOutcome::Failed
+    );
+    assert!(!archive.exists());
+    assert!(!reopen_sink_if_renamed_with(
+        &mut sink,
+        &base,
+        |_| Err(std::io::Error::other("open failed")),
+        |file| file,
+    ));
+    assert_eq!(sink.identity, identity);
+    assert!(!healthy.load(Ordering::Relaxed));
+    assert_eq!(
+        rotate_active_file(&mut sink, &base, &archive, 0, true, |file| file),
+        RotationOutcome::Failed
+    );
+    assert!(!archive.exists());
+    assert_eq!(fs::read_to_string(&old).unwrap(), "retained\n");
+    assert_eq!(fs::read_to_string(&base).unwrap(), "new generation\n");
+    assert!(reopen_sink_if_renamed(&mut sink, &base, |file| file));
+    sink.write_line("recovered");
+    assert!(sink.flush());
+    assert_eq!(fs::read_to_string(&base).unwrap(), "new generation\nrecovered\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn raced_candidate_path_is_rejected_and_stable_checkpoint_recovers() {
+    for recreate in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("access.log");
+        let old = dir.path().join("old.log");
+        let raced = dir.path().join("raced.log");
+        let file = open_log_file(&base).unwrap();
+        let identity = Some(opened_file_state(&file).unwrap().0);
+        let healthy = Arc::new(AtomicBool::new(true));
+        let mut sink = BatchSink::new(BufWriter::new(file), LogType::Access, 0, Arc::clone(&healthy), identity);
+        sink.write_line("retained");
+        fs::rename(&base, &old).unwrap();
+        assert!(!reopen_sink_if_renamed_with(
+            &mut sink,
+            &base,
+            |path| {
+                let candidate = open_log_file(path)?;
+                fs::rename(path, &raced)?;
+                if recreate {
+                    fs::write(path, "new generation\n")?;
+                }
+                // Descriptor metadata remains valid after pathname replacement.
+                assert!(candidate.metadata().is_ok());
+                Ok(candidate)
+            },
+            |file| file,
+        ));
+        assert_eq!(sink.identity, identity);
+        assert!(!sink.path_ok && !healthy.load(Ordering::Relaxed));
+        assert_eq!(fs::read_to_string(&old).unwrap(), "retained\n");
+        assert_eq!(fs::read_to_string(&raced).unwrap(), "");
+        assert!(reopen_sink_if_renamed(&mut sink, &base, |file| file));
+        assert!(sink.path_ok && healthy.load(Ordering::Relaxed));
+        sink.write_line("canonical");
+        assert!(sink.flush());
+        let expected = if recreate {
+            "new generation\ncanonical\n"
+        } else {
+            "canonical\n"
+        };
+        assert_eq!(fs::read_to_string(&base).unwrap(), expected);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn active_path_metadata_error_preserves_writer_until_path_recovers() {
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join("logs");
+    fs::create_dir(&parent).unwrap();
+    let base = parent.join("access.log");
+    let moved = dir.path().join("old-logs");
+    let file = open_log_file(&base).unwrap();
+    let identity = Some(opened_file_state(&file).unwrap().0);
+    let healthy = Arc::new(AtomicBool::new(true));
+    let mut sink = BatchSink::new(BufWriter::new(file), LogType::Access, 0, Arc::clone(&healthy), identity);
+    sink.write_line("retained");
+    fs::rename(&parent, &moved).unwrap();
+    fs::write(&parent, "not a directory").unwrap();
+    assert!(active_path_matches(&base, identity).is_err());
+    assert!(!reopen_sink_if_renamed_with(
+        &mut sink,
+        &base,
+        |_| panic!("metadata error must defer reopening"),
+        |file| file,
+    ));
+    assert_eq!(sink.identity, identity);
+    assert!(!sink.path_ok && !healthy.load(Ordering::Relaxed));
+    assert!(!sink.file.buffer().is_empty());
+    fs::remove_file(&parent).unwrap();
+    assert!(reopen_sink_if_renamed(&mut sink, &base, |file| file));
+    assert_eq!(fs::read_to_string(moved.join("access.log")).unwrap(), "retained\n");
+    sink.write_line("canonical");
+    assert!(sink.flush());
+    assert_eq!(fs::read_to_string(&base).unwrap(), "canonical\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn unknown_identity_cannot_confirm_unix_attachment() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("access.log");
+    let file = open_log_file(&base).unwrap();
+    let mut sink = BatchSink::new(
+        BufWriter::new(file),
+        LogType::Access,
+        0,
+        Arc::new(AtomicBool::new(true)),
+        None,
+    );
+    assert!(!active_path_matches(&base, sink.identity).unwrap());
+    assert!(reopen_sink_if_renamed(&mut sink, &base, |file| file));
+    assert!(active_path_matches(&base, sink.identity).unwrap());
+}
+
+#[cfg(unix)]
+#[test]
+fn time_rotation_refreshes_identity_and_rollback_never_overwrites_new_base() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("access.log");
+    let archive = dir.path().join("access.hour.log");
+    let file = open_log_file(&base).unwrap();
+    let identity = Some(opened_file_state(&file).unwrap().0);
+    let mut sink = BatchSink::new(
+        BufWriter::new(file),
+        LogType::Access,
+        0,
+        Arc::new(AtomicBool::new(true)),
+        identity,
+    );
+    sink.write_line("archived");
+    assert_eq!(
+        rotate_active_file(&mut sink, &base, &archive, 0, true, |file| file),
+        RotationOutcome::Rotated
+    );
+    assert_ne!(sink.identity, identity);
+    assert!(!reopen_sink_if_renamed(&mut sink, &base, |file| file));
+    sink.write_line("active");
+    assert!(sink.flush());
+    assert!(restore_archived_base(&archive, &base).is_err());
+    assert_eq!(fs::read_to_string(&archive).unwrap(), "archived\n");
+    assert_eq!(fs::read_to_string(&base).unwrap(), "active\n");
+    fs::remove_file(&base).unwrap();
+    restore_archived_base(&archive, &base).unwrap();
+    assert!(!archive.exists());
+    assert!(active_path_matches(&base, identity).unwrap());
+    assert_eq!(fs::read_to_string(&base).unwrap(), "archived\n");
+}
+
 #[test]
 fn time_rotation_waits_for_failed_buffer_to_flush_before_replace() {
     let dir = tempfile::tempdir().unwrap();
@@ -363,6 +637,7 @@ fn time_rotation_waits_for_failed_buffer_to_flush_before_replace() {
     let archive = dir.path().join("access.2026-01-01.log");
     let fail = Arc::new(AtomicBool::new(true));
     let file = open_log_file(&base).unwrap();
+    let identity = Some(opened_file_state(&file).unwrap().0);
     let mut sink = BatchSink::new(
         BufWriter::new(ToggleFailWriter {
             fail: Arc::clone(&fail),
@@ -371,6 +646,7 @@ fn time_rotation_waits_for_failed_buffer_to_flush_before_replace() {
         LogType::Access,
         0,
         Arc::new(AtomicBool::new(true)),
+        identity,
     );
 
     sink.write_line("retained");

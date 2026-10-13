@@ -113,3 +113,46 @@ config:
     assert!(errors.contains("timeout.command must not exceed 30000ms"));
     assert!(errors.contains("maxRedirects must not exceed 64"));
 }
+
+#[test]
+fn kafka_linger_admission_covers_produce_deadline_boundaries() {
+    for (linger, valid) in [
+        (None, true),
+        (Some(0), true),
+        (Some(29999), true),
+        (Some(30000), false),
+        (Some(u64::MAX), false),
+    ] {
+        let spec = serde_json::from_value(serde_json::json!({
+            "type": "kafka", "config": {"brokers": ["broker.example:9092"], "lingerMs": linger}
+        }))
+        .unwrap();
+        let errors = make_link_sys("kafka", spec).validate_config();
+        let expected = if valid {
+            vec![]
+        } else {
+            vec!["Kafka lingerMs must be shorter than the 30 second produce timeout"]
+        };
+        assert_eq!(errors, expected, "linger {linger:?}");
+    }
+}
+
+#[test]
+fn kafka_validation_preserves_order_with_all_scalar_errors() {
+    let spec = serde_json::from_value(serde_json::json!({
+        "type": "kafka", "config": {"brokers": [], "channelSize": 0, "maxTopics": 0,
+            "maxPendingRecords": 0, "maxPendingBytes": 0, "lingerMs": 30000}
+    }))
+    .unwrap();
+    assert_eq!(
+        make_link_sys("kafka", spec).validate_config(),
+        vec![
+            "Kafka configuration has no brokers",
+            "Kafka channelSize must be greater than zero",
+            "Kafka maxTopics must be greater than zero",
+            "Kafka maxPendingRecords must be greater than zero",
+            "Kafka maxPendingBytes must be greater than zero",
+            "Kafka lingerMs must be shorter than the 30 second produce timeout",
+        ]
+    );
+}

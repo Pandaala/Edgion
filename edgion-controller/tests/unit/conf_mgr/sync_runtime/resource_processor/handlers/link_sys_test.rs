@@ -2016,3 +2016,66 @@ async fn credential_source_retains_one_actual_private_tls_owner_and_scrubs_wire_
     let CredentialSourceProvider::OAuth2ClientCredentials(retained) = &desired.config.provider;
     assert!(retained.tls.as_ref().unwrap().resolved_client_certificate.is_some());
 }
+
+#[tokio::test]
+async fn kafka_linger_boundaries_drive_controller_accepted_status() {
+    let (ctx, _) = make_ctx(HashMap::new());
+    let handler = LinkSysHandler::new();
+    for (linger, valid) in [
+        (None, true),
+        (Some(0), true),
+        (Some(29999), true),
+        (Some(30000), false),
+        (Some(u64::MAX), false),
+    ] {
+        let mut ls: LinkSys = serde_json::from_value(serde_json::json!({
+            "metadata": {"namespace": "default", "name": "kafka", "generation": 1},
+            "spec": {"type": "kafka", "config": {"brokers": ["broker.example:9092"], "lingerMs": linger}}
+        }))
+        .unwrap();
+        let errors = handler.preparse(&mut ls, &ctx);
+        assert_eq!(errors, ls.validate_config());
+        assert_eq!(errors.is_empty(), valid, "linger {linger:?}");
+        let ProcessResult::Continue(mut parsed) = handler.parse(ls, &ctx).await else {
+            panic!("LinkSys must continue")
+        };
+        handler.update_status(&mut parsed, &ctx, &errors);
+        let condition = find_cond(&parsed, condition_types::ACCEPTED).unwrap();
+        assert_eq!(condition.status, if valid { "True" } else { "False" });
+        if !valid {
+            assert_eq!(condition.reason, "Invalid");
+            assert_eq!(condition.message, errors.join("; "));
+        }
+    }
+}
+
+#[tokio::test]
+async fn kafka_scalar_errors_retain_order_in_controller_status() {
+    let (ctx, _) = make_ctx(HashMap::new());
+    let handler = LinkSysHandler::new();
+    let mut ls: LinkSys = serde_json::from_value(serde_json::json!({
+        "metadata": {"namespace": "default", "name": "kafka", "generation": 1},
+        "spec": {"type": "kafka", "config": {"brokers": [], "channelSize": 0, "maxTopics": 0,
+            "maxPendingRecords": 0, "maxPendingBytes": 0, "lingerMs": 30000}}
+    }))
+    .unwrap();
+    let errors = handler.preparse(&mut ls, &ctx);
+    assert_eq!(
+        errors,
+        vec![
+            "Kafka configuration has no brokers",
+            "Kafka channelSize must be greater than zero",
+            "Kafka maxTopics must be greater than zero",
+            "Kafka maxPendingRecords must be greater than zero",
+            "Kafka maxPendingBytes must be greater than zero",
+            "Kafka lingerMs must be shorter than the 30 second produce timeout",
+        ]
+    );
+    let ProcessResult::Continue(mut parsed) = handler.parse(ls, &ctx).await else {
+        panic!("LinkSys must continue")
+    };
+    handler.update_status(&mut parsed, &ctx, &errors);
+    let condition = find_cond(&parsed, condition_types::ACCEPTED).unwrap();
+    assert_eq!(condition.status, "False");
+    assert_eq!(condition.message, errors.join("; "));
+}

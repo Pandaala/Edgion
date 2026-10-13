@@ -54,7 +54,10 @@ fn overlay_updates_use_generation_proofs_and_consumer_modulo() {
         name: "RegionRoute".to_string(),
         init_error: None,
         base: Arc::new(RegionRouteConfig {
-            regions: vec![make_region("base", 0, 999, "base")],
+            regions: vec![
+                make_region("base", 0, 499, "base"),
+                make_region("base-only", 500, 999, "base-only"),
+            ],
             ..Default::default()
         }),
         override_key: Some(key.to_string()),
@@ -79,6 +82,7 @@ fn overlay_updates_use_generation_proofs_and_consumer_modulo() {
     let mut session = MockPluginSession::new();
     let mut log = PluginLog::new("RegionRoute");
     let held = plugin.compute_effective_regions(&mut session, &mut log);
+    assert_eq!(held.len(), 1, "overlay replaces the entire base table");
     assert_eq!(held[0].name, "overlay", "variant enable is inert");
     if let ConfigEntry::RegionRouteOverride(overlay) = &mut resource.spec.data {
         overlay.regions.as_mut().unwrap()[0].hash_range = [0, 1500];
@@ -100,7 +104,11 @@ fn overlay_updates_use_generation_proofs_and_consumer_modulo() {
         overlay.regions = None;
     }
     store.insert_raw_for_test(key, Arc::new(resource));
-    assert_eq!(plugin.compute_effective_regions(&mut session, &mut log)[0].name, "base");
+    let inherited = plugin.compute_effective_regions(&mut session, &mut log);
+    assert!(
+        std::ptr::eq(&*inherited, plugin.base.regions.as_slice()),
+        "None borrows the complete base"
+    );
 }
 
 /// When no override_key is set, `compute_effective_regions` returns the base regions.
@@ -586,4 +594,38 @@ fn owning_region_invalid_target_keeps_base_but_owner_failure_has_no_constructor(
         owner.metadata.namespace = Some(String::new());
         assert!(RegionRoute::create_bound(HttpConfigDataEntry::from_plugins(&owner, 0).unwrap()).is_none());
     }
+}
+
+#[test]
+fn wrong_overlay_type_preserves_the_complete_base_and_reports_fallback() {
+    let key = "unit-test-ns/rr-wrong-type-complete-base";
+    let resource: EdgionConfigData = serde_json::from_value(serde_json::json!({
+        "apiVersion": "edgion.io/v1", "kind": "EdgionConfigData",
+        "metadata": {"name": "rr-wrong-type-complete-base", "namespace": "unit-test-ns"},
+        "spec": {"data": {"type": "Misc", "config": {}}}
+    }))
+    .unwrap();
+    get_global_edgion_config_data_store().insert_raw_for_test(key, Arc::new(resource));
+    let plugin = RegionRoute {
+        name: "RegionRoute".into(),
+        init_error: None,
+        base: Arc::new(RegionRouteConfig {
+            regions: vec![
+                make_region("first", 0, 499, "first"),
+                make_region("second", 500, 999, "second"),
+            ],
+            ..Default::default()
+        }),
+        override_key: Some(key.into()),
+    };
+    let mut session = MockPluginSession::new();
+    session
+        .expect_record_outcome()
+        .withf(|outcome, value| *outcome == DyeOutcome::Fallback && value == "overlay-fail-to-base")
+        .times(1)
+        .return_const(());
+    let mut log = PluginLog::new("RegionRoute");
+    let regions = plugin.compute_effective_regions(&mut session, &mut log);
+    assert!(std::ptr::eq(&*regions, plugin.base.regions.as_slice()));
+    assert!(log.render_for_test().contains("overlay_type_mismatch"));
 }

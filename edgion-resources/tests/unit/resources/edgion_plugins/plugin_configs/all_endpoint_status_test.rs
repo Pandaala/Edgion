@@ -143,3 +143,45 @@ fn test_validation_path_override_with_slash_is_valid() {
     };
     assert!(config.get_validation_error().is_none());
 }
+
+#[test]
+fn method_override_requires_an_exact_http_token() {
+    for method in ["", "BAD METHOD", " GET", "GET ", "G\tET", "GET\r\n", "G/ET", "méthod"] {
+        let config = AllEndpointStatusConfig {
+            method_override: Some(method.into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.get_validation_error().as_deref(),
+            Some("methodOverride must be a valid HTTP method")
+        );
+    }
+    for method in ["GET", "POST", "post", "X-Custom", "!#$%&'*+-.^_`|~"] {
+        let config = AllEndpointStatusConfig {
+            method_override: Some(method.into()),
+            ..Default::default()
+        };
+        assert!(config.get_validation_error().is_none(), "{method}");
+    }
+}
+
+#[test]
+fn method_validation_preserves_existing_error_precedence() {
+    let mut config = AllEndpointStatusConfig {
+        timeout_ms: 0,
+        path_override: Some("relative".into()),
+        method_override: Some("BAD METHOD".into()),
+        ..Default::default()
+    };
+    assert_eq!(config.get_validation_error().as_deref(), Some("timeoutMs must be > 0"));
+    config.timeout_ms = 1;
+    assert_eq!(
+        config.get_validation_error().as_deref(),
+        Some("pathOverride must start with '/'")
+    );
+    config.path_override = None;
+    assert_eq!(
+        config.get_validation_error().as_deref(),
+        Some("methodOverride must be a valid HTTP method")
+    );
+}

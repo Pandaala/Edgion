@@ -2,6 +2,7 @@ use super::{rpc_path, TranscodingError};
 use prost_reflect::{DynamicMessage, FieldDescriptor, Kind, MessageDescriptor, MethodDescriptor, Value};
 use regex::{Regex, RegexBuilder};
 use serde_json::{Map, Value as Json};
+use std::borrow::Cow;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -311,7 +312,10 @@ fn path_pattern(pattern: &str) -> Result<String, String> {
     }
     Ok(result)
 }
-fn decode_path(value: &str, preserve_slash: bool) -> Result<String, TranscodingError> {
+fn decode_path(value: &str, preserve_slash: bool) -> Result<Cow<'_, str>, TranscodingError> {
+    if !value.as_bytes().contains(&b'%') {
+        return Ok(Cow::Borrowed(value));
+    }
     let mut output = Vec::with_capacity(value.len());
     let bytes = value.as_bytes();
     let mut i = 0;
@@ -336,7 +340,9 @@ fn decode_path(value: &str, preserve_slash: bool) -> Result<String, TranscodingE
             i += 1;
         }
     }
-    String::from_utf8(output).map_err(|_| TranscodingError::Invalid)
+    String::from_utf8(output)
+        .map(Cow::Owned)
+        .map_err(|_| TranscodingError::Invalid)
 }
 pub(super) fn compile_rules(
     method: &MethodDescriptor,
@@ -396,3 +402,7 @@ pub(super) fn compile_rules(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/grpc_transcoding/mapping_test.rs"]
+mod tests;

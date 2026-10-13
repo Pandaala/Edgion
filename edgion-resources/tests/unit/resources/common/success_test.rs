@@ -193,3 +193,89 @@ fn non_empty_status_codes_accepted() {
     let s = spec("statusCodes: [200, 201]\n");
     assert!(validate_success(&s).is_none());
 }
+
+#[test]
+fn null_equality_operands_round_trip_and_classify_strictly() {
+    for operator in ["equals", "notEquals"] {
+        let wire = serde_json::json!({"pointer": "/error", operator: null});
+        let yaml = format!("pointer: /error\n{operator}: null\n");
+        let predicates = [
+            serde_json::from_value::<BodyPredicate>(wire.clone()).unwrap(),
+            serde_yaml::from_str::<BodyPredicate>(&yaml).unwrap(),
+        ];
+        for predicate in predicates {
+            let json_round_trip: BodyPredicate =
+                serde_json::from_str(&serde_json::to_string(&predicate).unwrap()).unwrap();
+            let yaml_round_trip: BodyPredicate =
+                serde_yaml::from_str(&serde_yaml::to_string(&predicate).unwrap()).unwrap();
+            assert_eq!(serde_json::to_value(json_round_trip).unwrap(), wire);
+            assert_eq!(serde_json::to_value(yaml_round_trip).unwrap(), wire);
+            let spec = SuccessSpec {
+                body: vec![predicate],
+                ..Default::default()
+            };
+            for (body, matches) in [
+                (br#"{"error":null}"#.as_slice(), operator == "equals"),
+                (br#"{"error":"denied"}"#.as_slice(), operator == "notEquals"),
+                (br#"{}"#.as_slice(), false),
+            ] {
+                let expected = if matches {
+                    SuccessOutcome::Success
+                } else {
+                    SuccessOutcome::BodyFail
+                };
+                assert_eq!(classify_detail(Some(&spec), 200, body, true), expected);
+                assert_eq!(
+                    classify_detail(Some(&spec), 500, body, true),
+                    SuccessOutcome::StatusFail
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn present_null_never_disappears_from_operator_arity() {
+    for operator in ["equals", "notEquals"] {
+        for (other, operand) in [
+            ("equals", "null"),
+            ("notEquals", "null"),
+            ("exists", "true"),
+            ("in", "[null]"),
+        ] {
+            if other == operator {
+                continue;
+            }
+            for fields in [
+                format!("\"{operator}\":null,\"{other}\":{operand}"),
+                format!("\"{other}\":{operand},\"{operator}\":null"),
+            ] {
+                let wire = format!("{{\"pointer\":\"/error\",{fields}}}");
+                assert!(serde_json::from_str::<BodyPredicate>(&wire).is_err(), "{wire}");
+                assert!(serde_yaml::from_str::<BodyPredicate>(&wire).is_err(), "{wire}");
+            }
+        }
+    }
+    for operator in ["exists", "in"] {
+        for extra in ["", ",\"equals\":0", ",\"equals\":null"] {
+            let wire = format!("{{\"pointer\":\"/error\",\"{operator}\":null{extra}}}");
+            assert!(serde_json::from_str::<BodyPredicate>(&wire).is_err(), "{wire}");
+            assert!(serde_yaml::from_str::<BodyPredicate>(&wire).is_err(), "{wire}");
+        }
+    }
+}
+
+#[test]
+fn null_predicates_retain_unknown_duplicate_and_missing_operator_rejection() {
+    for wire in [
+        r#"{"pointer":"/error"}"#,
+        r#"{"pointer":"/error","equals":null,"unknown":true}"#,
+        r#"{"pointer":"/error","equals":null,"equals":0}"#,
+        r#"{"pointer":"/error","notEquals":null,"notEquals":null}"#,
+        r#"{"pointer":"/error","exists":true,"exists":false}"#,
+        r#"{"pointer":"/error","in":[null],"in":[1]}"#,
+    ] {
+        assert!(serde_json::from_str::<BodyPredicate>(wire).is_err(), "{wire}");
+        assert!(serde_yaml::from_str::<BodyPredicate>(wire).is_err(), "{wire}");
+    }
+}

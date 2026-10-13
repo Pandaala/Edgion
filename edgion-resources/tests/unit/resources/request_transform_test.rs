@@ -1,5 +1,6 @@
 use super::*;
 use crate::resources::edgion_plugins::EdgionPlugin;
+use crate::resources::HTTPRouteMatch;
 use serde_json::json;
 
 fn rule(value: Value) -> HTTPRouteRule {
@@ -214,4 +215,61 @@ fn effective_safety_catches_multiple_backend_prefix_transforms() {
             .iter()
             .any(|violation| violation.message.contains("PathPrefix")));
     }
+}
+
+#[test]
+fn prefix_context_preserves_absent_empty_default_and_mixed_matches() {
+    let prefix: HTTPRouteMatch =
+        serde_json::from_value(json!({"path": {"type": "PathPrefix", "value": "/api"}})).unwrap();
+    let exact: HTTPRouteMatch = serde_json::from_value(json!({"path": {"type": "Exact", "value": "/api"}})).unwrap();
+    let mut no_path = prefix.clone();
+    no_path.path = None;
+    let mut no_type = prefix.clone();
+    no_type.path.as_mut().unwrap().match_type = None;
+    for (matches, accepted) in [
+        (None, true),
+        (Some(vec![]), false),
+        (Some(vec![no_path]), true),
+        (Some(vec![no_type]), true),
+        (Some(vec![prefix.clone()]), true),
+        (Some(vec![exact.clone(), prefix.clone()]), false),
+        (Some(vec![prefix, exact]), false),
+    ] {
+        let mut candidate = rule(json!({
+            "filters": [{"type": "URLRewrite", "urlRewrite": {"path": {
+                "type": "ReplacePrefixMatch", "replacePrefixMatch": "/v2"
+            }}}],
+            "backendRefs": [{"name": "backend", "port": 80}]
+        }));
+        candidate.matches = matches;
+        for violations in [
+            authored_request_transform_violations(&candidate).unwrap(),
+            effective_request_transform_violations(&candidate).unwrap(),
+        ] {
+            let prefix_rejected = violations.iter().any(|v| {
+                v.path == "matches" && v.message == "prefix request transforms require PathPrefix match context"
+            });
+            assert_eq!(prefix_rejected, !accepted, "{violations:?}");
+        }
+    }
+}
+
+#[test]
+fn prefix_rewrite_accepts_large_unrelated_header_matches() {
+    let headers = (0..16)
+        .map(|index| {
+            json!({
+                "name": format!("x-large-{index}"), "value": "x".repeat(4096)
+            })
+        })
+        .collect::<Vec<_>>();
+    let candidate = rule(json!({
+        "matches": [{"path": {"type": "PathPrefix", "value": "/api"}, "headers": headers}],
+        "filters": [{"type": "URLRewrite", "urlRewrite": {"path": {
+            "type": "ReplacePrefixMatch", "replacePrefixMatch": "/v2"
+        }}}],
+        "backendRefs": [{"name": "backend", "port": 80}]
+    }));
+    assert!(authored_request_transform_violations(&candidate).unwrap().is_empty());
+    assert!(effective_request_transform_violations(&candidate).unwrap().is_empty());
 }

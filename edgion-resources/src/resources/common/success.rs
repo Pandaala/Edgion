@@ -41,14 +41,24 @@ pub struct BodyPredicate {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawBodyPredicate {
     pointer: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_present")]
     equals: Option<serde_json::Value>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_present")]
     not_equals: Option<serde_json::Value>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_present")]
     exists: Option<bool>,
-    #[serde(default, rename = "in")]
+    #[serde(default, rename = "in", deserialize_with = "deserialize_present")]
     in_values: Option<Vec<serde_json::Value>>,
+}
+
+// Missing keys use the field default; present keys must decode their operand,
+// including JSON null for equality, instead of treating null as absence.
+fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
 }
 
 impl<'de> Deserialize<'de> for BodyPredicate {

@@ -1,6 +1,6 @@
 ---
 name: resource-edgion-config-data
-description: EdgionConfigData resource — general-purpose hot-swappable overlay/data primitive. Covers the overlay model (base+overlay, apply_override, fail-to-base), variant taxonomy (KeyList/IpList/typed first-party overlays/Misc), ownership (Center-controlled; the managed-by label is inert here), and controller/gateway processing.
+description: EdgionConfigData resource — general-purpose hot-swappable overlay/data primitive. Covers the overlay model (base+overlay, borrowed table selection, fail-to-base), variant taxonomy (KeyList/IpList/typed first-party overlays/Misc), ownership (Center-controlled; the managed-by label is inert here), and controller/gateway processing.
 ---
 
 # EdgionConfigData Resource
@@ -26,7 +26,7 @@ and others later) may reference it via a generic `dataRef`.
 - Native WAF bundle shape: `edgion-resources/src/resources/edgion_config_data/waf_rule_bundle.rs` (`WafRuleBundleData`)
 - GlobalConnectionIpRestriction plugin config (consumes `Selector` via `activeProfileRef`):
   `edgion-resources/src/resources/edgion_stream_plugins/global_connection_ip_restriction.rs` (`GlobalConnectionIpRestrictionConfig`)
-- Overlay framework: `edgion-resources/src/resources/edgion_config_data/overlay.rs` (`apply_override`)
+- Live overlay selection: `edgion-gateway/src/plugins/http/region_route/plugin.rs` (`compute_effective_regions`, `EffectiveRegions`)
 - Controller handler: `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_config_data.rs`
 - Gateway store + index: `edgion-gateway/src/plugins/runtime/edgion_config_data/conf_handler.rs`
 - Gateway store module: `edgion-gateway/src/plugins/runtime/edgion_config_data/mod.rs`
@@ -44,7 +44,7 @@ and others later) may reference it via a generic `dataRef`.
                 └──────────┬───────────┘
                            │ resolve at runtime
      ┌─────────────────────▼─────────────────────┐
-     │  effective = apply_override(base, overlay)  │
+     │  effective = select_table(base, overlay)    │
      │  overlay absent  → base                     │
      │  overlay present & valid → base ⊕ overlay   │  (field-level REPLACE)
      │  overlay present & invalid → base + signal  │  (fail-to-base)
@@ -73,9 +73,17 @@ and others later) may reference it via a generic `dataRef`.
 > **Security invariant:** fail-to-base means the base must be the conservative/safe value. If the base
 > `default_action` is `Allow`, an overlay error silently allows all traffic — document and validate this.
 
-### `apply_override` Contract
+### Overlay Selection Contract
 
-- Signature (conceptual): `fn apply(base: &Base, overlay: Option<&Override>) -> Effective`
+The base/overlay model is conceptual, not a generic merge API. RegionRoute's
+`compute_effective_regions` resolves the raw resource and compact validation proof
+from one immutable snapshot, checks the envelope/type/consumer modulo, and returns
+`EffectiveRegions`. That view borrows the base or holds the accepted overlay Arc
+and borrows its whole table. No request-time table clone or generic owned merge
+runs. The Controller's effective-view API independently retains its validated
+JSON projection for management requests.
+
+- Signature (conceptual): `fn select(base: &Base, overlay: Option<&Override>) -> Effective`
 - **Type guard first (D6):** verify the EdgionConfigData `type` matches the expected override variant before applying.
   Mismatch → fail-to-base + signal (`overlay_type_mismatch`). Never coerce across types.
 - For each field in `Override` (all `Option`): `Some(v)` → use `v`; `None` → use base value.

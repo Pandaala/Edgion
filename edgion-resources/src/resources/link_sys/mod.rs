@@ -247,21 +247,7 @@ impl LinkSys {
                 }
             }
             SystemConfig::Kafka(kafka_config) => {
-                if kafka_config.brokers.is_empty() {
-                    errors.push("Kafka configuration has no brokers".to_string());
-                }
-                if kafka_config.channel_size == Some(0) {
-                    errors.push("Kafka channelSize must be greater than zero".to_string());
-                }
-                if kafka_config.max_topics == Some(0) {
-                    errors.push("Kafka maxTopics must be greater than zero".to_string());
-                }
-                if kafka_config.max_pending_records == Some(0) {
-                    errors.push("Kafka maxPendingRecords must be greater than zero".to_string());
-                }
-                if kafka_config.max_pending_bytes == Some(0) {
-                    errors.push("Kafka maxPendingBytes must be greater than zero".to_string());
-                }
+                errors.extend(kafka_config.validation_errors());
             }
             SystemConfig::Otlp(config) => {
                 let reference = crate::output::LinkSysRef {

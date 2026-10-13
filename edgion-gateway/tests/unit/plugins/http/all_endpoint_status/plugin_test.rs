@@ -429,3 +429,34 @@ fn inbound_body_headers_are_content_length_and_expect() {
     assert!(!is_inbound_body_header("host"));
     assert!(is_hop_by_hop_or_listed("Transfer-Encoding", &[]));
 }
+
+#[test]
+fn method_preparation_rejects_invalid_overrides_and_preserves_tokens() {
+    for value in ["", "BAD METHOD", " GET", "GET ", "G\tET", "GET\r\n", "G/ET", "méthod"] {
+        let config = AllEndpointStatusConfig {
+            method_override: Some(value.into()),
+            ..Default::default()
+        };
+        assert!(AllEndpointStatus::new(&config).is_err(), "{value:?}");
+    }
+    for value in ["GET", "POST", "post", "X-Custom", "!#$%&'*+-.^_`|~"] {
+        let config = AllEndpointStatusConfig {
+            method_override: Some(value.into()),
+            ..Default::default()
+        };
+        let plugin = AllEndpointStatus::new(&config).unwrap();
+        assert_eq!(plugin.selected_method("HEAD").unwrap().as_str(), value);
+        assert_eq!(plugin.selected_method("BAD METHOD").unwrap().as_str(), value);
+    }
+}
+
+#[test]
+fn missing_method_override_inherits_once_without_get_recovery() {
+    let plugin = AllEndpointStatus::new(&AllEndpointStatusConfig::default()).unwrap();
+    for value in ["HEAD", "DELETE", "post", "X-Custom"] {
+        assert_eq!(plugin.selected_method(value).unwrap().as_str(), value);
+    }
+    for value in ["", "BAD METHOD", "GET\r\n", "G/ET"] {
+        assert!(plugin.selected_method(value).is_err());
+    }
+}

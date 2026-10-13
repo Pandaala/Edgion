@@ -22,6 +22,68 @@ use edgion_resources::output::RotationStrategy;
 /// it within this many batches.
 const UNHEALTHY_FLUSH_ERROR_THRESHOLD: u64 = 3;
 
+/// Identity of the opened descriptor, independent of its current pathname.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FileIdentity {
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+}
+
+impl FileIdentity {
+    fn from_metadata(metadata: &fs::Metadata) -> Self {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            Self {
+                device: metadata.dev(),
+                inode: metadata.ino(),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = metadata;
+            Self {}
+        }
+    }
+}
+
+fn opened_file_state(file: &fs::File) -> std::io::Result<(FileIdentity, u64)> {
+    let metadata = file.metadata()?;
+    Ok((FileIdentity::from_metadata(&metadata), metadata.len()))
+}
+
+/// Non-Unix targets retain presence-only recovery; replacement detection is
+/// guaranteed only on Unix. Metadata failures never confirm attachment.
+fn active_path_matches(base_path: &Path, identity: Option<FileIdentity>) -> std::io::Result<bool> {
+    match fs::metadata(base_path) {
+        Ok(metadata) => {
+            #[cfg(unix)]
+            {
+                Ok(identity == Some(FileIdentity::from_metadata(&metadata)))
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = (metadata, identity);
+                Ok(true)
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+fn candidate_file_state(file: &fs::File, base_path: &Path) -> std::io::Result<(FileIdentity, u64)> {
+    let state = opened_file_state(file)?;
+    if !active_path_matches(base_path, Some(state.0))? {
+        return Err(std::io::Error::other(
+            "Active log path changed while opening its writer",
+        ));
+    }
+    Ok(state)
+}
+
 /// Derive the health flag from the two live signals. Pure, so it is unit-tested
 /// in isolation. (Kept trivial on purpose; the load-bearing logic lives in
 /// `BatchSink`, which the FailWriter tests exercise end-to-end.)
@@ -84,6 +146,7 @@ fn disk_ok(path: &Path, threshold_percent: Option<u8>) -> bool {
 /// for promoting buffered bytes into the tracked on-disk size.
 struct BatchSink<W: Write> {
     file: BufWriter<W>,
+    identity: Option<FileIdentity>,
     log_type: LogType,
     /// Tracked on-disk size; advanced only on a successful flush.
     current_size: u64,
@@ -101,8 +164,8 @@ struct BatchSink<W: Write> {
     /// Latest disk-probe result.
     disk_ok: bool,
     /// Whether the writer is still attached to the canonical active path.
-    /// A failed reopen plus failed rollback clears this until a later external-
-    /// rename recovery successfully reclaims the base path.
+    /// Metadata uncertainty or a failed recovery clears this until a later
+    /// checkpoint successfully installs a confirmed active writer.
     path_ok: bool,
     /// Shared flag read by `healthy()` on the hot path.
     healthy: Arc<AtomicBool>,
@@ -111,9 +174,16 @@ struct BatchSink<W: Write> {
 }
 
 impl<W: Write> BatchSink<W> {
-    fn new(file: BufWriter<W>, log_type: LogType, current_size: u64, healthy: Arc<AtomicBool>) -> Self {
+    fn new(
+        file: BufWriter<W>,
+        log_type: LogType,
+        current_size: u64,
+        healthy: Arc<AtomicBool>,
+        identity: Option<FileIdentity>,
+    ) -> Self {
         Self {
             file,
+            identity,
             log_type,
             current_size,
             pending_bytes: 0,
@@ -293,15 +363,19 @@ where
     F: FnOnce(fs::File) -> W,
     O: FnOnce(&Path) -> std::io::Result<fs::File>,
 {
-    // `path_ok=false` means the current writer is known to target a renamed
-    // inode. An externally recreated base path does not repair that attachment;
-    // it must still be opened and installed below.
-    if sink.path_ok && base_path.exists() {
-        return false;
+    // A prior failure leaves attachment unconfirmed even if the base exists.
+    // Reopen and validate it before reporting the sink as healthy again.
+    match active_path_matches(base_path, sink.identity) {
+        Ok(true) if sink.path_ok => return false,
+        Ok(_) => {}
+        Err(_) => {
+            sink.set_path_ok(false);
+            return false;
+        }
     }
 
+    sink.set_path_ok(false);
     if !sink.flush() {
-        sink.set_path_ok(false);
         return false;
     }
 
@@ -317,8 +391,15 @@ where
             return false;
         }
     };
-    let current_size = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+    let (identity, current_size) = match candidate_file_state(&file, base_path) {
+        Ok(state) => state,
+        Err(e) => {
+            tracing::error!(error = %e, path = %base_path.display(), "Failed to confirm active log file attachment");
+            return false;
+        }
+    };
     sink.file = BufWriter::new(wrap(file));
+    sink.identity = Some(identity);
     sink.current_size = current_size;
     sink.set_path_ok(true);
     true
@@ -341,6 +422,10 @@ where
     W: Write,
     F: FnOnce(fs::File) -> W,
 {
+    if !sink.path_ok || !active_path_matches(base_path, sink.identity).unwrap_or(false) {
+        sink.set_path_ok(false);
+        return RotationOutcome::Failed;
+    }
     if !sink.flush() {
         return RotationOutcome::Failed;
     }
@@ -363,8 +448,10 @@ where
         }
     }
 
-    let file = match open_log_file(base_path) {
-        Ok(file) => file,
+    let candidate =
+        open_log_file(base_path).and_then(|file| candidate_file_state(&file, base_path).map(|state| (file, state)));
+    let (file, (identity, current_size)) = match candidate {
+        Ok(candidate) => candidate,
         Err(e) => {
             if let Err(rollback_error) = restore_archived_base(archive_path, base_path) {
                 sink.set_path_ok(false);
@@ -387,7 +474,8 @@ where
     };
 
     sink.file = BufWriter::new(wrap(file));
-    sink.current_size = 0;
+    sink.identity = Some(identity);
+    sink.current_size = current_size;
     sink.set_path_ok(true);
     cleanup_old_files(base_path, max_files);
     RotationOutcome::Rotated
@@ -475,16 +563,11 @@ impl DataSender<String> for LocalFileWriter {
 
             // Active file always uses the base path (nginx-style).
             let current_path = base_path.clone();
-            let mut initial_size: u64 = 0;
-            if let RotationStrategy::Size(_) = &strategy {
-                if base_path.exists() {
-                    initial_size = fs::metadata(&base_path).map(|m| m.len()).unwrap_or(0);
-                }
-            }
-
             // Open initial file with buffered writer for better performance
-            let file = match open_log_file(&current_path) {
-                Ok(f) => BufWriter::new(f),
+            let initial =
+                open_log_file(&current_path).and_then(|file| opened_file_state(&file).map(|state| (file, state)));
+            let (file, (identity, initial_size)) = match initial {
+                Ok((file, state)) => (BufWriter::new(file), state),
                 Err(e) => {
                     tracing::error!(error = %e, path = %current_path.display(), "Failed to open log file");
                     // Writer thread is dead before it started — report unhealthy
@@ -501,7 +584,7 @@ impl DataSender<String> for LocalFileWriter {
 
             tracing::info!(path = %current_path.display(), "Log file opened");
 
-            let mut sink = BatchSink::new(file, log_type, initial_size, healthy);
+            let mut sink = BatchSink::new(file, log_type, initial_size, healthy, Some(identity));
             // Seed the disk probe so an already-full disk degrades from batch one.
             sink.set_disk_ok(disk_ok(&base_path, disk_threshold));
 
@@ -528,9 +611,9 @@ impl DataSender<String> for LocalFileWriter {
                 };
 
                 // Before writing this batch, reclaim the active file if it was
-                // renamed out from under us (backfill / logrotate `create`). The
-                // previous batch was already flushed, so the buffer is empty and
-                // nothing is lost; the first post-rename entry lands in a fresh file.
+                // renamed out from under us, including rename plus recreation.
+                // Retained bytes flush to the old writer before replacement.
+                // Concurrent external changes converge at later checkpoints.
                 if reopen_sink_if_renamed(&mut sink, &base_path, |file| file) {
                     tracing::info!(path = %base_path.display(), "Active log file reopened after external rename");
                 }

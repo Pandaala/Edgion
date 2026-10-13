@@ -10,6 +10,8 @@
 //! the full specification, whitelist table, edge-case handling, and security
 //! commitment scope.
 
+use std::borrow::Cow;
+
 use super::config::PathNormalizationConfig;
 
 /// Returns `true` if `path` is not already in normalized form and would change
@@ -166,16 +168,23 @@ pub fn has_invalid_percent_encoding(path: &str) -> bool {
 /// [`needs_normalization`]).  This function is `pub(crate)` so that tests in
 /// sibling modules can call it directly.
 pub(crate) fn do_normalize(raw: &str, cfg: &PathNormalizationConfig) -> String {
-    let step1_owned: String;
-    let step1: &str = if cfg.preserve_path_parameters {
-        raw
-    } else {
-        step1_owned = strip_path_parameters(raw);
-        &step1_owned
-    };
-    let step2 = percent_decode_whitelist(step1);
-    let step3 = merge_slashes(&step2);
-    remove_dot_segments(&step3)
+    // Inspect each preceding stage's output: stripping may remove an escape,
+    // and decoding may introduce slashes or dot segments. Unchanged stages
+    // keep the borrowed input or the existing owned buffer.
+    let mut path = Cow::Borrowed(raw);
+    if !cfg.preserve_path_parameters && path.contains(';') {
+        path = Cow::Owned(strip_path_parameters(&path));
+    }
+    if has_decodable_percent(path.as_bytes()) {
+        path = Cow::Owned(percent_decode_whitelist(&path));
+    }
+    if path.contains("//") {
+        path = Cow::Owned(merge_slashes(&path));
+    }
+    if path.split('/').any(|segment| matches!(segment, "." | "..")) {
+        path = Cow::Owned(remove_dot_segments(&path));
+    }
+    path.into_owned()
 }
 
 // ---------------------------------------------------------------------------

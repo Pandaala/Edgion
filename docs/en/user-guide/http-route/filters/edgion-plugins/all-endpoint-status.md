@@ -100,7 +100,7 @@ concurrency, and response-body limits still apply.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `methodOverride` | String | none | Override the HTTP method sent to endpoints, e.g. `"GET"` |
+| `methodOverride` | String | none | Override the HTTP method sent to endpoints, e.g. `"GET"`. Must be a valid HTTP method token; extension methods and case are preserved. Malformed values are rejected. |
 | `pathOverride` | String | none | Override the request path sent to endpoints, e.g. `"/health"` |
 
 ### Debug Parameters

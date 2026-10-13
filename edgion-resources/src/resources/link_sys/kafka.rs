@@ -1,5 +1,7 @@
 //! Kafka client configuration types for the LinkSys CRD.
 
+use std::time::Duration;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -10,6 +12,11 @@ pub const DEFAULT_KAFKA_MAX_TOPICS: usize = 64;
 pub const DEFAULT_KAFKA_MAX_PENDING_RECORDS: usize = 4096;
 pub const DEFAULT_KAFKA_MAX_PENDING_BYTES: usize = 16 * 1024 * 1024;
 pub const DEFAULT_KAFKA_LINGER_MS: u64 = 5;
+
+/// Per-produce deadline: rskafka retry backoff has no deadline of its own.
+/// The Gateway exits a wedged producer task so it can be recreated on the
+/// current client. Linger must be shorter to leave time for production.
+pub const KAFKA_PRODUCE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Kafka client configuration.
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -43,9 +50,38 @@ pub struct KafkaClientConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_pending_bytes: Option<usize>,
 
-    /// BatchProducer linger time in ms (default: 5)
+    /// BatchProducer linger time in ms (default: 5); must be below the produce timeout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub linger_ms: Option<u64>,
+}
+
+impl KafkaClientConfig {
+    /// Pure scalar admission shared by Controller and Gateway construction.
+    pub fn validation_errors(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        if self.brokers.is_empty() {
+            errors.push("Kafka configuration has no brokers".to_string());
+        }
+        if self.channel_size == Some(0) {
+            errors.push("Kafka channelSize must be greater than zero".to_string());
+        }
+        if self.max_topics == Some(0) {
+            errors.push("Kafka maxTopics must be greater than zero".to_string());
+        }
+        if self.max_pending_records == Some(0) {
+            errors.push("Kafka maxPendingRecords must be greater than zero".to_string());
+        }
+        if self.max_pending_bytes == Some(0) {
+            errors.push("Kafka maxPendingBytes must be greater than zero".to_string());
+        }
+        if Duration::from_millis(self.linger_ms.unwrap_or(DEFAULT_KAFKA_LINGER_MS)) >= KAFKA_PRODUCE_TIMEOUT {
+            errors.push(format!(
+                "Kafka lingerMs must be shorter than the {} second produce timeout",
+                KAFKA_PRODUCE_TIMEOUT.as_secs()
+            ));
+        }
+        errors
+    }
 }
 
 /// SASL/PLAIN authentication configuration.

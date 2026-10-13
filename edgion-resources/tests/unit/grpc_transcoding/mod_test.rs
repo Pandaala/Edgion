@@ -928,3 +928,58 @@ fn correction_scalar_presence_proto2_and_integer_wire_boundaries() {
     wire.extend_from_slice(&f64::INFINITY.to_le_bytes());
     assert!(b.decode(&wire, c.limits, None).is_err());
 }
+
+#[test]
+fn bound_values_outlive_plain_and_escaped_mapping_inputs() {
+    let compiled = config().compile().unwrap();
+    for (name, expected) in [("plain", "plain"), ("hello%20world", "hello world")] {
+        let bound = {
+            let path = format!("/v1/hello/{name}");
+            compiled.bind("GET", &path, None).unwrap()
+        };
+        let (binding, frame) = bound.encode(b"", compiled.limits).unwrap();
+        let message = prost_reflect::DynamicMessage::decode(binding.method.input(), &frame[5..]).unwrap();
+        assert_eq!(message.get_field_by_name("name").unwrap().as_str(), Some(expected));
+    }
+    let method = compiled
+        .bind("GET", "/v1/hello/name", None)
+        .unwrap()
+        .binding
+        .method
+        .clone();
+    let binding = Arc::new(CompiledBinding::compile(method, "GET", "/query", "").unwrap());
+    for (query, expected) in [("name=plain", "plain"), ("name=hello+world%26%C3%A9", "hello world&é")] {
+        let bound = {
+            let query = query.to_owned();
+            binding.bind("/query", Some(&query), false).unwrap()
+        };
+        let (_, frame) = bound.encode(b"", compiled.limits).unwrap();
+        let message = prost_reflect::DynamicMessage::decode(binding.method.input(), &frame[5..]).unwrap();
+        assert_eq!(message.get_field_by_name("name").unwrap().as_str(), Some(expected));
+    }
+}
+
+#[test]
+fn ignored_unknown_queries_still_require_strict_percent_and_utf8_decoding() {
+    let mut config = config();
+    config.ignore_unknown_query_parameters = true;
+    let compiled = config.compile().unwrap();
+    assert!(compiled
+        .bind("GET", "/v1/numbers", Some("count=3&unknown=hello+world%26more"))
+        .is_ok());
+    for query in [
+        "count=3&unknown=%",
+        "count=3&unknown=%2",
+        "count=3&unknown=%XY",
+        "count=3&unknown=%FF",
+        "%FF=ignored",
+    ] {
+        assert!(
+            matches!(
+                compiled.bind("GET", "/v1/numbers", Some(query)),
+                Err(TranscodingError::Invalid)
+            ),
+            "{query}"
+        );
+    }
+}

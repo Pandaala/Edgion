@@ -54,18 +54,6 @@ impl RegionRouteOverride {
     }
 }
 
-/// Merge a `RegionRouteOverride` onto base `regions`, returning the effective `regions`.
-///
-/// - `Some(regions)` in overlay → whole-replace base regions (no element merge).
-/// - `None` → base regions unchanged.
-pub fn merge_region_route_override(base_regions: Vec<RegionDef>, overlay: &RegionRouteOverride) -> Vec<RegionDef> {
-    if let Some(override_regions) = &overlay.regions {
-        override_regions.clone()
-    } else {
-        base_regions
-    }
-}
-
 /// Validate a slice of [`RegionDef`] for use as an effective region table.
 ///
 /// Standalone checks are independent of any consumer's modulo. Use

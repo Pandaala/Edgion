@@ -2911,3 +2911,33 @@ async fn fixed_link_sys_dsl_invalid_owner_prevents_retention_without_changing_sc
         ));
     }
 }
+
+#[test]
+fn all_endpoint_method_validation_has_ordered_controller_gateway_parity() {
+    let mut resource: EdgionPlugins = serde_json::from_value(serde_json::json!({
+        "apiVersion": "edgion.io/v1", "kind": "EdgionPlugins",
+        "metadata": {"name": "probe-methods", "namespace": "default"},
+        "spec": {"requestPlugins": [
+            {"type": "AllEndpointStatus", "enable": false, "config": {"methodOverride": "BAD METHOD"}},
+            {"type": "AllEndpointStatus", "config": {"methodOverride": "BAD METHOD"}},
+            {"type": "AllEndpointStatus", "config": {"methodOverride": "", "timeoutMs": 0}},
+            {"type": "AllEndpointStatus", "config": {"methodOverride": "post"}}
+        ]}
+    }))
+    .unwrap();
+    let errors = resource.validate_plugins();
+    let compiled = compile_plugins(&resource);
+    assert_eq!(compiled.preparse_errors, errors);
+    assert_eq!(errors.len(), 2);
+    assert!(errors[0].starts_with("requestPlugins[1]"));
+    assert!(errors[0].contains("methodOverride must be a valid HTTP method"));
+    assert!(errors[1].starts_with("requestPlugins[2]"));
+    assert!(errors[1].contains("timeoutMs must be > 0"));
+    assert!(!compiled.is_activatable);
+    assert_leading_reject(&compiled);
+    resource.spec.request_plugins.as_mut().unwrap().drain(1..3);
+    assert!(resource.validate_plugins().is_empty());
+    let compiled = compile_plugins(&resource);
+    assert!(compiled.preparse_errors.is_empty());
+    assert!(compiled.is_activatable);
+}

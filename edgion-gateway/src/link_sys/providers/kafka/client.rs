@@ -22,7 +22,7 @@ use crate::link_sys::runtime::health_probe::{flip_log_allowed, new_published_hea
 use edgion_common::link_sys_core::{outbound_tls::PreparedLinkSysTls, PublishedHealth};
 use edgion_resources::resources::link_sys::kafka::{
     KafkaClientConfig, DEFAULT_KAFKA_CHANNEL_SIZE, DEFAULT_KAFKA_LINGER_MS, DEFAULT_KAFKA_MAX_PENDING_BYTES,
-    DEFAULT_KAFKA_MAX_PENDING_RECORDS, DEFAULT_KAFKA_MAX_TOPICS,
+    DEFAULT_KAFKA_MAX_PENDING_RECORDS, DEFAULT_KAFKA_MAX_TOPICS, KAFKA_PRODUCE_TIMEOUT,
 };
 use edgion_resources::resources::link_sys::{LinkSys, SystemConfig};
 
@@ -31,14 +31,6 @@ const MAX_BATCH_SIZE: usize = 1_000_000;
 /// configured bootstrap brokers (rskafka otherwise only reconnects to the
 /// discovered topology, which never recovers a pod-IP/StatefulSet restart).
 const KAFKA_REBUILD_THRESHOLD: u32 = 3;
-
-/// Per-produce wedge detector. rskafka's default backoff has no deadline, so a
-/// dead/old-IP broker makes `produce().await` hang forever; this timeout forces
-/// the task to exit (closing its channel) so the self-heal + rebuild can respawn
-/// it on the current client. Generous relative to `linger_ms`.
-/// Owning construction rejects linger durations at or above this ceiling so every
-/// accepted configuration leaves time for the produce operation itself.
-const PRODUCE_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct QueueBudget {
     max_records: usize,
@@ -226,33 +218,14 @@ impl KafkaLinkClient {
         let SystemConfig::Kafka(config) = &candidate.tls.owner().spec.config else {
             anyhow::bail!("Kafka construction requires an actual Kafka LinkSys");
         };
-        if config.brokers.is_empty() {
-            anyhow::bail!("Kafka brokers list is empty for '{}'", name);
+        if let Some(error) = config.validation_errors().into_iter().next() {
+            anyhow::bail!("{} for '{}'", error, name);
         }
         let channel_size = config.channel_size.unwrap_or(DEFAULT_KAFKA_CHANNEL_SIZE);
         let max_topics = config.max_topics.unwrap_or(DEFAULT_KAFKA_MAX_TOPICS);
         let max_pending_records = config.max_pending_records.unwrap_or(DEFAULT_KAFKA_MAX_PENDING_RECORDS);
         let max_pending_bytes = config.max_pending_bytes.unwrap_or(DEFAULT_KAFKA_MAX_PENDING_BYTES);
         let linger_ms = config.linger_ms.unwrap_or(DEFAULT_KAFKA_LINGER_MS);
-        if channel_size == 0 {
-            anyhow::bail!("Kafka channel size must be greater than zero for '{}'", name);
-        }
-        if max_topics == 0 {
-            anyhow::bail!("Kafka max topics must be greater than zero for '{}'", name);
-        }
-        if max_pending_records == 0 {
-            anyhow::bail!("Kafka max pending records must be greater than zero for '{}'", name);
-        }
-        if max_pending_bytes == 0 {
-            anyhow::bail!("Kafka max pending bytes must be greater than zero for '{}'", name);
-        }
-        if Duration::from_millis(linger_ms) >= PRODUCE_TIMEOUT {
-            anyhow::bail!(
-                "Kafka linger duration must be shorter than the {} second produce timeout for '{}'",
-                PRODUCE_TIMEOUT.as_secs(),
-                name
-            );
-        }
         let auth = crate::link_sys::credential::resolved_state(candidate.tls.owner());
         anyhow::ensure!(auth.is_buildable(), "Kafka authentication is {}", auth.kind());
         let tls = edgion_common::link_sys_core::tls::build_kafka_rustls_client_config(&candidate.tls)?.map(Arc::new);
@@ -386,7 +359,7 @@ impl KafkaLinkClient {
             Ok(()) => Ok(()),
             Err(mpsc::error::TrySendError::Closed(_record)) => {
                 // The producer receiver closed (PartitionClient init failure, or a
-                // PRODUCE_TIMEOUT wedge). Evict only after task completion so
+                // KAFKA_PRODUCE_TIMEOUT wedge). Evict only after task completion so
                 // shutdown retains a handle for any task still finishing.
                 // The next produce can respawn on the current inner_client.
                 self.topics.remove_if(topic, |_, entry| {
@@ -439,7 +412,7 @@ impl KafkaLinkClient {
                 headers: BTreeMap::new(),
                 timestamp: Utc::now(),
             };
-            let result = tokio::time::timeout(PRODUCE_TIMEOUT, producer.produce(record)).await;
+            let result = tokio::time::timeout(KAFKA_PRODUCE_TIMEOUT, producer.produce(record)).await;
             drop(reservation);
             match result {
                 Ok(Ok(_)) => {
@@ -462,7 +435,7 @@ impl KafkaLinkClient {
                     tracing::warn!(
                         kafka = %name, %topic,
                         "Kafka produce wedged > {}s; exiting producer task to force respawn",
-                        PRODUCE_TIMEOUT.as_secs()
+                        KAFKA_PRODUCE_TIMEOUT.as_secs()
                     );
                     return;
                 }

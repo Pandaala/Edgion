@@ -721,3 +721,71 @@ fn grpc_conversion_conflict_classification_preserves_disabled_ai_inertness() {
     inactive_transcoder.enable = false;
     assert!(collect_grpc_transcoding_errors(&[inactive_transcoder, ai_proxy_entry()]).is_empty());
 }
+
+#[test]
+fn request_config_reuse_preserves_order_ordinals_and_error_precedence() {
+    let mut invalid = RequestFilterEntry::new(EdgionPlugin::Dsl(DslConfig {
+        name: "d".to_string(),
+        ..Default::default()
+    }));
+    invalid.alias = Some("bad alias".to_string());
+    invalid.body = Some(BodyRequirement::fail_close());
+    let mut disabled = invalid.clone();
+    disabled.enable = false;
+    let mut unknown = RequestFilterEntry::new(EdgionPlugin::Unsupported);
+    unknown.body = Some(BodyRequirement::fail_close());
+    let mut disabled_unknown = unknown.clone();
+    disabled_unknown.enable = false;
+    let mut wrong_stage = RequestFilterEntry::new(EdgionPlugin::ResponseHeaderModifier(header_filter()));
+    wrong_stage.alias = Some("bad alias".to_string());
+    wrong_stage.body = Some(BodyRequirement::fail_close());
+    let plugins = with_request_plugins(vec![
+        invalid.clone(),
+        disabled,
+        unknown,
+        wrong_stage,
+        disabled_unknown,
+        invalid,
+    ]);
+    let expected = vec![
+        "requestPlugins[2]: unsupported plugin type",
+        "requestPlugins[4]: unsupported plugin type",
+        "requestPlugins[0] (Dsl): either source or bytecode must be provided",
+        "requestPlugins[3] (ResponseHeaderModifier): alias must match [a-zA-Z0-9._-]{1,32} (contains disallowed character)",
+        "requestPlugins[3] (ResponseHeaderModifier): plugin is not valid for request stage",
+        "requestPlugins[5] (Dsl): either source or bytecode must be provided",
+        "requestPlugins[3] (ResponseHeaderModifier): body: plugin does not consume a body",
+    ];
+    assert_eq!(plugins.validate_plugins(), expected);
+    assert_eq!(plugins.validate_plugins_before_waf_resolution(), expected);
+}
+
+#[test]
+fn request_config_results_do_not_survive_source_or_bytecode_changes() {
+    let mut plugins = with_request_plugins(vec![dsl_entry("let h = req.header(\"x-test\")")]);
+    assert!(plugins.validate_plugins().is_empty());
+    let entry = &mut plugins.spec.request_plugins.as_mut().unwrap()[0];
+    let EdgionPlugin::Dsl(config) = &mut entry.plugin else {
+        unreachable!()
+    };
+    let bytecode = config.compile_and_validate().unwrap().serialize_base64().unwrap();
+    config.source = Some("let h = req.header()".to_string());
+    assert!(plugins
+        .validate_plugins()
+        .iter()
+        .any(|error| error.contains("expects 1 argument(s), got 0")));
+
+    let EdgionPlugin::Dsl(config) = &mut plugins.spec.request_plugins.as_mut().unwrap()[0].plugin else {
+        unreachable!()
+    };
+    config.source = None;
+    config.bytecode = Some(bytecode);
+    assert!(plugins.validate_plugins_before_waf_resolution().is_empty());
+
+    let EdgionPlugin::Dsl(config) = &mut plugins.spec.request_plugins.as_mut().unwrap()[0].plugin else {
+        unreachable!()
+    };
+    config.bytecode = Some("invalid-bytecode!".to_string());
+    assert_eq!(plugins.validate_plugins().len(), 1);
+    assert!(!plugins.validate_plugins_before_waf_resolution().is_empty());
+}

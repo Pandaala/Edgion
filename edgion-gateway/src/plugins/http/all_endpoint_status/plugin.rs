@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
+use http::{method::InvalidMethod, Method};
 use pingora_http::ResponseHeader;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -431,13 +432,23 @@ where
 pub struct AllEndpointStatus {
     name: String,
     config: AllEndpointStatusConfig,
+    method_override: Option<Method>,
 }
 
 impl AllEndpointStatus {
-    pub fn new(config: &AllEndpointStatusConfig) -> Self {
-        Self {
+    pub fn new(config: &AllEndpointStatusConfig) -> Result<Self, InvalidMethod> {
+        let method_override = config.method_override.as_deref().map(str::parse).transpose()?;
+        Ok(Self {
             name: "AllEndpointStatus".to_string(),
             config: config.clone(),
+            method_override,
+        })
+    }
+
+    fn selected_method(&self, original_method: &str) -> Result<Method, InvalidMethod> {
+        match &self.method_override {
+            Some(method) => Ok(method.clone()),
+            None => original_method.parse(),
         }
     }
 
@@ -484,7 +495,7 @@ impl AllEndpointStatus {
     async fn fan_out_requests(
         &self,
         endpoints: &[ResolvedEndpoint],
-        original_method: &str,
+        method: &Method,
         original_path: &str,
         original_query: Option<&str>,
         original_headers: &[(String, String)],
@@ -499,7 +510,6 @@ impl AllEndpointStatus {
         let max_body = self.config.effective_max_body_size();
         let include_headers = self.config.include_response_headers;
 
-        let method = self.config.method_override.as_deref().unwrap_or(original_method);
         let path = self.config.path_override.as_deref().unwrap_or(original_path);
 
         let dynamic_listed: Vec<String> = original_headers
@@ -517,7 +527,7 @@ impl AllEndpointStatus {
                 let backend_name = ep.backend_name.clone();
                 let transport = Arc::clone(&ep.transport);
                 let allow_loopback = ep.allow_loopback;
-                let method = method.to_string();
+                let method = method.clone();
                 let path = path.to_string();
                 let query = original_query.map(|q| q.to_string());
                 let headers: Vec<(String, String)> = original_headers.to_vec();
@@ -539,8 +549,7 @@ impl AllEndpointStatus {
                         Err(error) => return failed_endpoint(ordinal, addr, start, error),
                     };
 
-                    let req_method: reqwest::Method = method.parse().unwrap_or(reqwest::Method::GET);
-                    let mut req = client.request(req_method, url).timeout(timeout);
+                    let mut req = client.request(method, url).timeout(timeout);
 
                     // Forward original headers. Skip hop-by-hop (RFC 9110 §7.6.1),
                     // Host (rewritten below to the backend service), and headers
@@ -803,7 +812,6 @@ impl RequestFilter for AllEndpointStatus {
         };
 
         // Collect original request info (before mutable borrow)
-        let original_method = session.get_method().to_string();
         let original_path = session.get_path().to_string();
         let original_query = session.get_query();
         let original_headers = session.request_headers();
@@ -873,11 +881,20 @@ impl RequestFilter for AllEndpointStatus {
             return self.send_json_response(session, 200, &json_body).await;
         }
 
+        // Resolve the inherited request method once, before any endpoint future.
+        let Ok(method) = self.selected_method(session.get_method()) else {
+            log.push_err("probe configuration unavailable");
+            return PluginRunningResult::ErrResponse {
+                status: 503,
+                body: Some(Bytes::from_static(b"probe configuration unavailable")),
+            };
+        };
+
         // 3. Fan-out requests
         let (endpoint_results, wall_timeout_hit) = self
             .fan_out_requests(
                 &all_endpoints,
-                &original_method,
+                &method,
                 &original_path,
                 original_query.as_deref(),
                 &original_headers,

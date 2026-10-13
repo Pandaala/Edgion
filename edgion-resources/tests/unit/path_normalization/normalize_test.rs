@@ -525,3 +525,35 @@ fn normalize_output_is_always_a_valid_uri_path() {
         });
     }
 }
+
+#[test]
+fn direct_pipeline_preserves_relative_dot_segment_semantics() {
+    let cfg = PathNormalizationConfig::default();
+    for (input, expected) in [
+        (".", ""),
+        ("..", ""),
+        ("./", ""),
+        ("../", ""),
+        ("./a", "a"),
+        ("../a", "a"),
+        ("a/..", "/"),
+        ("..;/a", "a"),
+        ("%2E%2E/a", "a"),
+    ] {
+        assert_eq!(do_normalize(input, &cfg), expected, "{input}");
+    }
+}
+
+#[test]
+fn stage_transitions_preserve_utf8_and_removed_escape_semantics() {
+    let cfg = PathNormalizationConfig::default();
+    for (input, expected) in [
+        ("/café;%2F/%2E%2E/é//", "/é/"),
+        ("/café/.hidden/%61", "/café/.hidden/a"),
+        ("./é/%2E%2E/café", "/café"),
+        ("/é;drop%61/ñ", "/é/ñ"),
+        ("/é;%2F%2E%2E", "/é"),
+    ] {
+        assert_eq!(do_normalize(input, &cfg), expected, "{input}");
+    }
+}

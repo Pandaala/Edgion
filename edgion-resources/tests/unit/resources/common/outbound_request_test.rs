@@ -336,3 +336,130 @@ fn form_body_field_template_compile_error_rejected() {
     };
     assert!(spec.validation_error().is_some());
 }
+
+#[test]
+fn custom_field_requires_exactly_one_visible_string_source() {
+    for input in [
+        r#"{"name":"X-Test"}"#,
+        r#"{"name":"X-Test","value":"literal","template":"${ctx:x}"}"#,
+        r#"{"name":"X-Test","template":"${ctx:x}","value":"literal"}"#,
+        r#"{"name":"X-Test","value":"literal","template":"${ctx:broken"}"#,
+        r#"{"name":"X-Test","value":"a","value":"b"}"#,
+        r#"{"name":"X-Test","template":"a","template":"b"}"#,
+        r#"{"name":"X-Test","name":"X-Other","value":"a"}"#,
+        r#"{"value":"a"}"#,
+    ] {
+        assert!(serde_json::from_str::<CustomField>(input).is_err(), "{input}");
+        assert!(serde_yaml::from_str::<CustomField>(input).is_err(), "{input}");
+    }
+    for source in ["value", "template"] {
+        for operand in ["null", "true", "42", "1.5", "[]", "{}"] {
+            let input = format!(r#"{{"name":"X-Test","{source}":{operand}}}"#);
+            assert!(serde_json::from_str::<CustomField>(&input).is_err(), "{input}");
+            let yaml = format!("name: X-Test\n{source}: {operand}\n");
+            assert!(serde_yaml::from_str::<CustomField>(&yaml).is_err(), "{yaml}");
+        }
+        let other = if source == "value" { "template" } else { "value" };
+        let input = format!(r#"{{"name":"X-Test","{source}":null,"{other}":"valid"}}"#);
+        assert!(serde_json::from_str::<CustomField>(&input).is_err(), "{input}");
+        assert!(serde_yaml::from_str::<CustomField>(&input).is_err(), "{input}");
+        let yaml = format!("name: X-Test\n{source}: a\n{source}: b\n");
+        assert!(serde_yaml::from_str::<CustomField>(&yaml).is_err(), "{yaml}");
+    }
+}
+
+#[test]
+fn custom_field_valid_sources_preserve_wire_shape_and_yaml_string_types() {
+    for source in ["value", "template"] {
+        for value in ["", "literal", "${secretRef:ns/token:key}"] {
+            let wire = serde_json::json!({"name": "X-Test", source: value});
+            let field: CustomField = serde_json::from_value(wire.clone()).unwrap();
+            assert_eq!(serde_json::to_value(&field).unwrap(), wire);
+            let yaml = serde_yaml::to_string(&field).unwrap();
+            let decoded: CustomField = serde_yaml::from_str(&yaml).unwrap();
+            assert_eq!(serde_json::to_value(decoded).unwrap(), wire);
+        }
+        for (yaml_value, expected) in [
+            ("'42'", "42"),
+            ("!!str 42", "42"),
+            ("'true'", "true"),
+            ("!!str null", "null"),
+        ] {
+            let yaml = format!("name: X-Test\n{source}: {yaml_value}\n");
+            let field: CustomField = serde_yaml::from_str(&yaml).unwrap();
+            assert_eq!(serde_json::to_value(field).unwrap()[source], expected);
+        }
+    }
+    // Required-name decoding keeps its pre-existing YAML String policy.
+    let field: CustomField = serde_yaml::from_str("name: 42\nvalue: 'literal'\n").unwrap();
+    assert_eq!(field.name, "42");
+}
+
+#[test]
+fn custom_source_arity_is_enforced_in_all_outbound_placements() {
+    for placement in ["args", "headers", "cookies", "body"] {
+        for fields in [
+            r#""value":"literal","template":"${ctx:x}""#,
+            r#""template":"${ctx:x}","value":"literal""#,
+        ] {
+            let field = format!(r#"{{"name":"X-Test",{fields}}}"#);
+            let request = if placement == "body" {
+                format!(r#"{{"body":{{"type":"form","fields":[{field}]}}}}"#)
+            } else {
+                format!(r#"{{"{placement}":{{"custom":[{field}]}}}}"#)
+            };
+            assert!(serde_json::from_str::<OutboundRequestSpec>(&request).is_err());
+            assert!(serde_yaml::from_str::<OutboundRequestSpec>(&request).is_err());
+            let request: serde_json::Value = serde_json::from_str(&request).unwrap();
+            let resource = serde_json::json!({
+                "type": "webhook", "config": {
+                    "target": {"name": "backend", "port": 80}, "request": request
+                }
+            });
+            assert!(serde_json::from_value::<crate::resources::link_sys::LinkSysSpec>(resource).is_err());
+        }
+    }
+}
+
+#[test]
+fn custom_sources_preserve_advisory_unknown_fields_and_secret_collection() {
+    let schema = schemars::schema_for!(OutboundRequestSpec);
+    for typo in [false, true] {
+        let mut field = serde_json::json!({"name": "X-Test", "template": "${secretRef:ns/token:key}"});
+        if typo {
+            field["templat"] = serde_json::json!("ignored");
+        }
+        let wire = serde_json::json!({"headers": {"custom": [field]}});
+        let findings = crate::schema_check::unknown_key_paths(&wire, &schema);
+        assert_eq!(
+            findings,
+            if typo {
+                vec!["headers.custom[0].templat"]
+            } else {
+                vec![]
+            }
+        );
+        let request: OutboundRequestSpec = serde_json::from_value(wire).unwrap();
+        assert!(request.validation_error().is_none());
+        assert_eq!(request.collect_secret_ref_names(), vec!["ns/token:key"]);
+    }
+}
+
+#[test]
+fn custom_fields_reject_sequence_wire_shapes() {
+    for input in [r#"["X-Test","literal"]"#, r#"["X-Test","literal",null]"#] {
+        assert!(serde_json::from_str::<CustomField>(input).is_err(), "{input}");
+        assert!(serde_yaml::from_str::<CustomField>(input).is_err(), "{input}");
+        let request = format!(r#"{{"headers":{{"custom":[{input}]}}}}"#);
+        assert!(serde_json::from_str::<OutboundRequestSpec>(&request).is_err());
+        assert!(serde_yaml::from_str::<OutboundRequestSpec>(&request).is_err());
+        let request: serde_json::Value = serde_json::from_str(&request).unwrap();
+        assert!(serde_json::from_value::<OutboundRequestSpec>(request.clone()).is_err());
+        let resource = serde_json::json!({
+            "type": "webhook", "config": {
+                "target": {"name": "backend", "port": 80}, "request": request
+            }
+        });
+        assert!(serde_json::from_value::<crate::resources::link_sys::LinkSysSpec>(resource).is_err());
+    }
+}

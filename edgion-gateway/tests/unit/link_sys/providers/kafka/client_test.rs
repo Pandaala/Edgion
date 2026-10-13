@@ -53,7 +53,10 @@ fn test_kafka_link_client_from_config_empty_brokers_fails() {
     assert!(result.is_err());
     // Use `.err().unwrap()` instead of `.unwrap_err()` to avoid requiring
     // `KafkaLinkClient: Debug`.
-    assert!(result.err().unwrap().to_string().contains("empty"));
+    assert_eq!(
+        result.err().unwrap().to_string(),
+        "Kafka configuration has no brokers for 'default/test'"
+    );
 }
 
 #[test]
@@ -168,7 +171,10 @@ fn test_kafka_link_client_from_config_rejects_zero_channel_size() {
     let result = from_test_config("default/kafka-main", &config, &CredentialState::NotRequired);
 
     let error = result.err().expect("zero channel size must be rejected");
-    assert!(error.to_string().contains("channel size"));
+    assert_eq!(
+        error.to_string(),
+        "Kafka channelSize must be greater than zero for 'default/kafka-main'"
+    );
 }
 
 #[test]
@@ -181,7 +187,7 @@ fn test_kafka_link_client_from_config_rejects_linger_at_produce_timeout() {
         max_topics: None,
         max_pending_records: None,
         max_pending_bytes: None,
-        linger_ms: Some(PRODUCE_TIMEOUT.as_millis() as u64),
+        linger_ms: Some(KAFKA_PRODUCE_TIMEOUT.as_millis().try_into().unwrap()),
     };
     let result = from_test_config("default/kafka-main", &config, &CredentialState::NotRequired);
 
@@ -279,4 +285,68 @@ fn owning_constructor_rejects_pending_and_invalid_sasl_instead_of_anonymous_conn
             .expect("unusable authentication must fail");
         assert!(error.to_string().contains("authentication"));
     }
+}
+
+#[test]
+fn constructor_matches_shared_kafka_linger_admission() {
+    for (linger, valid) in [
+        (None, true),
+        (Some(0), true),
+        (Some(29999), true),
+        (Some(30000), false),
+        (Some(u64::MAX), false),
+    ] {
+        let owner: LinkSys = serde_json::from_value(serde_json::json!({
+            "metadata": {"namespace": "default", "name": "kafka"},
+            "spec": {"type": "kafka", "config": {"brokers": ["broker.example:9092"], "lingerMs": linger}}
+        }))
+        .unwrap();
+        let errors = owner.validate_config();
+        assert_eq!(errors.is_empty(), valid, "linger {linger:?}");
+        let result = KafkaLinkClient::from_link_sys(Arc::new(owner));
+        if valid {
+            assert_eq!(result.unwrap().linger_ms, linger.unwrap_or(DEFAULT_KAFKA_LINGER_MS));
+        } else {
+            assert_eq!(
+                result.err().unwrap().to_string(),
+                format!("{} for 'default/kafka'", errors[0])
+            );
+        }
+    }
+}
+
+#[test]
+fn constructor_preserves_first_error_order_for_invalid_scalar_fields() {
+    let mut owner: LinkSys = serde_json::from_value(serde_json::json!({
+        "metadata": {"namespace": "default", "name": "kafka"},
+        "spec": {"type": "kafka", "config": {"brokers": [], "channelSize": 0, "maxTopics": 0,
+            "maxPendingRecords": 0, "maxPendingBytes": 0, "lingerMs": 30000}}
+    }))
+    .unwrap();
+    let expected = [
+        "Kafka configuration has no brokers",
+        "Kafka channelSize must be greater than zero",
+        "Kafka maxTopics must be greater than zero",
+        "Kafka maxPendingRecords must be greater than zero",
+        "Kafka maxPendingBytes must be greater than zero",
+        "Kafka lingerMs must be shorter than the 30 second produce timeout",
+    ];
+    for (index, message) in expected.iter().enumerate() {
+        assert_eq!(owner.validate_config(), expected[index..]);
+        let error = KafkaLinkClient::from_link_sys(Arc::new(owner.clone())).err().unwrap();
+        assert_eq!(error.to_string(), format!("{message} for 'default/kafka'"));
+        let SystemConfig::Kafka(config) = &mut owner.spec.config else {
+            unreachable!()
+        };
+        match index {
+            0 => config.brokers.push("broker.example:9092".into()),
+            1 => config.channel_size = None,
+            2 => config.max_topics = None,
+            3 => config.max_pending_records = None,
+            4 => config.max_pending_bytes = None,
+            5 => config.linger_ms = None,
+            _ => unreachable!(),
+        }
+    }
+    assert!(KafkaLinkClient::from_link_sys(Arc::new(owner)).is_ok());
 }

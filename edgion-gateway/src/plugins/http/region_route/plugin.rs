@@ -3,18 +3,18 @@
 //! # Base + overlay model (S3)
 //! `RegionRouteConfig` (in EdgionPlugins) holds ALL routing logic plus the default region table.
 //! At request time, if `override_ref` is set, the plugin looks up a `RegionRouteOverride`
-//! EdgionConfigData from the global `EdgionConfigDataStore` (ArcSwap, lock-free) and applies a typed
-//! overlay on top of the base `regions` via `apply_override` (D6 type guard + whole-replace).
+//! EdgionConfigData and its validation proof from one global store snapshot (ArcSwap, lock-free).
+//! `EffectiveRegions` holds the accepted generation and borrows its whole replacement table.
 //!
 //! # Fail-to-base semantics
 //! - **`overlay_missing`**: key not found in the EdgionConfigData store → base regions used.
 //! - **`overlay_type_mismatch`**: entry found but wrong `ConfigEntry` variant → base regions used.
 //!
 //! Both cases are recorded via `record_region_route_overlay_event`. No data-plane tracing
-//! (warn/error) is used — all signals go through Prometheus counters.
+//! (warn/error) is used; PluginLog and DyeOutcome carry request-level fallback evidence.
 //!
 //! # Request-time resolution
-//! `compute_effective_regions` is called per request: one ArcSwap load + one hashmap lookup.
+//! `compute_effective_regions` is called per request: one ArcSwap load with paired raw/proof lookups.
 //! The plugin struct itself caches only the base config (Arc) and the optional overlay store key.
 
 use edgion_resources::refs::config_data_fields::HttpConfigDataEntry;

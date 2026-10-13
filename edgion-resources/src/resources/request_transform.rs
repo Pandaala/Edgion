@@ -2,7 +2,7 @@
 
 use super::{
     HTTPPathMatch, HTTPPathModifier, HTTPPathModifierType, HTTPRequestRedirectFilter, HTTPRouteFilter,
-    HTTPRouteFilterType, HTTPRouteMatch, HTTPRouteRule, HTTPURLRewriteFilter,
+    HTTPRouteFilterType, HTTPRouteRule, HTTPURLRewriteFilter,
 };
 use crate::crd_contract::{http_route_transform_contract, CrdContractError, CrdViolation};
 use http::{uri::PathAndQuery, StatusCode};
@@ -386,25 +386,19 @@ fn rule_has_prefix_transform(rule: &HTTPRouteRule) -> bool {
 }
 
 fn effective_matches_are_prefix(rule: &HTTPRouteRule) -> bool {
-    let matches = effective_matches(rule);
-    !matches.is_empty()
-        && matches.iter().all(|route_match| {
-            route_match
-                .path
-                .as_ref()
-                .is_none_or(|path| effective_path_match_type(path) == "PathPrefix")
-        })
-}
-
-fn effective_matches(rule: &HTTPRouteRule) -> Vec<HTTPRouteMatch> {
-    match rule.matches.as_ref() {
-        Some(matches) => matches.clone(),
-        None => vec![HTTPRouteMatch {
-            path: Some(default_path_match()),
-            headers: None,
-            query_params: None,
-            method: None,
-        }],
+    match rule.matches.as_deref() {
+        Some(matches) => {
+            !matches.is_empty()
+                && matches.iter().all(|route_match| {
+                    route_match
+                        .path
+                        .as_ref()
+                        .is_none_or(|path| effective_path_match_type(path) == "PathPrefix")
+                })
+        }
+        None => http_route_transform_contract()
+            .ok()
+            .is_some_and(|contract| contract.defaults().path_type == "PathPrefix"),
     }
 }
 

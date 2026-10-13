@@ -68,7 +68,8 @@ pub struct AllEndpointStatusConfig {
 
     /// Override the HTTP method for endpoint requests.
     /// Default: None (uses the original request method).
-    /// Common override: "GET" for health checks.
+    /// Common override: "GET" for health checks. Must be a valid HTTP method token;
+    /// extension methods and case are preserved, and malformed values are rejected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub method_override: Option<String>,
 
@@ -130,6 +131,13 @@ impl AllEndpointStatusConfig {
             if !path.starts_with('/') {
                 return Some("pathOverride must start with '/'".to_string());
             }
+        }
+        if self
+            .method_override
+            .as_ref()
+            .is_some_and(|method| http::Method::from_bytes(method.as_bytes()).is_err())
+        {
+            return Some("methodOverride must be a valid HTTP method".to_string());
         }
         None
     }

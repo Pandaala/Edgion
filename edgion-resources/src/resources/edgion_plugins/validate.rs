@@ -518,6 +518,23 @@ impl EdgionPlugins {
         );
         compile_dye_conditions!(self.spec.upstream_response_plugins, "upstreamResponsePlugins");
 
+        // Reuse stateless configuration results only within this invocation.
+        // Keep every source ordinal, including inert entries, so all passes retain
+        // their existing diagnostic positions and alias/body precedence.
+        let request_config_errors: Vec<Option<String>> = self
+            .spec
+            .request_plugins
+            .iter()
+            .flatten()
+            .map(|entry| {
+                if entry.is_enabled() && !matches!(entry.plugin, EdgionPlugin::Unsupported) {
+                    entry.plugin.validation_error()
+                } else {
+                    None
+                }
+            })
+            .collect();
+
         // Request-stage entries whose bounded-structured `body` is invalid. The
         // gateway's `add_from_request_filters` records these in its prepass and
         // then skips the entry entirely, so Pass 2 must skip them too — otherwise
@@ -531,9 +548,9 @@ impl EdgionPlugins {
                     entries
                         .iter()
                         .enumerate()
-                        .filter(|(_, entry)| {
+                        .filter(|(i, entry)| {
                             entry.is_enabled()
-                                && entry.plugin.validation_error().is_none()
+                                && request_config_errors[*i].is_none()
                                 && matches!(
                                     entry.plugin,
                                     EdgionPlugin::FormJsonTransform(_)
@@ -573,10 +590,12 @@ impl EdgionPlugins {
                         let name = entry.plugin.type_name();
                         // 1. Per-plugin config validation. On error, skip the
                         //    remaining checks (mirrors the gateway `continue`).
+                        let response_config_error;
                         let config_error = if matches!($stage_word, "request") {
-                            entry.plugin.validation_error()
+                            request_config_errors[i].as_ref()
                         } else {
-                            response_stage_plugin_validation_error(&entry.plugin)
+                            response_config_error = response_stage_plugin_validation_error(&entry.plugin);
+                            response_config_error.as_ref()
                         };
                         if let Some(err) = config_error {
                             errors.push(format!("{}[{}] ({}): {}", $label, i, name, err));
@@ -735,15 +754,15 @@ impl EdgionPlugins {
             ($entries:expr, $label:literal, $stage:expr) => {
                 if let Some(entries) = &$entries {
                     for (i, entry) in entries.iter().enumerate() {
-                        if !entry.is_enabled() {
+                        if !entry.is_enabled() || matches!(entry.plugin, EdgionPlugin::Unsupported) {
                             continue;
                         }
-                        let config_error = if matches!($stage, BodyStage::Request) {
-                            entry.plugin.validation_error()
+                        let config_invalid = if matches!($stage, BodyStage::Request) {
+                            request_config_errors[i].is_some()
                         } else {
-                            response_stage_plugin_validation_error(&entry.plugin)
+                            response_stage_plugin_validation_error(&entry.plugin).is_some()
                         };
-                        if config_error.is_some() {
+                        if config_invalid {
                             continue;
                         }
                         let Some(body) = entry.body.as_ref() else { continue };

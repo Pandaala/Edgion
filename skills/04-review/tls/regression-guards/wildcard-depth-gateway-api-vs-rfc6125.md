@@ -71,9 +71,14 @@ When a review/audit report claims any of the following, close as "documented tra
    `CertValidationError::InvalidSanPattern { pattern }` for any multi-label,
    partial-label, or non-leftmost wildcard, instead of a generic `SanMismatch`.
    The runtime SNI matcher already rejects these via `Rfc6125HostnameMatcher::get`
-   (single-label). The permissive `EdgionTls::matches_hostname` / `wildcard_match`
-   is dead code (only caller `get_tls_by_host` is itself unused) and was left
-   untouched. Re-reports of "validator/matcher multi-star inconsistency" → close.
+   (single-label). The original resolution left the disconnected permissive
+   `EdgionTls::matches_hostname` / `wildcard_match` helpers untouched. They have
+   since been removed together with their 14 helper-only tests after confirming
+   that no production caller remained; the historical `get_tls_by_host` caller
+   was also already absent. Canonical Algo RFC 6125 matching tests and Common
+   `InvalidSanPattern` tests retain the live contract. This removal changes no
+   certificate-selection or validation behavior. Re-reports must verify the
+   current live owners before claiming a validator/matcher inconsistency.
 
 Verify before closing:
 

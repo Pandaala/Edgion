@@ -348,7 +348,7 @@ pub enum PresencePolicy {
 // ============================================================
 
 /// A custom field injected into the outbound request.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CustomField {
     /// Field name in the outbound request.
@@ -357,6 +357,73 @@ pub struct CustomField {
     /// Source: exactly one of value or template.
     #[serde(flatten)]
     pub source: CustomSource,
+}
+
+// Decode source keys before selecting the enum so a second source cannot be lost
+// by flattened enum deserialization. Unknown fields remain advisory.
+#[derive(Deserialize)]
+struct RawCustomField {
+    name: String,
+    #[serde(default, deserialize_with = "deserialize_present_string")]
+    value: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_present_string")]
+    template: Option<String>,
+}
+
+fn deserialize_present_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct StringVisitor;
+
+    impl serde::de::Visitor<'_> for StringVisitor {
+        type Value = Option<String>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a string")
+        }
+
+        fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+            Ok(Some(value.to_owned()))
+        }
+
+        fn visit_string<E: serde::de::Error>(self, value: String) -> Result<Self::Value, E> {
+            Ok(Some(value))
+        }
+    }
+
+    // Unlike deserialize_string, deserialize_any preserves YAML scalar types.
+    deserializer.deserialize_any(StringVisitor)
+}
+
+impl<'de> Deserialize<'de> for CustomField {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct CustomFieldVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for CustomFieldVisitor {
+            type Value = CustomField;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a custom field object")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+                let raw = RawCustomField::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+                let source = match (raw.value, raw.template) {
+                    (Some(value), None) => CustomSource::Value(value),
+                    (None, Some(template)) => CustomSource::Template(template),
+                    _ => {
+                        return Err(serde::de::Error::custom(
+                            "custom field must specify exactly one of value/template",
+                        ))
+                    }
+                };
+                Ok(CustomField { name: raw.name, source })
+            }
+        }
+
+        deserializer.deserialize_map(CustomFieldVisitor)
+    }
 }
 
 /// Source for a custom field: literal or template (which may embed
