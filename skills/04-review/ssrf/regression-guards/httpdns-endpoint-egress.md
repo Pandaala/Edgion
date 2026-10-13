@@ -35,6 +35,13 @@ serialized for conf_sync and is included in the resolver cache fingerprint.
 LinkSys config uses CRD preserve-unknown-fields; the typed schema exposes the
 boolean and serde rejects non-boolean values.
 
+ARCH-076: Both send and body-chunk SDK errors lose their attached URL through
+`reqwest::Error::without_url` before entering `DnsError::Http`. Signed paths and
+queries still reach the endpoint unchanged but must not appear in diagnostics.
+The request/decode error classes and primary-error/fallback policy remain intact.
+The pinned chunk decoder does not currently attach a URL; applying the same
+projection there preserves this boundary if that dependency behavior changes.
+
 ## Alternatives and limits
 
 The user explicitly chose default false with a per-resolver override for local

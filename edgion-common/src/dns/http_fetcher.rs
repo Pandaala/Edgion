@@ -125,7 +125,7 @@ impl HttpDnsFetcher for ReqwestHttpDnsFetcher {
             .get(url)
             .send()
             .await
-            .map_err(|e| DnsError::Http(e.to_string()))?;
+            .map_err(|e| DnsError::Http(e.without_url().to_string()))?;
         if !resp.status().is_success() {
             return Err(DnsError::Http(format!(
                 "http dns endpoint returned status {}",
@@ -135,7 +135,11 @@ impl HttpDnsFetcher for ReqwestHttpDnsFetcher {
         // Read the body in chunks and enforce `max_response_bytes` on the *actual*
         // bytes received (Content-Length may be absent or dishonest).
         let mut buf: Vec<u8> = Vec::new();
-        while let Some(chunk) = resp.chunk().await.map_err(|e| DnsError::Http(e.to_string()))? {
+        while let Some(chunk) = resp
+            .chunk()
+            .await
+            .map_err(|e| DnsError::Http(e.without_url().to_string()))?
+        {
             if buf.len() + chunk.len() > self.max_response_bytes {
                 return Err(DnsError::Http(format!(
                     "http dns response exceeds the {}-byte limit",

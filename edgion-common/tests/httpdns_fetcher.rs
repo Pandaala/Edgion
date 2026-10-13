@@ -481,3 +481,84 @@ async fn invalid_preparation_uses_the_latest_explicit_dns_fallback() {
         "failed preparation must honor configured DNS server rather than System"
     );
 }
+
+#[tokio::test]
+async fn signed_urls_are_sent_unchanged_but_transport_errors_are_redacted() {
+    use edgion_common::dns::{resolve, ResolverSpec};
+    use edgion_resources::resources::link_sys::httpdns::{
+        HttpDnsFallback, HttpDnsResolverConfig, HttpDnsResponseFormat,
+    };
+    for body_error in [false, true] {
+        for system_fallback in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!(
+                "http://{}/PRIVATE_PATH/d?host={{domain}}&signature=PRIVATE_SIGNATURE",
+                listener.local_addr().unwrap()
+            );
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = tokio::time::timeout(Duration::from_secs(3), listener.accept())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let request = tokio::time::timeout(Duration::from_secs(2), async {
+                    let mut request = Vec::new();
+                    let mut chunk = [0u8; 1024];
+                    while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                        let read = socket.read(&mut chunk).await.unwrap();
+                        assert!(read > 0 && request.len() + read <= 8192);
+                        request.extend_from_slice(&chunk[..read]);
+                    }
+                    request
+                })
+                .await
+                .unwrap();
+                let response = if body_error {
+                    "HTTP/1.1 200 OK\r\nContent-Length: 32\r\nConnection: close\r\n\r\nshort"
+                } else {
+                    "invalid HTTP response\r\n\r\n"
+                };
+                tokio::time::timeout(Duration::from_secs(2), socket.write_all(response.as_bytes()))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                request
+            });
+            let config = HttpDnsResolverConfig {
+                preset: None,
+                url_template: Some(url.clone()),
+                response: HttpDnsResponseFormat::default(),
+                fallback: if system_fallback {
+                    HttpDnsFallback::System
+                } else {
+                    HttpDnsFallback::None
+                },
+                connection: Some(local_connection()),
+            };
+            let result = resolve(&ResolverSpec::HttpDns(prepare(config)), "localhost").await;
+            let request = String::from_utf8(server.await.unwrap()).unwrap();
+            assert_eq!(
+                request.lines().next().unwrap(),
+                "GET /PRIVATE_PATH/d?host=localhost&signature=PRIVATE_SIGNATURE HTTP/1.1"
+            );
+            if system_fallback {
+                assert!(result.unwrap().iter().any(|ip| ip.is_loopback()));
+            } else {
+                let error = result.unwrap_err();
+                let expected = if body_error {
+                    "error decoding response body"
+                } else {
+                    "error sending request"
+                };
+                assert!(
+                    matches!(&error, DnsError::Http(message) if message == expected),
+                    "{error}"
+                );
+                let formatted = error.to_string();
+                assert_eq!(formatted, format!("http dns error: {expected}"));
+                for private in [url.as_str(), "PRIVATE_PATH", "PRIVATE_SIGNATURE"] {
+                    assert!(!formatted.contains(private));
+                }
+            }
+        }
+    }
+}
