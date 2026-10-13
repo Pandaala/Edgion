@@ -110,6 +110,45 @@ fn dom_profile_and_competing_error_order_remain_stable() {
 }
 
 #[test]
+fn dom_duplicate_keys_precede_value_errors_and_remain_object_local() {
+    let limits = JsonLimits {
+        bytes: 1024,
+        depth: 4,
+        nodes: 8,
+    };
+    for source in [
+        br#"{"a":0,"\u0061":2}"#.as_slice(),
+        br#"{"x":[{"a":0,"\u0061":2}]}"#,
+        br#"{"x":{"a":0,"a": }}"#,
+    ] {
+        assert_eq!(parse_dom(source, limits).unwrap_err(), StrictJsonError::DuplicateKey);
+    }
+    for source in [br#"{"a":0,"a": }"#.as_slice(), br#"{"a":0,"a":[[0]]}"#] {
+        assert_eq!(
+            parse_dom(
+                source,
+                JsonLimits {
+                    depth: 2,
+                    nodes: 2,
+                    ..limits
+                }
+            )
+            .unwrap_err(),
+            StrictJsonError::DuplicateKey
+        );
+    }
+
+    // A failed nested parse must not affect a later document or sibling key scope.
+    let parsed = parse_dom(br#"{"a":{"a":"x"},"b":[{"a":"yz"}]}"#, limits).unwrap();
+    assert_eq!(
+        parsed.value(),
+        &serde_json::json!({"a": {"a": "x"}, "b": [{"a": "yz"}]})
+    );
+    assert_eq!(parsed.node_count(), 6);
+    assert_eq!(parsed.text_bytes(), 7);
+}
+
+#[test]
 fn raw_json_node_and_source_caps_are_exact_and_construction_checks_combined_shape() {
     let array = format!(
         "[{}]",

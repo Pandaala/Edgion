@@ -25,6 +25,15 @@ existing DOM visitor ordering, numeric interpretation, node/text accounting and
 nodes4096, lowered by maxStringLen, with syntax-first error precedence. Merely
 placing separate parsers in one file would not satisfy policy unification.
 
+ARCH-069: DOM objects use their result map entries as the sole decoded-key
+membership owner. Text accounting precedes duplicate admission, and occupied
+entries reject before reading the duplicate value, including malformed or
+over-budget values. Vacant entries receive only successfully parsed values.
+Raw mode retains its separate key set and unchanged preallocation work charges;
+both representations still use the same duplicate-error policy. This removes
+redundant DOM key copies and indexing, without claiming measured heap or throughput
+improvements or changing the raw allocation ledger below.
+
 ## Allocation and execution boundaries
 
 Each raw serde invocation charges four units per span byte for traversal plus

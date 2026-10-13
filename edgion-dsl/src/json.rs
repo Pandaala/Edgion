@@ -179,15 +179,19 @@ impl<'de> Visitor<'de> for ValueVisitor<'_> {
     {
         let capacity = map.size_hint().unwrap_or(0).min(self.state.max_nodes as usize);
         let mut values = Map::with_capacity(capacity);
-        let mut keys = HashSet::with_capacity(capacity);
         while let Some(key) = map.next_key::<String>()? {
             self.state.text_bytes = self.state.text_bytes.saturating_add(key.len() as u64);
-            self.state.admit_key(&mut keys, &key).map_err(A::Error::custom)?;
-            let value = map.next_value_seed(ValueSeed {
-                state: self.state,
-                depth: self.depth + 1,
-            })?;
-            values.insert(key, value);
+            let entry = values.entry(key);
+            self.state
+                .admit_key(matches!(&entry, serde_json::map::Entry::Vacant(_)))
+                .map_err(A::Error::custom)?;
+            if let serde_json::map::Entry::Vacant(entry) = entry {
+                let value = map.next_value_seed(ValueSeed {
+                    state: self.state,
+                    depth: self.depth + 1,
+                })?;
+                entry.insert(value);
+            }
         }
         Ok(Value::Object(values))
     }
@@ -208,8 +212,8 @@ impl ParseState {
         }
         Ok(())
     }
-    fn admit_key(&mut self, keys: &mut HashSet<String>, key: &str) -> Result<(), StrictJsonError> {
-        if !keys.insert(key.to_owned()) {
+    fn admit_key(&mut self, is_new: bool) -> Result<(), StrictJsonError> {
+        if !is_new {
             return Err(self.fail(StrictJsonError::DuplicateKey));
         }
         Ok(())
@@ -312,7 +316,9 @@ impl RawState<'_> {
             )?;
             keys.try_reserve(1).map_err(|_| JsonError::Allocation)?;
         }
-        self.policy.admit_key(keys, key).map_err(JsonError::Strict)
+        self.policy
+            .admit_key(keys.insert(key.to_owned()))
+            .map_err(JsonError::Strict)
     }
 }
 
