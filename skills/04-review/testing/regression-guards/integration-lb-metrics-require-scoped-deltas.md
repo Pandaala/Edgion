@@ -38,6 +38,27 @@ Request transport errors, task join errors, and unexpected HTTP status codes are
 as `is_balanced` or variance only count as validation when they control the verdict, not when they appear only
 in a success message.
 
+## Retry-storm evidence is separate from distribution
+
+ARCH-281 adds invocation-unique canonical W3C markers and stored access-log
+inspection to the eight concurrent LeastConn retry-storm requests. A terminal
+503 alone does not prove retries: each matching entry must contain exactly four
+LeastConn attempts with status 503, `RetryOnStatus` on the first three only, and
+well-formed reason arrays (the empty final array may be omitted by serialization).
+Missing, stale, malformed or truncated evidence fails the case.
+
+The suite drains its request tasks, bounds concurrent log queries to five seconds,
+and then attempts deletion of only this invocation's eight stored entries under
+a separate five-second bound. Query and cleanup failures affect the verdict.
+The existing 30-second outer case timeout remains fail-closed; this does not
+guarantee cleanup after outer cancellation or prove internal connection-ledger
+accounting, which has separate `lb::attempt` unit tests.
+
+Pure verdict tests cover valid chains, identity/count/shape failures, wrong
+status/policy and misplaced retry markers. They do not establish a live retry
+run. The existing healthy-phase cumulative-metric issue remains ARCH-280; a
+verified storm does not repair or validate that separate distribution assertion.
+
 ## Fix suggestions not accepted
 
 - Accepting any nonzero metric total, because stale traffic can satisfy it.
