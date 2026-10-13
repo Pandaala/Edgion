@@ -33,3 +33,24 @@ fn if_block_preserves_outer_binding_and_discards_inner_binding() {
         .expect_err("inner binding must not escape the if block");
     assert!(error.message.contains("undefined variable 'inner'"), "{error}");
 }
+
+#[test]
+fn anonymous_slots_share_limits_without_creating_bindings() {
+    let mut compiler = Compiler::new();
+    assert_eq!(compiler.allocate_local_slot().unwrap(), 0);
+    assert!(compiler.locals.is_empty());
+    assert_eq!(compiler.declare_local("authored", true).unwrap(), 1);
+    assert_eq!(compiler.resolve_local("authored").unwrap().slot, 1);
+    compiler.next_slot = u16::MAX - 1;
+    assert_eq!(compiler.allocate_local_slot().unwrap(), u16::MAX - 1);
+    assert_eq!(compiler.next_slot, u16::MAX);
+    for error in [
+        compiler.allocate_local_slot().unwrap_err(),
+        compiler.declare_local("overflow", false).unwrap_err(),
+    ] {
+        assert_eq!(error.message, "too many local variables (max 65534)");
+    }
+    assert_eq!(compiler.next_slot, u16::MAX);
+    assert_eq!(compiler.locals.len(), 1);
+    assert!(compiler.resolve_local("overflow").is_none());
+}

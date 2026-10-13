@@ -145,6 +145,13 @@ The no-argument whole-body method and its opcode are removed in bytecode
 version 5, with no alias or implicit no-argument `read` replacement. Internal
 storage materialization APIs remain separate from the script API.
 
+### Compiler-local storage
+
+Physical local slots are allocated independently of source names. Loop lowering
+uses anonymous slots for its cached bound, iterable and counter; only authored
+bindings enter lexical name resolution. Both forms contribute to `local_count`
+and share the same compiler limit, with unchanged numeric bytecode and VM storage.
+
 ### Bounded XML values
 
 `edgion-dsl::xml` owns immutable `Value::Xml` Arc nodes, allocation-free lexical

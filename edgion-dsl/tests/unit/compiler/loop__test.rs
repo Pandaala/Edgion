@@ -105,3 +105,45 @@ fn test_compile_nested_loops_patch_stacks_balanced() {
     let compiled = Compiler::new().compile(&prog).unwrap();
     assert!(compiled.max_loop_depth >= 3);
 }
+
+#[test]
+fn internal_loop_storage_is_not_source_visible() {
+    for (loop_head, names) in [
+        ("for i in range(0, 1)", vec!["__range_end__"]),
+        ("for i in split(\"1\", \",\")", vec!["__list__", "__idx__"]),
+    ] {
+        for name in names {
+            for body in [format!("let value = {name}"), format!("{name} = 100")] {
+                let source = format!("{loop_head} {{ {body} }}");
+                let program = parse_program(&source).unwrap();
+                let error = Compiler::new().compile(&program).unwrap_err();
+                assert!(error.message.contains("undefined variable"), "{source}: {error}");
+            }
+        }
+    }
+}
+
+#[test]
+fn authored_internal_looking_names_remain_legal_immutable_loop_variables() {
+    for name in ["__range_end__", "__list__", "__idx__"] {
+        for iterable in ["range(0, 1)", "split(\"1\", \",\")"] {
+            let source = format!("for {name} in {iterable} {{ let copy = {name} }}");
+            assert!(Compiler::new().compile(&parse_program(&source).unwrap()).is_ok());
+            let source = format!("for {name} in {iterable} {{ {name} = 2 }}");
+            assert!(Compiler::new().compile(&parse_program(&source).unwrap()).is_err());
+        }
+    }
+}
+
+#[test]
+fn anonymous_loop_slots_remain_in_physical_local_count() {
+    for (source, expected) in [
+        ("for i in range(0, 1) {}", 2),
+        ("for i in split(\"1\", \",\") {}", 3),
+        ("for i in split(\"1\", \",\") { for j in range(0, 1) {} }", 5),
+        ("for i in range(0, 1) {} for j in split(\"1\", \",\") {}", 5),
+    ] {
+        let compiled = Compiler::new().compile(&parse_program(source).unwrap()).unwrap();
+        assert_eq!(compiled.local_count, expected);
+    }
+}

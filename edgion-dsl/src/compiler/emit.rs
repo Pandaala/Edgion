@@ -140,12 +140,18 @@ impl Compiler {
 
     // ==================== Locals ====================
 
-    pub(super) fn declare_local(&mut self, name: &str, mutable: bool) -> Result<u16, CompileError> {
+    /// Reserve physical storage without exposing a source-level binding.
+    pub(super) fn allocate_local_slot(&mut self) -> Result<u16, CompileError> {
         if self.next_slot == u16::MAX {
             return Err(CompileError::new("too many local variables (max 65534)"));
         }
         let slot = self.next_slot;
         self.next_slot += 1;
+        Ok(slot)
+    }
+
+    pub(super) fn declare_local(&mut self, name: &str, mutable: bool) -> Result<u16, CompileError> {
+        let slot = self.allocate_local_slot()?;
         self.locals.push(Local {
             name: name.to_string(),
             slot,

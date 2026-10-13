@@ -204,3 +204,38 @@ fn while_continue_counts_toward_the_loop_iteration_limit() {
         "got {error:?}"
     );
 }
+
+#[test]
+fn compiler_temporaries_do_not_shadow_authored_bindings() {
+    for (source, expected) in [
+        ("let __range_end__ = 99\nlet mut result = 0\nfor i in range(0, 1) { result = __range_end__ }\nreturn deny(403, to_str(result))", "99"),
+        ("let __range_end__ = 2\nlet mut result = 0\nfor i in range(__range_end__, 4) { result = result + i }\nreturn deny(403, to_str(result))", "5"),
+        ("let __list__ = 10\nlet mut __idx__ = 1\nlet mut total = 0\nfor i in split(\"1,2\", \",\") { for j in split(\"3,4\", \",\") { total = total + __list__ + __idx__\n__idx__ = __idx__ + 1 } }\nfor k in split(\"5\", \",\") { total = total + __list__ + __idx__ }\nreturn deny(403, to_str(total))", "65"),
+        ("let __idx__ = 9\nlet mut total = 0\nfor __idx__ in split(\"1,2\", \",\") { total = total + to_int(__idx__) }\nreturn deny(403, to_str(total + __idx__))", "12"),
+    ] {
+        assert_eq!(run(source, MockPluginSession::new()), err_response_body(403, expected));
+    }
+}
+
+#[test]
+fn compiler_loop_inputs_keep_once_only_evaluation_order() {
+    let mut session = MockPluginSession::new();
+    let mut sequence = mockall::Sequence::new();
+    for (header, value) in [("End", "3"), ("Start", "1"), ("Items", "a,b")] {
+        session
+            .expect_header_value()
+            .withf(move |name| name == header)
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(move |_| Some(value.to_string()));
+    }
+    let source = r#"
+        let mut total = 0
+        for i in range(to_int(req.header("Start")), to_int(req.header("End"))) {
+            total = total + i
+        }
+        for item in split(req.header("Items"), ",") { total = total + 1 }
+        return deny(403, to_str(total))
+    "#;
+    assert_eq!(run(source, session), err_response_body(403, "5"));
+}

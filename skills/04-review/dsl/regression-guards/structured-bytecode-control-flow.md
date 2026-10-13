@@ -53,3 +53,21 @@ opcodes, labeled loop exits, or a different loop-counter scheme are introduced.
 
 - `tasks/todo/validate-structured-dsl-bytecode-control-flow.md` (Issue N/A):
   structured bytecode validation and `while continue` counter correction.
+
+## Compiler-owned loop slots
+
+ARCH-206 separates anonymous physical slot allocation from authored name binding.
+The cached range end, retained iterable and iteration index use checked anonymous
+slots; they are never registered as `__range_end__`, `__list__` or `__idx__` in
+source name resolution. Legitimate authored variables with those names remain
+legal and visible according to ordinary lexical scope. Loop variables stay
+immutable, and undeclared reads or assignments fail compilation.
+
+Named and anonymous storage share the existing monotonic slot limit and contribute
+to `local_count`. Range end evaluation still precedes start evaluation exactly
+once, and for-in evaluates its iterable once. Existing numeric GetLocal/SetLocal
+instructions, bytecode version and independent validator/VM bounds are unchanged.
+Compiler tests cover scope, authored names, counts and allocation exhaustion;
+Gateway control-flow tests execute the shared compile/validate pipeline and verify
+returned values plus observable input evaluation order. This correction introduces
+no runtime name lookup or extra request allocation.

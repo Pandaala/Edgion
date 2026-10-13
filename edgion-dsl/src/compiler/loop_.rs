@@ -30,7 +30,7 @@ impl Compiler {
 
         // Evaluate end expression ONCE before the loop and store in a local
         self.compile_expr(end)?;
-        let end_slot = self.declare_local("__range_end__", false)?;
+        let end_slot = self.allocate_local_slot()?;
         self.emit(OpCode::SetLocal(end_slot));
 
         // Initialize: i = start (immutable to user, compiler manages increment)
@@ -122,13 +122,13 @@ impl Compiler {
 
         // Evaluate iterable → list
         self.compile_expr(iterable)?;
-        let list_slot = self.declare_local("__list__", false)?;
+        let list_slot = self.allocate_local_slot()?;
         self.emit(OpCode::SetLocal(list_slot));
 
         // index = 0
         let zero = self.add_int_const(0)?;
         self.emit(OpCode::LoadConst(zero));
-        let idx_slot = self.declare_local("__idx__", true)?;
+        let idx_slot = self.allocate_local_slot()?;
         self.emit(OpCode::SetLocal(idx_slot));
         self.emit(OpCode::LoopInit);
 
