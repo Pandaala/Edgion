@@ -38,6 +38,20 @@ pub(super) fn extract_csrf_token(set_cookie: &str, name: &str) -> Option<String>
     None
 }
 
+fn cookie_preservation_result(cookies: &[String], elapsed: std::time::Duration) -> TestResult {
+    let has_a = cookies.iter().any(|cookie| cookie.contains("upstream_a=aaa"));
+    let has_b = cookies.iter().any(|cookie| cookie.contains("upstream_b=bbb"));
+    let has_csrf = cookies.iter().any(|cookie| cookie.contains(TOKEN_HEADER));
+    if has_a && has_b && has_csrf {
+        TestResult::passed_with_message(
+            elapsed,
+            format!("All three Set-Cookie values present ({} total)", cookies.len()),
+        )
+    } else {
+        TestResult::failed(elapsed, format!("Expected upstream_a + upstream_b + {TOKEN_HEADER} in Set-Cookie: upstream_a={has_a}, upstream_b={has_b}, csrf={has_csrf}, total={}", cookies.len()))
+    }
+}
+
 impl CsrfTestSuite {
     /// GET request → 200 + Set-Cookie with CSRF token in response
     fn test_safe_method_sets_cookie() -> TestCase {
@@ -73,7 +87,7 @@ impl CsrfTestSuite {
                     } else {
                         TestResult::failed(
                             start.elapsed(),
-                            format!("Expected Set-Cookie with {}, got: {:?}", TOKEN_HEADER, cookie_header),
+                            format!("Expected Set-Cookie containing {TOKEN_HEADER}; cookie contents omitted"),
                         )
                     }
                 })
@@ -113,24 +127,7 @@ impl CsrfTestSuite {
                         .map(String::from)
                         .collect();
 
-                    let has_a = cookies.iter().any(|c| c.contains("upstream_a=aaa"));
-                    let has_b = cookies.iter().any(|c| c.contains("upstream_b=bbb"));
-                    let has_csrf = cookies.iter().any(|c| c.contains(TOKEN_HEADER));
-
-                    if has_a && has_b && has_csrf {
-                        TestResult::passed_with_message(
-                            start.elapsed(),
-                            format!("All three Set-Cookie values present ({} total)", cookies.len()),
-                        )
-                    } else {
-                        TestResult::failed(
-                            start.elapsed(),
-                            format!(
-                                "Expected upstream_a + upstream_b + {} in Set-Cookie, got: {:?}",
-                                TOKEN_HEADER, cookies
-                            ),
-                        )
-                    }
+                    cookie_preservation_result(&cookies, start.elapsed())
                 })
             },
         )
@@ -175,10 +172,7 @@ impl CsrfTestSuite {
                     let Some(token) = extract_csrf_token(&set_cookie, TOKEN_HEADER) else {
                         return TestResult::failed(
                             start.elapsed(),
-                            format!(
-                                "Could not extract {} token from Set-Cookie: {}",
-                                TOKEN_HEADER, set_cookie
-                            ),
+                            format!("Could not extract {TOKEN_HEADER} token from Set-Cookie; cookie contents omitted"),
                         );
                     };
 
@@ -438,5 +432,36 @@ impl TestSuite for CsrfTestSuite {
             cases.push(super::method_boundary::test_case());
         }
         cases
+    }
+}
+
+#[cfg(test)]
+mod cookie_diagnostic_tests {
+    use super::*;
+
+    #[test]
+    fn cookie_preservation_failure_reports_presence_without_values() {
+        let marker = "distinctive-issued-token-do-not-report";
+        let cookies = vec![
+            "upstream_a=aaa; Path=/".to_string(),
+            format!("{TOKEN_HEADER}={marker}; Path=/"),
+        ];
+        let result = cookie_preservation_result(&cookies, std::time::Duration::ZERO);
+        assert!(!result.passed);
+        let error = result.error.as_deref().unwrap();
+        assert!(error.contains("upstream_a=true, upstream_b=false, csrf=true, total=2"));
+        assert!(!error.contains(marker));
+        let reported = serde_json::json!({"error": result.error, "message": result.message}).to_string();
+        assert!(!reported.contains(marker));
+    }
+
+    #[test]
+    fn cookie_preservation_retains_all_three_required_observations() {
+        let mut cookies = vec!["upstream_a=aaa".to_string(), "upstream_b=bbb".to_string()];
+        let missing = cookie_preservation_result(&cookies, std::time::Duration::ZERO);
+        assert!(!missing.passed);
+        assert!(missing.error.unwrap().contains("csrf=false, total=2"));
+        cookies.push(format!("{TOKEN_HEADER}=issued-token"));
+        assert!(cookie_preservation_result(&cookies, std::time::Duration::ZERO).passed);
     }
 }
