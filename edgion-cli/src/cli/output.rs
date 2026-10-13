@@ -205,7 +205,11 @@ pub fn print_resource_list_all(items: Vec<Value>, format: OutputFormat) -> Resul
 /// (border + header + separator) and the bottom 1 line (bottom border).
 // FIXME(cli): pretty cross-page table streaming would need a custom Style.
 pub fn print_resource_list_page_streaming(data: &Value, format: OutputFormat, suppress_header: bool) -> Result<usize> {
-    let items = data.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default();
+    let items = data
+        .get("data")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
     let n = items.len();
     if n == 0 {
         return Ok(0);

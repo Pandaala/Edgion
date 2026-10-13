@@ -76,6 +76,16 @@ For server/client list requests, namespace-only filtering is applied by the CLI 
 
 ## EdgionClient
 
+### Paginated output ownership
+
+For `get --all` Table/Wide output, `print_resource_list_page_streaming` borrows
+the parsed page's resource array while projecting owned metadata rows. It does
+not clone unused spec/status trees (ARCH-171). The caller retains the page for
+continuation-token extraction. JSON/YAML accumulation keeps its separate owned
+lifetime across pages. Row formatting, empty-page behavior and continuation
+headers are unchanged; this is not a measured latency or process-memory bound.
+
+
 The HTTP client implementation; encapsulates the HTTP communication logic with Controller/Gateway.
 
 ```rust
