@@ -5865,7 +5865,6 @@ fn fold_local_rules(draft: &mut SemanticDraft<'_>, limits: SemanticLimits) -> Re
                 document_index,
                 directive_index,
                 previous,
-                None,
             )?
             else {
                 previous = None;
@@ -5968,7 +5967,6 @@ fn fold_local_rules(draft: &mut SemanticDraft<'_>, limits: SemanticLimits) -> Re
                 document_index,
                 directive_index,
                 previous,
-                Some((&mut draft.effective_transformations, effective_start)),
             )?
             else {
                 previous = None;
@@ -5976,6 +5974,17 @@ fn fold_local_rules(draft: &mut SemanticDraft<'_>, limits: SemanticLimits) -> Re
                 continue;
             };
             inspection.record.effective_start = effective_start;
+            // Inspection validates every action; commit only the admitted final suffix.
+            let surviving_start = inspection
+                .record
+                .reset_action
+                .map_or(mapping.action_start, |index| index + 1);
+            let action_end = mapping.action_start + mapping.action_count;
+            for index in surviving_start..action_end {
+                if matches!(draft.actions[index].kind, ActionEnvelopeKind::Transformation) {
+                    draft.effective_transformations.push(index);
+                }
+            }
             let fold_index = draft.folds.len();
             draft.directives[mapping_index].fold = Some(fold_index);
             if inspection.default_phase {
@@ -6027,7 +6036,6 @@ fn inspect_fold(
     document_index: usize,
     directive_index: usize,
     previous: Option<FoldAdjacency>,
-    mut effective_sink: Option<(&mut Vec<usize>, usize)>,
 ) -> Result<Option<FoldInspection>, SemanticError> {
     let envelope = match syntax.directive().directive() {
         Directive::SecRule { .. } => LocalRuleEnvelope::Rule,
@@ -6101,9 +6109,6 @@ fn inspect_fold(
                     record.reset_action = Some(index);
                     effective_after_reset = 0;
                     effective_excess_position = None;
-                    if let Some((sink, start)) = effective_sink.as_mut() {
-                        sink.truncate(*start);
-                    }
                 } else {
                     if envelope == LocalRuleEnvelope::Action {
                         forbidden.get_or_insert((FoldSingletonKind::Transformation, position));
@@ -6116,9 +6121,6 @@ fn inspect_fold(
                             .is_none_or(|count| count > arena.effective_limit)
                     {
                         effective_excess_position = Some(position);
-                    }
-                    if let Some((sink, _)) = effective_sink.as_mut() {
-                        sink.push(index);
                     }
                 }
             }

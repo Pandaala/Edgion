@@ -10,6 +10,8 @@ Check the current compiler, transaction, and detector code before applying a pas
 
 ## Regression guards
 
+- [Semantic folds commit only surviving transformation indices](regression-guards/semantic-transformation-reset-output.md)
+
 - [Form decoding borrows unchanged scratch](regression-guards/form-decoder-borrowed-scratch.md)
 
 - [Static tags select validated whole units before compilation](regression-guards/static-tag-selection-before-compilation.md)

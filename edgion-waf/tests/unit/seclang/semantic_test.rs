@@ -4429,3 +4429,60 @@ fn pinned_crs_semantic_classification_gate() {
             draft.retained_charged_bytes()
         );
 }
+
+#[test]
+fn final_empty_reset_fold_does_not_allocate_effective_indices() {
+    let prefix = "t:lowercase,".repeat(128);
+    let source = format!("SecRule ARGS \"@rx x\" \"id:1,phase:2,pass,{prefix}t:none\"\n");
+    with_fold(&source, |draft| {
+        assert!(draft.effective_transformations.is_empty());
+        assert_eq!(draft.effective_transformations.capacity(), 0);
+        let fold = draft.folded_rules().next().unwrap();
+        assert_eq!(fold.effective_transformations().len(), 0);
+        assert_eq!(
+            fold.reset_action().unwrap().transformation(),
+            Some(TransformationKind::None)
+        );
+    })
+    .unwrap();
+}
+
+#[test]
+fn reset_suffix_commit_preserves_neighbor_fold_ranges() {
+    let prefix = "t:lowercase,".repeat(128);
+    let source = format!(
+        "SecRule ARGS \"@rx x\" \"id:1,phase:2,pass,t:length\"\n\
+         SecRule ARGS \"@rx x\" \"id:2,phase:2,pass,{prefix}t:none,t:lowercase,t:none,t:length,t:lowercase\"\n\
+         SecRule ARGS \"@rx x\" \"id:3,phase:2,pass,{prefix}t:none\"\n\
+         SecRule ARGS \"@rx x\" \"id:4,phase:2,pass,t:lowercase\"\n"
+    );
+    with_fold(&source, |draft| {
+        let actual = draft
+            .folded_rules()
+            .map(|fold| {
+                fold.effective_transformations()
+                    .map(|action| action.transformation().unwrap())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            vec![
+                vec![TransformationKind::Length],
+                vec![TransformationKind::Length, TransformationKind::Lowercase],
+                vec![],
+                vec![TransformationKind::Lowercase]
+            ]
+        );
+        assert_eq!(draft.effective_transformations.len(), 4);
+    })
+    .unwrap();
+}
+
+#[test]
+fn invalid_actions_before_reset_are_still_rejected() {
+    for actions in ["t:unknown,t:none", "id:2,t:none", "status:404,t:none"] {
+        let source = format!("SecRule ARGS \"@rx x\" \"id:1,phase:2,pass,{actions}\"\n");
+        assert!(with_fold(&source, |_| ()).is_err(), "{actions}");
+    }
+}
