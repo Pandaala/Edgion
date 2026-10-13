@@ -563,3 +563,59 @@ fn partial_intra_group_duplicate_cidr_keeps_first() {
     let ip: std::net::IpAddr = "1.2.3.4".parse().unwrap();
     assert_eq!(m.matched_group(&ip), Some("g")); // first occurrence KEPT
 }
+
+#[test]
+fn mapped_rules_reach_strict_and_partial_grouped_matchers() {
+    for cidr in ["::ffff:192.0.2.7/120", "::ffff:192.0.2.7"] {
+        let groups = vec![IpGroup {
+            name: "mapped".into(),
+            description: None,
+            cidrs: vec![cidr.into()],
+        }];
+        assert!(collect_entry_errors(&groups).is_empty());
+        let strict = build_grouped_matcher(&groups).unwrap();
+        let (partial, errors) = build_grouped_matcher_partial(&groups);
+        assert!(errors.is_empty());
+        for matcher in [&strict, &partial] {
+            for ip in ["192.0.2.7", "::ffff:192.0.2.7"] {
+                assert_eq!(matcher.matched_group(&ip.parse().unwrap()), Some("mapped"));
+            }
+            assert!(!matcher.contains(&"192.0.3.7".parse().unwrap()));
+        }
+    }
+}
+
+#[test]
+fn mapped_aliases_preserve_strict_conflict_and_partial_first_kept() {
+    for (first, second) in [
+        ("192.0.2.0/24", "::ffff:192.0.2.7/120"),
+        ("::ffff:192.0.2.7/120", "192.0.2.0/24"),
+    ] {
+        let groups = vec![
+            IpGroup {
+                name: "first".into(),
+                description: None,
+                cidrs: vec![first.into()],
+            },
+            IpGroup {
+                name: "second".into(),
+                description: None,
+                cidrs: vec![second.into()],
+            },
+        ];
+        assert!(build_grouped_matcher(&groups).is_err());
+        let (partial, errors) = build_grouped_matcher_partial(&groups);
+        assert_eq!(errors, collect_entry_errors(&groups));
+        assert!(errors.is_empty()); // Existing advisory checks compare textual CIDRs.
+        for ip in ["192.0.2.7", "::ffff:192.0.2.7"] {
+            assert_eq!(partial.matched_group(&ip.parse().unwrap()), Some("first"));
+        }
+        let same_group = vec![IpGroup {
+            name: "same".into(),
+            description: None,
+            cidrs: vec![first.into(), second.into()],
+        }];
+        let strict = build_grouped_matcher(&same_group).unwrap();
+        assert_eq!(strict.matched_group(&"192.0.2.7".parse().unwrap()), Some("same"));
+    }
+}

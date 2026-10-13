@@ -4,7 +4,7 @@
 //! against CIDR rules, automatically dispatching to the appropriate tree.
 
 use std::collections::HashMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv6Addr};
 use std::sync::Arc;
 
 use super::builder_v4::IpV4RadixBuilder;
@@ -142,7 +142,15 @@ impl IpRadixMatcherBuilder {
         let id = self.intern(group_name)?;
         let result = match cidr {
             IpCidr::V4 { .. } => self.v4_builder.insert(cidr_str, id),
-            IpCidr::V6 { .. } => self.v6_builder.insert(cidr_str, id),
+            IpCidr::V6 { addr, prefix_len } => {
+                // Mapped-only rules must use the same family as mapped queries.
+                if let Some(mapped) = Ipv6Addr::from(addr).to_ipv4_mapped().filter(|_| prefix_len >= 96) {
+                    self.v4_builder
+                        .insert_parsed(u32::from(mapped), prefix_len - 96, id, cidr_str)
+                } else {
+                    self.v6_builder.insert(cidr_str, id)
+                }
+            }
         };
         result.map_err(|e| self.resolve_label_names(e))
     }

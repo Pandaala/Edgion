@@ -192,3 +192,74 @@ fn too_many_groups_returns_error() {
         other => panic!("expected TooManyGroups, got {:?}", other),
     }
 }
+
+#[test]
+fn mapped_cidrs_use_ipv4_prefixes_and_longest_match() {
+    let mut builder = IpRadixMatcher::builder();
+    for (cidr, group) in [
+        ("::ffff:192.0.2.7/96", "all"),
+        ("::ffff:192.0.2.7/120", "subnet"),
+        ("::ffff:192.0.2.7/128", "host"),
+    ] {
+        builder.insert(cidr, group).unwrap();
+    }
+    let matcher = builder.build().unwrap();
+    assert!(matcher.ipv6_tree.is_none());
+    for (ip, group) in [("192.0.2.7", "host"), ("192.0.2.8", "subnet"), ("192.0.3.7", "all")] {
+        for ip in [ip.to_string(), format!("::ffff:{ip}")] {
+            assert_eq!(matcher.matched_group(&ip.parse().unwrap()), Some(group));
+        }
+    }
+    assert!(!matcher.contains(&"2001:db8::1".parse().unwrap()));
+}
+
+#[test]
+fn mapped_native_aliases_share_terminal_ownership_in_both_orders() {
+    for (native, mapped) in [
+        ("0.0.0.0/0", "::ffff:192.0.2.7/96"),
+        ("192.0.2.0/24", "::ffff:192.0.2.7/120"),
+        ("192.0.2.7/32", "::ffff:192.0.2.7/128"),
+    ] {
+        for (first, second) in [(native, mapped), (mapped, native)] {
+            let mut builder = IpRadixMatcher::builder();
+            builder.insert(first, "first").unwrap();
+            builder.insert(second, "first").unwrap();
+            let error = builder.insert(second, "second").unwrap_err();
+            assert!(
+                matches!(error, IpRadixError::DuplicateCidr { cidr, existing_label, new_label }
+                if cidr == second && existing_label == "first" && new_label == "second")
+            );
+            let matcher = builder.build().unwrap();
+            assert_eq!(matcher.matched_group(&"192.0.2.7".parse().unwrap()), Some("first"));
+        }
+    }
+}
+
+#[test]
+fn non_mapped_ipv6_rules_keep_separate_family_semantics() {
+    for (cidr, covered) in [
+        ("::ffff:192.0.2.7/95", "::fffe:192.0.2.7"),
+        ("::/0", "2001:db8::1"),
+        ("::192.0.2.7/128", "::192.0.2.7"),
+        ("::1/128", "::1"),
+        ("2001:db8::/32", "2001:db8::1"),
+    ] {
+        let mut builder = IpRadixMatcher::builder();
+        builder.insert(cidr, "v6").unwrap();
+        let matcher = builder.build().unwrap();
+        assert!(matcher.ipv4_tree.is_none());
+        assert!(matcher.contains(&covered.parse().unwrap()));
+        assert!(!matcher.contains(&"192.0.2.7".parse().unwrap()));
+        assert!(!matcher.contains(&"::ffff:192.0.2.7".parse().unwrap()));
+    }
+    let cidr = "::ffff:192.0.2.7/120";
+    assert!(matches!(
+        IpCidr::parse(cidr).unwrap(),
+        IpCidr::V6 { prefix_len: 120, .. }
+    ));
+    let mut raw = IpV6RadixBuilder::new();
+    raw.insert(cidr, 1).unwrap();
+    let tree = raw.freeze().unwrap();
+    assert_eq!(tree.match_ipv6("::ffff:192.0.2.8".parse().unwrap()), Some(1));
+    assert_eq!(tree.match_ipv6("::ffff:192.0.3.8".parse().unwrap()), None);
+}

@@ -306,3 +306,35 @@ async fn blank_reference_name_preserves_structural_constructor_failure() {
         assert!(create(&owner(config)).is_none());
     }
 }
+
+#[tokio::test]
+async fn mapped_iplist_rules_enforce_deny_and_whitelist_for_both_query_forms() {
+    let store = EdgionConfigDataStore::new();
+    publish(&store, &[("mapped-list", "mapped", &["::ffff:192.0.2.7/120"])]);
+    for side in ["denyRefs", "allowRefs"] {
+        let mut config = json!({"defaultAction":"allow"});
+        config[side] = json!([{"name":"mapped-list"}]);
+        let owner = owner(config);
+        let plugin = create(&owner).unwrap();
+        for ip in ["192.0.2.7", "::ffff:192.0.2.7", "192.0.3.7", "::ffff:192.0.3.7"] {
+            let in_range = ip.ends_with("192.0.2.7");
+            let is_denied = if side == "denyRefs" { in_range } else { !in_range };
+            let mut s = session(&store, ip, false);
+            if is_denied {
+                denied(&mut s);
+            }
+            let expected_log = match (side, in_range) {
+                ("denyRefs", true) => "deny:group=mapped",
+                ("denyRefs", false) => "allow:default",
+                (_, true) => "allow:group=mapped",
+                (_, false) => "deny:not-in-allow",
+            };
+            let expected_result = if is_denied {
+                PluginRunningResult::ErrTerminateRequest
+            } else {
+                PluginRunningResult::GoodNext
+            };
+            assert_eq!(run(&*plugin, &mut s).await, (expected_result, expected_log.into()));
+        }
+    }
+}

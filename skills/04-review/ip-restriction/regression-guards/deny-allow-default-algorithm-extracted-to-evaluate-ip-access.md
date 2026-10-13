@@ -36,3 +36,20 @@ whitelist misses and defaults. This removes intermediate matching collections;
 it makes no whole-path allocation-free or numeric performance claim.
 
 Canonical contract: [grouped lists](../../../01-architecture/00-common/04-grouped-list-pattern.md).
+
+## Mapped CIDR insertion and query agreement
+
+ARCH-181 corrected accepted mapped-only CIDRs that were stored in the IPv6 tree
+but never reached by mapped queries. The unified algorithm builder now compiles
+`::ffff:0:0/96` subnets into IPv4 prefixes; runtime query ownership is unchanged.
+Strict grouped compilation rejects native/mapped aliases assigned to different
+groups. Partial compilation keeps the first terminal, preserving its existing
+advisory diagnostics: `collect_entry_errors` compares textual CIDRs and does not
+report these semantic aliases, just as it does not normalize host-bit aliases.
+
+Algorithm tests cover mapped /96, /120 and /128, host bits, longest-prefix lookup,
+terminal aliases and excluded IPv6 families. Grouped-helper tests cover strict and
+partial compilation, while HTTP tests publish actual IpLists and use `create_bound`
+and the canonical evaluator to verify deny/default-Allow and whitelist decisions
+for native and mapped queries. These are local unit tests, not deployed traffic or
+performance measurements. No new runtime policy, logging or allocation is added.

@@ -12,6 +12,12 @@ status: shipped
 Controller, Resources, and Gateway policy consumers. `IpRadixMatcher` interns group
 labels and keeps separate optional IPv4 and IPv6 trees. Native IPv4 and IPv4-mapped
 IPv6 inputs query only the IPv4 tree; other IPv6 inputs query only the IPv6 tree.
+The unified builder applies the same policy to mapped-only CIDRs (ARCH-181):
+a normalized mapped IPv6 prefix of length 96 through 128 is inserted into the
+IPv4 tree with 96 subtracted from its prefix length. Native and mapped aliases
+therefore share terminal ownership and longest-prefix selection. Broader IPv6
+prefixes, IPv4-compatible addresses and native IPv6 rules remain in the IPv6 tree.
+Raw `IpCidr` parsing and the low-level IPv6 builder retain IPv6 bit-prefix semantics.
 
 Both address families use one private binary-radix core, monomorphized through a
 two-implementation `BitKey` trait for `u32` and `u128`. Insertion consumes bits from

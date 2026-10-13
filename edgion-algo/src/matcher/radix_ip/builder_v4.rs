@@ -38,12 +38,23 @@ impl IpV4RadixBuilder {
     pub fn insert(&mut self, cidr_str: &str, label_id: u16) -> Result<(), IpRadixError> {
         debug_assert!(label_id != 0, "label_id 0 is reserved");
         match IpCidr::parse(cidr_str)? {
-            IpCidr::V4 { addr, prefix_len } => self.inner.insert(addr, prefix_len, label_id, cidr_str),
+            IpCidr::V4 { addr, prefix_len } => self.insert_parsed(addr, prefix_len, label_id, cidr_str),
             IpCidr::V6 { .. } => Err(IpRadixError::InvalidCidr {
                 input: cidr_str.to_string(),
                 reason: "IPv6 CIDR not supported in IPv4 builder".to_string(),
             }),
         }
+    }
+
+    /// Insert an already normalized IPv4 prefix from the unified family adapter.
+    pub(super) fn insert_parsed(
+        &mut self,
+        addr: u32,
+        prefix_len: u8,
+        label_id: u16,
+        cidr_str: &str,
+    ) -> Result<(), IpRadixError> {
+        self.inner.insert(addr, prefix_len, label_id, cidr_str)
     }
 
     /// Returns whether the builder is empty.
