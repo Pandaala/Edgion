@@ -97,9 +97,7 @@ pub use credential_injector::{
     CREDENTIAL_INJECTOR_FINAL_VALUE_MAX_LEN, CREDENTIAL_INJECTOR_VALUE_PREFIX_MAX_LEN,
 };
 pub use csrf::CsrfConfig;
-pub use ctx_set::{
-    CaseType, CtxSetConfig, CtxVarRule, ExtractConfig, MappingConfig, ReplaceConfig, TransformConfig, TransformType,
-};
+pub use ctx_set::{CaseType, CtxSetConfig, CtxVarRule, ExtractConfig, MappingConfig, ReplaceConfig, TransformConfig};
 pub use debug_access_log::DebugAccessLogToHeaderConfig;
 pub use direct_endpoint::{DirectEndpointConfig, EndpointExtract};
 pub use dsl::{DslConfig, DslErrorPolicy};

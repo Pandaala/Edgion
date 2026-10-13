@@ -39,6 +39,17 @@ Both `check_fields` (Controller `validate_plugins` / `validation_error`) and
 - `edgion-gateway/src/plugins/http/ctx_set/plugin.rs` keeps defensive priority
   in `apply_transform` and `malformed_multi_operation_transform_keeps_priority`
 
+## Borrowed validation ownership (ARCH-067)
+
+After the operation-count gate, both validators borrow `replace.pattern` and
+copy the substring tuple directly from `TransformConfig`. They do not build an
+owned transform projection or copy prefix, suffix, or replacement strings just
+to select validation. The unused `TransformType` projection and helper are removed.
+`validate` still clears and populates its owned compiled caches; `check_fields`
+remains stateless. Gateway runtime configuration and output ownership stay unchanged.
+Large-operand tests compare both validators and verify that stateless checks leave
+existing caches untouched while `validate` refreshes them after a transform change.
+
 ## Alternatives and limits
 
 Trigger: one rule's `transform` sets two or more operations.

@@ -441,3 +441,33 @@ fn test_matched_route_tokens_accepted() {
     assert!(CompiledTemplate::compile("${matchedGrpcRoute:annotation.owner}").is_ok());
     assert!(CompiledTemplate::compile("${matchedFooRoute:name}").is_err());
 }
+
+#[test]
+fn transform_validation_preserves_large_operands_and_refreshes_only_owned_caches() {
+    let large = "x".repeat(4096);
+    for transform in [
+        serde_json::json!({"prefix": large}),
+        serde_json::json!({"suffix": large}),
+        serde_json::json!({"replace": {"pattern": "(ALICE)", "with": large}}),
+    ] {
+        let mut config: CtxSetConfig = serde_json::from_value(serde_json::json!({
+            "vars": [{"name": "user", "value": "ALICE", "transform": transform}]
+        }))
+        .unwrap();
+        let authored = serde_json::to_value(&config.vars).unwrap();
+        assert_eq!(config.validation_error(), None);
+        assert!(config.compiled_transform_patterns.is_empty());
+        config.validate().unwrap();
+        let has_replace = transform.get("replace").is_some();
+        assert_eq!(config.get_compiled_transform_regex(0).is_some(), has_replace);
+        if let Some(regex) = config.get_compiled_transform_regex(0) {
+            assert!(regex.is_match("ALICE"));
+        }
+        assert_eq!(serde_json::to_value(&config.vars).unwrap(), authored);
+        config.vars[0].transform = Some(serde_json::from_value(serde_json::json!({"prefix": large})).unwrap());
+        assert_eq!(config.validation_error(), None);
+        assert_eq!(config.get_compiled_transform_regex(0).is_some(), has_replace);
+        config.validate().unwrap();
+        assert!(config.compiled_transform_patterns.is_empty());
+    }
+}

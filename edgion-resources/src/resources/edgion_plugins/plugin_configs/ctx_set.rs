@@ -251,49 +251,6 @@ impl TransformConfig {
         (self.configured_operation_count() > 1)
             .then(|| format!("vars[{idx}] '{name}': transform allows at most one operation"))
     }
-
-    /// Get the transform type for validation and processing
-    pub fn get_transform_type(&self) -> Option<TransformType> {
-        if let Some(ref replace) = self.replace {
-            return Some(TransformType::Replace {
-                pattern: replace.pattern.clone(),
-                with: replace.with.clone(),
-            });
-        }
-        if let Some((start, end)) = self.substring {
-            return Some(TransformType::Substring(start, end));
-        }
-        if let Some(ref case) = self.case {
-            return Some(TransformType::Case(case.clone()));
-        }
-        if let Some(ref prefix) = self.prefix {
-            return Some(TransformType::Prefix(prefix.clone()));
-        }
-        if let Some(ref suffix) = self.suffix {
-            return Some(TransformType::Suffix(suffix.clone()));
-        }
-        if self.trim == Some(true) {
-            return Some(TransformType::Trim);
-        }
-        None
-    }
-}
-
-/// Internal transform type for processing (not serialized)
-#[derive(Debug, Clone)]
-pub enum TransformType {
-    /// Regex replace
-    Replace { pattern: String, with: String },
-    /// Substring extraction
-    Substring(usize, usize),
-    /// Case conversion
-    Case(CaseType),
-    /// Add prefix
-    Prefix(String),
-    /// Add suffix
-    Suffix(String),
-    /// Trim whitespace
-    Trim,
 }
 
 /// Case conversion type
@@ -352,7 +309,8 @@ impl CtxSetConfig {
                 if let Some(error) = transform.multiple_operation_error(idx, &rule.name) {
                     return Some(error);
                 }
-                if let Some(TransformType::Replace { ref pattern, .. }) = transform.get_transform_type() {
+                if let Some(replace) = transform.replace.as_ref() {
+                    let pattern = &replace.pattern;
                     if let Err(e) = Regex::new(pattern) {
                         return Some(format!(
                             "vars[{}] '{}': invalid transform.replace pattern '{}': {}",
@@ -360,7 +318,7 @@ impl CtxSetConfig {
                         ));
                     }
                 }
-                if let Some(TransformType::Substring(start, end)) = transform.get_transform_type() {
+                if let Some((start, end)) = transform.substring {
                     if start > end {
                         return Some(format!(
                             "vars[{}] '{}': substring start ({}) > end ({})",
@@ -439,7 +397,8 @@ impl CtxSetConfig {
                 if let Some(error) = transform.multiple_operation_error(idx, &rule.name) {
                     return Err(error);
                 }
-                if let Some(TransformType::Replace { ref pattern, .. }) = transform.get_transform_type() {
+                if let Some(replace) = transform.replace.as_ref() {
+                    let pattern = &replace.pattern;
                     match Regex::new(pattern) {
                         Ok(re) => {
                             self.compiled_transform_patterns.insert(idx, re);
@@ -454,7 +413,7 @@ impl CtxSetConfig {
                 }
 
                 // Validate substring bounds
-                if let Some(TransformType::Substring(start, end)) = transform.get_transform_type() {
+                if let Some((start, end)) = transform.substring {
                     if start > end {
                         return Err(format!(
                             "vars[{}] '{}': substring start ({}) > end ({})",

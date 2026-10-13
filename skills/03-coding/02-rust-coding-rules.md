@@ -90,15 +90,17 @@ A graceful-degrade branch does three things:
 
 ```rust
 // Correct: data-plane fallback for an invariant the config layer should have caught
-TransformType::Replace { with, .. } => match compiled_replace {
-    Some(re) => Some(re.replace_all(value, with.as_str()).to_string()),
-    None => {
-        // Invariant: validate() compiles every Replace pattern; reaching
-        // here means the config bypassed validation. Fail-open via default.
-        plugin_log.push_err("transform regex missing");
-        None
-    }
-},
+if let Some(replace) = transform.replace.as_ref() {
+    return match compiled_replace {
+        Some(re) => Some(re.replace_all(value, replace.with.as_str()).to_string()),
+        None => {
+            // Invariant: validate() compiles every Replace pattern; reaching
+            // here means the config bypassed validation. Fail-open via default.
+            plugin_log.push_err("transform regex missing");
+            None
+        }
+    };
+}
 
 // Wrong: panic on the data plane — a misconfig kills every in-flight request
 None => panic!("compiled_transform_regex missing"),
