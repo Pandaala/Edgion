@@ -76,6 +76,61 @@ fn test_session_limit_constant() {
 }
 
 #[test]
+fn session_admission_exhaustion_reports_capacity() {
+    let permits = Arc::new(Semaphore::new(1));
+    let admitted = acquire_session_permit(&permits).unwrap();
+    assert_eq!(permits.available_permits(), 0);
+    assert_eq!(
+        acquire_session_permit(&permits).unwrap_err(),
+        UdpStatus::SessionLimitReached
+    );
+    drop(admitted);
+    assert_eq!(permits.available_permits(), 1);
+}
+
+#[test]
+fn session_admission_closed_reports_capacity() {
+    let permits = Arc::new(Semaphore::new(1));
+    permits.close();
+    assert_eq!(
+        acquire_session_permit(&permits).unwrap_err(),
+        UdpStatus::SessionLimitReached
+    );
+}
+
+#[test]
+fn upstream_socket_failure_reports_cause_and_releases_admission() {
+    for kind in [
+        std::io::ErrorKind::AddrInUse,
+        std::io::ErrorKind::PermissionDenied,
+        std::io::ErrorKind::Other,
+    ] {
+        let permits = Arc::new(Semaphore::new(1));
+        let admitted = acquire_session_permit(&permits).unwrap();
+        assert_eq!(permits.available_permits(), 0);
+        let result =
+            finish_upstream_socket::<()>(admitted, Err(std::io::Error::new(kind, "socket initialization failed")));
+        assert_eq!(result.unwrap_err(), UdpStatus::UpstreamSocketError);
+        assert_eq!(permits.available_permits(), 1);
+        assert!(acquire_session_permit(&permits).is_ok());
+    }
+}
+
+#[test]
+fn upstream_socket_success_retains_admission_until_owner_drops() {
+    let permits = Arc::new(Semaphore::new(1));
+    let admitted = acquire_session_permit(&permits).unwrap();
+    let initialized = finish_upstream_socket(admitted, Ok(())).unwrap();
+    assert_eq!(permits.available_permits(), 0);
+    assert_eq!(
+        acquire_session_permit(&permits).unwrap_err(),
+        UdpStatus::SessionLimitReached
+    );
+    drop(initialized);
+    assert_eq!(permits.available_permits(), 1);
+}
+
+#[test]
 fn test_upstream_bind_addr_matches_family() {
     // IPv4 upstream → IPv4 wildcard bind.
     let v4: SocketAddr = "127.0.0.1:8080".parse().unwrap();

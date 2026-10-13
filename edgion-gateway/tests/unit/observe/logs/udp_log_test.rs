@@ -25,11 +25,38 @@ fn udp_status_as_str_matches_log_field() {
         (UdpStatus::NoBackendResolved, "NoBackendResolved"),
         (UdpStatus::UnsafeUpstreamAddress, "unsafe upstream address"),
         (UdpStatus::SessionLimitReached, "SessionLimitReached"),
+        (UdpStatus::UpstreamSocketError, "UpstreamSocketError"),
         (UdpStatus::UpstreamSendError, "UpstreamSendError"),
         (UdpStatus::DownstreamSendError, "DownstreamSendError"),
     ];
     for (variant, expected) in cases {
         assert_eq!(variant.as_str(), *expected);
+    }
+}
+
+#[test]
+fn session_creation_failures_serialize_distinct_fixed_statuses() {
+    use crate::routes::udp::edgion_udp::UdpStatus;
+    for (status, expected) in [
+        (UdpStatus::SessionLimitReached, "SessionLimitReached"),
+        (UdpStatus::UpstreamSocketError, "UpstreamSocketError"),
+    ] {
+        let entry = UdpLogEntry::failure(9000, "192.0.2.1".to_owned(), 50000, status.as_str());
+        let value: serde_json::Value = serde_json::from_str(&entry.to_json()).unwrap();
+        assert_eq!(value["listener_port"], 9000);
+        assert!(value["direct_peer_ip"].is_string());
+        assert_eq!(value["direct_peer_port"], 50000);
+        assert_eq!(value["status"], expected);
+        assert!(value.get("upstream_addr").is_none());
+        for field in [
+            "session_duration_ms",
+            "packets_sent",
+            "packets_received",
+            "bytes_sent",
+            "bytes_received",
+        ] {
+            assert_eq!(value[field], 0);
+        }
     }
 }
 

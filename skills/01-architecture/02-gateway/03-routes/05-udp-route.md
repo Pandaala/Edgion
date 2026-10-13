@@ -53,6 +53,13 @@ mechanics to TCPRoute. See [SKILL.md → Shared L4 per-listener management](SKIL
 - Subsequent packets take the session fast path and reuse the pinned upstream without repeating route,
   plugin, or backend selection.
 - Sessions expire after 60 seconds of inactivity; each listener is capped at 10,000 sessions.
+- Session creation preserves its failure cause: admission denial records
+  `SessionLimitReached`, while upstream socket bind/registration failure records
+  `UpstreamSocketError` and releases the acquired permit before creating a session
+  or receiver. The packet handler forwards these fixed statuses through the
+  canonical UDP access log; both failures drop the datagram without retries or
+  raw OS error details. Access-log consumers should recognize the socket category
+  separately from capacity exhaustion.
 - Route or backend configuration changes therefore affect an existing client after its pinned session
   expires (or is otherwise removed), not on the next datagram.
 

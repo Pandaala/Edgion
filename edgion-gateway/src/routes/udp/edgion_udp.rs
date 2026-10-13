@@ -56,6 +56,7 @@ pub enum UdpStatus {
     NoBackendResolved,
     UnsafeUpstreamAddress,
     SessionLimitReached,
+    UpstreamSocketError,
     UpstreamSendError,
     DownstreamSendError,
 }
@@ -73,10 +74,27 @@ impl UdpStatus {
             Self::NoBackendResolved => "NoBackendResolved",
             Self::UnsafeUpstreamAddress => UNSAFE_UPSTREAM_ADDRESS_LOG,
             Self::SessionLimitReached => "SessionLimitReached",
+            Self::UpstreamSocketError => "UpstreamSocketError",
             Self::UpstreamSendError => "UpstreamSendError",
             Self::DownstreamSendError => "DownstreamSendError",
         }
     }
+}
+
+fn acquire_session_permit(permits: &Arc<Semaphore>) -> Result<OwnedSemaphorePermit, UdpStatus> {
+    permits
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| UdpStatus::SessionLimitReached)
+}
+
+/// Keep the admitted permit with the initialized socket, or release it on failure.
+fn finish_upstream_socket<T>(
+    permit: OwnedSemaphorePermit,
+    result: std::io::Result<T>,
+) -> Result<(OwnedSemaphorePermit, T), UdpStatus> {
+    let socket = result.map_err(|_| UdpStatus::UpstreamSocketError)?;
+    Ok((permit, socket))
 }
 
 /// Pick the wildcard bind address whose family matches the upstream.
@@ -387,18 +405,21 @@ impl EdgionUdpProxy {
             return;
         }
 
-        let Ok(session) = self
+        let session = match self
             .get_or_create_session(direct_peer_addr, upstream_addr, children)
             .await
-        else {
-            log_udp(&UdpLogEntry::failure(
-                self.listener_port,
-                direct_peer_ip,
-                direct_peer_port,
-                UdpStatus::SessionLimitReached.as_str(),
-            ))
-            .await;
-            return;
+        {
+            Ok(session) => session,
+            Err(status) => {
+                log_udp(&UdpLogEntry::failure(
+                    self.listener_port,
+                    direct_peer_ip,
+                    direct_peer_port,
+                    status.as_str(),
+                ))
+                .await;
+                return;
+            }
         };
 
         let send_result = session.upstream_socket.send_to(data, session.upstream_addr).await;
@@ -407,32 +428,34 @@ impl EdgionUdpProxy {
 
     /// Get or create a client session.
     ///
-    /// Returns `Err(())` if the session limit is reached, preventing resource
-    /// exhaustion from UDP reflection/amplification attacks.
+    /// Admission failure returns `SessionLimitReached`; upstream socket
+    /// initialization failure returns `UpstreamSocketError` and releases admission.
     async fn get_or_create_session(
         &self,
         direct_peer_addr: std::net::SocketAddr,
         upstream_addr: std::net::SocketAddr,
         children: &mut JoinSet<()>,
-    ) -> Result<Arc<ClientSession>, ()> {
+    ) -> Result<Arc<ClientSession>, UdpStatus> {
         if let Some(session) = self.client_sessions.get(&direct_peer_addr) {
             return Ok(session.value().clone());
         }
 
-        let Ok(session_permit) = self.session_permits.clone().try_acquire_owned() else {
-            if let Some(session) = self.client_sessions.get(&direct_peer_addr) {
-                return Ok(session.value().clone());
+        let session_permit = match acquire_session_permit(&self.session_permits) {
+            Ok(permit) => permit,
+            Err(status) => {
+                if let Some(session) = self.client_sessions.get(&direct_peer_addr) {
+                    return Ok(session.value().clone());
+                }
+                return Err(status);
             }
-            return Err(());
         };
 
         // Bind the upstream socket to the address family of the resolved upstream.
         // An IPv4-only socket cannot send to an IPv6 backend (send_to fails with
         // EINVAL), which would silently drop every packet for the session.
-        let upstream_socket = match UdpSocket::bind(upstream_bind_addr(upstream_addr)).await {
-            Ok(socket) => Arc::new(socket),
-            Err(_) => return Err(()),
-        };
+        let socket_result = UdpSocket::bind(upstream_bind_addr(upstream_addr)).await;
+        let (session_permit, upstream_socket) = finish_upstream_socket(session_permit, socket_result)?;
+        let upstream_socket = Arc::new(upstream_socket);
 
         let session = Arc::new(ClientSession {
             _session_permit: session_permit,
