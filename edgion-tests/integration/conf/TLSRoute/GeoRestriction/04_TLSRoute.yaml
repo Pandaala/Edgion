@@ -1,4 +1,4 @@
-# TLSRoute behind the Gateway's Stage-1 geo admission policy.
+# TLSRoute forwards through the Stage-1 policy to the existing real HTTPS backend.
 apiVersion: gateway.networking.k8s.io/v1
 kind: TLSRoute
 metadata:
@@ -6,14 +6,14 @@ metadata:
   namespace: edgion-test
 spec:
   parentRefs:
-    - name: tls-geo-gw
-      namespace: edgion-test
-      sectionName: tls-geo
-      port: 31953
+  - name: tls-geo-gw
+    namespace: edgion-test
+    sectionName: tls-geo
+    port: 31953
   hostnames:
-    - "*.geo.example.com"
+  - '*.geo.example.com'
   rules:
-    - backendRefs:
-        - name: test-tcp
-          port: 30010
-          weight: 100
+  - backendRefs:
+    - name: test-https-backend
+      port: 30051
+      weight: 100

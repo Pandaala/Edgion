@@ -345,11 +345,8 @@ async fn process_response_body(
     run_stream_processors(session, ctx, body, end_of_stream, sink).await;
 
     let delay = run_read_only_body_plugins(session, ctx, body, end_of_stream);
-<<<<<<< Updated upstream
-    crate::response_cache::lifecycle::capture_body(ctx, body.as_ref(), end_of_stream);
-=======
     abort_ip_body(ctx, body, sink).await?;
->>>>>>> Stashed changes
+    crate::response_cache::lifecycle::capture_body(ctx, body.as_ref(), end_of_stream);
     Ok(delay)
 }
 

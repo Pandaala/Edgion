@@ -132,15 +132,12 @@ impl WafCandidate {
 static NEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(0);
 
 pub struct PluginRuntime {
-<<<<<<< Updated upstream
     cache_identity: u64,
     cache_capabilities: super::entry_bundle::CacheCapabilities,
-=======
     required_ip: Vec<Arc<super::conditions::ip_refs::BoundIpPredicate>>,
     ip_view_required: bool,
     ip_unavailable_gate: Option<Arc<dyn RequestFilter>>,
     extension_checks: Vec<Arc<ExtensionRefFilter>>,
->>>>>>> Stashed changes
     /// Conservative construction-time capability, including conditional/nested consumers.
     requires_complete_request_body: bool,
     /// Effective executable membership, published only by successful typed construction.

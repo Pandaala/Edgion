@@ -79,17 +79,53 @@ async fn probe(src: &str, ctx: &TestContext) -> Verdict {
         Err(_) => return Verdict::Inconclusive("TLS handshake timed out".into()),
     };
 
-    let test_data = b"geo-tls-probe";
-    if let Err(e) = tls_stream.write_all(test_data).await {
-        return Verdict::Denied(format!("write failed post-handshake: {e}"));
+    const MARKER: &[u8] = b"geo-tls-probe";
+    let request = format!(
+        "POST /echo HTTP/1.1\r\nHost: {HOST}\r\nContent-Length: {}\r\nConnection: close\r\n\r\ngeo-tls-probe",
+        MARKER.len()
+    );
+    if let Err(error) = tls_stream.write_all(request.as_bytes()).await {
+        return Verdict::Denied(format!("write failed post-handshake: {error}"));
     }
-    let mut buf = vec![0u8; 1024];
-    match tokio::time::timeout(Duration::from_secs(2), tls_stream.read(&mut buf)).await {
-        Ok(Ok(0)) => Verdict::Denied("connection closed (EOF) after TLS handshake".to_string()),
-        Ok(Ok(n)) => Verdict::Echoed(n),
-        Ok(Err(e)) => Verdict::Denied(format!("read failed: {e}")),
-        Err(_) => Verdict::Inconclusive("read timed out".to_string()),
+    let mut bytes = [0u8; 4096];
+    let mut used = 0;
+    let read = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if used == bytes.len() {
+                return Verdict::Inconclusive("HTTPS echo exceeded the 4096-byte probe cap".into());
+            }
+            match tls_stream.read(&mut bytes[used..]).await {
+                Ok(0) if used > 0 && !bytes[..used].windows(4).any(|part| part == b"\r\n\r\n") => {
+                    return Verdict::Inconclusive("connection closed with malformed or incomplete HTTP".into());
+                }
+                Ok(0) => return Verdict::Denied("connection closed before the application echo".into()),
+                Ok(count) => {
+                    used += count;
+                    match echo_complete(&bytes[..used]) {
+                        Ok(true) => return Verdict::Echoed(MARKER.len()),
+                        Ok(false) => {}
+                        Err(reason) => return Verdict::Inconclusive(reason.into()),
+                    }
+                }
+                Err(error) => return Verdict::Denied(format!("read failed: {error}")),
+            }
+        }
+    })
+    .await;
+    read.unwrap_or_else(|_| Verdict::Inconclusive("HTTPS echo timed out".into()))
+}
+
+/// A real application echo proves forwarding; arbitrary TLS/HTTP bytes cannot pass.
+fn echo_complete(bytes: &[u8]) -> Result<bool, &'static str> {
+    let Some(header_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") else {
+        return Ok(false);
+    };
+    if !bytes.starts_with(b"HTTP/1.1 200 ") && !bytes.starts_with(b"HTTP/1.0 200 ") {
+        return Err("HTTPS echo did not return HTTP 200");
     }
+    Ok(bytes[header_end + 4..]
+        .windows(b"Echo: geo-tls-probe".len())
+        .any(|window| window == b"Echo: geo-tls-probe"))
 }
 
 async fn geoip_denied_total(ctx: &TestContext, reason: &str) -> f64 {
@@ -104,8 +140,8 @@ async fn geoip_denied_total(ctx: &TestContext, reason: &str) -> f64 {
     )
 }
 
-async fn apply_geo_chain(ctx: &TestContext, denied_country: &str) -> Result<(), String> {
-    let yaml = format!(
+fn geo_chain_yaml(denied_country: &str) -> String {
+    format!(
         r#"apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:
@@ -120,10 +156,8 @@ spec:
         profiles:
           default:
             defaultAction: allow
-            deny:
-              - name: deny-unrelated-source
-                cidrs:
-                  - "127.0.0.9/32"
+            denyRefs:
+              - name: acl-tls-geo-deny-deny-b8fb957b20
     - type: GeoIpLocation
       config:
         defaultAction: allow
@@ -135,8 +169,11 @@ spec:
                 key: country
                 values: ["{denied_country}"]
 "#
-    );
-    ctx.apply_yaml(&yaml).await
+    )
+}
+
+async fn apply_geo_chain(ctx: &TestContext, denied_country: &str) -> Result<(), String> {
+    ctx.apply_yaml(&geo_chain_yaml(denied_country)).await
 }
 
 impl TlsGeoRestrictionTestSuite {
@@ -147,9 +184,10 @@ impl TlsGeoRestrictionTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
+                    let check = tokio::time::timeout(Duration::from_secs(30), async {
                     let denied_country = if k8s_mode() { "US" } else { "RU" };
                     if let Err(e) = apply_geo_chain(&ctx, denied_country).await {
-                        return TestResult::failed(start.elapsed(), format!("apply: {e}"));
+                        return Err(format!("apply: {e}"));
                     }
                     // Delta-based, not absolute: a bare `>= 1.0` on the first
                     // `Denied` result would be vulnerable to the same race
@@ -167,10 +205,7 @@ impl TlsGeoRestrictionTestSuite {
                             Verdict::Denied(reason) => {
                                 let current = geoip_denied_total(&ctx, "deny_country").await;
                                 if current - baseline >= 1.0 {
-                                    return TestResult::passed_with_message(
-                                        start.elapsed(),
-                                        format!("denied ({reason}), metric={current}"),
-                                    );
+                                    return Ok(format!("denied ({reason}), metric={current}"));
                                 }
                                 last = format!(
                                     "{reason} (edgion_geoip_denied_total{{layer=\"stage1\",reason=\"deny_country\"}} not yet bumped: {current}, baseline {baseline})"
@@ -181,15 +216,17 @@ impl TlsGeoRestrictionTestSuite {
                         }
                         tokio::time::sleep(Duration::from_millis(200)).await;
                     }
-                    TestResult::failed(
-                        start.elapsed(),
-                        format!(
-                            "RU source was never denied with edgion_geoip_denied_total{{layer=\"stage1\",reason=\"deny_country\"}} bumped; last: {last}"
-                        ),
-                    )
+                    Err(format!("RU source was never denied with edgion_geoip_denied_total{{layer=\"stage1\",reason=\"deny_country\"}} bumped; last: {last}"))
+                    }).await.unwrap_or_else(|_| Err("country verification timed out after 30s".into()));
+                    let cleanup = tokio::time::timeout(Duration::from_secs(12), restore_geo_fixture(&ctx))
+                        .await.unwrap_or_else(|_| Err("country consumer cleanup timed out after 12s".into()));
+                    match (check, cleanup) {
+                        (Ok(message), Ok(())) => TestResult::passed_with_message(start.elapsed(), format!("{message}; original policy restored")),
+                        (check, cleanup) => TestResult::failed(start.elapsed(), format!("verification={check:?}; cleanup={cleanup:?}")),
+                    }
                 })
             },
-        )
+        ).with_timeout(Duration::from_secs(60))
     }
 
     fn geo_allow_cn_unaffected() -> TestCase {
@@ -199,27 +236,39 @@ impl TlsGeoRestrictionTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    if let Err(e) = apply_geo_chain(&ctx, "RU").await {
-                        return TestResult::failed(start.elapsed(), format!("apply: {e}"));
-                    }
-                    let mut last = String::new();
-                    for _ in 0..20 {
-                        match probe(test_source("127.0.0.1"), &ctx).await {
-                            Verdict::Echoed(n) => {
-                                return TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("allowed, echoed {n} bytes"),
-                                )
-                            }
-                            Verdict::Denied(reason) => last = format!("unexpectedly denied: {reason}"),
-                            Verdict::Inconclusive(reason) => last = reason,
+                    let check = tokio::time::timeout(Duration::from_secs(30), async {
+                        if let Err(e) = apply_geo_chain(&ctx, "RU").await {
+                            return Err(format!("apply: {e}"));
                         }
-                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        let mut last = String::new();
+                        for _ in 0..20 {
+                            match probe(test_source("127.0.0.1"), &ctx).await {
+                                Verdict::Echoed(n) => return Ok(format!("allowed, echoed {n} bytes")),
+                                Verdict::Denied(reason) => last = format!("unexpectedly denied: {reason}"),
+                                Verdict::Inconclusive(reason) => last = reason,
+                            }
+                            tokio::time::sleep(Duration::from_millis(200)).await;
+                        }
+                        Err(format!("CN source was never allowed; last: {last}"))
+                    })
+                    .await
+                    .unwrap_or_else(|_| Err("country verification timed out after 30s".into()));
+                    let cleanup = tokio::time::timeout(Duration::from_secs(12), restore_geo_fixture(&ctx))
+                        .await
+                        .unwrap_or_else(|_| Err("country consumer cleanup timed out after 12s".into()));
+                    match (check, cleanup) {
+                        (Ok(message), Ok(())) => TestResult::passed_with_message(
+                            start.elapsed(),
+                            format!("{message}; original policy restored"),
+                        ),
+                        (check, cleanup) => {
+                            TestResult::failed(start.elapsed(), format!("verification={check:?}; cleanup={cleanup:?}"))
+                        }
                     }
-                    TestResult::failed(start.elapsed(), format!("CN source was never allowed; last: {last}"))
                 })
             },
         )
+        .with_timeout(Duration::from_secs(60))
     }
 }
 
@@ -376,5 +425,60 @@ async fn cleanup_geo_resources(ctx: &TestContext, cidr: &str) -> Result<(), Stri
     match (list, consumer) {
         (Ok(()), Ok(())) => Ok(()),
         (list, consumer) => Err(format!("list cleanup={list:?}; consumer cleanup={consumer:?}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_tls_geo_chain_has_valid_reference_only_acl_and_country_rule() {
+        use edgion_resources::resources::edgion_plugins::PluginValidation;
+        use edgion_resources::resources::edgion_stream_plugins::EdgionStreamPlugin;
+
+        for country in ["RU", "US"] {
+            let yaml = geo_chain_yaml(country);
+            let policy: edgion_resources::EdgionStreamPlugins = serde_yaml::from_str(&yaml).unwrap();
+            assert_eq!(policy.metadata.name.as_deref(), Some("tls-geo-deny"));
+            assert_eq!(policy.metadata.namespace.as_deref(), Some("edgion-test"));
+            let entries = policy.spec.plugins.as_ref().unwrap();
+            assert_eq!(entries.len(), 2);
+            match &entries[0].plugin {
+                EdgionStreamPlugin::GlobalConnectionIpRestriction(config) => {
+                    assert!(config.validation_error().is_none())
+                }
+                _ => panic!("expected GCIR first"),
+            }
+            match &entries[1].plugin {
+                EdgionStreamPlugin::GeoIpLocation(config) => assert!(config.validation_error().is_none()),
+                _ => panic!("expected Geo second"),
+            }
+            let value: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+            let rules = &value["spec"]["plugins"][0]["config"]["profiles"]["default"];
+            assert_eq!(rules["defaultAction"].as_str(), Some("allow"));
+            assert_eq!(
+                rules["denyRefs"][0]["name"].as_str(),
+                Some("acl-tls-geo-deny-deny-b8fb957b20")
+            );
+            assert!(rules.get("allow").is_none());
+            assert!(rules.get("deny").is_none());
+            assert_eq!(
+                value["spec"]["plugins"][1]["config"]["denyRuleGroups"][0]["rules"][0]["values"][0].as_str(),
+                Some(country)
+            );
+        }
+    }
+
+    #[test]
+    fn application_echo_requires_success_and_exact_body_marker() {
+        assert_eq!(echo_complete(b"HTTP/1.1 200 OK\r\n\r\nEcho: geo-tls-probe"), Ok(true));
+        assert_eq!(echo_complete(b"HTTP/1.1 200 OK\r\n\r\nEcho: another-probe"), Ok(false));
+        assert!(echo_complete(b"HTTP/1.1 500 Error\r\n\r\nEcho: geo-tls-probe").is_err());
+        assert_eq!(
+            echo_complete(b"HTTP/1.1 200 OK\r\nX-Marker: Echo: geo-tls-probe\r\n\r\n"),
+            Ok(false)
+        );
+        assert_eq!(echo_complete(b"HTTP/1.1 200 OK\r\n\r\nEcho: geo-tls-"), Ok(false));
     }
 }

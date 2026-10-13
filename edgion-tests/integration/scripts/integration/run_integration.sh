@@ -2271,6 +2271,7 @@ run_all_tests() {
         run_test "EdgionPlugins_RateLimitLocal" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RateLimitLocal" || test_failed=true
         run_test "EdgionPlugins_RateLimitRedis" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RateLimitRedis" || test_failed=true
         run_test "EdgionPlugins_GraphqlRateLimit" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GraphqlRateLimit" || test_failed=true
+        run_test "EdgionPlugins_RestToGraphql" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RestToGraphql" || test_failed=true
         run_test "EdgionPlugins_GraphqlGuard" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GraphqlGuard" || test_failed=true
         run_test "EdgionPlugins_ResponseCache" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i ResponseCache" || test_failed=true
         run_test "EdgionPlugins_GraphqlSafelist" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GraphqlSafelist" || test_failed=true

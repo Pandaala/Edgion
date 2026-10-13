@@ -310,6 +310,122 @@ mod capability_tests {
     }
 
     #[test]
+    fn tls_geo_stage1_uses_supported_passthrough_without_weakening_terminate_gates() {
+        let gateway: edgion_resources::Gateway = serde_yaml::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/conf/TLSRoute/GeoRestriction/02_Gateway.yaml"
+        )))
+        .unwrap();
+        let value: serde_json::Value = serde_json::to_value(gateway).unwrap();
+        assert_eq!(value["spec"]["listeners"][0]["tls"]["mode"], "Passthrough");
+        assert!(value["spec"]["listeners"][0]["tls"].get("certificateRefs").is_none());
+        let route: edgion_resources::TLSRoute = serde_yaml::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/conf/TLSRoute/GeoRestriction/04_TLSRoute.yaml"
+        )))
+        .unwrap();
+        let value: serde_json::Value = serde_json::to_value(route).unwrap();
+        assert_eq!(
+            value["spec"]["rules"][0]["backendRefs"][0]["name"],
+            "test-https-backend"
+        );
+        assert_eq!(value["spec"]["rules"][0]["backendRefs"][0]["port"], 30051);
+        let source = include_str!("test_client.rs");
+        let gate = source
+            .rsplit("    if !suites::tls_route::tls_route_terminate_tests_enabled()")
+            .next()
+            .unwrap()
+            .split("    {\n        let reason")
+            .next()
+            .unwrap();
+        assert!(!gate.contains("\"TLSRoute/GeoRestriction\""));
+        assert!(gate.contains("\"TLSRoute/Basic\""));
+        assert!(gate.contains("\"TLSRoute/StreamPlugins\""));
+    }
+
+    #[test]
+    fn post_run_geo_fixtures_decode_as_canonical_native_and_kubernetes_types() {
+        use serde::Deserialize;
+        use std::path::Path;
+
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let paths = [
+            "integration/conf/TCPRoute/GeoRestriction/00_EdgionConfigData_geo-stream-chain-deny.yaml",
+            "integration/conf/TCPRoute/GeoRestriction/00_EdgionConfigData_geo-stream-loopback-allow.yaml",
+            "k8s/conf/TCPRoute/GeoRestriction/00_EdgionConfigData_geo-stream-chain-deny.yaml",
+            "k8s/conf/TCPRoute/GeoRestriction/00_EdgionConfigData_geo-stream-chain-deny-other.yaml",
+            "k8s/conf/TCPRoute/GeoRestriction/00_EdgionConfigData_geo-stream-loopback-allow.yaml",
+            "integration/conf/TLSRoute/GeoRestriction/02_Gateway.yaml",
+            "integration/conf/TLSRoute/GeoRestriction/04_TLSRoute.yaml",
+            "integration/conf/TLSRoute/GeoRestriction/Service_test-https-backend.yaml",
+            "integration/conf/TLSRoute/GeoRestriction/EndpointSlice_test-https-backend.yaml",
+            "k8s/conf/TLSRoute/GeoRestriction/resources.yaml",
+            "k8s/conf/TLSRoute/GeoRestriction/Service_test-https-backend.yaml",
+            "integration/conf/EdgionPlugins/ResponseCache/DynamicTest/updates/target/02_EndpointSlice.yaml",
+        ];
+        let mut count = 0;
+        for path in paths {
+            let yaml = std::fs::read_to_string(root.join(path)).unwrap();
+            for document in serde_yaml::Deserializer::from_str(&yaml) {
+                let value = serde_yaml::Value::deserialize(document).unwrap();
+                let expected_namespace = if path.starts_with("integration/conf/EdgionPlugins/ResponseCache/") {
+                    "edgion-default"
+                } else {
+                    "edgion-test"
+                };
+                assert_eq!(
+                    value["metadata"]["namespace"].as_str(),
+                    Some(expected_namespace),
+                    "{path}"
+                );
+                match value["kind"].as_str().unwrap() {
+                    "EdgionConfigData" => {
+                        let _: edgion_resources::EdgionConfigData = serde_yaml::from_value(value).unwrap();
+                    }
+                    "EdgionStreamPlugins" => {
+                        let _: edgion_resources::EdgionStreamPlugins = serde_yaml::from_value(value).unwrap();
+                    }
+                    "Gateway" => {
+                        let _: edgion_resources::Gateway = serde_yaml::from_value(value).unwrap();
+                    }
+                    "TLSRoute" => {
+                        let _: edgion_resources::TLSRoute = serde_yaml::from_value(value).unwrap();
+                    }
+                    "Service" => {
+                        let _: k8s_openapi::api::core::v1::Service = serde_yaml::from_value(value).unwrap();
+                    }
+                    "EndpointSlice" => {
+                        let _: k8s_openapi::api::discovery::v1::EndpointSlice = serde_yaml::from_value(value).unwrap();
+                    }
+                    other => panic!("unexpected fixture kind {other}"),
+                }
+                count += 1;
+            }
+        }
+        assert_eq!(count, 14);
+        assert!(!root
+            .join("integration/conf/TLSRoute/GeoRestriction/03_EdgionTls.yaml")
+            .exists());
+    }
+
+    #[test]
+    fn response_cache_target_update_only_replaces_origin_port() {
+        let initial: k8s_openapi::api::discovery::v1::EndpointSlice = serde_yaml::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/conf/EdgionPlugins/ResponseCache/DynamicTest/initial/02_EndpointSlice.yaml"
+        )))
+        .unwrap();
+        let target: k8s_openapi::api::discovery::v1::EndpointSlice = serde_yaml::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/conf/EdgionPlugins/ResponseCache/DynamicTest/updates/target/02_EndpointSlice.yaml"
+        )))
+        .unwrap();
+        let mut expected = serde_json::to_value(initial).unwrap();
+        expected["ports"][0]["port"] = serde_json::json!(30002);
+        assert_eq!(serde_json::to_value(target).unwrap(), expected);
+    }
+
+    #[test]
     fn dynamic_default_coverage_requires_registered_id_and_actual_enumeration() {
         let dispatcher = dynamic_dispatcher_fixture();
         let targeted = r#"
@@ -892,7 +1008,21 @@ run_test "Dyn_Unknown" "client --dynamic-scenario GraphqlRateLimitTypo" || test_
         assert!(prepare.contains(r#"--test "$ignored_test""#));
         assert!(prepare.contains("--no-run"));
         assert!(prepare.contains("stable_ignored_test_bin"));
-        assert!(prepare.contains(r#"export CARGO_TARGET_DIR="${PROJECT_ROOT}/target""#));
+        assert!(prepare.contains(r#"source "${SCRIPT_DIR}/artifact_paths.sh""#));
+        assert!(prepare.contains("edgion_resolve_artifacts"));
+        assert_eq!(
+            prepare
+                .matches(r#"export CARGO_TARGET_DIR="$EDGION_TEST_TARGET_DIR""#)
+                .count(),
+            2
+        );
+        let resolver = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/scripts/utils/artifact_paths.sh"
+        ));
+        assert!(resolver.contains(r#"EDGION_TEST_TARGET_DIR="${PROJECT_ROOT}/target""#));
+        assert!(resolver.contains(r#"EDGION_TEST_TARGET_DIR="${PROJECT_ROOT}/target/llvm-cov-target""#));
+        assert!(resolver.contains(r#"EDGION_TEST_BIN_DIR="${EDGION_TEST_TARGET_DIR}/${EDGION_TEST_PROFILE}""#));
     }
 
     #[test]
@@ -3844,7 +3974,6 @@ async fn main() -> Result<()> {
                 | "TLSRoute/StreamPlugins"
                 | "TLSRoute/MultiSNI"
                 | "TLSRoute/BothAbsentParentRef"
-                | "TLSRoute/GeoRestriction"
         )
     {
         let reason = format!("suite `{suite}` requires TLSRouteModeTerminate, which is not currently supported");

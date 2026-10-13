@@ -1971,6 +1971,7 @@ dependencies = [
  "http-body",
  "instant-acme",
  "jsonwebtoken",
+ "k8s-openapi",
  "ldap3",
  "parking_lot",
  "percent-encoding",

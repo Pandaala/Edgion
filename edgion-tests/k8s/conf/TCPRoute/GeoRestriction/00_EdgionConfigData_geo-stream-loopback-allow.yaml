@@ -1,0 +1,14 @@
+# Explicit collection owned by the TCP Geo chain verification cases.
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: geo-stream-loopback-allow
+  namespace: edgion-test
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+        - name: k8s-pod-network
+          cidrs:
+            - "192.168.0.0/16"

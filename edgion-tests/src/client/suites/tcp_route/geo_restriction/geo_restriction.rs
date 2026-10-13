@@ -110,11 +110,29 @@ async fn probe_stream(stream: &mut TcpStream, test_data: &[u8]) -> TcpEchoProbe 
         return TcpEchoProbe::Closed(format!("write failed: {e}"));
     }
 
-    let mut buf = vec![0u8; 1024];
-    match tokio::time::timeout(Duration::from_secs(1), stream.read(&mut buf)).await {
-        Ok(Ok(n)) if n > 0 => TcpEchoProbe::Echoed(n),
-        Ok(Ok(_)) => TcpEchoProbe::Closed("connection closed with EOF".to_string()),
-        Ok(Err(e)) => TcpEchoProbe::Closed(format!("read failed: {e}")),
+    read_exact_echo(stream, test_data).await
+}
+
+async fn read_exact_echo<R: tokio::io::AsyncRead + Unpin>(reader: &mut R, expected: &[u8]) -> TcpEchoProbe {
+    let read = async {
+        let mut received = vec![0; expected.len()];
+        let mut offset = 0;
+        while offset < expected.len() {
+            match reader.read(&mut received[offset..]).await {
+                Ok(0) => return TcpEchoProbe::Closed("connection closed before complete echo".to_string()),
+                Ok(n) => {
+                    offset += n;
+                    if received[..offset] != expected[..offset] {
+                        return TcpEchoProbe::Inconclusive("received bytes differ from expected echo".to_string());
+                    }
+                }
+                Err(e) => return TcpEchoProbe::Closed(format!("read failed: {e}")),
+            }
+        }
+        TcpEchoProbe::Echoed(offset)
+    };
+    match tokio::time::timeout(Duration::from_secs(1), read).await {
+        Ok(verdict) => verdict,
         Err(_) => TcpEchoProbe::Inconclusive("read timed out".to_string()),
     }
 }
@@ -309,6 +327,38 @@ async fn wait_for_esp_accepted(ctx: &TestContext, want_status: &str) -> Result<S
     Err(format!("Accepted never reached '{want_status}'; last: {last}"))
 }
 
+/// Load one explicit suite-owned collection; consumer application stays separate.
+async fn apply_chain_list(ctx: &TestContext, relative_fixture: &str) -> Result<(), String> {
+    let root = if k8s_mode() { "k8s" } else { "integration" };
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(root)
+        .join("conf/TCPRoute/GeoRestriction")
+        .join(relative_fixture);
+    let yaml = tokio::fs::read_to_string(path)
+        .await
+        .map_err(|error| error.to_string())?;
+    let yaml = if k8s_mode() {
+        crate::suites::k8s_peer_identity::render_geo_template(&yaml)?
+    } else {
+        yaml
+    };
+    ctx.apply_yaml(&yaml).await
+}
+
+/// Restore both original inputs, even if one attempt fails or times out.
+async fn cleanup_chain_resources(ctx: &TestContext, relative_fixture: &str) -> Result<(), String> {
+    let list = tokio::time::timeout(Duration::from_secs(12), apply_chain_list(ctx, relative_fixture))
+        .await
+        .unwrap_or_else(|_| Err("chain list cleanup timed out after 12s".into()));
+    let consumer = tokio::time::timeout(Duration::from_secs(12), restore_geo_fixture(ctx))
+        .await
+        .unwrap_or_else(|_| Err("chain consumer cleanup timed out after 12s".into()));
+    match (list, consumer) {
+        (Ok(()), Ok(())) => Ok(()),
+        (list, consumer) => Err(format!("list cleanup={list:?}; consumer cleanup={consumer:?}")),
+    }
+}
+
 async fn apply_esp(ctx: &TestContext, plugins_yaml: &str) -> Result<(), String> {
     let rendered;
     let plugins_yaml = if k8s_mode() {
@@ -371,15 +421,15 @@ const GEO_DENY_OTHER_CIDR: &str = "    - type: GeoIpLocation\n      config:\n   
 
 const GEO_PARSE_ONLY: &str = "    - type: GeoIpLocation\n      config: {}\n";
 
-const CHAIN_IP_DENY_THEN_GEO: &str = "    - type: GlobalConnectionIpRestriction\n      config:\n        enable: true\n        activeProfile: default\n        profiles:\n          default:\n            defaultAction: allow\n            deny:\n              - name: deny-ru-source\n                cidrs:\n                  - \"127.0.0.5/32\"\n    - type: GeoIpLocation\n      config:\n        defaultAction: allow\n        failOpen: false\n        denyRuleGroups:\n          - name: block-ru\n            rules:\n              - source: DirectPeerIp\n                key: country\n                values: [\"RU\"]\n";
+const CHAIN_IP_DENY_THEN_GEO: &str = "    - type: GlobalConnectionIpRestriction\n      config:\n        enable: true\n        activeProfile: default\n        profiles:\n          default:\n            defaultAction: allow\n            denyRefs:\n              - name: geo-stream-chain-deny\n    - type: GeoIpLocation\n      config:\n        defaultAction: allow\n        failOpen: false\n        denyRuleGroups:\n          - name: block-ru\n            rules:\n              - source: DirectPeerIp\n                key: country\n                values: [\"RU\"]\n";
 
-const CHAIN_IP_DENY_THEN_GEO_K8S: &str = "    - type: GlobalConnectionIpRestriction\n      config:\n        enable: true\n        activeProfile: default\n        profiles:\n          default:\n            defaultAction: allow\n            deny:\n              - name: deny-k8s-source\n                cidrs:\n                  - \"192.168.0.0/16\"\n    - type: GeoIpLocation\n      config:\n        defaultAction: allow\n        failOpen: false\n        denyRuleGroups:\n          - name: block-k8s-peer-country\n            rules:\n              - source: DirectPeerIp\n                key: country\n                values: [\"US\"]\n";
+const CHAIN_IP_DENY_THEN_GEO_K8S: &str = "    - type: GlobalConnectionIpRestriction\n      config:\n        enable: true\n        activeProfile: default\n        profiles:\n          default:\n            defaultAction: allow\n            denyRefs:\n              - name: geo-stream-chain-deny\n    - type: GeoIpLocation\n      config:\n        defaultAction: allow\n        failOpen: false\n        denyRuleGroups:\n          - name: block-k8s-peer-country\n            rules:\n              - source: DirectPeerIp\n                key: country\n                values: [\"US\"]\n";
 
-const CHAIN_ALLOW_K8S: &str = "    - type: GlobalConnectionIpRestriction\n      config:\n        enable: true\n        activeProfile: default\n        profiles:\n          default:\n            defaultAction: allow\n            deny:\n              - name: deny-other-source\n                cidrs:\n                  - \"10.0.0.0/8\"\n    - type: GeoIpLocation\n      config:\n        defaultAction: allow\n        failOpen: false\n        denyRuleGroups:\n          - name: block-ru\n            rules:\n              - source: DirectPeerIp\n                key: country\n                values: [\"RU\"]\n";
+const CHAIN_ALLOW_K8S: &str = "    - type: GlobalConnectionIpRestriction\n      config:\n        enable: true\n        activeProfile: default\n        profiles:\n          default:\n            defaultAction: allow\n            denyRefs:\n              - name: geo-stream-chain-deny-other\n    - type: GeoIpLocation\n      config:\n        defaultAction: allow\n        failOpen: false\n        denyRuleGroups:\n          - name: block-ru\n            rules:\n              - source: DirectPeerIp\n                key: country\n                values: [\"RU\"]\n";
 
-const GCIR_ONLY_LOOPBACK_ALLOW: &str = "    - type: GlobalConnectionIpRestriction\n      config:\n        enable: true\n        activeProfile: default\n        profiles:\n          default:\n            defaultAction: deny\n            allow:\n              - name: loopback\n                cidrs:\n                  - \"127.0.0.0/8\"\n";
+const GCIR_ONLY_LOOPBACK_ALLOW: &str = "    - type: GlobalConnectionIpRestriction\n      config:\n        enable: true\n        activeProfile: default\n        profiles:\n          default:\n            defaultAction: deny\n            allowRefs:\n              - name: geo-stream-loopback-allow\n";
 
-const GCIR_ONLY_K8S_ALLOW: &str = "    - type: GlobalConnectionIpRestriction\n      config:\n        enable: true\n        activeProfile: default\n        profiles:\n          default:\n            defaultAction: deny\n            allow:\n              - name: k8s-pod-network\n                cidrs:\n                  - \"192.168.0.0/16\"\n";
+const GCIR_ONLY_K8S_ALLOW: &str = "    - type: GlobalConnectionIpRestriction\n      config:\n        enable: true\n        activeProfile: default\n        profiles:\n          default:\n            defaultAction: deny\n            allowRefs:\n              - name: geo-stream-loopback-allow\n";
 
 impl TcpGeoRestrictionTestSuite {
     /// A bare `denyRuleGroups`/country hit denies at the "tcp" layer, and
@@ -606,7 +656,7 @@ impl TcpGeoRestrictionTestSuite {
     fn chain_ip_deny_precedes_geo() -> TestCase {
         TestCase::new(
             "chain_ip_deny_precedes_geo",
-            "a chained GlobalConnectionIpRestriction deny is terminal; GeoIpLocation never runs",
+            "first plugin (GlobalConnectionIpRestriction) denies before the GeoIpLocation entry",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -615,24 +665,39 @@ impl TcpGeoRestrictionTestSuite {
                     } else {
                         CHAIN_IP_DENY_THEN_GEO
                     };
-                    if let Err(e) = apply_esp(&ctx, config).await {
-                        return TestResult::failed(start.elapsed(), format!("apply: {e}"));
-                    }
-                    let addr = ctx.tcp_addr();
-                    match wait_for_non_geo_denial(&ctx, test_source("127.0.0.5"), &addr, b"chain-ip-deny").await {
-                        Ok(msg) => TestResult::passed_with_message(start.elapsed(), format!("denied ({msg})")),
-                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    let fixture = "00_EdgionConfigData_geo-stream-chain-deny.yaml";
+                    let check = tokio::time::timeout(Duration::from_secs(30), async {
+                        apply_chain_list(&ctx, fixture).await?;
+                        apply_esp(&ctx, config).await?;
+                        wait_for_esp_accepted(&ctx, "True").await?;
+                        let addr = ctx.tcp_addr();
+                        wait_for_non_geo_denial(&ctx, test_source("127.0.0.5"), &addr, b"chain-ip-deny")
+                            .await
+                            .map(|message| format!("denied ({message})"))
+                    })
+                    .await
+                    .unwrap_or_else(|_| Err("chain verification timed out after 30s".into()));
+                    let cleanup = cleanup_chain_resources(&ctx, fixture).await;
+                    match (check, cleanup) {
+                        (Ok(message), Ok(())) => TestResult::passed_with_message(
+                            start.elapsed(),
+                            format!("{message}; original resources restored"),
+                        ),
+                        (check, cleanup) => {
+                            TestResult::failed(start.elapsed(), format!("verification={check:?}; cleanup={cleanup:?}"))
+                        }
                     }
                 })
             },
         )
+        .with_timeout(Duration::from_secs(65))
     }
 
     /// Same chain, a source matching neither stage passes both.
     fn chain_allows_both() -> TestCase {
         TestCase::new(
             "chain_allows_both",
-            "a source matching neither the IP nor the geo stage is allowed",
+            "source outside IP deny and geo deny is allowed by the chain",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -641,21 +706,36 @@ impl TcpGeoRestrictionTestSuite {
                     } else {
                         CHAIN_IP_DENY_THEN_GEO
                     };
-                    if let Err(e) = apply_esp(&ctx, config).await {
-                        return TestResult::failed(start.elapsed(), format!("apply: {e}"));
-                    }
-                    let addr = ctx.tcp_addr();
-                    let result = match wait_for_echo(test_source("127.0.0.1"), &addr, b"chain-allow").await {
-                        Ok(n) => TestResult::passed_with_message(start.elapsed(), format!("allowed, echoed {n} bytes")),
-                        Err(e) => TestResult::failed(start.elapsed(), e),
+                    let fixture = if k8s_mode() {
+                        "00_EdgionConfigData_geo-stream-chain-deny-other.yaml"
+                    } else {
+                        "00_EdgionConfigData_geo-stream-chain-deny.yaml"
                     };
-                    // Restore a known-good baseline for whatever runs next.
-                    let baseline = if k8s_mode() { GEO_DENY_K8S_PEER } else { GEO_DENY_RU };
-                    let _ = apply_esp(&ctx, baseline).await;
-                    result
+                    let check = tokio::time::timeout(Duration::from_secs(30), async {
+                        apply_chain_list(&ctx, fixture).await?;
+                        apply_esp(&ctx, config).await?;
+                        wait_for_esp_accepted(&ctx, "True").await?;
+                        let addr = ctx.tcp_addr();
+                        wait_for_echo(test_source("127.0.0.1"), &addr, b"chain-allow")
+                            .await
+                            .map(|n| format!("allowed, echoed {n} bytes"))
+                    })
+                    .await
+                    .unwrap_or_else(|_| Err("chain verification timed out after 30s".into()));
+                    let cleanup = cleanup_chain_resources(&ctx, fixture).await;
+                    match (check, cleanup) {
+                        (Ok(message), Ok(())) => TestResult::passed_with_message(
+                            start.elapsed(),
+                            format!("{message}; original resources restored"),
+                        ),
+                        (check, cleanup) => {
+                            TestResult::failed(start.elapsed(), format!("verification={check:?}; cleanup={cleanup:?}"))
+                        }
+                    }
                 })
             },
         )
+        .with_timeout(Duration::from_secs(65))
     }
 
     /// No `GeoIpLocation` plugin at all: byte-for-byte plain
@@ -672,21 +752,32 @@ impl TcpGeoRestrictionTestSuite {
                     } else {
                         GCIR_ONLY_LOOPBACK_ALLOW
                     };
-                    if let Err(e) = apply_esp(&ctx, config).await {
-                        return TestResult::failed(start.elapsed(), format!("apply: {e}"));
+                    let fixture = "00_EdgionConfigData_geo-stream-loopback-allow.yaml";
+                    let check = tokio::time::timeout(Duration::from_secs(30), async {
+                        apply_chain_list(&ctx, fixture).await?;
+                        apply_esp(&ctx, config).await?;
+                        wait_for_esp_accepted(&ctx, "True").await?;
+                        let addr = ctx.tcp_addr();
+                        wait_for_echo(test_source("127.0.0.1"), &addr, b"no-geo")
+                            .await
+                            .map(|n| format!("allowed, echoed {n} bytes"))
+                    })
+                    .await
+                    .unwrap_or_else(|_| Err("chain verification timed out after 30s".into()));
+                    let cleanup = cleanup_chain_resources(&ctx, fixture).await;
+                    match (check, cleanup) {
+                        (Ok(message), Ok(())) => TestResult::passed_with_message(
+                            start.elapsed(),
+                            format!("{message}; original resources restored"),
+                        ),
+                        (check, cleanup) => {
+                            TestResult::failed(start.elapsed(), format!("verification={check:?}; cleanup={cleanup:?}"))
+                        }
                     }
-                    let addr = ctx.tcp_addr();
-                    let result = match wait_for_echo(test_source("127.0.0.1"), &addr, b"no-geo").await {
-                        Ok(n) => TestResult::passed_with_message(start.elapsed(), format!("allowed, echoed {n} bytes")),
-                        Err(e) => TestResult::failed(start.elapsed(), e),
-                    };
-                    // Restore a known-good baseline for whatever runs next.
-                    let baseline = if k8s_mode() { GEO_DENY_K8S_PEER } else { GEO_DENY_RU };
-                    let _ = apply_esp(&ctx, baseline).await;
-                    result
                 })
             },
         )
+        .with_timeout(Duration::from_secs(65))
     }
 
     /// Bare listener (no TCPRoute at all): the connection is evaluated purely
@@ -886,5 +977,165 @@ async fn cleanup_geo_resources(ctx: &TestContext, cidr: &str) -> Result<(), Stri
     match (list, consumer) {
         (Ok(()), Ok(())) => Ok(()),
         (list, consumer) => Err(format!("list cleanup={list:?}; consumer cleanup={consumer:?}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn actual_kubernetes_geo_renderer_preserves_lists_and_proves_peer_hit_miss() {
+        const CHILD: &str = "EDGION_POST_RUN_GEO_RENDER_CHILD";
+        if std::env::var(CHILD).as_deref() != Ok("1") {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "suites::tcp_route::geo_restriction::geo_restriction::tests::actual_kubernetes_geo_renderer_preserves_lists_and_proves_peer_hit_miss", "--nocapture"])
+                .env(CHILD, "1")
+                .env("EDGION_TEST_K8S_PEER_UID", "prepared-peer-uid")
+                .env("EDGION_TEST_K8S_PEER_IP", "192.168.99.42")
+                .env("EDGION_TEST_K8S_PEER_HIT_CIDR", "192.168.99.42/32")
+                .env("EDGION_TEST_K8S_PEER_MISS_CIDR", "198.51.100.0/24")
+                .status().unwrap();
+            assert!(status.success());
+            return;
+        }
+        for (file, hit) in [
+            ("geo-stream-chain-deny", true),
+            ("geo-stream-chain-deny-other", false),
+            ("geo-stream-loopback-allow", true),
+        ] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+                "k8s/conf/TCPRoute/GeoRestriction/00_EdgionConfigData_{file}.yaml"
+            ));
+            let template = std::fs::read_to_string(path).unwrap();
+            let rendered = crate::suites::k8s_peer_identity::render_geo_template(&template).unwrap();
+            let _: edgion_resources::EdgionConfigData = serde_yaml::from_str(&rendered).unwrap();
+            let mut expected: serde_yaml::Value = serde_yaml::from_str(&template).unwrap();
+            expected["spec"]["data"]["config"]["items"][0]["cidrs"][0] =
+                serde_yaml::Value::String(if hit { "192.168.99.42/32" } else { "198.51.100.0/24" }.into());
+            let actual: serde_yaml::Value = serde_yaml::from_str(&rendered).unwrap();
+            assert_eq!(actual, expected);
+            let groups: Vec<edgion_resources::resources::edgion_config_data::IpGroup> =
+                serde_yaml::from_value(actual["spec"]["data"]["config"]["items"].clone()).unwrap();
+            let matcher = edgion_resources::matcher::ip_cidr_helpers::build_grouped_matcher(&groups).unwrap();
+            assert_eq!(matcher.contains(&"192.168.99.42".parse().unwrap()), hit);
+        }
+    }
+
+    #[tokio::test]
+    async fn tcp_echo_requires_complete_exact_payload_across_partial_reads() {
+        let (mut writer, mut reader) = tokio::io::duplex(3);
+        let send = tokio::spawn(async move {
+            writer.write_all(b"geo").await.unwrap();
+            tokio::task::yield_now().await;
+            writer.write_all(b"-probe").await.unwrap();
+        });
+        assert!(matches!(
+            super::read_exact_echo(&mut reader, b"geo-probe").await,
+            super::TcpEchoProbe::Echoed(9)
+        ));
+        send.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn tcp_echo_rejects_wrong_payload_without_classifying_it_as_denial() {
+        let mut wrong = &b"different"[..];
+        assert!(matches!(
+            super::read_exact_echo(&mut wrong, b"geo-probe").await,
+            super::TcpEchoProbe::Inconclusive(_)
+        ));
+        let mut partial = &b"geo"[..];
+        assert!(matches!(
+            super::read_exact_echo(&mut partial, b"geo-probe").await,
+            super::TcpEchoProbe::Closed(_)
+        ));
+    }
+
+    use super::*;
+
+    #[test]
+    fn generated_gcir_chain_policies_have_exact_owning_lists_and_no_legacy_fields() {
+        for (root, raw, fixture, reference, field, group, cidr) in [
+            (
+                "integration",
+                CHAIN_IP_DENY_THEN_GEO,
+                "00_EdgionConfigData_geo-stream-chain-deny.yaml",
+                "geo-stream-chain-deny",
+                "denyRefs",
+                "deny-ru-source",
+                "127.0.0.5/32",
+            ),
+            (
+                "k8s",
+                CHAIN_IP_DENY_THEN_GEO_K8S,
+                "00_EdgionConfigData_geo-stream-chain-deny.yaml",
+                "geo-stream-chain-deny",
+                "denyRefs",
+                "deny-k8s-source",
+                "192.168.0.0/16",
+            ),
+            (
+                "k8s",
+                CHAIN_ALLOW_K8S,
+                "00_EdgionConfigData_geo-stream-chain-deny-other.yaml",
+                "geo-stream-chain-deny-other",
+                "denyRefs",
+                "deny-other-source",
+                "10.0.0.0/8",
+            ),
+            (
+                "integration",
+                GCIR_ONLY_LOOPBACK_ALLOW,
+                "00_EdgionConfigData_geo-stream-loopback-allow.yaml",
+                "geo-stream-loopback-allow",
+                "allowRefs",
+                "loopback",
+                "127.0.0.0/8",
+            ),
+            (
+                "k8s",
+                GCIR_ONLY_K8S_ALLOW,
+                "00_EdgionConfigData_geo-stream-loopback-allow.yaml",
+                "geo-stream-loopback-allow",
+                "allowRefs",
+                "k8s-pod-network",
+                "192.168.0.0/16",
+            ),
+        ] {
+            let yaml = format!("apiVersion: edgion.io/v1\nkind: EdgionStreamPlugins\nmetadata:\n  name: tcp-geo-esp\n  namespace: edgion-test\nspec:\n  plugins:\n{raw}");
+            let consumer: edgion_resources::EdgionStreamPlugins = serde_yaml::from_str(&yaml).unwrap();
+            use edgion_resources::resources::edgion_plugins::PluginValidation;
+            use edgion_resources::resources::edgion_stream_plugins::EdgionStreamPlugin;
+            assert!(consumer.unsupported_plugin_errors().is_empty());
+            for entry in consumer.spec.plugins.iter().flatten() {
+                match &entry.plugin {
+                    EdgionStreamPlugin::GlobalConnectionIpRestriction(config) => {
+                        assert!(config.validation_error().is_none())
+                    }
+                    EdgionStreamPlugin::GeoIpLocation(config) => assert!(config.validation_error().is_none()),
+                    _ => panic!("unexpected plugin in declared chain fixture"),
+                }
+            }
+            let value: serde_json::Value = serde_json::to_value(consumer).unwrap();
+            let profile = &value["spec"]["plugins"][0]["config"]["profiles"]["default"];
+            assert!(profile.get("allow").is_none() && profile.get("deny").is_none());
+            assert_eq!(profile[field], serde_json::json!([{ "name": reference }]));
+            assert_eq!(
+                profile["defaultAction"],
+                if field == "allowRefs" { "deny" } else { "allow" }
+            );
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(root)
+                .join("conf/TCPRoute/GeoRestriction")
+                .join(fixture);
+            let resource: edgion_resources::EdgionConfigData =
+                serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            assert_eq!(resource.metadata.name.as_deref(), Some(reference));
+            assert_eq!(resource.metadata.namespace.as_deref(), Some("edgion-test"));
+            let value: serde_json::Value = serde_json::to_value(resource).unwrap();
+            assert_eq!(value["spec"]["data"]["type"], "IpList");
+            assert_eq!(
+                value["spec"]["data"]["config"]["items"],
+                serde_json::json!([{ "name":group, "cidrs":[cidr] }])
+            );
+        }
     }
 }

@@ -1,20 +1,17 @@
-# Gateway for the TLSRoute GeoRestriction suite: single TLS listener on 31953.
+# Supported TLS Passthrough listener with Gateway Stage-1 geo admission.
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: tls-geo-gw
   namespace: edgion-test
   annotations:
-    edgion.io/edgion-stream-plugins: "tls-geo-deny"
+    edgion.io/edgion-stream-plugins: tls-geo-deny
 spec:
   gatewayClassName: public-gateway
   listeners:
-    - name: tls-geo
-      protocol: TLS
-      port: 31953
-      hostname: "*.geo.example.com"
-      tls:
-        mode: Terminate
-        certificateRefs:
-          - name: edge-tls
-            namespace: edgion-test
+  - name: tls-geo
+    protocol: TLS
+    port: 31953
+    hostname: '*.geo.example.com'
+    tls:
+      mode: Passthrough

@@ -1,0 +1,14 @@
+# Explicit collection owned by the TCP Geo chain verification cases.
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: geo-stream-loopback-allow
+  namespace: edgion-test
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+        - name: loopback
+          cidrs:
+            - "127.0.0.0/8"

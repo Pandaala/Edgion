@@ -950,7 +950,6 @@ pub(crate) fn resolve_cap(max_bytes: Option<u64>, ctx_cap: u64) -> u64 {
 
 #[async_trait]
 impl<'a> PluginSession for PingoraSessionAdapter<'a> {
-<<<<<<< Updated upstream
     fn nominate_response_cache(
         &mut self,
         policy: &Arc<crate::plugins::http::response_cache::ResponseCachePolicy>,
@@ -959,7 +958,8 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             return super::traits::session::ResponseCacheIntentAdmission::Bypassed;
         };
         self.nominate_response_cache_in(policy, store)
-=======
+    }
+
     fn mark_ip_body_denied(&mut self) {
         self.ctx.mark_ip_body_denied();
     }
@@ -1002,7 +1002,6 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             .as_ref()
             .map(|view| view.profile_index(key, default, names))
             .unwrap_or(crate::plugins::runtime::conditions::ip_refs::ProfileSelection::Unavailable)
->>>>>>> Stashed changes
     }
 
     fn request_header_map(&self) -> &http::HeaderMap {

@@ -1,0 +1,14 @@
+# Explicit collection owned by the TCP Geo chain verification cases.
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: geo-stream-chain-deny
+  namespace: edgion-test
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+        - name: deny-ru-source
+          cidrs:
+            - "127.0.0.5/32"
