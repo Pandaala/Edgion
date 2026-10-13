@@ -39,10 +39,10 @@ use self::manifest::{
     MANIFEST_ACCEPT,
 };
 use crate::observe::metrics::record_egress_blocked;
-use crate::plugins::http::common::outbound::call::stream_body_capped;
 use crate::plugins::http::common::outbound::egress::{
     default_block_private, egress_dns_cache_ttl, EgressPolicy, EgressResolver,
 };
+use crate::util::http_body::stream_body_capped;
 use crate::util::net::{classify_ip, IpClass};
 
 /// Default per-request timeout for pull requests (manifest, token, blob).

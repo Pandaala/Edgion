@@ -189,6 +189,7 @@ fn test_bulk_config(max_retries: u32, backoff: std::time::Duration) -> EsBulkCon
         max_retries,
         backoff,
         max_body_bytes: 10 * 1024 * 1024,
+        max_response_bytes: 1024 * 1024,
         channel_size: 10_000,
         index_prefix: "test-logs".to_string(),
         date_pattern: "%Y.%m.%d".to_string(),
@@ -498,4 +499,278 @@ async fn test_send_bulk_request_aborts_retry_on_shutdown() {
     tokio::time::timeout(std::time::Duration::from_secs(2), fut)
         .await
         .expect("send_bulk_request must return promptly when shutdown is signaled");
+}
+
+#[tokio::test]
+async fn receipt_cap_checks_declared_streamed_and_exact_limits() {
+    let unpolled = futures::stream::poll_fn(|_| -> std::task::Poll<Option<Result<Bytes, ()>>> {
+        panic!("declared oversize must not poll")
+    });
+    assert_eq!(
+        read_bulk_receipt_stream(Some(11), unpolled, 10).await.unwrap_err(),
+        BulkReceiptError::TooLarge
+    );
+    let json = Bytes::from_static(b"{\"errors\":false}");
+    let exact = read_bulk_receipt_stream(
+        Some(json.len() as u64),
+        futures::stream::iter([Ok::<_, ()>(json.clone())]),
+        json.len(),
+    )
+    .await
+    .unwrap();
+    assert!(!exact.errors);
+    for declared in [None, Some(1)] {
+        let chunks = futures::stream::iter([Ok::<_, ()>(json.clone()), Ok(Bytes::from_static(b"x"))]);
+        assert_eq!(
+            read_bulk_receipt_stream(declared, chunks, json.len())
+                .await
+                .unwrap_err(),
+            BulkReceiptError::TooLarge
+        );
+    }
+    let failed = futures::stream::iter([Ok(Bytes::from_static(b"{\"errors\":")), Err(())]);
+    assert_eq!(
+        read_bulk_receipt_stream(None, failed, 100).await.unwrap_err(),
+        BulkReceiptError::Read
+    );
+    for malformed in [
+        b"{\"errors\":false".as_slice(),
+        b"{\"errors\":false}x",
+        b"{\"errors\":true,\"items\":[{\"index\":{}}]}",
+    ] {
+        assert_eq!(
+            read_bulk_receipt_stream(
+                None,
+                futures::stream::iter([Ok::<_, ()>(Bytes::copy_from_slice(malformed))]),
+                100
+            )
+            .await
+            .unwrap_err(),
+            BulkReceiptError::Parse
+        );
+    }
+}
+
+#[tokio::test]
+async fn receipt_projection_ignores_large_metadata_without_retaining_error_tree() {
+    let depth = 1024;
+    let nested = format!("{}0{}", "[".repeat(depth), "]".repeat(depth));
+    let json = format!(
+        r#"{{"took":"ignored","errors":true,"items":[{{"index":{{"status":429,"_index":false,"_id":{{}},"error":{{"reason":"{}","caused_by":{}}}}}}}]}}"#,
+        "x".repeat(256 * 1024),
+        nested
+    );
+    let cap = json.len();
+    let response = read_bulk_receipt_stream(None, futures::stream::iter([Ok::<_, ()>(Bytes::from(json))]), cap)
+        .await
+        .unwrap();
+    assert_eq!(classify_bulk_items(&response, 1).unwrap().retryable_indices, vec![0]);
+    assert_eq!(
+        format!("{response:?}"),
+        "BulkResponse { errors: true, items: [BulkResponseItem { index: Some(BulkItemResult { status: 429 }) }] }"
+    );
+    let broken = format!(r#"{{"errors":false,"unknown":{}0}}"#, "[".repeat(depth));
+    assert_eq!(
+        read_bulk_receipt_stream(None, futures::stream::iter([Ok::<_, ()>(Bytes::from(broken))]), cap)
+            .await
+            .unwrap_err(),
+        BulkReceiptError::Parse
+    );
+}
+
+#[test]
+fn receipt_projection_keeps_required_relevant_fields_and_rejects_duplicates() {
+    for malformed in [
+        r#"{"items":[]}"#,
+        r#"{"errors":"false"}"#,
+        r#"{"errors":false,"errors":true}"#,
+        r#"{"errors":true,"items":[{"index":{"status":65536}}]}"#,
+        r#"{"errors":true,"items":[{"index":{"status":"429"}}]}"#,
+        r#"{"errors":true,"items":[{"index":{"status":429,"status":201}}]}"#,
+    ] {
+        assert!(serde_json::from_str::<BulkResponse>(malformed).is_err(), "{malformed}");
+    }
+}
+
+fn scripted_response(status: u16, body: impl Into<reqwest::Body>) -> reqwest::Response {
+    http::Response::builder()
+        .status(status)
+        .body(body.into())
+        .unwrap()
+        .into()
+}
+
+#[tokio::test]
+async fn scripted_bulk_ambiguous_receipts_do_not_replay_and_obey_retirement_fence() {
+    for initial_health in [false, true] {
+        for retired in [false, true] {
+            for receipt in [
+                r#"{"errors":false}trailing"#,
+                r#"{"errors":true,"items":[]}"#,
+                r#"{"errors":true,"items":[{"delete":{"status":429}}]}"#,
+                "oversized-response-content",
+            ] {
+                let mut config = test_bulk_config(3, std::time::Duration::ZERO);
+                config.max_response_bytes = if receipt == "oversized-response-content" {
+                    8
+                } else {
+                    1000
+                };
+                let health = Arc::new(PublishedHealth::new(initial_health));
+                let flip = AtomicU64::new(0);
+                let (_tx, rx) = watch::channel(false);
+                let mut attempts = 0;
+                send_bulk_request_using(
+                    |_| {
+                        attempts += 1;
+                        std::future::ready(Ok(scripted_response(200, receipt.to_owned())))
+                    },
+                    &["doc"],
+                    "test",
+                    &config,
+                    &health,
+                    &flip,
+                    "test/es",
+                    &rx,
+                    &AtomicBool::new(retired),
+                )
+                .await;
+                assert_eq!(attempts, 1);
+                assert_eq!(health.load(), initial_health || !retired);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn scripted_bulk_read_failure_is_ambiguous_and_errors_false_bypasses_correlation() {
+    let config = test_bulk_config(3, std::time::Duration::ZERO);
+    let health = Arc::new(PublishedHealth::new(false));
+    let flip = AtomicU64::new(0);
+    let (_tx, rx) = watch::channel(false);
+    let mut attempts = 0;
+    send_bulk_request_using(
+        |_| {
+            attempts += 1;
+            let failed = futures::stream::iter([Err::<Bytes, _>(std::io::Error::other("private-body-error"))]);
+            std::future::ready(Ok(scripted_response(200, reqwest::Body::wrap_stream(failed))))
+        },
+        &["doc"],
+        "test",
+        &config,
+        &health,
+        &flip,
+        "test/es",
+        &rx,
+        &AtomicBool::new(false),
+    )
+    .await;
+    assert_eq!(attempts, 1);
+    assert!(health.load());
+    send_bulk_request_using(
+        |_| {
+            attempts += 1;
+            std::future::ready(Ok(scripted_response(200, r#"{"errors":false,"items":[]}"#)))
+        },
+        &["doc"],
+        "test",
+        &config,
+        &health,
+        &flip,
+        "test/es",
+        &rx,
+        &AtomicBool::new(false),
+    )
+    .await;
+    assert_eq!(attempts, 2);
+    assert!(health.load());
+}
+
+#[tokio::test]
+async fn scripted_bulk_mixed_5xx_and_429_share_budget_and_keep_ordered_subset() {
+    let config = test_bulk_config(2, std::time::Duration::ZERO);
+    let health = Arc::new(PublishedHealth::new(true));
+    let flip = AtomicU64::new(0);
+    let (_tx, rx) = watch::channel(false);
+    let mut responses = std::collections::VecDeque::from([
+        scripted_response(503, "unavailable"),
+        scripted_response(
+            200,
+            r#"{"errors":true,"items":[{"index":{"status":201}},{"index":{"status":429}},{"index":{"status":400}},{"index":{"status":429}}]}"#,
+        ),
+        scripted_response(
+            200,
+            r#"{"errors":true,"items":[{"index":{"status":429}},{"index":{"status":429}}]}"#,
+        ),
+    ]);
+    let mut bodies = Vec::new();
+    send_bulk_request_using(
+        |body| {
+            bodies.push(body);
+            std::future::ready(Ok(responses.pop_front().expect("shared budget exceeded")))
+        },
+        &["success", "retry-first", "permanent", "retry-second"],
+        "test",
+        &config,
+        &health,
+        &flip,
+        "test/es",
+        &rx,
+        &AtomicBool::new(false),
+    )
+    .await;
+    assert!(responses.is_empty());
+    assert_eq!(bodies.len(), 3);
+    assert_eq!(bodies[0], bodies[1]);
+    assert_eq!(bodies[2], build_ndjson_body(&["retry-first", "retry-second"], "test"));
+    assert!(!health.load());
+}
+
+struct PendingReceipt(Arc<AtomicBool>);
+impl futures::Stream for PendingReceipt {
+    type Item = Result<Bytes, std::io::Error>;
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        std::task::Poll::Pending
+    }
+}
+impl Drop for PendingReceipt {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+#[tokio::test]
+async fn cancelling_pending_bulk_reception_drops_stream_without_replay_or_health_change() {
+    let config = test_bulk_config(3, std::time::Duration::ZERO);
+    let health = Arc::new(PublishedHealth::new(false));
+    let flip = AtomicU64::new(0);
+    let (_tx, rx) = watch::channel(false);
+    let dropped = Arc::new(AtomicBool::new(false));
+    let attempts = Arc::new(AtomicU64::new(0));
+    let retired = AtomicBool::new(false);
+    let mut future = Box::pin(send_bulk_request_using(
+        |_| {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            std::future::ready(Ok(scripted_response(
+                200,
+                reqwest::Body::wrap_stream(PendingReceipt(Arc::clone(&dropped))),
+            )))
+        },
+        &["doc"],
+        "test",
+        &config,
+        &health,
+        &flip,
+        "test/es",
+        &rx,
+        &retired,
+    ));
+    assert!(futures::poll!(&mut future).is_pending());
+    drop(future);
+    assert!(dropped.load(Ordering::SeqCst));
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    assert!(!health.load());
 }

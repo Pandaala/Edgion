@@ -14,3 +14,5 @@ pub use client_ip::{resolve_transport_client_addrs, TransportClientAddrs};
 
 pub mod redacted;
 pub use redacted::RedactedString;
+
+pub(crate) mod http_body;

@@ -148,6 +148,12 @@ pub struct EsBulk {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_body_bytes: Option<usize>,
 
+    /// Maximum bulk acknowledgement bytes (default: 1 MiB).
+    /// Gateway clamps explicit values to 1 byte through 8 MiB; zero does not
+    /// disable the limit. Oversized acknowledgements are ambiguous and not replayed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_response_bytes: Option<usize>,
+
     /// Capacity of the in-memory mpsc channel between log producers and the
     /// bulk ingest task (default: 10000, ceiling: 100000). A full channel drops
     /// non-blocking access-log submissions; awaiting producers such as backfill

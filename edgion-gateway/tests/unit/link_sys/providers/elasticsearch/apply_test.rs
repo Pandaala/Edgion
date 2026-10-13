@@ -320,3 +320,23 @@ fn timeout_clamp_does_not_change_fingerprint() {
     }
     assert!(fingerprint_es(&a).unwrap().equal_runtime(&fingerprint_es(&b).unwrap()));
 }
+
+#[test]
+fn bulk_response_limit_fingerprint_uses_effective_runtime_value() {
+    fn with_cap(cap: Option<usize>) -> LinkSys {
+        let mut owner = es_ls(vec!["http://es.example:9200"], None);
+        let SystemConfig::Elasticsearch(config) = &mut owner.spec.config else {
+            unreachable!()
+        };
+        config.bulk = Some(serde_json::from_value(serde_json::json!({"maxResponseBytes": cap})).unwrap());
+        owner
+    }
+    let absent = fingerprint_es(&with_cap(None)).unwrap();
+    let default = fingerprint_es(&with_cap(Some(1024 * 1024))).unwrap();
+    assert!(absent.equal_runtime(&default));
+    let changed = fingerprint_es(&with_cap(Some(2 * 1024 * 1024))).unwrap();
+    assert!(!absent.equal_runtime(&changed));
+    let maximum = fingerprint_es(&with_cap(Some(8 * 1024 * 1024))).unwrap();
+    let clamped = fingerprint_es(&with_cap(Some(usize::MAX))).unwrap();
+    assert!(maximum.equal_runtime(&clamped));
+}

@@ -135,6 +135,7 @@ fn hash_rebuild_fields(h: &mut FingerprintHasher, cfg: &ElasticsearchClientConfi
     h.u64(u64::from(bulk.max_retries));
     h.u64(bulk.backoff.as_millis() as u64);
     h.u64(bulk.max_body_bytes as u64);
+    h.u64(bulk.max_response_bytes as u64);
     h.u64(bulk.channel_size as u64);
     h.bytes(bulk.index_prefix.as_bytes());
     h.bytes(bulk.date_pattern.as_bytes());

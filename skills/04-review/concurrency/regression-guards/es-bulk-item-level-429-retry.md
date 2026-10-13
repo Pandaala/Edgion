@@ -65,9 +65,33 @@ even when it arrives during the wait; `EsLinkClient::shutdown` retains its 10-se
 abort backstop. Retry bodies remain subsets of a sub-batch already bounded by
 `max_body_bytes`.
 
+## Bounded acknowledgement reception (ARCH-027)
+
+The provider resolves LinkSys `bulk.maxResponseBytes` once with a 1 MiB default
+and inclusive 1-byte to 8-MiB clamp. Its resolved value is in the runtime
+fingerprint, so changed effective limits replace the worker generation. The
+opaque CRD config preserves this operator field. The Gateway canonical collector
+lives in `util/http_body.rs`; DSL, Wasm/OCI, OIDC, managed outbound and ES share
+its receiving implementation while retaining caller-owned caps and outcomes.
+
+Declared oversized receipts are rejected before reading; streamed accumulation
+also stops at the cap. No truncated prefix is parsed. HTTP-success cap/read/parse
+failures are ambiguous, do not replay and retain existing healthy/retirement
+fencing. A rejected oversized receipt can therefore lose item-level 429 retries.
+The minimal projection retains only errors/items/index/status; omitted or wrongly
+typed unused metadata is intentionally ignored. Required relevant fields and JSON
+syntax remain checked, and errors=false retains its existing classifier bypass.
+
+The limit bounds input, not total heap or process memory. Vec capacity, delivered
+chunks, projected items and serde scratch coexist. Locked serde_json 1.0.151 skips
+ignored nested metadata iteratively with delimiter scratch rather than retaining
+Value trees; its ordinary typed recursion limit is not an ignored-value depth
+limit. Re-evaluate this source-derived feasibility if the dependency changes.
+
 ## Verification and re-evaluation
 
-Fresh verification for this correction:
+Historical verification for the earlier item-level retry correction (not fresh
+ARCH-027 verification):
 
 - `cargo test -p edgion-gateway link_sys::providers::elasticsearch::bulk::tests --lib`
   — 16 passed, 0 failed.
@@ -80,6 +104,22 @@ Fresh verification for this correction:
 - Classification tests cover permanent errors, stable retry order, item-count
   mismatch, and unexpected action results. The pre-existing shutdown regression
   remains in the same targeted test set.
+
+Current ARCH-027 verification completed so far:
+
+- `cargo test -p edgion-resources --lib resources::link_sys::elasticsearch::tests`
+  passed 15 tests, including maxResponseBytes serialization and opaque CRD
+  preservation. This does not establish Gateway receiving or retry behavior.
+- Source comparison preserved existing apply (9), bulk (19), configuration
+  mapping (17) and Resources Elasticsearch (14) test identities. It added one,
+  seven, one and one respectively, plus four collector cases. This comparison
+  is source evidence, not a freshly executed baseline test listing.
+- Scoped formatting of the changed Rust files and `git diff --check` passed.
+- `cargo fmt --all` and the Gateway Elasticsearch test listing were attempted
+  and blocked by conflict markers committed in unrelated baseline Gateway
+  modules. Gateway receipt, collector, fingerprint, retry and cancellation tests
+  have not run. The current change therefore has not completed verification or
+  independent acceptance; historical results above cannot substitute for them.
 
 Re-evaluate this rule if the sink emits Bulk actions other than `index`, gains stable
 document IDs or a durable failed-document cache, changes the meaning of

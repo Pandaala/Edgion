@@ -205,3 +205,29 @@ fn es_auth_rejects_unknown_field() {
     let yaml = "type: basic\nsecretRef:\n  name: x\nbogus: 1";
     assert!(serde_yaml::from_str::<super::ElasticsearchAuth>(yaml).is_err());
 }
+
+#[test]
+fn bulk_response_limit_is_serialized_and_preserved_in_crd_config() {
+    let absent: EsBulk = serde_json::from_str("{}").unwrap();
+    assert_eq!(absent.max_response_bytes, None);
+    assert!(serde_json::to_value(absent).unwrap().get("maxResponseBytes").is_none());
+    let config: ElasticsearchClientConfig =
+        serde_yaml::from_str("endpoints: [http://es.example:9200]\nbulk:\n  maxResponseBytes: 2097152\n").unwrap();
+    assert_eq!(config.bulk.as_ref().unwrap().max_response_bytes, Some(2097152));
+    let wire = serde_json::to_value(&config).unwrap();
+    assert_eq!(wire["bulk"]["maxResponseBytes"], 2097152);
+    let roundtrip: ElasticsearchClientConfig = serde_json::from_value(wire).unwrap();
+    assert_eq!(roundtrip.bulk.unwrap().max_response_bytes, Some(2097152));
+    let crd: serde_yaml::Value =
+        serde_yaml::from_str(include_str!("../../../../../config/crd/edgion-crd/link_sys_crd.yaml")).unwrap();
+    for version in crd["spec"]["versions"].as_sequence().unwrap() {
+        if version["served"].as_bool() == Some(true) {
+            assert_eq!(
+                version["schema"]["openAPIV3Schema"]["properties"]["spec"]["properties"]["config"]
+                    ["x-kubernetes-preserve-unknown-fields"]
+                    .as_bool(),
+                Some(true)
+            );
+        }
+    }
+}

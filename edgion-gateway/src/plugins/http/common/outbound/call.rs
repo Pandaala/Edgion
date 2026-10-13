@@ -11,7 +11,9 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use futures::{Stream, StreamExt};
+use futures::Stream;
+
+use crate::util::http_body::stream_body_chunks_capped;
 
 use edgion_resources::resources::common::success::SuccessOutcome;
 
@@ -111,7 +113,8 @@ impl std::fmt::Display for OutboundCallError {
 ///    updates `client.health` based on `client.passive_health_check.failure_status_codes`.
 /// 6. **Response size cap** — enforces `min(global_max_bytes, client.max_response_bytes)`.
 ///    A `Content-Length` pre-check stops before reading, and the streaming
-///    accumulator stops mid-body; peak memory is at most cap + one chunk.
+///    accumulator stops mid-body. Logical body length stays within the cap;
+///    allocation capacity and a delivered chunk also cost memory.
 /// 7. **Return** — always returns `Ok(OutboundResponse { status, headers, body })`
 ///    for any completed HTTP exchange. The caller classifies it via
 ///    `client.classify(&resp)`, which reads `client.success`.
@@ -614,36 +617,6 @@ fn parse_retry_after_ms(headers: &reqwest::header::HeaderMap, now: std::time::Sy
 
 #[cfg(test)]
 include!("../../../../../tests/support/plugins/http/common/outbound/call_test/618_function_item.rs");
-
-/// Stream a response body, accumulating at most `max_bytes`.
-///
-/// Returns the collected bytes and whether the body exceeded the cap. Peak
-/// memory is at most `max_bytes` plus one chunk regardless of the actual body
-/// size.
-pub(crate) async fn stream_body_capped(
-    resp: reqwest::Response,
-    max_bytes: usize,
-) -> Result<(Bytes, bool), reqwest::Error> {
-    stream_body_chunks_capped(resp.bytes_stream(), max_bytes).await
-}
-
-async fn stream_body_chunks_capped<S, E>(stream: S, max_bytes: usize) -> Result<(Bytes, bool), E>
-where
-    S: Stream<Item = Result<Bytes, E>>,
-{
-    futures::pin_mut!(stream);
-    let mut buf: Vec<u8> = Vec::with_capacity(8192.min(max_bytes));
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk?;
-        let remaining = max_bytes - buf.len();
-        if chunk.len() > remaining {
-            buf.extend_from_slice(&chunk[..remaining]);
-            return Ok((Bytes::from(buf), true));
-        }
-        buf.extend_from_slice(&chunk);
-    }
-    Ok((Bytes::from(buf), false))
-}
 
 /// Record a passive health result for the given `HealthState`.
 ///

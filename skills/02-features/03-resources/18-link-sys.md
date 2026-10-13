@@ -215,6 +215,7 @@ spec:
       maxRetries: 3
       backoffMs: 1000
       maxBodyBytes: 10485760      # 10 MiB
+      maxResponseBytes: 1048576   # 1 MiB, explicit values clamped to 1..8388608 bytes
       channelSize: 10000          # producer→bulk-loop mpsc capacity, ceiling 100000
     index:
       prefix: "edgion-logs"
@@ -233,6 +234,15 @@ spec:
   restrictions. An unexpected runtime formatting failure drops the current batch
   without an ES request/retry and keeps the worker running; transport health and
   first-healthy fallback are unchanged.
+- `bulk.maxResponseBytes` bounds acknowledgement reception independently of the
+  outgoing request. It defaults to 1 MiB; explicit values are clamped to 1 byte
+  through 8 MiB, so zero never disables protection. Increase it for large batches
+  or verbose error/metadata envelopes. Declared lengths above the limit are
+  rejected early; streamed bytes enforce the limit even without a reliable
+  length. Oversized, unreadable or malformed HTTP-success receipts are ambiguous:
+  they are not replayed, and the existing healthy/retirement policy remains.
+  Their rejected items may consequently lose the opportunity for a 429 retry.
+  This is an input limit, not a total exchange heap or process memory guarantee.
 - `bulk.maxRetries` is one shared per-sub-batch budget for transport failures, HTTP 5xx responses,
   and item-level 429 rejections. A parsed partial response retries only its 429 documents, in
   request order; later documents wait up to the bounded `bulk.channelSize` capacity. Entries

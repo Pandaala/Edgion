@@ -62,6 +62,16 @@ access_log:
 
 The raw client-entry URI (`request_uri`) is controlled by a separate top-level `access_log_options` section, not by the `access_log` block — see [Special fields](#special-fields).
 
+The Elasticsearch LinkSys `spec.config.bulk.maxResponseBytes` limits each bulk
+acknowledgement independently of the submitted logs. It defaults to 1 MiB;
+explicit values clamp to 1 byte through 8 MiB, and zero does not disable the
+limit. Larger batches or verbose errors may require a higher value. An oversized,
+unreadable or malformed HTTP-success acknowledgement is not replayed because
+some documents may already have been indexed. Its 429 items may therefore remain
+unretried. This preserves the existing health policy and does not make fallback
+or backfill an acknowledgement-based delivery guarantee. The cap bounds received
+input, not total exchange or process memory.
+
 > The `output` block also accepts an `es` sink. When its Elasticsearch producer→bulk-loop channel is full, the non-blocking access-log submission is dropped and `edgion_access_log_dropped_total` increments. See [Metrics](./metrics.md).
 
 ## Degradation: fallback sink and backfill

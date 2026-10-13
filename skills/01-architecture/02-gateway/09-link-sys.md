@@ -39,6 +39,20 @@ Transport health and first-healthy fallback remain unchanged; this is no deliver
 acknowledgement or fallback guarantee. Validation runs at configuration time and
 index naming remains once per flush, with no new request-path work.
 
+Bulk acknowledgement reception uses the canonical Gateway
+`util/http_body.rs` chunk collector. `EsBulkConfig` resolves optional
+`bulk.maxResponseBytes` once (default 1 MiB, explicit clamp 1 byte through 8 MiB),
+and the effective cap participates in the replacement fingerprint. LinkSys config
+interiors remain opaque/preserved in the CRD; the field is serialized to the
+Gateway normally. Each HTTP-success receipt is length-prechecked and capped while
+streaming, then projected to errors/items/index/status without retaining metadata
+or arbitrary error trees. Ignored metadata no longer has incidental required/type
+checks. `errors=false` still bypasses per-item correlation. Cap/read/parse failures
+use the existing ambiguous no-replay, healthy and retirement-fenced outcome;
+429 retries still require exact count and ordered index results. The byte cap
+bounds input, not total heap; collector capacity, transport chunks, parser scratch
+and projected items also contribute.
+
 ```
 providers/elasticsearch/
 ├── apply.rs           # EsApply fingerprint / coverage / build for the runner

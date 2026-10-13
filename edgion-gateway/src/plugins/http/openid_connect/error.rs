@@ -1,7 +1,7 @@
 //! Data-free OIDC failure classifications and their public projection.
 use crate::observe::metrics::registry::record_outbound_tls_san_mismatch;
-use crate::plugins::http::common::outbound::call::stream_body_capped;
 use crate::tls::validation::outbound_san_mismatch_reason;
+use crate::util::http_body::stream_body_capped;
 use jsonwebtoken::errors::ErrorKind;
 
 /// Bound retained bytes while streaming and discard all provider/parser detail.

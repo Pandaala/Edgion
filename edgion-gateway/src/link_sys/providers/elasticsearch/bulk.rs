@@ -7,8 +7,12 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
+use bytes::Bytes;
 use edgion_common::link_sys_core::PublishedHealth;
+use futures::Stream;
 use reqwest::Client;
+
+use crate::util::http_body::stream_body_chunks_capped;
 use tokio::sync::{mpsc, watch};
 
 use super::config_mapping::EsBulkConfig;
@@ -34,7 +38,6 @@ fn apply_published_health(
 /// Elasticsearch Bulk API response
 #[derive(serde::Deserialize, Debug)]
 pub struct BulkResponse {
-    pub took: u64,
     pub errors: bool,
     #[serde(default)]
     pub items: Vec<BulkResponseItem>,
@@ -48,12 +51,42 @@ pub struct BulkResponseItem {
 
 #[derive(serde::Deserialize, Debug)]
 pub struct BulkItemResult {
-    #[serde(rename = "_index")]
-    pub index: String,
-    #[serde(rename = "_id")]
-    pub id: Option<String>,
     pub status: u16,
-    pub error: Option<serde_json::Value>,
+}
+
+/// A fixed diagnostic category; receipt content is never retained in errors.
+#[derive(Debug, PartialEq, Eq)]
+enum BulkReceiptError {
+    TooLarge,
+    Read,
+    Parse,
+}
+
+async fn read_bulk_receipt(resp: reqwest::Response, max_bytes: usize) -> Result<BulkResponse, BulkReceiptError> {
+    let declared_length = resp.content_length();
+    read_bulk_receipt_stream(declared_length, resp.bytes_stream(), max_bytes).await
+}
+
+async fn read_bulk_receipt_stream<S, E>(
+    declared_length: Option<u64>,
+    stream: S,
+    max_bytes: usize,
+) -> Result<BulkResponse, BulkReceiptError>
+where
+    S: Stream<Item = Result<Bytes, E>>,
+{
+    if declared_length.is_some_and(|length| length > max_bytes as u64) {
+        return Err(BulkReceiptError::TooLarge);
+    }
+    let (body, truncated) = stream_body_chunks_capped(stream, max_bytes)
+        .await
+        .map_err(|_| BulkReceiptError::Read)?;
+    if truncated {
+        return Err(BulkReceiptError::TooLarge);
+    }
+    // Ignored metadata is traversed without retaining arbitrary JSON trees.
+    // The input limit bounds receiving bytes, not the total exchange heap.
+    serde_json::from_slice(&body).map_err(|_| BulkReceiptError::Parse)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -331,23 +364,52 @@ async fn send_bulk_request(
     shutdown: &watch::Receiver<bool>,
     retired: &AtomicBool,
 ) {
+    send_bulk_request_using(
+        |body| {
+            client
+                .post(bulk_url)
+                .header("Content-Type", "application/x-ndjson")
+                .body(body)
+                .send()
+        },
+        docs,
+        index_name,
+        config,
+        healthy,
+        last_flip_log,
+        name,
+        shutdown,
+        retired,
+    )
+    .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn send_bulk_request_using<F, Fut>(
+    mut send: F,
+    docs: &[&str],
+    index_name: &str,
+    config: &EsBulkConfig,
+    healthy: &Arc<PublishedHealth>,
+    last_flip_log: &AtomicU64,
+    name: &str,
+    shutdown: &watch::Receiver<bool>,
+    retired: &AtomicBool,
+) where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = Result<reqwest::Response, reqwest::Error>>,
+{
     let mut pending_docs = docs.to_vec();
     let mut retries = 0u32;
     let mut backoff = config.backoff;
 
     loop {
         let body = build_ndjson_body(&pending_docs, index_name);
-        match client
-            .post(bulk_url)
-            .header("Content-Type", "application/x-ndjson")
-            .body(body)
-            .send()
-            .await
-        {
+        match send(body).await {
             Ok(resp) => {
                 let status = resp.status();
                 if status.is_success() {
-                    match resp.json::<BulkResponse>().await {
+                    match read_bulk_receipt(resp, config.max_response_bytes).await {
                         Ok(bulk_resp) => {
                             if bulk_resp.errors {
                                 let summary = match classify_bulk_items(&bulk_resp, pending_docs.len()) {
@@ -389,8 +451,8 @@ async fn send_bulk_request(
                             }
                         }
                         Err(e) => {
-                            tracing::warn!("ES [{}] bulk response parse error: {:?}", name, e);
-                            // Treat as success if HTTP status was 200 — items likely indexed
+                            tracing::warn!("ES [{}] bulk acknowledgement rejected: {:?}", name, e);
+                            // HTTP success leaves delivery ambiguous. Do not replay the batch.
                             apply_published_health(healthy, last_flip_log, name, true, retired);
                             return;
                         }

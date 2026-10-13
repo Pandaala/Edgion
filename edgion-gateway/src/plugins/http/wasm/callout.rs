@@ -15,11 +15,11 @@ use super::host_abi::{CalloutResponse, PendingCallout};
 use super::vm_manager::VmLease;
 use crate::link_sys::http_client::{build_outbound_client, OutboundClientConfig, OutboundRedirect};
 use crate::observe::metrics::registry::record_wasm_callout;
-use crate::plugins::http::common::outbound::call::stream_body_capped;
 use crate::plugins::http::common::outbound::egress::{
     default_block_private, egress_dns_cache_ttl, EgressPolicy, EgressResolver,
 };
 use crate::plugins::http::common::outbound::request::sync_outbound_body_framing;
+use crate::util::http_body::stream_body_capped;
 use edgion_common::dns::ResolverSpec;
 
 /// Response-body cap for a single callout. A guest-facing verdict payload

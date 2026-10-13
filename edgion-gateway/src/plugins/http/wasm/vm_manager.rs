@@ -1042,10 +1042,9 @@ async fn fetch_url_bytes_with_permits(
                     if resp.content_length().is_some_and(|cl| cl > MAX_MODULE_BYTES as u64) {
                         return Err(format!("fetch wasm url: body exceeds {MAX_MODULE_BYTES} bytes"));
                     }
-                    let (body, truncated) =
-                        crate::plugins::http::common::outbound::call::stream_body_capped(resp, MAX_MODULE_BYTES)
-                            .await
-                            .map_err(|_| "read wasm body: response error".to_string())?;
+                    let (body, truncated) = crate::util::http_body::stream_body_capped(resp, MAX_MODULE_BYTES)
+                        .await
+                        .map_err(|_| "read wasm body: response error".to_string())?;
                     if truncated {
                         return Err(format!("fetch wasm url: body exceeds {MAX_MODULE_BYTES} bytes"));
                     }

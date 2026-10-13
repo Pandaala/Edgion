@@ -37,6 +37,8 @@ const MAX_BATCH_SIZE: usize = 5_000;
 const MIN_FLUSH_INTERVAL_MS: u64 = 1;
 const MAX_FLUSH_INTERVAL_MS: u64 = 60_000; // 1 minute
 const MAX_BULK_BODY_BYTES: usize = 50 * 1024 * 1024; // 50MB
+const MAX_BULK_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+const DEFAULT_BULK_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_BULK_RETRIES: u32 = 10;
 const MAX_CHANNEL_SIZE: usize = 100_000;
 const MIN_CHANNEL_SIZE: usize = 1;
@@ -179,6 +181,7 @@ pub struct EsBulkConfig {
     pub max_retries: u32,
     pub backoff: Duration,
     pub max_body_bytes: usize,
+    pub max_response_bytes: usize,
     /// Capacity of the producer→bulk-loop mpsc channel; clamped to
     /// `[MIN_CHANNEL_SIZE, MAX_CHANNEL_SIZE]` so an operator-supplied 0 cannot
     /// produce a rendezvous channel that would deadlock on every send.
@@ -212,6 +215,10 @@ impl EsBulkConfig {
                 .and_then(|b| b.max_body_bytes)
                 .map(|s| s.min(MAX_BULK_BODY_BYTES))
                 .unwrap_or(DEFAULT_BULK_BODY_BYTES),
+            max_response_bytes: bulk
+                .and_then(|b| b.max_response_bytes)
+                .map(|s| s.clamp(1, MAX_BULK_RESPONSE_BYTES))
+                .unwrap_or(DEFAULT_BULK_RESPONSE_BYTES),
             channel_size: bulk
                 .and_then(|b| b.channel_size)
                 .map(|s| s.clamp(MIN_CHANNEL_SIZE, MAX_CHANNEL_SIZE))

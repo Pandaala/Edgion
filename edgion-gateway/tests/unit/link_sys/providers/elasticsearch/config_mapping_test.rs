@@ -187,6 +187,7 @@ fn test_bulk_config_clamped_to_max() {
             max_retries: Some(100), // Over max
             backoff_ms: None,
             max_body_bytes: None,
+            max_response_bytes: None,
             channel_size: Some(1_000_000), // Over max
         }),
         ..Default::default()
@@ -207,6 +208,7 @@ fn test_bulk_config_flush_interval_clamped_to_min() {
             max_retries: None,
             backoff_ms: None,
             max_body_bytes: None,
+            max_response_bytes: None,
             channel_size: None,
         }),
         ..Default::default()
@@ -227,6 +229,7 @@ fn test_bulk_config_channel_size_clamped_to_min() {
             max_retries: None,
             backoff_ms: None,
             max_body_bytes: None,
+            max_response_bytes: None,
             channel_size: Some(0),
         }),
         ..Default::default()
@@ -250,6 +253,7 @@ fn test_current_index_name_format() {
         max_retries: 3,
         backoff: Duration::from_secs(1),
         max_body_bytes: 10 * 1024 * 1024,
+        max_response_bytes: 1024 * 1024,
         channel_size: DEFAULT_CHANNEL_SIZE,
         index_prefix: "test-logs".to_string(),
         date_pattern: "%Y.%m.%d".to_string(),
@@ -320,4 +324,19 @@ fn test_pool_config_clamped() {
         ..Default::default()
     };
     let (_, _) = build_es_client(&crd, &no_auth()).unwrap();
+}
+
+#[test]
+fn bulk_response_limit_resolves_default_and_positive_safety_bounds() {
+    for (configured, expected) in [
+        (None, 1024 * 1024),
+        (Some(0), 1),
+        (Some(17), 17),
+        (Some(8 * 1024 * 1024), 8 * 1024 * 1024),
+        (Some(usize::MAX), 8 * 1024 * 1024),
+    ] {
+        let mut crd = ElasticsearchClientConfig::default();
+        crd.bulk = Some(serde_json::from_value(serde_json::json!({"maxResponseBytes": configured})).unwrap());
+        assert_eq!(EsBulkConfig::from_crd(&crd).max_response_bytes, expected);
+    }
 }
