@@ -179,9 +179,11 @@ if [[ "${RESOURCE}" == "Gateway" && "${ITEM}" == "PortConflict" ]]; then
   if no_conf_json="$(wait_gateway_json "port-no-conflict-hostname" 30)"; then
     if check_gateway_has_listeners_not_valid "${no_conf_json}" \
       || check_listener_conflicted "${no_conf_json}" "api" \
-      || check_listener_conflicted "${no_conf_json}" "web"; then
+      || check_listener_conflicted "${no_conf_json}" "web" \
+      || ! check_listener_not_conflicted "${no_conf_json}" "api" \
+      || ! check_listener_not_conflicted "${no_conf_json}" "web"; then
       echo "  ✗ no_conflict_different_hostname"
-      echo "    Unexpected conflict detected for different hostnames"
+      echo "    Missing no-conflict verdict or unexpected conflict for different hostnames"
       fail_count=$((fail_count + 1))
     else
       echo "  ✓ no_conflict_different_hostname"

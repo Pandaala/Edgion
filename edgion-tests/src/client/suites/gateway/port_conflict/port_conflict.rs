@@ -97,6 +97,32 @@ fn find_listener_status<'a>(status: &'a GatewayStatus, listener_name: &str) -> O
     status.listeners.as_ref()?.iter().find(|ls| ls.name == listener_name)
 }
 
+/// Require an observed no-conflict verdict; missing status is not evidence.
+fn require_listener_not_conflicted(status: &GatewayStatus, name: &str) -> Result<(), String> {
+    let mut listeners = status
+        .listeners
+        .iter()
+        .flatten()
+        .filter(|listener| listener.name == name);
+    let listener = listeners
+        .next()
+        .ok_or_else(|| format!("Missing Listener status: {name}"))?;
+    if listeners.next().is_some() {
+        return Err(format!("Duplicate Listener status: {name}"));
+    }
+    let mut conditions = listener
+        .conditions
+        .iter()
+        .filter(|condition| condition.type_ == "Conflicted");
+    let condition = conditions
+        .next()
+        .ok_or_else(|| format!("Missing Conflicted condition: {name}"))?;
+    if conditions.next().is_some() || condition.status != "False" {
+        return Err(format!("Expected one Conflicted=False condition: {name}"));
+    }
+    Ok(())
+}
+
 pub struct PortConflictTestSuite;
 
 impl PortConflictTestSuite {
@@ -220,8 +246,14 @@ impl PortConflictTestSuite {
                     };
 
                     // Find both Gateways
-                    let gateway_a = find_gateway(&gateways.data, "port-conflict-cross-a");
-                    let gateway_b = find_gateway(&gateways.data, "port-conflict-cross-b");
+                    let gateway_a = gateways.data.iter().find(|gateway| {
+                        gateway.metadata.namespace.as_deref() == Some("edgion-test")
+                            && gateway.metadata.name.as_deref() == Some("port-conflict-cross-a")
+                    });
+                    let gateway_b = gateways.data.iter().find(|gateway| {
+                        gateway.metadata.namespace.as_deref() == Some("edgion-test")
+                            && gateway.metadata.name.as_deref() == Some("port-conflict-cross-b")
+                    });
 
                     match (gateway_a, gateway_b) {
                         (Some(ga), Some(gb)) => {
@@ -242,28 +274,24 @@ impl PortConflictTestSuite {
                             let a_invalid = has_listeners_not_valid(status_a);
                             let b_invalid = has_listeners_not_valid(status_b);
 
-                            // Neither Listener should be Conflicted
-                            let listener_a = find_listener_status(status_a, "http");
-                            let listener_b = find_listener_status(status_b, "http");
-
-                            let a_conflicted = listener_a.map(is_listener_conflicted).unwrap_or(false);
-                            let b_conflicted = listener_b.map(is_listener_conflicted).unwrap_or(false);
-
-                            if !a_invalid && !b_invalid && !a_conflicted && !b_conflicted {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "Both Gateways are healthy: no ListenersNotValid, no Conflicted (cross-Gateway same port is allowed)"
-                                        .to_string(),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!(
-                                        "Cross-Gateway same port should NOT conflict. A: invalid={}, conflicted={}. B: invalid={}, conflicted={}",
-                                        a_invalid, a_conflicted, b_invalid, b_conflicted
-                                    ),
-                                )
+                            for (name, status) in
+                                [("port-conflict-cross-a", status_a), ("port-conflict-cross-b", status_b)]
+                            {
+                                if let Err(error) = require_listener_not_conflicted(status, "http") {
+                                    return TestResult::failed(start.elapsed(), format!("{name}: {error}"));
+                                }
                             }
+                            if a_invalid || b_invalid {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    "Unexpected ListenersNotValid=True for cross-Gateway listeners".to_string(),
+                                );
+                            }
+                            TestResult::passed_with_message(
+                                start.elapsed(),
+                                "Both Gateways report http Conflicted=False (cross-Gateway same port is allowed)"
+                                    .to_string(),
+                            )
                         }
                         _ => TestResult::failed(
                             start.elapsed(),
@@ -305,7 +333,10 @@ impl PortConflictTestSuite {
                     };
 
                     // Find the no-conflict Gateway
-                    let Some(gateway) = find_gateway(&gateways.data, "port-no-conflict-hostname") else {
+                    let Some(gateway) = gateways.data.iter().find(|gateway| {
+                        gateway.metadata.namespace.as_deref() == Some("edgion-test")
+                            && gateway.metadata.name.as_deref() == Some("port-no-conflict-hostname")
+                    }) else {
                         return TestResult::failed(
                             start.elapsed(),
                             "Gateway 'port-no-conflict-hostname' not found".to_string(),
@@ -324,39 +355,15 @@ impl PortConflictTestSuite {
                         );
                     }
 
-                    // Check that both Listeners are NOT Conflicted
-                    let api = find_listener_status(status, "api");
-                    let web = find_listener_status(status, "web");
-
-                    match (api, web) {
-                        (Some(l1), Some(l2)) => {
-                            let l1_conflicted = is_listener_conflicted(l1);
-                            let l2_conflicted = is_listener_conflicted(l2);
-
-                            if !l1_conflicted && !l2_conflicted {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "✓ Same port, different hostnames: no conflict detected".to_string(),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!(
-                                        "Expected no Conflicted, but got api={}, web={}",
-                                        l1_conflicted, l2_conflicted
-                                    ),
-                                )
-                            }
-                        }
-                        _ => {
-                            // If listeners are not found, it might be because the Gateway wasn't loaded
-                            // This is still a valid test - just check that no ListenersNotValid exists
-                            TestResult::passed_with_message(
-                                start.elapsed(),
-                                "✓ Gateway has no ListenersNotValid condition (no conflict)".to_string(),
-                            )
+                    for name in ["api", "web"] {
+                        if let Err(error) = require_listener_not_conflicted(status, name) {
+                            return TestResult::failed(start.elapsed(), error);
                         }
                     }
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        "Same port, different hostnames: both Listeners report Conflicted=False".to_string(),
+                    )
                 })
             },
         )
@@ -374,5 +381,43 @@ impl TestSuite for PortConflictTestSuite {
             Self::test_cross_gateway_no_conflict(),
             Self::test_no_conflict_diff_hostname(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn no_conflict_requires_an_explicit_named_verdict() {
+        for document in [
+            json!({}),
+            json!({"listeners": []}),
+            json!({"listeners": [{"name": "other", "conditions": [{"type": "Conflicted", "status": "False"}]}]}),
+            json!({"listeners": [{"name": "api", "conditions": []}]}),
+            json!({"listeners": [{"name": "api", "conditions": [{"type": "Conflicted", "status": "Unknown"}]}]}),
+            json!({"listeners": [{"name": "api", "conditions": [{"type": "Conflicted", "status": "True"}]}]}),
+            json!({"listeners": [{"name": "api", "conditions": [{"type": "Conflicted", "status": "False"}, {"type": "Conflicted", "status": "True"}]}]}),
+        ] {
+            let status: GatewayStatus = serde_json::from_value(document).unwrap();
+            assert!(require_listener_not_conflicted(&status, "api").is_err());
+        }
+        let mut status: GatewayStatus = serde_json::from_value(json!({"listeners": [
+            {"name": "api", "conditions": [{"type": "Conflicted", "status": "False"}]},
+            {"name": "web", "conditions": [{"type": "Conflicted", "status": "False"}]}
+        ]}))
+        .unwrap();
+        assert!(!has_listeners_not_valid(&status));
+        for name in ["api", "web"] {
+            assert!(require_listener_not_conflicted(&status, name).is_ok());
+        }
+        status.conditions = Some(vec![Condition {
+            type_: "ListenersNotValid".into(),
+            status: "True".into(),
+            reason: None,
+            message: None,
+        }]);
+        assert!(has_listeners_not_valid(&status));
     }
 }

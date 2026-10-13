@@ -23,3 +23,17 @@ the namespaced Gateway list endpoint, and a malformed item within an otherwise s
 ## Resolution references
 
 - `ITEST-003` — 2026-08-26.
+
+## Native Listener observations (ARCH-339)
+
+The PortConflict suite requires explicit named Listener `Conflicted=False` observations in its
+cross-Gateway and different-hostname no-conflict cases. Missing Listener entries, missing
+conditions, Unknown and True are not evidence of no conflict. Rust selects the fixture namespace
+and name and rejects duplicate Listener or Conflicted entries. The Kubernetes different-hostname
+branch requires the existing False predicate for both `api` and `web` while retaining its
+unexpected-True checks. The optional Gateway-level `ListenersNotValid` condition may be absent;
+its True value still fails these cases.
+
+Synthetic reader and shell checks establish this observation boundary, not live topology health,
+condition generation freshness, socket binding, or data-plane publication. The separate internal
+conflict admission shortcut is unchanged.
