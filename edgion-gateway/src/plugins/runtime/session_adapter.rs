@@ -425,6 +425,8 @@ pub struct PingoraSessionAdapter<'a> {
     /// Adapter-local permission for a read-only mirror tee during the first
     /// backend request dispatch, before Pingora starts delivering body events.
     backend_mirror_allowed: bool,
+    /// Local replies from selected-backend dispatch cannot reuse H1 in Pingora.
+    backend_request_dispatch: bool,
 }
 
 fn backend_mirror_allowed_for_attempt(attempt: Option<usize>) -> bool {
@@ -498,6 +500,7 @@ impl<'a> PingoraSessionAdapter<'a> {
             grpc_response_terminated: false,
             delivery_failure_recorded: false,
             backend_mirror_allowed: false,
+            backend_request_dispatch: false,
         }
     }
 
@@ -510,7 +513,16 @@ impl<'a> PingoraSessionAdapter<'a> {
         let allowed = backend_mirror_allowed_for_attempt(inner.request_attempt_id().map(|id| id.get()));
         let mut adapter = Self::new(inner, ctx);
         adapter.backend_mirror_allowed = allowed;
+        adapter.backend_request_dispatch = true;
         adapter
+    }
+
+    /// Align the wire with Pingora's non-reusable upstream-peer error path.
+    /// H2 keepalive is stream-independent, so the codec deliberately does nothing.
+    pub(super) fn prepare_local_reply_transport(&mut self) {
+        if self.backend_request_dispatch {
+            self.inner.as_downstream_mut().set_keepalive(None);
+        }
     }
 
     #[inline]
@@ -528,6 +540,7 @@ impl<'a> PingoraSessionAdapter<'a> {
             grpc_response_terminated: false,
             delivery_failure_recorded: false,
             backend_mirror_allowed: false,
+            backend_request_dispatch: false,
         }
     }
 
@@ -745,6 +758,7 @@ impl<'a> PingoraSessionAdapter<'a> {
 
         let mut resp = ResponseHeader::build(200, None).map_err(|e| Box::new(e) as PluginSessionError)?;
         prepare_grpc_terminal_headers(self.ctx, &mut resp).map_err(|e| Box::new(e) as PluginSessionError)?;
+        self.prepare_local_reply_transport();
         let result = send_grpc_trailers_only_frame(self.inner, resp, grpc_status, message)
             .await
             .map_err(|e| Box::new(e) as PluginSessionError);
@@ -796,6 +810,7 @@ impl<'a> PingoraSessionAdapter<'a> {
 
         let mut resp = ResponseHeader::build(200, None).map_err(|e| Box::new(e) as PluginSessionError)?;
         prepare_grpc_terminal_headers(self.ctx, &mut resp).map_err(|e| Box::new(e) as PluginSessionError)?;
+        self.prepare_local_reply_transport();
         let result = send_grpc_trailers_only_frame(self.inner, resp, grpc_status, Some(grpc_message))
             .await
             .map_err(|e| Box::new(e) as PluginSessionError);
@@ -1186,6 +1201,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             }
         }
         self.ctx.request_info.trace_id.reconcile_response(resp.as_mut());
+        self.prepare_local_reply_transport();
         let result = self
             .inner
             .write_response_header(resp, end_of_stream)

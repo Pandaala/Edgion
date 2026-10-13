@@ -3,6 +3,8 @@
 services:
   openldap-tls:
     image: osixia/openldap:1.5.0
+    # Startup edits LDIF files; isolate each service from the shared bootstrap mount.
+    command: ["--copy-service"]
     container_name: edgion-test-openldap-tls
     environment:
       LDAP_ORGANISATION: "Edgion Test"
@@ -32,6 +34,8 @@ services:
 
   openldap-tls-mtls:
     image: osixia/openldap:1.5.0
+    # Startup edits LDIF files; isolate each service from the shared bootstrap mount.
+    command: ["--copy-service"]
     container_name: edgion-test-openldap-mtls
     environment:
       LDAP_ORGANISATION: "Edgion Test"

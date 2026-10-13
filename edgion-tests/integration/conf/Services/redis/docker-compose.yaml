@@ -8,11 +8,13 @@ services:
     container_name: edgion-test-redis
     ports:
       - "16379:6379"
+    # Maintain long-idle host-to-container test connections with TCP keepalive.
     command: >
       redis-server
       --requirepass edgion-test-pwd
       --maxmemory 64mb
       --maxmemory-policy allkeys-lru
+      --tcp-keepalive 60
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "edgion-test-pwd", "ping"]
       interval: 2s

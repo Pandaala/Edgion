@@ -39,6 +39,26 @@ drain, overread, shutdown, and other transport checks authoritative.
 - Do not conflate this item with sticky-session `Set-Cookie` carry-over or
   pending response-header operation carry-over.
 
+## Selected-backend local replies
+
+Selected-backend request plugins execute inside `upstream_peer`. A local reply
+followed by termination makes that hook return an error; the locked fork returns
+`server_reuse=false` for this path regardless of `FailToProxy` reuse permission.
+Advertising H1 keepalive before this inevitable close is a correctness defect,
+distinct from the correctly advertised response-stage close described above.
+
+The backend-owned session adapter carries an independent dispatch flag, not the
+first-attempt-only mirror permission. Before each physical local final-head write
+it disables H1 reuse. The dispatcher does the same on bare termination before the
+existing fallback writer runs. Ordinary route replies and passing backend requests
+retain their prior reuse behavior. H2's codec operation is a no-op and leaves
+sibling streams available; status, body and gRPC trailers-only semantics remain.
+No fork reuse feature, body-drain shortcut, retry or policy-order change is implied.
+
+Deterministic bounded in-memory H1 wire and H2 sibling-stream tests cover these
+boundaries. Their acceptance is separate from fresh full integration verification;
+historical test results do not establish acceptance of the current source.
+
 ## Feature handoff
 
 The complete brainstorming handoff was created in the dedicated working tree at

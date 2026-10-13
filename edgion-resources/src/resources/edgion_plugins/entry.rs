@@ -62,36 +62,40 @@ pub(super) fn validate_alias_str(alias: &str) -> Option<String> {
 
 /// Plugin entry with enable switch
 ///
+/// Named groups and CIDRs belong to the referenced IpList.
+///
 /// YAML format:
 /// ```yaml
-/// plugins:
+/// requestPlugins:
 ///   - enable: true                    # optional, defaults to true
 ///     type: RequestHeaderModifier
 ///     config:
 ///       set:
 ///         - name: X-Test
 ///           value: test-value
+///   - conditions:                     # conditional execution
+///       skip:
+///         allOf:
+///           - type: keyExist
+///             key:
+///               type: header
+///               name: "X-Internal"
+///       run:
+///         allOf:
+///           - type: timeRange
+///             after: "2024-01-01T00:00:00Z"
+///             before: "2024-12-31T23:59:59Z"
+///     type: IpRestriction
+///     config:
+///       allowRefs: [{name: internal-network}]
+///       defaultAction: deny
+/// upstreamResponseFilterPlugins:
 ///   - enable: false                   # disabled plugin
 ///     type: ResponseHeaderModifier
 ///     config:
 ///       add:
 ///         - name: X-Response
 ///           value: added
-///   - conditions:                     # conditional execution
-///       skip:
-///         - type: keyExist
-///           key:
-///             type: header
-///             name: "X-Internal"
-///       run:
-///         - type: timeRange
-///           after: "2024-01-01T00:00:00Z"
-///           before: "2024-12-31T23:59:59Z"
-///     type: IpRestriction
-///     config:
-///       allow:
-///         - name: internal-network
-///           cidrs: ["10.0.0.0/8"]
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

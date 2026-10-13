@@ -3301,6 +3301,12 @@ impl PluginRuntime {
             }
         }
 
+        if session_adapter.ctx().plugin_terminated() {
+            // A bare backend termination is answered by terminate_with_fallback
+            // after this adapter is dropped; set framing before that writer.
+            session_adapter.prepare_local_reply_transport();
+        }
+
         ctx.finish_plugin_stage("request_filters", filter_logs);
         ctx.end_rate_limit_local_frame(outcome_frame);
     }

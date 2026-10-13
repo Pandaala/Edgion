@@ -442,6 +442,10 @@ tmp/integration_testing/redis_testing_YYYYMMDD_HHMMSS/
 
 ### Redis
 
+The plaintext Redis fixture sets `tcp-keepalive` to 60 seconds for long-idle
+connections across host-to-container forwarding. This is kernel transport
+maintenance; ordinary LinkSys Redis commands retain their single-attempt contract.
+
 | Item | Details |
 |------|---------|
 | **Runner integration** | Merged into `run_integration.sh` as the `LinkSys/Redis` suite (auto-discovered). Redis docker is auto-started via `start_redis_service_if_needed`. |

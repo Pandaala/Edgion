@@ -1,4 +1,5 @@
 use super::*;
+use bytes::Bytes;
 use serde_json::json;
 
 fn owner(spec: serde_json::Value) -> edgion_resources::EdgionPlugins {
@@ -155,4 +156,76 @@ fn entry_outcome_label_does_not_hide_successful_executable_members() {
     let mut view = PluginRuntime::new();
     view.append_entry_bundle(failed.bundle());
     assert!(!view.has_ai_conversion_owner());
+}
+
+struct LocalReplyTransportFilter(u8);
+
+#[async_trait::async_trait]
+impl RequestFilter for LocalReplyTransportFilter {
+    fn name(&self) -> &str {
+        "LocalReplyTransportTest"
+    }
+
+    async fn run_request(&self, session: &mut dyn PluginSession, _log: &mut PluginLog) -> PluginRunningResult {
+        match self.0 {
+            0 => PluginRunningResult::ErrResponse {
+                status: 401,
+                body: Some(Bytes::from_static(b"denied")),
+            },
+            1 => {
+                let mut header = ResponseHeader::build(401, Some(2)).unwrap();
+                header.insert_header("content-length", "6").unwrap();
+                session.write_response_header(Box::new(header), false).await.unwrap();
+                session
+                    .write_response_body(Some(Bytes::from_static(b"denied")), true)
+                    .await
+                    .unwrap();
+                PluginRunningResult::ErrTerminateRequest
+            }
+            2 => PluginRunningResult::ErrTerminateRequest,
+            _ => PluginRunningResult::GoodNext,
+        }
+    }
+}
+
+#[tokio::test]
+async fn real_backend_dispatch_closes_h1_for_reply_and_bare_termination_only() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    for (backend, mode) in [(true, 0), (true, 1), (true, 2), (true, 3), (false, 0)] {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            let (mut client, server) = tokio::io::duplex(64 * 1024);
+            client.write_all(b"GET /reply HTTP/1.1\r\nHost: test\r\n\r\n").await.unwrap();
+            let mut session = Session::new_h1(Box::new(server));
+            session.read_request().await.unwrap();
+            let mut ctx = EdgionHttpContext::default();
+            let mut runtime = PluginRuntime::new();
+            runtime.request_plugins.push(Arc::new(LocalReplyTransportFilter(mode)));
+            if backend { runtime.run_backend_request_plugins(&mut session, &mut ctx).await; }
+            else { runtime.run_request_plugins(&mut session, &mut ctx).await; }
+            if mode == 3 {
+                assert!(!ctx.plugin_terminated());
+                assert!(session.get_keepalive().is_some());
+                return;
+            }
+            assert!(ctx.plugin_terminated());
+            if mode == 2 {
+                assert!(!ctx.response_write_started());
+                assert!(session.get_keepalive().is_none(), "dispatch closes before the existing fallback writer");
+                crate::terminate_with_fallback(&mut session, &mut ctx, &crate::runtime::server::ServerHeaderOpts::default()).await.unwrap();
+            }
+            assert_eq!(session.get_keepalive().is_none(), backend);
+            let reusable = session.downstream_session.finish().await.unwrap();
+            assert_eq!(reusable.is_none(), backend);
+            drop(reusable);
+            let mut wire = Vec::new();
+            client.read_to_end(&mut wire).await.unwrap();
+            let text = String::from_utf8(wire).unwrap();
+            let (head, body) = text.split_once("\r\n\r\n").unwrap();
+            assert!(head.starts_with(if mode == 2 { "HTTP/1.1 502" } else { "HTTP/1.1 401" }));
+            assert_eq!(head.to_ascii_lowercase().contains("connection: close"), backend);
+            if mode == 2 {
+                assert_eq!(body.as_bytes(), b"<html>\n<head><title>502 Bad Gateway</title></head>\n<body>\n<center><h1>502 Bad Gateway</h1></center>\n<hr><center>edgion</center>\n</body>\n</html>");
+            } else { assert_eq!(body.as_bytes(), b"denied"); }
+        }).await.unwrap();
+    }
 }
