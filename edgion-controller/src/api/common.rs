@@ -233,9 +233,12 @@ where
 
     // Fall back to YAML
     serde_yaml::from_str::<T>(body).map_err(|e| {
+        let location = e.location();
         tracing::warn!(
             component = "unified_api",
-            error = %e,
+            stage = "resource_parse",
+            line = location.as_ref().map(|location| location.line()),
+            column = location.as_ref().map(|location| location.column()),
             "Failed to parse request body as JSON or YAML"
         );
         StatusCode::BAD_REQUEST
@@ -350,9 +353,12 @@ where
     T: serde::de::DeserializeOwned + kube::ResourceExt + edgion_resources::ResourceMeta,
 {
     crate::conf_mgr::conf_center::common::validate_resource_api_version::<T>(body).map_err(|e| {
+        let location = e.location();
         tracing::warn!(
             component = "unified_api",
-            error = %e,
+            stage = "source_version",
+            line = location.as_ref().map(|location| location.line()),
+            column = location.as_ref().map(|location| location.column()),
             "Resource API version validation failed"
         );
         StatusCode::BAD_REQUEST

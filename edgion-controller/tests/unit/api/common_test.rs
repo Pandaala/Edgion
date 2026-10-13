@@ -192,3 +192,131 @@ fn absent_update_precondition_remains_unconditional() {
     let body = r#"metadata: {name: route-a}"#;
     assert_eq!(expected_resource_version(&HeaderMap::new(), body).unwrap(), None);
 }
+
+#[derive(Clone, Default)]
+struct ParseLogWriter(std::sync::Arc<parking_lot::Mutex<Vec<u8>>>);
+
+impl std::io::Write for ParseLogWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for ParseLogWriter {
+    type Writer = Self;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+fn capture_parse_logs(run: impl FnOnce()) -> Vec<serde_json::Value> {
+    let writer = ParseLogWriter::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .without_time()
+        .with_writer(writer.clone())
+        .with_max_level(tracing::Level::WARN)
+        .finish();
+    tracing::subscriber::with_default(subscriber, run);
+    let bytes = writer.0.lock().clone();
+    String::from_utf8(bytes)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+fn assert_value_free_parse_warning(events: &[serde_json::Value], stage: &str, has_location: bool) {
+    assert_eq!(events.len(), 1, "expected exactly one parser warning: {events:?}");
+    let event = &events[0];
+    assert_eq!(event["level"], "WARN");
+    let fields = &event["fields"];
+    assert_eq!(fields["component"], "unified_api");
+    assert_eq!(fields["stage"], stage);
+    if has_location {
+        assert!(fields["line"].as_u64().is_some_and(|line| line > 0));
+        assert!(fields["column"].as_u64().is_some_and(|column| column > 0));
+    } else {
+        assert!(fields.get("line").is_none());
+        assert!(fields.get("column").is_none());
+    }
+    let serialized = event.to_string();
+    for private_fragment in ["private-marker", "private-key", "clientAuth", "verifyDepth", "spec."] {
+        assert!(
+            !serialized.contains(private_fragment),
+            "unexpected authored data: {serialized}"
+        );
+    }
+    assert!(fields.get("error").is_none());
+}
+
+#[test]
+fn admin_parser_warns_without_authored_values_for_json_and_yaml() {
+    let valid = serde_json::json!({
+        "apiVersion": "edgion.io/v1", "kind": "EdgionTls",
+        "metadata": {"name": "tls", "namespace": "default"},
+        "spec": {"hosts": ["example.com"], "secretRef": {"name": "tls"},
+                 "clientAuth": {"mode": "Terminate", "verifyDepth": 1}}
+    });
+    for yaml in [false, true] {
+        let encode = |value: &serde_json::Value| {
+            if yaml {
+                serde_yaml::to_string(value).unwrap()
+            } else {
+                value.to_string()
+            }
+        };
+        let events = capture_parse_logs(|| {
+            let parsed = parse_resource::<edgion_resources::EdgionTls>(&encode(&valid)).unwrap();
+            assert_eq!(parsed.spec.hosts, ["example.com"]);
+        });
+        assert!(events.is_empty());
+        for field in ["mode", "verifyDepth"] {
+            let mut invalid = valid.clone();
+            invalid["spec"]["clientAuth"][field] = serde_json::json!("private-marker");
+            let events = capture_parse_logs(|| {
+                assert_eq!(
+                    parse_resource::<edgion_resources::EdgionTls>(&encode(&invalid)).err(),
+                    Some(StatusCode::BAD_REQUEST)
+                );
+            });
+            assert_value_free_parse_warning(&events, "resource_parse", true);
+        }
+    }
+
+    // A dynamic map key must not become a logged parser path either.
+    let events = capture_parse_logs(|| {
+        assert_eq!(
+            parse_resource::<std::collections::BTreeMap<String, u8>>("private-key: private-marker").err(),
+            Some(StatusCode::BAD_REQUEST)
+        );
+    });
+    assert_value_free_parse_warning(&events, "resource_parse", true);
+}
+
+#[test]
+fn admin_source_version_warning_omits_authored_diagnostics() {
+    let malformed = "apiVersion: gateway.networking.k8s.io/v1\nprivate-key: [private-marker";
+    let events = capture_parse_logs(|| {
+        assert_eq!(
+            parse_resource_and_update_version::<edgion_resources::HTTPRoute>(malformed, false).err(),
+            Some(StatusCode::BAD_REQUEST)
+        );
+    });
+    assert_value_free_parse_warning(&events, "source_version", true);
+
+    let unsupported = backend_tls_policy_body("private-marker");
+    let events = capture_parse_logs(|| {
+        assert_eq!(
+            parse_resource_and_update_version::<BackendTLSPolicy>(&unsupported, false).err(),
+            Some(StatusCode::BAD_REQUEST)
+        );
+    });
+    assert_value_free_parse_warning(&events, "source_version", false);
+}

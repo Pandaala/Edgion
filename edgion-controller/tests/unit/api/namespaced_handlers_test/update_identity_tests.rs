@@ -287,3 +287,40 @@ async fn update_rejects_unregistered_backend_tls_policy_version_and_keeps_canoni
     let stored: serde_yaml::Value = serde_yaml::from_str(&stored).unwrap();
     assert_eq!(stored["apiVersion"], "gateway.networking.k8s.io/v1");
 }
+
+#[tokio::test]
+async fn malformed_tls_update_rejects_before_persistence() {
+    let (state, _tmp) = make_fs_state().await;
+    let current = serde_json::json!({
+        "apiVersion": "edgion.io/v1", "kind": "EdgionTls",
+        "metadata": {"name": "tls", "namespace": "default", "resourceVersion": "42"},
+        "spec": {"hosts": ["example.com"], "secretRef": {"name": "tls"},
+                 "clientAuth": {"mode": "Terminate"}}
+    });
+    state
+        .conf_center()
+        .create_one("EdgionTls", Some("default"), "tls", current.to_string())
+        .await
+        .unwrap();
+    let before = state
+        .conf_center()
+        .get_one("EdgionTls", Some("default"), "tls")
+        .await
+        .unwrap();
+    let mut invalid = current;
+    invalid["spec"]["clientAuth"]["mode"] = serde_json::json!("private-marker");
+    let result = update_namespaced(
+        State(Arc::clone(&state)),
+        Path(("EdgionTls".to_string(), "default".to_string(), "tls".to_string())),
+        HeaderMap::new(),
+        Bytes::from(invalid.to_string()),
+    )
+    .await;
+    assert_eq!(result.err(), Some(StatusCode::BAD_REQUEST));
+    let after = state
+        .conf_center()
+        .get_one("EdgionTls", Some("default"), "tls")
+        .await
+        .unwrap();
+    assert_eq!(after, before);
+}

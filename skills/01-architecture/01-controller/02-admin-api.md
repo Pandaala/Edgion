@@ -122,6 +122,10 @@ Response `data` shape:
 
 All endpoints read/write the **ConfCenter storage layer**. The request body supports JSON and YAML (JSON parsing is tried first).
 
+The shared resource parser and source-version gate log fixed failure stages and
+optional numeric line/column coordinates, never parser error Display or authored
+values/key paths. Rejection still returns HTTP 400 before persistence (ARCH-140).
+
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/namespaced/{kind}` | List all resources of a kind across all namespaces |
