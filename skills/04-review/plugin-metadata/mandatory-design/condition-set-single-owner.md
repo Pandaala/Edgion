@@ -65,3 +65,21 @@ unresolved predicate. Request callbacks do no regex compilation. The actual-owne
 mixed IP/regex test covers entry, body, Dye, RequestRestriction and RAP supplemental
 roots; the RR integration regression is important because its old validated config
 copy previously supplied regex state that is absent from the original borrowed set.
+
+## Admission observation boundary
+
+The local `PluginValidationStatus` malformed ConditionSet probes preserve the
+three authored YAML bodies and require authenticated Admin observations:
+initial GET 404, POST 400, and final GET 404. A generic apply error cannot prove
+structural rejection (ARCH-385): transport failure, auth denial, server error,
+unexpected acceptance, or failed non-persistence checks all fail the probe.
+The shared `status::helpers` admission helper supports both existing JSON and
+original YAML payloads. Unexpected observed persistence triggers exact-fixture
+cleanup and remains a failure, including when cleanup succeeds. It never deletes
+a preexisting fixture after a failed initial absence check. Cancellation or an
+unobserved write remains outside this bounded cleanup contract.
+
+Pure `admission_tests` cover status gates, request errors and unchanged YAML
+request bytes/authentication. They do not establish live Admin or Kubernetes
+admission results. Kubernetes server dry-run verification and the bounded
+ConditionSet decoder remain independently required and unchanged.

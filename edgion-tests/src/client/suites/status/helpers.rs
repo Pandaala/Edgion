@@ -328,6 +328,46 @@ mod tests {
 /// Probe the Controller Admin admission boundary, not native Kubernetes conformance.
 /// Authentication, transport failures and unexpected success must never pass.
 pub async fn expect_admin_admission_rejected(ctx: &TestContext, resource: &Value) -> Result<(), String> {
+    expect_admin_rejection(ctx, resource, AdmissionPayload::Json(resource)).await
+}
+
+/// Preserve the authored YAML boundary while inspecting only untyped identity fields.
+pub async fn expect_admin_yaml_admission_rejected(ctx: &TestContext, yaml: &str) -> Result<(), String> {
+    let resource: Value = serde_yaml::from_str(yaml).map_err(|_| "Admission fixture is not valid YAML")?;
+    expect_admin_rejection(ctx, &resource, AdmissionPayload::Yaml(yaml)).await
+}
+
+enum AdmissionPayload<'a> {
+    Json(&'a Value),
+    Yaml(&'a str),
+}
+
+fn admission_request(request: reqwest::RequestBuilder, payload: AdmissionPayload<'_>) -> reqwest::RequestBuilder {
+    match payload {
+        AdmissionPayload::Json(resource) => request.json(resource),
+        AdmissionPayload::Yaml(yaml) => request
+            .header("Content-Type", "application/x-yaml")
+            .body(yaml.to_owned()),
+    }
+}
+
+fn require_admission_status(
+    observed: Result<reqwest::StatusCode, reqwest::Error>,
+    expected: reqwest::StatusCode,
+    phase: &str,
+) -> Result<(), String> {
+    match observed {
+        Ok(actual) if actual == expected => Ok(()),
+        Ok(actual) => Err(format!("Admission {phase}: expected HTTP {expected}, got {actual}")),
+        Err(_) => Err(format!("Admission {phase}: request failed")),
+    }
+}
+
+async fn expect_admin_rejection(
+    ctx: &TestContext,
+    resource: &Value,
+    payload: AdmissionPayload<'_>,
+) -> Result<(), String> {
     let kind = resource["kind"].as_str().ok_or("fixture kind missing")?;
     let namespace = resource["metadata"]["namespace"]
         .as_str()
@@ -342,33 +382,90 @@ pub async fn expect_admin_admission_rejected(ctx: &TestContext, resource: &Value
     let before = authenticated(ctx.http_client.get(&object))
         .send()
         .await
-        .map_err(|e| format!("Admission precondition GET failed: {e}"))?;
-    if before.status() != reqwest::StatusCode::NOT_FOUND {
-        return Err(format!(
-            "Admission fixture must initially be absent; GET returned {}",
-            before.status()
-        ));
-    }
-    let response = authenticated(ctx.http_client.post(&collection).json(resource))
+        .map(|r| r.status());
+    require_admission_status(before, reqwest::StatusCode::NOT_FOUND, "precondition GET")?;
+
+    let response = authenticated(admission_request(ctx.http_client.post(&collection), payload))
         .send()
         .await
-        .map_err(|e| format!("Admission POST failed: {e}"))?;
-    if response.status() != reqwest::StatusCode::BAD_REQUEST {
-        let status = response.status();
-        return Err(format!(
-            "Expected Admin 400, got {status}: {}",
-            response.text().await.unwrap_or_default()
-        ));
+        .map(|r| r.status());
+    let unexpected_success = response.as_ref().is_ok_and(|status| status.is_success());
+    let outcome = require_admission_status(response, reqwest::StatusCode::BAD_REQUEST, "POST");
+    // A failed POST observation is never evidence of rejection. Only an observed
+    // success can trigger cleanup here, after proving the fixture was absent.
+    if let Err(error) = outcome {
+        return if unexpected_success {
+            Err(cleanup_unexpected_admission(ctx, &object, error).await)
+        } else {
+            Err(error)
+        };
     }
+
     let after = authenticated(ctx.http_client.get(&object))
         .send()
         .await
-        .map_err(|e| format!("Admission nonpersistence GET failed: {e}"))?;
-    if after.status() != reqwest::StatusCode::NOT_FOUND {
-        return Err(format!(
-            "Rejected resource must remain absent; GET returned {}",
-            after.status()
-        ));
+        .map(|r| r.status());
+    let persisted = after.as_ref().is_ok_and(|status| *status == reqwest::StatusCode::OK);
+    match require_admission_status(after, reqwest::StatusCode::NOT_FOUND, "nonpersistence GET") {
+        Err(error) if persisted => Err(cleanup_unexpected_admission(ctx, &object, error).await),
+        result => result,
     }
-    Ok(())
+}
+
+async fn cleanup_unexpected_admission(ctx: &TestContext, object: &str, failure: String) -> String {
+    let mut request = ctx.http_client.delete(object);
+    if let Some(token) = &ctx.admin_token {
+        request = request.bearer_auth(token);
+    }
+    let cleanup = match request.send().await {
+        Ok(response) if response.status().is_success() || response.status() == reqwest::StatusCode::NOT_FOUND => {
+            "unexpected admission cleanup completed"
+        }
+        Ok(_) => "unexpected admission cleanup returned an unexpected status",
+        Err(_) => "unexpected admission cleanup request failed",
+    };
+    format!("{failure}; {cleanup}")
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+    use reqwest::StatusCode;
+
+    #[test]
+    fn admission_requires_each_observed_status_and_rejects_request_errors() {
+        for (phase, expected) in [
+            ("precondition GET", StatusCode::NOT_FOUND),
+            ("POST", StatusCode::BAD_REQUEST),
+            ("nonpersistence GET", StatusCode::NOT_FOUND),
+        ] {
+            assert!(require_admission_status(Ok(expected), expected, phase).is_ok());
+            for actual in [200, 201, 204, 400, 401, 403, 404, 500] {
+                let actual = StatusCode::from_u16(actual).unwrap();
+                assert_eq!(
+                    require_admission_status(Ok(actual), expected, phase).is_ok(),
+                    actual == expected
+                );
+            }
+            let error = reqwest::Client::new().get("invalid URL").build().unwrap_err();
+            assert!(require_admission_status(Err(error), expected, phase).is_err());
+        }
+    }
+
+    #[test]
+    fn admission_yaml_request_preserves_bytes_and_authentication() {
+        let yaml = "kind: EdgionPlugins\nmetadata:\n  namespace: default\n  name: invalid-shape\n";
+        let request = admission_request(
+            reqwest::Client::new()
+                .post("http://127.0.0.1/unused")
+                .bearer_auth("fixture-token"),
+            AdmissionPayload::Yaml(yaml),
+        )
+        .build()
+        .unwrap();
+        assert_eq!(request.method(), reqwest::Method::POST);
+        assert_eq!(request.headers()["content-type"], "application/x-yaml");
+        assert_eq!(request.headers()["authorization"], "Bearer fixture-token");
+        assert_eq!(request.body().unwrap().as_bytes(), Some(yaml.as_bytes()));
+    }
 }

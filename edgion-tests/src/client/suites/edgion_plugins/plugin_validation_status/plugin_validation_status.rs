@@ -26,7 +26,7 @@
 //  10. condition_set_empty_invalid      → an empty operator is retained with Accepted=False/Invalid
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
-use crate::suites::status::helpers::controller_local_conditions;
+use crate::suites::status::helpers::{controller_local_conditions, expect_admin_yaml_admission_rejected};
 use std::time::Instant;
 
 const NS: &str = "default";
@@ -324,11 +324,10 @@ impl PluginValidationStatusTestSuite {
                         let yaml = format!(
                             "apiVersion: edgion.io/v1\nkind: EdgionPlugins\nmetadata:\n  name: {name}\n  namespace: {NS}\nspec:\n  requestPlugins:\n    - enable: true\n      type: Cors\n      config: {{}}\n      conditions:\n        run:\n          {condition_set}\n"
                         );
-                        if ctx.apply_yaml(&yaml).await.is_ok() {
-                            let _ = ctx.delete_resource("EdgionPlugins", NS, &name).await;
+                        if let Err(error) = expect_admin_yaml_admission_rejected(&ctx, &yaml).await {
                             return TestResult::failed(
                                 start.elapsed(),
-                                format!("ConditionSet structural case '{suffix}' was accepted"),
+                                format!("ConditionSet structural case '{suffix}': {error}"),
                             );
                         }
                     }
