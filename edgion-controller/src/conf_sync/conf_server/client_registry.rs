@@ -5,16 +5,28 @@
 
 use parking_lot::RwLock;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::Notify;
 
 pub struct ClientRegistry {
-    /// client_id -> client metadata
-    clients: RwLock<HashMap<String, ClientMeta>>,
+    /// client_id -> number of live metadata registrations
+    clients: RwLock<HashMap<String, usize>>,
     /// Notify watchers when count changes
     notify: Notify,
 }
 
-struct ClientMeta {}
+/// One metadata stream's ownership of a gateway presence entry.
+#[must_use = "hold the registration for the metadata stream lifetime"]
+pub(super) struct ClientRegistration {
+    registry: Arc<ClientRegistry>,
+    client_id: String,
+}
+
+impl Drop for ClientRegistration {
+    fn drop(&mut self) {
+        self.registry.release(&self.client_id);
+    }
+}
 
 impl ClientRegistry {
     pub fn new() -> Self {
@@ -24,11 +36,12 @@ impl ClientRegistry {
         }
     }
 
-    /// Register a gateway client. Notifies watchers if count changes.
-    pub fn register(&self, client_id: String, client_name: String) {
+    /// Acquire one registration; overlapping streams share one counted gateway.
+    pub(super) fn register(self: &Arc<Self>, client_id: String, client_name: String) -> ClientRegistration {
         let mut clients = self.clients.write();
-        let is_new = !clients.contains_key(&client_id);
-        clients.insert(client_id.clone(), ClientMeta {});
+        let registrations = clients.entry(client_id.clone()).or_default();
+        *registrations += 1;
+        let is_new = *registrations == 1;
         if is_new {
             tracing::info!(
                 client_id = %client_id,
@@ -39,12 +52,21 @@ impl ClientRegistry {
             drop(clients); // Release lock before notify
             self.notify.notify_waiters();
         }
+        ClientRegistration {
+            registry: self.clone(),
+            client_id,
+        }
     }
 
-    /// Unregister a gateway client. Notifies watchers if count changes.
-    pub fn unregister(&self, client_id: &str) {
+    /// Release only this stream's registration; the last owner removes presence.
+    fn release(&self, client_id: &str) {
         let mut clients = self.clients.write();
-        if clients.remove(client_id).is_some() {
+        let Some(registrations) = clients.get_mut(client_id) else {
+            return;
+        };
+        *registrations -= 1;
+        if *registrations == 0 {
+            clients.remove(client_id);
             tracing::info!(
                 client_id = %client_id,
                 total = clients.len(),

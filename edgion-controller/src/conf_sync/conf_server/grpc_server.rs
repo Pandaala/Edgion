@@ -766,7 +766,7 @@ impl ConfigSync for ConfigSyncGrpcServer {
         let req = request.into_inner();
         let registry = server.client_registry();
 
-        registry.register(req.client_id.clone(), req.client_name.clone());
+        let registration = registry.register(req.client_id.clone(), req.client_name.clone());
 
         let (tx, rx) = tokio::sync::mpsc::channel(8);
         let server_id = server.server_id();
@@ -789,6 +789,7 @@ impl ConfigSync for ConfigSyncGrpcServer {
         let process_token = self.process_token.clone();
 
         tokio::spawn(async move {
+            let _registration = registration;
             let shutdown = async move {
                 tokio::select! {
                     _ = term_token.cancelled() => {}
@@ -811,7 +812,6 @@ impl ConfigSync for ConfigSyncGrpcServer {
                 timestamp: now_millis(),
             };
             if tx.send(Ok(initial_event)).await.is_err() {
-                registry.unregister(&client_id);
                 return;
             }
 
@@ -842,7 +842,6 @@ impl ConfigSync for ConfigSyncGrpcServer {
                                 client_id = %client_id,
                                 "WatchServerMeta client disconnected, unregistering"
                             );
-                            registry.unregister(&client_id);
                             break;
                         }
                     }
@@ -856,7 +855,6 @@ impl ConfigSync for ConfigSyncGrpcServer {
                             client_id = %client_id,
                             "WatchServerMeta receiver closed, unregistering"
                         );
-                        registry.unregister(&client_id);
                         break;
                     }
                     // Periodically check if server_id changed (controller reload / leader switch)
@@ -879,8 +877,6 @@ impl ConfigSync for ConfigSyncGrpcServer {
                                     timestamp: now_millis(),
                                 };
                                 let _ = tx.send(Ok(switch_event)).await;
-                                // Unregister from the old registry before exiting
-                                registry.unregister(&client_id);
                                 break;
                             }
                         }
@@ -894,7 +890,6 @@ impl ConfigSync for ConfigSyncGrpcServer {
                             client_id = %client_id,
                             "WatchServerMeta stream task shutting down"
                         );
-                        registry.unregister(&client_id);
                         break;
                     }
                 }

@@ -116,7 +116,13 @@ This is a control-plane readiness issue, not an unsupported resource type. Gatew
 
 ## ClientRegistry
 
-Tracks connected Gateway instances and maintains gateway_instance_count information.
+Tracks distinct connected Gateway IDs and maintains gateway_instance_count information,
+with a minimum reported count of one. Each metadata RPC owns one non-cloneable
+registration guard; overlapping streams with the same ID share a counted entry.
+Only the last guard removes it, including early return and task cancellation
+(ARCH-118). First/last registration transitions notify watchers. This ownership
+contract does not change the stream's bounded send backpressure or establish a
+count-delivery deadline.
 
 Main uses:
 - **Cluster-level rate limiting**: Gateway receives `gateway_instance_count` via WatchServerMeta to compute cluster-level rate-limit quotas (per-instance quota = total cluster quota / instance count)
