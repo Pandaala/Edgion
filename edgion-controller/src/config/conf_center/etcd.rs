@@ -138,6 +138,8 @@ impl EtcdLeaderElectionConfig {
     }
 
     fn addr_is_routable(addr: &str) -> bool {
+        use edgion_common::egress::{classify_ip, IpClass};
+
         if addr.is_empty() {
             return false;
         }
@@ -146,7 +148,13 @@ impl EtcdLeaderElectionConfig {
         // never work (spec §8).
         let host = addr.rsplit_once(':').map(|(h, _)| h).unwrap_or(addr);
         let host = host.trim_start_matches('[').trim_end_matches(']');
-        !(host == "127.0.0.1" || host == "0.0.0.0" || host == "::1" || host == "::" || host == "localhost")
+        if host == "localhost" {
+            return false;
+        }
+        match host.parse() {
+            Ok(ip) => !matches!(classify_ip(ip), IpClass::Loopback | IpClass::Unspecified),
+            Err(_) => true, // DNS names remain supported without resolution here.
+        }
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {

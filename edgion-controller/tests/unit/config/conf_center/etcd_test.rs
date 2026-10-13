@@ -280,3 +280,55 @@ fn bootstrap_half_keepalive_uses_controller_defaults_only_for_missing_half() {
     let keepalive = direct.keep_alive.unwrap();
     assert_eq!((keepalive.time, keepalive.timeout), (Some(5), Some(11)));
 }
+
+#[test]
+fn advertised_leader_addresses_classify_literals_without_broadening_egress_policy() {
+    let cases = [
+        ("", false),
+        ("localhost:9090", false),
+        ("127.0.0.0:9090", false),
+        ("127.0.0.2:9090", false),
+        ("127.255.255.255:9090", false),
+        ("0.0.0.0:9090", false),
+        ("[::1]:9090", false),
+        ("[0:0:0:0:0:0:0:1]:9090", false),
+        ("[0:0:0:0:0:0:0:0]:9090", false),
+        ("[::ffff:127.0.0.2]:9090", false),
+        ("[::ffff:7fff:ffff]:9090", false),
+        ("[::ffff:0.0.0.0]:9090", false),
+        ("126.255.255.255:9090", true),
+        ("128.0.0.0:9090", true),
+        ("10.0.0.11:9090", true),
+        ("169.254.1.1:9090", true),
+        ("192.0.2.1:9090", true),
+        ("[fe80::1]:9090", true),
+        ("[fd00::1]:9090", true),
+        ("[2001:db8::1]:9090", true),
+        ("[::ffff:10.0.0.11]:9090", true),
+        ("[::ffff:192.0.2.1]:9090", true),
+        ("controller.example.test:9090", true),
+    ];
+    for (address, accepted) in cases {
+        for grpc in [true, false] {
+            let mut config = EtcdLeaderElectionConfig {
+                grpc_addr: "10.0.0.11:9090".into(),
+                admin_addr: "10.0.0.11:8080".into(),
+                ..Default::default()
+            };
+            if grpc {
+                config.grpc_addr = address.into();
+            } else {
+                config.admin_addr = address.into();
+            }
+            let result = config.validate();
+            assert_eq!(result.is_ok(), accepted, "grpc={grpc}, address={address}: {result:?}");
+            if let Err(error) = result {
+                let field = if grpc { "grpc_addr" } else { "admin_addr" };
+                assert!(error
+                    .to_string()
+                    .starts_with(&format!("etcd leader_election: {field} must be")));
+            }
+            assert_eq!(if grpc { &config.grpc_addr } else { &config.admin_addr }, address);
+        }
+    }
+}

@@ -53,6 +53,17 @@ Construction/file errors remain `anyhow::Result`; runtime writer operations
 retain typed `ConfWriterError`. This is a layered error contract. A new client
 trait is not required solely for mock convenience: `EtcdStorage` and `CenterApi`
 remain the storage abstraction, and production has one Etcd client implementation.
+
+## Advertised leader addresses
+
+ARCH-085 reuses Common's policy-free `egress::classify_ip` for the literal host
+of each advertised gRPC/Admin address. The local policy rejects only loopback
+and unspecified literals, including IPv4-mapped IPv6; private, link-local,
+unique-local and public literals retain their existing acceptance. Exact
+`localhost` and empty-address rejection remain in place. This is not the
+outbound egress filter: DNS names are not resolved, advertised strings are not
+rewritten, and neither comprehensive authority syntax nor actual reachability
+is established. Controller config tests exercise both advertised fields.
 Re-evaluate these decisions against concrete fault-injection or backend needs,
 rather than suppressing unrelated current defects.
 
