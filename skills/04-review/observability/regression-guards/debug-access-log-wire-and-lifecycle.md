@@ -115,3 +115,17 @@ to change the frozen runner wiring.
 - D0087, originally medium / needs-implementation in B0125: a real cross-process
   test gap, addressed with standalone wire and resource-lifecycle coverage.
 - Source task: `tasks/todo/add-debug-access-log-wire-integration-coverage.md`.
+
+
+## Empty terminal plugin logs (ARCH-353)
+
+The terminal-store `empty_plugin_logs` case requires a successfully fetched and
+decoded record whose `stage_logs` is empty. Omitted stages retain the existing
+serde empty-vector default. Request, Admin lookup or record parsing errors are
+failed observations, never evidence that no plugins ran; the case propagates
+its existing helper error. No debug-response-header behavior changes.
+
+A network-free regression invokes the actual case with an invalid request URL
+and requires failure. Serde controls retain omitted/empty/nonempty stage shapes
+and malformed-stage rejection. They do not execute live Admin failures or prove
+a fresh integration run.

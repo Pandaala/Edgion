@@ -284,14 +284,7 @@ impl PluginLogsTestSuite {
                                 )
                             }
                         }
-                        Err(_) => {
-                            // Access log not found is also acceptable for routes without plugins
-                            // (the gateway may not store logs for simple requests)
-                            TestResult::passed_with_message(
-                                start.elapsed(),
-                                "Empty logs handled correctly (no access log stored)".to_string(),
-                            )
-                        }
+                        Err(error) => TestResult::failed(start.elapsed(), error),
                     }
                 })
             },
@@ -423,5 +416,48 @@ impl TestSuite for PluginLogsTestSuite {
             Self::test_empty_plugin_logs(),
             Self::test_plugin_time_cost(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod empty_log_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn empty_logs_request_failure_is_not_success() {
+        // Invalid URL construction fails before DNS or any network operation.
+        let ctx = TestContext {
+            target_host: "[invalid".into(),
+            http_port: 80,
+            grpc_port: 0,
+            websocket_port: 0,
+            tcp_port: 0,
+            tcp_filtered_port: 0,
+            udp_port: 0,
+            https_port: 0,
+            grpc_https_port: 0,
+            admin_port: 0,
+            http_client: reqwest::Client::builder().no_proxy().build().unwrap(),
+            http_host: None,
+            grpc_host: None,
+            gateway: false,
+            verbose: false,
+            access_log_path: Default::default(),
+            admin_token: None,
+        };
+        let result = PluginLogsTestSuite::test_empty_plugin_logs().run(&ctx).await;
+        assert!(!result.passed);
+        assert!(result.error.unwrap().starts_with("Request failed:"));
+    }
+
+    #[test]
+    fn empty_log_records_preserve_omitted_and_nonempty_stage_semantics() {
+        for input in ["{}", r#"{"stage_logs":[]}"#] {
+            assert!(serde_json::from_str::<AccessLog>(input).unwrap().stage_logs.is_empty());
+        }
+        let populated: AccessLog =
+            serde_json::from_str(r#"{"stage_logs":[{"stage":"request_filter","filters":[]}]}"#).unwrap();
+        assert_eq!(populated.stage_logs.len(), 1);
+        assert!(serde_json::from_str::<AccessLog>(r#"{"stage_logs":"invalid"}"#).is_err());
     }
 }
