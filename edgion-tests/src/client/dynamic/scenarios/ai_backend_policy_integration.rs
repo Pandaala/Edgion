@@ -21,7 +21,6 @@ const TLS_POLICY: &str = "policy-integration-tls";
 const TRAFFIC_POLICY: &str = "policy-integration-traffic";
 const MISSING_ROUTE: &str = "policy-integration-missing-route";
 const HOST: &str = "ai-backend-policy-integration.example.com";
-const AI_GATEWAY_PORT: u16 = 31945;
 
 #[derive(Clone, Debug)]
 struct ProviderBases {
@@ -452,7 +451,7 @@ async fn request_client(ctx: &ScenarioCtx) -> Result<reqwest::Client> {
 }
 
 async fn request_client_with_timeout(ctx: &ScenarioCtx, timeout: Duration) -> Result<reqwest::Client> {
-    let target = ctx.target_socket_addr(AI_GATEWAY_PORT).await?;
+    let target = ctx.target_socket_addr(ctx.test_ctx.http_port).await?;
     reqwest::Client::builder()
         .timeout(timeout)
         .no_proxy()
@@ -462,10 +461,11 @@ async fn request_client_with_timeout(ctx: &ScenarioCtx, timeout: Duration) -> Re
 }
 
 async fn ai_request(ctx: &ScenarioCtx, mode: Option<&str>, streaming: bool) -> Result<reqwest::Response> {
+    let port = ctx.test_ctx.http_port;
     let query = mode.map_or(String::new(), |mode| format!("?mock_mode={mode}"));
     request_client(ctx)
         .await?
-        .post(format!("http://{HOST}:{AI_GATEWAY_PORT}/v1/chat/completions{query}"))
+        .post(format!("http://{HOST}:{port}/v1/chat/completions{query}"))
         .json(&json!({"model": "fixture-model", "stream": streaming, "messages": []}))
         .send()
         .await
@@ -473,9 +473,10 @@ async fn ai_request(ctx: &ScenarioCtx, mode: Option<&str>, streaming: bool) -> R
 }
 
 async fn capture_retry_request(ctx: &ScenarioCtx, fixture: &str) -> Result<reqwest::Response> {
+    let port = ctx.test_ctx.http_port;
     request_client_with_timeout(ctx, Duration::from_secs(135))
         .await?
-        .post(format!("http://{HOST}:{AI_GATEWAY_PORT}/v1/chat/completions"))
+        .post(format!("http://{HOST}:{port}/v1/chat/completions"))
         .header(
             "traceparent",
             crate::access_log_client::traceparent_for_marker(uuid::Uuid::new_v4().to_string()),
@@ -720,12 +721,11 @@ async fn assert_request_stable_capture(ctx: &ScenarioCtx, bases: &ProviderBases)
 }
 
 async fn assert_client_abort(ctx: &ScenarioCtx, provider_http_base: &str) -> Result<()> {
+    let port = ctx.test_ctx.http_port;
     let trace = uuid::Uuid::new_v4().to_string();
     let response = request_client(ctx)
         .await?
-        .post(format!(
-            "http://{HOST}:{AI_GATEWAY_PORT}/v1/chat/completions?mock_mode=long"
-        ))
+        .post(format!("http://{HOST}:{port}/v1/chat/completions?mock_mode=long"))
         .header("traceparent", crate::access_log_client::traceparent_for_marker(&trace))
         .json(&json!({"model": "fixture-model", "stream": true, "messages": []}))
         .send()

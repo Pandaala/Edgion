@@ -24,7 +24,6 @@ const WINNER_POLICY: &str = "lifecycle-ai-policy-a";
 const SIBLING_POLICY: &str = "lifecycle-ai-policy-b";
 const SERVICE_POLICY: &str = "lifecycle-service-policy";
 const HOST: &str = "ai-backend-lifecycle.example.com";
-const AI_GATEWAY_PORT: u16 = 31945;
 
 fn provider_endpoint(path: &str) -> String {
     provider_endpoint_for(std::env::var("EDGION_TEST_K8S_MODE").as_deref() == Ok("true"), path)
@@ -345,7 +344,8 @@ async fn ai_request_model_with_headers(
     tier: Option<&str>,
     trace: Option<&str>,
 ) -> Result<reqwest::Response> {
-    let target = ctx.target_socket_addr(AI_GATEWAY_PORT).await?;
+    let port = ctx.test_ctx.http_port;
+    let target = ctx.target_socket_addr(port).await?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .no_proxy()
@@ -353,7 +353,7 @@ async fn ai_request_model_with_headers(
         .build()
         .context("failed to build lifecycle request client")?;
     let mut request = client
-        .post(format!("http://{HOST}:{AI_GATEWAY_PORT}/v1/chat/completions"))
+        .post(format!("http://{HOST}:{port}/v1/chat/completions"))
         .json(&json!({"model": model, "messages": [{"role": "user", "content": "hello"}]}));
     if let Some(tier) = tier {
         request = request.header("x-model-tier", tier);
@@ -367,7 +367,8 @@ async fn ai_request_model_with_headers(
 }
 
 async fn model_list(ctx: &ScenarioCtx) -> Result<Vec<String>> {
-    let target = ctx.target_socket_addr(AI_GATEWAY_PORT).await?;
+    let port = ctx.test_ctx.http_port;
+    let target = ctx.target_socket_addr(port).await?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .no_proxy()
@@ -375,7 +376,7 @@ async fn model_list(ctx: &ScenarioCtx) -> Result<Vec<String>> {
         .build()
         .context("failed to build model-list request client")?;
     let response = client
-        .get(format!("http://{HOST}:{AI_GATEWAY_PORT}/v1/models"))
+        .get(format!("http://{HOST}:{port}/v1/models"))
         .send()
         .await
         .context("AI model-list request failed")?
