@@ -748,14 +748,19 @@ fn collect_header_removals(pairs: &[(String, String)]) -> Result<Vec<String>, i3
     Ok(remove)
 }
 
-/// Resolve a proxy-wasm buffer-type id to the host bytes it exposes.
-/// `None` = unknown buffer type (caller returns `STATUS_NOT_FOUND`).
-enum SelectedBuffer {
+/// Borrow a recognized ABI source without copying its payload.
+/// HostState remains the source owner; only the selected range crosses guest reentry.
+enum BufferSource<'a> {
+    Borrowed(&'a [u8]),
+    Shared(&'a Bytes),
+}
+
+enum BufferSnapshot {
     Owned(Vec<u8>),
     Shared(Bytes),
 }
 
-impl AsRef<[u8]> for SelectedBuffer {
+impl AsRef<[u8]> for BufferSnapshot {
     fn as_ref(&self) -> &[u8] {
         match self {
             Self::Owned(bytes) => bytes,
@@ -764,34 +769,55 @@ impl AsRef<[u8]> for SelectedBuffer {
     }
 }
 
-fn select_buffer(state: &HostState, buf_type: i32) -> Option<SelectedBuffer> {
+impl BufferSource<'_> {
+    /// Own the validated range before guest allocation can reenter and mutate
+    /// HostState. The returned snapshot has no borrow of the source owner.
+    fn snapshot(self, start: usize, max_size: usize) -> Result<BufferSnapshot, i32> {
+        let len = match &self {
+            Self::Borrowed(bytes) => bytes.len(),
+            Self::Shared(bytes) => bytes.len(),
+        };
+        if start >= len && len != 0 {
+            return Err(STATUS_BAD_ARGUMENT);
+        }
+        let range = buffer_range(len, start, max_size);
+        match self {
+            Self::Borrowed(bytes) => {
+                let mut snapshot = try_vec_with_capacity(range.len())?;
+                snapshot.extend_from_slice(&bytes[range]);
+                Ok(BufferSnapshot::Owned(snapshot))
+            }
+            Self::Shared(bytes) => Ok(BufferSnapshot::Shared(bytes.slice(range))),
+        }
+    }
+}
+
+/// `None` means an unknown buffer type; absent callout data is recognized empty.
+fn select_buffer(state: &HostState, buf_type: i32) -> Option<BufferSource<'_>> {
     match buf_type {
-        BUF_VM_CONFIGURATION => Some(SelectedBuffer::Owned(state.vm_config.clone())),
-        BUF_PLUGIN_CONFIGURATION => Some(SelectedBuffer::Owned(state.plugin_config.clone())),
-        BUF_HTTP_CALL_RESPONSE_BODY => Some(SelectedBuffer::Owned(
+        BUF_VM_CONFIGURATION => Some(BufferSource::Borrowed(&state.vm_config)),
+        BUF_PLUGIN_CONFIGURATION => Some(BufferSource::Borrowed(&state.plugin_config)),
+        BUF_HTTP_CALL_RESPONSE_BODY => Some(BufferSource::Borrowed(
             state
                 .callout_response
                 .as_ref()
-                .map(|r| r.body.clone())
+                .map(|r| r.body.as_slice())
                 .unwrap_or_default(),
         )),
         // Buffer mode: the full request body staged by the body gate.
-        BUF_HTTP_REQUEST_BODY => Some(SelectedBuffer::Owned(state.request_body.clone())),
-        // Read-only chunk window (body observation): the CURRENT chunk only,
-        // never an accumulated body.
-        BUF_HTTP_RESPONSE_BODY => Some(SelectedBuffer::Shared(state.body_chunk.clone())),
+        BUF_HTTP_REQUEST_BODY => Some(BufferSource::Borrowed(&state.request_body)),
+        // Read-only chunk window: the CURRENT chunk, never an accumulated body.
+        BUF_HTTP_RESPONSE_BODY => Some(BufferSource::Shared(&state.body_chunk)),
         _ => None,
     }
 }
 
-/// Sub-slice of `data` starting at `start` (guest-controlled, so it may
-/// point past the end of `data`) up to `max_size` bytes. `start` is clamped
-/// to `data.len()` before slicing so that an empty (or short) buffer with
-/// an out-of-range `start` never panics.
-fn slice_buffer(data: &[u8], start: usize, max_size: usize) -> &[u8] {
-    let start = start.min(data.len());
-    let end = data.len().min(start.saturating_add(max_size));
-    &data[start..end]
+/// Clamp the range after validating the ABI's nonempty-source offset contract.
+/// Empty sources accept arbitrary offsets and resolve to an empty range.
+fn buffer_range(len: usize, start: usize, max_size: usize) -> Range<usize> {
+    let start = start.min(len);
+    let end = len.min(start.saturating_add(max_size));
+    start..end
 }
 
 /// Apply the proxy-wasm range-replacement contract to the staged request Body.
@@ -1862,13 +1888,11 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
             // get_plugin_configuration passes usize::MAX (wasm32: u32::MAX,
             // i.e. -1 as i32) for "the whole buffer". Interpret as u32 —
             // a signed max(0) clamp would silently read 0 bytes there.
-            let start = start as u32 as usize;
-            let data = data.as_ref();
-            if start >= data.len() && !data.is_empty() {
-                return STATUS_BAD_ARGUMENT;
-            }
-            let slice = slice_buffer(data, start, max_size as u32 as usize);
-            write_to_guest(&mut caller, slice, ret_ptr, ret_size)
+            let snapshot = match data.snapshot(start as u32 as usize, max_size as u32 as usize) {
+                Ok(snapshot) => snapshot,
+                Err(status) => return status,
+            };
+            write_to_guest(&mut caller, snapshot.as_ref(), ret_ptr, ret_size)
         },
     )?;
 

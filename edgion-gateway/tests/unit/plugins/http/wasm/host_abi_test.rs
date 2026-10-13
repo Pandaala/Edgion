@@ -164,15 +164,16 @@ fn decode_map_huge_count_returns_none_without_abort() {
 /// `start`). Slicing must never panic.
 #[test]
 fn slice_buffer_empty_data_nonzero_start_no_panic() {
-    assert_eq!(slice_buffer(&[], 3, 10), b"");
+    assert_eq!(buffer_range(0, 3, 10), 0..0);
 }
 
 #[test]
 fn slice_buffer_normal_cases() {
     let data = b"hello world";
-    assert_eq!(slice_buffer(data, 0, 5), b"hello");
-    assert_eq!(slice_buffer(data, 6, 100), b"world");
-    assert_eq!(slice_buffer(data, 100, 5), b"");
+    assert_eq!(&data[buffer_range(data.len(), 0, 5)], b"hello");
+    assert_eq!(&data[buffer_range(data.len(), 6, 100)], b"world");
+    assert_eq!(&data[buffer_range(data.len(), 100, 5)], b"");
+    assert_eq!(buffer_range(data.len(), 6, usize::MAX), 6..data.len());
 }
 
 #[test]
@@ -538,19 +539,22 @@ fn begin_phase_clears_request_body() {
     assert_eq!(state.phase, WasmPhase::RequestBody);
 }
 
-/// `select_buffer` resolves `BUF_HTTP_REQUEST_BODY` to the staged full
-/// request body, keeps the existing response-body chunk-window behavior,
-/// and returns `None` for an unknown buffer-type id.
+/// Request snapshots own only the selected range and survive source mutation.
 #[test]
 fn buffer_select_preserves_owned_request_body() {
     let mut state = HostState::default();
-    state.request_body = b"POST-BODY".to_vec();
-    let selected = select_buffer(&state, BUF_HTTP_REQUEST_BODY).expect("request body buffer");
-    assert_eq!(selected.as_ref(), b"POST-BODY");
-    assert!(matches!(selected, SelectedBuffer::Owned(_)));
-    let response = select_buffer(&state, BUF_HTTP_RESPONSE_BODY).expect("response body buffer");
-    assert!(response.as_ref().is_empty());
-    assert!(matches!(response, SelectedBuffer::Shared(_)));
+    state.request_body = vec![b'a'; 1024 * 1024];
+    state.request_body[42..45].copy_from_slice(b"XYZ");
+    let selected = select_buffer(&state, BUF_HTTP_REQUEST_BODY)
+        .unwrap()
+        .snapshot(42, 3)
+        .unwrap();
+    state.request_body.clear();
+    assert_eq!(selected.as_ref(), b"XYZ");
+    let BufferSnapshot::Owned(bytes) = selected else {
+        panic!("request range must be independently owned");
+    };
+    assert_eq!(bytes.len(), 3);
     assert!(select_buffer(&state, 999).is_none());
 }
 
@@ -559,11 +563,57 @@ fn response_buffer_selection_shares_chunk_backing_storage() {
     let chunk = Bytes::from(vec![1, 2, 3, 4]);
     let mut state = HostState::default();
     state.body_chunk = chunk.clone();
+    let selected = select_buffer(&state, BUF_HTTP_RESPONSE_BODY)
+        .unwrap()
+        .snapshot(1, 2)
+        .unwrap();
+    state.body_chunk = Bytes::new();
+    assert_eq!(selected.as_ref(), &[2, 3]);
+    assert_eq!(selected.as_ref().as_ptr(), chunk[1..].as_ptr());
+    assert!(matches!(selected, BufferSnapshot::Shared(_)));
+}
 
-    let selected = select_buffer(&state, BUF_HTTP_RESPONSE_BODY).expect("response body buffer");
-    assert_eq!(selected.as_ref(), chunk.as_ref());
-    assert_eq!(selected.as_ref().as_ptr(), chunk.as_ptr());
-    assert!(matches!(selected, SelectedBuffer::Shared(_)));
+#[test]
+fn buffer_snapshots_cover_vec_sources_and_empty_callout() {
+    let mut state = HostState::default();
+    state.vm_config = b"vm-config".to_vec();
+    state.plugin_config = b"plugin-config".to_vec();
+    state.request_body = b"request".to_vec();
+    state.callout_response = Some(CalloutResponse {
+        body: b"callout".to_vec(),
+        ..Default::default()
+    });
+    let snapshots: Vec<_> = [
+        BUF_VM_CONFIGURATION,
+        BUF_PLUGIN_CONFIGURATION,
+        BUF_HTTP_REQUEST_BODY,
+        BUF_HTTP_CALL_RESPONSE_BODY,
+    ]
+    .into_iter()
+    .map(|id| select_buffer(&state, id).unwrap().snapshot(1, 2).unwrap())
+    .collect();
+    for id in [
+        BUF_VM_CONFIGURATION,
+        BUF_PLUGIN_CONFIGURATION,
+        BUF_HTTP_REQUEST_BODY,
+        BUF_HTTP_CALL_RESPONSE_BODY,
+    ] {
+        let source = select_buffer(&state, id).unwrap();
+        assert!(matches!(source.snapshot(usize::MAX, 0), Err(STATUS_BAD_ARGUMENT)));
+    }
+    state.vm_config.clear();
+    state.plugin_config.clear();
+    state.request_body.clear();
+    state.callout_response = None;
+    for (snapshot, expected) in snapshots.iter().zip([b"m-", b"lu", b"eq", b"al"]) {
+        assert_eq!(snapshot.as_ref(), expected);
+        assert!(matches!(snapshot, BufferSnapshot::Owned(bytes) if bytes.len() == 2));
+    }
+    let empty = select_buffer(&state, BUF_HTTP_CALL_RESPONSE_BODY)
+        .unwrap()
+        .snapshot(usize::MAX, usize::MAX)
+        .unwrap();
+    assert!(empty.as_ref().is_empty());
 }
 
 fn instantiate_guest(wat: &str) -> (Store<HostState>, Instance) {
@@ -880,8 +930,192 @@ fn set_buffer_bytes_enforces_phase_and_buffer_type() {
         STATUS_BAD_ARGUMENT
     );
     assert_eq!(
-        f.call(&mut store, (BUF_HTTP_RESPONSE_BODY, 0, 0, 0, 0)).unwrap(),
+        f.call(&mut store, (BUF_HTTP_RESPONSE_BODY, -1, -1, i32::MAX, -1))
+            .unwrap(),
         STATUS_UNIMPLEMENTED
+    );
+    for populated in [false, true] {
+        store.data_mut().vm_config = if populated { b"vm".to_vec() } else { Vec::new() };
+        store.data_mut().plugin_config = if populated { b"plugin".to_vec() } else { Vec::new() };
+        store.data_mut().callout_response = populated.then(|| CalloutResponse {
+            body: b"callout".to_vec(),
+            ..Default::default()
+        });
+        for id in [
+            BUF_VM_CONFIGURATION,
+            BUF_PLUGIN_CONFIGURATION,
+            BUF_HTTP_CALL_RESPONSE_BODY,
+        ] {
+            assert_eq!(
+                f.call(&mut store, (id, -1, -1, i32::MAX, -1)).unwrap(),
+                STATUS_BAD_ARGUMENT
+            );
+        }
+    }
+    assert_eq!(
+        f.call(&mut store, (999, -1, -1, i32::MAX, -1)).unwrap(),
+        STATUS_NOT_FOUND
+    );
+}
+
+/// The allocator records every invocation, can trap, or can reenter SET.
+const GET_BUFFER_BYTES_GUEST: &str = r#"
+    (module
+      (import "env" "proxy_get_buffer_bytes"
+        (func $get (param i32 i32 i32 i32 i32) (result i32)))
+      (import "env" "proxy_set_buffer_bytes"
+        (func $set (param i32 i32 i32 i32 i32) (result i32)))
+      (memory (export "memory") 1)
+      (global $mode (mut i32) (i32.const 0))
+      (data (i32.const 32) "XYZ")
+      (func (export "allocator_mode") (param i32) (global.set $mode (local.get 0)))
+      (func (export "proxy_on_memory_allocate") (param $size i32) (result i32)
+        (i32.store (i32.const 16) (i32.add (i32.load (i32.const 16)) (i32.const 1)))
+        (i32.store (i32.const 20) (local.get $size))
+        (if (i32.eq (global.get $mode) (i32.const 1)) (then unreachable))
+        (if (i32.eq (global.get $mode) (i32.const 2))
+          (then
+            (i32.store (i32.const 24)
+              (call $set (i32.const 0) (i32.const 1) (i32.const 3) (i32.const 32) (i32.const 3)))))
+        (i32.const 4096))
+      (func (export "call") (param i32 i32 i32 i32 i32) (result i32)
+        (call $get (local.get 0) (local.get 1) (local.get 2) (local.get 3) (local.get 4))))
+    "#;
+
+fn guest_u32(store: &mut Store<HostState>, instance: &Instance, offset: usize) -> u32 {
+    let memory = instance.get_memory(&mut *store, "memory").unwrap();
+    let mut bytes = [0; 4];
+    memory.read(&*store, offset, &mut bytes).unwrap();
+    u32::from_le_bytes(bytes)
+}
+
+fn guest_buffer(store: &mut Store<HostState>, instance: &Instance) -> Vec<u8> {
+    let ptr = guest_u32(store, instance, 0) as usize;
+    let size = guest_u32(store, instance, 4) as usize;
+    let memory = instance.get_memory(&mut *store, "memory").unwrap();
+    let mut bytes = vec![0; size];
+    memory.read(&*store, ptr, &mut bytes).unwrap();
+    bytes
+}
+
+#[test]
+fn get_buffer_bytes_preserves_unsigned_ranges_and_status_precedence() {
+    let (mut store, instance) = instantiate_guest(GET_BUFFER_BYTES_GUEST);
+    let get = instance
+        .get_typed_func::<(i32, i32, i32, i32, i32), i32>(&mut store, "call")
+        .unwrap();
+    let state = store.data_mut();
+    state.vm_config = b"abcdef".to_vec();
+    state.plugin_config = b"abcdef".to_vec();
+    state.request_body = b"abcdef".to_vec();
+    state.body_chunk = Bytes::from_static(b"abcdef");
+    state.callout_response = Some(CalloutResponse {
+        body: b"abcdef".to_vec(),
+        ..Default::default()
+    });
+    for id in [
+        BUF_VM_CONFIGURATION,
+        BUF_PLUGIN_CONFIGURATION,
+        BUF_HTTP_REQUEST_BODY,
+        BUF_HTTP_RESPONSE_BODY,
+        BUF_HTTP_CALL_RESPONSE_BODY,
+    ] {
+        assert_eq!(get.call(&mut store, (id, 1, 2, 0, 4)).unwrap(), STATUS_OK);
+        assert_eq!(guest_buffer(&mut store, &instance), b"bc");
+        assert_eq!(guest_u32(&mut store, &instance, 20), 2);
+        for max_size in [-1, i32::MIN, 100] {
+            assert_eq!(get.call(&mut store, (id, 2, max_size, 0, 4)).unwrap(), STATUS_OK);
+            assert_eq!(guest_buffer(&mut store, &instance), b"cdef");
+        }
+        assert_eq!(get.call(&mut store, (id, 0, -1, 0, 4)).unwrap(), STATUS_OK);
+        assert_eq!(guest_buffer(&mut store, &instance), b"abcdef");
+        let count = guest_u32(&mut store, &instance, 16);
+        for start in [-1, i32::MIN, 6, 100] {
+            assert_eq!(
+                get.call(&mut store, (id, start, 0, i32::MAX, i32::MAX)).unwrap(),
+                STATUS_BAD_ARGUMENT
+            );
+        }
+        assert_eq!(
+            guest_u32(&mut store, &instance, 16),
+            count,
+            "invalid ranges must not call the allocator"
+        );
+        assert_eq!(get.call(&mut store, (id, 1, 0, 0, 4)).unwrap(), STATUS_OK);
+        assert!(guest_buffer(&mut store, &instance).is_empty());
+        assert_eq!(guest_u32(&mut store, &instance, 16), count + 1);
+    }
+    let count = guest_u32(&mut store, &instance, 16);
+    assert_eq!(
+        get.call(&mut store, (999, -1, -1, i32::MAX, i32::MAX)).unwrap(),
+        STATUS_NOT_FOUND
+    );
+    assert_eq!(guest_u32(&mut store, &instance, 16), count);
+    assert_eq!(
+        get.call(&mut store, (BUF_HTTP_REQUEST_BODY, 1, 2, i32::MAX, 4))
+            .unwrap(),
+        STATUS_INVALID_MEMORY_ACCESS
+    );
+}
+
+#[test]
+fn get_buffer_bytes_empty_sources_still_invoke_guest_allocator() {
+    let (mut store, instance) = instantiate_guest(GET_BUFFER_BYTES_GUEST);
+    let get = instance
+        .get_typed_func::<(i32, i32, i32, i32, i32), i32>(&mut store, "call")
+        .unwrap();
+    for id in [
+        BUF_VM_CONFIGURATION,
+        BUF_PLUGIN_CONFIGURATION,
+        BUF_HTTP_REQUEST_BODY,
+        BUF_HTTP_RESPONSE_BODY,
+        BUF_HTTP_CALL_RESPONSE_BODY,
+    ] {
+        let count = guest_u32(&mut store, &instance, 16);
+        assert_eq!(get.call(&mut store, (id, -1, -1, 0, 4)).unwrap(), STATUS_OK);
+        assert!(guest_buffer(&mut store, &instance).is_empty());
+        assert_eq!(guest_u32(&mut store, &instance, 16), count + 1);
+        assert_eq!(guest_u32(&mut store, &instance, 20), 0);
+    }
+    let mode = instance
+        .get_typed_func::<i32, ()>(&mut store, "allocator_mode")
+        .unwrap();
+    mode.call(&mut store, 1).unwrap();
+    let count = guest_u32(&mut store, &instance, 16);
+    assert_eq!(
+        get.call(&mut store, (BUF_HTTP_CALL_RESPONSE_BODY, -1, 0, 0, 4))
+            .unwrap(),
+        STATUS_INTERNAL_FAILURE
+    );
+    assert_eq!(guest_u32(&mut store, &instance, 16), count + 1);
+}
+
+#[test]
+fn get_buffer_bytes_snapshot_survives_allocator_reentry_mutation() {
+    let (mut store, instance) = instantiate_guest(GET_BUFFER_BYTES_GUEST);
+    store
+        .data_mut()
+        .begin_phase(WasmPhase::RequestBody, vec![], vec![], HashMap::new());
+    store.data_mut().request_body = b"abcdef".to_vec();
+    store.data_mut().request_body_limit = 16;
+    let mode = instance
+        .get_typed_func::<i32, ()>(&mut store, "allocator_mode")
+        .unwrap();
+    mode.call(&mut store, 2).unwrap();
+    let get = instance
+        .get_typed_func::<(i32, i32, i32, i32, i32), i32>(&mut store, "call")
+        .unwrap();
+    assert_eq!(
+        get.call(&mut store, (BUF_HTTP_REQUEST_BODY, 1, 3, 0, 4)).unwrap(),
+        STATUS_OK
+    );
+    assert_eq!(guest_u32(&mut store, &instance, 24), STATUS_OK as u32);
+    assert_eq!(store.data().request_body, b"aXYZef");
+    assert!(store.data().request_body_modified);
+    assert_eq!(
+        guest_buffer(&mut store, &instance),
+        b"bcd",
+        "outer GET must return its pre-allocation range"
     );
 }
 

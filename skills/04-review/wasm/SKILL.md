@@ -11,6 +11,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Buffer ranges own their snapshot before guest allocation](regression-guards/buffer-range-snapshot-before-guest-allocation.md)
+
 - [Shared-data byte gauges aggregate live stores and balance destruction](regression-guards/shared-data-gauge-live-stores.md)
 - [Plugin owner destruction closes background work](regression-guards/tick-quiescence-on-zero-reference-eviction.md)
 - [Claim Wasm preload before copying task inputs](regression-guards/preload-claim-before-owned-inputs.md)
