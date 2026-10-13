@@ -187,6 +187,15 @@ Endpoint, scopes and egress derive from that same owner. Existing live source,
 Secret, Grant, issuer and leadership checks still control each acquisition and
 publication; snapshot capture grants no freshness or authorization bypass.
 
+OAuth2 provider preparation applies Common egress filtering to literal hosts of
+the same parsed token endpoint retained for acquisition (`ARCH-104`), because the
+HTTP connector bypasses DNS for IP literals. The source's `blockPrivate` policy
+and shared integration-testing loopback exception remain canonical. Domain hosts
+continue through the configured `EgressResolver` at connection time; preparation
+does not pre-resolve them. Blocked literals return the existing fixed permanent
+provider error before issuer IO. Isolated provider-construction tests cover
+literal policy and URL retention; they do not exercise issuer or TLS handshakes.
+
 Publication and teardown invariants:
 
 - `true` to `false` publishes or reacquires a live memory entry before deleting

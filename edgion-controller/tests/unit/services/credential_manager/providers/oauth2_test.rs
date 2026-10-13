@@ -159,6 +159,101 @@ fn oauth_build(prepared: &PreparedLinkSysTls) -> Result<OAuth2Provider, OAuth2Pr
 }
 
 #[test]
+fn literal_issuer_egress_uses_source_policy_and_shared_testing_exception() {
+    use edgion_common::link_sys_core::outbound_tls::GlobalOutboundTlsSnapshot;
+    const CHILD: &str = "EDGION_ARCH104_OAUTH_EGRESS_CHILD";
+    const TEST: &str = "services::credential_manager::providers::oauth2::tests::literal_issuer_egress_uses_source_policy_and_shared_testing_exception";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST, "--nocapture"])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+        return;
+    }
+    enum Expected {
+        Public,
+        Private,
+        Loopback,
+        Blocked,
+    }
+    use Expected::*;
+    let cases = [
+        ("https://8.8.8.8/token", Public),
+        ("https://[2606:4700:4700::1111]/token", Public),
+        ("https://[::ffff:8.8.8.8]/token", Public),
+        ("https://10.0.0.1/token", Private),
+        ("https://[fd00::1]/token", Private),
+        ("https://[::ffff:10.0.0.1]/token", Private),
+        ("https://127.0.0.1/token", Loopback),
+        ("https://127.1/token", Loopback),
+        ("https://0x7f000001/token", Loopback),
+        ("https://[::1]/token", Loopback),
+        ("https://[::ffff:127.0.0.1]/token", Loopback),
+        ("https://169.254.169.254/token", Blocked),
+        ("https://[fe80::1]/token", Blocked),
+        ("https://[::ffff:169.254.1.1]/token", Blocked),
+        ("https://0.0.0.0/token", Blocked),
+        ("https://[::]/token", Blocked),
+        ("https://[::ffff:0.0.0.0]/token", Blocked),
+        ("https://issuer.example/token", Public),
+    ];
+    for testing in [false, true] {
+        edgion_common::test_mode::init_integration_testing_mode(testing);
+        for block_private in [true, false] {
+            for (endpoint, expected) in &cases {
+                let mut owner = oauth_actual_owner(serde_json::Value::Null);
+                let SystemConfig::CredentialSource(source) = &mut owner.spec.config else {
+                    unreachable!()
+                };
+                source.egress.block_private = block_private;
+                let CredentialSourceProvider::OAuth2ClientCredentials(config) = &mut source.provider;
+                config.token_endpoint = endpoint.to_string();
+                let prepared = PreparedLinkSysTls::with_snapshot(
+                    Arc::new(owner),
+                    Arc::new(GlobalOutboundTlsSnapshot::from_configs([])),
+                )
+                .unwrap();
+                let result = OAuth2Provider::new(
+                    &prepared,
+                    Duration::from_secs(3),
+                    Duration::from_secs(8),
+                    ResolverSpec::StandardDns {
+                        servers: vec!["192.0.2.53:53".into()],
+                    },
+                );
+                let allowed = match expected {
+                    Public => true,
+                    Private => !block_private,
+                    Loopback => testing,
+                    Blocked => false,
+                };
+                assert_eq!(
+                    result.is_ok(),
+                    allowed,
+                    "{endpoint} private={block_private} testing={testing}"
+                );
+                match result {
+                    Ok(provider) => assert_eq!(provider.token_endpoint, Url::parse(endpoint).unwrap()),
+                    Err(error) => {
+                        assert_eq!(error.kind, OAuth2FailureKind::Permanent);
+                        assert_eq!(error.retry_after, None);
+                        assert!(!error.to_string().contains(*endpoint));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn owning_oauth_rejects_invalid_source_and_whole_material_mismatch() {
     use edgion_common::link_sys_core::outbound_tls::GlobalOutboundTlsSnapshot;
     use serde_json::json;

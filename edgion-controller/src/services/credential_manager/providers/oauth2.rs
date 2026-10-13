@@ -6,12 +6,13 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use base64::Engine;
 use edgion_common::dns::ResolverSpec;
-use edgion_common::egress::{EgressPolicy, EgressResolver};
+use edgion_common::egress::{filter_resolved_addrs, EgressPolicy, EgressResolver};
 use edgion_common::link_sys_core::http_client::{build_outbound_client_with_tls_selection, OutboundClientConfig};
 use edgion_common::link_sys_core::outbound_tls::PreparedLinkSysTls;
 use edgion_resources::credentials::{BearerResolver, SecretMaterialResolver};
@@ -178,14 +179,21 @@ impl OAuth2Provider {
             OAuth2ClientAuthenticationMethod::ClientSecretBasic => {}
         }
         let token_endpoint = validate_endpoint(&config.token_endpoint)?;
+        let egress_policy = EgressPolicy {
+            block_private: source.egress.block_private,
+        };
+        // The HTTP connector skips DNS for literals. Apply the resolver's
+        // canonical policy to the exact parsed URL retained for acquisition.
+        let literal = match token_endpoint.host() {
+            Some(url::Host::Ipv4(ip)) => Some(IpAddr::V4(ip)),
+            Some(url::Host::Ipv6(ip)) => Some(IpAddr::V6(ip)),
+            _ => None,
+        };
+        if literal.is_some_and(|ip| filter_resolved_addrs(vec![ip], egress_policy, false).is_empty()) {
+            return Err(OAuth2ProviderError::permanent());
+        }
         let authorization_form = build_request_form(&config.scopes)?;
-        let egress_resolver = EgressResolver::new(
-            resolver,
-            EgressPolicy {
-                block_private: source.egress.block_private,
-            },
-            EGRESS_CACHE_TTL,
-        );
+        let egress_resolver = EgressResolver::new(resolver, egress_policy, EGRESS_CACHE_TTL);
         let client = prepared
             .with_tls_selection(|proof, defaults| {
                 build_outbound_client_with_tls_selection(
