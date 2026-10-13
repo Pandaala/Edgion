@@ -147,3 +147,15 @@ Tests additionally assert shared native component Arcs, independently encoded
 legacy group keys/final reuse hashes, extra Secret-data isolation, identity-before-CA
 error priority and per-invocation SAN results. Historical verification above does
 not establish current test execution; fresh results belong to the active task.
+
+## Ordinary echo-header evidence (ARCH-342)
+
+The existing BackendTLS TLS and mTLS echo cases additionally require their ordinary
+`X-Test-Header` markers in the backend's `Headers:` section. Header names compare
+case-insensitively; each marker must have exactly one matching field with the exact
+expected value. Missing, changed, duplicate, or unrelated body text cannot satisfy
+this check. Success status, server identity and path checks remain required.
+
+This does not assert transparent forwarding of the managed `X-Trace-ID` header or
+replace any trust, identity or pool-isolation evidence. Pure synthetic response
+checks validate marker parsing; they do not establish live TLS/mTLS acceptance.

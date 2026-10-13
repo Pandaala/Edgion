@@ -24,6 +24,19 @@ use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
 use std::time::Instant;
 
+fn echoed_header_matches(body: &str, name: &str, expected: &str) -> bool {
+    let mut lines = body.lines();
+    if !lines.any(|line| line == "Headers:") {
+        return false;
+    }
+    let mut values = lines
+        .take_while(|line| line.starts_with("  "))
+        .filter_map(|line| line.strip_prefix("  ")?.split_once(':'))
+        .filter(|(key, _)| key.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.trim_matches([' ', '\t']));
+    values.next() == Some(expected) && values.next().is_none()
+}
+
 pub struct BackendTlsTestSuite;
 
 impl BackendTlsTestSuite {
@@ -105,6 +118,7 @@ impl BackendTlsTestSuite {
                                     if status.is_success()
                                         && body.contains("Server: 0.0.0.0:30051")
                                         && body.contains("Path: /backend-tls/echo")
+                                        && echoed_header_matches(&body, "X-Test-Header", "backend-tls-test")
                                     {
                                         TestResult::passed_with_message(
                                             start.elapsed(),
@@ -208,6 +222,7 @@ impl BackendTlsTestSuite {
                                     if status.is_success()
                                         && body.contains("Server: 0.0.0.0:30052")
                                         && body.contains("Path: /backend-mtls/echo")
+                                        && echoed_header_matches(&body, "X-Test-Header", "backend-mtls-test")
                                     {
                                         TestResult::passed_with_message(
                                             start.elapsed(),
@@ -308,5 +323,40 @@ impl TestSuite for BackendTlsTestSuite {
             Self::test_backend_mtls_without_client_cert_fails(),
             super::pool_isolation::test_case(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::echoed_header_matches;
+
+    #[test]
+    fn echo_markers_are_exact_header_values() {
+        for value in ["backend-tls-test", "backend-mtls-test", "value:with:colons"] {
+            for name in ["X-Test-Header", "x-test-header", "X-tEsT-hEaDeR"] {
+                let body = format!("Server: 0.0.0.0:30051\nPath: /backend-tls/echo\n\nHeaders:\n  Other: value\n  {name}: \t{value} \t\n");
+                assert!(echoed_header_matches(&body, "X-Test-Header", value));
+            }
+        }
+    }
+
+    #[test]
+    fn echo_markers_reject_missing_changed_duplicate_or_unrelated_text() {
+        for body in [
+            "Headers:\n  Other: backend-tls-test\n",
+            "Headers:\n  X-Test-Header: changed\n",
+            "Headers:\n  X-Test-Header: backend-tls-test-extra\n",
+            "Headers:\n  Other: X-Test-Header: backend-tls-test\n",
+            "X-Test-Header: backend-tls-test\nHeaders:\n",
+            "Headers:\nBody:\n  X-Test-Header: backend-tls-test\n",
+            "Headers:\n  X-Test-Header: backend-tls-test\n  X-Test-Header: backend-tls-test\n",
+            "Headers:\n  X-Test-Header: backend-tls-test\n  X-Test-Header: changed\n",
+            "  X-Test-Header: backend-tls-test\n",
+        ] {
+            assert!(
+                !echoed_header_matches(body, "X-Test-Header", "backend-tls-test"),
+                "{body}"
+            );
+        }
     }
 }
