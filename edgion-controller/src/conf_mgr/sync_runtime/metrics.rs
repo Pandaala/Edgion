@@ -80,6 +80,16 @@ pub struct ControllerMetrics {
     leader_transitions: Counter,
 }
 
+/// Owns one active-controller contribution for the lifetime of its run future.
+#[must_use = "hold the guard until controller cleanup finishes"]
+pub(crate) struct ActiveController<'a>(&'a ControllerMetrics);
+
+impl Drop for ActiveController<'_> {
+    fn drop(&mut self) {
+        self.0.active_controllers.decrement(1.0);
+    }
+}
+
 impl ControllerMetrics {
     fn new() -> Self {
         Self {
@@ -89,14 +99,10 @@ impl ControllerMetrics {
         }
     }
 
-    /// Record a controller starting
-    pub fn controller_started(&self) {
+    /// Count a controller until its run scope returns, unwinds, or is dropped.
+    pub(crate) fn active_controller(&self) -> ActiveController<'_> {
         self.active_controllers.increment(1.0);
-    }
-
-    /// Record a controller stopping
-    pub fn controller_stopped(&self) {
-        self.active_controllers.decrement(1.0);
+        ActiveController(self)
     }
 
     /// Set leader status (1.0 = leader, 0.0 = standby)
@@ -232,3 +238,7 @@ pub fn record_status_write_error(kind: &str, backend: &str) {
 pub fn record_status_write_skipped(kind: &str) {
     counter!(names::STATUS_WRITES_SKIPPED_TOTAL, "kind" => kind.to_string()).increment(1);
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/conf_mgr/sync_runtime/metrics_test.rs"]
+mod tests;

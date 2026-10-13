@@ -154,19 +154,6 @@ where
     }
 }
 
-struct ActiveController;
-impl ActiveController {
-    fn start() -> Self {
-        controller_metrics().controller_started();
-        Self
-    }
-}
-impl Drop for ActiveController {
-    fn drop(&mut self) {
-        controller_metrics().controller_stopped();
-    }
-}
-
 impl ApiScope {
     /// Get the namespace filter for MultipleNamespaces mode
     pub fn namespace_filter(&self) -> Option<Vec<String>> {
@@ -499,7 +486,7 @@ where
         let worker_cancel = self.cancel.child_token();
         let mut worker: Option<AbortOnDropHandle<()>> = None;
         let mut shutdown = self.shutdown_signal.clone();
-        let _active = ActiveController::start();
+        let _active = controller_metrics().active_controller();
         let processing = async {
             let mut timer = None;
             let mut running = false;

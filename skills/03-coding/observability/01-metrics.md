@@ -166,6 +166,15 @@ When using a Gauge, increments and decrements must be symmetric; otherwise the m
 
 For Gauge operations, prefer enforcing symmetry in a `Drop` implementation or an explicit RAII guard (see the `Drop for EdgionHttpContext` impl for the `ctx_active` Gauge).
 
+ARCH-088 applies this ownership to `edgion_controller_active`: FileSystem, Etcd
+and Kubernetes acquire the shared `ControllerMetrics::active_controller` guard
+at their existing run boundary and retain it through cleanup. The borrowed,
+non-cloneable guard restores its contribution on normal return, cancellation
+destruction or unwind. Abort is asynchronous; the Gauge does not prove descendant
+tasks have terminated or promise cleanup after process termination. Isolated
+guard tests cover accounting; FileSystem/Kubernetes lifecycle fixtures cover
+their existing worker behavior, and source review verifies all three placements.
+
 ---
 
 ## Controller Metrics and Federation Boundary

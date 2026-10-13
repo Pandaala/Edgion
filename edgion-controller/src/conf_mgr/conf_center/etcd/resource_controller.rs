@@ -82,7 +82,7 @@ where
     pub async fn run(mut self) -> Result<()> {
         let kind = self.kind;
 
-        controller_metrics().controller_started();
+        let _active = controller_metrics().active_controller();
         tracing::info!(
             component = "etcd_resource_controller",
             kind = kind,
@@ -341,7 +341,6 @@ where
             }
         }
 
-        controller_metrics().controller_stopped();
         tracing::info!(
             component = "etcd_resource_controller",
             kind = kind,
