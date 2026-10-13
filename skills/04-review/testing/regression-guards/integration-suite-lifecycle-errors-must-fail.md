@@ -14,6 +14,32 @@ A test selection that executes zero cases fails by default because it usually si
 dispatch drift. An intentionally empty probe must opt in through the runner's explicit
 `allow_empty_selection` API. Zero executed cases have a zero percent pass rate, never 100 percent.
 
+## AI backend dynamic cleanup outcomes
+
+`AiBackendWeighted`, `AiBackendLifecycle`, and `AiBackendPolicyIntegration`
+attempt every owned DELETE in the original order and accept actual HTTP success
+or 404. Other statuses and transport failures fail the scenario, with resource
+keys and fixed diagnostic text only; never include response bodies, credentials,
+or raw transport URLs. Their private `ai_backend_cleanup` helper retains the
+original TestContext Admin endpoint, bearer token and five-second timeout.
+
+Initial cleanup failure skips business setup but still runs final cleanup.
+Lifecycle captures its shared store-count baseline only after the two owned
+backends disappear. A subsequent business failure retains that baseline. Final
+deletion, both backend-absence observations and the count observation are
+attempted independently, then combined with the business outcome. If initial
+setup never produced a baseline, final absence checks still run, but no count
+baseline is invented. Successful DELETE alone does not establish immediate
+Gateway convergence for Weighted or PolicyIntegration.
+
+ARCH-265 corrects previously discarded DELETE errors and the loss of business
+errors behind failed final observations. Network-free unit tests exercise the
+actual deletion loop, success/404 handling, attempts after failures, the shared
+initial/business/final orchestration and labelled error composition. Existing
+scenario fixture tests remain unchanged. These tests do not claim a live outage
+or end-to-end Gateway convergence run. Re-evaluate when resource lists, Admin
+authentication or Lifecycle's store ownership/postconditions change.
+
 ## OTLP shutdown delivery
 
 `run_otlp_test.sh` starts the Gateway before its collector, so early warmup

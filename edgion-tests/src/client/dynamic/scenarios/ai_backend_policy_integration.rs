@@ -1,5 +1,6 @@
 //! Cross-component AI backend TLS and traffic-policy lifecycle coverage.
 
+use super::ai_backend_cleanup::{cleanup_resources, run_with_cleanup};
 use crate::dynamic::scenario::{Scenario, ScenarioRunFuture};
 use crate::dynamic::ScenarioCtx;
 use anyhow::{Context, Result};
@@ -887,25 +888,27 @@ async fn wait_weighted_generation(ctx: &ScenarioCtx, consecutive_errors: u64) ->
     .await
 }
 
-async fn cleanup(ctx: &ScenarioCtx) {
-    for (kind, namespace, name) in [
-        ("BackendTLSPolicy", NS, TLS_POLICY),
-        ("BackendTLSPolicy", NS, "policy-integration-wrong-variant"),
-        ("EdgionBackendTrafficPolicy", NS, TRAFFIC_POLICY),
-        ("EdgionBackendTrafficPolicy", NS, "policy-integration-incompatible"),
-        ("EdgionBackendTrafficPolicy", NS, "policy-integration-missing"),
-        ("HTTPRoute", NS, ROUTE),
-        ("HTTPRoute", NS, MISSING_ROUTE),
-        ("EdgionPlugins", NS, PLUGIN),
-        ("EdgionBackend", NS, BACKEND_A),
-        ("EdgionBackend", NS, BACKEND_B),
-        ("EdgionBackend", NS, "policy-integration-denied"),
-        ("Secret", NS, CREDENTIAL_A),
-        ("Secret", NS, CREDENTIAL_B),
-        ("Secret", "edgion-default", "policy-integration-denied-key"),
-    ] {
-        let _ = ctx.test_ctx.delete_resource(kind, namespace, name).await;
-    }
+async fn cleanup(ctx: &ScenarioCtx) -> Result<()> {
+    cleanup_resources(
+        ctx,
+        &[
+            ("BackendTLSPolicy", NS, TLS_POLICY),
+            ("BackendTLSPolicy", NS, "policy-integration-wrong-variant"),
+            ("EdgionBackendTrafficPolicy", NS, TRAFFIC_POLICY),
+            ("EdgionBackendTrafficPolicy", NS, "policy-integration-incompatible"),
+            ("EdgionBackendTrafficPolicy", NS, "policy-integration-missing"),
+            ("HTTPRoute", NS, ROUTE),
+            ("HTTPRoute", NS, MISSING_ROUTE),
+            ("EdgionPlugins", NS, PLUGIN),
+            ("EdgionBackend", NS, BACKEND_A),
+            ("EdgionBackend", NS, BACKEND_B),
+            ("EdgionBackend", NS, "policy-integration-denied"),
+            ("Secret", NS, CREDENTIAL_A),
+            ("Secret", NS, CREDENTIAL_B),
+            ("Secret", "edgion-default", "policy-integration-denied-key"),
+        ],
+    )
+    .await
 }
 
 async fn status_boundaries(ctx: &ScenarioCtx, bases: &ProviderBases) -> Result<()> {
@@ -1133,12 +1136,7 @@ async fn run_inner(ctx: &ScenarioCtx) -> Result<()> {
 }
 
 fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
-    Box::pin(async move {
-        cleanup(&ctx).await;
-        let result = run_inner(&ctx).await;
-        cleanup(&ctx).await;
-        result
-    })
+    Box::pin(async move { run_with_cleanup(cleanup(&ctx), run_inner(&ctx), |_| cleanup(&ctx)).await })
 }
 
 pub static SCENARIO: &Scenario = &Scenario {

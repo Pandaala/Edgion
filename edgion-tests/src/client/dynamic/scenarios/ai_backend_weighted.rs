@@ -1,5 +1,6 @@
 //! Dynamic conformance coverage for weighted EdgionBackend route slots.
 
+use super::ai_backend_cleanup::{cleanup_resources, run_with_cleanup};
 use crate::dynamic::scenario::{Scenario, ScenarioRunFuture};
 use crate::dynamic::ScenarioCtx;
 use anyhow::{Context, Result};
@@ -275,20 +276,22 @@ async fn wait_sample(ctx: &ScenarioCtx, expected: &TrafficSample, label: &str) -
     }
 }
 
-async fn cleanup(ctx: &ScenarioCtx) {
-    for (kind, namespace, name) in [
-        ("ReferenceGrant", BACKEND_NS, ROUTE_GRANT),
-        ("HTTPRoute", ROUTE_NS, ROUTE),
-        ("HTTPRoute", ROUTE_NS, CHILD_ROUTE),
-        ("EdgionPlugins", ROUTE_NS, PLUGIN),
-        ("Service", ROUTE_NS, ZERO_SERVICE),
-        ("EdgionBackend", BACKEND_NS, BACKEND_A),
-        ("EdgionBackend", BACKEND_NS, BACKEND_B),
-        ("Secret", BACKEND_NS, SECRET_A),
-        ("Secret", BACKEND_NS, SECRET_B),
-    ] {
-        let _ = ctx.test_ctx.delete_resource(kind, namespace, name).await;
-    }
+async fn cleanup(ctx: &ScenarioCtx) -> Result<()> {
+    cleanup_resources(
+        ctx,
+        &[
+            ("ReferenceGrant", BACKEND_NS, ROUTE_GRANT),
+            ("HTTPRoute", ROUTE_NS, ROUTE),
+            ("HTTPRoute", ROUTE_NS, CHILD_ROUTE),
+            ("EdgionPlugins", ROUTE_NS, PLUGIN),
+            ("Service", ROUTE_NS, ZERO_SERVICE),
+            ("EdgionBackend", BACKEND_NS, BACKEND_A),
+            ("EdgionBackend", BACKEND_NS, BACKEND_B),
+            ("Secret", BACKEND_NS, SECRET_A),
+            ("Secret", BACKEND_NS, SECRET_B),
+        ],
+    )
+    .await
 }
 
 async fn check_header_modifier_updates(ctx: &ScenarioCtx) -> Result<()> {
@@ -414,12 +417,7 @@ async fn run_inner(ctx: &ScenarioCtx) -> Result<()> {
 }
 
 fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
-    Box::pin(async move {
-        cleanup(&ctx).await;
-        let result = run_inner(&ctx).await;
-        cleanup(&ctx).await;
-        result
-    })
+    Box::pin(async move { run_with_cleanup(cleanup(&ctx), run_inner(&ctx), |_| cleanup(&ctx)).await })
 }
 
 pub static SCENARIO: &Scenario = &Scenario {

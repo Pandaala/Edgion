@@ -1,5 +1,6 @@
 //! Focused hot-reload coverage for EdgionBackend references and multi-target AI policies.
 
+use super::ai_backend_cleanup::{cleanup_resources, run_with_cleanup};
 use crate::dynamic::scenario::{Scenario, ScenarioRunFuture};
 use crate::dynamic::ScenarioCtx;
 use anyhow::{Context, Result};
@@ -434,30 +435,32 @@ async fn apply(ctx: &ScenarioCtx, yaml: String) -> Result<()> {
     result
 }
 
-async fn cleanup(ctx: &ScenarioCtx) {
-    for (kind, namespace, name) in [
-        ("EdgionBackendTrafficPolicy", BACKEND_NS, WINNER_POLICY),
-        ("EdgionBackendTrafficPolicy", BACKEND_NS, SIBLING_POLICY),
-        ("EdgionBackendTrafficPolicy", BACKEND_NS, SERVICE_POLICY),
-        ("EdgionBackendTrafficPolicy", BACKEND_NS, "lifecycle-ai-policy-mixed"),
-        (
-            "EdgionBackendTrafficPolicy",
-            BACKEND_NS,
-            "lifecycle-ai-policy-incompatible",
-        ),
-        ("ReferenceGrant", BACKEND_NS, ROUTE_GRANT),
-        ("ReferenceGrant", SECRET_NS, SECRET_GRANT),
-        ("HTTPRoute", ROUTE_NS, ROUTE),
-        ("EdgionPlugins", ROUTE_NS, PLUGIN),
-        ("EdgionBackend", BACKEND_NS, BACKEND_A),
-        ("EdgionBackend", BACKEND_NS, BACKEND_B),
-        ("Service", BACKEND_NS, "lifecycle-service"),
-        ("Service", BACKEND_NS, BACKEND_A),
-        ("Secret", SECRET_NS, SECRET),
-        ("Secret", SECRET_NS, SECRET_B),
-    ] {
-        let _ = ctx.test_ctx.delete_resource(kind, namespace, name).await;
-    }
+async fn cleanup(ctx: &ScenarioCtx) -> Result<()> {
+    cleanup_resources(
+        ctx,
+        &[
+            ("EdgionBackendTrafficPolicy", BACKEND_NS, WINNER_POLICY),
+            ("EdgionBackendTrafficPolicy", BACKEND_NS, SIBLING_POLICY),
+            ("EdgionBackendTrafficPolicy", BACKEND_NS, SERVICE_POLICY),
+            ("EdgionBackendTrafficPolicy", BACKEND_NS, "lifecycle-ai-policy-mixed"),
+            (
+                "EdgionBackendTrafficPolicy",
+                BACKEND_NS,
+                "lifecycle-ai-policy-incompatible",
+            ),
+            ("ReferenceGrant", BACKEND_NS, ROUTE_GRANT),
+            ("ReferenceGrant", SECRET_NS, SECRET_GRANT),
+            ("HTTPRoute", ROUTE_NS, ROUTE),
+            ("EdgionPlugins", ROUTE_NS, PLUGIN),
+            ("EdgionBackend", BACKEND_NS, BACKEND_A),
+            ("EdgionBackend", BACKEND_NS, BACKEND_B),
+            ("Service", BACKEND_NS, "lifecycle-service"),
+            ("Service", BACKEND_NS, BACKEND_A),
+            ("Secret", SECRET_NS, SECRET),
+            ("Secret", SECRET_NS, SECRET_B),
+        ],
+    )
+    .await
 }
 
 async fn reference_lifecycle(ctx: &ScenarioCtx) -> Result<()> {
@@ -961,35 +964,44 @@ async fn run_inner(ctx: &ScenarioCtx) -> Result<()> {
 
 fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
     Box::pin(async move {
-        cleanup(&ctx).await;
-        // The store is shared with every other scenario, so the baseline is
-        // only captured once the Gateway has dropped this scenario's own
-        // backends.
-        let baseline = async {
-            wait_backend_presence(&ctx, BACKEND_A, false).await?;
-            wait_backend_presence(&ctx, BACKEND_B, false).await?;
-            gateway_store_count(&ctx, "edgion_backend_store").await
-        }
-        .await?;
-        let result = run_inner(&ctx).await;
-        cleanup(&ctx).await;
-        // Cleanup is proven by this scenario's own entries leaving the runtime
-        // store. The unified count only has to stay at or below the baseline:
-        // an unrelated scenario's pending removal may still land here, but a
-        // leaked lifecycle backend would push the total above it.
-        let cleanup_result = async {
-            wait_backend_presence(&ctx, BACKEND_A, false).await?;
-            wait_backend_presence(&ctx, BACKEND_B, false).await?;
-            wait_for(
-                "lifecycle AI runtime-store cleanup",
-                Duration::from_secs(15),
-                || async { Ok(gateway_store_count(&ctx, "edgion_backend_store").await? <= baseline) },
-            )
-            .await
-        }
-        .await;
-        cleanup_result?;
-        result
+        let ctx = &ctx;
+        run_with_cleanup(
+            async {
+                cleanup(ctx).await?;
+                // Capture the shared store baseline only after our backends
+                // disappear. A failed initial barrier has no valid baseline.
+                wait_backend_presence(ctx, BACKEND_A, false).await?;
+                wait_backend_presence(ctx, BACKEND_B, false).await?;
+                gateway_store_count(ctx, "edgion_backend_store").await
+            },
+            run_inner(ctx),
+            |baseline| async move {
+                // Attempt every postcondition even when DELETE or another
+                // observation fails. Unrelated pending removals may lower the
+                // shared count, so preserve the original <= baseline check.
+                let deletion = cleanup(ctx).await;
+                let backend_a = wait_backend_presence(ctx, BACKEND_A, false).await;
+                let backend_b = wait_backend_presence(ctx, BACKEND_B, false).await;
+                let count = match baseline {
+                    Some(baseline) => {
+                        wait_for(
+                            "lifecycle AI runtime-store cleanup",
+                            Duration::from_secs(15),
+                            || async { Ok(gateway_store_count(ctx, "edgion_backend_store").await? <= baseline) },
+                        )
+                        .await
+                    }
+                    None => Ok(()),
+                };
+                super::ai_backend_cleanup::combine_outcomes([
+                    ("deletion", deletion),
+                    ("backend A absence", backend_a),
+                    ("backend B absence", backend_b),
+                    ("store-count convergence", count),
+                ])
+            },
+        )
+        .await
     })
 }
 
