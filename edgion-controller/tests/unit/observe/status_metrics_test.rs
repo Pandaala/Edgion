@@ -160,8 +160,9 @@ mod registration_tests {
             s
         });
 
-        let mut buf: Vec<Entry> = Vec::new();
+        let mut buf = BoundedEntries::new(1000);
         render_kind("FakeRoute", store.as_ref(), &mut buf);
+        let buf = buf.into_sorted_vec();
 
         assert_eq!(buf.len(), 2);
         let bad = buf.iter().find(|e| e.name == "bad").unwrap();
@@ -204,8 +205,9 @@ mod registration_tests {
             s
         });
 
-        let mut buf: Vec<Entry> = Vec::new();
+        let mut buf = BoundedEntries::new(1000);
         render_kind("FakeRoute", store.as_ref(), &mut buf);
+        let buf = buf.into_sorted_vec();
 
         // Only the bloated resource yields an Entry; the normal one is clean and small.
         assert_eq!(buf.len(), 1);
@@ -293,12 +295,14 @@ mod snapshot_loop_tests {
         let old_store = Arc::new(LocalRawStore::<Dummy>::new());
         old_store.upsert("a/old".into(), new_dummy("a", "old", "Accepted", "False"));
         register_status_renderer::<Dummy>("Dummy", old_store.clone());
+        assert_eq!(Arc::strong_count(&old_store), 2);
 
         // Simulated reload: second registration for the SAME kind with a
         // freshly-constructed store exposing a differently-named resource.
         let new_store = Arc::new(LocalRawStore::<Dummy>::new());
         new_store.upsert("a/new".into(), new_dummy("a", "new", "Accepted", "False"));
         register_status_renderer::<Dummy>("Dummy", new_store.clone());
+        assert_eq!(Arc::strong_count(&old_store), 1);
 
         snapshot_once();
         let snap = snapshot_slot().load();
@@ -318,10 +322,13 @@ mod snapshot_loop_tests {
     fn snapshot_once_propagates_renderer_panic_but_outer_loop_isolates_it() {
         let _guard = super::TEST_MUTEX.lock();
         reset();
+        let previous = Arc::new(vec![super::entry("previous")]);
+        snapshot_slot().store(previous.clone());
         // Register a panicking renderer.
         renderers_slot().lock().insert(
             "PanickingFake",
-            Box::new(|_buf: &mut Vec<Entry>| {
+            Box::new(|buf: &mut BoundedEntries| {
+                buf.push(super::entry("partial"));
                 panic!("synthetic panic");
             }),
         );
@@ -330,6 +337,8 @@ mod snapshot_loop_tests {
         // the background loop survives.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(snapshot_once));
         assert!(result.is_err(), "panic should propagate out of snapshot_once");
+        assert!(Arc::ptr_eq(&previous, &snapshot_slot().load_full()));
+        reset();
     }
 }
 
@@ -412,4 +421,123 @@ mod perf_tests {
         let snap = snapshot_slot().load();
         assert_eq!(snap.len(), 200);
     }
+}
+
+fn entry(name: &str) -> Entry {
+    Entry {
+        kind: "HTTPRoute",
+        namespace: "default".to_string(),
+        name: name.to_string(),
+        err_conditions: vec![],
+        warn_conditions: vec![],
+        max_conditions_len: 0,
+    }
+}
+
+#[test]
+fn bounded_entries_match_full_sort_with_all_ordering_ties_and_duplicates() {
+    let base = entry("same");
+    let mut entries = vec![base.clone(), base.clone()];
+    let mut different_kind = base.clone();
+    different_kind.kind = "Gateway";
+    entries.push(different_kind);
+    let mut different_namespace = base.clone();
+    different_namespace.namespace = "other".to_string();
+    entries.push(different_namespace);
+    entries.push(entry("other"));
+    for err_type in ["Accepted", "ResolvedRefs"] {
+        for err_status in ["False", "True"] {
+            for warn_type in ["PartiallyInvalid", "Ready"] {
+                for warn_status in ["False", "True"] {
+                    for count in [1, 20, 30] {
+                        let mut candidate = base.clone();
+                        candidate.err_conditions.push(ConditionRef {
+                            type_: err_type.to_string(),
+                            status: err_status.to_string(),
+                        });
+                        candidate.warn_conditions.push(ConditionRef {
+                            type_: warn_type.to_string(),
+                            status: warn_status.to_string(),
+                        });
+                        candidate.max_conditions_len = count;
+                        entries.push(candidate.clone());
+                        candidate.warn_conditions.push(ConditionRef {
+                            type_: "Ready".to_string(),
+                            status: "False".to_string(),
+                        });
+                        entries.push(candidate.clone());
+                        candidate.err_conditions.push(ConditionRef {
+                            type_: "Conflicted".to_string(),
+                            status: "True".to_string(),
+                        });
+                        entries.push(candidate);
+                    }
+                }
+            }
+        }
+    }
+    let mut sorted = entries.clone();
+    sorted.sort();
+    let mut reverse = entries.clone();
+    reverse.reverse();
+    let mut shuffled = entries.clone();
+    for index in (1..shuffled.len()).rev() {
+        shuffled.swap(index, (index * 37 + 11) % (index + 1));
+    }
+    for cap in [0, 1, 2, 5, 40, entries.len() - 1, entries.len(), entries.len() + 1] {
+        let expected = &sorted[..cap.min(sorted.len())];
+        for input in [&entries, &reverse, &shuffled] {
+            let mut collector = BoundedEntries::new(cap);
+            assert_eq!(collector.items.capacity(), 0);
+            for value in input {
+                collector.push(value.clone());
+                assert!(collector.items.len() <= cap);
+            }
+            assert_eq!(collector.total, input.len());
+            assert_eq!(collector.into_sorted_vec(), expected);
+        }
+    }
+}
+
+#[test]
+fn bounded_entries_large_stream_retains_only_cap_proportional_storage() {
+    let cap = 7;
+    let mut collector = BoundedEntries::new(cap);
+    for index in (0..10_000).rev() {
+        collector.push(entry(&format!("route-{index:05}")));
+        assert!(collector.items.len() <= cap);
+        // Allow Vec growth slack; capacity must not scale with the full stream.
+        assert!(collector.items.capacity() <= cap * 2);
+    }
+    assert_eq!(collector.total, 10_000);
+    let retained = collector.into_sorted_vec();
+    assert!(retained.capacity() <= cap * 2);
+    assert_eq!(
+        retained,
+        (0..cap)
+            .map(|index| entry(&format!("route-{index:05}")))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn snapshot_collection_applies_one_cap_across_all_renderers() {
+    let _guard = TEST_MUTEX.lock();
+    renderers_slot().lock().clear();
+    set_hard_cap(2);
+    for (kind, names) in [("First", ["z", "b"]), ("Second", ["a", "b"])] {
+        renderers_slot().lock().insert(
+            kind,
+            Box::new(move |out| {
+                for name in names {
+                    out.push(entry(name));
+                }
+            }),
+        );
+    }
+    snapshot_once();
+    assert_eq!(snapshot_slot().load().as_ref(), &vec![entry("a"), entry("b")]);
+    set_hard_cap(1000);
+    renderers_slot().lock().clear();
+    snapshot_slot().store(Arc::new(Vec::new()));
 }

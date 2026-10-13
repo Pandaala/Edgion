@@ -1,13 +1,13 @@
 //! `edgion_controller_resource_abnormal` gauge.
 //!
-//! See `docs/superpowers/specs/2026-04-20-controller-resource-abnormal-metrics-design.md`
+//! See `docs/zh-CN/dev-guide/resource-abnormal-metric.md`
 //! for the full design. Short version:
 //!
-//! * A background task rebuilds a fresh `Vec<Entry>` every `tick_secs` by
+//! * A background task rebuilds a bounded, sorted snapshot every `tick_secs` by
 //!   reading every registered `RawStore`, serializing each resource to JSON,
 //!   recursively scanning for `"conditions": [...]` arrays, and partitioning
 //!   the matching triggers into `err_conditions` / `warn_conditions`.
-//! * The snapshot is published atomically via `ArcSwap<Arc<Vec<Entry>>>`.
+//! * The snapshot is published atomically via `ArcSwap<Vec<Entry>>`.
 //! * `/metrics` is read-only; it loads the current snapshot and appends
 //!   a text block to the common Prometheus handler output.
 //! * No incremental state, no per-resource hooks — every tick fully
@@ -19,7 +19,7 @@
 
 use arc_swap::ArcSwap;
 use parking_lot::Mutex;
-use std::collections::HashMap;
+use std::collections::{BinaryHeap, HashMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -86,8 +86,41 @@ pub(crate) struct Entry {
     pub max_conditions_len: usize,
 }
 
-/// Renderer closure signature: pushes `Entry` values for one kind's store.
-pub(crate) type Renderer = Box<dyn Fn(&mut Vec<Entry>) + Send + Sync>;
+/// Retain the first `cap` entries in full Entry order while counting all matches.
+/// This bounds retained entries, not individual payload sizes or RawStore snapshots.
+struct BoundedEntries {
+    cap: usize,
+    total: usize,
+    items: BinaryHeap<Entry>,
+}
+
+impl BoundedEntries {
+    fn new(cap: usize) -> Self {
+        Self {
+            cap,
+            total: 0,
+            items: BinaryHeap::new(),
+        }
+    }
+
+    fn push(&mut self, entry: Entry) {
+        self.total += 1;
+        if self.items.len() < self.cap {
+            self.items.push(entry);
+        } else if let Some(mut largest) = self.items.peek_mut() {
+            if entry < *largest {
+                *largest = entry;
+            }
+        }
+    }
+
+    fn into_sorted_vec(self) -> Vec<Entry> {
+        self.items.into_sorted_vec()
+    }
+}
+
+/// Renderer closure signature: submits entries to the shared retention bound.
+type Renderer = Box<dyn Fn(&mut BoundedEntries) + Send + Sync>;
 
 /// Global current snapshot. Read lock-free on every `/metrics` scrape;
 /// replaced atomically at the end of each background tick.
@@ -103,7 +136,7 @@ pub(crate) fn snapshot_slot() -> &'static ArcSwap<Vec<Entry>> {
 /// `EtcdController` — each reload re-enters `register_status_renderer`
 /// with a fresh `Arc<RawStore<K>>`, and the old closure is dropped,
 /// releasing its reference to the previous store.
-pub(crate) fn renderers_slot() -> &'static Mutex<HashMap<&'static str, Renderer>> {
+fn renderers_slot() -> &'static Mutex<HashMap<&'static str, Renderer>> {
     static RENDERERS: OnceLock<Mutex<HashMap<&'static str, Renderer>>> = OnceLock::new();
     RENDERERS.get_or_init(|| Mutex::new(HashMap::new()))
 }
@@ -384,7 +417,7 @@ pub(crate) fn append_escaped(out: &mut String, s: &str) {
 ///
 /// Any resource that fails to serialize is skipped with a single
 /// `tracing::warn!`; we do not propagate the failure.
-pub(crate) fn render_kind<K>(kind: &'static str, store: &dyn RawStore<K>, out: &mut Vec<Entry>)
+fn render_kind<K>(kind: &'static str, store: &dyn RawStore<K>, out: &mut BoundedEntries)
 where
     K: serde::Serialize,
 {
@@ -448,7 +481,7 @@ pub(crate) fn register_status_renderer<K>(kind: &'static str, store: Arc<dyn Raw
 where
     K: serde::Serialize + Send + Sync + 'static,
 {
-    let renderer: Renderer = Box::new(move |buf: &mut Vec<Entry>| {
+    let renderer: Renderer = Box::new(move |buf: &mut BoundedEntries| {
         render_kind(kind, store.as_ref(), buf);
     });
     // Keyed by `kind`: a reload-time second call for the same kind drops
@@ -466,27 +499,24 @@ use std::time::Duration;
 /// background loop in [`spawn_snapshot_loop`] wraps each call in
 /// `catch_unwind` so a single panicking renderer cannot kill the loop.
 pub(crate) fn snapshot_once() {
-    let mut buf: Vec<Entry> = Vec::new();
+    let cap = hard_cap();
+    let mut buf = BoundedEntries::new(cap);
     {
         let guard = renderers_slot().lock();
         for renderer in guard.values() {
             renderer(&mut buf);
         }
     }
-    buf.sort();
-
-    let cap = hard_cap();
-    if buf.len() > cap {
+    if buf.total > cap {
         tracing::error!(
             component = "status_metrics",
-            count = buf.len(),
+            count = buf.total,
             cap = cap,
             "abnormal-resource snapshot exceeds hard cap; truncating"
         );
-        buf.truncate(cap);
     }
 
-    snapshot_slot().store(Arc::new(buf));
+    snapshot_slot().store(Arc::new(buf.into_sorted_vec()));
 }
 
 use axum::response::{IntoResponse, Response};

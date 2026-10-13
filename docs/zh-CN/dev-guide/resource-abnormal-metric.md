@@ -40,7 +40,7 @@ edgion_controller_resource_abnormal{kind="HTTPRoute",namespace="default",name="m
 - **异常恢复或资源删除** → 最多 `tick_secs + scrape 间隔` 后 series 消失
 - **Controller 重启** → 首次 tick 后重建（重启后短暂无该类 series）
 
-系统有 **snapshot hard cap**（默认 `1000`，可配置，范围 `[10, 100000]`），超出时会截断并打 `tracing::error!` —— 正常部署不会触及，仅作雪崩兜底。
+系统有 **snapshot hard cap**（默认 `1000`，可配置，范围 `[10, 100000]`）。每轮仍扫描全部资源，但收集过程中只保留按完整条目顺序排列的前 K 条；超出时打一条 `tracing::error!`，记录截断前的真实条目总数。该上限约束保留的条目数量，不是单个条目、RawStore 快照或进程总内存的字节上限；并发 scrape 也可能仍持有旧快照。
 
 ## 配置
 
@@ -93,12 +93,12 @@ metrics:
 
 - 一个后台 `tokio::spawn` 任务每 `tick_secs` 轮询所有注册的 per-kind renderer
 - 每个 renderer 扫 `RawStore<K>::snapshot()`，序列化为 JSON，递归找所有 `conditions[]`，`classify` 后产生 `Entry`（`err_conditions` + `warn_conditions` 两个列表）
-- 所有 `Entry` 排序后 `ArcSwap::store` 原子替换当前快照
+- 有界收集器保留的 `Entry` 排序后，通过 `ArcSwap::store` 原子替换当前快照；重复条目和完整排序规则保持不变
 - `/metrics` 被 scrape 时读取当前快照并 append 到 common handler 输出后面
-- 任意 renderer panic 被 `catch_unwind` 隔离，不影响其他 kind
+- 任意 renderer panic 会中止整轮收集，`catch_unwind` 保留上一次快照，后台循环在下一轮重试；不会发布本轮的部分结果
 
 ## 相关源码
 
-- `src/core/controller/observe/status_metrics.rs` — 主实现
-- `src/core/common/config/mod.rs` — `MetricsConfig` / `ResourceAbnormalMetricsConfig`
-- `src/core/controller/conf_mgr/conf_center/*/resource_controller.rs` — 各 backend 注册 renderer 的位置
+- `edgion-controller/src/observe/status_metrics.rs` — 主实现
+- `edgion-controller/src/config/mod.rs` — `MetricsConfig` / `ResourceAbnormalMetricsConfig`
+- `edgion-controller/src/conf_mgr/conf_center/*/resource_controller.rs` — 各 backend 注册 renderer 的位置

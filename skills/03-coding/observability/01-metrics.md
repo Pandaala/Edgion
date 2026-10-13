@@ -184,6 +184,23 @@ is maintained in the separate EdgionCenter repository. While Controller cardinal
 is lower, proactively restrain all new metric types: structured logs plus status
 conditions answer most event/detail questions.
 
+### Bounded resource-status snapshots
+
+ARCH-090 makes `status_metrics` retain at most the configured hard cap during
+collection, using a private max-heap with full `Entry` ordering. Every renderer
+still scans its complete source; the aggregate cap error reports the total
+eligible count. The published sorted multiset matches full-sort-then-truncate,
+including duplicate entries and condition-vector/count tie breakers. Publication
+occurs only after all renderers finish; a panic aborts the tick and preserves the
+previous snapshot under the existing outer `catch_unwind`.
+
+Mirrored status-metrics tests compare the selection against the original ordering,
+check retained capacity proportional to the cap, exercise combined renderers and
+panic preservation, and verify replaced renderers release their old store.
+This is an entry-retention bound, not a bound on RawStore snapshots, per-resource
+JSON, condition/identity payloads, scrape serialization or old snapshots held by
+concurrent readers. No new metric or label family is introduced.
+
 ### Decision threshold for adding a control-plane metric
 
 Before adding a control-plane metric, ask three questions; **any "no" means use tracing/status instead**:
