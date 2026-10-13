@@ -58,6 +58,19 @@ Authority: `skills/00-design-rules.md` A/B/D/F/U/V and
 
 ## Alternatives and limits
 
+The Controller DNS producer's successful-publication fingerprint uses the same
+complete `EndpointPort` projection as its slice builder (`ARCH-098`). A Service
+port name or protocol change must republish even when its UID, resolved IPs and
+port numbers are unchanged; otherwise the Gateway's exact section matching can
+retain no slots. AppProtocol changes also republish to refresh output metadata;
+the Gateway derives section appProtocol from the Service. Sorted JSON-encoded
+ports preserve optional-field distinctions and ignore port order. The producer
+continues to publish Service port numbers, not targetPort, and records success
+only after every desired family applies. This identity does not promise repair
+of arbitrary out-of-band edits to observed slice content. Focused producer tests
+exercise mixed-family repair and subsequent skip; Gateway tests cover stale and
+repaired name/protocol matching alongside the existing HTTP DNS bridge control.
+
 The user explicitly approved allowing published unready endpoints for DirectEndpoint on
 2026-09-08. This supports targeted debugging and deliberately overrides normal LB eligibility;
 it does not bypass route authorization or address safety. Normal selectors still enforce their

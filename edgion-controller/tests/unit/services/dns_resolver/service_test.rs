@@ -331,6 +331,140 @@ fn slice_fingerprint_stable_and_discriminating() {
 }
 
 #[test]
+fn slice_fingerprint_tracks_published_optional_fields_and_ignores_target_port() {
+    let ips = ["192.0.2.1".parse().unwrap()];
+    let base = ServicePort {
+        port: 80,
+        ..Default::default()
+    };
+    let fingerprint = slice_fingerprint(&ips, std::slice::from_ref(&base));
+    for field in ["name", "protocol", "appProtocol"] {
+        let mut absent = serde_json::to_value(&base).unwrap();
+        absent[field] = json!("");
+        let empty: ServicePort = serde_json::from_value(absent.clone()).unwrap();
+        absent[field] = json!("value");
+        let present: ServicePort = serde_json::from_value(absent).unwrap();
+        let empty_fp = slice_fingerprint(&ips, &[empty]);
+        let present_fp = slice_fingerprint(&ips, &[present]);
+        assert_ne!(fingerprint, empty_fp, "{field}");
+        assert_ne!(fingerprint, present_fp, "{field}");
+        assert_ne!(empty_fp, present_fp, "{field}");
+    }
+    let mut target_only = base.clone();
+    target_only.target_port = Some(k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(8080));
+    assert_eq!(fingerprint, slice_fingerprint(&ips, &[target_only]));
+    let sibling = ServicePort {
+        port: 443,
+        name: Some("https".into()),
+        ..base.clone()
+    };
+    assert_eq!(
+        slice_fingerprint(&ips, &[base.clone(), sibling.clone()]),
+        slice_fingerprint(&ips, &[sibling, base]),
+    );
+}
+
+#[tokio::test]
+async fn published_port_edits_reapply_both_families_then_skip_unchanged_generation() {
+    let requests = Arc::new(Mutex::new(Vec::<EndpointSlice>::new()));
+    let captured = requests.clone();
+    let client = Client::new(
+        service_fn(move |request: http::Request<Body>| {
+            let captured = captured.clone();
+            async move {
+                assert_eq!(request.method(), http::Method::PATCH);
+                assert!(request.uri().query().unwrap().contains("force=true"));
+                let bytes = request.into_body().collect_bytes().await.unwrap();
+                captured.lock().push(serde_json::from_slice(&bytes).unwrap());
+                Ok::<_, Infallible>(
+                    Response::builder()
+                        .header(http::header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(bytes))
+                        .unwrap(),
+                )
+            }
+        }),
+        "app",
+    );
+    let mut service = dns_service("");
+    let original_ports: Vec<ServicePort> = serde_json::from_value(json!([
+        {"port":80,"name":"old","protocol":"TCP","appProtocol":"http","targetPort":8080},
+        {"port":443,"name":"https","protocol":"TCP"}
+    ]))
+    .unwrap();
+    for field in ["name", "protocol", "appProtocol"] {
+        let mut states = HashMap::new();
+        let mut ips = vec![
+            "2001:db8::1".parse().unwrap(),
+            "192.0.2.1".parse().unwrap(),
+            "192.0.2.1".parse().unwrap(),
+        ];
+        service.spec.as_mut().unwrap().ports = Some(original_ports.clone());
+        let before = requests.lock().len();
+        apply_resolved_slices(
+            &client,
+            &service,
+            &original_ports,
+            &mut ips,
+            &mut states,
+            &HashMap::new(),
+        )
+        .await;
+        assert_eq!(requests.lock().len(), before + 2);
+        let published = requests.lock()[before..].to_vec();
+        let observed = published
+            .iter()
+            .map(|s| {
+                (
+                    (
+                        s.metadata.namespace.as_deref().unwrap(),
+                        s.metadata.name.as_deref().unwrap(),
+                    ),
+                    s,
+                )
+            })
+            .collect();
+        let mut changed = serde_json::to_value(&original_ports).unwrap();
+        changed[0][field] = json!(match field {
+            "name" => "new",
+            "protocol" => "UDP",
+            _ => "kubernetes.io/h2c",
+        });
+        let changed: Vec<ServicePort> = serde_json::from_value(changed).unwrap();
+        service.spec.as_mut().unwrap().ports = Some(changed.clone());
+        apply_resolved_slices(&client, &service, &changed, &mut ips, &mut states, &observed).await;
+        assert_eq!(requests.lock().len(), before + 4, "{field}");
+        let repaired = requests.lock()[before + 2..].to_vec();
+        for slice in &repaired {
+            let ports = slice.ports.as_ref().unwrap();
+            assert_eq!(ports[0].name, changed[0].name);
+            assert_eq!(ports[0].protocol, changed[0].protocol);
+            assert_eq!(ports[0].app_protocol, changed[0].app_protocol);
+            assert_eq!(ports[0].port, Some(80), "Service port, not targetPort");
+            assert_eq!(slice.endpoints.len(), 1, "duplicate IP is removed");
+        }
+        let observed = repaired
+            .iter()
+            .map(|s| {
+                (
+                    (
+                        s.metadata.namespace.as_deref().unwrap(),
+                        s.metadata.name.as_deref().unwrap(),
+                    ),
+                    s,
+                )
+            })
+            .collect();
+        apply_resolved_slices(&client, &service, &changed, &mut ips, &mut states, &observed).await;
+        let mut reordered = changed;
+        reordered.reverse();
+        ips.reverse();
+        apply_resolved_slices(&client, &service, &reordered, &mut ips, &mut states, &observed).await;
+        assert_eq!(requests.lock().len(), before + 4, "unchanged/reordered {field}");
+    }
+}
+
+#[test]
 fn controller_default_candidate_prefers_ref_then_servers() {
     let ref_cfg = DnsResolverConfig {
         enabled: true,

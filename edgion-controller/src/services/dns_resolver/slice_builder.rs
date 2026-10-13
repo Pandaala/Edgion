@@ -82,7 +82,7 @@ pub fn decide_action(enabled: bool, is_external_name: bool, mode_value: Option<&
 /// the Service port *number* (`ServicePort.port`) onto each `EndpointPort` so the
 /// gateway's `ready_endpoints_for_port` — keyed on the route BackendRef port —
 /// matches. Names/protocols are carried through for multi-port name resolution.
-fn endpoint_ports(service_ports: &[ServicePort]) -> Vec<EndpointPort> {
+pub(super) fn endpoint_ports(service_ports: &[ServicePort]) -> Vec<EndpointPort> {
     service_ports
         .iter()
         .map(|sp| EndpointPort {

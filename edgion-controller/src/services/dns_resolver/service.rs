@@ -39,7 +39,7 @@ use edgion_resources::resources::refs::dns_fields::DnsResolverOwner;
 use crate::config::{dns_resolver_config, DnsResolverConfig};
 
 use super::slice_builder::{
-    build_endpoint_slices, decide_action, managed_by_selector, slice_name, SliceAction, FIELD_MANAGER,
+    build_endpoint_slices, decide_action, endpoint_ports, managed_by_selector, slice_name, SliceAction, FIELD_MANAGER,
 };
 
 /// Fallback tick interval when the configured `refresh_interval` is unparseable.
@@ -477,19 +477,17 @@ fn service_resolver_candidate(service: &Service, runtime: &ControllerRuntime) ->
     (!servers.is_empty()).then_some(ResolverCandidate::Servers(servers))
 }
 
-/// Content fingerprint (sorted IPs + sorted Service port numbers) used to detect
-/// whether a re-apply is actually needed this tick.
-///
-/// NOTE: intentionally covers only IPs + port NUMBERS, not port name / protocol /
-/// appProtocol. The gateway matches endpoints on service-name + port number, so a
-/// name/protocol-only change does not affect routing; that metadata on the
-/// published slice may lag until the IP set or a port number changes.
+/// Publication identity using the caller's sorted/deduplicated IPs and the
+/// builder's complete EndpointPort projection. JSON preserves optional-field
+/// distinctions; sorting the encoded ports ignores Service port ordering.
 fn slice_fingerprint(ips: &[IpAddr], ports: &[ServicePort]) -> String {
     let ip_part = ips.iter().map(|ip| ip.to_string()).collect::<Vec<_>>().join(",");
-    let mut port_nums: Vec<i32> = ports.iter().map(|p| p.port).collect();
-    port_nums.sort_unstable();
-    let port_part = port_nums.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(",");
-    format!("{ip_part}|{port_part}")
+    let mut port_parts: Vec<String> = endpoint_ports(ports)
+        .into_iter()
+        .map(|port| serde_json::json!(port).to_string())
+        .collect();
+    port_parts.sort_unstable();
+    format!("{ip_part}|[{}]", port_parts.join(","))
 }
 
 /// Extract the `namespace/service-name` key of a resolver-owned slice from its

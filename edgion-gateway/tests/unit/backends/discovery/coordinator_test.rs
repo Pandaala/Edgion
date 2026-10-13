@@ -541,6 +541,57 @@ fn sibling_slice_without_named_port_does_not_invalidate_section() {
 }
 
 #[test]
+fn external_name_port_edit_requires_repaired_slice_name_and_protocol() {
+    for field in ["name", "protocol"] {
+        let coordinator = ServiceDiscoveryCoordinator::new();
+        let mut source = (*service(Some("service-uid"), IntOrString::Int(8080))).clone();
+        let spec = source.spec.as_mut().unwrap();
+        spec.type_ = Some("ExternalName".into());
+        spec.external_name = Some("backend.example.com".into());
+        let port = &mut spec.ports.as_mut().unwrap()[0];
+        if field == "name" {
+            port.name = Some("renamed".into());
+        } else {
+            port.protocol = Some("UDP".into());
+        }
+        let desired = EndpointPort {
+            name: port.name.clone(),
+            port: Some(port.port),
+            protocol: port.protocol.clone(),
+            app_protocol: port.app_protocol.clone(),
+        };
+        coordinator.replace_services(&HashMap::from([("default/backend".into(), Arc::new(source))]));
+        let mut published = (*slice("backend-edgion-dns", Some("slice-uid"), true)).clone();
+        published.ports.as_mut().unwrap()[0].port = Some(80);
+        coordinator.replace_endpoint_slices(&HashMap::from([(
+            "default/backend-edgion-dns".into(),
+            Arc::new(published.clone()),
+        )]));
+        let key = ServiceSectionKey::Number(NonZeroU16::new(80).unwrap());
+        let stale = coordinator
+            .load_generation()
+            .available("default/backend")
+            .unwrap()
+            .resolve_section(&key)
+            .unwrap();
+        assert!(stale.all_slots.is_empty(), "stale {field}");
+        published.ports = Some(vec![desired]);
+        coordinator.replace_endpoint_slices(&HashMap::from([(
+            "default/backend-edgion-dns".into(),
+            Arc::new(published),
+        )]));
+        let repaired = coordinator
+            .load_generation()
+            .available("default/backend")
+            .unwrap()
+            .resolve_section(&key)
+            .unwrap();
+        assert_eq!(repaired.ready_slots.len(), 1, "repaired {field}");
+        assert_eq!(repaired.all_slots[0].origin_set[0].serving_port.get(), 80);
+    }
+}
+
+#[test]
 fn same_ip_distinct_slice_ports_are_separate_slots() {
     let coordinator = ServiceDiscoveryCoordinator::new();
     let mut unnamed = (*service(Some("service-uid"), IntOrString::Int(8080))).clone();
