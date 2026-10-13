@@ -136,3 +136,18 @@ available separately.
 - Production: `edgion-gateway/src/plugins/http/openid_connect/{token_exchange,token_verify,error,callback,request_filter_impl}.rs`.
 - Reproduction: `edgion-gateway/tests/unit/plugins/http/openid_connect/plugin_test/auth_response_caps_integration.rs`.
 - In-memory coverage: `edgion-gateway/tests/unit/plugins/http/openid_connect/token_exchange_test/response_tests.rs`.
+
+
+## Signature rejection fixture encoding (ARCH-381)
+
+The JWKS invalid-signature integration probe mutates a decoded signature byte
+and re-encodes with unpadded base64url, preserving the original header and claims.
+Replacing the final encoded character can instead create noncanonical padding
+bits and test format rejection. Both outcomes map to 401 but have different Auto
+fallback semantics, so well-formed encoding is a necessary probe precondition.
+
+Pure tests use the actual 2048-bit RSA fixture signer and establish unchanged
+header/claims, canonical encoding, 256-byte signatures and exactly one changed
+signature byte. Malformed compact tokens and invalid encoding fail construction.
+The original integration identity and 401 assertion remain; this verification
+does not claim a fresh live Gateway signature-rejection run.

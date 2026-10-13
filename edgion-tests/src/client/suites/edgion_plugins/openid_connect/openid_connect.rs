@@ -1,4 +1,5 @@
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use serde_json::json;
 use std::time::Instant;
@@ -61,6 +62,24 @@ fn generate_rs256_token(sub: &str) -> Result<String, String> {
             .map_err(|e| format!("invalid private key: {}", e))?,
     )
     .map_err(|e| format!("failed to sign jwt: {}", e))
+}
+
+fn tamper_signature(jwt: &str) -> Result<String, &'static str> {
+    let parts: Vec<_> = jwt.split('.').collect();
+    if parts.len() != 3 || parts.iter().any(|part| part.is_empty()) {
+        return Err("Invalid compact JWT fixture");
+    }
+    let mut signature = URL_SAFE_NO_PAD
+        .decode(parts[2])
+        .map_err(|_| "Invalid JWT fixture signature encoding")?;
+    let first = signature.first_mut().ok_or("Empty JWT fixture signature")?;
+    *first ^= 1;
+    Ok(format!(
+        "{}.{}.{}",
+        parts[0],
+        parts[1],
+        URL_SAFE_NO_PAD.encode(signature)
+    ))
 }
 
 impl OpenidConnectTestSuite {
@@ -293,11 +312,10 @@ impl OpenidConnectTestSuite {
                             return TestResult::failed(start.elapsed(), format!("Failed to generate JWT: {}", e));
                         }
                     };
-                    let mut tampered = jwt.into_bytes();
-                    if let Some(last) = tampered.last_mut() {
-                        *last = if *last == b'a' { b'b' } else { b'a' };
-                    }
-                    let tampered = String::from_utf8_lossy(&tampered);
+                    let tampered = match tamper_signature(&jwt) {
+                        Ok(token) => token,
+                        Err(error) => return TestResult::failed(start.elapsed(), error.to_string()),
+                    };
 
                     let response = match ctx
                         .http_client
@@ -429,5 +447,35 @@ impl TestSuite for OpenidConnectTestSuite {
             Self::test_auto_fallback_to_introspection_passes(),
             Self::test_auto_mode_jwt_path_passes(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod signature_fixture_tests {
+    use super::*;
+
+    #[test]
+    fn signature_mutation_preserves_encoding_header_and_claims() {
+        let original = generate_rs256_token("signature-fixture-user").unwrap();
+        let changed = tamper_signature(&original).unwrap();
+        let original: Vec<_> = original.split('.').collect();
+        let changed: Vec<_> = changed.split('.').collect();
+        assert_eq!(original[..2], changed[..2]);
+        let before = URL_SAFE_NO_PAD.decode(original[2]).unwrap();
+        let after = URL_SAFE_NO_PAD.decode(changed[2]).unwrap();
+        assert_eq!(before.len(), 256);
+        assert_eq!(after.len(), 256);
+        assert_eq!(after[0], before[0] ^ 1);
+        assert_eq!(after[1..], before[1..]);
+        assert_ne!(after, before);
+        assert_eq!(URL_SAFE_NO_PAD.encode(&before), original[2]);
+        assert_eq!(URL_SAFE_NO_PAD.encode(&after), changed[2]);
+    }
+
+    #[test]
+    fn invalid_signature_fixture_inputs_fail() {
+        for token in ["", "a.b", "a.b.c.d", ".b.AA", "a..AA", "a.b.", "a.b.!", "a.b.Ab"] {
+            assert!(tamper_signature(token).is_err());
+        }
     }
 }
