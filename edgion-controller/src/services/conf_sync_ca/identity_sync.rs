@@ -57,7 +57,7 @@ use std::time::Duration;
 use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 
-use crate::conf_sync::conf_server::tls_identity::{global_handle, ServerIdentity};
+use crate::conf_sync::conf_server::tls_identity::{global_handle, ServerIdentity, ServerIdentityHandle};
 use crate::services::conf_sync_ca::cert_util::chains_to;
 use crate::services::conf_sync_ca::load_ca;
 
@@ -207,6 +207,19 @@ async fn sync_once(secret_api: &Api<Secret>, sans: &[String], rotation: &ConfSyn
         return Ok(());
     };
 
+    sync_once_with_handle(secret_api, sans, rotation, handle).await
+}
+
+async fn sync_once_with_handle(
+    secret_api: &Api<Secret>,
+    sans: &[String],
+    rotation: &ConfSyncRotationConfig,
+    handle: &ServerIdentityHandle,
+) -> anyhow::Result<()> {
+    // Capture before acquisition so a writer completing during the CA GET cannot
+    // become the expected identity for a decision based on the older fetched CA.
+    let expected = handle.load();
+
     // READ-ONLY (never `ensure_ca`): absence means the leader has not bootstrapped
     // the CA Secret yet. That is normal at cold start, so it is a DEBUG skip, not
     // an error — and definitely not a reason to mint a root from a non-leader.
@@ -218,22 +231,14 @@ async fn sync_once(secret_api: &Api<Secret>, sans: &[String], rotation: &ConfSyn
         return Ok(());
     };
 
-    let (cert_pem, identity_ca_pem, window, old_serial) = {
-        let id = handle.load();
-        (
-            id.cert_pem.clone(),
-            id.ca_cert_pem.clone(),
-            (id.not_before, id.not_after),
-            id.serial.clone(),
-        )
-    };
-    let chains = chains_to(&cert_pem, ca.ca_cert_pem());
+    let old_serial = &expected.serial;
+    let chains = chains_to(&expected.cert_pem, ca.ca_cert_pem());
 
     let Some(reason) = identity_resign_reason(
         chains,
-        &identity_ca_pem,
+        &expected.ca_cert_pem,
         ca.ca_cert_pem(),
-        window,
+        (expected.not_before, expected.not_after),
         rotation.lifetime_ratio,
         rotation.emergency_rotate_below.as_time(),
         OffsetDateTime::now_utc(),
@@ -245,24 +250,10 @@ async fn sync_once(secret_api: &Api<Secret>, sans: &[String], rotation: &ConfSyn
     let new_identity = ServerIdentity::from_pems(&leaf.cert_pem, leaf.key_pem.as_str(), ca.ca_cert_pem())?;
     let (new_serial, not_after) = (new_identity.serial.clone(), new_identity.not_after);
 
-    // Compare-then-swap against the snapshot this decision was computed from. (A
-    // narrowing, not a lock: the window between this check and the store is a few
-    // instructions wide instead of a Kubernetes round-trip plus a signing operation.)
-    //
-    // Between the `load_ca` GET above and this store, another writer (the leader's
-    // rotation reconciler — both loops run on the leader) may have installed a fresher
-    // identity. If a re-key completed inside that window, we are holding a leaf signed
-    // by the root we read (now the OLD one) and storing it would CLOBBER the leader's
-    // fresh identity, reinstating the old client-CA verifier — i.e. re-accepting the
-    // compromised gateway leaf until our next tick. Milliseconds wide, but the
-    // consequence is security-relevant, so bail whenever the handle no longer holds the
-    // identity we based the decision on and let the next tick re-evaluate from scratch.
-    //
-    // Note this is deliberately a SERIAL comparison against our snapshot, not a "does
-    // the installed identity chain to the root we just read" check: in the very race we
-    // care about, the fresher identity chains to the NEW root and therefore would NOT
-    // chain to the (old) root we read — such a check would wave the clobber through.
-    if handle.load().serial != old_serial {
+    // The handle checks this retained snapshot under its shared writer lock.
+    // Signing and validation stay outside that lock; a stale result is discarded
+    // without touching the identity or its trust token and the next tick retries.
+    if !handle.store_if_current(&expected, new_identity) {
         tracing::debug!(
             component = "conf_sync_ca",
             snapshot_serial = %old_serial,
@@ -270,8 +261,6 @@ async fn sync_once(secret_api: &Api<Secret>, sans: &[String], rotation: &ConfSyn
         );
         return Ok(());
     }
-    handle.store(new_identity);
-
     tracing::info!(
         component = "conf_sync_ca",
         event = "conf_sync_server_identity_resigned",

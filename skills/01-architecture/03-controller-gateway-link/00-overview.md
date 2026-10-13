@@ -193,6 +193,14 @@ a pod. The leader-only CA bootstrap is split-brain-safe by construction: `ensure
 POST-creates and adopts on a 409, so two replicas racing at cold start converge on one
 root.
 
+Per-replica identity sync retains the installed identity before its CA GET
+(ARCH-130). After signing and validating outside the publication lock, it installs
+only if that same retained identity still owns the slot. The comparison and
+publication use the shared cold writer lock; rejection leaves the current trust
+token and generation unchanged and the next tick re-evaluates. This prevents a
+concurrent local publication from being overwritten by this producer's stale
+candidate; it does not order all Kubernetes CA changes or other producers' inputs.
+
 **Hot reload, both ends, no process restarts.** Controller: an owned TCP accept loop
 feeds tonic `serve_with_incoming_shutdown` from one immutable identity-and-revocation-token ArcSwap snapshot, so the
 listener is never rebound and each handshake receives a matched verifier and token

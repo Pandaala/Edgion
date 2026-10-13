@@ -160,9 +160,22 @@ impl ServerIdentityHandle {
     /// old leaves still chain, but the anchor is a different certificate; tearing the
     /// sessions down is the conservative, correct call, and a renewal is rare).
     pub fn store(&self, id: ServerIdentity) {
+        self.store_inner(None, id);
+    }
+
+    /// Publish only if the retained identity still owns the installed slot.
+    /// Rejection leaves the identity, trust token and generation unchanged.
+    pub(crate) fn store_if_current(&self, expected: &Arc<ServerIdentity>, id: ServerIdentity) -> bool {
+        self.store_inner(Some(expected), id)
+    }
+
+    fn store_inner(&self, expected: Option<&Arc<ServerIdentity>>, id: ServerIdentity) -> bool {
         let generation = {
             let _guard = self.store_lock.lock();
             let old = self.installed.load_full();
+            if expected.is_some_and(|expected| !Arc::ptr_eq(expected, &old.identity)) {
+                return false;
+            }
             let root_changed = old.identity.ca_cert_pem.trim() != id.ca_cert_pem.trim();
             let trust_token = if root_changed {
                 Arc::new(CancellationToken::new())
@@ -191,6 +204,7 @@ impl ServerIdentityHandle {
                  the previous root (this is the revocation an emergency CA re-key relies on)"
             );
         }
+        true
     }
 }
 

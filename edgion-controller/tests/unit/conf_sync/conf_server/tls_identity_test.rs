@@ -230,3 +230,86 @@ fn concurrent_same_root_stores_publish_one_live_trust_generation() {
     assert!(!token.is_cancelled());
     assert!(tokens.iter().all(|captured| Arc::ptr_eq(captured, &token)));
 }
+
+fn conditional_identity(ca: &Ca) -> ServerIdentity {
+    let leaf = ca.sign_server(&["localhost".into()], time::Duration::days(7)).unwrap();
+    ServerIdentity::from_pems(&leaf.cert_pem, &leaf.key_pem, ca.ca_cert_pem()).unwrap()
+}
+
+#[test]
+fn conditional_store_preserves_rotation_and_revocation_contracts() {
+    install_test_crypto_provider();
+    let ca = Ca::generate_root(time::Duration::days(30)).unwrap();
+    let handle = ServerIdentityHandle::new(conditional_identity(&ca));
+    let expected = handle.load();
+    let token = handle.handshake_material().1;
+    assert!(handle.store_if_current(&expected, conditional_identity(&ca)));
+    assert!(!Arc::ptr_eq(&expected, &handle.load()));
+    assert!(Arc::ptr_eq(&token, &handle.handshake_material().1));
+    assert!(!token.is_cancelled());
+    assert_eq!(handle.trust_generation(), 0);
+
+    let other = Ca::generate_root(time::Duration::days(30)).unwrap();
+    assert!(handle.store_if_current(&handle.load(), conditional_identity(&other)));
+    assert!(token.is_cancelled());
+    assert!(!handle.handshake_material().1.is_cancelled());
+    assert_eq!(handle.trust_generation(), 1);
+}
+
+#[test]
+fn stale_conditional_store_cannot_change_the_current_trust_generation() {
+    install_test_crypto_provider();
+    let ca = Ca::generate_root(time::Duration::days(30)).unwrap();
+    let other = Ca::generate_root(time::Duration::days(30)).unwrap();
+    let handle = ServerIdentityHandle::new(conditional_identity(&ca));
+    let expected = handle.load();
+    let candidate = conditional_identity(&ca);
+    // A newer publication wins after candidate preparation but before commit.
+    handle.store(conditional_identity(&other));
+    let current = handle.load();
+    let token = handle.handshake_material().1;
+    let generation = handle.trust_generation();
+    assert!(!handle.store_if_current(&expected, candidate));
+    assert!(Arc::ptr_eq(&current, &handle.load()));
+    assert!(Arc::ptr_eq(&token, &handle.handshake_material().1));
+    assert!(!token.is_cancelled());
+    assert_eq!(handle.trust_generation(), generation);
+}
+
+#[test]
+fn concurrent_conditional_candidates_have_exactly_one_winner() {
+    install_test_crypto_provider();
+    let ca = Ca::generate_root(time::Duration::days(30)).unwrap();
+    let handle = ServerIdentityHandle::new(conditional_identity(&ca));
+    let expected = handle.load();
+    let old_token = handle.handshake_material().1;
+    let candidates: Vec<_> = (0..2)
+        .map(|_| conditional_identity(&Ca::generate_root(time::Duration::days(30)).unwrap()))
+        .collect();
+    let barrier = std::sync::Barrier::new(candidates.len());
+    let outcomes = std::thread::scope(|scope| {
+        let writers: Vec<_> = candidates
+            .into_iter()
+            .map(|candidate| {
+                let handle = &handle;
+                let expected = &expected;
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    let config = candidate.config.clone();
+                    (handle.store_if_current(expected, candidate), config)
+                })
+            })
+            .collect();
+        writers
+            .into_iter()
+            .map(|writer| writer.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(outcomes.iter().filter(|(installed, _)| *installed).count(), 1);
+    let winner = &outcomes.iter().find(|(installed, _)| *installed).unwrap().1;
+    assert!(Arc::ptr_eq(winner, &handle.load().config));
+    assert_eq!(handle.trust_generation(), 1);
+    assert!(old_token.is_cancelled());
+    assert!(!handle.handshake_material().1.is_cancelled());
+}

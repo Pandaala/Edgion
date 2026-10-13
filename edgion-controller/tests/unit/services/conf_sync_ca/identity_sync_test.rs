@@ -163,3 +163,64 @@ fn ratio_zero_and_one_boundaries() {
         None
     );
 }
+
+#[tokio::test]
+async fn ca_read_cannot_adopt_and_overwrite_a_concurrent_identity_publication() {
+    use crate::services::conf_sync_ca::{build_secret, Ca, CA_SECRET};
+    use std::collections::BTreeMap;
+    use std::sync::{Arc, Mutex};
+
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let ca_a = Ca::generate_root(time::Duration::days(3650)).unwrap();
+    let ca_b = Ca::generate_root(time::Duration::days(3650)).unwrap();
+    let sans = vec!["localhost".to_string()];
+    // Force a candidate even with the correct early A snapshot: the current
+    // twelve-hour leaf is inside the default twenty-four-hour emergency window.
+    let a = ca_a.sign_server(&sans, time::Duration::hours(12)).unwrap();
+    let b = ca_b.sign_server(&sans, time::Duration::days(7)).unwrap();
+    let handle = Arc::new(ServerIdentityHandle::new(
+        ServerIdentity::from_pems(&a.cert_pem, &a.key_pem, ca_a.ca_cert_pem()).unwrap(),
+    ));
+    let replacement = ServerIdentity::from_pems(&b.cert_pem, &b.key_pem, ca_b.ca_cert_pem()).unwrap();
+    let replacement_config = replacement.config.clone();
+    let replacement = Arc::new(Mutex::new(Some(replacement)));
+    let response = serde_json::to_vec(&build_secret(
+        CA_SECRET,
+        "test",
+        BTreeMap::from([
+            ("ca.crt".into(), ca_a.ca_cert_pem().as_bytes().to_vec()),
+            ("ca.key".into(), ca_a.ca_key_pem().as_bytes().to_vec()),
+        ]),
+    ))
+    .unwrap();
+    let transport_handle = handle.clone();
+    let transport = tower::service_fn(move |request: http::Request<kube::client::Body>| {
+        assert_eq!(request.method(), http::Method::GET);
+        assert_eq!(
+            request.uri().path(),
+            format!("/api/v1/namespaces/test/secrets/{CA_SECRET}")
+        );
+        // Publish B after this tick starts acquiring A but before its GET resolves.
+        // The old producer captured B only after this response and overwrote it.
+        transport_handle.store(replacement.lock().unwrap().take().unwrap());
+        let response = response.clone();
+        async move {
+            Ok::<_, std::convert::Infallible>(
+                http::Response::builder()
+                    .status(200)
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(kube::client::Body::from(response))
+                    .unwrap(),
+            )
+        }
+    });
+    let api = Api::namespaced(kube::Client::new(transport, "test"), "test");
+    sync_once_with_handle(&api, &sans, &ConfSyncRotationConfig::default(), &handle)
+        .await
+        .unwrap();
+    let installed = handle.load();
+    assert!(Arc::ptr_eq(&replacement_config, &installed.config));
+    assert_eq!(installed.cert_pem, b.cert_pem);
+    assert_eq!(installed.ca_cert_pem, ca_b.ca_cert_pem());
+    assert_eq!(handle.trust_generation(), 1);
+}
