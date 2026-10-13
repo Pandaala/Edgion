@@ -172,3 +172,17 @@ separate evidence.
   recorded in the resource-budget rule, not inferred from BODY-014's history.
 - `backend-request-mirror-streaming-body-stage` — fixed and verified on
   2026-09-10; uses a first-attempt adapter permission for a read-only tee.
+
+## Ordinary capture identity
+
+The ordinary POST body and path probes select `find_mirror_capture` before
+reading evidence (ARCH-393). Primary and mirror deliveries share the capture
+endpoint and trace; arrival order is not mirror identity. Polling for any marked
+record does not make `captures[0]` the mirror. The private selector requires the
+existing `x-mirror: true` marker; missing marked captures fail explicitly.
+
+The pure capture-identity regression checks both arrival orders and rejects
+borrowing a valid primary's method/body when the marked mirror is wrong. It
+verifies assertion input selection, not live delivery or production body copying.
+The separate missing query observation (ARCH-394) remains outside this identity
+correction; selecting a mirror does not by itself establish query preservation.

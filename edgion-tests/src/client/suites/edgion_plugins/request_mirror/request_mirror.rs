@@ -244,7 +244,12 @@ impl RequestMirrorTestSuite {
 
                     match poll_mirror_received(&ctx, &trace_id, 20, 100).await {
                         Ok(captures) => {
-                            let cap = &captures[0];
+                            let Some(cap) = find_mirror_capture(&captures) else {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    "No mirror capture found (x-mirror: true)".to_string(),
+                                );
+                            };
                             let mirrored_body = cap["body"].as_str().unwrap_or("");
                             let mirrored_method = cap["method"].as_str().unwrap_or("");
 
@@ -422,7 +427,12 @@ impl RequestMirrorTestSuite {
 
                     match poll_mirror_received(&ctx, &trace_id, 20, 100).await {
                         Ok(captures) => {
-                            let cap = &captures[0];
+                            let Some(cap) = find_mirror_capture(&captures) else {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    "No mirror capture found (x-mirror: true)".to_string(),
+                                );
+                            };
                             let path = cap["path"].as_str().unwrap_or("");
                             if !path.contains("/mirror/capture") {
                                 return TestResult::failed(start.elapsed(), format!("Mirror path wrong: '{}'", path));
@@ -923,5 +933,39 @@ impl TestSuite for RequestMirrorTestSuite {
             Self::test_mirror_headers_correct(),
             Self::test_bodyless_reject_still_mirrored(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn mirror_identity_is_independent_of_capture_order_and_primary_contents() {
+        let primary = json!({"headers": {}, "method": "POST", "body": "shadow-test"});
+        let mirror = json!({"headers": {"x-mirror": "true"}, "method": "POST", "body": "shadow-test"});
+        for captures in [
+            vec![primary.clone(), mirror.clone()],
+            vec![mirror.clone(), primary.clone()],
+        ] {
+            assert_eq!(find_mirror_capture(&captures), Some(&mirror));
+        }
+        assert!(find_mirror_capture(&[]).is_none());
+        assert!(find_mirror_capture(&[primary.clone()]).is_none());
+        assert!(find_mirror_capture(&[json!({"headers": {"x-mirror": false}})]).is_none());
+        for wrong in [
+            json!({"headers": {"x-mirror": "true"}, "method": "GET", "body": "shadow-test"}),
+            json!({"headers": {"x-mirror": "true"}, "method": "POST", "body": "wrong-body"}),
+        ] {
+            for captures in [
+                vec![primary.clone(), wrong.clone()],
+                vec![wrong.clone(), primary.clone()],
+            ] {
+                let selected = find_mirror_capture(&captures).unwrap();
+                assert_eq!(selected, &wrong);
+                assert!(selected["method"] != "POST" || !selected["body"].as_str().unwrap().contains("shadow-test"));
+            }
+        }
     }
 }
