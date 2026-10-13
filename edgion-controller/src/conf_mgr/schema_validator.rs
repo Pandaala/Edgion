@@ -42,7 +42,7 @@ fn gateway_profile(kind: &str, version: &str) -> GatewaySchemaProfile {
 /// Return only locations composed of shipped property names and array indexes.
 /// Map keys supplied by a user become `*`, even when jsonschema reports them
 /// in its instance path. Both paths and the number of diagnostics are bounded.
-fn safe_gateway_error_path(instance_path: &str, schema_path: &str, value: &JsonValue) -> String {
+fn safe_schema_error_path(instance_path: &str, schema_path: &str, value: &JsonValue) -> String {
     let schema_segments: Vec<_> = schema_path.split('/').collect();
     let properties: Vec<_> = schema_segments
         .windows(2)
@@ -78,6 +78,38 @@ fn safe_gateway_error_path(instance_path: &str, schema_path: &str, value: &JsonV
         raw_prefix.push_str(segment);
     }
     safe
+}
+
+fn format_schema_error(instance_path: &str, schema_path: &str, value: &JsonValue) -> String {
+    format!(
+        "Path: {}, Schema: {}",
+        safe_schema_error_path(instance_path, schema_path, value),
+        schema_path.chars().take(200).collect::<String>()
+    )
+}
+
+/// Format schema failures without invoking value-bearing ValidationError Display.
+fn validate_schema(validator: &Validator, value: &JsonValue) -> Result<(), ValidationError> {
+    let mut errors: Vec<_> = validator
+        .iter_errors(value)
+        .take(17)
+        .map(|error| {
+            format_schema_error(
+                &error.instance_path().to_string(),
+                &error.schema_path().to_string(),
+                value,
+            )
+        })
+        .collect();
+    if errors.len() > 16 {
+        errors.truncate(16);
+        errors.push("Additional schema errors omitted".to_string());
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(ValidationError::SchemaViolation(errors.join("; ")))
+    }
 }
 
 impl SchemaValidator {
@@ -304,24 +336,7 @@ impl SchemaValidator {
             return self.validate_gateway_source(GROUP, source.version, source.kind, value);
         }
         match self.validators.get(&kind) {
-            Some(validator) => {
-                let mut error_messages = Vec::new();
-                for error in validator.iter_errors(value) {
-                    tracing::debug!(
-                        component = "schema_validator",
-                        kind = ?kind,
-                        path = %error.instance_path(),
-                        error = %error,
-                        "Schema validation error"
-                    );
-                    error_messages.push(format!("Path: {}, Error: {}", error.instance_path(), error));
-                }
-                if error_messages.is_empty() {
-                    Ok(())
-                } else {
-                    Err(ValidationError::SchemaViolation(error_messages.join("; ")))
-                }
-            }
+            Some(validator) => validate_schema(validator, value),
             None => {
                 // No schema: warn but continue (fail-open by design)
                 tracing::warn!(
@@ -365,15 +380,7 @@ impl SchemaValidator {
                         .iter()
                         .take(16)
                         .map(|violation| {
-                            format!(
-                                "Path: {}, Schema: {}",
-                                safe_gateway_error_path(
-                                    &violation.instance_path,
-                                    &violation.schema_path,
-                                    &view.normalized
-                                ),
-                                violation.schema_path.chars().take(200).collect::<String>()
-                            )
+                            format_schema_error(&violation.instance_path, &violation.schema_path, &view.normalized)
                         })
                         .collect::<Vec<_>>()
                         .join("; "),
@@ -381,27 +388,7 @@ impl SchemaValidator {
             }
         }
         let value = prepared.as_ref().map(|view| &view.normalized).unwrap_or(value);
-        let mut errors: Vec<_> = validator
-            .iter_errors(value)
-            .take(17)
-            .map(|error| {
-                let schema_path = error.schema_path().to_string();
-                let instance_path = safe_gateway_error_path(&error.instance_path().to_string(), &schema_path, value);
-                format!(
-                    "Path: {instance_path}, Schema: {}",
-                    schema_path.chars().take(200).collect::<String>()
-                )
-            })
-            .collect();
-        if errors.len() > 16 {
-            errors.truncate(16);
-            errors.push("Additional schema errors omitted".to_string());
-        }
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(ValidationError::SchemaViolation(errors.join("; ")))
-        }
+        validate_schema(validator, value)
     }
 
     /// Get the number of loaded schemas

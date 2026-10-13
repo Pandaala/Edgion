@@ -325,3 +325,87 @@ fn reference_contract_errors_mask_listener_options_keys() {
     assert!(error.contains("/spec/listeners/0/tls/options/*"), "{error}");
     assert!(error.len() < 1000);
 }
+
+#[test]
+fn custom_tls_schema_errors_hide_typed_authored_host() {
+    let crd_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../config/crd");
+    let validator = SchemaValidator::from_crd_dir(&crd_dir).unwrap();
+    let raw = serde_json::json!({
+        "apiVersion": "edgion.io/v1", "kind": "EdgionTls",
+        "metadata": {"name": "edge", "namespace": "default"},
+        "spec": {"hosts": ["tenant-internal_host"], "secretRef": {"name": "certificate"}}
+    });
+    // Admin custom-resource writes serialize the typed document before validation.
+    let typed: edgion_resources::EdgionTls = serde_json::from_value(raw).unwrap();
+    let mut value = serde_json::to_value(typed).unwrap();
+    let error = validator
+        .validate(ResourceKind::EdgionTls, &value)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Path: /spec/hosts/0"), "{error}");
+    assert!(error.contains("/pattern"), "{error}");
+    assert!(!error.contains("tenant-internal_host"), "{error}");
+    value["spec"]["hosts"][0] = serde_json::json!("example.com");
+    assert!(validator.validate(ResourceKind::EdgionTls, &value).is_ok());
+}
+
+#[test]
+fn custom_schema_errors_mask_authored_map_keys_and_bound_count() {
+    let schema = serde_json::json!({
+        "type": "object", "properties": {"spec": {
+            "type": "object", "additionalProperties": {"type": "array", "items": {"type": "integer"}}
+        }}
+    });
+    let mut validator = SchemaValidator::empty();
+    validator
+        .validators
+        .insert(ResourceKind::EdgionTls, Validator::new(&schema).unwrap());
+    let value = serde_json::json!({"spec": {
+        "private-customer-token": ["private-value"], "12345678": ["private-value"]
+    }});
+    let error = validator
+        .validate(ResourceKind::EdgionTls, &value)
+        .unwrap_err()
+        .to_string();
+    assert_eq!(error.matches("Path: /spec/*/0").count(), 2, "{error}");
+    for hidden in ["private-customer-token", "12345678", "private-value"] {
+        assert!(!error.contains(hidden), "{error}");
+    }
+    assert!(!error.contains("Additional schema errors omitted"));
+
+    for count in [16, 17, 100] {
+        let value = serde_json::json!({"spec": {"private-customer-token": vec!["private-value"; count]}});
+        let error = validator
+            .validate(ResourceKind::EdgionTls, &value)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(error.matches("Path:").count(), 16, "{error}");
+        assert_eq!(error.contains("Additional schema errors omitted"), count > 16);
+        assert!(error.contains("Path: /spec/*/15"), "{error}");
+        assert!(!error.contains("private-customer-token"));
+        assert!(!error.contains("private-value"));
+    }
+}
+
+#[test]
+fn custom_schema_diagnostic_paths_remain_bounded_with_long_unicode_properties() {
+    let property = "é".repeat(300);
+    let mut schema = serde_json::json!({"type": "integer"});
+    let mut value = serde_json::json!("private-value");
+    for _ in 0..20 {
+        schema = serde_json::json!({"type": "object", "properties": {property.clone(): schema}});
+        value = serde_json::json!({property.clone(): value});
+    }
+    let mut validator = SchemaValidator::empty();
+    validator
+        .validators
+        .insert(ResourceKind::EdgionTls, Validator::new(&schema).unwrap());
+    let ValidationError::SchemaViolation(error) = validator.validate(ResourceKind::EdgionTls, &value).unwrap_err();
+    let (instance, schema) = error.strip_prefix("Path: ").unwrap().split_once(", Schema: ").unwrap();
+    assert!(instance.starts_with("/é"));
+    assert!(instance.len() <= 240);
+    assert!(instance.matches('/').count() <= 16);
+    assert_eq!(schema.chars().count(), 200);
+    assert!(schema.len() <= 800);
+    assert!(!error.contains("private-value"));
+}

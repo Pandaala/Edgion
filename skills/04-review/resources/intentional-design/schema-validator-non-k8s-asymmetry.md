@@ -119,6 +119,24 @@ a "write → poll status → translate conditions → derive error" round-trip. 
 - "`edgion-cli config lint <file>` as the canonical solution to this finding" — orthogonal
   feature; whether to add a CLI lint subcommand is a separate product decision.
 
+## Safe schema diagnostics
+
+ARCH-089 unifies custom-resource and Gateway API schema failures through the
+private bounded formatter in `conf_mgr/schema_validator.rs`. The existing Admin
+warning may display that result: it includes schema locations and masked instance
+paths, never submitted values or the JSON Schema error's raw Display. Authored
+map keys are masked; shipped property names and actual array indexes remain useful.
+The shared schema pass emits at most 16 diagnostics plus an omission marker;
+instance paths are limited to 240 bytes and 16 segments, and trusted schema paths
+to 200 characters. Reference-contract failures reuse the same per-error formatter.
+
+The mirrored schema-validator tests cover a typed EdgionTls malformed hostname,
+map-key/value masking, array positions, error-count boundaries, and long Unicode
+schema paths alongside existing Gateway source-profile tests. This bounds the
+returned diagnostics, not total schema-validation CPU or input memory. It changes
+neither admission placement nor validation verdicts; schema-construction failures
+from trusted CRD artifacts remain a separate startup surface.
+
 ## The one real adjacent problem (out of scope here)
 
 Fields where OpenAPI catches but `serde` and `handler.validate` both miss — `format:
