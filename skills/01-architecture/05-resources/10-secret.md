@@ -28,7 +28,11 @@ and DNS credentials are instead consumed by the Kubernetes-only Controller AcmeS
    read the same runtime instance.
 2. **Initialization-stage accumulation**: collect Secrets during the initial List; on init_done,
    `secret_store.replace_all(...)` performs the authoritative replacement.
-3. **OIDC Secret check**: if referenced by EdgionPlugins, check whether it contains an OIDC-compatible key (`clientSecret` / `client_secret` / `sessionSecret` / `session_secret` / `secret`); warn if missing.
+3. **Consumer-owned material validation**: dependency edges identify resources to
+   requeue, not credential types. The generic handler does not infer OIDC from an
+   EdgionPlugins edge. Each bound-field resolver owns its key, UTF-8 and emptiness
+   rules; BasicAuth and OIDC can share the same lifecycle without sharing material
+   contracts (ARCH-157).
 
 ### on_init_done / on_change / on_delete
 

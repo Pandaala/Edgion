@@ -101,6 +101,22 @@ The no-detail rule also applies to Debug and Display output of retained errors.
 
 ## Resolution references
 
+### Secret material ownership (ARCH-157)
+
+Generic Secret lifecycle processing no longer treats every EdgionPlugins reverse
+dependency as an OIDC Secret. Such edges carry wakeup identity, not plugin or
+owning-field semantics. OIDC's bound-field resolver retains separate client/session
+alias sets and the canonical `read_secret_utf8` contract after authorization.
+No replacement warning or provider failure/fallback behavior is introduced.
+
+The Secret-handler regression first resolves an enabled BasicAuth entry, rotates
+its Secret, captures actual lifecycle events without an OIDC warning or credential
+values, verifies the dependent queue item, and resolves the updated password.
+The three removed helper-only tests exercised the obsolete generic alias union;
+normalization, initialization and delete/recreate coverage remain intact.
+
+### Existing dependency projection references
+
 - `redact-openid-connect-dependency-error-responses.md` / D0058: dependency
   projection task; original disposition pending, corrected and verified on
   2026-09-14.

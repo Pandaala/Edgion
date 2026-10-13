@@ -29,41 +29,6 @@ async fn assert_plugins_requeued(processor: &ResourceProcessor<EdgionPlugins>) {
 }
 
 #[test]
-fn test_has_non_empty_secret_field_reads_data() {
-    let mut secret = Secret::default();
-    let mut data = BTreeMap::new();
-    data.insert("clientSecret".to_string(), ByteString(b"abc".to_vec()));
-    secret.data = Some(data);
-
-    assert!(SecretHandler::has_non_empty_secret_field(
-        &secret,
-        &["clientSecret", "client_secret"]
-    ));
-}
-
-#[test]
-fn test_has_non_empty_secret_field_reads_string_data() {
-    let mut secret = Secret::default();
-    let mut string_data = BTreeMap::new();
-    string_data.insert("session_secret".to_string(), "v".to_string());
-    secret.string_data = Some(string_data);
-
-    assert!(SecretHandler::has_non_empty_secret_field(
-        &secret,
-        &["sessionSecret", "session_secret"]
-    ));
-}
-
-#[test]
-fn test_has_non_empty_secret_field_false_when_missing() {
-    let secret = Secret::default();
-    assert!(!SecretHandler::has_non_empty_secret_field(
-        &secret,
-        &["clientSecret", "client_secret", "secret"]
-    ));
-}
-
-#[test]
 fn normalize_string_data_copies_into_data_and_clears() {
     let mut secret = Secret::default();
     let mut sd = BTreeMap::new();
@@ -1364,5 +1329,100 @@ async fn acme_account_secret_events_recover_bare_material_and_ambiguity_without_
         policies.on_event_key(key.into()).await;
         work!(policies, owners, key);
         assert!(runtime.secret_ref_manager.get_dependencies(&dependent.key()).is_empty());
+    }
+}
+
+#[tokio::test]
+async fn basic_auth_secret_refresh_requeues_without_oidc_material_warning() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionPluginsHandler;
+    use crate::conf_mgr::sync_runtime::resource_processor::ProcessResult;
+    use edgion_resources::resources::edgion_plugins::EdgionPlugin;
+    use std::io::{Read, Seek};
+    use tracing::instrument::WithSubscriber;
+
+    let runtime = Arc::new(ControllerRuntime::default());
+    let processor = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
+        "EdgionPlugins",
+        100,
+        Arc::new(PluginsNoop),
+        runtime.clone(),
+    ));
+    runtime.processor_registry.register(processor.clone());
+    let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime);
+    let handler = SecretHandler::new();
+    let mut secret = Secret {
+        metadata: ObjectMeta {
+            namespace: Some("default".into()),
+            name: Some("basic".into()),
+            ..Default::default()
+        },
+        string_data: Some(BTreeMap::from([
+            ("username".into(), "private-user".into()),
+            ("password".into(), "private-old-password".into()),
+        ])),
+        ..Default::default()
+    };
+    let ProcessResult::Continue(_) = handler.parse(secret.clone(), &ctx).await else {
+        panic!("Secret must parse")
+    };
+    let plugins: EdgionPlugins = serde_json::from_value(serde_json::json!({
+        "metadata": {"namespace": "default", "name": "policy"},
+        "spec": {"requestPlugins": [{"type": "BasicAuth", "config": {
+            "secretGroups": [{"name": "users", "secretRefs": [{"name": "basic"}]}]
+        }}]}
+    }))
+    .unwrap();
+    let plugin_handler = EdgionPluginsHandler::new();
+    let ProcessResult::Continue(first) = plugin_handler.parse(plugins.clone(), &ctx).await else {
+        panic!("plugin must parse")
+    };
+    let EdgionPlugin::BasicAuth(config) = &first.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+        panic!("BasicAuth expected")
+    };
+    assert_eq!(
+        config.resolved_users.as_ref().unwrap()["private-user"].password,
+        "private-old-password"
+    );
+    assert_eq!(ctx.secret_ref_manager().get_refs("default/basic").len(), 1);
+
+    secret
+        .string_data
+        .as_mut()
+        .unwrap()
+        .insert("password".into(), "private-new-password".into());
+    let mut log_file = tempfile::tempfile().unwrap();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(log_file.try_clone().unwrap())
+        .with_max_level(tracing::Level::DEBUG)
+        .without_time()
+        .with_ansi(false)
+        .finish();
+    async {
+        let ProcessResult::Continue(normalized) = handler.parse(secret, &ctx).await else {
+            panic!("Secret must parse")
+        };
+        assert!(normalized.string_data.is_none());
+        handler.on_change(&normalized, &ctx).await;
+    }
+    .with_subscriber(subscriber)
+    .await;
+    assert_plugins_requeued(&processor).await;
+    let ProcessResult::Continue(refreshed) = plugin_handler.parse(plugins, &ctx).await else {
+        panic!("plugin must refresh")
+    };
+    let EdgionPlugin::BasicAuth(config) = &refreshed.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+        panic!("BasicAuth expected")
+    };
+    assert_eq!(
+        config.resolved_users.as_ref().unwrap()["private-user"].password,
+        "private-new-password"
+    );
+    log_file.rewind().unwrap();
+    let mut logs = String::new();
+    log_file.read_to_string(&mut logs).unwrap();
+    assert!(logs.contains("Secret parsed and added to SecretStore"));
+    assert!(logs.contains("Triggering cascading requeue"));
+    for forbidden in ["OIDC", "private-user", "private-old-password", "private-new-password"] {
+        assert!(!logs.contains(forbidden), "unexpected log content: {logs}");
     }
 }

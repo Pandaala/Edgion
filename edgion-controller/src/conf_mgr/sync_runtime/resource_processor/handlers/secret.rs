@@ -15,12 +15,11 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
     frontend_ca_ref::{FrontendCaSourceKey, FrontendCaSourceKind},
     HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
-use edgion_resources::ResourceKind;
 
 /// Secret handler
 ///
 /// Features:
-/// - parse: Normalize stringData→data, update SecretStore, validate OIDC secret shape
+/// - parse: Normalize stringData to data and update SecretStore
 /// - on_change: Trigger cascading requeue for dependent resources
 /// - on_delete: Remove from SecretStore + trigger cascading requeue
 ///
@@ -86,55 +85,6 @@ impl SecretHandler {
             ctx.requeue(resource_ref.kind.as_str(), key).await;
         }
     }
-
-    fn has_non_empty_secret_field(secret: &Secret, keys: &[&str]) -> bool {
-        if let Some(data) = &secret.data {
-            for key in keys {
-                if let Some(value) = data.get(*key) {
-                    if !value.0.is_empty() {
-                        return true;
-                    }
-                }
-            }
-        }
-        if let Some(string_data) = &secret.string_data {
-            for key in keys {
-                if let Some(value) = string_data.get(*key) {
-                    if !value.trim().is_empty() {
-                        return true;
-                    }
-                }
-            }
-        }
-        false
-    }
-
-    fn validate_oidc_secret_shape(&self, secret: &Secret, secret_key: &str, ctx: &HandlerContext) {
-        let refs = ctx.secret_ref_manager().get_refs(secret_key);
-        if refs.is_empty() {
-            return;
-        }
-        if !refs.iter().any(|r| r.kind == ResourceKind::EdgionPlugins) {
-            return;
-        }
-
-        let has_oidc_field = Self::has_non_empty_secret_field(
-            secret,
-            &[
-                "clientSecret",
-                "client_secret",
-                "sessionSecret",
-                "session_secret",
-                "secret",
-            ],
-        );
-        if !has_oidc_field {
-            tracing::warn!(
-                secret_key = %secret_key,
-                "Referenced Secret has no OIDC-compatible key; expected one of clientSecret/client_secret/sessionSecret/session_secret/secret"
-            );
-        }
-    }
 }
 
 impl Default for SecretHandler {
@@ -195,7 +145,6 @@ impl ProcessorHandler<Secret> for SecretHandler {
             secret_key = %secret_key,
             "Secret parsed and added to SecretStore"
         );
-        self.validate_oidc_secret_shape(&secret, &secret_key, ctx);
 
         ProcessResult::Continue(secret)
     }
@@ -214,8 +163,6 @@ impl ProcessorHandler<Secret> for SecretHandler {
             secret.metadata.namespace.as_ref(),
             secret.metadata.name.as_deref().unwrap_or(""),
         );
-
-        self.validate_oidc_secret_shape(secret, &secret_key, ctx);
 
         // SecretStore is already updated in parse(); only trigger cascading requeue here.
         self.trigger_cascading_requeue(&secret_key, secret, "updated", ctx)
