@@ -3,6 +3,7 @@
 //! The tokenizer is allocation-free. This module owns structural validation,
 //! namespace identity, character decoding and bounded construction/serialization.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::sync::Arc;
 
@@ -336,15 +337,24 @@ impl<'a> Writer<'a> {
         }
     }
     fn append(&mut self, text: &str) -> Result<(), XmlError> {
-        let next = self.output.len().saturating_add(text.len());
+        self.append_with_prefix("", text)
+    }
+    fn admit_append(&mut self, current_len: usize, added_len: usize) -> Result<usize, XmlError> {
+        let next = current_len.saturating_add(added_len);
         bound(next, self.limit, "output bytes")?;
-        self.budget.charge((text.len() as u64).saturating_mul(2))?;
+        self.budget.charge((added_len as u64).saturating_mul(2))?;
+        Ok(next)
+    }
+    // A borrowed decoded prefix has already paid its per-character charges.
+    fn append_with_prefix(&mut self, prefix: &str, text: &str) -> Result<(), XmlError> {
+        let next = self.admit_append(self.output.len().saturating_add(prefix.len()), text.len())?;
         if next > self.output.capacity() {
             let target = next.max(self.output.capacity().saturating_mul(2)).min(self.limit);
             self.output
                 .try_reserve_exact(target - self.output.len())
                 .map_err(|_| XmlError::Allocation)?;
         }
+        self.output.push_str(prefix);
         self.output.push_str(text);
         Ok(())
     }
@@ -461,16 +471,19 @@ fn serialize(node: &XmlValue, out: &mut Writer<'_>) -> Result<(), XmlError> {
 }
 
 /// XML whitespace normalization occurs before reference decoding.
-fn decode(
-    raw: &str,
+fn decode<'raw>(
+    raw: &'raw str,
     attribute: bool,
     references: bool,
     limit: usize,
     budget: &mut ValueWorkBudget,
-) -> Result<String, XmlError> {
+) -> Result<Cow<'raw, str>, XmlError> {
     let mut writer = Writer::new(limit, budget);
+    let mut owned = false;
     let mut chars = raw.chars();
-    while let Some(mut c) = chars.next() {
+    loop {
+        let start = raw.len() - chars.as_str().len();
+        let Some(mut c) = chars.next() else { break };
         let mut from_reference = false;
         if c == '&' && references {
             let start = chars.as_str();
@@ -536,9 +549,19 @@ fn decode(
         let decoded = c.encode_utf8(&mut bytes);
         // Two emitted units cover String capacity; two more cover Arc conversion.
         writer.budget.charge((decoded.len() as u64).saturating_mul(2))?;
-        writer.append(decoded)?;
+        let end = raw.len() - chars.as_str().len();
+        if !owned && &raw[start..end] == decoded {
+            writer.admit_append(start, decoded.len())?;
+        } else {
+            writer.append_with_prefix(if owned { "" } else { &raw[..start] }, decoded)?;
+            owned = true;
+        }
     }
-    Ok(writer.output)
+    Ok(if owned {
+        Cow::Owned(writer.output)
+    } else {
+        Cow::Borrowed(raw)
+    })
 }
 
 struct RawAttribute<'a> {
@@ -732,7 +755,7 @@ pub fn parse(source: &str, budget: &mut ValueWorkBudget) -> Result<XmlValue, Xml
                             return Err(XmlError::Invalid);
                         }
                         budget.charge(NODE_UNITS + uri.len() as u64)?;
-                        bindings.push((key, Arc::from(uri)));
+                        bindings.push((key, Arc::from(uri.as_ref())));
                     }
                 }
                 let namespace = resolve(tag.prefix, &bindings, &frames, budget)?;

@@ -153,6 +153,9 @@ summaries and bounded construction/serialization. XML uses the existing builtin
 resolution, arity and independent bytecode validation seams, with no grammar
 extension or workspace dependency edge. Prefixes normalize while expanded names,
 ordinary attribute order and mixed/repeated child order remain semantic.
+The private leaf decoder borrows unchanged token text and allocates decoded scratch
+only when transformation is necessary. Returned nodes and namespace bindings still
+own their Arc payloads; the existing per-character work and byte checks remain.
 
 Gateway `lang/xml_builtins.rs` owns runtime policy and an owned raw scanner.
 `DslBodyOps::parse_xml` checks current physical/source admission, reserves the

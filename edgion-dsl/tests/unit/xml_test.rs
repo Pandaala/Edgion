@@ -340,3 +340,113 @@ fn serializer_reuses_bindings_and_bounds_generated_declarations() {
         })
     ));
 }
+
+#[test]
+fn decoder_borrows_only_unchanged_tokens() {
+    for (raw, attribute, references) in [
+        ("", false, true),
+        ("plain é text", false, true),
+        ("line\nnext\ttab", false, true),
+        ("plain attribute", true, true),
+        ("<&amp; é", false, false),
+    ] {
+        let decoded = decode(raw, attribute, references, raw.len(), &mut ValueWorkBudget::default()).unwrap();
+        assert!(matches!(decoded, Cow::Borrowed(_)));
+        assert_eq!(decoded, raw);
+        assert_eq!(decoded.as_ptr(), raw.as_ptr());
+    }
+    for (raw, attribute, references, expected) in [
+        ("&amp;tail", false, true, "&tail"),
+        ("prefix é &amp;tail", false, true, "prefix é &tail"),
+        ("line\r\nnext\rtail", false, true, "line\nnext\ntail"),
+        ("a\r\nb\tc", true, true, "a b c"),
+        ("a&#10;&#x9;b", true, true, "a\n\tb"),
+        ("&amp;\r\n", false, false, "&amp;\n"),
+    ] {
+        let decoded = decode(
+            raw,
+            attribute,
+            references,
+            expected.len(),
+            &mut ValueWorkBudget::default(),
+        )
+        .unwrap();
+        assert!(matches!(decoded, Cow::Owned(_)));
+        assert_eq!(decoded, expected);
+    }
+}
+
+fn decoder_budget(units: u64) -> ValueWorkBudget {
+    let mut budget = ValueWorkBudget::default();
+    budget.charge(MAX_VALUE_WORK_UNITS - units).unwrap();
+    budget
+}
+
+fn decoder_remaining(mut budget: ValueWorkBudget) -> u64 {
+    let mut remaining = 0;
+    while budget.charge(1).is_ok() {
+        remaining += 1;
+    }
+    remaining
+}
+
+#[test]
+fn decoder_keeps_exact_work_charges_across_late_ownership_transition() {
+    for (raw, expected) in [("plain é", "plain é"), ("abc&amp;é", "abc&é"), ("é\r\nx", "é\nx")] {
+        let cost = expected.len() as u64 * 4;
+        let mut budget = decoder_budget(cost);
+        assert_eq!(decode(raw, false, true, expected.len(), &mut budget).unwrap(), expected);
+        assert_eq!(decoder_remaining(budget), 0);
+        let mut short = decoder_budget(cost - 1);
+        assert!(matches!(
+            decode(raw, false, true, expected.len(), &mut short),
+            Err(XmlError::Work(_))
+        ));
+        assert_eq!(
+            decoder_remaining(short),
+            expected.chars().last().unwrap().len_utf8() as u64 * 2 - 1
+        );
+    }
+}
+
+#[test]
+fn decoder_preserves_competing_error_order_and_remaining_work() {
+    for (raw, limit, units, expected, remaining) in [
+        ("a", 0, 1, "work", 1),
+        ("a", 0, 2, "limit", 0),
+        ("a", 1, 3, "work", 1),
+        ("é", 1, 3, "work", 3),
+        ("é", 1, 4, "limit", 0),
+        ("abc&amp;", 3, 13, "work", 1),
+        ("abc&amp;", 3, 14, "limit", 0),
+        ("abc&amp;", 4, 15, "work", 1),
+        ("a&unknown;", 0, 10, "limit", 8),
+        ("&unknown;", 0, 0, "invalid", 0),
+        ("a&#0;", 1, 8, "invalid", 4),
+    ] {
+        let mut budget = decoder_budget(units);
+        let error = decode(raw, false, true, limit, &mut budget).unwrap_err();
+        let kind = match error {
+            XmlError::Work(_) => "work",
+            XmlError::Limit { .. } => "limit",
+            XmlError::Invalid => "invalid",
+            XmlError::Allocation => "allocation",
+        };
+        assert_eq!(kind, expected, "{raw}");
+        assert_eq!(decoder_remaining(budget), remaining, "{raw}");
+    }
+}
+
+#[test]
+fn decoded_nodes_own_text_attributes_and_namespace_after_source_drop() {
+    let root = {
+        let source = String::from("<r xmlns='urn:owned' a='plain é'>plain &amp; text</r>");
+        parsed(&source)
+    };
+    assert_eq!(root.name(), Some(("urn:owned", "r")));
+    assert_eq!(
+        root.attr_value("", "a", &mut ValueWorkBudget::default()).unwrap(),
+        Some("plain é")
+    );
+    assert_eq!(root.value(32, &mut ValueWorkBudget::default()).unwrap(), "plain & text");
+}

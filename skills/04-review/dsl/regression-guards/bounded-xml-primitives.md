@@ -40,8 +40,26 @@ Map-entry admission, traversal and every serialized expanded visit/output byte.
 Output/String capacity uses capped growth, not buffer-then-check. Final Arc copy
 is charged separately; Bytes consumes String. The ledger bounds additional XML
 producer state per execution, excluding allocator rounding and preexisting storage;
-it is not process-wide memory admission. Constants/charges are documented in
-tasks/pending/request-body-capability-next/xml/01-design.md.
+it is not process-wide memory admission. Constants and charges are documented in the maintained
+[XML security ledger](../../../01-architecture/02-gateway/dsl-engine-security-model.md#3-compile-time-limits--source-map).
+The original task design ledger is no longer present in the tree.
+
+## Decoded token ownership
+
+ARCH-201 keeps unchanged decoded tokens borrowed until the parser creates their
+owned Arc nodes or namespace bindings. On the first entity or whitespace
+transformation, the private decoder copies the already admitted prefix once and
+continues with bounded owned output. No source-backed slice escapes in the tree.
+The existing character/reference walk still performs every emitted-byte precharge,
+length check and append charge in that order, including unchanged input. Prefix
+materialization does not debit those bytes again. Serialization shares the same
+append admission and capped reservation owner.
+
+Private decoder tests verify borrowed/owned results, normalization, exact work and
+byte admission, competing-error order and remaining work after failure. Existing
+leaf and Gateway XML tests cover owned nodes, request memory/spill scanning and
+publication. This avoids one intermediate payload for unchanged tokens; final Arc
+copies remain, and no measured latency or whole-operation memory claim is made.
 
 ## Canonical Body runtime
 
