@@ -163,39 +163,6 @@ impl HeaderCertAuth {
         session.client_cert_info().cloned().ok_or("no-client-cert")
     }
 
-    fn decode_header_cert_to_pem(&self, raw_value: &str) -> Result<Vec<u8>, &'static str> {
-        match self.config.certificate_header_format {
-            CertHeaderFormat::Base64Encoded => {
-                let body: String = raw_value
-                    .chars()
-                    .filter(|ch| !ch.is_ascii_whitespace())
-                    .collect::<String>();
-                let der = STANDARD.decode(body).map_err(|_| "invalid-base64-cert")?;
-                Ok(Self::der_to_pem(&der).into_bytes())
-            }
-            CertHeaderFormat::UrlEncoded => {
-                let decoded = percent_decode_str(raw_value)
-                    .decode_utf8()
-                    .map_err(|_| "invalid-url-encoded-cert")?;
-                Ok(decoded.into_owned().into_bytes())
-            }
-        }
-    }
-
-    fn der_to_pem(der: &[u8]) -> String {
-        let body = STANDARD.encode(der);
-        let mut pem = String::with_capacity(body.len() + 64);
-        pem.push_str("-----BEGIN CERTIFICATE-----\n");
-        for chunk in body.as_bytes().chunks(64) {
-            if let Ok(line) = std::str::from_utf8(chunk) {
-                pem.push_str(line);
-                pem.push('\n');
-            }
-        }
-        pem.push_str("-----END CERTIFICATE-----\n");
-        pem
-    }
-
     fn parse_first_cert_der(bytes: &[u8]) -> Result<Vec<u8>, &'static str> {
         for pem in Pem::iter_from_buffer(bytes) {
             match pem {
@@ -215,7 +182,18 @@ impl HeaderCertAuth {
         }
 
         let leaf_der = Self::parse_first_cert_der(cert_pem)?;
-        let (_, leaf) = parse_x509_certificate(&leaf_der).map_err(|_| "invalid-leaf-cert")?;
+        self.verify_leaf_der(&leaf_der)
+    }
+
+    fn verify_leaf_der(&self, leaf_der: &[u8]) -> Result<(), &'static str> {
+        if self.ca_pool.is_empty() {
+            return Err("no-ca-configured");
+        }
+        if leaf_der.is_empty() {
+            return Err("invalid-cert-pem");
+        }
+
+        let (_, leaf) = parse_x509_certificate(leaf_der).map_err(|_| "invalid-leaf-cert")?;
         if !leaf.validity().is_valid() {
             return Err("expired-leaf-cert");
         }
@@ -242,9 +220,22 @@ impl HeaderCertAuth {
         let header_value = session
             .header_str(&self.config.certificate_header_name)
             .ok_or("missing-cert-header")?;
-        let cert_pem = self.decode_header_cert_to_pem(header_value.trim())?;
-        self.verify_against_ca(&cert_pem)?;
-        let cert = X509::from_pem(&cert_pem).map_err(|_| "invalid-cert-pem")?;
+        let raw_value = header_value.trim();
+        let cert = match self.config.certificate_header_format {
+            CertHeaderFormat::Base64Encoded => {
+                let body: String = raw_value.chars().filter(|ch| !ch.is_ascii_whitespace()).collect();
+                let leaf_der = STANDARD.decode(body).map_err(|_| "invalid-base64-cert")?;
+                self.verify_leaf_der(&leaf_der)?;
+                X509::from_der(&leaf_der).map_err(|_| "invalid-cert-pem")?
+            }
+            CertHeaderFormat::UrlEncoded => {
+                let cert_pem = percent_decode_str(raw_value)
+                    .decode_utf8()
+                    .map_err(|_| "invalid-url-encoded-cert")?;
+                self.verify_against_ca(cert_pem.as_bytes())?;
+                X509::from_pem(cert_pem.as_bytes()).map_err(|_| "invalid-cert-pem")?
+            }
+        };
         Ok(extract_client_cert_info_from_cert(&cert))
     }
 

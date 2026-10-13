@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use regex::Regex;
+use std::borrow::Cow;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::LazyLock;
 
@@ -188,29 +189,29 @@ impl ProxyRewrite {
         // This must be done last, after $uri, $arg_xxx, and $1-$9 are replaced.
         // Skip if the matched name is "uri" (already handled) or starts with "arg_".
         if result.contains('$') {
-            // Collect all matches first to avoid borrowing issues
-            let matches: Vec<(String, String)> = PATH_PARAM_PATTERN
-                .captures_iter(&result)
-                .filter_map(|caps| {
-                    let full_match = caps.get(0)?.as_str().to_string();
-                    let param_name = caps.get(1)?.as_str();
-                    // Skip "uri" and anything starting with "arg_" (already handled)
-                    if param_name == "uri" || param_name.starts_with("arg_") {
-                        return None;
-                    }
-                    Some((full_match, param_name.to_string()))
-                })
-                .collect();
-
-            for (full_match, param_name) in matches {
-                if let Some(value) = session.get_path_param(&param_name) {
-                    let replacement = match context {
-                        TemplateContext::Uri | TemplateContext::Header => Self::url_encode(&value),
+            let stage_input = result.as_str();
+            result = PATH_PARAM_PATTERN
+                .replace_all(stage_input, |caps: &regex::Captures| {
+                    let Some(matched) = caps.get(0) else {
+                        return Cow::Borrowed("");
                     };
-                    // Path params are the last substitution step; no need to escape.
-                    result = result.replace(&full_match, &replacement);
-                }
-            }
+                    let original = &stage_input[matched.start()..matched.end()];
+                    let param_name = &caps[1];
+                    // Injected dollars stay literal, even beside an original token of the same name.
+                    if (matched.start() > 0 && stage_input.as_bytes()[matched.start() - 1] == b'\0')
+                        || param_name == "uri"
+                        || param_name.starts_with("arg_")
+                    {
+                        return Cow::Borrowed(original);
+                    }
+                    match session.get_path_param(param_name) {
+                        Some(value) => Cow::Owned(match context {
+                            TemplateContext::Uri | TemplateContext::Header => Self::url_encode(&value),
+                        }),
+                        None => Cow::Borrowed(original),
+                    }
+                })
+                .into_owned();
         }
 
         // Restore any escaped $ signs that were produced by earlier substitution steps.

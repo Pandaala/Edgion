@@ -444,3 +444,127 @@ fn test_capture_and_path_param_url_encode_in_uri_context() {
     let pp_out = plugin.resolve_variables("/u/$uid", "/orig", &mut mock_session, None, TemplateContext::Uri);
     assert_eq!(pp_out, "/u/caf%C3%A9", "URI context: $<name> stays url-encoded");
 }
+
+fn path_token_session() -> MockPluginSession {
+    let mut session = MockPluginSession::new();
+    session.expect_get_path_param().returning(|name| match name {
+        "id" => Some("first".to_string()),
+        "id2" => Some("second".to_string()),
+        "id_tail" => Some("tail".to_string()),
+        "empty" => Some(String::new()),
+        "encoded" => Some("café &\n$id2".to_string()),
+        _ => None,
+    });
+    session
+}
+
+#[test]
+fn path_tokens_use_exact_original_spans_in_both_contexts() {
+    let plugin = plugin(&ProxyRewriteConfig::default());
+    for context in [TemplateContext::Uri, TemplateContext::Header] {
+        for (template, expected) in [
+            ("$id/$id2/$id/$id2", "first/second/first/second"),
+            ("$id2/$id/$id2/$id", "second/first/second/first"),
+            ("$id$id2/$id3/$id_tail/$empty", "firstsecond/$id3/tail/"),
+            ("$/$_id/$-id/$9/$arg_", "$/$_id/$-id/$9/$arg_"),
+            ("$encoded/$id2", "caf%C3%A9%20%26%0A%24id2/second"),
+        ] {
+            assert_eq!(
+                plugin.resolve_variables(template, "/orig", &mut path_token_session(), None, context),
+                expected,
+                "template: {template}, context: {context:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn path_tokens_preserve_injected_dollars_beside_original_tokens() {
+    let plugin = plugin(&ProxyRewriteConfig::default());
+    for context in [TemplateContext::Uri, TemplateContext::Header] {
+        assert_eq!(
+            plugin.resolve_variables(
+                "$uri/$id/$id2/$uri/$id",
+                "/literal/$id/$id2/$id3",
+                &mut path_token_session(),
+                None,
+                context,
+            ),
+            "/literal/$id/$id2/$id3/first/second//literal/$id/$id2/$id3/first"
+        );
+        // Isolate final-stage reserved/escaped handling from earlier substitutions.
+        assert_eq!(
+            plugin.resolve_variables(
+                "$uri/$id",
+                "/literal/$uri/$arg_",
+                &mut path_token_session(),
+                None,
+                context,
+            ),
+            "/literal/$uri/$arg_/first"
+        );
+    }
+}
+
+#[test]
+fn path_tokens_reach_ordinary_uri_and_add_set_header_sinks() {
+    let config: ProxyRewriteConfig = serde_json::from_value(serde_json::json!({
+        "uri": "/$id/$id2/$id3/$empty/$encoded",
+        "headers": {
+            "add": [{"name": "X-Added", "value": "$id/$id2/$id/$id3/$empty/$encoded"}],
+            "set": [{"name": "X-Set", "value": "$id2/$id/$uri/$id2"}]
+        }
+    }))
+    .unwrap();
+    let plugin = plugin(&config);
+    let mut session = path_token_session();
+    session
+        .expect_set_upstream_uri()
+        .with(mockall::predicate::eq(
+            "/first/second/$id3//caf%C3%A9%20%26%0A%24id2?keep=a%20b",
+        ))
+        .times(1)
+        .returning(|_| Ok(()));
+    session
+        .expect_append_request_header()
+        .withf(|name, value| {
+            name == "X-Added"
+                && value == "first/second/first/$id3//caf%C3%A9%20%26%0A%24id2"
+                && HeaderValue::from_str(value).is_ok()
+        })
+        .times(1)
+        .returning(|_, _| Ok(()));
+    session
+        .expect_set_request_header()
+        .withf(|name, value| name == "X-Set" && value == "second/first//literal/$id/$id2/second")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    let mut log = PluginLog::new("ProxyRewrite");
+    plugin.rewrite_uri(&mut session, &mut log, "/literal/$id/$id2", Some("keep=a%20b"), None);
+    plugin.modify_headers(&mut session, &mut log, "/literal/$id/$id2", None);
+}
+
+#[test]
+fn regex_uri_raw_captures_keep_named_dollars_literal() {
+    let config: ProxyRewriteConfig = serde_json::from_value(serde_json::json!({
+        "regexUri": {"pattern": "^/source/(.+)$", "replacement": "/$1/$id/$id2/$id3"}
+    }))
+    .unwrap();
+    let plugin = plugin(&config);
+    let path = "/source/$id/$id2";
+    let regex = Regex::new("^/source/(.+)$").unwrap();
+    let captures = regex.captures(path).unwrap();
+    let mut session = path_token_session();
+    session
+        .expect_set_upstream_uri()
+        .with(mockall::predicate::eq("/$id/$id2/first/second/$id3?keep=1"))
+        .times(1)
+        .returning(|_| Ok(()));
+    plugin.rewrite_uri(
+        &mut session,
+        &mut PluginLog::new("ProxyRewrite"),
+        path,
+        Some("keep=1"),
+        Some(&captures),
+    );
+}

@@ -16,6 +16,7 @@ before applying a decision to current code.
 
 ## Intentional design
 
+- [Standalone HMAC — fixed generic 500 when no usable credentials exist](intentional-design/no-usable-credentials-response.md)
 - [HMAC Auth Replay Protection: Timestamp Window + HTTPS + Business-Layer Idempotency is the Correct Layering](intentional-design/replay-protection-timestamp-only.md)
 
 ## Regression guards

@@ -8,7 +8,7 @@ knowledge_type: review-evidence
 
 ## Conclusion
 
-The `verify_against_ca()` of `header_cert_auth` Header mode performs only single-layer CA matching (leaf-cert signature vs configured CA), without building a full X.509 path; classified as **NOT-AN-ISSUE**. Fix suggestions of the form "switch to webpki / implement chain-path construction" are not accepted.
+The `verify_leaf_der()` of `header_cert_auth` Header mode performs only single-layer CA matching (leaf-cert signature vs configured CA), without building a full X.509 path; classified as **NOT-AN-ISSUE**. Fix suggestions of the form "switch to webpki / implement chain-path construction" are not accepted.
 
 ## Core Rationale
 
@@ -19,7 +19,7 @@ Header mode's prerequisite is a TLS-terminating proxy in front (Nginx / Envoy / 
 - After verification passes, the cert is placed into a header (such as `ssl-client-cert` / `x-forwarded-client-cert`)
 - The cert that Edgion reads from the header is already a cert trusted via the proxy
 
-In this architecture, `verify_against_ca()` is **secondary filtering** ("which CA organization that I configured does this cert belong to"), not first-time security verification. Single-layer matching satisfies this purpose.
+In this architecture, `verify_leaf_der()` is **secondary filtering** ("which CA organization that I configured does this cert belong to"), not first-time security verification. Single-layer matching satisfies this purpose.
 
 **2. Industry consistency**
 
@@ -40,7 +40,7 @@ The actual security risk is whether the proxy strips the cert header from extern
 
 ## Note: Connection Mode is Unaffected
 
-The `mode=Connection` path performs full chain verification at the Pingora/BoringSSL TLS handshake layer, without going through `verify_against_ca()`; naturally correct.
+The `mode=Connection` path performs full chain verification at the Pingora/BoringSSL TLS handshake layer, without going through `verify_leaf_der()`; naturally correct.
 
 ## Actual CA reference boundary
 

@@ -241,12 +241,31 @@ fn make_ca_and_leaf(
     leaf_not_before_days: i64,
     leaf_not_after_days: i64,
 ) -> (String, String) {
+    make_named_ca_and_leaf(
+        "Edgion Test CA",
+        "leaf",
+        ca_not_before_days,
+        ca_not_after_days,
+        leaf_not_before_days,
+        leaf_not_after_days,
+    )
+}
+
+fn make_named_ca_and_leaf(
+    ca_name: &str,
+    leaf_name: &str,
+    ca_not_before_days: i64,
+    ca_not_after_days: i64,
+    leaf_not_before_days: i64,
+    leaf_not_after_days: i64,
+) -> (String, String) {
     use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
 
     let now = ::time::OffsetDateTime::now_utc();
 
     let ca_key = KeyPair::generate().expect("CA key gen failed");
     let mut ca_params = CertificateParams::new(vec!["Edgion Test CA".to_string()]).expect("CA params failed");
+    ca_params.distinguished_name.push(DnType::CommonName, ca_name);
     ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     ca_params.not_before = now + ::time::Duration::days(ca_not_before_days);
     ca_params.not_after = now + ::time::Duration::days(ca_not_after_days);
@@ -254,7 +273,15 @@ fn make_ca_and_leaf(
     let ca_issuer = Issuer::from_params(&ca_params, &ca_key);
 
     let leaf_key = KeyPair::generate().expect("leaf key gen failed");
-    let mut leaf_params = CertificateParams::new(vec!["leaf.example.com".to_string()]).expect("leaf params failed");
+    let mut leaf_params = CertificateParams::new(vec![
+        "leaf.example.com".to_string(),
+        "alternate.example.com".to_string(),
+    ])
+    .expect("leaf params failed");
+    leaf_params.distinguished_name.push(DnType::CommonName, leaf_name);
+    leaf_params
+        .distinguished_name
+        .push(DnType::OrganizationName, "Edgion Leaf Test");
     leaf_params.not_before = now + ::time::Duration::days(leaf_not_before_days);
     leaf_params.not_after = now + ::time::Duration::days(leaf_not_after_days);
     let leaf_cert = leaf_params.signed_by(&leaf_key, &ca_issuer).expect("leaf sign failed");
@@ -466,4 +493,170 @@ fn subject_only_cert_fixture() -> &'static ClientCertInfo {
 fn sample_cert_fixture() -> &'static ClientCertInfo {
     static CERT: std::sync::OnceLock<ClientCertInfo> = std::sync::OnceLock::new();
     CERT.get_or_init(sample_cert_info)
+}
+
+fn extract_header_value(plugin: &HeaderCertAuth, value: &str) -> Result<ClientCertInfo, &'static str> {
+    let mut session = MockPluginSession::new();
+    let mut headers = http::HeaderMap::new();
+    headers.insert(
+        http::header::HeaderName::from_bytes(plugin.config.certificate_header_name.as_bytes()).unwrap(),
+        http::HeaderValue::from_str(value).unwrap(),
+    );
+    session.expect_request_header_map().times(1).return_const(headers);
+    plugin.extract_from_header(&session)
+}
+
+fn assert_same_identity(actual: &ClientCertInfo, expected: &ClientCertInfo) {
+    assert_eq!(actual.subject, expected.subject);
+    assert_eq!(actual.sans, expected.sans);
+    assert_eq!(actual.cn, expected.cn);
+    assert_eq!(actual.fingerprint, expected.fingerprint);
+}
+
+fn base64_leaf(pem: &str) -> String {
+    STANDARD.encode(HeaderCertAuth::parse_first_cert_der(pem.as_bytes()).unwrap())
+}
+
+fn url_pem(pem: &str) -> String {
+    percent_encoding::utf8_percent_encode(pem, percent_encoding::NON_ALPHANUMERIC).to_string()
+}
+
+#[test]
+fn base64_header_extraction_preserves_canonical_identity_and_ascii_whitespace() {
+    let (ca_pem, leaf_pem) = make_ca_and_leaf(-1, 30, -1, 30);
+    let mut plugin = header_mode_plugin_with_ca(vec![make_ca_secret(&ca_pem)]);
+    plugin.config.certificate_header_format = CertHeaderFormat::Base64Encoded;
+    let expected = extract_client_cert_info_from_cert(&X509::from_pem(leaf_pem.as_bytes()).unwrap());
+    assert_eq!(expected.cn.as_deref(), Some("leaf"));
+    assert_eq!(expected.sans, ["leaf.example.com", "alternate.example.com"]);
+    assert!(expected.subject.contains("O=Edgion Leaf Test"));
+    assert!(!expected.fingerprint.is_empty());
+    let encoded = base64_leaf(&leaf_pem);
+    let spaced = format!(" \t{} \t{}\t ", &encoded[..64], &encoded[64..]);
+    for value in [encoded, spaced] {
+        assert_same_identity(&extract_header_value(&plugin, &value).unwrap(), &expected);
+    }
+}
+
+#[test]
+fn base64_header_extraction_preserves_error_precedence() {
+    let (ca_pem, _) = make_ca_and_leaf(-1, 30, -1, 30);
+    let mut trusted = header_mode_plugin_with_ca(vec![make_ca_secret(&ca_pem)]);
+    let mut empty = header_mode_plugin_with_ca(Vec::new());
+    for plugin in [&mut trusted, &mut empty] {
+        plugin.config.certificate_header_format = CertHeaderFormat::Base64Encoded;
+    }
+    for (value, expected) in [
+        ("!invalid!".to_string(), "invalid-base64-cert"),
+        ("Zh==".to_string(), "invalid-base64-cert"),
+        (" \t".to_string(), "invalid-cert-pem"),
+        (STANDARD.encode(b"malformed DER"), "invalid-leaf-cert"),
+    ] {
+        assert_eq!(extract_header_value(&trusted, &value).unwrap_err(), expected);
+        let empty_expected = if expected == "invalid-base64-cert" {
+            expected
+        } else {
+            "no-ca-configured"
+        };
+        assert_eq!(extract_header_value(&empty, &value).unwrap_err(), empty_expected);
+    }
+}
+
+#[test]
+fn base64_header_extraction_preserves_trailing_der() {
+    let (ca_pem, leaf_pem) = make_ca_and_leaf(-1, 30, -1, 30);
+    let mut plugin = header_mode_plugin_with_ca(vec![make_ca_secret(&ca_pem)]);
+    plugin.config.certificate_header_format = CertHeaderFormat::Base64Encoded;
+    let mut der = HeaderCertAuth::parse_first_cert_der(leaf_pem.as_bytes()).unwrap();
+    der.extend_from_slice(b"trailing bytes");
+    // The previous PEM constructor and the DER constructor both accept a leaf prefix.
+    let body = STANDARD.encode(&der);
+    let previous_pem = format!("-----BEGIN CERTIFICATE-----\n{body}\n-----END CERTIFICATE-----\n");
+    let expected = extract_client_cert_info_from_cert(&X509::from_pem(previous_pem.as_bytes()).unwrap());
+    assert_same_identity(&extract_header_value(&plugin, &body).unwrap(), &expected);
+}
+
+#[test]
+fn base64_header_extraction_preserves_expiry_and_distinct_issuer_filtering() {
+    let (trusted_ca, expired_leaf) = make_named_ca_and_leaf("Trusted CA", "expired", -30, 30, -30, -1);
+    let (_, foreign_leaf) = make_named_ca_and_leaf("Foreign CA", "foreign", -1, 30, -1, 30);
+    let trusted_der = HeaderCertAuth::parse_first_cert_der(trusted_ca.as_bytes()).unwrap();
+    let foreign_der = HeaderCertAuth::parse_first_cert_der(foreign_leaf.as_bytes()).unwrap();
+    let (_, trusted) = parse_x509_certificate(&trusted_der).unwrap();
+    let (_, foreign) = parse_x509_certificate(&foreign_der).unwrap();
+    assert_ne!(trusted.subject().as_raw(), foreign.issuer().as_raw());
+    let mut plugin = header_mode_plugin_with_ca(vec![make_ca_secret(&trusted_ca)]);
+    plugin.config.certificate_header_format = CertHeaderFormat::Base64Encoded;
+    assert_eq!(
+        extract_header_value(&plugin, &base64_leaf(&expired_leaf)).unwrap_err(),
+        "expired-leaf-cert"
+    );
+    assert_eq!(
+        extract_header_value(&plugin, &base64_leaf(&foreign_leaf)).unwrap_err(),
+        "ca-verification-failed"
+    );
+}
+
+#[test]
+fn base64_header_extraction_checks_same_subject_keys_and_later_valid_ca() {
+    let (wrong_key_ca, _) = make_ca_and_leaf(-1, 30, -1, 30);
+    let (trusted_ca, leaf_pem) = make_ca_and_leaf(-1, 30, -1, 30);
+    let wrong_der = HeaderCertAuth::parse_first_cert_der(wrong_key_ca.as_bytes()).unwrap();
+    let trusted_der = HeaderCertAuth::parse_first_cert_der(trusted_ca.as_bytes()).unwrap();
+    let (_, wrong) = parse_x509_certificate(&wrong_der).unwrap();
+    let (_, trusted) = parse_x509_certificate(&trusted_der).unwrap();
+    assert_eq!(wrong.subject().as_raw(), trusted.subject().as_raw());
+    assert_ne!(wrong.public_key().raw, trusted.public_key().raw);
+    let mut plugin = header_mode_plugin_with_ca(vec![make_ca_secret(&wrong_key_ca)]);
+    plugin.config.certificate_header_format = CertHeaderFormat::Base64Encoded;
+    let encoded = base64_leaf(&leaf_pem);
+    assert_eq!(
+        extract_header_value(&plugin, &encoded).unwrap_err(),
+        "ca-verification-failed"
+    );
+    let mut plugin = header_mode_plugin_with_ca(vec![make_ca_secret(&wrong_key_ca), make_ca_secret(&trusted_ca)]);
+    plugin.config.certificate_header_format = CertHeaderFormat::Base64Encoded;
+    let expected = extract_client_cert_info_from_cert(&X509::from_pem(leaf_pem.as_bytes()).unwrap());
+    assert_same_identity(&extract_header_value(&plugin, &encoded).unwrap(), &expected);
+}
+
+#[test]
+fn url_header_extraction_keeps_first_pem_identity_and_envelope_behavior() {
+    let (trusted_ca, verified_leaf) = make_named_ca_and_leaf("Trusted CA", "verified", -1, 30, -1, 30);
+    let (_, older_leaf) = make_named_ca_and_leaf("Other CA", "older-identity", -1, 30, -1, 30);
+    let mut plugin = header_mode_plugin_with_ca(vec![make_ca_secret(&trusted_ca)]);
+    plugin.config.certificate_header_format = CertHeaderFormat::UrlEncoded;
+    let verified_info = extract_client_cert_info_from_cert(&X509::from_pem(verified_leaf.as_bytes()).unwrap());
+    let older_info = extract_client_cert_info_from_cert(&X509::from_pem(older_leaf.as_bytes()).unwrap());
+    assert_ne!(verified_info.subject, older_info.subject);
+    assert_ne!(verified_info.fingerprint, older_info.fingerprint);
+    assert_same_identity(
+        &extract_header_value(&plugin, &url_pem(&verified_leaf)).unwrap(),
+        &verified_info,
+    );
+    let multiple = format!("{verified_leaf}{older_leaf}");
+    assert_same_identity(
+        &extract_header_value(&plugin, &url_pem(&multiple)).unwrap(),
+        &verified_info,
+    );
+    let older_label = older_leaf.replace("CERTIFICATE", "X509 CERTIFICATE");
+    let mixed = format!("{older_label}{verified_leaf}");
+    // Verification skips the older label; BoringSSL identity extraction accepts it.
+    assert_same_identity(&extract_header_value(&plugin, &url_pem(&mixed)).unwrap(), &older_info);
+    let mismatched = verified_leaf.replace("END CERTIFICATE", "END OTHER");
+    assert!(plugin.verify_against_ca(mismatched.as_bytes()).is_ok());
+    assert_eq!(
+        extract_header_value(&plugin, &url_pem(&mismatched)).unwrap_err(),
+        "invalid-cert-pem"
+    );
+    let mut empty = header_mode_plugin_with_ca(Vec::new());
+    empty.config.certificate_header_format = CertHeaderFormat::UrlEncoded;
+    assert_eq!(
+        extract_header_value(&empty, "%FF").unwrap_err(),
+        "invalid-url-encoded-cert"
+    );
+    assert_eq!(
+        extract_header_value(&empty, &url_pem(&mismatched)).unwrap_err(),
+        "no-ca-configured"
+    );
 }

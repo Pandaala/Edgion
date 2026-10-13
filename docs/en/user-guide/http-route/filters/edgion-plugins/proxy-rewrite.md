@@ -59,6 +59,8 @@ The following variables can be used in templates:
 | `$1-$9` | Regex capture groups (`regexUri` scenarios only) | `/users/$1` |
 | `$xxx` | Path parameters (extracted from `/:xxx` defined in HTTPRoute) | `$uid` |
 
+In the final named-path substitution step, path parameters use complete names: `$id` and `$id2` are independent, and every repeated occurrence is replaced. Undefined parameters remain literal; present empty values become empty strings. Values are URL-encoded for both URI and request-header use. `$uri` and `$arg_` variables are handled by earlier steps; this named-path behavior does not change their substitution rules.
+
 **Note**: Query strings are automatically preserved — no manual handling needed.
 
 ---
@@ -571,7 +573,7 @@ spec:
 
 - **Regex pre-compilation**: `regexUri.pattern` is pre-compiled at configuration load time, with no additional overhead at runtime
 - **Variable resolution**: Resolved on demand; unused variables are not processed
-- **Path parameter extraction**: Uses lazy loading — extracted from the route pattern only on first access
+- **Path parameter extraction**: Captured and cached at route match; later rewrites continue to use those match-time values
 
 ---
 

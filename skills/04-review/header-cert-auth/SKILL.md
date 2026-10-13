@@ -12,3 +12,7 @@ before applying a decision to current code.
 ## Review evidence
 
 - [HeaderCertAuth Header Mode — Single-Layer CA Matching NOT-AN-ISSUE](review-evidence/chain-verification-header-mode.md)
+
+## Regression guards
+
+- [Base64 leaf DER ownership and URL PEM boundary](regression-guards/base64-leaf-der-ownership.md)

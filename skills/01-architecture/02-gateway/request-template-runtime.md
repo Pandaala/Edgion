@@ -12,7 +12,8 @@ compiled segments, Secret-reference helpers, and typed admission policies.
 `edgion-gateway/src/link_sys/template/engine.rs` owns the only runtime segment
 walker and variable resolver. Compile during configuration preparation; substituted
 `${...}` text remains literal data. The separate ProxyRewrite `$uri` language is
-outside this mechanism.
+outside this mechanism. Its final named-path substitution preserves original token
+spans and escaped injected dollars; see the [ProxyRewrite boundary guard](../../04-review/plugin-runtime/regression-guards/proxy-rewrite-path-token-boundaries.md).
 
 Admission combines `VariablePolicy::{Request, Trusted}` with
 `SecretPolicy::{Deny, AllowResolved}`. Trusted variables are ctx, remoteIp and
