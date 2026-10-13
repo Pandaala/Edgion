@@ -58,3 +58,22 @@ smallest deterministic skew bound implied by the number of selector instances.
 ## Resolution references
 
 - `ITEST-011` — 2026-08-26.
+
+## Retired orphan analyzer
+
+ARCH-252 removes the unused file-based `AccessLogAnalyzer` module and its own
+13 unit tests after a repository-wide caller/documentation search found no
+consumer or supported offline-tool contract. Its permissive parsing and readable
+trace-prefix selection were separate from the registered live suites.
+
+`LBRoundRobinTestSuite` continues to own successful request and exact endpoint/
+Service counter-delta assertions. Retry/request facts continue to use
+`AccessLogClient` and the canonical marker-to-W3C-trace-ID helper. These existing
+owners do not claim equivalence with every behavior of the retired offline API.
+Live cases, registrations, fixtures, listeners and assertions are unchanged.
+
+Verification compares the retained harness file set and contents and reruns the
+five RoundRobin unit tests plus the marker identity test. This retirement fixes
+no demonstrated live false-pass and makes no performance claim. Re-evaluate only
+if an explicitly supported offline diagnostic consumer needs a defined identity,
+parse-failure and insufficient-evidence contract.

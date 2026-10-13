@@ -25,8 +25,6 @@ pub mod admin_apply;
 pub mod dynamic;
 #[path = "client/framework.rs"]
 pub mod framework;
-#[path = "client/log_analyzer.rs"]
-pub mod log_analyzer;
 #[path = "client/metrics_helper.rs"]
 pub mod metrics_helper;
 #[path = "client/port_config.rs"]
