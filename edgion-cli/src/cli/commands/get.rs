@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde_json::Value;
 
-use crate::cli::client::{parse_json_response, EdgionClient};
+use crate::cli::client::{diagnostic_origin, parse_json_response, EdgionClient};
 use crate::cli::output::{print_error, print_resource, print_resource_list, OutputFormat};
 use crate::cli::TargetType;
 
@@ -48,18 +48,19 @@ pub async fn get(
 
 /// Print connection hint when request fails
 fn print_connection_hint(client: &EdgionClient) {
+    let origin = diagnostic_origin(client.base_url());
     let component = match client.target() {
         TargetType::Center | TargetType::Server => "controller",
         TargetType::Client => "gateway",
     };
     eprintln!();
-    eprintln!("Hint: edgion-cli is trying to connect to: {}", client.base_url());
+    eprintln!("Hint: edgion-cli is trying to connect to: {}", origin);
     eprintln!("      Target: {} ({})", client.target(), component);
     eprintln!("      Use --server to specify a different address, e.g.:");
     eprintln!(
         "        ./edgion-cli -t {} --server {} get httproute",
         client.target(),
-        client.base_url()
+        origin
     );
 }
 

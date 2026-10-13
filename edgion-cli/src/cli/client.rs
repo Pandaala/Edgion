@@ -142,7 +142,13 @@ impl EdgionClient {
             .get(&status_url)
             .send()
             .await
-            .with_context(|| format!("cannot reach controller at {} (network/TLS error)", self.base_url))?;
+            .map_err(reqwest::Error::without_url)
+            .with_context(|| {
+                format!(
+                    "cannot reach controller at {} (network/TLS error)",
+                    diagnostic_origin(&self.base_url)
+                )
+            })?;
 
         let status_code = resp.status();
         if !status_code.is_success() {
@@ -155,6 +161,7 @@ impl EdgionClient {
         let wrapper: serde_json::Value = resp
             .json()
             .await
+            .map_err(reqwest::Error::without_url)
             .context("/auth/status response is not valid JSON (schema unrecognized)")?;
         let data = wrapper
             .get("data")
@@ -192,7 +199,7 @@ impl EdgionClient {
         self.target
     }
 
-    /// Get the base URL for connection hints
+    /// Get the transport URL. Use `diagnostic_origin` before displaying it.
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
@@ -212,7 +219,7 @@ impl EdgionClient {
     /// Send HTTP request with detailed error handling
     async fn send_request(&self, request: reqwest::RequestBuilder, url: &str) -> Result<Response> {
         self.authenticate_request(request).send().await.map_err(|e| {
-            let error_msg = format_request_error(url, &e, self.target);
+            let error_msg = format_request_error(url, e, self.target);
             anyhow::anyhow!("{}", error_msg)
         })
     }
@@ -362,8 +369,20 @@ impl EdgionClient {
     }
 }
 
-/// Format network error with detailed diagnostics
-fn format_request_error(url: &str, error: &reqwest::Error, target: TargetType) -> String {
+/// Project an endpoint to its HTTP(S) origin without credentials or request data.
+pub(crate) fn diagnostic_origin(raw: &str) -> String {
+    match reqwest::Url::parse(raw) {
+        Ok(url) if matches!(url.scheme(), "http" | "https") && url.host_str().is_some() => {
+            url.origin().ascii_serialization()
+        }
+        _ => "<invalid endpoint>".to_string(),
+    }
+}
+
+/// Format network error with detailed diagnostics.
+fn format_request_error(url: &str, error: reqwest::Error, target: TargetType) -> String {
+    let url = diagnostic_origin(url);
+    let error = error.without_url();
     let mut msg = format!("Request to {} failed\n", url);
 
     // Determine error type and provide specific hints

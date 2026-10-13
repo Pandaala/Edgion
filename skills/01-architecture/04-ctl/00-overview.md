@@ -110,6 +110,13 @@ pub struct EdgionClient {
 
 ### Error handling
 
+Connection diagnostics share `cli::client::diagnostic_origin` (ARCH-178): only the HTTP(S)
+scheme, host and port are displayed, excluding userinfo, path, query and fragment.
+Malformed or non-HTTP(S) inputs use a fixed placeholder. Request and auth-probe
+errors remove reqwest's attached URL before rendering, including nested error
+chains. Get hints and best-effort login warnings use the same projection; actual
+request URLs, bearer authentication and token persistence are unchanged.
+
 EdgionClient provides detailed network-error diagnostics:
 - Connection refused → suggests the corresponding component (controller/gateway) may not be running
 - DNS resolution failed → suggests checking the hostname

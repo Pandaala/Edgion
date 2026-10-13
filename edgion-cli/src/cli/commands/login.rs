@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use edgion_common::link_sys_core::http_client::{build_outbound_client, OutboundClientConfig, OutboundRedirect};
 use std::time::Duration;
 
+use crate::cli::client::diagnostic_origin;
 use crate::cli::token::save_token;
 
 /// Execute the `login` command.
@@ -47,13 +48,18 @@ async fn probe_status(base_url: &str) {
         return;
     };
 
+    let origin = diagnostic_origin(&url);
     match client.get(&url).send().await {
         Ok(resp) if resp.status().is_success() => { /* reachable and ready enough */ }
         Ok(resp) => {
-            eprintln!("warning: {} returned HTTP {} (token saved anyway).", url, resp.status());
+            eprintln!(
+                "warning: {} returned HTTP {} (token saved anyway).",
+                origin,
+                resp.status()
+            );
         }
         Err(_) => {
-            eprintln!("warning: could not reach {} (token saved anyway).", url);
+            eprintln!("warning: could not reach {} (token saved anyway).", origin);
         }
     }
 }

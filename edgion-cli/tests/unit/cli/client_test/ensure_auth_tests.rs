@@ -201,3 +201,59 @@ fn with_static_bearer_uses_supplied_url() {
     assert_eq!(c.base_url(), "http://localhost:9999");
     assert_eq!(c.token_for_test(), Some("edg_abc"));
 }
+
+#[test]
+fn diagnostic_origin_excludes_request_data() {
+    for (raw, expected) in [
+        (
+            "https://alice:secret@example.com/private?token=secret#secret",
+            "https://example.com",
+        ),
+        (
+            "http://alice%40x:p%40ss@example.com:8080/private",
+            "http://example.com:8080",
+        ),
+        (
+            "https://alice:secret@[::1]:8443/private?secret#secret",
+            "https://[::1]:8443",
+        ),
+        ("http://example.com:80/private", "http://example.com"),
+        ("https://example.com:443/private", "https://example.com"),
+        ("http://[secret", "<invalid endpoint>"),
+        ("file:///private/secret", "<invalid endpoint>"),
+        ("mailto:secret@example.com", "<invalid endpoint>"),
+    ] {
+        assert_eq!(diagnostic_origin(raw), expected);
+    }
+}
+
+#[test]
+fn request_diagnostics_remove_explicit_and_sdk_urls() {
+    let client = reqwest::Client::new();
+    for target in [TargetType::Center, TargetType::Server, TargetType::Client] {
+        let error = client.get("http://[").build().unwrap_err().with_url(
+            reqwest::Url::parse("https://sdk-user:sdk-secret@example.org/sdk-path?token=sdk-query#sdk-fragment")
+                .unwrap(),
+        );
+        let message = format_request_error(
+            "https://explicit-user:explicit-secret@example.com:8443/explicit-path?token=explicit-query#explicit-fragment",
+            error,
+            target,
+        );
+        assert!(message.contains("Request to https://example.com:8443 failed"));
+        assert!(message.contains("Try: curl -v https://example.com:8443"));
+        assert!(!message.contains("explicit-"));
+        assert!(!message.contains("sdk-"));
+        assert!(!message.contains("example.org"));
+    }
+}
+
+#[tokio::test]
+async fn auth_probe_invalid_url_does_not_expose_input_in_error_chain() {
+    let mut client = make_client("http://[private-marker?token=credential-marker".to_string());
+    let error = client.ensure_auth().await.unwrap_err();
+    let rendered = format!("{error}\n{error:?}\n{error:#}");
+    assert!(rendered.contains("cannot reach controller at <invalid endpoint>"));
+    assert!(!rendered.contains("private-marker"));
+    assert!(!rendered.contains("credential-marker"));
+}
