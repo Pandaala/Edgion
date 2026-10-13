@@ -489,3 +489,62 @@ fn oci_cache_key_and_metrics_label() {
     c.oci.as_mut().unwrap().resolved_pull_secret = Some("x".to_string());
     assert_eq!(c.cache_key(), a.cache_key());
 }
+
+#[test]
+fn rejected_callout_origins_never_enter_validation_diagnostics() {
+    use crate::resources::edgion_plugins::EdgionPlugins;
+
+    for (raw, expected) in [
+        ("private-invalid-url", "origin is not a valid URL"),
+        (
+            "https://private-user:private-password@auth.example:private-port",
+            "origin is not a valid URL",
+        ),
+        (
+            "ftp://private-user:private-password@auth.example/private-path?token=private-token",
+            "only http/https origins are allowed",
+        ),
+        (
+            "https://private-user:private-password@auth.example",
+            "credentials are not allowed in an origin",
+        ),
+        (
+            "https://auth.example/private-path",
+            "origin only: no path, query, or fragment",
+        ),
+        (
+            "https://auth.example?token=private-token",
+            "origin only: no path, query, or fragment",
+        ),
+        (
+            "https://auth.example#private-fragment",
+            "origin only: no path, query, or fragment",
+        ),
+        (
+            "https://private-user:private-password@auth.example?token=private-token",
+            "origin only: no path, query, or fragment",
+        ),
+    ] {
+        assert_eq!(normalize_callout_origin(raw).unwrap_err(), expected);
+        assert!(normalize_callout_origin_quiet(raw).is_none());
+        let mut config = file_config();
+        config.callout_allowlist = vec![raw.to_string()];
+        assert_eq!(config.validate().unwrap_err(), format!("calloutAllowlist: {expected}"));
+        let original = serde_json::to_value(&config).unwrap();
+        let resource: EdgionPlugins = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "wasm-redaction", "namespace": "default"},
+            "spec": {"requestPlugins": [{"type": "Wasm", "config": original}]}
+        }))
+        .unwrap();
+        let errors = resource.validate_plugins();
+        assert_eq!(
+            errors,
+            vec![format!("requestPlugins[0] (Wasm): calloutAllowlist: {expected}")]
+        );
+        assert_eq!(serde_json::to_value(&config).unwrap(), original);
+        assert_eq!(
+            serde_json::to_value(&resource).unwrap()["spec"]["requestPlugins"][0]["config"]["calloutAllowlist"][0],
+            raw
+        );
+    }
+}

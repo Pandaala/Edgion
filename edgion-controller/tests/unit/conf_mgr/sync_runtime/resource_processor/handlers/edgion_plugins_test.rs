@@ -8834,3 +8834,34 @@ async fn geo_pass_preserves_mixed_ip_dependencies_and_clears_inactive_proof() {
         })
         .unwrap();
 }
+
+#[test]
+fn wasm_callout_rejection_status_does_not_disclose_authored_origin() {
+    let (ctx, _) = make_ctx_with_secrets(HashMap::new());
+    for raw in [
+        "https://private-user:private-password@auth.example",
+        "https://auth.example?token=private-token",
+        "https://auth.example/private-path#private-fragment",
+        "private-invalid-url",
+        "ftp://auth.example/private-path",
+    ] {
+        let mut resource: EdgionPlugins = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "wasm-redaction", "namespace": "default", "generation": 1},
+            "spec": {"requestPlugins": [{"type": "Wasm", "config": {
+                "source": {"file": "./demo.wasm"}, "calloutAllowlist": [raw]
+            }}]}
+        }))
+        .unwrap();
+        let errors = EdgionPluginsHandler.preparse(&mut resource, &ctx);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].starts_with("requestPlugins[0] (Wasm): calloutAllowlist:"));
+        assert!(!errors[0].contains("private-"));
+        EdgionPluginsHandler.update_status(&mut resource, &ctx, &errors);
+        let status = resource.status.as_ref().unwrap().as_local().unwrap();
+        let accepted = status.conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
+        assert_eq!(accepted.status, "False");
+        assert_eq!(accepted.reason, "Invalid");
+        assert_eq!(accepted.message, errors[0]);
+        assert!(!serde_json::to_string(&resource.status).unwrap().contains("private-"));
+    }
+}

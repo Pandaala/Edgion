@@ -2941,3 +2941,30 @@ fn all_endpoint_method_validation_has_ordered_controller_gateway_parity() {
     assert!(compiled.preparse_errors.is_empty());
     assert!(compiled.is_activatable);
 }
+
+#[test]
+fn wasm_callout_rejection_is_redacted_and_fails_closed() {
+    for raw in [
+        "https://private-user:private-password@auth.example",
+        "https://auth.example?token=private-token",
+        "https://auth.example/private-path#private-fragment",
+        "private-invalid-url",
+        "ftp://auth.example/private-path",
+    ] {
+        let resource: EdgionPlugins = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "wasm-redaction", "namespace": "default"},
+            "spec": {"requestPlugins": [{"type": "Wasm", "config": {
+                "source": {"file": "./demo.wasm"}, "calloutAllowlist": [raw]
+            }}]}
+        }))
+        .unwrap();
+        let errors = resource.validate_plugins();
+        let compiled = compile_plugins(&resource);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(compiled.preparse_errors, errors);
+        assert!(errors[0].starts_with("requestPlugins[0] (Wasm): calloutAllowlist:"));
+        assert!(!errors[0].contains("private-"));
+        assert!(!compiled.is_activatable);
+        assert_leading_reject(&compiled);
+    }
+}

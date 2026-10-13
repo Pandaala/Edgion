@@ -29,6 +29,23 @@ The bytecode-fetch path (`vm_manager.rs::fetch_url_bytes`) uses the same
 egress-guarded + redirect-Deny client, and `sha256` is still enforced on the
 final bytes.
 
+## Rejected-origin diagnostic boundary (ARCH-066)
+
+`normalize_callout_origin` reports fixed rejection categories without the authored
+origin or parser error text. Rejected userinfo, path, query, fragment, and invalid
+URL bytes may contain secrets. The owning field/stage/index context remains in
+validation errors; Controller preparse logging and serialized `Accepted=False`
+status, Gateway validation, and the existing cold-builder WARN all consume the
+same safe diagnostic. The configured value and accepted normalization stay
+unchanged; the quiet runtime wrapper still returns no diagnostic.
+
+Focused resource tests cover exact categories and precedence, configuration
+preservation, and shared plugin validation. Controller status and Gateway compile
+tests cover the actual diagnostic consumers and fail-closed publication. Recheck
+this boundary when adding error categories or another allowlist diagnostic sink.
+The separate module-fetch URL identity policy remains owned by the Wasm URL-source
+redaction guard.
+
 ## Accepted tradeoffs (fix suggestions here should be CLOSED unless a new scenario is shown)
 
 **1. IP-literal origins are not additionally IP-classified at dispatch.**

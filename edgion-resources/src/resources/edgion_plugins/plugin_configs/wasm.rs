@@ -433,26 +433,30 @@ fn write_canonical_json(writer: &mut CappedJsonWriter, value: &Value) -> std::io
 /// Accepts only `http`/`https`, a host, an optional port, and nothing else —
 /// no path (beyond a bare `/`), query, fragment, or credentials. Shared by
 /// admission validation (here) and the gateway's dispatch-time allowlist
-/// check so the two can never disagree.
+/// check so the two can never disagree. Rejection diagnostics contain only fixed
+/// categories because invalid input may contain credentials or tokens.
 pub fn normalize_callout_origin(raw: &str) -> Result<String, String> {
-    normalize_callout_origin_inner(raw).map_err(|error| match error {
-        CalloutOriginError::InvalidUrl(error) => format!("'{raw}' is not a valid URL: {error}"),
-        CalloutOriginError::Scheme => format!("'{raw}': only http/https origins are allowed"),
-        CalloutOriginError::Components => format!("'{raw}': origin only — no path, query, or fragment"),
-        CalloutOriginError::Credentials => format!("'{raw}': credentials are not allowed in an origin"),
-        CalloutOriginError::Host => format!("'{raw}': origin must include a host"),
-        CalloutOriginError::Port => format!("'{raw}': origin must include a port"),
+    normalize_callout_origin_inner(raw).map_err(|error| {
+        let message = match error {
+            CalloutOriginError::InvalidUrl => "origin is not a valid URL",
+            CalloutOriginError::Scheme => "only http/https origins are allowed",
+            CalloutOriginError::Components => "origin only: no path, query, or fragment",
+            CalloutOriginError::Credentials => "credentials are not allowed in an origin",
+            CalloutOriginError::Host => "origin must include a host",
+            CalloutOriginError::Port => "origin must include a port",
+        };
+        message.to_string()
     })
 }
 
 /// Runtime variant of [`normalize_callout_origin`] that deliberately avoids
-/// formatting the untrusted raw origin into an error allocation.
+/// allocating an error diagnostic.
 pub fn normalize_callout_origin_quiet(raw: &str) -> Option<String> {
     normalize_callout_origin_inner(raw).ok()
 }
 
 enum CalloutOriginError {
-    InvalidUrl(url::ParseError),
+    InvalidUrl,
     Scheme,
     Components,
     Credentials,
@@ -461,7 +465,7 @@ enum CalloutOriginError {
 }
 
 fn normalize_callout_origin_inner(raw: &str) -> Result<String, CalloutOriginError> {
-    let parsed = url::Url::parse(raw).map_err(CalloutOriginError::InvalidUrl)?;
+    let parsed = url::Url::parse(raw).map_err(|_| CalloutOriginError::InvalidUrl)?;
     let scheme = parsed.scheme();
     if scheme != "http" && scheme != "https" {
         return Err(CalloutOriginError::Scheme);
