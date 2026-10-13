@@ -20,3 +20,10 @@ Re-evaluate if the cited mechanism, dependency, or threat model changes.
 ## Resolution references
 
 - `cl-11` — 2026-08-24.
+
+ARCH-028 B2 keeps ordinary IP references live: required Deny and entry/body roots
+must be preflighted together before a matching sibling, outer skip or stage-specific
+shortcut. Required absence returns a recoverable generic 500; Allow alternatives
+remain incomplete candidates. Controller status and generation clearing tests verify
+read proofs, not copied CIDR payloads. Dynamic ConditionRefs phases update/delete/
+restore only the IpList while retaining ordinary and RAP plugin resources.

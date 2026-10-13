@@ -32,8 +32,8 @@ metadata:
 
 | 类型 | 配置对象 | 说明 |
 |------|----------|------|
-| `IpRestriction` | 内联规则 | IP 允许/拒绝分组，直接嵌入插件中。 |
-| `GlobalConnectionIpRestriction` | 内联配置 + 可选 `activeProfileRef` | 完整 IP 规则集（命名 `profiles`）内联在插件中；可选的 `Selector` EdgionConfigData 用于热切换**当前激活哪个 profile**。由 Center 管理并同步到各 Controller。 |
+| `IpRestriction` | IpList 引用 | 通过有序的 allowRefs/denyRefs 引用中心 IpList，分组和 CIDR 仅写在 IpList 中。 |
+| `GlobalConnectionIpRestriction` | 内联配置 + 可选 `activeProfileRef` | 命名 `profiles` 在插件中仅保存 IpList 引用和动作；可选的 `Selector` EdgionConfigData 用于热切换**当前激活哪个 profile**。由 Center 管理并同步到各 Controller。 |
 | `ConnectionRateLimit` | `config` 对象 | 本地监听器保护与可选的 Redis 共享限额；Gateway 挂载在 TLS 前执行，UDPRoute 挂载作用于新会话准入。详见下文 [ConnectionRateLimit 小节](#connectionratelimit-连接与-udp-会话接入限流)。 |
 
 `spec.plugins` 下的每个条目都有可选的 `enable` 标志（默认 `true`）、一个 `type` 和一个 `config` 对象。
@@ -42,13 +42,11 @@ metadata:
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `allow` | Array\<Object\> | 无 | 允许分组；每项格式为 `{name, cidrs}`。非空的 `allow` 启用白名单模式。 |
-| `deny` | Array\<Object\> | 无 | 拒绝分组；每项格式为 `{name, cidrs}`。优先于 `allow` 求值。 |
 | `allowRefs` | Array\<Object\> | 无 | 引用中心化的 `IpList` EdgionConfigData，其 CIDR 合并进白名单。每项为 `{name, namespace?}`；`namespace` 缺省取该资源所在 namespace。被引用 IpList 缺失/禁用时 fail-closed（全拒），并通过 `ResolvedRefs=False` 暴露。 |
 | `denyRefs` | Array\<Object\> | 无 | 同 `allowRefs`，但合并进黑名单。被引用 IpList 缺失/禁用时少拦（同样以 `ResolvedRefs=False` 暴露）。 |
 | `defaultAction` | Enum | `allow` | 没有规则匹配时的动作。允许值：`allow` \| `deny`。 |
 
-`allow`/`deny` 或 `allowRefs`/`denyRefs` 中至少有一个必须非空。
+`allowRefs`/`denyRefs` 至少一侧非空。旧 allow/deny 键出现即无效，包括 null 和空数组。
 
 #### 分组子字段
 
@@ -58,11 +56,11 @@ metadata:
 | `cidrs` | Array\<String\> | **必填** | CIDR 字符串或裸 IP（裸 IP 会转为 `/32` 或 `/128`）。 |
 | `description` | String | 无 | 可选的可读说明。 |
 
-求值顺序：先 `deny`，再 `allow`，最后 `defaultAction`。对于原始 TCP，被拒绝的连接直接关闭（L4 没有协议级响应）。
+求值顺序：先有序 `denyRefs`，再有序 `allowRefs`，最后 `defaultAction`。对于原始 TCP，被拒绝的连接直接关闭（L4 没有协议级响应）。
 
 ### `GlobalConnectionIpRestriction` 配置
 
-该插件将**完整**的 IP 规则集内联携带（由 git 管理）。唯一可热切换的输入是
+该插件保存命名的引用型策略（由 git 管理）。IpList 内容可独立热更新；另一个输入是
 *当前激活哪个 profile*，由通过 `activeProfileRef` 引用的可选 `Selector`
 EdgionConfigData 提供。
 
@@ -70,7 +68,7 @@ EdgionConfigData 提供。
 |------|------|--------|------|
 | `enable` | Boolean | **必填** | 总开关。`false` 时禁用插件（放行所有连接）。 |
 | `activeProfile` | String | **必填** | 默认激活的 profile 名；必须存在于 `profiles` 中。 |
-| `profiles` | Map\<String, Object\> | **必填** | 命名规则集。每个 profile 为 `{ defaultAction, allow?, deny?, allowRefs?, denyRefs? }`（分组结构同 `IpRestriction`）。每个 profile 也可通过 per-profile 的 `allowRefs`/`denyRefs` 引用中心 IpList（与 `activeProfileRef` 不同——后者是选择哪个 profile 生效，而非引用 IpList）。 |
+| `profiles` | Map\<String, Object\> | **必填** | 命名规则集。每个 profile 为 `{ defaultAction, allowRefs?, denyRefs? }`（分组结构同 `IpRestriction`）。每个 profile 也可通过 per-profile 的 `allowRefs`/`denyRefs` 引用中心 IpList（与 `activeProfileRef` 不同——后者是选择哪个 profile 生效，而非引用 IpList）。 |
 | `description` | String | 无 | 可选的可读说明。 |
 | `activeProfileRef.name` | String | 无 | 可选。一个 `Selector` EdgionConfigData 的名称，用于覆盖当前激活的 profile。 |
 | `activeProfileRef.namespace` | String | 父 ESP 命名空间 | Selector 的命名空间；省略时继承父 `EdgionStreamPlugins` 的命名空间。 |
@@ -81,11 +79,25 @@ EdgionConfigData 提供。
 内联的 `activeProfile`（**fail-to-base**）。selector 只能在 git 管理的 profile 之间
 切换，永远无法注入规则或禁用插件。
 
-## 快速开始（内联 IpRestriction）
+## 快速开始（引用型 IpRestriction）
 
 ### 第一步：定义插件
 
 ```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: example-tcp-ip-restriction-allow-allow-1
+  namespace: edgion-test
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: allowed-clients
+        cidrs:
+        - 10.0.0.0/8
+---
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:
@@ -93,13 +105,12 @@ metadata:
   namespace: edgion-test
 spec:
   plugins:
-    - type: IpRestriction
-      config:
-        allow:
-          - name: allowed-clients
-            cidrs:
-              - "10.0.0.0/8"          # 仅限内网
-        defaultAction: deny           # 拒绝所有不在允许列表中的请求
+  - type: IpRestriction
+    config:
+      defaultAction: deny
+      allowRefs:
+      - name: example-tcp-ip-restriction-allow-allow-1
+        namespace: edgion-test
 ```
 
 ### 第二步：在路由中引用
@@ -133,11 +144,39 @@ kubectl apply -f tcp-route.yaml
 
 ## Center 管理的激活 profile（GlobalConnectionIpRestriction）
 
-把**完整**的规则集一次性内联写在插件里（由 git 管理、经过评审）。然后让 Center
+将命名的引用型策略写在插件中，将 CIDR 分组写入 IpList（由 git 管理、经过评审）。然后让 Center
 同步一个很小的 `Selector` EdgionConfigData，用来在多个 Controller 之间选择
 **当前激活哪个 profile**——而完全不需要下发规则本身。
 
 ```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: example-gcir-stream-allow-2
+  namespace: edgion-test
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: office
+        cidrs:
+        - 10.0.0.0/8
+---
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: example-gcir-stream-allow-3
+  namespace: edgion-test
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: any
+        cidrs:
+        - 0.0.0.0/0
+---
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:
@@ -145,24 +184,23 @@ metadata:
   namespace: edgion-test
 spec:
   plugins:
-    - type: GlobalConnectionIpRestriction
-      config:
-        enable: true                    # 总开关（false 时禁用插件）
-        activeProfile: locked           # git 默认 profile（安全）
-        profiles:
-          locked:
-            defaultAction: deny
-            allow:
-              - name: office
-                cidrs: ["10.0.0.0/8"]
-          open:
-            defaultAction: deny
-            allow:
-              - name: any
-                cidrs: ["0.0.0.0/0"]
-        activeProfileRef:               # 可选：热切换激活的 profile
-          name: gcir-active
-          # namespace 省略：继承父 ESP 命名空间（edgion-test）
+  - type: GlobalConnectionIpRestriction
+    config:
+      enable: true
+      activeProfile: locked
+      profiles:
+        locked:
+          defaultAction: deny
+          allowRefs:
+          - name: example-gcir-stream-allow-2
+            namespace: edgion-test
+        open:
+          defaultAction: deny
+          allowRefs:
+          - name: example-gcir-stream-allow-3
+            namespace: edgion-test
+      activeProfileRef:
+        name: gcir-active
 ---
 apiVersion: edgion.io/v1
 kind: EdgionConfigData
@@ -174,8 +212,8 @@ spec:
   data:
     type: Selector
     config:
-      active: open                      # 切换到 "open"；null/缺省 → base 默认（locked）
-      description: "临时放宽访问"
+      active: open
+      description: 临时放宽访问
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: TCPRoute
@@ -183,15 +221,15 @@ metadata:
   name: gcir-route
   namespace: edgion-test
   annotations:
-    edgion.io/edgion-stream-plugins: "edgion-test/gcir-stream"
+    edgion.io/edgion-stream-plugins: edgion-test/gcir-stream
 spec:
   parentRefs:
-    - name: stream-gateway
-      sectionName: tcp-redis
+  - name: stream-gateway
+    sectionName: tcp-redis
   rules:
-    - backendRefs:
-        - name: redis-primary
-          port: 6379
+  - backendRefs:
+    - name: redis-primary
+      port: 6379
 ```
 
 要放宽或收紧访问，把 `active` 切换到另一个**预先授权**的 profile；selector 无法注入
@@ -250,23 +288,49 @@ spec:
 
 ```yaml
 apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: example-carve-out-allow-4
+  namespace: edgion-test
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: internal
+        cidrs:
+        - 10.0.0.0/8
+---
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: example-carve-out-deny-5
+  namespace: edgion-test
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: quarantine
+        cidrs:
+        - 10.6.6.6/32
+---
+apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:
   name: carve-out
   namespace: edgion-test
 spec:
   plugins:
-    - type: IpRestriction
-      config:
-        allow:
-          - name: internal
-            cidrs:
-              - "10.0.0.0/8"
-        deny:
-          - name: quarantine
-            cidrs:
-              - "10.6.6.6/32"        # 尽管在 10.0.0.0/8 内，仍被拒绝
-        defaultAction: deny
+  - type: IpRestriction
+    config:
+      defaultAction: deny
+      allowRefs:
+      - name: example-carve-out-allow-4
+        namespace: edgion-test
+      denyRefs:
+      - name: example-carve-out-deny-5
+        namespace: edgion-test
 ```
 
 ## ConnectionRateLimit: 连接与 UDP 会话接入限流

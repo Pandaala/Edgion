@@ -1,0 +1,14 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: condition-refs-live-ips
+  namespace: edgion-default
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: clients
+        cidrs:
+        - 0.0.0.0/0
+        - ::/0

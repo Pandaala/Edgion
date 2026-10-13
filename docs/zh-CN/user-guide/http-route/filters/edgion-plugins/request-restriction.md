@@ -6,7 +6,7 @@
 
 ## 概述
 
-`RequestRestriction` 插件通过共享的 `Condition` 枚举限制访问。与专注于 IP 的 `IpRestriction` 不同，本插件匹配请求属性（header、cookie、query、path、method）以及**认证后身份**——mTLS 客户端证书的 subject / SAN / CN（`mtlsMatch`）和已验证的 JWT claim（`jwtClaimMatch`）。内联 IP 集合（`directPeerIpMatch` / `remoteIpMatch` 的 `ips`）可以和 path 条件放在同一分组里。
+`RequestRestriction` 插件通过共享的 `Condition` 枚举限制访问。与专注于 IP 的 `IpRestriction` 不同，本插件匹配请求属性（header、cookie、query、path、method）以及**认证后身份**——mTLS 客户端证书的 subject / SAN / CN（`mtlsMatch`）和已验证的 JWT claim（`jwtClaimMatch`）。引用 IpList 的 IP 条件（`directPeerIpMatch` / `remoteIpMatch` 的 `ipRefs`）可以和 path 条件放在同一分组里。
 
 它仍然是一个**本地 allow/deny 匹配器**，而非完整的 RBAC 编排层：一条条件仍是纯断言，由必填的 `mode` 决定命中意味着放行还是拒绝。
 
@@ -32,7 +32,7 @@
 - **共享 Condition 词表**：与插件 `run`/`skip` 使用同一套 `Condition` 类型
 - **请求属性**：header、cookie、query、path、requestPath、method
 - **身份匹配**：`mtlsMatch`（subject / CN / SAN，可选 `sanType`）和 `jwtClaimMatch`
-- **内联与引用 IP 集合**：`directPeerIpMatch` / `remoteIpMatch` 的 `ips` 与 `ipRefs`（IpList ConfigData）
+- **引用 IP 集合**：`directPeerIpMatch` / `remoteIpMatch` 的 `ipRefs`（IpList ConfigData）
 - **精确匹配与正则匹配**：`values` 精确匹配，`regex` 正则匹配
 - **自动性能优化**：精确匹配列表超过 16 个值时自动使用 HashSet (O(1) 查找)
 - **布尔组合**：显式的扁平 `allOf`、扁平 `anyOf` 或 OR-of-AND
@@ -354,7 +354,7 @@ spec:
 
 ### 8. 同一分组内的 IP 与 path
 
-仅对内联对端 IP 集合拒绝 admin 路径。
+仅对引用的对端 IP 集合拒绝 admin 路径。
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -370,7 +370,7 @@ spec:
           anyOf:
             - allOf:
                 - type: directPeerIpMatch
-                  ips: ["127.0.0.1", "::1"]
+                  ipRefs: [{ name: local-peers }]
                 - type: keyMatch
                   key:
                     type: path
@@ -427,7 +427,7 @@ Edgion 的 `RequestRestriction` 把多种限制能力收进一个插件，配置
 5. **HashSet 优化**：精确匹配列表超过 16 个值时自动使用 HashSet，O(1) 查找。
 6. **path 与 requestPath**：`key: { type: path }` 对照规范化后的当前路径（`values` 在加载时规范化）；`key: { type: requestPath }` 是入口时刻的 raw 路径。regex 从不规范化。
 7. **缺失值**：`keyMatch` / 身份匹配在值缺失时为 false。用 `keyExist` + `negate: true` 匹配缺失。
-8. **ipRefs**：条件可以使用内联 `ips` 和 `ipRefs`（IpList ConfigData）。Controller 在 apply 路径把 `ipRefs` 展开到 `resolvedIps`。缺失、未启用、类型错误或跨命名空间未授权的 IpList 引用 fail-closed（`ResolvedRefs=False`）；网关不会对未解析的操作员 `ipRefs` 编译空 matcher。
+8. **ipRefs**：IP 条件仅引用 IpList。entry/body 条件和 Deny 限制在短路求值前检查整份运行时的必需引用；任何依赖不可用时返回通用 500，后续有效 IpList 发布可恢复。Allow 限制跳过不完整的备选项。依赖失败不会被 `negate` 反转。
 
 ## FAQ
 

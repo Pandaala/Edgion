@@ -175,8 +175,8 @@ fn root_fixture() -> EdgionPlugins {
     let set = |name: &str| serde_json::json!({"allOf":[leaf(name)]});
     let gates = |name: &str| serde_json::json!({"skip":set(&format!("{name}-skip")),"run":set(&format!("{name}-run"))});
     let profile = serde_json::json!({"requiredRuleGroups":[{"name":"gate","anyOfRules":[
-        {"name":"direct","type":"directPeerIp","config":{"ips":["192.0.2.1"],"conditions":set("direct")}},
-        {"name":"remote","type":"remoteIp","config":{"ips":["192.0.2.2"],"conditions":set("remote")}},
+        {"name":"direct","type":"directPeerIp","config":{"ipRefs":[{"name":"direct-networks"}],"conditions":set("direct")}},
+        {"name":"remote","type":"remoteIp","config":{"ipRefs":[{"name":"remote-networks"}],"conditions":set("remote")}},
         {"name":"url","type":"url","config":{"hosts":["example.com"],"paths":[{"type":"Exact","value":"/"}],
             "conditions":set("authored-url"),"resolvedCandidates":[{"name":"imported","paths":[{"type":"Exact","value":"/"}],"conditions":set("effective-url")}]}}
     ]}]});
@@ -336,7 +336,7 @@ fn ip_owner() -> EdgionPlugins {
         for profile in config.resolved_profiles.as_mut().unwrap().values_mut() {
             for rule in &mut profile.required_rule_groups[0].any_of_rules {
                 if let RequestAccessRuleType::DirectPeerIp(ip) | RequestAccessRuleType::RemoteIp(ip) = &mut rule.rule {
-                    ip.ip.ip_refs = vec![serde_json::from_value(serde_json::json!({"name":"direct-nets"})).unwrap()];
+                    ip.refs.ip_refs = vec![serde_json::from_value(serde_json::json!({"name":"direct-nets"})).unwrap()];
                 }
             }
         }
@@ -356,6 +356,7 @@ fn ip_catalogue_covers_actual_roots_and_retains_enabled_only_activity() {
             match leaf.consumer() {
                 IpReferenceConsumer::Ordinary => ordinary += 1,
                 IpReferenceConsumer::RequestAccessPolicy => rap += 1,
+                IpReferenceConsumer::RealIp => panic!("unexpected RealIp root in ordinary fixture"),
             }
             for token in leaf.references().unwrap() {
                 let bound = token.validated().unwrap();
@@ -390,7 +391,7 @@ fn ip_descriptors_validate_before_access_and_resolved_payload_does_not_change_bi
             .visit_ip_mut(
                 &mut owner,
                 |mut leaf, _emit| {
-                    leaf.config_mut().resolved_ips = Some(vec![]);
+                    leaf.config_mut().resolved_refs = None;
                     for wire in &mut leaf.config_mut().ip_refs {
                         wire.ref_denied = None;
                     }
@@ -467,4 +468,148 @@ fn rap_warning_application_rechecks_owner_and_preserves_root_order() {
         unreachable!()
     };
     assert_eq!(config.resolution_warnings, order);
+}
+
+#[test]
+fn inactive_effective_ip_nodes_clear_seeded_scope_and_negative_markers_without_loans() {
+    let mut owner = ip_owner();
+    let prepared = PreparedConditionReferences::from_plugins(&owner);
+    prepared
+        .visit_ip_mut(
+            &mut owner,
+            |mut leaf, _| {
+                let scopes: Vec<_> = leaf
+                    .config()
+                    .ip_refs
+                    .iter()
+                    .map(|_| crate::resources::edgion_plugins::ip_reference_set::IpReadScope::Denied)
+                    .collect();
+                leaf.set_read_scopes(&scopes).unwrap();
+            },
+            |_, _| {},
+        )
+        .unwrap();
+    if let Some(entries) = &mut owner.spec.request_plugins {
+        for entry in entries {
+            entry.enable = false;
+        }
+    }
+    let prepared = PreparedConditionReferences::from_plugins(&owner);
+    prepared.clear_ip_read_scopes(&mut owner).unwrap();
+    prepared
+        .visit(&owner, |leaf| {
+            if let Condition::DirectPeerIpMatch(ip) | Condition::RemoteIpMatch(ip) = leaf.config() {
+                assert!(ip.refs.resolved_refs.is_none());
+                assert!(ip.refs.ip_refs.iter().all(|reference| reference.ref_denied.is_none()));
+            }
+        })
+        .unwrap();
+    let mut active_count = 0;
+    prepared.visit_ip(&owner, |_| active_count += 1).unwrap();
+    // Other stage arrays in this fixture remain enabled and keep the original catalogue semantics.
+    assert!(active_count > 0);
+}
+
+#[test]
+fn unsupported_stage_rap_clears_seeded_primary_proof_without_becoming_a_consumer() {
+    let mut owner = ip_owner();
+    let prepared = PreparedConditionReferences::from_plugins(&owner);
+    prepared
+        .visit_ip_mut(
+            &mut owner,
+            |mut leaf, _| {
+                let scopes = vec![
+                    crate::resources::edgion_plugins::ip_reference_set::IpReadScope::Denied;
+                    leaf.config().ip_refs.len()
+                ];
+                leaf.set_read_scopes(&scopes).unwrap();
+            },
+            |_, _| {},
+        )
+        .unwrap();
+    let entry = owner.spec.request_plugins.as_mut().unwrap().remove(2);
+    let entry = serde_json::from_value(serde_json::to_value(entry).unwrap()).unwrap();
+    owner
+        .spec
+        .upstream_response_body_filter_plugins
+        .get_or_insert_default()
+        .push(entry);
+    let prepared = PreparedConditionReferences::from_plugins(&owner);
+    prepared.clear_ip_read_scopes(&mut owner).unwrap();
+    let entry = owner
+        .spec
+        .upstream_response_body_filter_plugins
+        .as_ref()
+        .unwrap()
+        .last()
+        .unwrap();
+    let EdgionPlugin::RequestAccessPolicy(config) = &entry.plugin else {
+        unreachable!()
+    };
+    for profile in config.resolved_profiles.as_ref().unwrap().values() {
+        for group in &profile.required_rule_groups {
+            for rule in &group.any_of_rules {
+                if let crate::resources::edgion_plugins::plugin_configs::RequestAccessRuleType::DirectPeerIp(ip)
+                | crate::resources::edgion_plugins::plugin_configs::RequestAccessRuleType::RemoteIp(ip) = &rule.rule
+                {
+                    assert!(ip.refs.resolved_refs.is_none());
+                    assert!(ip.refs.ip_refs.iter().all(|reference| reference.ref_denied.is_none()));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn global_real_ip_loans_have_actual_cluster_authority_and_finite_scopes() {
+    use crate::EdgionGatewayConfig;
+    let make = || {
+        serde_json::from_value::<EdgionGatewayConfig>(serde_json::json!({
+            "metadata": {"name": "global", "uid": "egc-uid", "generation": 1},
+            "spec": {"realIp": {"trustedIpRefs": [{"name": "proxies", "namespace": "ops"}]}}
+        }))
+        .unwrap()
+    };
+    for scope in [
+        IpReadScope::SameNamespace,
+        IpReadScope::GrantAuthorized,
+        IpReadScope::ClusterOnly,
+        IpReadScope::ValidationDisabled,
+        IpReadScope::Denied,
+    ] {
+        let mut owner = make();
+        let prepared = PreparedConditionReferences::from_gateway_config(&owner);
+        prepared
+            .visit_gateway_ip(&owner, |leaf| {
+                assert_eq!(leaf.execution_role(), IpExecutionRole::Trust);
+                assert_eq!(leaf.consumer(), IpReferenceConsumer::RealIp);
+                let token = leaf.references().unwrap().next().unwrap();
+                let bound = token.validated().unwrap();
+                assert_eq!(bound.source().group_kind().kind(), "EdgionGatewayConfig");
+                assert_eq!(bound.source().scope().namespace(), None);
+                assert_eq!(bound.target().scope().namespace(), Some("ops"));
+            })
+            .unwrap();
+        prepared
+            .visit_gateway_ip_mut(&mut owner, |mut leaf| {
+                assert_eq!(
+                    leaf.set_read_scopes(&[scope]).is_ok(),
+                    !matches!(scope, IpReadScope::SameNamespace | IpReadScope::GrantAuthorized)
+                );
+            })
+            .unwrap();
+        prepared.clear_gateway_ip_scopes(&mut owner).unwrap();
+        assert!(owner.spec.real_ip.as_ref().unwrap().trusted.resolved_refs.is_none());
+    }
+    let mut owner = make();
+    let prepared = PreparedConditionReferences::from_gateway_config(&owner);
+    owner.metadata.name = Some("different-owner".into());
+    assert!(prepared.visit_gateway_ip(&owner, |_| panic!("stale callback")).is_err());
+    let mut owner = make();
+    owner.spec.real_ip.as_mut().unwrap().trusted.ip_refs[0].namespace = None;
+    PreparedConditionReferences::from_gateway_config(&owner)
+        .visit_gateway_ip(&owner, |leaf| {
+            assert!(leaf.references().unwrap().next().unwrap().validated().is_err());
+        })
+        .unwrap();
 }

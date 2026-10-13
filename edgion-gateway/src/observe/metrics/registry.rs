@@ -63,8 +63,6 @@ pub mod names {
     pub const ACME_CHALLENGE_LOOKUP_TOTAL: &str = "edgion_acme_challenge_lookup_total";
     // Stream plugin: GlobalConnectionIpRestriction decision events
     pub const CONN_IP_RESTRICTION_EVENTS_TOTAL: &str = "edgion_conn_ip_restriction_events_total";
-    // IP restriction: inline deny CIDR entries skipped by partial-good compilation (blacklist hole)
-    pub const IP_DENY_ENTRIES_SKIPPED_TOTAL: &str = "edgion_ip_deny_entries_skipped_total";
     // Config aggregation: a conflict silently fell back to a default (e.g. conflicting outbound CA defaults -> System)
     pub const CONFIG_CONFLICT_TOTAL: &str = "edgion_config_conflict_total";
     // Outbound: a caller-injected header was dropped for an invalid name/value (silent no-op)
@@ -812,14 +810,6 @@ pub fn record_conn_ip_restriction_event(result: &'static str) {
     counter!(names::CONN_IP_RESTRICTION_EVENTS_TOTAL, "result" => result).increment(1);
 }
 
-/// Record that one or more inline `deny` CIDR entries were skipped by partial-good
-/// compilation. A skipped deny entry is a hole in a blacklist (under-block / fail-open
-/// direction), so it gets a loud counter — not just a passive status condition.
-/// `scope` is a low-cardinality `&'static str`: "http" | "stream_l4" | "tls_route".
-pub fn record_ip_deny_entries_skipped(scope: &'static str) {
-    counter!(names::IP_DENY_ENTRIES_SKIPPED_TOTAL, "scope" => scope).increment(1);
-}
-
 /// A config-aggregation conflict silently fell back to a default. `field` is a bounded
 /// constant `&'static str` naming which aggregate conflicted (for example,
 /// "outbound_ca" or "outbound_client_identity").
@@ -1235,7 +1225,7 @@ pub fn record_geoip_lookup_panic() {
 
 /// L4 geo denials, which are never logged (see the design's §6.6).
 /// `layer` is stage1 | tcp; `reason` is deny_country | allow_miss |
-/// db_unavailable | lookup_failed.
+/// db_unavailable | lookup_failed | ref_unavailable.
 /// Neither label carries a client address.
 pub fn record_geoip_denied(layer: StreamLayer, reason: &'static str) {
     counter!(names::GEOIP_DENIED, "layer" => layer.as_metric_label(), "reason" => reason).increment(1);

@@ -5,7 +5,7 @@
 The consequence is that the Kubernetes API server
 does not prune a mistyped key inside those `config` blocks, and the Controller's Rust
 deserialization is the only remaining gate. Without a dedicated check, an unrecognized key is
-silently dropped: `deny:` mistyped as `denys:` leaves an `IpRestriction` entry with an empty
+silently dropped: `denyRefs:` mistyped as `denyRefss:` leaves an `IpRestriction` entry with an empty
 deny list, `Accepted: True`, and nothing anywhere says the rule was never loaded. For a
 security-relevant plugin that is a fail-open, not a harmless no-op.
 
@@ -57,7 +57,7 @@ An operator can see a finding in four places:
        - type: UnknownConfigFields
          status: "True"
          reason: UnknownFieldsDetected
-         message: "requestPlugins[0].config.denys"
+         message: "requestPlugins[0].config.denyRefss"
    ```
 
    `kubectl describe` shows this like any other condition. It does **not** affect `Accepted`
@@ -80,7 +80,7 @@ An operator can see a finding in four places:
            "kind": "EdgionPlugins",
            "namespace": "default",
            "name": "auth-chain",
-           "paths": ["requestPlugins[0].config.denys"]
+           "paths": ["requestPlugins[0].config.denyRefss"]
          }
        ]
      }
@@ -98,7 +98,7 @@ An operator can see a finding in four places:
    {
      "success": true,
      "data": "EdgionPlugins created",
-     "warnings": ["requestPlugins[0].config.denys"]
+     "warnings": ["requestPlugins[0].config.denyRefss"]
    }
    ```
 
@@ -125,7 +125,7 @@ POST /api/v1/validate/EdgionPlugins
   "data": {
     "ok": false,
     "unknownFieldCheck": "performed",
-    "unknownFields": ["requestPlugins[0].config.denys"],
+    "unknownFields": ["requestPlugins[0].config.denyRefss"],
     "schemaErrors": [],
     "validationErrors": []
   }

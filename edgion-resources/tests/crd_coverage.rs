@@ -1153,3 +1153,85 @@ fn linksys_removed_redis_fields_survive_kubernetes_pruning_for_advisory_reportin
         "Redis redirect bounds belong to lenient Controller validation"
     );
 }
+
+#[test]
+fn global_real_ip_crd_preserves_only_policy_interior_and_declares_reference_shape() {
+    for (version, schema) in served_schemas("edgion_gateway_config_crd.yaml") {
+        let spec = &schema["properties"]["spec"];
+        let policy = &spec["properties"]["realIp"];
+        assert_eq!(
+            policy["x-kubernetes-preserve-unknown-fields"], true,
+            "{version}: removed fields must reach typed invalid capture"
+        );
+        assert!(
+            spec.get("x-kubernetes-preserve-unknown-fields").is_none(),
+            "{version}: preserve must not widen to spec"
+        );
+        assert!(policy["required"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::String("trustedIpRefs".into())));
+        let refs = &policy["properties"]["trustedIpRefs"];
+        assert_eq!(refs["type"], "array");
+        assert_eq!(refs["minItems"], 1);
+        let item = &refs["items"];
+        assert_eq!(item["type"], "object");
+        for field in ["name", "namespace"] {
+            assert_eq!(item["properties"][field]["type"], "string");
+            assert!(item["required"]
+                .as_array()
+                .unwrap()
+                .contains(&Value::String(field.into())));
+        }
+        for forbidden in ["trustedIps", "cidrs", "invalidInput", "resolvedRefs"] {
+            assert!(
+                policy["properties"].get(forbidden).is_none(),
+                "{version}: legacy payload and resolver metadata are not operator fields"
+            );
+        }
+        assert!(item["properties"].get("refDenied").is_none());
+        assert!(item.get("x-kubernetes-preserve-unknown-fields").is_none());
+    }
+}
+
+#[test]
+fn geo_reference_wire_uses_existing_opaque_plugin_boundary_and_hides_proofs() {
+    for (file, stages) in [
+        (
+            "edgion_plugins_crd.yaml",
+            vec![
+                "requestPlugins",
+                "upstreamResponseFilterPlugins",
+                "upstreamResponseBodyFilterPlugins",
+                "upstreamResponsePlugins",
+            ],
+        ),
+        ("edgion_stream_plugins_crd.yaml", vec!["plugins"]),
+    ] {
+        for (version, schema) in served_schemas(file) {
+            for stage in &stages {
+                let config = &schema["properties"]["spec"]["properties"][*stage]["items"]["properties"]["config"];
+                assert_eq!(config["type"], "object", "{file}/{version}/{stage}");
+                assert_eq!(
+                    config["x-kubernetes-preserve-unknown-fields"], true,
+                    "removed Geo fields must reach typed-invalid ingest"
+                );
+            }
+        }
+    }
+    let generated = serde_json::to_value(schema_for!(
+        edgion_resources::resources::edgion_plugins::plugin_configs::GeoRule
+    ))
+    .unwrap();
+    let fields = generated["properties"].as_object().unwrap();
+    for field in ["source", "key", "values", "ipRefs"] {
+        assert!(fields.contains_key(field), "{field}");
+    }
+    for field in ["invalidInput", "resolvedRefs", "cidrMatcher", "geoipRefs"] {
+        assert!(!fields.contains_key(field), "{field}");
+    }
+    assert_eq!(fields["ipRefs"]["type"], "array");
+    assert!(generated["$defs"]["EdgionConfigDataRef"]["properties"]
+        .get("refDenied")
+        .is_none());
+}

@@ -313,7 +313,7 @@ denied. See [HTTP DNS endpoint policy](../../04-review/ssrf/regression-guards/ht
   `edgion-resources/src/matcher/ip_cidr_helpers.rs`).
 - **Consumers**: http/stream ip_restriction, global_connection_ip_restriction,
   tls_route IP restriction, request_access_policy, real-IP trusted-proxy
-  matching, edgion_config_data.
+  matching, GeoIpLocation CIDR rules (HTTP and Stream), edgion_config_data.
 - **Rule**: IP allow/deny matching MUST use the radix tree; no linear
   `Vec<IpNet>` scans, no second matcher.
 
@@ -504,3 +504,40 @@ and hashes inherited axes in the secret/material digest. Common canonical TLS
 resolution feeds the sole Gateway tonic014 conversion. The transport retains
 its owning input, native Endpoint and metadata across retries/reconnects; SDK
 roots, SNI, deadlines, H2 and dial-time egress behavior remain provider-owned.
+
+### Reference-only IP conditions (ARCH-028 B2)
+
+The shared condition evaluator consumes only actual-owner-bound IpList keys and read
+policy. IpList `items[].cidrs` is the collection owner; Gateway ConfigData publication
+is the matcher owner. Controller condition resolution publishes permission/status
+metadata and credential payloads, never an expanded address union. Ordinary required
+roots are preflighted as a complete effective runtime before short circuits; RAP
+optional roots retain successful empty-union semantics. No threshold or second
+matching implementation is used.
+
+### ARCH-028 RealIp reference ownership
+
+HTTP RealIp and global EGC RealIp store only nonempty `trustedIpRefs`; IpGroups live in referenced IpLists. The actual owning EP/EGC catalogue provides the same cold key compiler as Boolean IP conditions. A global EGC requires explicit target namespaces and permits only current Cluster visibility or the controller's validation-disabled scope; its TLS administrative exemption and namespaced grants do not apply. Controller generation processing clears old proof and dependency edges before recomputing from actual fields, including missing-target recovery edges. Shared EGC Accepted remains intrinsic-only; deployment-local trust availability adds no shared condition.
+
+The global policy captures a ConfigData snapshot directly before PluginSession exists; the HTTP policy reuses its dispatch-local adapter view. Both preflight every trust ref once and use that same view for the PROXY-effective downstream peer and all forwarded hops. Any unavailable list makes all trust false for that decision; content/visibility/delete/recovery changes remain live without rebuilding policy or copying CIDRs. Invalid input publishes a sealed plugin generation or disables global extraction, with clean-generation recovery. The narrow realIp CRD preservation and typed invalid marker prevent removed/unknown fields from becoming silently pruned successful configs; resolver-only proof is schema-hidden and recomputed on ingest. Referenced IpLists retain central partial-good entry compilation, replacing the former inline strict-trust admission.
+
+### Geo CIDR reference ownership (ARCH-028)
+
+GeoRule stores geographic values but no CIDRs or matcher. Its CIDR criteria use
+IpReferenceSet loans from PreparedIpListReferences and an IpList-domain proof;
+Condition/RealIp proofs use the separate Condition domain. One private owning
+proof builder verifies source, domain, position, ordered targets and scope pairing.
+Gateway CompiledGeoIpRefs retains only cold compiled key grids, then clears unused
+CIDR fields from its private normalized rule copy. Resources retains the sole
+AND/OR/deny-first/allow-terminal/default algorithm through a membership callback.
+All required refs precede MMDB and shortcuts and use one decision snapshot.
+
+### Business IP collections and reference-only ACL decisions
+
+IpList EdgionConfigData is the sole owner of business IP/CIDR collections in IpGroups and their central partial-good matcher index. Plugin conditions, RAP, HTTP/global RealIp, HTTP/Stream Geo CIDR rules, HTTP/connection/TLS IpRestriction and GCIR ProfileRules retain references and scalar policy only. No threshold-based Controller expansion or per-consumer CIDR compiler exists. Startup TCP-peer Controller Admin API allow_admin_ips remains the explicit infrastructure exception, as does inbound PROXY policy's independent authority boundary.
+
+The Controller resolves permission and diagnostics using actual source/target/field-slot loans, clears imported proof every generation, and retains only bounded schema-hidden proof metadata. Same-namespace, explicit Grant, current Cluster-only and validation-disabled read policies are distinct; disabled validation never bypasses identity/type checks. Gateway cold constructors verify actual owner/domain/slot/order before protected cache reuse. A decision borrows one scoped ConfigData snapshot and its authorized matcher iterator, preserving source-first group attribution and each list's longest prefix. No matcher-reference vector, copied CIDRs, per-request permission query or new global cache is needed.
+
+Availability is role-specific: ordinary conditions and Geo require their complete dependency view before shortcuts/MMDB; RAP optional IP data follows its partial-good policy; unavailable RealIp dependencies disable all trust for that decision; optional ACL sources are omitted while authored allowRefs retain whitelist intent. Static typed-invalid generations replace prior runtime policy and fail closed; clean publication recovers. Kubernetes admission-rejected updates never reach this publication boundary and leave the prior admitted generation. ACL denial-group logs retain their explicit security exception; credential-failure attribution remains forbidden.
+
+Disabled standalone ACLs retain passive Controller dependency/status observation without executable proof or Gateway execution. One clear-before-add registry pass preserves all Condition/RealIp/ACL/Geo/Selector edges; no new store, workqueue or runtime IO is introduced.

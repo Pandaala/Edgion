@@ -14,7 +14,7 @@ fn type_name_and_tag_roundtrip() {
                         "anyOfRules": [{
                             "name": "internal",
                             "type": "directPeerIp",
-                            "config": { "ips": ["10.0.0.0/8"] }
+                            "config": { "ipRefs": [{"name":"private-networks"}] }
                         }]
                     }]
                 }
@@ -41,8 +41,11 @@ fn validation_error_surfaces_bad_default_profile() {
                         name: "internal".to_string(),
                         rule: crate::resources::edgion_plugins::plugin_configs::RequestAccessRuleType::DirectPeerIp(
                             crate::resources::edgion_plugins::plugin_configs::IpAccessRuleConfig {
-                                ip: crate::resources::edgion_plugins::plugin_configs::IpAccessMatch {
-                                    ips: vec!["10.0.0.0/8".to_string()],
+                                refs: crate::resources::edgion_plugins::ip_reference_set::IpReferenceSet {
+                                    ip_refs: vec![crate::resources::edgion_config_data::EdgionConfigDataRef {
+                                        name: "test-networks".into(),
+                                        ..Default::default()
+                                    }],
                                     ..Default::default()
                                 },
                                 conditions: None,

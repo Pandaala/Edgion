@@ -387,12 +387,14 @@ fn condition_set_crd_is_fixed_depth_and_structural() {
 
     let atom = &skip["properties"]["allOf"]["items"];
     assert_eq!(atom["type"], "object");
-    assert!(atom.get("x-kubernetes-preserve-unknown-fields").is_none());
+    assert_eq!(atom["x-kubernetes-preserve-unknown-fields"], true);
+    assert!(atom["properties"].get("ips").is_none());
     assert!(required_set(atom, "Condition").contains("type"));
 
     let clause = &skip["properties"]["anyOf"]["items"];
     assert_eq!(clause["type"], "object");
-    assert!(clause.get("x-kubernetes-preserve-unknown-fields").is_none());
+    assert_eq!(clause["x-kubernetes-preserve-unknown-fields"], true);
+    assert!(clause["properties"].get("ips").is_none());
     assert_eq!(clause["oneOf"].as_array().map(Vec::len), Some(2));
     assert_eq!(
         required_set(&clause["oneOf"][0], "AnyOfClause.oneOf[0]"),

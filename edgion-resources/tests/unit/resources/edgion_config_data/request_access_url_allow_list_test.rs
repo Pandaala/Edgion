@@ -73,7 +73,13 @@ fn validates_all_path_kinds_and_nested_ip_conditions() {
     );
     exact.conditions = Some(ConditionSet::all_of(vec![Condition::DirectPeerIpMatch(
         IpAccessMatch {
-            ips: vec!["127.0.0.0/8".to_string()],
+            refs: crate::resources::edgion_plugins::ip_reference_set::IpReferenceSet {
+                ip_refs: vec![crate::resources::edgion_config_data::EdgionConfigDataRef {
+                    name: "loopback".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
             ..Default::default()
         },
     )]));
@@ -84,10 +90,13 @@ fn validates_all_path_kinds_and_nested_ip_conditions() {
         "/callbacks/:vendor",
     );
     prefix.conditions = Some(ConditionSet::all_of(vec![Condition::RemoteIpMatch(IpAccessMatch {
-        ip_refs: vec![crate::resources::edgion_config_data::EdgionConfigDataRef {
-            name: "vendor-networks".to_string(),
+        refs: crate::resources::edgion_plugins::ip_reference_set::IpReferenceSet {
+            ip_refs: vec![crate::resources::edgion_config_data::EdgionConfigDataRef {
+                name: "vendor-networks".to_string(),
+                ..Default::default()
+            }],
             ..Default::default()
-        }],
+        },
         ..Default::default()
     })]));
     let regex = candidate(

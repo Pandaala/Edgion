@@ -17,10 +17,7 @@ spec:
       config:
         ipSource: RemoteIp
         defaultAction: allow
-        deny:
-          - name: mixed-good-and-bad
-            cidrs:
-              - "10.0.0.0/8" # good — does NOT cover the client peer (OrbStack test-client Pod IP)
-              - "not-a-cidr" # bad  — skipped (partial-good), not fatal
+        denyRefs:
+          - name: acl-ip-restriction-inline-de-deny-f1570dac16
         status: 403
         message: "IP is in inline partial-good block list"

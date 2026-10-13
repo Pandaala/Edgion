@@ -167,6 +167,11 @@ impl ExtensionRefFilter {
         Ok((plugin_runtime, token))
     }
 
+    pub(crate) fn ip_dependencies_available(&self, session: &mut dyn PluginSession) -> bool {
+        self.resolve_runtime_silent(session)
+            .is_none_or(|runtime| runtime.ip_dependencies_available(session))
+    }
+
     /// Execute the referenced EdgionPlugins's plugin runtime
     fn run_extension(
         &self,
@@ -191,6 +196,12 @@ impl ExtensionRefFilter {
             };
         };
 
+        if !plugin_runtime.ip_dependencies_available(session) {
+            return PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None,
+            };
+        }
         match stage {
             PluginRunningStage::UpstreamResponseFilter => {
                 for plugin in plugin_runtime.upstream_response_plugins_iter() {
@@ -254,6 +265,12 @@ impl ExtensionRefFilter {
             return PluginRunningResult::ErrTerminateRequest;
         };
 
+        if !plugin_runtime.ip_dependencies_available(session) {
+            return PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None,
+            };
+        }
         match stage {
             PluginRunningStage::Request => {
                 let outcome_frame = if plugin_runtime.rate_limit_local_outcome_slots() > 0 {
@@ -358,6 +375,10 @@ impl ExtensionRefFilter {
         session: &mut dyn PluginSession,
     ) -> Option<std::time::Duration> {
         let plugin_runtime = self.resolve_runtime_silent(session)?;
+        if !plugin_runtime.ip_dependencies_available(session) {
+            session.mark_ip_body_denied();
+            return None;
+        }
 
         let mut max_delay: Option<std::time::Duration> = None;
         for plugin in plugin_runtime.upstream_response_body_plugins_iter() {
@@ -370,6 +391,9 @@ impl ExtensionRefFilter {
                     Some(current) => current.max(d),
                     None => d,
                 });
+            }
+            if session.ctx().ip_body_denied() {
+                break;
             }
         }
 

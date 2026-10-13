@@ -485,22 +485,40 @@ filters:
 ### 2. With IP Restriction
 
 ```yaml
-filters:
-  # Restrict IP first
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: example-policy-allow-1
+  namespace: edgion-default
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: internal-networks
+        description: Networks permitted to reach the authenticated endpoint
+        cidrs:
+        - 10.0.0.0/8
+        - 192.168.0.0/16
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: basic-auth-and-ip
+  namespace: edgion-default
+spec:
+  requestPlugins:
   - type: IpRestriction
     config:
-      allow:
-        - name: internal-networks
-          description: Networks permitted to reach the authenticated endpoint
-          cidrs: ["10.0.0.0/8", "192.168.0.0/16"]
-  
-  # Then authenticate
+      allowRefs:
+      - name: example-policy-allow-1
+        namespace: edgion-default
   - type: BasicAuth
     config:
       secretGroups:
-        - name: default
-          secretRefs:
-            - name: internal-api-user
+      - name: default
+        secretRefs:
+        - name: internal-api-user
 ```
 
 **Advantage**: Dual protection — only requests from internal IPs with correct credentials can access the resource.

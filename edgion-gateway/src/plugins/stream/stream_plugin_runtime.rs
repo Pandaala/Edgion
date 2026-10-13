@@ -4,7 +4,7 @@ use super::stream_plugin_trait::{StreamContext, StreamPlugin, StreamPluginResult
 use crate::plugins::stream::{
     ConnectionRateLimitPlugin, GeoIpLocationStreamPlugin, GlobalConnectionIpRestrictionPlugin, StreamIpRestriction,
 };
-use edgion_resources::refs::ip_list_fields::StreamIpListBindings;
+use edgion_resources::refs::ip_list_fields::{IpListSide, StreamIpListBindings};
 use edgion_resources::refs::stream_plugin_fields::StreamConnectionRateLimitField;
 use edgion_resources::resources::edgion_plugins::PluginValidation;
 use edgion_resources::resources::edgion_stream_plugins::{
@@ -111,6 +111,55 @@ impl StreamPluginRuntime {
                     cache[index] = None;
                 }
             }
+            let acl_valid = match &entry.plugin {
+                EdgionStreamPlugin::IpRestriction(config) => {
+                    config.validation_error().is_none()
+                        && binding.connection_entry(index).is_some_and(|entry| {
+                            let refs = entry.references();
+                            refs.validate_owner().is_ok()
+                                && refs.read_scopes(IpListSide::Allow).is_ok()
+                                && refs.read_scopes(IpListSide::Deny).is_ok()
+                        })
+                }
+                EdgionStreamPlugin::GlobalConnectionIpRestriction(config) => {
+                    config.validation_error().is_none()
+                        && binding.global_entry(index).is_some_and(|entry| {
+                            !config.enable
+                                || entry.profiles().all(|(_, refs)| {
+                                    refs.validate_owner().is_ok()
+                                        && refs.read_scopes(IpListSide::Allow).is_ok()
+                                        && refs.read_scopes(IpListSide::Deny).is_ok()
+                                })
+                        })
+                }
+                _ => true,
+            };
+            if !acl_valid {
+                cache[index] = None;
+                let reason = match &entry.plugin {
+                    EdgionStreamPlugin::IpRestriction(config) if config.validation_error().is_some() => {
+                        "invalid stream/IpRestriction configuration"
+                    }
+                    EdgionStreamPlugin::GlobalConnectionIpRestriction(_) => {
+                        "invalid stream/GlobalConnectionIpRestriction configuration"
+                    }
+                    _ => "invalid owning IP reference",
+                };
+                invalid_config_reason.get_or_insert_with(|| reason.to_string());
+                continue;
+            }
+            if let Some(geo) = binding.geo_entry(index) {
+                let valid = geo.config().check_fields(true).is_none()
+                    && geo
+                        .leaves()
+                        .all(|leaf| leaf.validate_owner().is_ok() && leaf.read_scopes().is_ok());
+                if !valid {
+                    cache[index] = None;
+                    invalid_config_reason
+                        .get_or_insert_with(|| "invalid stream/GeoIpLocation configuration".to_string());
+                    continue;
+                }
+            }
             let outcome = cache[index].get_or_insert_with(|| {
                 let outcome = Self::build_entry(entry, binding, resource_key, index, rate_limit_config);
                 if outcome.is_err() {
@@ -171,9 +220,11 @@ impl StreamPluginRuntime {
                     &crate::plugins::common::entry_scope(resource_key, None, index),
                 )))
             }
-            EdgionStreamPlugin::GeoIpLocation(config) => GeoIpLocationStreamPlugin::new(config)
-                .map(|plugin| Arc::new(plugin) as Arc<dyn StreamPlugin>)
-                .map_err(|_| "invalid stream/GeoIpLocation configuration"),
+            EdgionStreamPlugin::GeoIpLocation(_) => GeoIpLocationStreamPlugin::from_bound(
+                binding.geo_entry(index).ok_or("invalid owning Geo IP reference")?,
+            )
+            .map(|plugin| Arc::new(plugin) as Arc<dyn StreamPlugin>)
+            .map_err(|_| "invalid stream/GeoIpLocation configuration"),
         }
     }
 

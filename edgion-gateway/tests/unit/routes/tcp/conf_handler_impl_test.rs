@@ -304,7 +304,7 @@ fn invalid_source_withdraws_units_listener_and_publication_and_repairs_bare_key(
         )]));
         publisher.replace_stream_plugins(HashMap::from([("default/policy".into(), Arc::new(serde_json::from_value(json!({
             "metadata": {"name": "policy", "namespace": "default"},
-            "spec": {"plugins": [{"type": "IpRestriction", "config": {"ipSource": "DirectPeerIp", "deny": [{"name": "blocked", "cidrs": ["192.0.2.0/24"]}]}}]}
+            "spec": {"plugins": [{"type": "IpRestriction", "config": {"denyRefs": [{"name": "blocked-networks"}]}}]}
         })).unwrap()))]));
         assert_eq!(publisher.snapshot().stats().stream_cached_entries, 0);
         let managers = GlobalTcpRouteManagers::new();

@@ -24,10 +24,8 @@ config:
   profiles:
     main:
       defaultAction: deny
-      allow:
+      allowRefs:
         - name: office
-          cidrs:
-            - "10.0.0.0/8"
 "#;
     let p: EdgionStreamPlugin = serde_yaml::from_str(yaml).unwrap();
     assert_eq!(p.type_name(), "GlobalConnectionIpRestriction");
@@ -50,10 +48,8 @@ config:
   profiles:
     default:
       defaultAction: deny
-      allow:
+      allowRefs:
         - name: loopback
-          cidrs:
-            - "127.0.0.0/8"
   activeProfileRef:
     name: gcir-active
     namespace: edgion-test

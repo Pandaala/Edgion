@@ -116,15 +116,7 @@ edgion-gateway/src/plugins/stream/
 
 ### 2. Define or reuse the configuration struct
 
-The current `IpRestriction` reuses `IpRestrictionConfig` from the HTTP plugin side directly:
-
-- [../../../edgion-resources/src/resources/edgion_plugins/plugin_configs/](../../../edgion-resources/src/resources/edgion_plugins/plugin_configs/)
-
-`IpRestrictionConfig` supports both inline rules (`allowlist`/`denylist`) and references to central
-`IpList` EdgionConfigData objects via `allowRefs`/`denyRefs` (`Option<Vec<EdgionConfigDataRef>>`).
-The gateway merges referenced IpLists into the same allow/deny pools as inline entries; a missing or
-disabled referenced IpList causes the `allowRef` to fail closed (deny-all). The L4 variant is defined in
-`edgion-resources/src/resources/edgion_stream_plugins/connection_ip_restriction_rules.rs`.
+Stage 1 IpRestriction uses `ConnectionIpRestrictionRules`; TLS-route IpRestriction reuses HTTP `IpRestrictionConfig`. Both embed the canonical reference-only ACL set (`allowRefs`/`denyRefs`). Cold construction borrows the actual owning field, validates source/slot/domain permission proof, and creates a shared `CompiledIpAcl` with ordered keys. One decision-local ConfigData snapshot supplies lazy matcher references; unavailable ACL sources are omitted. A nonempty authored allow side preserves whitelist intent even when every target is unavailable. No plugin owns CIDRs or local matchers.
 
 **Cross-namespace `allowRefs`/`denyRefs`:** when the referenced IpList EdgionConfigData is in a
 different namespace, a Gateway-API `ReferenceGrant` must exist in the target namespace granting
@@ -254,22 +246,32 @@ Only `spec.plugins` applies because UDP has no TLS stage.
 
 ```yaml
 apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: example-tcp-allow-localhost-allow-1
+  namespace: edgion-test
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: localhost
+        description: Local development clients
+        cidrs:
+        - 127.0.0.1/32
+---
+apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:
   name: tcp-allow-localhost
   namespace: edgion-test
 spec:
   plugins:
-    - type: IpRestriction
-      config:
-        allow:
-          - name: localhost
-            description: Local development clients
-            cidrs:
-              - 127.0.0.1/32
-        # allowRefs: reference a central IpList EdgionConfigData (merged into the allow pool)
-        # allowRefs:
-        #   - name: corp-allowlist   # namespace defaults to edgion-test
+  - type: IpRestriction
+    config:
+      allowRefs:
+      - name: example-tcp-allow-localhost-allow-1
+        namespace: edgion-test
 ```
 
 ### Reference it from a Gateway
@@ -300,18 +302,32 @@ resource above. The route annotation uses the same name-resolution syntax.
 
 ```yaml
 apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: example-tls-allow-localhost-allow-2
+  namespace: edgion-test
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: localhost
+        cidrs:
+        - 127.0.0.1/32
+---
+apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:
   name: tls-allow-localhost
   namespace: edgion-test
 spec:
   tlsRoutePlugins:
-    - type: IpRestriction
-      config:
-        allow:
-          - name: localhost
-            cidrs: ["127.0.0.1/32"]
-        defaultAction: deny
+  - type: IpRestriction
+    config:
+      defaultAction: deny
+      allowRefs:
+      - name: example-tls-allow-localhost-allow-2
+        namespace: edgion-test
 ```
 
 ```yaml

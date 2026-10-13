@@ -76,12 +76,19 @@ impl RequestRestriction {
         config: &RequestRestrictionConfig,
         body_requirement: Option<BodyRequirement>,
     ) -> Box<dyn RequestFilter> {
+        Self::with_ip(config, body_requirement, None)
+    }
+    pub(crate) fn with_ip(
+        config: &RequestRestrictionConfig,
+        body_requirement: Option<BodyRequirement>,
+        ip: Option<&crate::plugins::runtime::conditions::ip_refs::IpConditionCompiler<'_>>,
+    ) -> Box<dyn RequestFilter> {
         // Clone and validate the config to compile regex patterns. The caller's
         // generation can then be released while the compiled condition set owns
         // the runtime material it needs.
         let mut validated_config = config.clone();
         let config_valid = validated_config.validate().is_ok();
-        let conditions = CompiledConditionSet::new(&validated_config.conditions, "conditions", body_requirement);
+        let conditions = CompiledConditionSet::with_ip(&config.conditions, "conditions", body_requirement, ip);
         let policy = if config_valid {
             let allow_mode = validated_config.allow_mode();
             if !allow_mode && conditions.has_unresolved_refs() {

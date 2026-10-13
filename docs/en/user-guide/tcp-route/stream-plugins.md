@@ -50,8 +50,8 @@ Stage-1-only resource fails closed. See the [TLSRoute stage contract](../../dev-
 
 | Type | Config object | Description |
 |------|---------------|-------------|
-| `IpRestriction` | inline rules | IP allow/deny groups embedded directly in the plugin. |
-| `GlobalConnectionIpRestriction` | inline config + optional `activeProfileRef` | Full IP rule set (named `profiles`) inline in the plugin; an optional `Selector` EdgionConfigData hot-swaps **which profile is active**. Center-managed and synced across Controllers. |
+| `IpRestriction` | IpList references | Ordered allow/deny references to central named IpList groups. |
+| `GlobalConnectionIpRestriction` | inline config + optional `activeProfileRef` | Named reference-only `profiles` in the plugin; an optional `Selector` EdgionConfigData hot-swaps **which profile is active**. Center-managed and synced across Controllers. |
 | `ConnectionRateLimit` | `config` object | Local per-listener protection with optional Redis shared limits. Gateway attachments run before TLS; UDPRoute attachments apply to new-session admission. See the [ConnectionRateLimit section](#connectionratelimit-connection-and-udp-session-rate-limiting) below. |
 
 Each entry under `spec.plugins` has an optional `enable` flag (default `true`),
@@ -61,36 +61,33 @@ a `type`, and a `config` object.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `allow` | Array\<Object\> | none | Allow groups; each is `{name, cidrs}`. A non-empty `allow` turns on whitelist mode. |
-| `deny` | Array\<Object\> | none | Deny groups; each is `{name, cidrs}`. Evaluated before `allow`. |
 | `allowRefs` | Array\<Object\> | none | References to central `IpList` EdgionConfigData whose CIDRs merge into the allowlist. Each ref is `{name, namespace?}`; `namespace` defaults to the parent `EdgionStreamPlugins` namespace. Configuring any `allowRefs` puts the plugin in whitelist mode. A missing or disabled IpList fails closed (deny-all) and is reported via `ResolvedRefs=False`. |
 | `denyRefs` | Array\<Object\> | none | Same as `allowRefs` but merges into the denylist. A missing or disabled IpList under-blocks (still reported via `ResolvedRefs=False`). |
 | `defaultAction` | Enum | `allow` | Action when no rule matches. Allowed values: `allow` \| `deny`. |
 
-At least one of `allow`/`deny` or `allowRefs`/`denyRefs` must be non-empty.
+At least one of `allowRefs`/`denyRefs` must be nonempty. Removed inline `allow` or `deny` presence, including null/empty values, is invalid.
 
 #### Group sub-fields
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `name` | String | **Required** | Group name, unique within the plugin (admin label only). |
+| `name` | String | **Required** | Group name, unique within the referenced IpList (admin label only). |
 | `cidrs` | Array\<String\> | **Required** | CIDR strings or bare IPs (bare IPs become `/32` or `/128`). |
 | `description` | String | none | Optional human-readable note. |
 
-Evaluation order: `deny` first, then `allow`, then `defaultAction`. For raw TCP
+Evaluation order: ordered `denyRefs` first, then ordered `allowRefs`, then `defaultAction`. Each source preserves its own longest-prefix matching; valid siblings remain usable when another source is unavailable. For raw TCP
 a denied connection is simply closed (no protocol-level response exists at L4).
 
 ### `GlobalConnectionIpRestriction` config
 
-This plugin carries its **complete** IP rule set inline (git-owned). The only
-hot-swappable input is *which profile is active*, supplied by an optional
+This plugin owns named reference-only profiles (git-owned). IpList content changes are live; profile selection is separately supplied by an optional
 `Selector` EdgionConfigData referenced via `activeProfileRef`.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enable` | Boolean | **Required** | Kill switch. `false` disables the plugin (all connections allowed). |
 | `activeProfile` | String | **Required** | Default active profile name; must exist in `profiles`. |
-| `profiles` | Map\<String, Object\> | **Required** | Named rule sets. Each profile is `{ defaultAction, allow?, deny?, allowRefs?, denyRefs? }` (same group shape as `IpRestriction`). Each profile may also reference central IpLists via per-profile `allowRefs`/`denyRefs` (distinct from `activeProfileRef`, which selects which profile is active, not an IpList). |
+| `profiles` | Map\<String, Object\> | **Required** | Named rule sets. Each profile is `{ defaultAction, allowRefs?, denyRefs? }` (same reference shape as `IpRestriction`). Each profile may also reference central IpLists via per-profile `allowRefs`/`denyRefs` (distinct from `activeProfileRef`, which selects which profile is active, not an IpList). |
 | `description` | String | none | Optional human-readable note. |
 | `activeProfileRef.name` | String | none | Optional. Name of a `Selector` EdgionConfigData that overrides which profile is active. |
 | `activeProfileRef.namespace` | String | parent ESP namespace | Namespace of the Selector; inherited from the parent `EdgionStreamPlugins` if omitted. |
@@ -102,11 +99,25 @@ wrong type, `active: null`, or an unknown profile name — the plugin falls back
 inline `activeProfile` (**fail-to-base**). A selector can only switch among the
 git-owned profiles; it can never inject rules or disable the plugin.
 
-## Quick start (inline IpRestriction)
+## Quick start (reference-only IpRestriction)
 
 ### Step 1: Define the plugin
 
 ```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: example-tcp-ip-restriction-allow-allow-1
+  namespace: edgion-test
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: allowed-clients
+        cidrs:
+        - 10.0.0.0/8
+---
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:
@@ -114,13 +125,12 @@ metadata:
   namespace: edgion-test
 spec:
   plugins:
-    - type: IpRestriction
-      config:
-        allow:
-          - name: allowed-clients
-            cidrs:
-              - "10.0.0.0/8"          # internal network only
-        defaultAction: deny           # reject everything not allowed
+  - type: IpRestriction
+    config:
+      defaultAction: deny
+      allowRefs:
+      - name: example-tcp-ip-restriction-allow-allow-1
+        namespace: edgion-test
 ```
 
 ### Step 2: Reference it from the route
@@ -154,11 +164,39 @@ Only clients in `10.0.0.0/8` can now reach the Redis service.
 
 ## Center-managed active profile (GlobalConnectionIpRestriction)
 
-Author the **full** rule set once, inline in the plugin (git-owned, reviewed). Then
+Author named reference-only profiles in the plugin and CIDR groups in IpLists (git-owned, reviewed). Then
 let Center sync a small `Selector` EdgionConfigData that picks **which profile is
 active** across multiple Controllers — without ever shipping the rules themselves.
 
 ```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: example-gcir-stream-allow-2
+  namespace: edgion-test
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: office
+        cidrs:
+        - 10.0.0.0/8
+---
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: example-gcir-stream-allow-3
+  namespace: edgion-test
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: any
+        cidrs:
+        - 0.0.0.0/0
+---
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:
@@ -166,24 +204,23 @@ metadata:
   namespace: edgion-test
 spec:
   plugins:
-    - type: GlobalConnectionIpRestriction
-      config:
-        enable: true                    # kill switch (false disables the plugin)
-        activeProfile: locked           # git-default profile (safe)
-        profiles:
-          locked:
-            defaultAction: deny
-            allow:
-              - name: office
-                cidrs: ["10.0.0.0/8"]
-          open:
-            defaultAction: deny
-            allow:
-              - name: any
-                cidrs: ["0.0.0.0/0"]
-        activeProfileRef:               # optional: hot-swap the active profile
-          name: gcir-active
-          # namespace omitted: inherits parent ESP namespace (edgion-test)
+  - type: GlobalConnectionIpRestriction
+    config:
+      enable: true
+      activeProfile: locked
+      profiles:
+        locked:
+          defaultAction: deny
+          allowRefs:
+          - name: example-gcir-stream-allow-2
+            namespace: edgion-test
+        open:
+          defaultAction: deny
+          allowRefs:
+          - name: example-gcir-stream-allow-3
+            namespace: edgion-test
+      activeProfileRef:
+        name: gcir-active
 ---
 apiVersion: edgion.io/v1
 kind: EdgionConfigData
@@ -195,8 +232,8 @@ spec:
   data:
     type: Selector
     config:
-      active: open                      # switch to "open"; null/absent → base default (locked)
-      description: "temporarily widen access"
+      active: open
+      description: temporarily widen access
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: TCPRoute
@@ -204,15 +241,15 @@ metadata:
   name: gcir-route
   namespace: edgion-test
   annotations:
-    edgion.io/edgion-stream-plugins: "edgion-test/gcir-stream"
+    edgion.io/edgion-stream-plugins: edgion-test/gcir-stream
 spec:
   parentRefs:
-    - name: stream-gateway
-      sectionName: tcp-redis
+  - name: stream-gateway
+    sectionName: tcp-redis
   rules:
-    - backendRefs:
-        - name: redis-primary
-          port: 6379
+  - backendRefs:
+    - name: redis-primary
+      port: 6379
 ```
 
 To widen or tighten access you switch `active` to a different **pre-authored**
@@ -275,23 +312,49 @@ out one address. Group names are arbitrary labels used only for organization.
 
 ```yaml
 apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: example-carve-out-allow-4
+  namespace: edgion-test
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: internal
+        cidrs:
+        - 10.0.0.0/8
+---
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: example-carve-out-deny-5
+  namespace: edgion-test
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: quarantine
+        cidrs:
+        - 10.6.6.6/32
+---
+apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:
   name: carve-out
   namespace: edgion-test
 spec:
   plugins:
-    - type: IpRestriction
-      config:
-        allow:
-          - name: internal
-            cidrs:
-              - "10.0.0.0/8"
-        deny:
-          - name: quarantine
-            cidrs:
-              - "10.6.6.6/32"        # blocked even though it is inside 10.0.0.0/8
-        defaultAction: deny
+  - type: IpRestriction
+    config:
+      defaultAction: deny
+      allowRefs:
+      - name: example-carve-out-allow-4
+        namespace: edgion-test
+      denyRefs:
+      - name: example-carve-out-deny-5
+        namespace: edgion-test
 ```
 
 ## ConnectionRateLimit: connection and UDP session rate limiting

@@ -336,3 +336,113 @@ async fn parameters_recover_after_target_removal_and_recreation() {
     deployment.drain_class().await;
     deployment.assert_class(true);
 }
+
+#[tokio::test]
+async fn global_real_ip_shared_acceptance_is_independent_of_local_data_and_validation_policy() {
+    const CHILD: &str = "EDGION_B3_REAL_IP_STATUS_CHILD";
+    const TEST: &str = "conf_mgr::sync_runtime::resource_processor::handlers::gateway_class::status_tests::global_real_ip_shared_acceptance_is_independent_of_local_data_and_validation_policy";
+    if std::env::var_os(CHILD).is_none() {
+        let mut reports = Vec::new();
+        for enabled in ["true", "false"] {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", TEST, "--nocapture"])
+                .env(CHILD, enabled)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{} {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            let report = stdout
+                .split("B3_STATUS_REPORT:")
+                .nth(1)
+                .expect("child executed exact status test")
+                .lines()
+                .next()
+                .unwrap();
+            reports.push(serde_json::from_str::<serde_json::Value>(report).unwrap());
+        }
+        assert_eq!(reports[0]["accepted"], reports[1]["accepted"]);
+        assert_ne!(reports[0]["scopes"], reports[1]["scopes"]);
+        return;
+    }
+    use edgion_resources::resources::edgion_plugins::ip_reference_set::IpReadScope;
+    use std::collections::{HashMap, HashSet};
+    let enabled = std::env::var(CHILD).unwrap() == "true";
+    let mut process_config = crate::config::EdgionControllerConfig::default();
+    process_config.validation.enable_reference_grant_validation = enabled;
+    crate::config::init_controller_config(process_config);
+    assert_eq!(crate::config::is_reference_grant_validation_enabled(), enabled);
+    let first = Arc::new(ControllerRuntime::default());
+    let second = Arc::new(ControllerRuntime::default());
+    let mut accepted = None;
+    let mut scopes = Vec::new();
+    for (runtime, visibility) in [(&first, Some("Cluster")), (&second, Some("Namespace")), (&second, None)] {
+        let incoming = visibility.map(|visibility| {
+            let data = serde_json::from_value(serde_json::json!({
+                "metadata": {"name": "proxies", "namespace": "ops"},
+                "spec": {"visibility": visibility, "data": {"type": "IpList", "config": {"items": [{"name": "private", "cidrs": ["10.0.0.0/8"]}]}}}
+            })).unwrap();
+            HashMap::from([("ops/proxies".into(), data)])
+        }).unwrap_or_default();
+        runtime
+            .edgion_config_data_store
+            .update(HashMap::new(), &HashSet::from(["ops/proxies".into()]));
+        runtime.edgion_config_data_store.update(incoming, &HashSet::new());
+        let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime.clone());
+        let mut owner: EdgionGatewayConfig = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "shared-trust", "generation": 1}, "spec": {"realIp": {"trustedIpRefs": [{"name": "proxies", "namespace": "ops"}]}}
+        })).unwrap();
+        let handler = EdgionGatewayConfigHandler::new();
+        let errors = handler.preparse(&mut owner, &ctx);
+        assert!(errors.is_empty());
+        let crate::conf_mgr::sync_runtime::resource_processor::ProcessResult::Continue(mut owner) =
+            handler.parse(owner, &ctx).await
+        else {
+            panic!("intrinsically valid EGC must publish");
+        };
+        handler.update_status(&mut owner, &ctx, &errors);
+        let conditions = &owner.status.as_ref().unwrap().conditions;
+        assert!(conditions.iter().all(|condition| condition.type_ != "ResolvedRefs"));
+        let condition = conditions
+            .iter()
+            .find(|condition| condition.type_ == "Accepted")
+            .unwrap();
+        let current = serde_json::json!([condition.status, condition.reason, condition.message]);
+        assert_eq!(condition.status, "True");
+        if let Some(previous) = &accepted {
+            assert_eq!(previous, &current);
+        } else {
+            accepted = Some(current);
+        }
+        let scope = owner
+            .spec
+            .real_ip
+            .as_ref()
+            .unwrap()
+            .trusted
+            .resolved_refs
+            .as_ref()
+            .unwrap()
+            .slots[0]
+            .scope;
+        assert_eq!(
+            scope,
+            if !enabled {
+                IpReadScope::ValidationDisabled
+            } else if visibility == Some("Namespace") {
+                IpReadScope::Denied
+            } else {
+                IpReadScope::ClusterOnly
+            }
+        );
+        scopes.push(scope);
+    }
+    println!(
+        "B3_STATUS_REPORT:{}",
+        serde_json::json!({"accepted": accepted.unwrap(), "scopes": scopes})
+    );
+}

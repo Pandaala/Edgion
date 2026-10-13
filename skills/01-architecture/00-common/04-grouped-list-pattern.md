@@ -44,16 +44,18 @@ Closed cases (do not reopen without new requirement): see the "Closed: not group
 - **Cross-group duplicate items**: use **first-wins** (groups are iterated in array order) and emit a `tracing::warn!` carrying both the *existing* and *incoming* group plus the offending item identifier (`secret_key`, `iss`, `cidr`, …). Rationale: grouping is a management / audit aid, **not** a tenant isolation primitive — a single misconfigured partner Secret must not take the whole plugin down. **Forbidden**: fail-fast (kills the resource) and last-wins (order-dependent, operator-unpredictable).
 - Cross-group uniqueness validation reuses the helper pattern in `validate_groups_structure` (see `edgion-resources/src/matcher/ip_cidr_helpers.rs`); abstract a `HashSet`-based helper rather than re-implementing per plugin.
 
-### 3.1 Partial-good compilation (IpList and inline IP lists)
+### 3.1 Central IpList partial-good compilation
 
-`IpList` EdgionConfigData and the inline `allow`/`deny` groups on `IpRestriction` plugins (HTTP, L4 `ConnectionIpRestriction`, GCIR `ProfileRules`, TLS-route `IpRestriction`) use a **partial-good** compilation path instead of the strict all-or-nothing helper:
+ARCH-028 intentionally replaces HTTP/global RealIp inline trust groups with `trustedIpRefs`. These consumers reuse the central IpList partial-good matcher: valid entries remain usable, invalid entries are excluded, and empty/all-invalid matchers trust nothing. Every referenced list must be available before any effective peer or forwarded hop is trusted; otherwise the whole trust decision falls back to the effective peer. RealIp has no local CIDR compiler. The strict/partial helper distinction below remains binding for other callers.
+
+Only IpList EdgionConfigData owns business CIDR groups and their partial-good compilation. HTTP/L4/TLS IpRestriction and GCIR ProfileRules contain ordered references; their cold plans borrow the actual owner and retain only authorized keys and scalar policy.
 
 | Helper | Path | Used by |
 |--------|------|---------|
-| `validate_groups_structure` | Strict: any bad entry → `Err`, callers typically set `Accepted=False` | `real_ip::trusted_ips` (strict/all-or-nothing; intentional) |
+| `validate_groups_structure` | Strict: any bad entry → `Err`, callers typically set `Accepted=False` | Explicit strict admission callers; RealIp no longer owns inline groups |
 | `build_grouped_matcher` | Strict: same, builds matcher only if all entries valid | Current strict callers that must treat a partial group as invalid |
-| `collect_entry_errors(groups) -> Vec<EntryError>` | Partial-good: returns per-entry errors without aborting | Controller `update_status` for `PartiallyInvalid` condition; gateway metric gate |
-| `build_grouped_matcher_partial(groups) -> (IpRadixMatcher, Vec<EntryError>)` | Partial-good: skips bad entries, builds matcher from valid ones | `validate_and_init` for all IP-restriction inline lists; `IpList` gateway index build |
+| `collect_entry_errors(groups) -> Vec<EntryError>` | Partial-good: returns per-entry errors without aborting | IpList Controller `update_status` for its `PartiallyInvalid` condition |
+| `build_grouped_matcher_partial(groups) -> (IpRadixMatcher, Vec<EntryError>)` | Partial-good: skips bad entries, builds matcher from valid ones | Central IpList gateway index build |
 
 **Skipped entry categories** (as produced by `collect_entry_errors`):
 - Invalid CIDR string (parse failure)
@@ -62,16 +64,16 @@ Closed cases (do not reopen without new requirement): see the "Closed: not group
 - Duplicate group name: **keep-first** (same keep-first rule)
 - Invalid group name (violates `validate_group_name` charset/length)
 
-**Empty `items` is valid**: an `IpList` with `items: []` compiles to an empty matcher (no entries). This is distinct from a missing `allow`/`deny` field.
+**Empty `items` is valid**: an `IpList` with `items: []` compiles to an empty matcher (no entries). ACL configuration separately requires at least one nonempty reference side. Authored allow intent remains a whitelist even if all referenced sources are unavailable.
 
 **Controller surface**: the controller calls `collect_entry_errors` in `update_status` and writes a `PartiallyInvalid` condition (`status=True`, `reason=RuleInvalid`, message listing the bad entries) when any errors exist; `status=False`/`reason=AllRulesValid` when clean. `Accepted` stays `True` — partial-good entries are admitted.
 
-**Gateway metric**: a skipped inline **deny** entry increments `edgion_ip_deny_entries_skipped_total{scope="http"|"stream_l4"|"tls_route"}` (IpRestriction HTTP/L4/TLS-route only; GCIR per-profile deny is not metered by this counter — it uses `record_conn_ip_restriction_event`). A blacklist hole is the fail-open direction, so it gets a loud counter. Skipped **allow** entries are not metered (over-blocking is the safe direction).
+**Gateway ownership**: only the central IpList index compiles CIDRs. The former consumer-side skipped-inline-deny counter is removed. ACL consumers retain ordered references and scalar policy; unavailable references are omitted without changing authored allow intent.
 
 ## 4. Gateway runtime / observability contract
 
 - **Hit branch** (`Allow` / `OK`): `PluginLog` must include `group=<name>`. Follow the `<verb>:group=<name>` shape that IpRestriction uses (`allow:group=<name>`, `deny:group=<name>`, `deny:default`, `deny:not-in-allow`) so existing log parsers keep working.
-- **Failure / anonymous branch** (`Deny *`, `Allow anon`): **must not** include `group=`. Leaking the group on a failed credential lets an attacker enumerate multi-tenant topology by brute-forcing keys. This is an iron rule; every grouping plugin records it as `skills/04-review/<plugin>/group-in-ok-log.md`.
+- **Failure / anonymous branch** (`Deny *`, `Allow anon`): **must not** include credential `group=`. The explicit IP ACL exception retains deny-group attribution: [ACL deny logs](../../04-review/ip-restriction/mandatory-design/group-name-in-deny-log.md). Leaking the group on a failed credential lets an attacker enumerate multi-tenant topology by brute-forcing keys. This is an iron rule; every grouping plugin records it as `skills/04-review/<plugin>/group-in-ok-log.md`.
 - **Tracing forbidden on the data plane**: all attribution signal on the gateway path goes through `PluginLog`, access-log diagnostics, or Prometheus metrics. `tracing::warn!/error!/info!` is reserved for the controller (resolution path, duplicate warnings). See [`../../03-coding/01-log-safety.md`](../../03-coding/01-log-safety.md) iron rule 3.
 
 ## 5. Access-log skill must be updated in the same PR

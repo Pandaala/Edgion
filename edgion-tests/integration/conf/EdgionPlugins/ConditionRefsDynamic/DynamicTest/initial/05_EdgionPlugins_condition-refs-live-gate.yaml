@@ -1,0 +1,16 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: condition-refs-live-gate
+  namespace: edgion-default
+spec:
+  requestPlugins:
+  - type: Mock
+    config:
+      statusCode: 418
+    conditions:
+      run:
+        allOf:
+        - type: directPeerIpMatch
+          ipRefs:
+          - name: condition-refs-live-ips

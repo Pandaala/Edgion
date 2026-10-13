@@ -12,9 +12,8 @@ spec:
   forwardedHeaders:
     remoteIpHeader: X-Edgion-Remote-IP
   realIp:
-    trustedIps:
-      - name: peer-gateways
-        cidrs:
-          - "127.0.0.0/8"
+    trustedIpRefs:
+      - name: chain-realip-proxies
+        namespace: edgion-test
     realIpHeader: X-Forwarded-For
     recursive: true

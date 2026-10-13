@@ -425,7 +425,7 @@ Do not add another cache implementation or broaden TinyUFO usage without documen
     skills/01-architecture/02-gateway/12-edgion-plugin-dev.md.
 11. Access policy is expressed as **allow/deny lists plus `defaultAction`**.
     Whitelist behaviour is implied by configuring an allow list (see
-    `IpRestrictionConfig::allow_mode`); anything unmatched falls to
+    `IpAclReferenceSet::allow_mode`); anything unmatched falls to
     `defaultAction`.
 12. Two client IPs, never conflated. **`DirectPeerIp`** is the physical transport
     peer observed before inbound PROXY protocol or HTTP forwarded-header
@@ -440,6 +440,19 @@ Do not add another cache implementation or broaden TinyUFO usage without documen
     `direct_peer_ip` and `remote_ip`; protocol-specific logs follow the same
     vocabulary.
 13. Request condition predicates reuse the shared `Condition`/`ConditionSet`; a container field name must state how its elements combine. Do not add a plugin-local request predicate enum, Include/Exclude, RestrictionSource, or wildcard values. Configuration-only WAF rule-metadata selection has one canonical implementation in the external-only `edgion-waf` leaf; it has no request bindings or request-time evaluation. Importing crates must not implement another static WAF selector.
+
+### Plugin IP list ownership
+
+Business IP/CIDR collections belong to `EdgionConfigData` `IpList`, organized as
+named `IpGroup`s. Plugin IP-list fields use references only; reuse centrally
+compiled matchers, with no inline copies, Controller CIDR expansion, or size-based
+merge threshold. Keep each consumer's policy, authorization, ordering and failure
+semantics, including global RealIp. Controller passive dependency/status observation
+is distinct from executable read authority; clear imported proofs before rebinding.
+Scalar addresses,
+DSL/WAF language operators, frozen inbound PROXY trust and the Controller Admin API
+startup TCP-peer allowlist are separate boundaries.
+See the [canonical IP ownership contract](skills/01-architecture/00-common/05-unification-points.md#9-ipcidr-matching--unified).
 
 ## Git constraints
 

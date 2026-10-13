@@ -1,16 +1,16 @@
 use super::update_identity_tests::make_fs_state;
 use super::*;
 
-/// `config.denys` is a typo for `config.deny` on `IpRestrictionConfig`.
+/// `config.denyRefss` is a typo for `config.denyRefs` on `IpRestrictionConfig`.
 fn plugins_body_with_typo(name: &str, namespace: &str) -> Bytes {
     Bytes::from(format!(
-        r#"{{"apiVersion":"edgion.io/v1","kind":"EdgionPlugins","metadata":{{"name":"{name}","namespace":"{namespace}"}},"spec":{{"requestPlugins":[{{"type":"IpRestriction","config":{{"defaultAction":"allow","denys":[]}}}}]}}}}"#
+        r#"{{"apiVersion":"edgion.io/v1","kind":"EdgionPlugins","metadata":{{"name":"{name}","namespace":"{namespace}"}},"spec":{{"requestPlugins":[{{"type":"IpRestriction","config":{{"defaultAction":"allow","denyRefss":[]}}}}]}}}}"#
     ))
 }
 
 fn plugins_body_clean(name: &str, namespace: &str) -> Bytes {
     Bytes::from(format!(
-        r#"{{"apiVersion":"edgion.io/v1","kind":"EdgionPlugins","metadata":{{"name":"{name}","namespace":"{namespace}"}},"spec":{{"requestPlugins":[{{"type":"IpRestriction","config":{{"defaultAction":"allow","deny":[]}}}}]}}}}"#
+        r#"{{"apiVersion":"edgion.io/v1","kind":"EdgionPlugins","metadata":{{"name":"{name}","namespace":"{namespace}"}},"spec":{{"requestPlugins":[{{"type":"IpRestriction","config":{{"defaultAction":"allow","denyRefs":[]}}}}]}}}}"#
     ))
 }
 
@@ -46,11 +46,11 @@ async fn create_with_typo_is_not_rejected_and_carries_warning() {
         StatusCode::CREATED,
         "warn-not-reject: the write must still succeed"
     );
-    assert_eq!(body.0.warnings, vec!["requestPlugins[0].config.denys".to_string()]);
+    assert_eq!(body.0.warnings, vec!["requestPlugins[0].config.denyRefss".to_string()]);
 
     let serialized = serde_json::to_value(&body.0).expect("ApiResponse must serialize");
     assert_eq!(
-        serialized["warnings"][0], "requestPlugins[0].config.denys",
+        serialized["warnings"][0], "requestPlugins[0].config.denyRefss",
         "the finding must also be visible in the serialized payload"
     );
 }
@@ -100,7 +100,7 @@ async fn update_with_typo_is_not_rejected_and_carries_warning() {
     .await;
 
     let body = result.expect("a typo'd key must warn, never reject the update");
-    assert_eq!(body.0.warnings, vec!["requestPlugins[0].config.denys".to_string()]);
+    assert_eq!(body.0.warnings, vec!["requestPlugins[0].config.denyRefss".to_string()]);
 }
 
 #[tokio::test]

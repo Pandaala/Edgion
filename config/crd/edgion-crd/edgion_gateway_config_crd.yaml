@@ -106,28 +106,25 @@ spec:
                 # ============================================
                 realIp:
                   type: object
-                  description: "Real IP extraction configuration"
+                  x-kubernetes-preserve-unknown-fields: true
+                  description: "Real IP extraction through referenced IpLists; removed or unknown fields fail closed."
+                  required:
+                    - trustedIpRefs
                   properties:
-                    trustedIps:
+                    trustedIpRefs:
                       type: array
-                      description: "Trusted proxy IP groups. Each group carries a name (surfaced in debug logs) and a list of CIDRs."
+                      minItems: 1
+                      description: "Ordered trusted proxy IpLists. Global references require explicit namespaces and current Cluster visibility."
                       items:
                         type: object
                         required:
                           - name
-                          - cidrs
+                          - namespace
                         properties:
                           name:
                             type: string
-                            description: "Group name. <=63 chars, K8s label-value charset, unique within the list."
-                          description:
+                          namespace:
                             type: string
-                            description: "Optional human-readable description."
-                          cidrs:
-                            type: array
-                            description: "IP addresses or CIDR ranges (e.g., '10.0.0.0/8', '192.168.1.1')."
-                            items:
-                              type: string
                     realIpHeader:
                       type: string
                       description: "Header to extract real IP from (default: 'X-Forwarded-For')"

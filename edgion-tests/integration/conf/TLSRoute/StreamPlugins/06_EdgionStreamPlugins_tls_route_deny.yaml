@@ -9,10 +9,7 @@ spec:
   tlsRoutePlugins:
     - type: IpRestriction
       config:
-        deny:
-          - name: all
-            cidrs:
-              - "0.0.0.0/0"
-              - "::/0"
+        denyRefs:
+          - name: acl-tls-route-deny-all-deny-4353ab26de
         defaultAction: deny
         message: "Blocked by TLS route plugin (Stage 2)"

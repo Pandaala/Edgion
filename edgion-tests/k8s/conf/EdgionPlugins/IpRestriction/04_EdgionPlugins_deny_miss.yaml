@@ -10,9 +10,7 @@ spec:
     config:
       ipSource: RemoteIp
       defaultAction: allow
-      deny:
-      - name: blocked
-        cidrs:
-        - 127.0.0.1/32
+      denyRefs:
+        - name: acl-ip-restriction-deny-miss-deny-a361c57bab
       status: 403
       message: IP is blocked

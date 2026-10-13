@@ -18,16 +18,12 @@ spec:
         profiles:
           allow-local:
             defaultAction: deny
-            allow:
-              - name: loopback
-                cidrs:
-                  - "127.0.0.0/8"
+            allowRefs:
+              - name: acl-gcir-stream-plugins-allow-af75fff99c
           block-local:
             defaultAction: allow
-            deny:
-              - name: loopback-block
-                cidrs:
-                  - "127.0.0.0/8"
+            denyRefs:
+              - name: acl-gcir-stream-plugins-deny-59e25a3eea
         activeProfileRef:
           namespace: edgion-test
           name: gcir-enforce-test

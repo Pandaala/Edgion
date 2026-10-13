@@ -20,10 +20,8 @@ spec:
       config:
         ipSource: RemoteIp
         defaultAction: allow
-        deny:
-          - name: blocked-ranges
-            cidrs:
-              - "10.0.0.0/8"
+        denyRefs:
+          - name: acl-ecd-allow-refs-cross-ns-deny-4e9f106305
         allowRefs:
           - name: ecd-refgrant-blocklist
             namespace: edgion-default

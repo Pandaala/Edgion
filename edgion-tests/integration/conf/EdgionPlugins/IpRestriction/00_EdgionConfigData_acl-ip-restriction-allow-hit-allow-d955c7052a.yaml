@@ -1,0 +1,14 @@
+# Suite-owned IP collection for one authored ACL slot.
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: acl-ip-restriction-allow-hit-allow-d955c7052a
+  namespace: edgion-default
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: loopback
+        cidrs:
+        - 127.0.0.0/8

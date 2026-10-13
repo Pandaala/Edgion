@@ -53,6 +53,22 @@ Deleting a referenced EGC still follows existing plugin-scope admission denial.
 Reference EdgionGatewayConfig from a GatewayClass via `parametersRef`:
 
 ```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: default
+spec:
+  visibility: Cluster
+  data:
+    type: IpList
+    config:
+      items:
+      - name: private-ranges
+        cidrs:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+---
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
 metadata:
@@ -87,9 +103,9 @@ spec:
     attempts: 2
 
   realIp:
-    trustedIps:
-      - name: private-ranges
-        cidrs: ["10.0.0.0/8", "172.16.0.0/12"]
+    trustedIpRefs:
+      - name: realip-proxies-1
+        namespace: default
     realIpHeader: "X-Forwarded-For"
     recursive: true
 
@@ -232,19 +248,18 @@ number of upstream requests is `1 + attempts`. A route-level
 
 ### spec.realIp
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `trustedIps` | `Array<IpGroup>` | — (required when `realIp` is set) | List of trusted proxy IP groups; must be non-empty |
-| `realIpHeader` | `String` | `X-Forwarded-For` | Header from which to extract the real client IP. Must be a valid HTTP header field name (RFC 9110 `token` charset) of at most 256 bytes |
-| `recursive` | `Boolean` | `true` | Traverse the header right-to-left, skip trusted proxies, and take the first non-trusted IP |
+| Parameter | Default | Description |
+| --- | --- | --- |
+| `trustedIpRefs` | required | Nonempty ordered IpList references; every entry requires `name` and explicit `namespace` |
+| `realIpHeader` | `X-Forwarded-For` | Valid HTTP field name, at most 256 bytes |
+| `recursive` | `true` | Walk valid forwarded hops right-to-left; all-trusted chains return the leftmost parsed hop |
+| `maxTrustedHops` | unlimited | Recursive cap; 0 stops at the first trusted hop; ignored in nonrecursive mode |
 
-Each `trustedIps` entry is an `IpGroup` object: `name` (required; ≤63 chars, charset `[a-zA-Z0-9._-]`, must start/end alphanumeric, unique within the list), `description` (optional), and `cidrs` (required; non-empty list of IP or CIDR strings).
+Store IP/CIDR collections in the referenced IpList's `items` (IpGroups). Global EGC references require current `Cluster` visibility when ReferenceGrant validation is enabled; namespaced grants and the outbound TLS administrative exemption do not authorize this trust policy. Validation-disabled resolution still checks identity, type and enabled state.
 
-Extraction logic: walk `realIpHeader` from right to left, skip addresses in any `trustedIps` group, and return the first non-trusted IP.
+All references must be available before trusting the PROXY-effective peer or any forwarded hop. Missing, disabled, denied or wrong-type lists use the peer for that decision. One ConfigData snapshot covers all hops; content, visibility, deletion and restoration affect new decisions without copying CIDRs or rebuilding listeners. The central IpList compiler retains valid entries and excludes invalid ones; empty/all-invalid matchers trust no addresses.
 
-`spec.realIp` is validated at ingest with the same rules as the RealIp plugin. An empty `trustedIps`, a malformed or duplicated CIDR, an `IpGroup` name outside the label-value charset, or a `realIpHeader` that is not a valid HTTP header field name makes the resource report `Accepted=False` with `reason=Invalid`. On the Kubernetes path the API server rejects a malformed `realIpHeader` outright, since the CRD carries the header-name `pattern` and `maxLength`.
-
-Controller preparse warns rather than refusing to publish, so the Gateway applies the same check as a backstop: when `spec.realIp` is invalid it logs an error and runs with real-IP extraction disabled, exactly as if `realIp` were unset. Note that `RealIpExtractor` itself is forgiving about individual CIDRs (it skips invalid entries with a warning), so a CIDR mistake that previously degraded silently now invalidates the whole `realIp` block.
+Intrinsic errors in a typed, published configuration report `Accepted=False` and disable global extraction. Kubernetes required/minItems/namespace/header constraints may reject the update at API admission instead; that rejected update never reaches the Controller/Gateway and the previous admitted generation remains active. Removed inline `trustedIps` or unknown mixed keys survive narrow preservation and invalidate typed publication. Narrow CRD preservation allows typed invalid input to replace a previously valid runtime instead of silently pruning the old field. Clean publication restores extraction. Shared EGC status describes intrinsic structure only; deployment-local list availability adds no shared condition. Nonrecursive resolution uses the rightmost parsed hop if untrusted, otherwise the peer.
 
 ### spec.securityProtect
 
@@ -394,14 +409,28 @@ mirrors use the current Service override or global default at each selection.
 When Gateway is deployed behind a load balancer, configure trusted proxy IPs to correctly extract the client's real IP:
 
 ```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: default
 spec:
-  realIp:
-    trustedIps:
+  visibility: Cluster
+  data:
+    type: IpList
+    config:
+      items:
       - name: private-ranges
         cidrs:
-          - "10.0.0.0/8"
-          - "172.16.0.0/12"
-          - "192.168.0.0/16"
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+---
+spec:
+  realIp:
+    trustedIpRefs:
+      - name: realip-proxies-1
+        namespace: default
     realIpHeader: "X-Forwarded-For"
     recursive: true
 ```

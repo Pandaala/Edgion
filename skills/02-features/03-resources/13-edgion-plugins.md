@@ -86,11 +86,11 @@ runtime before its body reads, not at cross-resource publication. See
 |------|-------------|
 | `Cors` | CORS cross-origin resource sharing |
 | `Csrf` | CSRF protection |
-| `IpRestriction` | IP allow/deny list (CIDR supported). Inline `allow`/`deny` groups are **partial-good**: a bad CIDR entry is skipped (not fatal); the plugin loads with the valid entries. Bad entries surface as a `PartiallyInvalid` status condition (reason `RuleInvalid`); `Accepted` stays `True`. A skipped inline deny entry also increments `edgion_ip_deny_entries_skipped_total{scope="http"}`. |
+| `IpRestriction` | Reference-only ordered `allowRefs`/`denyRefs` to central IpLists. CIDRs and named groups live only in IpList `items`; central partial-good compilation preserves valid entries. Unavailable ACL references are omitted, preserving authored whitelist intent and valid siblings. Removed inline `allow`/`deny` presence is invalid. |
 | `RequestRestriction` | Request restrictions (header/body match rules). Geo matching is not part of this plugin — combine it with `GeoIpLocation` (below) as a separate, ordered plugin-list entry instead. |
 | `RequestBodyBuffer` | Explicitly populate the shared request-body cache for later-stage consumers |
 | `RequestAccessPolicy` | L7 named-profile access policy with independent `DirectPeerIp`/`RemoteIp` branches, IP-first and exact-host/path-first rules, bounded `anyOf`/`allOf` conditions, Secret/HMAC checks, and fail-closed Selector/IpList hot references. Its `hmacAuth` condition uses the strict match-only `HmacMatchConfig`; ordinary auth failures are non-matches, while non-forwardable body failures terminate evaluation. Geo matching is not part of this plugin — see `GeoIpLocation` below. |
-| `GeoIpLocation` | Country/continent/city/subdivision (and CIDR) matching backed by the gateway's process-wide GeoIP provider, shared verbatim between this HTTP registration and the `EdgionStreamPlugins` L4 (Stage-1) registration of the same name. Parse-only (`config: {}`) just resolves geo into the access log; rule mode adds `defaultAction`/`failOpen`/`denyRuleGroups`/`allowRuleGroups`. Combine with `IpRestriction`/`RequestRestriction` by chaining plugin-list entries, not by embedding. See `docs/en/ops-guide/gateway/geoip.md`. |
+| `GeoIpLocation` | Country/continent/city/subdivision matching backed by the process-wide GeoIP provider; CIDR rules use central IpList `ipRefs` without MMDB, shared verbatim between this HTTP registration and the `EdgionStreamPlugins` L4 (Stage-1) registration of the same name. Parse-only (`config: {}`) just resolves geo into the access log; rule mode adds `defaultAction`/`failOpen`/`denyRuleGroups`/`allowRuleGroups`. Combine with `IpRestriction`/`RequestRestriction` by chaining plugin-list entries, not by embedding. See `docs/en/ops-guide/gateway/geoip.md`. |
 
 ### Traffic Control
 
@@ -326,3 +326,10 @@ Controller and Gateway independently use the same leaf compiler; no request-time
 condition evaluator or rewritten source is introduced. See the
 [operator guide](../../../docs/en/user-guide/http-route/filters/edgion-plugins/waf.md#static-rule-selection)
 and [current implementation guard](../../04-review/waf/regression-guards/static-tag-selection-before-compilation.md).
+
+GeoIpLocation CIDR criteria contain ordered `ipRefs` only. All lists are required
+before MMDB/failOpen/group shortcuts; content and availability remain live.
+Unknown/removed input is transported as bounded invalidity, with static HTTP
+configuration rejection / Stream denial and clean-generation recovery. Central
+IpList partial-good compilation is intentional; empty available lists match none.
+No Geo CIDR tree or CIDR expansion belongs to a consumer plugin.

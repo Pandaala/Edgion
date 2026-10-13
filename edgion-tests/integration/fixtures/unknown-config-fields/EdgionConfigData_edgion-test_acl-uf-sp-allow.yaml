@@ -1,0 +1,14 @@
+# Explicit list owned by the standalone unknown-field fixture suite.
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: acl-uf-sp-allow
+  namespace: edgion-test
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: localhost
+        cidrs:
+        - 127.0.0.0/8

@@ -1,0 +1,14 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: condition-refs-live-realip
+  namespace: edgion-default
+spec:
+  requestPlugins:
+  - type: RealIp
+    config:
+      trustedIpRefs:
+      - name: realip-primary
+      - name: realip-secondary
+      realIpHeader: X-Forwarded-For
+      recursive: true

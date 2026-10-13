@@ -15,6 +15,8 @@ pub mod dye;
 pub mod edgion_plugin;
 pub mod entry;
 pub mod hmac_match;
+pub mod ip_acl_refs;
+pub mod ip_reference_set;
 pub mod mtls_field;
 
 pub mod access_decision;

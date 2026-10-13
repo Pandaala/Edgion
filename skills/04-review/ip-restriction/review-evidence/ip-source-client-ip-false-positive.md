@@ -8,7 +8,7 @@ knowledge_type: review-evidence
 
 ## Conclusion
 
-Findings of the form "without the RealIp plugin enabled, an attacker can bypass the IP allowlist/rate limit by spoofing `X-Forwarded-For`" rest on a wrong premise; classified as NOT-AN-ISSUE.
+Findings of the form "without either the RealIp plugin or global RealIp policy configured, an attacker can bypass the IP allowlist/rate limit by spoofing `X-Forwarded-For`" rest on a wrong premise; classified as NOT-AN-ISSUE.
 
 ## Code Path (key evidence)
 
@@ -17,7 +17,7 @@ IpSource::RemoteIp  → session.remote_ip() → ctx.request_info.remote_ip
 KeyGet::RemoteIp    → self.remote_ip()    → ctx.request_info.remote_ip
 ```
 
-`remote_ip` is initialized in `edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs`:
+`remote_ip` is initialized in `edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs`. The following excerpt records the historical pre-ARCH-028 extractor call; it is not the current API. Current global resolution calls `ctx.egc.real_ip_policy.resolve_in` with one captured ConfigData snapshot, and the canonical extractor remains in `edgion-gateway/src/util/real_ip_extractor.rs`.
 
 ```rust
 ctx.request_info.remote_ip = if let Some(extractor) = &edgion_http.real_ip_extractor {
@@ -28,7 +28,7 @@ ctx.request_info.remote_ip = if let Some(extractor) = &edgion_http.real_ip_extra
 };
 ```
 
-**When `real_ip_extractor` is not configured, `remote_ip` is set directly to the effective downstream peer; XFF/X-Real-IP request headers are not read at all.**
+**Without either global RealIp policy or the RealIp plugin configured, `remote_ip` remains the effective downstream peer. Forwarded headers do not supply the `RemoteIp` identity automatically.**
 
 ## Why the doc comment looked like "reads XFF"
 
@@ -42,9 +42,9 @@ The doc comment was corrected on 2026-04-22 (`ip_restriction.rs`).
 
 | Scenario | Content of `remote_ip` | Can XFF be spoofed |
 |------|------------------|---------------|
-| RealIp not configured | Effective downstream peer | ❌ Ineffective; XFF is not read |
-| RealIp plugin configured | RealIp extraction result | Depends on whether `trustedIps` is configured precisely |
-| Global `spec.realIp` configured | Global RealIp extraction result | Same as above |
+| Neither RealIp plugin nor global policy configured | Effective downstream peer | ❌ Ineffective; XFF does not determine RemoteIp |
+| RealIp plugin configured | RealIp extraction result | Depends on precise CIDRs in the IpLists named by `trustedIpRefs`; unavailable trust dependencies retain the effective peer |
+| Global `spec.realIp` configured | Global RealIp extraction result | Same CIDR precision and whole-trust availability rule as above |
 
 When the operator wants "based on real client IP", the correct approach is to explicitly configure RealIp, not to change the plugin default behavior.
 

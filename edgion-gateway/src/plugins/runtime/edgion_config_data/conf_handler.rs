@@ -12,10 +12,6 @@
 //!   RegionRoute reads its matching validation proof in that same snapshot.
 
 use arc_swap::ArcSwap;
-use edgion_resources::refs::ip_list_fields::BoundIpListRefs;
-use edgion_resources::refs::ReferenceError;
-use edgion_resources::refs::ReferenceToken;
-use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -34,43 +30,6 @@ pub fn get_global_edgion_config_data_store() -> Arc<EdgionConfigDataStore> {
 pub(crate) fn capture_global_edgion_config_data_snapshot() -> EdgionConfigDataSnapshot {
     GLOBAL_EDGION_CONFIG_DATA_STORE.capture_snapshot()
 }
-
-/// Capture the current generation only when an authorization decision has live
-/// IpList references. Inline-only decisions retain their zero-store-load path.
-pub(crate) fn capture_global_edgion_config_data_snapshot_for_refs(
-    deny_keys: &[String],
-    allow_keys: &[String],
-) -> Option<EdgionConfigDataSnapshot> {
-    if deny_keys.is_empty() && allow_keys.is_empty() {
-        None
-    } else {
-        Some(capture_global_edgion_config_data_snapshot())
-    }
-}
-
-/// Compile keys from actual owning fields; owner failure is distinct from a bad target slot.
-pub(crate) fn resolve_bound_ip_list_keys(
-    refs: BoundIpListRefs<'_>,
-) -> Result<(Vec<String>, Vec<String>), ReferenceError> {
-    refs.validate_owner()?;
-    let project = |(token, denied): (ReferenceToken<'_>, bool)| {
-        if denied {
-            return None;
-        }
-        let bound = token.validated().ok()?;
-        Some(format!(
-            "{}/{}",
-            bound.target().scope().namespace().unwrap_or_default(),
-            bound.target().name()
-        ))
-    };
-    Ok((
-        refs.allow().filter_map(project).collect(),
-        refs.deny().filter_map(project).collect(),
-    ))
-}
-#[cfg(test)]
-pub(crate) use stats_tests::resolve_ip_list_ref_keys;
 
 pub fn create_edgion_config_data_handler() -> Box<dyn ConfHandler<EdgionConfigData> + Send + Sync> {
     Box::new(get_global_edgion_config_data_store())
@@ -117,21 +76,88 @@ pub(crate) struct EdgionConfigDataSnapshot {
 }
 
 impl EdgionConfigDataSnapshot {
+    pub(crate) fn ip_list_availability(
+        &self,
+        key: &super::super::conditions::ip_refs::IpListReadKey,
+    ) -> super::super::conditions::ip_refs::IpListAvailability {
+        use super::super::conditions::ip_refs::IpListAvailability;
+        use edgion_resources::resources::edgion_config_data::ConfigDataVisibility;
+        use edgion_resources::resources::edgion_plugins::ip_reference_set::IpReadScope;
+        if key.scope == IpReadScope::Denied {
+            return IpListAvailability::Unavailable;
+        }
+        let Some((namespace, name)) = key.key.split_once('/') else {
+            return IpListAvailability::Unavailable;
+        };
+        let readable = self.get_raw_by_key(&key.key).is_some_and(|data| {
+            data.metadata.name.as_deref() == Some(name)
+                && data.metadata.namespace.as_deref() == Some(namespace)
+                && data.spec.enable
+                && matches!(data.spec.data, ConfigEntry::IpList(_))
+                && match key.scope {
+                    IpReadScope::Denied => false,
+                    IpReadScope::ClusterOnly => data.spec.visibility == ConfigDataVisibility::Cluster,
+                    _ => true,
+                }
+        });
+        if readable && self.inner.indexes.ip_list.contains_key(&key.key) {
+            IpListAvailability::Available
+        } else {
+            IpListAvailability::Unavailable
+        }
+    }
+    pub(crate) fn ip_list_contains(
+        &self,
+        key: &super::super::conditions::ip_refs::IpListReadKey,
+        ip: std::net::IpAddr,
+    ) -> Option<bool> {
+        if self.ip_list_availability(key) != super::super::conditions::ip_refs::IpListAvailability::Available {
+            return None;
+        }
+        self.inner
+            .indexes
+            .ip_list
+            .get(&key.key)
+            .map(|matcher| matcher.contains(&ip))
+    }
+    pub(crate) fn profile_index(
+        &self,
+        key: &str,
+        default: &str,
+        names: &HashMap<String, usize>,
+    ) -> super::super::conditions::ip_refs::ProfileSelection {
+        use super::super::conditions::ip_refs::ProfileSelection;
+        match self.get_raw_by_key(key) {
+            Some(data) if data.spec.enable => match &data.spec.data {
+                ConfigEntry::Selector(selector) => names
+                    .get(selector.active.as_deref().unwrap_or(default))
+                    .copied()
+                    .map(ProfileSelection::Selected)
+                    .unwrap_or(ProfileSelection::UnknownProfile),
+                _ => ProfileSelection::WrongType,
+            },
+            _ => ProfileSelection::Unavailable,
+        }
+    }
     pub(crate) fn get_raw_by_key(&self, key: &str) -> Option<&EdgionConfigData> {
         self.inner.raw.get(key).map(Arc::as_ref)
     }
 
-    /// Append matchers in configured key order. Missing, disabled, and invalid
-    /// references contribute nothing; the caller retains whitelist intent.
-    pub(crate) fn append_ip_list_matchers<'a>(
-        &'a self,
-        keys: &[String],
-        target: &mut SmallVec<[&'a IpRadixMatcher; 4]>,
-    ) {
-        target.extend(
-            keys.iter()
-                .filter_map(|key| self.inner.indexes.ip_list.get(key).map(Arc::as_ref)),
-        );
+    /// Borrow matchers lazily in configured key order. Missing, disabled, and
+    /// invalid references contribute nothing; the caller retains whitelist intent.
+    /// Matcher borrows belong to this snapshot, independently of the key slice.
+    pub(crate) fn ip_list_matchers<'snapshot, 'keys>(
+        &'snapshot self,
+        keys: &'keys [super::super::conditions::ip_refs::IpListReadKey],
+    ) -> impl Iterator<Item = &'snapshot IpRadixMatcher> + 'keys
+    where
+        'snapshot: 'keys,
+    {
+        keys.iter().filter_map(move |key| {
+            (self.ip_list_availability(key) == super::super::conditions::ip_refs::IpListAvailability::Available)
+                .then(|| self.inner.indexes.ip_list.get(&key.key).map(Arc::as_ref))
+                .flatten()
+        })
     }
 }
 

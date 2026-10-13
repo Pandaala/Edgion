@@ -7,13 +7,9 @@ metadata:
   name: conformance-gateway
 spec:
   realIp:
-    trustedIps:
-      - name: private-ranges
-        cidrs:
-          - "10.0.0.0/8"
-          - "172.16.0.0/12"
-          - "192.168.0.0/16"
-          - "127.0.0.0/8"
+    trustedIpRefs:
+      - name: conformance-realip-proxies
+        namespace: edgion-system
     realIpHeader: "X-Forwarded-For"
 
   securityProtect:

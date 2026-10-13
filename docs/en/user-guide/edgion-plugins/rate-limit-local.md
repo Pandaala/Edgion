@@ -565,3 +565,5 @@ Pair it with an aliased, earlier local entry and a subsequent Redis entry using
 Configured response destinations follow the shared response header restrictions.
 
 [Response header policy](../http-route/filters/gateway-api/response-header-modifier.md#response-header-policy).
+
+IP predicates in shared plugin conditions accept `ipRefs` only. Put addresses in an IpList `items[].cidrs`; required condition dependencies are preflighted from one live Gateway snapshot. See the shared Conditions reference for availability and negation policy.

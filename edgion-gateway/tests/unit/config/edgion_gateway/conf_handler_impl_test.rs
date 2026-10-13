@@ -408,7 +408,7 @@ fn runtime_egc_hot_reload_pins_security_and_compiled_http_policy() {
         },
         "httpTimeout": {"client": {"readTimeout": "3s"}, "backend": {"defaultConnectTimeout": "4s"}},
         "tcpTimeout": {"connectTimeout": "5s", "idleTimeout": "6s"},
-        "realIp": {"trustedIps": [{"name": "local", "cidrs": ["127.0.0.1/32"]}], "realIpHeader": "X-Forwarded-For"}
+        "realIp": {"trustedIpRefs": [{"name": "local", "namespace": "default"}], "realIpHeader": "X-Forwarded-For"}
     }))
     .unwrap();
     handler.full_set(&HashMap::from([("runtime-policy".into(), Arc::new(initial))]));
@@ -425,7 +425,7 @@ fn runtime_egc_hot_reload_pins_security_and_compiled_http_policy() {
     assert_eq!(old.parsed_timeouts.client.read_timeout, Duration::from_secs(3));
     assert_eq!(old.parsed_timeouts.backend.connect_timeout, Duration::from_secs(4));
     assert_eq!(old.l4_timeouts.connect_timeout, Some(Duration::from_secs(5)));
-    assert!(old.real_ip_extractor.is_some());
+    assert!(old.real_ip_policy.is_some());
 
     let mut updated = make_config("runtime-policy");
     updated.spec.security_protect = Some(
@@ -446,7 +446,7 @@ fn runtime_egc_hot_reload_pins_security_and_compiled_http_policy() {
     assert_eq!(next.downstream_keepalive_request_limit, 10_000);
     assert!(next.require_sni_host_match && next.tls_proxy_log_record);
     assert!(!next.allow_loopback_upstream && !next.enable_compression);
-    assert!(next.real_ip_extractor.is_none());
+    assert!(next.real_ip_policy.is_none());
     assert_eq!(next.parsed_timeouts.client.read_timeout, Duration::from_secs(60));
     assert_eq!(old.fallback_sni.as_deref(), Some("old.example.com"));
     assert!(old.allow_loopback_upstream && old.enable_compression);
@@ -1544,4 +1544,72 @@ fn dns_invalid_winner_does_not_select_inline_or_another_egc() {
         );
         assert_eq!(inline.cache_ttl(), Duration::from_secs(17));
     }
+}
+
+#[test]
+fn global_real_ip_valid_invalid_clean_publication_and_live_visibility_recovery() {
+    use crate::plugins::runtime::edgion_config_data::EdgionConfigDataStore;
+    let _guard = TEST_MUTEX.lock();
+    let handler = EdgionGatewayConfigHandler;
+    let make = |legacy: bool| {
+        let mut config = serde_json::json!({"trustedIpRefs": [{"name": "proxies", "namespace": "ops"}]});
+        if legacy {
+            config["trustedIps"] = serde_json::Value::Null;
+        }
+        let owner: EdgionGatewayConfig = serde_json::from_value(
+            serde_json::json!({"metadata": {"name": "trust-publication"}, "spec": {"realIp": config}}),
+        )
+        .unwrap();
+        Arc::new(serde_json::from_value::<EdgionGatewayConfig>(serde_json::to_value(owner).unwrap()).unwrap())
+    };
+    handler.full_set(&HashMap::from([("trust-publication".into(), make(false))]));
+    let good = get_resolved_gateway_config(Some("trust-publication"));
+    let policy = good.real_ip_policy.as_ref().unwrap();
+    let store = EdgionConfigDataStore::new();
+    let publish = |visibility: &str| {
+        let data = serde_json::from_value(serde_json::json!({"metadata": {"name": "proxies", "namespace": "ops"}, "spec": {"visibility": visibility, "data": {"type": "IpList", "config": {"items": [{"name": "local", "cidrs": ["127.0.0.0/8"]}]}}}})).unwrap();
+        store.full_set(&HashMap::from([("ops/proxies".into(), Arc::new(data))]));
+    };
+    let resolve = || {
+        policy
+            .resolve_in(&store.capture_snapshot(), "127.0.0.1:123", Some("203.0.113.7"))
+            .remote_ip
+    };
+    assert_eq!(resolve(), "127.0.0.1");
+    publish("Cluster");
+    let held = store.capture_snapshot();
+    assert_eq!(resolve(), "203.0.113.7");
+    publish("Namespace");
+    assert_eq!(resolve(), "127.0.0.1");
+    assert_eq!(
+        policy.resolve_in(&held, "127.0.0.1", Some("203.0.113.7")).remote_ip,
+        "203.0.113.7"
+    );
+    publish("Cluster");
+    assert_eq!(resolve(), "203.0.113.7");
+    assert!(Arc::ptr_eq(
+        &good,
+        &get_resolved_gateway_config(Some("trust-publication"))
+    ));
+    handler.partial_update(
+        HashMap::new(),
+        HashMap::from([("trust-publication".into(), make(true))]),
+        HashSet::new(),
+    );
+    assert!(get_resolved_gateway_config(Some("trust-publication"))
+        .real_ip_policy
+        .is_none());
+    handler.partial_update(
+        HashMap::new(),
+        HashMap::from([("trust-publication".into(), make(false))]),
+        HashSet::new(),
+    );
+    assert!(get_resolved_gateway_config(Some("trust-publication"))
+        .real_ip_policy
+        .is_some());
+    handler.partial_update(
+        HashMap::new(),
+        HashMap::new(),
+        HashSet::from(["trust-publication".into()]),
+    );
 }

@@ -2,7 +2,7 @@
 //!
 //! Two ordered passes (do not swap):
 //! 1. **ConfigData expansion** writes RAP `resolved_profiles` / `resolved_candidates`
-//!    and fills `IpAccessMatch.resolved_ips` from `ipRefs` everywhere (entry-level
+//!    and stamps read scopes for `ipRefs` everywhere (entry-level
 //!    skip/run, body, dye, RAP sidecar, and RequestRestriction ConditionSets).
 //! 2. **Credential pass** runs after and reads those snapshots, filling
 //!    `resolved_values` / `resolved_credentials`. HMAC `secretGroups` that exist
@@ -40,7 +40,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
     resolve_credentials(ep, resource_ref, ctx);
 }
 
-/// Pass 1: RAP sidecars + `ipRefs` → `resolved_ips` on every Condition tree.
+/// Pass 1: RAP sidecars and actual-owner IP read authorization on every tree.
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn expand_config_data(
     ep: &mut EdgionPlugins,
     resource_ref: &ResourceRef,
@@ -48,6 +48,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn expand_co
 ) {
     request_access_policy_data::expand(ep, ctx);
     let prepared = PreparedConditionReferences::from_plugins(ep);
+    let _ = prepared.clear_ip_read_scopes(ep);
     // The owner was just prepared; callbacks mutate only Controller-owned payloads.
     let _ = prepared.visit_ip_mut(
         ep,
@@ -78,13 +79,10 @@ fn resolve_ip_match(
     ctx: &HandlerContext,
     warning: &mut dyn FnMut(String),
 ) {
-    if leaf.config().ip_refs.is_empty() {
-        leaf.config_mut().resolved_ips = None;
-        return;
-    }
+    // A new owning generation never inherits a permission stamp from input.
+    leaf.config_mut().resolved_refs = None;
     let partial = leaf.consumer() == IpReferenceConsumer::RequestAccessPolicy;
-    let mut resolved = leaf.config().ips.clone();
-    let mut failed = false;
+    let mut scopes = Vec::new();
     let markers: Option<Vec<_>> = match leaf.references() {
         Ok(tokens) => Some(tokens.map(|token| {
             if let Ok(bound) = validated_ip_reference(&token) {
@@ -94,34 +92,26 @@ fn resolve_ip_match(
                 if !bound.is_same_namespace() { ctx.runtime().cross_ns_ref_mgr.add_ref(namespace.into(), owner.clone()); }
             }
             let outcome = resolve_ip_reference(token, is_reference_grant_validation_enabled(), |ns, name| ctx.runtime().edgion_config_data_store.get(Some(ns), name), |query| ctx.runtime().ref_grant_store.check_query(query));
-            failed |= outcome.error.is_some();
-            if let Some(data) = outcome.data {
-                if let ConfigEntry::IpList(ip) = data.spec.data {
-                    if partial && !edgion_resources::matcher::ip_cidr_helpers::collect_entry_errors(&ip.items).is_empty() {
-                        if let Ok(bound) = validated_ip_reference(&token) {
-                            warning(format!("RequestAccessPolicy IP data ref {}/{} contains invalid entries; valid entries were retained", bound.target().scope().namespace().unwrap_or_default(), bound.target().name()));
+            scopes.push(outcome.read_scope);
+            if partial {
+                if let Some(data) = outcome.data {
+                    if let ConfigEntry::IpList(ip) = data.spec.data {
+                        if !edgion_resources::matcher::ip_cidr_helpers::collect_entry_errors(&ip.items).is_empty() {
+                            warning("RequestAccessPolicy IP data contains invalid entries; valid entries were retained".into());
                         }
                     }
-                    resolved.extend(ip.items.into_iter().flat_map(|group| group.cidrs));
                 }
+                if let Some(message) = outcome.warning { warning(message); }
             }
-            if partial { if let Some(message) = outcome.warning { warning(message); } }
             outcome.denied
         }).collect()),
         Err(_) => None,
     };
-    let Some(markers) = markers else {
-        leaf.config_mut().resolved_ips = None;
-        return;
-    };
-    let config = leaf.config_mut();
-    config.resolved_ips = None;
-    for (reference, marker) in config.ip_refs.iter_mut().zip(markers) {
+    let Some(markers) = markers else { return };
+    for (reference, marker) in leaf.config_mut().ip_refs.iter_mut().zip(markers) {
         reference.ref_denied = marker;
     }
-    if !config.ip_refs.is_empty() && (partial || !failed) {
-        config.resolved_ips = Some(resolved);
-    }
+    let _ = leaf.set_read_scopes(&scopes);
 }
 
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn ip_status_errors(
@@ -131,7 +121,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn ip_status
     let prepared = PreparedConditionReferences::from_plugins(ep);
     let mut errors = Vec::new();
     let result = prepared.visit_ip(ep, |leaf| {
-        if leaf.consumer() != IpReferenceConsumer::Ordinary {
+        if leaf.consumer() == IpReferenceConsumer::RequestAccessPolicy {
             return;
         }
         match leaf.references() {

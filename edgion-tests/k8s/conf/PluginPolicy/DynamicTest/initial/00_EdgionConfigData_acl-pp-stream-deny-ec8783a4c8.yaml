@@ -1,0 +1,14 @@
+# Suite-owned IP collection for one authored ACL slot.
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: acl-pp-stream-deny-ec8783a4c8
+  namespace: edgion-test
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: unrelated
+        cidrs:
+        - 192.0.2.0/24

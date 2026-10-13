@@ -90,7 +90,7 @@ Re-open only if:
 - Task `tasks/todo/validate-real-ip-header-names.md` (deferred from B0098), closed 2026-09-06.
 - Duplicate task `tasks/todo/real-ip-header-name-validation.md`, closed as already fixed on 2026-09-12 after revalidating the shared admission check and Gateway backstop.
 - Implementation: `edgion-resources/src/resources/edgion_plugins/plugin_configs/real_ip.rs`, `edgion-resources/src/resources/edgion_gateway_config.rs`, `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_gateway_config.rs`, `edgion-gateway/src/runtime/server/listener_builder.rs`, `config/crd/edgion-crd/edgion_gateway_config_crd.yaml`.
-- Side effect recorded on purpose: `validate_real_ip` runs the whole `check` body, so `spec.realIp` is now also rejected for an empty `trustedIps`, a malformed or duplicated CIDR, and an out-of-charset or duplicate `IpGroup` name — shapes `RealIpExtractor::new` used to accept and degrade silently.
+- Historical admission also validated inline IpGroups strictly. ARCH-028 B3 removes inline trust collections: RealIp now validates nonempty references and field shape; referenced IpLists use the central partial-good matcher compiler. Missing/denied/disabled lists make the whole trust view unavailable for that decision, while malformed header names still fail intrinsic validation.
 - Tests: `test_plugin_validation_rejects_non_token_header_names`, `test_plugin_validation_rejects_oversized_header_name`, `test_plugin_validation_accepts_default_and_custom_header_names`, `egc_invalid_real_ip_header_is_rejected_at_ingest`.
 - Sibling rule: [`max-trusted-hops-opt-in.md`](../intentional-design/max-trusted-hops-opt-in.md).
 

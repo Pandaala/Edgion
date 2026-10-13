@@ -1226,3 +1226,173 @@ fn ttft_requires_first_nonempty_body_chunk_and_never_overwrites() {
     record_first_body_time(&mut ctx, Some(&Bytes::from_static(b"later")));
     assert_eq!(ctx.get_current_upstream().and_then(|upstream| upstream.bt), first);
 }
+
+#[tokio::test]
+async fn ip_dependency_abort_discards_queued_output_and_releases_real_conversion_budget_before_logging() {
+    use crate::plugins::http::grpc_json_transcoder::GrpcJsonTranscoder;
+    use base64::Engine;
+    use edgion_resources::filters::PluginRunningResult;
+    let mut session = test_session().await;
+    session.req_header_mut().set_uri("/v1/hello/world".parse().unwrap());
+    let mut ctx = EdgionHttpContext::default();
+    ctx.route_unit = Some(http_route_unit(Arc::new(PluginRuntime::new())));
+    ctx.request_info.normalized_current_path = "/v1/hello/world".into();
+    ctx.request_info.body_declared = Some(false);
+    ctx.request_info.in_request_body_stage = true;
+    let config = serde_json::from_value(serde_json::json!({
+        "descriptor":{"type":"inline","base64":base64::engine::general_purpose::STANDARD.encode(include_bytes!("../../../../../../edgion-tests/proto/grpc_json_transcoding/test.pb"))},
+        "services":["test.TestService"]
+    })).unwrap();
+    let plugin = GrpcJsonTranscoder::create_inline(
+        &config,
+        edgion_resources::resources::edgion_plugins::BodyRequirement::fail_close(),
+    )
+    .unwrap();
+    let mut log = crate::plugins::runtime::PluginLog::new("GrpcJsonTranscoder");
+    {
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        assert_eq!(
+            plugin.run_request(&mut adapter, &mut log).await,
+            PluginRunningResult::Nothing,
+            "{log:?}"
+        );
+    }
+    let plan = ctx.grpc_transcoding.as_ref().unwrap().clone();
+    assert!(
+        plan.output(vec![b'x']).is_ok(),
+        "the real conversion reservation is live"
+    );
+    ctx.freeze_response_processor_driver();
+    assert!(ctx.claim_final_response(200));
+    ctx.mark_ip_body_denied();
+    let mut body = Some(Bytes::from_static(b"current-output"));
+    let mut sink = ResponseBodySink::new();
+    sink.push(Bytes::from_static(b"queued-output")).unwrap();
+    assert!(!sink.peek_extra().is_empty());
+    let error = abort_ip_body(&mut ctx, &mut body, &mut sink).await.unwrap_err();
+    assert!(!error.retry());
+    assert!(body.is_none());
+    assert!(sink.peek_extra().is_empty());
+    assert!(sink.is_terminated());
+    assert!(
+        plan.output(vec![b'y']).is_err(),
+        "budget ownership is released before logging"
+    );
+    assert_eq!(ctx.final_downstream_status(), Some(200));
+    assert!(ctx.response_write_started());
+    assert!(matches!(
+        ctx.response_terminal_state,
+        crate::response::terminal::ResponseTerminalState::Closed {
+            winner: None,
+            close: ResponseClose::GatewayTerminate,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn ip_dependency_abort_preempts_all_driver_slots_without_a_synthetic_winner() {
+    let owners: Vec<_> = (0..3)
+        .map(|_| Arc::new(Mutex::new(LifecycleCounts::default())))
+        .collect();
+    let attached = Arc::new(AttachedExtProc::test_lazy());
+    let mut ctx = EdgionHttpContext::default();
+    let state = ctx.ensure_ai_state();
+    state.stream_processor = Some(Box::new(LifecycleMarker {
+        counts: owners[0].clone(),
+        terminate: false,
+    }));
+    state.semantic_processor = Some(Box::new(LifecycleMarker {
+        counts: owners[1].clone(),
+        terminate: false,
+    }));
+    state.canonical_record_batch = Some(crate::ai::protocols::openai::canonical_sse::CanonicalRecordBatch::new());
+    ctx.push_response_stream_processor(Box::new(LifecycleMarker {
+        counts: owners[2].clone(),
+        terminate: false,
+    }));
+    ctx.push_response_stream_processor(test_response_processor(attached.clone(), false));
+    let trailers = Arc::new(Mutex::new(LifecycleCounts::default()));
+    assert!(ctx.install_upstream_response_trailer(Box::new(IpAbortTrailer(trailers.clone()))));
+    ctx.freeze_response_processor_driver();
+    ctx.mark_ip_body_denied();
+    let mut body = None;
+    let mut sink = ResponseBodySink::new();
+    sink.push(Bytes::from_static(b"extras-without-current-body")).unwrap();
+    assert!(abort_ip_body(&mut ctx, &mut body, &mut sink).await.is_err());
+    assert!(sink.peek_extra().is_empty());
+    for owner in owners {
+        let counts = owner.lock();
+        assert_eq!((counts.preempted, counts.released), (1, 1));
+    }
+    assert!(
+        attached.test_state().2,
+        "the real attached owner is closed before logging"
+    );
+    assert!(ctx.ai_state().unwrap().canonical_record_batch.is_none());
+    let counts = trailers.lock();
+    assert_eq!((counts.ran, counts.preempted, counts.released), (0, 1, 1));
+}
+
+struct IpAbortTrailer(Arc<Mutex<LifecycleCounts>>);
+#[async_trait]
+impl crate::plugins::runtime::traits::UpstreamResponseTrailer for IpAbortTrailer {
+    fn name(&self) -> &str {
+        "IpAbortTrailer"
+    }
+    async fn run_upstream_response_trailer(
+        &mut self,
+        _: Option<&mut http::HeaderMap>,
+        _: &mut dyn PluginSession,
+        _: &mut crate::plugins::runtime::PluginLog,
+    ) -> crate::plugins::runtime::traits::UpstreamTrailerResult {
+        self.0.lock().ran += 1;
+        crate::plugins::runtime::traits::UpstreamTrailerResult::Continue
+    }
+    fn on_terminal_preempted(&mut self, _: &'static str) {
+        self.0.lock().preempted += 1;
+    }
+    fn release_inflight(&mut self) {
+        self.0.lock().released += 1;
+    }
+}
+
+#[tokio::test]
+async fn unavailable_ip_body_event_aborts_pure_queued_output_before_any_trailer_dispatch() {
+    let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"body-gate","namespace":"b2-body-gate"},
+        "spec":{"upstreamResponseBodyFilterPlugins":[{"type":"BandwidthLimit","config":{"rate":"1mb"},
+            "conditions":{"run":{"allOf":[{"type":"directPeerIpMatch","ipRefs":[{"name":"never-published-b2-list"}],"negate":true}]}}
+        }]}
+    })).unwrap();
+    let compiled = crate::plugins::http::compile_plugins(&owner);
+    assert!(compiled.is_activatable, "{:?}", compiled.preparse_errors);
+    for event in [
+        UpstreamResponseBodyEvent::Data { end_of_stream: true },
+        UpstreamResponseBodyEvent::TerminalWithoutTrailers,
+        UpstreamResponseBodyEvent::TerminalBeforeTrailers,
+    ] {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.route_unit = Some(http_route_unit(compiled.plugin_runtime.clone()));
+        let trailers = Arc::new(Mutex::new(LifecycleCounts::default()));
+        assert!(ctx.install_upstream_response_trailer(Box::new(IpAbortTrailer(trailers.clone()))));
+        ctx.freeze_response_processor_driver();
+        assert!(ctx.claim_final_response(200));
+        let mut body = None;
+        let mut sink = ResponseBodySink::new();
+        sink.push(Bytes::from_static(b"queued-without-current-body")).unwrap();
+        let error = process_response_body_event(&mut session, &mut body, event, &mut sink, &mut ctx)
+            .await
+            .unwrap_err();
+        assert!(matches!(error.etype(), pingora_core::ErrorType::HTTPStatus(500)));
+        assert!(!error.retry());
+        assert!(ctx.ip_body_denied());
+        assert!(body.is_none());
+        assert!(sink.peek_extra().is_empty());
+        assert!(sink.is_terminated());
+        assert_eq!(ctx.final_downstream_status(), Some(200));
+        let counts = trailers.lock();
+        assert_eq!((counts.ran, counts.preempted, counts.released), (0, 1, 1));
+    }
+}

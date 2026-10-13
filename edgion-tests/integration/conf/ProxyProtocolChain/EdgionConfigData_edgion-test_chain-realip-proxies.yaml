@@ -1,0 +1,14 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: chain-realip-proxies
+  namespace: edgion-test
+spec:
+  visibility: Cluster
+  data:
+    type: IpList
+    config:
+      items:
+      - name: peer-gateways
+        cidrs:
+        - 127.0.0.0/8

@@ -14,8 +14,7 @@ knowledge_type: intentional-design
 A non-route resource emitting `PartiallyInvalid` is **not** a status-vocabulary violation.
 The condition covers any resource whose spec holds a collection that can be *partially*
 resolved. Four emitter families exist today: `HTTPRoute` / `GRPCRoute` (per-rule backend
-refs), `EdgionPlugins` / `EdgionStreamPlugins` (inline IpRestriction and
-GlobalConnectionIpRestriction profile CIDR entries), `EdgionConfigData` (IpList entries), and
+refs), `EdgionPlugins` (optional WAF bundle references), `EdgionConfigData` (IpList entries), and
 `EdgionBackend` (provider credential pool).
 
 Findings of the form "`PartiallyInvalid` is documented as HTTPRoute/GRPCRoute only, so the
@@ -103,3 +102,5 @@ stays `True`; if that lands, refresh the matrix in §4.2 — it does not affect 
 ## Resolution references
 
 - `docs-04` — 2026-08-04 (docs-only).
+
+ARCH-028 moves all ACL CIDR collections into IpList. Historical consumer-side CIDR PartiallyInvalid examples are superseded; central IpList retains partial-good diagnostics, while removed consumer fields are whole-generation invalid input.

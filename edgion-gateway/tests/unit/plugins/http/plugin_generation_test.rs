@@ -619,6 +619,15 @@ fn descriptor_policy_view_omits_material_before_copy_and_preserves_generation_so
     assert!(Arc::ptr_eq(&previous, &request_filter(&resumed, "GrpcJsonTranscoder")));
 }
 
+fn wire_acl_snapshot(session: &mut MockPluginSession) {
+    let view = crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store().capture_snapshot();
+    session.expect_ensure_config_data_view().times(1).returning(|| {});
+    session
+        .expect_ip_acl_decision()
+        .times(1)
+        .returning(move |acl, ip| acl.evaluate_in(Some(&view), ip));
+}
+
 #[tokio::test]
 async fn owning_ip_generation_defaults_namespace_keeps_pinned_target_and_live_content() {
     use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
@@ -634,6 +643,7 @@ async fn owning_ip_generation_defaults_namespace_keeps_pinned_target_and_live_co
     let first = generation.compile(None);
     let filter = request_filter(&first, "IpRestriction");
     let mut missing = MockPluginSession::new();
+    wire_acl_snapshot(&mut missing);
     missing.expect_remote_ip().return_const("198.51.100.8".to_owned());
     missing.expect_write_response_header().returning(|_, _| Ok(()));
     missing.expect_write_response_body().returning(|_, _| Ok(()));
@@ -660,12 +670,13 @@ async fn owning_ip_generation_defaults_namespace_keeps_pinned_target_and_live_co
     else {
         panic!()
     };
-    config.allow_refs.as_mut().unwrap()[0].name = "r5c2-http-new".into();
+    config.refs.allow_refs.as_mut().unwrap()[0].name = "r5c2-http-new".into();
     seed("r5c2-http-new", "203.0.113.8/32");
     let next_view = PluginGeneration::new(next).compile(None);
     let next_filter = request_filter(&next_view, "IpRestriction");
     for (filter, allow) in [(&filter, true), (&next_filter, false)] {
         let mut session = MockPluginSession::new();
+        wire_acl_snapshot(&mut session);
         session.expect_remote_ip().return_const("198.51.100.8".to_owned());
         if !allow {
             session.expect_write_response_header().returning(|_, _| Ok(()));
@@ -682,6 +693,7 @@ async fn owning_ip_generation_defaults_namespace_keeps_pinned_target_and_live_co
     }
     seed("r5c2-http-old", "203.0.113.8/32");
     let mut session = MockPluginSession::new();
+    wire_acl_snapshot(&mut session);
     session.expect_remote_ip().return_const("198.51.100.8".to_owned());
     session.expect_write_response_header().returning(|_, _| Ok(()));
     session.expect_write_response_body().returning(|_, _| Ok(()));

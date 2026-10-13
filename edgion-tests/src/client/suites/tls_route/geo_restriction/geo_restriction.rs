@@ -72,10 +72,11 @@ async fn probe(src: &str, ctx: &TestContext) -> Verdict {
         Ok(s) => s,
         Err(e) => return Verdict::Inconclusive(format!("bad SNI: {e}")),
     };
-    let mut tls_stream = match connector.connect(sni, tcp_stream).await {
-        Ok(s) => s,
+    let mut tls_stream = match tokio::time::timeout(Duration::from_secs(2), connector.connect(sni, tcp_stream)).await {
+        Ok(Ok(s)) => s,
         // Gateway admission can close the connection before the TLS handshake.
-        Err(e) => return Verdict::Denied(format!("TLS handshake rejected: {e}")),
+        Ok(Err(e)) => return Verdict::Denied(format!("TLS handshake rejected: {e}")),
+        Err(_) => return Verdict::Inconclusive("TLS handshake timed out".into()),
     };
 
     let test_data = b"geo-tls-probe";
@@ -231,6 +232,149 @@ impl TestSuite for TlsGeoRestrictionTestSuite {
         vec![
             TlsGeoRestrictionTestSuite::geo_deny_ru(),
             TlsGeoRestrictionTestSuite::geo_allow_cn_unaffected(),
+            TlsGeoRestrictionTestSuite::cidr_list_stage1_live_and_missing_recovery(),
         ]
+    }
+}
+
+async fn apply_geo_cidrs(ctx: &TestContext, cidr: &str) -> Result<(), String> {
+    let yaml = format!(
+        r#"apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: geo-tls-cidrs
+  namespace: edgion-test
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+        - name: test-peer
+          cidrs: ["{cidr}"]
+"#
+    );
+    let yaml = if k8s_mode() {
+        crate::suites::k8s_peer_identity::render_geo_template(&yaml)?
+    } else {
+        yaml
+    };
+    ctx.apply_yaml(&yaml).await
+}
+
+async fn wait_geo_verdict(ctx: &TestContext, source: &str, denial: Option<&str>) -> Result<(), String> {
+    let baseline = if let Some(reason) = denial {
+        geoip_denied_total(ctx, reason).await
+    } else {
+        0.0
+    };
+    let mut last = "no completed TLS probe".to_string();
+    for _ in 0..25 {
+        match probe(source, ctx).await {
+            Verdict::Echoed(n) if denial.is_none() => {
+                return if n > 0 {
+                    Ok(())
+                } else {
+                    Err("empty echo is not forwarding".into())
+                }
+            }
+            Verdict::Echoed(n) => last = format!("unexpected echo of {n} bytes"),
+            Verdict::Denied(message) => {
+                if let Some(reason) = denial {
+                    if geoip_denied_total(ctx, reason).await - baseline >= 1.0 {
+                        return Ok(());
+                    }
+                }
+                last = message;
+            }
+            Verdict::Inconclusive(message) => return Err(message),
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    Err(format!("TLS verdict did not converge: {last}"))
+}
+
+async fn restore_geo_fixture(ctx: &TestContext) -> Result<(), String> {
+    use serde::Deserialize;
+    let source = if k8s_mode() {
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/k8s/conf/TLSRoute/GeoRestriction/resources.yaml"
+        ))
+    } else {
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/conf/TLSRoute/GeoRestriction/01_EdgionStreamPlugins_geo_deny.yaml"
+        ))
+    };
+    let yaml = {
+        let mut selected = None;
+        for document in serde_yaml::Deserializer::from_str(source) {
+            let value = serde_yaml::Value::deserialize(document).map_err(|error| error.to_string())?;
+            if value["kind"].as_str() == Some("EdgionStreamPlugins")
+                && value["metadata"]["name"].as_str() == Some("tls-geo-deny")
+            {
+                selected = Some(serde_yaml::to_string(&value).map_err(|error| error.to_string())?);
+                break;
+            }
+        }
+        selected.ok_or_else(|| "original TLS Geo fixture is missing".to_string())?
+    };
+    ctx.apply_yaml(&yaml).await
+}
+
+impl TlsGeoRestrictionTestSuite {
+    fn cidr_list_stage1_live_and_missing_recovery() -> TestCase {
+        TestCase::new(
+            "cidr_list_stage1_live_and_missing_recovery",
+            "TLS Stage-1 CIDR references use the physical peer and recover on list-only changes",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let hit = if k8s_mode() { "192.168.0.0/16" } else { "127.0.0.5/32" };
+                    let miss = if k8s_mode() { "10.0.0.0/8" } else { "127.0.0.1/32" };
+                    // Isolate Geo: prior GCIR cannot supply a false denial/metric proof.
+                    let policy = "apiVersion: edgion.io/v1\nkind: EdgionStreamPlugins\nmetadata:\n  name: tls-geo-deny\n  namespace: edgion-test\nspec:\n  plugins:\n    - type: GeoIpLocation\n      config:\n        failOpen: true\n        denyRuleGroups:\n          - name: peer-list\n            rules:\n              - source: DirectPeerIp\n                key: cidr\n                ipRefs: [{name: geo-tls-cidrs}]\n";
+                    let source = test_source("127.0.0.5");
+                    let check = tokio::time::timeout(Duration::from_secs(85), async {
+                        apply_geo_cidrs(&ctx, miss).await?;
+                        ctx.apply_yaml(policy).await?;
+                        wait_geo_verdict(&ctx, source, None).await?;
+                        apply_geo_cidrs(&ctx, hit).await?;
+                        wait_geo_verdict(&ctx, source, Some("deny_country")).await?;
+                        if !k8s_mode() {
+                            wait_geo_verdict(&ctx, "127.0.0.1", None).await?;
+                        }
+                        ctx.delete_resource("EdgionConfigData", "edgion-test", "geo-tls-cidrs").await?;
+                        wait_geo_verdict(&ctx, source, Some("ref_unavailable")).await?;
+                        apply_geo_cidrs(&ctx, miss).await?;
+                        wait_geo_verdict(&ctx, source, None).await
+                    })
+                        .await
+                        .unwrap_or_else(|_| Err("Geo verification timed out after 85s; cleanup remains reserved".to_string()));
+                    let cleanup = cleanup_geo_resources(&ctx, hit).await;
+                    match (check, cleanup) {
+                        (Ok(()), Ok(())) => TestResult::passed_with_message(
+                            start.elapsed(),
+                            "actual Stage-1 reference metrics, TLS forwarding/denial and list-only recovery; cleanup complete".into(),
+                        ),
+                        (result, cleanup) => TestResult::failed(start.elapsed(), format!("verification={result:?}; cleanup={cleanup:?}")),
+                    }
+                })
+            },
+        ).with_timeout(Duration::from_secs(120))
+    }
+}
+
+/// Attempt both original resource restorations even if one fails or times out.
+async fn cleanup_geo_resources(ctx: &TestContext, cidr: &str) -> Result<(), String> {
+    let list = tokio::time::timeout(Duration::from_secs(12), apply_geo_cidrs(ctx, cidr))
+        .await
+        .unwrap_or_else(|_| Err("list cleanup timed out after 12s".into()));
+    let consumer = tokio::time::timeout(Duration::from_secs(12), restore_geo_fixture(ctx))
+        .await
+        .unwrap_or_else(|_| Err("consumer cleanup timed out after 12s".into()));
+    match (list, consumer) {
+        (Ok(()), Ok(())) => Ok(()),
+        (list, consumer) => Err(format!("list cleanup={list:?}; consumer cleanup={consumer:?}")),
     }
 }

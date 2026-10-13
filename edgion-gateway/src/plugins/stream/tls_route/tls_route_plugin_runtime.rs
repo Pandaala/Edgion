@@ -2,8 +2,9 @@
 
 use super::tls_route_plugin_trait::{TlsRouteContext, TlsRoutePlugin};
 use crate::plugins::stream::stream_plugin_trait::StreamPluginResult;
-use edgion_resources::refs::ip_list_fields::StreamIpListBindings;
+use edgion_resources::refs::ip_list_fields::{IpListSide, StreamIpListBindings};
 use edgion_resources::refs::ReferenceError;
+use edgion_resources::resources::edgion_plugins::PluginValidation;
 use edgion_resources::resources::edgion_stream_plugins::TlsRouteStreamPlugin;
 use edgion_resources::resources::plugin_policy::{CompiledPluginPolicy, PluginFamily};
 use std::sync::Arc;
@@ -86,6 +87,19 @@ impl TlsRoutePluginRuntime {
                     continue;
                 }
                 None => {}
+            }
+
+            let valid = binding.tls_entry(index).is_some_and(|entry| {
+                let refs = entry.references();
+                entry.config().validation_error().is_none()
+                    && refs.validate_owner().is_ok()
+                    && refs.read_scopes(IpListSide::Allow).is_ok()
+                    && refs.read_scopes(IpListSide::Deny).is_ok()
+            });
+            if !valid {
+                cache[index] = None;
+                invalid_config_reason.get_or_insert_with(|| "invalid owning IP reference".to_string());
+                continue;
             }
 
             let plugin = cache[index].get_or_insert_with(|| match &entry.plugin {

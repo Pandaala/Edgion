@@ -21,7 +21,7 @@ spec:
         perListener: {rate: 2, interval: 1h}
   tlsRoutePlugins:
     - type: IpRestriction
-      config: {defaultAction: allow}
+      config: {defaultAction: allow, denyRefs: [{name: unreferenced-budget-fixture}]}
 "#,
         )
         .unwrap(),
@@ -92,7 +92,24 @@ async fn denied_and_unreferenced_stages_never_construct_entries() {
         connection: false,
         tls_route: true,
     };
-    let _tls_view = generation.compile(&CompiledPluginPolicy::default(), tls);
+    let tls_view = generation.compile(&CompiledPluginPolicy::default(), tls);
+    let rsc = crate::Rsc::new("TLSRoute", "default", "budget-fixture");
+    let tls_ctx = crate::plugins::stream::tls_route::TlsRouteContext {
+        direct_peer_ip: "127.0.0.1".parse().unwrap(),
+        remote_ip: "127.0.0.1".parse().unwrap(),
+        listener_port: 443,
+        sni: "budget.example.com",
+        tls_id: None,
+        rsc: &rsc,
+        is_mtls: false,
+    };
+    assert!(
+        matches!(
+            tls_view.tls_route_plugin_runtime.run(&tls_ctx).await,
+            StreamPluginResult::Allow
+        ),
+        "unavailable optional deny reference preserves this source's default-Allow forwarding"
+    );
     assert_eq!(generation.cached_entry_count(), 1);
     let mut demand = generation.demand(&CompiledPluginPolicy::default(), tls);
     demand.extend(&generation.demand(&policy("block"), CONNECTION));
@@ -116,7 +133,10 @@ async fn failed_entries_stay_fail_closed_and_do_not_pollute_bypassed_scope() {
     let mut generation = StreamPluginGeneration::new(Arc::new(source));
     let allow = CompiledPluginPolicy::default();
     let invalid = generation.compile(&allow, CONNECTION);
-    assert!(generation.connection[0].as_ref().unwrap().is_err());
+    // Static-invalid Geo input is rejected before construction and cache
+    // reuse; the published runtime still denies instead of retaining an Err.
+    assert!(generation.connection[0].is_none());
+    assert_eq!(generation.cached_entry_count(), 0);
     let context = StreamContext::new("127.0.0.1".parse().unwrap(), 18493, StreamLayer::Stage1);
     assert!(matches!(
         invalid.stream_plugin_runtime.run(&context).await,
@@ -268,9 +288,16 @@ async fn gcir_selector_fresh_retarget_generation_and_pinned_view_keep_live_snaps
         let data=serde_json::from_value(serde_json::json!({"metadata":{"name":name,"namespace":"default"},"spec":{"data":{"type":"Selector","config":{"active":active}}}})).unwrap();
         store.insert_raw_for_test(format!("default/{name}"), Arc::new(data));
     };
+    for (name, cidr) in [
+        ("r5e-base-networks", "203.0.113.0/24"),
+        ("r5e-blocked-networks", "0.0.0.0/0"),
+    ] {
+        let data=serde_json::from_value(serde_json::json!({"metadata":{"name":name,"namespace":"default"},"spec":{"data":{"type":"IpList","config":{"items":[{"name":"all","cidrs":[cidr]}]}}}})).unwrap();
+        store.insert_raw_for_test(format!("default/{name}"), Arc::new(data));
+    }
     let source = |name: &str| -> Arc<EdgionStreamPlugins> {
         Arc::new(serde_json::from_value(serde_json::json!({"metadata":{"name":"r5e-gcir"},"spec":{"plugins":[{
-        "type":"GlobalConnectionIpRestriction","config":{"enable":true,"activeProfile":"base","activeProfileRef":{"name":name},"profiles":{"base":{"defaultAction":"allow","deny":[{"name":"other-net","cidrs":["203.0.113.0/24"]}]},"blocked":{"defaultAction":"deny","deny":[{"name":"all","cidrs":["0.0.0.0/0"]}]}}}
+        "type":"GlobalConnectionIpRestriction","config":{"enable":true,"activeProfile":"base","activeProfileRef":{"name":name},"profiles":{"base":{"defaultAction":"allow","denyRefs":[{"name":"r5e-base-networks"}]},"blocked":{"defaultAction":"deny","denyRefs":[{"name":"r5e-blocked-networks"}]}}}
     }]}})).unwrap())
     };
     let mut first = StreamPluginGeneration::new(source("r5e-selector-first"));
@@ -338,4 +365,56 @@ async fn active_redis_generation_checks_new_owner_without_revoking_captured_view
         captured.stream_plugin_runtime.run(&context).await,
         StreamPluginResult::Allow
     ));
+}
+
+#[tokio::test]
+async fn tls_acl_legacy_wire_generation_replaces_valid_and_clean_recovers() {
+    use crate::plugins::stream::tls_route::TlsRouteContext;
+    let value = serde_json::json!({"metadata":{"name":"tls-acl-generations","namespace":"default"},"spec":{"tlsRoutePlugins":[{
+        "type":"IpRestriction","config":{"ipSource":"DirectPeerIp","defaultAction":"allow","denyRefs":[{"name":"unavailable-tls-generation-deny"}]}
+    }]}});
+    let clean: Arc<EdgionStreamPlugins> = Arc::new(serde_json::from_value(value.clone()).unwrap());
+    let stages = StreamStages {
+        connection: false,
+        tls_route: true,
+    };
+    let policy = CompiledPluginPolicy::default();
+    let mut generation = StreamPluginGeneration::new(clean.clone());
+    let held = generation.compile(&policy, stages);
+    let rsc = crate::Rsc::new("TLSRoute", "default", "tls-acl-generations");
+    let context = TlsRouteContext {
+        direct_peer_ip: "192.0.2.1".parse().unwrap(),
+        remote_ip: "192.0.2.1".parse().unwrap(),
+        listener_port: 443,
+        sni: "example.com",
+        tls_id: None,
+        rsc: &rsc,
+        is_mtls: false,
+    };
+    assert!(matches!(
+        held.tls_route_plugin_runtime.run(&context).await,
+        StreamPluginResult::Allow
+    ));
+    for payload in [serde_json::Value::Null, serde_json::json!([])] {
+        let mut invalid = value.clone();
+        invalid["spec"]["tlsRoutePlugins"][0]["config"]["deny"] = payload;
+        let typed: EdgionStreamPlugins = serde_json::from_value(invalid).unwrap();
+        let received = Arc::new(serde_json::from_str(&serde_json::to_string(&typed).unwrap()).unwrap());
+        let mut rejected_generation = StreamPluginGeneration::new(received);
+        let rejected = rejected_generation.compile(&policy, stages);
+        assert!(matches!(
+            rejected.tls_route_plugin_runtime.run(&context).await,
+            StreamPluginResult::Deny(_)
+        ));
+        assert_eq!(rejected_generation.cached_entry_count(), 0);
+        assert!(matches!(
+            held.tls_route_plugin_runtime.run(&context).await,
+            StreamPluginResult::Allow
+        ));
+        let recovered = StreamPluginGeneration::new(clean.clone()).compile(&policy, stages);
+        assert!(matches!(
+            recovered.tls_route_plugin_runtime.run(&context).await,
+            StreamPluginResult::Allow
+        ));
+    }
 }

@@ -1,0 +1,18 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: global-realip-proxies
+  namespace: edgion-test
+spec:
+  visibility: Cluster
+  data:
+    type: IpList
+    config:
+      items:
+      - name: private-ranges
+        cidrs:
+        - 127.0.0.0/8
+        - 198.51.100.0/24
+        - 192.168.0.0/16
+        - 10.0.0.0/8
+        - 172.16.0.0/12

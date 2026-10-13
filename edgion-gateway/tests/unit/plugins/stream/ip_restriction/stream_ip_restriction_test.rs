@@ -4,6 +4,7 @@ use crate::plugins::stream::stream_plugin_trait::{StreamContext, StreamLayer};
 use edgion_resources::resources::edgion_config_data::{
     ConfigEntry, EdgionConfigData, EdgionConfigDataRef, EdgionConfigDataSpec, IpGroup, IpListData,
 };
+use edgion_resources::resources::edgion_stream_plugins::ConnectionIpRestrictionRules;
 use std::sync::Arc;
 
 fn seed_iplist(ns: &str, name: &str, cidr: &str) {
@@ -31,12 +32,12 @@ async fn deny_refs_block_referenced_ip() {
     let ns = "l4-ipr-denyref-unit";
     seed_iplist(ns, "blk", "9.9.9.9/32");
     let mut rules = ConnectionIpRestrictionRules::default();
-    rules.deny_refs = Some(vec![EdgionConfigDataRef {
+    rules.refs.deny_refs = Some(vec![EdgionConfigDataRef {
         name: "blk".into(),
         namespace: Some(ns.into()),
         ..Default::default()
     }]);
-    let plugin = StreamIpRestriction::new(&rules, ns);
+    let plugin = from_owner(&owner(&rules, ns));
     let ctx_block = StreamContext::new("9.9.9.9".parse().unwrap(), 8080, StreamLayer::Stage1);
     assert!(matches!(
         plugin.on_connection(&ctx_block).await,
@@ -51,7 +52,7 @@ async fn l4_denied_allow_ref_contributes_no_key() {
     use edgion_resources::resources::edgion_config_data::EdgionConfigDataRef;
     let ns = "l4-ipr-ref-denied-unit";
     let mut rules = ConnectionIpRestrictionRules::default();
-    rules.allow_refs = Some(vec![EdgionConfigDataRef {
+    rules.refs.allow_refs = Some(vec![EdgionConfigDataRef {
         name: "corp".into(),
         namespace: Some(ns.into()),
         ref_denied: Some(edgion_resources::resources::common::RefDenied {
@@ -60,9 +61,12 @@ async fn l4_denied_allow_ref_contributes_no_key() {
             reason: None,
         }),
     }]);
-    let plugin = StreamIpRestriction::new(&rules, ns);
+    let plugin = from_owner(&owner(&rules, ns));
     // Denied allow_ref → allow_ref_keys is empty → no matcher resolved.
-    assert!(plugin.allow_ref_keys.is_empty(), "denied allow_ref must yield no key");
+    assert!(matches!(
+        plugin.acl.evaluate_in(None, Some("8.8.8.8".parse().unwrap())),
+        edgion_resources::AccessDecision::DenyByWhitelistMiss
+    ));
     // Evaluate path: whitelist mode + zero allow matchers → deny-all (fail-closed).
     // Empty key lists keep the snapshot absent, so on_connection reaches
     // check_ip_with_refs with empty ref slices — a whitelist miss → Deny.
@@ -74,18 +78,15 @@ async fn l4_denied_allow_ref_contributes_no_key() {
 }
 
 use edgion_resources::refs::ip_list_fields::PreparedIpListReferences;
-// Detached convenience exists only in this mirrored test module.
-impl StreamIpRestriction {
-    pub(crate) fn new(config: &ConnectionIpRestrictionRules, namespace: &str) -> Self {
-        let owner: edgion_resources::EdgionStreamPlugins = serde_json::from_value(serde_json::json!({
-            "metadata": {"name": "fixture", "namespace": namespace},
-            "spec": {"plugins": [{"type": "IpRestriction", "config": config}]}
-        }))
-        .unwrap();
-        let prepared = PreparedIpListReferences::from_stream_plugins(&owner);
-        let binding = prepared.bind_stream_plugins(&owner).unwrap();
-        Self::from_bound(binding.connection_entry(0).unwrap()).expect("valid fixture owner")
-    }
+fn owner(config: &ConnectionIpRestrictionRules, namespace: &str) -> edgion_resources::EdgionStreamPlugins {
+    serde_json::from_value(serde_json::json!({"metadata":{"name":"actual","namespace":namespace},
+        "spec":{"plugins":[{"type":"IpRestriction","config":config}]}}))
+    .unwrap()
+}
+fn from_owner(owner: &edgion_resources::EdgionStreamPlugins) -> StreamIpRestriction {
+    let prepared = PreparedIpListReferences::from_stream_plugins(owner);
+    let binding = prepared.bind_stream_plugins(owner).unwrap();
+    StreamIpRestriction::from_bound(binding.connection_entry(0).unwrap()).unwrap()
 }
 
 #[tokio::test]
@@ -99,7 +100,7 @@ async fn owning_connection_invalid_slots_keep_allow_intent_and_deny_set_drop() {
         format!("{namespace}/good"),
     ] {
         let data: EdgionConfigData = serde_json::from_value(serde_json::json!({
-            "metadata":{"name":"decoy","namespace":namespace},"spec":{"data":{"type":"IpList","config":{"items":[{"name":"set","cidrs":["198.51.100.8/32"]}]}}}
+            "metadata":{"name":key.rsplit('/').next().unwrap(),"namespace":namespace},"spec":{"data":{"type":"IpList","config":{"items":[{"name":"set","cidrs":["198.51.100.8/32"]}]}}}
         })).unwrap();
         get_global_edgion_config_data_store().insert_raw_for_test(key, std::sync::Arc::new(data));
     }
@@ -135,7 +136,12 @@ async fn owning_connection_invalid_slots_keep_allow_intent_and_deny_set_drop() {
             })).unwrap();
             let prepared = PreparedIpListReferences::from_stream_plugins(&owner);
             let bound = prepared.bind_stream_plugins(&owner).unwrap();
-            let plugin = StreamIpRestriction::from_bound(bound.connection_entry(0).unwrap()).unwrap();
+            let result = StreamIpRestriction::from_bound(bound.connection_entry(0).unwrap());
+            if case == "inline" {
+                assert!(result.is_err());
+                continue;
+            }
+            let plugin = result.unwrap();
             let context = StreamContext::new("198.51.100.8".parse().unwrap(), 18498, StreamLayer::Stage1);
             let result = plugin.on_connection(&context).await;
             assert_eq!(matches!(result, StreamPluginResult::Allow), allow, "{case} / {bad}");
@@ -171,6 +177,6 @@ async fn blank_reference_name_preserves_structural_constructor_failure() {
         let prepared = PreparedIpListReferences::from_stream_plugins(&owner);
         let binding = prepared.bind_stream_plugins(&owner).unwrap();
         let result = StreamIpRestriction::from_bound(binding.connection_entry(0).unwrap());
-        assert!(result.unwrap().init_failed);
+        assert!(result.is_err());
     }
 }

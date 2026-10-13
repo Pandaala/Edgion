@@ -52,7 +52,7 @@ control plane:
 |-----------|---------|
 | **Accepted** | Resource is syntactically/semantically valid and accepted by the Controller |
 | **ResolvedRefs** | All references to other objects (Secrets, Services, etc.) are resolved |
-| **PartiallyInvalid** | Part of a partially-resolvable collection is invalid while the rest stays usable. Not route-exclusive: route rules with invalid backend refs, inline CIDR / IpList entries, an EdgionBackend credential pool with unresolved credentials — see [§4.2](#partiallyinvalid-on-non-route-resources) |
+| **PartiallyInvalid** | Part of a partially-resolvable collection is invalid while the rest stays usable. Not route-exclusive: route rules with invalid backend refs, central IpList entries, optional RAP/WAF references, or an EdgionBackend credential pool with unresolved credentials — see [§4.2](#partiallyinvalid-on-non-route-resources) |
 | **Conflicted** | Listener or policy conflicts detected by the Controller |
 | **Programmed** | Gateway/Gateway Listener processing state derived by the Gateway handler |
 
@@ -227,10 +227,12 @@ False/`UnsupportedValue` instead of False/`AllRulesValid` — the generic "all r
 valid" wording would contradict the `Accepted=False` beside it. See
 `skills/04-review/ai-routing/regression-guards/ai-rule-accepted-escalates-only-when-nothing-serves.md`.
 
-Flat-status resources already using that helper: `EdgionPlugins` and `EdgionStreamPlugins`
-(bad inline IpRestriction / GlobalConnectionIpRestriction profile CIDR entries) and
-`EdgionConfigData` (bad IpList entries) — all three from `update_status()`, all with the
-shared `RuleInvalid` reason.
+Current flat-status uses of that helper: `EdgionPlugins` reports optional RAP resolution
+warnings and WAF resolution warnings; `EdgionConfigData` reports central IpList entry
+errors or optional WAF policy references. These use `RuleInvalid` for a partial failure.
+`EdgionStreamPlugins` emits `False/AllRulesValid` to clear previous partial diagnostics.
+The former inline IpRestriction/GCIR CIDR examples are historical: reference-only ACL
+consumers own no CIDR entries; removed inline fields invalidate the whole generation.
 
 **`EdgionBackend` differs on two axes** and is the reference case for both:
 

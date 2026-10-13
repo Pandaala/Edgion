@@ -1,0 +1,14 @@
+# Suite-owned IP collection for one authored ACL slot.
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: acl-tcp-sp-reload-esp-allow-54ba6a1a02
+  namespace: edgion-test
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: kubernetes-client
+        cidrs:
+        - 0.0.0.0/0

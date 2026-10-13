@@ -1,0 +1,15 @@
+# Suite-owned IP collection for one authored ACL slot.
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: acl-ip-restriction-inline-de-deny-66dd1d77d6
+  namespace: edgion-default
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: mixed-good-and-bad
+        cidrs:
+        - 192.168.0.0/16
+        - not-a-cidr

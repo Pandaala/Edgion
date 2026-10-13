@@ -3,6 +3,7 @@
 //! This module provides the logic to evaluate conditions at runtime
 //! to determine whether a plugin should be executed or skipped.
 
+use super::ip_refs::{BoundIpPredicate, IpConditionCompiler};
 use crate::plugins::http::hmac_auth::{HmacVerifier, HmacVerifyOutcome};
 use crate::plugins::runtime::body_gate::body_read_failure_result;
 use crate::plugins::runtime::conditions::extract::{extract_jwt_claim_values, extract_mtls_values};
@@ -21,6 +22,7 @@ use edgion_resources::resources::edgion_plugins::BodyRequirement;
 use std::borrow::Cow;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 /// Result of condition evaluation
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +93,11 @@ enum CompiledPredicate {
         hmac: Option<HmacVerifier>,
     },
     TimeRange(CompiledTimeRangeCondition),
+    Ip {
+        refs: Option<Arc<BoundIpPredicate>>,
+        direct: bool,
+        negate: bool,
+    },
     HmacBody {
         verifier: HmacVerifier,
         negate: bool,
@@ -105,10 +112,26 @@ pub(crate) struct CompiledCondition {
 }
 
 impl CompiledCondition {
-    fn compile(condition: &Condition, descriptor: String, body_requirement: Option<BodyRequirement>) -> Self {
-        let unresolved = condition.has_unresolved_refs();
+    fn compile(
+        condition: &Condition,
+        descriptor: String,
+        body_requirement: Option<BodyRequirement>,
+        ip: Option<&IpConditionCompiler<'_>>,
+    ) -> Self {
+        let mut unresolved = condition.has_unresolved_refs()
+            || match condition {
+                Condition::DirectPeerIpMatch(config) | Condition::RemoteIpMatch(config) => {
+                    ip.and_then(|ip| ip.bind(&config.refs)).is_none()
+                }
+                _ => false,
+            };
         let descriptor = condition_descriptor(&descriptor, condition);
         let predicate = match condition {
+            Condition::DirectPeerIpMatch(config) | Condition::RemoteIpMatch(config) => CompiledPredicate::Ip {
+                refs: ip.and_then(|ip| ip.bind(&config.refs)),
+                direct: matches!(condition, Condition::DirectPeerIpMatch(_)),
+                negate: config.negate,
+            },
             Condition::RateLimitExceeded(config) => CompiledPredicate::RateLimitExceeded {
                 alias: config.plugin_alias.clone().into_boxed_str(),
                 slot: None,
@@ -118,13 +141,19 @@ impl CompiledCondition {
                 verifier: HmacVerifier::new(config, body_requirement),
                 negate: config.negate,
             },
-            _ => CompiledPredicate::Sync {
-                hmac: match condition {
-                    Condition::HmacAuth(config) if !unresolved => Some(HmacVerifier::new(config, None)),
-                    _ => None,
-                },
-                condition: condition.clone(),
-            },
+            _ => {
+                // Initialize the private non-IP leaf without cloning the owning
+                // condition set: IP bindings must retain their original nodes.
+                let mut compiled = condition.clone();
+                unresolved |= compiled.compile(0).is_err();
+                CompiledPredicate::Sync {
+                    hmac: match condition {
+                        Condition::HmacAuth(config) if !unresolved => Some(HmacVerifier::new(config, None)),
+                        _ => None,
+                    },
+                    condition: compiled,
+                }
+            }
         };
         Self {
             predicate,
@@ -138,6 +167,18 @@ impl CompiledCondition {
             return MatchState::Unresolved;
         }
         match &self.predicate {
+            CompiledPredicate::Ip { refs, direct, negate } => {
+                let address = if *direct {
+                    session.direct_peer_ip()
+                } else {
+                    session.remote_ip()
+                }
+                .parse()
+                .ok();
+                refs.as_ref()
+                    .map(|refs| refs.evaluate(session, address, *negate))
+                    .unwrap_or(MatchState::Unresolved)
+            }
             CompiledPredicate::RateLimitExceeded { slot, .. } => {
                 use crate::plugins::runtime::conditions::rate_limit_local_outcome::RateLimitLocalOutcome;
                 match slot.map(|slot| session.rate_limit_local_outcome(slot)) {
@@ -264,6 +305,7 @@ pub(crate) struct CompiledConditionSet {
     kind: CompiledSetKind,
     atomic_count: usize,
     has_unresolved_refs: bool,
+    has_ip: bool,
 }
 
 impl CompiledConditionSet {
@@ -280,8 +322,26 @@ impl CompiledConditionSet {
             }
         }
     }
-    pub(crate) fn new(set: &ConditionSet, prefix: &str, body_requirement: Option<BodyRequirement>) -> Self {
+    pub(crate) fn with_ip(
+        set: &ConditionSet,
+        prefix: &str,
+        body_requirement: Option<BodyRequirement>,
+        ip: Option<&IpConditionCompiler<'_>>,
+    ) -> Self {
         let mut has_unresolved_refs = false;
+        let has_ip = match set {
+            ConditionSet::AllOf { all_of } => all_of
+                .iter()
+                .any(|condition| matches!(condition, Condition::DirectPeerIpMatch(_) | Condition::RemoteIpMatch(_))),
+            ConditionSet::AnyOf { any_of } => any_of.iter().any(|clause| match clause {
+                AnyOfClause::Condition(condition) => {
+                    matches!(condition, Condition::DirectPeerIpMatch(_) | Condition::RemoteIpMatch(_))
+                }
+                AnyOfClause::AllOf(group) => group.all_of.iter().any(|condition| {
+                    matches!(condition, Condition::DirectPeerIpMatch(_) | Condition::RemoteIpMatch(_))
+                }),
+            }),
+        };
         let (kind, atomic_count) = match set {
             ConditionSet::AllOf { all_of } => {
                 let group = compile_all_of(
@@ -290,6 +350,7 @@ impl CompiledConditionSet {
                     format!("{prefix}.allOf"),
                     body_requirement,
                     &mut has_unresolved_refs,
+                    ip,
                 );
                 let count = group.predicates.len();
                 (CompiledSetKind::AllOf(group), count)
@@ -302,12 +363,14 @@ impl CompiledConditionSet {
                     .map(|(index, clause)| match clause {
                         AnyOfClause::Condition(condition) => {
                             count += 1;
-                            has_unresolved_refs |= condition.has_unresolved_refs();
-                            CompiledAnyOfClause::Condition(CompiledCondition::compile(
+                            let compiled = CompiledCondition::compile(
                                 condition,
                                 format!("{prefix}.anyOf[{index}]"),
                                 body_requirement.clone(),
-                            ))
+                                ip,
+                            );
+                            has_unresolved_refs |= compiled.unresolved;
+                            CompiledAnyOfClause::Condition(compiled)
                         }
                         AnyOfClause::AllOf(AllOfGroup { name, all_of }) => {
                             count += all_of.len();
@@ -317,6 +380,7 @@ impl CompiledConditionSet {
                                 format!("{prefix}.anyOf[{index}].allOf"),
                                 body_requirement.clone(),
                                 &mut has_unresolved_refs,
+                                ip,
                             ))
                         }
                     })
@@ -328,9 +392,13 @@ impl CompiledConditionSet {
             kind,
             atomic_count,
             has_unresolved_refs,
+            has_ip,
         }
     }
 
+    pub(crate) fn requires_config_data_view(&self) -> bool {
+        self.has_ip
+    }
     pub(crate) fn atomic_count(&self) -> usize {
         self.atomic_count
     }
@@ -415,14 +483,21 @@ fn compile_all_of(
     descriptor: String,
     body_requirement: Option<BodyRequirement>,
     unresolved: &mut bool,
+    ip: Option<&IpConditionCompiler<'_>>,
 ) -> CompiledAllOf {
     let mut group_unresolved = false;
     let predicates = conditions
         .iter()
         .enumerate()
         .map(|(index, condition)| {
-            group_unresolved |= condition.has_unresolved_refs();
-            CompiledCondition::compile(condition, format!("{descriptor}[{index}]"), body_requirement.clone())
+            let compiled = CompiledCondition::compile(
+                condition,
+                format!("{descriptor}[{index}]"),
+                body_requirement.clone(),
+                ip,
+            );
+            group_unresolved |= compiled.unresolved;
+            compiled
         })
         .collect();
     *unresolved |= group_unresolved;
@@ -543,14 +618,17 @@ pub(crate) struct CompiledPluginConditions {
 
 impl CompiledPluginConditions {
     pub(crate) fn new(conditions: PluginConditions) -> Self {
+        Self::with_ip(&conditions, None)
+    }
+    pub(crate) fn with_ip(conditions: &PluginConditions, ip: Option<&IpConditionCompiler<'_>>) -> Self {
         let skip = conditions
             .skip
             .as_ref()
-            .map(|set| CompiledConditionSet::new(set, "skip", None));
+            .map(|set| CompiledConditionSet::with_ip(set, "skip", None, ip));
         let run = conditions
             .run
             .as_ref()
-            .map(|set| CompiledConditionSet::new(set, "run", None));
+            .map(|set| CompiledConditionSet::with_ip(set, "run", None, ip));
         let atomic_count = skip.as_ref().map_or(0, CompiledConditionSet::atomic_count)
             + run.as_ref().map_or(0, CompiledConditionSet::atomic_count);
         let mut compiled = Self {
@@ -761,8 +839,8 @@ impl ConditionExt for Condition {
             Condition::TimeRange(c) => c.evaluate(),
             Condition::Probability(c) => c.evaluate(session),
             Condition::SecretMatch(c) => evaluate_secret_match(c, session),
-            Condition::DirectPeerIpMatch(c) => evaluate_ip_match(c, session.direct_peer_ip()),
-            Condition::RemoteIpMatch(c) => evaluate_ip_match(c, session.remote_ip()),
+            Condition::DirectPeerIpMatch(_) => false,
+            Condition::RemoteIpMatch(_) => false,
             // Runtime HMAC evaluation is available only through
             // CompiledCondition, which owns the snapshot verifier.
             Condition::HmacAuth(_) => false,
@@ -778,7 +856,7 @@ impl ConditionExt for Condition {
         match self {
             Condition::SecretMatch(condition) => condition.resolved_values.is_none(),
             Condition::DirectPeerIpMatch(condition) | Condition::RemoteIpMatch(condition) => {
-                !condition.ip_refs.is_empty() && condition.resolved_ips.is_none()
+                condition.refs.invalid_input
             }
             Condition::HmacAuth(condition) => {
                 condition
@@ -825,18 +903,6 @@ fn evaluate_secret_match(
             .iter()
             .any(|candidate| candidate.len() == actual.len() && candidate.as_bytes().ct_eq(actual.as_bytes()).into())
     });
-    apply_negate(base, condition.negate)
-}
-
-fn evaluate_ip_match(
-    condition: &edgion_resources::resources::edgion_plugins::conditions::IpAccessMatch,
-    ip: &str,
-) -> bool {
-    let base = ip
-        .parse::<std::net::IpAddr>()
-        .ok()
-        .and_then(|addr| condition.matcher.as_ref().map(|matcher| matcher.contains(&addr)))
-        .unwrap_or(false);
     apply_negate(base, condition.negate)
 }
 

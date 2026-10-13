@@ -1,0 +1,14 @@
+# Suite-owned IP collection for one authored ACL slot.
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: acl-udp-allow-localhost-allow-1f567d51d3
+  namespace: edgion-test
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: localhost
+        cidrs:
+        - 127.0.0.0/8

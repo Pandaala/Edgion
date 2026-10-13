@@ -33,6 +33,79 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
+/// The framework awaits cases and suites serially. Capture the admitted resource
+/// before mutating it, including prepared Kubernetes peer annotations.
+async fn capture_original(ctx: &TestContext, kind: &str, ns: &str, name: &str) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let url = format!("{}/api/v1/namespaced/{kind}/{ns}/{name}", ctx.admin_api_url());
+    let mut request = client.get(url);
+    if let Some(token) = &ctx.admin_token {
+        request = request.bearer_auth(token);
+    }
+    let response = request.send().await.map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Cannot capture original {kind}/{ns}/{name}: {}",
+            response.status()
+        ));
+    }
+    let mut value: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+    // A restoration is an unconditional publication of the original authored spec.
+    value
+        .as_object_mut()
+        .ok_or("Original resource is not an object")?
+        .remove("status");
+    if let Some(metadata) = value["metadata"].as_object_mut() {
+        for key in [
+            "resourceVersion",
+            "generation",
+            "managedFields",
+            "uid",
+            "creationTimestamp",
+            "deletionTimestamp",
+            "deletionGracePeriodSeconds",
+        ] {
+            metadata.remove(key);
+        }
+    }
+    Ok(value)
+}
+
+async fn apply_value(ctx: &TestContext, value: &serde_json::Value) -> Result<(), String> {
+    ctx.apply_yaml(&serde_yaml::to_string(value).map_err(|e| e.to_string())?)
+        .await
+}
+
+/// All restorations run even after an earlier failure. Four targets require a
+/// 48s cleanup reserve. Four bounded captures take at most 20s;
+/// 20s capture + 120s mutation/probes + 48s cleanup leaves 22s before 210s.
+async fn restore_originals(ctx: &TestContext, originals: &[serde_json::Value]) -> Result<(), String> {
+    let mut errors = Vec::new();
+    for value in originals {
+        match tokio::time::timeout(Duration::from_secs(12), apply_value(ctx, value)).await {
+            Ok(Ok(())) => {}
+            result => errors.push(format!(
+                "{}/{}/{} restoration: {result:?}",
+                value["kind"], value["metadata"]["namespace"], value["metadata"]["name"]
+            )),
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+fn list_with_cidr(original: &serde_json::Value, cidr: &str) -> serde_json::Value {
+    let mut value = original.clone();
+    value["spec"]["data"]["config"]["items"] = serde_json::json!([{"name":"live-peer", "cidrs":[cidr]}]);
+    value
+}
+
 pub struct GcirEnforcementTestSuite;
 
 enum TcpEchoProbe {
@@ -132,6 +205,65 @@ spec:
 }
 
 impl GcirEnforcementTestSuite {
+    fn selected_profile_live_lists_and_invalid_generation_recovery() -> TestCase {
+        TestCase::new("selected_profile_live_lists_and_invalid_generation_recovery", "Selected GCIR profile reads live lists, preserves optional omissions, and rejects a published legacy generation", |ctx: TestContext| Box::pin(async move {
+            let start = Instant::now();
+            let consumer = match capture_original(&ctx, "EdgionStreamPlugins", "edgion-test", "gcir-stream-plugins").await {
+                Ok(value) => value, Err(error) => return TestResult::failed(start.elapsed(), error),
+            };
+            let selector = match capture_original(&ctx, "EdgionConfigData", "edgion-test", "gcir-enforce-test").await {
+                Ok(value) => value, Err(error) => return TestResult::failed(start.elapsed(), error),
+            };
+            let config = &consumer["spec"]["plugins"][0]["config"];
+            let allow_name = match config["profiles"]["allow-local"]["allowRefs"][0]["name"].as_str() { Some(name) => name.to_owned(), None => return TestResult::failed(start.elapsed(), "Missing allow profile reference".into()) };
+            let deny_name = match config["profiles"]["block-local"]["denyRefs"][0]["name"].as_str() { Some(name) => name.to_owned(), None => return TestResult::failed(start.elapsed(), "Missing deny profile reference".into()) };
+            let mut originals = Vec::new();
+            for name in [&allow_name, &deny_name] {
+                if originals.iter().any(|value: &serde_json::Value| value["metadata"]["name"].as_str() == Some(name)) { continue; }
+                match capture_original(&ctx, "EdgionConfigData", "edgion-test", name).await {
+                    Ok(value) => originals.push(value), Err(error) => return TestResult::failed(start.elapsed(), error),
+                }
+            }
+            let allow = originals.iter().find(|value| value["metadata"]["name"].as_str() == Some(&allow_name)).unwrap().clone();
+            let deny = originals.iter().find(|value| value["metadata"]["name"].as_str() == Some(&deny_name)).unwrap().clone();
+            originals.push(consumer.clone()); originals.push(selector);
+            let check = async {
+                // Explicit list setup precedes the policy. Shared K8s peer identity
+                // retains its exact annotations and is restored in this serial case.
+                apply_value(&ctx, &allow).await?; apply_value(&ctx, &deny).await?;
+                apply_value(&ctx, &consumer).await?;
+                ctx.apply_yaml(&selector_yaml_with("allow-local")).await?;
+                wait_for_tcp_echo(&ctx.tcp_addr(), b"acl-live-allow").await?;
+                apply_value(&ctx, &list_with_cidr(&allow, "192.0.2.0/24")).await?;
+                wait_for_tcp_denial(&ctx.tcp_addr(), b"acl-live-miss").await?;
+                ctx.delete_resource("EdgionConfigData", "edgion-test", &allow_name).await?;
+                wait_for_tcp_denial(&ctx.tcp_addr(), b"acl-live-missing").await?;
+                apply_value(&ctx, &allow).await?;
+                wait_for_tcp_echo(&ctx.tcp_addr(), b"acl-live-restored").await?;
+                ctx.apply_yaml(&selector_yaml_with("block-local")).await?;
+                wait_for_tcp_denial(&ctx.tcp_addr(), b"acl-live-deny").await?;
+                ctx.delete_resource("EdgionConfigData", "edgion-test", &deny_name).await?;
+                wait_for_tcp_echo(&ctx.tcp_addr(), b"acl-live-deny-omitted").await?;
+                apply_value(&ctx, &deny).await?;
+                wait_for_tcp_denial(&ctx.tcp_addr(), b"acl-live-deny-restored").await?;
+                ctx.apply_yaml(&selector_yaml_with("allow-local")).await?;
+                wait_for_tcp_echo(&ctx.tcp_addr(), b"acl-live-positive").await?;
+                let mut invalid = consumer.clone();
+                invalid["spec"]["plugins"][0]["config"]["profiles"]["allow-local"]["allow"] = serde_json::Value::Null;
+                apply_value(&ctx, &invalid).await?;
+                wait_for_tcp_denial(&ctx.tcp_addr(), b"acl-live-invalid").await?;
+                apply_value(&ctx, &consumer).await?;
+                wait_for_tcp_echo(&ctx.tcp_addr(), b"acl-live-clean").await.map(|_| ())
+            };
+            let result = tokio::time::timeout(Duration::from_secs(120), check).await.unwrap_or_else(|_| Err("GCIR live phases exceeded 120s".into()));
+            let cleanup = restore_originals(&ctx, &originals).await;
+            match (result, cleanup) {
+                (Ok(()), Ok(())) => TestResult::passed(start.elapsed()),
+                (result, cleanup) => TestResult::failed(start.elapsed(), format!("check={result:?}; cleanup={cleanup:?}")),
+            }
+        })).with_timeout(Duration::from_secs(210))
+    }
+
     /// Test 1: selector active=allow-local
     ///
     /// The selector selects the inline allow-local profile:
@@ -316,6 +448,7 @@ impl TestSuite for GcirEnforcementTestSuite {
             Self::gcir_deny_after_switch(),
             Self::gcir_fallback_unknown_profile(),
             Self::gcir_fallback_selector_missing(),
+            Self::selected_profile_live_lists_and_invalid_generation_recovery(),
         ]
     }
 }

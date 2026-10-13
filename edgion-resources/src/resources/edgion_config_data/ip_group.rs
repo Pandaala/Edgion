@@ -1,10 +1,8 @@
 //! Shared IP group primitive.
 //!
-//! `IpGroup` is a named bundle of CIDR strings used by multiple EdgionConfigData
-//! variants and plugin configs (e.g. `IpList`, and the GlobalConnectionIpRestriction
-//! stream-plugin profiles). It lives here, in the `edgion_config_data` primitive
-//! module, so both the config-data variants and the stream/HTTP plugins can share it
-//! without a cross-module ownership tangle.
+//! `IpGroup` owns named CIDR collections exclusively within `IpList`. Business
+//! consumers reference these lists and borrow the Gateway's central compiled
+//! matchers; they never copy or recompile the groups in plugin configuration.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -13,7 +11,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct IpGroup {
-    /// Group name (unique within a profile). Used for admin organization; runtime flattens all groups.
+    /// Group name, unique within one IpList; retained for canonical match attribution.
     pub name: String,
 
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -121,3 +121,149 @@ impl TestSuite for ConditionRefsDynamicDeletedTestSuite {
         )]
     }
 }
+
+async fn assert_live_ip_statuses(ctx: &TestContext, ordinary: u16, rap: u16) -> TestResult {
+    let start = Instant::now();
+    for (host, expected) in [
+        ("condition-refs-live-gate.example.com", ordinary),
+        ("condition-refs-live-rap.example.com", rap),
+    ] {
+        let response = ctx
+            .http_client
+            .get(format!("http://{}:31180/echo", ctx.target_host))
+            .header("host", host)
+            .send()
+            .await;
+        match response {
+            Ok(response) if response.status().as_u16() == expected => {}
+            result => {
+                return TestResult::failed(
+                    start.elapsed(),
+                    format!("Live IpList consumer {host} expected {expected}, got {result:?}"),
+                )
+            }
+        }
+    }
+    TestResult::passed(start.elapsed())
+}
+
+macro_rules! live_ip_suite {
+    ($name:ident, $title:literal, $case:literal, $ordinary:literal, $rap:literal) => {
+        pub struct $name;
+        impl TestSuite for $name {
+            fn name(&self) -> &str {
+                $title
+            }
+            fn test_cases(&self) -> Vec<TestCase> {
+                vec![TestCase::new(
+                    $case,
+                    "IpList-only publication changes retained ordinary and RAP consumers",
+                    |ctx| Box::pin(async move { assert_live_ip_statuses(&ctx, $ordinary, $rap).await }),
+                )]
+            }
+        }
+    };
+}
+live_ip_suite!(
+    ConditionRefsLiveIpInitialTestSuite,
+    "Condition References Dynamic - IpList Initial",
+    "condition_refs_live_ip_initial",
+    418,
+    200
+);
+live_ip_suite!(
+    ConditionRefsLiveIpUpdatedTestSuite,
+    "Condition References Dynamic - IpList Updated",
+    "condition_refs_live_ip_updated",
+    200,
+    403
+);
+live_ip_suite!(
+    ConditionRefsLiveIpDeletedTestSuite,
+    "Condition References Dynamic - IpList Deleted",
+    "condition_refs_live_ip_deleted",
+    500,
+    403
+);
+
+async fn real_ip_echo(ctx: &TestContext, host: &str, forwarded: bool) -> Result<String, String> {
+    let mut request = ctx
+        .http_client
+        .get(format!("http://{}:31180/headers", ctx.target_host))
+        .header("host", host);
+    if forwarded {
+        request = request.header("x-forwarded-for", "203.0.113.77");
+    }
+    let response = request.send().await.map_err(|error| error.to_string())?;
+    if response.status().as_u16() != 200 {
+        return Err(format!("expected 200, got {}", response.status()));
+    }
+    let body: serde_json::Value = response.json().await.map_err(|error| error.to_string())?;
+    body["headers"]["x-real-ip"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| "missing x-real-ip echo".into())
+}
+
+async fn assert_live_real_ip(ctx: &TestContext, plugin_trusted: bool, global_trusted: bool) -> TestResult {
+    let start = Instant::now();
+    for (host, trusted) in [
+        ("condition-refs-live-realip.example.com", plugin_trusted),
+        ("condition-refs-global-realip.example.com", global_trusted),
+    ] {
+        let result = async {
+            let peer = real_ip_echo(ctx, host, false).await?;
+            let forwarded = real_ip_echo(ctx, host, true).await?;
+            let expected = if trusted { "203.0.113.77" } else { &peer };
+            if forwarded == expected {
+                Ok(())
+            } else {
+                Err(format!("{host}: expected {expected}, got {forwarded}"))
+            }
+        }
+        .await;
+        if let Err(error) = result {
+            return TestResult::failed(start.elapsed(), error);
+        }
+    }
+    TestResult::passed(start.elapsed())
+}
+
+macro_rules! real_ip_suite {
+    ($name:ident, $title:literal, $case:literal, $plugin:literal, $global:literal) => {
+        pub struct $name;
+        impl TestSuite for $name {
+            fn name(&self) -> &str {
+                $title
+            }
+            fn test_cases(&self) -> Vec<TestCase> {
+                vec![TestCase::new(
+                    $case,
+                    "RealIp references respond to content, availability and visibility without rebuilding",
+                    |ctx| Box::pin(async move { assert_live_real_ip(&ctx, $plugin, $global).await }),
+                )]
+            }
+        }
+    };
+}
+real_ip_suite!(
+    ConditionRefsRealIpTrustedTestSuite,
+    "Condition References Dynamic - RealIp Trusted",
+    "condition_refs_realip_trusted",
+    true,
+    true
+);
+real_ip_suite!(
+    ConditionRefsRealIpPluginFallbackTestSuite,
+    "Condition References Dynamic - RealIp Plugin Fallback",
+    "condition_refs_realip_plugin_fallback",
+    false,
+    true
+);
+real_ip_suite!(
+    ConditionRefsRealIpGlobalFallbackTestSuite,
+    "Condition References Dynamic - RealIp Global Fallback",
+    "condition_refs_realip_global_fallback",
+    true,
+    false
+);

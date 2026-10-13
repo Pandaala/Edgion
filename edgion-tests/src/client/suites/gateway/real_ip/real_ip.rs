@@ -4,7 +4,7 @@
 // - EndpointSlice_edge_test-http.yaml         # HTTP backend service discovery
 // - Service_edge_test-http.yaml               # HTTP service definition
 // - httproute_default_example-route.yaml      # HTTP routing rules (Host: test.example.com)
-//   Note: route contains trustedIps config for real IP extraction
+//   Note: route contains trusted IpList entries config for real IP extraction
 // - Gateway_edge_example-gateway.yaml         # Gateway config
 // - GatewayClass__public-gateway.yaml         # GatewayClass config
 
@@ -36,7 +36,7 @@ impl RealIpTestSuite {
                     let url = format!("{}/headers", ctx.http_url());
 
                     // Simulate request through proxy chain:
-                    // Real client: 203.0.113.1 (NOT in trustedIps)
+                    // Real client: 203.0.113.1 (NOT in trusted IpList entries)
                     // Proxy 1: 198.51.100.2 (in 198.51.100.0/24 - trusted)
                     // Proxy 2: 192.168.1.1 (in 192.168.0.0/16 - trusted)
                     let mut headers = HeaderMap::new();

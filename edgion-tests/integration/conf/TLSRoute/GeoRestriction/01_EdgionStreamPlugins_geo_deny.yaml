@@ -13,10 +13,8 @@ spec:
         profiles:
           default:
             defaultAction: allow
-            deny:
-              - name: deny-unrelated-source
-                cidrs:
-                  - "127.0.0.9/32"
+            denyRefs:
+              - name: acl-tls-geo-deny-deny-b8fb957b20
     - type: GeoIpLocation
       config:
         defaultAction: allow

@@ -1,0 +1,14 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: global-realip-proxies
+  namespace: edgion-test
+spec:
+  visibility: Cluster
+  data:
+    type: IpList
+    config:
+      items:
+      - name: proxy
+        cidrs:
+        - 203.0.113.0/24

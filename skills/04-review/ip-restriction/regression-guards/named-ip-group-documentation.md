@@ -1,71 +1,32 @@
 ---
 name: named-ip-group-documentation
-description: Use when reviewing IpRestriction documentation or examples for the inline allow and deny schema shared by HTTP, L4 stream, and TLS-route plugins.
+description: Current reference-only IpList ownership, actual-owner binding, canonical borrowed matching and preserved historical review evidence.
 knowledge_type: regression-guards
 ---
 
-# IpRestriction documentation uses named `IpGroup` entries
+# Named IpGroups and reference-only ACL documentation
 
-## Conclusion and scope
+Business IP/CIDR collections belong only to IpList items. Each item is an IpGroup
+with name, optional description and ordered cidrs. HTTP IpRestriction, connection
+IpRestriction, TLS-route IpRestriction and GCIR ProfileRules contain ordered
+allowRefs/denyRefs objects, never inline allow/deny arrays or CIDR strings disguised
+as references. Each reference supplies name and optional namespace.
 
-Every documented inline `IpRestriction` `allow` or `deny` entry must use the
-current named `IpGroup` shape: required `name`, optional `description`, and
-non-empty `cidrs`. This applies to HTTP `IpRestrictionConfig`, L4
-`ConnectionIpRestrictionRules`, TLS-route IP restriction, related migration
-examples, and examples that compose IP restriction with another plugin.
+Examples must show named list resources alongside referring policies, preserve
+source/group/CIDR order and describe optional ACL omission accurately. IpList owns
+partial-good collection admission/status. Plugin policy validation owns source,
+reference and scalar shape; published removed-field invalidity seals the generation.
+Admission/decode rejection happens before publication and retains the admitted one.
 
-The obsolete `allowlist`/`denylist` keys and flat CIDR arrays under `allow` or
-`deny` are not compatibility forms and must not appear in usable examples.
+Historical D0049 corrected scalar legacy allowlist/denylist examples to then-current
+named inline groups without changing behavior. Its inline schema conclusion is now
+superseded by the reference-only contract. Preserve its documentation correctness
+lesson: a rename is insufficient if item types, resource ownership or namespaces
+are wrong. Verify English/Chinese tables and YAML examples semantically.
 
-## Rationale and evidence
+ACL matched groups intentionally remain in denial logs under the documented
+security exception; credential authentication failure groups remain redacted.
+Re-evaluate typed fields, schema shape, central ownership and all examples whenever
+the shared contract changes. Unrelated policy allow/deny names are not IP collections.
 
-The canonical grouped-list contract requires atomic replacement of flat fields
-without aliases (`skills/01-architecture/00-common/04-grouped-list-pattern.md`).
-Current source types independently confirm the wire shape:
-
-- `edgion-resources/src/resources/edgion_config_data/ip_group.rs::IpGroup`
-  defines `name`, optional `description`, and `cidrs`.
-- `IpRestrictionConfig::allow`/`deny` and
-  `ConnectionIpRestrictionRules::allow`/`deny` are
-  `Option<Vec<IpGroup>>`.
-- HTTP, L4 stream, and TLS-route initialization compile those groups with the
-  canonical partial-good matcher path.
-
-D0049 found that source Rustdoc, agent knowledge, migration material, and
-bilingual user guides still contained examples from the removed flat schema.
-Those examples could not represent the current structs and could mislead an
-operator into applying an invalid or ineffective access-control configuration.
-
-## Limits
-
-This guard concerns the inline IP-restriction schema only. Natural-language
-terms such as “allowlist”, resource names such as `corp-allowlist`, and unrelated
-fields such as Wasm `calloutAllowlist` are not obsolete IP-restriction keys.
-
-Documentation alignment does not change deny-before-allow evaluation,
-`defaultAction`, `DirectPeerIp`/`RemoteIp`, partial-good CIDR compilation, or
-`allowRefs`/`denyRefs` resolution semantics. Integration fixtures already use the
-current schema and are intentionally outside this documentation-only correction.
-
-## Verification and re-evaluation
-
-Search documentation, skills, and source Rustdoc for all of the following when
-the schema or examples change:
-
-- `allowlist:` or `denylist:` inside an `IpRestriction` configuration;
-- inline `allow: [...]` or `deny: [...]` CIDR arrays;
-- an `allow`/`deny` sequence whose entries are scalar IP/CIDR strings rather
-  than objects containing `name` and `cidrs`;
-- English/Chinese examples that no longer have equivalent schema shapes.
-
-Re-evaluate this rule only if the canonical resource structs or grouped-list
-contract change. The D0049 correction passed `cargo fmt --all`, workspace
-all-target `cargo check` and Clippy, agent-document validation, and the SSA,
-metrics-inventory, and Pingora-source guards. An independent reviewer also ran
-`cargo test -p edgion-resources ip_restriction --lib` (65 passed, 0 failed).
-
-## Resolution references
-
-- D0049 — documentation-correctness finding discovered during B0082; corrected
-  by aligning Rustdoc, skills, migration docs, and English/Chinese user examples
-  without changing schemas, runtime behavior, or integration tests.
+Canonical contract: [grouped lists](../../../01-architecture/00-common/04-grouped-list-pattern.md).

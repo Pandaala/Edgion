@@ -41,7 +41,7 @@ conditions:
   run:
     anyOf:
       - type: directPeerIpMatch
-        ips: [10.0.0.0/8]
+        ipRefs: [{ name: private-networks }]
       - name: authenticated-production
         allOf:
           - type: keyMatch
@@ -89,8 +89,8 @@ body gate: its outbound webhook body is unrelated to the proxied request body.
 | `keyMatch` | True when the key's value is in `values` **or** matches `regex`. `negate: true` is the exclude spelling. |
 | `timeRange` | True when now is on or after `after` and strictly before `before` (RFC3339). Either bound may be omitted. |
 | `probability` | True with probability `ratio` (0.0–1.0). Optional `key` makes the sample deterministic. |
-| `directPeerIpMatch` | True when the immediate TCP peer is in `ips` / `ipRefs`. |
-| `remoteIpMatch` | True when the RealIp-resolved client is in `ips` / `ipRefs`. |
+| `directPeerIpMatch` | True when the immediate TCP peer is in referenced IpLists. |
+| `remoteIpMatch` | True when the RealIp-resolved client is in referenced IpLists. |
 | `secretMatch` | True when the request key equals the selected Secret data value. `secretKey` names that data entry. |
 | `hmacAuth` | True when the request passes header-only HMAC verification. HMAC fields (`secretGroups`, `algorithms`, …) are siblings of `type`. |
 | `jwtClaimMatch` | True when a stored JWT claim matches `values` **or** `regex`. `claim` is a dot-nested path. |
@@ -107,7 +107,7 @@ never inverts it.
 
 ## ConfigData and Secret references
 
-`directPeerIpMatch` / `remoteIpMatch` may list `ipRefs` to an IpList `EdgionConfigData`. `secretMatch` uses `secretRef` plus required `secretKey`; it resolves exactly `Secret.data[secretKey]`, never every value in the Secret. `hmacAuth` resolves `secretGroups[].secretRefs`. The Controller walks every direct and grouped Condition in entry, body, dye, RequestRestriction, and RequestAccessPolicy sets, and writes `resolvedIps` / `resolvedValues` / `resolvedCredentials` **in place** on those Condition objects.
+`directPeerIpMatch` / `remoteIpMatch` accept only `ipRefs` to IpList ConfigData. Put IPs and CIDRs in the referenced IpList `items[].cidrs`; small business lists can use one IpGroup. The Gateway compiles each list once and borrows its matcher from one dispatch snapshot. IpList-only updates change retained consumers without copying addresses into plugins. The Controller authorizes references and resolves `secretMatch.secretRef` plus `secretKey`, and HMAC `secretGroups[].secretRefs`; only credential payloads are written into the conditions.
 
 - A missing, disabled, wrong-type, or unpermitted **IpList** `ipRefs` target is reported as `ResolvedRefs=False`; the Controller does not compile an empty matcher from unresolved `ipRefs`. A missing **Secret** referenced by `secretMatch` or HMAC `secretRefs` is reported the same way. For `secretMatch`, a missing, non-UTF-8, or empty selected `secretKey` value is also unresolved. These errors are included in the `edgion_controller_resource_abnormal` metric.
 
@@ -253,3 +253,21 @@ short-circuiting. Otherwise existing Boolean semantics apply, so additional vali
 conditions may intentionally skip Redis. Results are isolated per resource and
 per chain invocation, including reloads. See the
 [complete overflow example](./rate-limit-redis.md#local-allowance-before-redis-overflow-admission).
+
+## Referenced IP data
+
+IP/CIDR collections are configured in IpList resources. Small business lists use their own IpGroup; multiple groups remain part of the same referenced matcher. There is no aggregation threshold and plugins carry references only. Removed inline fields are invalid even when valid references also exist.
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: private-networks
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+        - name: private-clients
+          cidrs: [10.0.0.0/8]
+```

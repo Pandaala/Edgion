@@ -22,6 +22,8 @@ use bytes::Bytes;
 use std::net::IpAddr;
 
 use crate::geoip::{GeoInfo, GeoLookup};
+use crate::plugins::common::geo_ip_refs::CompiledGeoIpRefs;
+use crate::plugins::runtime::conditions::ip_refs::IpConditionCompiler;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::plugin_configs::{
@@ -71,12 +73,7 @@ fn dim_facts(info: &GeoInfo) -> GeoDimFacts<'_> {
 /// `GeoIpLocation` L7 plugin: geo resolution, plus an optional deny/allow decision.
 pub struct GeoIpLocation {
     config: GeoIpLocationConfig,
-    /// True when `validate_and_init` failed at construction (should not happen
-    /// — the controller and this same code path both validate first via the
-    /// shared `check_fields`; see the config's module doc). Requests then fail
-    /// CLOSED (non-auth default-close policy) rather than run against
-    /// uncompiled matchers.
-    init_failed: bool,
+    refs: CompiledGeoIpRefs,
     /// Any configured rule references `RemoteIp` (any key, including `Cidr`)
     /// — the remote address itself is needed. Always true in parse-only mode.
     needs_remote_ip: bool,
@@ -91,31 +88,32 @@ pub struct GeoIpLocation {
 }
 
 impl GeoIpLocation {
-    pub fn create(config: &GeoIpLocationConfig) -> Box<dyn RequestFilter> {
+    pub(crate) fn create(
+        config: &GeoIpLocationConfig,
+        compiler: &IpConditionCompiler<'_>,
+    ) -> Result<Box<dyn RequestFilter>, String> {
+        // Validate authored shape before clearing fields in the private runtime copy.
+        if let Some(error) = config.check_fields(false) {
+            return Err(error);
+        }
+        let refs = CompiledGeoIpRefs::from_http(config, compiler)
+            .map_err(|_| "GeoIpLocation owning IP references are invalid".to_string())?;
         let mut config = config.clone();
-        let init_failed = if let Err(e) = config.validate_and_init(false) {
-            tracing::error!(
-                error = %e,
-                label = "HTTP plugin",
-                "Failed to initialize GeoIpLocationConfig; failing CLOSED",
-            );
-            true
-        } else {
-            false
-        };
+        config.validate_and_init(false)?;
+        CompiledGeoIpRefs::sanitize(&mut config);
 
         let parse_only = config.is_parse_only();
         let needs_remote_ip = parse_only || config.source_is_used(GeoRuleSource::RemoteIp);
         let needs_direct_facts = parse_only || config.source_needs_geo_facts(GeoRuleSource::DirectPeerIp);
         let needs_remote_facts = parse_only || config.source_needs_geo_facts(GeoRuleSource::RemoteIp);
 
-        Box::new(GeoIpLocation {
+        Ok(Box::new(GeoIpLocation {
             config,
-            init_failed,
+            refs,
             needs_remote_ip,
             needs_direct_facts,
             needs_remote_facts,
-        })
+        }))
     }
 
     fn parse_ip(addr: &str) -> Option<IpAddr> {
@@ -141,8 +139,11 @@ impl RequestFilter for GeoIpLocation {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        if self.init_failed {
-            plugin_log.push_err("init fail: fail-closed");
+        if self.refs.has_refs() {
+            session.ensure_config_data_view();
+        }
+        if !self.refs.available(session) {
+            plugin_log.push_err("refs:unavailable fail-closed");
             return self.deny_response(session);
         }
 
@@ -198,7 +199,9 @@ impl RequestFilter for GeoIpLocation {
                     },
                     remote: remote_facts,
                 };
-                RuntimeDecision::Rule(self.config.decide(&ctx))
+                RuntimeDecision::Rule(self.config.decide(&ctx, |side, group, rule, ip| {
+                    self.refs.contains(session, side, group, rule, ip)
+                }))
             }
         };
 

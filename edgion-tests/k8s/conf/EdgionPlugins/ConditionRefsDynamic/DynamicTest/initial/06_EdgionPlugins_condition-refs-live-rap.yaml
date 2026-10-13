@@ -1,0 +1,20 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: condition-refs-live-rap
+  namespace: edgion-default
+spec:
+  requestPlugins:
+  - type: RequestAccessPolicy
+    config:
+      defaultProfile: main
+      profiles:
+        main:
+          requiredRuleGroups:
+          - name: clients
+            anyOfRules:
+            - name: peer
+              type: directPeerIp
+              config:
+                ipRefs:
+                - name: condition-refs-live-ips

@@ -2,8 +2,8 @@
 //!
 //! A profile is an AND of named required rule groups. Each group is satisfied
 //! by any complete typed rule in `anyOfRules`. Typed rules may match the direct
-//! TCP peer, the RealIp-resolved remote client, or URL candidates. IP-list and
-//! URL-list references are expanded by the Controller into `resolvedProfiles`
+//! TCP peer, the RealIp-resolved remote client, or URL candidates. IP-list
+//! references remain live; URL-list references are expanded by the Controller into `resolvedProfiles`
 //! before the policy reaches the Gateway.
 
 use std::collections::{HashMap, HashSet};
@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::path_normalization::{get_path_normalization_config, normalize_config_path};
 use crate::resources::edgion_config_data::EdgionConfigDataRef;
-use crate::resources::edgion_plugins::conditions::{ConditionSet, ConditionValidationProfile, IpAccessMatch};
+use crate::resources::edgion_plugins::conditions::{ConditionSet, ConditionValidationProfile};
+use crate::resources::edgion_plugins::ip_reference_set::{IpReferenceSet, IpReferenceWire};
 use crate::resources::edgion_plugins::PluginValidation;
 
 pub const DEFAULT_MAX_REFERENCED_URL_RULES: usize = 100;
@@ -59,8 +60,8 @@ pub struct RequestAccessPolicyConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 
-    /// Controller-expanded, self-contained runtime profiles. The Gateway uses
-    /// these instead of resolving IP/URL ConfigData on the request path.
+    /// Effective runtime profiles with Controller-expanded URL candidates and
+    /// credential material. IpList references remain live on the Gateway.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub resolved_profiles: Option<HashMap<String, RequestAccessProfile>>,
@@ -104,14 +105,31 @@ pub enum RequestAccessRuleType {
     Url(UrlAccessRuleConfig),
 }
 
-/// Primary IP match plus secondary conditions.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Positive primary IP membership plus secondary conditions.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct IpAccessRuleConfig {
     #[serde(flatten)]
-    pub ip: IpAccessMatch,
+    pub refs: IpReferenceSet,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conditions: Option<ConditionSet>,
+}
+
+impl<'de> Deserialize<'de> for IpAccessRuleConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Wire {
+            #[serde(default)]
+            conditions: Option<ConditionSet>,
+            #[serde(flatten)]
+            refs: IpReferenceWire,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        Ok(Self {
+            refs: wire.refs.into_set(),
+            conditions: wire.conditions,
+        })
+    }
 }
 
 /// One URL typed rule. Its inline candidate and every referenced item are OR-ed.
@@ -314,7 +332,7 @@ impl RequestAccessRule {
 
 impl IpAccessRuleConfig {
     fn validate_and_init(&mut self) -> Result<(), String> {
-        self.ip.validate_and_init()?;
+        self.refs.validate()?;
         validate_optional_conditions(&mut self.conditions)
     }
 }

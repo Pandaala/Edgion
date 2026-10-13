@@ -9,8 +9,6 @@ spec:
   plugins:
     - type: IpRestriction
       config:
-        allow:
-          - name: allow-all
-            cidrs:
-              - "0.0.0.0/0"
+        allowRefs:
+          - name: acl-allow-all-ips-allow-976c8bc59f
         defaultAction: allow

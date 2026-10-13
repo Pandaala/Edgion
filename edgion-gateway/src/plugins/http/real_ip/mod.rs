@@ -1,3 +1,3 @@
 mod plugin;
 
-pub use plugin::RealIp;
+pub use plugin::{RealIp, RealIpPolicy};

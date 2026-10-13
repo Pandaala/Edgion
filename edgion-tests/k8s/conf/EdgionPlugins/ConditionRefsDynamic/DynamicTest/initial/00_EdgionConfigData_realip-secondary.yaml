@@ -1,0 +1,14 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-secondary
+  namespace: edgion-default
+spec:
+  visibility: Namespace
+  data:
+    type: IpList
+    config:
+      items:
+      - name: ipv6
+        cidrs:
+        - ::1/128

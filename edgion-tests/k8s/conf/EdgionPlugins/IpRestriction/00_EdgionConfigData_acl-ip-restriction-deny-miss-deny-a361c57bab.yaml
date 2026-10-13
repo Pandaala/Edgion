@@ -1,0 +1,14 @@
+# Suite-owned IP collection for one authored ACL slot.
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: acl-ip-restriction-deny-miss-deny-a361c57bab
+  namespace: edgion-default
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: blocked
+        cidrs:
+        - 127.0.0.1/32

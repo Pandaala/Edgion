@@ -48,7 +48,7 @@ spec:
                         Variant-specific configuration. Shape depends on `type`:
                           - KeyList: { matchMode?: "exact"|"regex", items: [{ name, description?, items: [{ key, code?, priority?, id?, behavior? }] }] }
                           - IpList: { items: [{ name, description?, cidrs: string[] }] }   (grouped CIDRs / bare IPs, v4/v6)
-                          - RequestAccessUrlAllowList: { items: [{ name, hosts?, paths, allOf? }] }; data-only URL allow candidates bound and expanded by the referring RequestAccessPolicy. allOf uses the same Condition enum as plugin conditions (keyExist, keyMatch, timeRange, probability, directPeerIpMatch, remoteIpMatch, secretMatch, hmacAuth)
+                          - RequestAccessUrlAllowList: { items: [{ name, hosts?, paths, conditions? }] }; data-only URL allow candidates bound and expanded by the referring RequestAccessPolicy. conditions uses the shared ConditionSet grammar; IP leaves accept ipRefs only, with addresses owned by IpList items[].cidrs
                           - ProxyProtocolTrust: strict non-overlay inbound PROXY sender trust policy — { mode: "required" } or { mode: "trustedSources", trustedCidrs: string[] }; invalid or unknown fields reject the policy
                           - Selector: active-profile selector — { active?: string, description?: string }; referenced via activeProfileRef in plugin configs. `active` names one of the consumer's configured profiles; `active: null`/absent uses its default. Switches among profiles only — never disables filtering
                           - RegionRouteOverride: all-Optional overlay for RegionRoute — { enable?, active?, regions? }; referenced via overrideRef in EdgionPlugins RegionRoute configs

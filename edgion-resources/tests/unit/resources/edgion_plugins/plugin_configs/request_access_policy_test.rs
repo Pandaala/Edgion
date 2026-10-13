@@ -2,17 +2,20 @@ use super::*;
 use crate::common::KeyGet;
 use crate::resources::common::SecretObjectReference;
 use crate::resources::edgion_plugins::conditions::{
-    Condition, JwtClaimMatchCondition, KeyMatchCondition, MatchCore, MtlsField, MtlsMatchCondition,
+    Condition, IpAccessMatch, JwtClaimMatchCondition, KeyMatchCondition, MatchCore, MtlsField, MtlsMatchCondition,
     SecretMatchCondition,
 };
 use crate::resources::edgion_plugins::plugin_configs::HmacMatchConfig;
 
-fn ip_rule(name: &str, cidr: &str) -> RequestAccessRule {
+fn ip_rule(name: &str, _cidr: &str) -> RequestAccessRule {
     RequestAccessRule {
         name: name.to_string(),
         rule: RequestAccessRuleType::RemoteIp(IpAccessRuleConfig {
-            ip: IpAccessMatch {
-                ips: vec![cidr.to_string()],
+            refs: IpReferenceSet {
+                ip_refs: vec![EdgionConfigDataRef {
+                    name: "test-networks".into(),
+                    ..Default::default()
+                }],
                 ..Default::default()
             },
             conditions: None,
@@ -220,38 +223,25 @@ fn hmac_match_condition_redacts_admin_output_and_round_trips_conf_sync() {
 
 #[test]
 fn expanded_ip_union_compiles_one_matcher_for_inline_and_refs() {
-    let mut value = IpAccessMatch {
-        ips: vec!["10.0.0.0/8".to_string()],
-        ip_refs: vec![EdgionConfigDataRef {
-            name: "shared-networks".to_string(),
-            ..Default::default()
-        }],
-        resolved_ips: Some(vec!["10.0.0.0/8".to_string(), "203.0.113.0/24".to_string()]),
-        ..Default::default()
-    };
-    value.validate_and_init().unwrap();
-    let matcher = value.matcher.as_ref().expect("one compiled union matcher");
-    assert!(matcher.contains(&"10.1.2.3".parse().unwrap()));
-    assert!(matcher.contains(&"203.0.113.8".parse().unwrap()));
+    let mut value: IpAccessMatch = serde_json::from_value(serde_json::json!({
+        "ips":["10.0.0.0/8"], "ipRefs":[{"name":"shared-networks"}],
+        "resolvedIps":["10.0.0.0/8","203.0.113.0/24"]
+    }))
+    .unwrap();
+    assert!(value.validate_and_init().is_err());
+    let wire = serde_json::to_value(value).unwrap();
+    assert!(wire.get("ips").is_none());
+    assert!(wire.get("resolvedIps").is_none());
 }
 
 #[test]
 fn all_invalid_resolved_ips_compile_to_empty_matcher() {
-    let mut value = IpAccessMatch {
-        ips: vec!["10.0.0.0/8".to_string()],
-        ip_refs: vec![EdgionConfigDataRef {
-            name: "junk-networks".to_string(),
-            ..Default::default()
-        }],
-        resolved_ips: Some(vec!["not-a-cidr".to_string(), "999.999.999.999".to_string()]),
-        ..Default::default()
-    };
-    value
-        .validate_and_init()
-        .expect("all-invalid resolvedIps must not fail RAP init");
-    let matcher = value.matcher.as_ref().expect("empty matcher");
-    assert!(!matcher.contains(&"10.1.2.3".parse().unwrap()));
-    assert!(!matcher.contains(&"203.0.113.8".parse().unwrap()));
+    let mut value: IpAccessMatch = serde_json::from_value(serde_json::json!({
+        "ipRefs":[{"name":"junk-networks"}], "resolvedIps":["not-a-cidr","999.999.999.999"]
+    }))
+    .unwrap();
+    assert!(value.validate_and_init().is_err());
+    assert!(serde_json::to_value(value).unwrap().get("resolvedIps").is_none());
 }
 
 #[test]
@@ -410,8 +400,11 @@ fn validates_request_body_scans_all_of() {
     let mut value = config();
     value.profiles.get_mut("default").unwrap().required_rule_groups[0].any_of_rules[0].rule =
         RequestAccessRuleType::RemoteIp(IpAccessRuleConfig {
-            ip: IpAccessMatch {
-                ips: vec!["10.0.0.0/8".to_string()],
+            refs: IpReferenceSet {
+                ip_refs: vec![EdgionConfigDataRef {
+                    name: "test-networks".into(),
+                    ..Default::default()
+                }],
                 ..Default::default()
             },
             conditions: Some(ConditionSet::all_of(vec![Condition::HmacAuth(HmacMatchConfig {

@@ -5,36 +5,31 @@ use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::IpAddr;
 
+use crate::plugins::runtime::conditions::ip_refs::{BoundIpPredicate, IpConditionCompiler, ProfileSelection};
 use async_trait::async_trait;
 use bytes::Bytes;
-use edgion_algo::matcher::radix_ip::IpRadixMatcher;
 use edgion_algo::matcher::radix_path::{PathMatchKind, PathRadixBuilder, PathRadixTree};
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::edgion_config_data::ConfigEntry;
 use edgion_resources::resources::edgion_plugins::plugin_configs::{
-    AccessPathMatchType, IpAccessMatch, RequestAccessPolicyConfig, RequestAccessProfile, RequestAccessRuleType,
-    UrlAccessCandidate,
+    AccessPathMatch, AccessPathMatchType, RequestAccessPolicyConfig, RequestAccessProfile, RequestAccessRuleType,
 };
 use edgion_resources::resources::edgion_plugins::BodyRequirement;
 use regex::Regex;
+use std::sync::Arc;
 
 use crate::ctx::NormalizedHostname;
 use crate::plugins::runtime::conditions::{CompiledConditionSet, MatchState};
-use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
 use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
 
 /// Fallback deny body used when the operator configured no `message`.
 const DEFAULT_DENY_BODY: Bytes = Bytes::from_static(b"Access denied");
 
-struct RuntimeIpSet(Option<IpRadixMatcher>);
-
+struct RuntimeIpSet(Option<Arc<BoundIpPredicate>>);
 impl RuntimeIpSet {
-    fn new(config: IpAccessMatch) -> Self {
-        Self(config.matcher)
-    }
-
-    fn matches(&self, ip: Option<&IpAddr>) -> bool {
-        ip.is_some_and(|ip| self.0.as_ref().is_some_and(|matcher| matcher.contains(ip)))
+    fn matches(&self, session: &dyn PluginSession, ip: Option<&IpAddr>) -> bool {
+        self.0
+            .as_ref()
+            .is_some_and(|refs| refs.evaluate(session, ip.copied(), false) == MatchState::True)
     }
 }
 
@@ -94,24 +89,30 @@ fn canonical_radix_path(path: &str) -> String {
 }
 
 impl RuntimeUrlIndex {
-    fn compile(candidates: Vec<UrlAccessCandidate>, body_requirement: Option<BodyRequirement>) -> Result<Self, String> {
+    fn compile(
+        candidates: Vec<(
+            &[String],
+            &[AccessPathMatch],
+            Option<&edgion_resources::resources::edgion_plugins::conditions::ConditionSet>,
+        )>,
+        body_requirement: Option<BodyRequirement>,
+        ip: Option<&IpConditionCompiler<'_>>,
+    ) -> Result<Self, String> {
         let mut runtime_candidates = Vec::with_capacity(candidates.len());
         let mut paths: BTreeMap<String, PathBucket> = BTreeMap::new();
         let mut regex_paths = Vec::new();
-        for candidate in candidates {
+        for (hosts, candidate_paths, conditions) in candidates {
             let candidate_index = runtime_candidates.len();
             runtime_candidates.push(RuntimeUrlCandidate {
-                hosts: candidate
-                    .hosts
-                    .into_iter()
-                    .map(|host| NormalizedHostname::new(&host).as_str().to_string())
+                hosts: hosts
+                    .iter()
+                    .map(|host| NormalizedHostname::new(host).as_str().to_string())
                     .collect(),
-                conditions: candidate
-                    .conditions
-                    .as_ref()
-                    .map(|conditions| CompiledConditionSet::new(conditions, "conditions", body_requirement.clone())),
+                conditions: conditions.map(|conditions| {
+                    CompiledConditionSet::with_ip(conditions, "conditions", body_requirement.clone(), ip)
+                }),
             });
-            for path in candidate.paths {
+            for path in candidate_paths {
                 match path.match_type {
                     AccessPathMatchType::Exact => paths
                         .entry(canonical_radix_path(&path.value))
@@ -208,14 +209,14 @@ impl RuntimeRule {
     ) -> PolicyMatch {
         match self {
             Self::DirectPeerIp { ips, conditions } => {
-                if !ips.matches(direct_peer_ip) {
+                if !ips.matches(session, direct_peer_ip) {
                     PolicyMatch::NoMatch
                 } else {
                     supplemental_matches(conditions.as_ref(), session, log).await
                 }
             }
             Self::RemoteIp { ips, conditions } => {
-                if !ips.matches(remote_ip) {
+                if !ips.matches(session, remote_ip) {
                     PolicyMatch::NoMatch
                 } else {
                     supplemental_matches(conditions.as_ref(), session, log).await
@@ -250,36 +251,46 @@ struct RuntimeProfile {
 }
 
 impl RuntimeProfile {
-    fn new(config: RequestAccessProfile, body_requirement: Option<BodyRequirement>) -> Result<Self, String> {
+    fn new(
+        config: &RequestAccessProfile,
+        body_requirement: Option<BodyRequirement>,
+        ip: Option<&IpConditionCompiler<'_>>,
+    ) -> Result<Self, String> {
         let mut url_candidates = Vec::new();
         let mut groups = Vec::with_capacity(config.required_rule_groups.len());
-        for group in config.required_rule_groups {
+        for group in &config.required_rule_groups {
             let mut rules = Vec::with_capacity(group.any_of_rules.len());
-            for rule in group.any_of_rules {
-                rules.push(match rule.rule {
+            for rule in &group.any_of_rules {
+                rules.push(match &rule.rule {
                     RequestAccessRuleType::DirectPeerIp(config) => RuntimeRule::DirectPeerIp {
-                        ips: RuntimeIpSet::new(config.ip),
+                        ips: RuntimeIpSet(ip.and_then(|ip| ip.bind(&config.refs))),
                         conditions: config.conditions.as_ref().map(|conditions| {
-                            CompiledConditionSet::new(conditions, "conditions", body_requirement.clone())
+                            CompiledConditionSet::with_ip(conditions, "conditions", body_requirement.clone(), ip)
                         }),
                     },
                     RequestAccessRuleType::RemoteIp(config) => RuntimeRule::RemoteIp {
-                        ips: RuntimeIpSet::new(config.ip),
+                        ips: RuntimeIpSet(ip.and_then(|ip| ip.bind(&config.refs))),
                         conditions: config.conditions.as_ref().map(|conditions| {
-                            CompiledConditionSet::new(conditions, "conditions", body_requirement.clone())
+                            CompiledConditionSet::with_ip(conditions, "conditions", body_requirement.clone(), ip)
                         }),
                     },
                     RequestAccessRuleType::Url(config) => {
-                        let candidates = config.resolved_candidates.unwrap_or_else(|| {
-                            vec![UrlAccessCandidate {
-                                name: rule.name,
-                                hosts: config.hosts,
-                                paths: config.paths,
-                                conditions: config.conditions,
-                            }]
-                        });
                         let start = url_candidates.len();
-                        url_candidates.extend(candidates);
+                        if let Some(candidates) = &config.resolved_candidates {
+                            url_candidates.extend(candidates.iter().map(|candidate| {
+                                (
+                                    candidate.hosts.as_slice(),
+                                    candidate.paths.as_slice(),
+                                    candidate.conditions.as_ref(),
+                                )
+                            }));
+                        } else {
+                            url_candidates.push((
+                                config.hosts.as_slice(),
+                                config.paths.as_slice(),
+                                config.conditions.as_ref(),
+                            ));
+                        }
                         RuntimeRule::Url((start..url_candidates.len()).collect())
                     }
                 });
@@ -288,7 +299,7 @@ impl RuntimeProfile {
         }
         Ok(Self {
             groups,
-            url_index: RuntimeUrlIndex::compile(url_candidates, body_requirement)?,
+            url_index: RuntimeUrlIndex::compile(url_candidates, body_requirement, ip)?,
         })
     }
 
@@ -339,19 +350,22 @@ impl RuntimeProfile {
 
 pub struct RequestAccessPolicy {
     default_profile: String,
-    profiles: HashMap<String, RuntimeProfile>,
+    profiles: Vec<RuntimeProfile>,
+    profile_names: HashMap<String, usize>,
     active_profile_ref_key: Option<String>,
     status: u16,
     /// Prepared once per generation; `None` falls back to
     /// [`DEFAULT_DENY_BODY`], which never allocates.
     message: Option<Bytes>,
     init_failed: bool,
+    needs_data_view: bool,
 }
 
 impl RequestAccessPolicy {
     pub(crate) fn create_bound(
         entry: HttpConfigDataEntry<'_>,
         body_requirement: Option<BodyRequirement>,
+        ip: Option<&IpConditionCompiler<'_>>,
     ) -> Option<Box<dyn RequestFilter>> {
         let EdgionPlugin::RequestAccessPolicy(config) = entry.plugin() else {
             return None;
@@ -364,17 +378,18 @@ impl RequestAccessPolicy {
             Some(Ok(Some(key))) => (Some(key), false),
             Some(Ok(None) | Err(_)) => (None, true),
         };
-        Some(Self::build(config, key, invalid_selector, body_requirement))
+        Some(Self::build(config, key, invalid_selector, body_requirement, ip))
     }
 
     pub(crate) fn create_inline(
         config: &RequestAccessPolicyConfig,
         body_requirement: Option<BodyRequirement>,
+        ip: Option<&IpConditionCompiler<'_>>,
     ) -> Option<Box<dyn RequestFilter>> {
         if request_access_has_external_data(config) {
             return None;
         }
-        Some(Self::build(config, None, false, body_requirement))
+        Some(Self::build(config, None, false, body_requirement, ip))
     }
 
     fn build(
@@ -382,19 +397,22 @@ impl RequestAccessPolicy {
         active_profile_ref_key: Option<String>,
         invalid_selector: bool,
         body_requirement: Option<BodyRequirement>,
+        ip: Option<&IpConditionCompiler<'_>>,
     ) -> Box<dyn RequestFilter> {
-        let mut config = config.clone();
-        let mut init_failed = config.validate_and_init().is_err() || invalid_selector;
-        let mut profiles = HashMap::new();
+        let mut validation = config.clone();
+        let mut init_failed = validation.validate_and_init().is_err() || invalid_selector;
+        let mut profiles = Vec::new();
+        let mut profile_names = HashMap::new();
         if !init_failed {
-            let prepared_profiles = config
-                .resolved_profiles
-                .take()
-                .unwrap_or_else(|| std::mem::take(&mut config.profiles));
-            for (name, profile) in prepared_profiles {
-                match RuntimeProfile::new(profile, body_requirement.clone()) {
+            let prepared_profiles = config.resolved_profiles.as_ref().unwrap_or(&config.profiles);
+            let mut names: Vec<_> = prepared_profiles.keys().collect();
+            names.sort();
+            for name in names {
+                let profile = &prepared_profiles[name];
+                match RuntimeProfile::new(profile, body_requirement.clone(), ip) {
                     Ok(profile) => {
-                        profiles.insert(name, profile);
+                        profile_names.insert(name.clone(), profiles.len());
+                        profiles.push(profile);
                     }
                     Err(error) => {
                         tracing::error!(error = %error, "Failed to initialize RequestAccessPolicy; requests will be denied");
@@ -408,38 +426,49 @@ impl RequestAccessPolicy {
         if init_failed {
             tracing::error!("Invalid RequestAccessPolicy configuration; requests will be denied");
         }
+        let needs_data_view = active_profile_ref_key.is_some()
+            || profiles.iter().any(|profile| {
+                profile
+                    .groups
+                    .iter()
+                    .any(|group| group.0.iter().any(|rule| !matches!(rule, RuntimeRule::Url(_))))
+                    || profile.url_index.candidates.iter().any(|candidate| {
+                        candidate
+                            .conditions
+                            .as_ref()
+                            .is_some_and(CompiledConditionSet::requires_config_data_view)
+                    })
+            });
         Box::new(Self {
-            default_profile: config.default_profile,
+            default_profile: config.default_profile.clone(),
             profiles,
+            profile_names,
             active_profile_ref_key,
             status: config.status,
-            message: config.message.map(Bytes::from),
+            message: config.message.clone().map(Bytes::from),
             init_failed,
+            needs_data_view,
         })
     }
 
-    fn active_profile<'a>(&'a self, log: &mut PluginLog) -> Option<&'a RuntimeProfile> {
-        if let Some(key) = &self.active_profile_ref_key {
-            let store = get_global_edgion_config_data_store();
-            let data = store.get_raw_by_key(key);
-            match data.as_deref() {
-                Some(value) if value.spec.enable => match &value.spec.data {
-                    ConfigEntry::Selector(selector) => {
-                        let selected = selector.active.as_deref().unwrap_or(self.default_profile.as_str());
-                        return self.profiles.get(selected);
-                    }
-                    _ => {
-                        log.push_err("selector type mismatch");
-                        return None;
-                    }
-                },
-                _ => {
-                    log.push_err("selector unavailable");
-                    return None;
+    fn active_profile<'a>(&'a self, session: &dyn PluginSession, log: &mut PluginLog) -> Option<&'a RuntimeProfile> {
+        let index = if let Some(key) = &self.active_profile_ref_key {
+            match session.config_data_profile_index(key, &self.default_profile, &self.profile_names) {
+                ProfileSelection::Selected(index) => Some(index),
+                ProfileSelection::WrongType => {
+                    log.push_err("selector type mismatch");
+                    None
                 }
+                ProfileSelection::Unavailable => {
+                    log.push_err("selector unavailable");
+                    None
+                }
+                ProfileSelection::UnknownProfile => None,
             }
-        }
-        self.profiles.get(self.default_profile.as_str())
+        } else {
+            self.profile_names.get(&self.default_profile).copied()
+        };
+        index.and_then(|index| self.profiles.get(index))
     }
 
     fn deny(&self) -> PluginRunningResult {
@@ -461,7 +490,10 @@ impl RequestFilter for RequestAccessPolicy {
             log.push_err("deny:init-failed");
             return self.deny();
         }
-        let Some(profile) = self.active_profile(log) else {
+        if self.needs_data_view {
+            session.ensure_config_data_view();
+        }
+        let Some(profile) = self.active_profile(session, log) else {
             log.push_err("deny:profile-unavailable");
             return self.deny();
         };

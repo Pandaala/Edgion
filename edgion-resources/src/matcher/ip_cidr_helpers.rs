@@ -289,51 +289,13 @@ pub fn build_grouped_matcher(groups: &[IpGroup]) -> Result<IpRadixMatcher, Strin
         .map_err(|e| format!("Failed to build IpRadixMatcher: {}", e))
 }
 
-/// Single-matcher **compatibility shim** over [`evaluate_ip_access_multi`].
-///
-/// Whitelist mode here is decided by **content** (`allow.is_some()`), NOT by
-/// configured intent. That is safe only because the partial builder always yields
-/// `Some(empty)` for a present-but-all-bad allow list (Task 2), so a configured
-/// whitelist can never silently collapse into "no allow matcher → default-allow".
-/// Even so, **live whitelist evaluation MUST use the intent-based
-/// [`evaluate_ip_access_multi`]** (via `check_ip_access_with_refs` /
-/// `check_ip_with_refs`), which derives `allow_mode` from configured intent and
-/// folds in reference-resolved matchers. This shim is retained only for the
-/// single-matcher unit tests and the ref-less `check_ip`/`check_ip_access`
-/// convenience wrappers; do not introduce new live whitelist call sites here.
-///
-/// Behaviour (canonical deny > allow > default priority used by every
-/// IP-restriction plugin — HTTP `IpRestrictionConfig`, L4
-/// `ConnectionIpRestrictionRules`, cluster-scope `GlobalConnectionIpRestriction`):
-/// - `deny` match wins → `DenyByGroup(g)`.
-/// - `allow` is present and matches → `AllowByGroup(g)`.
-/// - `allow` is present but does not match → `DenyByWhitelistMiss`.
-/// - `allow` is absent → fall through to `Default(default_action.clone())`.
-///
-/// Keeping the algorithm in one place prevents the call sites from silently
-/// diverging when the priority or returned variants change. See spec §4.6 truth
-/// table.
-pub fn evaluate_ip_access(
-    deny: Option<&IpRadixMatcher>,
-    allow: Option<&IpRadixMatcher>,
-    default_action: &DefaultAction,
-    ip: &IpAddr,
-) -> AccessDecision {
-    // Preserve the historical semantics exactly: "allow present" == whitelist mode.
-    let deny_slice: Vec<&IpRadixMatcher> = deny.into_iter().collect();
-    let allow_slice: Vec<&IpRadixMatcher> = allow.into_iter().collect();
-    evaluate_ip_access_multi(&deny_slice, &allow_slice, allow.is_some(), default_action, ip)
-}
-
-/// N-matcher generalization of [`evaluate_ip_access`]. `deny`/`allow` are the
-/// union of inline and reference-resolved matchers; `allow_mode` is whitelist
-/// mode decided by *configured intent* (inline allow non-empty OR allow_refs
-/// configured non-empty), NOT by whether any allow matcher resolved. See spec
-/// Decisions 4 & 5: an allow-mode config with an empty resolved allow set
-/// denies all (fail-closed whitelist).
-pub fn evaluate_ip_access_multi(
-    deny: &[&IpRadixMatcher],
-    allow: &[&IpRadixMatcher],
+/// Ordered borrowed matcher evaluation shared by every IP restriction consumer.
+/// `deny`/`allow` lazily visit canonical matchers in authored reference order.
+/// `allow_mode` follows non-empty authored allowRefs, independently of availability:
+/// an empty available allow union still denies every address as a whitelist miss.
+pub fn evaluate_ip_access_multi<'deny, 'allow>(
+    deny: impl IntoIterator<Item = &'deny IpRadixMatcher>,
+    allow: impl IntoIterator<Item = &'allow IpRadixMatcher>,
     allow_mode: bool,
     default_action: &DefaultAction,
     ip: &IpAddr,

@@ -4,7 +4,6 @@ use crate::routes::grpc::GrpcPortRouteManager;
 use crate::routes::http::routes_mgr::HttpPortRouteManager;
 use crate::util::RealIpExtractor;
 use edgion_resources::path_normalization::PathNormalizationConfig;
-use edgion_resources::resources::edgion_config_data::IpGroup;
 use edgion_resources::{EdgionGatewayConfig, ListenerKey};
 use http::HeaderValue;
 use serde_json::json;
@@ -58,21 +57,20 @@ async fn session_from_request(raw_request: &[u8]) -> (Session, DuplexStream) {
 }
 
 fn trusted_proxy_extractor(header: &str) -> RealIpExtractor {
-    RealIpExtractor::new(
-        &[IpGroup {
-            name: "trusted".to_string(),
-            description: None,
-            cidrs: vec![
-                "0.0.0.0/32".to_string(),
-                "192.168.0.0/16".to_string(),
-                "10.0.0.0/8".to_string(),
-            ],
-        }],
-        header.to_string(),
-        true,
-        None,
-    )
-    .unwrap()
+    RealIpExtractor::new(header.into(), true, None)
+}
+
+fn trusted(ip: &std::net::IpAddr) -> bool {
+    matches!(ip, std::net::IpAddr::V4(ip) if ip.is_private() || ip.is_unspecified())
+}
+
+fn trusted_proxy_policy(header: &str) -> crate::plugins::http::real_ip::RealIpPolicy {
+    let owner: EdgionGatewayConfig = serde_json::from_value(json!({
+        "metadata": {"name": "real-ip"}, "spec": {"realIp": {"trustedIpRefs": [{"name": "proxies", "namespace": "default"}], "realIpHeader": header}}
+    })).unwrap();
+    let compiler =
+        crate::plugins::runtime::conditions::ip_refs::IpConditionCompiler::from_gateway_config(&owner).unwrap();
+    crate::plugins::http::real_ip::RealIpPolicy::bind(owner.spec.real_ip.as_ref().unwrap(), &compiler).unwrap()
 }
 
 #[test]
@@ -132,19 +130,28 @@ fn configured_xff_is_case_insensitive_while_custom_header_keeps_its_path() {
     let xff = trusted_proxy_extractor("X-FoRwArDeD-FoR");
     assert!(xff.real_ip_header().eq_ignore_ascii_case("x-forwarded-for"));
     assert_eq!(
-        xff.resolve_real_ip("192.168.1.4:8080", snapshot.value.as_deref())
+        xff.resolve_real_ip("192.168.1.4:8080", snapshot.value.as_deref(), trusted)
             .remote_ip,
         "203.0.113.7"
     );
 
     let custom = trusted_proxy_extractor("X-Client-IP");
     assert!(!custom.real_ip_header().eq_ignore_ascii_case("x-forwarded-for"));
-    assert_eq!(custom.extract_real_ip("192.168.1.4:8080", &request), "198.51.100.9");
+    assert_eq!(
+        custom
+            .resolve_real_ip(
+                "192.168.1.4:8080",
+                request.headers.get("x-client-ip").and_then(|v| v.to_str().ok()),
+                trusted
+            )
+            .remote_ip,
+        "198.51.100.9"
+    );
 
     let invalid = request_with_xff(&[HeaderValue::from_bytes(b"\xff").unwrap()]);
     let snapshot = snapshot_x_forwarded_for(&invalid, Some(200));
     assert_eq!(
-        xff.resolve_real_ip("192.168.1.4:8080", snapshot.value.as_deref())
+        xff.resolve_real_ip("192.168.1.4:8080", snapshot.value.as_deref(), trusted)
             .remote_ip,
         "192.168.1.4"
     );
@@ -217,7 +224,7 @@ async fn invalid_under_limit_xff_falls_back_and_upstream_replaces_it_with_peer()
     let proxy = proxy();
     let mut ctx = context(200);
     let config = crate::config::ResolvedGatewayConfig {
-        real_ip_extractor: Some(Arc::new(trusted_proxy_extractor("X-Forwarded-For"))),
+        real_ip_policy: Some(Arc::new(trusted_proxy_policy("X-Forwarded-For"))),
         ..Default::default()
     };
     ctx.egc = Arc::new(config);

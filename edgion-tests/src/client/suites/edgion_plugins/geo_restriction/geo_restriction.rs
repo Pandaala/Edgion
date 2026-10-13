@@ -35,7 +35,7 @@
 // here ONLY because this harness is closed (no real client can reach this
 // Gateway from the outside claiming to be a trusted proxy); the shared base
 // EdgionGatewayConfig already trusts 127.0.0.0/8 as a proxy (`realIp.
-// trustedIps`).
+// trusted IpList entries`).
 //
 // `ctx.apply_yaml` only waits for Controller admission, not for conf_sync
 // propagation to the Gateway, so every assertion below polls via
@@ -439,34 +439,32 @@ impl GeoRestrictionTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let denied_cidr = if k8s_mode() { "192.168.0.0/16" } else { "127.0.0.5/32" };
-                    let config = format!(
-                        "          defaultAction: allow\n          failOpen: false\n          denyRuleGroups:\n            - name: block-cidr\n              rules:\n                - source: DirectPeerIp\n                  key: cidr\n                  values: [\"{denied_cidr}\"]\n"
-                    );
-                    if let Err(e) = apply_geo_rr(&ctx, &config).await {
-                        return TestResult::failed(start.elapsed(), format!("apply: {e}"));
-                    }
-                    let denied_client = client_from("127.0.0.5");
-                    if let Err(e) = expect_status(&denied_client, &ctx, RR_HOST, None, 403).await {
-                        return TestResult::failed(start.elapsed(), format!("in-CIDR: {e}"));
-                    }
-                    if k8s_mode() {
-                        let out_of_cidr = "          defaultAction: allow\n          failOpen: false\n          denyRuleGroups:\n            - name: block-other-cidr\n              rules:\n                - source: DirectPeerIp\n                  key: cidr\n                  values: [\"10.0.0.0/8\"]\n";
-                        if let Err(e) = apply_geo_rr(&ctx, out_of_cidr).await {
-                            return TestResult::failed(start.elapsed(), format!("apply out-of-CIDR: {e}"));
-                        }
-                    }
-                    let allowed_client = client_from("127.0.0.1");
-                    match expect_status(&allowed_client, &ctx, RR_HOST, None, 200).await {
-                        Ok(()) => TestResult::passed_with_message(
+                    let hit = if k8s_mode() { "192.168.0.0/16" } else { "127.0.0.5/32" };
+                    let config="          defaultAction: allow\n          failOpen: false\n          denyRuleGroups:\n            - name: block-cidr\n              rules:\n                - source: DirectPeerIp\n                  key: cidr\n                  ipRefs: [{name: geo-http-cidrs}]\n";
+                    let check = tokio::time::timeout(Duration::from_secs(55), async {
+                apply_geo_cidrs(&ctx,hit).await?; apply_geo_rr(&ctx,config).await?;
+                expect_status(&client_from("127.0.0.5"),&ctx,RR_HOST,None,403).await?;
+                if k8s_mode() {
+                    let out_of_cidr="          defaultAction: allow\n          failOpen: false\n          denyRuleGroups:\n            - name: block-other-cidr\n              rules:\n                - source: DirectPeerIp\n                  key: cidr\n                  ipRefs: [{name: geo-http-cidrs}]\n";
+                    apply_geo_cidrs(&ctx,"10.0.0.0/8").await?; apply_geo_rr(&ctx,out_of_cidr).await?;
+                }
+                expect_status(&client_from("127.0.0.1"),&ctx,RR_HOST,None,200).await
+            })
+                        .await
+                        .unwrap_or_else(|_| Err("Geo verification timed out after 55s; cleanup remains reserved".to_string()));
+                    let cleanup = cleanup_geo_resources(&ctx, hit).await;
+                    match (check, cleanup) {
+                        (Ok(()), Ok(())) => TestResult::passed_with_message(
                             start.elapsed(),
-                            "CIDR membership correctly enforced".to_string(),
+                            "CIDR membership correctly enforced; original resources restored".into(),
                         ),
-                        Err(e) => TestResult::failed(start.elapsed(), format!("out-of-CIDR: {e}")),
+                        (result, cleanup) => {
+                            TestResult::failed(start.elapsed(), format!("verification={result:?}; cleanup={cleanup:?}"))
+                        }
                     }
                 })
             },
-        )
+        ).with_timeout(Duration::from_secs(90))
     }
 
     /// Ingest rejection: a plugin with a deny rule group but no plugin-level
@@ -731,6 +729,7 @@ impl TestSuite for GeoRestrictionTestSuite {
             GeoRestrictionTestSuite::remote_ip_source_resolves_via_xff(),
             GeoRestrictionTestSuite::allow_whitelist_miss_denies(),
             GeoRestrictionTestSuite::cidr_rule_matches_by_membership(),
+            GeoRestrictionTestSuite::live_ip_list_and_invalid_generation_recovery(),
             GeoRestrictionTestSuite::ingest_rejection_missing_fail_open(),
             GeoRestrictionTestSuite::invalid_iso_value_is_accepted(),
             GeoRestrictionTestSuite::access_log_geo_fields(),
@@ -739,5 +738,131 @@ impl TestSuite for GeoRestrictionTestSuite {
             GeoRestrictionTestSuite::chain_geo_deny_independent_of_ip(),
             GeoRestrictionTestSuite::chain_allows_both(),
         ]
+    }
+}
+
+/// Update the explicit list independently of the ref-only consuming plugin.
+async fn apply_geo_cidrs(ctx: &TestContext, cidr: &str) -> Result<(), String> {
+    apply_geo_cidrs_enabled(ctx, cidr, true).await
+}
+async fn apply_geo_cidrs_enabled(ctx: &TestContext, cidr: &str, enabled: bool) -> Result<(), String> {
+    let yaml = format!(
+        r#"apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: geo-http-cidrs
+  namespace: edgion-default
+spec:
+  enable: {enabled}
+  data:
+    type: IpList
+    config:
+      items:
+        - name: test-peer
+          cidrs: ["{cidr}"]
+"#
+    );
+    let yaml = if k8s_mode() {
+        crate::suites::k8s_peer_identity::render_geo_template(&yaml)?
+    } else {
+        yaml
+    };
+    ctx.apply_yaml(&yaml).await
+}
+
+impl GeoRestrictionTestSuite {
+    fn live_ip_list_and_invalid_generation_recovery() -> TestCase {
+        TestCase::new(
+            "live_ip_list_and_invalid_generation_recovery",
+            "retained Geo policy observes IpList changes and rejects published removed fields",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let hit = if k8s_mode() { "192.168.0.0/16" } else { "127.0.0.5/32" };
+                    let miss = if k8s_mode() { "10.0.0.0/8" } else { "127.0.0.1/32" };
+                    let config="          failOpen: true\n          denyRuleGroups:\n            - name: clients\n              rules:\n                - source: DirectPeerIp\n                  key: cidr\n                  ipRefs: [{name: geo-http-cidrs}]\n";
+                    let client = client_from("127.0.0.5");
+                    let check = tokio::time::timeout(Duration::from_secs(85), async {
+                apply_geo_cidrs(&ctx,hit).await?; apply_geo_rr(&ctx,config).await?;
+                expect_status(&client,&ctx,RR_HOST,None,403).await?;
+                apply_geo_cidrs(&ctx,miss).await?;
+                expect_status(&client,&ctx,RR_HOST,None,200).await?;
+                ctx.delete_resource("EdgionConfigData",RR_NS,"geo-http-cidrs").await?;
+                expect_status(&client,&ctx,RR_HOST,None,500).await?;
+                apply_geo_cidrs(&ctx,hit).await?;
+                expect_status(&client,&ctx,RR_HOST,None,403).await?;
+                apply_geo_cidrs_enabled(&ctx,hit,false).await?;
+                expect_status(&client,&ctx,RR_HOST,None,500).await?;
+                ctx.apply_yaml("apiVersion: edgion.io/v1\nkind: EdgionConfigData\nmetadata:\n  name: geo-http-cidrs\n  namespace: edgion-default\nspec:\n  data:\n    type: Misc\n    config: {}\n").await?;
+                expect_status(&client,&ctx,RR_HOST,None,500).await?;
+                apply_geo_cidrs(&ctx,hit).await?;
+                expect_status(&client,&ctx,RR_HOST,None,403).await?;
+                apply_geo_cidrs(&ctx,miss).await?;
+                expect_status(&client,&ctx,RR_HOST,None,200).await?;
+                let invalid=format!("{config}                  values: null\n");
+                apply_geo_rr(&ctx,&invalid).await?;
+                wait_for_accepted(&ctx,RR_NAME,"False").await?;
+                expect_status(&client,&ctx,RR_HOST,None,500).await?;
+                apply_geo_rr(&ctx,config).await?;
+                wait_for_accepted(&ctx,RR_NAME,"True").await?;
+                expect_status(&client,&ctx,RR_HOST,None,200).await
+            })
+                        .await
+                        .unwrap_or_else(|_| Err("Geo verification timed out after 85s; cleanup remains reserved".to_string()));
+                    let cleanup = cleanup_geo_resources(&ctx, hit).await;
+                    match (check, cleanup) {
+                        (Ok(()), Ok(())) => TestResult::passed_with_message(
+                            start.elapsed(),
+                            "live lists and typed-invalid clean recovery; original list/policy restored".into(),
+                        ),
+                        (result, cleanup) => {
+                            TestResult::failed(start.elapsed(), format!("verification={result:?}; cleanup={cleanup:?}"))
+                        }
+                    }
+                })
+            },
+        ).with_timeout(Duration::from_secs(120))
+    }
+}
+
+/// Restore the exact original native/K8s resource, including group names and adjacent ACLs.
+async fn restore_geo_fixture(ctx: &TestContext) -> Result<(), String> {
+    use serde::Deserialize;
+    let source = if k8s_mode() {
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/k8s/conf/EdgionPlugins/GeoRestriction/resources.yaml"
+        ))
+    } else {
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/conf/EdgionPlugins/GeoRestriction/02_EdgionPlugins_geo_rr.yaml"
+        ))
+    };
+    let yaml = {
+        let mut selected = None;
+        for document in serde_yaml::Deserializer::from_str(source) {
+            let value = serde_yaml::Value::deserialize(document).map_err(|error| error.to_string())?;
+            if value["kind"].as_str() == Some("EdgionPlugins") && value["metadata"]["name"].as_str() == Some("geo-rr") {
+                selected = Some(serde_yaml::to_string(&value).map_err(|error| error.to_string())?);
+                break;
+            }
+        }
+        selected.ok_or_else(|| "original Geo fixture resource is missing".to_string())?
+    };
+    ctx.apply_yaml(&yaml).await
+}
+
+/// Attempt both original resource restorations even if one fails or times out.
+async fn cleanup_geo_resources(ctx: &TestContext, cidr: &str) -> Result<(), String> {
+    let list = tokio::time::timeout(Duration::from_secs(12), apply_geo_cidrs(ctx, cidr))
+        .await
+        .unwrap_or_else(|_| Err("list cleanup timed out after 12s".into()));
+    let consumer = tokio::time::timeout(Duration::from_secs(12), restore_geo_fixture(ctx))
+        .await
+        .unwrap_or_else(|_| Err("consumer cleanup timed out after 12s".into()));
+    match (list, consumer) {
+        (Ok(()), Ok(())) => Ok(()),
+        (list, consumer) => Err(format!("list cleanup={list:?}; consumer cleanup={consumer:?}")),
     }
 }

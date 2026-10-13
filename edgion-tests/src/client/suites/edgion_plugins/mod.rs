@@ -81,6 +81,9 @@ pub use body_plugins::{
 pub use canary::{CanaryHotSwapFinalTestSuite, CanaryHotSwapInitialTestSuite, CanaryTestSuite};
 pub use condition_refs_dynamic::{
     ConditionRefsDynamicDeletedTestSuite, ConditionRefsDynamicInitialTestSuite, ConditionRefsDynamicUpdatedTestSuite,
+    ConditionRefsLiveIpDeletedTestSuite, ConditionRefsLiveIpInitialTestSuite, ConditionRefsLiveIpUpdatedTestSuite,
+    ConditionRefsRealIpGlobalFallbackTestSuite, ConditionRefsRealIpPluginFallbackTestSuite,
+    ConditionRefsRealIpTrustedTestSuite,
 };
 pub use cors::CorsPluginTestSuite;
 pub use credential_injector::{

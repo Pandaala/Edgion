@@ -1768,3 +1768,344 @@ impl super::HttpListenerPublication {
         )
     }
 }
+
+#[tokio::test]
+async fn typed_ip_invalid_input_replaces_committed_runtime_and_clean_generation_recovers() {
+    for full in [true, false] {
+        for removed in ["ips", "resolvedIps", "unknownIpField"] {
+            let publisher = publisher();
+            let mut wire = json!({
+                "metadata":{"name":"plugins","namespace":"apps"},
+                "spec":{"requestPlugins":[{"type":"RequestHeaderModifier","config":{"set":[{"name":"X-Test","value":"ok"}]},
+                    "conditions":{"run":{"allOf":[{"type":"remoteIpMatch","ipRefs":[{"name":"nets"}]}]}}
+                }]}
+            });
+            let clean: EdgionPlugins = serde_json::from_value(wire.clone()).unwrap();
+            update_source(&publisher, Arc::new(clean.clone()), full);
+            let before = view(&publisher);
+            assert!(before.is_activatable, "temporary list absence is not a cold seal");
+            wire["spec"]["requestPlugins"][0]["conditions"]["run"]["allOf"][0][removed] = json!(["192.0.2.0/24"]);
+            wire["spec"]["requestPlugins"][0]["conditions"]["run"]["allOf"][0]["invalidInput"] = json!(false);
+            let invalid: EdgionPlugins = serde_json::from_value(wire).unwrap();
+            let transport = serde_json::to_value(invalid).unwrap();
+            assert!(transport["spec"]["requestPlugins"][0]["conditions"]["run"]["allOf"][0]
+                .get(removed)
+                .is_none());
+            let receiver: EdgionPlugins = serde_json::from_value(transport).unwrap();
+            update_source(&publisher, Arc::new(receiver), full);
+            let rejected = view(&publisher);
+            assert!(!rejected.is_activatable);
+            assert!(!Arc::ptr_eq(&before, &rejected));
+            assert!(matches!(
+                first_result(&rejected).await,
+                PluginRunningResult::ErrResponse { status: 500, .. }
+            ));
+            update_source(&publisher, Arc::new(clean), full);
+            let recovered = view(&publisher);
+            assert!(recovered.is_activatable);
+            assert!(!Arc::ptr_eq(&rejected, &recovered));
+        }
+    }
+}
+
+#[tokio::test]
+async fn primary_rap_negate_presence_replaces_runtime_instead_of_retaining_ignored_configuration() {
+    for full in [true, false] {
+        for negate in [json!(false), json!(true), json!(null)] {
+            let publisher = publisher();
+            let profile = json!({"requiredRuleGroups":[{"name":"clients","anyOfRules":[{"name":"peer","type":"directPeerIp","config":{"ipRefs":[{"name":"nets"}]}}]}]});
+            let mut wire = json!({"metadata":{"name":"plugins","namespace":"apps"},"spec":{"requestPlugins":[{
+                "type":"RequestAccessPolicy","config":{"defaultProfile":"main","profiles":{"main":profile},"resolvedProfiles":{"main":profile}}
+            }]}});
+            let clean: EdgionPlugins = serde_json::from_value(wire.clone()).unwrap();
+            update_source(&publisher, Arc::new(clean.clone()), full);
+            assert!(view(&publisher).is_activatable);
+            wire["spec"]["requestPlugins"][0]["config"]["profiles"]["main"]["requiredRuleGroups"][0]["anyOfRules"][0]
+                ["config"]["negate"] = negate.clone();
+            wire["spec"]["requestPlugins"][0]["config"]["resolvedProfiles"]["main"]["requiredRuleGroups"][0]
+                ["anyOfRules"][0]["config"]["negate"] = negate;
+            let invalid: EdgionPlugins = serde_json::from_value(wire).unwrap();
+            let receiver: EdgionPlugins = serde_json::from_value(serde_json::to_value(invalid).unwrap()).unwrap();
+            update_source(&publisher, Arc::new(receiver), full);
+            let rejected = view(&publisher);
+            assert!(!rejected.is_activatable);
+            assert!(matches!(
+                first_result(&rejected).await,
+                PluginRunningResult::ErrResponse { status: 500, .. }
+            ));
+            update_source(&publisher, Arc::new(clean), full);
+            assert!(view(&publisher).is_activatable);
+        }
+    }
+}
+
+#[test]
+fn real_ip_legacy_presence_replaces_previous_runtime_and_clean_publication_recovers() {
+    for full in [false, true] {
+        let publisher = publisher();
+        let make = |legacy: Option<Value>| {
+            let mut config = json!({"trustedIpRefs": [{"name": "proxies"}]});
+            if let Some(value) = legacy {
+                config["trustedIps"] = value;
+            }
+            let source: EdgionPlugins = serde_json::from_value(json!({
+                "metadata": {"name": "plugins", "namespace": "apps"},
+                "spec": {"requestPlugins": [{"type": "RealIp", "config": config}]}
+            }))
+            .unwrap();
+            let transported = serde_json::to_value(source).unwrap();
+            Arc::new(serde_json::from_value(transported).unwrap())
+        };
+        update_source(&publisher, make(None), full);
+        let good = view(&publisher);
+        assert!(good
+            .plugin_runtime
+            .request_plugins_iter()
+            .any(|filter| filter.name() == "RealIp"));
+        for legacy in [Value::Null, json!([])] {
+            update_source(&publisher, make(Some(legacy)), full);
+            let invalid = view(&publisher);
+            assert!(!Arc::ptr_eq(&good, &invalid));
+            assert!(!invalid
+                .plugin_runtime
+                .request_plugins_iter()
+                .any(|filter| filter.name() == "RealIp"));
+            assert!(invalid
+                .plugin_runtime
+                .request_plugins_iter()
+                .any(|filter| filter.name() == "RejectInvalidConfig"));
+        }
+        update_source(&publisher, make(None), full);
+        let recovered = view(&publisher);
+        assert!(recovered
+            .plugin_runtime
+            .request_plugins_iter()
+            .any(|filter| filter.name() == "RealIp"));
+        assert!(!recovered
+            .plugin_runtime
+            .request_plugins_iter()
+            .any(|filter| filter.name() == "RejectInvalidConfig"));
+    }
+}
+
+#[tokio::test]
+async fn geo_removed_and_typo_fields_replace_previous_runtime_and_clean_generation_recovers() {
+    for full in [false, true] {
+        let publisher = publisher();
+        let make = |field: Option<(&str, Value)>| {
+            let mut rule = json!({"source":"DirectPeerIp","key":"cidr","ipRefs":[{"name":"clients"}]});
+            if let Some((name, value)) = field {
+                rule[name] = value;
+            }
+            let source:EdgionPlugins=serde_json::from_value(json!({"metadata":{"name":"plugins","namespace":"apps"},"spec":{"requestPlugins":[{"type":"GeoIpLocation","config":{"failOpen":true,"allowRuleGroups":[{"rules":[rule]}]}}]}})).unwrap();
+            Arc::new(serde_json::from_value(serde_json::to_value(source).unwrap()).unwrap())
+        };
+        update_source(&publisher, make(None), full);
+        let good = view(&publisher);
+        assert!(good
+            .plugin_runtime
+            .request_plugins_iter()
+            .any(|filter| filter.name() == "GeoIpLocation"));
+        for (name, value) in [
+            ("values", Value::Null),
+            ("values", json!([])),
+            ("values", json!(["10.0.0.0/8"])),
+            ("geoipRefs", Value::Null),
+            ("ipRefz", json!([])),
+        ] {
+            update_source(&publisher, make(Some((name, value))), full);
+            let invalid = view(&publisher);
+            assert!(!Arc::ptr_eq(&good, &invalid));
+            assert!(!invalid
+                .plugin_runtime
+                .request_plugins_iter()
+                .any(|filter| filter.name() == "GeoIpLocation"));
+            assert!(matches!(
+                first_result(&invalid).await,
+                PluginRunningResult::ErrResponse { status: 500, .. }
+            ));
+        }
+        update_source(&publisher, make(None), full);
+        let recovered = view(&publisher);
+        assert!(recovered
+            .plugin_runtime
+            .request_plugins_iter()
+            .any(|filter| filter.name() == "GeoIpLocation"));
+        assert!(!recovered
+            .plugin_runtime
+            .request_plugins_iter()
+            .any(|filter| filter.name() == "RejectInvalidConfig"));
+        assert!(
+            good.plugin_runtime
+                .request_plugins_iter()
+                .any(|filter| filter.name() == "GeoIpLocation"),
+            "held old generation remains intact"
+        );
+    }
+}
+
+#[test]
+fn geo_stream_typed_invalid_replaces_cached_policy_and_clean_publication_restores_forwarding() {
+    use crate::plugins::stream::{StreamContext, StreamLayer, StreamPluginResult};
+    use futures::FutureExt;
+    let _lock = crate::geoip::GEO_TEST_LOCK.lock();
+    for full in [false, true] {
+        let publisher = publisher();
+        publisher.replace_gateways(HashMap::from([(
+            "apps/a".into(),
+            gateway("a", "a", 18080, Some("stream")),
+        )]));
+        let listener = ListenerKey::new("0.0.0.0:18080".parse().unwrap(), "HTTP");
+        let make = |invalid: bool| {
+            let mut config = json!({"failOpen":true,"denyRuleGroups":[{"rules":[{"source":"DirectPeerIp","key":"country","values":["ZZ"]}]}]});
+            if invalid {
+                config["denyRuleGroup"] = Value::Null;
+            }
+            let source:EdgionStreamPlugins=serde_json::from_value(json!({"metadata":{"name":"stream","namespace":"apps"},"spec":{"plugins":[{"type":"GeoIpLocation","config":config}]}})).unwrap();
+            Arc::new(serde_json::from_value(serde_json::to_value(source).unwrap()).unwrap())
+        };
+        for invalid in [false, true, false] {
+            let incoming = HashMap::from([("apps/stream".into(), make(invalid))]);
+            if full {
+                publisher.replace_stream_plugins(incoming);
+            } else {
+                publisher.update_stream_plugins(incoming, &HashSet::new());
+            }
+            let ConnectionView::Ready(runtime) = publisher.snapshot().connection(&listener) else {
+                panic!("existing listener must remain bound");
+            };
+            let ctx = StreamContext::new("192.0.2.1".parse().unwrap(), 18080, StreamLayer::Stage1);
+            let result = runtime
+                .stream_plugin_runtime
+                .run(&ctx)
+                .now_or_never()
+                .expect("synchronous Geo connection decision");
+            assert_eq!(matches!(result, StreamPluginResult::Deny(_)), invalid);
+        }
+    }
+}
+
+#[test]
+fn acl_actual_publication_replaces_legacy_generation_and_clean_recovers() {
+    let publisher = publisher();
+    let value = json!({"metadata":{"name":"plugins","namespace":"apps"},"spec":{"requestPlugins":[{
+        "type":"IpRestriction","config":{"allowRefs":[{"name":"networks"}]}
+    }]}});
+    let clean: Arc<EdgionPlugins> = Arc::new(serde_json::from_value(value.clone()).unwrap());
+    update_source(&publisher, clean.clone(), true);
+    let held = view(&publisher);
+    assert!(held.is_activatable);
+    assert_eq!(
+        held.plugin_runtime.request_plugins_iter().next().unwrap().name(),
+        "IpRestriction"
+    );
+    for (field, payload) in [("allow", Value::Null), ("deny", json!([]))] {
+        let mut invalid = value.clone();
+        invalid["spec"]["requestPlugins"][0]["config"][field] = payload;
+        let typed: EdgionPlugins = serde_json::from_value(invalid).unwrap();
+        let received = Arc::new(serde_json::from_str(&serde_json::to_string(&typed).unwrap()).unwrap());
+        update_source(&publisher, received, false);
+        let rejected = view(&publisher);
+        assert!(!Arc::ptr_eq(&held, &rejected));
+        assert_eq!(
+            rejected.plugin_runtime.request_plugins_iter().next().unwrap().name(),
+            "RejectInvalidConfig"
+        );
+        // An in-flight retained view remains immutable while current callers
+        // receive the rejected generation; a clean new publication recovers.
+        assert_eq!(
+            held.plugin_runtime.request_plugins_iter().next().unwrap().name(),
+            "IpRestriction"
+        );
+        update_source(&publisher, clean.clone(), false);
+        let recovered = view(&publisher);
+        assert!(recovered.is_activatable);
+        assert_eq!(
+            recovered.plugin_runtime.request_plugins_iter().next().unwrap().name(),
+            "IpRestriction"
+        );
+    }
+}
+
+#[tokio::test]
+async fn acl_stream_actual_publication_replaces_invalid_generation_and_clean_recovers() {
+    use crate::plugins::stream::{StreamContext, StreamLayer, StreamPluginResult};
+    for kind in ["IpRestriction", "GlobalConnectionIpRestriction"] {
+        let publisher = publisher();
+        publisher.replace_gateways(HashMap::from([(
+            "apps/a".into(),
+            gateway("a", "a", 18080, Some("stream")),
+        )]));
+        let mut cfg = json!({"defaultAction":"allow","denyRefs":[{"name":"unavailable-publication-deny"}]});
+        if kind == "GlobalConnectionIpRestriction" {
+            cfg = json!({"enable":true,"activeProfile":"base","profiles":{"base":cfg}});
+        }
+        let authored =
+            json!({"metadata":{"name":"stream","namespace":"apps"},"spec":{"plugins":[{"type":kind,"config":cfg}]}});
+        let clean: Arc<EdgionStreamPlugins> = Arc::new(serde_json::from_value(authored.clone()).unwrap());
+        publisher.replace_stream_plugins(HashMap::from([("apps/stream".into(), clean.clone())]));
+        let held = scope(&publisher, "apps/a").stream("apps/stream").unwrap();
+        let context = StreamContext::new("192.0.2.1".parse().unwrap(), 18080, StreamLayer::Stage1);
+        assert!(matches!(
+            held.stream_plugin_runtime.run(&context).await,
+            StreamPluginResult::Allow
+        ));
+        for payload in [Value::Null, json!([])] {
+            let mut bad = authored.clone();
+            let config = &mut bad["spec"]["plugins"][0]["config"];
+            if kind == "IpRestriction" {
+                config["deny"] = payload;
+            } else {
+                config["profiles"]["base"]["deny"] = payload;
+            }
+            let typed: EdgionStreamPlugins = serde_json::from_value(bad).unwrap();
+            let wire = serde_json::to_string(&typed).unwrap();
+            publisher.replace_stream_plugins(HashMap::from([(
+                "apps/stream".into(),
+                Arc::new(serde_json::from_str(&wire).unwrap()),
+            )]));
+            let rejected = scope(&publisher, "apps/a").stream("apps/stream").unwrap();
+            assert!(!Arc::ptr_eq(&held, &rejected));
+            assert!(matches!(
+                rejected.stream_plugin_runtime.run(&context).await,
+                StreamPluginResult::Deny(_)
+            ));
+            assert!(matches!(
+                held.stream_plugin_runtime.run(&context).await,
+                StreamPluginResult::Allow
+            ));
+            assert_eq!(publisher.snapshot().stats().stream_cached_entries, 0);
+            publisher.replace_stream_plugins(HashMap::from([("apps/stream".into(), clean.clone())]));
+            let recovered = scope(&publisher, "apps/a").stream("apps/stream").unwrap();
+            assert!(matches!(
+                recovered.stream_plugin_runtime.run(&context).await,
+                StreamPluginResult::Allow
+            ));
+        }
+    }
+    // The accepted B4 static-before-cache gate likewise publishes a denial,
+    // never retains a constructor Err, and permits a clean source to recover.
+    let publisher = publisher();
+    publisher.replace_gateways(HashMap::from([(
+        "apps/a".into(),
+        gateway("a", "a", 18080, Some("stream")),
+    )]));
+    publisher.replace_stream_plugins(HashMap::from([("apps/stream".into(),Arc::new(serde_json::from_value(json!({"metadata":{"name":"stream","namespace":"apps"},"spec":{"plugins":[{"type":"GeoIpLocation","config":{}}]}})).unwrap()))]));
+    let invalid = scope(&publisher, "apps/a").stream("apps/stream").unwrap();
+    let context = StreamContext::new("192.0.2.1".parse().unwrap(), 18080, StreamLayer::Stage1);
+    assert!(matches!(
+        invalid.stream_plugin_runtime.run(&context).await,
+        StreamPluginResult::Deny(_)
+    ));
+    assert_eq!(publisher.snapshot().stats().stream_cached_entries, 0);
+    publisher.replace_stream_plugins(HashMap::from([("apps/stream".into(),Arc::new(serde_json::from_value(json!({"metadata":{"name":"stream","namespace":"apps"},"spec":{"plugins":[{"type":"IpRestriction","config":{"defaultAction":"allow","denyRefs":[{"name":"unavailable-publication-deny"}]}}]}})).unwrap()))]));
+    assert!(matches!(
+        scope(&publisher, "apps/a")
+            .stream("apps/stream")
+            .unwrap()
+            .stream_plugin_runtime
+            .run(&context)
+            .await,
+        StreamPluginResult::Allow
+    ));
+}

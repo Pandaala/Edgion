@@ -561,18 +561,17 @@ fn egc_reserved_remote_ip_header_is_rejected_at_ingest() {
 
 #[test]
 fn egc_invalid_real_ip_header_is_rejected_at_ingest() {
-    use edgion_resources::resources::edgion_config_data::IpGroup;
     use edgion_resources::resources::edgion_plugins::RealIpConfig;
 
     let ctx = make_ctx_with_secrets(HashMap::new());
     let spec = EdgionGatewayConfigSpec {
         current_status: None,
         real_ip: Some(RealIpConfig {
-            trusted_ips: vec![IpGroup {
-                name: "internal".to_string(),
-                description: None,
-                cidrs: vec!["10.0.0.0/8".to_string()],
-            }],
+            trusted: serde_json::from_value::<RealIpConfig>(
+                serde_json::json!({"trustedIpRefs": [{"name": "internal", "namespace": "default"}]}),
+            )
+            .unwrap()
+            .trusted,
             real_ip_header: "X Forwarded For".to_string(),
             ..Default::default()
         }),
@@ -856,4 +855,59 @@ async fn global_attachment_invalid_targets_register_nothing_and_status_is_intrin
         ctx.runtime().cross_ns_ref_mgr.get_refs("default").is_empty(),
         "no invented Grant dependency"
     );
+}
+
+#[tokio::test]
+async fn global_trust_missing_targets_register_recovery_and_retarget_clears_previous_generation() {
+    let ctx = make_ctx_with_secrets(HashMap::new());
+    let handler = EdgionGatewayConfigHandler::new();
+    let make = |namespace: serde_json::Value| {
+        serde_json::from_value::<EdgionGatewayConfig>(serde_json::json!({
+        "metadata": {"name": "global-trust"}, "spec": {"realIp": {"trustedIpRefs": [{"name": "proxies", "namespace": namespace}]}}
+    })).unwrap()
+    };
+    let mut owner = make(serde_json::json!("first"));
+    assert!(
+        handler.preparse(&mut owner, &ctx).is_empty(),
+        "local target absence cannot invalidate shared intrinsic status"
+    );
+    let parsed = match handler.parse(owner, &ctx).await {
+        ProcessResult::Continue(value) => value,
+        ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+    };
+    assert!(parsed.spec.real_ip.as_ref().unwrap().trusted.resolved_refs.is_some());
+    assert_eq!(
+        ctx.runtime().edgion_config_data_refs.get_refs("first/proxies"),
+        vec!["EdgionGatewayConfig:global-trust"]
+    );
+    assert!(ctx.runtime().cross_ns_ref_mgr.get_refs("first").is_empty());
+    let mut owner = make(serde_json::json!("second"));
+    assert!(handler.preparse(&mut owner, &ctx).is_empty());
+    let _ = handler.parse(owner.clone(), &ctx).await;
+    assert!(ctx
+        .runtime()
+        .edgion_config_data_refs
+        .get_refs("first/proxies")
+        .is_empty());
+    assert_eq!(
+        ctx.runtime().edgion_config_data_refs.get_refs("second/proxies"),
+        vec!["EdgionGatewayConfig:global-trust"]
+    );
+    owner.metadata.namespace = Some("forbidden".into());
+    assert!(!handler.preparse(&mut owner, &ctx).is_empty());
+    let _ = handler.parse(owner.clone(), &ctx).await;
+    assert!(ctx
+        .runtime()
+        .edgion_config_data_refs
+        .get_refs("second/proxies")
+        .is_empty());
+    handler.on_delete(&owner, &ctx).await;
+    let mut implicit = make(serde_json::Value::Null);
+    assert!(!handler.preparse(&mut implicit, &ctx).is_empty());
+    let _ = handler.parse(implicit, &ctx).await;
+    assert!(ctx
+        .runtime()
+        .edgion_config_data_refs
+        .get_refs("default/proxies")
+        .is_empty());
 }

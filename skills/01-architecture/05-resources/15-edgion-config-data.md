@@ -159,7 +159,7 @@ Findings live in `EdgionConfigDataSpec::unknown_fields`, an in-process-only side
 
 No separate `StringList`/`RegexList` (folded into `KeyList(matchMode)`). No standalone `Switch` variant
 (`enable`/`active` live on the envelope). `Selector` replaced the former `GlobalConnIpRestrictionOverride`
-overlay: GlobalConnectionIpRestriction now carries its full rule data inline (git-owned plugin config) and
+overlay: GlobalConnectionIpRestriction now owns named reference-only profiles (git-owned plugin config) and
 exposes only "which profile is active" as the hot-swappable surface — see the example below.
 
 `ProxyProtocolTrust` and `WafRuleBundle` are exceptions to the ordinary overlay/advisory behavior. `WafRuleBundle`
@@ -229,6 +229,13 @@ performed **at request time** (lock-free ArcSwap load). RegionRoute borrows the 
 configuration publication builds a compact `RegionTableValidation` proof in the same snapshot.
 The request checks only that proof's maximum hash bound against its base modulo, without repeating
 full endpoint, interval, or failover-graph validation or copying the region table.
+
+HTTP, connection, TLS-route and global-connection IpRestriction capture one
+ConfigData snapshot for a decision and borrow referenced matchers lazily through
+`ip_list_matchers`. They preserve configured source order without constructing a temporary matcher-reference collection.
+GCIR Selector and selected profile matchers use that same snapshot. Matcher borrows
+belong to the snapshot generation; key slices are needed only during iteration.
+This removes union projections, not all allocations from the surrounding plugin path.
 
 - **Overlay absent or type-mismatch:** base used; metric counter incremented (`overlay_missing` /
   `overlay_type_mismatch` label on the relevant plugin's event counter).
@@ -349,7 +356,7 @@ withholds that ref at runtime:
 | Ref type | Denied behavior |
 |----------|-----------------|
 | `allowRefs` (IpList) | **Deny-all fail-closed**: `allow_mode` stays true but the referenced allow set is withheld — no IP is permitted through that ref. Whitelist intent is preserved; this is the safe fail direction. |
-| `denyRefs` (IpList) | **Under-block**: the denied deny set is not applied. The plugin continues with remaining inline/permitted deny entries, but the denied external deny set is missing (possible security gap). |
+| `denyRefs` (IpList) | **Under-block**: the denied deny set is not applied. The plugin continues with remaining permitted deny references, but the denied external deny set is missing (possible security gap). |
 | `overrideRef` (RegionRouteOverride) | **No override**: RegionRoute falls back to the base inline region table. Traffic continues (fail-to-base, not fail-closed). |
 | `activeProfileRef` (Selector) | Consumer-specific: Canary and GlobalConnectionIpRestriction use their validated base profile on invalid, denied or unavailable targets; WAF uses its validated default profile. RequestAccessPolicy fails closed: invalid or denied configured selectors produce an initialization-failed filter, and missing, disabled, wrong-type or unknown selections deny. An absent RAP selector, or an enabled Selector with no active value, uses its default profile. |
 
@@ -457,37 +464,70 @@ spec:
 ## GlobalConnectionIpRestriction with a Selector
 
 Unlike RegionRoute (whole-table overlay), the L4 `GlobalConnectionIpRestriction` stream plugin carries
-its **complete** IP rule data inline (git-owned) and exposes only the *active profile* as the
-hot-swappable surface via `activeProfileRef` → a `Selector` EdgionConfigData. The selector can only
+named reference-only profiles (git-owned). Their IpList content updates independently; the *active profile* is selected via `activeProfileRef` → a `Selector` EdgionConfigData. The selector can only
 switch among the plugin's own `profiles`; it can never inject rules or disable filtering.
 
 ```yaml
-# EdgionStreamPlugins (git-owned: full rule data inline, no base: wrapper)
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: example-policy-allow-1
+  namespace: edgion-default
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: office
+        cidrs:
+        - 10.0.0.0/8
+---
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: example-policy-allow-2
+  namespace: edgion-default
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: any
+        cidrs:
+        - 0.0.0.0/0
+---
 - type: GlobalConnectionIpRestriction
   config:
     enable: true
-    activeProfile: locked          # git default (safe)
+    activeProfile: locked
     profiles:
       locked:
         defaultAction: deny
-        allow: [{ name: office, cidrs: ["10.0.0.0/8"] }]
-        # allowRefs (optional): merge additional IpList EdgionConfigData into the allow pool
-        allowRefs: [{ name: corp-allowlist }]   # namespace defaults to parent ESP namespace
-      open:    { defaultAction: deny, allow: [{ name: any, cidrs: ["0.0.0.0/0"] }] }
-    activeProfileRef: { name: gcir-active, namespace: edgion-system }  # optional
-
+        allowRefs:
+        - name: example-policy-allow-1
+          namespace: edgion-default
+        - name: corp-allowlist
+      open:
+        defaultAction: deny
+        allowRefs:
+        - name: example-policy-allow-2
+          namespace: edgion-default
+    activeProfileRef:
+      name: gcir-active
+      namespace: edgion-system
 ---
-# EdgionConfigData (hot-swappable active-profile selector)
 apiVersion: edgion.io/v1
 kind: EdgionConfigData
-metadata: { name: gcir-active, namespace: edgion-system }
+metadata:
+  name: gcir-active
+  namespace: edgion-system
 spec:
   enable: true
   data:
     type: Selector
     config:
-      active: open                 # switch to the "open" profile; null/absent → base default
-      description: "temporarily widen access"   # informational only
+      active: open
+      description: temporarily widen access
 ```
 
 **Fail-to-base (selector resolution at connection time):**
@@ -565,3 +605,14 @@ value and validation-proof lookup. No request-path identity parsing is added.
 ### Actual inbound PROXY reference field (C3)
 
 Gateway inbound PROXY references now derive a typed GrantQuery from the actual Gateway field before dependency registration/acquisition. The consumer uses `ReferenceGrantStore::check_query` with the canonical `decide_edgion_config_data_ref`; validation flag, same-namespace and Cluster visibility exemptions retain their existing semantics. Identity errors precede every exemption. The bounded diagnostic identity is output metadata, not permission evidence; its failure stops resolution rather than permitting a lookup.
+
+### Live shared IP consumers (ARCH-028 B2)
+
+Shared Conditions and RAP primary IP fields contain `ipRefs` only. IpList groups
+own all CIDRs; the central typed index owns their compiled matcher. Conditions
+borrow one immutable snapshot through scoped scalar session reads. No list size
+threshold or consumer expansion exists. Required availability recovers after a
+list-only publication; RAP optional omissions remain a successful empty union.
+Permission proofs bind actual source/target/root/leaf/slot and never bypass current
+type/enable or Cluster-only visibility. Controller URL expansion and credentials
+remain separate cold responsibilities.

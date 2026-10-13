@@ -12,10 +12,8 @@ spec:
       profiles:
         main:
           defaultAction: deny
-          allow:
-          - name: office
-            cidrs:
-            - 10.0.0.0/8
+          allowRefs:
+            - name: acl-esp-gcir-data-exists-allow-7a62762bd4
       activeProfileRef:
         name: esp-gcir-data-exists
         namespace: edgion-test

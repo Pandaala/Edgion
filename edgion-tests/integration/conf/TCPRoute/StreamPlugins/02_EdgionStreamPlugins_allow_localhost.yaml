@@ -12,7 +12,5 @@ spec:
     - type: IpRestriction
       config:
         defaultAction: deny
-        allow:
-          - name: localhost
-            cidrs:
-              - "127.0.0.0/8"
+        allowRefs:
+          - name: acl-tcp-allow-localhost-allow-71a00a9a1e

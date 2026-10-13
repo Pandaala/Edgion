@@ -68,3 +68,17 @@ and no decoder/IP/path labels.
 ## Resolution references
 
 - `D0025` — 2026-09-04.
+
+## Reference-only Geo CIDR checkpoint (ARCH-028)
+
+Geo CIDR rules now bind actual PreparedIpListReferences fields and the shared
+IpList-domain proof before cache reuse. Central partial-good IpLists replace
+strict inline CIDR admission; empty compiled lists are available non-matches.
+Required reference availability is separate from MMDB: it precedes all rule and
+failOpen shortcuts, uses one decision snapshot, and always fails closed.
+HTTP dispatch uses its existing required-dependency 500 gate; direct invocation
+keeps the plugin 403 backstop. Stream records only the finite ref_unavailable
+reason in its existing metric. No new lookup cache, MMDB switch, response storage,
+request tracing or unbounded label is introduced. Typed-invalid published
+config/group/rule generations replace prior policy; clean publication recovers.
+API-admission rejected updates retain the previously admitted generation.

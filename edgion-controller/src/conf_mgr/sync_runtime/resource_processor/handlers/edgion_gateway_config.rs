@@ -7,7 +7,9 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
     accepted_condition, condition_false, condition_types, update_condition, HandlerContext, ProcessResult,
     ProcessorHandler, ResourceRef,
 };
+use crate::config::is_reference_grant_validation_enabled;
 use edgion_resources::prelude_resources::EdgionGatewayConfig;
+use edgion_resources::refs::condition_fields::PreparedConditionReferences;
 use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfigStatus;
 use edgion_resources::resources::refs::egc_tls_fields::PreparedEgcTlsReferences;
 use edgion_resources::resources::refs::plugin_attachment_fields::HttpPluginAttachments;
@@ -57,6 +59,19 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         errors.extend(egc.spec.validate_retry());
         errors.extend(egc.spec.validate_forwarded_headers());
         errors.extend(egc.spec.validate_real_ip());
+        let trust = PreparedConditionReferences::from_gateway_config(egc);
+        if let Err(error) = trust.visit_gateway_ip(egc, |leaf| match leaf.references() {
+            Ok(tokens) => {
+                for (index, token) in tokens.enumerate() {
+                    if let Err(error) = token.validated() {
+                        errors.push(format!("realIp.trustedIpRefs[{index}]: {error}"));
+                    }
+                }
+            }
+            Err(error) => errors.push(format!("realIp: {error}")),
+        }) {
+            errors.push(format!("realIp: {error}"));
+        }
         errors.extend(egc.spec.validate_preflight_policy());
         errors.extend(egc.spec.validate_plugin_policy());
         errors.extend(egc_tls::identity_errors(egc));
@@ -85,6 +100,42 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         ctx.secret_ref_manager().clear_value_refs(&resource_ref);
         ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&resource_ref);
         ctx.runtime().plugin_ref_mgr.clear_value_refs(&resource_ref);
+        let owner_key = format!("{}:{}", resource_ref.kind_str(), resource_ref.resource_key());
+        ctx.runtime().edgion_config_data_refs.clear_refs_from(&owner_key);
+        let trust = PreparedConditionReferences::from_gateway_config(&egc);
+        let _ = trust.clear_gateway_ip_scopes(&mut egc);
+        let _ = trust.visit_gateway_ip_mut(&mut egc, |mut leaf| {
+            let mut scopes = Vec::new();
+            let markers = match leaf.references() {
+                Ok(tokens) => tokens
+                    .map(|token| {
+                        if let Ok(bound) = super::ip_list_refs::validated_ip_reference(&token) {
+                            ctx.runtime().edgion_config_data_refs.add_ref(
+                                format!(
+                                    "{}/{}",
+                                    bound.target().scope().namespace().unwrap_or_default(),
+                                    bound.target().name()
+                                ),
+                                owner_key.clone(),
+                            );
+                        }
+                        let outcome = super::ip_list_refs::resolve_ip_reference(
+                            token,
+                            is_reference_grant_validation_enabled(),
+                            |namespace, name| ctx.runtime().edgion_config_data_store.get(Some(namespace), name),
+                            |_| unreachable!("cluster RealIp cannot query a namespaced ReferenceGrant"),
+                        );
+                        scopes.push(outcome.read_scope);
+                        outcome.denied
+                    })
+                    .collect::<Vec<_>>(),
+                Err(_) => return,
+            };
+            for (reference, marker) in leaf.config_mut().ip_refs.iter_mut().zip(markers) {
+                reference.ref_denied = marker;
+            }
+            let _ = leaf.set_read_scopes(&scopes);
+        });
         if let Some(field) = egc.spec.outbound_tls.as_mut() {
             field.resolved_ca_certificates = None;
             field.resolved_client_certificate = None;
@@ -129,6 +180,11 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         ctx.secret_ref_manager().clear_value_refs(&resource_ref);
         ctx.runtime().cross_ns_ref_mgr.clear_value_refs(&resource_ref);
         ctx.runtime().plugin_ref_mgr.clear_value_refs(&resource_ref);
+        ctx.runtime().edgion_config_data_refs.clear_refs_from(&format!(
+            "{}:{}",
+            resource_ref.kind_str(),
+            resource_ref.resource_key()
+        ));
         // A GatewayClass's ResolvedRefs/Accepted conditions depend on whether the
         // EdgionGatewayConfig it references exists, so recompute them on every EGC delete.
         requeue_all_gateway_classes(ctx).await;

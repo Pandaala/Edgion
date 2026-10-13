@@ -9,7 +9,5 @@ spec:
     - type: IpRestriction
       config:
         defaultAction: deny
-        allow:
-          - name: kubernetes-client
-            cidrs:
-              - "0.0.0.0/0"
+        allowRefs:
+          - name: acl-tcp-sp-reload-esp-allow-54ba6a1a02

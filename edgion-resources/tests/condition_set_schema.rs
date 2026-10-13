@@ -94,7 +94,7 @@ fn walker_and_profiles_cover_direct_and_nested_atoms() {
     let yaml = r#"
 anyOf:
   - type: directPeerIpMatch
-    ips: [10.0.0.0/8]
+    ipRefs: [{name: private-networks}]
   - allOf:
       - type: hmacAuth
         secretGroups:
@@ -104,7 +104,7 @@ anyOf:
         algorithms: [hmac-sha256]
         validateRequestBody: true
       - type: remoteIpMatch
-        ips: [192.0.2.0/24]
+        ipRefs: [{name: peer-networks}]
 "#;
     let mut set: ConditionSet = serde_yaml::from_str(yaml).unwrap();
     assert_eq!(set.atomic_count(), 3);
@@ -149,12 +149,13 @@ profiles:
           - name: internal
             type: directPeerIp
             config:
-              ips: [10.0.0.0/8]
+              ipRefs: [{name: private-networks}]
               allOf:
                 - type: probability
                   ratio: 1.0
 "#;
-    assert!(serde_yaml::from_str::<RequestAccessPolicyConfig>(old_rap).is_err());
+    let invalid_rap: RequestAccessPolicyConfig = serde_yaml::from_str(old_rap).unwrap();
+    assert!(edgion_resources::resources::edgion_plugins::PluginValidation::validation_error(&invalid_rap).is_some());
 
     let mixed_rr = r#"
 mode: Deny

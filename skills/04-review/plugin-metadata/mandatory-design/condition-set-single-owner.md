@@ -46,3 +46,22 @@ with an explicitly changed shared architecture, updating every affected consumer
 
 - `condition-layer-s15`: original predicate unification decision.
 - `CSD-1`: successor bounded ConditionSet grouping design.
+
+### ARCH-028 live-IP construction
+
+IP binding consumes the actual effective owner catalogue before config cloning or
+movement. A cold compiler indexes original borrowed IpReferenceSet nodes by address;
+it drops that index before publication and retains only immutable keys/read policy.
+Whole-runtime required inventories come from the same catalogue, including all
+stage roots and Deny restrictions while excluding Dye, Allow and RAP optional roots.
+Controller clearing uses the full catalogue without minting inactive tokens; active
+resolution retains the established enabled-only visitation. Imported URL conditions
+are authorized as fields of their effective EdgionPlugins owner.
+
+The borrowed IP index does not initialize non-IP predicates on the original owner.
+`CompiledCondition` must initialize its private non-IP leaf with the existing
+schema compiler during cold construction, and retain compilation failure as an
+unresolved predicate. Request callbacks do no regex compilation. The actual-owner
+mixed IP/regex test covers entry, body, Dye, RequestRestriction and RAP supplemental
+roots; the RR integration regression is important because its old validated config
+copy previously supplied regex state that is absent from the original borrowed set.

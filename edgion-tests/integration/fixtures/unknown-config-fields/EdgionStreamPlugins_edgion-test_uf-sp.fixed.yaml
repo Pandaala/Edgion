@@ -1,6 +1,4 @@
-# Corrected variant of EdgionStreamPlugins_edgion-test_uf-sp.yaml: "denys" ->
-# "deny". Applying this over the malformed fixture must drain the
-# diagnostics endpoint to zero for this resource.
+# Corrected refs-only variant; unknown-field diagnostics must clear.
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:
@@ -8,14 +6,10 @@ metadata:
   namespace: edgion-test
 spec:
   plugins:
-    - type: IpRestriction
-      config:
-        defaultAction: allow
-        allow:
-          - name: localhost
-            cidrs:
-              - "127.0.0.0/8"
-        deny:
-          - name: blocked
-            cidrs:
-              - "1.2.3.4/32"
+  - type: IpRestriction
+    config:
+      defaultAction: allow
+      allowRefs:
+      - name: acl-uf-sp-allow
+      denyRefs:
+      - name: acl-uf-sp-deny

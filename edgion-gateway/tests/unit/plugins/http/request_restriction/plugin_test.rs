@@ -514,16 +514,63 @@ async fn ip_and_path_in_one_group() {
             "ip-and-path",
             vec![
                 Condition::DirectPeerIpMatch(IpAccessMatch {
-                    ips: vec!["203.0.113.10".to_string()],
+                    refs: edgion_resources::resources::edgion_plugins::ip_reference_set::IpReferenceSet {
+                        ip_refs: vec![edgion_resources::resources::edgion_config_data::EdgionConfigDataRef {
+                            name: "test-networks".into(),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    },
                     ..Default::default()
                 }),
-                key_match(KeyGet::Path, &["/admin"]),
+                Condition::KeyMatch(KeyMatchCondition {
+                    key: KeyGet::Path,
+                    core: core_regex(&["^/admin$"]),
+                    negate: false,
+                    descriptor: Box::from(""),
+                }),
             ],
         )],
     );
-    let plugin = RequestRestriction::create(&config);
+    use crate::plugins::runtime::conditions::ip_refs::IpConditionCompiler;
+    use crate::plugins::runtime::edgion_config_data::EdgionConfigDataStore;
+    use edgion_common::conf_sync::traits::ConfHandler;
+    let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"restriction","namespace":"default"},
+        "spec":{"requestPlugins":[{"type":"RequestRestriction","config":config}]}
+    }))
+    .unwrap();
+    let compiler = IpConditionCompiler::new(&owner).unwrap();
+    let edgion_resources::resources::edgion_plugins::EdgionPlugin::RequestRestriction(config) =
+        &owner.spec.request_plugins.as_ref().unwrap()[0].plugin
+    else {
+        unreachable!()
+    };
+    let plugin = RequestRestriction::with_ip(config, None, Some(&compiler));
+    let store = EdgionConfigDataStore::new();
+    let data = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"test-networks","namespace":"default"},
+        "spec":{"data":{"type":"IpList","config":{"items":[{"name":"main","cidrs":["203.0.113.10/32"]}]}}}
+    }))
+    .unwrap();
+    store.full_set(&std::collections::HashMap::from([(
+        "default/test-networks".into(),
+        std::sync::Arc::new(data),
+    )]));
+    let view = std::sync::Arc::new(store.capture_snapshot());
+    let wire = |session: &mut MockPluginSession| {
+        let availability = view.clone();
+        session
+            .expect_ip_list_availability()
+            .returning(move |key| availability.ip_list_availability(key));
+        let contains = view.clone();
+        session
+            .expect_ip_list_contains()
+            .returning(move |key, ip| contains.ip_list_contains(key, ip));
+    };
 
     let mut hit = MockPluginSession::new();
+    wire(&mut hit);
     let mut hit_log = PluginLog::new("RequestRestriction");
     hit.expect_direct_peer_ip().return_const("203.0.113.10".to_string());
     setup_condition_input_mocks(&mut hit, &[(KeyGet::Path, "/admin")]);
@@ -537,6 +584,7 @@ async fn ip_and_path_in_one_group() {
     assert!(hit_log.contains("Deny"));
 
     let mut path_miss = MockPluginSession::new();
+    wire(&mut path_miss);
     let mut path_log = PluginLog::new("RequestRestriction");
     path_miss
         .expect_direct_peer_ip()

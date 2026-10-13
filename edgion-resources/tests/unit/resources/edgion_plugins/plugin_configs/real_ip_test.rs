@@ -1,95 +1,68 @@
 use super::*;
 
-fn group(name: &str, cidrs: &[&str]) -> IpGroup {
-    IpGroup {
-        name: name.to_string(),
-        description: None,
-        cidrs: cidrs.iter().map(|s| s.to_string()).collect(),
-    }
+fn valid_config() -> RealIpConfig {
+    serde_json::from_value(serde_json::json!({"trustedIpRefs": [{"name": "proxies"}]})).unwrap()
 }
 
 #[test]
 fn test_default_config() {
     let config = RealIpConfig::default();
-    assert_eq!(config.trusted_ips.len(), 0);
+    assert!(config.trusted.ip_refs.is_empty());
     assert_eq!(config.real_ip_header, "X-Forwarded-For");
     assert!(config.recursive);
+    assert_eq!(config.max_trusted_hops, None);
 }
 
 #[test]
-fn test_empty_trusted_ips() {
-    let mut config = RealIpConfig::default();
-    let result = config.validate_and_init();
-    assert!(result.is_err());
-    assert!(result.unwrap_err().contains("must not be empty"));
-}
-
-#[test]
-fn test_empty_real_ip_header() {
-    let mut config = RealIpConfig {
-        trusted_ips: vec![group("default", &["10.0.0.0/8"])],
-        real_ip_header: "".to_string(),
-        ..Default::default()
-    };
-    let result = config.validate_and_init();
-    assert!(result.is_err());
-    assert!(result.unwrap_err().contains("real_ip_header"));
-}
-
-#[test]
-fn test_invalid_ip() {
-    let mut config = RealIpConfig {
-        trusted_ips: vec![group("default", &["192.168.1.256"])],
-        ..Default::default()
-    };
-    let result = config.validate_and_init();
-    assert!(result.is_err());
-    // New error path: validation surfaces the parse error via validate_groups_structure.
-    let msg = result.unwrap_err();
-    assert!(msg.contains("Invalid IP"), "unexpected message: {msg}");
-}
-
-#[test]
-fn test_invalid_cidr_prefix() {
-    let mut config = RealIpConfig {
-        trusted_ips: vec![group("default", &["192.168.1.0/33"])],
-        ..Default::default()
-    };
-    let result = config.validate_and_init();
-    assert!(result.is_err());
+fn test_empty_trusted_refs() {
+    assert!(RealIpConfig::default()
+        .validation_error()
+        .unwrap()
+        .contains("trustedIpRefs"));
 }
 
 #[test]
 fn test_custom_header() {
-    let mut config = RealIpConfig {
-        trusted_ips: vec![group("default", &["10.0.0.0/8"])],
-        real_ip_header: "CF-Connecting-IP".to_string(),
-        recursive: false,
-        ..Default::default()
-    };
+    let mut config = valid_config();
+    config.real_ip_header = "CF-Connecting-IP".into();
+    config.recursive = false;
     assert!(config.validate_and_init().is_ok());
-    assert_eq!(config.real_ip_header, "CF-Connecting-IP");
-    assert!(!config.recursive);
 }
 
 #[test]
 fn test_serialization() {
-    let config = RealIpConfig {
-        trusted_ips: vec![group("default", &["10.0.0.0/8", "192.168.1.1"])],
-        real_ip_header: "X-Real-IP".to_string(),
-        recursive: false,
-        ..Default::default()
-    };
-
+    let config = valid_config();
     let json = serde_json::to_value(&config).unwrap();
-    let deserialized: RealIpConfig = serde_json::from_value(json).unwrap();
+    assert_eq!(json["trustedIpRefs"][0]["name"], "proxies");
+    assert!(json.get("trustedIps").is_none());
+    assert!(json.get("invalidInput").is_none());
+    let restored: RealIpConfig = serde_json::from_value(json).unwrap();
+    assert!(restored.validation_error().is_none());
+}
 
-    assert_eq!(deserialized.trusted_ips.len(), 1);
-    assert_eq!(deserialized.trusted_ips[0].name, "default");
-    assert_eq!(
-        deserialized.trusted_ips[0].cidrs,
-        vec!["10.0.0.0/8".to_string(), "192.168.1.1".to_string()]
-    );
-    assert_eq!(deserialized.real_ip_header, "X-Real-IP");
-    assert!(!deserialized.recursive);
+#[test]
+fn rejected_fields_preserve_invalidity_without_payload() {
+    for key in ["trustedIps", "trustedIPRefs", "unexpected"] {
+        for value in [
+            serde_json::Value::Null,
+            serde_json::json!([]),
+            serde_json::json!([{"cidrs": ["10.0.0.0/8"]}]),
+        ] {
+            let mut raw = serde_json::json!({"trustedIpRefs": [{"name": "proxies"}], "invalidInput": false});
+            raw[key] = value;
+            let config: RealIpConfig = serde_json::from_value(raw).unwrap();
+            assert!(config.trusted.invalid_input);
+            assert!(config.validation_error().is_some());
+            let transported = serde_json::to_value(&config).unwrap();
+            assert!(transported.get(key).is_none());
+            assert_eq!(transported["invalidInput"], true);
+            let restored: RealIpConfig = serde_json::from_value(transported).unwrap();
+            assert!(restored.validation_error().is_some());
+        }
+    }
+    let forced: RealIpConfig =
+        serde_json::from_value(serde_json::json!({"trustedIpRefs": [{"name": "proxies"}], "invalidInput": true}))
+            .unwrap();
+    assert!(forced.validation_error().is_some());
+    assert!(valid_config().validation_error().is_none());
 }

@@ -1,6 +1,5 @@
 use super::*;
-use edgion_resources::resources::edgion_config_data::IpGroup;
-use edgion_resources::resources::edgion_plugins::{DefaultAction, IpRestrictionConfig};
+use edgion_resources::resources::edgion_plugins::IpRestrictionConfig;
 use edgion_resources::resources::plugin_policy::{PluginPolicyConfig, PolicyActionKind};
 use std::net::IpAddr;
 
@@ -51,15 +50,10 @@ async fn test_from_empty_entries() {
 /// range and default-allows everything else — so `make_ctx()`'s
 /// 127.0.0.1 client passes through when the plugin actually runs.
 fn ip_restriction_entry() -> TlsRoutePluginEntry {
-    let config = IpRestrictionConfig {
-        deny: Some(vec![IpGroup {
-            name: "blocked".to_string(),
-            description: None,
-            cidrs: vec!["10.0.0.0/8".to_string()],
-        }]),
-        default_action: DefaultAction::Allow,
-        ..Default::default()
-    };
+    let config: IpRestrictionConfig = serde_json::from_value(serde_json::json!({
+        "denyRefs":[{"name":"unrelated-blocked-range"}],"defaultAction":"allow"
+    }))
+    .unwrap();
     TlsRoutePluginEntry {
         enable: true,
         plugin: TlsRouteStreamPlugin::IpRestriction(Box::new(config)),

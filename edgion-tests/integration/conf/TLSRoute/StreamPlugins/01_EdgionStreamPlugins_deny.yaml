@@ -9,9 +9,6 @@ spec:
   tlsRoutePlugins:
     - type: IpRestriction
       config:
-        deny:
-          - name: all
-            cidrs:
-              - "0.0.0.0/0"
-              - "::/0"
+        denyRefs:
+          - name: acl-tls-deny-all-deny-dd12b47039
         defaultAction: deny

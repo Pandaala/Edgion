@@ -23,7 +23,10 @@ use async_trait::async_trait;
 
 use crate::geoip::{GeoInfo, GeoIpProvider, GeoLookup};
 use crate::observe::metrics::record_geoip_denied;
+use crate::plugins::common::geo_ip_refs::CompiledGeoIpRefs;
+use crate::plugins::runtime::edgion_config_data::capture_global_edgion_config_data_snapshot;
 use crate::plugins::stream::stream_plugin_trait::{StreamContext, StreamPlugin, StreamPluginResult};
+use edgion_resources::refs::ip_list_fields::BoundGeoIpEntry;
 use edgion_resources::resources::edgion_plugins::plugin_configs::{
     GeoDecision, GeoDimFacts, GeoIpLocationConfig, GeoRuleContext, GeoRuleSource,
 };
@@ -39,23 +42,33 @@ fn dim_facts(info: &GeoInfo) -> GeoDimFacts<'_> {
     }
 }
 
-#[derive(Debug)]
 pub struct GeoIpLocationStreamPlugin {
     config: GeoIpLocationConfig,
     needs_facts: bool,
+    refs: CompiledGeoIpRefs,
 }
 
 impl GeoIpLocationStreamPlugin {
-    /// Construct from a `GeoIpLocationConfig`, compiling every rule's matcher
-    /// (`is_stream: true` — a `RemoteIp` rule fails here, though it should
-    /// already have been rejected at controller ingest).
-    pub fn new(config: &GeoIpLocationConfig) -> Result<Self, String> {
-        let mut config = config.clone();
+    /// Bind actual owning CIDR references before normalizing the private geographic
+    /// rule copy. L4 rejects RemoteIp through the shared admission validator.
+    pub fn from_bound(entry: BoundGeoIpEntry<'_>) -> Result<Self, String> {
+        if let Some(error) = entry.config().check_fields(true) {
+            return Err(error);
+        }
+        let authored = entry.config();
+        let refs = CompiledGeoIpRefs::from_stream(entry)
+            .map_err(|_| "GeoIpLocation owning IP references are invalid".to_string())?;
+        let mut config = authored.clone();
         config
             .validate_and_init(true)
             .map_err(|e| format!("GeoIpLocation config validation failed: {e}"))?;
         let needs_facts = config.source_needs_geo_facts(GeoRuleSource::DirectPeerIp);
-        Ok(Self { config, needs_facts })
+        CompiledGeoIpRefs::sanitize(&mut config);
+        Ok(Self {
+            config,
+            needs_facts,
+            refs,
+        })
     }
 }
 
@@ -66,6 +79,11 @@ impl StreamPlugin for GeoIpLocationStreamPlugin {
     }
 
     async fn on_connection(&self, ctx: &StreamContext) -> StreamPluginResult {
+        let view = self.refs.has_refs().then(capture_global_edgion_config_data_snapshot);
+        if view.as_ref().is_some_and(|view| !self.refs.available_in(view)) {
+            record_geoip_denied(ctx.layer, "ref_unavailable");
+            return StreamPluginResult::Deny("geo:deny:ref_unavailable".into());
+        }
         // No parse-only branch here: `check_fields(true)` rejects a rule-less
         // L4 config at admission, because there is no L4 access log for a
         // resolved location to reach. Every config that gets this far has at
@@ -105,14 +123,20 @@ impl StreamPlugin for GeoIpLocationStreamPlugin {
             remote: GeoDimFacts::default(),
         };
 
-        match self.config.decide(&rule_ctx) {
+        match self.config.decide(&rule_ctx, |side, group, rule, ip| {
+            view.as_ref()
+                .is_some_and(|view| self.refs.contains_in(view, side, group, rule, ip))
+        }) {
             GeoDecision::Allow => StreamPluginResult::Allow,
             GeoDecision::Deny => {
                 // The documented `reason` label enum has no distinct bucket for
                 // "defaultAction: Deny with nothing configured to explain why" —
                 // fold that (rare, degenerate) case into `deny_country` too
                 // rather than adding an undeclared fourth reason value.
-                let reason = if self.config.denies(&rule_ctx) {
+                let reason = if self.config.denies(&rule_ctx, |side, group, rule, ip| {
+                    view.as_ref()
+                        .is_some_and(|view| self.refs.contains_in(view, side, group, rule, ip))
+                }) {
                     "deny_country"
                 } else if !self.config.allow_rule_groups.is_empty() {
                     "allow_miss"

@@ -180,6 +180,16 @@ pub(super) struct OwnerSnapshot {
 }
 
 impl OwnerSnapshot {
+    pub(super) fn ip_read_source(&self) -> crate::resources::edgion_plugins::ip_reference_set::IpReadSource {
+        crate::resources::edgion_plugins::ip_reference_set::IpReadSource {
+            group: self.group.into(),
+            kind: self.kind.into(),
+            namespace: self.namespace.clone(),
+            name: self.name.clone(),
+            uid: self.uid.clone(),
+            generation: self.generation,
+        }
+    }
     pub(super) fn egc(metadata: &ObjectMeta) -> Self {
         let mut owner = Self::namespaced("edgion.io", "EdgionGatewayConfig", metadata);
         owner.cluster = true;
@@ -494,6 +504,10 @@ pub(super) enum FieldSlot {
         reference: usize,
         deny: bool,
     },
+    GeoIp {
+        root: usize,
+        reference: usize,
+    },
     ConditionIp {
         root: usize,
         leaf: Option<super::condition_fields::LeafPosition>,
@@ -557,6 +571,7 @@ impl FieldSlot {
             | Self::BackendCredential { .. }
             | Self::LinkSys { .. }
             | Self::IpList { .. }
+            | Self::GeoIp { .. }
             | Self::ConditionIp { .. }
             | Self::Condition { .. }
             | Self::PluginTemplate { .. }
@@ -648,6 +663,111 @@ pub(super) fn validate_secret_metadata(
         return Err(ReferenceError::StaleBinding);
     }
     Ok(())
+}
+
+/// Build read metadata only from private owner and actual matching field tokens.
+pub(super) fn ip_read_resolution<'a>(
+    owner: &OwnerSnapshot,
+    domain: crate::resources::edgion_plugins::ip_reference_set::IpReadDomain,
+    root: usize,
+    leaf: Option<(usize, Option<usize>)>,
+    tokens: impl IntoIterator<Item = ReferenceToken<'a>>,
+    scopes: &[crate::resources::edgion_plugins::ip_reference_set::IpReadScope],
+) -> Result<crate::resources::edgion_plugins::ip_reference_set::IpReadResolution, ReferenceError> {
+    use crate::resources::edgion_plugins::ip_reference_set::{IpReadDomain, IpReadResolution, IpReadScope, IpReadSlot};
+    owner.source()?;
+    let mut slots = Vec::with_capacity(scopes.len());
+    for (index, token) in tokens.into_iter().enumerate() {
+        let scope = scopes.get(index).ok_or(ReferenceError::StaleBinding)?;
+        if token.owner.ip_read_source() != owner.ip_read_source() {
+            return Err(ReferenceError::StaleBinding);
+        }
+        let position_matches = match (&token.slot.position, domain) {
+            (
+                FieldSlot::ConditionIp {
+                    root: current,
+                    leaf: position,
+                    reference,
+                },
+                IpReadDomain::Condition,
+            ) => {
+                let position = position.map(|position| match position {
+                    super::condition_fields::LeafPosition::AllOf(index) => (index, None),
+                    super::condition_fields::LeafPosition::AnyOf(index) => (index, Some(usize::MAX)),
+                    super::condition_fields::LeafPosition::AnyClauseAll { clause, leaf } => (clause, Some(leaf)),
+                });
+                *current == root
+                    && *reference == index
+                    && position == leaf
+                    && matches!(token.topology, TopologyLoan::Conditions(_))
+            }
+            (
+                FieldSlot::IpList {
+                    root: current,
+                    reference,
+                    deny,
+                },
+                IpReadDomain::IpList,
+            ) => {
+                *current == root
+                    && *reference == index
+                    && leaf == Some((usize::from(*deny), None))
+                    && matches!(token.topology, TopologyLoan::IpList(_))
+            }
+            (
+                FieldSlot::GeoIp {
+                    root: current,
+                    reference,
+                },
+                IpReadDomain::IpList,
+            ) => {
+                *current == root
+                    && *reference == index
+                    && leaf.is_none()
+                    && matches!(token.topology, TopologyLoan::IpList(_))
+            }
+            _ => false,
+        };
+        if !position_matches {
+            return Err(ReferenceError::StaleBinding);
+        }
+        let slot = match token.validated() {
+            Ok(bound) => {
+                let cluster = bound.source().scope() == ResourceScope::Cluster;
+                let paired = match scope {
+                    IpReadScope::SameNamespace => !cluster && bound.is_same_namespace(),
+                    IpReadScope::GrantAuthorized => !cluster && !bound.is_same_namespace(),
+                    IpReadScope::ClusterOnly | IpReadScope::ValidationDisabled => !bound.is_same_namespace(),
+                    IpReadScope::Denied => true,
+                };
+                if !paired {
+                    return Err(ReferenceError::StaleBinding);
+                }
+                IpReadSlot {
+                    namespace: bound.target().scope().namespace().map(str::to_owned),
+                    name: Some(bound.target().name().to_owned()),
+                    scope: *scope,
+                }
+            }
+            Err(_) if *scope == IpReadScope::Denied => IpReadSlot {
+                namespace: None,
+                name: None,
+                scope: *scope,
+            },
+            Err(_) => return Err(ReferenceError::StaleBinding),
+        };
+        slots.push(slot);
+    }
+    if slots.len() != scopes.len() {
+        return Err(ReferenceError::StaleBinding);
+    }
+    Ok(IpReadResolution {
+        source: owner.ip_read_source(),
+        domain,
+        root,
+        leaf,
+        slots,
+    })
 }
 
 /// An opaque capability loan from an actual bound resource field.

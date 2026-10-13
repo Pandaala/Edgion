@@ -31,7 +31,10 @@ pub struct CompiledDyeRule {
 }
 
 impl CompiledDyeRule {
-    fn compile(rule: &DyeRule) -> Result<Self, String> {
+    fn compile(
+        rule: &DyeRule,
+        ip: Option<&super::conditions::ip_refs::IpConditionCompiler<'_>>,
+    ) -> Result<Self, String> {
         let value = match &rule.value {
             Some(v) => Some(
                 CompiledTemplate::compile(v)
@@ -43,7 +46,10 @@ impl CompiledDyeRule {
             name: rule.name.clone(),
             on: rule.on.clone(),
             value,
-            conditions: rule.conditions.clone().map(CompiledPluginConditions::new),
+            conditions: rule
+                .conditions
+                .as_ref()
+                .map(|conditions| CompiledPluginConditions::with_ip(conditions, ip)),
         })
     }
 }
@@ -67,15 +73,22 @@ impl CompiledDyePlan {
     /// Compile an entry's suite. Validation already ran; a template that
     /// fails to compile here is a bug — surface via the compile error vec.
     pub fn compile(suite: &DyeSuite, type_prefix: &'static str) -> Result<Arc<Self>, String> {
+        Self::with_ip(suite, type_prefix, None)
+    }
+    pub(crate) fn with_ip(
+        suite: &DyeSuite,
+        type_prefix: &'static str,
+        ip: Option<&super::conditions::ip_refs::IpConditionCompiler<'_>>,
+    ) -> Result<Arc<Self>, String> {
         let request = suite
             .request
             .iter()
-            .map(CompiledDyeRule::compile)
+            .map(|rule| CompiledDyeRule::compile(rule, ip))
             .collect::<Result<Vec<_>, _>>()?;
         let response = suite
             .response
             .iter()
-            .map(CompiledDyeRule::compile)
+            .map(|rule| CompiledDyeRule::compile(rule, ip))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Arc::new(Self {
             request,

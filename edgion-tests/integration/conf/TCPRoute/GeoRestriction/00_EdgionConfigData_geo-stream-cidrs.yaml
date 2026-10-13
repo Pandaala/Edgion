@@ -1,0 +1,14 @@
+# Explicit suite-owned list; dynamic cases update this resource separately.
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: geo-stream-cidrs
+  namespace: edgion-test
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+        - name: test-peer
+          cidrs:
+            - "127.0.0.5/32"

@@ -11,7 +11,7 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
-An unresolved `ipRefs`, `secretMatch.secretRef`, or HMAC `secretGroups[].secretRefs` dependency is not an ordinary false predicate. It never matches, `negate` never inverts it, and the owning consumer decides whether the incomplete candidate is unavailable or the whole runtime must fail closed.
+An unavailable required `ipRefs`, `secretMatch.secretRef`, or HMAC `secretGroups[].secretRefs` dependency is not an ordinary false predicate. It never matches, `negate` never inverts it, and the owning consumer decides whether the incomplete candidate is unavailable or the whole runtime must fail closed.
 
 Fix suggestions that collapse unresolved dependencies back into a boolean or add one global allow/deny switch are **not accepted**.
 
@@ -21,13 +21,13 @@ Fix suggestions that collapse unresolved dependencies back into a boolean or add
 
 `RequestRestriction` `Deny` and entry-level `run` can admit traffic when a required dependency becomes false. `RequestRestriction` `Allow` and `RequestAccessPolicy` instead deny safely when an incomplete allow candidate cannot match. Applying `negate` to the unresolved state reverses either conclusion and is therefore forbidden.
 
-**2. Resolution completeness is available before request evaluation**
+**2. Static construction validity and live IP availability are separate**
 
-The Controller writes `resolvedIps`, `resolvedValues`, and `resolvedCredentials` into the conf_sync payload. The Gateway distinguishes absent Controller-owned IP payload from a successfully resolved empty IP union. A Secret with no usable string value remains unresolved, as do configured HMAC groups with no resolved credentials; an empty verifier cannot represent a usable credential source.
+The Controller resolves credential payloads and recomputes IP read scopes from actual owning fields. It never expands IP/CIDR strings into consumers. The Gateway binds original effective condition nodes before cloning, then uses one adapter-owned ConfigData snapshot for whole-runtime preflight and subsequent scalar membership/Selector reads. Missing same-namespace lists can recover without recompiling the consumer. Cross-namespace slots require a positive Grant proof or current Cluster visibility; an absent negative marker is not permission. Source, target, root/leaf/slot and scope consistency are checked before cache reuse.
 
 **3. Enforcement follows the consumer boundary**
 
-Active entry/body `PluginConditions` mark the compiled EdgionPlugins runtime non-activatable and reuse `seal_fail_closed`. RequestRestriction `Deny` uses its existing generic 500 configuration-error path; `Allow` skips the incomplete group. RequestAccessPolicy skips the incomplete allow candidate. Dye conditions remain observational and simply do not match. Missing or denied references retain the Controller status and `edgion_controller_resource_abnormal` signal. `secretMatch` also reports a present Secret whose selected `secretKey` is missing, non-UTF-8, or blank; other present-but-unusable Secret consumers may still rely on their resolver-specific status or warning plus Gateway enforcement. No path adds per-request tracing or a duplicate metric.
+Static malformed inputs, owner-binding failures and unresolved credentials keep the existing cold fail-closed contract. Live required IP dependencies cover all active entry/body roots and RequestRestriction Deny roots, before outer skip/run, early RequestId, backend or nested ExtensionRef dispatch. Their temporary absence returns the generic 500; it does not permanently seal the runtime. Allow restrictions skip incomplete alternatives, Dye remains observational, and RAP optional IP omissions form a successful empty union. Before headers, response stages use existing local-reply arbitration. After commitment, body failure discards both current and queued output, preempts/releases every body and trailer owner, clears conversion output/budgets and returns a non-retryable transport error without rewriting committed status. Body success adds no chunk log or allocation. Controller status/requeue and the existing canonical diagnostic remain the observability owners.
 
 ## Fix Suggestions Not Accepted
 
@@ -56,15 +56,6 @@ Re-open this decision only if:
 
 ## RAP IP resolution distinction
 
-The Controller's existing RAP IP policy is partial-good: direct IP rule fields,
-optional IP-rule conditions and expanded URL-candidate IP conditions retain inline
-and usable referenced siblings, write a resolved union (including an empty union),
-and record bounded resolution warnings. This is distinct from a condition that
-reaches the Gateway with an absent resolved payload. The unavailable-candidate
-rule above applies to genuinely unresolved conditions, including unresolved RAP
-credentials; it does not turn the existing RAP IP union into all-or-nothing lookup.
-Ordinary entry/body/dye/RequestRestriction IP reference failures leave the payload
-absent, including after a formerly resolved generation. Invalid identities obey
-the same consumer policies while causing no target lookup, Grant query or dependency.
-R5c1 binds these references and warning ownership through the existing effective
-condition catalogue; standalone IpRestriction remains a separate contract.
+RAP IP references remain partial-good. Missing, disabled, wrong-type and denied optional targets contribute no matcher; usable siblings remain. An all-missing union is successful and empty: positive primary membership is false, while secondary/URL shared IP Condition negation may invert false. Invalid input or binding is unresolved and cannot invert. Primary RAP `negate` was previously inert despite its schema exposure; ARCH-028 removes and rejects its presence rather than silently introducing complement behavior. Supplemental negation remains ANDed with positive primary membership.
+
+Historical cl-01 used Controller-expanded IP payloads to distinguish incomplete resolution; ARCH-028 replaces that mechanism with live snapshot availability and positive per-slot read policy. It preserves the credential contract and consumer polarity, not the removed payload representation. ReferenceGrant revocation retains the existing Controller requeue window; current Cluster-only visibility is checked immediately in the same data snapshot. No cross-store transaction or per-request Grant lookup is claimed.

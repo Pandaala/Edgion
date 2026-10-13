@@ -6,6 +6,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use edgion_resources::resources::edgion_plugins::conditions::{Condition, ConditionSet};
 use edgion_resources::resources::edgion_plugins::plugin_configs::SecretMatchCondition;
+use edgion_resources::resources::edgion_plugins::plugin_configs::{IpAccessMatch, UrlAccessCandidate};
 use edgion_resources::EdgionErrorCode;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
@@ -28,7 +29,7 @@ profiles:
         anyOfRules:
           - name: internal
             type: remoteIp
-            config: { ips: [10.0.0.0/8] }
+            config: { ipRefs: [{ name: private-networks }] }
 "#,
     );
     let first = RequestAccessPolicy::create(&config, "default", None);
@@ -50,7 +51,7 @@ profiles:
           - name: signed
             type: directPeerIp
             config:
-              ips: [192.0.2.0/24]
+              ipRefs: [{{ name: peer-networks }}]
               conditions:
                 allOf:
                   - type: hmacAuth
@@ -60,7 +61,7 @@ profiles:
                     validateRequestBody: {validate_request_body}
           - name: internal-fallback
             type: directPeerIp
-            config: {{ ips: [192.0.2.0/24] }}
+            config: {{ ipRefs: [{{ name: peer-networks }}] }}
 "#
     ));
     let rule = &mut config.profiles.get_mut("lockdown").unwrap().required_rule_groups[0].any_of_rules[0];
@@ -112,7 +113,7 @@ async fn unresolved_body_hmac_uses_backup_rule_without_negation() {
     hmac.negate = true;
 
     let plugin = RequestAccessPolicy::create(&config, "default", Some(BodyRequirement::fail_close()));
-    let mut session = MockPluginSession::new();
+    let mut session = ip_session();
     session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
     session.expect_remote_ip().return_const("198.51.100.10".to_string());
     let mut log = PluginLog::new("RequestAccessPolicy");
@@ -135,12 +136,12 @@ profiles:
         anyOfRules:
           - name: internal-peer
             type: directPeerIp
-            config: { ips: [192.0.2.0/24] }
+            config: { ipRefs: [{ name: peer-networks }] }
       - name: client
         anyOfRules:
           - name: internal-client
             type: remoteIp
-            config: { ips: [10.0.0.0/8] }
+            config: { ipRefs: [{ name: private-networks }] }
           - name: vendor
             type: url
             config:
@@ -149,11 +150,11 @@ profiles:
               conditions:
                 allOf:
                   - type: remoteIpMatch
-                    ips: [203.0.113.0/24]
+                    ipRefs: [{ name: client-networks }]
 "#,
     );
     let plugin = RequestAccessPolicy::create(&config, "default", None);
-    let mut session = MockPluginSession::new();
+    let mut session = ip_session();
     session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
     session.expect_remote_ip().return_const("203.0.113.8".to_string());
     session.expect_get_path().return_const("/callbacks/acme".to_string());
@@ -177,16 +178,16 @@ profiles:
         anyOfRules:
           - name: internal-peer
             type: directPeerIp
-            config: { ips: [192.0.2.0/24] }
+            config: { ipRefs: [{ name: peer-networks }] }
       - name: client
         anyOfRules:
           - name: internal-client
             type: remoteIp
-            config: { ips: [10.0.0.0/8] }
+            config: { ipRefs: [{ name: private-networks }] }
 "#,
     );
     let plugin = RequestAccessPolicy::create(&config, "default", None);
-    let mut session = MockPluginSession::new();
+    let mut session = ip_session();
     session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
     session.expect_remote_ip().return_const("203.0.113.8".to_string());
     let mut log = PluginLog::new("RequestAccessPolicy");
@@ -214,7 +215,7 @@ profiles:
 "#,
     );
     let plugin = RequestAccessPolicy::create(&config, "default", None);
-    let mut session = MockPluginSession::new();
+    let mut session = ip_session();
     session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
     session.expect_remote_ip().return_const("203.0.113.8".to_string());
     session
@@ -281,7 +282,7 @@ profiles:
 
 async fn run_imported_secret_case(path: &str, host: &str, token: Option<&str>) -> PluginRunningResult {
     let plugin = RequestAccessPolicy::create(&imported_secret_config(), "default", None);
-    let mut session = MockPluginSession::new();
+    let mut session = ip_session();
     session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
     session.expect_remote_ip().return_const("203.0.113.8".to_string());
     session.expect_get_path().return_const(path.to_string());
@@ -320,7 +321,7 @@ async fn imported_url_candidate_matches_path_host_and_nested_secret() {
 fn profile_url_index_preserves_exact_prefix_regex_and_candidate_ownership() {
     use edgion_resources::resources::edgion_plugins::plugin_configs::AccessPathMatch;
 
-    let candidates = vec![
+    let candidates = [
         UrlAccessCandidate {
             name: "exact".to_string(),
             hosts: vec!["a.example.com".to_string()],
@@ -349,7 +350,21 @@ fn profile_url_index_preserves_exact_prefix_regex_and_candidate_ownership() {
             conditions: None,
         },
     ];
-    let index = RuntimeUrlIndex::compile(candidates, None).unwrap();
+    let index = RuntimeUrlIndex::compile(
+        candidates
+            .iter()
+            .map(|candidate| {
+                (
+                    candidate.hosts.as_slice(),
+                    candidate.paths.as_slice(),
+                    candidate.conditions.as_ref(),
+                )
+            })
+            .collect(),
+        None,
+        None,
+    )
+    .unwrap();
     assert_eq!(index.lookup("/events/exact"), vec![true, true, false]);
     assert_eq!(index.lookup("/events/exact/suffix"), vec![false, true, false]);
     assert_eq!(index.lookup("/events"), vec![false, false, false]);
@@ -372,7 +387,7 @@ profiles:
               configRefs: [{ name: missing-list }]
           - name: internal
             type: directPeerIp
-            config: { ips: [192.0.2.0/24] }
+            config: { ipRefs: [{ name: peer-networks }] }
 "#,
     );
     let RequestAccessRuleType::Url(url) =
@@ -382,7 +397,7 @@ profiles:
     };
     url.resolved_candidates = Some(vec![]);
     let plugin = RequestAccessPolicy::create(&with_fallback, "default", None);
-    let mut session = MockPluginSession::new();
+    let mut session = ip_session();
     session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
     session.expect_remote_ip().return_const("203.0.113.8".to_string());
     let mut log = PluginLog::new("RequestAccessPolicy");
@@ -395,7 +410,7 @@ profiles:
         .any_of_rules
         .truncate(1);
     let plugin = RequestAccessPolicy::create(&with_fallback, "default", None);
-    let mut session = MockPluginSession::new();
+    let mut session = ip_session();
     session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
     session.expect_remote_ip().return_const("203.0.113.8".to_string());
     let mut log = PluginLog::new("RequestAccessPolicy");
@@ -437,18 +452,30 @@ profiles:
         ],
         conditions: Some(ConditionSet::all_of(vec![
             Condition::DirectPeerIpMatch(IpAccessMatch {
-                ips: vec!["192.0.2.0/24".to_string()],
+                refs: edgion_resources::resources::edgion_plugins::ip_reference_set::IpReferenceSet {
+                    ip_refs: vec![edgion_resources::resources::edgion_config_data::EdgionConfigDataRef {
+                        name: "peer-networks".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
                 ..Default::default()
             }),
             Condition::RemoteIpMatch(IpAccessMatch {
-                ips: vec!["203.0.113.0/24".to_string()],
+                refs: edgion_resources::resources::edgion_plugins::ip_reference_set::IpReferenceSet {
+                    ip_refs: vec![edgion_resources::resources::edgion_config_data::EdgionConfigDataRef {
+                        name: "client-networks".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
                 ..Default::default()
             }),
         ])),
     }]);
     let run = |direct: &'static str, remote: &'static str, config: RequestAccessPolicyConfig| async move {
         let plugin = RequestAccessPolicy::create(&config, "default", None);
-        let mut session = MockPluginSession::new();
+        let mut session = ip_session();
         session.expect_direct_peer_ip().return_const(direct.to_string());
         session.expect_remote_ip().return_const(remote.to_string());
         session.expect_get_path().return_const("/callback".to_string());
@@ -471,7 +498,7 @@ async fn bad_hmac_is_a_non_match_and_allows_sibling_fallback() {
     let config = hmac_fallback_config(false);
     let plugin = RequestAccessPolicy::create(&config, "default", None);
     let date = chrono::Utc::now().to_rfc2822();
-    let mut session = MockPluginSession::new();
+    let mut session = ip_session();
     session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
     session.expect_remote_ip().return_const("198.51.100.8".to_string());
     setup_header_mocks(
@@ -498,7 +525,7 @@ async fn hmac_body_capture_failure_is_terminal_for_the_policy() {
     let date = chrono::Utc::now().to_rfc2822();
     let digest = "SHA-256=unused".to_string();
     let authorization = signed_authorization(&date, Some(&digest));
-    let mut session = MockPluginSession::new();
+    let mut session = ip_session();
     session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
     session.expect_remote_ip().return_const("198.51.100.8".to_string());
     setup_header_mocks(
@@ -534,7 +561,7 @@ async fn hmac_logical_body_limit_is_a_non_match_and_allows_sibling_fallback() {
     let date = chrono::Utc::now().to_rfc2822();
     let digest = "SHA-256=unused".to_string();
     let authorization = signed_authorization(&date, Some(&digest));
-    let mut session = MockPluginSession::new();
+    let mut session = ip_session();
     session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
     session.expect_remote_ip().return_const("198.51.100.8".to_string());
     setup_header_mocks(
@@ -560,7 +587,7 @@ async fn hmac_digest_read_failure_is_terminal_for_the_policy() {
     let date = chrono::Utc::now().to_rfc2822();
     let digest = "SHA-256=unused".to_string();
     let authorization = signed_authorization(&date, Some(&digest));
-    let mut session = MockPluginSession::new();
+    let mut session = ip_session();
     session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
     session.expect_remote_ip().return_const("198.51.100.8".to_string());
     setup_header_mocks(
@@ -603,7 +630,7 @@ profiles:
           - name: internal
             type: remoteIp
             config:
-              ips: [10.0.0.0/8]
+              ipRefs: [{ name: private-networks }]
               conditions:
                 allOf:
                   - type: timeRange
@@ -611,7 +638,7 @@ profiles:
 "#,
     );
     let plugin = RequestAccessPolicy::create(&config, "default", None);
-    let mut session = MockPluginSession::new();
+    let mut session = ip_session();
     session.expect_direct_peer_ip().return_const("198.51.100.8".to_string());
     session.expect_remote_ip().return_const("10.1.2.3".to_string());
     let mut log = PluginLog::new("RequestAccessPolicy");
@@ -634,7 +661,7 @@ profiles:
           - name: internal
             type: directPeerIp
             config:
-              ips: [192.0.2.0/24]
+              ipRefs: [{ name: peer-networks }]
               conditions:
                 allOf:
                   - type: keyExist
@@ -642,7 +669,7 @@ profiles:
 "#,
     );
     let plugin = RequestAccessPolicy::create(&config, "default", None);
-    let mut session = MockPluginSession::new();
+    let mut session = ip_session();
     session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
     session.expect_remote_ip().return_const("198.51.100.10".to_string());
     setup_header_mocks(&mut session, &[("x-one", "yes")]);
@@ -669,7 +696,7 @@ profiles:
           - name: internal
             type: directPeerIp
             config:
-              ips: [192.0.2.0/24]
+              ipRefs: [{ name: peer-networks }]
               conditions:
                 allOf:
                   - type: keyExist
@@ -679,7 +706,7 @@ profiles:
 "#,
     );
     let plugin = RequestAccessPolicy::create(&config, "default", None);
-    let mut session = MockPluginSession::new();
+    let mut session = ip_session();
     session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
     session.expect_remote_ip().return_const("198.51.100.10".to_string());
     setup_header_mocks(&mut session, &[("x-one", "yes"), ("x-two", "yes")]);
@@ -695,9 +722,9 @@ profiles:
 
 #[tokio::test]
 async fn partial_good_ip_payload_keeps_valid_sibling_matching() {
-    let config: RequestAccessPolicyConfig = serde_json::from_value(serde_json::json!({"defaultProfile":"main","profiles":{"main":{"requiredRuleGroups":[{"name":"g","anyOfRules":[{"name":"peer","type":"directPeerIp","config":{"ipRefs":[{"name":"bad/name"},{"name":"nets"}],"resolvedIps":["192.0.2.0/24"]}}]}]}}})).unwrap();
+    let config: RequestAccessPolicyConfig = serde_json::from_value(serde_json::json!({"defaultProfile":"main","profiles":{"main":{"requiredRuleGroups":[{"name":"g","anyOfRules":[{"name":"peer","type":"directPeerIp","config":{"ipRefs":[{"name":"bad/name"},{"name":"nets"}]}}]}]}}})).unwrap();
     let plugin = RequestAccessPolicy::create(&config, "default", None);
-    let mut session = MockPluginSession::new();
+    let mut session = ip_session();
     session.expect_direct_peer_ip().return_const("192.0.2.10".to_string());
     session.expect_remote_ip().return_const("198.51.100.10".to_string());
     let mut log = PluginLog::new("RequestAccessPolicy");
@@ -707,19 +734,47 @@ async fn partial_good_ip_payload_keeps_valid_sibling_matching() {
     );
 }
 
-// Detached fixture convenience is confined to this mirrored test module.
+// Build the same effective owning sidecars as Controller expansion before binding.
 impl RequestAccessPolicy {
     pub(crate) fn create(
         config: &RequestAccessPolicyConfig,
         namespace: &str,
         body_requirement: Option<BodyRequirement>,
     ) -> Box<dyn RequestFilter> {
-        let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+        let mut owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
             "metadata": {"name": "fixture", "namespace": namespace},
             "spec": {"requestPlugins": [{"type": "RequestAccessPolicy", "config": config}]}
         }))
         .unwrap();
-        Self::create_bound(HttpConfigDataEntry::from_plugins(&owner, 0).unwrap(), body_requirement).unwrap()
+        let EdgionPlugin::RequestAccessPolicy(config) = &mut owner.spec.request_plugins.as_mut().unwrap()[0].plugin
+        else {
+            unreachable!()
+        };
+        if config.resolved_profiles.is_none() {
+            config.resolved_profiles = Some(config.profiles.clone());
+        }
+        for profile in config.resolved_profiles.as_mut().unwrap().values_mut() {
+            for group in &mut profile.required_rule_groups {
+                for rule in &mut group.any_of_rules {
+                    if let RequestAccessRuleType::Url(url) = &mut rule.rule {
+                        if url.resolved_candidates.is_none() {
+                            url.resolved_candidates = Some(vec![UrlAccessCandidate {
+                                name: rule.name.clone(),
+                                hosts: url.hosts.clone(),
+                                paths: url.paths.clone(),
+                                conditions: url.conditions.clone(),
+                            }]);
+                        }
+                    }
+                }
+            }
+        }
+        Self::create_bound(
+            HttpConfigDataEntry::from_plugins(&owner, 0).unwrap(),
+            body_requirement,
+            Some(&IpConditionCompiler::new(&owner).unwrap()),
+        )
+        .unwrap()
     }
 }
 
@@ -731,11 +786,11 @@ async fn owning_selector_invalid_and_denied_slots_keep_rap_filter_denial() {
         serde_json::json!({"name":"selector","refDenied":{"targetNamespace":"default","targetName":"selector"}}),
     ] {
         let owner: edgion_resources::EdgionPlugins=serde_json::from_value(serde_json::json!({"metadata":{"name":"rap"},"spec":{"requestPlugins":[{
-            "type":"RequestAccessPolicy","config":{"defaultProfile":"base","activeProfileRef":reference,"profiles":{"base":{"requiredRuleGroups":[{"name":"all","anyOfRules":[{"name":"ip","type":"remoteIp","config":{"ips":["0.0.0.0/0"]}}]}]}}}
+            "type":"RequestAccessPolicy","config":{"defaultProfile":"base","activeProfileRef":reference,"profiles":{"base":{"requiredRuleGroups":[{"name":"all","anyOfRules":[{"name":"ip","type":"remoteIp","config":{"ipRefs":[{"name":"all-networks"}]}}]}]}}}
         }]}})).unwrap();
         let entry = HttpConfigDataEntry::from_plugins(&owner, 0).unwrap();
-        let filter = RequestAccessPolicy::create_bound(entry, None).unwrap();
-        let mut session = MockPluginSession::new();
+        let filter = RequestAccessPolicy::create_bound(entry, None, None).unwrap();
+        let mut session = ip_session();
         let mut log = PluginLog::new("RequestAccessPolicy");
         assert!(matches!(
             filter.run_request(&mut session, &mut log).await,
@@ -744,12 +799,44 @@ async fn owning_selector_invalid_and_denied_slots_keep_rap_filter_denial() {
         let EdgionPlugin::RequestAccessPolicy(config) = entry.plugin() else {
             unreachable!()
         };
-        assert!(RequestAccessPolicy::create_inline(config, None).is_none());
+        assert!(RequestAccessPolicy::create_inline(config, None, None).is_none());
         let mut invalid_owner = owner;
         invalid_owner.metadata.namespace = Some(String::new());
-        assert!(
-            RequestAccessPolicy::create_bound(HttpConfigDataEntry::from_plugins(&invalid_owner, 0).unwrap(), None)
-                .is_none()
-        );
+        assert!(RequestAccessPolicy::create_bound(
+            HttpConfigDataEntry::from_plugins(&invalid_owner, 0).unwrap(),
+            None,
+            None
+        )
+        .is_none());
     }
+}
+
+/// Test sessions read real typed indexes; only the session wiring is mocked.
+fn ip_session() -> MockPluginSession {
+    use crate::plugins::runtime::edgion_config_data::EdgionConfigDataStore;
+    use edgion_common::conf_sync::traits::ConfHandler;
+    let store = EdgionConfigDataStore::new();
+    let mut resources = HashMap::new();
+    for (name, cidr) in [
+        ("private-networks", "10.0.0.0/8"),
+        ("peer-networks", "192.0.2.0/24"),
+        ("client-networks", "203.0.113.0/24"),
+        ("nets", "192.0.2.0/24"),
+        ("all-networks", "0.0.0.0/0"),
+    ] {
+        let data = serde_json::from_value(serde_json::json!({"metadata":{"name":name,"namespace":"default"},"spec":{"data":{"type":"IpList","config":{"items":[{"name":"main","cidrs":[cidr]}]}}}})).unwrap();
+        resources.insert(format!("default/{name}"), Arc::new(data));
+    }
+    store.full_set(&resources);
+    let view = Arc::new(store.capture_snapshot());
+    let mut session = MockPluginSession::new();
+    session.expect_ensure_config_data_view().return_const(());
+    let availability = view.clone();
+    session
+        .expect_ip_list_availability()
+        .returning(move |key| availability.ip_list_availability(key));
+    session
+        .expect_ip_list_contains()
+        .returning(move |key, ip| view.ip_list_contains(key, ip));
+    session
 }

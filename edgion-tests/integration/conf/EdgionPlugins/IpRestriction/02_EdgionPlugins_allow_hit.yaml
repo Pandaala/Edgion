@@ -11,9 +11,7 @@ spec:
       type: IpRestriction
       config:
         ipSource: RemoteIp
-        allow:
-          - name: loopback
-            cidrs:
-              - "127.0.0.0/8"
+        allowRefs:
+          - name: acl-ip-restriction-allow-hit-allow-d955c7052a
         status: 403
         message: "IP not in allow list"

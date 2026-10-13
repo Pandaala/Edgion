@@ -111,3 +111,35 @@ python3 cicd/checks/validate_agent_docs.py
 - `edgion-resources/src/redact.rs` — Admin-output redaction adapters
 - `edgion-resources/tests/crd_coverage.rs` — structural property guard
 - `edgion-resources/tests/plugin_crd_type_coverage.rs` — plugin discriminator guard
+
+### Reference-only IP wire rejection
+
+Shared IP leaves and RAP primary configs discard unknown values with `IgnoredAny`
+and retain only a monotone schema-hidden `invalidInput` marker. This keeps removed
+`ips`/`resolvedIps` and primary RAP `negate` presence invalid through typed watcher
+and conf_sync publication instead of retaining an older accepted runtime after a
+decode error. Explicit false cannot clear detected invalidity; true can only deny.
+CRD atomic Condition and AnyOf-clause nodes preserve unknown fields narrowly while
+retaining their declared structural grammar/CEL, so legacy IP keys reach typed
+rejection rather than pruning into a different valid policy. Reference interiors
+and URL ConfigData remain existing opaque review boundaries. Resolver-only read
+proofs stay schema-hidden and are cleared/recomputed from actual owning fields.
+
+### ARCH-028 RealIp reference ownership
+
+HTTP RealIp and global EGC RealIp store only nonempty `trustedIpRefs`; IpGroups live in referenced IpLists. The actual owning EP/EGC catalogue provides the same cold key compiler as Boolean IP conditions. A global EGC requires explicit target namespaces and permits only current Cluster visibility or the controller's validation-disabled scope; its TLS administrative exemption and namespaced grants do not apply. Controller generation processing clears old proof and dependency edges before recomputing from actual fields, including missing-target recovery edges. Shared EGC Accepted remains intrinsic-only; deployment-local trust availability adds no shared condition.
+
+The global policy captures a ConfigData snapshot directly before PluginSession exists; the HTTP policy reuses its dispatch-local adapter view. Both preflight every trust ref once and use that same view for the PROXY-effective downstream peer and all forwarded hops. Any unavailable list makes all trust false for that decision; content/visibility/delete/recovery changes remain live without rebuilding policy or copying CIDRs. Invalid input publishes a sealed plugin generation or disables global extraction, with clean-generation recovery. The narrow realIp CRD preservation and typed invalid marker prevent removed/unknown fields from becoming silently pruned successful configs; resolver-only proof is schema-hidden and recomputed on ingest. Referenced IpLists retain central partial-good entry compilation, replacing the former inline strict-trust admission.
+
+### GeoIpLocation reference-only wire
+
+CIDR rules accept nonempty ipRefs only; geographic rules accept nonempty values
+only. Config/group/rule wire shadows discard removed and unknown payloads while
+serializing schema-hidden monotone invalidInput. Positive resolvedRefs includes
+required Condition/IpList catalogue domain and is recomputed from actual fields.
+Both plugin config interiors already preserve unknown fields; no broad CRD
+preservation is added. Typed-invalid publication replaces executable policy and
+clean publication recovers. API-admission rejected updates do not publish and
+retain the previous admitted generation. Malformed known reserved typed fields
+still have their existing decode boundary; this is not a universal raw-document
+watcher-error recovery mechanism.

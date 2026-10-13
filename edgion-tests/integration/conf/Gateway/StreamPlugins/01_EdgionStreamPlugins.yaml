@@ -9,8 +9,6 @@ spec:
   plugins:
     - type: IpRestriction
       config:
-        deny:
-          - name: all
-            cidrs:
-              - "0.0.0.0/0"
+        denyRefs:
+          - name: acl-deny-all-ips-deny-66b24144d6
         defaultAction: deny

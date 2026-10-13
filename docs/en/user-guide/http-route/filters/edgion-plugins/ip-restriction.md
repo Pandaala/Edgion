@@ -1,562 +1,101 @@
-# IP Restriction Plugin
+# IpRestriction
 
-> **🔌 Edgion extension**
-> 
-> IpRestriction is an access control plugin provided by the `EdgionPlugins` CRD and is not part of the standard Gateway API.
+`IpRestriction` allows or denies requests using ordered references to `EdgionConfigData` resources of type `IpList`. Author every IP/CIDR collection in that list's named `IpGroup` items. The Gateway compiles each list centrally and reads its current matcher; plugin configuration never contains or expands CIDRs.
 
-## What is IP Restriction?
-
-The IP Restriction plugin controls which IP addresses or CIDR ranges can access your API, providing allowlist and denylist functionality.
-
-`allow` and `deny` are lists of **named IP groups**. Each group has a `name` (surfaced in deny logs for audit/attribution) and a `cidrs` list of IP/CIDR strings. At least one of `allow`/`deny` or `allowRefs`/`denyRefs` must be non-empty.
-
-**Use cases**:
-- Only allow internal network IPs to access admin interfaces
-- Block specific malicious IP addresses
-- Allow specific partner IPs to access the API
-- Restrict payment interfaces to application server access only
-
-## Quick Start
-
-### Allowlist Mode (Allow Specific IPs Only)
+## Example
 
 ```yaml
-filters:
-  - type: IpRestriction
-    config:
-      allow:
-        - name: internal
-          cidrs:
-            - "192.168.1.0/24"  # Allow entire subnet
-            - "10.0.0.100"       # Allow single IP
-```
-
-**Effect**: Only `192.168.1.x` and `10.0.0.100` can access; all other IPs are denied.
-
-### Denylist Mode (Deny Specific IPs)
-
-```yaml
-filters:
-  - type: IpRestriction
-    config:
-      deny:
-        - name: blocklist
-          cidrs:
-            - "203.0.113.50"     # Deny single malicious IP
-            - "198.51.100.0/24"  # Deny entire malicious subnet
-```
-
-**Effect**: Only the IPs in the list are denied; all other IPs can access (because `defaultAction` is `allow`).
-
----
-
-## Configuration Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `allow` | Array\<Object\> | none | Allowlist groups (whitelist). When non-empty, only IPs in an allow group are permitted. Each entry is an IP group (see sub-table). |
-| `deny` | Array\<Object\> | none | Denylist groups (blacklist). Highest priority: IPs in a deny group are always denied. |
-| `allowRefs` | Array\<Object\> | none | References to central `IpList` EdgionConfigData whose CIDRs merge into the allowlist. Each ref is `{name, namespace?}`; `namespace` defaults to the resource's namespace. Configuring any `allowRefs` puts the plugin in whitelist mode. A missing or disabled IpList fails closed (deny-all) and is reported via `ResolvedRefs=False`. |
-| `denyRefs` | Array\<Object\> | none | Same as `allowRefs` but merges into the denylist. A missing or disabled IpList under-blocks (still reported via `ResolvedRefs=False`). |
-| `ipSource` | Enum | `RemoteIp` | IP source. `RemoteIp`: reads the resolved client identity (pre-processed by the RealIp plugin or global `spec.realIp`; falls back to the effective L4 remote IP when neither is configured). `DirectPeerIp`: always the physical transport peer address. |
-| `status` | Integer | `403` | Final HTTP status code returned when denied (200–599). |
-| `message` | String | none | Custom message returned when denied. |
-| `defaultAction` | Enum | `allow` | Action when an IP matches no rule. Allowed values: `allow` / `deny`. |
-
-At least one of `allow`/`deny` or `allowRefs`/`denyRefs` must be non-empty, otherwise the configuration is rejected.
-
-### IP group sub-fields (`allow[]` / `deny[]`)
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `name` | String | — | Group name. Required. Surfaces in deny logs for audit/attribution. |
-| `description` | String | none | Human-readable description (not used by the runtime). |
-| `cidrs` | Array\<String\> | `[]` | IP addresses or CIDR ranges (IPv4 and IPv6). |
-
-### Referencing a central IpList
-
-You can define a shared IP list once as an `IpList` EdgionConfigData and reference it from many IpRestriction plugins via `allowRefs` or `denyRefs`, avoiding copy-paste across routes. The gateway resolves the reference live and merges the IpList's CIDRs into the same allow/deny pools as inline `allow`/`deny` entries; the deny → allow → defaultAction priority order is unchanged. If the referenced IpList is missing, disabled (`enable: false`), or malformed, an `allowRef` fails closed (deny-all) while a `denyRef` under-blocks; both cases surface on the owning resource as a `ResolvedRefs=False` status condition. `namespace` in each ref defaults to the IpRestriction plugin's own namespace when omitted.
-
-```yaml
-# Define the central list once (any namespace)
 apiVersion: edgion.io/v1
 kind: EdgionConfigData
 metadata:
-  name: corp-allowlist
-  namespace: security
+  name: office-networks
+  namespace: edgion-default
 spec:
-  enable: true
   data:
     type: IpList
     config:
       items:
-        - name: corporate
-          cidrs:
-            - "10.0.0.0/8"
-            - "203.0.113.0/24"
----
-# Reference it from any IpRestriction plugin
-filters:
-  - type: IpRestriction
-    config:
-      allowRefs:
-        - name: corp-allowlist
-          namespace: security   # omit if same namespace
-      defaultAction: deny
-```
-
----
-
-## Priority Rules
-
-The plugin uses a three-tier priority system consistent with Nginx:
-
-```
-1. Deny takes priority (highest priority)
-   └─> If IP is in a deny group, deny immediately
-
-2. Allow comes next
-   └─> If IP is in an allow group, allow access
-   └─> If allow is configured but IP is not in any allow group, deny
-
-3. Default Action (fallback)
-   └─> If nothing matches, use defaultAction
-```
-
-### Example
-
-```yaml
-allow:
-  - name: internal
-    cidrs: ["10.0.0.0/8"]
-deny:
-  - name: blocked
-    cidrs: ["10.0.0.100"]
-defaultAction: "deny"
-```
-
-| Client IP | Matched Rule | Result |
-|-----------|-------------|--------|
-| `10.0.0.100` | In deny group | ❌ Denied (deny takes priority) |
-| `10.0.0.50` | In allow group | ✅ Allowed |
-| `10.1.2.3` | In allow group | ✅ Allowed |
-| `192.168.1.1` | Not in any group | ❌ Denied (defaultAction: deny) |
-
----
-
-## Common Configuration Scenarios
-
-### 1. Internal Network Only API
-
-Allow only company internal network access:
-
-```yaml
-filters:
-  - type: IpRestriction
-    config:
-      allow:
-        - name: rfc1918
-          cidrs:
-            - "10.0.0.0/8"        # Private Class A
-            - "172.16.0.0/12"     # Private Class B
-            - "192.168.0.0/16"    # Private Class C
-      message: "Access denied: Internal network only"
-      status: 403
-```
-
-### 2. Office Allowlist
-
-Allow only fixed office IPs:
-
-```yaml
-filters:
-  - type: IpRestriction
-    config:
-      allow:
         - name: office
-          cidrs:
-            - "203.0.113.10"      # Office IP 1
-            - "203.0.113.20"      # Office IP 2
-            - "198.51.100.0/24"   # VPN subnet
-      message: "Access restricted to office network"
-```
-
-### 3. Denylist: Block Malicious IPs
-
-```yaml
-filters:
-  - type: IpRestriction
-    config:
-      deny:
-        - name: abuse
-          cidrs:
-            - "203.0.113.50"      # Malicious attacker
-            - "198.51.100.100"    # Malicious crawler
-            - "192.0.2.0/24"      # Malicious subnet
-      message: "Your IP has been blocked"
-      status: 403
-      defaultAction: "allow"  # All other IPs allowed
-```
-
-### 4. Combined Mode: Allow Subnet but Exclude Specific IPs
-
-Allow an entire subnet but exclude a few IPs (deny wins over allow):
-
-```yaml
-filters:
-  - type: IpRestriction
-    config:
-      allow:
-        - name: subnet
-          cidrs:
-            - "10.0.0.0/16"       # Allow entire subnet
-      deny:
-        - name: excluded
-          cidrs:
-            - "10.0.0.100"        # Exclude test machine 1
-            - "10.0.0.200"        # Exclude test machine 2
-```
-
-**Results**:
-- `10.0.0.50` → ✅ Allowed (in allow, not in deny)
-- `10.0.0.100` → ❌ Denied (in deny, deny takes priority)
-- `192.168.1.1` → ❌ Denied (not in allow)
-
-### 5. Multiple Named Groups (Partners)
-
-Use separate named groups so deny logs attribute the matched group:
-
-```yaml
-filters:
-  - type: IpRestriction
-    config:
-      allow:
-        - name: partner-a
-          cidrs: ["203.0.113.0/24"]
-        - name: partner-b
-          cidrs: ["198.51.100.50"]
-        - name: partner-c
-          cidrs: ["192.0.2.100"]
-      message: "Access restricted to authorized partners"
-      status: 403
-```
-
-### 6. Behind a Load Balancer (trust the real client IP)
-
-When the gateway sits behind a proxy/load balancer, the TCP peer is the proxy. Configure the RealIp plugin first to derive `RemoteIp` from `X-Forwarded-For` / `X-Real-IP`; then `ipSource: RemoteIp` matches against the resolved client.
-
-```yaml
-filters:
-  # RealIp resolves remote_ip from trusted proxies first
-  - type: RealIp
-    config:
-      trustedIps:
-        - name: lb
-          cidrs:
-            - "10.0.0.0/8"
-  # IpRestriction reads the normalized client IP
-  - type: IpRestriction
-    config:
-      ipSource: "RemoteIp"
-      allow:
-        - name: clients
-          cidrs: ["203.0.113.0/24"]
-```
-
-> **Warning:** `ipSource: RemoteIp` is only as trustworthy as the configured PROXY/RealIp trust boundary. Without RealIp configured, it uses the effective L4 remote IP. If clients can reach the gateway directly, do not trust forwarded headers — use `ipSource: DirectPeerIp` or configure RealIp with the exact trusted-proxy ranges.
-
+          cidrs: ["192.0.2.0/24", "2001:db8::/32"]
 ---
-
-## IP Source Selection
-
-### `ipSource: RemoteIp` (Default)
-
-Reads `RemoteIp`, which the RealIp plugin or global `spec.realIp` resolves from proxy headers. Without RealIp configured, it falls back to the effective L4 remote IP.
-
-```yaml
-filters:
-  - type: IpRestriction
-    config:
-      ipSource: "RemoteIp"  # Default
-      allow:
-        - name: clients
-          cidrs: ["203.0.113.0/24"]
-```
-
-### `ipSource: DirectPeerIp`
-
-Always uses the TCP connection's peer address (direct connection IP); never forgeable.
-
-**Use cases**:
-- Direct deployment without proxy/load balancer
-- Restricting the proxy/load balancer server IPs themselves
-
-```yaml
-filters:
-  - type: IpRestriction
-    config:
-      ipSource: "DirectPeerIp"
-      allow:
-        - name: lb
-          cidrs: ["10.0.0.0/8"]  # Only allow internal load balancers
-```
-
----
-
-## CIDR Notation
-
-### Single IP
-
-```yaml
-allow:
-  - name: hosts
-    cidrs:
-      - "192.168.1.100"      # Single IP
-      - "203.0.113.50"
-```
-
-### CIDR Subnets
-
-```yaml
-allow:
-  - name: subnets
-    cidrs:
-      - "192.168.1.0/24"     # 192.168.1.0 - 192.168.1.255 (256 IPs)
-      - "10.0.0.0/8"         # 10.0.0.0 - 10.255.255.255 (16M IPs)
-      - "172.16.0.0/12"      # 172.16.0.0 - 172.31.255.255
-      - "203.0.113.0/28"     # 203.0.113.0 - 203.0.113.15 (16 IPs)
-```
-
-### CIDR Quick Reference
-
-| CIDR | Subnet Mask | IP Count | IP Range Example |
-|------|-------------|----------|-----------------|
-| `/32` | 255.255.255.255 | 1 | Single IP |
-| `/24` | 255.255.255.0 | 256 | x.x.x.0 - x.x.x.255 |
-| `/16` | 255.255.0.0 | 65,536 | x.x.0.0 - x.x.255.255 |
-| `/8` | 255.0.0.0 | 16,777,216 | x.0.0.0 - x.255.255.255 |
-
-### IPv6 Support
-
-```yaml
-allow:
-  - name: ipv6
-    cidrs:
-      - "2001:db8::1"                    # Single IPv6
-      - "2001:db8::/32"                  # IPv6 subnet
-      - "fe80::/10"                      # Link-local address
-```
-
----
-
-## Custom Deny Response
-
-### Custom Status Code and Message
-
-```yaml
-filters:
-  - type: IpRestriction
-    config:
-      allow:
-        - name: internal
-          cidrs: ["10.0.0.0/8"]
-      status: 404  # Pretend the resource doesn't exist (hide the API)
-      message: "Not Found"
-```
-
-Or return a friendlier message:
-
-```yaml
-filters:
-  - type: IpRestriction
-    config:
-      allow:
-        - name: office
-          cidrs: ["192.168.1.0/24"]
-      status: 403
-      message: "Access denied. Please contact your administrator."
-```
-
----
-
-## Security Best Practices
-
-### ✅ Recommended
-
-1. **Principle of least privilege** — only allow the IPs you need; prefer an explicit allow-list over relying on deny alone.
-
-   ```yaml
-   allow:
-     - name: hosts
-       cidrs:
-         - "192.168.1.100"
-         - "192.168.1.101"
-   ```
-
-2. **Use the smallest CIDR range possible** — `10.0.1.0/24` rather than `10.0.0.0/8`.
-
-3. **Review rules regularly** — remove IPs that are no longer needed; update changed office IPs.
-
-4. **Pair `RemoteIp` with RealIp** — only trust forwarded client IPs when the RealIp plugin (or global `spec.realIp`) sanitizes them from known trusted proxies. Otherwise use `DirectPeerIp`.
-
-5. **Combine with authentication** — IP restriction is defense-in-depth, not a substitute for authentication.
-
-   ```yaml
-   filters:
-     - type: IpRestriction
-       config:
-         allow:
-           - name: internal
-             cidrs: ["10.0.0.0/8"]
-     - type: BasicAuth
-       config:
-         secretGroups:
-           - name: default
-             secretRefs:
-               - name: admin-users
-   ```
-
-### ❌ Avoid
-
-1. **Overly broad ranges in production** (for example `0.0.0.0/0`, which allows all IPs).
-2. **Relying solely on IP restriction for authentication** — IPs can be spoofed, especially on internal networks.
-3. **Trusting `RemoteIp` without RealIp** on a gateway that clients can reach directly (forwarded-header spoofing bypass).
-4. **Forgetting IPv6** — configure both families when IPv6 traffic is possible.
-
----
-
-## Troubleshooting
-
-### Issue 1: Legitimate IPs Are Denied
-
-**Cause**:
-- CIDR range misconfigured
-- Wrong `ipSource` (behind a proxy but using `DirectPeerIp` when the policy requires the resolved client)
-
-**Solution**: Check the request logs for the actual matched IP and the `X-Forwarded-For` header, then align `ipSource` (and configure RealIp if behind a proxy).
-
-### Issue 2: Cannot Obtain Real IP
-
-**Cause**: The proxy/load balancer is not setting `X-Forwarded-For`, or RealIp is not configured.
-
-**Solution**: Configure the RealIp plugin with the trusted proxy ranges, or use `ipSource: DirectPeerIp` intentionally and allow the load balancer IP.
-
-### Issue 3: Rules Not Taking Effect
-
-**Cause**:
-- Plugin not bound to the route
-- YAML formatting error
-
-**Solution**:
-```bash
-kubectl get edgionplugins -A
-kubectl describe edgionplugins <name>
-```
-
----
-
-## Complete Example
-
-```yaml
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
 metadata:
-  name: protected-admin
-  namespace: production
+  name: blocked-networks
+  namespace: edgion-default
 spec:
-  parentRefs:
-    - name: main-gateway
-  hostnames:
-    - "api.example.com"
-  rules:
-    # Admin interface: strict IP allowlist
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /admin
-      filters:
-        - type: ExtensionRef
-          extensionRef:
-            group: edgion.io
-            kind: EdgionPlugins
-            name: admin-security
-      backendRefs:
-        - name: admin-service
-          port: 8080
-    # Public API: denylist mode
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /api
-      filters:
-        - type: ExtensionRef
-          extensionRef:
-            group: edgion.io
-            kind: EdgionPlugins
-            name: public-security
-      backendRefs:
-        - name: api-service
-          port: 8080
+  data:
+    type: IpList
+    config:
+      items:
+        - name: blocked
+          cidrs: ["192.0.2.100/32"]
 ---
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
-  name: admin-security
-  namespace: production
+  name: office-access
+  namespace: edgion-default
 spec:
   requestPlugins:
-    # IP allowlist
     - type: IpRestriction
       config:
-        ipSource: "RemoteIp"
-        allow:
-          - name: internal
-            cidrs:
-              - "10.0.0.0/8"
-          - name: office
-            cidrs:
-              - "203.0.113.10"
-              - "203.0.113.20"
-        deny:
-          - name: excluded
-            cidrs:
-              - "10.0.0.100"
-        message: "Admin access restricted to authorized networks"
-        status: 403
-    # Additional authentication
-    - type: BasicAuth
-      config:
-        secretGroups:
-          - name: default
-            secretRefs:
-              - name: admin-users
----
-apiVersion: edgion.io/v1
-kind: EdgionPlugins
-metadata:
-  name: public-security
-  namespace: production
-spec:
-  requestPlugins:
-    # IP denylist
-    - type: IpRestriction
-      config:
-        ipSource: "RemoteIp"
-        deny:
-          - name: abuse
-            cidrs:
-              - "203.0.113.50"
-              - "198.51.100.0/24"
-        defaultAction: "allow"
-        message: "Your IP has been blocked due to suspicious activity"
+        ipSource: RemoteIp
+        allowRefs:
+          - name: office-networks
+        denyRefs:
+          - name: blocked-networks
+        defaultAction: deny
         status: 403
 ```
 
----
+Attach the `EdgionPlugins` resource through an HTTPRoute `ExtensionRef` filter. The same IpList can contain several named groups or be referenced by several policies. To manage independent collections, reference several lists instead of copying their CIDRs into each consumer.
 
-## Related Links
+## Configuration
 
-- [RealIp](./real-ip.md) — Real client IP extraction (configure first when behind a proxy)
-- [RateLimitLocal](./rate-limit-local.md) — Rate limiting
-- [RequestRestriction](./request-restriction.md) — Request restriction
-- [Basic Auth](./basic-auth.md) — Combine with authentication
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `allowRefs` | Array of EdgionConfigDataRef objects | Absent | Non-empty authored references enable whitelist mode. |
+| `denyRefs` | Array of EdgionConfigDataRef objects | Absent | Ordered blacklist sources; matching deny takes precedence. |
+| `ipSource` | `RemoteIp` or `DirectPeerIp` | `RemoteIp` | Canonical resolved client address or physical TCP peer. |
+| `defaultAction` | `allow` or `deny` | `allow` | Decision when whitelist mode is absent and no deny matches. |
+| `message` | String | Standard denial message | Message in the prebuilt JSON denial response. |
+| `status` | Integer, 200–599 | `403` | Final HTTP status for a policy denial. |
+
+At least one of `allowRefs` or `denyRefs` must be non-empty. A reference has a required non-empty `name` and an optional `namespace`; an omitted namespace means the consuming resource's namespace. Cross-namespace access follows the normal ReferenceGrant/visibility rules. Do not author Controller read proofs or denial markers.
+
+The removed `allow` and `deny` collection fields are invalid, including `null`, empty arrays, and mixed old/new configurations. Their rejected values are discarded; bounded invalidity survives Controller-to-Gateway transport. Other unknown configuration keys retain the advisory warning contract.
+
+## Decision order and list availability
+
+1. Visit available deny lists in reference order. The first matching source denies the request.
+2. With non-empty authored `allowRefs`, visit available allow lists in reference order. A match allows; otherwise deny as a whitelist miss.
+3. Without whitelist mode, use `defaultAction` when no deny matches.
+
+Within one IpList, the most specific matching prefix determines the named group. Reference source order takes precedence over a narrower prefix in a later list. Deny takes precedence even when the same address matches an allow source.
+
+Unavailable references—missing, disabled, wrong type, unauthorized, or inconsistent resource identity—are omitted. Good siblings still contribute. An unavailable allow union keeps whitelist mode and denies all misses. An unavailable deny-only union preserves its configured default, which can allow traffic. Choose the default policy with this behavior in mind; ACL references do not become an all-required dependency gate.
+
+Malformed owning policy/proofs fail construction and seal that runtime generation. Ordinary shared IP Conditions and Geo CIDR dependencies have their own required-reference contract: an unavailable required dependency fails the HTTP runtime's preflight with its configuration/dependency response, rather than becoming an ACL whitelist miss.
+
+## Client address
+
+`RemoteIp` uses the canonical RealIp result, falling back to the effective transport peer. Configure trusted proxy lists through RealIp's `trustedIpRefs` before relying on forwarded headers. `DirectPeerIp` always uses the physical peer and is independent of forwarded headers and PROXY protocol's advertised source.
+
+IPv4, IPv6 and IPv4-mapped IPv6 membership use the shared canonical matcher. Bare addresses in an IpList become host prefixes. Partial-good collection admission also belongs to IpList: valid CIDRs survive invalid siblings, and list-local `PartiallyInvalid` status reports rejected entries. A completely empty available allow matcher still produces whitelist misses.
+
+## Hot reload and publication
+
+Changing an IpList's content, enable flag, type or visibility affects subsequent decisions without rebuilding the referring plugin. One dispatch uses one immutable ConfigData snapshot for both shared Conditions and ACL membership, including nested ExtensionRef execution. A held snapshot keeps its original generation; the next dispatch can observe deletion and restoration.
+
+A published typed invalid policy generation replaces the previous executable policy with a sealed configuration outcome; publishing a clean generation restores it. This includes captured removed-field presence. An update rejected by Kubernetes admission or typed decoding never reaches publication and leaves the previously admitted generation in place.
+
+## Denial response and logs
+
+A normal policy denial returns the configured final status and a JSON object with a `message` member. Default status is 403. The body is prepared during configuration construction.
+
+ACL access logs intentionally retain the matched group: `deny:group=blocked` or `allow:group=office`. Whitelist misses use `deny:not-in-allow`; default decisions use `allow:default` or `deny:default`. This is the documented ACL diagnostic exception; credential authentication failures must not expose credential-group identity.
+
+## Stream policies
+
+Connection-phase `IpRestriction`, TLS-route `IpRestriction`, and each `GlobalConnectionIpRestriction` profile also use `allowRefs`/`denyRefs`. L4 connection policies use the physical peer; TLS-route policies support their existing address selector. GCIR owns named scalar policies plus optional Selector-based active-profile selection; its IP collections remain live referenced IpLists. See [Stream plugins](../../../tcp-route/stream-plugins.md).

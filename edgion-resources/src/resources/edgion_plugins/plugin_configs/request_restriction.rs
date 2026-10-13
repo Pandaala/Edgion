@@ -16,9 +16,8 @@
 //! A condition is a shared [`Condition`] predicate. Predicates match request
 //! attributes (header/cookie/query/path/method) and, additionally,
 //! post-authentication identity: mTLS client-cert subject / SAN / CN
-//! (`mtlsMatch`) and verified JWT claims (`jwtClaimMatch`). Inline IP sets
-//! (`directPeerIpMatch` / `remoteIpMatch` with `ips` and `ipRefs`) are
-//! accepted. It is still a local allow/deny matcher, not a full RBAC
+//! (`mtlsMatch`) and verified JWT claims (`jwtClaimMatch`). IP predicates
+//! (`directPeerIpMatch` / `remoteIpMatch`) accept only `ipRefs` to IpList data. It is still a local allow/deny matcher, not a full RBAC
 //! orchestration layer.
 //!
 //! ## Configuration Examples

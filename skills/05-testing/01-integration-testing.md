@@ -580,3 +580,11 @@ identify the last successfully started stack. Runner cleanup uses
 `kill_all.sh --work-dir <directory>` and verifies recorded executable identities;
 it never falls back to the old `.current` on a failed new startup. The no-argument
 manual cleanup command retains its existing behavior.
+
+The existing `ConditionRefsDynamic` scenario also covers retained IpList consumers:
+one shared list changes ordinary entry gating and RAP primary membership through
+content update, deletion and restoration without plugin updates. It retains the
+existing Secret phases and restores both values on success/failure. Use the shared
+topology and one resource per filesystem YAML fixture.
+
+ARCH-028 B3 extends ConditionRefsDynamic on its existing topology with HTTP and global RealIp routes. It checks union content changes, missing required lists, global visibility flips, deletion and recovery using echoed canonical remote-IP headers. Retain its original Secret and ordinary/RAP IP phases, and restore every changed list in the finalizer. RealIp fixture lists belong to their existing owning namespaces; global trust lists use explicit Cluster-visible references. Native integration migration does not establish live Kubernetes or full conformance execution.

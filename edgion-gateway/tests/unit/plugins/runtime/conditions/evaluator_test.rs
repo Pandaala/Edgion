@@ -146,6 +146,7 @@ fn compile_time_range(condition: &TimeRangeCondition) -> CompiledCondition {
         &Condition::TimeRange(condition.clone()),
         "conditions.allOf[0]".to_string(),
         None,
+        None,
     )
 }
 
@@ -236,7 +237,7 @@ fn compiled_header_hmac_reuses_one_credentials_arc_across_evaluations() {
         descriptor: Box::from("0:hmacAuth"),
         ..Default::default()
     });
-    let compiled = CompiledCondition::compile(&condition, "conditions.allOf[0]".to_string(), None);
+    let compiled = CompiledCondition::compile(&condition, "conditions.allOf[0]".to_string(), None, None);
     let credentials_ptr = compiled
         .hmac_credentials_ptr()
         .expect("header-only HMAC must prebuild one verifier");
@@ -973,27 +974,51 @@ fn body_evaluate_stays_silent() {
     assert_eq!(skip.evaluate(&session), EvaluationResult::Skip);
 }
 
+fn live_ip_test_session(cidr: &str) -> MockPluginSession {
+    use crate::plugins::runtime::edgion_config_data::EdgionConfigDataStore;
+    use edgion_common::conf_sync::traits::ConfHandler;
+    let store = EdgionConfigDataStore::new();
+    let data = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"test-networks","namespace":"default"},
+        "spec":{"data":{"type":"IpList","config":{"items":[{"name":"main","cidrs":[cidr]}]}}}
+    }))
+    .unwrap();
+    store.full_set(&std::collections::HashMap::from([(
+        "default/test-networks".into(),
+        std::sync::Arc::new(data),
+    )]));
+    let view = std::sync::Arc::new(store.capture_snapshot());
+    let mut session = MockPluginSession::new();
+    let availability = view.clone();
+    session
+        .expect_ip_list_availability()
+        .returning(move |key| availability.ip_list_availability(key));
+    session
+        .expect_ip_list_contains()
+        .returning(move |key, ip| view.ip_list_contains(key, ip));
+    session
+}
+
 #[test]
 fn direct_peer_ip_match_in_run_is_reachable() {
-    use edgion_resources::resources::edgion_plugins::conditions::IpAccessMatch;
-    let mut ip = IpAccessMatch {
-        ips: vec!["10.0.0.0/8".to_string()],
-        ..Default::default()
-    };
-    ip.validate_and_init().expect("compile IP matcher");
-    let mut conds = PluginConditions {
-        skip: None,
-        run: Some(ConditionSet::all_of(vec![Condition::DirectPeerIpMatch(ip)])),
-    };
-    conds.compile().expect("compile descriptors");
-
-    let mut hit = MockPluginSession::new();
+    let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"policy","namespace":"default"},
+        "spec":{"requestPlugins":[{"type":"Mock","config":{"status":418},
+          "conditions":{"run":{"allOf":[{"type":"directPeerIpMatch","ipRefs":[{"name":"test-networks"}]}]}}}]}
+    }))
+    .unwrap();
+    let compiler = IpConditionCompiler::new(&owner).unwrap();
+    let conditions = owner.spec.request_plugins.as_ref().unwrap()[0]
+        .conditions
+        .as_ref()
+        .unwrap();
+    let compiled = CompiledPluginConditions::with_ip(conditions, Some(&compiler));
+    let mut hit = live_ip_test_session("10.0.0.0/8");
     hit.expect_direct_peer_ip().return_const("10.1.2.3".to_string());
-    assert_eq!(conds.evaluate(&hit), EvaluationResult::Run);
-
-    let mut miss = MockPluginSession::new();
+    assert_eq!(compiled.evaluate(&hit), EvaluationResult::Run);
+    let mut miss = live_ip_test_session("10.0.0.0/8");
     miss.expect_direct_peer_ip().return_const("203.0.113.1".to_string());
-    assert_eq!(conds.evaluate(&miss), EvaluationResult::Skip);
+    assert_eq!(compiled.evaluate(&miss), EvaluationResult::Skip);
 }
 
 fn jwt_session(claims: Option<&'static str>) -> MockPluginSession {
@@ -1199,28 +1224,39 @@ fn unresolved_references_never_match_when_negated() {
     ];
 
     for condition in cases {
-        assert!(condition.has_unresolved_refs());
-        assert!(!condition.evaluate(&session, None));
+        let set = ConditionSet::all_of(vec![condition]);
+        let compiled = CompiledConditionSet::new(&set, "unbound", None);
+        assert!(compiled.has_unresolved_refs());
+        assert_eq!(compiled.evaluate(&session, None, false).state, MatchState::Unresolved);
     }
 }
 
 #[test]
 fn resolved_empty_ip_union_is_not_unresolved() {
-    let mut condition: Condition = serde_json::from_value(serde_json::json!({
-        "type": "remoteIpMatch",
-        "ipRefs": [{ "name": "empty" }],
-        "negate": true
+    let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"rap","namespace":"default"},
+        "spec":{"requestPlugins":[{"type":"RequestAccessPolicy","config":{
+            "defaultProfile":"main","profiles":{},"resolvedProfiles":{"main":{"requiredRuleGroups":[{
+                "name":"clients","anyOfRules":[{"name":"peer","type":"directPeerIp","config":{
+                    "ipRefs":[{"name":"empty"}],"conditions":{"allOf":[{
+                        "type":"remoteIpMatch","ipRefs":[{"name":"empty"}],"negate":true
+                    }]}
+                }}]
+            }]}}
+        }}]}
     }))
     .unwrap();
-    let Condition::RemoteIpMatch(ip) = &mut condition else {
-        unreachable!()
-    };
-    ip.resolved_ips = Some(Vec::new());
-
-    let mut session = MockPluginSession::new();
-    session.expect_remote_ip().return_const("192.0.2.1".to_string());
-    assert!(!condition.has_unresolved_refs());
-    assert!(condition.evaluate(&session, None));
+    let compiler = IpConditionCompiler::new(&owner).unwrap();
+    let prepared =
+        edgion_resources::resources::refs::condition_fields::PreparedConditionReferences::from_plugins(&owner);
+    let session = live_ip_test_session("192.0.2.0/24");
+    let mut predicates = Vec::new();
+    prepared
+        .visit_ip(&owner, |leaf| predicates.push(compiler.bind(leaf.config()).unwrap()))
+        .unwrap();
+    let ip = Some("192.0.2.1".parse().unwrap());
+    assert_eq!(predicates[0].evaluate(&session, ip, false), MatchState::False);
+    assert_eq!(predicates[1].evaluate(&session, ip, true), MatchState::True);
 }
 
 #[test]
@@ -1294,4 +1330,60 @@ fn mtls_missing_candidates_suppress_uncompiled_regex_diagnostic() {
         Some(&mut log)
     ));
     assert!(serde_json::to_string(&log).unwrap().contains("regex not compiled"));
+}
+
+impl CompiledConditionSet {
+    pub(crate) fn new(set: &ConditionSet, prefix: &str, body_requirement: Option<BodyRequirement>) -> Self {
+        Self::with_ip(set, prefix, body_requirement, None)
+    }
+}
+
+#[test]
+fn actual_owner_mixed_ip_and_uninitialized_regex_leaves_compile_at_every_consumer_root() {
+    use edgion_resources::resources::refs::condition_fields::PreparedConditionReferences;
+    use serde_json::json;
+    let set = json!({"allOf":[
+        {"type":"directPeerIpMatch","ipRefs":[{"name":"test-networks"}]},
+        {"type":"keyMatch","key":{"type":"path"},"regex":["^/admin$"]}
+    ]});
+    let conditions = json!({"run":set});
+    let owner: edgion_resources::EdgionPlugins = serde_json::from_value(json!({
+        "metadata":{"name":"regex-roots","namespace":"default"},
+        "spec":{"requestPlugins":[
+            {"type":"Dsl","config":{"name":"regex-roots","source":"let found = req.body.contains(\"needle\")"},
+             "conditions":conditions,"body":{"conditions":conditions},
+             "dye":{"response":[{"name":"x-regex","on":["fail-close"],"conditions":conditions}]}},
+            {"type":"RequestRestriction","config":{"mode":"Deny","conditions":set}},
+            {"type":"RequestAccessPolicy","config":{"defaultProfile":"main","profiles":{},
+             "resolvedProfiles":{"main":{"requiredRuleGroups":[{"name":"clients","anyOfRules":[
+                 {"name":"peer","type":"directPeerIp","config":{"ipRefs":[{"name":"test-networks"}],"conditions":set}}
+             ]}]}}}}
+        ]}
+    }))
+    .unwrap();
+    let compiler = IpConditionCompiler::new(&owner).unwrap();
+    let prepared = PreparedConditionReferences::from_plugins(&owner);
+    let mut session = live_ip_test_session("10.0.0.0/8");
+    session.expect_direct_peer_ip().return_const("10.1.2.3".into());
+    session.expect_get_path().return_const("/admin".into());
+    let mut ip_count = 0;
+    let mut regex_count = 0;
+    prepared
+        .visit(&owner, |leaf| {
+            let condition = leaf.config();
+            let compiled = CompiledCondition::compile(condition, "root".into(), None, Some(&compiler));
+            assert_eq!(compiled.evaluate_sync(&session), MatchState::True);
+            match condition {
+                Condition::DirectPeerIpMatch(_) => ip_count += 1,
+                Condition::KeyMatch(_) => regex_count += 1,
+                _ => unreachable!(),
+            }
+        })
+        .unwrap();
+    assert_eq!((ip_count, regex_count), (5, 5));
+    let invalid: Condition =
+        serde_json::from_value(json!({"type":"keyMatch","key":{"type":"path"},"regex":["["]})).unwrap();
+    let invalid = CompiledCondition::compile(&invalid, "invalid".into(), None, None);
+    assert!(invalid.unresolved);
+    assert_eq!(invalid.evaluate_sync(&session), MatchState::Unresolved);
 }

@@ -12,7 +12,7 @@ spec:
     - type: IpRestriction
       config:
         defaultAction: allow
-        denys: []
+        denyRefss: []
 "#;
 
 const CLEAN_PLUGINS: &str = r#"
@@ -26,7 +26,7 @@ spec:
     - type: IpRestriction
       config:
         defaultAction: allow
-        deny: []
+        denyRefs: []
 "#;
 
 const TYPO_STREAM_PLUGINS: &str = r#"
@@ -40,7 +40,7 @@ spec:
     - type: IpRestriction
       config:
         defaultAction: allow
-        denys: []
+        denyRefss: []
 "#;
 
 const TYPO_CONFIG_DATA: &str = r#"
@@ -93,7 +93,7 @@ fn edgion_plugins_typo_populates_unknown_fields_with_exact_path() {
     let parsed: EdgionPlugins = parse_resource_content(TYPO_PLUGINS).expect("well-formed aside from the typo");
     assert_eq!(
         parsed.spec.unknown_fields,
-        vec!["requestPlugins[0].config.denys".to_string()]
+        vec!["requestPlugins[0].config.denyRefss".to_string()]
     );
 }
 
@@ -107,12 +107,15 @@ fn edgion_plugins_clean_document_yields_no_findings() {
 fn edgion_stream_plugins_typo_populates_unknown_fields_with_exact_path() {
     let parsed: EdgionStreamPlugins =
         parse_resource_content(TYPO_STREAM_PLUGINS).expect("well-formed aside from the typo");
-    assert_eq!(parsed.spec.unknown_fields, vec!["plugins[0].config.denys".to_string()]);
+    assert_eq!(
+        parsed.spec.unknown_fields,
+        vec!["plugins[0].config.denyRefss".to_string()]
+    );
 }
 
 #[test]
 fn edgion_stream_plugins_clean_document_yields_no_findings() {
-    let clean = TYPO_STREAM_PLUGINS.replace("denys", "deny");
+    let clean = TYPO_STREAM_PLUGINS.replace("denyRefss", "denyRefs");
     let parsed: EdgionStreamPlugins = parse_resource_content(&clean).expect("clean document must parse");
     assert!(parsed.spec.unknown_fields.is_empty());
 }

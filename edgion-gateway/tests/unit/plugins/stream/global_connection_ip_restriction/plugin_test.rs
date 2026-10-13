@@ -19,15 +19,34 @@ fn ip_group(name: &str, cidr: &str) -> IpGroup {
 
 /// One profile that allows only `allow_cidr` (default deny), or with a deny entry.
 fn profile(default_action: DefaultAction, allow_cidr: Option<&str>, deny_cidr: Option<&str>) -> ProfileRules {
-    ProfileRules {
-        allow: allow_cidr.map(|c| vec![ip_group("test-allow", c)]),
-        deny: deny_cidr.map(|c| vec![ip_group("test-deny", c)]),
-        default_action,
-        allow_refs: None,
-        deny_refs: None,
-        allow_matcher: None,
-        deny_matcher: None,
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT_LIST: AtomicU64 = AtomicU64::new(0);
+    let mut config = serde_json::json!({"defaultAction":default_action});
+    for (side, cidr, group) in [
+        ("allowRefs", allow_cidr, "test-allow"),
+        ("denyRefs", deny_cidr, "test-deny"),
+    ] {
+        if let Some(cidr) = cidr {
+            let name = format!("gcir-profile-test-{}", NEXT_LIST.fetch_add(1, Ordering::Relaxed));
+            let mut data = EdgionConfigData::new(
+                &name,
+                EdgionConfigDataSpec {
+                    current_status: None,
+                    unknown_fields: Vec::new(),
+                    enable: true,
+                    active: None,
+                    visibility: edgion_resources::resources::edgion_config_data::ConfigDataVisibility::Cluster,
+                    data: ConfigEntry::IpList(IpListData {
+                        items: vec![ip_group(group, cidr)],
+                    }),
+                },
+            );
+            data.metadata.namespace = Some("default".into());
+            get_global_edgion_config_data_store().insert_raw_for_test(format!("default/{name}"), Arc::new(data));
+            config[side] = serde_json::json!([{"name":name,"namespace":"default"}]);
+        }
     }
+    serde_json::from_value(config).unwrap()
 }
 
 /// Build a single-profile config (no selector ref).
@@ -51,7 +70,7 @@ fn make_config(
 
 fn plugin_deny_nonloopback() -> GlobalConnectionIpRestrictionPlugin {
     let config = make_config("main", DefaultAction::Deny, Some("127.0.0.0/8"), None);
-    GlobalConnectionIpRestrictionPlugin::new(&config, "default").expect("valid config")
+    from_owner(&fixture_owner(&config, "default")).expect("valid config")
 }
 
 /// Insert a raw EdgionConfigData into the store under "ns/name".
@@ -95,7 +114,7 @@ async fn absent_selector_falls_back_to_base() {
         namespace: Some("default".to_string()),
         ..Default::default()
     });
-    let plugin = GlobalConnectionIpRestrictionPlugin::new(&config, "default").expect("valid config");
+    let plugin = from_owner(&fixture_owner(&config, "default")).expect("valid config");
 
     let ctx = StreamContext::new("127.0.0.1".parse().unwrap(), 8080, StreamLayer::Stage1);
     assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Allow));
@@ -107,7 +126,7 @@ async fn absent_selector_falls_back_to_base() {
 async fn enable_false_allows_all_connections() {
     let mut config = make_config("main", DefaultAction::Deny, Some("127.0.0.0/8"), None);
     config.enable = false;
-    let plugin = GlobalConnectionIpRestrictionPlugin::new(&config, "default").expect("valid config");
+    let plugin = from_owner(&fixture_owner(&config, "default")).expect("valid config");
     let ctx = StreamContext::new("1.2.3.4".parse().unwrap(), 8080, StreamLayer::Stage1);
     assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Allow));
 }
@@ -150,7 +169,7 @@ async fn selector_switches_active_profile() {
         }),
     );
     let config = two_profile_config(ns, "sel-open");
-    let plugin = GlobalConnectionIpRestrictionPlugin::new(&config, ns).expect("valid config");
+    let plugin = from_owner(&fixture_owner(&config, ns)).expect("valid config");
     // Selector switches active profile to "open" → 8.8.8.8 is allowed.
     let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
     assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Allow));
@@ -169,7 +188,7 @@ async fn selector_active_null_is_noop_uses_base() {
         }),
     );
     let config = two_profile_config(ns, "sel-null");
-    let plugin = GlobalConnectionIpRestrictionPlugin::new(&config, ns).expect("valid config");
+    let plugin = from_owner(&fixture_owner(&config, ns)).expect("valid config");
     // active: null → no override → base "deny" profile → 8.8.8.8 denied.
     let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
     assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Deny(_)));
@@ -188,7 +207,7 @@ async fn selector_unknown_profile_falls_back_to_base() {
         }),
     );
     let config = two_profile_config(ns, "sel-bad");
-    let plugin = GlobalConnectionIpRestrictionPlugin::new(&config, ns).expect("valid config");
+    let plugin = from_owner(&fixture_owner(&config, ns)).expect("valid config");
     // Unknown profile → fail-to-base → base "deny" → 8.8.8.8 denied.
     let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
     assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Deny(_)));
@@ -205,7 +224,7 @@ async fn type_mismatch_falls_back_to_base() {
         ConfigEntry::IpList(IpListData { items: vec![] }),
     );
     let config = two_profile_config(ns, "not-a-selector");
-    let plugin = GlobalConnectionIpRestrictionPlugin::new(&config, ns).expect("valid config");
+    let plugin = from_owner(&fixture_owner(&config, ns)).expect("valid config");
     // Wrong variant → fail-to-base → base "deny" → 8.8.8.8 denied.
     let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
     assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Deny(_)));
@@ -226,7 +245,7 @@ async fn envelope_disabled_falls_back_to_base() {
         }),
     );
     let config = two_profile_config(ns, "sel-envelope-off");
-    let plugin = GlobalConnectionIpRestrictionPlugin::new(&config, ns).expect("valid config");
+    let plugin = from_owner(&fixture_owner(&config, ns)).expect("valid config");
     // Envelope disabled → selector ignored → base "deny" → 8.8.8.8 denied.
     let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
     assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Deny(_)));
@@ -245,7 +264,7 @@ fn invalid_base_returns_error() {
         description: None,
         active_profile_ref: None,
     };
-    assert!(GlobalConnectionIpRestrictionPlugin::new(&config, "default").is_err());
+    assert!(from_owner(&fixture_owner(&config, "default")).is_err());
 }
 
 /// A denied active_profile_ref must not be resolved as a store key (ref_denied is
@@ -271,7 +290,7 @@ async fn gcir_denied_active_profile_ref_falls_back_to_base() {
         target_name: "sel-denied".to_string(),
         reason: None,
     });
-    let plugin = GlobalConnectionIpRestrictionPlugin::new(&config, ns).expect("valid config");
+    let plugin = from_owner(&fixture_owner(&config, ns)).expect("valid config");
     // Denied ref → active_profile_ref_key is None → base "deny" profile used.
     // 8.8.8.8 must be denied (not allowed by "open").
     let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
@@ -295,7 +314,7 @@ async fn profile_deny_refs_block_referenced_ip() {
     );
     // One profile, default Allow, with a denyRef to the seeded IpList.
     let mut profile = profile(DefaultAction::Allow, None, None);
-    profile.deny_refs = Some(vec![EdgionConfigDataRef {
+    profile.refs.deny_refs = Some(vec![EdgionConfigDataRef {
         name: "blk".into(),
         namespace: Some(ns.into()),
         ..Default::default()
@@ -307,7 +326,7 @@ async fn profile_deny_refs_block_referenced_ip() {
         description: None,
         active_profile_ref: None,
     };
-    let plugin = GlobalConnectionIpRestrictionPlugin::new(&config, ns).expect("valid");
+    let plugin = from_owner(&fixture_owner(&config, ns)).expect("valid");
     let ctx_block = StreamContext::new("9.9.9.9".parse().unwrap(), 8080, StreamLayer::Stage1);
     assert!(matches!(
         plugin.on_connection(&ctx_block).await,
@@ -318,18 +337,18 @@ async fn profile_deny_refs_block_referenced_ip() {
 }
 
 use edgion_resources::refs::ip_list_fields::PreparedIpListReferences;
-// Detached convenience exists only in this mirrored test module.
-impl GlobalConnectionIpRestrictionPlugin {
-    pub(crate) fn new(config: &GlobalConnectionIpRestrictionConfig, namespace: &str) -> Result<Self, String> {
-        let owner: edgion_resources::EdgionStreamPlugins = serde_json::from_value(serde_json::json!({
-            "metadata": {"name": "fixture", "namespace": namespace},
-            "spec": {"plugins": [{"type": "GlobalConnectionIpRestriction", "config": config}]}
-        }))
-        .unwrap();
-        let prepared = PreparedIpListReferences::from_stream_plugins(&owner);
-        let binding = prepared.bind_stream_plugins(&owner).unwrap();
-        Self::from_bound(binding.global_entry(0).unwrap())
-    }
+fn fixture_owner(
+    config: &GlobalConnectionIpRestrictionConfig,
+    namespace: &str,
+) -> edgion_resources::EdgionStreamPlugins {
+    serde_json::from_value(serde_json::json!({"metadata":{"name":"actual","namespace":namespace},
+        "spec":{"plugins":[{"type":"GlobalConnectionIpRestriction","config":config}]}}))
+    .unwrap()
+}
+fn from_owner(owner: &edgion_resources::EdgionStreamPlugins) -> Result<GlobalConnectionIpRestrictionPlugin, String> {
+    let prepared = PreparedIpListReferences::from_stream_plugins(owner);
+    let binding = prepared.bind_stream_plugins(owner).unwrap();
+    GlobalConnectionIpRestrictionPlugin::from_bound(binding.global_entry(0).unwrap())
 }
 
 #[tokio::test]
@@ -343,7 +362,7 @@ async fn owning_gcir_invalid_slots_keep_allow_intent_and_deny_set_drop() {
         format!("{namespace}/good"),
     ] {
         let data: EdgionConfigData = serde_json::from_value(serde_json::json!({
-            "metadata":{"name":"decoy","namespace":namespace},"spec":{"data":{"type":"IpList","config":{"items":[{"name":"set","cidrs":["198.51.100.8/32"]}]}}}
+            "metadata":{"name":key.rsplit('/').next().unwrap(),"namespace":namespace},"spec":{"data":{"type":"IpList","config":{"items":[{"name":"set","cidrs":["198.51.100.8/32"]}]}}}
         })).unwrap();
         get_global_edgion_config_data_store().insert_raw_for_test(key, std::sync::Arc::new(data));
     }
@@ -379,7 +398,12 @@ async fn owning_gcir_invalid_slots_keep_allow_intent_and_deny_set_drop() {
             })).unwrap();
             let prepared = PreparedIpListReferences::from_stream_plugins(&owner);
             let bound = prepared.bind_stream_plugins(&owner).unwrap();
-            let plugin = GlobalConnectionIpRestrictionPlugin::from_bound(bound.global_entry(0).unwrap()).unwrap();
+            let result = GlobalConnectionIpRestrictionPlugin::from_bound(bound.global_entry(0).unwrap());
+            if case == "inline" {
+                assert!(result.is_err());
+                continue;
+            }
+            let plugin = result.unwrap();
             let context = StreamContext::new("198.51.100.8".parse().unwrap(), 18498, StreamLayer::Stage1);
             let result = plugin.on_connection(&context).await;
             assert_eq!(matches!(result, StreamPluginResult::Allow), allow, "{case} / {bad}");
@@ -425,7 +449,7 @@ async fn owning_gcir_selector_invalid_slot_uses_base_and_invalid_owner_rejects()
         serde_json::json!({"name":"selector","namespace":""}),
     ] {
         let owner: edgion_resources::EdgionStreamPlugins=serde_json::from_value(serde_json::json!({"metadata":{"name":"gcir"},"spec":{"plugins":[{
-            "type":"GlobalConnectionIpRestriction","config":{"enable":true,"activeProfile":"base","activeProfileRef":reference,"profiles":{"base":{"defaultAction":"allow","deny":[{"name":"other-net","cidrs":["203.0.113.0/24"]}]},"other":{"defaultAction":"deny","deny":[{"name":"all","cidrs":["0.0.0.0/0"]}]}}}
+            "type":"GlobalConnectionIpRestriction","config":{"enable":true,"activeProfile":"base","activeProfileRef":reference,"profiles":{"base":{"defaultAction":"allow","denyRefs":[{"name":"other-net"}]},"other":{"defaultAction":"deny","denyRefs":[{"name":"all"}]}}}
         }]}})).unwrap();
         let prepared = PreparedIpListReferences::from_stream_plugins(&owner);
         let binding = prepared.bind_stream_plugins(&owner).unwrap();

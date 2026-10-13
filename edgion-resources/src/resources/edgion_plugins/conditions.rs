@@ -52,12 +52,11 @@
 use crate::common::KeyGet;
 
 crate::redact::impl_redacted_debug!(SecretMatchCondition);
+use super::ip_reference_set::{IpReferenceSet, IpReferenceWire};
 use crate::path_normalization::{get_path_normalization_config, normalize_config_path};
 use crate::resources::common::SecretObjectReference;
-use crate::resources::config_data_ref::EdgionConfigDataRef;
 use crate::resources::edgion_plugins::hmac_match::HmacMatchConfig;
 pub use crate::resources::edgion_plugins::mtls_field::{MtlsField, SanType};
-use edgion_algo::matcher::radix_ip::IpRadixMatcher;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -474,102 +473,41 @@ pub struct SecretMatchCondition {
     pub descriptor: Box<str>,
 }
 
-/// Inline and referenced IP ranges evaluated as one union.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+/// An ordered union of referenced IpLists, with optional predicate negation.
+#[derive(Debug, Clone, Default, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct IpAccessMatch {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub ips: Vec<String>,
-
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub ip_refs: Vec<EdgionConfigDataRef>,
-
+    #[serde(flatten)]
+    pub refs: IpReferenceSet,
     #[serde(default)]
     pub negate: bool,
-
-    /// Controller-expanded union of inline IPs and every usable IpList ref.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub resolved_ips: Option<Vec<String>>,
-
-    /// Receiver-local matcher compiled from `resolvedIps` or inline `ips`.
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub matcher: Option<IpRadixMatcher>,
-
     /// Runtime-only match descriptor (`<ordinal>:<type>`).
     #[serde(skip)]
     #[schemars(skip)]
     pub descriptor: Box<str>,
 }
 
-impl Default for IpAccessMatch {
-    fn default() -> Self {
-        Self {
-            ips: Vec::new(),
-            ip_refs: Vec::new(),
-            negate: false,
-            resolved_ips: None,
-            matcher: None,
-            descriptor: Box::from(""),
+impl<'de> Deserialize<'de> for IpAccessMatch {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Wire {
+            #[serde(default)]
+            negate: bool,
+            #[serde(flatten)]
+            refs: IpReferenceWire,
         }
+        let wire = Wire::deserialize(deserializer)?;
+        Ok(Self {
+            refs: wire.refs.into_set(),
+            negate: wire.negate,
+            descriptor: Box::from(""),
+        })
     }
 }
 
 impl IpAccessMatch {
     pub fn validate_and_init(&mut self) -> Result<(), String> {
-        if self.ips.is_empty() && self.ip_refs.is_empty() {
-            return Err("ips or ipRefs must be configured".to_string());
-        }
-        for (index, reference) in self.ip_refs.iter().enumerate() {
-            validate_nonempty_name(&reference.name, &format!("ipRefs[{index}].name"))?;
-        }
-        let effective = self.resolved_ips.as_ref().unwrap_or(&self.ips);
-        if effective.is_empty() {
-            self.matcher = None;
-            return Ok(());
-        }
-        // Built without `ip_cidr_helpers` / `IpGroup` so this module does not
-        // load `edgion_config_data` (that parent compiles the URL allow-list,
-        // which imports `plugin_configs` → this file).
-        let mut builder = IpRadixMatcher::builder();
-        let mut any_inserted = false;
-        for cidr in effective {
-            let normalized = to_cidr_format(cidr);
-            if self.resolved_ips.is_some() {
-                // ConfigData IpList resources are partial-good: retain valid
-                // siblings from the controller-expanded union. All-invalid
-                // input must compile to an empty matcher (never fail RAP
-                // init) so sibling anyOf rules still run.
-                if let Ok(normalized) = normalized {
-                    if builder.insert(&normalized, "request-access-policy").is_ok() {
-                        any_inserted = true;
-                    }
-                }
-            } else {
-                let normalized = normalized?;
-                builder
-                    .insert(&normalized, "request-access-policy")
-                    .map_err(|error| error.to_string())?;
-                any_inserted = true;
-            }
-        }
-        self.matcher = Some(if self.resolved_ips.is_some() && !any_inserted {
-            IpRadixMatcher::empty()
-        } else {
-            builder.build().map_err(|error| error.to_string())?
-        });
-        Ok(())
-    }
-}
-
-fn to_cidr_format(ip_str: &str) -> Result<String, String> {
-    if ip_str.contains('/') {
-        Ok(ip_str.to_string())
-    } else {
-        let ip: std::net::IpAddr = ip_str.parse().map_err(|_| format!("Invalid IP address: {ip_str}"))?;
-        let prefix_len = if ip.is_ipv4() { 32 } else { 128 };
-        Ok(format!("{ip_str}/{prefix_len}"))
+        self.refs.validate()
     }
 }
 
@@ -651,7 +589,7 @@ impl Condition {
         }
     }
 
-    /// Compile regex / IP matchers and assign the runtime-only descriptor.
+    /// Compile regexes, validate IP references and assign the runtime-only descriptor.
     ///
     /// `ordinal` is the stable atomic traversal index inside the owning set.
     /// This resource-layer diagnostic descriptor never contains match values,
@@ -664,9 +602,9 @@ impl Condition {
             Condition::JwtClaimMatch(c) => c.compile(),
             Condition::MtlsMatch(c) => c.compile(),
             Condition::DirectPeerIpMatch(c) | Condition::RemoteIpMatch(c) => {
-                // Matcher init errors are reported by placement-profile validation
-                // as String; compile still assigns the descriptor so entry-level
-                // DirectPeerIpMatch can run when the fields are valid.
+                // Reference-shape errors are reported by placement-profile validation.
+                // The Gateway binds references from the actual effective owner;
+                // this schema module never owns a matcher.
                 let _ = c.validate_and_init();
                 Ok(())
             }

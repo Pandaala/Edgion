@@ -1,9 +1,10 @@
 use crate::link_sys::providers::webhook::manager::configure_webhook_global_max;
 use crate::link_sys::runtime::store::configure_link_sys_max_instances_per_kind;
+use crate::plugins::http::real_ip::RealIpPolicy;
+use crate::plugins::runtime::conditions::ip_refs::IpConditionCompiler;
 use crate::request_body::ResolvedRequestBodyConfig;
 use crate::routes::http::proxy_http::preflight_handler::ResolvedPreflightPolicy;
 use crate::routes::http::proxy_http::ParsedTimeouts;
-use crate::util::RealIpExtractor;
 use arc_swap::ArcSwap;
 use edgion_common::conf_sync::traits::ConfHandler;
 use edgion_common::dns::resolver_select::{candidate_from_egc_default, ResolverCandidate};
@@ -63,7 +64,7 @@ pub struct ResolvedGatewayConfig {
     pub tls_proxy_log_record: bool,
     pub parsed_timeouts: ParsedTimeouts,
     pub retry_attempts: u32,
-    pub real_ip_extractor: Option<Arc<RealIpExtractor>>,
+    pub real_ip_policy: Option<Arc<RealIpPolicy>>,
     pub enable_compression: bool,
     pub downstream_keepalive_request_limit: u32,
     pub l4_timeouts: ResolvedL4Timeouts,
@@ -75,7 +76,7 @@ impl std::fmt::Debug for ResolvedGatewayConfig {
         f.debug_struct("ResolvedGatewayConfig")
             .field("request_body", &self.request_body)
             .field("parsed_timeouts", &self.parsed_timeouts)
-            .field("has_real_ip_extractor", &self.real_ip_extractor.is_some())
+            .field("has_real_ip_policy", &self.real_ip_policy.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -101,7 +102,7 @@ impl ResolvedGatewayConfig {
         };
 
         let real_ip_errors = config.spec.validate_real_ip();
-        let real_ip_extractor = if !real_ip_errors.is_empty() {
+        let real_ip_policy = if !real_ip_errors.is_empty() {
             tracing::error!(
                 config = %config.name_any(),
                 errors = ?real_ip_errors,
@@ -110,12 +111,10 @@ impl ResolvedGatewayConfig {
             None
         } else {
             config.spec.real_ip.as_ref().and_then(|real_ip| {
-                match RealIpExtractor::new(
-                    &real_ip.trusted_ips,
-                    real_ip.real_ip_header.clone(),
-                    real_ip.recursive,
-                    real_ip.max_trusted_hops,
-                ) {
+                match IpConditionCompiler::from_gateway_config(config)
+                    .map_err(|error| format!("invalid owning RealIp references: {error}"))
+                    .and_then(|compiler| RealIpPolicy::bind(real_ip, &compiler))
+                {
                     Ok(extractor) => Some(Arc::new(extractor)),
                     Err(error) => {
                         tracing::warn!(config = %config.name_any(), error = ?error,
@@ -150,7 +149,7 @@ impl ResolvedGatewayConfig {
             tls_proxy_log_record: security.is_none_or(|s| s.tls_proxy_log_record),
             parsed_timeouts: ParsedTimeouts::from_config(config),
             retry_attempts,
-            real_ip_extractor,
+            real_ip_policy,
             enable_compression: config.spec.server.as_ref().is_some_and(|s| s.enable_compression),
             downstream_keepalive_request_limit: config
                 .spec
@@ -179,7 +178,7 @@ impl Default for ResolvedGatewayConfig {
             retry_attempts: edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfigSpec::default()
                 .retry
                 .attempts,
-            real_ip_extractor: None,
+            real_ip_policy: None,
             enable_compression: false,
             downstream_keepalive_request_limit: 10_000,
             l4_timeouts: ResolvedL4Timeouts::default(),

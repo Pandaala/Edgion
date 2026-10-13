@@ -132,19 +132,18 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
         let mut errors = esp.unsupported_plugin_errors();
 
         // Known disabled entries are skipped, mirroring the
-        // runtime builders (`from_stream_plugins` / `from_entries`) which never construct a
+        // actual-owner runtime builders (`from_owner_cached`) which never construct a
         // disabled plugin — a parked broken config must not flip `Accepted` to False.
         //
         // Validation routes through the stateless `PluginValidation::validation_error()`
         // trait, mirroring the HTTP-plugin preparse pattern. The structural checks match
-        // what the data-plane plugins (`StreamIpRestriction::new`,
-        // `TlsRouteIpRestriction::new`) would hit at construction. Both stage plugins fail
+        // the actual-owner Stream/TLS cold construction gates. Both stage plugins fail
         // closed on an invalid config — every connection denied — but without surfacing
         // the error here the CR keeps a healthy-looking `Accepted=True`, i.e. a silent
         // blackhole. Emitting a non-legacy error makes `update_status` set
         // `Accepted=False` with the `Invalid` reason.
 
-        // Stage 1: ConnectionFilter plugins (pre-TLS, inline L4 `ConnectionIpRestrictionRules`).
+        // Stage 1: ConnectionFilter plugins (pre-TLS, reference-only L4 `ConnectionIpRestrictionRules`).
         for (idx, entry) in esp.spec.plugins.iter().flatten().enumerate() {
             if !entry.is_enabled() {
                 continue;
@@ -168,10 +167,9 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
                     errors.push(format!("plugins[{idx}] (ConnectionRateLimit): {e}"));
                 }
             }
-            // Validate GlobalConnectionIpRestriction inline config (profiles + active profile).
+            // Validate GlobalConnectionIpRestriction policy (profiles + active profile).
             if let EdgionStreamPlugin::GlobalConnectionIpRestriction(gcir) = &entry.plugin {
-                let mut config = gcir.clone();
-                if let Err(e) = config.validate_and_init() {
+                if let Some(e) = gcir.validation_error() {
                     errors.push(format!(
                         "plugins[{idx}] (GlobalConnectionIpRestriction): config invalid: {e}"
                     ));
@@ -182,8 +180,8 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
             // `PluginValidation::validation_error()` trait (that fixed
             // signature has no layer flag) — it calls the exact same
             // `GeoIpLocationConfig::check_fields(true)` the gateway's
-            // `GeoIpLocation` stream-plugin constructor calls via
-            // `validate_and_init(true)`, so the two paths cannot drift. See
+            // actual-owner Geo stream-plugin constructor uses before key binding,
+            // so the two validation paths cannot drift. See
             // `GeoIpLocationConfig`'s module doc.
             if let EdgionStreamPlugin::GeoIpLocation(cfg) = &entry.plugin {
                 if let Some(e) = cfg.check_fields(true) {
@@ -200,7 +198,7 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
             match &entry.plugin {
                 TlsRouteStreamPlugin::Unsupported => {}
                 TlsRouteStreamPlugin::IpRestriction(config) => {
-                    if let Err(e) = config.clone().validate_and_init() {
+                    if let Some(e) = config.validation_error() {
                         errors.push(format!("tlsRoutePlugins[{idx}] (IpRestriction): {e}"));
                     }
                 }
@@ -312,13 +310,7 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
             condition_false(condition_types::RESOLVED_REFS, reason, message, generation)
         };
 
-        let inline_errors = collect_inline_ip_entry_errors(esp);
-        let partially_invalid = if inline_errors.is_empty() {
-            partially_invalid_condition(None, generation)
-        } else {
-            let msg = edgion_resources::matcher::ip_cidr_helpers::format_entry_errors(&inline_errors);
-            partially_invalid_condition(Some(msg), generation)
-        };
+        let partially_invalid = partially_invalid_condition(None, generation);
 
         let Some(status) = esp
             .status
@@ -371,50 +363,6 @@ async fn requeue_referencing_gateways(esp: &EdgionStreamPlugins, ctx: &HandlerCo
     for gw_ref in refs {
         ctx.requeue("Gateway", gw_ref.resource_key()).await;
     }
-}
-
-/// Collect partial-good entry errors over every inline allow/deny in L4 IpRestriction
-/// (spec.plugins), each GCIR ProfileRules (gcir.profiles), and TLS-route IpRestriction
-/// (spec.tls_route_plugins). GCIR present-but-empty is a separate structural concern
-/// (Accepted), not reported here.
-fn collect_inline_ip_entry_errors(
-    esp: &EdgionStreamPlugins,
-) -> Vec<edgion_resources::matcher::ip_cidr_helpers::EntryError> {
-    use edgion_resources::matcher::ip_cidr_helpers::collect_entry_errors;
-    let mut errs = Vec::new();
-    for entry in esp.spec.plugins.iter().flatten() {
-        if let EdgionStreamPlugin::IpRestriction(rules) = &entry.plugin {
-            if let Some(g) = &rules.allow {
-                errs.extend(collect_entry_errors(g));
-            }
-            if let Some(g) = &rules.deny {
-                errs.extend(collect_entry_errors(g));
-            }
-        }
-        if let EdgionStreamPlugin::GlobalConnectionIpRestriction(gcir) = &entry.plugin {
-            for profile in gcir.profiles.values() {
-                if let Some(g) = &profile.allow {
-                    errs.extend(collect_entry_errors(g));
-                }
-                if let Some(g) = &profile.deny {
-                    errs.extend(collect_entry_errors(g));
-                }
-            }
-        }
-    }
-    for entry in esp.spec.tls_route_plugins.iter().flatten() {
-        let config = match &entry.plugin {
-            TlsRouteStreamPlugin::IpRestriction(config) => config,
-            TlsRouteStreamPlugin::Unsupported => continue,
-        };
-        if let Some(g) = &config.allow {
-            errs.extend(collect_entry_errors(g));
-        }
-        if let Some(g) = &config.deny {
-            errs.extend(collect_entry_errors(g));
-        }
-    }
-    errs
 }
 
 /// Resolve each GCIR `activeProfileRef` against the EdgionConfigData store.

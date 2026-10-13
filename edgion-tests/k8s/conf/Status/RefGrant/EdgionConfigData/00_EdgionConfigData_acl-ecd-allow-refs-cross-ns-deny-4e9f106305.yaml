@@ -1,0 +1,14 @@
+# Suite-owned IP collection for one authored ACL slot.
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: acl-ecd-allow-refs-cross-ns-deny-4e9f106305
+  namespace: edgion-test
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: blocked-ranges
+        cidrs:
+        - 10.0.0.0/8

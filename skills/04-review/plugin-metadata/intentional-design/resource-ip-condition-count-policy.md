@@ -94,3 +94,8 @@ restore the former constant as an assumed matcher capacity limit.
 - D0081 / `fail-closed-plugin-ip-matcher-limit-violations`: originally a real
   plugin-publication inconsistency; resolved by the user-authorized removal of
   the aggregate constraint, not by adding a reject gate.
+
+ARCH-028 B2 removes consumer CIDR expansion and keeps referenced lists live. This
+changes representation and dependency availability, not the existing absence of an
+aggregate IP-Condition count quota. Long collections remain in IpList IpGroups;
+there is no per-list aggregation threshold.

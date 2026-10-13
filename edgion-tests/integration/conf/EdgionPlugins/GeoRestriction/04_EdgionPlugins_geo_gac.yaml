@@ -15,10 +15,8 @@ spec:
     - enable: true
       type: IpRestriction
       config:
-        deny:
-          - name: block-us-source
-            cidrs:
-              - "127.0.0.6/32"
+        denyRefs:
+          - name: acl-geo-chain-deny-93ed78e133
     - enable: true
       type: GeoIpLocation
       config:

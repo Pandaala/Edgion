@@ -12,13 +12,13 @@ use crate::resources::edgion_stream_plugins::global_connection_ip_restriction::G
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", content = "config")]
 pub enum EdgionStreamPlugin {
-    /// Inline IP restriction (L4-specific, no HTTP fields).
+    /// Reference-only IP restriction (L4-specific, no HTTP response fields).
     IpRestriction(ConnectionIpRestrictionRules),
 
     /// L4 connection-phase IP restriction.
     ///
-    /// Carries the complete, git-owned IP config inline (`enable` + named `profiles`). The
-    /// only dynamic input is *which profile is active*, supplied via an optional
+    /// Owns scalar policy and named profiles with ordered `allowRefs`/`denyRefs`.
+    /// CIDR content is read live from central IpLists. Profile selection uses an optional
     /// `activeProfileRef` pointing at a `Selector` EdgionConfigData. On any selector error
     /// (absent / type-mismatch / unknown profile / envelope-disabled), the gateway falls
     /// back to `activeProfile` (fail-to-base) and emits a metric signal.

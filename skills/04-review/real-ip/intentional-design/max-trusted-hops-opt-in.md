@@ -14,7 +14,7 @@ When a review reports "RealIp should change `maxTrustedHops` to required / set a
 
 ## Background Threat (M12)
 
-In `recursive=true` mode, the `X-Forwarded-For` list is traversed right-to-left until the first non-trusted IP is encountered. If `trusted_ips` is configured too broadly (e.g., `10.0.0.0/8`) and an attacker can initiate requests from an IP within that range, they can construct a "trusted-IP prefix" of arbitrary length to push the malicious IP to the leftmost position, causing `RemoteIp` to be spoofed.
+In `recursive=true` mode, the `X-Forwarded-For` list is traversed right-to-left until the first non-trusted IP is encountered. If `trusted IpList entries` is configured too broadly (e.g., `10.0.0.0/8`) and an attacker can initiate requests from an IP within that range, they can construct a "trusted-IP prefix" of arbitrary length to push the malicious IP to the leftmost position, causing `RemoteIp` to be spoofed.
 
 `maxTrustedHops: Some(N)` stops at the Nth trusted hop during recursive traversal and returns the IP at the current position — closing off this "infinitely extending trusted prefix" path.
 
@@ -23,8 +23,8 @@ In `recursive=true` mode, the `X-Forwarded-For` list is traversed right-to-left 
 1. **Default `None` (no upper limit)**: maintains Nginx compatibility; zero breakage on upgrade
 2. **Aligned with Envoy `xff_num_trusted_hops` concept**: gives Envoy-familiar operators a familiar control surface
 3. **Only meaningful for `recursive=true`**: the field exists in non-recursive mode but is ineffective
-4. **Main defense is in `trusted_ips`**: `maxTrustedHops` is an auxiliary defense, not the main one; documentation makes "two-layer defense" explicit
-5. **Field type is `Option<u32>`**: `None` = no upper limit; `Some(0)` is legal but means "do not skip any trusted hop" (effectively non-recursive semantics)
+4. **Main defense is in `trusted IpList entries`**: `maxTrustedHops` is an auxiliary defense, not the main one; documentation makes "two-layer defense" explicit
+5. **Field type is `Option<u32>`**: `None` = no upper limit; `Some(0)` is legal and stops at the first trusted parsed forwarded hop in recursive mode. It differs from nonrecursive mode: a trusted rightmost hop there returns the effective downstream peer. Zero never means unlimited
 
 ## Decision Rule
 
@@ -39,7 +39,7 @@ Verify three points before closing:
 
 - The type of `RealIpConfig.max_trusted_hops` is still `Option<u32>`, default `None`
 - The recursive branch of `RealIpExtractor::resolve_from_header` still uses a counter to implement the cap (the non-recursive branch does not read this field)
-- The user documentation `docs/{zh-CN,en}/user-guide/edgion-plugins/real-ip.md` still has the "Security tradeoffs" / "Security Trade-offs" section, making "first defense is precise `trustedIps`; second is `maxTrustedHops`" explicit
+- The user documentation `docs/{zh-CN,en}/user-guide/edgion-plugins/real-ip.md` still has the "Security tradeoffs" / "Security Trade-offs" section, making "first defense is precise `trustedIpRefs`; second is `maxTrustedHops`" explicit
 
 All three satisfied → design decision; point to the M12 FIXED entry in `tasks/security-audit/02-access-control.md` and close.
 

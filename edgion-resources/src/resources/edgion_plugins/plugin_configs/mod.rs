@@ -114,7 +114,7 @@ pub use fault_injection::{
 pub use form_json_transform::{FormJsonDirection, FormJsonTransformConfig};
 pub use forward_auth::{ForwardAuthConfig, ForwardAuthDecision};
 pub use geo_rule::{GeoDimFacts, GeoRule, GeoRuleContext, GeoRuleGroup, GeoRuleKey, GeoRuleSource};
-pub use geoip_location::{GeoDecision, GeoIpLocationConfig};
+pub use geoip_location::{GeoDecision, GeoIpLocationConfig, GeoRuleSide};
 pub use graphql_rate_limit::{
     graphql_body_validation_errors, GraphqlCostRule, GraphqlRateLimitConfig, GraphqlRootQuota,
 };

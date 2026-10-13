@@ -51,15 +51,15 @@ impl ConditionalRequestFilter {
 
     /// Create a wrapper that also carries an operator-defined alias and an
     /// optional compiled dye plan.
-    pub fn with_alias_and_dye(
+    pub(crate) fn with_alias_and_dye(
         inner: Box<dyn RequestFilter>,
-        conditions: Option<PluginConditions>,
+        conditions: Option<CompiledPluginConditions>,
         alias: Option<String>,
         dye_plan: Option<Arc<CompiledDyePlan>>,
     ) -> Self {
         Self {
             inner,
-            conditions: conditions.map(CompiledPluginConditions::new),
+            conditions,
             alias,
             dye_plan,
         }
@@ -124,15 +124,15 @@ impl ConditionalUpstreamResponseFilter {
 
     /// Create a wrapper that also carries an operator-defined alias and an
     /// optional compiled dye plan.
-    pub fn with_alias_and_dye(
+    pub(crate) fn with_alias_and_dye(
         inner: Box<dyn UpstreamResponseFilter>,
-        conditions: Option<PluginConditions>,
+        conditions: Option<CompiledPluginConditions>,
         alias: Option<String>,
         dye_plan: Option<Arc<CompiledDyePlan>>,
     ) -> Self {
         Self {
             inner,
-            conditions: conditions.map(CompiledPluginConditions::new),
+            conditions,
             alias,
             dye_plan,
         }
@@ -205,15 +205,15 @@ impl ConditionalUpstreamResponseBodyFilter {
 
     /// Create a wrapper that also carries an operator-defined alias and an
     /// optional compiled dye plan.
-    pub fn with_alias_and_dye(
+    pub(crate) fn with_alias_and_dye(
         inner: Box<dyn UpstreamResponseBodyFilter>,
-        conditions: Option<PluginConditions>,
+        conditions: Option<CompiledPluginConditions>,
         alias: Option<String>,
         dye_plan: Option<Arc<CompiledDyePlan>>,
     ) -> Self {
         Self {
             inner,
-            conditions: conditions.map(CompiledPluginConditions::new),
+            conditions,
             alias,
             dye_plan,
         }
@@ -274,15 +274,15 @@ impl ConditionalUpstreamResponse {
 
     /// Create a wrapper that also carries an operator-defined alias and an
     /// optional compiled dye plan.
-    pub fn with_alias_and_dye(
+    pub(crate) fn with_alias_and_dye(
         inner: Box<dyn UpstreamResponse>,
-        conditions: Option<PluginConditions>,
+        conditions: Option<CompiledPluginConditions>,
         alias: Option<String>,
         dye_plan: Option<Arc<CompiledDyePlan>>,
     ) -> Self {
         Self {
             inner,
-            conditions: conditions.map(CompiledPluginConditions::new),
+            conditions,
             alias,
             dye_plan,
         }

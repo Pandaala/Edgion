@@ -29,10 +29,7 @@ because:
 
 The essential fact is already captured by `plugin_log.push("trusted
 proxy:match")` (the sanctioned per-request access-log channel), so the
-trusted-proxy match remains observable without `tracing`. `matched_trusted_group`
-stays a `pub fn` on `RealIpExtractor` with its own unit test
-(`matched_trusted_group_returns_name`), so removing its only production caller
-does not create dead code.
+trusted-proxy match remains observable without `tracing`. ARCH-028 B3 removes the unused `matched_trusted_group` helper and local matcher ownership. The extractor now receives synchronous membership from the caller's single canonical IpList snapshot; it adds no request tracing or group-name logging.
 
 ## Decision Rule
 

@@ -54,6 +54,22 @@ spec:
 ## Full Schema
 
 ```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: default
+spec:
+  visibility: Cluster
+  data:
+    type: IpList
+    config:
+      items:
+      - name: private-ranges
+        description: ''
+        cidrs:
+        - 10.0.0.0/8
+---
 apiVersion: edgion.io/v1alpha1
 kind: EdgionGatewayConfig
 metadata:
@@ -92,13 +108,11 @@ spec:
 
   # ─── Real IP extraction ───
   realIp:
-    trustedIps:                             # Vec<IpGroup>, list of trusted proxy IP groups
-      - name: private-ranges                # string, required; <=63 chars, charset [a-zA-Z0-9._-], starts/ends alphanumeric, unique within the list
-        description: ""                     # string, optional
-        cidrs:                              # Vec<String>, required; non-empty list of IPs/CIDRs
-          - "10.0.0.0/8"
+    trustedIpRefs:
+      - name: realip-proxies-1
+        namespace: default
     realIpHeader: "X-Forwarded-For"         # string, header used to extract the real IP
-    recursive: true                         # bool, traverse the header right-to-left, skip trustedIps, take the first untrusted IP
+    recursive: true                         # bool, traverse the header right-to-left, skip trustedIpRefs, take the first untrusted IP
 
   # ─── Security protection ───
   securityProtect:
@@ -237,13 +251,20 @@ or the owner of a shared physical listener still requires a process restart.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `trustedIps` | `Vec<IpGroup>` | `[]` | List of trusted proxy IP groups |
+| `trustedIpRefs` | `Vec<EdgionConfigDataRef>` | required | Ordered trusted proxy IpList references |
 | `realIpHeader` | `String` | `X-Forwarded-For` | Header name from which the real IP is extracted |
 | `recursive` | `bool` | `true` | Whether to skip trusted proxies right-to-left in nginx style |
 
-Each `trustedIps` entry is an `IpGroup`: `name` (required; ≤63 chars, charset `[a-zA-Z0-9._-]`, starts/ends alphanumeric, unique within the list), `description` (optional), `cidrs` (required; non-empty list of IP/CIDR strings).
+References are ordered `EdgionConfigData` IpLists. Put IP/CIDR collections in each IpList's `items` (IpGroups), then reference them by `name` and optional `namespace`. HTTP plugin references default to the actual owning plugin namespace. Global `spec.realIp` references require an explicit namespace and current `Cluster` visibility when ReferenceGrant validation is enabled; namespaced grants do not authorize this cluster owner. Disabling that validation preserves identity, IpList type and enabled checks.
 
-Extraction logic: traverse `realIpHeader` right-to-left, skip addresses listed in any `trustedIps` group, and take the first untrusted IP.
+Every referenced list must be available before trusting the effective downstream peer or any forwarded hop. A missing, disabled, denied or wrong-type list disables trust for this decision and uses the PROXY-effective peer, even when another list matches. Content updates, deletion, visibility changes and restoration affect subsequent decisions without copying CIDRs into the consumer. One captured view covers the peer and all hops. Invalid entries in an otherwise valid IpList are excluded by the central partial-good compiler; an empty/all-invalid matcher trusts no addresses.
+
+| Field | Meaning |
+| --- | --- |
+| `name` | Required IpList resource name |
+| `namespace` | HTTP: defaults to the owning namespace; global EGC: required |
+
+Removed inline `trustedIps` and unknown fields are invalid even when null or empty. Invalid policies that reach typed publication replace the previous generation with a sealed plugin failure or disable global extraction. A clean generation restores the policy. Global EGC `Accepted` reports intrinsic structure only, never deployment-local list availability.
 
 ### spec.securityProtect
 

@@ -20,7 +20,8 @@ spec:
                   - name: explicit-fallback
                     type: directPeerIp
                     config:
-                      ips: ["127.0.0.0/8"]
+                      ipRefs:
+                        - name: hmac-fallback-ip-list
                       conditions:
                         allOf:
                           - type: keyMatch

@@ -13,42 +13,73 @@ EdgionStreamPlugins defines connection-stage plugins and a separate TLSRoute-sta
 
 ```yaml
 apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: example-my-stream-plugins-allow-1
+  namespace: default
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: internal-networks
+        description: Private client networks
+        cidrs:
+        - 10.0.0.0/8
+        - 192.168.1.0/24
+---
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: example-my-stream-plugins-deny-2
+  namespace: default
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: blocked-hosts
+        cidrs:
+        - 10.0.0.100
+---
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: example-my-stream-plugins-allow-3
+  namespace: default
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: tls-clients
+        cidrs:
+        - 172.16.0.0/12
+---
+apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:
   name: my-stream-plugins
   namespace: default
 spec:
-  # Stage 1: connection context (IP/port information only)
   plugins:
-    - enable: true
-      type: IpRestriction
-      config:
-        allow:
-          - name: internal-networks
-            description: Private client networks
-            cidrs:
-              - "10.0.0.0/8"
-              - "192.168.1.0/24"
-        deny:
-          - name: blocked-hosts
-            cidrs:
-              - "10.0.0.100"
-          # allowRefs/denyRefs (optional): reference central IpList EdgionConfigData objects;
-          # merged into the same allow/deny pools as inline entries.
-          # namespace defaults to this EdgionStreamPlugins resource's namespace if omitted.
-        allowRefs:
-          - name: corp-allowlist   # references an IpList EdgionConfigData named "corp-allowlist"
-
-  # Stage 2: TlsRoute (post-route-match; TLS identity only after termination)
+  - enable: true
+    type: IpRestriction
+    config:
+      allowRefs:
+      - name: example-my-stream-plugins-allow-1
+        namespace: default
+      - name: corp-allowlist
+      denyRefs:
+      - name: example-my-stream-plugins-deny-2
+        namespace: default
   tlsRoutePlugins:
-    - enable: true
-      type: IpRestriction
-      config:
-        allow:
-          - name: tls-clients
-            cidrs:
-              - "172.16.0.0/12"
-        # allowRefs/denyRefs also available here (same semantics as Stage 1)
+  - enable: true
+    type: IpRestriction
+    config:
+      allowRefs:
+      - name: example-my-stream-plugins-allow-3
+        namespace: default
 ```
 
 ## Two-Stage Model
@@ -104,8 +135,8 @@ attach the resource to `UDPRoute` for UDP admission.
 
 | Type | Stage | Description |
 |------|-------|-------------|
-| `IpRestriction` | Stage 1 + Stage 2 | IP allow/deny list (CIDR supported); rules may be inline named `IpGroup` entries under `allow`/`deny` or referenced from a central `IpList` EdgionConfigData via `allowRefs`/`denyRefs` (merged into the same pools; a missing/disabled referenced IpList causes allowRef to fail closed). Inline `allow`/`deny` groups are **partial-good**: a bad CIDR entry is skipped (not fatal); the plugin loads with valid entries. Bad entries surface as `PartiallyInvalid` status (reason `RuleInvalid`; `Accepted` stays `True`). A skipped inline deny entry increments `edgion_ip_deny_entries_skipped_total{scope="stream_l4"|"tls_route"}`. |
-| `GlobalConnectionIpRestriction` | Stage 1 only | EdgionConfigData-referenced IP restriction. The plugin config holds `overrideRef`; referenced profiles carry the rule sets. No geo block — combine with `GeoIpLocation` (below) as a separate, ordered Stage-1 entry instead. |
+| `IpRestriction` | Stage 1 and TLS-route Stage 2 | Ordered `allowRefs`/`denyRefs` to central IpLists; no local CIDR collections or compilation. Optional unavailable references are omitted, with authored whitelist intent preserved. |
+| `GlobalConnectionIpRestriction` | Stage 1 only | The plugin owns named reference-only `profiles` and a validated `activeProfile`. Optional `activeProfileRef` targets a Selector that names one local profile; each profile separately references IpLists. No geo block — combine with `GeoIpLocation` (below) as a separate, ordered Stage-1 entry instead. |
 | `ConnectionRateLimit` | Stage 1 only | Limits new TCP/TLS connections or UDP session-admission attempts using the current rate configuration; it does not count packets on established UDP sessions. |
 | `GeoIpLocation` | Stage 1 only | Same config shape as the HTTP `GeoIpLocation` plugin (`defaultAction`/`failOpen`/`denyRuleGroups`/`allowRuleGroups`), sharing its matching core; `source: RemoteIp` is rejected at L4 (no `X-Forwarded-For` to resolve). L4 configuration requires at least one allow or deny rule group because no L4 sink consumes resolved facts; rule-less `config: {}` is invalid and the generation fails closed. Denials from valid rules increment the bounded `edgion_geoip_denied_total{layer,reason}` metric. A Stage-1 listener denial is otherwise metric-only; TCP/UDP route denials retain their canonical protocol logs without GeoIP facts or sensitive denial reasons. See `docs/en/ops-guide/gateway/geoip.md`. |
 
@@ -153,13 +184,19 @@ for allow/deny semantics, lifecycle boundaries and unavailable-policy behavior.
 
 ## Unknown config keys (`UnknownConfigFields` condition)
 
-Same mechanism and same condition as `EdgionPlugins` (13-edgion-plugins.md) — `spec.plugins` /
-`spec.tlsRoutePlugins` entry `config` blocks are `x-kubernetes-preserve-unknown-fields`, so a
-mistyped key (e.g. a `GeoIpLocation` config typo) is pruned by nothing and silently dropped
-by serde. The Controller reports it via a dedicated `UnknownConfigFields` condition
-(`status: "True"`, `reason: UnknownFieldsDetected`, message = the full path list) plus a WARN
-log line; `Accepted` and the abnormal-resource metric are untouched, and the condition is
-removed on the next apply once the key is fixed. See `13-edgion-plugins.md` for the full
+Ordinary advisory unknown-key handling follows `EdgionPlugins`: entry config
+interiors preserve unknown fields, the Controller reports `UnknownConfigFields`,
+and a clean apply removes that condition without changing Accepted.
+GeoIpLocation is a fail-closed exception: config/group/rule unknown or removed
+fields form a typed invalid generation, Accepted=False, and a live denial gate.
+See `13-edgion-plugins.md` for the full
 behavior description and `docs/en/ops-guide/plugin-config-unknown-fields.md` for the operator
 guide (fleet-wide `GET /api/v1/diagnostics/unknown-fields`, and
 `POST /api/v1/validate/{kind}` for a blocking gate of your own).
+
+GeoIpLocation CIDR criteria contain ordered `ipRefs` only. All lists are required
+before MMDB/failOpen/group shortcuts; content and availability remain live.
+Unknown/removed input is transported as bounded invalidity, with static HTTP
+configuration rejection / Stream denial and clean-generation recovery. Central
+IpList partial-good compilation is intentional; empty available lists match none.
+No Geo CIDR tree or CIDR expansion belongs to a consumer plugin.

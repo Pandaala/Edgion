@@ -22,7 +22,8 @@ spec:
                   - name: none
                     type: directPeerIp
                     config:
-                      ips: ["192.0.2.0/24"]
+                      ipRefs:
+                        - name: gac-documentation-ips
           lockdown:
             requiredRuleGroups:
               - name: source
@@ -30,7 +31,8 @@ spec:
                   - name: cloudflare
                     type: directPeerIp
                     config:
-                      ips: ["192.168.0.0/16"]
+                      ipRefs:
+                        - name: gac-lockdown-ips
                       conditions:
                         allOf:
                           - type: secretMatch

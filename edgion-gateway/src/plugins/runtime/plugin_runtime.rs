@@ -1,7 +1,7 @@
 //! Plugin runtime - manages plugin execution across different stages
 
 use edgion_resources::refs::config_data_fields::{request_access_has_external_data, HttpConfigDataEntry};
-use edgion_resources::refs::ip_list_fields::PreparedIpListReferences;
+use edgion_resources::refs::ip_list_fields::{IpListSide, PreparedIpListReferences};
 use edgion_resources::refs::waf_fields::WafPluginReferences;
 use edgion_resources::resource::meta::ResourceMeta;
 use edgion_resources::resources::refs::plugin_fields::{
@@ -21,7 +21,7 @@ use crate::runtime::server::http_to_grpc_status;
 use crate::EdgionHttpContext;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::filters::PluginRunningResult::ErrTerminateRequest;
-use edgion_resources::resources::edgion_plugins::{BodyRequirement, CorsConfig, WafConfig};
+use edgion_resources::resources::edgion_plugins::{BodyRequirement, CorsConfig, PluginValidation, WafConfig};
 use edgion_resources::resources::header_modifier::{validate_grpc_filter_list, validate_http_filter_list};
 use edgion_resources::resources::http_route::MirrorTuning;
 use edgion_resources::resources::refs::extension_ref::ExtensionRefValidationError;
@@ -132,8 +132,15 @@ impl WafCandidate {
 static NEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(0);
 
 pub struct PluginRuntime {
+<<<<<<< Updated upstream
     cache_identity: u64,
     cache_capabilities: super::entry_bundle::CacheCapabilities,
+=======
+    required_ip: Vec<Arc<super::conditions::ip_refs::BoundIpPredicate>>,
+    ip_view_required: bool,
+    ip_unavailable_gate: Option<Arc<dyn RequestFilter>>,
+    extension_checks: Vec<Arc<ExtensionRefFilter>>,
+>>>>>>> Stashed changes
     /// Conservative construction-time capability, including conditional/nested consumers.
     requires_complete_request_body: bool,
     /// Effective executable membership, published only by successful typed construction.
@@ -320,6 +327,10 @@ impl PluginRuntime {
             policy_bypassed: Vec::new(),
             requires_complete_request_body: false,
             has_ai_conversion_owner: false,
+            required_ip: Vec::new(),
+            ip_view_required: false,
+            ip_unavailable_gate: None,
+            extension_checks: Vec::new(),
             has_unary_body_consumer: false,
             waf_candidate: None,
             has_request_id: false,
@@ -969,6 +980,8 @@ impl PluginRuntime {
         }
         let invalid = filter.plugin_key().is_none();
         let filter = Arc::new(filter);
+        self.extension_checks.push(filter.clone());
+        self.ensure_ip_unavailable_gate();
         let request: Arc<dyn RequestFilter> = filter.clone();
         if assign_indices && invalid && self.invalid_extension_gate.is_none() {
             self.invalid_extension_gate = Some(Arc::clone(&request));
@@ -996,6 +1009,18 @@ impl PluginRuntime {
         owner: &edgion_resources::EdgionPlugins,
         cache: &mut EntryCache,
     ) -> Vec<String> {
+        let ip = match super::conditions::ip_refs::IpConditionCompiler::new(owner) {
+            Ok(ip) => Some(ip),
+            Err(_) => {
+                self.invalid_plugins.record_non_retainable("IpList");
+                None
+            }
+        };
+        self.ip_view_required = ip.as_ref().is_some_and(|ip| ip.has_refs());
+        self.required_ip = ip.as_ref().map(|ip| ip.required()).unwrap_or_default();
+        if !self.required_ip.is_empty() {
+            self.ensure_ip_unavailable_gate();
+        }
         let prepared = PreparedPluginReferences::from_plugins(owner);
         let bindings = prepared.bind(owner).ok();
         let namespace = owner.metadata.namespace.as_deref().unwrap_or("default");
@@ -1006,6 +1031,7 @@ impl PluginRuntime {
             cache,
             Some(owner),
             bindings.as_ref(),
+            ip.as_ref(),
         );
         errors.extend(
             self.add_response_filter_entries(
@@ -1017,11 +1043,33 @@ impl PluginRuntime {
                 namespace,
                 cache,
                 bindings.as_ref(),
+                ip.as_ref(),
             ),
         );
+        errors.extend(
+            self.add_from_upstream_response_body_filters_with_cache(
+                owner
+                    .spec
+                    .upstream_response_body_filter_plugins
+                    .as_deref()
+                    .unwrap_or_default(),
+                namespace,
+                cache,
+                bindings.as_ref(),
+                ip.as_ref(),
+            ),
+        );
+        errors.extend(self.add_from_upstream_responses_with_cache(
+            owner.spec.upstream_response_plugins.as_deref().unwrap_or_default(),
+            namespace,
+            cache,
+            ip.as_ref(),
+        ));
         errors
     }
 
+    // Keep independently borrowed owner capabilities explicit at this cold boundary.
+    #[allow(clippy::too_many_arguments)]
     fn add_request_entries(
         &mut self,
         entries: &[RequestFilterEntry],
@@ -1030,6 +1078,7 @@ impl PluginRuntime {
         cache: &mut EntryCache,
         owner: Option<&edgion_resources::EdgionPlugins>,
         bindings: Option<&PluginBindings<'_>>,
+        ip: Option<&super::conditions::ip_refs::IpConditionCompiler<'_>>,
     ) -> Vec<String> {
         let mut errors = Vec::new();
         // Bind once to the actual equal-length policy view. Never synthesize an owner
@@ -1344,7 +1393,16 @@ impl PluginRuntime {
                     && ip_binding
                         .as_ref()
                         .and_then(|binding| binding.http_entry(index))
-                        .is_none_or(|entry| entry.references().validate_owner().is_err())
+                        .is_none_or(|entry| {
+                            let refs = entry.references();
+                            entry.config().validation_error().is_some()
+                                || refs.validate_owner().is_err()
+                                || refs.read_scopes(IpListSide::Allow).is_err()
+                                || refs.read_scopes(IpListSide::Deny).is_err()
+                                || ip
+                                    .as_ref()
+                                    .is_none_or(|compiler| compiler.bind_acl(&entry.config().refs).is_none())
+                        })
                 {
                     self.invalid_plugins.record_non_retainable("IpRestriction");
                     errors.push(format!(
@@ -1483,6 +1541,7 @@ impl PluginRuntime {
                             &format!("requestPlugins[{}] ({})", index, plugin_name),
                             &mut errors,
                             &mut entry_runtime.invalid_plugins,
+                            ip,
                         )
                     } else {
                         None
@@ -1535,7 +1594,9 @@ impl PluginRuntime {
                                 entry_runtime.add_request_filter(Box::new(
                                     ConditionalRequestFilter::with_alias_and_dye(
                                         gated,
-                                        entry.conditions.clone(),
+                                        entry.conditions.as_ref().map(|conditions| {
+                                            super::conditions::CompiledPluginConditions::with_ip(conditions, ip)
+                                        }),
                                         entry_alias.clone(),
                                         dye_plan.clone(),
                                     ),
@@ -1579,7 +1640,9 @@ impl PluginRuntime {
                                 entry_runtime.add_request_filter(Box::new(
                                     ConditionalRequestFilter::with_alias_and_dye(
                                         request,
-                                        entry.conditions.clone(),
+                                        entry.conditions.as_ref().map(|conditions| {
+                                            super::conditions::CompiledPluginConditions::with_ip(conditions, ip)
+                                        }),
                                         entry_alias.clone(),
                                         dye_plan.clone(),
                                     ),
@@ -1604,101 +1667,105 @@ impl PluginRuntime {
                         break 'build_entry;
                     }
 
-                    let created = match &entry.plugin {
-                        EdgionPlugin::Wasm(_) => CreateResult::Ok(
-                            descriptor_entries
-                                .get(index)
-                                .zip(wasm_defaults.as_deref())
-                                .and_then(|(entry, defaults)| WasmPlugin::create_request(entry, defaults)),
-                        ),
-                        EdgionPlugin::OpenidConnect(_) => CreateResult::Ok(
-                            descriptor_entries
-                                .get(index)
-                                .zip(oidc_defaults.as_deref())
-                                .and_then(|(entry, defaults)| OpenidConnect::try_new(entry, defaults).ok())
-                                .map(|plugin| Box::new(plugin) as Box<dyn RequestFilter>),
-                        ),
-                        EdgionPlugin::LdapAuth(_) => CreateResult::Ok(
-                            descriptor_entries
-                                .get(index)
-                                .zip(ldap_defaults.as_deref())
-                                .and_then(|(entry, defaults)| LdapAuth::create(entry, defaults)),
-                        ),
-                        EdgionPlugin::HeaderCertAuth(_) => CreateResult::Ok(
-                            header_ca_field
-                                .as_ref()
-                                .map(|field| Box::new(HeaderCertAuth::new(field)) as Box<dyn RequestFilter>),
-                        ),
-                        EdgionPlugin::ForwardAuth(_) => CreateResult::Ok(
-                            managed_input
-                                .as_ref()
-                                .and_then(|input| ForwardAuth::from_owned(input).ok())
-                                .map(|plugin| Box::new(plugin) as Box<dyn RequestFilter>),
-                        ),
-                        EdgionPlugin::AiGuard(config) if config.evaluator.is_some() => CreateResult::Ok(
-                            managed_input
-                                .as_ref()
-                                .and_then(|input| AiGuard::create_owned(input, &entry_scope)),
-                        ),
-                        EdgionPlugin::IpRestriction(_) => {
-                            let bound = ip_binding.as_ref().and_then(|binding| binding.http_entry(index));
-                            CreateResult::Ok(bound.and_then(IpRestriction::create_bound))
-                        }
+                    let created =
+                        match &entry.plugin {
+                            EdgionPlugin::Wasm(_) => CreateResult::Ok(
+                                descriptor_entries
+                                    .get(index)
+                                    .zip(wasm_defaults.as_deref())
+                                    .and_then(|(entry, defaults)| WasmPlugin::create_request(entry, defaults)),
+                            ),
+                            EdgionPlugin::OpenidConnect(_) => CreateResult::Ok(
+                                descriptor_entries
+                                    .get(index)
+                                    .zip(oidc_defaults.as_deref())
+                                    .and_then(|(entry, defaults)| OpenidConnect::try_new(entry, defaults).ok())
+                                    .map(|plugin| Box::new(plugin) as Box<dyn RequestFilter>),
+                            ),
+                            EdgionPlugin::LdapAuth(_) => CreateResult::Ok(
+                                descriptor_entries
+                                    .get(index)
+                                    .zip(ldap_defaults.as_deref())
+                                    .and_then(|(entry, defaults)| LdapAuth::create(entry, defaults)),
+                            ),
+                            EdgionPlugin::HeaderCertAuth(_) => CreateResult::Ok(
+                                header_ca_field
+                                    .as_ref()
+                                    .map(|field| Box::new(HeaderCertAuth::new(field)) as Box<dyn RequestFilter>),
+                            ),
+                            EdgionPlugin::ForwardAuth(_) => CreateResult::Ok(
+                                managed_input
+                                    .as_ref()
+                                    .and_then(|input| ForwardAuth::from_owned(input).ok())
+                                    .map(|plugin| Box::new(plugin) as Box<dyn RequestFilter>),
+                            ),
+                            EdgionPlugin::AiGuard(config) if config.evaluator.is_some() => CreateResult::Ok(
+                                managed_input
+                                    .as_ref()
+                                    .and_then(|input| AiGuard::create_owned(input, &entry_scope)),
+                            ),
+                            EdgionPlugin::IpRestriction(_) => {
+                                let bound = ip_binding.as_ref().and_then(|binding| binding.http_entry(index));
+                                CreateResult::Ok(bound.and_then(|entry| {
+                                    ip.and_then(|compiler| IpRestriction::create_bound(entry, compiler))
+                                }))
+                            }
 
-                        EdgionPlugin::RequestAccessPolicy(config) => CreateResult::Ok(match data_entry {
-                            Some(entry) => RequestAccessPolicy::create_bound(entry, body_req.clone()),
-                            None => RequestAccessPolicy::create_inline(config, body_req.clone()),
-                        }),
-                        EdgionPlugin::Canary(config) => CreateResult::Ok(match data_entry {
-                            Some(entry) => Canary::create_bound(entry),
-                            None => Canary::create_inline(config),
-                        }),
-                        EdgionPlugin::RegionRoute(config) => CreateResult::Ok(match data_entry {
-                            Some(entry) => RegionRoute::create_bound(entry),
-                            None => RegionRoute::create_inline(config),
-                        }),
-                        EdgionPlugin::GrpcJsonTranscoder(config) => {
-                            CreateResult::Ok(descriptor_entries.get(index).map_or_else(
-                                || {
-                                    GrpcJsonTranscoder::create_inline(
-                                        config,
-                                        body_req.clone().unwrap_or_else(BodyRequirement::fail_close),
-                                    )
-                                },
-                                |entry| {
-                                    GrpcJsonTranscoder::create(
-                                        entry,
-                                        body_req.clone().unwrap_or_else(BodyRequirement::fail_close),
-                                    )
-                                },
-                            ))
-                        }
-                        EdgionPlugin::RequestMirror(config) => CreateResult::Ok(
-                            mirror_field
-                                .and_then(|field| RequestMirrorPlugin::new(field, config.tuning.clone()))
-                                .map(|plugin| Box::new(plugin) as Box<dyn RequestFilter>),
-                        ),
-                        EdgionPlugin::RateLimitLocal(config) => {
-                            CreateResult::Ok(Some(RateLimitLocal::create_with_outcome_slot(
-                                config,
-                                source_aliases[index]
-                                    .as_deref()
-                                    .and_then(|alias| outcome_aliases.get(alias).copied()),
-                            )))
-                        }
-                        _ if link_sys_config.is_some() => Self::create_link_sys_request_filter(
-                            link_sys_config.expect("owning config checked above"),
-                            namespace,
-                            body_req.clone(),
-                            &entry_scope,
-                        ),
-                        _ => Self::create_request_filter_from_edgion(
-                            &entry.plugin,
-                            namespace,
-                            body_req.clone(),
-                            &entry_scope,
-                        ),
-                    };
+                            EdgionPlugin::RequestAccessPolicy(config) => CreateResult::Ok(match data_entry {
+                                Some(entry) => RequestAccessPolicy::create_bound(entry, body_req.clone(), ip),
+                                None => RequestAccessPolicy::create_inline(config, body_req.clone(), ip),
+                            }),
+                            EdgionPlugin::Canary(config) => CreateResult::Ok(match data_entry {
+                                Some(entry) => Canary::create_bound(entry),
+                                None => Canary::create_inline(config),
+                            }),
+                            EdgionPlugin::RegionRoute(config) => CreateResult::Ok(match data_entry {
+                                Some(entry) => RegionRoute::create_bound(entry),
+                                None => RegionRoute::create_inline(config),
+                            }),
+                            EdgionPlugin::GrpcJsonTranscoder(config) => {
+                                CreateResult::Ok(descriptor_entries.get(index).map_or_else(
+                                    || {
+                                        GrpcJsonTranscoder::create_inline(
+                                            config,
+                                            body_req.clone().unwrap_or_else(BodyRequirement::fail_close),
+                                        )
+                                    },
+                                    |entry| {
+                                        GrpcJsonTranscoder::create(
+                                            entry,
+                                            body_req.clone().unwrap_or_else(BodyRequirement::fail_close),
+                                        )
+                                    },
+                                ))
+                            }
+                            EdgionPlugin::RequestMirror(config) => CreateResult::Ok(
+                                mirror_field
+                                    .and_then(|field| RequestMirrorPlugin::new(field, config.tuning.clone()))
+                                    .map(|plugin| Box::new(plugin) as Box<dyn RequestFilter>),
+                            ),
+                            EdgionPlugin::RateLimitLocal(config) => {
+                                CreateResult::Ok(Some(RateLimitLocal::create_with_outcome_slot(
+                                    config,
+                                    source_aliases[index]
+                                        .as_deref()
+                                        .and_then(|alias| outcome_aliases.get(alias).copied()),
+                                )))
+                            }
+                            _ if link_sys_config.is_some() => Self::create_link_sys_request_filter(
+                                link_sys_config.expect("owning config checked above"),
+                                namespace,
+                                body_req.clone(),
+                                &entry_scope,
+                            ),
+                            _ => Self::create_request_filter_from_edgion(
+                                &entry.plugin,
+                                namespace,
+                                body_req.clone(),
+                                &entry_scope,
+                                ip,
+                            ),
+                        };
                     match created {
                         CreateResult::Ok(Some(filter)) => {
                             // Condition-owned body HMAC on RequestRestriction and
@@ -1708,14 +1775,26 @@ impl PluginRuntime {
                             // it performs cheap header authentication before capture.
                             let generic_body_gate = Self::use_generic_body_gate(&entry.plugin);
                             let gated: Box<dyn RequestFilter> = match body_req {
-                                Some(req) if generic_body_gate => Box::new(BodyGatedRequestFilter::new(filter, req)),
+                                Some(req) if generic_body_gate => {
+                                    Box::new(BodyGatedRequestFilter::with_conditions(
+                                        filter,
+                                        req,
+                                        entry.body.as_ref().and_then(|body| body.conditions.as_ref()).map(
+                                            |conditions| {
+                                                super::conditions::CompiledPluginConditions::with_ip(conditions, ip)
+                                            },
+                                        ),
+                                    ))
+                                }
                                 None => filter,
                                 Some(_) => filter,
                             };
                             // Wrap with ConditionalRequestFilter to support condition evaluation
                             let mut conditional_filter = ConditionalRequestFilter::with_alias_and_dye(
                                 gated,
-                                entry.conditions.clone(),
+                                entry.conditions.as_ref().map(|conditions| {
+                                    super::conditions::CompiledPluginConditions::with_ip(conditions, ip)
+                                }),
                                 entry_alias,
                                 dye_plan,
                             );
@@ -1770,7 +1849,7 @@ impl PluginRuntime {
         entries: &[UpstreamResponseFilterEntry],
         namespace: &str,
     ) -> Vec<String> {
-        self.add_response_filter_entries(entries, namespace, &mut EntryCache::default(), None)
+        self.add_response_filter_entries(entries, namespace, &mut EntryCache::default(), None, None)
     }
 
     fn add_response_filter_entries(
@@ -1779,6 +1858,7 @@ impl PluginRuntime {
         namespace: &str,
         cache: &mut EntryCache,
         bindings: Option<&PluginBindings<'_>>,
+        ip: Option<&super::conditions::ip_refs::IpConditionCompiler<'_>>,
     ) -> Vec<String> {
         let mut errors = Vec::new();
         let bound_entries: Vec<_> = bindings
@@ -1910,6 +1990,7 @@ impl PluginRuntime {
                             &format!("upstreamResponseFilterPlugins[{}] ({})", index, plugin_name),
                             &mut errors,
                             &mut entry_runtime.invalid_plugins,
+                            ip,
                         )
                     } else {
                         None
@@ -1933,7 +2014,9 @@ impl PluginRuntime {
                             // Wrap with ConditionalUpstreamResponseFilter to support condition evaluation
                             let conditional_filter = ConditionalUpstreamResponseFilter::with_alias_and_dye(
                                 filter,
-                                entry.conditions.clone(),
+                                entry.conditions.as_ref().map(|conditions| {
+                                    super::conditions::CompiledPluginConditions::with_ip(conditions, ip)
+                                }),
                                 entry_alias,
                                 dye_plan,
                             );
@@ -1982,7 +2065,7 @@ impl PluginRuntime {
     /// # Returns
     /// A vector of validation error messages (empty if all plugins are valid)
     pub fn add_from_upstream_responses(&mut self, entries: &[UpstreamResponseEntry], namespace: &str) -> Vec<String> {
-        self.add_from_upstream_responses_with_cache(entries, namespace, &mut EntryCache::default())
+        self.add_from_upstream_responses_with_cache(entries, namespace, &mut EntryCache::default(), None)
     }
 
     pub(crate) fn add_from_upstream_responses_with_cache(
@@ -1990,6 +2073,7 @@ impl PluginRuntime {
         entries: &[UpstreamResponseEntry],
         namespace: &str,
         cache: &mut EntryCache,
+        ip: Option<&super::conditions::ip_refs::IpConditionCompiler<'_>>,
     ) -> Vec<String> {
         let mut errors = Vec::new();
 
@@ -2088,6 +2172,7 @@ impl PluginRuntime {
                             &format!("upstreamResponsePlugins[{}] ({})", index, plugin_name),
                             &mut errors,
                             &mut entry_runtime.invalid_plugins,
+                            ip,
                         )
                     } else {
                         None
@@ -2104,14 +2189,25 @@ impl PluginRuntime {
                                 entry.body.clone(),
                                 edgion_resources::resources::edgion_plugins::BodyStage::Response,
                             );
-                            let gated: Box<dyn UpstreamResponse> = match body_req {
-                                Some(req) => Box::new(BodyGatedUpstreamResponse::new(filter, req)),
-                                None => filter,
-                            };
+                            let gated: Box<dyn UpstreamResponse> =
+                                match body_req {
+                                    Some(req) => Box::new(BodyGatedUpstreamResponse::with_conditions(
+                                        filter,
+                                        req,
+                                        entry.body.as_ref().and_then(|body| body.conditions.as_ref()).map(
+                                            |conditions| {
+                                                super::conditions::CompiledPluginConditions::with_ip(conditions, ip)
+                                            },
+                                        ),
+                                    )),
+                                    None => filter,
+                                };
                             // Wrap with ConditionalUpstreamResponse to support condition evaluation
                             let conditional_filter = ConditionalUpstreamResponse::with_alias_and_dye(
                                 gated,
-                                entry.conditions.clone(),
+                                entry.conditions.as_ref().map(|conditions| {
+                                    super::conditions::CompiledPluginConditions::with_ip(conditions, ip)
+                                }),
                                 entry_alias,
                                 dye_plan,
                             );
@@ -2164,7 +2260,13 @@ impl PluginRuntime {
         entries: &[UpstreamResponseBodyFilterEntry],
         namespace: &str,
     ) -> Vec<String> {
-        self.add_from_upstream_response_body_filters_with_cache(entries, namespace, &mut EntryCache::default(), None)
+        self.add_from_upstream_response_body_filters_with_cache(
+            entries,
+            namespace,
+            &mut EntryCache::default(),
+            None,
+            None,
+        )
     }
 
     pub(crate) fn add_from_upstream_response_body_filters_with_cache(
@@ -2173,6 +2275,7 @@ impl PluginRuntime {
         namespace: &str,
         cache: &mut EntryCache,
         bindings: Option<&PluginBindings<'_>>,
+        ip: Option<&super::conditions::ip_refs::IpConditionCompiler<'_>>,
     ) -> Vec<String> {
         let mut errors = Vec::new();
         let bound_entries: Vec<_> = bindings
@@ -2285,6 +2388,7 @@ impl PluginRuntime {
                             &format!("upstreamResponseBodyFilterPlugins[{}] ({})", index, plugin_name),
                             &mut errors,
                             &mut entry_runtime.invalid_plugins,
+                            ip,
                         )
                     } else {
                         None
@@ -2306,7 +2410,9 @@ impl PluginRuntime {
                             // Wrap with ConditionalUpstreamResponseBodyFilter to support condition evaluation
                             let conditional_filter = ConditionalUpstreamResponseBodyFilter::with_alias_and_dye(
                                 filter,
-                                entry.conditions.clone(),
+                                entry.conditions.as_ref().map(|conditions| {
+                                    super::conditions::CompiledPluginConditions::with_ip(conditions, ip)
+                                }),
                                 entry_alias,
                                 dye_plan,
                             );
@@ -2455,6 +2561,7 @@ impl PluginRuntime {
         namespace: &str,
         body_requirement: Option<edgion_resources::resources::edgion_plugins::BodyRequirement>,
         entry_scope: &str,
+        ip: Option<&super::conditions::ip_refs::IpConditionCompiler<'_>>,
     ) -> CreateResult<Box<dyn RequestFilter>> {
         if HttpLinkSysConfig::is_reference_bearing(plugin) {
             return CreateResult::WrongStage;
@@ -2485,9 +2592,11 @@ impl PluginRuntime {
             EdgionPlugin::CredentialInjector(config) => CreateResult::Ok(CredentialInjector::create(config)),
             EdgionPlugin::IpRestriction(_) => CreateResult::WrongStage,
             EdgionPlugin::RequestAccessPolicy(config) => {
-                CreateResult::Ok(RequestAccessPolicy::create_inline(config, body_requirement))
+                CreateResult::Ok(RequestAccessPolicy::create_inline(config, body_requirement, ip))
             }
-            EdgionPlugin::GeoIpLocation(config) => CreateResult::Ok(Some(GeoIpLocation::create(config))),
+            EdgionPlugin::GeoIpLocation(config) => {
+                CreateResult::Ok(ip.and_then(|compiler| GeoIpLocation::create(config, compiler).ok()))
+            }
             EdgionPlugin::Canary(config) => CreateResult::Ok(Canary::create_inline(config)),
             EdgionPlugin::JwtAuth(config) => {
                 CreateResult::Ok(Some(Box::new(JwtAuth::new(config, namespace.to_string()))))
@@ -2526,7 +2635,7 @@ impl PluginRuntime {
                 CreateResult::Ok(crate::plugins::http::response_cache::ResponseCache::create(config))
             }
             EdgionPlugin::RequestRestriction(config) => {
-                CreateResult::Ok(Some(RequestRestriction::create_with_body(config, body_requirement)))
+                CreateResult::Ok(Some(RequestRestriction::with_ip(config, body_requirement, ip)))
             }
             EdgionPlugin::RateLimitLocal(config) => CreateResult::Ok(Some(RateLimitLocal::create(config))),
             EdgionPlugin::RateLimitRedis(_) => CreateResult::WrongStage,
@@ -2539,7 +2648,9 @@ impl PluginRuntime {
             EdgionPlugin::DynamicExternalUpstream(config) => {
                 CreateResult::Ok(Some(DynamicExternalUpstream::create(config)))
             }
-            EdgionPlugin::RealIp(config) => CreateResult::Ok(Some(RealIp::create(config))),
+            EdgionPlugin::RealIp(config) => {
+                CreateResult::Ok(ip.and_then(|compiler| RealIp::create(config, compiler).ok()))
+            }
             EdgionPlugin::RequestId(config) => CreateResult::Ok(RequestId::create(config)),
             EdgionPlugin::ExtProc(_) => CreateResult::WrongStage,
             EdgionPlugin::Guardrail(_) => CreateResult::WrongStage,
@@ -2848,9 +2959,10 @@ impl PluginRuntime {
         context: &str,
         errors: &mut Vec<String>,
         invalid_plugins: &mut InvalidPlugins,
+        ip: Option<&super::conditions::ip_refs::IpConditionCompiler<'_>>,
     ) -> Option<Arc<super::dye_plan::CompiledDyePlan>> {
         let suite = dye?;
-        match super::dye_plan::CompiledDyePlan::compile(suite, plugin.dye_type_prefix()) {
+        match super::dye_plan::CompiledDyePlan::with_ip(suite, plugin.dye_type_prefix(), ip) {
             Ok(plan) => Some(plan),
             Err(e) => {
                 errors.push(format!(
@@ -2960,6 +3072,31 @@ impl PluginRuntime {
         self.upstream_response_async_plugins.iter()
     }
 
+    fn ensure_ip_unavailable_gate(&mut self) {
+        if self.ip_unavailable_gate.is_none() {
+            self.ip_unavailable_gate = Some(Arc::new(RejectFilter::new(vec!["IpList"])));
+        }
+    }
+    pub(crate) fn ip_dependencies_available(&self, session: &mut dyn PluginSession) -> bool {
+        if self.policy_blocked() || self.invalid_config_sealed {
+            return true;
+        }
+        if self.ip_view_required {
+            session.ensure_config_data_view();
+        }
+        if !self.required_ip.iter().all(|refs| refs.available(session)) {
+            return false;
+        }
+        self.extension_checks
+            .iter()
+            .all(|extension| extension.ip_dependencies_available(session))
+    }
+    fn policy_blocked(&self) -> bool {
+        self.request_plugins
+            .first()
+            .is_some_and(|filter| filter.name() == "PluginPolicyBlock")
+    }
+
     /// Run request stage filters (async)
     pub async fn run_request_plugins(&self, s: &mut Session, ctx: &mut EdgionHttpContext) {
         self.run_request_plugins_impl(&self.request_plugins, s, ctx, false, RequestIdPhase::Normal)
@@ -2983,6 +3120,9 @@ impl PluginRuntime {
         } else if !ctx.plugin_terminated() {
             if let Some(gate) = &self.invalid_extension_gate {
                 self.run_request_plugins_impl(std::slice::from_ref(gate), s, ctx, false, RequestIdPhase::Normal)
+                    .await;
+            } else if self.ip_unavailable_gate.is_some() {
+                self.run_request_plugins_impl(&[], s, ctx, false, RequestIdPhase::Normal)
                     .await;
             }
         }
@@ -3037,10 +3177,20 @@ impl PluginRuntime {
             PingoraSessionAdapter::new(s, ctx)
         };
 
+        let unavailable = !self.policy_blocked() && !self.ip_dependencies_available(&mut session_adapter);
+        let filters = if unavailable {
+            self.ip_unavailable_gate
+                .as_ref()
+                .map(std::slice::from_ref)
+                .unwrap_or(filters)
+        } else {
+            filters
+        };
         for filter in filters {
             let is_request_id = filter.name() == "RequestId";
-            if (phase == RequestIdPhase::Early && !is_request_id)
-                || (phase == RequestIdPhase::AfterEarly && is_request_id)
+            if !unavailable
+                && ((phase == RequestIdPhase::Early && !is_request_id)
+                    || (phase == RequestIdPhase::AfterEarly && is_request_id))
             {
                 continue;
             }
@@ -3158,12 +3308,23 @@ impl PluginRuntime {
         ctx: &mut EdgionHttpContext,
         response_header: &mut ResponseHeader,
     ) {
-        if self.upstream_response_plugins.is_empty() {
-            return;
-        }
-
         let mut filter_logs = Vec::new();
         let mut session_adapter = PingoraSessionAdapter::with_response_header(s, ctx, response_header);
+        if !self.ip_dependencies_available(&mut session_adapter) {
+            let mut log = PluginLog::new("IpList");
+            check_response_stage_terminate(
+                &PluginRunningResult::ErrResponse {
+                    status: 500,
+                    body: None,
+                },
+                &mut log,
+                &mut session_adapter,
+            );
+            session_adapter.set_terminate();
+            drop(session_adapter);
+            ctx.finish_plugin_stage("upstream_response_filters", vec![log]);
+            return;
+        }
 
         for filter in &self.upstream_response_plugins {
             // Install this entry's dye plan before invocation (Task 7's
@@ -3231,12 +3392,15 @@ impl PluginRuntime {
         body: &Option<bytes::Bytes>,
         end_of_stream: bool,
     ) -> Option<Duration> {
+        let mut session_adapter = PingoraSessionAdapter::new(s, ctx);
+        if !self.ip_dependencies_available(&mut session_adapter) {
+            session_adapter.mark_ip_body_denied();
+            return None;
+        }
         if self.upstream_response_body_plugins.is_empty() {
             return None;
         }
-
         let mut max_delay: Option<Duration> = None;
-        let mut session_adapter = PingoraSessionAdapter::new(s, ctx);
 
         for filter in &self.upstream_response_body_plugins {
             // Install this entry's dye plan before invocation (Task 7's
@@ -3251,9 +3415,19 @@ impl PluginRuntime {
                     None => d,
                 });
             }
+            if session_adapter.ctx().ip_body_denied() {
+                break;
+            }
         }
 
         max_delay
+    }
+
+    pub(crate) fn check_body_ip_dependencies(&self, session: &mut Session, ctx: &mut EdgionHttpContext) {
+        let mut adapter = PingoraSessionAdapter::new(session, ctx);
+        if !self.ip_dependencies_available(&mut adapter) {
+            adapter.mark_ip_body_denied();
+        }
     }
 
     /// Run response_filter stage filters (async)
@@ -3263,12 +3437,23 @@ impl PluginRuntime {
         ctx: &mut EdgionHttpContext,
         response_header: &mut ResponseHeader,
     ) {
-        if self.upstream_response_async_plugins.is_empty() {
-            return;
-        }
-
         let mut filter_logs = Vec::new();
         let mut session_adapter = PingoraSessionAdapter::with_response_header(s, ctx, response_header);
+        if !self.ip_dependencies_available(&mut session_adapter) {
+            let mut log = PluginLog::new("IpList");
+            check_response_stage_terminate(
+                &PluginRunningResult::ErrResponse {
+                    status: 500,
+                    body: None,
+                },
+                &mut log,
+                &mut session_adapter,
+            );
+            session_adapter.set_terminate();
+            drop(session_adapter);
+            ctx.finish_plugin_stage("upstream_responses", vec![log]);
+            return;
+        }
 
         for filter in &self.upstream_response_async_plugins {
             // Install this entry's dye plan before invocation (Task 7's

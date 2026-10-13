@@ -1,7 +1,4 @@
-# DELIBERATELY MALFORMED (unknown-field negative test):
-# "denys" is a typo for the real field "deny", covering EdgionStreamPlugins
-# (the sweep in conf_corpus_unknown_fields.rs also walks stream-plugin
-# documents). Expect "plugins[0].config.denys" to be reported.
+# Deliberate advisory typo: denyRefss instead of denyRefs. Valid allowRefs keep Accepted=True.
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:
@@ -9,14 +6,10 @@ metadata:
   namespace: edgion-test
 spec:
   plugins:
-    - type: IpRestriction
-      config:
-        defaultAction: allow
-        allow:
-          - name: localhost
-            cidrs:
-              - "127.0.0.0/8"
-        denys:
-          - name: blocked
-            cidrs:
-              - "1.2.3.4/32"
+  - type: IpRestriction
+    config:
+      defaultAction: allow
+      allowRefs:
+      - name: acl-uf-sp-allow
+      denyRefss:
+      - name: acl-uf-sp-deny

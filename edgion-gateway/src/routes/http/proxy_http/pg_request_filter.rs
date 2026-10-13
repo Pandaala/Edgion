@@ -548,14 +548,19 @@ async fn build_request_metadata(
     let xff_snapshot = snapshot_x_forwarded_for(req_header, xff_limit);
     let xff_too_long = xff_snapshot.too_long;
 
-    let resolved = if let Some(extractor) = &ctx.egc.real_ip_extractor {
-        if extractor.real_ip_header().eq_ignore_ascii_case("x-forwarded-for") {
-            extractor
-                .resolve_real_ip(&ctx.request_info.downstream_peer_ip, xff_snapshot.value.as_deref())
-                .remote_ip
+    let resolved = if let Some(policy) = &ctx.egc.real_ip_policy {
+        let view = crate::plugins::runtime::edgion_config_data::capture_global_edgion_config_data_snapshot();
+        let header = if policy.real_ip_header().eq_ignore_ascii_case("x-forwarded-for") {
+            xff_snapshot.value.as_deref()
         } else {
-            extractor.extract_real_ip(&ctx.request_info.downstream_peer_ip, req_header)
-        }
+            req_header
+                .headers
+                .get(policy.real_ip_header())
+                .and_then(|value| value.to_str().ok())
+        };
+        policy
+            .resolve_in(&view, &ctx.request_info.downstream_peer_ip, header)
+            .remote_ip
     } else {
         ctx.request_info.downstream_peer_ip.clone()
     };

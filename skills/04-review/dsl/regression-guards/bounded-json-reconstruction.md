@@ -67,5 +67,5 @@ this page does not claim live recipe or response-cache acceptance.
 
 Re-evaluate on serde/Fred upgrades, parser policy/materializer changes, allocation
 ledger changes, new raw operations, Body publication/stage ownership changes or
-Redis transport memory guarantees. The selected task is
-[response-cache-and-dsl-query-lookup](../../../../tasks/pending/response-cache-and-dsl-query-lookup/response-cache-and-dsl-query-lookup.md).
+Redis transport memory guarantees. The maintained architecture contract is in
+[the DSL engine security model](../../../01-architecture/02-gateway/dsl-engine-security-model.md#strict-json-reconstruction-and-nontruncating-redis-get).

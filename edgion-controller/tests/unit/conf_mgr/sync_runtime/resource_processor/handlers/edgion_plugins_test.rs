@@ -397,9 +397,9 @@ fn owning_condition_fixture(stage: &str, enabled: bool, reference: serde_json::V
         {"type":"HmacAuth","enable":enabled,"config":{"secretGroups":[{"name":"standalone","secretRefs":[reference]}]}},
         {"type":"RequestRestriction","enable":enabled,"config":{"mode":"Deny","conditions":set}},
         {"type":"RequestAccessPolicy","enable":enabled,"config":{"defaultProfile":"p","profiles":{"p":{"requiredRuleGroups":[
-            {"name":"gate","anyOfRules":[{"name":"source","type":"directPeerIp","config":{"ips":["192.0.2.1"],"conditions":set}}]}
+            {"name":"gate","anyOfRules":[{"name":"source","type":"directPeerIp","config":{"ipRefs":[{"name":"authored-networks"}],"conditions":set}}]}
         ]}},"resolvedProfiles":{"p":{"requiredRuleGroups":[
-            {"name":"gate","anyOfRules":[{"name":"source","type":"directPeerIp","config":{"ips":["192.0.2.1"],"conditions":set}}]}
+            {"name":"gate","anyOfRules":[{"name":"source","type":"directPeerIp","config":{"ipRefs":[{"name":"authored-networks"}],"conditions":set}}]}
         ]}}}}
     ]);
     serde_json::from_value(wire).unwrap()
@@ -969,8 +969,8 @@ fn request_access_policy_config(
     condition: Option<edgion_resources::resources::edgion_plugins::plugin_configs::Condition>,
 ) -> edgion_resources::resources::edgion_plugins::plugin_configs::RequestAccessPolicyConfig {
     use edgion_resources::resources::edgion_plugins::plugin_configs::{
-        ConditionSet, IpAccessMatch, IpAccessRuleConfig, RequestAccessProfile, RequestAccessRule,
-        RequestAccessRuleType, RequiredRuleGroup,
+        ConditionSet, IpAccessRuleConfig, RequestAccessProfile, RequestAccessRule, RequestAccessRuleType,
+        RequiredRuleGroup,
     };
     edgion_resources::resources::edgion_plugins::plugin_configs::RequestAccessPolicyConfig {
         default_profile: "lockdown".to_string(),
@@ -982,8 +982,11 @@ fn request_access_policy_config(
                     any_of_rules: vec![RequestAccessRule {
                         name: "test".to_string(),
                         rule: RequestAccessRuleType::DirectPeerIp(IpAccessRuleConfig {
-                            ip: IpAccessMatch {
-                                ips: vec!["0.0.0.0/0".to_string(), "::/0".to_string()],
+                            refs: edgion_resources::resources::edgion_plugins::ip_reference_set::IpReferenceSet {
+                                ip_refs: vec![EdgionConfigDataRef {
+                                    name: "authored-networks".into(),
+                                    ..Default::default()
+                                }],
                                 ..Default::default()
                             },
                             conditions: condition.map(|condition| ConditionSet::all_of(vec![condition])),
@@ -3714,11 +3717,14 @@ async fn ip_restriction_deny_refs_registered_and_resolved() {
     ep.metadata.namespace = Some("default".to_string());
     ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::IpRestriction(
         IpRestrictionConfig {
-            deny_refs: Some(vec![EdgionConfigDataRef {
-                name: "blocklist".into(),
-                namespace: None,
+            refs: edgion_resources::resources::edgion_plugins::ip_acl_refs::IpAclReferenceSet {
+                deny_refs: Some(vec![EdgionConfigDataRef {
+                    name: "blocklist".into(),
+                    namespace: None,
+                    ..Default::default()
+                }]),
                 ..Default::default()
-            }]),
+            },
             ..Default::default()
         },
     ))]);
@@ -3747,11 +3753,14 @@ async fn ip_restriction_missing_deny_ref_reports_iplist_error() {
     ep.metadata.namespace = Some("default".to_string());
     ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::IpRestriction(
         IpRestrictionConfig {
-            deny_refs: Some(vec![EdgionConfigDataRef {
-                name: "missing".into(),
-                namespace: None,
+            refs: edgion_resources::resources::edgion_plugins::ip_acl_refs::IpAclReferenceSet {
+                deny_refs: Some(vec![EdgionConfigDataRef {
+                    name: "missing".into(),
+                    namespace: None,
+                    ..Default::default()
+                }]),
                 ..Default::default()
-            }]),
+            },
             ..Default::default()
         },
     ))]);
@@ -3806,11 +3815,14 @@ async fn ip_restriction_disabled_deny_ref_reports_error() {
     ep.metadata.namespace = Some("default".to_string());
     ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::IpRestriction(
         IpRestrictionConfig {
-            deny_refs: Some(vec![EdgionConfigDataRef {
-                name: "disabled-list".into(),
-                namespace: None,
+            refs: edgion_resources::resources::edgion_plugins::ip_acl_refs::IpAclReferenceSet {
+                deny_refs: Some(vec![EdgionConfigDataRef {
+                    name: "disabled-list".into(),
+                    namespace: None,
+                    ..Default::default()
+                }]),
                 ..Default::default()
-            }]),
+            },
             ..Default::default()
         },
     ))]);
@@ -3864,11 +3876,14 @@ async fn ip_restriction_allow_ref_resolves() {
     ep.metadata.namespace = Some("default".to_string());
     ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::IpRestriction(
         IpRestrictionConfig {
-            allow_refs: Some(vec![EdgionConfigDataRef {
-                name: "allowlist".into(),
-                namespace: None,
+            refs: edgion_resources::resources::edgion_plugins::ip_acl_refs::IpAclReferenceSet {
+                allow_refs: Some(vec![EdgionConfigDataRef {
+                    name: "allowlist".into(),
+                    namespace: None,
+                    ..Default::default()
+                }]),
                 ..Default::default()
-            }]),
+            },
             ..Default::default()
         },
     ))]);
@@ -3889,31 +3904,22 @@ async fn ip_restriction_allow_ref_resolves() {
 
 #[test]
 fn collect_inline_ip_entry_errors_returns_error_for_bad_cidr() {
-    use edgion_resources::resources::edgion_config_data::IpGroup;
-    use edgion_resources::resources::edgion_plugins::IpRestrictionConfig;
-
-    let mut ep = EdgionPlugins::new("ipr-inline", EdgionPluginsSpec::default());
-    ep.metadata.namespace = Some("default".to_string());
-    ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::IpRestriction(
-        IpRestrictionConfig {
-            deny: Some(vec![IpGroup {
-                name: "bad".to_string(),
-                description: None,
-                cidrs: vec!["not-a-cidr".to_string()],
-            }]),
-            ..Default::default()
-        },
-    ))]);
-
-    let errs = super::collect_inline_ip_entry_errors(&ep);
-    assert_eq!(errs.len(), 1, "expected one entry error for bad CIDR; got: {:?}", errs);
+    // The former inline collector is gone: legacy presence is a typed invalid policy,
+    // while CIDR partial-good admission belongs exclusively to EdgionConfigData.
+    use edgion_resources::resources::edgion_plugins::{IpRestrictionConfig, PluginValidation};
+    let config: IpRestrictionConfig = serde_json::from_value(serde_json::json!({
+        "deny":[{"name":"bad","cidrs":["not-a-cidr"]}],"denyRefs":[{"name":"blocked"}]
+    }))
+    .unwrap();
+    assert!(config.refs.invalid_input);
+    assert!(config.validation_error().unwrap().contains("Inline ACL"));
+    assert!(serde_json::to_value(config).unwrap().get("deny").is_none());
 }
 
 #[test]
 fn collect_inline_ip_entry_errors_empty_when_no_request_plugins() {
-    let ep = EdgionPlugins::new("ipr-inline", EdgionPluginsSpec::default());
-    let errs = super::collect_inline_ip_entry_errors(&ep);
-    assert!(errs.is_empty(), "expected no errors when no plugins; got: {:?}", errs);
+    let ep = EdgionPlugins::new("ipr-ref-only", EdgionPluginsSpec::default());
+    assert!(ep.validate_plugins().is_empty());
 }
 
 #[tokio::test]
@@ -3960,11 +3966,14 @@ async fn ip_restriction_enabled_malformed_ip_list_resolves() {
     ep.metadata.namespace = Some("default".to_string());
     ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::IpRestriction(
         IpRestrictionConfig {
-            deny_refs: Some(vec![EdgionConfigDataRef {
-                name: "malformed-list".into(),
-                namespace: None,
+            refs: edgion_resources::resources::edgion_plugins::ip_acl_refs::IpAclReferenceSet {
+                deny_refs: Some(vec![EdgionConfigDataRef {
+                    name: "malformed-list".into(),
+                    namespace: None,
+                    ..Default::default()
+                }]),
                 ..Default::default()
-            }]),
+            },
             ..Default::default()
         },
     ))]);
@@ -4020,11 +4029,14 @@ async fn cross_ns_ref_registered_for_grant_revalidation() {
     ep.metadata.namespace = Some("team-a".to_string());
     ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::IpRestriction(
         IpRestrictionConfig {
-            deny_refs: Some(vec![EdgionConfigDataRef {
-                name: "blocklist".into(),
-                namespace: Some("team-b".into()),
+            refs: edgion_resources::resources::edgion_plugins::ip_acl_refs::IpAclReferenceSet {
+                deny_refs: Some(vec![EdgionConfigDataRef {
+                    name: "blocklist".into(),
+                    namespace: Some("team-b".into()),
+                    ..Default::default()
+                }]),
                 ..Default::default()
-            }]),
+            },
             ..Default::default()
         },
     ))]);
@@ -4139,11 +4151,14 @@ async fn cross_ns_deny_ref_without_grant_is_marked() {
     ep.metadata.namespace = Some("team-a".to_string());
     ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::IpRestriction(
         IpRestrictionConfig {
-            deny_refs: Some(vec![EdgionConfigDataRef {
-                name: "blocklist".into(),
-                namespace: Some("team-b".into()),
+            refs: edgion_resources::resources::edgion_plugins::ip_acl_refs::IpAclReferenceSet {
+                deny_refs: Some(vec![EdgionConfigDataRef {
+                    name: "blocklist".into(),
+                    namespace: Some("team-b".into()),
+                    ..Default::default()
+                }]),
                 ..Default::default()
-            }]),
+            },
             ..Default::default()
         },
     ))]);
@@ -4159,7 +4174,7 @@ async fn cross_ns_deny_ref_without_grant_is_marked() {
         .as_ref()
         .and_then(|v| v.first())
         .and_then(|e| match &e.plugin {
-            EdgionPlugin::IpRestriction(c) => c.deny_refs.as_ref()?.first(),
+            EdgionPlugin::IpRestriction(c) => c.refs.deny_refs.as_ref()?.first(),
             _ => None,
         })
         .expect("missing deny_refs[0]");
@@ -4276,7 +4291,7 @@ async fn request_access_policy_merges_ip_refs_and_tracks_missing_siblings() {
     let RequestAccessRuleType::DirectPeerIp(ip) = &mut rule.rule else {
         panic!("expected directPeerIp rule")
     };
-    ip.ip.ip_refs = vec![
+    ip.refs.ip_refs = vec![
         EdgionConfigDataRef {
             name: "shared-networks".to_string(),
             ..Default::default()
@@ -4302,9 +4317,9 @@ async fn request_access_policy_merges_ip_refs_and_tracks_missing_siblings() {
     let RequestAccessRuleType::DirectPeerIp(ip) = &rule.rule else {
         panic!("expected directPeerIp rule")
     };
-    let resolved = ip.ip.resolved_ips.as_ref().expect("controller-expanded IP union");
-    assert!(resolved.contains(&"0.0.0.0/0".to_string()));
-    assert!(resolved.contains(&"203.0.113.0/24".to_string()));
+    let resolved = ip.refs.resolved_refs.as_ref().expect("controller read scope stamps");
+    assert_eq!(resolved.slots.len(), 2);
+    assert_eq!(resolved.slots[0].name.as_deref(), Some("shared-networks"));
     assert!(config
         .resolution_warnings
         .iter()
@@ -4357,7 +4372,7 @@ async fn request_access_policy_denied_ip_ref_is_partial_not_unresolved() {
     let RequestAccessRuleType::DirectPeerIp(ip) = &mut rule.rule else {
         panic!("expected directPeerIp rule")
     };
-    ip.ip.ip_refs.push(EdgionConfigDataRef {
+    ip.refs.ip_refs.push(EdgionConfigDataRef {
         name: "private-networks".to_string(),
         namespace: Some("team-b".to_string()),
         ..Default::default()
@@ -4823,17 +4838,19 @@ async fn request_access_policy_imported_url_candidate_expands_nested_ip_refs() {
         },
     );
     let condition = Condition::RemoteIpMatch(IpAccessMatch {
-        ips: vec!["198.51.100.0/24".to_string()],
-        ip_refs: vec![
-            EdgionConfigDataRef {
-                name: "vendor-networks".to_string(),
-                ..Default::default()
-            },
-            EdgionConfigDataRef {
-                name: "missing-networks".to_string(),
-                ..Default::default()
-            },
-        ],
+        refs: edgion_resources::resources::edgion_plugins::ip_reference_set::IpReferenceSet {
+            ip_refs: vec![
+                EdgionConfigDataRef {
+                    name: "vendor-networks".to_string(),
+                    ..Default::default()
+                },
+                EdgionConfigDataRef {
+                    name: "missing-networks".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        },
         ..Default::default()
     });
     let url_data = request_access_url_data(
@@ -4857,9 +4874,8 @@ async fn request_access_policy_imported_url_candidate_expands_nested_ip_refs() {
     let Condition::RemoteIpMatch(ip) = first_url_candidate_condition(&first_resolved_url_candidates(&parsed)[0]) else {
         panic!("expected nested remote IP match")
     };
-    let resolved = ip.resolved_ips.as_ref().expect("resolved nested IP union");
-    assert!(resolved.contains(&"198.51.100.0/24".to_string()));
-    assert!(resolved.contains(&"203.0.113.0/24".to_string()));
+    assert!(ip.refs.resolved_refs.is_some());
+    assert_eq!(ip.refs.ip_refs[0].name, "vendor-networks");
     assert_eq!(runtime.edgion_config_data_refs.get_refs("default/vendor-list").len(), 1);
     assert_eq!(
         runtime
@@ -5162,11 +5178,13 @@ async fn request_access_policy_url_ip_retarget_and_removal_clear_stale_dependenc
     };
     let condition = |name: &str| {
         Condition::DirectPeerIpMatch(IpAccessMatch {
-            ips: vec!["127.0.0.1/32".to_string()],
-            ip_refs: vec![EdgionConfigDataRef {
-                name: name.to_string(),
+            refs: edgion_resources::resources::edgion_plugins::ip_reference_set::IpReferenceSet {
+                ip_refs: vec![EdgionConfigDataRef {
+                    name: name.to_string(),
+                    ..Default::default()
+                }],
                 ..Default::default()
-            }],
+            },
             ..Default::default()
         })
     };
@@ -5209,12 +5227,11 @@ async fn request_access_policy_url_ip_retarget_and_removal_clear_stale_dependenc
     else {
         panic!("expected direct peer IP match")
     };
-    assert!(!ip.resolved_ips.as_ref().unwrap().contains(&"192.0.2.0/24".to_string()));
-    assert!(ip
-        .resolved_ips
-        .as_ref()
-        .unwrap()
-        .contains(&"203.0.113.0/24".to_string()));
+    assert_eq!(ip.refs.ip_refs[0].name, "ip-b");
+    assert_eq!(
+        ip.refs.resolved_refs.as_ref().unwrap().slots[0].name.as_deref(),
+        Some("ip-b")
+    );
 
     runtime.edgion_config_data_store.replace_all(HashMap::from([
         (
@@ -5622,11 +5639,14 @@ async fn denied_ref_reports_ref_not_permitted_reason() {
     ep.metadata.namespace = Some("team-a".to_string());
     ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::IpRestriction(
         IpRestrictionConfig {
-            deny_refs: Some(vec![EdgionConfigDataRef {
-                name: "blocklist".into(),
-                namespace: Some("team-b".into()),
+            refs: edgion_resources::resources::edgion_plugins::ip_acl_refs::IpAclReferenceSet {
+                deny_refs: Some(vec![EdgionConfigDataRef {
+                    name: "blocklist".into(),
+                    namespace: Some("team-b".into()),
+                    ..Default::default()
+                }]),
                 ..Default::default()
-            }]),
+            },
             ..Default::default()
         },
     ))]);
@@ -5824,11 +5844,14 @@ async fn ep_on_delete_clears_cross_ns_refs() {
     ep.metadata.namespace = Some("team-a".to_string());
     ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::IpRestriction(
         IpRestrictionConfig {
-            deny_refs: Some(vec![EdgionConfigDataRef {
-                name: "blocklist".into(),
-                namespace: Some("team-b".into()),
+            refs: edgion_resources::resources::edgion_plugins::ip_acl_refs::IpAclReferenceSet {
+                deny_refs: Some(vec![EdgionConfigDataRef {
+                    name: "blocklist".into(),
+                    namespace: Some("team-b".into()),
+                    ..Default::default()
+                }]),
                 ..Default::default()
-            }]),
+            },
             ..Default::default()
         },
     ))]);
@@ -6602,13 +6625,16 @@ fn ip_list_config_data(namespace: &str, name: &str, cidr: &str) -> EdgionConfigD
 fn condition_ip_refs(names: &[&str]) -> edgion_resources::resources::edgion_plugins::plugin_configs::Condition {
     use edgion_resources::resources::edgion_plugins::plugin_configs::{Condition, IpAccessMatch};
     Condition::DirectPeerIpMatch(IpAccessMatch {
-        ip_refs: names
-            .iter()
-            .map(|name| EdgionConfigDataRef {
-                name: (*name).to_string(),
-                ..Default::default()
-            })
-            .collect(),
+        refs: edgion_resources::resources::edgion_plugins::ip_reference_set::IpReferenceSet {
+            ip_refs: names
+                .iter()
+                .map(|name| EdgionConfigDataRef {
+                    name: (*name).to_string(),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        },
         ..Default::default()
     })
 }
@@ -6723,15 +6749,15 @@ async fn condition_tree_ip_refs_from_rr_group_and_entry_level_run() {
         panic!("expected RR ipRefs condition")
     };
     assert_eq!(
-        rr_ip.resolved_ips.as_deref(),
-        Some(["203.0.113.0/24".to_string()].as_slice())
+        rr_ip.refs.resolved_refs.as_ref().unwrap().slots[0].scope,
+        edgion_resources::resources::edgion_plugins::ip_reference_set::IpReadScope::SameNamespace
     );
     let Condition::DirectPeerIpMatch(run_ip) = first_entry_run_condition(&parsed) else {
         panic!("expected entry-level run ipRefs")
     };
     assert_eq!(
-        run_ip.resolved_ips.as_deref(),
-        Some(["203.0.113.0/24".to_string()].as_slice())
+        run_ip.refs.resolved_refs.as_ref().unwrap().slots[0].scope,
+        edgion_resources::resources::edgion_plugins::ip_reference_set::IpReadScope::SameNamespace
     );
     let run = parsed.spec.request_plugins.as_ref().unwrap()[1]
         .conditions
@@ -6741,14 +6767,11 @@ async fn condition_tree_ip_refs_from_rr_group_and_entry_level_run() {
     let resolved: Vec<_> = run
         .iter_conditions()
         .map(|condition| match condition {
-            Condition::DirectPeerIpMatch(ip) => ip.resolved_ips.clone().unwrap(),
+            Condition::DirectPeerIpMatch(ip) => ip.refs.resolved_refs.as_ref().unwrap().slots[0].name.clone().unwrap(),
             _ => panic!("expected entry-level run ipRefs"),
         })
         .collect();
-    assert_eq!(
-        resolved,
-        vec![vec!["203.0.113.0/24".to_string()], vec!["198.51.100.0/24".to_string()],]
-    );
+    assert_eq!(resolved, vec!["office-nets".to_string(), "backup-nets".to_string()]);
     let refs = runtime.edgion_config_data_refs.get_refs("default/office-nets");
     assert!(
         refs.contains(&"EdgionPlugins:default/rr-and-run".to_string()),
@@ -6785,8 +6808,8 @@ async fn condition_tree_missing_ip_ref_sets_resolved_refs_false() {
         panic!("expected RR ipRefs condition")
     };
     assert!(
-        ip.resolved_ips.is_none(),
-        "missing operator ipRefs must not compile an empty resolvedIps matcher"
+        ip.refs.resolved_refs.is_some(),
+        "same-namespace permission remains live when target data is missing"
     );
 
     let mut status_ep = parsed;
@@ -6949,27 +6972,51 @@ async fn condition_tree_expansion_has_no_resource_ip_match_cap() {
         "vendor",
         vec![
             Condition::DirectPeerIpMatch(IpAccessMatch {
-                ips: vec!["192.0.2.0/24".to_string()],
+                refs: edgion_resources::resources::edgion_plugins::ip_reference_set::IpReferenceSet {
+                    ip_refs: vec![EdgionConfigDataRef {
+                        name: "authored-networks".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
                 ..Default::default()
             }),
             Condition::RemoteIpMatch(IpAccessMatch {
-                ips: vec!["198.51.100.0/24".to_string()],
+                refs: edgion_resources::resources::edgion_plugins::ip_reference_set::IpReferenceSet {
+                    ip_refs: vec![EdgionConfigDataRef {
+                        name: "authored-networks".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
                 ..Default::default()
             }),
         ],
     );
     let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
-    runtime.edgion_config_data_store.replace_all(HashMap::from([(
-        "default/vendor-list".to_string(),
-        request_access_url_data("default", "vendor-list", vec![imported]),
-    )]));
+    runtime.edgion_config_data_store.replace_all(HashMap::from([
+        (
+            "default/vendor-list".to_string(),
+            request_access_url_data("default", "vendor-list", vec![imported]),
+        ),
+        (
+            "default/authored-networks".to_string(),
+            ip_list_config_data("default", "authored-networks", "192.0.2.0/24"),
+        ),
+    ]));
 
     let mut authored = request_access_url_policy("                - name: vendor-list");
     // Two imported matches take the resource beyond the former 10,000-node cap.
     authored.spec.request_plugins.as_mut().unwrap()[0].conditions = Some(PluginConditions {
         run: Some(ConditionSet::all_of(vec![
             Condition::DirectPeerIpMatch(IpAccessMatch {
-                ips: vec!["192.0.2.0/24".to_string()],
+                refs: edgion_resources::resources::edgion_plugins::ip_reference_set::IpReferenceSet {
+                    ip_refs: vec![EdgionConfigDataRef {
+                        name: "authored-networks".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
                 ..Default::default()
             });
             10_000
@@ -7171,8 +7218,8 @@ async fn condition_tree_body_and_dye_walk_both_passes_and_clear_removed_refs() {
         panic!("expected direct body IP condition")
     };
     assert_eq!(
-        body_ip.resolved_ips.as_deref(),
-        Some(["192.0.2.0/24".to_string()].as_slice())
+        body_ip.refs.resolved_refs.as_ref().unwrap().slots[0].scope,
+        edgion_resources::resources::edgion_plugins::ip_reference_set::IpReadScope::SameNamespace
     );
     let Condition::SecretMatch(body_secret) = body_atoms[1] else {
         panic!("expected nested body SecretMatch condition")
@@ -7207,8 +7254,8 @@ async fn condition_tree_body_and_dye_walk_both_passes_and_clear_removed_refs() {
         panic!("expected nested dye IP condition")
     };
     assert_eq!(
-        dye_ip.resolved_ips.as_deref(),
-        Some(["198.51.100.0/24".to_string()].as_slice())
+        dye_ip.refs.resolved_refs.as_ref().unwrap().slots[0].scope,
+        edgion_resources::resources::edgion_plugins::ip_reference_set::IpReadScope::SameNamespace
     );
     let Condition::HmacAuth(dye_hmac) = dye_atoms[2] else {
         panic!("expected nested dye HMAC condition")
@@ -7756,7 +7803,7 @@ async fn condition_ip_identity_uses_default_targets_and_raw_owner_cleanup() {
     let Condition::DirectPeerIpMatch(ip) = &mut condition else {
         unreachable!()
     };
-    ip.resolved_ips = Some(vec!["0.0.0.0/0".into()]);
+    ip.refs.resolved_refs = None;
     let mut owner = plugins_with_request_entries(
         "bare-owner",
         vec![RequestFilterEntry::new(EdgionPlugin::RequestRestriction(
@@ -7770,7 +7817,10 @@ async fn condition_ip_identity_uses_default_targets_and_raw_owner_cleanup() {
     let Condition::DirectPeerIpMatch(ip) = first_rr_condition(&parsed) else {
         unreachable!()
     };
-    assert!(ip.resolved_ips.is_none());
+    assert_eq!(
+        ip.refs.resolved_refs.as_ref().unwrap().slots[1].scope,
+        edgion_resources::resources::edgion_plugins::ip_reference_set::IpReadScope::Denied
+    );
     assert_eq!(
         runtime.edgion_config_data_refs.get_refs("default/nets"),
         vec!["EdgionPlugins:bare-owner".to_string()]
@@ -7803,7 +7853,10 @@ async fn condition_ip_identity_uses_default_targets_and_raw_owner_cleanup() {
     let Condition::DirectPeerIpMatch(ip) = first_rr_condition(&parsed) else {
         unreachable!()
     };
-    assert_eq!(ip.resolved_ips.as_ref().unwrap(), &["198.51.100.0/24"]);
+    assert_eq!(
+        ip.refs.resolved_refs.as_ref().unwrap().slots[0].name.as_deref(),
+        Some("next")
+    );
     assert!(super::resolve_ip_list_refs(&parsed, &ctx).is_empty());
     EdgionPluginsHandler.on_delete(&parsed, &ctx).await;
     assert!(runtime.edgion_config_data_refs.get_refs("default/next").is_empty());
@@ -7824,9 +7877,9 @@ async fn rap_bound_ip_keeps_partial_good_and_warning_bound() {
     .into_iter()
     .chain((0..80).map(|i| serde_json::json!({"name":format!("missing-{i}")})))
     .collect();
-    let set = serde_json::json!({"allOf":[{"type":"remoteIpMatch","ipRefs":refs,"ips":["198.51.100.0/24"]}]});
+    let set = serde_json::json!({"allOf":[{"type":"remoteIpMatch","ipRefs":refs}]});
     let owner: EdgionPlugins = serde_json::from_value(serde_json::json!({"metadata":{"name":"rap-bare"},"spec":{"requestPlugins":[{"type":"RequestAccessPolicy","config":{"defaultProfile":"main","profiles":{"main":{"requiredRuleGroups":[{"name":"g","anyOfRules":[
-        {"name":"direct","type":"directPeerIp","config":{"ips":["198.51.100.0/24"],"ipRefs":refs,"conditions":set}},
+        {"name":"direct","type":"directPeerIp","config":{"ipRefs":refs,"conditions":set}},
         {"name":"url","type":"url","config":{"configRefs":[{"name":"missing-url"}],"hosts":["example.com"],"paths":[{"type":"Exact","value":"/"}],"conditions":set}}
     ]}]}}}}]}})).unwrap();
     let ProcessResult::Continue(parsed) = EdgionPluginsHandler.parse(owner, &ctx).await else {
@@ -7837,8 +7890,8 @@ async fn rap_bound_ip_keeps_partial_good_and_warning_bound() {
         .visit_ip(&parsed, |leaf| {
             assert_eq!(leaf.consumer(), IpReferenceConsumer::RequestAccessPolicy);
             assert_eq!(
-                leaf.config().resolved_ips.as_ref().unwrap(),
-                &["198.51.100.0/24", "192.0.2.0/24"]
+                leaf.config().resolved_refs.as_ref().unwrap().slots[0].name.as_deref(),
+                Some("nets")
             );
             count += 1;
         })
@@ -7893,8 +7946,12 @@ async fn condition_ip_grant_recovery_keeps_only_valid_namespace_edges() {
         let Condition::RemoteIpMatch(ip) = first_rr_condition(&parsed) else {
             unreachable!()
         };
-        assert_eq!(ip.resolved_ips.is_some(), allowed);
-        assert_eq!(ip.ip_refs[0].ref_denied.is_some(), !allowed);
+        assert_eq!(
+            ip.refs.resolved_refs.as_ref().unwrap().slots[0].scope
+                != edgion_resources::resources::edgion_plugins::ip_reference_set::IpReadScope::Denied,
+            allowed
+        );
+        assert_eq!(ip.refs.ip_refs[0].ref_denied.is_some(), !allowed);
         assert_eq!(super::resolve_ip_list_refs(&parsed, &ctx).is_empty(), allowed);
         assert!(runtime.cross_ns_ref_mgr.get_refs("ops").contains(&raw_owner));
     }
@@ -7937,11 +7994,11 @@ async fn standalone_ip_slots_keep_disabled_dependencies_raw_owner_and_retarget_c
     let EdgionPlugin::IpRestriction(config) = &mut owner.spec.request_plugins.as_mut().unwrap()[0].plugin else {
         panic!()
     };
-    config.allow_refs = Some(vec![EdgionConfigDataRef {
+    config.refs.allow_refs = Some(vec![EdgionConfigDataRef {
         name: "next".into(),
         ..Default::default()
     }]);
-    config.deny_refs = None;
+    config.refs.deny_refs = None;
     let ProcessResult::Continue(mut parsed) = EdgionPluginsHandler.parse(owner, &ctx).await else {
         panic!()
     };
@@ -8727,4 +8784,53 @@ async fn merged_waf_denied_policy_preserves_denial_before_invalid_selections() {
         super::resolve_waf_policy_ref(&parsed).as_slice(),
         [ResolvedRefsError::RefNotPermitted { .. }]
     ));
+}
+
+#[tokio::test]
+async fn geo_pass_preserves_mixed_ip_dependencies_and_clears_inactive_proof() {
+    use edgion_resources::refs::ip_list_fields::PreparedIpListReferences;
+    let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+    let wire = serde_json::json!({"metadata":{"name":"mixed-geo","namespace":"apps"},"spec":{"requestPlugins":[
+        {"type":"IpRestriction","config":{"allowRefs":[{"name":"acl"}]}},
+        {"type":"RealIp","config":{"trustedIpRefs":[{"name":"trust"}]}},
+        {"type":"RequestHeaderModifier","config":{"set":[]},"conditions":{"run":{"allOf":[{"type":"remoteIpMatch","ipRefs":[{"name":"condition"}]}]}}},
+        {"type":"GeoIpLocation","config":{"failOpen":true,"allowRuleGroups":[{"rules":[{"source":"DirectPeerIp","key":"cidr","ipRefs":[{"name":"geo"}]}]}]}}
+    ]}});
+    let owner: EdgionPlugins = serde_json::from_value(wire).unwrap();
+    let ProcessResult::Continue(mut parsed) = EdgionPluginsHandler.parse(owner, &ctx).await else {
+        panic!()
+    };
+    for name in ["acl", "trust", "condition", "geo"] {
+        assert_eq!(
+            runtime.edgion_config_data_refs.get_refs(&format!("apps/{name}")),
+            ["EdgionPlugins:apps/mixed-geo"],
+            "one clear preserves {name}"
+        );
+    }
+    let prepared = PreparedIpListReferences::from_plugins(&parsed);
+    prepared
+        .visit_geo_plugins(&parsed, |leaf| assert!(leaf.config().resolved_refs.is_some()))
+        .unwrap();
+    parsed.spec.request_plugins.as_mut().unwrap()[3].enable = false;
+    let ProcessResult::Continue(parsed) = EdgionPluginsHandler.parse(parsed, &ctx).await else {
+        panic!()
+    };
+    assert!(runtime.edgion_config_data_refs.get_refs("apps/geo").is_empty());
+    for name in ["acl", "trust", "condition"] {
+        assert!(!runtime
+            .edgion_config_data_refs
+            .get_refs(&format!("apps/{name}"))
+            .is_empty());
+    }
+    PreparedIpListReferences::from_plugins(&parsed)
+        .visit_geo_plugins(&parsed, |leaf| {
+            assert!(!leaf.is_supported());
+            assert!(leaf.config().resolved_refs.is_none());
+            assert!(leaf
+                .config()
+                .ip_refs
+                .iter()
+                .all(|reference| reference.ref_denied.is_none()));
+        })
+        .unwrap();
 }

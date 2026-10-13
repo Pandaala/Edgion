@@ -1809,6 +1809,7 @@ struct PluginExecutionState {
     stage_logs: Vec<StageLogs>,
     pending_edgion_plugins_logs: Vec<EdgionPluginsLog>,
     terminated: bool,
+    ip_body_denied: bool,
     current_entry: Option<CurrentPluginEntryIdentity>,
     resolved_global_plugins: Option<Arc<[Arc<PluginRuntime>]>>,
     resolved_gateway_plugins: Option<Arc<[Arc<PluginRuntime>]>>,
@@ -2403,6 +2404,12 @@ impl EdgionHttpContext {
     }
 
     #[inline]
+    pub(crate) fn mark_ip_body_denied(&mut self) {
+        self.plugin_execution.ip_body_denied = true;
+    }
+    pub(crate) fn ip_body_denied(&self) -> bool {
+        self.plugin_execution.ip_body_denied
+    }
     pub(crate) fn plugin_terminated(&self) -> bool {
         self.plugin_execution.terminated
     }

@@ -272,11 +272,13 @@ fn test_empty_values_list() {
 #[test]
 fn ip_refs_in_rr_group_accepted() {
     let mut config = deny_cfg(vec![group(vec![Condition::DirectPeerIpMatch(IpAccessMatch {
-        ips: vec!["10.0.0.0/8".to_string()],
-        ip_refs: vec![EdgionConfigDataRef {
-            name: "office".to_string(),
+        refs: crate::resources::edgion_plugins::ip_reference_set::IpReferenceSet {
+            ip_refs: vec![EdgionConfigDataRef {
+                name: "office".to_string(),
+                ..Default::default()
+            }],
             ..Default::default()
-        }],
+        },
         ..Default::default()
     })])]);
     assert!(
@@ -290,7 +292,13 @@ fn ip_refs_in_rr_group_accepted() {
 fn inline_ips_and_path_in_one_group_accepted() {
     let mut config = deny_cfg(vec![group(vec![
         Condition::DirectPeerIpMatch(IpAccessMatch {
-            ips: vec!["127.0.0.1".to_string()],
+            refs: crate::resources::edgion_plugins::ip_reference_set::IpReferenceSet {
+                ip_refs: vec![EdgionConfigDataRef {
+                    name: "loopback".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
             ..Default::default()
         }),
         key_match(KeyGet::Path, &["/admin"]),

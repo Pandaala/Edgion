@@ -192,7 +192,7 @@ fn multi_deny_any_matcher_wins() {
     }])
     .unwrap();
     let ip: IpAddr = "2.2.2.2".parse().unwrap();
-    let dec = evaluate_ip_access_multi(&[&d1, &d2], &[], false, &DefaultAction::Allow, &ip);
+    let dec = evaluate_ip_access_multi([&d1, &d2], [], false, &DefaultAction::Allow, &ip);
     assert!(matches!(dec, AccessDecision::DenyByGroup(g) if &*g == "b"));
 }
 
@@ -205,7 +205,7 @@ fn multi_allow_mode_miss_is_whitelist_miss() {
     }])
     .unwrap();
     let ip: IpAddr = "8.8.8.8".parse().unwrap();
-    let dec = evaluate_ip_access_multi(&[], &[&a], true, &DefaultAction::Allow, &ip);
+    let dec = evaluate_ip_access_multi([], [&a], true, &DefaultAction::Allow, &ip);
     assert!(matches!(dec, AccessDecision::DenyByWhitelistMiss));
 }
 
@@ -213,14 +213,14 @@ fn multi_allow_mode_miss_is_whitelist_miss() {
 fn multi_allow_mode_true_with_empty_allow_denies_all() {
     // allowRefs-configured-but-all-missing case: allow_mode=true, no allow matchers.
     let ip: IpAddr = "8.8.8.8".parse().unwrap();
-    let dec = evaluate_ip_access_multi(&[], &[], true, &DefaultAction::Allow, &ip);
+    let dec = evaluate_ip_access_multi([], [], true, &DefaultAction::Allow, &ip);
     assert!(matches!(dec, AccessDecision::DenyByWhitelistMiss));
 }
 
 #[test]
 fn multi_not_allow_mode_falls_through_to_default() {
     let ip: IpAddr = "8.8.8.8".parse().unwrap();
-    let dec = evaluate_ip_access_multi(&[], &[], false, &DefaultAction::Deny, &ip);
+    let dec = evaluate_ip_access_multi([], [], false, &DefaultAction::Deny, &ip);
     assert!(matches!(dec, AccessDecision::Default(DefaultAction::Deny)));
 }
 
@@ -239,8 +239,64 @@ fn multi_allow_union_across_matchers() {
     }])
     .unwrap();
     let ip: IpAddr = "192.168.1.1".parse().unwrap();
-    let dec = evaluate_ip_access_multi(&[], &[&a1, &a2], true, &DefaultAction::Deny, &ip);
+    let dec = evaluate_ip_access_multi([], [&a1, &a2], true, &DefaultAction::Deny, &ip);
     assert!(matches!(dec, AccessDecision::AllowByGroup(g) if &*g == "g2"));
+}
+
+#[test]
+fn multi_first_source_preserves_group_arc_and_stops_before_lazy_tail() {
+    let first = build_grouped_matcher(&[IpGroup {
+        name: "first-wide".into(),
+        description: None,
+        cidrs: vec!["10.0.0.0/8".into()],
+    }])
+    .unwrap();
+    let later = build_grouped_matcher(&[IpGroup {
+        name: "later-narrow".into(),
+        description: None,
+        cidrs: vec!["10.1.0.0/16".into()],
+    }])
+    .unwrap();
+    let ip: IpAddr = "10.1.2.3".parse().unwrap();
+    let expected = first.matched_group_arc(&ip).unwrap();
+
+    for deny_side in [true, false] {
+        let sources = [&first, &later];
+        let lazy_sources = sources.iter().copied().enumerate().map(|(index, matcher)| {
+            assert_eq!(index, 0, "a decisive first source must stop lazy traversal");
+            matcher
+        });
+        let decision = if deny_side {
+            evaluate_ip_access_multi(lazy_sources, [], true, &DefaultAction::Allow, &ip)
+        } else {
+            evaluate_ip_access_multi([], lazy_sources, true, &DefaultAction::Deny, &ip)
+        };
+        let group = match decision {
+            AccessDecision::DenyByGroup(group) if deny_side => group,
+            AccessDecision::AllowByGroup(group) if !deny_side => group,
+            _ => panic!("the first source must determine the decision"),
+        };
+        assert_eq!(group.as_ref(), "first-wide");
+        assert!(std::sync::Arc::ptr_eq(&group, &expected));
+    }
+}
+
+#[test]
+fn multi_deny_match_does_not_consume_allow_iterator() {
+    let deny = build_grouped_matcher(&[IpGroup {
+        name: "blocked".into(),
+        description: None,
+        cidrs: vec!["10.0.0.0/8".into()],
+    }])
+    .unwrap();
+    let allow = std::iter::from_fn(|| -> Option<&IpRadixMatcher> {
+        panic!("deny precedence must avoid traversing allow sources")
+    });
+    let ip: IpAddr = "10.1.2.3".parse().unwrap();
+    assert!(matches!(
+        evaluate_ip_access_multi([&deny], allow, true, &DefaultAction::Allow, &ip),
+        AccessDecision::DenyByGroup(group) if group.as_ref() == "blocked"
+    ));
 }
 
 #[test]

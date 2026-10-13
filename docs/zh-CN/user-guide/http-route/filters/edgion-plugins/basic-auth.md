@@ -485,22 +485,40 @@ filters:
 ### 2. 与 IP Restriction 配合
 
 ```yaml
-filters:
-  # 先限制 IP
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: example-policy-allow-1
+  namespace: edgion-default
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: internal-networks
+        description: 允许访问认证端点的内部网络
+        cidrs:
+        - 10.0.0.0/8
+        - 192.168.0.0/16
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: basic-auth-and-ip
+  namespace: edgion-default
+spec:
+  requestPlugins:
   - type: IpRestriction
     config:
-      allow:
-        - name: internal-networks
-          description: 允许访问认证端点的内部网络
-          cidrs: ["10.0.0.0/8", "192.168.0.0/16"]
-  
-  # 再进行认证
+      allowRefs:
+      - name: example-policy-allow-1
+        namespace: edgion-default
   - type: BasicAuth
     config:
       secretGroups:
-        - name: default
-          secretRefs:
-            - name: internal-api-user
+      - name: default
+        secretRefs:
+        - name: internal-api-user
 ```
 
 **优势**：双重保护，只有内网 IP + 正确凭证才能访问。

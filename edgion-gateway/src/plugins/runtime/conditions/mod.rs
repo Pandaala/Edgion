@@ -5,6 +5,7 @@
 
 mod evaluator;
 mod extract;
+pub mod ip_refs;
 pub mod rate_limit_local_outcome;
 
 pub use evaluator::{ConditionEvalResult, EvaluationResult};

@@ -1,5 +1,7 @@
 //! Cross-protocol shared plugin building blocks.
 
+pub(crate) mod geo_ip_refs;
+pub mod ip_acl;
 pub mod redis_rate_limiter;
 
 /// Identity of one plugin entry: `<resource key>/<alias or #index>`, i.e.

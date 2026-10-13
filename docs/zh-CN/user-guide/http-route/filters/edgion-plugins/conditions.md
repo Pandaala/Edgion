@@ -37,7 +37,7 @@ conditions:
   run:
     anyOf:
       - type: directPeerIpMatch
-        ips: [10.0.0.0/8]
+        ipRefs: [{ name: private-networks }]
       - name: authenticated-production
         allOf:
           - type: keyMatch
@@ -81,8 +81,8 @@ body 门闩；它的 outbound webhook body 与被代理的客户端请求体无�
 | `keyMatch` | 键的值落在 `values` 中，**或**匹配 `regex`，则为真。`negate: true` 是 exclude 的写法。 |
 | `timeRange` | 当前时间不早于 `after` 且严格早于 `before`（RFC3339）则为真。任一边界都可省略。 |
 | `probability` | 以 `ratio`（0.0–1.0）的概率为真。可选 `key` 使抽样确定化。 |
-| `directPeerIpMatch` | 直接 TCP 对端落在 `ips` / `ipRefs` 中则为真。 |
-| `remoteIpMatch` | RealIp 解析出的客户端落在 `ips` / `ipRefs` 中则为真。 |
+| `directPeerIpMatch` | 直接 TCP 对端落在 `ipRefs` 引用的 IpList 中则为真。 |
+| `remoteIpMatch` | RealIp 解析出的客户端落在 `ipRefs` 引用的 IpList 中则为真。 |
 | `secretMatch` | 请求键的值等于指定的 Secret data 值则为真；`secretKey` 指定 data 项。 |
 | `hmacAuth` | 请求通过仅校验请求头的 HMAC 验证则为真。HMAC 字段（`secretGroups`、`algorithms` 等）与 `type` 同级。 |
 | `jwtClaimMatch` | 已存储的 JWT claim 命中 `values` **或** `regex` 则为真。`claim` 是点分嵌套路径。 |
@@ -94,7 +94,7 @@ body 门闩；它的 outbound webhook body 与被代理的客户端请求体无�
 
 ## ConfigData 与 Secret 引用
 
-`directPeerIpMatch` / `remoteIpMatch` 可以用 `ipRefs` 指向 IpList 类型的 `EdgionConfigData`。`secretMatch` 使用 `secretRef` 与必填的 `secretKey`，且只解析 `Secret.data[secretKey]`，不会遍历 Secret 的全部值。`hmacAuth` 解析 `secretGroups[].secretRefs`。Controller 遍历条目、body、dye、RequestRestriction 和 RequestAccessPolicy 集合中的每个直接或分组 Condition，并在这些 Condition 对象上**就地**写入 `resolvedIps` / `resolvedValues` / `resolvedCredentials`。
+`directPeerIpMatch` / `remoteIpMatch` 只接受 `ipRefs`，指向 IpList 类型的 ConfigData。IP/CIDR 写在 IpList 的 `items[].cidrs`，业务自己的小列表也可用一个 IpGroup。Gateway 统一编译每份 IpList，在一次调度中借用同一快照的 matcher；仅更新 IpList 即可改变保留的插件行为，不把地址复制到插件。Controller 负责引用授权，并解析 `secretMatch` 的 `secretRef` / `secretKey` 及 HMAC 的 `secretGroups[].secretRefs`；只有凭据仍写入 Condition 的内部解析字段。
 
 - 缺失、未启用、类型错误或未授权的 **IpList** `ipRefs` 目标会报告 `ResolvedRefs=False`，Controller 不会对未解析的 `ipRefs` 编译空 matcher。`secretMatch` 或 HMAC `secretRefs` 引用的 **Secret** 缺失时采用相同报告方式。对于 `secretMatch`，指定的 `secretKey` 不存在、不是 UTF-8 或值为空时也视为未解析。这些错误会进入 `edgion_controller_resource_abnormal` 指标。
 
@@ -229,3 +229,21 @@ conditions:
 返回通用 500，不把缺失状态当作假。此检查先于 skip/allOf/anyOf 短路求值。
 除此之外维持原有布尔语义，其他有效条件仍可主动跳过 Redis。结果按资源和本次
 插件链执行隔离，热更新不会混用结果。参见[完整补充限流示例](./rate-limit-redis.md#本地额度与-redis-补充准入)。
+
+## 引用 IP 数据
+
+IP/CIDR 集合只写在 IpList 资源中。业务自己的小列表可使用一个 IpGroup，多组仍属于同一份引用 matcher。没有聚合阈值，插件只携带引用。已删除的内联字段即使同时有有效引用也会判为无效。
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: private-networks
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+        - name: private-clients
+          cidrs: [10.0.0.0/8]
+```

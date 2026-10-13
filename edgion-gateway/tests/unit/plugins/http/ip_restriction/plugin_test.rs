@@ -1,693 +1,308 @@
 use super::*;
+use crate::plugins::runtime::edgion_config_data::EdgionConfigDataStore;
 use crate::plugins::runtime::traits::session::MockPluginSession;
-use edgion_resources::resources::edgion_config_data::IpGroup;
-use edgion_resources::resources::edgion_plugins::DefaultAction;
+use edgion_common::conf_sync::traits::ConfHandler;
+use edgion_resources::refs::ip_list_fields::PreparedIpListReferences;
+use edgion_resources::EdgionPlugins;
 use mockall::Sequence;
+use serde_json::json;
+use std::collections::HashMap;
 
-fn create_ip_config_allow_list() -> IpRestrictionConfig {
-    let config = IpRestrictionConfig {
-        allow: Some(vec![IpGroup {
-            name: "default".into(),
-            description: None,
-            cidrs: vec!["192.168.1.0/24".into()],
-        }]),
-        deny: None,
-        default_action: DefaultAction::Deny,
-        allow_refs: None,
-        deny_refs: None,
-        ip_source: IpSource::RemoteIp,
-        message: None,
-        status: 403,
-        allow_matcher: None,
-        deny_matcher: None,
-    };
-    IpRestrictionConfig::new(config).unwrap()
+fn owner(config: serde_json::Value) -> EdgionPlugins {
+    serde_json::from_value(json!({"metadata":{"name":"actual","namespace":"default"},
+        "spec":{"requestPlugins":[{"type":"IpRestriction","config":config}]}}))
+    .unwrap()
 }
-
-fn create_ip_config_deny_list() -> IpRestrictionConfig {
-    let config = IpRestrictionConfig {
-        allow: None,
-        deny: Some(vec![IpGroup {
-            name: "default".into(),
-            description: None,
-            cidrs: vec!["10.0.0.100".into()],
-        }]),
-        default_action: DefaultAction::Allow,
-        allow_refs: None,
-        deny_refs: None,
-        ip_source: IpSource::RemoteIp,
-        message: None,
-        status: 403,
-        allow_matcher: None,
-        deny_matcher: None,
-    };
-    IpRestrictionConfig::new(config).unwrap()
+fn create(owner: &EdgionPlugins) -> Option<Box<dyn RequestFilter>> {
+    let compiler = IpConditionCompiler::new(owner).ok()?;
+    let prepared = PreparedIpListReferences::from_plugins(owner);
+    let binding = prepared.bind_plugins(owner).ok()?;
+    IpRestriction::create_bound(binding.http_entry(0)?, &compiler)
 }
-
+fn publish(store: &EdgionConfigDataStore, lists: &[(&str, &str, &[&str])]) {
+    let data = lists
+        .iter()
+        .map(|(name, group, cidrs)| {
+            let value = serde_json::from_value(json!({"metadata":{"name":name,"namespace":"default"},
+            "spec":{"data":{"type":"IpList","config":{"items":[{"name":group,"cidrs":cidrs}]}}}}))
+            .unwrap();
+            (format!("default/{name}"), Arc::new(value))
+        })
+        .collect::<HashMap<_, _>>();
+    store.full_set(&data);
+}
+fn session(store: &EdgionConfigDataStore, ip: &str, direct: bool) -> MockPluginSession {
+    let mut session = MockPluginSession::new();
+    let snapshot = store.capture_snapshot();
+    session.expect_ensure_config_data_view().times(1).returning(|| {});
+    session
+        .expect_ip_acl_decision()
+        .times(1)
+        .returning(move |acl, ip| acl.evaluate_in(Some(&snapshot), ip));
+    if direct {
+        session.expect_direct_peer_ip().times(1).return_const(ip.to_owned());
+    } else {
+        session.expect_remote_ip().times(1).return_const(ip.to_owned());
+    }
+    session
+}
+fn denied(session: &mut MockPluginSession) {
+    session.expect_write_response_header().times(1).returning(|_, _| Ok(()));
+    session.expect_write_response_body().times(1).returning(|_, _| Ok(()));
+    session.expect_shutdown().times(1).returning(|| {});
+}
+async fn run(plugin: &dyn RequestFilter, session: &mut MockPluginSession) -> (PluginRunningResult, String) {
+    let mut log = PluginLog::new(PLUGIN_NAME);
+    let result = plugin.run_request(session, &mut log).await;
+    (result, log.render_for_test())
+}
 #[test]
 fn plugin_name_is_static_across_instances() {
-    let first = IpRestriction::create(&create_ip_config_allow_list(), "default");
-    let second = IpRestriction::create(&create_ip_config_deny_list(), "default");
-
+    let a = owner(json!({"allowRefs":[{"name":"clients"}]}));
+    let b = owner(json!({"denyRefs":[{"name":"blocked"}]}));
+    let first = create(&a).unwrap();
+    let second = create(&b).unwrap();
     assert_eq!(first.name(), PLUGIN_NAME);
     assert_eq!(second.name(), PLUGIN_NAME);
     assert!(std::ptr::eq(first.name().as_ptr(), second.name().as_ptr()));
 }
-
 #[tokio::test]
 async fn init_failure_uses_fixed_fail_closed_response() {
-    let config = IpRestrictionConfig {
-        message: Some("do not expose this configuration detail".to_string()),
-        ..Default::default()
-    };
-    let plugin = IpRestriction::create(&config, "default");
-    let mut session = MockPluginSession::new();
-    let mut sequence = Sequence::new();
-    session
-        .expect_write_response_header()
-        .withf(|response, end_of_stream| {
-            !end_of_stream
-                && response.status.as_u16() == 403
-                && response
-                    .headers
-                    .get("content-type")
-                    .and_then(|value| value.to_str().ok())
-                    == Some("application/json")
-        })
-        .times(1)
-        .in_sequence(&mut sequence)
-        .returning(|_, _| Ok(()));
-    session
-        .expect_write_response_body()
-        .withf(|body, end_of_stream| {
-            *end_of_stream && body.as_deref() == Some(Bytes::from_static(INIT_FAILURE_BODY).as_ref())
-        })
-        .times(1)
-        .in_sequence(&mut sequence)
-        .returning(|_, _| Ok(()));
-    session
-        .expect_shutdown()
-        .times(1)
-        .in_sequence(&mut sequence)
-        .returning(|| {});
-    let mut log = PluginLog::new(PLUGIN_NAME);
-
-    assert_eq!(
-        plugin.run_request(&mut session, &mut log).await,
-        PluginRunningResult::ErrTerminateRequest
-    );
-    assert_eq!(log.render_for_test(), "err: ip init fail");
+    // Static construction failures are now sealed by the owning runtime; no detached
+    // partly initialized plugin can write an operator-provided message.
+    let invalid = owner(json!({"message":"do not expose this configuration detail"}));
+    assert!(create(&invalid).is_none());
+    for value in [json!(null), json!([]), json!([{ "cidrs":["192.0.2.0/24"] }])] {
+        assert!(create(&owner(json!({"deny":value,"denyRefs":[{"name":"blocked"}]}))).is_none());
+    }
 }
-
 #[tokio::test]
 async fn partial_good_deny_uses_exact_prebuilt_custom_body() {
-    let config = IpRestrictionConfig {
-        allow: None,
-        deny: Some(vec![IpGroup {
-            name: "blocked".into(),
-            description: None,
-            cidrs: vec!["not-an-ip".into(), "10.0.0.7/32".into()],
-        }]),
-        default_action: DefaultAction::Allow,
-        allow_refs: None,
-        deny_refs: None,
-        ip_source: IpSource::RemoteIp,
-        message: Some("quoted \"slash\\line\n©".to_string()),
-        status: 429,
-        allow_matcher: None,
-        deny_matcher: None,
-    };
-    let plugin = IpRestriction::create(&config, "default");
-    let mut session = MockPluginSession::new();
-    session.expect_remote_ip().return_const("10.0.0.7".to_string());
+    let store = EdgionConfigDataStore::new();
+    publish(&store, &[("blocked", "blocked", &["not-an-ip", "10.0.0.7/32"])]);
+    let owner = owner(json!({"denyRefs":[{"name":"blocked"}],"message":"quoted \"slash\\line\n©","status":429}));
+    let plugin = create(&owner).unwrap();
+    let mut s = session(&store, "10.0.0.7", false);
     let mut sequence = Sequence::new();
-    session
-        .expect_write_response_header()
-        .withf(|response, end_of_stream| {
-            !end_of_stream
-                && response.status.as_u16() == 429
-                && response
-                    .headers
-                    .get("content-type")
-                    .and_then(|value| value.to_str().ok())
-                    == Some("application/json")
+    s.expect_write_response_header()
+        .withf(|h, eos| {
+            !eos && h.status.as_u16() == 429
+                && h.headers.get("content-type").and_then(|v| v.to_str().ok()) == Some("application/json")
         })
         .times(1)
         .in_sequence(&mut sequence)
         .returning(|_, _| Ok(()));
-    session
-        .expect_write_response_body()
-        .withf(|body, end_of_stream| {
-            *end_of_stream && body.as_deref() == Some(r#"{"message":"quoted \"slash\\line\n©"}"#.as_bytes())
-        })
+    s.expect_write_response_body()
+        .withf(|b, eos| *eos && b.as_deref() == Some(r#"{"message":"quoted \"slash\\line\n©"}"#.as_bytes()))
         .times(1)
         .in_sequence(&mut sequence)
         .returning(|_, _| Ok(()));
-    session
-        .expect_shutdown()
-        .times(1)
-        .in_sequence(&mut sequence)
-        .returning(|| {});
-    let mut log = PluginLog::new(PLUGIN_NAME);
-
+    s.expect_shutdown().times(1).in_sequence(&mut sequence).returning(|| {});
     assert_eq!(
-        plugin.run_request(&mut session, &mut log).await,
-        PluginRunningResult::ErrTerminateRequest
+        run(&*plugin, &mut s).await,
+        (PluginRunningResult::ErrTerminateRequest, "deny:group=blocked".into())
     );
-    assert_eq!(log.render_for_test(), "deny:group=blocked");
 }
-
 #[tokio::test]
 async fn test_default_action_allow() {
-    let config = create_ip_config_deny_list();
-    let plugin = IpRestriction::create(&config, "default");
-    let mut mock_session = MockPluginSession::new();
-    let mut plugin_log = PluginLog::new("IpRestriction");
-
-    mock_session.expect_remote_ip().return_const("172.16.0.1".to_string());
-
-    let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-    assert_eq!(result, PluginRunningResult::GoodNext);
-    assert!(plugin_log.contains("allow:default"));
+    let store = EdgionConfigDataStore::new();
+    publish(&store, &[("blocked", "default", &["10.0.0.100"])]);
+    let owner = owner(json!({"denyRefs":[{"name":"blocked"}]}));
+    let plugin = create(&owner).unwrap();
+    assert_eq!(
+        run(&*plugin, &mut session(&store, "172.16.0.1", false)).await,
+        (PluginRunningResult::GoodNext, "allow:default".into())
+    );
 }
-
 #[tokio::test]
 async fn direct_peer_source_does_not_read_remote_ip() {
-    let config = IpRestrictionConfig {
-        allow: None,
-        deny: Some(vec![IpGroup {
-            name: "proxy".into(),
-            description: None,
-            cidrs: vec!["10.0.0.7/32".into()],
-        }]),
-        default_action: DefaultAction::Allow,
-        allow_refs: None,
-        deny_refs: None,
-        ip_source: IpSource::DirectPeerIp,
-        message: None,
-        status: 403,
-        allow_matcher: None,
-        deny_matcher: None,
-    };
-    let plugin = IpRestriction::create(&config, "default");
-    let mut session = MockPluginSession::new();
-    session.expect_direct_peer_ip().return_const("10.0.0.7".to_string());
-    session.expect_write_response_header().returning(|_, _| Ok(()));
-    session.expect_write_response_body().returning(|_, _| Ok(()));
-    session.expect_shutdown().returning(|| {});
-    let mut log = PluginLog::new("IpRestriction");
-
-    assert_eq!(
-        plugin.run_request(&mut session, &mut log).await,
-        PluginRunningResult::ErrTerminateRequest
-    );
+    let store = EdgionConfigDataStore::new();
+    publish(&store, &[("blocked", "proxy", &["10.0.0.7/32"])]);
+    let owner = owner(json!({"denyRefs":[{"name":"blocked"}],"ipSource":"DirectPeerIp"}));
+    let plugin = create(&owner).unwrap();
+    let mut s = session(&store, "10.0.0.7", true);
+    denied(&mut s);
+    assert_eq!(run(&*plugin, &mut s).await.0, PluginRunningResult::ErrTerminateRequest);
 }
-
 #[tokio::test]
 async fn test_missing_ip_denied_in_whitelist_mode() {
-    // Allow list configured = whitelist mode: unknown IP must be denied
-    let config = create_ip_config_allow_list();
-    let plugin = IpRestriction::create(&config, "default");
-    let mut mock_session = MockPluginSession::new();
-    let mut plugin_log = PluginLog::new("IpRestriction");
-
-    mock_session.expect_remote_ip().return_const("".to_string());
-    mock_session.expect_write_response_header().returning(|_, _| Ok(()));
-    mock_session.expect_write_response_body().returning(|_, _| Ok(()));
-    mock_session.expect_shutdown().returning(|| {});
-
-    let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-    assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-    assert!(plugin_log.contains("deny:no-client-ip"));
+    let store = EdgionConfigDataStore::new();
+    let owner = owner(json!({"allowRefs":[{"name":"clients"}]}));
+    let plugin = create(&owner).unwrap();
+    let mut s = session(&store, "", false);
+    denied(&mut s);
+    assert_eq!(
+        run(&*plugin, &mut s).await,
+        (PluginRunningResult::ErrTerminateRequest, "deny:no-client-ip".into())
+    );
 }
-
-/// Regression for fr-types-01: a config arriving via the gRPC/YAML path has
-/// `allow_matcher`/`deny_matcher` == None (they are `#[serde(skip)]`). `create`
-/// must compile them via `validate_and_init`; otherwise the evaluator falls
-/// through to `Default(Allow)` and the whitelist is silently fail-open.
 #[tokio::test]
 async fn test_create_compiles_matchers_whitelist_enforced() {
-    // Build the config exactly as deserialization yields it: matchers are None
-    // and we do NOT route through `IpRestrictionConfig::new` (which would pre-build
-    // them and mask the constructor bug). default_action stays Allow (the default).
-    let config = IpRestrictionConfig {
-        allow: Some(vec![IpGroup {
-            name: "default".into(),
-            description: None,
-            cidrs: vec!["192.168.1.0/24".into()],
-        }]),
-        deny: None,
-        default_action: DefaultAction::Allow,
-        allow_refs: None,
-        deny_refs: None,
-        ip_source: IpSource::RemoteIp,
-        message: None,
-        status: 403,
-        allow_matcher: None,
-        deny_matcher: None,
-    };
-
-    let plugin = IpRestriction::create(&config, "default");
-    let mut mock_session = MockPluginSession::new();
-    let mut plugin_log = PluginLog::new("IpRestriction");
-
-    // An IP outside the allow list must be denied.
-    mock_session.expect_remote_ip().return_const("10.0.0.1".to_string());
-    mock_session.expect_write_response_header().returning(|_, _| Ok(()));
-    mock_session.expect_write_response_body().returning(|_, _| Ok(()));
-    mock_session.expect_shutdown().returning(|| {});
-
-    let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-    assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-    assert!(plugin_log.contains("deny:not-in-allow"));
+    // A received refs-only policy with default Allow still enforces authored
+    // whitelist intent, even when no canonical list is currently available.
+    let store = EdgionConfigDataStore::new();
+    let owner = owner(json!({"allowRefs":[{"name":"clients"}]}));
+    let plugin = create(&owner).unwrap();
+    let mut s = session(&store, "10.0.0.1", false);
+    denied(&mut s);
+    assert_eq!(
+        run(&*plugin, &mut s).await,
+        (PluginRunningResult::ErrTerminateRequest, "deny:not-in-allow".into())
+    );
 }
-
 #[tokio::test]
 async fn test_whitelist_miss_emits_not_in_allow() {
-    let config = create_ip_config_allow_list();
-    let plugin = IpRestriction::create(&config, "default");
-    let mut mock_session = MockPluginSession::new();
-    let mut plugin_log = PluginLog::new("IpRestriction");
-
-    // An IP outside the configured allow range.
-    mock_session.expect_remote_ip().return_const("10.0.0.1".to_string());
+    let store = EdgionConfigDataStore::new();
+    publish(&store, &[("clients", "default", &["192.168.1.0/24"])]);
+    let owner = owner(json!({"allowRefs":[{"name":"clients"}],"defaultAction":"deny"}));
+    let plugin = create(&owner).unwrap();
+    let mut s = session(&store, "10.0.0.1", false);
     let mut sequence = Sequence::new();
-    mock_session
-        .expect_write_response_header()
-        .withf(|response, end_of_stream| {
-            !end_of_stream
-                && response.status.as_u16() == 403
-                && response
-                    .headers
-                    .get("content-type")
-                    .and_then(|value| value.to_str().ok())
-                    == Some("application/json")
+    s.expect_write_response_header()
+        .withf(|h, eos| {
+            !eos && h.status.as_u16() == 403
+                && h.headers.get("content-type").and_then(|v| v.to_str().ok()) == Some("application/json")
         })
         .times(1)
         .in_sequence(&mut sequence)
         .returning(|_, _| Ok(()));
-    mock_session
-        .expect_write_response_body()
-        .withf(|body, end_of_stream| {
-            *end_of_stream && body.as_deref() == Some(Bytes::from_static(DEFAULT_DENY_BODY).as_ref())
-        })
+    s.expect_write_response_body()
+        .withf(|b, eos| *eos && b.as_deref() == Some(DEFAULT_DENY_BODY))
         .times(1)
         .in_sequence(&mut sequence)
         .returning(|_, _| Ok(()));
-    mock_session
-        .expect_shutdown()
-        .times(1)
-        .in_sequence(&mut sequence)
-        .returning(|| {});
-
-    let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
-    assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-    assert!(plugin_log.contains("deny:not-in-allow"));
+    s.expect_shutdown().times(1).in_sequence(&mut sequence).returning(|| {});
+    assert_eq!(
+        run(&*plugin, &mut s).await,
+        (PluginRunningResult::ErrTerminateRequest, "deny:not-in-allow".into())
+    );
 }
-
 #[tokio::test]
 async fn deny_refs_block_referenced_ip() {
-    use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
-    use edgion_resources::resources::edgion_config_data::{
-        ConfigEntry, EdgionConfigData, EdgionConfigDataRef, EdgionConfigDataSpec, IpGroup, IpListData,
-    };
-    use std::sync::Arc as StdArc;
-
-    // Seed an IpList EdgionConfigData under a unique namespace.
-    let ns = "http-ipr-denyref-unit";
-    let spec = EdgionConfigDataSpec {
-        current_status: None,
-        enable: true,
-        active: None,
-        visibility: Default::default(),
-        unknown_fields: Vec::new(),
-        data: ConfigEntry::IpList(IpListData {
-            items: vec![IpGroup {
-                name: "blocked".into(),
-                description: None,
-                cidrs: vec!["9.9.9.9/32".into()],
-            }],
-        }),
-    };
-    let mut ed = EdgionConfigData::new("blocklist", spec);
-    ed.metadata.namespace = Some(ns.to_string());
-    get_global_edgion_config_data_store().insert_raw_for_test(format!("{ns}/blocklist"), StdArc::new(ed));
-
-    // Refs-only deny config (no inline allow/deny), default Allow.
-    let config = IpRestrictionConfig {
-        allow: None,
-        deny: None,
-        default_action: DefaultAction::Allow,
-        allow_refs: None,
-        deny_refs: Some(vec![EdgionConfigDataRef {
-            name: "blocklist".into(),
-            namespace: Some(ns.to_string()),
-            ..Default::default()
-        }]),
-        ip_source: IpSource::RemoteIp,
-        message: None,
-        status: 403,
-        allow_matcher: None,
-        deny_matcher: None,
-    };
-    let plugin = IpRestriction::create(&config, ns);
-
-    // 9.9.9.9 is in the referenced blocklist -> denied.
-    let mut s = MockPluginSession::new();
-    let mut log = PluginLog::new("IpRestriction");
-    s.expect_remote_ip().return_const("9.9.9.9".to_string());
-    s.expect_write_response_header().returning(|_, _| Ok(()));
-    s.expect_write_response_body().returning(|_, _| Ok(()));
-    s.expect_shutdown().returning(|| {});
+    let store = EdgionConfigDataStore::new();
+    publish(&store, &[("blocklist", "blocked", &["9.9.9.9/32"])]);
+    let owner = owner(json!({"denyRefs":[{"name":"blocklist"}]}));
+    let plugin = create(&owner).unwrap();
+    let mut s = session(&store, "9.9.9.9", false);
+    denied(&mut s);
     assert_eq!(
-        plugin.run_request(&mut s, &mut log).await,
-        PluginRunningResult::ErrTerminateRequest
+        run(&*plugin, &mut s).await,
+        (PluginRunningResult::ErrTerminateRequest, "deny:group=blocked".into())
     );
-    assert_eq!(log.render_for_test(), "deny:group=blocked");
-
-    // 8.8.8.8 not in blocklist -> allowed (default Allow).
-    let mut s2 = MockPluginSession::new();
-    let mut log2 = PluginLog::new("IpRestriction");
-    s2.expect_remote_ip().return_const("8.8.8.8".to_string());
     assert_eq!(
-        plugin.run_request(&mut s2, &mut log2).await,
-        PluginRunningResult::GoodNext
+        run(&*plugin, &mut session(&store, "8.8.8.8", false)).await,
+        (PluginRunningResult::GoodNext, "allow:default".into())
     );
-    assert_eq!(log2.render_for_test(), "allow:default");
 }
-
 #[tokio::test]
 async fn referenced_deny_precedes_inline_allow_and_logs_group() {
-    use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
-    use edgion_resources::resources::edgion_config_data::{
-        ConfigEntry, EdgionConfigData, EdgionConfigDataRef, EdgionConfigDataSpec, IpGroup, IpListData,
-    };
-    use std::sync::Arc as StdArc;
-
-    let ns = "http-ipr-denyref-precedence-unit";
-    let spec = EdgionConfigDataSpec {
-        current_status: None,
-        enable: true,
-        active: None,
-        visibility: Default::default(),
-        unknown_fields: Vec::new(),
-        data: ConfigEntry::IpList(IpListData {
-            items: vec![IpGroup {
-                name: "blocked".into(),
-                description: None,
-                cidrs: vec!["9.9.9.9/32".into()],
-            }],
-        }),
-    };
-    let mut ed = EdgionConfigData::new("blocklist", spec);
-    ed.metadata.namespace = Some(ns.to_string());
-    get_global_edgion_config_data_store().insert_raw_for_test(format!("{ns}/blocklist"), StdArc::new(ed));
-
-    let config = IpRestrictionConfig {
-        allow: Some(vec![IpGroup {
-            name: "all".into(),
-            description: None,
-            cidrs: vec!["0.0.0.0/0".into()],
-        }]),
-        deny: None,
-        default_action: DefaultAction::Allow,
-        allow_refs: None,
-        deny_refs: Some(vec![EdgionConfigDataRef {
-            name: "blocklist".into(),
-            namespace: Some(ns.to_string()),
-            ..Default::default()
-        }]),
-        ip_source: IpSource::RemoteIp,
-        message: None,
-        status: 403,
-        allow_matcher: None,
-        deny_matcher: None,
-    };
-    let plugin = IpRestriction::create(&config, ns);
-    let mut session = MockPluginSession::new();
-    session.expect_remote_ip().return_const("9.9.9.9".to_string());
-    session.expect_write_response_header().returning(|_, _| Ok(()));
-    session.expect_write_response_body().returning(|_, _| Ok(()));
-    session.expect_shutdown().returning(|| {});
-    let mut log = PluginLog::new(PLUGIN_NAME);
-
-    assert_eq!(
-        plugin.run_request(&mut session, &mut log).await,
-        PluginRunningResult::ErrTerminateRequest
+    // The former inline allow source is now a separate canonical list, in its
+    // original order. Deny priority and the mandatory ACL group log remain exact.
+    let store = EdgionConfigDataStore::new();
+    publish(
+        &store,
+        &[
+            ("allow-all", "all", &["0.0.0.0/0"]),
+            ("blocklist", "blocked", &["9.9.9.9/32"]),
+        ],
     );
-    assert_eq!(log.render_for_test(), "deny:group=blocked");
+    let owner = owner(json!({"allowRefs":[{"name":"allow-all"}],"denyRefs":[{"name":"blocklist"}]}));
+    let plugin = create(&owner).unwrap();
+    let mut s = session(&store, "9.9.9.9", false);
+    denied(&mut s);
+    assert_eq!(
+        run(&*plugin, &mut s).await,
+        (PluginRunningResult::ErrTerminateRequest, "deny:group=blocked".into())
+    );
 }
-
-/// Approach-A hot reload: editing the referenced IpList's CONTENT (same key) must change
-/// the data-plane decision WITHOUT rebuilding the plugin instance. The plugin stores only
-/// the resolved key and re-resolves the matcher from the global store on every request.
 #[tokio::test]
 async fn allow_ref_hot_reload_reflects_iplist_content_change() {
-    use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
-    use edgion_resources::resources::edgion_config_data::{
-        ConfigEntry, EdgionConfigData, EdgionConfigDataRef, EdgionConfigDataSpec, IpGroup, IpListData,
-    };
-    use std::sync::Arc as StdArc;
-
-    let ns = "http-ipr-hotreload-unit";
-    let key = format!("{ns}/reload-list");
-    let seed = |cidr: &str| {
-        let spec = EdgionConfigDataSpec {
-            current_status: None,
-            enable: true,
-            active: None,
-            visibility: Default::default(),
-            unknown_fields: Vec::new(),
-            data: ConfigEntry::IpList(IpListData {
-                items: vec![IpGroup {
-                    name: "g".into(),
-                    description: None,
-                    cidrs: vec![cidr.into()],
-                }],
-            }),
-        };
-        let mut ed = EdgionConfigData::new("reload-list", spec);
-        ed.metadata.namespace = Some(ns.to_string());
-        get_global_edgion_config_data_store().insert_raw_for_test(&key, StdArc::new(ed));
-    };
-
-    // Initial: allowlist contains the loopback range.
-    seed("127.0.0.0/8");
-    let config = IpRestrictionConfig {
-        allow: None,
-        deny: None,
-        default_action: DefaultAction::Allow,
-        allow_refs: Some(vec![EdgionConfigDataRef {
-            name: "reload-list".into(),
-            namespace: Some(ns.to_string()),
-            ..Default::default()
-        }]),
-        deny_refs: None,
-        ip_source: IpSource::RemoteIp,
-        message: None,
-        status: 403,
-        allow_matcher: None,
-        deny_matcher: None,
-    };
-    let plugin = IpRestriction::create(&config, ns);
-
-    // 127.0.0.1 is in the allowlist -> allowed.
-    let mut s = MockPluginSession::new();
-    let mut log = PluginLog::new("IpRestriction");
-    s.expect_remote_ip().return_const("127.0.0.1".to_string());
+    let store = EdgionConfigDataStore::new();
+    publish(&store, &[("reload-list", "g", &["127.0.0.0/8"])]);
+    let owner = owner(json!({"allowRefs":[{"name":"reload-list"}]}));
+    let plugin = create(&owner).unwrap();
+    let mut held = session(&store, "127.0.0.1", false);
+    publish(&store, &[("reload-list", "g", &["10.0.0.0/8"])]);
+    assert_eq!(run(&*plugin, &mut held).await.0, PluginRunningResult::GoodNext);
+    let mut fresh = session(&store, "127.0.0.1", false);
+    denied(&mut fresh);
     assert_eq!(
-        plugin.run_request(&mut s, &mut log).await,
-        PluginRunningResult::GoodNext,
-        "127.0.0.1 should be allowed by the initial [127.0.0.0/8] list"
-    );
-
-    // Hot reload: replace the SAME IpList with a non-loopback range. Plugin instance unchanged.
-    seed("10.0.0.0/8");
-
-    // 127.0.0.1 is no longer in the allowlist -> whitelist miss -> denied.
-    let mut s2 = MockPluginSession::new();
-    let mut log2 = PluginLog::new("IpRestriction");
-    s2.expect_remote_ip().return_const("127.0.0.1".to_string());
-    s2.expect_write_response_header().returning(|_, _| Ok(()));
-    s2.expect_write_response_body().returning(|_, _| Ok(()));
-    s2.expect_shutdown().returning(|| {});
-    assert_eq!(
-        plugin.run_request(&mut s2, &mut log2).await,
-        PluginRunningResult::ErrTerminateRequest,
-        "after the IpList content changed to [10.0.0.0/8], 127.0.0.1 must be denied (hot reload)"
-    );
-}
-
-/// A denied allow_ref must NOT flip allow_mode to false (which would allow all).
-/// With allow_mode=true but zero allow matchers, a non-matching IP is denied.
-#[tokio::test]
-async fn denied_allow_ref_keeps_allow_mode_and_contributes_no_key() {
-    use crate::plugins::runtime::edgion_config_data::resolve_ip_list_ref_keys;
-    use edgion_resources::resources::edgion_config_data::EdgionConfigDataRef;
-    let cfg = IpRestrictionConfig {
-        allow_refs: Some(vec![EdgionConfigDataRef {
-            name: "corp".into(),
-            namespace: Some("team-b".into()),
-            ref_denied: Some(edgion_resources::resources::common::RefDenied {
-                target_namespace: "team-b".into(),
-                target_name: "corp".into(),
-                reason: None,
-            }),
-        }]),
-        ..Default::default()
-    };
-    // allow_mode() must be true (the field is still present — whitelist intent preserved).
-    assert!(cfg.allow_mode(), "whitelist intent must survive the denial marker");
-    // The ref_denied entry contributes no key (fail-closed: deny-all with empty allow set).
-    let keys = resolve_ip_list_ref_keys(cfg.allow_refs.as_ref(), "team-a");
-    assert!(keys.is_empty(), "denied allow_ref must contribute no matcher key");
-    // Evaluate path: whitelist mode + zero allow matchers → deny-all (fail-closed).
-    // Empty ref slices mirror what on-request evaluation produces when allow_ref_keys is empty.
-    use edgion_resources::resources::edgion_plugins::AccessDecision;
-    let ip: std::net::IpAddr = "8.8.8.8".parse().unwrap();
-    assert!(
-        matches!(
-            cfg.check_ip_access_with_refs(&ip, &[], &[]),
-            AccessDecision::DenyByWhitelistMiss
-        ),
-        "whitelist miss with no allow matchers must be DENIED (deny-all fail-closed)",
-    );
-
-    let plugin = IpRestriction::create(&cfg, "team-a");
-    let mut session = MockPluginSession::new();
-    session.expect_remote_ip().return_const("8.8.8.8".to_string());
-    session.expect_write_response_header().returning(|_, _| Ok(()));
-    session.expect_write_response_body().returning(|_, _| Ok(()));
-    session.expect_shutdown().returning(|| {});
-    let mut log = PluginLog::new(PLUGIN_NAME);
-    assert_eq!(
-        plugin.run_request(&mut session, &mut log).await,
+        run(&*plugin, &mut fresh).await.0,
         PluginRunningResult::ErrTerminateRequest
     );
-    assert_eq!(log.render_for_test(), "deny:not-in-allow");
+    store.full_set(&HashMap::new());
+    let mut missing = session(&store, "127.0.0.1", false);
+    denied(&mut missing);
+    assert_eq!(
+        run(&*plugin, &mut missing).await.0,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    publish(&store, &[("reload-list", "g", &["127.0.0.0/8"])]);
+    assert_eq!(
+        run(&*plugin, &mut session(&store, "127.0.0.1", false)).await.0,
+        PluginRunningResult::GoodNext
+    );
 }
-
-use edgion_resources::refs::ip_list_fields::PreparedIpListReferences;
-use edgion_resources::resources::edgion_plugins::IpRestrictionConfig;
-// Detached convenience exists only in this mirrored test module.
-impl IpRestriction {
-    pub(crate) fn create(config: &IpRestrictionConfig, namespace: &str) -> Box<dyn RequestFilter> {
-        let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
-            "metadata": {"name": "fixture", "namespace": namespace},
-            "spec": {"requestPlugins": [{"type": "IpRestriction", "config": config}]}
-        }))
-        .unwrap();
-        let prepared = PreparedIpListReferences::from_plugins(&owner);
-        let binding = prepared.bind_plugins(&owner).unwrap();
-        Self::create_bound(binding.http_entry(0).unwrap()).expect("valid fixture owner")
-    }
+#[tokio::test]
+async fn denied_allow_ref_keeps_allow_mode_and_contributes_no_key() {
+    let store = EdgionConfigDataStore::new();
+    publish(&store, &[("corp", "corp", &["0.0.0.0/0"])]);
+    let owner =
+        owner(json!({"allowRefs":[{"name":"corp","refDenied":{"targetNamespace":"default","targetName":"corp"}}]}));
+    let plugin = create(&owner).unwrap();
+    let mut s = session(&store, "8.8.8.8", false);
+    denied(&mut s);
+    assert_eq!(
+        run(&*plugin, &mut s).await,
+        (PluginRunningResult::ErrTerminateRequest, "deny:not-in-allow".into())
+    );
 }
-
 #[tokio::test]
 async fn owning_http_invalid_slots_keep_allow_intent_and_deny_set_drop() {
-    use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
-    use edgion_resources::EdgionConfigData;
-    let namespace = "r5c2-http";
-    for key in [
-        format!("{namespace}/bad/name"),
-        "/r5c2-http-nets".into(),
-        format!("{namespace}/good"),
-    ] {
-        let data: EdgionConfigData = serde_json::from_value(serde_json::json!({
-            "metadata":{"name":"decoy","namespace":namespace},"spec":{"data":{"type":"IpList","config":{"items":[{"name":"set","cidrs":["198.51.100.8/32"]}]}}}
-        })).unwrap();
-        get_global_edgion_config_data_store().insert_raw_for_test(key, std::sync::Arc::new(data));
-    }
-    for bad in [
-        serde_json::json!({"name":"bad/name"}),
-        serde_json::json!({"name":"r5c2-http-nets","namespace":""}),
-    ] {
-        for (case, allow) in [
-            ("allow", false),
-            ("deny", true),
-            ("inline", true),
-            ("allow-sibling", true),
-            ("deny-sibling", false),
+    let store = EdgionConfigDataStore::new();
+    publish(&store, &[("good", "set", &["198.51.100.8/32"])]);
+    for bad in [json!({"name":"bad/name"}), json!({"name":"nets","namespace":""})] {
+        for (side, sibling, allow) in [
+            ("allowRefs", false, false),
+            ("denyRefs", false, true),
+            ("allowRefs", true, true),
+            ("denyRefs", true, false),
         ] {
-            let mut config = serde_json::json!({"defaultAction":"allow"});
-            let side = if case.starts_with("deny") {
-                "denyRefs"
-            } else {
-                "allowRefs"
-            };
-            config[side] = serde_json::json!([bad]);
-            if case.ends_with("sibling") {
-                config[side]
-                    .as_array_mut()
-                    .unwrap()
-                    .push(serde_json::json!({"name":"good"}));
+            let mut config = json!({});
+            config[side] = json!([bad]);
+            if sibling {
+                config[side].as_array_mut().unwrap().push(json!({"name":"good"}));
             }
-            if case == "inline" {
-                config["allow"] = serde_json::json!([{"name":"inline","cidrs":["198.51.100.8/32"]}]);
-            }
-            let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
-                "metadata":{"name":"actual","namespace":namespace},"spec":{"requestPlugins":[{"type":"IpRestriction","config":config}]}
-            })).unwrap();
-            let prepared = PreparedIpListReferences::from_plugins(&owner);
-            let bound = prepared.bind_plugins(&owner).unwrap();
-            let plugin = IpRestriction::create_bound(bound.http_entry(0).unwrap()).unwrap();
-            let mut session = MockPluginSession::new();
-            session.expect_remote_ip().return_const("198.51.100.8".to_owned());
+            let owner = owner(config);
+            let plugin = create(&owner).unwrap();
+            let mut s = session(&store, "198.51.100.8", false);
             if !allow {
-                session.expect_write_response_header().returning(|_, _| Ok(()));
-                session.expect_write_response_body().returning(|_, _| Ok(()));
-                session.expect_shutdown().returning(|| {});
+                denied(&mut s);
             }
-            let result = plugin
-                .run_request(&mut session, &mut PluginLog::new("IpRestriction"))
-                .await;
-            assert_eq!(result == PluginRunningResult::GoodNext, allow, "{case} / {bad}");
+            assert_eq!(
+                run(&*plugin, &mut s).await.0 == PluginRunningResult::GoodNext,
+                allow,
+                "{side}, sibling={sibling}, {bad}"
+            );
         }
     }
 }
 #[test]
 fn owning_http_invalid_owner_fails_separately_from_invalid_target() {
-    let config = serde_json::json!({"denyRefs":[{"name":"bad/name"}]});
-    let mut owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
-        "metadata":{"name":"actual","namespace":""},"spec":{"requestPlugins":[{"type":"IpRestriction","config":config}]}
-    }))
-    .unwrap();
-    let prepared = PreparedIpListReferences::from_plugins(&owner);
-    let bound = prepared.bind_plugins(&owner).unwrap();
-    assert!(IpRestriction::create_bound(bound.http_entry(0).unwrap()).is_none());
+    let mut owner = owner(json!({"denyRefs":[{"name":"bad/name"}]}));
+    owner.metadata.namespace = Some(String::new());
+    assert!(create(&owner).is_none());
     owner.metadata.namespace = None;
+    assert!(create(&owner).is_some());
     let prepared = PreparedIpListReferences::from_plugins(&owner);
-    let bound = prepared.bind_plugins(&owner).unwrap();
-    assert!(IpRestriction::create_bound(bound.http_entry(0).unwrap()).is_some());
     owner.metadata.uid = Some("changed".into());
     assert!(prepared.bind_plugins(&owner).is_err());
 }
-
 #[tokio::test]
 async fn blank_reference_name_preserves_structural_constructor_failure() {
     for side in ["allowRefs", "denyRefs"] {
-        let mut config = serde_json::json!({"defaultAction":"allow"});
-        config[side] = serde_json::json!([{"name":""}]);
-        let owner:edgion_resources::EdgionPlugins=serde_json::from_value(serde_json::json!({
-            "metadata":{"name":"actual","namespace":"default"},"spec":{"requestPlugins":[{"type":"IpRestriction","config":config}]}
-        })).unwrap();
-        let prepared = PreparedIpListReferences::from_plugins(&owner);
-        let binding = prepared.bind_plugins(&owner).unwrap();
-        let result = IpRestriction::create_bound(binding.http_entry(0).unwrap());
-        let plugin = result.unwrap();
-        let mut session = MockPluginSession::new();
-        session.expect_write_response_header().returning(|_, _| Ok(()));
-        session.expect_write_response_body().returning(|_, _| Ok(()));
-        session.expect_shutdown().returning(|| {});
-        assert_eq!(
-            plugin
-                .run_request(&mut session, &mut PluginLog::new("IpRestriction"))
-                .await,
-            PluginRunningResult::ErrTerminateRequest
-        );
+        let mut config = json!({});
+        config[side] = json!([{"name":""}]);
+        assert!(create(&owner(config)).is_none());
     }
 }

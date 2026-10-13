@@ -8,13 +8,12 @@ spec:
   - type: IpRestriction
     config:
       defaultAction: allow
-      deny: &id001
-      - name: unrelated
-        cidrs:
-        - 192.0.2.0/24
+      denyRefs:
+      - name: acl-pp-stream-deny-ec8783a4c8
   tlsRoutePlugins:
   - type: IpRestriction
     config:
       defaultAction: allow
-      deny: *id001
       ipSource: DirectPeerIp
+      denyRefs:
+      - name: acl-pp-stream-deny-79a0da5df8

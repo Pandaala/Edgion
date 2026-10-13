@@ -60,6 +60,38 @@ pub enum RouteProto {
 #[cfg_attr(test, allow(clippy::disallowed_types))]
 #[async_trait]
 pub trait PluginSession: Send + Sync {
+    /// Monotone failure signal for the outer response transport owner.
+    fn mark_ip_body_denied(&mut self);
+    /// Evaluate only an actual-owner cold ACL plan against this dispatch's captured view.
+    fn ip_acl_decision(
+        &self,
+        acl: &crate::plugins::common::ip_acl::CompiledIpAcl,
+        ip: Option<std::net::IpAddr>,
+    ) -> edgion_resources::resources::edgion_plugins::AccessDecision;
+    /// Capture once for this dispatch; scalar readers never expose resource loans.
+    fn ensure_config_data_view(&mut self) {}
+    fn ip_list_availability(
+        &self,
+        _key: &crate::plugins::runtime::conditions::ip_refs::IpListReadKey,
+    ) -> crate::plugins::runtime::conditions::ip_refs::IpListAvailability {
+        crate::plugins::runtime::conditions::ip_refs::IpListAvailability::Unavailable
+    }
+    fn ip_list_contains(
+        &self,
+        _key: &crate::plugins::runtime::conditions::ip_refs::IpListReadKey,
+        _ip: std::net::IpAddr,
+    ) -> Option<bool> {
+        None
+    }
+    fn config_data_profile_index(
+        &self,
+        _key: &str,
+        _default: &str,
+        _names: &std::collections::HashMap<String, usize>,
+    ) -> crate::plugins::runtime::conditions::ip_refs::ProfileSelection {
+        crate::plugins::runtime::conditions::ip_refs::ProfileSelection::Unavailable
+    }
+
     /// Borrowed access to the live request header map.
     ///
     /// This is the zero-copy read seam: every borrowed accessor in

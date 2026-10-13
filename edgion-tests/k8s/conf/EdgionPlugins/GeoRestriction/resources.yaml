@@ -2,7 +2,7 @@
 # see ports.json "EdgionPlugins/GeoRestriction"). ClientGeo needs real_ip
 # configured with a trusted-proxy set; the shared base EdgionGatewayConfig
 # ("example-gateway", which every "public-gateway"-class Gateway uses)
-# already carries `realIp.trustedIps: [... "127.0.0.0/8" ...]`
+# already carries `realIp.trustedIpRefs` referencing the Cluster global-realip-proxies IpList (including 127/8)
 # (edgion-tests/integration/conf/base/EdgionGatewayConfig.yaml), which covers
 # every loopback source address this suite uses — no private EdgionGatewayConfig
 # override is needed here.
@@ -89,10 +89,8 @@ spec:
     - enable: true
       type: IpRestriction
       config:
-        deny:
-          - name: block-us-source
-            cidrs:
-              - "127.0.0.6/32"
+        denyRefs:
+          - name: acl-geo-chain-deny-93ed78e133
     - enable: true
       type: GeoIpLocation
       config:

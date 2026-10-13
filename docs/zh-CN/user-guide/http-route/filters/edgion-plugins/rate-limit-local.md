@@ -67,3 +67,5 @@ spec:
 自定义响应头名称还须遵守限流功能自身的保留名称限制。
 
 [响应头策略](../gateway-api/response-header-modifier.md#response-header-policy).
+
+共享插件条件中的 IP 谓词只接受 `ipRefs`。地址放在 IpList 的 `items[].cidrs`；必需引用会从同一份 Gateway 实时快照预检。可用性与否定策略见共享 Conditions 说明。

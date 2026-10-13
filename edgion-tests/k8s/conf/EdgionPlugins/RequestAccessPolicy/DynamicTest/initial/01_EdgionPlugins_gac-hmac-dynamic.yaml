@@ -22,7 +22,8 @@ spec:
                     config:
                       # The K8s test client is a separate Pod, so its direct
                       # peer is not loopback as it is in the local runner.
-                      ips: ["0.0.0.0/0"]
+                      ipRefs:
+                        - name: hmac-fallback-ip-list
                       conditions:
                         allOf:
                           - type: keyMatch

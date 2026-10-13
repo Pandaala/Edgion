@@ -410,6 +410,7 @@ pub(crate) fn strip_request_dye_once_core(
 mod backend_ext_ref_pin_tests;
 
 pub struct PingoraSessionAdapter<'a> {
+    config_data_view: Option<crate::plugins::runtime::edgion_config_data::EdgionConfigDataSnapshot>,
     inner: &'a mut Session,
     ctx: &'a mut EdgionHttpContext,
     response_header: Option<&'a mut ResponseHeader>,
@@ -489,6 +490,7 @@ impl<'a> PingoraSessionAdapter<'a> {
     #[inline]
     pub fn new(inner: &'a mut Session, ctx: &'a mut EdgionHttpContext) -> Self {
         Self {
+            config_data_view: None,
             inner,
             ctx,
             response_header: None,
@@ -518,6 +520,7 @@ impl<'a> PingoraSessionAdapter<'a> {
         response_header: &'a mut ResponseHeader,
     ) -> Self {
         Self {
+            config_data_view: None,
             inner,
             ctx,
             response_header: Some(response_header),
@@ -947,6 +950,7 @@ pub(crate) fn resolve_cap(max_bytes: Option<u64>, ctx_cap: u64) -> u64 {
 
 #[async_trait]
 impl<'a> PluginSession for PingoraSessionAdapter<'a> {
+<<<<<<< Updated upstream
     fn nominate_response_cache(
         &mut self,
         policy: &Arc<crate::plugins::http::response_cache::ResponseCachePolicy>,
@@ -955,6 +959,50 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             return super::traits::session::ResponseCacheIntentAdmission::Bypassed;
         };
         self.nominate_response_cache_in(policy, store)
+=======
+    fn mark_ip_body_denied(&mut self) {
+        self.ctx.mark_ip_body_denied();
+    }
+    fn ip_acl_decision(
+        &self,
+        acl: &crate::plugins::common::ip_acl::CompiledIpAcl,
+        ip: Option<std::net::IpAddr>,
+    ) -> edgion_resources::resources::edgion_plugins::AccessDecision {
+        acl.evaluate_in(self.config_data_view.as_ref(), ip)
+    }
+    fn ensure_config_data_view(&mut self) {
+        if self.config_data_view.is_none() {
+            self.config_data_view =
+                Some(crate::plugins::runtime::edgion_config_data::capture_global_edgion_config_data_snapshot());
+        }
+    }
+    fn ip_list_availability(
+        &self,
+        key: &crate::plugins::runtime::conditions::ip_refs::IpListReadKey,
+    ) -> crate::plugins::runtime::conditions::ip_refs::IpListAvailability {
+        self.config_data_view
+            .as_ref()
+            .map(|view| view.ip_list_availability(key))
+            .unwrap_or(crate::plugins::runtime::conditions::ip_refs::IpListAvailability::Unavailable)
+    }
+    fn ip_list_contains(
+        &self,
+        key: &crate::plugins::runtime::conditions::ip_refs::IpListReadKey,
+        ip: std::net::IpAddr,
+    ) -> Option<bool> {
+        self.config_data_view.as_ref()?.ip_list_contains(key, ip)
+    }
+    fn config_data_profile_index(
+        &self,
+        key: &str,
+        default: &str,
+        names: &std::collections::HashMap<String, usize>,
+    ) -> crate::plugins::runtime::conditions::ip_refs::ProfileSelection {
+        self.config_data_view
+            .as_ref()
+            .map(|view| view.profile_index(key, default, names))
+            .unwrap_or(crate::plugins::runtime::conditions::ip_refs::ProfileSelection::Unavailable)
+>>>>>>> Stashed changes
     }
 
     fn request_header_map(&self) -> &http::HeaderMap {

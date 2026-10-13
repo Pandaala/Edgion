@@ -12,7 +12,7 @@
 - `remoteIp`：先匹配 RealIp 解析出的客户端地址，再检查补充 `conditions` 集合。
 - `url`：先匹配 path，再匹配精确 host 和补充 `conditions` 集合。
 
-Controller 会把一条完整 IP 规则中的内联 IP 与所有有效 `ipRefs` 合并，并统一编译成一棵 radix tree。`configRefs` 引用强类型 `RequestAccessUrlAllowList`。IP/URL 数据引用不存在、未启用、类型错误或跨命名空间未授权时，只忽略该引用并记录 `PartiallyInvalid`，其他有效引用继续生效。ConfigData 或 Secret 更新后会自动 requeue 对应的 `EdgionPlugins` 并重新生成运行时快照。
+IP 规则只接受 `ipRefs`，IP/CIDR 写在 IpList 的 `items[].cidrs`。Gateway 统一编译每份 IpList，并从同一次调度的快照借用 matcher。主 IP 规则只做正向成员匹配，主规则的 `negate` 字段即使是 `false` 或 `null` 也会拒绝；补充的共享 IP Condition 仍可设置否定。`configRefs` 引用强类型 `RequestAccessUrlAllowList`。IP/URL 数据引用不存在、未启用、类型错误或跨命名空间未授权时，只忽略该引用并记录 `PartiallyInvalid`，其他有效引用继续生效。IpList 内容更新直接影响保留的运行时；授权、URL 导入和凭据更新仍通过 requeue 处理。如果所有可选 RAP IP 引用都不可用，其成功并集为空：主成员匹配为假，带否定的补充 IP Condition 为真，但补充条件仍受正向主规则约束。
 
 可选的补充 `conditions` 字段使用与插件 `run` / `skip` 相同的有界 ConditionSet：
 顶层可以是 `allOf`，也可以是由直接 Condition 和一层 `allOf` 分组组成的 `anyOf`。

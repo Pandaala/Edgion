@@ -306,3 +306,17 @@ fn genai_metric_has_exactly_twelve_fixed_series_and_no_model_label() {
         );
     }
 }
+
+#[test]
+fn geo_reference_unavailable_uses_only_existing_bounded_metric_labels() {
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let handle = recorder.handle();
+    metrics::with_local_recorder(&recorder, || {
+        record_geoip_denied(StreamLayer::Stage1, "ref_unavailable");
+        record_geoip_denied(StreamLayer::Tcp, "ref_unavailable");
+    });
+    let rendered = handle.render();
+    assert!(rendered.contains("edgion_geoip_denied_total{layer=\"stage1\",reason=\"ref_unavailable\"} 1"));
+    assert!(rendered.contains("edgion_geoip_denied_total{layer=\"tcp\",reason=\"ref_unavailable\"} 1"));
+    assert!(!rendered.contains("resource=") && !rendered.contains("address="));
+}

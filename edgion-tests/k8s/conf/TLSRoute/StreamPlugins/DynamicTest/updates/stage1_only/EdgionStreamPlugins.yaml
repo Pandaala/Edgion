@@ -8,8 +8,5 @@ spec:
     - type: IpRestriction
       config:
         defaultAction: deny
-        deny:
-          - name: all
-            cidrs:
-              - "0.0.0.0/0"
-              - "::/0"
+        denyRefs:
+          - name: acl-tls-sp-reload-deny-28471a46e9

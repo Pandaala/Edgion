@@ -1,7 +1,12 @@
 use super::*;
+use crate::plugins::runtime::conditions::ip_refs::{compile_keys, IpListReadKey};
+use edgion_resources::refs::condition_fields::IpExecutionRole;
+use edgion_resources::refs::ip_list_fields::IpListSide;
 use edgion_resources::resources::edgion_config_data::{
     EdgionConfigDataSpec, IpGroup, IpListData, KeyGroup, RegionRouteOverride, Selector,
 };
+use edgion_resources::resources::edgion_plugins::ip_reference_set::IpReadScope;
+use smallvec::SmallVec;
 
 #[test]
 fn region_validation_proofs_follow_full_partial_and_removed_generations() {
@@ -180,10 +185,12 @@ fn named_ip_list_resource(name: &str, group: &str, cidr: &str) -> Arc<EdgionConf
 }
 
 fn snapshot_matcher<'a>(snapshot: &'a EdgionConfigDataSnapshot, key: &str) -> Option<&'a IpRadixMatcher> {
-    let keys = [key.to_string()];
-    let mut matchers = SmallVec::new();
-    snapshot.append_ip_list_matchers(&keys, &mut matchers);
-    matchers.pop()
+    let keys = [IpListReadKey {
+        key: key.to_string(),
+        scope: IpReadScope::ValidationDisabled,
+    }];
+    let matcher = snapshot.ip_list_matchers(&keys).next();
+    matcher
 }
 
 #[derive(Clone, Default)]
@@ -304,9 +311,14 @@ fn captured_snapshot_prevents_torn_selector_ip_list_authorization() {
         let keys = profile_keys
             .get(active)
             .expect("every test profile must have configured deny keys");
-        let mut matchers = SmallVec::new();
-        matcher_snapshot.append_ip_list_matchers(keys, &mut matchers);
-        matchers
+        let keys: Vec<_> = keys
+            .iter()
+            .map(|key| IpListReadKey {
+                key: key.clone(),
+                scope: IpReadScope::ValidationDisabled,
+            })
+            .collect();
+        matcher_snapshot.ip_list_matchers(&keys).collect()
     }
 
     let store = EdgionConfigDataStore::new();
@@ -365,7 +377,7 @@ fn captured_snapshot_prevents_torn_selector_ip_list_authorization() {
     assert_eq!(torn[0].matched_group(&probe), None);
     assert_eq!(torn[1].matched_group(&probe), None);
     assert!(matches!(
-        evaluate_ip_access_multi(&torn, &[], false, &DefaultAction::Allow, &probe),
+        evaluate_ip_access_multi(torn.iter().copied(), [], false, &DefaultAction::Allow, &probe),
         AccessDecision::Default(DefaultAction::Allow)
     ));
 
@@ -374,7 +386,7 @@ fn captured_snapshot_prevents_torn_selector_ip_list_authorization() {
     assert_eq!(old[0].matched_group(&probe), Some("blue-first"));
     assert_eq!(old[1].matched_group(&probe), Some("blue-second"));
     assert!(matches!(
-        evaluate_ip_access_multi(&old, &[], false, &DefaultAction::Allow, &probe),
+        evaluate_ip_access_multi(old.iter().copied(), [], false, &DefaultAction::Allow, &probe),
         AccessDecision::DenyByGroup(group) if group.as_ref() == "blue-first"
     ));
 
@@ -383,7 +395,7 @@ fn captured_snapshot_prevents_torn_selector_ip_list_authorization() {
     assert_eq!(current[0].matched_group(&probe), Some("green-second"));
     assert_eq!(current[1].matched_group(&probe), Some("green-first"));
     assert!(matches!(
-        evaluate_ip_access_multi(&current, &[], false, &DefaultAction::Allow, &probe),
+        evaluate_ip_access_multi(current.iter().copied(), [], false, &DefaultAction::Allow, &probe),
         AccessDecision::DenyByGroup(group) if group.as_ref() == "green-second"
     ));
 }
@@ -867,9 +879,9 @@ fn resolve_ref_keys_defaults_namespace() {
             ..Default::default()
         },
     ];
-    let keys = resolve_ip_list_ref_keys(Some(&refs), "parent");
+    let keys = compiled_reference_keys(Some(&refs), "parent");
     assert_eq!(keys, vec!["parent/a".to_string(), "other/b".to_string()]);
-    assert!(resolve_ip_list_ref_keys(None, "parent").is_empty());
+    assert!(compiled_reference_keys(None, "parent").is_empty());
 }
 
 #[test]
@@ -891,7 +903,7 @@ fn ref_denied_entries_are_skipped() {
             }),
         },
     ];
-    let keys = resolve_ip_list_ref_keys(Some(&refs), "ns");
+    let keys = compiled_reference_keys(Some(&refs), "ns");
     assert_eq!(keys, vec!["ns/a".to_string()]); // "other/b" dropped
 }
 
@@ -948,7 +960,7 @@ fn unsupported_extension_removes_indexes_and_recovers_full_and_partial() {
 }
 
 use edgion_resources::refs::ip_list_fields::PreparedIpListReferences;
-pub(crate) fn resolve_ip_list_ref_keys(
+fn compiled_reference_keys(
     refs: Option<&Vec<edgion_resources::resources::edgion_config_data::EdgionConfigDataRef>>,
     namespace: &str,
 ) -> Vec<String> {
@@ -959,9 +971,18 @@ pub(crate) fn resolve_ip_list_ref_keys(
     .unwrap();
     let prepared = PreparedIpListReferences::from_plugins(&owner);
     let binding = prepared.bind_plugins(&owner).unwrap();
-    super::super::resolve_bound_ip_list_keys(binding.http_entry(0).unwrap().references())
-        .unwrap()
-        .0
+    let references = binding.http_entry(0).unwrap().references();
+    compile_keys(
+        None,
+        IpExecutionRole::Partial,
+        references.references(IpListSide::Allow),
+        &mut false,
+    )
+    .unwrap()
+    .into_iter()
+    .filter(|key| key.scope != IpReadScope::Denied)
+    .map(|key| key.key)
+    .collect()
 }
 
 #[test]
@@ -974,8 +995,66 @@ fn bound_standalone_keys_exclude_invalid_targets_without_erasing_allowed_sibling
     .unwrap();
     let prepared = PreparedIpListReferences::from_plugins(&owner);
     let binding = prepared.bind_plugins(&owner).unwrap();
-    assert_eq!(
-        super::super::resolve_bound_ip_list_keys(binding.http_entry(0).unwrap().references()).unwrap(),
-        (vec!["default/good".to_owned()], vec!["ops/other".to_owned()])
-    );
+    let refs = binding.http_entry(0).unwrap().references();
+    let keys = |side| {
+        compile_keys(None, IpExecutionRole::Partial, refs.references(side), &mut false)
+            .unwrap()
+            .into_iter()
+            .map(|key| key.key)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(keys(IpListSide::Allow), ["default/good"]);
+    assert_eq!(keys(IpListSide::Deny), ["ops/other"]);
+}
+
+#[test]
+fn scoped_ip_availability_rejects_mismatched_identity_even_when_validation_is_disabled() {
+    use crate::plugins::runtime::conditions::ip_refs::{IpListAvailability, IpListReadKey};
+    use edgion_resources::resources::edgion_config_data::ConfigDataVisibility;
+    use edgion_resources::resources::edgion_plugins::ip_reference_set::IpReadScope;
+    let store = EdgionConfigDataStore::new();
+    let make = || {
+        let mut data = ip_list_resource("trusted", true, None, "192.0.2.0/24");
+        let config = Arc::make_mut(&mut data);
+        config.metadata.namespace = Some("ops".into());
+        config.spec.visibility = ConfigDataVisibility::Cluster;
+        data
+    };
+    store.full_set(&HashMap::from([("ops/trusted".into(), make())]));
+    let held = store.capture_snapshot();
+    let ip = "192.0.2.1".parse().unwrap();
+    for scope in [IpReadScope::ClusterOnly, IpReadScope::ValidationDisabled] {
+        let key = IpListReadKey {
+            key: "ops/trusted".into(),
+            scope,
+        };
+        assert_eq!(held.ip_list_availability(&key), IpListAvailability::Available);
+        assert_eq!(held.ip_list_contains(&key, ip), Some(true));
+        for field in ["name", "namespace", "missing-name", "missing-namespace"] {
+            let mut mismatched = make();
+            let data = Arc::make_mut(&mut mismatched);
+            match field {
+                "name" => data.metadata.name = Some("different".into()),
+                "namespace" => data.metadata.namespace = Some("different".into()),
+                "missing-name" => data.metadata.name = None,
+                _ => data.metadata.namespace = None,
+            }
+            store.partial_update(
+                HashMap::new(),
+                HashMap::from([("ops/trusted".into(), mismatched)]),
+                HashSet::new(),
+            );
+            let current = store.capture_snapshot();
+            assert_eq!(current.ip_list_availability(&key), IpListAvailability::Unavailable);
+            assert_eq!(current.ip_list_contains(&key, ip), None);
+            assert_eq!(held.ip_list_contains(&key, ip), Some(true));
+        }
+        store.full_set(&HashMap::new());
+        assert_eq!(
+            store.capture_snapshot().ip_list_availability(&key),
+            IpListAvailability::Unavailable
+        );
+        store.full_set(&HashMap::from([("ops/trusted".into(), make())]));
+        assert_eq!(store.capture_snapshot().ip_list_contains(&key, ip), Some(true));
+    }
 }

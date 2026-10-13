@@ -46,12 +46,13 @@ fn valid_geoip_config() -> GeoIpLocationConfig {
         fail_open: Some(false),
         default_action: DefaultAction::Allow,
         deny_rule_groups: vec![GeoRuleGroup {
+            invalid_input: false,
             name: None,
             rules: vec![GeoRule {
                 source: GeoRuleSource::DirectPeerIp,
                 key: GeoRuleKey::Cidr,
-                values: vec!["10.0.0.0/8".to_string()],
-                cidr_matcher: None,
+                values: Vec::new(),
+                cidr: serde_json::from_value(serde_json::json!({"ipRefs":[{"name":"networks"}]})).unwrap(),
             }],
         }],
         ..Default::default()

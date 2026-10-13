@@ -1,0 +1,13 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: gac-lockdown-ips
+  namespace: edgion-test
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: main
+        cidrs:
+        - 127.0.0.0/8

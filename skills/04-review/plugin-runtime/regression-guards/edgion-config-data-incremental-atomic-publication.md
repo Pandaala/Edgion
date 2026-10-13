@@ -17,9 +17,7 @@ publish a new snapshot.
 Authorization decisions that combine live references capture one owned snapshot
 handle and resolve every raw Selector and IpList matcher through that handle.
 This makes one decision generation-consistent even when publication races with
-the request or connection. Consumers capture lazily: inline-only IP restriction
-decisions, and global-connection decisions with neither a Selector nor selected
-profile references, do not load the store.
+the request or connection. Consumers capture once per decision when their cold demand requires ConfigData. HTTP entry conditions, nested ExtensionRef and ACL membership share the dispatch-local view. Stream GCIR selection and selected ACL membership share one view; consumers never collect matcher vectors or copy CIDRs.
 
 Add and update have different generation semantics. An update may reuse an
 equivalent raw or typed value. An add always replaces and rebuilds the affected
@@ -98,19 +96,19 @@ re-enabling compiles the current generation.
   Authorization code must not combine direct store getters or independently
   captured handles in one decision. Raw-only single-lookup consumers may keep
   using the direct getter because they cannot tear related values.
-- Reference-free HTTP, stream, and TLS IP restriction decisions avoid snapshot
-  capture. Global connection IP restriction captures unconditionally only when a
-  Selector must be read; without a Selector it captures only when the selected
-  base profile has deny or allow references.
-- HTTP uses one inline-capacity `SmallVec` per authorization side to combine
-  inline and referenced matchers. The three stream consumers use their
-  `SmallVec`s only for resolved reference matchers, then the existing resource
-  helper creates a `Vec` per side to prepend inline matchers. The HTTP `SmallVec`
-  spills when its inline matcher count plus resolved references exceeds four; a
-  stream `SmallVec` spills when resolved references exceed four. The stream helper
-  `Vec`s may heap-allocate. A matched-group result clones an existing `Arc<str>`
-  and performs reference-count work; it does not allocate a new group value. Do
-  not describe these paths as allocation-free.
+- Active reference-only HTTP, connection and TLS ACL decisions use one
+  dispatch- or connection-local snapshot. Disabled or policy-masked entries are
+  not constructed and introduce no executable lookup demand. GCIR reads its
+  optional Selector and selected profile's IpList keys through the same view;
+  every structurally valid executable profile contains references.
+- HTTP, connection, TLS-route and global-connection IP restriction borrow ordered
+  authorized matchers through `EdgionConfigDataSnapshot::ip_list_matchers`.
+  Source order is the authored reference order; consumers have no inline
+  matchers. No temporary `Vec` or `SmallVec` projects the union.
+  The canonical evaluator stops after a decisive match and preserves group Arc
+  identity. A matched-group result still clones an existing `Arc<str>` and performs
+  reference-count work; it does not allocate a new group value. Removing these
+  projections does not establish that the complete consumer path is allocation-free.
 - Production load-clone-store publication relies on the conf-sync single-writer
   contract. The test-only insertion helper uses `ArcSwap::rcu` and rebuilds from
   the newest value on each retry so concurrent unique-key inserts are not lost.
@@ -181,3 +179,16 @@ ConfigData target roles are not migrated by this change.
 ### Bound remaining plugin fields
 
 RAP/Canary/GCIR Selector and RegionRoute keys are built from actual EP/ESP field loans before cache reuse. Invalid target slots rebuild each consumer's established denial/base outcome; invalid owners cannot reuse a prior external executable. Fresh valid retarget generations retain the existing fresh-cache contract. GCIR still captures Selector and IpLists together, and Region raw value/proof publication remains paired. RAP URL documents are expanded in Controller and introduce no live Gateway document lookup. Unit coverage proves bounded constructor/cache/generation behavior, not live cross-process requeue traffic.
+
+### ARCH-028 B2 condition consumers
+
+Shared IP conditions and RAP primary membership now borrow central IpList matchers.
+One dispatch-local adapter snapshot covers required-root preflight, all later
+condition reads and RAP Selector profile-index selection, including nested
+ExtensionRef loops. Current raw visibility and typed index membership are checked
+in that same handle. Separate callbacks may see newer generations. Ordinary
+missing-list recovery does not require an EdgionPlugins generation change. The
+B1 HTTP ACL wrapper still had a separate inner snapshot at the historical B2
+checkpoint. B5 replaces that boundary with the same dispatch-local scalar ACL
+capability used after required-root preflight and condition reads. This is one
+callback/dispatch view, not a whole-request or cross-store transaction claim.

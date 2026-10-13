@@ -75,7 +75,7 @@ spec:
         })
         .and_then(|e| match &e.plugin {
             EdgionStreamPlugin::GlobalConnectionIpRestriction(gcir) => {
-                gcir.profiles.get("main")?.deny_refs.as_ref()?.first()
+                gcir.profiles.get("main")?.refs.deny_refs.as_ref()?.first()
             }
             _ => None,
         })
@@ -363,9 +363,8 @@ spec:
   plugins:
     - type: IpRestriction
       config:
-        allow:
+        allowRefs:
           - name: default
-            cidrs: ["10.0.0.0/8"]
         defaultAction: deny
 "#;
     serde_yaml::from_str(yaml).unwrap()
@@ -677,11 +676,12 @@ spec:
         defaultAction: allow
 "#;
     let esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
-    let errs = collect_inline_ip_entry_errors(&esp);
+    let mut esp = esp;
+    let errs = EdgionStreamPluginsHandler::new().preparse(&mut esp, &make_ctx());
     assert_eq!(
         errs.len(),
         1,
-        "expected one entry error for bad L4 inline CIDR; got: {:?}",
+        "expected typed invalid legacy L4 configuration; got: {:?}",
         errs
     );
 }
@@ -708,11 +708,12 @@ spec:
                 cidrs: ["256.0.0.1/32"]
 "#;
     let esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
-    let errs = collect_inline_ip_entry_errors(&esp);
+    let mut esp = esp;
+    let errs = EdgionStreamPluginsHandler::new().preparse(&mut esp, &make_ctx());
     assert_eq!(
         errs.len(),
         1,
-        "expected one entry error for bad GCIR profile CIDR; got: {:?}",
+        "expected typed invalid legacy GCIR configuration; got: {:?}",
         errs
     );
 }
@@ -734,11 +735,12 @@ spec:
             cidrs: ["not-a-cidr"]
 "#;
     let esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
-    let errs = collect_inline_ip_entry_errors(&esp);
+    let mut esp = esp;
+    let errs = EdgionStreamPluginsHandler::new().preparse(&mut esp, &make_ctx());
     assert_eq!(
         errs.len(),
         1,
-        "expected one entry error for bad TLS-route inline CIDR; got: {:?}",
+        "expected typed invalid legacy TLS configuration; got: {:?}",
         errs
     );
 }
@@ -746,7 +748,8 @@ spec:
 #[test]
 fn collect_inline_ip_entry_errors_empty_for_clean_config() {
     let esp = clean_esp();
-    let errs = collect_inline_ip_entry_errors(&esp);
+    let mut esp = esp;
+    let errs = EdgionStreamPluginsHandler::new().preparse(&mut esp, &make_ctx());
     assert!(errs.is_empty(), "expected no errors for clean config; got: {:?}", errs);
 }
 
@@ -1151,4 +1154,140 @@ async fn gcir_selector_actual_source_grants_and_default_namespace_are_current() 
     assert!(EdgionStreamPluginsHandler::iter_gcir_refs(&owner)
         .collect::<Vec<_>>()
         .is_empty());
+}
+
+#[tokio::test]
+async fn geo_stream_pass_preserves_acl_selector_edges_and_intrinsic_status() {
+    use edgion_resources::refs::ip_list_fields::PreparedIpListReferences;
+    let runtime = Arc::new(ControllerRuntime::default());
+    let ctx = make_ctx_with_runtime(runtime.clone());
+    let owner:EdgionStreamPlugins=serde_json::from_value(serde_json::json!({"metadata":{"name":"mixed-geo","namespace":"apps"},"spec":{"plugins":[
+        {"type":"IpRestriction","config":{"allowRefs":[{"name":"acl"}]}},
+        {"type":"GlobalConnectionIpRestriction","config":{"enable":true,"activeProfile":"main","profiles":{"main":{"allowRefs":[{"name":"profile"}]}}}},
+        {"type":"GeoIpLocation","config":{"failOpen":true,"allowRuleGroups":[{"rules":[{"source":"DirectPeerIp","key":"cidr","ipRefs":[{"name":"geo"}]}]}]}}
+    ]}})).unwrap();
+    let handler = EdgionStreamPluginsHandler::new();
+    let ProcessResult::Continue(mut parsed) = handler.parse(owner, &ctx).await else {
+        panic!()
+    };
+    for name in ["acl", "profile", "geo"] {
+        assert_eq!(
+            runtime.edgion_config_data_refs.get_refs(&format!("apps/{name}")),
+            ["EdgionStreamPlugins:apps/mixed-geo"]
+        );
+    }
+    PreparedIpListReferences::from_stream_plugins(&parsed)
+        .visit_geo_stream_plugins(&parsed, |leaf| assert!(leaf.config().resolved_refs.is_some()))
+        .unwrap();
+    parsed.spec.plugins.as_mut().unwrap()[2].enable = false;
+    let ProcessResult::Continue(parsed) = handler.parse(parsed, &ctx).await else {
+        panic!()
+    };
+    assert!(runtime.edgion_config_data_refs.get_refs("apps/geo").is_empty());
+    assert!(!runtime.edgion_config_data_refs.get_refs("apps/acl").is_empty());
+    PreparedIpListReferences::from_stream_plugins(&parsed)
+        .visit_geo_stream_plugins(&parsed, |leaf| assert!(leaf.config().resolved_refs.is_none()))
+        .unwrap();
+}
+
+#[tokio::test]
+async fn inactive_acl_sites_keep_passive_diagnostics_and_clear_all_executable_metadata() {
+    use edgion_resources::refs::ip_list_fields::{IpListSide, PreparedIpListReferences};
+    use edgion_resources::resources::edgion_plugins::ip_reference_set::IpReadScope;
+    use serde_json::json;
+    for family in ["connection", "outer-gcir", "inner-gcir", "tls"] {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = make_ctx_with_runtime(runtime.clone());
+        let target:edgion_resources::EdgionConfigData=serde_json::from_value(json!({"metadata":{"name":"nets","namespace":"shared"},"spec":{"data":{"type":"IpList","config":{"items":[]}}}})).unwrap();
+        runtime
+            .edgion_config_data_store
+            .replace_all(std::collections::HashMap::from([("shared/nets".into(), target)]));
+        let reference =
+            json!({"name":"nets","namespace":"shared","refDenied":{"targetNamespace":"shared","targetName":"nets"}});
+        let refs = json!({"allowRefs":[reference,{"name":"bad/name"}]});
+        let entry = if family.contains("gcir") {
+            json!({"type":"GlobalConnectionIpRestriction","enable":family!="outer-gcir","config":{"enable":family!="inner-gcir","activeProfile":"base","activeProfileRef":{"name":"selector"},"profiles":{"base":refs}}})
+        } else {
+            json!({"type":"IpRestriction","enable":false,"config":refs})
+        };
+        let name = format!("inactive-{family}");
+        let key = format!("EdgionStreamPlugins:apps/{name}");
+        let mut spec = json!({"plugins":[{"type":"GeoIpLocation","config":{"failOpen":true,"allowRuleGroups":[{"rules":[{"source":"DirectPeerIp","key":"cidr","ipRefs":[{"name":"geo"}]}]}]}}]});
+        if family == "tls" {
+            spec["tlsRoutePlugins"] = json!([entry]);
+        } else {
+            spec["plugins"].as_array_mut().unwrap().push(entry);
+        }
+        let mut owner: EdgionStreamPlugins =
+            serde_json::from_value(json!({"metadata":{"name":name,"namespace":"apps"},"spec":spec})).unwrap();
+        let prepared = PreparedIpListReferences::from_stream_plugins(&owner);
+        prepared
+            .visit_acl_stream_plugins_mut(&mut owner, |mut leaf| {
+                assert!(!leaf.is_supported());
+                leaf.set_read_scopes(IpListSide::Allow, &[IpReadScope::GrantAuthorized, IpReadScope::Denied])
+                    .unwrap();
+            })
+            .unwrap();
+        for allowed in [false, true] {
+            runtime.ref_grant_store.remove("shared/permit");
+            if allowed {
+                let grant=serde_json::from_value(json!({"metadata":{"name":"permit","namespace":"shared"},"spec":{"from":[{"group":"edgion.io","kind":"EdgionStreamPlugins","namespace":"apps"}],"to":[{"group":"edgion.io","kind":"EdgionConfigData","name":"nets"}]}})).unwrap();
+                runtime.ref_grant_store.upsert("shared/permit".into(), Arc::new(grant));
+            }
+            let handler = EdgionStreamPluginsHandler::new();
+            let ProcessResult::Continue(parsed) = handler.parse(owner.clone(), &ctx).await else {
+                panic!()
+            };
+            assert_eq!(runtime.edgion_config_data_refs.get_refs("shared/nets"), [key.as_str()]);
+            assert_eq!(runtime.edgion_config_data_refs.get_refs("apps/geo"), [key.as_str()]);
+            if family.contains("gcir") {
+                assert_eq!(
+                    runtime.edgion_config_data_refs.get_refs("apps/selector"),
+                    [key.as_str()]
+                );
+            }
+            assert!(runtime.edgion_config_data_refs.get_refs("apps/bad/name").is_empty());
+            let prepared = PreparedIpListReferences::from_stream_plugins(&parsed);
+            let binding = prepared.bind_stream_plugins(&parsed).unwrap();
+            for leaf in binding.references() {
+                assert!(leaf.config().resolved_allow_refs.is_none());
+                assert!(leaf.config().resolved_deny_refs.is_none());
+                assert!(leaf.allow().chain(leaf.deny()).all(|(_, denied)| !denied));
+            }
+            let errors = super::resolve_ip_list_refs(&parsed, &ctx);
+            assert!(errors
+                .iter()
+                .any(|error| matches!(error, ResolvedRefsError::InvalidReference { .. })));
+            let denied = errors
+                .iter()
+                .any(|error| matches!(error, ResolvedRefsError::RefNotPermitted { .. }));
+            assert_eq!(
+                denied,
+                !allowed && crate::config::is_reference_grant_validation_enabled(),
+                "{family}"
+            );
+        }
+        let mut wire = serde_json::to_value(&owner).unwrap();
+        let path = if family == "tls" {
+            &mut wire["spec"]["tlsRoutePlugins"][0]["config"]
+        } else if family.contains("gcir") {
+            &mut wire["spec"]["plugins"][1]["config"]["profiles"]["base"]
+        } else {
+            &mut wire["spec"]["plugins"][1]["config"]
+        };
+        path["allowRefs"] = json!([{"name":"next"}]);
+        path.as_object_mut().unwrap().remove("resolvedAllowRefs");
+        let changed: EdgionStreamPlugins = serde_json::from_value(wire).unwrap();
+        let handler = EdgionStreamPluginsHandler::new();
+        let ProcessResult::Continue(parsed) = handler.parse(changed, &ctx).await else {
+            panic!()
+        };
+        assert!(runtime.edgion_config_data_refs.get_refs("shared/nets").is_empty());
+        assert_eq!(runtime.edgion_config_data_refs.get_refs("apps/next"), [key.as_str()]);
+        assert_eq!(runtime.edgion_config_data_refs.get_refs("apps/geo"), [key.as_str()]);
+        handler.on_delete(&parsed, &ctx).await;
+        for target in ["apps/next", "apps/geo", "apps/selector"] {
+            assert!(runtime.edgion_config_data_refs.get_refs(target).is_empty());
+        }
+    }
 }

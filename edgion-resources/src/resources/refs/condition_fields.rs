@@ -8,8 +8,10 @@ use super::{ReferenceError, ReferenceToken};
 use crate::resources::edgion_config_data::EdgionConfigDataRef;
 use crate::resources::edgion_plugins::conditions::{AnyOfClause, Condition, ConditionSet, PluginConditions};
 use crate::resources::edgion_plugins::dye::DyeSuite;
-use crate::resources::edgion_plugins::plugin_configs::{IpAccessMatch, RequestAccessRuleType};
+use crate::resources::edgion_plugins::ip_reference_set::{IpReadDomain, IpReadResolution, IpReadScope, IpReferenceSet};
+use crate::resources::edgion_plugins::plugin_configs::RequestAccessRuleType;
 use crate::resources::edgion_plugins::{EdgionPlugin, EdgionPlugins};
+use crate::EdgionGatewayConfig;
 use serde::Serialize;
 use std::mem::{discriminant, Discriminant};
 
@@ -31,6 +33,7 @@ enum Action {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Location {
+    RealIp,
     Entry {
         present: bool,
     },
@@ -43,7 +46,9 @@ enum Location {
         rule: usize,
         conditions: bool,
     },
-    Restriction,
+    Restriction {
+        deny: bool,
+    },
     RapIp {
         profile: String,
         group: usize,
@@ -112,6 +117,7 @@ struct PreparedRoot {
     ip: Option<PreparedIp>,
 }
 pub(super) struct ConditionSnapshot {
+    global: bool,
     pub(super) owner: OwnerSnapshot,
     stages: [Option<usize>; 4],
     roots: Vec<PreparedRoot>,
@@ -171,11 +177,100 @@ impl PreparedConditionReferences {
             .collect();
         Self {
             snapshot: ConditionSnapshot {
+                global: false,
                 owner: source,
                 stages: stage_shape(owner),
                 roots,
             },
         }
+    }
+    pub fn from_gateway_config(owner: &EdgionGatewayConfig) -> Self {
+        let source = OwnerSnapshot::egc(&owner.metadata);
+        let roots = owner
+            .spec
+            .real_ip
+            .as_ref()
+            .map(|config| PreparedRoot {
+                position: RootPosition {
+                    stage: PluginStage::Request,
+                    entry: 0,
+                    location: Location::RealIp,
+                    action: Action::Direct,
+                },
+                enabled: true,
+                supported: true,
+                variant: "RealIp",
+                set: None,
+                ip: Some(PreparedIp::new(&source, 0, None, &config.trusted)),
+            })
+            .into_iter()
+            .collect();
+        Self {
+            snapshot: ConditionSnapshot {
+                global: true,
+                owner: source,
+                stages: [None; 4],
+                roots,
+            },
+        }
+    }
+    fn check_gateway(&self, owner: &EdgionGatewayConfig) -> Result<(), ReferenceError> {
+        if !self.snapshot.global || !self.snapshot.owner.matches(&owner.metadata) {
+            return Err(ReferenceError::StaleBinding);
+        }
+        match (owner.spec.real_ip.as_ref(), self.snapshot.roots.as_slice()) {
+            (None, []) => Ok(()),
+            (Some(config), [root]) if root.ip.as_ref().is_some_and(|ip| ip.matches(&config.trusted)) => Ok(()),
+            _ => Err(ReferenceError::StaleBinding),
+        }
+    }
+    pub fn visit_gateway_ip(
+        &self,
+        owner: &EdgionGatewayConfig,
+        mut visit: impl for<'leaf> FnMut(BoundIpAccess<'leaf>),
+    ) -> Result<(), ReferenceError> {
+        self.check_gateway(owner)?;
+        self.snapshot.owner.source()?;
+        if let Some(config) = owner.spec.real_ip.as_ref() {
+            visit(BoundIpAccess {
+                config: &config.trusted,
+                prepared: self.snapshot.roots[0].ip.as_ref().ok_or(ReferenceError::StaleBinding)?,
+                snapshot: &self.snapshot,
+                consumer: IpReferenceConsumer::RealIp,
+                role: IpExecutionRole::Trust,
+                supported: true,
+            });
+        }
+        Ok(())
+    }
+    pub fn visit_gateway_ip_mut(
+        &self,
+        owner: &mut EdgionGatewayConfig,
+        mut visit: impl for<'leaf> FnMut(BoundIpAccessMut<'leaf>),
+    ) -> Result<(), ReferenceError> {
+        self.check_gateway(owner)?;
+        self.snapshot.owner.source()?;
+        if let Some(config) = owner.spec.real_ip.as_mut() {
+            visit(BoundIpAccessMut {
+                config: &mut config.trusted,
+                prepared: self.snapshot.roots[0].ip.as_ref().ok_or(ReferenceError::StaleBinding)?,
+                snapshot: &self.snapshot,
+                consumer: IpReferenceConsumer::RealIp,
+                role: IpExecutionRole::Trust,
+                supported: true,
+            });
+        }
+        Ok(())
+    }
+    pub fn clear_gateway_ip_scopes(&self, owner: &mut EdgionGatewayConfig) -> Result<(), ReferenceError> {
+        self.check_gateway(owner)?;
+        if let Some(config) = owner.spec.real_ip.as_mut() {
+            config.trusted.resolved_refs = None;
+            for reference in &mut config.trusted.ip_refs {
+                reference.ref_denied = None;
+            }
+        }
+        Ok(())
     }
     pub fn visit(
         &self,
@@ -223,7 +318,10 @@ impl PreparedConditionReferences {
         Ok(())
     }
     fn check(&self, owner: &EdgionPlugins) -> Result<(), ReferenceError> {
-        if !self.snapshot.owner.matches(&owner.metadata) || self.snapshot.stages != stage_shape(owner) {
+        if self.snapshot.global
+            || !self.snapshot.owner.matches(&owner.metadata)
+            || self.snapshot.stages != stage_shape(owner)
+        {
             return Err(ReferenceError::StaleBinding);
         }
         let actual = roots(owner);
@@ -253,16 +351,30 @@ impl PreparedConditionReferences {
 
 /// IP consumers retain their established resolution policy independently of credentials.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IpExecutionRole {
+    Required,
+    Candidate,
+    Observational,
+    Partial,
+    Trust,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IpReferenceConsumer {
+    RealIp,
     Ordinary,
     RequestAccessPolicy,
 }
 struct PreparedIp {
+    root: usize,
+    leaf: Option<LeafPosition>,
     slots: Vec<PreparedSlot>,
 }
 impl PreparedIp {
-    fn new(owner: &OwnerSnapshot, root: usize, leaf: Option<LeafPosition>, ip: &IpAccessMatch) -> Self {
+    fn new(owner: &OwnerSnapshot, root: usize, leaf: Option<LeafPosition>, ip: &IpReferenceSet) -> Self {
         Self {
+            root,
+            leaf,
             slots: ip
                 .ip_refs
                 .iter()
@@ -278,7 +390,7 @@ impl PreparedIp {
                 .collect(),
         }
     }
-    fn matches(&self, ip: &IpAccessMatch) -> bool {
+    fn matches(&self, ip: &IpReferenceSet) -> bool {
         self.slots.len() == ip.ip_refs.len()
             && self
                 .slots
@@ -294,21 +406,68 @@ fn ip_wire(wire: &EdgionConfigDataRef) -> FieldWire {
     }
 }
 pub struct BoundIpAccess<'a> {
-    config: &'a IpAccessMatch,
+    config: &'a IpReferenceSet,
     prepared: &'a PreparedIp,
     snapshot: &'a ConditionSnapshot,
     consumer: IpReferenceConsumer,
+    role: IpExecutionRole,
+    supported: bool,
 }
 pub struct BoundIpAccessMut<'a> {
-    config: &'a mut IpAccessMatch,
+    config: &'a mut IpReferenceSet,
     prepared: &'a PreparedIp,
     snapshot: &'a ConditionSnapshot,
     consumer: IpReferenceConsumer,
+    role: IpExecutionRole,
+    supported: bool,
 }
 macro_rules! ip_access {
     () => {
-        pub fn config(&self) -> &IpAccessMatch {
+        pub fn config(&self) -> &IpReferenceSet {
             self.config
+        }
+        pub fn validate_owner(&self) -> Result<(), ReferenceError> {
+            if !self.prepared.matches(self.config) {
+                return Err(ReferenceError::StaleBinding);
+            }
+            self.snapshot.owner.source().map(|_| ())
+        }
+
+        fn resolution(&self, scopes: &[IpReadScope]) -> Result<IpReadResolution, ReferenceError> {
+            self.validate_owner()?;
+            if !self.prepared.matches(self.config) || scopes.len() != self.prepared.slots.len() {
+                return Err(ReferenceError::StaleBinding);
+            }
+            let leaf = self.prepared.leaf.map(|leaf| match leaf {
+                LeafPosition::AllOf(index) => (index, None),
+                LeafPosition::AnyOf(index) => (index, Some(usize::MAX)),
+                LeafPosition::AnyClauseAll { clause, leaf } => (clause, Some(leaf)),
+            });
+            super::owned::ip_read_resolution(
+                &self.snapshot.owner,
+                IpReadDomain::Condition,
+                self.prepared.root,
+                leaf,
+                self.references()?,
+                scopes,
+            )
+        }
+        /// Read proof must match the actual source, owning slot and canonical target.
+        pub fn read_scopes(&self) -> Result<Option<Vec<IpReadScope>>, ReferenceError> {
+            let Some(resolution) = self.config.resolved_refs.as_deref() else {
+                return Ok(None);
+            };
+            let scopes: Vec<_> = resolution.slots.iter().map(|slot| slot.scope).collect();
+            if self.resolution(&scopes)? != *resolution {
+                return Err(ReferenceError::StaleBinding);
+            }
+            Ok(Some(scopes))
+        }
+        pub fn is_supported(&self) -> bool {
+            self.supported
+        }
+        pub fn execution_role(&self) -> IpExecutionRole {
+            self.role
         }
         pub fn consumer(&self) -> IpReferenceConsumer {
             self.consumer
@@ -330,21 +489,39 @@ impl BoundIpAccess<'_> {
 }
 impl BoundIpAccessMut<'_> {
     ip_access!();
-    pub fn config_mut(&mut self) -> &mut IpAccessMatch {
+    pub fn set_read_scopes(&mut self, scopes: &[IpReadScope]) -> Result<(), ReferenceError> {
+        let resolution = self.resolution(scopes)?;
+        self.config.resolved_refs = Some(Box::new(resolution));
+        Ok(())
+    }
+    pub fn config_mut(&mut self) -> &mut IpReferenceSet {
         self.config
     }
 }
 impl PreparedRoot {
+    fn ip_role(&self) -> IpExecutionRole {
+        match self.position.location {
+            Location::RealIp => IpExecutionRole::Trust,
+            Location::RapIp { .. } | Location::RapUrl { .. } => IpExecutionRole::Partial,
+            Location::Dye { .. } => IpExecutionRole::Observational,
+            Location::Restriction { deny: false } => IpExecutionRole::Candidate,
+            _ => IpExecutionRole::Required,
+        }
+    }
     fn ip_consumer(&self) -> Option<IpReferenceConsumer> {
         if !self.enabled {
             return None;
         }
         match self.position.location {
+            Location::RealIp if self.position.stage == PluginStage::Request && self.supported => {
+                Some(IpReferenceConsumer::RealIp)
+            }
+            Location::RealIp => None,
             Location::RapIp { .. } | Location::RapUrl { .. } if self.position.stage == PluginStage::Request => {
                 Some(IpReferenceConsumer::RequestAccessPolicy)
             }
             Location::RapIp { .. } | Location::RapUrl { .. } | Location::Boundary { .. } => None,
-            Location::Restriction if self.position.stage != PluginStage::Request => None,
+            Location::Restriction { .. } if self.position.stage != PluginStage::Request => None,
             _ => Some(IpReferenceConsumer::Ordinary),
         }
     }
@@ -366,8 +543,12 @@ impl PreparedConditionReferences {
                     prepared: ip,
                     snapshot: &self.snapshot,
                     consumer,
+                    role: prepared.ip_role(),
+                    supported: prepared.supported,
                 });
             }
+            let role = prepared.ip_role();
+            let supported = prepared.supported;
             if let (Some(set), Some(prepared)) = (root.conditions, &prepared.set) {
                 for leaf in &prepared.leaves {
                     if let Some(ip) = &leaf.ip {
@@ -378,6 +559,8 @@ impl PreparedConditionReferences {
                             prepared: ip,
                             snapshot: &self.snapshot,
                             consumer,
+                            role,
+                            supported,
                         });
                     }
                 }
@@ -385,6 +568,35 @@ impl PreparedConditionReferences {
         }
         Ok(())
     }
+    /// Clear resolver-only metadata on every effective owning node, including inactive roots.
+    /// Clearing never mints a reference token or performs a lookup.
+    pub fn clear_ip_read_scopes(&self, owner: &mut EdgionPlugins) -> Result<(), ReferenceError> {
+        self.check(owner)?;
+        let clear = |config: &mut IpReferenceSet| {
+            config.resolved_refs = None;
+            for reference in &mut config.ip_refs {
+                reference.ref_denied = None;
+            }
+        };
+        for root in &self.snapshot.roots {
+            if root.ip.is_some() {
+                clear(direct_ip_mut(owner, &root.position).ok_or(ReferenceError::StaleBinding)?);
+            }
+            if let Some(set) = &root.set {
+                let actual = root_mut(owner, &root.position).ok_or(ReferenceError::StaleBinding)?;
+                for leaf in &set.leaves {
+                    if leaf.ip.is_some() {
+                        clear(
+                            condition_ip_mut(leaf_at_mut(actual, leaf.position).ok_or(ReferenceError::StaleBinding)?)
+                                .ok_or(ReferenceError::StaleBinding)?,
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Warning application rechecks the same owning topology before borrowing the RAP entry.
     pub fn visit_ip_mut(
         &self,
@@ -419,6 +631,8 @@ impl PreparedConditionReferences {
                         prepared,
                         snapshot: &self.snapshot,
                         consumer,
+                        role: root.ip_role(),
+                        supported: root.supported,
                     },
                     &mut emit,
                 );
@@ -436,6 +650,8 @@ impl PreparedConditionReferences {
                                 prepared,
                                 snapshot: &self.snapshot,
                                 consumer,
+                                role: root.ip_role(),
+                                supported: root.supported,
                             },
                             &mut emit,
                         );
@@ -465,28 +681,19 @@ fn rap_warnings_mut(owner: &mut EdgionPlugins, entry: usize) -> Result<&mut Vec<
     Ok(&mut config.resolution_warnings)
 }
 
-fn condition_ip(condition: &Condition) -> Option<&IpAccessMatch> {
+fn condition_ip(condition: &Condition) -> Option<&IpReferenceSet> {
     match condition {
-        Condition::DirectPeerIpMatch(ip) | Condition::RemoteIpMatch(ip) => Some(ip),
+        Condition::DirectPeerIpMatch(ip) | Condition::RemoteIpMatch(ip) => Some(&ip.refs),
         _ => None,
     }
 }
-fn condition_ip_mut(condition: &mut Condition) -> Option<&mut IpAccessMatch> {
+fn condition_ip_mut(condition: &mut Condition) -> Option<&mut IpReferenceSet> {
     match condition {
-        Condition::DirectPeerIpMatch(ip) | Condition::RemoteIpMatch(ip) => Some(ip),
+        Condition::DirectPeerIpMatch(ip) | Condition::RemoteIpMatch(ip) => Some(&mut ip.refs),
         _ => None,
     }
 }
-fn direct_ip<'a>(owner: &'a EdgionPlugins, position: &RootPosition) -> Option<&'a IpAccessMatch> {
-    let Location::RapIp {
-        profile,
-        group,
-        rule,
-        direct,
-    } = &position.location
-    else {
-        return None;
-    };
+fn direct_ip<'a>(owner: &'a EdgionPlugins, position: &RootPosition) -> Option<&'a IpReferenceSet> {
     let plugin = match position.stage {
         PluginStage::Request => &owner.spec.request_plugins.as_ref()?.get(position.entry)?.plugin,
         PluginStage::Response => {
@@ -514,6 +721,21 @@ fn direct_ip<'a>(owner: &'a EdgionPlugins, position: &RootPosition) -> Option<&'
                 .plugin
         }
     };
+    if matches!(position.location, Location::RealIp) {
+        let EdgionPlugin::RealIp(config) = plugin else {
+            return None;
+        };
+        return Some(&config.trusted);
+    }
+    let Location::RapIp {
+        profile,
+        group,
+        rule,
+        direct,
+    } = &position.location
+    else {
+        return None;
+    };
     let EdgionPlugin::RequestAccessPolicy(config) = plugin else {
         return None;
     };
@@ -527,12 +749,45 @@ fn direct_ip<'a>(owner: &'a EdgionPlugins, position: &RootPosition) -> Option<&'
         .get(*rule)?
         .rule;
     match rule {
-        RequestAccessRuleType::DirectPeerIp(ip) if *direct => Some(&ip.ip),
-        RequestAccessRuleType::RemoteIp(ip) if !*direct => Some(&ip.ip),
+        RequestAccessRuleType::DirectPeerIp(ip) if *direct => Some(&ip.refs),
+        RequestAccessRuleType::RemoteIp(ip) if !*direct => Some(&ip.refs),
         _ => None,
     }
 }
-fn direct_ip_mut<'a>(owner: &'a mut EdgionPlugins, position: &RootPosition) -> Option<&'a mut IpAccessMatch> {
+fn direct_ip_mut<'a>(owner: &'a mut EdgionPlugins, position: &RootPosition) -> Option<&'a mut IpReferenceSet> {
+    let plugin = match position.stage {
+        PluginStage::Request => &mut owner.spec.request_plugins.as_mut()?.get_mut(position.entry)?.plugin,
+        PluginStage::Response => {
+            &mut owner
+                .spec
+                .upstream_response_plugins
+                .as_mut()?
+                .get_mut(position.entry)?
+                .plugin
+        }
+        PluginStage::ResponseFilter => {
+            &mut owner
+                .spec
+                .upstream_response_filter_plugins
+                .as_mut()?
+                .get_mut(position.entry)?
+                .plugin
+        }
+        PluginStage::ResponseBodyFilter => {
+            &mut owner
+                .spec
+                .upstream_response_body_filter_plugins
+                .as_mut()?
+                .get_mut(position.entry)?
+                .plugin
+        }
+    };
+    if matches!(position.location, Location::RealIp) {
+        let EdgionPlugin::RealIp(config) = plugin else {
+            return None;
+        };
+        return Some(&mut config.trusted);
+    }
     let Location::RapIp {
         profile,
         group,
@@ -542,13 +797,7 @@ fn direct_ip_mut<'a>(owner: &'a mut EdgionPlugins, position: &RootPosition) -> O
     else {
         return None;
     };
-    // IP RAP consumers exist only at the request stage.
-    if position.stage != PluginStage::Request {
-        return None;
-    }
-    let EdgionPlugin::RequestAccessPolicy(config) =
-        &mut owner.spec.request_plugins.as_mut()?.get_mut(position.entry)?.plugin
-    else {
+    let EdgionPlugin::RequestAccessPolicy(config) = plugin else {
         return None;
     };
     let rule = &mut config
@@ -561,8 +810,8 @@ fn direct_ip_mut<'a>(owner: &'a mut EdgionPlugins, position: &RootPosition) -> O
         .get_mut(*rule)?
         .rule;
     match rule {
-        RequestAccessRuleType::DirectPeerIp(ip) if *direct => Some(&mut ip.ip),
-        RequestAccessRuleType::RemoteIp(ip) if !*direct => Some(&mut ip.ip),
+        RequestAccessRuleType::DirectPeerIp(ip) if *direct => Some(&mut ip.refs),
+        RequestAccessRuleType::RemoteIp(ip) if !*direct => Some(&mut ip.refs),
         _ => None,
     }
 }
@@ -726,7 +975,7 @@ impl PreparedLeaf {
         }
         match condition {
             Condition::DirectPeerIpMatch(ip) | Condition::RemoteIpMatch(ip) => {
-                self.ip.as_ref().is_some_and(|prepared| prepared.matches(ip))
+                self.ip.as_ref().is_some_and(|prepared| prepared.matches(&ip.refs))
             }
             Condition::SecretMatch(config) => {
                 self.key.as_deref() == Some(&config.secret_key)
@@ -877,9 +1126,15 @@ fn roots(owner: &EdgionPlugins) -> Vec<Root<'_>> {
                 dye_sets(entry.dye.as_ref(), &mut push);
                 {
                     match &entry.plugin {
-                        EdgionPlugin::RequestRestriction(config) => {
-                            push(Location::Restriction, Action::Direct, Some(&config.conditions))
-                        }
+                        EdgionPlugin::RealIp(_) => push(Location::RealIp, Action::Direct, None),
+                        EdgionPlugin::RequestRestriction(config) => push(
+                            Location::Restriction {
+                                deny: config.mode
+                                    == Some(crate::resources::edgion_plugins::plugin_configs::RestrictionMode::Deny),
+                            },
+                            Action::Direct,
+                            Some(&config.conditions),
+                        ),
                         EdgionPlugin::RequestAccessPolicy(config) => {
                             push(
                                 Location::Boundary {
@@ -1140,7 +1395,7 @@ fn request_special_mut<'a>(
 }
 fn plugin_root_mut<'a>(plugin: &'a mut EdgionPlugin, position: &RootPosition) -> Option<&'a mut ConditionSet> {
     match &position.location {
-        Location::Restriction => match plugin {
+        Location::Restriction { .. } => match plugin {
             EdgionPlugin::RequestRestriction(config) => Some(&mut config.conditions),
             _ => None,
         },

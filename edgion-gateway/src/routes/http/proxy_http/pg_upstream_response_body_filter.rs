@@ -62,6 +62,62 @@ async fn settle_driver_terminal(
     ctx.response_terminal_state.close_gateway();
 }
 
+/// A framework dependency failure has no processor winner: release every owner.
+async fn abort_ip_body(
+    ctx: &mut EdgionHttpContext,
+    body: &mut Option<bytes::Bytes>,
+    sink: &mut ResponseBodySink,
+) -> pingora_core::Result<()> {
+    if !ctx.ip_body_denied() {
+        return Ok(());
+    }
+    *body = None;
+    drop(sink.take_extra());
+    sink.terminate();
+    let cause = ResponseTerminalCause::ProcessorFailure;
+    if let Some(driver) = ctx.response_processor_driver() {
+        if let Some(mut lease) = driver.body_lease().await {
+            let processors = lease.processors();
+            for processor in processors
+                .ai
+                .iter_mut()
+                .chain(processors.semantic.iter_mut())
+                .chain(processors.ordinary.iter_mut())
+            {
+                processor.finalize_incomplete("fail-close", "ip-list-unavailable");
+                processor.on_terminal_preempted(cause);
+                processor.release_inflight();
+            }
+            lease.complete();
+        }
+        if let Some(mut lease) = driver.trailer_lease().await {
+            for companion in lease.companions() {
+                companion.finalize_incomplete("ip-list-unavailable");
+                companion.on_terminal_preempted("ip-list-unavailable");
+                companion.release_inflight();
+            }
+            lease.complete();
+        }
+    }
+    if let Some(state) = ctx.ai_state_mut() {
+        state.canonical_record_batch = None;
+    }
+    if let Some(plan) = &ctx.grpc_transcoding {
+        plan.clear_output();
+    }
+    ctx.response_terminal_state.settle_pending_without_event();
+    ctx.response_terminal_state.close_gateway();
+    ctx.response_terminal_state.close_open(ResponseClose::GatewayTerminate);
+    ctx.record_error(edgion_resources::EdgionErrorCode::PluginResponseDenyAborted);
+    // The existing final-status owner refuses to rewrite already committed headers.
+    let mut error = pingora_core::Error::explain(
+        pingora_core::ErrorType::HTTPStatus(500),
+        "IpList dependency unavailable during response body",
+    );
+    error.set_retry(false);
+    Err(error)
+}
+
 /// Run private response-processor header callbacks after raw response retry
 /// arbitration. The processor set is fixed during the request stage.
 pub(crate) fn run_stream_processor_headers(response: &mut ResponseHeader, ctx: &mut EdgionHttpContext) {
@@ -270,6 +326,17 @@ pub async fn upstream_response_body_filter(
     sink: &mut ResponseBodySink,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<Option<Duration>> {
+    process_response_body(session, body, end_of_stream, sink, ctx).await
+}
+
+#[inline]
+async fn process_response_body(
+    session: &mut Session,
+    body: &mut Option<bytes::Bytes>,
+    end_of_stream: bool,
+    sink: &mut ResponseBodySink,
+    ctx: &mut EdgionHttpContext,
+) -> pingora_core::Result<Option<Duration>> {
     record_first_body_time(ctx, body.as_ref());
 
     // Writable streaming-processor pipeline (installed per-request by
@@ -278,7 +345,11 @@ pub async fn upstream_response_body_filter(
     run_stream_processors(session, ctx, body, end_of_stream, sink).await;
 
     let delay = run_read_only_body_plugins(session, ctx, body, end_of_stream);
+<<<<<<< Updated upstream
     crate::response_cache::lifecycle::capture_body(ctx, body.as_ref(), end_of_stream);
+=======
+    abort_ip_body(ctx, body, sink).await?;
+>>>>>>> Stashed changes
     Ok(delay)
 }
 
@@ -286,7 +357,18 @@ pub async fn upstream_response_body_filter(
 /// pre-trailer boundary into a no-trailers EOS.
 #[inline]
 pub async fn upstream_response_body_filter_event(
-    edgion_http: &EdgionHttpProxy,
+    _edgion_http: &EdgionHttpProxy,
+    session: &mut Session,
+    body: &mut Option<bytes::Bytes>,
+    event: UpstreamResponseBodyEvent,
+    sink: &mut ResponseBodySink,
+    ctx: &mut EdgionHttpContext,
+) -> pingora_core::Result<Option<Duration>> {
+    process_response_body_event(session, body, event, sink, ctx).await
+}
+
+#[inline]
+async fn process_response_body_event(
     session: &mut Session,
     body: &mut Option<bytes::Bytes>,
     event: UpstreamResponseBodyEvent,
@@ -295,7 +377,7 @@ pub async fn upstream_response_body_filter_event(
 ) -> pingora_core::Result<Option<Duration>> {
     match event {
         UpstreamResponseBodyEvent::Data { end_of_stream } => {
-            let delay = upstream_response_body_filter(edgion_http, session, body, end_of_stream, sink, ctx).await?;
+            let delay = process_response_body(session, body, end_of_stream, sink, ctx).await?;
             if end_of_stream {
                 super::pg_upstream_response_trailer_filter::dispatch_upstream_response_trailers(session, ctx, None)
                     .await?;
@@ -314,6 +396,7 @@ pub async fn upstream_response_body_filter_event(
             )
             .await;
             let delay = run_read_only_body_plugins(session, ctx, body, true);
+            abort_ip_body(ctx, body, sink).await?;
             super::pg_upstream_response_trailer_filter::dispatch_upstream_response_trailers(session, ctx, None).await?;
             emit_grpc_terminal(ctx, sink)?;
             crate::response_cache::lifecycle::capture_body(ctx, body.as_ref(), true);
@@ -328,8 +411,10 @@ pub async fn upstream_response_body_filter_event(
             let delay = if body.as_ref().is_some_and(|chunk| !chunk.is_empty()) {
                 run_read_only_body_plugins(session, ctx, body, false)
             } else {
+                check_read_only_ip_dependencies(session, ctx);
                 None
             };
+            abort_ip_body(ctx, body, sink).await?;
             let _ = ctx.mark_upstream_before_trailers();
             Ok(delay)
         }
@@ -376,6 +461,39 @@ fn run_read_only_body_plugins(
     max_delay
 }
 
+fn check_read_only_ip_dependencies(session: &mut Session, ctx: &mut EdgionHttpContext) {
+    if let Some(runtime) = prefer_plugin_runtime(
+        ctx.grpc_route_unit
+            .as_ref()
+            .map(|unit| Arc::clone(&unit.plugin_runtime)),
+        || ctx.route_unit.as_ref().map(|unit| Arc::clone(&unit.plugin_runtime)),
+    ) {
+        runtime.check_body_ip_dependencies(session, ctx);
+    }
+    if let Some(runtime) = prefer_plugin_runtime(
+        ctx.selected_grpc_backend
+            .as_ref()
+            .map(crate::routes::grpc::SelectedGrpcBackend::plugin_runtime),
+        || {
+            ctx.selected_backend
+                .as_ref()
+                .map(crate::backends::SelectedHttpBackend::plugin_runtime)
+        },
+    ) {
+        runtime.check_body_ip_dependencies(session, ctx);
+    }
+    if let Some(plugins) = ctx.resolved_gateway_plugins() {
+        for runtime in plugins.iter() {
+            runtime.check_body_ip_dependencies(session, ctx);
+        }
+    }
+    if let Some(plugins) = ctx.resolved_global_plugins() {
+        for runtime in plugins.iter() {
+            runtime.check_body_ip_dependencies(session, ctx);
+        }
+    }
+}
+
 #[inline]
 fn prefer_plugin_runtime(
     preferred: Option<Arc<crate::plugins::runtime::PluginRuntime>>,
@@ -393,6 +511,9 @@ fn run_and_merge_read_only_body_runtime(
     body: &Option<bytes::Bytes>,
     end_of_stream: bool,
 ) {
+    if ctx.ip_body_denied() {
+        return;
+    }
     merge_max_delay(
         max_delay,
         runtime.run_upstream_response_body_plugins(session, ctx, body, end_of_stream),

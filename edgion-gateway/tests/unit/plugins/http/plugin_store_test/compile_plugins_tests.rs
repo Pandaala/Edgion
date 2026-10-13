@@ -524,7 +524,13 @@ fn resource_with_ip_conditions(count: usize) -> EdgionPlugins {
     entry.conditions = Some(PluginConditions {
         run: Some(ConditionSet::all_of(vec![
             Condition::DirectPeerIpMatch(IpAccessMatch {
-                ips: vec!["192.0.2.0/24".to_string()],
+                refs: edgion_resources::resources::edgion_plugins::ip_reference_set::IpReferenceSet {
+                    ip_refs: vec![edgion_resources::resources::edgion_config_data::EdgionConfigDataRef {
+                        name: "test-networks".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
                 ..Default::default()
             });
             count
@@ -532,7 +538,11 @@ fn resource_with_ip_conditions(count: usize) -> EdgionPlugins {
         ..Default::default()
     });
     EdgionPlugins {
-        metadata: Default::default(),
+        metadata: kube::api::ObjectMeta {
+            name: Some("ip-conditions".into()),
+            namespace: Some("default".into()),
+            ..Default::default()
+        },
         spec: EdgionPluginsSpec {
             current_status: None,
             request_plugins: Some(vec![entry]),
@@ -619,8 +629,10 @@ fn bad_regex_conditions() -> PluginConditions {
 fn unresolved_conditions() -> PluginConditions {
     conditions(serde_json::json!({
         "run": { "allOf": [{
-            "type": "remoteIpMatch",
-            "ipRefs": [{ "name": "missing" }],
+            "type": "secretMatch",
+            "key": {"type":"header","name":"x-token"},
+            "secretKey": "token",
+            "secretRef": {"name":"missing"},
             "negate": true
         }] }
     }))
@@ -1663,8 +1675,10 @@ fn unresolved_entry_condition_seals_resource_fail_closed() {
     entry.conditions = Some(
         serde_json::from_value(serde_json::json!({
             "run": { "allOf": [{
-                    "type": "remoteIpMatch",
-                    "ipRefs": [{ "name": "missing" }],
+                    "type": "secretMatch",
+                    "key": {"type":"header","name":"x-token"},
+                    "secretKey": "token",
+                    "secretRef": {"name":"missing"},
                     "negate": true
             }] }
         }))
@@ -2271,7 +2285,7 @@ fn request_local_reply_status_validation_matches_controller_and_gateway() {
                                 "anyOfRules": [{
                                     "name": "loopback",
                                     "type": "directPeerIp",
-                                    "config": {"ips": ["127.0.0.1"]}
+                                    "config": {"ipRefs": [{"name":"local-peers"}]}
                                 }]
                             }]
                         }
@@ -2291,7 +2305,7 @@ fn request_local_reply_status_validation_matches_controller_and_gateway() {
             (
                 "IpRestriction",
                 serde_json::json!({
-                    "allow": [{"name": "loopback", "cidrs": ["127.0.0.1"]}],
+                    "allowRefs": [{"name": "loopback"}],
                     "status": status
                 }),
             ),

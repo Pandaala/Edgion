@@ -30,15 +30,18 @@
 //! gateway-side parity tests for the "identical error text" guarantee.
 
 use schemars::JsonSchema;
+use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::net::IpAddr;
 
 use super::geo_rule::{GeoRuleContext, GeoRuleGroup, GeoRuleKey, GeoRuleSource};
 use super::ip_restriction::DefaultAction;
 use crate::resources::edgion_plugins::PluginValidation;
 
 /// `GeoIpLocation` plugin configuration — shared by the HTTP and L4 registrations.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, Default, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct GeoIpLocationConfig {
     /// Action when neither side has an opinion (no deny hit, no allow
     /// configured or an allow hit). Defaults to `Allow`, matching the
@@ -62,6 +65,47 @@ pub struct GeoIpLocationConfig {
     /// deny group matched (whitelist semantics).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow_rule_groups: Vec<GeoRuleGroup>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[schemars(skip)]
+    pub invalid_input: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
+}
+impl<'de> Deserialize<'de> for GeoIpLocationConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Wire {
+            #[serde(default)]
+            default_action: DefaultAction,
+            fail_open: Option<bool>,
+            #[serde(default)]
+            deny_rule_groups: Vec<GeoRuleGroup>,
+            #[serde(default)]
+            allow_rule_groups: Vec<GeoRuleGroup>,
+            #[serde(default)]
+            invalid_input: bool,
+            #[serde(flatten)]
+            rejected: HashMap<String, IgnoredAny>,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        Ok(Self {
+            default_action: wire.default_action,
+            fail_open: wire.fail_open,
+            deny_rule_groups: wire.deny_rule_groups,
+            allow_rule_groups: wire.allow_rule_groups,
+            invalid_input: wire.invalid_input || !wire.rejected.is_empty(),
+        })
+    }
+}
+
+/// Stable coordinates into the canonical deny/allow rule grid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeoRuleSide {
+    Deny,
+    Allow,
 }
 
 /// Final judgement of `GeoIpLocationConfig::decide`.
@@ -81,6 +125,9 @@ impl GeoIpLocationConfig {
     /// path and the gateway construction path. `is_stream` is the only
     /// layer-specific input: an L4 config rejects `RemoteIp` rules.
     pub fn check_fields(&self, is_stream: bool) -> Option<String> {
+        if self.invalid_input {
+            return Some("GeoIpLocation contains unsupported fields".into());
+        }
         if is_stream && self.is_parse_only() {
             return Some(
                 "GeoIpLocation: an L4 (stream) config must declare at least one denyRuleGroups or \
@@ -108,7 +155,7 @@ impl GeoIpLocationConfig {
         None
     }
 
-    /// Validate then compile every rule's matcher. Mutates `self`.
+    /// Validate authored criteria and normalize geographic values. Mutates `self`.
     pub fn validate_and_init(&mut self, is_stream: bool) -> Result<(), String> {
         if let Some(e) = self.check_fields(is_stream) {
             return Err(e);
@@ -151,13 +198,31 @@ impl GeoIpLocationConfig {
     /// `decide`) so a caller that needs to distinguish WHY a request was
     /// denied — e.g. the L4 plugin picking a bounded metric `reason` label —
     /// doesn't have to re-implement this half of the judgement.
-    pub fn denies(&self, ctx: &GeoRuleContext<'_>) -> bool {
-        self.deny_rule_groups.iter().any(|g| g.matches(ctx))
+    pub fn denies(
+        &self,
+        ctx: &GeoRuleContext<'_>,
+        mut cidr: impl FnMut(GeoRuleSide, usize, usize, IpAddr) -> bool,
+    ) -> bool {
+        !self.invalid_input
+            && self
+                .deny_rule_groups
+                .iter()
+                .enumerate()
+                .any(|(index, group)| group.matches(ctx, |rule, ip| cidr(GeoRuleSide::Deny, index, rule, ip)))
     }
 
     /// True iff any allow group matches. See [`Self::denies`].
-    pub fn allows(&self, ctx: &GeoRuleContext<'_>) -> bool {
-        self.allow_rule_groups.iter().any(|g| g.matches(ctx))
+    pub fn allows(
+        &self,
+        ctx: &GeoRuleContext<'_>,
+        mut cidr: impl FnMut(GeoRuleSide, usize, usize, IpAddr) -> bool,
+    ) -> bool {
+        !self.invalid_input
+            && self
+                .allow_rule_groups
+                .iter()
+                .enumerate()
+                .any(|(index, group)| group.matches(ctx, |rule, ip| cidr(GeoRuleSide::Allow, index, rule, ip)))
     }
 
     /// The plugin-level deny/allow judgement, assuming the GeoIP database was
@@ -177,12 +242,16 @@ impl GeoIpLocationConfig {
     ///    through to a `deny` default would make a matched whitelist entry
     ///    reject the very traffic it was written to admit;
     /// 3. with no allow group configured, `defaultAction`.
-    pub fn decide(&self, ctx: &GeoRuleContext<'_>) -> GeoDecision {
-        if self.denies(ctx) {
+    pub fn decide(
+        &self,
+        ctx: &GeoRuleContext<'_>,
+        mut cidr: impl FnMut(GeoRuleSide, usize, usize, IpAddr) -> bool,
+    ) -> GeoDecision {
+        if self.invalid_input || self.denies(ctx, &mut cidr) {
             return GeoDecision::Deny;
         }
         if !self.allow_rule_groups.is_empty() {
-            return if self.allows(ctx) {
+            return if self.allows(ctx, &mut cidr) {
                 GeoDecision::Allow
             } else {
                 GeoDecision::Deny

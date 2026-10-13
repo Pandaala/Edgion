@@ -1,0 +1,14 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: condition-loopback
+  namespace: edgion-default
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: main
+        cidrs:
+        - 127.0.0.1
+        - ::1

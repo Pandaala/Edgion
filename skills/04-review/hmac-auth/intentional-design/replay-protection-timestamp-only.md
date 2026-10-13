@@ -63,7 +63,7 @@ This decision belongs to the same category as the following review rules: "**lay
 
 - `auth-timing/basic-auth-username-enumeration.md` (M4) — doc recommends `authFailureDelayMs` + RateLimitLocal combination
 - `oidc/nonce-pkce-defaults.md` (M8) — doc recommends enabling `useNonce` / `usePkce` in production
-- `real-ip/max-trusted-hops-opt-in.md` (M12) — doc recommends two-layer defense (precise trustedIps + maxTrustedHops cap)
+- `real-ip/max-trusted-hops-opt-in.md` (M12) — doc recommends two-layer defense (precise CIDRs in IpLists named by trustedIpRefs + maxTrustedHops cap)
 - This file (M6) — doc recommends HTTPS + hideCredentials + business-layer idempotency
 
 Common pattern: **code maintains industry consistency + documentation makes threat layering explicit + operator does corresponding deployment per docs**.

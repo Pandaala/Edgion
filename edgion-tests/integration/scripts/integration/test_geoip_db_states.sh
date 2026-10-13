@@ -587,6 +587,24 @@ spec:
                 values: ["ZZ"]
 EOF
 
+    # Named IpLists are explicit test resources, created before Gateway startup.
+    for geo_namespace in edgion-default edgion-test; do
+        cat > "${CONF_DIR}/${geo_namespace}/EdgionConfigData_${geo_namespace}_geo-cidr-peer.yaml" <<EOF
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: geo-cidr-peer
+  namespace: ${geo_namespace}
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+        - name: matching-peer
+          cidrs: ["127.0.0.1/32"]
+EOF
+    done
+
     # CIDR-only ESP: `key: cidr` never needs the GeoIP database, so this must
     # deny/allow purely by IP membership -- identically across every phase,
     # including Phase 1 (no database) with failOpen:false. `failOpen` is still
@@ -609,7 +627,7 @@ spec:
             rules:
               - source: DirectPeerIp
                 key: cidr
-                values: ["127.0.0.1/32"]
+                ipRefs: [{name: geo-cidr-peer}]
 EOF
 
     cat > "${CONF_DIR}/edgion-test/Gateway_edgion-test_geo-tcp-cidr-gw.yaml" <<EOF
@@ -844,7 +862,7 @@ spec:
             rules:
               - source: DirectPeerIp
                 key: cidr
-                values: ["127.0.0.1/32"]
+                ipRefs: [{name: geo-cidr-peer}]
 EOF
 
     for name in geo-bl403 geo-wl403 geo-passopen geo-city geo-cidr; do

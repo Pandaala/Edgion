@@ -4,6 +4,7 @@ use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_s
 use edgion_resources::resources::edgion_config_data::{
     ConfigEntry, EdgionConfigData, EdgionConfigDataRef, EdgionConfigDataSpec, IpGroup, IpListData,
 };
+use edgion_resources::resources::edgion_plugins::IpRestrictionConfig;
 use edgion_resources::resources::edgion_plugins::{DefaultAction, IpSource};
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -26,25 +27,14 @@ fn ctx_with_ips<'a>(direct_peer_ip: &str, remote_ip: &str, rsc: &'a crate::Rsc) 
 
 #[tokio::test]
 async fn source_selector_distinguishes_direct_peer_and_remote_ip() {
-    let base = IpRestrictionConfig {
-        allow: None,
-        deny: Some(vec![IpGroup {
-            name: "blocked".into(),
-            description: None,
-            cidrs: vec!["10.0.0.7/32".into()],
-        }]),
-        default_action: DefaultAction::Allow,
-        allow_refs: None,
-        deny_refs: None,
-        ip_source: IpSource::DirectPeerIp,
-        message: None,
-        status: 403,
-        allow_matcher: None,
-        deny_matcher: None,
-    };
+    let ns = "tls-direct-source-unit";
+    let data: EdgionConfigData=serde_json::from_value(serde_json::json!({"metadata":{"name":"blocked","namespace":ns},"spec":{"data":{"type":"IpList","config":{"items":[{"name":"blocked","cidrs":["10.0.0.7/32"]}]}}}})).unwrap();
+    get_global_edgion_config_data_store().insert_raw_for_test(format!("{ns}/blocked"), Arc::new(data));
+    let base: IpRestrictionConfig =
+        serde_json::from_value(serde_json::json!({"denyRefs":[{"name":"blocked"}],"ipSource":"DirectPeerIp"})).unwrap();
     let rsc = crate::Rsc::new("TLSRoute", "default", "r");
     let addresses = ctx_with_ips("10.0.0.7", "203.0.113.9", &rsc);
-    let direct = TlsRouteIpRestriction::new(&base, "default");
+    let direct = from_owner(&owner(&base, ns));
     assert!(matches!(
         direct.on_tls_route(&addresses).await,
         StreamPluginResult::Deny(_)
@@ -52,7 +42,7 @@ async fn source_selector_distinguishes_direct_peer_and_remote_ip() {
 
     let mut remote_config = base;
     remote_config.ip_source = IpSource::RemoteIp;
-    let remote = TlsRouteIpRestriction::new(&remote_config, "default");
+    let remote = from_owner(&owner(&remote_config, ns));
     assert!(matches!(
         remote.on_tls_route(&addresses).await,
         StreamPluginResult::Allow
@@ -81,22 +71,21 @@ async fn deny_refs_block_referenced_ip() {
     get_global_edgion_config_data_store().insert_raw_for_test(format!("{ns}/blk"), Arc::new(ed));
 
     let config = IpRestrictionConfig {
-        allow: None,
-        deny: None,
-        default_action: DefaultAction::Allow,
-        allow_refs: None,
-        deny_refs: Some(vec![EdgionConfigDataRef {
-            name: "blk".into(),
-            namespace: Some(ns.into()),
+        refs: edgion_resources::resources::edgion_plugins::ip_acl_refs::IpAclReferenceSet {
+            allow_refs: None,
+            deny_refs: Some(vec![EdgionConfigDataRef {
+                name: "blk".into(),
+                namespace: Some(ns.into()),
+                ..Default::default()
+            }]),
             ..Default::default()
-        }]),
+        },
+        default_action: DefaultAction::Allow,
         ip_source: IpSource::RemoteIp,
         message: None,
         status: 403,
-        allow_matcher: None,
-        deny_matcher: None,
     };
-    let plugin = TlsRouteIpRestriction::new(&config, ns);
+    let plugin = from_owner(&owner(&config, ns));
     let rsc = crate::Rsc::new("TLSRoute", "default", "r");
     assert!(matches!(
         plugin.on_tls_route(&ctx("9.9.9.9", &rsc)).await,
@@ -113,28 +102,30 @@ async fn tls_route_denied_allow_ref_contributes_no_key() {
     use edgion_resources::resources::edgion_config_data::EdgionConfigDataRef;
     let ns = "tls-ipr-ref-denied-unit";
     let config = IpRestrictionConfig {
-        allow: None,
-        deny: None,
+        refs: edgion_resources::resources::edgion_plugins::ip_acl_refs::IpAclReferenceSet {
+            allow_refs: Some(vec![EdgionConfigDataRef {
+                name: "corp".into(),
+                namespace: Some(ns.into()),
+                ref_denied: Some(edgion_resources::resources::common::RefDenied {
+                    target_namespace: ns.into(),
+                    target_name: "corp".into(),
+                    reason: None,
+                }),
+            }]),
+            deny_refs: None,
+            ..Default::default()
+        },
         default_action: DefaultAction::Allow,
-        allow_refs: Some(vec![EdgionConfigDataRef {
-            name: "corp".into(),
-            namespace: Some(ns.into()),
-            ref_denied: Some(edgion_resources::resources::common::RefDenied {
-                target_namespace: ns.into(),
-                target_name: "corp".into(),
-                reason: None,
-            }),
-        }]),
-        deny_refs: None,
         ip_source: IpSource::RemoteIp,
         message: None,
         status: 403,
-        allow_matcher: None,
-        deny_matcher: None,
     };
-    let plugin = TlsRouteIpRestriction::new(&config, ns);
+    let plugin = from_owner(&owner(&config, ns));
     assert!(
-        plugin.allow_ref_keys.is_empty(),
+        matches!(
+            plugin.acl.evaluate_in(None, Some("8.8.8.8".parse().unwrap())),
+            edgion_resources::AccessDecision::DenyByWhitelistMiss
+        ),
         "denied allow_ref must yield no key in TLS route"
     );
     // Evaluate path: whitelist mode + zero allow matchers → deny-all (fail-closed).
@@ -151,18 +142,15 @@ async fn tls_route_denied_allow_ref_contributes_no_key() {
 }
 
 use edgion_resources::refs::ip_list_fields::PreparedIpListReferences;
-// Detached convenience exists only in this mirrored test module.
-impl TlsRouteIpRestriction {
-    pub(crate) fn new(config: &IpRestrictionConfig, namespace: &str) -> Self {
-        let owner: edgion_resources::EdgionStreamPlugins = serde_json::from_value(serde_json::json!({
-            "metadata": {"name": "fixture", "namespace": namespace},
-            "spec": {"tlsRoutePlugins": [{"type": "IpRestriction", "config": config}]}
-        }))
-        .unwrap();
-        let prepared = PreparedIpListReferences::from_stream_plugins(&owner);
-        let binding = prepared.bind_stream_plugins(&owner).unwrap();
-        Self::from_bound(binding.tls_entry(0).unwrap()).expect("valid fixture owner")
-    }
+fn owner(config: &IpRestrictionConfig, namespace: &str) -> edgion_resources::EdgionStreamPlugins {
+    serde_json::from_value(serde_json::json!({"metadata":{"name":"actual","namespace":namespace},
+        "spec":{"tlsRoutePlugins":[{"type":"IpRestriction","config":config}]}}))
+    .unwrap()
+}
+fn from_owner(owner: &edgion_resources::EdgionStreamPlugins) -> TlsRouteIpRestriction {
+    let prepared = PreparedIpListReferences::from_stream_plugins(owner);
+    let binding = prepared.bind_stream_plugins(owner).unwrap();
+    TlsRouteIpRestriction::from_bound(binding.tls_entry(0).unwrap()).unwrap()
 }
 
 #[tokio::test]
@@ -176,7 +164,7 @@ async fn owning_tls_invalid_slots_keep_allow_intent_and_deny_set_drop() {
         format!("{namespace}/good"),
     ] {
         let data: EdgionConfigData = serde_json::from_value(serde_json::json!({
-            "metadata":{"name":"decoy","namespace":namespace},"spec":{"data":{"type":"IpList","config":{"items":[{"name":"set","cidrs":["198.51.100.8/32"]}]}}}
+            "metadata":{"name":key.rsplit('/').next().unwrap(),"namespace":namespace},"spec":{"data":{"type":"IpList","config":{"items":[{"name":"set","cidrs":["198.51.100.8/32"]}]}}}
         })).unwrap();
         get_global_edgion_config_data_store().insert_raw_for_test(key, std::sync::Arc::new(data));
     }
@@ -212,7 +200,12 @@ async fn owning_tls_invalid_slots_keep_allow_intent_and_deny_set_drop() {
             })).unwrap();
             let prepared = PreparedIpListReferences::from_stream_plugins(&owner);
             let bound = prepared.bind_stream_plugins(&owner).unwrap();
-            let plugin = TlsRouteIpRestriction::from_bound(bound.tls_entry(0).unwrap()).unwrap();
+            let result = TlsRouteIpRestriction::from_bound(bound.tls_entry(0).unwrap());
+            if case == "inline" {
+                assert!(result.is_err());
+                continue;
+            }
+            let plugin = result.unwrap();
             let rsc = crate::Rsc::new("TLSRoute", "default", "r5c2");
             let context = ctx("198.51.100.8", &rsc);
             let result = plugin.on_tls_route(&context).await;
@@ -248,6 +241,6 @@ async fn blank_reference_name_preserves_structural_constructor_failure() {
         let prepared = PreparedIpListReferences::from_stream_plugins(&owner);
         let binding = prepared.bind_stream_plugins(&owner).unwrap();
         let result = TlsRouteIpRestriction::from_bound(binding.tls_entry(0).unwrap());
-        assert!(result.unwrap().init_failed);
+        assert!(result.is_err());
     }
 }

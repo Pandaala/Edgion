@@ -9,10 +9,10 @@ use crate::resources::edgion_config_data::IpGroup;
 
 /// A grouped list of IP addresses or CIDR ranges.
 ///
-/// `items` is required and must be non-empty. Each `IpGroup` carries its
-/// own name (for log/observability) and `cidrs` (non-empty). Groups are
-/// merged at runtime into a single `IpRadixMatcher`; longest-prefix match
-/// selects the matched group when subnets overlap across groups.
+/// `items` is required; an empty array is a valid, present empty list.
+/// Each named `IpGroup` supplies CIDRs. Central partial-good compilation
+/// excludes invalid entries and preserves valid siblings; longest-prefix
+/// matching selects the group within this list.
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct IpListData {

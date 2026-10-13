@@ -55,16 +55,22 @@ for uid, address in (("", "10.0.0.1"), ("bad uid", "10.0.0.1"), ("uid", "not-an-
 
 with tempfile.TemporaryDirectory() as directory:
     target = Path(directory)
-    for row in r.CATALOG:
-        path = target / "EdgionPlugins" / row[0]
+    sources = [row[0] for row in r.CATALOG] + [row[0] for row in r.RAP_CONSUMERS] + [r.RAP_DOCUMENTATION]
+    for relative in sources:
+        path = target / "EdgionPlugins" / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(root / "EdgionPlugins" / row[0], path)
-    for row, mutate in (
-        (r.CATALOG[0], lambda d: d["metadata"].update(name="wrong")),
-        (r.CATALOG[2], lambda d: d["spec"]["data"]["config"]["items"][0]["cidrs"].pop()),
-        (r.CATALOG[6], lambda d: d["spec"]["requestPlugins"][0]["config"]["profiles"]["lockdown"]["requiredRuleGroups"][0]["anyOfRules"][0]["config"]["conditions"]["allOf"][0].update(secretKey="wrong")),
+        shutil.copy(root / "EdgionPlugins" / relative, path)
+    for relative, mutate in (
+        (r.CATALOG[0][0], lambda d: d["metadata"].update(name="wrong")),
+        (r.CATALOG[2][0], lambda d: d["spec"]["data"]["config"]["items"][0]["cidrs"].pop()),
+        (r.RAP_CONSUMERS[0][0], lambda d: d["spec"]["requestPlugins"][0]["config"]["profiles"]["lockdown"]["requiredRuleGroups"][0]["anyOfRules"][0]["config"]["conditions"]["allOf"][0].update(secretKey="wrong")),
+        (r.RAP_CONSUMERS[1][0], lambda d: d["metadata"].update(name="wrong")),
+        (r.RAP_CONSUMERS[0][0], lambda d: d["spec"]["requestPlugins"][0]["config"].update(defaultProfile="normal")),
+        (r.RAP_CONSUMERS[0][0], lambda d: d["spec"]["requestPlugins"][0]["config"]["profiles"]["lockdown"]["requiredRuleGroups"][0]["anyOfRules"][0]["config"].update(ipRefs=[{"name":"wrong"}])),
+        (r.RAP_CONSUMERS[0][0], lambda d: d["spec"]["requestPlugins"][0]["config"]["profiles"]["normal"]["requiredRuleGroups"][0]["anyOfRules"][0]["config"].update(ipRefs=[{"name":"wrong"}])),
+        (r.RAP_DOCUMENTATION, lambda d: d["spec"]["data"]["config"]["items"][0].update(cidrs=["198.51.100.0/24"])),
     ):
-        path = target / "EdgionPlugins" / row[0]
+        path = target / "EdgionPlugins" / relative
         original = path.read_text()
         document = r.yaml.load(original, Loader=r.FixtureLoader)
         mutate(document)

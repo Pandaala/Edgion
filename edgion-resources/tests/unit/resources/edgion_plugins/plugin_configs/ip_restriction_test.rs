@@ -1,251 +1,253 @@
 use super::*;
-
+use crate::matcher::ip_cidr_helpers::{build_grouped_matcher_partial, evaluate_ip_access_multi};
+use crate::{AccessDecision, IpGroup};
+use serde_json::json;
+fn config(value: serde_json::Value) -> IpRestrictionConfig {
+    serde_json::from_value(value).unwrap()
+}
 fn group(name: &str, cidrs: &[&str]) -> IpGroup {
     IpGroup {
-        name: name.to_string(),
+        name: name.into(),
         description: None,
-        cidrs: cidrs.iter().map(|s| s.to_string()).collect(),
+        cidrs: cidrs.iter().map(|v| (*v).into()).collect(),
     }
 }
-
-/// Convenience: `check_ip_access` returns an `AccessDecision`; the legacy
-/// tests were boolean. This helper preserves their semantic intent.
+// Collection admission and membership belong to canonical IpList machinery, independently of ACL wire policy.
+fn decide(allow: &[IpGroup], deny: &[IpGroup], ip: &str, default: DefaultAction) -> AccessDecision {
+    let allow_matcher = build_grouped_matcher_partial(allow).0;
+    let deny_matcher = build_grouped_matcher_partial(deny).0;
+    evaluate_ip_access_multi(
+        [&deny_matcher],
+        [&allow_matcher],
+        !allow.is_empty(),
+        &default,
+        &ip.parse().unwrap(),
+    )
+}
 fn is_allowed(decision: AccessDecision) -> bool {
     matches!(
         decision,
         AccessDecision::AllowByGroup(_) | AccessDecision::Default(DefaultAction::Allow)
     )
 }
-
 #[test]
 fn test_default_config() {
-    let config = IpRestrictionConfig::default();
-    assert!(config.allow.is_none());
-    assert!(config.deny.is_none());
-    assert_eq!(config.ip_source, IpSource::RemoteIp);
-    assert_eq!(config.message, None);
-    assert_eq!(config.status, 403);
-    assert_eq!(config.default_action, DefaultAction::Allow);
+    let c = IpRestrictionConfig::default();
+    assert!(c.refs.allow_refs.is_none());
+    assert!(c.refs.deny_refs.is_none());
+    assert_eq!(c.ip_source, IpSource::RemoteIp);
+    assert_eq!(c.message, None);
+    assert_eq!(c.status, 403);
+    assert_eq!(c.default_action, DefaultAction::Allow);
 }
 
 #[test]
 fn test_missing_both_lists() {
-    let mut config = IpRestrictionConfig::default();
-    let result = config.validate_and_init();
-    assert!(result.is_err());
-    assert!(result.unwrap_err().contains("At least one"));
+    assert!(IpRestrictionConfig::default()
+        .validation_error()
+        .unwrap()
+        .contains("At least one"));
 }
 
 #[test]
 fn test_invalid_status_code() {
     for status in [100, 101, 199, 600] {
-        let mut config = IpRestrictionConfig {
-            allow: Some(vec![group("default", &["192.168.1.1"])]),
-            status,
-            ..Default::default()
-        };
-        let result = config.validate_and_init();
-        assert!(result.is_err(), "{status}");
-        assert!(result.unwrap_err().contains("Invalid status code"));
+        let c = config(json!({"allowRefs":[{"name":"clients"}],"status":status}));
+        assert!(c.validation_error().unwrap().contains("Invalid status code"));
     }
 }
 
 #[test]
 fn test_allow_list_validation() {
-    let mut config = IpRestrictionConfig {
-        allow: Some(vec![group("default", &["192.168.1.1", "10.0.0.0/8"])]),
-        ..Default::default()
-    };
-    assert!(config.validate_and_init().is_ok());
+    assert!(config(json!({"allowRefs":[{"name":"clients"}]}))
+        .validation_error()
+        .is_none());
 }
 
 #[test]
 fn test_deny_list_validation() {
-    let mut config = IpRestrictionConfig {
-        deny: Some(vec![group("default", &["192.168.1.100", "172.16.0.0/12"])]),
-        ..Default::default()
-    };
-    assert!(config.validate_and_init().is_ok());
+    assert!(config(json!({"denyRefs":[{"name":"blocked"}]}))
+        .validation_error()
+        .is_none());
 }
 
 #[test]
 fn test_invalid_ip_is_partial_good() {
-    // Partial-good (CIDR-only leniency): a bad inline IP is skipped, not fatal.
-    let mut config = IpRestrictionConfig {
-        allow: Some(vec![group("default", &["192.168.1.256"])]),
-        ..Default::default()
-    };
-    let result = config.validate_and_init();
-    assert!(result.is_ok());
-    // All CIDRs invalid -> empty matcher (whitelist denies all), but still built.
-    assert!(config.allow_matcher.is_some());
+    let (matcher, errors) = build_grouped_matcher_partial(&[group("default", &["192.168.1.256"])]);
+    assert!(!errors.is_empty());
+    assert!(!matcher.contains(&"192.168.1.1".parse().unwrap()));
 }
 
 #[test]
 fn test_invalid_cidr_prefix_is_partial_good() {
-    // Partial-good (CIDR-only leniency): a bad CIDR prefix is skipped, not fatal.
-    let mut config = IpRestrictionConfig {
-        allow: Some(vec![group("default", &["192.168.1.0/33"])]),
-        ..Default::default()
-    };
-    let result = config.validate_and_init();
-    assert!(result.is_ok());
-    assert!(config.allow_matcher.is_some());
+    let (matcher, errors) = build_grouped_matcher_partial(&[group("default", &["192.168.1.0/33"])]);
+    assert!(!errors.is_empty());
+    assert!(!matcher.contains(&"192.168.1.1".parse().unwrap()));
 }
 
 #[test]
 fn validate_and_init_partial_keeps_good_inline_cidr() {
-    let mut cfg = IpRestrictionConfig {
-        allow: Some(vec![IpGroup {
-            name: "g".into(),
-            description: None,
-            cidrs: vec!["10.0.0.0/8".into(), "bad-ip".into()],
-        }]),
-        ..Default::default()
-    };
-    // No longer an Err on a bad inline CIDR (partial-good); structural checks still pass.
-    assert!(cfg.validate_and_init().is_ok());
-    assert!(cfg.allow_matcher.is_some());
-    // The good CIDR survived and matches.
-    assert!(is_allowed(cfg.check_ip_access(&"10.1.2.3".parse().unwrap())));
+    let (matcher, errors) = build_grouped_matcher_partial(&[group("g", &["10.0.0.0/8", "bad-ip"])]);
+    assert!(!errors.is_empty());
+    assert!(matcher.contains(&"10.1.2.3".parse().unwrap()));
 }
 
 #[test]
 fn test_allow_list_access() {
-    let mut config = IpRestrictionConfig {
-        allow: Some(vec![group("default", &["192.168.1.0/24", "10.0.0.1"])]),
-        ..Default::default()
-    };
-    config.validate_and_init().unwrap();
-
-    assert!(is_allowed(config.check_ip_access(&"192.168.1.50".parse().unwrap())));
-    assert!(is_allowed(config.check_ip_access(&"10.0.0.1".parse().unwrap())));
-
-    // Not in allow list -> DenyByWhitelistMiss
+    let a = [group("default", &["192.168.1.0/24", "10.0.0.1"])];
+    for ip in ["192.168.1.50", "10.0.0.1"] {
+        assert!(is_allowed(decide(&a, &[], ip, DefaultAction::Allow)));
+    }
     assert!(matches!(
-        config.check_ip_access(&"8.8.8.8".parse().unwrap()),
+        decide(&a, &[], "8.8.8.8", DefaultAction::Allow),
         AccessDecision::DenyByWhitelistMiss
     ));
 }
 
 #[test]
 fn test_deny_list_access() {
-    let mut config = IpRestrictionConfig {
-        deny: Some(vec![group("default", &["192.168.1.100", "10.0.0.0/8"])]),
-        ..Default::default()
-    };
-    config.validate_and_init().unwrap();
-
-    assert!(matches!(
-        config.check_ip_access(&"192.168.1.100".parse().unwrap()),
-        AccessDecision::DenyByGroup(_)
-    ));
-    assert!(matches!(
-        config.check_ip_access(&"10.0.0.1".parse().unwrap()),
-        AccessDecision::DenyByGroup(_)
-    ));
-
-    // Not in deny list -> Default(Allow)
-    assert!(is_allowed(config.check_ip_access(&"8.8.8.8".parse().unwrap())));
+    let d = [group("default", &["192.168.1.100", "10.0.0.0/8"])];
+    for ip in ["192.168.1.100", "10.0.0.1"] {
+        assert!(matches!(
+            decide(&[], &d, ip, DefaultAction::Allow),
+            AccessDecision::DenyByGroup(_)
+        ));
+    }
+    assert!(is_allowed(decide(&[], &d, "8.8.8.8", DefaultAction::Allow)));
 }
 
 #[test]
 fn test_allow_deny_combination() {
-    let mut config = IpRestrictionConfig {
-        allow: Some(vec![group("a", &["10.0.0.0/8"])]),
-        deny: Some(vec![group("b", &["10.0.0.100"])]),
-        ..Default::default()
-    };
-    config.validate_and_init().unwrap();
-
-    assert!(is_allowed(config.check_ip_access(&"10.0.0.50".parse().unwrap())));
+    let a = [group("a", &["10.0.0.0/8"])];
+    let d = [group("b", &["10.0.0.100"])];
+    assert!(is_allowed(decide(&a, &d, "10.0.0.50", DefaultAction::Allow)));
     assert!(matches!(
-        config.check_ip_access(&"10.0.0.100".parse().unwrap()),
+        decide(&a, &d, "10.0.0.100", DefaultAction::Allow),
         AccessDecision::DenyByGroup(_)
     ));
-    // Outside allow list -> DenyByWhitelistMiss
     assert!(matches!(
-        config.check_ip_access(&"8.8.8.8".parse().unwrap()),
+        decide(&a, &d, "8.8.8.8", DefaultAction::Allow),
         AccessDecision::DenyByWhitelistMiss
     ));
 }
 
 #[test]
 fn test_default_action_deny() {
-    let mut config = IpRestrictionConfig {
-        deny: Some(vec![group("default", &["192.168.1.100"])]),
-        default_action: DefaultAction::Deny,
-        ..Default::default()
-    };
-    config.validate_and_init().unwrap();
-
+    let d = [group("default", &["192.168.1.100"])];
     assert!(matches!(
-        config.check_ip_access(&"192.168.1.100".parse().unwrap()),
+        decide(&[], &d, "192.168.1.100", DefaultAction::Deny),
         AccessDecision::DenyByGroup(_)
     ));
-    // Not in deny list -> Default(Deny)
     assert!(matches!(
-        config.check_ip_access(&"8.8.8.8".parse().unwrap()),
+        decide(&[], &d, "8.8.8.8", DefaultAction::Deny),
         AccessDecision::Default(DefaultAction::Deny)
     ));
 }
 
 #[test]
 fn test_ipv6_support() {
-    let mut config = IpRestrictionConfig {
-        allow: Some(vec![group("default", &["::1", "2001:db8::/32"])]),
-        ..Default::default()
-    };
-    config.validate_and_init().unwrap();
-
-    assert!(is_allowed(config.check_ip_access(&"::1".parse().unwrap())));
-    assert!(is_allowed(config.check_ip_access(&"2001:db8::1".parse().unwrap())));
+    let a = [group("default", &["::1", "2001:db8::/32"])];
+    for ip in ["::1", "2001:db8::1"] {
+        assert!(is_allowed(decide(&a, &[], ip, DefaultAction::Allow)));
+    }
     assert!(matches!(
-        config.check_ip_access(&"2001:db9::1".parse().unwrap()),
+        decide(&a, &[], "2001:db9::1", DefaultAction::Allow),
         AccessDecision::DenyByWhitelistMiss
     ));
 }
 
 #[test]
 fn test_empty_allow_list() {
-    let mut config = IpRestrictionConfig {
-        allow: Some(vec![]),
-        ..Default::default()
-    };
-    let result = config.validate_and_init();
-    assert!(result.is_err());
-    assert!(result.unwrap_err().contains("At least one"));
+    assert!(config(json!({"allowRefs":[]}))
+        .validation_error()
+        .unwrap()
+        .contains("At least one"));
 }
 
 #[test]
 fn test_serialization() {
-    let config = IpRestrictionConfig {
-        allow: Some(vec![group("a", &["192.168.1.0/24"])]),
-        deny: Some(vec![group("b", &["192.168.1.100"])]),
-        ip_source: IpSource::DirectPeerIp,
-        message: Some("Access denied".to_string()),
-        status: 404,
-        default_action: DefaultAction::Deny,
-        ..Default::default()
-    };
-
-    let json = serde_json::to_value(&config).unwrap();
-    let deserialized: IpRestrictionConfig = serde_json::from_value(json).unwrap();
-
-    assert_eq!(
-        deserialized.allow.as_ref().map(|v| v.len()),
-        config.allow.as_ref().map(|v| v.len())
+    let c = config(
+        json!({"allowRefs":[{"name":"a"}],"denyRefs":[{"name":"b"}],"ipSource":"DirectPeerIp","message":"Access denied","status":404,"defaultAction":"deny"}),
     );
-    assert_eq!(
-        deserialized.deny.as_ref().map(|v| v.len()),
-        config.deny.as_ref().map(|v| v.len())
+    let back: IpRestrictionConfig = serde_json::from_value(serde_json::to_value(c).unwrap()).unwrap();
+    assert_eq!(back.refs.allow_refs.unwrap()[0].name, "a");
+    assert_eq!(back.refs.deny_refs.unwrap()[0].name, "b");
+    assert_eq!(back.ip_source, IpSource::DirectPeerIp);
+    assert_eq!(back.message, Some("Access denied".into()));
+    assert_eq!(back.status, 404);
+    assert_eq!(back.default_action, DefaultAction::Deny);
+}
+
+#[test]
+fn whitelist_miss_returns_specific_variant() {
+    assert!(matches!(
+        decide(
+            &[group("office", &["192.168.0.0/16"])],
+            &[],
+            "10.0.0.1",
+            DefaultAction::Allow
+        ),
+        AccessDecision::DenyByWhitelistMiss
+    ));
+}
+
+#[test]
+fn deny_priority_returns_deny_group() {
+    assert!(
+        matches!(decide(&[group("allow_all", &["10.0.0.0/8"])],&[group("blocked", &["10.0.0.100/32"])],"10.0.0.100",DefaultAction::Allow),AccessDecision::DenyByGroup(ref g) if &**g=="blocked")
     );
-    assert_eq!(deserialized.allow.as_ref().unwrap()[0].name, "a");
-    assert_eq!(deserialized.deny.as_ref().unwrap()[0].name, "b");
-    assert_eq!(deserialized.ip_source, IpSource::DirectPeerIp);
-    assert_eq!(deserialized.message, Some("Access denied".to_string()));
-    assert_eq!(deserialized.status, 404);
-    assert_eq!(deserialized.default_action, DefaultAction::Deny);
+}
+
+#[test]
+fn allow_mode_true_when_only_allow_refs_set() {
+    assert!(config(json!({"allowRefs":[{"name":"corp"}]})).refs.allow_mode());
+}
+
+#[test]
+fn refs_only_config_passes_validation() {
+    assert!(config(json!({"denyRefs":[{"name":"blocklist"}]}))
+        .validation_error()
+        .is_none());
+}
+
+#[test]
+fn with_refs_deny_union_blocks_referenced_ip() {
+    let first = build_grouped_matcher_partial(&[group("first", &["1.1.1.1"])]).0;
+    let second = build_grouped_matcher_partial(&[group("reflist", &["2.2.2.2"])]).0;
+    for ip in ["1.1.1.1", "2.2.2.2"] {
+        assert!(matches!(
+            evaluate_ip_access_multi(
+                [&first, &second],
+                [],
+                false,
+                &DefaultAction::Allow,
+                &ip.parse().unwrap()
+            ),
+            AccessDecision::DenyByGroup(_)
+        ));
+    }
+    assert!(is_allowed(evaluate_ip_access_multi(
+        [&first, &second],
+        [],
+        false,
+        &DefaultAction::Allow,
+        &"8.8.8.8".parse().unwrap()
+    )));
+}
+
+#[test]
+fn allow_refs_missing_denies_all_in_allow_mode() {
+    let c = config(json!({"allowRefs":[{"name":"missing"}]}));
+    assert!(matches!(
+        evaluate_ip_access_multi(
+            [],
+            [],
+            c.refs.allow_mode(),
+            &c.default_action,
+            &"8.8.8.8".parse().unwrap()
+        ),
+        AccessDecision::DenyByWhitelistMiss
+    ));
 }
 
 #[test]
@@ -261,135 +263,4 @@ fn ip_source_uses_exact_pascal_case_and_rejects_old_values() {
             "{old} must be rejected"
         );
     }
-}
-
-#[test]
-fn whitelist_miss_returns_specific_variant() {
-    let mut config = IpRestrictionConfig {
-        allow: Some(vec![IpGroup {
-            name: "office".into(),
-            description: None,
-            cidrs: vec!["192.168.0.0/16".into()],
-        }]),
-        deny: None,
-        ip_source: IpSource::RemoteIp,
-        message: None,
-        status: 403,
-        default_action: DefaultAction::Allow,
-        allow_refs: None,
-        deny_refs: None,
-        allow_matcher: None,
-        deny_matcher: None,
-    };
-    config.validate_and_init().unwrap();
-    let outside: IpAddr = "10.0.0.1".parse().unwrap();
-    assert!(matches!(
-        config.check_ip_access(&outside),
-        AccessDecision::DenyByWhitelistMiss
-    ));
-}
-
-#[test]
-fn deny_priority_returns_deny_group() {
-    let mut config = IpRestrictionConfig {
-        allow: Some(vec![IpGroup {
-            name: "allow_all".into(),
-            description: None,
-            cidrs: vec!["10.0.0.0/8".into()],
-        }]),
-        deny: Some(vec![IpGroup {
-            name: "blocked".into(),
-            description: None,
-            cidrs: vec!["10.0.0.100/32".into()],
-        }]),
-        ip_source: IpSource::RemoteIp,
-        message: None,
-        status: 403,
-        default_action: DefaultAction::Allow,
-        allow_refs: None,
-        deny_refs: None,
-        allow_matcher: None,
-        deny_matcher: None,
-    };
-    config.validate_and_init().unwrap();
-    let blocked: IpAddr = "10.0.0.100".parse().unwrap();
-    match config.check_ip_access(&blocked) {
-        AccessDecision::DenyByGroup(g) => assert_eq!(&*g, "blocked"),
-        other => panic!("expected DenyByGroup, got {:?}", other),
-    }
-}
-
-#[test]
-fn allow_mode_true_when_only_allow_refs_set() {
-    use crate::resources::edgion_config_data::EdgionConfigDataRef;
-    let config = IpRestrictionConfig {
-        allow_refs: Some(vec![EdgionConfigDataRef {
-            name: "corp".into(),
-            namespace: None,
-            ..Default::default()
-        }]),
-        ..Default::default()
-    };
-    assert!(config.allow_mode());
-}
-
-#[test]
-fn refs_only_config_passes_validation() {
-    use crate::resources::edgion_config_data::EdgionConfigDataRef;
-    let mut config = IpRestrictionConfig {
-        deny_refs: Some(vec![EdgionConfigDataRef {
-            name: "blocklist".into(),
-            namespace: None,
-            ..Default::default()
-        }]),
-        ..Default::default()
-    };
-    // No inline allow/deny, only denyRefs -> must be accepted now.
-    assert!(config.validate_and_init().is_ok());
-    assert_eq!(PluginValidation::validation_error(&config), None);
-}
-
-#[test]
-fn with_refs_deny_union_blocks_referenced_ip() {
-    use crate::matcher::ip_cidr_helpers::build_grouped_matcher;
-    let mut config = IpRestrictionConfig {
-        deny: Some(vec![group("inline", &["1.1.1.1"])]),
-        ..Default::default()
-    };
-    config.validate_and_init().unwrap();
-    let ref_deny = build_grouped_matcher(&[group("reflist", &["2.2.2.2"])]).unwrap();
-    // referenced deny IP
-    assert!(matches!(
-        config.check_ip_access_with_refs(&"2.2.2.2".parse().unwrap(), &[&ref_deny], &[]),
-        AccessDecision::DenyByGroup(_)
-    ));
-    // inline deny IP still blocked
-    assert!(matches!(
-        config.check_ip_access_with_refs(&"1.1.1.1".parse().unwrap(), &[&ref_deny], &[]),
-        AccessDecision::DenyByGroup(_)
-    ));
-    // unrelated IP allowed (default Allow)
-    assert!(is_allowed(config.check_ip_access_with_refs(
-        &"8.8.8.8".parse().unwrap(),
-        &[&ref_deny],
-        &[]
-    )));
-}
-
-#[test]
-fn allow_refs_missing_denies_all_in_allow_mode() {
-    use crate::resources::edgion_config_data::EdgionConfigDataRef;
-    let config = IpRestrictionConfig {
-        allow_refs: Some(vec![EdgionConfigDataRef {
-            name: "missing".into(),
-            namespace: None,
-            ..Default::default()
-        }]),
-        ..Default::default()
-    };
-    // allow_mode true, but no resolved allow matchers -> whitelist miss (fail-closed).
-    assert!(matches!(
-        config.check_ip_access_with_refs(&"8.8.8.8".parse().unwrap(), &[], &[]),
-        AccessDecision::DenyByWhitelistMiss
-    ));
 }

@@ -45,6 +45,17 @@ struct ResultSession {
 }
 #[async_trait]
 impl PluginSession for ResultSession {
+    fn ip_acl_decision(
+        &self,
+        _acl: &edgion_gateway::plugins::common::ip_acl::CompiledIpAcl,
+        _ip: Option<std::net::IpAddr>,
+    ) -> edgion_resources::resources::edgion_plugins::AccessDecision {
+        panic!("unexpected session operation")
+    }
+    fn mark_ip_body_denied(&mut self) {
+        panic!("unexpected session operation")
+    }
+
     fn waf(&mut self) -> &mut dyn edgion_gateway::plugins::runtime::traits::WafSessionCapability {
         panic!("unexpected session operation")
     }

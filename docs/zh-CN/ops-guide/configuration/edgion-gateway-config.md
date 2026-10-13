@@ -20,6 +20,22 @@ EdgionGatewayConfig 是 Edgion 的 Cluster 作用域 CRD（`edgion.io/v1alpha1`�
 通过 GatewayClass 的 `parametersRef` 字段关联 EdgionGatewayConfig：
 
 ```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: default
+spec:
+  visibility: Cluster
+  data:
+    type: IpList
+    config:
+      items:
+      - name: private-ranges
+        cidrs:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+---
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
 metadata:
@@ -54,9 +70,9 @@ spec:
     attempts: 2
 
   realIp:
-    trustedIps:
-      - name: private-ranges
-        cidrs: ["10.0.0.0/8", "172.16.0.0/12"]
+    trustedIpRefs:
+      - name: realip-proxies-1
+        namespace: default
     realIpHeader: "X-Forwarded-For"
     recursive: true
 
@@ -184,19 +200,18 @@ spec:
 
 ### spec.realIp
 
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `trustedIps` | `Array<IpGroup>` | `[]` | 可信代理 IP 分组列表 |
-| `realIpHeader` | `String` | `X-Forwarded-For` | 从哪个请求头提取真实 IP |
-| `recursive` | `Boolean` | `true` | 是否从右向左遍历 header，跳过可信代理，取第一个非信任 IP |
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `trustedIpRefs` | 必填 | 非空、有序的 IpList 引用，每项必须包含 `name` 和显式 `namespace` |
+| `realIpHeader` | `X-Forwarded-For` | 有效 HTTP 字段名，不超过 256 字节 |
+| `recursive` | `true` | 从右到左遍历有效跳点；全部可信时返回最左侧有效跳点 |
+| `maxTrustedHops` | 无限制 | 递归跳数上限；0 在首个可信跳点停止；非递归模式忽略此值 |
 
-`trustedIps` 中每一项都是一个 `IpGroup` 对象：`name`（必填；≤63 字符，字符集 `[a-zA-Z0-9._-]`，首尾必须是字母或数字，在列表内唯一）、`description`（可选）、`cidrs`（必填；非空的 IP 或 CIDR 字符串列表）。
+IP/CIDR 集合存储在 IpList 的 `items`（IpGroup）中。启用 ReferenceGrant 校验时，全局 EGC 只能读取当前为 `Cluster` 可见的列表；命名空间级授权和出站 TLS 的管理权限例外不适用。关闭校验仍检查资源身份、类型及启用状态。
 
-提取逻辑：从右向左遍历 `realIpHeader`，跳过任一 `trustedIps` 分组中的地址，取第一个非信任 IP。
+全部引用可用后才信任 PROXY 协议处理后的对端和转发链。列表缺失、禁用、未授权或类型错误时，本次解析使用连接对端。一次快照覆盖所有跳点；列表内容、可见性、删除及恢复在后续解析中生效，不复制 CIDR，也不重建监听器。中央编译器保留有效条目并排除无效条目；空列表或全部无效的列表不信任任何地址。
 
-`spec.realIp` 在准入阶段按与 RealIp 插件相同的规则校验：`trustedIps` 为空、CIDR 格式错误或重复、`IpGroup` 名称超出 label-value 字符集，或 `realIpHeader` 不是合法的 HTTP header 字段名时，资源会给出 `Accepted=False` 与 `reason=Invalid`。在 Kubernetes 路径上，CRD 已带有 header 名称的 `pattern` 与 `maxLength`，格式错误的 `realIpHeader` 会被 API Server 直接拒绝。
-
-Controller preparse 只告警、不阻止发布，因此 Gateway 侧做了同样的兜底校验：`spec.realIp` 非法时记录一条 error 日志，并按 `realIp` 未配置的方式运行（不做真实 IP 提取）。注意 `RealIpExtractor` 本身对单条 CIDR 是宽容的（跳过非法项并告警），所以此前会被静默降级的 CIDR 错误，现在会让整个 `realIp` 块失效。
+实际进入类型化发布的配置若存在固有错误，会报告 `Accepted=False` 并关闭全局提取。Kubernetes 的必填项、最小数量、命名空间及请求头约束也可能直接在 API admission 拒绝更新；该更新不会到达 Controller/Gateway，上一份已获准的配置保持有效。混合旧内联 `trustedIps` 或未知字段会被窄范围保留，并使进入类型化发布的配置失效。CRD 仅在 realIp 对象内保留未知字段，让类型化无效状态替换旧运行时，而不是静默剪除旧字段。干净的新一代配置可恢复。共享 EGC 状态仅描述固有结构，不写入部署本地的列表可用性。非递归模式使用最右侧有效跳点（若其不可信），否则使用连接对端。
 
 ### spec.securityProtect
 
@@ -297,14 +312,28 @@ TCP/UDP/TLS 和请求镜像在每次选择端点时使用当前 Service 覆盖�
 当 Gateway 部署在负载均衡器后面时，配置可信代理 IP 以正确提取客户端真实 IP：
 
 ```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: default
 spec:
-  realIp:
-    trustedIps:
+  visibility: Cluster
+  data:
+    type: IpList
+    config:
+      items:
       - name: private-ranges
         cidrs:
-          - "10.0.0.0/8"
-          - "172.16.0.0/12"
-          - "192.168.0.0/16"
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+---
+spec:
+  realIp:
+    trustedIpRefs:
+      - name: realip-proxies-1
+        namespace: default
     realIpHeader: "X-Forwarded-For"
     recursive: true
 ```

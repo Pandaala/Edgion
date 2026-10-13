@@ -150,6 +150,7 @@ kubectl rollout status deployment/edgion-controller -n edgion-system --timeout=1
 # 4. GatewayClass + EdgionGatewayConfig
 # ------------------------------------------------------------------
 echo "[4] Apply GatewayClass and EdgionGatewayConfig"
+kubectl apply -f "$MANIFESTS_DIR/edgion-gateway-config-iplist.yaml"
 kubectl apply -f "$MANIFESTS_DIR/edgion-gateway-config.yaml"
 kubectl apply -f "$MANIFESTS_DIR/gatewayclass.yaml"
 

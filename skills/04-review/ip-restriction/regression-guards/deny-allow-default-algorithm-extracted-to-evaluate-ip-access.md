@@ -1,44 +1,38 @@
 ---
 name: deny-allow-default-algorithm-extracted-to-evaluate-ip-access
-description: Use when reviewing findings that propose extracting the duplicated "deny → allow → default" IP evaluation algorithm in IpRestrictionConfig::check_ip_access, ConnectionIpRestrictionRules::check_ip, and ProfileRules::check_ip into a shared free function; documents the consolidation done as plugins-stream-F012.
+description: Current reference-only IpList ownership, actual-owner binding, canonical borrowed matching and preserved historical review evidence.
 knowledge_type: regression-guards
 ---
 
-# Deny→allow→default IP evaluation algorithm — CONSOLIDATED
+# Canonical borrowed ACL evaluation
 
-## Conclusion
+`evaluate_ip_access_multi` is the single deny/allow/default algorithm. It consumes
+ordered borrowed matcher iterators, keeps non-empty authored allowRefs as whitelist
+intent even when no source is available, and returns the existing matched group Arc.
+The first matching source wins; within that source longest prefix wins. Deny precedes
+allow and lazy traversal stops as soon as the decision is known.
 
-The byte-identical body that walked `deny_matcher` → `allow_matcher` → `default_action` and returned `AccessDecision::{DenyByGroup, AllowByGroup, DenyByWhitelistMiss, Default}` was duplicated across three call sites:
+`CompiledIpAcl` binds actual HTTP/connection/TLS/GCIR field loans to the shared
+IpListReadKey/read-policy core. `EdgionConfigDataSnapshot::ip_list_matchers` visits
+those keys lazily and checks current identity/type/enable/visibility/permission.
+There is no raw String-key live projector, consumer-owned inline Option matcher,
+temporary Vec/SmallVec matcher union, or legacy Resources wrapper. The unused
+single-matcher `evaluate_ip_access` facade is removed after its final callers.
 
-- `IpRestrictionConfig::check_ip_access` (`edgion-resources/src/resources/edgion_plugins/plugin_configs/ip_restriction.rs`) — HTTP layer
-- `ConnectionIpRestrictionRules::check_ip` (`edgion-resources/src/resources/edgion_stream_plugins/connection_ip_restriction_rules.rs`) — L4 stream layer
-- `ProfileRules::check_ip` (`edgion-resources/src/resources/edgion_stream_plugins/global_connection_ip_restriction.rs`) — L4 `GlobalConnectionIpRestriction` profile
+The evaluator does not choose client address, fetch resources, decide availability
+policy, or map protocol responses. HTTP uses its existing configured response;
+Stream uses `access_decision_to_stream_result`. ACL absence is optional omission:
+allow intent still denies misses, and deny-only absence uses its configured default.
+Required Condition/Geo dependencies and trust fallback retain their distinct roles.
 
-All three accept `&IpAddr` and operate on the same `Option<IpRadixMatcher>` matchers and `DefaultAction` type. Consolidated into a single free function `evaluate_ip_access(deny, allow, default_action, ip) -> AccessDecision` in `edgion-resources/src/matcher/ip_cidr_helpers.rs`. Each of the three call sites is now a 5-line delegation. Closed as `plugins-stream-F012`, 2026-05-27.
+Historical `plugins-stream-F012` (2026-05-27) consolidated three identical local
+matcher algorithms. `ARCH-028` first removed temporary borrowed-reference unions,
+then the reference-only redesign removed the three local wrapper owners entirely.
+The earlier F003 tradeoff is historical; it does not justify duplicate IP ownership.
 
-Re-reports of the form "deny → allow → default body is copy-pasted across the three IP-restriction methods" should verify `evaluate_ip_access` is still the single mapper before being filed.
+Tests must prove first-source versus narrower later source, inner longest prefix,
+Arc identity, early iterator termination, deny priority, IPv4/IPv6/mapped addresses,
+whitelist misses and defaults. This removes intermediate matching collections;
+it makes no whole-path allocation-free or numeric performance claim.
 
-## Why this collapsed cleanly (unlike sibling `plugins-stream-F003`)
-
-This fix and the closed-as-tradeoff `plugins-stream-F003` look superficially similar — both involve duplicated bodies across HTTP and L4 IP-restriction code — but the cost/benefit verdict opposite for reasons that matter when classifying future findings:
-
-| Axis | F-012 (consolidated) | F-003 (kept inlined) |
-|---|---|---|
-| Sites | 3 | 2 |
-| Parameter types | Identical: `Option<&IpRadixMatcher>`, `&DefaultAction`, `&IpAddr` — already shared across the three structs | Different: `ConnectionIpRestrictionRules` vs `IpRestrictionConfig`, no shared trait |
-| Abstraction overhead | 1 free fn, ~22 lines incl. doc — no trait, no generics | Required new `ValidateAndInit` trait + 2 impls + generic helper, ~15 lines just for the abstraction |
-| Net code change | Net negative (~30 lines saved across the three method bodies vs ~22 lines added) | Single-digit net saving |
-| Drift risk | High — algorithm is on the data plane and any priority / variant change must touch all 3 | Low — `validate_and_init` is init-only; the wrapper can't abstract over the fail-closed divergence anyway |
-
-Rule of thumb when a "shared this duplication" finding arrives:
-- If the parameter types are **already identical** and a plain free fn suffices, ship it.
-- If consolidation forces a new trait/generic just to bridge type differences, treat it as a maintainability cost trade and apply `F-003`-style reasoning.
-
-## What `evaluate_ip_access` does NOT abstract
-
-- It does **not** subsume `access_decision_to_stream_result` (the `AccessDecision → StreamPluginResult` mapping consolidated in `plugins-stream-F001`). That function is the *stream-specific* wrapper around the `AccessDecision` returned here; the HTTP plugin still maps `AccessDecision` to an HTTP error response separately. The two refactors compose cleanly: `evaluate_ip_access` produces the decision, and each protocol's mapper turns it into a result. Do not file a follow-up "consolidate into one mega-function" finding — the boundary is intentional.
-- It does **not** clone the matchers. The three call sites pass `Option<&IpRadixMatcher>` via `as_ref()`; only the final `default_action.clone()` (an enum copy, used only on the no-deny / no-allow fall-through) remains. Hot-path allocation behaviour is unchanged.
-
-## Resolution references
-
-- `plugins-stream-F012` — 2026-05-27.
+Canonical contract: [grouped lists](../../../01-architecture/00-common/04-grouped-list-pattern.md).

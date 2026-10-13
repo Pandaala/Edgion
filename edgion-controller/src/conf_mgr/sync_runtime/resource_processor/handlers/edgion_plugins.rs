@@ -562,13 +562,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             condition_false(condition_types::RESOLVED_REFS, reason, message, generation)
         };
 
-        let inline_errors = collect_inline_ip_entry_errors(ep);
         let mut partial_messages = Vec::new();
-        if !inline_errors.is_empty() {
-            partial_messages.push(edgion_resources::matcher::ip_cidr_helpers::format_entry_errors(
-                &inline_errors,
-            ));
-        }
         partial_messages.extend(request_access_policy_resolution_warnings(ep));
         if let Some(waf) = ep.spec.waf.as_ref() {
             partial_messages.extend(waf.resolution_warnings.iter().cloned());
@@ -1164,27 +1158,6 @@ async fn requeue_referencing_resources(ep: &EdgionPlugins, ctx: &HandlerContext)
     for resource_ref in refs {
         ctx.requeue(resource_ref.kind_str(), resource_ref.resource_key()).await;
     }
-}
-
-/// Collect partial-good entry errors over every inline IpRestriction allow/deny in the
-/// request stage (the only stage IpRestriction refs are scanned; see get_ip_list_ref_keys).
-fn collect_inline_ip_entry_errors(ep: &EdgionPlugins) -> Vec<edgion_resources::matcher::ip_cidr_helpers::EntryError> {
-    use edgion_resources::matcher::ip_cidr_helpers::collect_entry_errors;
-    let mut errs = Vec::new();
-    let Some(plugins) = &ep.spec.request_plugins else {
-        return errs;
-    };
-    for entry in plugins {
-        if let EdgionPlugin::IpRestriction(ref config) = entry.plugin {
-            if let Some(g) = &config.allow {
-                errs.extend(collect_entry_errors(g));
-            }
-            if let Some(g) = &config.deny {
-                errs.extend(collect_entry_errors(g));
-            }
-        }
-    }
-    errs
 }
 
 fn request_access_policy_resolution_warnings(ep: &EdgionPlugins) -> Vec<String> {

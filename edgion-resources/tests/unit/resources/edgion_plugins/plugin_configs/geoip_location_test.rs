@@ -1,12 +1,32 @@
 use super::*;
+use crate::resources::edgion_config_data::EdgionConfigDataRef;
+use crate::resources::edgion_plugins::ip_reference_set::IpReferenceSet;
 use crate::resources::edgion_plugins::plugin_configs::geo_rule::{GeoDimFacts, GeoRule, GeoRuleKey, GeoRuleSource};
 
 fn rule(source: GeoRuleSource, key: GeoRuleKey, values: &[&str]) -> GeoRule {
     GeoRule {
         source,
         key,
-        values: values.iter().map(|s| s.to_string()).collect(),
-        cidr_matcher: None,
+        values: if key == GeoRuleKey::Cidr {
+            Vec::new()
+        } else {
+            values.iter().map(|s| s.to_string()).collect()
+        },
+        cidr: if key == GeoRuleKey::Cidr {
+            IpReferenceSet {
+                ip_refs: values
+                    .iter()
+                    .map(|_| EdgionConfigDataRef {
+                        name: "networks".into(),
+                        namespace: None,
+                        ref_denied: None,
+                    })
+                    .collect(),
+                ..Default::default()
+            }
+        } else {
+            Default::default()
+        },
     }
 }
 
@@ -35,6 +55,7 @@ fn parse_only_config_is_rejected_at_l4() {
 fn rule_mode_without_fail_open_is_rejected() {
     let cfg = GeoIpLocationConfig {
         deny_rule_groups: vec![GeoRuleGroup {
+            invalid_input: false,
             name: None,
             rules: vec![rule(GeoRuleSource::DirectPeerIp, GeoRuleKey::Country, &["RU"])],
         }],
@@ -49,6 +70,7 @@ fn rule_mode_with_fail_open_is_valid() {
     let mut cfg = GeoIpLocationConfig {
         fail_open: Some(false),
         deny_rule_groups: vec![GeoRuleGroup {
+            invalid_input: false,
             name: None,
             rules: vec![rule(GeoRuleSource::DirectPeerIp, GeoRuleKey::Country, &["RU"])],
         }],
@@ -62,6 +84,7 @@ fn remote_ip_rejected_in_stream_layer() {
     let cfg = GeoIpLocationConfig {
         fail_open: Some(false),
         deny_rule_groups: vec![GeoRuleGroup {
+            invalid_input: false,
             name: None,
             rules: vec![rule(GeoRuleSource::RemoteIp, GeoRuleKey::Country, &["RU"])],
         }],
@@ -74,9 +97,11 @@ fn remote_ip_rejected_in_stream_layer() {
 #[test]
 fn deny_beats_allow_and_allow_miss_denies_under_default_allow() {
     let mut cfg = GeoIpLocationConfig {
+        invalid_input: false,
         fail_open: Some(false),
         default_action: DefaultAction::Allow,
         deny_rule_groups: vec![GeoRuleGroup {
+            invalid_input: false,
             name: Some("block-moscow".into()),
             rules: vec![
                 rule(GeoRuleSource::DirectPeerIp, GeoRuleKey::City, &["Moscow"]),
@@ -84,6 +109,7 @@ fn deny_beats_allow_and_allow_miss_denies_under_default_allow() {
             ],
         }],
         allow_rule_groups: vec![GeoRuleGroup {
+            invalid_input: false,
             name: Some("office".into()),
             rules: vec![rule(GeoRuleSource::DirectPeerIp, GeoRuleKey::Cidr, &["10.0.0.0/8"])],
         }],
@@ -99,7 +125,10 @@ fn deny_beats_allow_and_allow_miss_denies_under_default_allow() {
         },
         ..Default::default()
     };
-    assert_eq!(cfg.decide(&deny_ctx), GeoDecision::Deny);
+    assert_eq!(
+        cfg.decide(&deny_ctx, |_, _, _, ip| cidr_contains(ip)),
+        GeoDecision::Deny
+    );
 
     // Neither deny nor allow hit -> allow configured and missed -> Deny.
     let miss_ctx = GeoRuleContext {
@@ -110,7 +139,10 @@ fn deny_beats_allow_and_allow_miss_denies_under_default_allow() {
         },
         ..Default::default()
     };
-    assert_eq!(cfg.decide(&miss_ctx), GeoDecision::Deny);
+    assert_eq!(
+        cfg.decide(&miss_ctx, |_, _, _, ip| cidr_contains(ip)),
+        GeoDecision::Deny
+    );
 
     // Allow hit -> Allow.
     let allow_ctx = GeoRuleContext {
@@ -121,7 +153,10 @@ fn deny_beats_allow_and_allow_miss_denies_under_default_allow() {
         },
         ..Default::default()
     };
-    assert_eq!(cfg.decide(&allow_ctx), GeoDecision::Allow);
+    assert_eq!(
+        cfg.decide(&allow_ctx, |_, _, _, ip| cidr_contains(ip)),
+        GeoDecision::Allow
+    );
 }
 
 #[test]
@@ -134,13 +169,14 @@ fn default_action_deny_with_no_rule_groups_denies_everything() {
         default_action: DefaultAction::Deny,
         fail_open: Some(false),
         deny_rule_groups: vec![GeoRuleGroup {
+            invalid_input: false,
             name: None,
             rules: vec![rule(GeoRuleSource::DirectPeerIp, GeoRuleKey::Country, &["ZZ"])],
         }],
         ..Default::default()
     };
     let ctx = GeoRuleContext::default();
-    assert_eq!(cfg.decide(&ctx), GeoDecision::Deny);
+    assert_eq!(cfg.decide(&ctx, |_, _, _, ip| cidr_contains(ip)), GeoDecision::Deny);
 }
 
 /// Regression: an allow-group HIT is terminal and must not fall through
@@ -156,6 +192,7 @@ fn allow_group_hit_is_terminal_under_default_deny() {
         default_action: DefaultAction::Deny,
         fail_open: Some(false),
         allow_rule_groups: vec![GeoRuleGroup {
+            invalid_input: false,
             name: Some("cn-allow".into()),
             rules: vec![rule(GeoRuleSource::DirectPeerIp, GeoRuleKey::Country, &["CN"])],
         }],
@@ -168,7 +205,11 @@ fn allow_group_hit_is_terminal_under_default_deny() {
         },
         ..Default::default()
     };
-    assert_eq!(cfg.decide(&hit), GeoDecision::Allow, "an allow hit must allow");
+    assert_eq!(
+        cfg.decide(&hit, |_, _, _, ip| cidr_contains(ip)),
+        GeoDecision::Allow,
+        "an allow hit must allow"
+    );
     // A miss under the same config still denies (whitelist miss), and it
     // denies because of the miss, not because of `defaultAction`.
     let miss = GeoRuleContext {
@@ -178,7 +219,7 @@ fn allow_group_hit_is_terminal_under_default_deny() {
         },
         ..Default::default()
     };
-    assert_eq!(cfg.decide(&miss), GeoDecision::Deny);
+    assert_eq!(cfg.decide(&miss, |_, _, _, ip| cidr_contains(ip)), GeoDecision::Deny);
 }
 
 /// The same allow-hit terminality holds with `defaultAction: allow` — the
@@ -189,6 +230,7 @@ fn allow_group_miss_denies_even_under_default_allow() {
         default_action: DefaultAction::Allow,
         fail_open: Some(false),
         allow_rule_groups: vec![GeoRuleGroup {
+            invalid_input: false,
             name: Some("cn-allow".into()),
             rules: vec![rule(GeoRuleSource::DirectPeerIp, GeoRuleKey::Country, &["CN"])],
         }],
@@ -201,7 +243,7 @@ fn allow_group_miss_denies_even_under_default_allow() {
         },
         ..Default::default()
     };
-    assert_eq!(cfg.decide(&miss), GeoDecision::Deny);
+    assert_eq!(cfg.decide(&miss, |_, _, _, ip| cidr_contains(ip)), GeoDecision::Deny);
 }
 
 /// The failure this plugin most needs to be immune to: a mistyped
@@ -212,8 +254,9 @@ fn allow_group_miss_denies_even_under_default_allow() {
 #[test]
 fn mistyped_rule_group_key_is_rejected_not_degraded_to_parse_only() {
     let yaml = "defaultAction: allow\nfailOpen: false\ndenyRuleGroup:\n  - name: g\n    rules:\n      - source: DirectPeerIp\n        key: country\n        values: [\"RU\"]\n";
-    let e = serde_yaml::from_str::<GeoIpLocationConfig>(yaml).expect_err("a mistyped rule-group key must be rejected");
-    assert!(e.to_string().contains("denyRuleGroup"), "unexpected error: {e}");
+    let config = serde_yaml::from_str::<GeoIpLocationConfig>(yaml).unwrap();
+    assert!(config.check_fields(false).is_some());
+    assert!(config.invalid_input);
 }
 
 /// Parse-only remains reachable the only way it should be: by actually
@@ -230,6 +273,7 @@ fn cidr_only_config_needs_no_geo_facts() {
     let cfg = GeoIpLocationConfig {
         fail_open: Some(false),
         allow_rule_groups: vec![GeoRuleGroup {
+            invalid_input: false,
             name: Some("office".into()),
             rules: vec![rule(GeoRuleSource::DirectPeerIp, GeoRuleKey::Cidr, &["10.0.0.0/8"])],
         }],
@@ -245,6 +289,7 @@ fn country_rule_needs_geo_facts() {
     let cfg = GeoIpLocationConfig {
         fail_open: Some(false),
         deny_rule_groups: vec![GeoRuleGroup {
+            invalid_input: false,
             name: None,
             rules: vec![rule(GeoRuleSource::DirectPeerIp, GeoRuleKey::Country, &["RU"])],
         }],
@@ -259,6 +304,7 @@ fn country_rule_needs_geo_facts() {
 fn check_fields_and_validate_and_init_agree_on_error_text() {
     let cfg = GeoIpLocationConfig {
         deny_rule_groups: vec![GeoRuleGroup {
+            invalid_input: false,
             name: None,
             rules: vec![rule(GeoRuleSource::DirectPeerIp, GeoRuleKey::Country, &["RU"])],
         }],
@@ -270,4 +316,33 @@ fn check_fields_and_validate_and_init_agree_on_error_text() {
     let gateway_err = cfg.clone().validate_and_init(false).err();
     assert_eq!(controller_err, gateway_err);
     assert!(controller_err.unwrap().contains("failOpen"));
+}
+
+fn cidr_contains(ip: std::net::IpAddr) -> bool {
+    let mut builder = edgion_algo::matcher::radix_ip::IpRadixMatcherBuilder::new();
+    builder.insert("10.0.0.0/8", "private").unwrap();
+    builder.insert("203.0.113.5/32", "host").unwrap();
+    builder.build().unwrap().contains(&ip)
+}
+
+#[test]
+fn config_and_group_unknown_presence_cannot_turn_invalid_policy_into_parse_only() {
+    for value in [
+        serde_json::json!(null),
+        serde_json::json!([]),
+        serde_json::json!({"rejected":"payload"}),
+    ] {
+        let config: GeoIpLocationConfig =
+            serde_json::from_value(serde_json::json!({"invalidInput":false,"denyRuleGroup":value})).unwrap();
+        assert!(config.check_fields(false).is_some());
+        let roundtrip: GeoIpLocationConfig = serde_json::from_value(serde_json::to_value(config).unwrap()).unwrap();
+        assert!(roundtrip.check_fields(false).is_some());
+        let group:GeoRuleGroup=serde_json::from_value(serde_json::json!({"rules":[{"source":"DirectPeerIp","key":"country","values":["US"]}],"geoipRefs":null,"invalidInput":false})).unwrap();
+        assert!(group.check_fields(false).is_some());
+        let encoded = serde_json::to_value(group).unwrap();
+        assert!(encoded.get("geoipRefs").is_none());
+        assert_eq!(encoded["invalidInput"], true);
+    }
+    let clean: GeoIpLocationConfig = serde_json::from_value(serde_json::json!({})).unwrap();
+    assert!(clean.check_fields(false).is_none());
 }

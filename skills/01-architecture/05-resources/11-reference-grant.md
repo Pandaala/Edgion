@@ -97,3 +97,15 @@ for grant-change revalidation. See the
 - Same-namespace refs are always allowed regardless of `visibility`.
 
 See [15-edgion-config-data.md — Cross-Namespace Reference Grants](15-edgion-config-data.md#cross-namespace-reference-grants) for the full mechanism, data-plane fail semantics, and status reason strings.
+
+### Live IpList read proofs
+
+An absent `refDenied` is not a positive authorization proof. Controller-owned IP
+slot metadata distinguishes intrinsic SameNamespace, current-visibility ClusterOnly,
+GrantAuthorized, ValidationDisabled and Denied. SameNamespace requires actual namespace
+equality; the three cross-namespace scopes require an actual cross-namespace target.
+Missing cross-namespace targets default to ClusterOnly until positive Grant processing;
+a later private target cannot become readable under a stale absence marker. ClusterOnly
+checks current raw visibility from the same snapshot as membership. Existing Grant
+revocation/requeue latency remains; this is not an atomic cross-store Grant transaction.
+ValidationDisabled changes permission policy only, never identity/type/enable checks.

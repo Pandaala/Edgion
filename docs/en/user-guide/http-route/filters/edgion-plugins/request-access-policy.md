@@ -14,7 +14,7 @@ Each profile contains `requiredRuleGroups`. Every group must pass (AND). Within 
 
 One group may mix all three rule types. This directly models alternatives such as an internal client IP or an authenticated vendor callback.
 
-Inline IPs and all usable `ipRefs` in one complete IP rule are expanded by the Controller and compiled into one radix matcher. `configRefs` import typed `RequestAccessUrlAllowList` data. Missing, disabled, wrong-type, or unpermitted IP/URL data refs are ignored individually and reported through `PartiallyInvalid`; valid siblings continue to work. ConfigData and Secret changes dynamically requeue the owning `EdgionPlugins` resource.
+IP rules accept only `ipRefs`; IPs and CIDRs belong in IpList `items[].cidrs`. The Gateway compiles each IpList once and evaluates referenced matchers from one dispatch snapshot. Primary IP membership is positive only: a primary `negate` field is rejected, including `false` or `null`. Supplemental shared IP Conditions still support negation. `configRefs` import typed `RequestAccessUrlAllowList` data. Missing, disabled, wrong-type, or unpermitted IP/URL data refs are ignored individually and reported through `PartiallyInvalid`; valid siblings continue to work. IpList content changes affect the retained runtime directly; authorization and imported URL/credential changes still requeue the owning resource. If every optional RAP IP reference is unavailable, the successful union is empty: primary membership is false, while a negated supplemental IP Condition is true. The supplemental set remains constrained by the positive primary gate.
 
 The optional supplemental `conditions` field uses the same bounded ConditionSet
 as plugin `run` / `skip`: a top-level `allOf`, or an `anyOf` of direct

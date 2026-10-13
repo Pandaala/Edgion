@@ -91,5 +91,5 @@ arrays are each individually small.)
 
 The inventory tags each metric `self` or `business`, but that split is documentation
 only (there is no runtime `category` label). A few `business` metrics
-(`ip_deny_entries_skipped`, `connection_rate_limit_redis_failure`, `lb_degrade_selections_total`) are
+(`connection_rate_limit_redis_failure`, `lb_degrade_selections_total`) are
 alerted here as operational health — the category tag is not an alerting boundary.

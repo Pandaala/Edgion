@@ -1,9 +1,4 @@
-# DELIBERATELY MALFORMED (unknown-field negative test):
-# "denys" is a typo for the real field "deny". This exercises the plain
-# nested-object unknown-key case: the schema walker must report exactly
-# "requestPlugins[0].config.denys", while the resource stays Accepted: True
-# (the warn-not-reject contract) because a valid "allow" entry
-# keeps IpRestrictionConfig::validation_error satisfied.
+# Deliberate advisory typo: denyRefss instead of denyRefs. Valid allowRefs keep Accepted=True.
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -11,15 +6,11 @@ metadata:
   namespace: edgion-test
 spec:
   requestPlugins:
-    - enable: true
-      type: IpRestriction
-      config:
-        ipSource: RemoteIp
-        allow:
-          - name: office
-            cidrs:
-              - "10.0.0.0/8"
-        denys:
-          - name: blocked
-            cidrs:
-              - "1.2.3.4/32"
+  - enable: true
+    type: IpRestriction
+    config:
+      ipSource: RemoteIp
+      allowRefs:
+      - name: acl-uf-ipr-allow
+      denyRefss:
+      - name: acl-uf-ipr-deny

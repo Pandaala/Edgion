@@ -27,7 +27,7 @@ errors use `Invalid`.
 
 ### parse
 
-- **Cross-PM ref registration**: first `clear_refs_from` clears this resource's old refs in `edgion_config_data_refs`, then iterate each Stage 1 `EdgionStreamPlugin::GlobalConnectionIpRestriction` entry, registering `edgion_config_data_ref.namespace/name` as the cluster_pm_key with value `"EdgionStreamPlugins:<this_ns>/<this_name>"`
+- **Cross-PM ref registration**: first `clear_refs_from` clears this resource's old refs in `edgion_config_data_refs`, then observe actual Condition/RealIp/ACL/Geo/Selector sites without clearing between passes, registering each target namespace/name as the cluster_pm_key with value `"EdgionStreamPlugins:<this_ns>/<this_name>"`
 - This way, when the referenced GCIR PM changes, the PM handler's `requeue_pm_referrers` will requeue this ESP and refresh ResolvedRefs
 
 ### on_delete
@@ -40,13 +40,13 @@ Uses `k8s_openapi::Condition`, writing three conditions:
 
 - **`Accepted`**: True (reason=Accepted) when there are no validation errors;
   current code still emits `LegacySchemaDeprecated` for the removal debt above,
-  and `Invalid` for current-schema errors. It stays `True` when inline IP lists
+  and `Invalid` for current-schema errors. Referenced IpList validation is separate; it stays `True` when referenced IP lists
   have bad entries (partial-good; see `PartiallyInvalid` below).
 - **`ResolvedRefs`**: iterates all EdgionConfigData references:
   - `GlobalConnectionIpRestriction.activeProfileRef` (→ Selector): must exist as a `Selector` EdgionConfigData. If `ref_denied` is set (cross-ns without grant / target `visibility: Namespace` without a `ReferenceGrant`): reason `RefNotPermitted`. If missing or wrong-type: reason `InvalidEdgionConfigDataRef`.
   - `IpRestriction.allowRefs`/`denyRefs` (Stage 1 + Stage 2) and GCIR per-profile `ProfileRules.allowRefs`/`denyRefs` (→ IpList): each named `IpList` EdgionConfigData must exist and be enabled. Denied cross-ns ref → reason `RefNotPermitted`; missing/disabled/wrong-type → reason `InvalidEdgionConfigDataRef`.
   - Stage 2 `tls_route_plugins` `IpRestriction` entries are checked here as well.
-- **`PartiallyInvalid`**: set when `IpRestriction` (Stage 1 or Stage 2) or GCIR `ProfileRules` inline `allow`/`deny` groups contain bad entries (invalid CIDR, empty group, cross-group duplicate CIDR, duplicate/invalid group name). `status=True`/`reason=RuleInvalid` when bad entries exist (message lists them); `status=False`/`reason=AllRulesValid` when clean. The plugin still loads — valid entries compile and the connection filter operates normally. A skipped inline **deny** entry from `IpRestriction` (Stage 1 or Stage 2) increments `edgion_ip_deny_entries_skipped_total{scope="stream_l4"|"tls_route"}` (IpRestriction HTTP/L4/TLS-route only; GCIR per-profile deny is not metered by this counter — it uses `record_conn_ip_restriction_event`). Blacklist hole = loud metric. Exception: if the structural guards fire (both allow+deny empty with no refs, or GCIR `ProfileRules` `Some(vec![])` on an inline allow/deny), `Accepted` is set `False/Invalid` — those are structural misconfigurations, not bad-CIDR cases.
+- **`PartiallyInvalid`**: old consumer-side CIDR diagnostics are cleared. Central IpList owns entry-level partial-good validation; Stream/TLS/GCIR policies contain only references. Removed inline fields are structural invalid input and publish an always-deny generation.
 
 ## Gateway-side processing
 
@@ -71,3 +71,9 @@ See [scoped publication](../../04-review/plugin-runtime/regression-guards/scoped
 | EdgionStreamPlugins ← Route resources | HTTPRoute/GRPCRoute/TCPRoute/TLSRoute | association reference | Route resources may reference Stream plugins |
 | EdgionStreamPlugins → EdgionConfigData | EdgionConfigData | `GlobalConnectionIpRestriction.activeProfileRef` (→ Selector) | Cross-ns refs gated by ReferenceGrant + target `visibility`; denied ref → `ref_denied` → `ResolvedRefs=False/RefNotPermitted` |
 | EdgionStreamPlugins → EdgionConfigData | EdgionConfigData | `IpRestriction.allowRefs`/`denyRefs` (Stage 1 + Stage 2); GCIR per-profile `ProfileRules.allowRefs`/`denyRefs` (→ IpList) | Cross-ns refs gated by ReferenceGrant + target `visibility`; denied cross-ns ref → `RefNotPermitted`; missing/disabled/wrong-type → `InvalidEdgionConfigDataRef` |
+
+## Reference-only ACL ownership
+
+Connection IpRestriction, TLS-route IpRestriction and GCIR ProfileRules own ordered allowRefs/denyRefs and scalar policy. IpList alone owns IpGroups and CIDR compilation. Cold constructors require actual field loans and validated side/domain/source/target/slot proofs before cache reuse. Runtime callbacks borrow authorized matchers from one scoped snapshot; GCIR Selector selection uses that same view. Missing optional ACL sources are omitted; nonempty authored allowRefs retain whitelist intent and good siblings remain usable.
+
+Controller passive diagnostics and recovery edges include disabled standalone ACL fields, preserving status and requeue behavior. All imported executable proof/negative metadata is cleared every generation; only valid executable sites receive positive read proof. Passive observation grants no Gateway execution permission. Registry clearing happens once before all reference families are added; apply/delete use the existing serial queue.

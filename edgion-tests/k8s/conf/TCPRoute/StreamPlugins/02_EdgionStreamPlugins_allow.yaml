@@ -8,8 +8,6 @@ spec:
   plugins:
     - type: IpRestriction
       config:
-        allow:
-          - name: allow-all
-            cidrs:
-              - "0.0.0.0/0"
+        allowRefs:
+          - name: acl-tcp-allow-all-allow-65220eb7b7
         defaultAction: allow

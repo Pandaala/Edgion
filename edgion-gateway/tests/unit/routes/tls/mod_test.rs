@@ -195,15 +195,24 @@ fn gateway_only_empty_exact_listener_updates_block_and_restore_wildcard_route() 
     assert!(select_tls_route(&manager, &blocked, &key, "api.example.com").is_none());
     assert!(Arc::ptr_eq(&route_table, &manager.load_route_table()));
 }
-fn stage1_entry() -> StreamPluginEntry {
-    serde_yaml::from_str("type: IpRestriction\nconfig:\n  deny:\n    - name: blocked\n      cidrs: [127.0.0.0/8]\n")
-        .unwrap()
+fn stage_acl_list(name: &str, cidr: &str) {
+    let store = crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store();
+    let data=serde_json::from_value(serde_json::json!({"metadata":{"name":name,"namespace":"tls-stage-contract"},"spec":{"data":{"type":"IpList","config":{"items":[{"name":"blocked","cidrs":[cidr]}]}}}})).unwrap();
+    store.insert_raw_for_test(format!("tls-stage-contract/{name}"), Arc::new(data));
 }
-
+fn stage1_entry() -> StreamPluginEntry {
+    stage_acl_list("stage1-blocked", "127.0.0.0/8");
+    serde_yaml::from_str("type: IpRestriction\nconfig:\n  denyRefs: [{name: stage1-blocked}]\n").unwrap()
+}
 fn stage2_entry(deny: bool) -> TlsRoutePluginEntry {
-    let cidr = if deny { "127.0.0.0/8" } else { "192.0.2.0/24" };
+    let (name, cidr) = if deny {
+        ("stage2-blocked", "127.0.0.0/8")
+    } else {
+        ("stage2-miss", "192.0.2.0/24")
+    };
+    stage_acl_list(name, cidr);
     serde_yaml::from_str(&format!(
-        "type: IpRestriction\nconfig:\n  ipSource: DirectPeerIp\n  deny:\n    - name: blocked\n      cidrs: [{cidr}]\n"
+        "type: IpRestriction\nconfig:\n  ipSource: DirectPeerIp\n  denyRefs: [{{name: {name}}}]\n"
     ))
     .unwrap()
 }

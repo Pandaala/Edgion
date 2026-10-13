@@ -52,14 +52,14 @@ Clear all references for this EdgionPlugins in SecretRefManager and ServiceRefMa
 
 Two Gateway-API-style conditions (`k8s_openapi::Condition` type):
 
-- **`Accepted`**: True (reason=Accepted) when there are no validation_errors; False (reason=Invalid) when errors exist. Stays `True` even when inline IP lists have bad entries (partial-good; see `PartiallyInvalid` below).
+- **`Accepted`**: True (reason=Accepted) when there are no validation_errors; False (reason=Invalid) when errors exist. Referenced IpList entry errors belong to that target; removed inline ACL fields make the consumer invalid.
 - **`ResolvedRefs`**: checks credential-material references and EdgionConfigData cross-namespace refs:
   - Secret/ConfigMap material refs: readonly classifiers bind the current actual owning fields, validate identity/activity, authorize and query the exact target kind. Dependency registry strings are recovery indexes, never status authority. Fresh status works without parse; stale or disabled-field edges cannot authorize reads or add errors. Missing material reports `SecretNotFound` or `ConfigMapNotFound`. CredentialInjector reports its own missing/denied errors, and final exact deduplication emits one diagnostic for repeated fields. Classifier/field order determines stable messages; the shared priority helper selects the reason. Readonly classification does not register dependencies.
   - Enabled RequestMirror refs: require a core Service with a valid name and port. A missing target sets `ResolvedRefs=False/BackendNotFound`; cross-namespace authorization still uses ReferenceGrant and `RefNotPermitted`.
   - JWE credential content: a present Secret missing `data.secret`, containing invalid inner Base64 for `base64Secret`, or decoding to a non-32-byte A256GCM key sets `ResolvedRefs=False` with `MissingKeys` or `DecodeError`. The Gateway still publishes a fail-closed JWE runtime for that generation and never retains the prior key.
   - EdgionConfigData cross-ns refs (`overrideRef`, `RequestAccessPolicy.activeProfileRef`, WAF policyRef (→ WafPolicy) and plugin activeProfileRef (→ Selector), policy bundle references, RequestAccessPolicy nested IpList refs, `allowRefs`/`denyRefs`): if `ref_denied` is set on the ref (cross-ns without a matching `ReferenceGrant` and target `visibility ≠ Cluster`), → `ResolvedRefsError::RefNotPermitted` (reason `RefNotPermitted`). If the target is missing/disabled/wrong-type → reason `InvalidEdgionConfigDataRef`.
   - When all references resolve → True
-- **`PartiallyInvalid`**: reports independently skipped entries, including bad `IpRestriction` inline `allow`/`deny` groups and optional WAF profile bundle references. A required WAF bundle failure remains a whole-profile failure. `status=True`/`reason=RuleInvalid` identifies skipped entries without exposing rule source; `status=False`/`reason=AllRulesValid` means none were skipped. A skipped inline IP **deny** entry additionally increments `edgion_ip_deny_entries_skipped_total{scope="http"}`. An entirely empty IP restriction remains a structural error.
+- **`PartiallyInvalid`**: reports independently skipped optional WAF profile bundle references. IpRestriction no longer owns CIDR entries; central IpList reports its own partial-good diagnostics. Required WAF bundle failures remain whole-profile failures.
 
 Most legacy plugin Secret resolvers currently report only Secret **existence** through `ResolvedRefs`, not every required data key. JWE and the other explicitly documented typed resolvers are exceptions: they project usable-material failures into `ResolvedRefs` without turning dependency content into an operator-facing `Accepted` error.
 
@@ -164,3 +164,14 @@ binding/expiry and retained-generation behavior remain unchanged. This is
 in-process evidence, not live delivery or global source-identity closure; see
 [coordinator progress](../../../tasks/pending/resource-reference-contract/07-progress.md)
 for final gates, independent reviews and commit status.
+
+### Live referenced IP conditions
+
+All shared IP Condition leaves and RAP primary IP fields carry `ipRefs` only.
+The Controller clears resolver-only read proofs on every effective owning node,
+then recomputes active slots from exact source/target identities. The Gateway
+checks source metadata, root/leaf/slot order and scope consistency before binding
+original nodes or reusing an entry. The temporary cold address index cannot escape
+construction and stores no payload or matcher. Removed inline keys become a
+monotone typed invalid marker, preserving publication/recovery through conf_sync.
+Primary RAP `negate` presence is invalid; supplemental Condition negation remains.

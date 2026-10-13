@@ -1775,7 +1775,8 @@ fn canary_plugin_construction() {
     let plugin = EdgionPlugin::Canary(config);
 
     // Verify request stage returns Ok(Some(...)).
-    let result = PluginRuntime::create_request_filter_from_edgion(&plugin, "default", None, "default/test-plugins/#0");
+    let result =
+        PluginRuntime::create_request_filter_from_edgion(&plugin, "default", None, "default/test-plugins/#0", None);
     assert!(
         matches!(result, CreateResult::Ok(Some(_))),
         "Canary should construct in request stage"
@@ -1816,6 +1817,7 @@ fn ai_proxy_is_constructed_only_for_request_stage() {
         "tenant-a",
         plugin.body_requirement(edgion_resources::resources::edgion_plugins::BodyStage::Request),
         "tenant-a/plugins/#0",
+        None,
     );
     let CreateResult::Ok(Some(filter)) = request else {
         panic!("AiProxy must construct in request stage");
@@ -2070,7 +2072,15 @@ impl PluginRuntime {
         namespace: &str,
         resource_key: &str,
     ) -> Vec<String> {
-        self.add_request_entries(entries, namespace, resource_key, &mut EntryCache::default(), None, None)
+        self.add_request_entries(
+            entries,
+            namespace,
+            resource_key,
+            &mut EntryCache::default(),
+            None,
+            None,
+            None,
+        )
     }
 }
 
@@ -2104,7 +2114,7 @@ fn config_data_owner_and_target_guards_precede_populated_cache() {
     for (kind, config) in [
         (
             "RequestAccessPolicy",
-            serde_json::json!({"defaultProfile":"base","profiles":{"base":{"requiredRuleGroups":[{"name":"all","anyOfRules":[{"name":"ip","type":"remoteIp","config":{"ips":["0.0.0.0/0"]}}]}]}},"activeProfileRef":{"name":"selector"}}),
+            serde_json::json!({"defaultProfile":"base","profiles":{"base":{"requiredRuleGroups":[{"name":"all","anyOfRules":[{"name":"ip","type":"remoteIp","config":{"ipRefs":[{"name":"networks"}]}}]}]}},"activeProfileRef":{"name":"selector"}}),
         ),
         (
             "Canary",
@@ -2155,7 +2165,7 @@ fn config_data_owner_and_target_guards_precede_populated_cache() {
 async fn invalid_rap_selector_keeps_entry_condition_and_policy_failure_scope() {
     for mode in ["invoked", "condition", "bypass"] {
         let mut entry:RequestFilterEntry=serde_json::from_value(serde_json::json!({"type":"RequestAccessPolicy","config":{
-            "defaultProfile":"base","activeProfileRef":{"name":"bad/name"},"profiles":{"base":{"requiredRuleGroups":[{"name":"all","anyOfRules":[{"name":"ip","type":"remoteIp","config":{"ips":["0.0.0.0/0"]}}]}]}}
+            "defaultProfile":"base","activeProfileRef":{"name":"bad/name"},"profiles":{"base":{"requiredRuleGroups":[{"name":"all","anyOfRules":[{"name":"ip","type":"remoteIp","config":{"ipRefs":[{"name":"networks"}]}}]}]}}
         }})).unwrap();
         if mode == "condition" {
             entry.conditions=Some(serde_json::from_value(serde_json::json!({"run":{"allOf":[{"type":"keyExist","key":{"type":"header","name":"x-run-rap"}}]}})).unwrap());
@@ -2234,6 +2244,7 @@ impl PluginRuntime {
             cache,
             Some(owner),
             bindings.as_ref(),
+            None,
         )
     }
 }
@@ -3271,7 +3282,6 @@ async fn ext_proc_actual_tls_preflight_precedes_cache_and_fresh_generations_reco
 
 #[test]
 fn wasm_actual_tls_precedes_all_three_stage_caches() {
-    use edgion_resources::resources::refs::plugin_fields::PreparedPluginReferences;
     for stage in [
         "requestPlugins",
         "upstreamResponseFilterPlugins",
@@ -3284,17 +3294,7 @@ fn wasm_actual_tls_precedes_all_three_stage_caches() {
         let owner: edgion_resources::EdgionPlugins = serde_json::from_value(value.clone()).unwrap();
         let compile = |owner: &edgion_resources::EdgionPlugins, cache: &mut EntryCache| {
             let mut runtime = PluginRuntime::new();
-            let mut errors = runtime.add_resource_filters_with_cache(owner, cache);
-            if let Some(entries) = owner.spec.upstream_response_body_filter_plugins.as_ref() {
-                let prepared = PreparedPluginReferences::from_plugins(owner);
-                let binding = prepared.bind(owner).unwrap();
-                errors.extend(runtime.add_from_upstream_response_body_filters_with_cache(
-                    entries,
-                    "default",
-                    cache,
-                    Some(&binding),
-                ));
-            }
+            let errors = runtime.add_resource_filters_with_cache(owner, cache);
             (runtime, errors)
         };
         let count = |runtime: &PluginRuntime| match stage {
@@ -3432,6 +3432,7 @@ fn conditional_consumers_keep_capability_through_entry_cache() {
                     "apps",
                     &mut cache,
                     None,
+                    None,
                 )
             } else {
                 runtime.add_resource_filters_with_cache(&owner, &mut cache)
@@ -3440,4 +3441,270 @@ fn conditional_consumers_keep_capability_through_entry_cache() {
             assert!(runtime.requires_complete_request_body(), "{stage}");
         }
     }
+}
+
+#[test]
+fn required_ip_preflight_covers_short_circuit_outer_skip_and_every_stage_on_retained_runtime() {
+    use crate::plugins::runtime::edgion_config_data::EdgionConfigDataStore;
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use edgion_common::conf_sync::traits::ConfHandler;
+    use std::collections::HashMap;
+    let ip = |name: &str| serde_json::json!({"type":"remoteIpMatch","ipRefs":[{"name":name}]});
+    let always = serde_json::json!({"type":"probability","ratio":1.0});
+    let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"whole-view","namespace":"apps"},"spec":{
+            "requestPlugins":[
+                {"type":"RequestHeaderModifier","config":{"set":[]},"conditions":{"skip":{"allOf":[always]},"run":{"anyOf":[always,ip("entry")]}}},
+                {"type":"RequestRestriction","config":{"mode":"Deny","conditions":{"allOf":[ip("deny")]}}},
+                {"type":"RequestRestriction","config":{"mode":"Allow","conditions":{"allOf":[ip("optional")]}}},
+                {"type":"RequestBodyBuffer","config":{},"body":{"conditions":{"run":{"allOf":[ip("body")]}}}}
+            ],
+            "upstreamResponseFilterPlugins":[{"type":"ResponseHeaderModifier","config":{"set":[]},"conditions":{"run":{"allOf":[ip("sync")]}}}],
+            "upstreamResponseBodyFilterPlugins":[{"type":"BandwidthLimit","config":{"rate":"1mb"},"conditions":{"run":{"allOf":[ip("chunk")]}}}]
+        }
+    })).unwrap();
+    let compiled = crate::plugins::http::compile_plugins(&owner);
+    assert!(compiled.is_activatable, "{:?}", compiled.preparse_errors);
+    let runtime = compiled.plugin_runtime.clone();
+    assert_eq!(runtime.required_ip.len(), 5);
+    let store = EdgionConfigDataStore::new();
+    let mut resources = HashMap::new();
+    for name in ["entry", "deny", "body", "sync", "chunk"] {
+        let data = serde_json::from_value(serde_json::json!({"metadata":{"name":name,"namespace":"apps"},"spec":{"data":{"type":"IpList","config":{"items":[{"name":"main","cidrs":["192.0.2.0/24"]}]}}}})).unwrap();
+        resources.insert(format!("apps/{name}"), Arc::new(data));
+    }
+    for missing in [
+        None,
+        Some("entry"),
+        Some("deny"),
+        Some("body"),
+        Some("sync"),
+        Some("chunk"),
+        None,
+    ] {
+        let mut generation = resources.clone();
+        if let Some(name) = missing {
+            generation.remove(&format!("apps/{name}"));
+        }
+        store.full_set(&generation);
+        let view = store.capture_snapshot();
+        let mut session = MockPluginSession::new();
+        session.expect_ensure_config_data_view().times(1).return_const(());
+        session
+            .expect_ip_list_availability()
+            .returning(move |key| view.ip_list_availability(key));
+        assert_eq!(
+            runtime.ip_dependencies_available(&mut session),
+            missing.is_none(),
+            "{missing:?}"
+        );
+        assert!(
+            Arc::ptr_eq(&runtime, &compiled.plugin_runtime),
+            "IpList-only changes retain the plugin runtime"
+        );
+    }
+}
+
+#[tokio::test]
+async fn cold_reject_and_policy_block_precede_live_ip_dependency_attribution() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"priority","namespace":"apps"},"spec":{"requestPlugins":[{
+            "type":"RequestHeaderModifier","config":{"set":[]},"conditions":{"run":{"allOf":[{"type":"remoteIpMatch","ipRefs":[{"name":"missing"}]}]}}
+        }]}
+    })).unwrap();
+    for block in [false, true] {
+        let mut runtime = PluginRuntime::new();
+        assert!(runtime
+            .add_resource_filters_with_cache(&owner, &mut EntryCache::default())
+            .is_empty());
+        runtime.invalid_plugins.record_non_retainable("OriginalStaticFailure");
+        runtime.seal_fail_closed();
+        if block {
+            runtime.record_policy_action(
+                "Mock",
+                edgion_resources::resources::plugin_policy::PluginPolicyAction::Block { status: 451 },
+            );
+            runtime.seal_plugin_policy();
+        }
+        let mut session = MockPluginSession::new();
+        session.expect_ensure_config_data_view().times(0);
+        assert!(runtime.ip_dependencies_available(&mut session));
+        let first = runtime.request_plugins_iter().next().unwrap();
+        assert_eq!(
+            first.name(),
+            if block {
+                "PluginPolicyBlock"
+            } else {
+                "RejectInvalidConfig"
+            }
+        );
+        let mut log = PluginLog::new(first.name());
+        let result = first.run_request(&mut session, &mut log).await;
+        assert!(
+            matches!(result, PluginRunningResult::ErrResponse { status, .. } if status == if block {451} else {500})
+        );
+    }
+}
+
+#[tokio::test]
+async fn empty_response_stage_runners_still_preflight_required_ip_view_before_headers() {
+    let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"empty-response-gate","namespace":"b2-header-gate"},"spec":{"requestPlugins":[{
+            "type":"RequestHeaderModifier","config":{"set":[]},"conditions":{"run":{"allOf":[{"type":"remoteIpMatch","ipRefs":[{"name":"never-published-b2-header-list"}]}]}}
+        }]}
+    })).unwrap();
+    let compiled = crate::plugins::http::compile_plugins(&owner);
+    assert!(compiled.is_activatable);
+    assert_eq!(compiled.plugin_runtime.upstream_response_plugins_count(), 0);
+    assert_eq!(compiled.plugin_runtime.upstream_response_async_plugins_count(), 0);
+    for asynchronous in [false, true] {
+        let (mut session, _client) = plugin_test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        let mut response = ResponseHeader::build(200, None).unwrap();
+        if asynchronous {
+            compiled
+                .plugin_runtime
+                .run_upstream_response_plugins_async(&mut session, &mut ctx, &mut response)
+                .await;
+        } else {
+            compiled
+                .plugin_runtime
+                .run_upstream_response_plugins_sync(&mut session, &mut ctx, &mut response);
+        }
+        assert!(ctx.plugin_terminated());
+        assert_eq!(ctx.take_pending_response_local_reply().unwrap().0.status.as_u16(), 500);
+        assert!(!ctx.response_write_started());
+    }
+}
+
+#[test]
+fn geo_required_inventory_precedes_outer_skip_and_content_only_recovery() {
+    use crate::plugins::runtime::edgion_config_data::EdgionConfigDataStore;
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use edgion_common::conf_sync::traits::ConfHandler;
+    let owner:edgion_resources::EdgionPlugins=serde_json::from_value(serde_json::json!({"metadata":{"name":"geo","namespace":"apps"},"spec":{"requestPlugins":[{"type":"GeoIpLocation","conditions":{"skip":{"allOf":[{"type":"probability","ratio":1.0}]}},"config":{"failOpen":true,"denyRuleGroups":[{"rules":[{"source":"DirectPeerIp","key":"country","values":["RU"]},{"source":"DirectPeerIp","key":"cidr","ipRefs":[{"name":"first"},{"name":"last"}]}]}]}}]}})).unwrap();
+    let compiled = crate::plugins::http::compile_plugins(&owner);
+    assert!(compiled.is_activatable, "{:?}", compiled.preparse_errors);
+    let runtime = compiled.plugin_runtime.clone();
+    assert_eq!(runtime.required_ip.len(), 1);
+    let store = EdgionConfigDataStore::new();
+    for ready in [false, true, false, true] {
+        let mut resources = std::collections::HashMap::new();
+        for name in if ready { vec!["first", "last"] } else { vec!["first"] } {
+            let data=serde_json::from_value(serde_json::json!({"metadata":{"name":name,"namespace":"apps"},"spec":{"data":{"type":"IpList","config":{"items":[{"name":"main","cidrs":["0.0.0.0/0"]}]}}}})).unwrap();
+            resources.insert(format!("apps/{name}"), Arc::new(data));
+        }
+        store.full_set(&resources);
+        let view = store.capture_snapshot();
+        let mut session = MockPluginSession::new();
+        session.expect_ensure_config_data_view().times(1).return_const(());
+        session
+            .expect_ip_list_availability()
+            .returning(move |key| view.ip_list_availability(key));
+        assert_eq!(runtime.ip_dependencies_available(&mut session), ready);
+        assert!(Arc::ptr_eq(&runtime, &compiled.plugin_runtime));
+    }
+}
+
+#[tokio::test]
+async fn acl_published_legacy_generation_replaces_valid_and_clean_recovers() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    let authored = serde_json::json!({"metadata":{"name":"acl-generations","namespace":"apps"},"spec":{"requestPlugins":[{
+        "type":"IpRestriction","config":{"allowRefs":[{"name":"networks"}],"status":403}
+    }]}});
+    let owner: edgion_resources::EdgionPlugins = serde_json::from_value(authored.clone()).unwrap();
+    let mut cache = EntryCache::default();
+    let mut valid = PluginRuntime::new();
+    assert!(valid.add_resource_filters_with_cache(&owner, &mut cache).is_empty());
+    valid.seal_fail_closed();
+    let original = valid.request_plugins[0].clone();
+    let mut retained = PluginRuntime::new();
+    assert!(retained.add_resource_filters_with_cache(&owner, &mut cache).is_empty());
+    assert!(Arc::ptr_eq(&original, &retained.request_plugins[0]));
+    for (field, value) in [("allow", serde_json::Value::Null), ("deny", serde_json::json!([]))] {
+        let mut input = authored.clone();
+        input["spec"]["requestPlugins"][0]["config"][field] = value;
+        let invalid: edgion_resources::EdgionPlugins = serde_json::from_value(input).unwrap();
+        // Exercise the real conf-sync shape, not a deserialization error that
+        // could leave an earlier admitted policy running.
+        let transported: edgion_resources::EdgionPlugins =
+            serde_json::from_str(&serde_json::to_string(&invalid).unwrap()).unwrap();
+        let mut rejected = PluginRuntime::new();
+        assert!(!rejected
+            .add_resource_filters_with_cache(&transported, &mut cache)
+            .is_empty());
+        rejected.seal_fail_closed();
+        let filter = rejected.request_plugins_iter().next().unwrap();
+        assert_eq!(filter.name(), "RejectInvalidConfig");
+        let mut session = MockPluginSession::new();
+        session.expect_ensure_config_data_view().times(0);
+        session.expect_ip_acl_decision().times(0);
+        let mut log = PluginLog::new(filter.name());
+        assert!(matches!(
+            filter.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse { status: 500, .. }
+        ));
+        let mut clean = PluginRuntime::new();
+        assert!(clean.add_resource_filters_with_cache(&owner, &mut cache).is_empty());
+        clean.seal_fail_closed();
+        assert_eq!(clean.request_plugins_iter().next().unwrap().name(), "IpRestriction");
+        // Cache belongs to the original immutable source: invalid input must
+        // not execute it, but the exact clean original may reuse its bundle.
+        // Actual publisher source replacement has separate generation coverage.
+        assert!(Arc::ptr_eq(&original, &clean.request_plugins[0]));
+    }
+}
+
+#[tokio::test]
+async fn acl_and_required_condition_share_actual_dispatch_adapter_snapshot() {
+    use crate::plugins::runtime::conditions::ip_refs::IpConditionCompiler;
+    use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
+    use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
+    use crate::plugins::runtime::traits::session::PluginSession;
+    use edgion_resources::resources::edgion_plugins::AccessDecision;
+    let name = "b5-dispatch-shared-networks";
+    let store = get_global_edgion_config_data_store();
+    let data = |cidr: &str| {
+        Arc::new(serde_json::from_value(serde_json::json!({"metadata":{"name":name,"namespace":"apps"},"spec":{"data":{"type":"IpList","config":{"items":[{"name":"shared","cidrs":[cidr]}]}}}})).unwrap())
+    };
+    store.insert_raw_for_test(format!("apps/{name}"), data("192.0.2.0/24"));
+    let owner:edgion_resources::EdgionPlugins=serde_json::from_value(serde_json::json!({"metadata":{"name":"shared-dispatch","namespace":"apps"},"spec":{"requestPlugins":[{
+        "type":"IpRestriction","config":{"allowRefs":[{"name":name}]},"conditions":{"run":{"allOf":[{"type":"remoteIpMatch","ipRefs":[{"name":name}]}]}}
+    }]}})).unwrap();
+    let compiler = IpConditionCompiler::new(&owner).unwrap();
+    let EdgionPlugin::IpRestriction(config) = &owner.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+        unreachable!()
+    };
+    let acl = compiler.bind_acl(&config.refs).unwrap();
+    let mut runtime = PluginRuntime::new();
+    assert!(runtime
+        .add_resource_filters_with_cache(&owner, &mut EntryCache::default())
+        .is_empty());
+    assert_eq!(runtime.required_ip.len(), 1);
+    let key = &runtime.required_ip[0];
+    let ip = "192.0.2.1".parse().unwrap();
+    let mut session = session_from_request(b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n").await;
+    let mut ctx = EdgionHttpContext::new();
+    {
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        assert!(runtime.ip_dependencies_available(&mut adapter));
+        assert!(key.contains(&adapter, ip));
+        // Content publication races after whole-runtime preflight. Later ACL
+        // scalar access and nested filters on this adapter retain that view.
+        store.insert_raw_for_test(format!("apps/{name}"), data("198.51.100.0/24"));
+        adapter.ensure_config_data_view();
+        assert!(key.contains(&adapter, ip));
+        assert!(matches!(
+            adapter.ip_acl_decision(&acl, Some(ip)),
+            AccessDecision::AllowByGroup(_)
+        ));
+    }
+    let mut next = PingoraSessionAdapter::new(&mut session, &mut ctx);
+    assert!(runtime.ip_dependencies_available(&mut next));
+    assert!(!key.contains(&next, ip));
+    assert!(matches!(
+        next.ip_acl_decision(&acl, Some(ip)),
+        AccessDecision::DenyByWhitelistMiss
+    ));
 }

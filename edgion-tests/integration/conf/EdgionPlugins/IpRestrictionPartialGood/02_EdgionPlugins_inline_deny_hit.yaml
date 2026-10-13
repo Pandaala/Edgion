@@ -16,10 +16,7 @@ spec:
       config:
         ipSource: RemoteIp
         defaultAction: allow
-        deny:
-          - name: mixed-good-and-bad
-            cidrs:
-              - "127.0.0.0/8" # good — covers the client peer (127.0.0.1)
-              - "not-a-cidr"  # bad  — skipped (partial-good), not fatal
+        denyRefs:
+          - name: acl-ip-restriction-inline-de-deny-3d58b7ea62
         status: 403
         message: "IP is in inline partial-good block list"

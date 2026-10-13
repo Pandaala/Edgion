@@ -12,13 +12,5 @@ spec:
     - type: IpRestriction
       config:
         defaultAction: deny
-        allow:
-          - name: private-client-ranges
-            cidrs:
-              # Keep localhost for non-k8s environments.
-              - "127.0.0.0/8"
-              # K8s test-client source IP is typically Pod CIDR/private ranges.
-              # This still rejects 0.0.0.0, preserving the original regression intent.
-              - "10.0.0.0/8"
-              - "172.16.0.0/12"
-              - "192.168.0.0/16"
+        allowRefs:
+          - name: acl-tcp-allow-localhost-allow-005960c787

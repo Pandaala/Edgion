@@ -9,9 +9,7 @@ spec:
     type: IpRestriction
     config:
       ipSource: RemoteIp
-      allow:
-      - name: office
-        cidrs:
-        - 127.0.0.0/8
+      allowRefs:
+        - name: acl-ip-restriction-allow-mis-allow-065d3760ce
       status: 403
       message: IP not in allow list

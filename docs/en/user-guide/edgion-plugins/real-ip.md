@@ -24,6 +24,23 @@ This plugin implements the Nginx-style IP extraction algorithm, supporting trust
 
 ```yaml
 apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: production
+spec:
+  visibility: Namespace
+  data:
+    type: IpList
+    config:
+      items:
+      - name: private-ranges
+        cidrs:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+---
+apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: real-ip-basic
@@ -32,12 +49,9 @@ spec:
   requestPlugins:
     - type: RealIp
       config:
-        trustedIps:
-          - name: private-ranges
-            cidrs:
-              - "10.0.0.0/8"
-              - "172.16.0.0/12"
-              - "192.168.0.0/16"
+        trustedIpRefs:
+          - name: realip-proxies-1
+            namespace: production
         realIpHeader: "X-Forwarded-For"
         recursive: true
 ```
@@ -46,28 +60,25 @@ spec:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `trustedIps` | Array\<IpGroup\> | — (required) | List of trusted proxy IP groups |
+| `trustedIpRefs` | Array\<EdgionConfigDataRef\> | — (required) | Nonempty references to trusted proxy IpLists |
 | `realIpHeader` | String | `"X-Forwarded-For"` | Header name to extract the real IP from |
 | `recursive` | Boolean | `true` | Whether to enable recursive lookup (Nginx-style) |
-| `maxTrustedHops` | Integer | none (unlimited) | Cap on trusted-hop traversal when `recursive=true`. See [Security Trade-offs](#security-trade-offs-trustedips-and-maxtrustedhops) |
+| `maxTrustedHops` | Integer | none (unlimited) | Cap on trusted-hop traversal when `recursive=true`. See [Security Trade-offs](#security-trade-offs-trustediprefs-and-maxtrustedhops) |
 
-#### trustedIps
+#### trustedIpRefs
 
-List of trusted proxy IP groups. Corresponds to Nginx's `set_real_ip_from` directive.
+A Kubernetes update rejected by API admission for required references, minimum size, target namespace or header constraints never reaches the Controller/Gateway; the previous admitted generation remains active. Invalid-generation replacement below refers to input that reaches typed publication (for example FS input or preserved mixed legacy keys), not an API-rejected update.
 
-Each entry is an `IpGroup` object:
+References are ordered `EdgionConfigData` IpLists. Put IP/CIDR collections in each IpList's `items` (IpGroups), then reference them by `name` and optional `namespace`. HTTP plugin references default to the actual owning plugin namespace. Global `spec.realIp` references require an explicit namespace and current `Cluster` visibility when ReferenceGrant validation is enabled; namespaced grants do not authorize this cluster owner. Disabling that validation preserves identity, IpList type and enabled checks.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `name` | String | yes | Group name; ≤63 chars, charset `[a-zA-Z0-9._-]`, must start/end alphanumeric, unique within the list |
-| `description` | String | no | Optional human-readable description of the group |
-| `cidrs` | Array\<String\> | yes | Non-empty list of IP addresses or CIDR ranges |
+Every referenced list must be available before trusting the effective downstream peer or any forwarded hop. A missing, disabled, denied or wrong-type list disables trust for this decision and uses the PROXY-effective peer, even when another list matches. Content updates, deletion, visibility changes and restoration affect subsequent decisions without copying CIDRs into the consumer. One captured view covers the peer and all hops. Invalid entries in an otherwise valid IpList are excluded by the central partial-good compiler; an empty/all-invalid matcher trusts no addresses.
 
-Each `cidrs` entry supports:
+| Field | Meaning |
+| --- | --- |
+| `name` | Required IpList resource name |
+| `namespace` | HTTP: defaults to the owning namespace; global EGC: required |
 
-- Single IP addresses: `"192.168.1.1"`
-- CIDR ranges: `"10.0.0.0/8"`
-- IPv6: `"2001:db8::/32"`
+Removed inline `trustedIps` and unknown fields are invalid even when null or empty. Invalid policies that reach typed publication replace the previous generation with a sealed plugin failure or disable global extraction. A clean generation restores the policy. Global EGC `Accepted` reports intrinsic structure only, never deployment-local list availability.
 
 #### realIpHeader
 
@@ -99,27 +110,29 @@ unset.
 Enables recursive lookup mode. Corresponds to Nginx's `real_ip_recursive` directive.
 
 - `true` (default): Traverses the IP list in the header from right to left, finding the first non-trusted IP
-- `false`: Uses the rightmost IP in the header (the last proxy)
+- `false`: Uses the rightmost parsed hop if untrusted; otherwise uses the effective downstream peer. The hop cap is ignored.
 
 #### maxTrustedHops
 
 Cap on trusted-proxy hops to traverse when `recursive=true` (optional). Mirrors Envoy's `xff_num_trusted_hops`.
 
 - `null` (default): No cap — Nginx-compatible behavior, traverse right-to-left until the first non-trusted IP
+- `0`: Stops at the first trusted parsed hop; it does not mean unlimited.
 - `N` (>0): Skip at most `N` trusted IPs in the right-to-left walk; if all `N` are trusted, return the IP at position `N` even if trusted
 
 **When to set it?**
 
-`maxTrustedHops` is a **secondary defense** against the "`trustedIps` scoped too broadly + attacker reachable from that range" scenario (see [Security Trade-offs](#security-trade-offs-trustedips-and-maxtrustedhops) below). Recommended for production: set it to your **actual proxy-chain depth** (e.g., CDN → LB → Gateway = `2`).
+`maxTrustedHops` is a **secondary defense** against the "`trustedIpRefs` scoped too broadly + attacker reachable from that range" scenario (see [Security Trade-offs](#security-trade-offs-trustediprefs-and-maxtrustedhops) below). Recommended for production: set it to your **actual proxy-chain depth** (e.g., CDN → LB → Gateway = `2`).
 
-## Security Trade-offs: trustedIps and maxTrustedHops
+## Security Trade-offs: trustedIpRefs and maxTrustedHops
 
 ### Core Threat: XFF Depth Forgery Under Broad Trust CIDRs
 
-With `recursive=true` and no hop cap, if `trustedIps` is scoped too broadly (e.g., the entire `10.0.0.0/8`) and attackers can originate requests from within that range:
+With `recursive=true` and no hop cap, if `trustedIpRefs` is scoped too broadly (e.g., the entire `10.0.0.0/8`) and attackers can originate requests from within that range:
 
 ```text
-Config:  trustedIps: ["10.0.0.0/8"], recursive: true
+Config: trustedIpRefs: [{name: internal-proxies}], recursive: true
+Referenced IpList internal-proxies contains the broad CIDR 10.0.0.0/8.
 Attacker at 10.0.0.1 sends:
   X-Forwarded-For: 1.2.3.4, 10.0.0.99, 10.0.0.50
 
@@ -138,28 +151,55 @@ The attacker can then:
 
 ### Two Layers of Defense (configure both)
 
-**Layer 1 (primary): Scope `trustedIps` precisely**
+**Layer 1 (primary): Scope `trustedIpRefs` precisely**
 
-`trustedIps` **must list only the actual proxy egress IPs** — do not use broad internal CIDRs for convenience:
+The referenced IpLists **must contain only the actual proxy egress IPs** — do not use broad internal CIDRs for convenience:
 
 ```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: default
+spec:
+  visibility: Namespace
+  data:
+    type: IpList
+    config:
+      items:
+      - name: internal
+        cidrs:
+        - 10.0.0.0/8
+---
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-2
+  namespace: default
+spec:
+  visibility: Namespace
+  data:
+    type: IpList
+    config:
+      items:
+      - name: cloudflare
+        cidrs:
+        - 103.21.244.0/22
+        - 103.22.200.0/22
+        - 173.245.48.0/20
+      - name: internal-lb
+        description: Internal LB egress (single address)
+        cidrs:
+        - 10.1.0.10
+---
 # ❌ Bad: too broad — any internal request is treated as a trusted proxy
-trustedIps:
-  - name: internal
-    cidrs:
-      - "10.0.0.0/8"
-
+trustedIpRefs:
+  - name: realip-proxies-1
+    namespace: default
 # ✅ Good: only the actual proxies (Cloudflare origin ranges, specific internal LB)
-trustedIps:
-  - name: cloudflare
-    cidrs:
-      - "103.21.244.0/22"
-      - "103.22.200.0/22"
-      - "173.245.48.0/20"
-  - name: internal-lb
-    description: Internal LB egress (single address)
-    cidrs:
-      - "10.1.0.10"
+trustedIpRefs:
+  - name: realip-proxies-2
+    namespace: default
 ```
 
 **Layer 2 (secondary): Set `maxTrustedHops` as a hard ceiling**
@@ -167,21 +207,35 @@ trustedIps:
 Even if Layer 1 is misconfigured, set `maxTrustedHops = actual proxy-chain depth` to limit how far an attacker can push the result with a forged trusted-looking prefix:
 
 ```yaml
-trustedIps:
-  - name: cloudflare
-    cidrs:
-      - "103.21.244.0/22"   # Cloudflare (1 hop)
-  - name: internal-lb
-    cidrs:
-      - "10.1.0.10"         # Internal LB (1 hop)
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: default
+spec:
+  visibility: Namespace
+  data:
+    type: IpList
+    config:
+      items:
+      - name: cloudflare
+        cidrs:
+        - 103.21.244.0/22
+      - name: internal-lb
+        cidrs:
+        - 10.1.0.10
+---
+trustedIpRefs:
+  - name: realip-proxies-1
+    namespace: default
 maxTrustedHops: 2         # Only trust 2 hops; attacker cannot push result leftward
                           # by padding more "trusted" IPs
 ```
 
 ### When `maxTrustedHops` Can Be Omitted
 
-- `recursive: false`: has no effect (non-recursive takes rightmost only)
-- `trustedIps` is already tight to a handful of specific IPs / small CIDRs and is audited
+- `recursive: false`: has no effect (nonrecursive uses an untrusted rightmost hop, otherwise the peer)
+- the referenced IpLists contain only a handful of specific IPs / small CIDRs and is audited
 - Proxy chain is dynamic (e.g., service mesh scaling nodes) and a fixed hop count is not known — rely on Layer 1 only
 
 ### Comparison with Nginx / Envoy
@@ -199,7 +253,7 @@ Edgion follows the Nginx style by default (unlimited, backward-compatible) while
 ### Algorithm Flow
 
 ```text
-1. Check if downstream_peer_ip is in trustedIps
+1. Check if downstream_peer_ip is in trustedIpRefs
    ├─ No → Keep downstream_peer_ip as RemoteIp
    └─ Yes → Continue to step 2
 
@@ -208,9 +262,9 @@ Edgion follows the Nginx style by default (unlimited, backward-compatible) while
 
 3. Recursive lookup (if recursive=true)
    Traverse from right to left:
-   ├─ 192.168.1.1 → In trustedIps ✓ Continue
-   ├─ 198.51.100.2 → In trustedIps ✓ Continue
-   └─ 203.0.113.1 → Not in trustedIps ✗ This is the real IP!
+   ├─ 192.168.1.1 → In trustedIpRefs ✓ Continue
+   ├─ 198.51.100.2 → In trustedIpRefs ✓ Continue
+   └─ 203.0.113.1 → Not in trustedIpRefs ✗ This is the real IP!
 
 4. Update ctx.request_info.remote_ip (via set_remote_ip method)
 ```
@@ -231,13 +285,27 @@ Edgion Gateway (downstream_peer_ip: 192.168.1.1)
 
 **Configuration:**
 ```yaml
-trustedIps:
-  - name: load-balancer
-    cidrs:
-      - "192.168.0.0/16"
-  - name: cdn
-    cidrs:
-      - "198.51.100.0/24"
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: default
+spec:
+  visibility: Namespace
+  data:
+    type: IpList
+    config:
+      items:
+      - name: load-balancer
+        cidrs:
+        - 192.168.0.0/16
+      - name: cdn
+        cidrs:
+        - 198.51.100.0/24
+---
+trustedIpRefs:
+  - name: realip-proxies-1
+    namespace: default
 realIpHeader: "X-Forwarded-For"
 recursive: true
 ```
@@ -247,13 +315,26 @@ recursive: true
 #### Scenario 2: Cloudflare CDN
 
 ```yaml
-trustedIps:
-  - name: cloudflare
-    cidrs:
-      - "173.245.48.0/20"
-      - "103.21.244.0/22"
-      - "103.22.200.0/22"
-      # ... more Cloudflare IP ranges
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: default
+spec:
+  visibility: Namespace
+  data:
+    type: IpList
+    config:
+      items:
+      - name: cloudflare
+        cidrs:
+        - 173.245.48.0/20
+        - 103.21.244.0/22
+        - 103.22.200.0/22
+---
+trustedIpRefs:
+  - name: realip-proxies-1
+    namespace: default
 realIpHeader: "CF-Connecting-IP"
 recursive: false
 ```
@@ -264,6 +345,23 @@ recursive: false
 
 ```yaml
 apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: production
+spec:
+  visibility: Namespace
+  data:
+    type: IpList
+    config:
+      items:
+      - name: private-ranges
+        cidrs:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+---
+apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: real-ip-basic
@@ -272,17 +370,38 @@ spec:
   requestPlugins:
     - type: RealIp
       config:
-        trustedIps:
-          - name: private-ranges
-            cidrs:
-              - "10.0.0.0/8"
-              - "172.16.0.0/12"
-              - "192.168.0.0/16"
+        trustedIpRefs:
+          - name: realip-proxies-1
+            namespace: production
 ```
 
 ### Example 2: Cloudflare Configuration
 
 ```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: production
+spec:
+  visibility: Namespace
+  data:
+    type: IpList
+    config:
+      items:
+      - name: cloudflare
+        cidrs:
+        - 173.245.48.0/20
+        - 103.21.244.0/22
+        - 103.22.200.0/22
+        - 103.31.4.0/22
+        - 141.101.64.0/18
+        - 108.162.192.0/18
+        - 190.93.240.0/20
+        - 188.114.96.0/20
+        - 197.234.240.0/22
+        - 198.41.128.0/17
+---
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -292,19 +411,9 @@ spec:
   requestPlugins:
     - type: RealIp
       config:
-        trustedIps:
-          - name: cloudflare
-            cidrs:
-              - "173.245.48.0/20"
-              - "103.21.244.0/22"
-              - "103.22.200.0/22"
-              - "103.31.4.0/22"
-              - "141.101.64.0/18"
-              - "108.162.192.0/18"
-              - "190.93.240.0/20"
-              - "188.114.96.0/20"
-              - "197.234.240.0/22"
-              - "198.41.128.0/17"
+        trustedIpRefs:
+          - name: realip-proxies-1
+            namespace: production
         realIpHeader: "CF-Connecting-IP"
         recursive: false
 ```
@@ -312,6 +421,27 @@ spec:
 ### Example 3: Multi-Tier Proxy
 
 ```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: production
+spec:
+  visibility: Namespace
+  data:
+    type: IpList
+    config:
+      items:
+      - name: internal
+        description: Internal proxy and private networks
+        cidrs:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+      - name: cdn
+        cidrs:
+        - 198.51.100.0/24
+---
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -321,16 +451,9 @@ spec:
   requestPlugins:
     - type: RealIp
       config:
-        trustedIps:
-          - name: internal
-            description: Internal proxy and private networks
-            cidrs:
-              - "10.0.0.0/8"
-              - "172.16.0.0/12"
-              - "192.168.0.0/16"
-          - name: cdn
-            cidrs:
-              - "198.51.100.0/24"
+        trustedIpRefs:
+          - name: realip-proxies-1
+            namespace: production
         realIpHeader: "X-Forwarded-For"
         recursive: true
 ```
@@ -366,7 +489,7 @@ A: Check the `remote_ip` field in request logs, or check the configured RemoteIp
 
 ### Q: Can I trust multiple CDNs simultaneously?
 
-A: Yes, add each CDN as its own group under `trustedIps` (one `IpGroup` per CDN, with its ranges in `cidrs`).
+A: Yes, put each CDN in an IpGroup inside one shared IpList, or reference multiple IpLists.
 
 ### Q: Does it support dynamic updates?
 

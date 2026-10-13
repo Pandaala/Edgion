@@ -303,7 +303,6 @@ pub(crate) fn compile_plugins_with_cache(
         ep.has_active_request_id(),
         !ep.validate_request_id_early_attachment().is_empty(),
     );
-    let namespace = spec.metadata.namespace.clone().unwrap_or_else(|| "default".to_string());
 
     if spec.spec.waf.is_some() {
         errors.extend(runtime.add_waf_with_cache(ep, cache));
@@ -360,20 +359,6 @@ pub(crate) fn compile_plugins_with_cache(
     }
 
     errors.extend(runtime.add_resource_filters_with_cache(&spec, cache));
-    if let Some(body_filter_plugins) = &spec.spec.upstream_response_body_filter_plugins {
-        let prepared = edgion_resources::resources::refs::plugin_fields::PreparedPluginReferences::from_plugins(&spec);
-        let bindings = prepared.bind(&spec).ok();
-        errors.extend(runtime.add_from_upstream_response_body_filters_with_cache(
-            body_filter_plugins,
-            &namespace,
-            cache,
-            bindings.as_ref(),
-        ));
-    }
-    if let Some(response_plugins) = &spec.spec.upstream_response_plugins {
-        errors.extend(runtime.add_from_upstream_responses_with_cache(response_plugins, &namespace, cache));
-    }
-
     // Resource-level dye "set clobber" check: a failure rule's response
     // header must not equal (case-insensitively) any success rule's response
     // header across ANY entry in this resource — success renders with Set

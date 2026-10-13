@@ -12,7 +12,5 @@ spec:
       profiles:
         main:
           defaultAction: deny
-          allow:
-          - name: office
-            cidrs:
-            - 10.0.0.0/8
+          allowRefs:
+            - name: acl-data-status-gcir-invalid-allow-f12fd46ff5

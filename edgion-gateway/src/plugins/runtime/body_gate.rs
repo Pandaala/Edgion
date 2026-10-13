@@ -74,20 +74,13 @@ struct BodyGatePolicy {
 }
 
 impl BodyGatePolicy {
-    fn new(requirement: BodyRequirement) -> Self {
+    fn new(requirement: BodyRequirement, compiled: Option<CompiledPluginConditions>) -> Self {
         let logical_limit_bytes = plugin_limit_bytes(&requirement);
-        let BodyRequirement {
-            conditions,
-            on_read_failure,
-            ..
-        } = requirement;
-        let conditions = conditions
-            .filter(|conditions| !conditions.is_empty())
-            .map(CompiledPluginConditions::new);
+        let BodyRequirement { on_read_failure, .. } = requirement;
         Self {
             logical_limit_bytes,
             on_read_failure,
-            conditions,
+            conditions: compiled,
         }
     }
 
@@ -129,10 +122,24 @@ pub struct BodyGatedRequestFilter {
 }
 
 impl BodyGatedRequestFilter {
+    pub(crate) fn with_conditions(
+        inner: Box<dyn RequestFilter>,
+        requirement: BodyRequirement,
+        conditions: Option<CompiledPluginConditions>,
+    ) -> Self {
+        Self {
+            inner,
+            policy: BodyGatePolicy::new(requirement, conditions),
+        }
+    }
+
     pub fn new(inner: Box<dyn RequestFilter>, requirement: BodyRequirement) -> Self {
         Self {
             inner,
-            policy: BodyGatePolicy::new(requirement),
+            policy: BodyGatePolicy::new(
+                requirement.clone(),
+                requirement.conditions.map(CompiledPluginConditions::new),
+            ),
         }
     }
 }
@@ -193,10 +200,24 @@ pub struct BodyGatedUpstreamResponse {
 }
 
 impl BodyGatedUpstreamResponse {
+    pub(crate) fn with_conditions(
+        inner: Box<dyn UpstreamResponse>,
+        requirement: BodyRequirement,
+        conditions: Option<CompiledPluginConditions>,
+    ) -> Self {
+        Self {
+            inner,
+            policy: BodyGatePolicy::new(requirement, conditions),
+        }
+    }
+
     pub fn new(inner: Box<dyn UpstreamResponse>, requirement: BodyRequirement) -> Self {
         Self {
             inner,
-            policy: BodyGatePolicy::new(requirement),
+            policy: BodyGatePolicy::new(
+                requirement.clone(),
+                requirement.conditions.map(CompiledPluginConditions::new),
+            ),
         }
     }
 }

@@ -672,6 +672,19 @@ egress policy, body forwarding, retry and deadlines are unchanged. No route entr
 cache, Service grant policy, new Service recovery edge or live conformance claim
 is added.
 
+### Live IP dependency dispatch
+
+A callback-local PingoraSessionAdapter captures ConfigData once when IP/Selector
+reads are needed. Object-safe scalar readers return availability, membership or
+profile index, never a resource/snapshot loan. The complete effective runtime's
+required entry/body and Deny-restriction roots are checked before any filter,
+including early RequestId, backend dispatch and nested ExtensionRef loops. Dynamic
+absence is recoverable and never a permanent cold seal; ordinary failures return
+500, candidate/observational and optional RAP roles retain their own policies.
+After response commitment, body failure clears current plus sink-queued output and
+all body/trailer owners and conversion output/budgets before a non-retryable error.
+The public body filter trait and streaming/backpressure boundary are unchanged.
+
 ## ResponseCache intent and certificates
 
 ResponseCache's public PluginSession seam accepts only an opaque cold-compiled

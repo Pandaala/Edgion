@@ -185,24 +185,44 @@ TCPRoute、UDP 传输路由的判定（TLS 流量在 Listener 上执行），只
 的：
 
 ```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: example-policy-allow-1
+  namespace: edgion-default
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: office-network
+        description: 不受地理规则限制的办公网络客户端
+        cidrs:
+        - 10.0.0.0/8
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: geo-with-acl
+  namespace: edgion-default
 spec:
   requestPlugins:
-    - type: IpRestriction
-      config:
-        allow:
-          - name: office-network
-            description: 不受地理规则限制的办公网络客户端
-            cidrs: ["10.0.0.0/8"]
-    - type: GeoIpLocation
-      config:
-        defaultAction: allow
-        failOpen: false
-        denyRuleGroups:
-          - name: block-ru
-            rules:
-              - source: DirectPeerIp
-                key: country
-                values: ["RU"]
+  - type: IpRestriction
+    config:
+      allowRefs:
+      - name: example-policy-allow-1
+        namespace: edgion-default
+  - type: GeoIpLocation
+    config:
+      defaultAction: allow
+      failOpen: false
+      denyRuleGroups:
+      - name: block-ru
+        rules:
+        - source: DirectPeerIp
+          key: country
+          values:
+          - RU
 ```
 
 ### 规则形状
@@ -211,35 +231,67 @@ spec:
   都可用。`RemoteIp` 是经过 `X-Forwarded-For` 解析、并对照可信代理集合确认后的客户端——**仅限
   L7**；在 L4 的 `GeoIpLocation` 配置中使用 `RemoteIp` 会被判定为硬性接入错误，因为 L4 没有 HTTP
   头可供解析转发链。参见[`RemoteIp` 可被伪造](#remoteip-可被伪造directpeerip-不可以)。
-- **`key`**：`cidr` 直接把地址本身与一个或多个 CIDR/裸 IP 做匹配（裸 IP 是其 `/32`/`/128`
-  的简写），完全不需要 GeoIP 数据库——见[纯 CIDR 规则](#纯-cidr-规则永不触碰-failopen)。
+- **`key`**：`cidr` 通过非空、有序的 `ipRefs` 引用中央 IpList；地址只写在这些列表的
+  `items`/IpGroup 中。完全不需要 GeoIP 数据库——见[纯 CIDR 规则](#纯-cidr-规则永不触碰-failopen)。
   `country`/`continent`/`subdivision` 是 ISO 代码，编译期归一化为**大写**；未识别的代码只会
   产生 **WARN**，不会被拒绝（宽松接入策略）。`city` 是自由文本，匹配 `names["en"]`，区分大小写
   ——见[`city` 只匹配英文名称](#city-只匹配英文名称)。
-- **`values`**：必须**非空**——空列表在入库时即被拒绝。一条没有取值的规则不表达任何判据，
+- **`values`**：地理维度必须**非空**。CIDR 规则禁止此字段，包括 null 或空列表；使用 `ipRefs`。
+  地理维度禁止 `ipRefs`。一条没有取值的规则不表达任何判据，
   若按"匹配一切"解读，会让 deny 组变成全站拒绝、让 allow 组变成敞开的白名单。要去掉一个
   判据，请删除该条规则。一个记录无法提供的维度会让规则直接**不匹配**——没有单独的
   `onMissing` 开关可配置；见[缺失维度](#缺失维度只是普通的规则未命中)。
 
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: office-networks
+  namespace: apps
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+        - name: office
+          cidrs: ["10.0.0.0/8"]
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: office-geo
+  namespace: apps
+spec:
+  requestPlugins:
+    - type: GeoIpLocation
+      config:
+        failOpen: false
+        allowRuleGroups:
+          - name: office
+            rules:
+              - source: DirectPeerIp
+                key: cidr
+                ipRefs: [{name: office-networks}]
+```
+
 ### 未知字段会被拒绝，而不是忽略
 
-`GeoIpLocation` 的每个配置结构体都是严格的：本插件不认识的字段名会导致入库直接失败并指出是哪个
-键，而不是静默忽略这一行。
+配置、分组、规则中的未知字段、CIDR 规则的旧 `values` 以及 `geoipRefs` 会形成有类型的无效配置代。
+被拒绝的内容会被丢弃；有界的 `invalidInput` 标记随 Controller–Gateway 同步保留，外部设置 false 无法清除已检测的错误。
+发布无效 HTTP 策略会安装既有配置错误 500 门禁；Stream 策略会拒绝连接。发布干净的新配置即可恢复。
+这样不会因 watcher 类型解析失败而继续运行上一代策略。
 
-这是刻意为之，比大多数插件都严。geo 配置是一项安全控制，而它的各种拼写错误全都会**向放行的
-方向**失效：
+插件 config 的既有 CRD 保留边界让这些字段进入检测。若更新被 API admission 直接拒绝，它不会进入发布流程，
+上一代已接纳配置仍然保留；这与发布有类型的无效替换不同。
 
-| 拼错 | 加严之前的后果 |
-|---|---|
-| `denyRuleGroup:`（少了 s） | 整个规则列表消失，配置变空——也就是只解析模式。所有请求全部放行，`failOpen: false` 也不再是必填，而资源状态依然是 `Accepted: True`。 |
-| 规则里的 `valuez:` | `values` 落到空列表，而空列表当时意味着"匹配一切"——在 deny 组里是全站拒绝，在 allow 组里是敞开的白名单。 |
+所有必需 CIDR 引用都在分组短路或 MMDB 工作之前检查，各规则及地址来源使用同一 ConfigData 快照。
+缺失、禁用、错误类型、权限拒绝或身份不符的列表无论 `failOpen` 如何都拒绝处理。
+普通 HTTP dispatch 的共享依赖门禁在外层 conditions 之前返回 500；直接调用插件仍有固定 403 后备门禁。
+Stream 使用有界原因 `ref_unavailable`。只更新、删除或恢复 IpList 无需重建消费策略。
 
-这两种情况从外部都看不出来：资源被接受，流量照常。EdgionPlugins 的 CRD 把插件 `config` 建模为
-`x-kubernetes-preserve-unknown-fields`，API server 会原样转发未知键，因此这里的 schema 严格性是
-唯一能拦住它们的关口。
-
-实际影响是：**空配置 `config: {}` 现在只可能因为有人真的这么写，**而绝不会是某条规则悄悄没解析
-成功。
+中央 IpList 有意采用 partial-good 接纳，替代原内联 Geo CIDR 的严格接纳：错误条目跳过，正确条目保留；
+可用但为空或全部无效的列表不匹配任何地址。列表不可用是独立的失败状态。空 HTTP `config: {}` 仍是只解析模式，
+未知键不能把无效策略变成只解析模式。
 
 ### 规则分组：组内 AND，组间 OR
 
@@ -313,28 +365,43 @@ MMDB 查询。HTTP 和 L4 插件都会按来源（`source`）检测这一点（`
 ### `RemoteIp` 可被伪造；`DirectPeerIp` 不可以
 
 `RemoteIp` 的解析地址**来自 `X-Forwarded-For`**，属于客户端可控输入。只有当部署真正终结在可信
-代理之后——即配置了 `RealIp` 插件，且其 `trustedIps` 集合确实精确匹配你真实的代理/CDN 出口
+代理之后——即配置了 `RealIp` 插件，且其 `trustedIpRefs` 集合确实精确匹配你真实的代理/CDN 出口
 范围，同时连接的 TCP 对端也在该集合内——它才是可信的。如果这些条件不满足，`RemoteIp` 就只是
 TCP 对端地址的原样拷贝，`RemoteIp` 规则会（无害地）退化为与 `DirectPeerIp` 规则读取相同的值。
 
-危险的配置是把 `trustedIps` 配得过于宽泛——极端情况就是一条默认路由：
+危险的配置是把 `trustedIpRefs` 配得过于宽泛——极端情况就是一条默认路由：
 
 ```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: default
+spec:
+  visibility: Namespace
+  data:
+    type: IpList
+    config:
+      items:
+      - name: everyone
+        cidrs:
+        - 0.0.0.0/0
+---
 # 反面示例 —— 不要这样做
 - type: RealIp
   config:
-    trustedIps:
-      - name: everyone
-        cidrs: ["0.0.0.0/0"]
+    trustedIpRefs:
+      - name: realip-proxies-1
+        namespace: default
 ```
 
 有了这个配置，**任何**客户端都可以发送 `X-Forwarded-For: 1.1.1.1`，被当作来自
 `1.1.1.1` 所在的地理位置，从而完全绕过一条来源为 `RemoteIp` 的拒绝规则。这是一个在实践中很可能
-发生的误配置——某个 CDN 发布的出口范围不完整或经常变化，运维方"为了保险"扩大了 `trustedIps`，
+发生的误配置——某个 CDN 发布的出口范围不完整或经常变化，运维方"为了保险"扩大了 `trustedIpRefs`，
 却在不知不觉中把地理判定的完全控制权交给了每一个客户端。
 
 > **关于自动检测的说明。** 目前**没有**任何接入时的校验会将 `RemoteIp` 的 `GeoIpLocation` 规则
-> 与所在监听器的 `RealIp`/`trustedIps` 配置做交叉检查。`RemoteIp` 是否可信完全需要运维方自行核对
+> 与所在监听器的 `RealIp`/`trustedIpRefs` 配置做交叉检查。`RemoteIp` 是否可信完全需要运维方自行核对
 > 同一路由/网关上的 `RealIp` 插件配置来确认。如果你的部署并没有真正终结在一个可信、范围精确的
 > 代理之后，任何关乎安全的规则都应优先使用 `DirectPeerIp`——它总是读取原始 TCP 对端地址，不会受
 > 请求头影响。L4 的 `GeoIpLocation` 配置会直接拒绝 `RemoteIp`，所以这个问题只与 HTTP 层有关。
@@ -541,7 +608,7 @@ TLS 监听器拒绝使用上方 Stage1 的仅指标路径。HTTP 拒绝仍走普
 | 更新周期以 `reason="disk"`（或类似 `ENOSPC`）持续失败 | 更新卷容量不足以完成一次交换（需要 `max_db_bytes` 的 `.tmp`，加上当前数据库大小 2 倍的旧 inode/rename 双持有开销） | 按上面的公式扩容卷，而不是扩到 `max_db_bytes` 的 3 倍 |
 | 一个 `country` + `city` 规则分组永远不匹配任何内容 | 已加载数据库的记录不携带这条规则所需的 city 数据——见[不存在"数据库分级"这个概念](#缺失维度只是普通的规则未命中) | 查看访问日志的 `geo` 块并对照供应商文档，确认已加载的数据库实际能解析出哪些字段；如果 `city`/`subdivision` 规则在结构上永远不可能匹配，就去掉它 |
 | 带翻译语言取值的 `city` 规则永远不匹配 | `city` 只会与 `names["en"]` 比较 | 使用英文城市名 |
-| 黑名单模式下、来源为 `RemoteIp` 的规则被任意客户端轻易绕过 | `RealIp` 的 `trustedIps` 配得过宽（例如 `0.0.0.0/0`）——`RemoteIp` 退化为攻击者可控输入 | 将 `trustedIps` 收窄到你真实的代理出口范围，或改用 `DirectPeerIp` |
+| 黑名单模式下、来源为 `RemoteIp` 的规则被任意客户端轻易绕过 | `RealIp` 的 `trustedIpRefs` 配得过宽（例如 `0.0.0.0/0`）——`RemoteIp` 退化为攻击者可控输入 | 将 `trustedIpRefs` 收窄到你真实的代理出口范围，或改用 `DirectPeerIp` |
 | L4 配置在接入/编译时被拒绝，报错提到 `RemoteIp` | L4 的 `GeoIpLocation` 配置中出现 `source: RemoteIp` 是硬性接入错误 | 改用 `source: DirectPeerIp`——L4 没有 `X-Forwarded-For` 可用来解析真实客户端 |
 | Listener 阶段发生地理拒绝，但没有日志行 | 符合预期——`Stage1` 只有连接过滤器布尔结果和有界指标 | 使用 `edgion_geoip_denied_total{layer="stage1",reason=...}` |
 | TCP/UDP 路由阶段的地理拒绝日志没有 GeoIP 详情 | 符合预期——路由路径保留标准协议日志，但会将 GeoIP 事实和插件原因替换为通用 Stream 插件拒绝 | 将协议日志与 `edgion_geoip_denied_total{layer="tcp",reason=...}` 关联分析；TLS 监听器拒绝使用上方 Stage1 的仅指标路径 |
@@ -552,6 +619,6 @@ TLS 监听器拒绝使用上方 Stage1 的仅指标路径。HTTP 拒绝仍走普
 - [Gateway 配置](../configuration/gateway-config.md) —— 完整的 `GatewayConfig`
   schema 参考，包括 `geoip`
 - [Real IP](../../user-guide/edgion-plugins/real-ip.md) —— 决定 `RemoteIp` 是否可信的
-  `trustedIps` 配置
+  `trustedIpRefs` 配置
 - [指标](../observability/metrics-inventory.md) —— 完整的指标清单，包括五个
   `edgion_geoip_*` 系列

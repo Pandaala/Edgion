@@ -197,7 +197,8 @@ spec:
                                 description: "Atomic conditions combined with AND"
                                 items: &conditionSchema
                                   type: object
-                                  description: "A single condition (tagged union with 'type' field)"
+                                  description: "A single condition (tagged union with 'type' field); unknown IP fields are preserved for typed rejection"
+                                  x-kubernetes-preserve-unknown-fields: true
                                   required: [type]
                                   properties:
                                     type:
@@ -247,11 +248,6 @@ spec:
                                       description: "Probability ratio 0.0-1.0"
                                       minimum: 0.0
                                       maximum: 1.0
-                                    ips:
-                                      type: array
-                                      description: "Inline IPs or CIDRs (directPeerIpMatch / remoteIpMatch)"
-                                      items:
-                                        type: string
                                     ipRefs:
                                       type: array
                                       description: "EdgionConfigData IpList references (directPeerIpMatch / remoteIpMatch)"
@@ -312,7 +308,8 @@ spec:
                                 description: "Alternatives combined with OR; an alternative is atomic or one allOf group"
                                 items: &anyOfClauseSchema
                                   type: object
-                                  description: "An atomic condition or a named one-level allOf group"
+                                  description: "An atomic condition or a named one-level allOf group; unknown IP fields are preserved for typed rejection"
+                                  x-kubernetes-preserve-unknown-fields: true
                                   properties:
                                     type:
                                       type: string
@@ -336,9 +333,6 @@ spec:
                                       type: number
                                       minimum: 0.0
                                       maximum: 1.0
-                                    ips:
-                                      type: array
-                                      items: { type: string }
                                     ipRefs:
                                       type: array
                                       items:

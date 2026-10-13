@@ -1,0 +1,21 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: condition-refs-live-realip
+  namespace: edgion-default
+spec:
+  hostnames:
+  - condition-refs-live-realip.example.com
+  parentRefs:
+  - name: edgion-plugins-gateway
+    namespace: edgion-test
+  rules:
+  - backendRefs:
+    - name: condition-refs-dynamic-backend
+      port: 30001
+    filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: condition-refs-live-realip

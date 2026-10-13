@@ -377,3 +377,288 @@ fn waf_policy_invalid_optional_identity_is_partial_and_keeps_valid_missing_edge(
     assert!(resolved.message.contains("unavailable"));
     assert!(!resolved.message.contains("invalid reference namespace"));
 }
+
+#[tokio::test]
+async fn real_ip_list_apply_delete_restore_requeue_actual_egc_and_clean_dropped_edges() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionGatewayConfigHandler;
+    use edgion_resources::EdgionGatewayConfig;
+    let runtime = Arc::new(ControllerRuntime::default());
+    let handler = EdgionGatewayConfigHandler::new();
+    let processor = Arc::new(ResourceProcessor::<EdgionGatewayConfig>::new(
+        "EdgionGatewayConfig",
+        100,
+        Arc::new(EdgionGatewayConfigHandler::new()),
+        runtime.clone(),
+    ));
+    runtime.processor_registry.register(processor.clone());
+    let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime.clone());
+    let mut owner: EdgionGatewayConfig = serde_json::from_value(serde_json::json!({"metadata": {"name": "global"}, "spec": {"realIp": {"trustedIpRefs": [{"name": "proxies", "namespace": "ops"}]}}})).unwrap();
+    let _ = handler.parse(owner.clone(), &ctx).await;
+    assert_eq!(
+        runtime.edgion_config_data_refs.get_refs("ops/proxies"),
+        ["EdgionGatewayConfig:global"]
+    );
+    let target: EdgionConfigData = serde_json::from_value(serde_json::json!({"metadata": {"name": "proxies", "namespace": "ops"}, "spec": {"visibility": "Cluster", "data": {"type": "IpList", "config": {"items": []}}}})).unwrap();
+    let data_handler = EdgionConfigDataHandler::new();
+    for delete in [false, true, false] {
+        if delete {
+            data_handler.on_delete(&target, &ctx).await;
+        } else {
+            data_handler.on_change(&target, &ctx).await;
+        }
+        let item = tokio::time::timeout(Duration::from_secs(1), processor.workqueue().dequeue())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(item.key, "global");
+        processor.workqueue().done(&item.key);
+        assert_eq!(
+            runtime.edgion_config_data_refs.get_refs("ops/proxies"),
+            ["EdgionGatewayConfig:global"],
+            "deletion retains recovery edge"
+        );
+    }
+    owner.spec.real_ip.as_mut().unwrap().trusted.ip_refs[0].name = "replacement".into();
+    let _ = handler.parse(owner.clone(), &ctx).await;
+    assert!(runtime.edgion_config_data_refs.get_refs("ops/proxies").is_empty());
+    assert_eq!(
+        runtime.edgion_config_data_refs.get_refs("ops/replacement"),
+        ["EdgionGatewayConfig:global"]
+    );
+    data_handler.on_change(&target, &ctx).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), processor.workqueue().dequeue())
+            .await
+            .is_err(),
+        "dropped target must not wake owner"
+    );
+    handler.on_delete(&owner, &ctx).await;
+    assert!(runtime.edgion_config_data_refs.get_refs("ops/replacement").is_empty());
+    let mut replacement = target;
+    replacement.metadata.name = Some("replacement".into());
+    data_handler.on_change(&replacement, &ctx).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), processor.workqueue().dequeue())
+            .await
+            .is_err(),
+        "deleted owner has no stale wake edge"
+    );
+}
+
+#[tokio::test]
+async fn geo_http_list_apply_delete_restore_requeues_and_dropped_edges_are_removed() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionPluginsHandler;
+    use edgion_resources::EdgionPlugins;
+    let runtime = Arc::new(ControllerRuntime::default());
+    let handler = EdgionPluginsHandler::new();
+    let processor = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
+        "EdgionPlugins",
+        100,
+        Arc::new(EdgionPluginsHandler::new()),
+        runtime.clone(),
+    ));
+    runtime.processor_registry.register(processor.clone());
+    let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime.clone());
+    let mut wire = serde_json::json!({"metadata":{"name":"geo","namespace":"apps"},"spec":{"requestPlugins":[{"type":"GeoIpLocation","config":{"failOpen":true,"allowRuleGroups":[{"rules":[{"source":"DirectPeerIp","key":"cidr","ipRefs":[{"name":"networks"}]}]}]}}]}});
+    let owner: EdgionPlugins = serde_json::from_value(wire.clone()).unwrap();
+    let _ = handler.parse(owner, &ctx).await;
+    assert_eq!(
+        runtime.edgion_config_data_refs.get_refs("apps/networks"),
+        ["EdgionPlugins:apps/geo"]
+    );
+    let target:EdgionConfigData=serde_json::from_value(serde_json::json!({"metadata":{"name":"networks","namespace":"apps"},"spec":{"data":{"type":"IpList","config":{"items":[]}}}})).unwrap();
+    let data_handler = EdgionConfigDataHandler::new();
+    for delete in [false, true, false] {
+        if delete {
+            data_handler.on_delete(&target, &ctx).await;
+        } else {
+            data_handler.on_change(&target, &ctx).await;
+        }
+        let item = tokio::time::timeout(Duration::from_secs(1), processor.workqueue().dequeue())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(item.key, "apps/geo");
+        processor.workqueue().done(&item.key);
+    }
+    wire["spec"]["requestPlugins"][0]["config"]["allowRuleGroups"][0]["rules"][0]["ipRefs"][0]["name"] =
+        serde_json::json!("replacement");
+    let owner: EdgionPlugins = serde_json::from_value(wire).unwrap();
+    let _ = handler.parse(owner.clone(), &ctx).await;
+    assert!(runtime.edgion_config_data_refs.get_refs("apps/networks").is_empty());
+    assert_eq!(
+        runtime.edgion_config_data_refs.get_refs("apps/replacement"),
+        ["EdgionPlugins:apps/geo"]
+    );
+    data_handler.on_change(&target, &ctx).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), processor.workqueue().dequeue())
+            .await
+            .is_err()
+    );
+    handler.on_delete(&owner, &ctx).await;
+    assert!(runtime.edgion_config_data_refs.get_refs("apps/replacement").is_empty());
+}
+
+#[tokio::test]
+async fn geo_stream_list_apply_delete_restore_requeues_and_dropped_edges_are_removed() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionStreamPluginsHandler;
+    use edgion_resources::EdgionStreamPlugins;
+    let runtime = Arc::new(ControllerRuntime::default());
+    let handler = EdgionStreamPluginsHandler::new();
+    let processor = Arc::new(ResourceProcessor::<EdgionStreamPlugins>::new(
+        "EdgionStreamPlugins",
+        100,
+        Arc::new(EdgionStreamPluginsHandler::new()),
+        runtime.clone(),
+    ));
+    runtime.processor_registry.register(processor.clone());
+    let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime.clone());
+    let mut wire = serde_json::json!({"metadata":{"name":"geo","namespace":"apps"},"spec":{"plugins":[{"type":"GeoIpLocation","config":{"failOpen":true,"allowRuleGroups":[{"rules":[{"source":"DirectPeerIp","key":"cidr","ipRefs":[{"name":"networks"}]}]}]}}]}});
+    let owner: EdgionStreamPlugins = serde_json::from_value(wire.clone()).unwrap();
+    let _ = handler.parse(owner, &ctx).await;
+    assert_eq!(
+        runtime.edgion_config_data_refs.get_refs("apps/networks"),
+        ["EdgionStreamPlugins:apps/geo"]
+    );
+    let target:EdgionConfigData=serde_json::from_value(serde_json::json!({"metadata":{"name":"networks","namespace":"apps"},"spec":{"data":{"type":"IpList","config":{"items":[]}}}})).unwrap();
+    let data_handler = EdgionConfigDataHandler::new();
+    for delete in [false, true, false] {
+        if delete {
+            data_handler.on_delete(&target, &ctx).await;
+        } else {
+            data_handler.on_change(&target, &ctx).await;
+        }
+        let item = tokio::time::timeout(Duration::from_secs(1), processor.workqueue().dequeue())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(item.key, "apps/geo");
+        processor.workqueue().done(&item.key);
+    }
+    wire["spec"]["plugins"][0]["config"]["allowRuleGroups"][0]["rules"][0]["ipRefs"][0]["name"] =
+        serde_json::json!("replacement");
+    let owner: EdgionStreamPlugins = serde_json::from_value(wire).unwrap();
+    let _ = handler.parse(owner.clone(), &ctx).await;
+    assert!(runtime.edgion_config_data_refs.get_refs("apps/networks").is_empty());
+    assert_eq!(
+        runtime.edgion_config_data_refs.get_refs("apps/replacement"),
+        ["EdgionStreamPlugins:apps/geo"]
+    );
+    data_handler.on_change(&target, &ctx).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), processor.workqueue().dequeue())
+            .await
+            .is_err()
+    );
+    handler.on_delete(&owner, &ctx).await;
+    assert!(runtime.edgion_config_data_refs.get_refs("apps/replacement").is_empty());
+}
+
+#[tokio::test]
+async fn inactive_acl_http_list_apply_delete_restore_requeues_and_dropped_edges_are_removed() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionPluginsHandler;
+    use edgion_resources::EdgionPlugins;
+    let runtime = Arc::new(ControllerRuntime::default());
+    let handler = EdgionPluginsHandler::new();
+    let processor = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
+        "EdgionPlugins",
+        100,
+        Arc::new(EdgionPluginsHandler::new()),
+        runtime.clone(),
+    ));
+    runtime.processor_registry.register(processor.clone());
+    let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime.clone());
+    let mut wire = serde_json::json!({"metadata":{"name":"inactive-acl","namespace":"apps"},"spec":{"requestPlugins":[{"type":"IpRestriction","enable":false,"config":{"allowRefs":[{"name":"networks"}]}}]}});
+    let owner: EdgionPlugins = serde_json::from_value(wire.clone()).unwrap();
+    let _ = handler.parse(owner, &ctx).await;
+    assert_eq!(
+        runtime.edgion_config_data_refs.get_refs("apps/networks"),
+        ["EdgionPlugins:apps/inactive-acl"]
+    );
+    let target:EdgionConfigData=serde_json::from_value(serde_json::json!({"metadata":{"name":"networks","namespace":"apps"},"spec":{"data":{"type":"IpList","config":{"items":[]}}}})).unwrap();
+    let data_handler = EdgionConfigDataHandler::new();
+    for delete in [false, true, false] {
+        if delete {
+            data_handler.on_delete(&target, &ctx).await;
+        } else {
+            data_handler.on_change(&target, &ctx).await;
+        }
+        let item = tokio::time::timeout(Duration::from_secs(1), processor.workqueue().dequeue())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(item.key, "apps/inactive-acl");
+        processor.workqueue().done(&item.key);
+    }
+    wire["spec"]["requestPlugins"][0]["config"]["allowRefs"][0]["name"] = serde_json::json!("replacement");
+    let owner: EdgionPlugins = serde_json::from_value(wire).unwrap();
+    let _ = handler.parse(owner.clone(), &ctx).await;
+    assert!(runtime.edgion_config_data_refs.get_refs("apps/networks").is_empty());
+    assert_eq!(
+        runtime.edgion_config_data_refs.get_refs("apps/replacement"),
+        ["EdgionPlugins:apps/inactive-acl"]
+    );
+    data_handler.on_change(&target, &ctx).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), processor.workqueue().dequeue())
+            .await
+            .is_err()
+    );
+    handler.on_delete(&owner, &ctx).await;
+    assert!(runtime.edgion_config_data_refs.get_refs("apps/replacement").is_empty());
+}
+
+#[tokio::test]
+async fn inactive_acl_stream_list_apply_delete_restore_requeues_and_dropped_edges_are_removed() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionStreamPluginsHandler;
+    use edgion_resources::EdgionStreamPlugins;
+    let runtime = Arc::new(ControllerRuntime::default());
+    let handler = EdgionStreamPluginsHandler::new();
+    let processor = Arc::new(ResourceProcessor::<EdgionStreamPlugins>::new(
+        "EdgionStreamPlugins",
+        100,
+        Arc::new(EdgionStreamPluginsHandler::new()),
+        runtime.clone(),
+    ));
+    runtime.processor_registry.register(processor.clone());
+    let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime.clone());
+    let mut wire = serde_json::json!({"metadata":{"name":"inactive-acl","namespace":"apps"},"spec":{"plugins":[{"type":"IpRestriction","enable":false,"config":{"allowRefs":[{"name":"networks"}]}}]}});
+    let owner: EdgionStreamPlugins = serde_json::from_value(wire.clone()).unwrap();
+    let _ = handler.parse(owner, &ctx).await;
+    assert_eq!(
+        runtime.edgion_config_data_refs.get_refs("apps/networks"),
+        ["EdgionStreamPlugins:apps/inactive-acl"]
+    );
+    let target:EdgionConfigData=serde_json::from_value(serde_json::json!({"metadata":{"name":"networks","namespace":"apps"},"spec":{"data":{"type":"IpList","config":{"items":[]}}}})).unwrap();
+    let data_handler = EdgionConfigDataHandler::new();
+    for delete in [false, true, false] {
+        if delete {
+            data_handler.on_delete(&target, &ctx).await;
+        } else {
+            data_handler.on_change(&target, &ctx).await;
+        }
+        let item = tokio::time::timeout(Duration::from_secs(1), processor.workqueue().dequeue())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(item.key, "apps/inactive-acl");
+        processor.workqueue().done(&item.key);
+    }
+    wire["spec"]["plugins"][0]["config"]["allowRefs"][0]["name"] = serde_json::json!("replacement");
+    let owner: EdgionStreamPlugins = serde_json::from_value(wire).unwrap();
+    let _ = handler.parse(owner.clone(), &ctx).await;
+    assert!(runtime.edgion_config_data_refs.get_refs("apps/networks").is_empty());
+    assert_eq!(
+        runtime.edgion_config_data_refs.get_refs("apps/replacement"),
+        ["EdgionStreamPlugins:apps/inactive-acl"]
+    );
+    data_handler.on_change(&target, &ctx).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), processor.workqueue().dequeue())
+            .await
+            .is_err()
+    );
+    handler.on_delete(&owner, &ctx).await;
+    assert!(runtime.edgion_config_data_refs.get_refs("apps/replacement").is_empty());
+}

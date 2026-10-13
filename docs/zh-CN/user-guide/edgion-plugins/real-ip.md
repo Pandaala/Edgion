@@ -24,6 +24,23 @@ RealIp 插件用于从 HTTP 请求头中提取真实的客户端 IP 地址，特
 
 ```yaml
 apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: production
+spec:
+  visibility: Namespace
+  data:
+    type: IpList
+    config:
+      items:
+      - name: private-ranges
+        cidrs:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+---
+apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: real-ip-basic
@@ -32,12 +49,9 @@ spec:
   requestPlugins:
     - type: RealIp
       config:
-        trustedIps:
-          - name: private-ranges
-            cidrs:
-              - "10.0.0.0/8"
-              - "172.16.0.0/12"
-              - "192.168.0.0/16"
+        trustedIpRefs:
+          - name: realip-proxies-1
+            namespace: production
         realIpHeader: "X-Forwarded-For"
         recursive: true
 ```
@@ -46,28 +60,25 @@ spec:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `trustedIps` | Array\<IpGroup\> | —（必填） | 可信代理 IP 分组列表 |
+| `trustedIpRefs` | Array\<EdgionConfigDataRef\> | —（必填） | 非空的可信代理 IpList 引用列表 |
 | `realIpHeader` | String | `"X-Forwarded-For"` | 提取真实 IP 的 Header 名称 |
 | `recursive` | Boolean | `true` | 是否启用递归查找（Nginx 风格） |
-| `maxTrustedHops` | Integer | 无（不限） | `recursive=true` 时可信代理跳数上限，详见 [安全取舍](#安全取舍trustedips-和-maxtrustedhops) |
+| `maxTrustedHops` | Integer | 无（不限） | `recursive=true` 时可信代理跳数上限，详见 [安全取舍](#安全取舍trustediprefs-和-maxtrustedhops) |
 
-#### trustedIps
+#### trustedIpRefs
 
-可信代理 IP 分组列表。对应 Nginx 的 `set_real_ip_from` 指令。
+Kubernetes API admission 若因必填引用、最小数量、目标命名空间或请求头约束拒绝更新，该更新不会到达 Controller/Gateway，上一份已获准的配置保持有效。下文的无效代替换指实际进入类型化发布的配置（例如 FS 输入，或被窄范围保留的混合旧字段），不是 API 已拒绝的更新。
 
-列表中每一项都是一个 `IpGroup` 对象：
+`trustedIpRefs` 按顺序引用 `EdgionConfigData` 的 IpList。IP/CIDR 集合写在 IpList 的 `items`（IpGroup）中；插件只写 `name` 和可选 `namespace`。HTTP 插件默认使用实际所属资源的命名空间；全局 `spec.realIp` 必须显式指定命名空间，并在启用 ReferenceGrant 校验时要求列表当前为 `Cluster` 可见。命名空间级授权不适用于这个集群级引用者。关闭授权校验仍然检查资源身份、IpList 类型和启用状态。
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `name` | String | 是 | 分组名称；≤63 字符，字符集 `[a-zA-Z0-9._-]`，首尾必须是字母或数字，在列表内唯一 |
-| `description` | String | 否 | 分组的可选描述 |
-| `cidrs` | Array\<String\> | 是 | 非空的 IP 地址或 CIDR 范围列表 |
+每份引用列表都可用时才信任连接对端和转发链。任意列表缺失、禁用、未授权或类型错误，都在本次解析中使用 PROXY 协议处理后的连接对端，即使另一份列表能匹配。列表内容、可见性、删除和恢复在后续解析中生效，消费者不复制 CIDR；一次快照覆盖对端及全部跳点。中央 IpList 编译保留有效条目并排除无效条目；空列表或全部无效的列表不信任任何地址。
 
-`cidrs` 中每一项支持：
+| 字段 | 含义 |
+| --- | --- |
+| `name` | 必填，IpList 资源名 |
+| `namespace` | HTTP 默认所属命名空间；全局 EGC 必填 |
 
-- 单个 IP 地址：`"192.168.1.1"`
-- CIDR 范围：`"10.0.0.0/8"`
-- IPv6：`"2001:db8::/32"`
+旧的内联 `trustedIps` 及未知字段即使为 null 或空值也会使配置失效。到达类型化发布链路的无效配置会替换上一代：插件封闭请求链，全局配置关闭提取。干净的新一代配置可恢复。全局 EGC 的 `Accepted` 仅反映固有结构，不反映部署本地列表可用性。
 
 #### realIpHeader
 
@@ -96,27 +107,29 @@ spec:
 启用递归查找模式。对应 Nginx 的 `real_ip_recursive` 指令。
 
 - `true`（默认）：从右到左遍历 Header 中的 IP 列表，找到第一个非可信 IP
-- `false`：使用 Header 中最右边的 IP（最后一个代理）
+- `false`：最右侧有效跳点不可信时使用该地址，否则使用连接对端；忽略跳数上限。
 
 #### maxTrustedHops
 
 `recursive=true` 时可信代理跳数上限（可选）。对应 Envoy 的 `xff_num_trusted_hops` 概念。
 
 - `null`（默认）：无上限，Nginx 兼容行为——从右到左遍历直到遇到首个非可信 IP
+- `0`：在首个可信的有效跳点停止，并非无限制。
 - `N`（>0）：右→左遍历中最多跳过 `N` 个可信 IP；如仍未遇到非可信 IP，返回第 `N` 个位置的 IP（即便其可信）
 
 **什么时候应该设置？**
 
-`maxTrustedHops` 是**辅助防线**，用来对抗"`trustedIps` 配得过宽 + 攻击者能从该范围内发起请求"的情景（见下方[安全取舍](#安全取舍trustedips-和-maxtrustedhops)）。推荐生产部署显式设置为**实际代理链层数**（如 CDN → LB → Gateway 为 `2`）。
+`maxTrustedHops` 是**辅助防线**，用来对抗"`trustedIpRefs` 配得过宽 + 攻击者能从该范围内发起请求"的情景（见下方[安全取舍](#安全取舍trustediprefs-和-maxtrustedhops)）。推荐生产部署显式设置为**实际代理链层数**（如 CDN → LB → Gateway 为 `2`）。
 
-## 安全取舍：trustedIps 和 maxTrustedHops
+## 安全取舍：trustedIpRefs 和 maxTrustedHops
 
 ### 核心威胁：宽信任 CIDR 下的 XFF 深度伪造
 
-`recursive=true` 模式下，默认无跳数上限。若 `trustedIps` 配得过宽（例如整个 `10.0.0.0/8`），且攻击者能从该范围内的 IP 发起请求：
+`recursive=true` 模式下，默认无跳数上限。若 `trustedIpRefs` 配得过宽（例如整个 `10.0.0.0/8`），且攻击者能从该范围内的 IP 发起请求：
 
 ```text
-配置: trustedIps: ["10.0.0.0/8"], recursive: true
+配置: trustedIpRefs: [{name: internal-proxies}], recursive: true
+引用的 IpList internal-proxies 包含过宽的 CIDR 10.0.0.0/8。
 攻击者从 10.0.0.1 发送:
   X-Forwarded-For: 1.2.3.4, 10.0.0.99, 10.0.0.50
 
@@ -135,28 +148,55 @@ spec:
 
 ### 两道防线（需同时配置）
 
-**第一道（主要）：精确配置 `trustedIps`**
+**第一道（主要）：精确配置 `trustedIpRefs`**
 
-`trustedIps` **只应包含真实代理出口 IP**，不应为了"偷懒"覆盖整个内网段：
+`trustedIpRefs` **只应包含真实代理出口 IP**，不应为了"偷懒"覆盖整个内网段：
 
 ```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: default
+spec:
+  visibility: Namespace
+  data:
+    type: IpList
+    config:
+      items:
+      - name: internal
+        cidrs:
+        - 10.0.0.0/8
+---
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-2
+  namespace: default
+spec:
+  visibility: Namespace
+  data:
+    type: IpList
+    config:
+      items:
+      - name: cloudflare
+        cidrs:
+        - 103.21.244.0/22
+        - 103.22.200.0/22
+        - 173.245.48.0/20
+      - name: internal-lb
+        description: Internal LB egress (single address)
+        cidrs:
+        - 10.1.0.10
+---
 # ❌ 反例：覆盖面过宽，任何来自内网的请求都被当作可信代理
-trustedIps:
-  - name: internal
-    cidrs:
-      - "10.0.0.0/8"
-
+trustedIpRefs:
+  - name: realip-proxies-1
+    namespace: default
 # ✅ 正例：仅包含实际代理（如 Cloudflare 回源 IP、内部 LB IP）
-trustedIps:
-  - name: cloudflare
-    cidrs:
-      - "103.21.244.0/22"
-      - "103.22.200.0/22"
-      - "173.245.48.0/20"
-  - name: internal-lb
-    description: Internal LB egress (single address)
-    cidrs:
-      - "10.1.0.10"
+trustedIpRefs:
+  - name: realip-proxies-2
+    namespace: default
 ```
 
 **第二道（辅助）：设置 `maxTrustedHops` 作为硬上限**
@@ -164,20 +204,34 @@ trustedIps:
 即便第一道防线可能配置错误，设置 `maxTrustedHops = 实际代理链层数`，限制攻击者能伪造的 XFF 前缀长度：
 
 ```yaml
-trustedIps:
-  - name: cloudflare
-    cidrs:
-      - "103.21.244.0/22"   # Cloudflare（1 跳）
-  - name: internal-lb
-    cidrs:
-      - "10.1.0.10"         # 内部 LB（1 跳）
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: default
+spec:
+  visibility: Namespace
+  data:
+    type: IpList
+    config:
+      items:
+      - name: cloudflare
+        cidrs:
+        - 103.21.244.0/22
+      - name: internal-lb
+        cidrs:
+        - 10.1.0.10
+---
+trustedIpRefs:
+  - name: realip-proxies-1
+    namespace: default
 maxTrustedHops: 2         # 只信任 2 跳；攻击者无法通过填充多层"可信" IP 推进到左端
 ```
 
 ### 何时可不设 `maxTrustedHops`
 
 - `recursive: false`：无效果（非递归模式只看最右 IP）
-- `trustedIps` 已严格收敛到固定几个 IP / 小 CIDR 且可审计
+- 引用的 IpList 已严格收敛到固定几个 IP / 小 CIDR 且可审计
 - 代理链动态变化（如服务网格随节点扩缩容），难以确定固定跳数——此时只能靠第一道防线
 
 ### 与 Nginx / Envoy 对比
@@ -195,7 +249,7 @@ Edgion 默认采用 Nginx 风格（无上限，向后兼容），同时通过 `m
 ### 算法流程
 
 ```text
-1. 检查 downstream_peer_ip 是否在 trustedIps 中
+1. 检查 downstream_peer_ip 是否在 trustedIpRefs 中
    ├─ 否 → 保持 downstream_peer_ip 作为 RemoteIp
    └─ 是 → 继续步骤 2
 
@@ -204,9 +258,9 @@ Edgion 默认采用 Nginx 风格（无上限，向后兼容），同时通过 `m
 
 3. 递归查找（如果 recursive=true）
    从右到左遍历：
-   ├─ 192.168.1.1 → 在 trustedIps 中 ✓ 继续
-   ├─ 198.51.100.2 → 在 trustedIps 中 ✓ 继续
-   └─ 203.0.113.1 → 不在 trustedIps 中 ✗ 这是真实 IP！
+   ├─ 192.168.1.1 → 在 trustedIpRefs 中 ✓ 继续
+   ├─ 198.51.100.2 → 在 trustedIpRefs 中 ✓ 继续
+   └─ 203.0.113.1 → 不在 trustedIpRefs 中 ✗ 这是真实 IP！
 
 4. 更新 ctx.request_info.remote_ip（通过 set_remote_ip 方法）
 ```
@@ -227,13 +281,27 @@ Edgion Gateway (downstream_peer_ip: 192.168.1.1)
 
 **配置：**
 ```yaml
-trustedIps:
-  - name: load-balancer
-    cidrs:
-      - "192.168.0.0/16"
-  - name: cdn
-    cidrs:
-      - "198.51.100.0/24"
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: default
+spec:
+  visibility: Namespace
+  data:
+    type: IpList
+    config:
+      items:
+      - name: load-balancer
+        cidrs:
+        - 192.168.0.0/16
+      - name: cdn
+        cidrs:
+        - 198.51.100.0/24
+---
+trustedIpRefs:
+  - name: realip-proxies-1
+    namespace: default
 realIpHeader: "X-Forwarded-For"
 recursive: true
 ```
@@ -243,13 +311,26 @@ recursive: true
 #### 场景 2：Cloudflare CDN
 
 ```yaml
-trustedIps:
-  - name: cloudflare
-    cidrs:
-      - "173.245.48.0/20"
-      - "103.21.244.0/22"
-      - "103.22.200.0/22"
-      # ... 更多 Cloudflare IP 范围
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: default
+spec:
+  visibility: Namespace
+  data:
+    type: IpList
+    config:
+      items:
+      - name: cloudflare
+        cidrs:
+        - 173.245.48.0/20
+        - 103.21.244.0/22
+        - 103.22.200.0/22
+---
+trustedIpRefs:
+  - name: realip-proxies-1
+    namespace: default
 realIpHeader: "CF-Connecting-IP"
 recursive: false
 ```
@@ -260,6 +341,23 @@ recursive: false
 
 ```yaml
 apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: production
+spec:
+  visibility: Namespace
+  data:
+    type: IpList
+    config:
+      items:
+      - name: private-ranges
+        cidrs:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+---
+apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: real-ip-basic
@@ -268,17 +366,38 @@ spec:
   requestPlugins:
     - type: RealIp
       config:
-        trustedIps:
-          - name: private-ranges
-            cidrs:
-              - "10.0.0.0/8"
-              - "172.16.0.0/12"
-              - "192.168.0.0/16"
+        trustedIpRefs:
+          - name: realip-proxies-1
+            namespace: production
 ```
 
 ### 示例 2：Cloudflare 配置
 
 ```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: production
+spec:
+  visibility: Namespace
+  data:
+    type: IpList
+    config:
+      items:
+      - name: cloudflare
+        cidrs:
+        - 173.245.48.0/20
+        - 103.21.244.0/22
+        - 103.22.200.0/22
+        - 103.31.4.0/22
+        - 141.101.64.0/18
+        - 108.162.192.0/18
+        - 190.93.240.0/20
+        - 188.114.96.0/20
+        - 197.234.240.0/22
+        - 198.41.128.0/17
+---
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -288,19 +407,9 @@ spec:
   requestPlugins:
     - type: RealIp
       config:
-        trustedIps:
-          - name: cloudflare
-            cidrs:
-              - "173.245.48.0/20"
-              - "103.21.244.0/22"
-              - "103.22.200.0/22"
-              - "103.31.4.0/22"
-              - "141.101.64.0/18"
-              - "108.162.192.0/18"
-              - "190.93.240.0/20"
-              - "188.114.96.0/20"
-              - "197.234.240.0/22"
-              - "198.41.128.0/17"
+        trustedIpRefs:
+          - name: realip-proxies-1
+            namespace: production
         realIpHeader: "CF-Connecting-IP"
         recursive: false
 ```
@@ -308,6 +417,27 @@ spec:
 ### 示例 3：多层代理
 
 ```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: production
+spec:
+  visibility: Namespace
+  data:
+    type: IpList
+    config:
+      items:
+      - name: internal
+        description: Internal proxy and private networks
+        cidrs:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+      - name: cdn
+        cidrs:
+        - 198.51.100.0/24
+---
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -317,16 +447,9 @@ spec:
   requestPlugins:
     - type: RealIp
       config:
-        trustedIps:
-          - name: internal
-            description: Internal proxy and private networks
-            cidrs:
-              - "10.0.0.0/8"
-              - "172.16.0.0/12"
-              - "192.168.0.0/16"
-          - name: cdn
-            cidrs:
-              - "198.51.100.0/24"
+        trustedIpRefs:
+          - name: realip-proxies-1
+            namespace: production
         realIpHeader: "X-Forwarded-For"
         recursive: true
 ```
@@ -362,7 +485,7 @@ A：查看请求日志中的 `remote_ip` 字段，或者在后端服务查看配
 
 ### Q: 可以同时信任多个 CDN 吗？
 
-A: 可以，将每个 CDN 作为 `trustedIps` 下独立的一个分组（每个 CDN 一个 `IpGroup`，把它的范围写进 `cidrs`）。
+A: 可以，在一个 IpList 内为每个 CDN 建立 IpGroup，或引用多份 IpList。
 
 ### Q: 支持动态更新吗？
 

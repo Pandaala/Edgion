@@ -229,8 +229,11 @@ async fn listener_annotation_can_be_added_and_removed_after_startup() {
         &HashSet::new(),
     );
     assert!(!accept_connection_view(publisher.snapshot().connection(&key), Some(&peer), 18094).await);
+    let list=serde_json::from_value(serde_json::json!({"metadata":{"name":"dynamic-bridge-blocklist","namespace":"default"},"spec":{"data":{"type":"IpList","config":{"items":[{"name":"blocked","cidrs":["10.0.0.0/8"]}]}}}})).unwrap();
+    crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store()
+        .insert_raw_for_test("default/dynamic-bridge-blocklist", Arc::new(list));
     let source = Arc::new(serde_yaml::from_str(
-            "apiVersion: edgion.io/v1\nkind: EdgionStreamPlugins\nmetadata: {name: dynamic-policy, namespace: default}\nspec:\n  plugins:\n    - type: IpRestriction\n      config:\n        deny: [{name: blocked, cidrs: [10.0.0.0/8]}]"
+            "apiVersion: edgion.io/v1\nkind: EdgionStreamPlugins\nmetadata: {name: dynamic-policy, namespace: default}\nspec:\n  plugins:\n    - type: IpRestriction\n      config:\n        denyRefs: [{name: dynamic-bridge-blocklist}]"
         ).unwrap());
     publisher.replace_stream_plugins(HashMap::from([("default/dynamic-policy".into(), source)]));
     assert!(!accept_connection_view(publisher.snapshot().connection(&key), Some(&peer), 18094).await);

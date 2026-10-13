@@ -6,7 +6,7 @@
 // - Verify recursive and non-recursive lookup modes
 // - Verify direct connection scenario
 //
-// Config: trustedIps: [{ name: "private-ranges", cidrs: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.1/32"] }]
+// Config: trusted IpList entries: [{ name: "private-ranges", cidrs: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.1/32"] }]
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use serde_json::Value;
@@ -187,7 +187,7 @@ impl RealIpPluginTestSuite {
                     let client = &ctx.http_client;
                     let url = format!("{}/headers", ctx.http_url());
 
-                    // All IPs are in trustedIps, should return the leftmost IP
+                    // All IPs are in trusted IpList entries, should return the leftmost IP
                     let request = client
                         .get(&url)
                         .header("host", HOST)

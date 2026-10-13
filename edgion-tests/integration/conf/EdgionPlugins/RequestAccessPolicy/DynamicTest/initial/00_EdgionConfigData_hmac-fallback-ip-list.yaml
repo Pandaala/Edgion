@@ -1,0 +1,13 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: hmac-fallback-ip-list
+  namespace: edgion-default
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: main
+        cidrs:
+        - 127.0.0.0/8

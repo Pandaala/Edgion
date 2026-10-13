@@ -4,15 +4,60 @@
 
 use async_trait::async_trait;
 
+use crate::plugins::runtime::conditions::ip_refs::{BoundIpPredicate, IpConditionCompiler};
+use crate::plugins::runtime::edgion_config_data::EdgionConfigDataSnapshot;
 use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
+use crate::util::real_ip_extractor::RealIpResolution;
 use crate::util::RealIpExtractor;
 use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::edgion_plugins::PluginValidation;
 use edgion_resources::resources::edgion_plugins::RealIpConfig;
+use std::sync::Arc;
 
-/// RealIp plugin: extracts real client IP using a per-instance RealIpExtractor.
+/// One validated policy and its actual-owner-bound trust references.
+pub struct RealIpPolicy {
+    extractor: RealIpExtractor,
+    trusted: Arc<BoundIpPredicate>,
+}
+impl RealIpPolicy {
+    pub(crate) fn bind(config: &RealIpConfig, compiler: &IpConditionCompiler<'_>) -> Result<Self, String> {
+        if let Some(error) = config.validation_error() {
+            return Err(error);
+        }
+        let trusted = compiler
+            .bind(&config.trusted)
+            .ok_or_else(|| "invalid owning RealIp trust references".to_string())?;
+        Ok(Self {
+            extractor: RealIpExtractor::new(config.real_ip_header.clone(), config.recursive, config.max_trusted_hops),
+            trusted,
+        })
+    }
+    pub(crate) fn real_ip_header(&self) -> &str {
+        self.extractor.real_ip_header()
+    }
+    pub(crate) fn resolve_session(&self, session: &dyn PluginSession, header_value: Option<&str>) -> RealIpResolution {
+        let available = self.trusted.available(session);
+        self.extractor
+            .resolve_real_ip(session.downstream_peer_ip(), header_value, |ip| {
+                available && self.trusted.contains(session, *ip)
+            })
+    }
+    pub(crate) fn resolve_in(
+        &self,
+        view: &EdgionConfigDataSnapshot,
+        peer: &str,
+        header_value: Option<&str>,
+    ) -> RealIpResolution {
+        let available = self.trusted.available_in(view);
+        self.extractor.resolve_real_ip(peer, header_value, |ip| {
+            available && self.trusted.contains_in(view, *ip)
+        })
+    }
+}
+
 pub struct RealIp {
-    extractor: Option<RealIpExtractor>,
+    policy: RealIpPolicy,
     header_log: &'static str,
 }
 
@@ -26,36 +71,15 @@ impl RealIp {
         }
     }
 
-    /// Create a new RealIp plugin from configuration
-    pub fn create(config: &RealIpConfig) -> Box<dyn RequestFilter> {
-        // Build RealIpExtractor from plugin config
-        let extractor = if !config.trusted_ips.is_empty() {
-            match RealIpExtractor::new(
-                &config.trusted_ips,
-                config.real_ip_header.clone(),
-                config.recursive,
-                config.max_trusted_hops,
-            ) {
-                Ok(e) => Some(e),
-                Err(err) => {
-                    tracing::error!(
-                        error = ?err,
-                        "Failed to create RealIpExtractor from plugin config"
-                    );
-                    None
-                }
-            }
-        } else {
-            tracing::warn!("RealIp plugin: trusted_ips is empty, plugin will be no-op");
-            None
-        };
-
-        let plugin = RealIp {
-            extractor,
+    pub(crate) fn create(
+        config: &RealIpConfig,
+        compiler: &IpConditionCompiler<'_>,
+    ) -> Result<Box<dyn RequestFilter>, String> {
+        let policy = RealIpPolicy::bind(config, compiler)?;
+        Ok(Box::new(Self {
+            policy,
             header_log: Self::header_log(&config.real_ip_header),
-        };
-
-        Box::new(plugin)
+        }))
     }
 }
 
@@ -66,16 +90,10 @@ impl RequestFilter for RealIp {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        // Check if extractor is available
-        let Some(ref extractor) = self.extractor else {
-            plugin_log.push_err("no extractor");
-            return PluginRunningResult::GoodNext;
-        };
-
+        session.ensure_config_data_view();
         plugin_log.push(self.header_log);
-
-        let header_value = session.header_str(extractor.real_ip_header());
-        let resolution = extractor.resolve_real_ip(session.downstream_peer_ip(), header_value);
+        let header_value = session.header_str(self.policy.real_ip_header());
+        let resolution = self.policy.resolve_session(session, header_value);
 
         if resolution.downstream_trusted {
             plugin_log.push("trusted proxy:match");

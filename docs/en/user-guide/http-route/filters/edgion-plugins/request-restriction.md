@@ -6,7 +6,7 @@
 
 ## Overview
 
-The `RequestRestriction` plugin restricts access using the shared `Condition` enum. Unlike `IpRestriction`, which focuses on IP addresses, this plugin matches request attributes (header, cookie, query, path, method) and **post-authentication identity** — mTLS client-certificate subject / SAN / CN (`mtlsMatch`) and verified JWT claims (`jwtClaimMatch`). Inline IP sets (`directPeerIpMatch` / `remoteIpMatch` with `ips`) can sit in the same group as a path match.
+The `RequestRestriction` plugin restricts access using the shared `Condition` enum. Unlike `IpRestriction`, which focuses on IP addresses, this plugin matches request attributes (header, cookie, query, path, method) and **post-authentication identity** — mTLS client-certificate subject / SAN / CN (`mtlsMatch`) and verified JWT claims (`jwtClaimMatch`). Referenced IpLists (`directPeerIpMatch` / `remoteIpMatch` with `ipRefs`) can sit in the same group as a path match.
 
 It remains a **local allow/deny matcher**, not a full RBAC orchestration layer: a condition is still a pure predicate, and a single required `mode` decides whether a match means admit or reject.
 
@@ -38,7 +38,7 @@ use `keyExist` with `negate: true` to match a missing header and reject it.
 - **Shared Condition vocabulary**: the same `Condition` types used by plugin `run`/`skip`
 - **Request attributes**: header, cookie, query, path, requestPath, method
 - **Identity matches**: `mtlsMatch` (subject / CN / SAN, optional `sanType`) and `jwtClaimMatch`
-- **Inline and referenced IP sets**: `directPeerIpMatch` / `remoteIpMatch` with `ips` and `ipRefs` (IpList ConfigData)
+- **Referenced IP sets**: `directPeerIpMatch` / `remoteIpMatch` with `ipRefs` (IpList ConfigData)
 - **Exact and regex matching**: `values` for exact matching, `regex` for regex matching
 - **Automatic performance optimization**: Exact match lists exceeding 16 values automatically use HashSet (O(1) lookup)
 - **Boolean composition**: explicit flat `allOf`, flat `anyOf`, or OR-of-AND
@@ -377,7 +377,7 @@ spec:
           anyOf:
             - allOf:
                 - type: directPeerIpMatch
-                  ips: ["127.0.0.1", "::1"]
+                  ipRefs: [{ name: local-peers }]
                 - type: keyMatch
                   key:
                     type: path
@@ -434,7 +434,7 @@ Edgion's `RequestRestriction` plugin unifies multiple restriction capabilities i
 5. **HashSet optimization**: Exact match lists exceeding 16 values automatically use HashSet for O(1) lookup.
 6. **Path vs requestPath**: `key: { type: path }` is compared against the normalized current path (and `values` are normalized at load time); `key: { type: requestPath }` is the entry-time raw path. Regex is never normalized.
 7. **Missing values**: `keyMatch` / identity matches are false when the value is absent. Use `keyExist` + `negate: true` to match absence.
-8. **ipRefs**: conditions may use inline `ips` and `ipRefs` (IpList ConfigData). The Controller expands `ipRefs` onto `resolvedIps` on apply. A missing, disabled, wrong-type, or unpermitted IpList reference is fail-closed (`ResolvedRefs=False`); the gateway does not compile an empty matcher from unresolved operator `ipRefs`.
+8. **ipRefs**: IP conditions accept referenced IpLists only. Required entry/body conditions and Deny restrictions preflight every required reference before short-circuit evaluation and return a generic 500 while any dependency is unavailable. Availability recovers on a later valid IpList publication. Allow restrictions skip incomplete alternatives. A dependency failure is never inverted by `negate`.
 
 ## FAQ
 

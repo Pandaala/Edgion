@@ -6,16 +6,16 @@
 # proves ABSENCE: it fails the run if any resource in the fleet carries a
 # typo'd config key. This script proves PRESENCE end to end:
 #
-#   1. apply an EdgionPlugins fixture with `config.denys` (typo for `deny`);
+#   1. apply an EdgionPlugins fixture with `config.denyRefss` (typo for `denyRefs`);
 #      assert the diagnostics endpoint reports exactly
-#      `requestPlugins[0].config.denys`, that the resource is still
+#      `requestPlugins[0].config.denyRefss`, that the resource is still
 #      `Accepted: True` (the warn-not-reject contract),
 #      and that an `UnknownConfigFields` status condition is present;
 #   2. apply a ForwardAuth fixture with `successStatusCodes` -- a key that no
 #      longer exists, AND one `deny_unknown_fields` structurally cannot catch
 #      because ForwardAuthConfig `#[serde(flatten)]`s its connection struct;
 #      assert it is reported;
-#   3. apply an EdgionStreamPlugins fixture with the same `denys` typo;
+#   3. apply an EdgionStreamPlugins fixture with the same `denyRefss` typo;
 #      assert it is reported;
 #   4. apply a typed EdgionConfigData `Selector` with `descripton`; assert it
 #      is reported, then apply a `Misc` payload with arbitrary nested keys and
@@ -106,13 +106,45 @@ cleanup() {
         kill "$CONTROLLER_PID" 2>/dev/null || true
         sleep 1
         kill -9 "$CONTROLLER_PID" 2>/dev/null || true
+        wait "$CONTROLLER_PID" 2>/dev/null || true
     fi
-    if [[ "$TEST_PASSED" -eq 1 ]]; then
+    # The stopped worker cannot recreate status siblings during bounded cleanup.
+    local acl_cleanup_failed=0
+    if ! python3 - "$CONF_WATCH_DIR" <<'PY_ACL_CLEANUP'
+import pathlib
+import subprocess
+import sys
+
+watch = pathlib.Path(sys.argv[1])
+stems = [
+    "EdgionPlugins_edgion-test_uf-ipr",
+    "EdgionStreamPlugins_edgion-test_uf-sp",
+    "EdgionConfigData_edgion-test_acl-uf-ipr-allow",
+    "EdgionConfigData_edgion-test_acl-uf-ipr-deny",
+    "EdgionConfigData_edgion-test_acl-uf-sp-allow",
+    "EdgionConfigData_edgion-test_acl-uf-sp-deny",
+]
+failures = []
+for stem in stems:
+    try:
+        subprocess.run(["rm", "-f", str(watch / (stem + ".yaml")),
+                        str(watch / (stem + ".yaml.status"))], check=True, timeout=12)
+    except (OSError, subprocess.SubprocessError) as error:
+        failures.append(stem + " (" + type(error).__name__ + ")")
+if failures:
+    print("ACL fixture cleanup failed: " + "; ".join(failures), file=sys.stderr)
+sys.exit(1 if failures else 0)
+PY_ACL_CLEANUP
+    then
+        acl_cleanup_failed=1
+    fi
+    if [[ "$TEST_PASSED" -eq 1 && "$acl_cleanup_failed" -eq 0 ]]; then
         log_info "Removing WORK_DIR (test passed): $WORK_DIR"
         rm -rf "$WORK_DIR"
     else
         log_warn "Keeping WORK_DIR for post-mortem: $WORK_DIR"
     fi
+    return "$acl_cleanup_failed"
 }
 trap cleanup EXIT
 
@@ -333,10 +365,16 @@ status_file_for() {
 
 # --- Test sequence ---
 
-log_section "Test 1: EdgionPlugins IpRestriction — config.denys reported, Accepted stays True"
+# Four explicit suite-owned lists; fixed and typo generations share only their own slot.
+for list_name in acl-uf-ipr-allow acl-uf-ipr-deny acl-uf-sp-allow acl-uf-sp-deny; do
+    cp "${FIXTURE_DIR}/EdgionConfigData_edgion-test_${list_name}.yaml" "${CONF_WATCH_DIR}/"
+done
+
+
+log_section "Test 1: EdgionPlugins IpRestriction — config.denyRefss reported, Accepted stays True"
 cp "${FIXTURE_DIR}/EdgionPlugins_edgion-test_uf-ipr.yaml" "${CONF_WATCH_DIR}/"
 wait_for_diag_total 1 "after uf-ipr apply"
-assert_item_reported "EdgionPlugins" "$NS" "$IPR_NAME" "requestPlugins[0].config.denys"
+assert_item_reported "EdgionPlugins" "$NS" "$IPR_NAME" "requestPlugins[0].config.denyRefss"
 IPR_STATUS=$(status_file_for EdgionPlugins "$NS" "$IPR_NAME")
 wait_condition_status "$IPR_STATUS" "UnknownConfigFields" "True" "uf-ipr UnknownConfigFields present"
 acc=$(condition_status "$IPR_STATUS" "Accepted")
@@ -353,12 +391,18 @@ assert_item_reported "EdgionPlugins" "$NS" "$FA_NAME" "requestPlugins[0].config.
 FA_STATUS=$(status_file_for EdgionPlugins "$NS" "$FA_NAME")
 wait_condition_status "$FA_STATUS" "UnknownConfigFields" "True" "uf-fa UnknownConfigFields present"
 
-log_section "Test 3: EdgionStreamPlugins — plugins[0].config.denys reported"
+log_section "Test 3: EdgionStreamPlugins — plugins[0].config.denyRefss reported"
 cp "${FIXTURE_DIR}/EdgionStreamPlugins_edgion-test_uf-sp.yaml" "${CONF_WATCH_DIR}/"
 wait_for_diag_total 3 "after uf-sp apply"
-assert_item_reported "EdgionStreamPlugins" "$NS" "$SP_NAME" "plugins[0].config.denys"
+assert_item_reported "EdgionStreamPlugins" "$NS" "$SP_NAME" "plugins[0].config.denyRefss"
 SP_STATUS=$(status_file_for EdgionStreamPlugins "$NS" "$SP_NAME")
 wait_condition_status "$SP_STATUS" "UnknownConfigFields" "True" "uf-sp UnknownConfigFields present"
+acc=$(condition_status "$SP_STATUS" "Accepted")
+if [ "$acc" != "True" ]; then
+    log_error "uf-sp Accepted=$acc (expected True; advisory typo must not reject config)"
+    exit 1
+fi
+
 
 log_section "Test 4: typed EdgionConfigData typo reported; Misc payload remains open"
 cp "${FIXTURE_DIR}/EdgionConfigData_edgion-test_uf-cd.yaml" "${CONF_WATCH_DIR}/"

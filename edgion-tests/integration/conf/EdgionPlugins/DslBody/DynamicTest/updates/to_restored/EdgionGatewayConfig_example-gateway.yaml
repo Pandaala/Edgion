@@ -6,14 +6,9 @@ spec:
   server:
     downstreamKeepaliveRequestLimit: 1000
   realIp:
-    trustedIps:
-      - name: private-ranges
-        cidrs:
-          - "127.0.0.0/8"
-          - "198.51.100.0/24"
-          - "192.168.0.0/16"
-          - "10.0.0.0/8"
-          - "172.16.0.0/12"
+    trustedIpRefs:
+      - name: global-realip-proxies
+        namespace: edgion-test
     realIpHeader: "X-Forwarded-For"
   securityProtect:
     xForwardedForLimit: 200

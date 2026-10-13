@@ -1,56 +1,47 @@
 use super::*;
 use crate::resources::edgion_plugins::PluginValidation;
 
-fn group(name: &str, cidrs: &[&str]) -> IpGroup {
-    IpGroup {
-        name: name.to_string(),
-        description: None,
-        cidrs: cidrs.iter().map(|s| s.to_string()).collect(),
-    }
-}
-
 #[test]
 fn validation_error_both_none() {
     let config = IpRestrictionConfig::default();
     let result = PluginValidation::validation_error(&config);
     assert_eq!(
         result,
-        Some("At least one of 'allow'/'deny' or 'allowRefs'/'denyRefs' must be non-empty".to_string())
+        Some("At least one of 'allowRefs'/'denyRefs' must be non-empty".to_string())
     );
 }
 
 #[test]
 fn validation_error_empty_allow_list() {
     let config = IpRestrictionConfig {
-        allow: Some(vec![]),
+        refs: serde_json::from_value(serde_json::json!({"allowRefs":[]})).unwrap(),
         ..Default::default()
     };
     let result = PluginValidation::validation_error(&config);
     assert_eq!(
         result,
-        Some("At least one of 'allow'/'deny' or 'allowRefs'/'denyRefs' must be non-empty".to_string())
+        Some("At least one of 'allowRefs'/'denyRefs' must be non-empty".to_string())
     );
 }
 
 #[test]
 fn validation_error_empty_deny_list() {
     let config = IpRestrictionConfig {
-        deny: Some(vec![]),
+        refs: serde_json::from_value(serde_json::json!({"denyRefs":[]})).unwrap(),
         ..Default::default()
     };
     let result = PluginValidation::validation_error(&config);
     assert_eq!(
         result,
-        Some("At least one of 'allow'/'deny' or 'allowRefs'/'denyRefs' must be non-empty".to_string())
+        Some("At least one of 'allowRefs'/'denyRefs' must be non-empty".to_string())
     );
 }
 
 #[test]
 fn validation_error_tolerates_invalid_inline_cidr() {
-    // Partial-good (CIDR-only leniency): a bad inline CIDR no longer rejects the
-    // plugin at admission; CIDR errors are surfaced later via status/metric.
+    // Canonical IpList admission owns CIDR validation; the consumer validates references.
     let config = IpRestrictionConfig {
-        allow: Some(vec![group("default", &["not-an-ip"])]),
+        refs: serde_json::from_value(serde_json::json!({"allowRefs":[{"name":"clients"}]})).unwrap(),
         ..Default::default()
     };
     let result = PluginValidation::validation_error(&config);
@@ -61,7 +52,7 @@ fn validation_error_tolerates_invalid_inline_cidr() {
 fn validation_error_valid_status_200() {
     for status in [200, 599] {
         let config = IpRestrictionConfig {
-            allow: Some(vec![group("default", &["192.168.1.1"])]),
+            refs: serde_json::from_value(serde_json::json!({"allowRefs":[{"name":"clients"}]})).unwrap(),
             status,
             ..Default::default()
         };
@@ -74,7 +65,7 @@ fn validation_error_valid_status_200() {
 fn validation_error_rejects_non_final_statuses() {
     for status in [100, 101, 199, 600] {
         let config = IpRestrictionConfig {
-            allow: Some(vec![group("default", &["192.168.1.1"])]),
+            refs: serde_json::from_value(serde_json::json!({"allowRefs":[{"name":"clients"}]})).unwrap(),
             status,
             ..Default::default()
         };
@@ -86,8 +77,8 @@ fn validation_error_rejects_non_final_statuses() {
 #[test]
 fn validation_error_valid_config() {
     let config = IpRestrictionConfig {
-        allow: Some(vec![group("a", &["192.168.1.0/24"])]),
-        deny: Some(vec![group("b", &["192.168.1.100"])]),
+        refs: serde_json::from_value(serde_json::json!({"allowRefs":[{"name":"clients"}]})).unwrap(),
+
         status: 403,
         ..Default::default()
     };

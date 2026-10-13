@@ -23,17 +23,15 @@ FixtureLoader.yaml_implicit_resolvers = {
 FixtureLoader.add_implicit_resolver("tag:yaml.org,2002:bool", re.compile(r"^(?:true|false)$", re.I), list("tTfF"))
 
 ECD = "/spec/data/config/items/0/cidrs/0"
-INLINE = "/spec/requestPlugins/0/config/deny/0/cidrs/0"
-RAP = "/spec/requestPlugins/0/config/profiles/lockdown/requiredRuleGroups/0/anyOfRules/0/config/ips/0"
 CATALOG = [
     ("IpRestrictionRefs/01_EdgionConfigData_ipref-allowlist.yaml", "EdgionConfigData", "edgion-default", "ipref-allowlist", ECD, "192.168.0.0/16", "hit", "loopback", None),
     ("IpRestrictionRefs/01_EdgionConfigData_ipref-blocklist.yaml", "EdgionConfigData", "edgion-default", "ipref-blocklist", ECD, "192.168.0.0/16", "hit", "blocked", None),
     ("IpRestrictionPartialGood/01_EdgionConfigData_ippg-blocklist-hit.yaml", "EdgionConfigData", "edgion-default", "ippg-blocklist-hit", ECD, "192.168.0.0/16", "hit", "mixed-good-and-bad", "not-a-cidr"),
     ("IpRestrictionPartialGood/01_EdgionConfigData_ippg-blocklist-miss.yaml", "EdgionConfigData", "edgion-default", "ippg-blocklist-miss", ECD, "10.0.0.0/8", "miss", "mixed-good-and-bad", "999.0.0.1/8"),
-    ("IpRestrictionPartialGood/02_EdgionPlugins_inline_deny_hit.yaml", "EdgionPlugins", "edgion-default", "ip-restriction-inline-deny-hit", INLINE, "192.168.0.0/16", "hit", "mixed-good-and-bad", "not-a-cidr"),
-    ("IpRestrictionPartialGood/02_EdgionPlugins_inline_deny_miss.yaml", "EdgionPlugins", "edgion-default", "ip-restriction-inline-deny-miss", INLINE, "10.0.0.0/8", "miss", "mixed-good-and-bad", "not-a-cidr"),
-    ("RequestAccessPolicy/03_EdgionPlugins_edgion-test_gac-lockdown.yaml", "EdgionPlugins", "edgion-test", "gac-lockdown", RAP, "192.168.0.0/16", "hit", "cloudflare", None),
-    ("RequestAccessPolicy/04_EdgionPlugins_edgion-test_gac-ip-outside.yaml", "EdgionPlugins", "edgion-test", "gac-ip-outside", RAP, "10.0.0.0/8", "miss", "cloudflare", None),
+    ("IpRestrictionPartialGood/00_EdgionConfigData_acl-ip-restriction-inline-de-deny-66dd1d77d6.yaml", "EdgionConfigData", "edgion-default", "acl-ip-restriction-inline-de-deny-66dd1d77d6", ECD, "192.168.0.0/16", "hit", "mixed-good-and-bad", "not-a-cidr"),
+    ("IpRestrictionPartialGood/00_EdgionConfigData_acl-ip-restriction-inline-de-deny-f1570dac16.yaml", "EdgionConfigData", "edgion-default", "acl-ip-restriction-inline-de-deny-f1570dac16", ECD, "10.0.0.0/8", "miss", "mixed-good-and-bad", "not-a-cidr"),
+    ("RequestAccessPolicy/00_EdgionConfigData_gac-lockdown-ips.yaml", "EdgionConfigData", "edgion-test", "gac-lockdown-ips", ECD, "192.168.0.0/16", "hit", "main", None),
+    ("RequestAccessPolicy/00_EdgionConfigData_gac-private-ips.yaml", "EdgionConfigData", "edgion-test", "gac-private-ips", ECD, "10.0.0.0/8", "miss", "main", None),
     ("RequestAccessPolicy/08_EdgionConfigData_edgion-test_gac-url-loopback.yaml", "EdgionConfigData", "edgion-test", "gac-url-loopback", ECD, "192.168.0.0/16", "hit", "loopback", None),
 ]
 
@@ -61,8 +59,40 @@ def pointer_parent(document, pointer):
     return current, int(parts[-1]) if isinstance(current, list) else parts[-1]
 
 
+RAP_CONSUMERS = [
+    ("RequestAccessPolicy/03_EdgionPlugins_edgion-test_gac-lockdown.yaml", "gac-lockdown", "gac-lockdown-ips"),
+    ("RequestAccessPolicy/04_EdgionPlugins_edgion-test_gac-ip-outside.yaml", "gac-ip-outside", "gac-private-ips"),
+]
+RAP_DOCUMENTATION = "RequestAccessPolicy/00_EdgionConfigData_gac-documentation-ips.yaml"
+
+
+def assert_rap_consumers(root):
+    for relative, name, target in RAP_CONSUMERS:
+        documents = list(yaml.load_all((root / "EdgionPlugins" / relative).read_text(), Loader=FixtureLoader))
+        require(len(documents) == 1, f"RAP document count changed: {relative}")
+        source = documents[0]
+        require(source["apiVersion"] == "edgion.io/v1" and source["kind"] == "EdgionPlugins" and source["metadata"]["name"] == name and source["metadata"]["namespace"] == "edgion-test", f"RAP identity changed: {relative}")
+        plugins = source["spec"]["requestPlugins"]
+        require(len(plugins) == 1 and plugins[0]["enable"] is True and plugins[0]["type"] == "RequestAccessPolicy", f"RAP entry changed: {relative}")
+        config = plugins[0]["config"]
+        require(config["defaultProfile"] == "lockdown", f"RAP default profile changed: {relative}")
+        groups = config["profiles"]["lockdown"]["requiredRuleGroups"]
+        require(len(groups) == 1 and groups[0]["name"] == "source" and len(groups[0]["anyOfRules"]) == 1, f"RAP source group changed: {relative}")
+        rule = groups[0]["anyOfRules"][0]
+        require(rule["name"] == "cloudflare" and rule["type"] == "directPeerIp" and rule["config"]["ipRefs"] == [{"name": target}] and "ips" not in rule["config"], f"RAP list reference changed: {relative}")
+        require(rule["config"]["conditions"] == {"allOf": [{"type": "secretMatch", "key": {"type": "header", "name": "X-CF-Secret"}, "secretRef": {"name": "gac-origin-secret", "namespace": "edgion-test"}, "secretKey": "token"}]}, f"RAP Secret condition changed: {relative}")
+        normal = config["profiles"]["normal"]["requiredRuleGroups"]
+        require(len(normal) == 1 and normal[0]["name"] == "source" and normal[0]["anyOfRules"] == [{"name": "none", "type": "directPeerIp", "config": {"ipRefs": [{"name": "gac-documentation-ips"}]}}], f"RAP normal profile changed: {relative}")
+    documentation = list(yaml.load_all((root / "EdgionPlugins" / RAP_DOCUMENTATION).read_text(), Loader=FixtureLoader))
+    require(len(documentation) == 1, "RAP documentation list document count changed")
+    source = documentation[0]
+    require(source["apiVersion"] == "edgion.io/v1" and source["kind"] == "EdgionConfigData" and source["metadata"]["name"] == "gac-documentation-ips" and source["metadata"]["namespace"] == "edgion-test", "RAP documentation list identity changed")
+    require(source["spec"]["data"] == {"type": "IpList", "config": {"items": [{"name": "main", "cidrs": ["192.0.2.0/24"]}]}}, "RAP normal exclusion changed")
+
+
 def render(root, uid, address):
     address, hit, miss = cidrs(uid, address)
+    assert_rap_consumers(root)
     result = []
     for relative, kind, namespace, name, pointer, original, choice, ancestor, invalid in CATALOG:
         documents = list(yaml.load_all((root / "EdgionPlugins" / relative).read_text(), Loader=FixtureLoader))
@@ -72,22 +102,8 @@ def render(root, uid, address):
         require(source["metadata"]["name"] == name and source["metadata"]["namespace"] == namespace, f"resource identity changed: {relative}")
         parent, index = pointer_parent(source, pointer)
         require(parent == ([original, invalid] if invalid else [original]), f"CIDR siblings changed: {relative}")
-        if pointer == ECD:
-            data = source["spec"]["data"]
-            require(data["type"] == "IpList" and len(data["config"]["items"]) == 1 and data["config"]["items"][0]["name"] == ancestor, f"IpList shape changed: {relative}")
-        else:
-            plugins = source["spec"]["requestPlugins"]
-            require(len(plugins) == 1, f"plugin count changed: {relative}")
-            config = plugins[0]["config"]
-            if pointer == INLINE:
-                require(plugins[0]["type"] == "IpRestriction" and config["ipSource"] == "RemoteIp" and config["deny"][0]["name"] == ancestor and len(config["deny"]) == 1, f"inline shape changed: {relative}")
-            else:
-                group = config["profiles"]["lockdown"]["requiredRuleGroups"][0]
-                rule = group["anyOfRules"][0]
-                require(plugins[0]["type"] == "RequestAccessPolicy" and config["defaultProfile"] == "lockdown" and group["name"] == "source" and rule["name"] == ancestor and rule["type"] == "directPeerIp", f"RAP shape changed: {relative}")
-                secret = rule["config"]["conditions"]["allOf"][0]
-                require(secret["type"] == "secretMatch" and secret["secretRef"] == {"name": "gac-origin-secret", "namespace": "edgion-test"} and secret["secretKey"] == "token" and secret["key"] == {"type": "header", "name": "X-CF-Secret"}, f"RAP Secret condition changed: {relative}")
-                require(config["profiles"]["normal"]["requiredRuleGroups"][0]["anyOfRules"][0]["config"]["ips"] == ["192.0.2.0/24"], f"normal exclusion changed: {relative}")
+        data = source["spec"]["data"]
+        require(pointer == ECD and data["type"] == "IpList" and len(data["config"]["items"]) == 1 and data["config"]["items"][0]["name"] == ancestor, f"IpList shape changed: {relative}")
         document = copy.deepcopy(source)
         target, index = pointer_parent(document, pointer)
         target[index] = hit if choice == "hit" else miss

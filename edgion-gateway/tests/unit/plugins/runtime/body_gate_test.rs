@@ -65,7 +65,13 @@ fn runtime_policy_caches_resolved_fields_at_construction() {
         on_read_failure: BodyReadFailureMode::FailOpen,
     };
 
-    let policy = BodyGatePolicy::new(requirement);
+    let policy = BodyGatePolicy::new(
+        requirement.clone(),
+        requirement
+            .conditions
+            .filter(|conditions| !conditions.is_empty())
+            .map(CompiledPluginConditions::new),
+    );
 
     assert_eq!(policy.logical_limit_bytes, Some(64 * 1024 * 1024));
     assert_eq!(policy.on_read_failure, BodyReadFailureMode::FailOpen);
@@ -74,10 +80,13 @@ fn runtime_policy_caches_resolved_fields_at_construction() {
 
 #[test]
 fn runtime_policy_normalizes_empty_conditions() {
-    let policy = BodyGatePolicy::new(BodyRequirement {
-        conditions: Some(PluginConditions::default()),
-        ..BodyRequirement::fail_close()
-    });
+    let policy = BodyGatePolicy::new(
+        BodyRequirement {
+            conditions: Some(PluginConditions::default()),
+            ..BodyRequirement::fail_close()
+        },
+        None,
+    );
 
     assert!(policy.conditions.is_none());
 }

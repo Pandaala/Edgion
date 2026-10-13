@@ -205,24 +205,44 @@ country unless the source IP is on the office allowlist" is expressed by placing
 and the IP plugin as **separate, ordered entries** on the same plugin list:
 
 ```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: example-policy-allow-1
+  namespace: edgion-default
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+      - name: office-network
+        description: Office clients exempt from the geo rule
+        cidrs:
+        - 10.0.0.0/8
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: geo-with-acl
+  namespace: edgion-default
 spec:
   requestPlugins:
-    - type: IpRestriction
-      config:
-        allow:
-          - name: office-network
-            description: Office clients exempt from the geo rule
-            cidrs: ["10.0.0.0/8"]
-    - type: GeoIpLocation
-      config:
-        defaultAction: allow
-        failOpen: false
-        denyRuleGroups:
-          - name: block-ru
-            rules:
-              - source: DirectPeerIp
-                key: country
-                values: ["RU"]
+  - type: IpRestriction
+    config:
+      allowRefs:
+      - name: example-policy-allow-1
+        namespace: edgion-default
+  - type: GeoIpLocation
+    config:
+      defaultAction: allow
+      failOpen: false
+      denyRuleGroups:
+      - name: block-ru
+        rules:
+        - source: DirectPeerIp
+          key: country
+          values:
+          - RU
 ```
 
 ### Rule shape
@@ -232,39 +252,76 @@ spec:
   `X-Forwarded-For` against the trusted-proxy set — **L7 only**; a rule using `RemoteIp` in an
   L4 `GeoIpLocation` config is a hard admission error, since L4 has no HTTP headers to resolve a
   forwarded-for chain from. See [`RemoteIp` is spoofable](#remoteip-is-spoofable-directpeerip-is-not).
-- **`key`**: `cidr` matches the address itself against one or more CIDRs/bare IPs (a bare IP is
-  shorthand for its `/32`/`/128`) and needs no GeoIP database at all — see
+- **`key`**: `cidr` matches the address through nonempty ordered `ipRefs` to central IpLists;
+  addresses belong to those lists' named `items`/IpGroups. It needs no GeoIP database — see
   [CIDR-only rules](#cidr-only-rules-never-touch-failopen). `country` / `continent` /
   `subdivision` are ISO codes, normalized to **uppercase** at compile time; an unrecognized code
   is a **WARN**, not a rejection (lenient-admission policy). `city` is free text, matched against
   `names["en"]`, case-sensitive — see [`city` matches the English name only](#city-matches-the-english-name-only).
-- **`values`**: must be **non-empty** — an empty list is rejected at admission. A rule with no
+- **`values`**: geographic keys require a **non-empty** list. CIDR rules forbid this field
+  by presence, including null or empty values; use `ipRefs`. Geographic rules forbid `ipRefs`. A rule with no
   values expresses no criterion, and reading it as "matches everything" would turn a deny group
   into a total outage and an allow group into an open whitelist. To drop a criterion, delete the
   rule. A dimension the resolved record cannot supply makes a rule simply **not match** — there
   is no separate `onMissing` knob to configure; see
   [Absent dimensions](#absent-dimensions-are-ordinary-rule-misses).
 
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: office-networks
+  namespace: apps
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+        - name: office
+          cidrs: ["10.0.0.0/8"]
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: office-geo
+  namespace: apps
+spec:
+  requestPlugins:
+    - type: GeoIpLocation
+      config:
+        failOpen: false
+        allowRuleGroups:
+          - name: office
+            rules:
+              - source: DirectPeerIp
+                key: cidr
+                ipRefs: [{name: office-networks}]
+```
+
 ### Unknown fields are rejected, not ignored
 
-Every `GeoIpLocation` config struct is strict: a field name this plugin does not recognize is a
-hard admission error naming the offending key, not a silently ignored line.
+Unknown fields at config/group/rule level, removed CIDR `values`, and `geoipRefs` produce
+an invalid typed generation. Their values are discarded; a bounded `invalidInput` marker survives
+Controller-to-Gateway transport. An operator-supplied false cannot clear detected invalidity.
+Published invalid HTTP policy installs the existing configuration 500 gate; Stream policy denies
+connections. Clean publication recovers. This avoids a typed watcher decode error silently
+retaining a previous executable policy.
 
-This is deliberate, and stricter than most other plugins. A geo config is a security control, and
-the ways it can be mistyped all fail *open*:
+The existing opaque plugin config CRD preserves these fields so ingest can detect them. A separate
+API-admission rejection never reaches publication and leaves the previous admitted generation
+active. Do not confuse admission failure with publishing a typed invalid replacement.
 
-| Typo | What it used to do |
-|---|---|
-| `denyRuleGroup:` (singular) | The whole rule list vanished, leaving an empty config — i.e. parse-only mode. Every request was allowed, `failOpen: false` stopped being required, and the resource still reported `Accepted: True`. |
-| `valuez:` inside a rule | `values` defaulted to empty, which used to mean "matches everything" — a total outage in a deny group, an open whitelist in an allow group. |
+Every required CIDR reference is checked before group shortcuts or MMDB work, using the same
+ConfigData snapshot for all rules and address sources. Missing, disabled, wrong-type, denied or
+invalid-identity lists fail closed regardless of `failOpen`. In ordinary HTTP dispatch the shared
+required-dependency gate returns 500 before outer conditions; a direct plugin invocation retains
+its fixed 403 backstop. Stream reports the bounded `ref_unavailable` denial reason. IpList-only
+updates/deletion/recovery remain live on a retained policy.
 
-Neither is detectable from the outside: the resource is accepted and traffic flows. The
-EdgionPlugins CRD models plugin `config` as `x-kubernetes-preserve-unknown-fields`, so the API
-server forwards unknown keys untouched — schema strictness here is the only gate that can catch
-them.
-
-The practical consequence: **an empty `config: {}` now means parse-only because someone wrote it
-that way**, never because a rule silently failed to parse.
+The central IpList compiler intentionally uses partial-good admission, replacing former strict
+inline Geo CIDR validation: invalid list entries are skipped, valid entries match, and an available
+empty/all-invalid list matches no address. Unavailable lists are a separate failure state. Empty
+HTTP `config: {}` remains parse-only; an unknown key cannot turn invalid policy into parse-only.
 
 ### Rule groups: AND within a group, OR across groups
 
@@ -349,31 +406,46 @@ to be loaded.
 
 `RemoteIp` resolves from an address that is **derived from `X-Forwarded-For`**, which is
 client-controlled input. It is only trustworthy when the deployment genuinely terminates behind
-a trusted proxy — i.e., a `RealIp` plugin is configured with a `trustedIps` set that actually,
+a trusted proxy — i.e., a `RealIp` plugin is configured with a `trustedIpRefs` set that actually,
 tightly matches your real proxy/CDN egress ranges, and the connection's TCP peer is inside that
 set. If those conditions don't hold, `RemoteIp` is just a clone of the effective L4 peer address, and
 a `RemoteIp` rule degrades to (harmlessly) the same value a `DirectPeerIp` rule would read.
 
-The dangerous configuration is a `trustedIps` set scoped far too broadly — the extreme case being
+The dangerous configuration is a `trustedIpRefs` set scoped far too broadly — the extreme case being
 a default route:
 
 ```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: default
+spec:
+  visibility: Namespace
+  data:
+    type: IpList
+    config:
+      items:
+      - name: everyone
+        cidrs:
+        - 0.0.0.0/0
+---
 # ANTI-PATTERN — do not do this
 - type: RealIp
   config:
-    trustedIps:
-      - name: everyone
-        cidrs: ["0.0.0.0/0"]
+    trustedIpRefs:
+      - name: realip-proxies-1
+        namespace: default
 ```
 
 With this in place, **any** client can send `X-Forwarded-For: 1.1.1.1` and be treated as
 originating from wherever `1.1.1.1` geolocates, completely bypassing a deny rule sourced on
 `RemoteIp`. This is a realistic misconfiguration behind a CDN whose published egress ranges are
-incomplete or change — an operator broadens `trustedIps` "to be safe" and unknowingly hands
+incomplete or change — an operator broadens `trustedIpRefs` "to be safe" and unknowingly hands
 every client full control over the geo decision.
 
 > **Note on automated detection.** There is currently **no ingest-time warning** that
-> cross-checks a `RemoteIp` `GeoIpLocation` rule against the listener's `RealIp`/`trustedIps`
+> cross-checks a `RemoteIp` `GeoIpLocation` rule against the listener's `RealIp`/`trustedIpRefs`
 > configuration. The trustworthiness of `RemoteIp` is entirely the operator's responsibility to
 > verify by inspecting the `RealIp` plugin config for the same route/gateway. If your deployment
 > does not genuinely terminate behind a trusted, tightly-scoped proxy, prefer `DirectPeerIp` for
@@ -557,7 +629,7 @@ mechanism that lets some ext-log fields opt out of masking does not apply here; 
 | `edgion_geoip_db_build_epoch_seconds` | Gauge | none | Build timestamp of the loaded database. Alert on staleness. |
 | `edgion_geoip_update_failed_total` | Counter | `reason` (`fetch` \| `encoding` \| `size_cap` \| `stall` \| `validation` \| `rename` \| `disk` \| `deadline`) | Background *update-cycle* failures, by class. `disk` is the free-space precheck refusing to start (no request was ever issued); `deadline` is the whole cycle exceeding `download_deadline_sec` despite steady progress, distinct from `stall` (no progress within `stall_timeout_sec`) — the two call for opposite fixes. |
 | `edgion_geoip_lookup_panic_total` | Counter | none | A per-request MMDB lookup panicked (caught) and was reported as `Failed`. Distinct from `edgion_geoip_update_failed_total` above: this is a per-request event on the query path, not an update-cycle failure. Decode-without-panic failures share the `Failed` outcome but do not increment this counter. |
-| `edgion_geoip_denied_total` | Counter | `layer` (`stage1` \| `tcp`), `reason` (`deny_country` \| `allow_miss` \| `db_unavailable` \| `lookup_failed`) | L4 decisions denied by `GeoIpLocation`. `stage1` is listener admission (including TLS), and `tcp` covers TCPRoute and UDP transport-route admission. The metric never carries a client address; HTTP denials are deliberately absent because they already appear in the access log. |
+| `edgion_geoip_denied_total` | Counter | `layer` (`stage1` \| `tcp`), `reason` (`deny_country` \| `allow_miss` \| `db_unavailable` \| `lookup_failed` \| `ref_unavailable`) | L4 decisions denied by `GeoIpLocation`. `stage1` is listener admission (including TLS), and `tcp` covers TCPRoute and UDP transport-route admission. The metric never carries a client address; HTTP denials are deliberately absent because they already appear in the access log. |
 
 ## Multi-replica update behavior, jitter, and the `.meta` validator
 
@@ -616,7 +688,7 @@ backoff is used, and the next request is unconditional.
 | Updater cycles fail permanently with `reason="disk"` (or an `ENOSPC`-flavored error) | Update volume undersized for a swap (needs `max_db_bytes` for the `.tmp` + 2× the current database size for the old inode/rename double-hold) | Resize the volume per the formula above, not to 3× `max_db_bytes` |
 | A `country` + `city` rule group never matches anything | The loaded database's records don't carry city data for this rule — see [no "database tier" concept](#absent-dimensions-are-ordinary-rule-misses) | Check the access log's `geo` block against your provider's documentation for what the loaded database actually resolves; drop the `city`/`subdivision` rule if it's structurally never going to match |
 | A `city` rule with a translated-language value never matches | `city` only ever compares against `names["en"]` | Use the English city name |
-| A blacklist-mode rule sourced on `RemoteIp` is trivially bypassed by any client | `RealIp`'s `trustedIps` is scoped too broadly (e.g. `0.0.0.0/0`) — `RemoteIp` degrades to attacker-controlled input | Scope `trustedIps` to your actual proxy egress ranges, or switch the rule to `DirectPeerIp` |
+| A blacklist-mode rule sourced on `RemoteIp` is trivially bypassed by any client | `RealIp`'s `trustedIpRefs` is scoped too broadly (e.g. `0.0.0.0/0`) — `RemoteIp` degrades to attacker-controlled input | Scope `trustedIpRefs` to your actual proxy egress ranges, or switch the rule to `DirectPeerIp` |
 | L4 config rejected at ingest/compile mentioning `RemoteIp` | `source: RemoteIp` is a hard admission error in an L4 `GeoIpLocation` config | Use `source: DirectPeerIp` — L4 has no `X-Forwarded-For` to resolve a real client from |
 | A listener-stage geo denial has no log line | Expected — `Stage1` has only the connection-filter boolean and bounded metric | Use `edgion_geoip_denied_total{layer="stage1",reason=...}` |
 | A TCP/UDP route-stage geo denial log lacks GeoIP details | Expected — route paths keep canonical protocol logs but replace GeoIP facts and plugin reasons with a generic stream-plugin denial | Correlate the protocol log with `edgion_geoip_denied_total{layer="tcp",reason=...}`; TLS listener denials use the Stage1 metric-only path above |
@@ -625,5 +697,5 @@ backoff is used, and the next request is unconditional.
 ## Related documents
 
 - [Gateway Configuration](../configuration/gateway-config.md) — full `GatewayConfig` schema reference, including `geoip`
-- [Real IP](../../user-guide/edgion-plugins/real-ip.md) — `trustedIps` configuration that governs whether `RemoteIp` is trustworthy
+- [Real IP](../../user-guide/edgion-plugins/real-ip.md) — `trustedIpRefs` configuration that governs whether `RemoteIp` is trustworthy
 - [Metrics](../observability/metrics-inventory.md) — full metrics inventory, including the five `edgion_geoip_*` series

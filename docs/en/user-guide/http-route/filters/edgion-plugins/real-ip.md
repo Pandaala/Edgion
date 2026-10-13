@@ -16,6 +16,21 @@ The plugin is nginx-compatible (`ngx_http_realip_module` semantics): it only tru
 
 ```yaml
 apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: production
+spec:
+  visibility: Namespace
+  data:
+    type: IpList
+    config:
+      items:
+      - name: internal
+        cidrs:
+        - 10.0.0.0/8
+---
+apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: real-ip-plugin
@@ -24,10 +39,9 @@ spec:
   requestPlugins:
     - type: RealIp
       config:
-        trustedIps:
-          - name: internal
-            cidrs:
-              - "10.0.0.0/8"
+        trustedIpRefs:
+          - name: realip-proxies-1
+            namespace: production
         realIpHeader: "X-Forwarded-For"
         recursive: true
 ```
@@ -36,7 +50,7 @@ spec:
 
 | Field | Default | Meaning |
 |-------|---------|---------|
-| `trustedIps` | **Required** | Must be non-empty — there is no default trust |
+| `trustedIpRefs` | **Required** | Must be non-empty — there is no default trust |
 | `realIpHeader` | `X-Forwarded-For` | Header to read the client IP from |
 | `recursive` | `true` | Walk the chain right-to-left, skipping trusted IPs |
 | `maxTrustedHops` | none | No cap on the number of trusted hops to skip |
@@ -47,25 +61,32 @@ spec:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `trustedIps` | Array\<Object\> | **Required** | Trusted proxy IP groups. Real-IP extraction only happens when the connecting peer is in one of these groups. Must be non-empty. See the sub-table |
+| `trustedIpRefs` | Array\<Object\> | **Required** | Nonempty references to trusted proxy IpLists; all referenced lists must be available. See the reference fields below |
 | `realIpHeader` | String | `X-Forwarded-For` | Header to extract the real IP from. Must be a valid HTTP header field name (RFC 9110 `token` charset) of at most 256 bytes; an invalid name is rejected at admission. Common values: `X-Forwarded-For`, `X-Real-IP`, `CF-Connecting-IP`, `True-Client-IP` |
 | `recursive` | Boolean | `true` | Enable nginx-style right-to-left traversal of `X-Forwarded-For`, skipping trusted IPs until the first non-trusted IP is found |
 | `maxTrustedHops` | Integer | none | Cap the number of trusted hops to skip during recursive traversal (Envoy's `xff_num_trusted_hops` concept). When set to `N`, traversal stops after skipping `N` trusted hops. Only takes effect when `recursive: true`. When unset, there is no cap (nginx-compatible) |
 
-### `trustedIps[]` group fields
+### `trustedIpRefs[]`
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `name` | String | **Required** | Group name (surfaced in debug logs) |
-| `cidrs` | Array\<String\> | **Required** | IP addresses or CIDR ranges (e.g. `10.0.0.0/8`, `192.168.1.1`). Each entry must be a valid IP or CIDR |
-| `description` | String | none | Optional human-readable description |
+A Kubernetes update rejected by API admission for required references, minimum size, target namespace or header constraints never reaches the Controller/Gateway; the previous admitted generation remains active. Invalid-generation replacement below refers to input that reaches typed publication (for example FS input or preserved mixed legacy keys), not an API-rejected update.
+
+References are ordered `EdgionConfigData` IpLists. Put IP/CIDR collections in each IpList's `items` (IpGroups), then reference them by `name` and optional `namespace`. HTTP plugin references default to the actual owning plugin namespace. Global `spec.realIp` references require an explicit namespace and current `Cluster` visibility when ReferenceGrant validation is enabled; namespaced grants do not authorize this cluster owner. Disabling that validation preserves identity, IpList type and enabled checks.
+
+Every referenced list must be available before trusting the effective downstream peer or any forwarded hop. A missing, disabled, denied or wrong-type list disables trust for this decision and uses the PROXY-effective peer, even when another list matches. Content updates, deletion, visibility changes and restoration affect subsequent decisions without copying CIDRs into the consumer. One captured view covers the peer and all hops. Invalid entries in an otherwise valid IpList are excluded by the central partial-good compiler; an empty/all-invalid matcher trusts no addresses.
+
+| Field | Meaning |
+| --- | --- |
+| `name` | Required IpList resource name |
+| `namespace` | HTTP: defaults to the owning namespace; global EGC: required |
+
+Removed inline `trustedIps` and unknown fields are invalid even when null or empty. Invalid policies that reach typed publication replace the previous generation with a sealed plugin failure or disable global extraction. A clean generation restores the policy. Global EGC `Accepted` reports intrinsic structure only, never deployment-local list availability.
 
 ### How resolution works
 
-- The plugin first checks whether the connecting peer is in `trustedIps`. If it is **not** trusted, the peer address is used as-is and the header is ignored (a non-trusted client cannot spoof its IP through the header).
-- When the peer is trusted and `recursive: true` (default), the `X-Forwarded-For` chain is walked **right to left**, skipping any IP in `trustedIps`, and the first non-trusted IP is returned.
-- If every IP in the chain is trusted, the connecting peer address is used as a fallback.
-- `maxTrustedHops` bounds the traversal: it is a safety net for when `trustedIps` is broader than your real proxy chain (e.g. you trust all of `10.0.0.0/8` but attackers can also reach the gateway from that range and forge long chains).
+- The plugin first checks whether the connecting peer is in `trustedIpRefs`. If it is **not** trusted, the peer address is used as-is and the header is ignored (a non-trusted client cannot spoof its IP through the header).
+- When the peer is trusted and `recursive: true` (default), the `X-Forwarded-For` chain is walked **right to left**, skipping any IP in `trustedIpRefs`, and the first non-trusted IP is returned.
+- If every parsed hop in a recursive chain is trusted, the leftmost parsed hop is returned. Nonrecursive mode uses the peer when the rightmost parsed hop is trusted.
+- `maxTrustedHops` bounds the traversal: it is a safety net for when `trustedIpRefs` is broader than your real proxy chain (e.g. you trust all of `10.0.0.0/8` but attackers can also reach the gateway from that range and forge long chains).
 
 ---
 
@@ -77,6 +98,21 @@ When exactly one trusted LB injects `X-Real-IP`, read it directly.
 
 ```yaml
 apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: production
+spec:
+  visibility: Namespace
+  data:
+    type: IpList
+    config:
+      items:
+      - name: lb
+        cidrs:
+        - 10.0.0.0/8
+---
+apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: real-ip-xrealip
@@ -85,10 +121,9 @@ spec:
   requestPlugins:
     - type: RealIp
       config:
-        trustedIps:
-          - name: lb
-            cidrs:
-              - "10.0.0.0/8"
+        trustedIpRefs:
+          - name: realip-proxies-1
+            namespace: production
         realIpHeader: "X-Real-IP"
         recursive: false
 ```
@@ -99,6 +134,22 @@ Trust your internal proxy ranges and resolve past them.
 
 ```yaml
 apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: production
+spec:
+  visibility: Namespace
+  data:
+    type: IpList
+    config:
+      items:
+      - name: internal
+        cidrs:
+        - 10.0.0.0/8
+        - 192.168.1.0/24
+---
+apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: real-ip-recursive
@@ -107,11 +158,9 @@ spec:
   requestPlugins:
     - type: RealIp
       config:
-        trustedIps:
-          - name: internal
-            cidrs:
-              - "10.0.0.0/8"
-              - "192.168.1.0/24"
+        trustedIpRefs:
+          - name: realip-proxies-1
+            namespace: production
         realIpHeader: "X-Forwarded-For"
         recursive: true
 ```
@@ -119,6 +168,22 @@ spec:
 ### 3. CDN with a bounded hop count (Cloudflare)
 
 ```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: production
+spec:
+  visibility: Namespace
+  data:
+    type: IpList
+    config:
+      items:
+      - name: cloudflare
+        cidrs:
+        - 173.245.48.0/20
+        - 103.21.244.0/22
+---
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -128,11 +193,9 @@ spec:
   requestPlugins:
     - type: RealIp
       config:
-        trustedIps:
-          - name: cloudflare
-            cidrs:
-              - "173.245.48.0/20"
-              - "103.21.244.0/22"
+        trustedIpRefs:
+          - name: realip-proxies-1
+            namespace: production
         realIpHeader: "CF-Connecting-IP"
         recursive: true
         # Skip at most one trusted hop
@@ -147,6 +210,21 @@ RealIp and [IP Restriction](./ip-restriction.md) are commonly paired. RealIp res
 
 ```yaml
 apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: production
+spec:
+  visibility: Namespace
+  data:
+    type: IpList
+    config:
+      items:
+      - name: internal
+        cidrs:
+        - 10.0.0.0/8
+---
+apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: real-ip-then-restrict
@@ -156,10 +234,9 @@ spec:
     # 1. Resolve the real client IP from the trusted proxy chain
     - type: RealIp
       config:
-        trustedIps:
-          - name: internal
-            cidrs:
-              - "10.0.0.0/8"
+        trustedIpRefs:
+          - name: realip-proxies-1
+            namespace: production
         realIpHeader: "X-Forwarded-For"
         recursive: true
     # 2. Allow/deny based on the resolved client IP
@@ -181,11 +258,11 @@ spec:
 
 ### Q2: Why is a spoofed `X-Forwarded-For` still trusted?
 
-**A**: It should not be. The header is only honored when the connecting peer is in `trustedIps`, and recursive traversal skips trusted hops to reach the first non-trusted IP. If you trust too broad a range (e.g. all of `10.0.0.0/8`), narrow `trustedIps` or set `maxTrustedHops` so attackers in that range cannot forge an arbitrarily long chain.
+**A**: It should not be. The header is only honored when the connecting peer is in `trustedIpRefs`, and recursive traversal skips trusted hops to reach the first non-trusted IP. If you trust too broad a range (e.g. all of `10.0.0.0/8`), narrow `trustedIpRefs` or set `maxTrustedHops` so attackers in that range cannot forge an arbitrarily long chain.
 
 ### Q3: The gateway rejected my config?
 
-**A**: `trustedIps` must be non-empty, `realIpHeader` must not be blank, and every entry in `cidrs` must be a valid IP or CIDR (for example, `10.0.0.0/8`, not `10.0.0/8`). The plugin reports the offending field at parse time.
+**A**: `trustedIpRefs` must be nonempty and `realIpHeader` a valid HTTP field name. IpList entries are compiled centrally: valid entries remain usable, invalid entries are excluded, and all referenced lists must be available before trusting forwarded input.
 
 ---
 
@@ -206,6 +283,22 @@ upstream propagation header is configured independently through
 ## Complete configuration example
 
 ```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: realip-proxies-1
+  namespace: production
+spec:
+  visibility: Namespace
+  data:
+    type: IpList
+    config:
+      items:
+      - name: internal
+        cidrs:
+        - 10.0.0.0/8
+        - 192.168.1.0/24
+---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -240,11 +333,9 @@ spec:
   requestPlugins:
     - type: RealIp
       config:
-        trustedIps:
-          - name: internal
-            cidrs:
-              - "10.0.0.0/8"
-              - "192.168.1.0/24"
+        trustedIpRefs:
+          - name: realip-proxies-1
+            namespace: production
         realIpHeader: "X-Forwarded-For"
         recursive: true
 ```

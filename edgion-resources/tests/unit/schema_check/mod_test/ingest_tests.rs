@@ -168,7 +168,7 @@ fn realistic_reingest_round_trip_has_zero_findings() {
             },
             {
                 "type": "IpRestriction",
-                "config": {"defaultAction": "allow", "deny": [{"name": "blocklist", "cidrs": ["10.0.0.0/8"]}]}
+                "config": {"defaultAction": "allow", "denyRefs": [{"name": "blocklist"}]}
             }
         ]
     });
@@ -312,7 +312,7 @@ fn config_data_url_allow_list_typo_is_advisory_with_gate_off_and_on() {
                 "data": {"type": "RequestAccessUrlAllowList", "config": {"items": [{
                     "name": "health", "hosts": ["api.example.com"],
                     "paths": [{"type": "Exact", "value": "/health"}],
-                    "conditions": {"allOf": [{"type": "directPeerIpMatch", "ips": ["192.0.2.0/24"], "ipsz": []}]}
+                    "conditions": {"allOf": [{"type": "directPeerIpMatch", "ipRefs": [{"name":"networks"}], "ipsz": []}]}
                 }]}}
             }),
             "data.config.items[0].conditions.allOf[0].ipsz",
@@ -498,4 +498,165 @@ fn link_sys_resolved_secret_is_transport_only_and_not_recursed() {
     let _guard = GateGuard::set(&GATE_LOCK, true);
     let spec: LinkSysSpec = serde_json::from_value(doc).expect("gated boundary input still parses");
     assert_eq!(spec.unknown_fields, ["config.resolvedSecrets"]);
+}
+
+#[test]
+fn migrated_geo_fixtures_decode_through_canonical_resource_wire() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../edgion-tests");
+    let files = [
+        "integration/conf/EdgionPlugins/GeoRestriction/00_EdgionConfigData_geo-http-cidrs.yaml",
+        "integration/conf/EdgionPlugins/GeoRestriction/02_EdgionPlugins_geo_rr.yaml",
+        "integration/conf/EdgionPlugins/GeoRestriction/04_EdgionPlugins_geo_gac.yaml",
+        "integration/conf/EdgionPlugins/GeoRestriction/06_EdgionPlugins_geo_invalid.yaml",
+        "integration/conf/EdgionPlugins/GeoRestriction/07_EdgionPlugins_geo_parseonly.yaml",
+        "integration/conf/TCPRoute/GeoRestriction/00_EdgionConfigData_geo-stream-cidrs.yaml",
+        "integration/conf/TCPRoute/GeoRestriction/01_EdgionStreamPlugins_tcp_geo.yaml",
+        "integration/conf/TLSRoute/GeoRestriction/00_EdgionConfigData_geo-tls-cidrs.yaml",
+        "integration/conf/TLSRoute/GeoRestriction/01_EdgionStreamPlugins_geo_deny.yaml",
+        "k8s/conf/EdgionPlugins/GeoRestriction/00_EdgionConfigData_geo-http-cidrs.yaml",
+        "k8s/conf/EdgionPlugins/GeoRestriction/resources.yaml",
+        "k8s/conf/TCPRoute/GeoRestriction/00_EdgionConfigData_geo-stream-cidrs.yaml",
+        "k8s/conf/TCPRoute/GeoRestriction/resources.yaml",
+        "k8s/conf/TLSRoute/GeoRestriction/00_EdgionConfigData_geo-tls-cidrs.yaml",
+        "k8s/conf/TLSRoute/GeoRestriction/resources.yaml",
+    ];
+    use serde::Deserialize;
+    let mut list_count = 0;
+    let mut plugin_count = 0;
+    for file in files {
+        let text = std::fs::read_to_string(root.join(file)).unwrap();
+        for document in serde_yaml::Deserializer::from_str(&text) {
+            let value = serde_yaml::Value::deserialize(document).unwrap();
+            match value["kind"].as_str() {
+                Some("EdgionConfigData") => {
+                    let data: crate::EdgionConfigData = serde_yaml::from_value(value).unwrap();
+                    let crate::resources::edgion_config_data::ConfigEntry::IpList(list) = data.spec.data else {
+                        panic!("named Geo fixture must be an IpList")
+                    };
+                    assert_eq!(list.items.len(), 1);
+                    assert_eq!(list.items[0].cidrs.len(), 1);
+                    assert_eq!(
+                        list.items[0].cidrs[0],
+                        if file.starts_with("k8s/") {
+                            "192.168.0.0/16"
+                        } else {
+                            "127.0.0.5/32"
+                        }
+                    );
+                    list_count += 1;
+                }
+                Some("EdgionPlugins") => {
+                    let _: crate::EdgionPlugins = serde_yaml::from_value(value).unwrap();
+                    plugin_count += 1;
+                }
+                Some("EdgionStreamPlugins") => {
+                    let _: crate::EdgionStreamPlugins = serde_yaml::from_value(value).unwrap();
+                    plugin_count += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(list_count, 6);
+    assert!(plugin_count >= 7, "native and K8s mixed-resource mirrors were decoded");
+}
+
+#[test]
+fn generated_geo_cidr_literals_use_reference_objects_and_decode_canonically() {
+    fn check(text: &str, is_stream: bool, expected_list: &str) {
+        let node: serde_yaml::Value = serde_yaml::from_str(text).expect("generated CIDR template YAML");
+        let configs: Vec<serde_yaml::Value> = if let Some(entries) = node.as_sequence() {
+            entries
+                .iter()
+                .filter(|entry| entry["type"].as_str() == Some("GeoIpLocation"))
+                .map(|entry| entry["config"].clone())
+                .collect()
+        } else if node["kind"].as_str().is_some() {
+            let field = if is_stream { "plugins" } else { "requestPlugins" };
+            node["spec"][field]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .filter(|entry| entry["type"].as_str() == Some("GeoIpLocation"))
+                .map(|entry| entry["config"].clone())
+                .collect()
+        } else {
+            vec![node]
+        };
+        assert!(!configs.is_empty());
+        for config in configs {
+            let config: crate::resources::edgion_plugins::plugin_configs::GeoIpLocationConfig =
+                serde_yaml::from_value(config).unwrap();
+            assert!(config.check_fields(is_stream).is_none(), "valid authored CIDR template");
+            for rule in config
+                .deny_rule_groups
+                .iter()
+                .chain(&config.allow_rule_groups)
+                .flat_map(|group| &group.rules)
+            {
+                if rule.key == crate::resources::edgion_plugins::plugin_configs::GeoRuleKey::Cidr {
+                    assert!(rule.values.is_empty());
+                    assert_eq!(rule.cidr.ip_refs.len(), 1);
+                    assert_eq!(rule.cidr.ip_refs[0].name, expected_list);
+                }
+            }
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../edgion-tests");
+    let quoted = regex::Regex::new(r#""(?:\\.|[^"\\])*""#).unwrap();
+    let mut count = 0;
+    for (path, is_stream, expected_list) in [
+        (
+            "src/client/suites/edgion_plugins/geo_restriction/geo_restriction.rs",
+            false,
+            "geo-http-cidrs",
+        ),
+        (
+            "src/client/suites/tcp_route/geo_restriction/geo_restriction.rs",
+            true,
+            "geo-stream-cidrs",
+        ),
+        (
+            "src/client/suites/tls_route/geo_restriction/geo_restriction.rs",
+            true,
+            "geo-tls-cidrs",
+        ),
+    ] {
+        let source = std::fs::read_to_string(root.join(path)).unwrap();
+        for literal in quoted.find_iter(&source) {
+            let Ok(text) = serde_json::from_str::<String>(literal.as_str()) else {
+                continue;
+            };
+            if text.contains("key: cidr\n") && text.contains("source:") {
+                check(&text.replace("{{", "{").replace("}}", "}"), is_stream, expected_list);
+                count += 1;
+            }
+        }
+    }
+    assert_eq!(count, 7, "all HTTP/TCP/TLS CIDR literals");
+    let shell = std::fs::read_to_string(root.join("integration/scripts/integration/test_geoip_db_states.sh")).unwrap();
+    let heredocs = regex::Regex::new(r"(?s)<<EOF\n(.*?)\nEOF").unwrap();
+    let mut shell_count = 0;
+    for block in heredocs.captures_iter(&shell) {
+        let text = &block[1];
+        if !text.contains("key: cidr\n") {
+            continue;
+        }
+        let node: serde_yaml::Value = serde_yaml::from_str(text).unwrap();
+        let field = if node["kind"].as_str() == Some("EdgionStreamPlugins") {
+            "plugins"
+        } else {
+            "requestPlugins"
+        };
+        for entry in node["spec"][field].as_sequence().unwrap() {
+            let config: crate::resources::edgion_plugins::plugin_configs::GeoIpLocationConfig =
+                serde_yaml::from_value(entry["config"].clone()).unwrap();
+            assert!(config.check_fields(field == "plugins").is_none());
+            let rule = &config.deny_rule_groups[0].rules[0];
+            assert!(rule.values.is_empty());
+            assert_eq!(rule.cidr.ip_refs[0].name, "geo-cidr-peer");
+        }
+        shell_count += 1;
+    }
+    assert_eq!(shell_count, 2);
 }
