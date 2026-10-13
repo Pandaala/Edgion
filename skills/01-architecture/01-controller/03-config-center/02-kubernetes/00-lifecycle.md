@@ -232,6 +232,9 @@ Preflight logic (`version_detection.rs`):
 `no_watch_kinds` configuration (`KubernetesConfig`):
 - The values are PascalCase kind names, e.g. `["TCPRoute", "UDPRoute", "BackendTLSPolicy"]`
 - Listed resources: not probed, no watcher spawned, excluded from `all_processor_kinds()`
+- EndpointSlice obeys the same registration and watcher selection as other provider
+  kinds. Disabling every processor kind still leaves the separate Namespace
+  first-snapshot gate in place (`ARCH-111`).
 - Effective only in Kubernetes mode; FileSystem mode does not have this option
 
 ### Watcher Tasks

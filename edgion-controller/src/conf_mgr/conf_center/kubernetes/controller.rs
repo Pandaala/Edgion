@@ -901,16 +901,18 @@ impl KubernetesController {
             h.spawn(spawn::<Service, _>(self, "Service", ServiceHandler::new(), &ctx));
         }
 
-        tracing::info!(
-            component = "k8s_controller",
-            "Registering EndpointSlice controller (Phase 1)"
-        );
-        h.spawn(spawn::<EndpointSlice, _>(
-            self,
-            "EndpointSlice",
-            EndpointSliceHandler::new(),
-            &ctx,
-        ));
+        if self.should_watch("EndpointSlice") {
+            tracing::info!(
+                component = "k8s_controller",
+                "Registering EndpointSlice controller (Phase 1)"
+            );
+            h.spawn(spawn::<EndpointSlice, _>(
+                self,
+                "EndpointSlice",
+                EndpointSliceHandler::new(),
+                &ctx,
+            ));
+        }
 
         // Namespace watcher (Gateway Selector namespace policy)
         h.spawn(ctx.tracker.track_future(spawn_namespace_watcher(

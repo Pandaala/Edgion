@@ -36,6 +36,84 @@ async fn eventually(mut predicate: impl FnMut() -> bool) {
 }
 
 #[tokio::test]
+async fn actual_startup_respects_endpoint_slice_selection_and_keeps_namespace_gate() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for enabled in [false, true] {
+        let namespace_requests = Arc::new(AtomicUsize::new(0));
+        let slice_requests = Arc::new(AtomicUsize::new(0));
+        let client = Client::new(
+            tower::service_fn({
+                let namespace_requests = namespace_requests.clone();
+                let slice_requests = slice_requests.clone();
+                move |request: http::Request<kube::client::Body>| {
+                    let path = request.uri().path();
+                    if path == "/api/v1/namespaces" {
+                        namespace_requests.fetch_add(1, Ordering::SeqCst);
+                    } else if path.ends_with("/endpointslices") {
+                        slice_requests.fetch_add(1, Ordering::SeqCst);
+                    } else {
+                        panic!("unexpected startup request: {path}");
+                    }
+                    futures::future::pending::<Result<http::Response<kube::client::Body>, std::io::Error>>()
+                }
+            }),
+            "default",
+        );
+        let cancel = CancellationToken::new();
+        let tracker = TaskTracker::new();
+        let (ready_tx, ready_rx) = watch::channel(false);
+        let mut controller = KubernetesController::with_metadata_filter(
+            client,
+            "edgion.io/test".into(),
+            None,
+            vec![],
+            None,
+            MetadataFilterConfig::default(),
+            HashSet::new(),
+        )
+        .unwrap()
+        .with_epoch(cancel.clone(), tracker.clone())
+        .with_phases_ready(ready_tx);
+        controller.no_watch_kinds = controller
+            .all_processor_kinds()
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        if enabled {
+            controller.no_watch_kinds.remove("EndpointSlice");
+        }
+        let expected = controller.all_processor_kinds();
+        assert_eq!(expected, if enabled { vec!["EndpointSlice"] } else { vec![] });
+        let runtime = Arc::new(ControllerRuntime::new());
+        let (_shutdown, signal) = ShutdownController::new();
+        let task = tokio::spawn({
+            let runtime = runtime.clone();
+            async move { controller.run_controllers(signal, runtime).await }
+        });
+        eventually(|| {
+            namespace_requests.load(Ordering::SeqCst) > 0 && (!enabled || slice_requests.load(Ordering::SeqCst) > 0)
+        })
+        .await;
+        assert_eq!(runtime.processor_registry.all_kinds(), expected);
+        assert_eq!(slice_requests.load(Ordering::SeqCst) > 0, enabled);
+        assert!(!*ready_rx.borrow(), "Namespace's first snapshot is still pending");
+        assert!(!runtime.processor_registry.is_registration_complete());
+        assert!(!task.is_finished());
+        cancel.cancel();
+        assert!(tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_err());
+        tracker.close();
+        tokio::time::timeout(Duration::from_secs(5), tracker.wait())
+            .await
+            .unwrap();
+        assert!(tracker.is_empty());
+    }
+}
+
+#[tokio::test]
 async fn namespace_relist_and_incremental_changes_defer_refresh_until_gateway_bootstrap() {
     let runtime = Arc::new(ControllerRuntime::new());
     let processor = Arc::new(ResourceProcessor::new(
