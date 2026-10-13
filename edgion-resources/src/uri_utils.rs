@@ -66,10 +66,13 @@ pub fn url_decode(s: &str) -> String {
 
     while let Some(c) = chars.next() {
         if c == '%' {
-            // Try to decode %XX
-            let hex: String = chars.by_ref().take(2).collect();
+            // Borrow the token after consuming up to two complete Unicode scalars.
+            let remaining = chars.as_str();
+            chars.next();
+            chars.next();
+            let hex = &remaining[..remaining.len() - chars.as_str().len()];
             if hex.len() == 2 {
-                if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                if let Ok(byte) = u8::from_str_radix(hex, 16) {
                     byte_buf.push(byte);
                     continue;
                 }
@@ -77,7 +80,7 @@ pub fn url_decode(s: &str) -> String {
             // If decode failed, flush any pending bytes and keep the % and hex as is
             flush(&mut byte_buf, &mut result);
             result.push('%');
-            result.push_str(&hex);
+            result.push_str(hex);
         } else {
             flush(&mut byte_buf, &mut result);
             if c == '+' {

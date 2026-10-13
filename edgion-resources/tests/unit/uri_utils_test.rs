@@ -69,3 +69,53 @@ fn test_url_decode_invalid_encoding() {
     assert_eq!(url_decode("test%"), "test%");
     assert_eq!(url_decode("test%GG"), "test%GG");
 }
+
+#[test]
+fn test_url_decode_radix_leading_plus() {
+    assert_eq!(url_decode("%+A%+0+%2B"), "\n\0 +");
+}
+
+#[test]
+fn test_url_decode_failed_tokens_preserve_consumed_plus() {
+    assert_eq!(url_decode("%+G+%G++%+"), "%+G %G+ %+");
+}
+
+#[test]
+fn test_url_decode_malformed_scalar_consumption() {
+    for (input, expected) in [
+        ("%", "%"),
+        ("%A", "%A"),
+        ("%G1+", "%G1 "),
+        ("%%41", "%%41"),
+        ("%é", "%é"),
+        ("%éA%20", "%éA "),
+        ("%Aé%20", "%Aé "),
+        ("%€+%20", "%€+ "),
+    ] {
+        assert_eq!(url_decode(input), expected, "input: {input}");
+    }
+}
+
+#[test]
+fn test_url_decode_percent_run_flush_boundaries() {
+    assert_eq!(url_decode("%C3%A9%GG%E2%82%AC"), "é%GG€");
+    assert_eq!(url_decode("%C3%A9x%E2%82%AC+%41"), "éx€ A");
+}
+
+#[test]
+fn test_url_decode_invalid_utf8_falls_back_for_entire_run() {
+    // A valid UTF-8 prefix falls back with the invalid tail in the same run.
+    assert_eq!(url_decode("%C3%A9%FF"), "\u{c3}©\u{ff}");
+    assert_eq!(url_decode("%E2%82"), "â\u{82}");
+    assert_eq!(url_decode("%C3%A9%FF+%C3%A9"), "\u{c3}©\u{ff} é");
+}
+
+#[test]
+fn test_parse_query_string_decoded_duplicates_and_empty_pairs() {
+    let params = parse_query_string("&&name=first&na%6De=last%2Bvalue&flag&&value=a=b&");
+
+    assert_eq!(params.len(), 3);
+    assert_eq!(params.get("name").map(String::as_str), Some("last+value"));
+    assert_eq!(params.get("flag").map(String::as_str), Some(""));
+    assert_eq!(params.get("value").map(String::as_str), Some("a=b"));
+}

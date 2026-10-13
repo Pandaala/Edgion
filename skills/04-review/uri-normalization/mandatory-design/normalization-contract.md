@@ -177,6 +177,30 @@ is a separate concern.
 
 ---
 
+## Canonical query percent-token contract
+
+`edgion-resources/src/uri_utils.rs::url_decode` consumes up to two Unicode
+scalars after each percent sign and borrows that exact input prefix, without
+owning or copying a temporary token (ARCH-048). Preserve the token's byte-length
+`== 2` gate and `u8::from_str_radix(..., 16)`: leading-plus tokens `%+A` and `%+0`
+are accepted. Failed tokens keep their consumed scalars literally, including
+any plus; only a plus outside a token becomes a space. Successful adjacent
+tokens form one UTF-8 byte run. If any byte makes that run invalid UTF-8, the
+entire run falls back to bytewise Latin-1 characters. Malformed tokens and
+ordinary scalars flush pending bytes before being appended.
+
+The output String, byte-run buffer and API remain owned as before. Query parsing
+skips empty pairs, gives no-equals pairs empty values and lets the last decoded
+duplicate key win. Regression assertions live in
+`edgion-resources/tests/unit/uri_utils_test.rs`. This local ownership change
+preserves frozen single-key query reads, raw whole-query reads, LB's plain-name
+fast path and raw values, and auth's decoded-key comparison with raw surviving
+pairs. The separately bounded DSL decoder remains excluded. No measured
+performance improvement follows from these source and semantic assertions.
+Re-evaluate if token consumption, radix parsing or byte-run fallback changes.
+
+---
+
 ## Commitment Scope Summary
 
 | Attack type | Default coverage | High-security hardening |
@@ -192,6 +216,7 @@ is a separate concern.
 ## Resolution references
 
 - `ARCH-004` — 2026-10-12; the context owns frozen query-cache source selection.
+- `ARCH-048` — borrowed percent tokens preserve scalar, radix and byte-run semantics.
 
 - `g8-005` — —.
 - `path-norm-F001` — 2026-05-26.
