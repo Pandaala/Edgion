@@ -335,8 +335,10 @@ fn bulk_response_limit_resolves_default_and_positive_safety_bounds() {
         (Some(8 * 1024 * 1024), 8 * 1024 * 1024),
         (Some(usize::MAX), 8 * 1024 * 1024),
     ] {
-        let mut crd = ElasticsearchClientConfig::default();
-        crd.bulk = Some(serde_json::from_value(serde_json::json!({"maxResponseBytes": configured})).unwrap());
+        let crd = ElasticsearchClientConfig {
+            bulk: Some(serde_json::from_value(serde_json::json!({"maxResponseBytes": configured})).unwrap()),
+            ..Default::default()
+        };
         assert_eq!(EsBulkConfig::from_crd(&crd).max_response_bytes, expected);
     }
 }

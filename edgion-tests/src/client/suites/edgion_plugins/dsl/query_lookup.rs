@@ -52,6 +52,40 @@ fn invocation(id: &str, variables: Option<&str>) -> String {
     envelope(&serde_json::to_string(&json!({"id":id})).unwrap(), variables)
 }
 
+fn observation_operation(operation: &str) -> &'static str {
+    match operation.split('/').next() {
+        Some("del") => "del",
+        Some("get") => "get",
+        Some("set") => "set",
+        Some("hset") => "hset",
+        _ => "unknown_operation",
+    }
+}
+
+fn observation_failure_category(error: Option<&str>) -> &'static str {
+    match error {
+        Some(error) if error.contains("registered, not yet connected") => "registered_not_connected",
+        Some(error) if error.contains("not found. Available:") => "client_not_registered",
+        Some(error)
+            if ["DEL failed:", "GET failed:", "SET failed:", "HSET failed:"]
+                .iter()
+                .any(|prefix| error.starts_with(prefix)) =>
+        {
+            "dependency_operation_failed"
+        }
+        _ => "unknown_failure",
+    }
+}
+
+fn observation_failure_message(operation: &str, status: u16, error: Option<&str>) -> String {
+    format!(
+        "Redis observation operation failed: operation={} status={} category={}",
+        observation_operation(operation),
+        status,
+        observation_failure_category(error)
+    )
+}
+
 pub(crate) async fn redis_api(ctx: &TestContext, operation: &str, payload: Option<Value>) -> Result<Value> {
     let base =
         std::env::var("EDGION_TEST_GATEWAY_ADMIN_URL").unwrap_or_else(|_| format!("http://{}:12001", ctx.target_host));
@@ -79,9 +113,19 @@ pub(crate) async fn redis_api(ctx: &TestContext, operation: &str, payload: Optio
         None => request,
     };
     let response = request.timeout(Duration::from_secs(3)).send().await?;
-    ensure!(response.status().is_success(), "Redis observation HTTP failure");
+    let status = response.status();
+    ensure!(
+        status.is_success(),
+        "Redis observation HTTP failure: operation={} status={}",
+        observation_operation(operation),
+        status.as_u16()
+    );
     let reply: Value = response.json().await?;
-    ensure!(reply["success"] == true, "Redis observation operation failed");
+    ensure!(
+        reply["success"] == true,
+        "{}",
+        observation_failure_message(operation, status.as_u16(), reply["error"].as_str())
+    );
     Ok(reply["data"].clone())
 }
 pub(crate) async fn clean_keys(ctx: &TestContext, keys: &[String]) -> Result<()> {
@@ -1035,6 +1079,43 @@ impl TestSuite for QueryLookupPhase {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn redis_observation_diagnostics_use_only_fixed_operation_and_failure_categories() {
+        for (operation, label) in [
+            ("del", "del"),
+            ("get/private-key", "get"),
+            ("set", "set"),
+            ("hset", "hset"),
+            ("private-operation", "unknown_operation"),
+        ] {
+            assert_eq!(super::observation_operation(operation), label);
+        }
+        for (error, category) in [
+            (
+                Some("Redis client 'private-client' not found (registered, not yet connected)"),
+                "registered_not_connected",
+            ),
+            (
+                Some("Redis client 'private-client' not found. Available: [private-topology]"),
+                "client_not_registered",
+            ),
+            (Some("DEL failed: private-credential"), "dependency_operation_failed"),
+            (Some("GET failed: private-credential"), "dependency_operation_failed"),
+            (Some("SET failed: private-credential"), "dependency_operation_failed"),
+            (Some("HSET failed: private-credential"), "dependency_operation_failed"),
+            (Some("private-unknown-failure"), "unknown_failure"),
+            (None, "unknown_failure"),
+        ] {
+            assert_eq!(super::observation_failure_category(error), category);
+            let message = super::observation_failure_message("get/private-key", 200, error);
+            assert_eq!(
+                message,
+                format!("Redis observation operation failed: operation=get status=200 category={category}")
+            );
+            assert!(!message.contains("private"));
+        }
+    }
+
     #[test]
     fn execution_evidence_requires_the_inner_plugin_of_the_owned_request_resource() {
         let outer = serde_json::json!({"stage_logs":[{"stage":"request_filters","edgion_plugins":[{"name":"dsl-query-executor-dynamic","logs":[]}]}]});
