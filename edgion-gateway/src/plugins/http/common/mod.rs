@@ -17,7 +17,6 @@ mod capped_writer;
 pub mod graphql_log_consts;
 pub(crate) mod graphql_request;
 pub mod http_client;
-pub mod http_util;
 pub mod json_request;
 pub mod outbound;
 

@@ -69,3 +69,6 @@ Re-evaluate on serde/Fred upgrades, parser policy/materializer changes, allocati
 ledger changes, new raw operations, Body publication/stage ownership changes or
 Redis transport memory guarantees. The maintained architecture contract is in
 [the DSL engine security model](../../../01-architecture/02-gateway/dsl-engine-security-model.md#strict-json-reconstruction-and-nontruncating-redis-get).
+
+The historical source task was
+`response-cache-and-dsl-query-lookup`; its task file is absent from the current tree.

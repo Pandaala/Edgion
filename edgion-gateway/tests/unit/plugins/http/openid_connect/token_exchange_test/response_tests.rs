@@ -107,3 +107,57 @@ fn response_errors_keep_wire_and_contextual_log_contracts() {
         "token refresh fail"
     );
 }
+
+#[tokio::test]
+async fn caller_selected_small_cap_is_enforced() {
+    let response = streamed(vec![Ok(Bytes::from_static(b"{}      "))]);
+    assert_eq!(response.content_length(), None);
+    assert_eq!(
+        read_oidc_json::<Value>(response, 8).await.unwrap(),
+        serde_json::json!({})
+    );
+
+    let response: reqwest::Response = http::Response::new(b"{}       ".to_vec()).into();
+    assert_eq!(response.content_length(), Some(9));
+    assert_eq!(
+        read_oidc_json::<Value>(response, 8).await.unwrap_err(),
+        OidcDependencyFailure::ResponseTooLarge
+    );
+
+    let response = streamed(vec![Ok(Bytes::from_static(b"{}      ")), Ok(Bytes::from_static(b" "))]);
+    assert_eq!(response.content_length(), None);
+    assert_eq!(
+        read_oidc_json::<Value>(response, 8).await.unwrap_err(),
+        OidcDependencyFailure::ResponseTooLarge
+    );
+}
+
+#[tokio::test]
+async fn cancelling_pending_json_read_drops_response_stream() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    struct DropProbe(Arc<AtomicBool>);
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let dropped = Arc::new(AtomicBool::new(false));
+    let probe = DropProbe(Arc::clone(&dropped));
+    let parts = stream::iter([Ok::<_, io::Error>(Bytes::from_static(b"{}"))]).chain(stream::poll_fn(
+        move |_| -> std::task::Poll<Option<Result<Bytes, io::Error>>> {
+            let _ = &probe;
+            std::task::Poll::Pending
+        },
+    ));
+    let response = http::Response::new(reqwest::Body::wrap_stream(parts)).into();
+    let mut reader = Box::pin(read_oidc_json::<Value>(response, 64));
+
+    assert!(futures::poll!(reader.as_mut()).is_pending());
+    assert!(!dropped.load(Ordering::SeqCst));
+    drop(reader);
+    assert!(dropped.load(Ordering::SeqCst));
+}
