@@ -105,7 +105,7 @@ pub use dynamic_external_upstream::{DomainTarget, DynamicExternalUpstreamConfig,
 pub use dynamic_internal_upstream::{
     DynUpstreamExtract, DynUpstreamRule, DynUpstreamTarget, DynamicInternalUpstreamConfig,
 };
-pub use ext_proc::{BodySendMode, ExtProcConfig, GrpcServiceConfig, HeaderSendMode, ProcessingMode};
+pub use ext_proc::{BodySendMode, ExtProcConfig, ExtProcTarget, GrpcServiceConfig, HeaderSendMode, ProcessingMode};
 pub use fault_injection::{
     AbortConfig, DelayConfig, FaultHeaderEntry, FaultInjectionConfig, MAX_DELAY_MS as FAULT_MAX_DELAY_MS,
 };

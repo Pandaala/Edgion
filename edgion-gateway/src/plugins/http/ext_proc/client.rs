@@ -163,8 +163,10 @@ impl ExtProcClient {
         };
         let grpc = &cfg.grpc_service;
         let timeout = Duration::from_millis(grpc.timeout_ms);
-        let (host, port) = split_authority(&grpc.target)?;
-        let normalized_authority = normalized_authority(&host, port);
+        let target = grpc.parse_target()?;
+        let host = target.host;
+        let port = target.port;
+        let normalized_authority = target.authority;
         let resolved_tls = Self::validate_tls_entry(entry, defaults)?
             .as_ref()
             .map(|proof| {
@@ -184,7 +186,7 @@ impl ExtProcClient {
             return Ok(Self { runtime, timeout });
         }
 
-        let channel = Self::build_channel(&normalized_authority, host, port, resolved_tls.as_ref())?;
+        let channel = Self::build_channel(&normalized_authority, host.to_owned(), port, resolved_tls.as_ref())?;
         let runtime = Arc::new(ExtProcTargetRuntime {
             client: ExternalProcessorClient::new(channel),
             sessions: Arc::new(Semaphore::new(TARGET_SESSION_CAP)),
@@ -506,14 +508,6 @@ fn build_rustls_config(
 type TlsTransport = TokioIo<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>;
 type PlainTransport = TokioIo<tokio::net::TcpStream>;
 
-fn normalized_authority(host: &str, port: u16) -> String {
-    match host.parse::<std::net::IpAddr>() {
-        Ok(std::net::IpAddr::V6(ip)) => format!("[{ip}]:{port}"),
-        Ok(std::net::IpAddr::V4(ip)) => format!("{ip}:{port}"),
-        Err(_) => format!("{}:{port}", host.to_ascii_lowercase()),
-    }
-}
-
 fn fingerprint_effective_tls(hasher: &mut Sha256, tls: Option<&ResolvedOutboundTls>) {
     let Some(tls) = tls else {
         hasher.update(b"plaintext");
@@ -546,30 +540,6 @@ fn fingerprint_effective_tls(hasher: &mut Sha256, tls: Option<&ResolvedOutboundT
             hasher.update(encoded);
         }
     }
-}
-
-fn split_authority(authority: &str) -> Result<(String, u16), String> {
-    if let Some(rest) = authority.strip_prefix('[') {
-        let (host, suffix) = rest
-            .split_once(']')
-            .ok_or_else(|| "invalid ext_proc IPv6 authority".to_string())?;
-        let port = suffix
-            .strip_prefix(':')
-            .ok_or_else(|| "ext_proc target is missing a port".to_string())?
-            .parse::<u16>()
-            .map_err(|_| "ext_proc target has an invalid port".to_string())?;
-        return Ok((host.to_string(), port));
-    }
-    let (host, port) = authority
-        .rsplit_once(':')
-        .ok_or_else(|| "ext_proc target is missing a port".to_string())?;
-    let port = port
-        .parse::<u16>()
-        .map_err(|_| "ext_proc target has an invalid port".to_string())?;
-    if host.is_empty() {
-        return Err("ext_proc target host is empty".to_string());
-    }
-    Ok((host.to_string(), port))
 }
 
 async fn connect_admitted(

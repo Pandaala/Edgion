@@ -275,3 +275,42 @@ fn base_response_trailer_send_is_supported() {
     config.processing_mode.response_trailer_mode = HeaderSendMode::Send;
     assert!(config.validation_error().is_none());
 }
+
+#[test]
+fn rejects_targets_unrepresentable_as_complete_channel_uris() {
+    for target in ["ext proc:9000", "ext\tproc:9000", "ext\rproc:9000", "ext\nproc:9000"] {
+        let mut config = valid_base();
+        config.grpc_service.target = target.to_string();
+        assert_eq!(
+            config.validation_error().as_deref(),
+            Some("grpcService.target cannot form a valid channel URI")
+        );
+    }
+    let max_host_len = usize::from(u16::MAX) - 1 - "http://".len() - ":9000".len();
+    for (host_len, valid) in [(max_host_len, true), (max_host_len + 1, false)] {
+        let mut config = valid_base();
+        config.grpc_service.target = format!("{}:9000", "a".repeat(host_len));
+        assert_eq!(config.validation_error().is_none(), valid);
+    }
+}
+
+#[test]
+fn effective_target_preserves_connector_host_and_existing_normalization() {
+    for (raw, host, authority) in [
+        ("EXT-PROC:+09000", "EXT-PROC", "ext-proc:9000"),
+        ("svc_alias:9000", "svc_alias", "svc_alias:9000"),
+        ("192.0.2.1:9000", "192.0.2.1", "192.0.2.1:9000"),
+        ("[2001:0DB8::1]:9000", "2001:0DB8::1", "[2001:db8::1]:9000"),
+        ("2001:0DB8::1:9000", "2001:0DB8::1", "[2001:db8::1]:9000"),
+        ("[ALIAS]:9000", "ALIAS", "alias:9000"),
+    ] {
+        let mut config = valid_base();
+        config.grpc_service.target = raw.to_string();
+        assert!(config.validation_error().is_none());
+        let parsed = config.grpc_service.parse_target().unwrap();
+        assert_eq!(parsed.host, host);
+        assert_eq!(parsed.port, 9000);
+        assert_eq!(parsed.authority, authority);
+        assert_eq!(config.grpc_service.target, raw);
+    }
+}

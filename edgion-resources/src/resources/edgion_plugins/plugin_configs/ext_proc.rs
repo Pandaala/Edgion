@@ -79,6 +79,20 @@ pub struct GrpcServiceConfig {
     pub tls: TlsConfig,
 }
 
+/// Parsed cold ExtProc target; the connector keeps the authored host spelling.
+pub struct ExtProcTarget<'a> {
+    pub host: &'a str,
+    pub port: u16,
+    pub authority: String,
+}
+
+impl GrpcServiceConfig {
+    /// Parse and validate the effective URI used by both plain and custom TLS channels.
+    pub fn parse_target(&self) -> Result<ExtProcTarget<'_>, String> {
+        parse_target(&self.target)
+    }
+}
+
 /// Per-phase processing control, mirroring Envoy's `ProcessingMode`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -267,7 +281,7 @@ impl Default for ExtProcConfig {
 /// fail-closed (the route 500s) instead of surfacing a clean validation error on
 /// the resource's status at controller ingest. Catching it here gives the
 /// operator an actionable message up front.
-fn validate_target(target: &str) -> Result<(), String> {
+fn parse_target(target: &str) -> Result<ExtProcTarget<'_>, String> {
     if target.is_empty() {
         return Err("grpcService.target is required".to_string());
     }
@@ -297,19 +311,32 @@ fn validate_target(target: &str) -> Result<(), String> {
     if host.is_empty() {
         return Err("grpcService.target host must not be empty".to_string());
     }
-    match port.parse::<u16>() {
-        Ok(p) if crate::gwapi_types::is_valid_port(p as i64) => Ok(()),
-        _ => Err(format!(
-            "grpcService.target port must be a number in {}..={}",
-            crate::gwapi_types::PORT_MIN,
-            crate::gwapi_types::PORT_MAX
-        )),
-    }
+    let port = match port.parse::<u16>() {
+        Ok(p) if crate::gwapi_types::is_valid_port(p as i64) => p,
+        _ => {
+            return Err(format!(
+                "grpcService.target port must be a number in {}..={}",
+                crate::gwapi_types::PORT_MIN,
+                crate::gwapi_types::PORT_MAX
+            ))
+        }
+    };
+    let authority = match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V6(ip)) => format!("[{ip}]:{port}"),
+        Ok(std::net::IpAddr::V4(ip)) => format!("{ip}:{port}"),
+        Err(_) => format!("{}:{port}", host.to_ascii_lowercase()),
+    };
+    // Validate the complete URI: its size bound also includes the scheme bytes.
+    // The custom TLS connector uses the same synthetic http URI as plaintext.
+    format!("http://{authority}")
+        .parse::<http::Uri>()
+        .map_err(|_| "grpcService.target cannot form a valid channel URI".to_string())?;
+    Ok(ExtProcTarget { host, port, authority })
 }
 
 impl PluginValidation for ExtProcConfig {
     fn validation_error(&self) -> Option<String> {
-        if let Err(e) = validate_target(&self.grpc_service.target) {
+        if let Err(e) = self.grpc_service.parse_target() {
             return Some(e);
         }
         if self.grpc_service.timeout_ms == 0 {

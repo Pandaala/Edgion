@@ -52,6 +52,23 @@ The compiled resource is not activatable and does not request last-known-good
 retention. The existing reject filter returns HTTP 500 with the generic body
 `{"message":"plugin configuration error"}`; no new request logging is needed.
 
+## Target URI admission (ARCH-068)
+
+`GrpcServiceConfig::parse_target` owns bare-target checks, port validation, and
+normalization of the effective authority. Shared validation and the actual Gateway
+constructor both call it before transport construction or target-cache lookup.
+It parses the complete synthetic `http://` channel URI, including the scheme in
+the URI length bound, and emits a fixed field diagnostic without the target or
+parser error details. Embedded spaces/control characters cannot receive
+Controller `Accepted=True` and then fail static channel construction.
+
+The connector retains the authored host spelling. The normalized authority keeps
+existing alias, IPv4, bracketed/unbracketed IPv6, case, and numeric-port behavior;
+TLS still uses the custom connector with a synthetic http URI. Tests cover shared
+validation, real lazy construction for both transports, the complete URI boundary,
+Controller status, and generic Gateway rejection under both failure modes. No DNS
+lookup, TLS handshake, or backend availability is asserted by this static gate.
+
 ## Alternatives and limits
 
 Do not silently ignore the policy, treat ordinary chain verification as SAN

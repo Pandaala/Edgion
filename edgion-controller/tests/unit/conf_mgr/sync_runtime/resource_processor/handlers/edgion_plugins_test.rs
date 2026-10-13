@@ -8865,3 +8865,36 @@ fn wasm_callout_rejection_status_does_not_disclose_authored_origin() {
         assert!(!serde_json::to_string(&resource.status).unwrap().contains("private-"));
     }
 }
+
+#[test]
+fn ext_proc_invalid_target_uri_is_rejected_in_controller_status() {
+    let (ctx, _) = make_ctx_with_secrets(HashMap::new());
+    for failure_mode_allow in [false, true] {
+        let mut resource: EdgionPlugins = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "ext-proc-target", "namespace": "default", "generation": 1},
+            "spec": {"requestPlugins": [{"type": "ExtProc", "config": {
+                "grpcService": {"target": "private processor:9000"}, "failureModeAllow": failure_mode_allow
+            }}]}
+        }))
+        .unwrap();
+        let errors = EdgionPluginsHandler.preparse(&mut resource, &ctx);
+        assert_eq!(
+            errors,
+            vec!["requestPlugins[0] (ExtProc): grpcService.target cannot form a valid channel URI"]
+        );
+        EdgionPluginsHandler.update_status(&mut resource, &ctx, &errors);
+        let accepted = resource
+            .status
+            .as_ref()
+            .unwrap()
+            .as_local()
+            .unwrap()
+            .conditions
+            .iter()
+            .find(|c| c.type_ == "Accepted")
+            .unwrap();
+        assert_eq!(accepted.status, "False");
+        assert_eq!(accepted.reason, "Invalid");
+        assert_eq!(accepted.message, errors[0]);
+    }
+}

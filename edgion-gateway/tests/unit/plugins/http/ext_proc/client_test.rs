@@ -1167,3 +1167,77 @@ async fn captured_tls_generation_and_plaintext_inactivity_are_process_isolated()
     )
     .await;
 }
+
+#[tokio::test]
+async fn cold_target_construction_matches_shared_uri_admission() {
+    use edgion_resources::resources::edgion_plugins::PluginValidation;
+    install_test_crypto_provider();
+    let max_host_len = usize::from(u16::MAX) - 1 - "http://".len() - ":9000".len();
+    let mut targets: Vec<(String, bool)> = [
+        ("EXT-PROC:+09000", true),
+        ("svc_alias:9000", true),
+        ("192.0.2.1:9000", true),
+        ("[2001:0DB8::1]:9000", true),
+        ("2001:0DB8::1:9000", true),
+        ("[ALIAS]:9000", true),
+        ("ext proc:9000", false),
+        ("ext\tproc:9000", false),
+        ("ext\rproc:9000", false),
+        ("ext\nproc:9000", false),
+    ]
+    .into_iter()
+    .map(|(target, valid)| (target.to_string(), valid))
+    .collect();
+    targets.push((format!("{}:9000", "a".repeat(max_host_len)), true));
+    targets.push((format!("{}:9000", "a".repeat(max_host_len + 1)), false));
+    for tls in [false, true] {
+        for (target, valid) in &targets {
+            let mut config = tls_cfg();
+            config.grpc_service.tls.enabled = tls;
+            config.grpc_service.target = target.clone();
+            let error = config.validation_error();
+            assert_eq!(error.is_none(), *valid);
+            let client = actual_client(&config);
+            if *valid {
+                assert!(client.is_ok(), "cold target construction: {:?}", client.err());
+            } else {
+                assert_eq!(client.err(), error);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn invalid_target_uri_compilation_preserves_generic_rejection_for_both_failure_modes() {
+    use crate::plugins::http::compile_plugins;
+    use crate::plugins::runtime::log::PluginLog;
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use edgion_resources::filters::PluginRunningResult;
+    for failure_mode_allow in [false, true] {
+        let mut config = ExtProcConfig::default();
+        config.grpc_service.target = "private processor:9000".to_string();
+        config.failure_mode_allow = failure_mode_allow;
+        let compiled = compile_plugins(&actual_owner(&config));
+        assert_eq!(
+            compiled.preparse_errors,
+            vec!["requestPlugins[0] (ExtProc): grpcService.target cannot form a valid channel URI"]
+        );
+        assert!(!compiled.is_activatable);
+        assert!(!compiled.retain_previous_on_invalid_update);
+        let reject = compiled.plugin_runtime.request_plugins_iter().next().unwrap();
+        assert_eq!(reject.name(), "RejectInvalidConfig");
+        match reject
+            .run_request(
+                &mut MockPluginSession::new(),
+                &mut PluginLog::new("RejectInvalidConfig"),
+            )
+            .await
+        {
+            PluginRunningResult::ErrResponse { status, body } => {
+                assert_eq!(status, 500);
+                assert_eq!(body.unwrap().as_ref(), br#"{"message":"plugin configuration error"}"#);
+            }
+            _ => panic!("invalid target must reject before processing"),
+        }
+    }
+}
