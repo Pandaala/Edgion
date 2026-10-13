@@ -46,6 +46,8 @@ struct MirrorCapture {
     method: String,
     /// Request path.
     path: String,
+    /// Original query string, without the question mark.
+    query: Option<String>,
     /// All headers (lowercase keys).
     headers: std::collections::HashMap<String, String>,
     /// Request body as UTF-8 string (truncated to 4KB).
@@ -1396,6 +1398,7 @@ async fn mirror_capture_handler(req: AxumRequest<Body>) -> impl IntoResponse {
 
     let method = req.method().to_string();
     let path = req.uri().path().to_string();
+    let query = req.uri().query().map(str::to_owned);
 
     let mut headers = std::collections::HashMap::new();
     let trace_id = req
@@ -1419,6 +1422,7 @@ async fn mirror_capture_handler(req: AxumRequest<Body>) -> impl IntoResponse {
         received_at_ms,
         method,
         path,
+        query,
         headers,
         body,
     };
@@ -1479,6 +1483,7 @@ async fn mirror_slow_handler(Path(ms): Path<u64>, req: AxumRequest<Body>) -> imp
         .as_millis() as u64;
     let method = req.method().to_string();
     let path = req.uri().path().to_string();
+    let query = req.uri().query().map(str::to_owned);
     let mut headers = std::collections::HashMap::new();
     let trace_id = req
         .headers()
@@ -1497,6 +1502,7 @@ async fn mirror_slow_handler(Path(ms): Path<u64>, req: AxumRequest<Body>) -> imp
         received_at_ms,
         method,
         path,
+        query,
         headers,
         body,
     };
@@ -5903,5 +5909,41 @@ mod tests {
         );
         assert!(byte_at_a_time.interval <= Duration::from_millis(5));
         assert!(!byte_at_a_time.abort_after_chunks);
+    }
+}
+
+#[cfg(test)]
+mod mirror_query_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn mirror_handlers_record_original_query_before_consuming_body() {
+        for slow in [false, true] {
+            for query in [Some("env=shadow&version=2"), Some("key=value&env=prod"), None] {
+                let trace = uuid::Uuid::new_v4().to_string();
+                let path = if slow { "/mirror/slow/0" } else { "/mirror/capture" };
+                let target = query.map_or_else(|| path.to_owned(), |query| format!("{path}?{query}"));
+                let request = AxumRequest::builder()
+                    .uri(target)
+                    .header("x-trace-id", &trace)
+                    .body(Body::from("query-capture-body"))
+                    .unwrap();
+                let response = if slow {
+                    mirror_slow_handler(Path(0), request).await.into_response()
+                } else {
+                    mirror_capture_handler(request).await.into_response()
+                };
+                assert_eq!(response.status(), axum::http::StatusCode::OK);
+                let captures = MIRROR_STORE.lock().remove(&trace).unwrap();
+                assert_eq!(captures.len(), 1);
+                let value = serde_json::to_value(&captures[0]).unwrap();
+                assert_eq!(value["path"], path);
+                assert_eq!(value["query"].as_str(), query);
+                assert_eq!(value["body"], "query-capture-body");
+                if query.is_none() {
+                    assert!(value["query"].is_null());
+                }
+            }
+        }
     }
 }

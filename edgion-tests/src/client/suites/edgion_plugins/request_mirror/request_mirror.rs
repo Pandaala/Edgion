@@ -136,6 +136,10 @@ fn find_mirror_capture(captures: &[Value]) -> Option<&Value> {
         .find(|c| c["headers"]["x-mirror"].as_str() == Some("true"))
 }
 
+fn mirror_capture_matches_target(capture: &Value, path: &str, query: &str) -> bool {
+    capture["path"].as_str() == Some(path) && capture["query"].as_str() == Some(query)
+}
+
 impl RequestMirrorTestSuite {
     // ==================== TC-01: Basic GET mirroring ====================
     fn test_basic_get_mirrored() -> TestCase {
@@ -434,8 +438,11 @@ impl RequestMirrorTestSuite {
                                 );
                             };
                             let path = cap["path"].as_str().unwrap_or("");
-                            if !path.contains("/mirror/capture") {
-                                return TestResult::failed(start.elapsed(), format!("Mirror path wrong: '{}'", path));
+                            if !mirror_capture_matches_target(cap, "/mirror/capture", "env=shadow&version=2") {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    "Mirror path or query mismatch".to_string(),
+                                );
                             }
                             TestResult::passed_with_message(start.elapsed(), format!("Mirror path: '{}' ✓", path))
                         }
@@ -693,9 +700,6 @@ impl RequestMirrorTestSuite {
                         .send()
                         .await;
 
-                    // The path stored by mirror_capture_handler includes the query string
-                    // because Axum's uri.path() for capture just gives path, but we can check indirectly
-                    // via the received headers having the trace_id (meaning request arrived)
                     match poll_mirror_received(&ctx, &trace_id, 20, 100).await {
                         Ok(captures) => {
                             let Some(cap) = find_mirror_capture(&captures) else {
@@ -707,6 +711,12 @@ impl RequestMirrorTestSuite {
                             let x_mirror = cap["headers"]["x-mirror"].as_str().unwrap_or("");
                             if x_mirror != "true" {
                                 return TestResult::failed(start.elapsed(), "x-mirror not 'true'".to_string());
+                            }
+                            if !mirror_capture_matches_target(cap, "/mirror/capture", "key=value&env=prod") {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    "Mirror path or query mismatch".to_string(),
+                                );
                             }
                             TestResult::passed_with_message(
                                 start.elapsed(),
@@ -940,6 +950,40 @@ impl TestSuite for RequestMirrorTestSuite {
 mod capture_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn mirror_target_requires_exact_path_and_observed_query() {
+        for query in ["env=shadow&version=2", "key=value&env=prod"] {
+            let capture = json!({"path": "/mirror/capture", "query": query});
+            assert!(mirror_capture_matches_target(&capture, "/mirror/capture", query));
+            for bad in [
+                Value::Null,
+                json!(7),
+                json!(""),
+                json!("wrong=value"),
+                json!(query.split('&').rev().collect::<Vec<_>>().join("&")),
+            ] {
+                let mut wrong = capture.clone();
+                wrong["query"] = bad;
+                assert!(!mirror_capture_matches_target(&wrong, "/mirror/capture", query));
+            }
+            assert!(!mirror_capture_matches_target(
+                &json!({"path": "/mirror/capture"}),
+                "/mirror/capture",
+                query
+            ));
+            assert!(!mirror_capture_matches_target(
+                &json!({"query": query}),
+                "/mirror/capture",
+                query
+            ));
+            assert!(!mirror_capture_matches_target(
+                &json!({"path": "/mirror/capture/extra", "query": query}),
+                "/mirror/capture",
+                query
+            ));
+        }
+    }
 
     #[test]
     fn mirror_identity_is_independent_of_capture_order_and_primary_contents() {

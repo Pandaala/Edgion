@@ -184,5 +184,12 @@ existing `x-mirror: true` marker; missing marked captures fail explicitly.
 The pure capture-identity regression checks both arrival orders and rejects
 borrowing a valid primary's method/body when the marked mirror is wrong. It
 verifies assertion input selection, not live delivery or production body copying.
-The separate missing query observation (ARCH-394) remains outside this identity
-correction; selecting a mirror does not by itself establish query preservation.
+Selecting a mirror does not by itself establish query preservation. The normal
+and slow test-server capture handlers record the raw query before consuming the
+body, independently of the existing path field (ARCH-394). Both query-preservation
+cases require the selected mirror's complete path and authored query in original
+order; absent, null, malformed or changed values fail. Network-free handler tests
+verify the serialized record from both real handlers, while pure client checks
+challenge missing, altered and reordered queries. These checks do not establish
+live Gateway or Kubernetes query forwarding. Production mirror transport and
+body budgets remain unchanged.
