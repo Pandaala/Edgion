@@ -10,6 +10,8 @@ Check the current compiler, transaction, and detector code before applying a pas
 
 ## Regression guards
 
+- [Form decoding borrows unchanged scratch](regression-guards/form-decoder-borrowed-scratch.md)
+
 - [Static tags select validated whole units before compilation](regression-guards/static-tag-selection-before-compilation.md)
 
 - [JSON inspection uses one grammar pass and bounded selected retention](regression-guards/fused-json-inspection.md)

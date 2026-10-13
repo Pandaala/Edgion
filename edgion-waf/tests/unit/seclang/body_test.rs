@@ -832,3 +832,54 @@ fn is_xml_scalar(value: char) -> bool {
         || (0xE000..=0xFFFD).contains(&value)
         || (0x10000..=0x10FFFF).contains(&value)
 }
+
+#[test]
+fn form_decoder_borrows_plain_bytes_and_keeps_tolerant_owned_decoding() {
+    for input in [b"".as_slice(), b"item", b"from-body", b"binary\0\xff"] {
+        let decoded = percent_decode(input).unwrap();
+        assert!(matches!(decoded, Cow::Borrowed(_)));
+        assert_eq!(decoded.as_ref(), input);
+        assert_eq!(decoded.as_ptr(), input.as_ptr());
+    }
+    for (input, expected) in [
+        (b"a+b".as_slice(), b"a b".as_slice()),
+        (b"%2B+%2b", b"+ +"),
+        (b"%2520", b"%20"),
+        (b"%Q0%", b"%Q0%"),
+        (b"%2", b"%2"),
+        (b"%00%FF", b"\0\xff"),
+        (b"a%26b%3Dc", b"a&b=c"),
+    ] {
+        let decoded = percent_decode(input).unwrap();
+        assert!(matches!(decoded, Cow::Owned(_)));
+        assert_eq!(decoded.as_ref(), expected);
+    }
+}
+
+#[test]
+fn form_publication_owns_fields_after_input_drop_and_preserves_split_order() {
+    let published = {
+        let input = b"&item=from-body&&item=second=tail&flag&=empty-name&plus=%2B+&".to_vec();
+        publication(&input, BodyProcessorSelection::UrlEncoded, None)
+    };
+    assert_eq!(
+        values(&published, CollectionKind::Args),
+        [
+            (Some(b"item".as_slice()), b"from-body".as_slice()),
+            (Some(b"item".as_slice()), b"second=tail".as_slice()),
+            (Some(b"flag".as_slice()), b"".as_slice()),
+            (Some(b"".as_slice()), b"empty-name".as_slice()),
+            (Some(b"plus".as_slice()), b"+ ".as_slice()),
+        ]
+    );
+    assert_eq!(
+        values(&published, CollectionKind::ArgsNames),
+        [
+            (Some(b"item".as_slice()), b"item".as_slice()),
+            (Some(b"item".as_slice()), b"item".as_slice()),
+            (Some(b"flag".as_slice()), b"flag".as_slice()),
+            (Some(b"".as_slice()), b"".as_slice()),
+            (Some(b"plus".as_slice()), b"plus".as_slice()),
+        ]
+    );
+}

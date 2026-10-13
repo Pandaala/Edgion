@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use memchr::memmem::Finder;
 use thiserror::Error;
 
@@ -810,7 +812,10 @@ fn disposition_parameter_value<'input>(parameter: &'input [u8], expected: &[u8])
     }
 }
 
-fn percent_decode(value: &[u8]) -> Result<Vec<u8>, BodyError> {
+fn percent_decode(value: &[u8]) -> Result<Cow<'_, [u8]>, BodyError> {
+    if !value.iter().any(|byte| matches!(*byte, b'+' | b'%')) {
+        return Ok(Cow::Borrowed(value));
+    }
     let mut output = Vec::new();
     output
         .try_reserve_exact(value.len())
@@ -843,7 +848,7 @@ fn percent_decode(value: &[u8]) -> Result<Vec<u8>, BodyError> {
             }
         }
     }
-    Ok(output)
+    Ok(Cow::Owned(output))
 }
 
 fn try_copy(value: &[u8]) -> Result<Vec<u8>, BodyError> {
