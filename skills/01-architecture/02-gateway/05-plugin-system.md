@@ -99,6 +99,19 @@ ExtensionRef body trait is not evidence of an incompatible target. This boundary
 adds no request state, lock, allocation, response aggregation or dispatch wrapper.
 
 
+### OIDC signing policy preparation
+
+`OpenidConnect::try_new` resolves the expected and allowed signing algorithms once
+per plugin generation through the OIDC-local `resolve_algorithm_policy` helper.
+The immutable owner retains either the prepared policy or the data-free
+`AuthFailure::InvalidAlgorithm`; an outside-default expected algorithm without an
+explicit allowlist remains a verification-time failure. The internal verifier
+decodes the JWT header first, borrows the policy, validates the token algorithm,
+and only then accesses JWKS/discovery. Captured old plugin generations retain
+their policy across configuration replacement. Dynamic key selection and JWKS
+rotation remain provider-owned; constructor prewarm and callback token exchange
+retain their separate ordering. See the [signing-policy regression boundary](../../04-review/oidc/regression-guards/prepared-signing-policy.md).
+
 ### Request-body read contract ownership
 
 `request_body/contracts.rs` defines `BodyReadError`, `BodyReadResult`,

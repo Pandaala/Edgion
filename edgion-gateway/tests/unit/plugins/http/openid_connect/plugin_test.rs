@@ -3187,3 +3187,126 @@ fn oidc_both_tls_branches_use_the_captured_global_generation() {
         },
     );
 }
+
+fn signing_policy_script() -> Arc<super::super::jwks_provider::ScriptedHttp> {
+    use super::super::jwks_provider::{ScriptedHttp, DISCOVERY_PATH, JWKS_PATH};
+    use base64::Engine;
+
+    let script = ScriptedHttp::new();
+    script.enqueue_http_repeat(
+        DISCOVERY_PATH,
+        200,
+        json!({
+            "issuer": ScriptedHttp::origin(), "jwks_uri": ScriptedHttp::jwks_url(),
+            "authorization_endpoint": "http://oidc.test/authorize",
+            "token_endpoint": "http://oidc.test/token",
+            "userinfo_endpoint": "http://oidc.test/userinfo"
+        })
+        .to_string(),
+    );
+    script.enqueue_http_repeat(
+        JWKS_PATH,
+        200,
+        json!({"keys": [{
+            "kty": "oct", "alg": "HS256", "kid": "policy-key",
+            "k": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"signing-policy-test-secret")
+        }]})
+        .to_string(),
+    );
+    script
+}
+
+fn signing_policy_token(audience: &str, nonce: &str) -> String {
+    use super::super::jwks_provider::ScriptedHttp;
+    let mut header = Header::new(Algorithm::HS256);
+    header.kid = Some("policy-key".to_string());
+    jsonwebtoken::encode(
+        &header,
+        &json!({
+            "iss": ScriptedHttp::origin(), "sub": "policy-user", "aud": audience,
+            "nonce": nonce, "exp": OpenidConnect::now_unix_secs() + 3600
+        }),
+        &jsonwebtoken::EncodingKey::from_secret(b"signing-policy-test-secret"),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn prepared_signing_policy_preserves_header_first_and_cold_provider_rejection() {
+    use super::super::error::{AuthFailure, OidcVerifyError};
+    use super::super::jwks_provider::{DISCOVERY_PATH, JWKS_PATH};
+
+    let token = signing_policy_token("client", "expected-nonce");
+    for expected in [Some("HS256"), None] {
+        let mut config = base_config();
+        config.token_signing_alg = expected.map(str::to_owned);
+        assert!(config.get_validation_error().is_none());
+        let plugin = actual_oidc(&config, "default".to_string()).expect("policy preserves construction");
+        let script = signing_policy_script();
+        plugin.jwks_provider.install_scripted_http(script.clone());
+        // Both provider caches remain cold. Even successful routes must not be consulted.
+        let mut session = MockPluginSession::new();
+        assert_eq!(
+            plugin
+                .verify_jwt_token_internal(&mut session, "bad.header.payload", true, None, true)
+                .await,
+            Err(OidcVerifyError::InvalidFormat)
+        );
+        assert_eq!(
+            plugin
+                .verify_jwt_token_internal(&mut session, &token, true, None, true)
+                .await,
+            Err(OidcVerifyError::Auth(AuthFailure::InvalidAlgorithm))
+        );
+        assert_eq!(script.hits(DISCOVERY_PATH), 0);
+        assert_eq!(script.hits(JWKS_PATH), 0);
+    }
+}
+
+#[tokio::test]
+async fn prepared_signing_policy_retains_old_generation_and_id_token_audience_nonce() {
+    use super::super::error::{AuthFailure, OidcVerifyError};
+    use super::super::jwks_provider::{DISCOVERY_PATH, JWKS_PATH};
+
+    let mut config = base_config();
+    config.token_signing_alg = Some("HS256".to_string());
+    config.allowed_signing_algs = Some(vec!["HS256".to_string()]);
+    config.audiences = Some(vec!["resource-api".to_string()]);
+    let old = Arc::new(OpenidConnect::new(&config, "default".to_string()));
+    let old_script = signing_policy_script();
+    old.jwks_provider.install_scripted_http(old_script.clone());
+    let token = signing_policy_token("resource-api", "expected-nonce");
+    let mut session = MockPluginSession::new();
+    assert!(old.verify_jwt_token(&mut session, &token).await.is_ok());
+
+    config.token_signing_alg = Some("RS256".to_string());
+    config.allowed_signing_algs = Some(vec!["RS256".to_string()]);
+    let new = OpenidConnect::new(&config, "default".to_string());
+    let new_script = signing_policy_script();
+    new.jwks_provider.install_scripted_http(new_script.clone());
+    assert_eq!(
+        new.verify_jwt_token(&mut session, &token).await,
+        Err(OidcVerifyError::Auth(AuthFailure::InvalidAlgorithm))
+    );
+    assert!(old.verify_jwt_token(&mut session, &token).await.is_ok());
+    assert_eq!(new_script.hits(DISCOVERY_PATH), 0);
+    assert_eq!(new_script.hits(JWKS_PATH), 0);
+    assert_eq!(old_script.hits(DISCOVERY_PATH), 1);
+    assert_eq!(old_script.hits(JWKS_PATH), 1);
+
+    let id_token = signing_policy_token("client", "expected-nonce");
+    assert!(old
+        .validate_id_token_nonce(&mut session, &id_token, "expected-nonce")
+        .await
+        .is_ok());
+    assert_eq!(
+        old.validate_id_token_nonce(&mut session, &id_token, "different-nonce")
+            .await,
+        Err(OidcVerifyError::Auth(AuthFailure::InvalidNonce))
+    );
+    assert!(old
+        .validate_id_token_nonce(&mut session, &token, "expected-nonce")
+        .await
+        .is_err());
+    assert!(old.verify_jwt_token(&mut session, &id_token).await.is_err());
+}

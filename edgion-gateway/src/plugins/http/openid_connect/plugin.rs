@@ -7,7 +7,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use bytes::Bytes;
 use jsonwebtoken::jwk::JwkSet;
-use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
+use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use pingora_http::ResponseHeader;
 use rand::RngCore;
 use reqwest::Url;
@@ -114,6 +114,11 @@ fn oidc_outbound_client_config(
 enum PreparedValue<T> {
     Ready(T),
     Unavailable,
+}
+
+struct PreparedSigningPolicy {
+    expected_alg: Option<Algorithm>,
+    allowed_algs: Vec<Algorithm>,
 }
 
 struct PreparedOidcSecrets {
@@ -276,6 +281,7 @@ pub struct OpenidConnect {
     claim_header_projection: ClaimHeaderProjectionPlan,
     callback_path: String,
     prepared_secrets: PreparedOidcSecrets,
+    signing_policy: Result<PreparedSigningPolicy, AuthFailure>,
     /// Per-instance outbound HTTP client. Built at construction with the plugin's
     /// resolved TLS policy (custom CA, mTLS identity, verify gate). Construction
     /// fails closed if any declared TLS policy cannot be applied.
@@ -355,6 +361,15 @@ impl OpenidConnect {
         };
         let callback_path = normalize_config_path(&raw_callback_path, path_cfg);
         let prepared_secrets = Self::prepare_secrets(&mut config, plugin_namespace);
+        // Preserve verification-time rejection for policies outside the default allowlist.
+        let signing_policy = resolve_algorithm_policy(
+            config.token_signing_alg.as_deref(),
+            config.allowed_signing_algs.as_deref(),
+        )
+        .map(|(expected_alg, allowed_algs)| PreparedSigningPolicy {
+            expected_alg,
+            allowed_algs,
+        });
 
         let introspection_limits = resolve_tiny_ufo_ttl_cache_limits(&config.introspection.tiny_ufo_ttl_cache)?;
         let (access_token_capacity, access_token_shards) = resolve_lru_cache_limits(&config.access_token.lru_cache)?;
@@ -460,6 +475,7 @@ impl OpenidConnect {
             claim_header_projection,
             callback_path,
             prepared_secrets,
+            signing_policy,
             client: outbound_client,
             jwks_provider,
             introspection_cache: TinyUfoTtlCache::new(introspection_limits).map_err(|e| e.to_string())?,

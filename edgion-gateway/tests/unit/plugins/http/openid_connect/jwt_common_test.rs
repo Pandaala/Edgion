@@ -61,3 +61,58 @@ fn test_map_jwt_decode_error_format() {
     let err = jsonwebtoken::errors::Error::from(ErrorKind::InvalidToken);
     assert_eq!(map_jwt_decode_error_typed(err), OidcVerifyError::InvalidFormat);
 }
+
+#[test]
+fn signing_policy_preserves_exact_defaults_and_explicit_opt_ins() {
+    use super::validate_token_alg;
+
+    let (_, defaults) = resolve_algorithm_policy(None, None).unwrap();
+    assert_eq!(
+        defaults,
+        vec![
+            Algorithm::RS256,
+            Algorithm::RS384,
+            Algorithm::RS512,
+            Algorithm::ES256,
+            Algorithm::ES384
+        ]
+    );
+    for (name, algorithm) in [
+        ("HS256", Algorithm::HS256),
+        ("HS384", Algorithm::HS384),
+        ("HS512", Algorithm::HS512),
+        ("PS256", Algorithm::PS256),
+        ("PS384", Algorithm::PS384),
+        ("PS512", Algorithm::PS512),
+        ("EdDSA", Algorithm::EdDSA),
+    ] {
+        assert!(validate_token_alg(algorithm, None, &defaults).is_err());
+        let allowed = vec![name.to_string()];
+        let (expected, resolved) = resolve_algorithm_policy(Some(name), Some(&allowed)).unwrap();
+        assert_eq!(expected, Some(algorithm));
+        assert_eq!(resolved, vec![algorithm]);
+        assert!(validate_token_alg(algorithm, expected, &resolved).is_ok());
+        assert!(validate_token_alg(Algorithm::RS256, expected, &resolved).is_err());
+    }
+    assert!(validate_token_alg(Algorithm::RS384, Some(Algorithm::RS256), &defaults).is_err());
+}
+
+#[test]
+fn signing_policy_rejects_invalid_configuration_without_error_payloads() {
+    use super::super::error::AuthFailure;
+
+    for (expected, allowed) in [
+        (Some("hs256"), None),
+        (Some("unknown"), None),
+        (None, Some(vec!["rs256".to_string()])),
+        (None, Some(vec!["unknown".to_string()])),
+        (None, Some(vec![])),
+        (Some("HS256"), None),
+        (Some("RS256"), Some(vec!["ES256".to_string()])),
+    ] {
+        assert_eq!(
+            resolve_algorithm_policy(expected, allowed.as_deref()),
+            Err(AuthFailure::InvalidAlgorithm)
+        );
+    }
+}

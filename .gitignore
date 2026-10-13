@@ -59,3 +59,4 @@ docs/.vitepress/cache/
 # Local-only cargo path overrides for verifying unpushed pingora fork changes.
 # Anchored and narrowed so a shared .cargo/config.toml stays possible later.
 /.cargo/config.toml
+!/edgion-tests/integration/conf/EdgionPlugins/ResponseCache/DynamicTest/updates/target/

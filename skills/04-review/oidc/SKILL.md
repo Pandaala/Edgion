@@ -20,6 +20,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [OIDC generation-owned signing policy](regression-guards/prepared-signing-policy.md)
+
 - [OIDC dependency error projection](regression-guards/dependency-error-projection.md)
 - [OIDC authentication response byte caps](regression-guards/authentication-response-byte-caps.md)
 

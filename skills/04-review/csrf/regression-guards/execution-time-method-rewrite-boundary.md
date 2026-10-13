@@ -49,7 +49,8 @@ Sources:
 No original-only getter substitution, generic request seal, static DSL guarantee,
 extra token copies, traffic tracing or new metrics are introduced. Automatically
 enforcing all transformations requires a separate design; late method permissions
-remain tracked under T06 in the [identity subtasks](../../../../tasks/pending/http-request-identity/03-subtasks.md).
+were tracked under T06 in the former `tasks/pending/http-request-identity/03-subtasks.md`
+task (absent from the current tree).
 
 The protected-write example requires a separate read-only token bootstrap endpoint.
 Authentication cookies and a genuinely state-changing origin operation are necessary

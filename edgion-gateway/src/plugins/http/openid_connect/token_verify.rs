@@ -82,11 +82,11 @@ impl OpenidConnect {
         let header = decode_header(token).map_err(|_| OidcVerifyError::InvalidFormat)?;
         let token_alg = header.alg;
 
-        let (expected_alg, allowed_algs) = resolve_algorithm_policy(
-            self.config.token_signing_alg.as_deref(),
-            self.config.allowed_signing_algs.as_deref(),
-        )?;
-        validate_token_alg(token_alg, expected_alg, &allowed_algs)?;
+        let policy = self
+            .signing_policy
+            .as_ref()
+            .map_err(|failure| OidcVerifyError::Auth(*failure))?;
+        validate_token_alg(token_alg, policy.expected_alg, &policy.allowed_algs)?;
 
         let build_decoding_key = |jwk: &jsonwebtoken::jwk::Jwk| {
             DecodingKey::from_jwk(jwk).map_err(|_| OidcVerifyError::Auth(AuthFailure::InvalidKey))

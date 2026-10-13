@@ -26,9 +26,9 @@ pub fn default_allowed_algs() -> Vec<Algorithm> {
 pub fn resolve_algorithm_policy(
     token_signing_alg: Option<&str>,
     allowed_signing_algs: Option<&[String]>,
-) -> VerifyResult<(Option<Algorithm>, Vec<Algorithm>)> {
+) -> Result<(Option<Algorithm>, Vec<Algorithm>), AuthFailure> {
     let expected = if let Some(configured) = token_signing_alg {
-        Some(Algorithm::from_str(configured).map_err(|_| OidcVerifyError::Auth(AuthFailure::InvalidAlgorithm))?)
+        Some(Algorithm::from_str(configured).map_err(|_| AuthFailure::InvalidAlgorithm)?)
     } else {
         None
     };
@@ -36,7 +36,7 @@ pub fn resolve_algorithm_policy(
     let allowed = if let Some(configured) = allowed_signing_algs {
         let mut out = Vec::with_capacity(configured.len());
         for alg in configured {
-            let parsed = Algorithm::from_str(alg).map_err(|_| OidcVerifyError::Auth(AuthFailure::InvalidAlgorithm))?;
+            let parsed = Algorithm::from_str(alg).map_err(|_| AuthFailure::InvalidAlgorithm)?;
             out.push(parsed);
         }
         out
@@ -45,12 +45,12 @@ pub fn resolve_algorithm_policy(
     };
 
     if allowed.is_empty() {
-        return Err(OidcVerifyError::Auth(AuthFailure::InvalidAlgorithm));
+        return Err(AuthFailure::InvalidAlgorithm);
     }
 
     if let Some(exp) = expected {
         if !allowed.contains(&exp) {
-            return Err(OidcVerifyError::Auth(AuthFailure::InvalidAlgorithm));
+            return Err(AuthFailure::InvalidAlgorithm);
         }
     }
 
