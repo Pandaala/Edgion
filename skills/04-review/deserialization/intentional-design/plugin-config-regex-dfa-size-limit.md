@@ -14,7 +14,7 @@ knowledge_type: intentional-design
 The plugin config structs compile operator-supplied regex patterns with bare
 `regex::Regex::new(pattern)` (no `size_limit` / `dfa_size_limit`) at the following sites:
 
-- `edgion-resources/src/resources/edgion_plugins/plugin_configs/proxy_rewrite.rs` (`check_fields`, `precompile`)
+- `edgion-resources/src/resources/edgion_plugins/plugin_configs/proxy_rewrite.rs` (private `prepare`, shared by `check_fields` and `precompile`)
 - `edgion-resources/src/resources/edgion_plugins/plugin_configs/ctx_set.rs` (`validate` — extract + transform)
 - `edgion-resources/src/resources/edgion_plugins/plugin_configs/direct_endpoint.rs` (`validate` — extract)
 - `edgion-resources/src/resources/edgion_plugins/plugin_configs/dynamic_external_upstream.rs` (`check_fields`, `validate`)
@@ -28,6 +28,15 @@ Proposals to replace these with the P3-g5-015 capped builder
 NOT a confirmed bug to fix.
 
 ## Core Rationale
+
+ARCH-072: ProxyRewrite prepares its regex and JSON Patch plan once per
+`precompile` invocation, retaining both only after complete success. Stateless
+`check_fields` independently uses the same private preparation routine and
+discards its outputs. Host conflict, regex and JSON diagnostics retain that
+priority; failed preparation clears both runtime caches. This removes redundant
+compilation within one preparation call, without changing engine limits or
+merging Controller and Gateway admission boundaries. No measured throughput or
+heap improvement is claimed.
 
 **1. This is not ReDoS — Rust's `regex` is linear-time by construction**
 

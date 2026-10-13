@@ -360,3 +360,89 @@ fn unknown_operation_fields_are_rejected() {
     }));
     assert!(result.is_err());
 }
+
+#[test]
+fn preparation_preserves_error_priority_and_clears_both_caches_on_failure() {
+    let valid: ProxyRewriteConfig = serde_json::from_value(serde_json::json!({
+        "regexUri": {"pattern": "^/old$", "replacement": "/new"},
+        "jsonBody": {"operations": [{"op": "add", "path": "/literal", "value": "x".repeat(4096)}]}
+    }))
+    .unwrap();
+    let invalid_regex = "[invalid";
+    let regex_error = format!("Invalid regex pattern: {}", Regex::new(invalid_regex).unwrap_err());
+    for (host_conflict, bad_regex, expected) in [
+        (
+            true,
+            true,
+            "Conflict: 'host' field and 'headers.set' with Host header both configured. Use only 'host' field.",
+        ),
+        (false, true, regex_error.as_str()),
+        (false, false, "jsonBody.operations must not be empty"),
+    ] {
+        let mut config = valid.clone();
+        assert!(config.precompile());
+        assert_eq!(config.compiled_regex.as_ref().unwrap().replace("/old", "/new"), "/new");
+        let CompiledJsonPatchOperation::Add {
+            value: CompiledJsonPatchValue::Literal(value),
+            ..
+        } = &config.compiled_json_body.as_ref().unwrap().operations[0]
+        else {
+            panic!()
+        };
+        assert_eq!(value.as_str().unwrap(), "x".repeat(4096));
+        config.json_body.as_mut().unwrap().operations.clear();
+        if bad_regex {
+            config.regex_uri.as_mut().unwrap().pattern = invalid_regex.into();
+        }
+        if host_conflict {
+            config.host = Some("backend.example".into());
+            config.headers = Some(HeaderActions {
+                add: None,
+                set: Some(vec![HeaderEntry {
+                    name: "hOsT".into(),
+                    value: "other.example".into(),
+                }]),
+                remove: None,
+            });
+        }
+        assert_eq!(config.check_fields().as_deref(), Some(expected));
+        // Stateless validation must not publish or clear runtime caches.
+        assert!(config.compiled_regex.is_some());
+        assert!(config.compiled_json_body.is_some());
+        assert!(!config.precompile());
+        assert!(config.compiled_regex.is_none());
+        assert!(config.compiled_json_body.is_none());
+    }
+}
+
+#[test]
+fn preparation_publishes_only_current_optional_outputs() {
+    let both: ProxyRewriteConfig = serde_json::from_value(serde_json::json!({
+        "regexUri": {"pattern": "^/old$", "replacement": "/new"},
+        "jsonBody": {"operations": [{"op": "add", "path": "/value", "value": null}]}
+    }))
+    .unwrap();
+    for (regex, json) in [(true, true), (true, false), (false, true), (false, false)] {
+        let mut config = both.clone();
+        assert!(config.precompile());
+        if !regex {
+            config.regex_uri = None;
+        }
+        if !json {
+            config.json_body = None;
+        }
+        assert_eq!(config.check_fields(), None);
+        assert!(config.precompile());
+        assert_eq!(config.compiled_regex.is_some(), regex);
+        assert_eq!(config.compiled_json_body.is_some(), json);
+        if let Some(plan) = &config.compiled_json_body {
+            assert!(matches!(
+                &plan.operations[0],
+                CompiledJsonPatchOperation::Add {
+                    value: CompiledJsonPatchValue::Literal(serde_json::Value::Null),
+                    ..
+                }
+            ));
+        }
+    }
+}

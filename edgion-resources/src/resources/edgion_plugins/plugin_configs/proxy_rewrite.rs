@@ -447,15 +447,19 @@ impl ProxyRewriteConfig {
     /// Check all validation rules without mutating self.
     ///
     /// Returns `Some(error)` if any field is invalid, `None` if all checks pass.
-    /// Used by both `precompile()` and the `PluginValidation` trait impl.
+    /// Used by the `PluginValidation` trait impl without publishing runtime caches.
     pub fn check_fields(&self) -> Option<String> {
+        self.prepare().err()
+    }
+
+    fn prepare(&self) -> Result<(Option<Regex>, Option<CompiledJsonBodyRewrite>), String> {
         // Check for Host conflict in headers.set
         if self.host.is_some() {
             if let Some(ref headers) = self.headers {
                 if let Some(ref set_headers) = headers.set {
                     for entry in set_headers {
                         if entry.name.eq_ignore_ascii_case("host") {
-                            return Some(
+                            return Err(
                                 "Conflict: 'host' field and 'headers.set' with Host header both configured. Use only 'host' field.".to_string()
                             );
                         }
@@ -464,45 +468,24 @@ impl ProxyRewriteConfig {
             }
         }
 
-        // Validate regex pattern if configured
-        if let Some(ref regex_uri) = self.regex_uri {
-            if let Err(e) = Regex::new(&regex_uri.pattern) {
-                return Some(format!("Invalid regex pattern: {}", e));
-            }
-        }
-
-        if let Some(rewrite) = &self.json_body {
-            if let Err(error) = rewrite.compile() {
-                return Some(error);
-            }
-        }
-
-        None
+        let compiled_regex = self
+            .regex_uri
+            .as_ref()
+            .map(|regex_uri| Regex::new(&regex_uri.pattern).map_err(|error| format!("Invalid regex pattern: {error}")))
+            .transpose()?;
+        let compiled_json_body = self.json_body.as_ref().map(JsonBodyRewrite::compile).transpose()?;
+        Ok((compiled_regex, compiled_json_body))
     }
 
-    /// Precompile regex pattern and validate configuration.
+    /// Precompile regex and JSON Patch plans and validate configuration.
     ///
     /// Returns true if configuration is valid, false otherwise.
     pub fn precompile(&mut self) -> bool {
         self.compiled_regex = None;
         self.compiled_json_body = None;
-        let compiled_regex = match self.regex_uri.as_ref() {
-            Some(regex_uri) => match Regex::new(&regex_uri.pattern) {
-                Ok(regex) => Some(regex),
-                Err(_) => return false,
-            },
-            None => None,
-        };
-        let compiled_json_body = match self.json_body.as_ref() {
-            Some(rewrite) => match rewrite.compile() {
-                Ok(rewrite) => Some(rewrite),
-                Err(_) => return false,
-            },
-            None => None,
-        };
-        if self.check_fields().is_some() {
+        let Ok((compiled_regex, compiled_json_body)) = self.prepare() else {
             return false;
-        }
+        };
         self.compiled_regex = compiled_regex;
         self.compiled_json_body = compiled_json_body;
         true
