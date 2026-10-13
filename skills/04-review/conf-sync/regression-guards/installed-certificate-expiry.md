@@ -66,6 +66,16 @@ fixed diagnostics rather than input-derived markers. This does not broaden the
 shared reload/provision validator's accepted inputs or change Controller metadata
 selection; mixed-prefix loading coverage applies to initial client construction.
 
+ARCH-075 narrows the shared reload/provision gate to require CERTIFICATE labels
+on the first decoded leaf and CA PEM blocks. A relabeled certificate prefix must
+not validate while rustls skips it and installs a different leaf. Fixed label
+diagnostics contain no supplied marker or material. Accepted normal leaf-first
+chains retain first-block validation and Controller metadata selection; initial
+client mixed-prefix loading still selects its first CERTIFICATE. Invalid reloads
+leave the installed identity, validity, serial and trust token unchanged. This
+restriction does not adopt the historical validator-only selector migration below
+or change trust-root bundle membership and chain policy.
+
 ## Verification and re-evaluation
 
 The new `edgion-gateway/tests/conf_sync_cert_expiry.rs` drives production initialization,
@@ -96,7 +106,8 @@ Fresh verification on 2026-10-05:
 - Independent Astra review returned LGTM after first-CERTIFICATE selection,
   sanitized PEM diagnostics and metric-name corrections. An intermediate
   validator change was withdrawn after review identified Controller metadata
-  consumers with a different selection policy; that validator remains unchanged.
+  consumers with a different selection policy; the validator was unchanged at
+  that checkpoint. ARCH-075 subsequently added the label restriction above.
 
 No full workspace test suite, filesystem-notify scenario or shared
 Gateway/Controller end-to-end run is claimed.

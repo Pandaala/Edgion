@@ -54,16 +54,26 @@ pub fn client_tls_from_pems(
 /// Validate a leaf identity before hot-swapping it into a live TLS config
 /// (spec §6 Task 1 item 3). Checks: PEMs parse; leaf within validity NOW;
 /// leaf chains to `ca_pem` (issuer + signature); private key matches the leaf.
+/// The first decoded leaf and CA PEM blocks must be labeled CERTIFICATE so
+/// validation cannot select a block that the transport's certificate loader skips.
 /// Every consumer (controller server swap, gateway client swap, provision adopt)
 /// MUST call this and keep the previous config on error.
 pub fn validate_identity(cert_pem: &[u8], key_pem: &[u8], ca_pem: &[u8]) -> anyhow::Result<()> {
     let (_, leaf_doc) =
         x509_parser::pem::parse_x509_pem(cert_pem).map_err(|e| anyhow::anyhow!("leaf cert PEM parse: {e}"))?;
+    anyhow::ensure!(
+        leaf_doc.label == "CERTIFICATE",
+        "leaf cert PEM must begin with a CERTIFICATE block"
+    );
     let leaf = leaf_doc
         .parse_x509()
         .map_err(|e| anyhow::anyhow!("leaf cert DER parse: {e}"))?;
     let (_, ca_doc) =
         x509_parser::pem::parse_x509_pem(ca_pem).map_err(|e| anyhow::anyhow!("CA cert PEM parse: {e}"))?;
+    anyhow::ensure!(
+        ca_doc.label == "CERTIFICATE",
+        "CA cert PEM must begin with a CERTIFICATE block"
+    );
     let ca = ca_doc
         .parse_x509()
         .map_err(|e| anyhow::anyhow!("CA cert DER parse: {e}"))?;
