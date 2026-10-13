@@ -392,11 +392,10 @@ impl PreparedIp {
     }
     fn matches(&self, ip: &IpReferenceSet) -> bool {
         self.slots.len() == ip.ip_refs.len()
-            && self
-                .slots
-                .iter()
-                .zip(&ip.ip_refs)
-                .all(|(slot, wire)| slot.wire == ip_wire(wire))
+            && self.slots.iter().zip(&ip.ip_refs).all(|(slot, wire)| {
+                matches!(&slot.wire, FieldWire::ConfigData { name, namespace }
+                        if name == &wire.name && namespace == &wire.namespace)
+            })
     }
 }
 fn ip_wire(wire: &EdgionConfigDataRef) -> FieldWire {

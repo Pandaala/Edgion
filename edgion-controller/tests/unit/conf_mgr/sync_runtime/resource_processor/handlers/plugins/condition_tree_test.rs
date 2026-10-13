@@ -67,7 +67,9 @@ fn ip_permission_precedence_and_namespace_defaults_remain_field_specific() {
                     |ns, name| {
                         assert_eq!(ns, namespace.unwrap_or("default"));
                         assert_eq!(name, "nets");
-                        Some(data(enabled, visibility, "IpList"))
+                        let mut target = data(enabled, visibility, "IpList");
+                        target.metadata.namespace = Some(ns.into());
+                        Some(target)
                     },
                     |query| {
                         grants.set(grants.get() + 1);

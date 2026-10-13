@@ -613,3 +613,42 @@ fn global_real_ip_loans_have_actual_cluster_authority_and_finite_scopes() {
         })
         .unwrap();
 }
+
+#[test]
+fn prepared_ip_comparison_preserves_exact_authored_fields_and_wire_variant() {
+    let resource = owner();
+    let snapshot = OwnerSnapshot::namespaced("edgion.io", "EdgionPlugins", &resource.metadata);
+    let ip: IpReferenceSet = serde_json::from_value(serde_json::json!({
+        "ipRefs": [{"name": "first"}, {"name": "second", "namespace": "ops"}]
+    }))
+    .unwrap();
+    let mut prepared = PreparedIp::new(&snapshot, 0, None, &ip);
+    assert!(prepared.matches(&ip));
+    for mutation in [
+        "name",
+        "namespace-empty",
+        "namespace-explicit",
+        "namespace-omitted",
+        "order",
+        "length",
+    ] {
+        let mut changed = ip.clone();
+        match mutation {
+            "name" => changed.ip_refs[0].name = "other".into(),
+            "namespace-empty" => changed.ip_refs[0].namespace = Some(String::new()),
+            "namespace-explicit" => changed.ip_refs[0].namespace = Some("apps".into()),
+            "namespace-omitted" => changed.ip_refs[1].namespace = None,
+            "order" => changed.ip_refs.swap(0, 1),
+            _ => {
+                changed.ip_refs.pop();
+            }
+        }
+        assert!(!prepared.matches(&changed), "{mutation}");
+        assert!(PreparedIp::new(&snapshot, 0, None, &changed).matches(&changed));
+    }
+    prepared.slots[0].wire = FieldWire::Descriptor {
+        name: "first".into(),
+        key: String::new(),
+    };
+    assert!(!prepared.matches(&ip));
+}

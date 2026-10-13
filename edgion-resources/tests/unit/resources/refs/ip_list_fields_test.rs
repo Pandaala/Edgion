@@ -483,3 +483,58 @@ fn passive_controller_sites_do_not_confer_executable_authority() {
         assert!(!refs.is_supported());
     }
 }
+
+#[test]
+fn standalone_ip_comparison_preserves_namespace_presence_order_and_wire_variant() {
+    let mut owner = http(json!({"name": "first"}));
+    let EdgionPlugin::IpRestriction(config) = &mut owner.spec.request_plugins.as_mut().unwrap()[0].plugin else {
+        panic!()
+    };
+    config
+        .refs
+        .allow_refs
+        .as_mut()
+        .unwrap()
+        .push(serde_json::from_value(json!({"name": "second", "namespace": "ops"})).unwrap());
+    let mut prepared = PreparedIpListReferences::from_plugins(&owner);
+    assert!(prepared.bind_plugins(&owner).is_ok());
+    for mutation in [
+        "namespace-empty",
+        "namespace-explicit",
+        "namespace-omitted",
+        "order",
+        "length",
+        "presence",
+    ] {
+        let mut changed = owner.clone();
+        let EdgionPlugin::IpRestriction(config) = &mut changed.spec.request_plugins.as_mut().unwrap()[0].plugin else {
+            panic!()
+        };
+        let refs = config.refs.allow_refs.as_mut().unwrap();
+        match mutation {
+            "namespace-empty" => refs[0].namespace = Some(String::new()),
+            "namespace-explicit" => refs[0].namespace = Some("default".into()),
+            "namespace-omitted" => refs[1].namespace = None,
+            "order" => refs.swap(0, 1),
+            "length" => {
+                refs.pop();
+            }
+            _ => config.refs.allow_refs = None,
+        }
+        assert!(
+            matches!(prepared.bind_plugins(&changed), Err(ReferenceError::StaleBinding)),
+            "{mutation}"
+        );
+        assert!(PreparedIpListReferences::from_plugins(&changed)
+            .bind_plugins(&changed)
+            .is_ok());
+    }
+    prepared.snapshot.roots[0].refs[0].as_mut().unwrap()[0].wire = FieldWire::Descriptor {
+        name: "first".into(),
+        key: String::new(),
+    };
+    assert!(matches!(
+        prepared.bind_plugins(&owner),
+        Err(ReferenceError::StaleBinding)
+    ));
+}

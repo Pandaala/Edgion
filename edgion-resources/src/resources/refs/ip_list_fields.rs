@@ -153,7 +153,11 @@ impl PreparedIpListReferences {
                 let matches = match (actual, slots) {
                     (None, None) => true,
                     (Some(actual), Some(slots)) => {
-                        actual.len() == slots.len() && actual.iter().zip(slots).all(|(r, s)| wire(r) == s.wire)
+                        actual.len() == slots.len()
+                            && actual.iter().zip(slots).all(|(reference, slot)| {
+                                matches!(&slot.wire, FieldWire::ConfigData { name, namespace }
+                                    if name == &reference.name && namespace == &reference.namespace)
+                            })
                     }
                     _ => false,
                 };

@@ -171,6 +171,14 @@ The bounded source analysis established no measured benefit sufficient to justif
 a binding/lifetime refactor. This is not whole-contract acceptance or a prohibition
 on future evidence-backed optimization of cold traversal.
 
+ARCH-071: Standalone and condition IpList topology comparisons borrow the stored
+ConfigData name and optional namespace against the actual owner fields. Snapshot
+preparation still owns its strings; only temporary comparison copies are removed.
+Omitted and explicitly empty namespaces remain distinct, other wire variants
+reject, and order, side, presence and owner gates remain unchanged. Controller
+material and denial updates remain outside authored topology. This does not
+replace the preparation/binding mechanism or claim allocation-free traversal.
+
 The Gateway retains only canonical target keys in the compiled plugin. It continues
 to capture one immutable ConfigData snapshot per decision, preserving atomic IpList
 updates and live content refresh for pinned plugin generations. Selector and other
