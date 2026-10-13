@@ -353,12 +353,10 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
         .into_iter()
         .collect();
         if resolved_refs_errors.is_empty() && tls.spec.secret.is_some() {
-            use edgion_common::tls_validation::CertValidationError as CVE;
             resolved_refs_errors.extend(
                 edgion_common::tls_validation::validate_cert(tls)
                     .errors
                     .into_iter()
-                    .filter(|e| !matches!(e, CVE::SecretNotFound | CVE::CertNotFound | CVE::KeyNotFound))
                     .map(|e| ResolvedRefsError::CertContentInvalid {
                         detail: e.status_message(),
                     }),

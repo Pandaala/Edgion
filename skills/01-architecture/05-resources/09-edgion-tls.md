@@ -45,6 +45,7 @@ Clear SecretRefManager references and the GatewayRouteIndex registration.
 Produce an independent RouteParentStatus for each parentRef:
 - `Accepted`: True when there are no validation_errors; False (reason=Invalid) when errors exist; also validates whether the Gateway corresponding to parentRef exists
 - `ResolvedRefs`: validates actual server/CA fields and carried material; readonly authorization distinguishes RefNotPermitted from SecretNotFound without payload reads or dependency registration.
+- Present authorized server material is checked with the shared certificate validator. Missing `tls.crt` or `tls.key` remains `ResolvedRefs=False/InvalidCertificate` with its fixed diagnostic; a missing Secret remains `SecretNotFound`. All validator errors are projected without re-reading payloads or changing Accepted (ARCH-136).
 - Sets only the Accepted and ResolvedRefs Conditions; does not set Programmed/Ready
 
 ## Gateway-side processing

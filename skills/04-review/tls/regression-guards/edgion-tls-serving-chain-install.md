@@ -82,6 +82,17 @@ production path: `validate_cert` runs `check_key_matches_cert`, which itself
 calls `parse_strict_certificate_chain` and `parse_strict_private_key_pem`, so a
 matchable entry always has a strict-parseable chain and key.
 
+## Controller server-material status
+
+ARCH-136 keeps every shared `validate_cert` error when projecting an authorized,
+identity-matched server Secret into Controller status. A present Secret lacking
+`tls.crt` or `tls.key` reports `ResolvedRefs=False/InvalidCertificate` using the
+existing fixed `status_message`; absence and authorization failures retain their
+separate reasons. The Controller consumes the parsed material, without a second
+Secret read or duplicate certificate inspection. Accepted semantics and Gateway
+whole-generation predecessor retention remain unchanged. This correction covers
+server material only; it does not expand mTLS CA-content admission described above.
+
 ## Diagnostic granularity
 
 Atomic installation reports one category (`set serving identity`) instead of the

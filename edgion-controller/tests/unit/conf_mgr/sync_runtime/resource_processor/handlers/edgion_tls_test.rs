@@ -783,3 +783,114 @@ async fn actual_fields_scrub_injection_independently_and_status_is_readonly() {
         .iter()
         .any(|c| c.type_ == "ResolvedRefs" && c.reason == "RefNotPermitted"));
 }
+
+#[test]
+fn present_secret_missing_server_material_reports_invalid_certificate_and_recovers() {
+    use super::super::secret::SecretHandler;
+    use edgion_resources::constants::secret_keys::tls::{CERT, KEY};
+    use k8s_openapi::api::core::v1::Secret;
+    use std::collections::BTreeMap;
+
+    let ctx = make_ctx_with_gateways(&[("test-ns", "my-gw")]);
+    let key = rcgen::KeyPair::generate().unwrap();
+    let cert = rcgen::CertificateParams::new(vec!["example.com".to_string()])
+        .unwrap()
+        .self_signed(&key)
+        .unwrap()
+        .pem();
+    let key = key.serialize_pem();
+    let mut tls = make_tls(Some(vec![make_parent_ref("my-gw", "test-ns")]), "test-secret");
+    tls.metadata.generation = Some(17);
+    let handler = EdgionTlsHandler::default();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        tls = match handler.parse(tls, &ctx).await {
+            ProcessResult::Continue(tls) => tls,
+            _ => panic!("TLS parse must preserve a pending Secret reference"),
+        };
+        handler.update_status(&mut tls, &ctx, &[]);
+        let conditions = &tls.status.as_ref().unwrap().parents[0].conditions;
+        let absent = conditions.iter().find(|c| c.type_ == "ResolvedRefs").unwrap();
+        assert_eq!((&*absent.status, &*absent.reason), ("False", "SecretNotFound"));
+        let accepted = conditions.iter().find(|c| c.type_ == "Accepted").unwrap().clone();
+
+        for (case, message) in [
+            ("no-data", "Certificate (tls.crt) not found in Secret"),
+            ("valid", "All references resolved"),
+            ("missing-cert", "Certificate (tls.crt) not found in Secret"),
+            ("valid", "All references resolved"),
+            ("missing-key", "Private key (tls.key) not found in Secret"),
+            ("valid", "All references resolved"),
+        ] {
+            let string_data = match case {
+                "no-data" => None,
+                "missing-cert" => Some(BTreeMap::from([(KEY.into(), key.clone())])),
+                "missing-key" => Some(BTreeMap::from([(CERT.into(), cert.clone())])),
+                "valid" => Some(BTreeMap::from([(CERT.into(), cert.clone()), (KEY.into(), key.clone())])),
+                _ => unreachable!(),
+            };
+            let expected_keys: Vec<_> = string_data
+                .as_ref()
+                .into_iter()
+                .flat_map(|data| data.keys().cloned())
+                .collect();
+            let secret = Secret {
+                metadata: ObjectMeta {
+                    name: Some("test-secret".into()),
+                    namespace: Some("test-ns".into()),
+                    ..Default::default()
+                },
+                string_data,
+                ..Default::default()
+            };
+            let parsed = match SecretHandler::new().parse(secret, &ctx).await {
+                ProcessResult::Continue(secret) => secret,
+                _ => panic!("Secret parse must retain incomplete server material"),
+            };
+            assert!(parsed.string_data.is_none());
+            for field in expected_keys {
+                assert!(parsed.data.as_ref().unwrap().contains_key(&field));
+            }
+            tls = match handler.parse(tls, &ctx).await {
+                ProcessResult::Continue(tls) => tls,
+                _ => panic!("TLS parse must carry present Secret material"),
+            };
+            assert!(tls.spec.secret.is_some());
+            handler.update_status(&mut tls, &ctx, &[]);
+            let conditions = &tls.status.as_ref().unwrap().parents[0].conditions;
+            assert_eq!(conditions.len(), 2);
+            let current_accepted = conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
+            assert_eq!(
+                (
+                    &current_accepted.status,
+                    &current_accepted.reason,
+                    &current_accepted.message
+                ),
+                (&accepted.status, &accepted.reason, &accepted.message)
+            );
+            let resolved = conditions.iter().find(|c| c.type_ == "ResolvedRefs").unwrap();
+            assert_eq!(resolved.observed_generation, Some(17));
+            assert_eq!(resolved.message, message, "{case}");
+            assert_eq!(
+                resolved.status,
+                if case == "valid" { "True" } else { "False" },
+                "{case}"
+            );
+            assert_eq!(
+                resolved.reason,
+                if case == "valid" {
+                    "ResolvedRefs"
+                } else {
+                    "InvalidCertificate"
+                },
+                "{case}"
+            );
+            let status = serde_json::to_string(&tls.status).unwrap();
+            assert!(!status.contains("BEGIN CERTIFICATE"));
+            assert!(!status.contains("PRIVATE KEY"));
+        }
+    });
+}
