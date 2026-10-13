@@ -74,6 +74,12 @@ GET    /configclient/{kind}?name=N&namespace=NS  # Filter by name/namespace
 
 For server/client list requests, namespace-only filtering is applied by the CLI after fetching the list. Named requests use the query endpoint and are filtered by the server.
 
+Single-page and `--all` cache queries share the same command-owned namespace
+selection (ARCH-176). Each page is filtered before Table/Wide output or JSON/YAML
+accumulation; the original server continuation token remains authoritative even
+when no rows match. Table headers follow the first nonempty printed page, not the
+first fetched page. Center's namespaced and metadata-key endpoints are unchanged.
+
 ## EdgionClient
 
 ### Paginated output ownership

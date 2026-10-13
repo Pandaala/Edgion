@@ -137,3 +137,90 @@ fn cli_get_without_kind_fails() {
     let err = Cli::try_parse_from(["edgion-cli", "get"]).expect_err("get without kind should fail");
     assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
 }
+
+#[test]
+fn list_page_namespace_selection_preserves_transport_pagination() {
+    let source = json!({
+        "success": true, "count": 3, "continue_token": "original-token",
+        "data": [
+            {"metadata": {"name": "first", "namespace": "team-a"}},
+            {"metadata": {"name": "other", "namespace": "team-b"}},
+            {"metadata": {"name": "last", "namespace": "team-a"}}
+        ]
+    });
+    for target in [TargetType::Center, TargetType::Server, TargetType::Client] {
+        for namespace in [None, Some("team-a"), Some("missing")] {
+            let mut page = source.clone();
+            filter_list_page(&mut page, target, namespace);
+            assert_eq!(page["continue_token"], "original-token");
+            assert_eq!(page["success"], true);
+            if target == TargetType::Center || namespace.is_none() {
+                assert_eq!(page, source);
+            } else if namespace == Some("missing") {
+                assert_eq!(page["data"], json!([]));
+                assert_eq!(page["count"], 0);
+            } else {
+                assert_eq!(page["data"], json!([source["data"][0], source["data"][2]]));
+                assert_eq!(page["count"], 2);
+            }
+        }
+    }
+}
+
+#[test]
+fn empty_filtered_page_keeps_token_for_later_matching_page() {
+    for target in [TargetType::Server, TargetType::Client] {
+        let mut empty = json!({
+            "data": [{"metadata": {"namespace": "other"}}],
+            "count": 1, "continue_token": "next-page"
+        });
+        filter_list_page(&mut empty, target, Some("wanted"));
+        assert_eq!(empty["count"], 0);
+        assert_eq!(empty["continue_token"], "next-page");
+        for format in [OutputFormat::Table, OutputFormat::Wide] {
+            assert_eq!(
+                crate::cli::output::print_resource_list_page_streaming(&empty, format, false).unwrap(),
+                0
+            );
+        }
+        let mut next = json!({
+            "data": [{"metadata": {"name": "visible", "namespace": "wanted"}}],
+            "count": 1, "continue_token": null
+        });
+        filter_list_page(&mut next, target, Some("wanted"));
+        assert_eq!(next["data"][0]["metadata"]["name"], "visible");
+        assert_eq!(next["count"], 1);
+        assert!(next["continue_token"].is_null());
+    }
+}
+
+#[test]
+fn cli_parses_all_cache_namespace_queries_for_each_output_format() {
+    for (target, expected_target) in [("server", TargetType::Server), ("client", TargetType::Client)] {
+        for format in ["table", "wide", "json", "yaml"] {
+            let cli = Cli::try_parse_from([
+                "edgion-cli",
+                "-t",
+                target,
+                "get",
+                "httproute",
+                "-n",
+                "team-a",
+                "--all",
+                "-o",
+                format,
+            ])
+            .unwrap();
+            assert_eq!(cli.target, expected_target);
+            let Commands::Get {
+                namespace, output, all, ..
+            } = cli.command
+            else {
+                panic!("get expected")
+            };
+            assert_eq!(namespace.as_deref(), Some("team-a"));
+            assert_eq!(output, format);
+            assert!(all);
+        }
+    }
+}

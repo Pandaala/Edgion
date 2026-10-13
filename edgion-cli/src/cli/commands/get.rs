@@ -86,6 +86,15 @@ fn filter_by_namespace(data: &mut Value, namespace: &str) {
     }
 }
 
+/// Apply command-owned namespace selection without changing server pagination.
+fn filter_list_page(data: &mut Value, target: TargetType, namespace: Option<&str>) {
+    if matches!(target, TargetType::Server | TargetType::Client) {
+        if let Some(namespace) = namespace {
+            filter_by_namespace(data, namespace);
+        }
+    }
+}
+
 /// Extract resource data from response based on target type
 /// - center: get returns raw JSON `{...}`
 /// - server/client: get returns wrapped format `{"success": true, "data": {...}}`
@@ -195,6 +204,7 @@ async fn list_all_paginated(
     let mut accumulated_items: Vec<Value> = Vec::new();
     let mut continue_token: Option<String> = opts.continue_token.clone();
     let mut page_index = 0usize;
+    let mut printed_rows = false;
 
     loop {
         let resp = match (namespace, opts.metadata_only && client.target() == TargetType::Center) {
@@ -224,12 +234,13 @@ async fn list_all_paginated(
             // friendly 5xx hint / stale-token message as single-page paths.
             return Err(handle_list_error_status(resp).await);
         }
-        let data = parse_json_response(resp).await?;
+        let mut data = parse_json_response(resp).await?;
+        filter_list_page(&mut data, client.target(), namespace);
 
         match output {
             OutputFormat::Table | OutputFormat::Wide => {
-                let suppress_header = page_index > 0;
-                let _ = crate::cli::output::print_resource_list_page_streaming(&data, output, suppress_header)?;
+                let count = crate::cli::output::print_resource_list_page_streaming(&data, output, printed_rows)?;
+                printed_rows |= count > 0;
             }
             OutputFormat::Json | OutputFormat::Yaml => {
                 if let Some(items) = data.get("data").and_then(|d| d.as_array()) {
@@ -311,7 +322,7 @@ async fn list_namespaced(
 
             let mut data = parse_json_response(resp).await?;
             // Apply client-side namespace filtering
-            filter_by_namespace(&mut data, namespace);
+            filter_list_page(&mut data, client.target(), Some(namespace));
             print_resource_list(&data, output)?;
         }
     }
