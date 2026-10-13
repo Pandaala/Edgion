@@ -13,8 +13,8 @@ use edgion_resources::resources::ReferenceGrant;
 /// Type alias for the raw grant map (key: namespace/name)
 type RawGrantMap = HashMap<String, Arc<ReferenceGrant>>;
 
-/// Type alias for the indexed grant map (key: to_namespace, value: grants in that namespace)
-type IndexedGrantMap = HashMap<String, Vec<Arc<ReferenceGrant>>>;
+/// Namespace buckets retain raw keys so single-grant mutations update exact slots.
+type IndexedGrantMap = HashMap<String, RawGrantMap>;
 
 /// Internal state holding both the raw map and the to_namespace index.
 ///
@@ -30,7 +30,7 @@ struct State {
 ///
 /// Uses two-layer storage:
 /// 1. Raw storage: HashMap<String, Arc<ReferenceGrant>> for basic lookup
-/// 2. Indexed storage: HashMap<String, Vec<Arc<ReferenceGrant>>> indexed by to_namespace
+/// 2. Indexed storage: namespace -> raw key -> shared grant Arc
 ///
 /// Note: This is control plane code, so we use simple RwLock instead of ArcSwap.
 pub struct ReferenceGrantStore {
@@ -52,7 +52,7 @@ impl ReferenceGrantStore {
             .read()
             .by_to_namespace
             .get(target)
-            .is_some_and(|grants| grants.iter().any(|grant| query.matches(grant)))
+            .is_some_and(|grants| grants.values().any(|grant| query.matches(grant)))
     }
 
     /// Capture permission and its revision from the same authorizer snapshot.
@@ -71,7 +71,7 @@ impl ReferenceGrantStore {
         let mut revisions = state
             .by_to_namespace
             .get(target)?
-            .iter()
+            .values()
             .filter(|grant| query.matches(grant))
             .map(|grant| {
                 format!(
@@ -111,7 +111,7 @@ impl ReferenceGrantStore {
             .read()
             .by_to_namespace
             .get(to_namespace)
-            .cloned()
+            .map(|grants| grants.values().cloned().collect())
             .unwrap_or_default()
     }
 
@@ -155,12 +155,18 @@ impl ReferenceGrantStore {
 
     /// Add or update a single grant
     pub fn upsert(&self, key: String, grant: Arc<ReferenceGrant>) {
-        let to_namespace = grant.namespace().map(|s| s.to_string());
-
         let mut state = self.state.write();
-        state.raw.insert(key, grant);
-        if let Some(ns) = to_namespace {
-            Self::rebuild_namespace_index_locked(&mut state, &ns);
+        if let Some(old) = state.raw.insert(key.clone(), Arc::clone(&grant)) {
+            if let Some(namespace) = old.namespace() {
+                Self::remove_index_entry_locked(&mut state, namespace, &key);
+            }
+        }
+        if let Some(namespace) = grant.namespace() {
+            state
+                .by_to_namespace
+                .entry(namespace.to_string())
+                .or_default()
+                .insert(key, grant);
         }
     }
 
@@ -168,27 +174,22 @@ impl ReferenceGrantStore {
     pub fn remove(&self, key: &str) -> Option<Arc<ReferenceGrant>> {
         let mut state = self.state.write();
         let grant = state.raw.remove(key)?;
-        if let Some(ns) = grant.namespace().map(|s| s.to_string()) {
-            Self::rebuild_namespace_index_locked(&mut state, &ns);
+        if let Some(namespace) = grant.namespace() {
+            Self::remove_index_entry_locked(&mut state, namespace, key);
         }
         Some(grant)
     }
 
-    /// Rebuild the index for a specific namespace.
+    /// Remove only the indexed slot belonging to the changed raw key.
     ///
     /// Caller must already hold the state write lock.
-    fn rebuild_namespace_index_locked(state: &mut State, namespace: &str) {
-        let grants_in_ns: Vec<Arc<ReferenceGrant>> = state
-            .raw
-            .values()
-            .filter(|g| g.namespace() == Some(namespace))
-            .cloned()
-            .collect();
-
-        if grants_in_ns.is_empty() {
+    fn remove_index_entry_locked(state: &mut State, namespace: &str, key: &str) {
+        let empty = state.by_to_namespace.get_mut(namespace).is_some_and(|grants| {
+            grants.remove(key);
+            grants.is_empty()
+        });
+        if empty {
             state.by_to_namespace.remove(namespace);
-        } else {
-            state.by_to_namespace.insert(namespace.to_string(), grants_in_ns);
         }
     }
 
@@ -204,9 +205,12 @@ impl ReferenceGrantStore {
     fn build_index(grants: &RawGrantMap) -> IndexedGrantMap {
         let mut index: IndexedGrantMap = HashMap::new();
 
-        for grant in grants.values() {
+        for (key, grant) in grants {
             if let Some(ns) = grant.namespace() {
-                index.entry(ns.to_string()).or_default().push(grant.clone());
+                index
+                    .entry(ns.to_string())
+                    .or_default()
+                    .insert(key.clone(), Arc::clone(grant));
             }
         }
 

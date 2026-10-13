@@ -31,6 +31,15 @@ fn bound_authorization_revision_tracks_replacement_and_revocation() {
     grant.metadata.resource_version = Some("2".to_string());
     store.upsert("target/allow".to_string(), Arc::new(grant.clone()));
     assert_eq!(store.query_authorization_revision(query).as_deref(), Some("uid-b:2"));
+    let mut second = grant.clone();
+    second.metadata.uid = Some("uid-a".into());
+    second.metadata.resource_version = Some("3".into());
+    store.upsert("another-raw-key".into(), Arc::new(second));
+    assert_eq!(
+        store.query_authorization_revision(query).as_deref(),
+        Some("uid-a:3,uid-b:2")
+    );
+    store.remove("another-raw-key");
     grant.spec.to[0].name = Some("other".to_string());
     store.upsert("target/allow".to_string(), Arc::new(grant));
     assert!(!store.check_query(query));
@@ -176,6 +185,87 @@ fn test_check_reference_allowed_cross_namespace() {
         "Service",
         Some("my-service")
     ));
+}
+
+fn assert_index_matches_raw(store: &ReferenceGrantStore) {
+    let state = store.state.read();
+    let indexed_count: usize = state.by_to_namespace.values().map(HashMap::len).sum();
+    assert_eq!(
+        indexed_count,
+        state.raw.values().filter(|grant| grant.namespace().is_some()).count()
+    );
+    assert!(state.by_to_namespace.values().all(|bucket| !bucket.is_empty()));
+    for (namespace, bucket) in &state.by_to_namespace {
+        for (key, grant) in bucket {
+            assert_eq!(grant.namespace(), Some(namespace.as_str()));
+            assert!(Arc::ptr_eq(grant, state.raw.get(key).unwrap()));
+        }
+    }
+}
+
+#[test]
+fn exact_key_updates_preserve_aliases_and_relocate_namespace_membership() {
+    let store = ReferenceGrantStore::new();
+    let shared = Arc::new(create_test_grant("old", "shared", "source", "HTTPRoute", "Service"));
+    let unrelated = Arc::new(create_test_grant("other", "unchanged", "source", "HTTPRoute", "Secret"));
+    store.replace_all(HashMap::from([
+        ("raw-a".into(), Arc::clone(&shared)),
+        ("raw-alias".into(), Arc::clone(&shared)),
+        ("unrelated".into(), Arc::clone(&unrelated)),
+    ]));
+    assert_eq!(store.get_by_to_namespace("old").len(), 2);
+    assert_index_matches_raw(&store);
+
+    let moved = Arc::new(create_test_grant("other", "moved", "source", "HTTPRoute", "Service"));
+    store.upsert("raw-a".into(), Arc::clone(&moved));
+    assert_index_matches_raw(&store);
+    assert!(Arc::ptr_eq(&store.get_by_to_namespace("old")[0], &shared));
+    assert_eq!(store.get_by_to_namespace("other").len(), 2);
+    let mut no_namespace = (*shared).clone();
+    no_namespace.metadata.namespace = None;
+    store.upsert("raw-alias".into(), Arc::new(no_namespace));
+    assert_index_matches_raw(&store);
+    assert!(!store.state.read().by_to_namespace.contains_key("old"));
+    assert!(store.get("raw-alias").is_some());
+    store.upsert("raw-alias".into(), Arc::clone(&moved));
+    assert_index_matches_raw(&store);
+    assert_eq!(store.get_by_to_namespace("other").len(), 3);
+
+    assert!(Arc::ptr_eq(&store.remove("raw-a").unwrap(), &moved));
+    assert!(store.remove("raw-a").is_none());
+    assert_index_matches_raw(&store);
+    store.remove("raw-alias");
+    assert!(Arc::ptr_eq(&store.get_by_to_namespace("other")[0], &unrelated));
+    assert_index_matches_raw(&store);
+    store.remove("unrelated");
+    assert!(store.state.read().by_to_namespace.is_empty());
+    assert_index_matches_raw(&store);
+}
+
+#[test]
+fn full_replacement_rebuilds_only_current_namespaced_grants() {
+    let store = ReferenceGrantStore::new();
+    store.upsert(
+        "old".into(),
+        Arc::new(create_test_grant("old", "old", "source", "HTTPRoute", "Service")),
+    );
+    let named = Arc::new(create_test_grant("new", "named", "source", "HTTPRoute", "Service"));
+    let mut unnamed = (*named).clone();
+    unnamed.metadata.namespace = None;
+    store.replace_all(HashMap::from([
+        ("new-a".into(), Arc::clone(&named)),
+        ("new-b".into(), named),
+        ("unnamed".into(), Arc::new(unnamed)),
+    ]));
+    assert!(store.get("old").is_none());
+    assert!(store.get_by_to_namespace("old").is_empty());
+    assert_eq!(store.get_by_to_namespace("new").len(), 2);
+    assert_index_matches_raw(&store);
+    assert!(store.remove("unnamed").is_some());
+    assert_index_matches_raw(&store);
+    store.replace_all(HashMap::new());
+    assert!(store.state.read().raw.is_empty());
+    assert!(store.state.read().by_to_namespace.is_empty());
 }
 
 impl ReferenceGrantStore {

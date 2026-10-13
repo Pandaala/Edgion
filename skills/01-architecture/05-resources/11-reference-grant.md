@@ -38,6 +38,16 @@ ReferenceGrant is included in `DEFAULT_NO_SYNC_KINDS` (`["ReferenceGrant", "Secr
 
 Write the ReferenceGrant into the global `ReferenceGrantStore` (upsert). The store provides a `check_reference_allowed()` method for other Handlers to check whether a cross-namespace reference is allowed.
 
+The raw map and namespace index share one lock. Each indexed namespace bucket
+retains the exact raw grant key, so upsert/remove touch only the previous and new
+namespace buckets (`ARCH-110`); changing namespace metadata also removes the old
+slot. Absent namespace metadata remains raw-only. `replace_all` builds the full
+index and publishes both maps together. This avoids unrelated raw-map traversal
+per grant mutation at the cost of one additional owned key and hash-table entry
+per namespaced grant, without duplicating resource bodies. Lookup order remains
+unspecified; authorization revisions retain their sorted UID/resourceVersion
+representation. No measured latency or memory improvement is claimed.
+
 ### on_change
 
 1. Collect the set of affected namespaces (including the ReferenceGrant's to namespace and all from namespaces)
