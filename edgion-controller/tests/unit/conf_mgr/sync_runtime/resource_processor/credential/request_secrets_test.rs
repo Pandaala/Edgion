@@ -122,6 +122,75 @@ fn template_secret_status_read_does_not_register_dependencies() {
     assert!(!ctx.secret_ref_manager().get_refs("prod/missing").contains(&owner));
 }
 
+#[test]
+fn readonly_material_and_status_preserve_data_precedence_and_error_order() {
+    let (key, mut secret) = make_secret("prod", "token", &[("empty", b""), ("bad", &[0xff])]);
+    secret.string_data = Some(BTreeMap::from([
+        ("empty".into(), "must-not-replace-empty".into()),
+        ("bad".into(), "must-not-hide-invalid-data".into()),
+        ("fallback".into(), "fallback-value".into()),
+    ]));
+    let (ctx, runtime) = make_ctx(HashMap::from([(key, secret)]));
+    let owner = owner();
+    let names = [
+        "prod/token:bad",
+        "prod/token:empty",
+        "prod/token:missing",
+        "prod/token:fallback",
+        "prod/absent:key",
+    ]
+    .map(str::to_string);
+    let (values, material_errors) = with_templates(&owner, &names, |references| {
+        resolve_request_secrets_readonly(&ctx, &owner, references.request_secrets())
+    });
+    assert_eq!(
+        values,
+        BTreeMap::from([
+            (names[1].clone(), String::new()),
+            (names[3].clone(), "fallback-value".into()),
+        ])
+    );
+    let status_errors = template_errors(&ctx, &owner, &names);
+    assert_eq!(material_errors, status_errors);
+    let invalid_utf8 = String::from_utf8(vec![0xff]).unwrap_err();
+    assert_eq!(
+        status_errors,
+        vec![
+            ResolvedRefsError::DecodeError {
+                key: "secretRef",
+                detail: format!("prod/token:bad: key {:?}: invalid UTF-8: {}", "bad", invalid_utf8)
+            },
+            ResolvedRefsError::DecodeError {
+                key: "secretRef",
+                detail: "prod/token:missing: key \"missing\" not found in secret".into()
+            },
+            ResolvedRefsError::SecretNotFound {
+                namespace: "prod".into(),
+                name: "absent".into()
+            },
+        ]
+    );
+    assert!(runtime.secret_ref_manager.get_dependencies(&owner.key()).is_empty());
+    let (registered_values, registered_errors) = resolve_templates(&ctx, &owner, &names);
+    assert_eq!(registered_values, values);
+    assert_eq!(registered_errors, status_errors);
+    assert!(ctx.secret_ref_manager().get_refs("prod/token").contains(&owner));
+}
+
+#[test]
+fn selected_secret_values_borrow_the_fetched_storage() {
+    let data = vec![b'a'; 64 * 1024];
+    let (_, mut secret) = make_secret("prod", "token", &[("large", &data)]);
+    secret.string_data = Some(BTreeMap::from([("fallback".into(), "text".into())]));
+    let selected = read_secret_key(&secret, "large").unwrap();
+    assert_eq!(selected.len(), data.len());
+    assert_eq!(selected.as_ptr(), secret.data.as_ref().unwrap()["large"].0.as_ptr());
+    assert_eq!(
+        read_secret_key(&secret, "fallback").unwrap().as_ptr(),
+        secret.string_data.as_ref().unwrap()["fallback"].as_ptr()
+    );
+}
+
 /// A missing key in a present Secret surfaces as `DecodeError` (the Secret
 /// object exists; `read_secret_key` returns `Err` for the absent key).
 /// A missing Secret object surfaces as `SecretNotFound`.

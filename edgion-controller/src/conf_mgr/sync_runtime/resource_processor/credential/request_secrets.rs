@@ -16,15 +16,15 @@ use super::{fetch_bound_secret, BoundFetchOutcome, PendingReason};
 /// fallback (string_data is usually only present before the object is stored
 /// server-side, but we handle it defensively). Returns an error string if the
 /// key is absent or the bytes are not valid UTF-8.
-pub(crate) fn read_secret_key(secret: &Secret, key: &str) -> Result<String, String> {
+pub(crate) fn read_secret_key<'s>(secret: &'s Secret, key: &str) -> Result<&'s str, String> {
     if let Some(data) = &secret.data {
         if let Some(bytes) = data.get(key) {
-            return String::from_utf8(bytes.0.clone()).map_err(|e| format!("key {:?}: invalid UTF-8: {}", key, e));
+            return std::str::from_utf8(&bytes.0).map_err(|e| format!("key {:?}: invalid UTF-8: {}", key, e));
         }
     }
     if let Some(string_data) = &secret.string_data {
         if let Some(value) = string_data.get(key) {
-            return Ok(value.clone());
+            return Ok(value.as_str());
         }
     }
     Err(format!("key {:?} not found in secret", key))
@@ -36,7 +36,7 @@ pub fn resolve_request_secrets<'a>(
     owner: &ResourceRef,
     references: impl IntoIterator<Item = TemplateSecretReference<'a>>,
 ) -> (BTreeMap<String, String>, Vec<ResolvedRefsError>) {
-    resolve_request_secrets_core(ctx, owner, references, true)
+    resolve_request_secrets_core(ctx, owner, references, true, true)
 }
 
 /// Canonical acquisition for a declaring field whose root recovery receipts were
@@ -46,7 +46,7 @@ pub(crate) fn resolve_request_secrets_readonly<'a>(
     owner: &ResourceRef,
     references: impl IntoIterator<Item = TemplateSecretReference<'a>>,
 ) -> (BTreeMap<String, String>, Vec<ResolvedRefsError>) {
-    resolve_request_secrets_core(ctx, owner, references, false)
+    resolve_request_secrets_core(ctx, owner, references, false, true)
 }
 
 /// Re-evaluate request-template Secret refs for status without registering
@@ -57,7 +57,7 @@ pub fn request_secret_errors_readonly<'a>(
     owner: &ResourceRef,
     references: impl IntoIterator<Item = TemplateSecretReference<'a>>,
 ) -> Vec<ResolvedRefsError> {
-    resolve_request_secrets_core(ctx, owner, references, false).1
+    resolve_request_secrets_core(ctx, owner, references, false, false).1
 }
 
 fn resolve_request_secrets_core<'a>(
@@ -65,6 +65,7 @@ fn resolve_request_secrets_core<'a>(
     owner: &ResourceRef,
     references: impl IntoIterator<Item = TemplateSecretReference<'a>>,
     register_dependencies: bool,
+    collect_values: bool,
 ) -> (BTreeMap<String, String>, Vec<ResolvedRefsError>) {
     let mut resolved: BTreeMap<String, String> = BTreeMap::new();
     let mut errs: Vec<ResolvedRefsError> = Vec::new();
@@ -86,7 +87,9 @@ fn resolve_request_secrets_core<'a>(
         match outcome {
             BoundFetchOutcome::Ok(authorized) => match read_secret_key(&authorized.secret, reference.data_key()) {
                 Ok(value) => {
-                    resolved.insert(reference.map_key().to_string(), value);
+                    if collect_values {
+                        resolved.insert(reference.map_key().to_string(), value.to_owned());
+                    }
                 }
                 Err(detail) => errs.push(ResolvedRefsError::DecodeError {
                     key: "secretRef",

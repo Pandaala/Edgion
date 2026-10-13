@@ -69,6 +69,14 @@ string_data fallback and non-UTF-8/missing-key errors. This implementation is on
 slice of the open resource-reference contract task; complete transport/global
 TLS preparation and final task verification remain separate work.
 
+The errors-only status projection validates borrowed selected values without
+populating a value map (`ARCH-108`). Data retains precedence over string_data,
+including present-empty and invalid UTF-8 data. Material acquisition, including
+the readonly internal HTTPRoute-auth path, still owns its required runtime map;
+value collection is independent of dependency registration. SecretStore's fetched
+Secret clone remains outside this change. No measured memory or latency claim
+follows from removing the discarded successful-value projection.
+
 ## Owning managed-template readiness
 
 Enabled request ForwardAuth, Guardrail and AiGuard evaluator entries and internal
