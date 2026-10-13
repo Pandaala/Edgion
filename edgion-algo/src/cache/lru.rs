@@ -219,11 +219,7 @@ where
             return None;
         }
 
-        let key = self.nodes[idx]
-            .key
-            .as_ref()
-            .expect("occupied node must have key")
-            .clone();
+        let key = self.nodes[idx].key.take().expect("occupied node must have key");
 
         // Drop the expiration record before release_index() resets the node and
         // clears the deadline the record is keyed by. This is the single release

@@ -108,6 +108,17 @@ nothing, and `get` on an expired entry pays an O(log n) removal. The `update_hea
 workload exists to watch this; its baseline is p50 1.08 us / 1.13 us / 1.38 us at 1K / 16K / 256K
 (same dev-profile caveat).
 
+## Retiring key ownership
+
+ARCH-186 removes a redundant key clone from `remove_index`: the retiring node's
+key is taken into a local owner and borrowed for map removal. Expiration-record
+removal still precedes node reset; list detachment, occupancy accounting, value
+return and free-slot reuse keep their existing order under the same mutex.
+Insertion still clones the key because the map and occupied node each retain an
+owner. Local/sharded LRU and DNS cache regression tests exercise the release paths;
+source inspection establishes removal of the clone, without a latency or memory
+benchmark claim.
+
 ## Alternatives Considered
 
 | Alternative | Verdict | Why |
