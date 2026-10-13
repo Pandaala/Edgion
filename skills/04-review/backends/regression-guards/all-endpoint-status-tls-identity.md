@@ -91,3 +91,17 @@ evidence about this probe path; their cited mechanisms have changed.
 
 - D0032 — real correctness/security defect; fixed and verified.
 - Task: `add-all-endpoint-status-backend-tls-policy-support`.
+
+## Path override observation (ARCH-347)
+
+The static `path_override` case sends `/anything` while its fixture selects
+`/health`. It requires the named `edgion-test/test-http:30001` backend, at least
+one endpoint, and HTTP 200, explicit null error, exact `OK` body and no truncation
+for every selected endpoint. An aggregate `summary` alone, or successful wildcard
+echo output, cannot establish override precedence. The outer HTTP/JSON checks,
+rate gate and separate zero-endpoint negative case remain unchanged.
+
+Pure response tests reject a wrong-path echo even with endpoint status 200,
+missing evidence and mixed healthy/failed endpoints. They do not establish fresh
+live local or Kubernetes acceptance; the historical TLS runs above cover a
+different contract.

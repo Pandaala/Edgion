@@ -21,6 +21,34 @@ const TEST_HOST: &str = "all-endpoint-status-test.example.com";
 const HEADERS_HOST: &str = "all-endpoint-status-headers.example.com";
 const NO_BACKEND_HOST: &str = "all-endpoint-status-no-backend.example.com";
 
+fn validate_path_override_results(json: &serde_json::Value) -> Result<(), &'static str> {
+    if json.get("summary").is_none() {
+        return Err("Response JSON missing summary");
+    }
+    let backends = json["backends"].as_array().ok_or("Missing backend results")?;
+    let mut selected = backends.iter().filter(|backend| {
+        backend["name"] == "test-http" && backend["namespace"] == "edgion-test" && backend["port"] == 30001
+    });
+    let backend = selected.next().ok_or("Missing test-http fixture backend")?;
+    if selected.next().is_some() {
+        return Err("Duplicate test-http fixture backend");
+    }
+    let endpoints = backend["endpoints"].as_array().ok_or("Missing endpoint results")?;
+    if endpoints.is_empty() {
+        return Err("No fixture endpoints observed");
+    }
+    for endpoint in endpoints {
+        if endpoint["status"] != 200
+            || endpoint.get("error") != Some(&serde_json::Value::Null)
+            || endpoint["body"] != "OK"
+            || endpoint["body_truncated"] != false
+        {
+            return Err("Fixture endpoint did not return complete /health success");
+        }
+    }
+    Ok(())
+}
+
 impl AllEndpointStatusTestSuite {
     // ==========================================
     // Basic Functionality Tests
@@ -710,20 +738,16 @@ impl AllEndpointStatusTestSuite {
                                 );
                             }
 
-                            // The plugin terminates the request and returns JSON,
-                            // regardless of the original path. The backend receives /health.
-                            // We verify the response is valid JSON with summary.
+                            // Inspect endpoint output: the aggregate envelope alone cannot
+                            // distinguish /health from the successful /anything echo.
                             match serde_json::from_str::<serde_json::Value>(&body) {
-                                Ok(json) => {
-                                    if json.get("summary").is_some() {
-                                        TestResult::passed_with_message(
-                                            start.elapsed(),
-                                            "pathOverride working: request intercepted and JSON returned".to_string(),
-                                        )
-                                    } else {
-                                        TestResult::failed(start.elapsed(), "Response JSON missing summary".to_string())
-                                    }
-                                }
+                                Ok(json) => match validate_path_override_results(&json) {
+                                    Ok(()) => TestResult::passed_with_message(
+                                        start.elapsed(),
+                                        "pathOverride working: fixture endpoints returned /health OK".to_string(),
+                                    ),
+                                    Err(error) => TestResult::failed(start.elapsed(), error.to_string()),
+                                },
                                 Err(e) => {
                                     TestResult::failed(start.elapsed(), format!("Invalid JSON: {}. Body: {}", e, body))
                                 }
@@ -803,5 +827,65 @@ impl TestSuite for AllEndpointStatusTestSuite {
             // Connection handling
             Self::test_connection_close(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod path_override_tests {
+    use super::validate_path_override_results;
+    use serde_json::json;
+
+    fn healthy() -> serde_json::Value {
+        json!({"summary": {}, "backends": [{"name": "test-http", "namespace": "edgion-test", "port": 30001,
+            "endpoints": [{"status": 200, "error": null, "body": "OK", "body_truncated": false}]}]})
+    }
+
+    #[test]
+    fn path_override_requires_health_output_from_every_endpoint() {
+        let mut response = healthy();
+        let endpoint = response["backends"][0]["endpoints"][0].clone();
+        response["backends"][0]["endpoints"]
+            .as_array_mut()
+            .unwrap()
+            .push(endpoint);
+        assert!(validate_path_override_results(&response).is_ok());
+        for (field, value) in [
+            ("body", json!("Server: 0.0.0.0:30001\nPath: /anything\n")),
+            ("status", json!(500)),
+            ("error", json!("timeout")),
+            ("body_truncated", json!(true)),
+        ] {
+            let mut invalid = response.clone();
+            invalid["backends"][0]["endpoints"][1][field] = value;
+            assert!(validate_path_override_results(&invalid).is_err());
+        }
+        response["backends"][0]["endpoints"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove("error");
+        assert!(validate_path_override_results(&response).is_err());
+    }
+
+    #[test]
+    fn path_override_rejects_missing_or_wrong_fixture_evidence() {
+        for invalid in [
+            json!({}),
+            json!({"summary": {}}),
+            json!({"summary": {}, "backends": []}),
+        ] {
+            assert!(validate_path_override_results(&invalid).is_err());
+        }
+        for field in ["name", "namespace", "port", "endpoints"] {
+            let mut invalid = healthy();
+            invalid["backends"][0].as_object_mut().unwrap().remove(field);
+            assert!(validate_path_override_results(&invalid).is_err());
+        }
+        let mut response = healthy();
+        response["backends"][0]["endpoints"] = json!([]);
+        assert!(validate_path_override_results(&response).is_err());
+        let mut response = healthy();
+        let duplicate = response["backends"][0].clone();
+        response["backends"].as_array_mut().unwrap().push(duplicate);
+        assert!(validate_path_override_results(&response).is_err());
     }
 }
