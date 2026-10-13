@@ -74,6 +74,33 @@ fn test_older_policy_wins() {
 }
 
 #[test]
+fn unrelated_policy_timestamps_do_not_affect_target_winner() {
+    let state = make_state();
+    setup_two_policies(&state, "target");
+    let target_key = make_target_conflict_key(&service_target("target", "my-service"), None);
+    for index in 0..128 {
+        state.set_timestamp(&format!("unrelated/policy-{index}"), Some(ts("2000-01-01T00:00:00Z")));
+    }
+    assert!(state.is_winner("target/policy-a", &target_key));
+    assert!(!state.is_winner("target/policy-b", &target_key));
+    assert!(!state.is_winner("unrelated/policy-0", &target_key));
+}
+
+#[test]
+fn timestamp_removal_uses_present_then_key_precedence() {
+    let state = make_state();
+    setup_two_policies(&state, "target");
+    let target_key = make_target_conflict_key(&service_target("target", "my-service"), None);
+    state.set_timestamp("target/policy-a", None);
+    assert_eq!(state.timestamp_of("target/policy-a"), None);
+    assert!(!state.is_winner("target/policy-a", &target_key));
+    assert!(state.is_winner("target/policy-b", &target_key));
+    state.set_timestamp("target/policy-b", None);
+    assert!(state.is_winner("target/policy-a", &target_key));
+    assert!(!state.is_winner("target/policy-b", &target_key));
+}
+
+#[test]
 fn test_same_timestamp_name_tiebreak() {
     let ns = "ns-tiebreak";
     let state = make_state();
