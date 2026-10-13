@@ -36,6 +36,15 @@ edgion-cli apply -f <file|directory> [-f <file|directory> ...] [--dry-run]
 
 ### Examples
 
+Individual file failures in a directory are reported while remaining eligible
+files are still attempted. The directory then returns an aggregate failure;
+`apply_many` continues with later input paths and returns a failed command if any
+path failed (exit status 1). Successful writes are not rolled back. Directory
+enumeration errors still propagate immediately. Empty directories or directories
+without eligible YAML files remain successful no-ops and report `No YAML files
+found`; directories containing only failed YAML files do not report that message
+(ARCH-177).
+
 ```bash
 # Apply a single file
 edgion-cli apply -f gateway.yaml

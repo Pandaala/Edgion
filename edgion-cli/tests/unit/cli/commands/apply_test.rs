@@ -88,3 +88,52 @@ fn cli_apply_without_file_flag_fails() {
     let err = Cli::try_parse_from(["edgion-cli", "apply"]).expect_err("apply without --file should fail");
     assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
 }
+
+#[tokio::test]
+async fn directory_dry_run_distinguishes_no_files_success_and_partial_failure() {
+    let client = EdgionClient::new(crate::cli::TargetType::Center, None, None).unwrap();
+    for (valid, invalid) in [(0, 0), (2, 0), (0, 2), (1, 1)] {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("ignored.txt"), "not yaml").unwrap();
+        for index in 0..valid {
+            std::fs::write(
+                dir.path().join(format!("valid-{index}.yaml")),
+                format!("apiVersion: v1\nkind: Service\nmetadata:\n  name: valid-{index}\n"),
+            )
+            .unwrap();
+        }
+        for index in 0..invalid {
+            std::fs::write(dir.path().join(format!("invalid-{index}.yml")), "").unwrap();
+        }
+        let result = apply_directory(&client, dir.path(), true).await;
+        if invalid == 0 {
+            result.unwrap();
+        } else {
+            assert!(result.unwrap_err().to_string().contains(&format!(
+                "Failed to apply {invalid} of {} YAML file(s)",
+                valid + invalid
+            )));
+        }
+    }
+}
+
+#[tokio::test]
+async fn batch_dry_run_propagates_directory_and_single_file_failures() {
+    let client = EdgionClient::new(crate::cli::TargetType::Center, None, None).unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let failed_dir = root.path().join("failed");
+    std::fs::create_dir(&failed_dir).unwrap();
+    let bad_file = failed_dir.join("bad.yaml");
+    std::fs::write(&bad_file, "").unwrap();
+    let good_file = root.path().join("later.yaml");
+    std::fs::write(&good_file, "apiVersion: v1\nkind: Service\nmetadata:\n  name: later\n").unwrap();
+    let paths = vec![
+        failed_dir.to_string_lossy().into_owned(),
+        good_file.to_string_lossy().into_owned(),
+    ];
+    let error = apply_many(&client, &paths, true).await.unwrap_err().to_string();
+    assert!(error.contains("Failed to apply 1 of 2 input path(s)"));
+    assert!(error.contains("Failed to apply 1 of 1 YAML file(s)"));
+    let error = apply(&client, bad_file.to_str().unwrap(), true).await.unwrap_err();
+    assert!(error.to_string().contains("Empty YAML file"));
+}

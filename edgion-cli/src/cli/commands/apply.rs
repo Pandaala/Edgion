@@ -53,15 +53,19 @@ async fn apply_path(client: &EdgionClient, file_path: &str, dry_run: bool) -> Re
 async fn apply_directory(client: &EdgionClient, dir: &Path, dry_run: bool) -> Result<()> {
     let mut entries = fs::read_dir(dir).await?;
     let mut count = 0;
+    let mut attempted = 0;
+    let mut failed = 0;
 
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
         if path.is_file() {
             let ext = path.extension().and_then(|e| e.to_str());
             if matches!(ext, Some("yaml") | Some("yml")) {
+                attempted += 1;
                 match apply_file(client, &path, dry_run).await {
                     Ok(_) => count += 1,
                     Err(e) => {
+                        failed += 1;
                         print_error(&format!("Failed to apply {}: {}", path.display(), e));
                     }
                 }
@@ -71,8 +75,17 @@ async fn apply_directory(client: &EdgionClient, dir: &Path, dry_run: bool) -> Re
 
     if count > 0 {
         print_success(&format!("Applied {} resource(s) from {}", count, dir.display()));
-    } else {
+    } else if attempted == 0 {
         print_error(&format!("No YAML files found in {}", dir.display()));
+    }
+
+    if failed > 0 {
+        anyhow::bail!(
+            "Failed to apply {} of {} YAML file(s) in {}",
+            failed,
+            attempted,
+            dir.display()
+        );
     }
 
     Ok(())
