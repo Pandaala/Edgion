@@ -37,3 +37,11 @@ its True value still fails these cases.
 Synthetic reader and shell checks establish this observation boundary, not live topology health,
 condition generation freshness, socket binding, or data-plane publication. The separate internal
 conflict admission shortcut is unchanged.
+
+## HTTP rejection observations (ARCH-340)
+
+The Gateway Security oversized-XFF case requires the canonical HTTP 400 response. Request
+construction, connection, transport and deadline failures do not establish a Gateway rejection.
+The existing 228-byte request exceeds the shared fixture's 200-byte limit; normal, exact-boundary
+and absent-XFF cases retain their existing assertions. A network-free regression invokes the real
+case with an invalid URL and requires failure. It does not replace live HTTP acceptance testing.

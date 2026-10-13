@@ -99,13 +99,10 @@ impl SecurityTestSuite {
                                 )
                             }
                         }
-                        Err(e) => {
-                            // Connection reset or similar errors are also acceptable for rejected requests
-                            TestResult::passed_with_message(
-                                start.elapsed(),
-                                format!("✓ Long XFF rejected (connection error: {})", e),
-                            )
-                        }
+                        Err(_) => TestResult::failed(
+                            start.elapsed(),
+                            "Failed to observe HTTP 400 for oversized XFF request".to_string(),
+                        ),
                     }
                 })
             },
@@ -209,5 +206,40 @@ impl TestSuite for SecurityTestSuite {
             Self::test_boundary_xff(),
             Self::test_no_xff(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn excessive_xff_request_failure_is_not_a_rejection() {
+        // The malformed URL fails request construction before any network operation.
+        let ctx = TestContext {
+            target_host: "[invalid".into(),
+            http_port: 80,
+            grpc_port: 0,
+            websocket_port: 0,
+            tcp_port: 0,
+            tcp_filtered_port: 0,
+            udp_port: 0,
+            https_port: 0,
+            grpc_https_port: 0,
+            admin_port: 0,
+            http_client: reqwest::Client::builder().no_proxy().build().unwrap(),
+            http_host: Some("test.example.com".into()),
+            grpc_host: None,
+            gateway: false,
+            verbose: false,
+            access_log_path: Default::default(),
+            admin_token: None,
+        };
+        let result = SecurityTestSuite::test_excessive_xff().run(&ctx).await;
+        assert!(!result.passed);
+        assert_eq!(
+            result.error.as_deref(),
+            Some("Failed to observe HTTP 400 for oversized XFF request")
+        );
     }
 }
