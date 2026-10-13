@@ -77,6 +77,13 @@ displaces and cancels the first. The federation supervisor's run predicate is th
 `center.enabled && is_leader` (`fed_sync::supervisor::should_run`), fed by
 `CenterLifeCycle::leader_signal()`.
 
+Each actual client start receives the supervisor's current immutable Center
+configuration snapshot (ARCH-083), including an address/identity restart or a
+promotion after a follower received reloads. The CLI spawn closure consumes that
+snapshot rather than retaining the startup configuration. Policy-only reloads
+still use the live Authorizer without restarting the connection; this does not
+add restart triggers for security, environment or tag fields.
+
 This is the one behavior in `all-serve` where a follower does less than the leader while
 still serving gRPC reads normally. The leadership signal used here is deliberately NOT
 `leadership_status()`, which stays `NotApplicable` in Kubernetes so the Admin API

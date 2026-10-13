@@ -728,7 +728,7 @@ impl EdgionControllerCli {
         // The supervisor owns the fed client lifecycle: it starts/stops the client
         // on reload and ensures the prior task is awaited before a new one spawns,
         // preventing dual registration at Center.
-        if let Some(center_config) = config.center.clone() {
+        if config.center.is_some() {
             // Build the fed router:
             //   1. Base admin router (routes + handlers, no auth).
             //   2. route_layer: authz_layer (innermost route_layer -- added first).
@@ -764,9 +764,8 @@ impl EdgionControllerCli {
             let conf_mgr_for_spawn = conf_mgr.clone();
             let authorizer_for_spawn = authorizer.clone();
 
-            let spawn_client = move |rx: watch::Receiver<bool>| {
+            let spawn_client = move |cfg: crate::config::CenterClientConfig, rx: watch::Receiver<bool>| {
                 let router = fed_router.clone();
-                let cfg = center_config.clone();
                 let conf_mgr = conf_mgr_for_spawn.clone();
                 let authorizer = authorizer_for_spawn.clone();
                 tokio::spawn(async move {

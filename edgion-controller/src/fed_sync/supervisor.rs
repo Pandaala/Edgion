@@ -45,7 +45,7 @@ pub(crate) fn should_run(cfg: &CenterClientConfig, is_leader: bool) -> bool {
 /// Generic over `F` so unit tests can inject a fake spawn closure.
 pub struct FederationSupervisor<F>
 where
-    F: Fn(watch::Receiver<bool>) -> JoinHandle<()> + Send + 'static,
+    F: Fn(CenterClientConfig, watch::Receiver<bool>) -> JoinHandle<()> + Send + 'static,
 {
     spawn_client: F,
     /// The running task: `(shutdown_tx, join_handle)`, or `None` if stopped.
@@ -54,7 +54,7 @@ where
 
 impl<F> FederationSupervisor<F>
 where
-    F: Fn(watch::Receiver<bool>) -> JoinHandle<()> + Send + 'static,
+    F: Fn(CenterClientConfig, watch::Receiver<bool>) -> JoinHandle<()> + Send + 'static,
 {
     pub fn new(spawn_client: F) -> Self {
         Self {
@@ -64,12 +64,12 @@ where
     }
 
     /// Start the federation client. No-op if already running.
-    pub(crate) fn start(&mut self) {
+    pub(crate) fn start(&mut self, cfg: &CenterClientConfig) {
         if self.current.is_some() {
             return;
         }
         let (tx, rx) = watch::channel(false);
-        let handle = (self.spawn_client)(rx);
+        let handle = (self.spawn_client)(cfg.clone(), rx);
         self.current = Some((tx, handle));
         tracing::info!(component = "fed_supervisor", "federation client started");
     }
@@ -112,7 +112,7 @@ where
     /// instead of falsely claiming the operator engaged the kill switch.
     pub(crate) async fn apply(&mut self, cfg: &CenterClientConfig, is_leader: bool) {
         if should_run(cfg, is_leader) {
-            self.start();
+            self.start(cfg);
         } else {
             self.stop().await;
         }
@@ -190,7 +190,7 @@ pub async fn run_supervisor<F>(
     leader_signal: Option<watch::Receiver<bool>>,
     authorizer: Arc<Authorizer>,
 ) where
-    F: Fn(watch::Receiver<bool>) -> JoinHandle<()> + Send + 'static,
+    F: Fn(CenterClientConfig, watch::Receiver<bool>) -> JoinHandle<()> + Send + 'static,
 {
     // Apply the initial policy at startup. This is UNCONDITIONAL — a follower
     // still needs the correct Center RBAC policy resident so promotion is

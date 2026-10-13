@@ -3,8 +3,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// A fake spawn closure: increments a counter and spawns a task that
 /// exits when the shutdown receiver fires.
-fn make_fake_spawn(counter: Arc<AtomicUsize>) -> impl Fn(watch::Receiver<bool>) -> JoinHandle<()> {
-    move |mut rx: watch::Receiver<bool>| {
+fn make_fake_spawn(counter: Arc<AtomicUsize>) -> impl Fn(CenterClientConfig, watch::Receiver<bool>) -> JoinHandle<()> {
+    move |_: CenterClientConfig, mut rx: watch::Receiver<bool>| {
         counter.fetch_add(1, Ordering::SeqCst);
         tokio::spawn(async move {
             // Wait until shutdown=true is sent or the sender is dropped.
@@ -473,11 +473,13 @@ struct SpawnStats {
     spawned: AtomicUsize,
     running: AtomicUsize,
     max_running: AtomicUsize,
+    configs: parking_lot::Mutex<Vec<CenterClientConfig>>,
 }
 
-fn make_tracking_spawn(stats: Arc<SpawnStats>) -> impl Fn(watch::Receiver<bool>) -> JoinHandle<()> {
-    move |mut rx: watch::Receiver<bool>| {
+fn make_tracking_spawn(stats: Arc<SpawnStats>) -> impl Fn(CenterClientConfig, watch::Receiver<bool>) -> JoinHandle<()> {
+    move |cfg: CenterClientConfig, mut rx: watch::Receiver<bool>| {
         let stats = stats.clone();
+        stats.configs.lock().push(cfg);
         stats.spawned.fetch_add(1, Ordering::SeqCst);
         let now_running = stats.running.fetch_add(1, Ordering::SeqCst) + 1;
         stats.max_running.fetch_max(now_running, Ordering::SeqCst);
@@ -508,7 +510,7 @@ async fn yield_until(mut pred: impl FnMut() -> bool) -> bool {
 /// 3. promotion => exactly one client.
 /// 4. demotion => the client is stopped (and awaited).
 /// 5. re-promotion => exactly one new client (2 total), never 2 at once.
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn run_supervisor_gates_on_leadership_across_both_channels() {
     let stats = Arc::new(SpawnStats::default());
     let authorizer = Arc::new(Authorizer::new(CenterPolicy::deny_all()));
@@ -564,6 +566,10 @@ async fn run_supervisor_gates_on_leadership_across_both_channels() {
         "promotion must start the federation client"
     );
     assert_eq!(stats.running.load(Ordering::SeqCst), 1, "exactly one client must run");
+    assert!(
+        stats.configs.lock()[0].rbac.is_some(),
+        "promotion must receive the follower's latest snapshot"
+    );
 
     // 4. Demotion stops it (stop() awaits the task, so `running` drops to 0).
     leader_tx.send_replace(false);
@@ -577,7 +583,21 @@ async fn run_supervisor_gates_on_leadership_across_both_channels() {
         "demotion must not spawn anything"
     );
 
-    // 5. Re-promotion spawns exactly one new client.
+    // Apply a new address while still a follower. On this current-thread runtime,
+    // yield to let the ready reload branch complete before sending promotion.
+    let replacement = CenterClientConfig {
+        address: "http://replacement:12251".into(),
+        name: "ctrl-new".into(),
+        cluster: "next".into(),
+        env: vec!["staging".into()],
+        tag: vec!["latest".into()],
+        ..initial.clone()
+    };
+    reload_tx.send(replacement.clone()).unwrap();
+    tokio::task::yield_now().await;
+    tokio::task::yield_now().await;
+
+    // 5. Re-promotion spawns exactly one new client with the remembered snapshot.
     leader_tx.send_replace(true);
     assert!(
         yield_until(|| stats.spawned.load(Ordering::SeqCst) == 2).await,
@@ -588,8 +608,83 @@ async fn run_supervisor_gates_on_leadership_across_both_channels() {
         1,
         "two federation clients must never be alive at once (double registration at Center)"
     );
+    {
+        let configs = stats.configs.lock();
+        let actual = &configs[1];
+        assert_eq!(actual.address, replacement.address);
+        assert_eq!(actual.name, replacement.name);
+        assert_eq!(actual.cluster, replacement.cluster);
+        assert_eq!(actual.env, replacement.env);
+        assert_eq!(actual.tag, replacement.tag);
+    }
 
+    leader_tx.send_replace(false);
+    assert!(yield_until(|| stats.running.load(Ordering::SeqCst) == 0).await);
     drop(reload_tx);
     drop(leader_tx);
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(3), task).await;
+    tokio::time::timeout(std::time::Duration::from_secs(3), task)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn address_restart_passes_current_snapshot_to_spawn() {
+    let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (stopped_tx, mut stopped_rx) = tokio::sync::mpsc::unbounded_channel();
+    let spawn = move |cfg: CenterClientConfig, mut shutdown: watch::Receiver<bool>| {
+        let stopped_tx = stopped_tx.clone();
+        started_tx.send(cfg).unwrap();
+        tokio::spawn(async move {
+            let _ = shutdown.changed().await;
+            stopped_tx.send(()).unwrap();
+        })
+    };
+    let initial = CenterClientConfig {
+        address: "http://center-a:12251".into(),
+        name: "controller".into(),
+        cluster: "prod".into(),
+        ..Default::default()
+    };
+    let (reload_tx, reload_rx) = watch::channel(initial.clone());
+    let (leader_tx, leader_rx) = watch::channel(true);
+    let task = tokio::spawn(run_supervisor(
+        FederationSupervisor::new(spawn),
+        initial.clone(),
+        reload_rx,
+        Some(leader_rx),
+        Arc::new(Authorizer::new(CenterPolicy::deny_all())),
+    ));
+    let first = tokio::time::timeout(std::time::Duration::from_secs(3), started_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.address, initial.address);
+    let updated = CenterClientConfig {
+        address: "http://center-b:12251".into(),
+        tag: vec!["replacement".into()],
+        ..initial
+    };
+    reload_tx.send(updated.clone()).unwrap();
+    let second = tokio::time::timeout(std::time::Duration::from_secs(3), started_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(second.address, updated.address);
+    assert_eq!(second.name, updated.name);
+    assert_eq!(second.cluster, updated.cluster);
+    assert_eq!(second.tag, updated.tag);
+    stopped_rx
+        .try_recv()
+        .expect("old client must stop before replacement starts");
+    leader_tx.send_replace(false);
+    tokio::time::timeout(std::time::Duration::from_secs(3), stopped_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    drop(reload_tx);
+    tokio::time::timeout(std::time::Duration::from_secs(3), task)
+        .await
+        .unwrap()
+        .unwrap();
 }
