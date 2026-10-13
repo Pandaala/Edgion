@@ -93,7 +93,6 @@ impl AcmeClient {
 
         tracing::info!(
             server = server_url,
-            email = email,
             account_id = %account.id(),
             "ACME account created"
         );
@@ -125,7 +124,6 @@ impl AcmeClient {
 
         tracing::info!(
             server = server_url,
-            email = email,
             account_id = %account.id(),
             "ACME account created (with custom CA)"
         );

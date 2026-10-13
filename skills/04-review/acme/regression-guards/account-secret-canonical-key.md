@@ -28,3 +28,16 @@ tests cover canonical and missing-key behavior.
 ## Resolution references
 
 - `review-results/controller-gateway-overengineering-20260924-031121/ISSUE-002`.
+
+## Account registration log privacy (ARCH-141)
+
+`AcmeClient::new` and `new_with_ca` send the configured `mailto:` contact to the
+CA but omit the email from their successful-registration events. The events
+retain the server, account identifier and outcome. This follows the email PII
+rule in [log safety](../../../03-coding/01-log-safety.md); account protocol and
+Secret persistence/restoration behavior are unchanged.
+
+Verification of this narrow logging correction is inspection of both event field
+sets and unchanged contact construction. Existing account and service tests cover
+their own lifecycle contracts, not emitted registration-event privacy. Re-evaluate
+if registration events gain contact data or new account-creation paths are added.
