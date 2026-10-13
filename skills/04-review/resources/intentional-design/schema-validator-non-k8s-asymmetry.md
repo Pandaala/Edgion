@@ -39,6 +39,24 @@ CRD. Admission does not prove compatibility with Edgion's typed model or runtime
 
 ## Kubernetes availability and compatibility boundary
 
+### Gateway listener-port guard (ARCH-152)
+
+The existing placement does not permit unchecked numeric socket identity.
+GatewayHandler validates ordinary listener ports with `gwapi_types::is_valid_port`
+and withdraws the entire listener projection before any address conversion when a
+port is outside `1..=65535`. Normal processing retains invalid status, replaces
+PROXY and listener-port registrations, and refreshes dependent routes after publication.
+Corrected generations recover through the existing queue. No watcher OpenAPI pass
+or runtime socket rebinding is added.
+
+The offline v1/v1beta1 processor regression covers mixed valid/invalid listeners,
+i32 extremes, zero, negative and overflow ports, plus valid endpoints 1 and 65535.
+It checks indexed diagnostics, status, empty registrations and conflicting-policy
+probes at old/truncated identities. A queued TLSRoute regression checks attachment
+withdrawal and repair. These are in-process checks, not actual socket bind tests.
+
+### Retained schema policy
+
 On 2026-09-23, the user explicitly approved closing
 `kubernetes-live-crd-schema-source-and-version-contract` without implementing its
 proposed enhancement, after discussing the following scope and tradeoffs:

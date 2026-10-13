@@ -3357,3 +3357,110 @@ fn native_frontend_aggregate_certificate_count_distinguishes_shared_from_unique_
         }
     }
 }
+
+#[tokio::test]
+async fn offline_listener_port_bounds_withdraw_invalid_generations_and_recover() {
+    use crate::conf_mgr::conf_center::common::parse_resource_content_offline;
+    use crate::conf_mgr::sync_runtime::resource_processor::proxy_protocol_listener_policy::{
+        ProxyProtocolListenerContribution, ProxyProtocolPolicyDeclaration,
+    };
+    use edgion_resources::listener_key::ListenerKey;
+    use std::time::Duration;
+
+    fn source(version: &str, port: i32) -> Gateway {
+        parse_resource_content_offline(
+            &serde_json::json!({
+                "apiVersion": format!("gateway.networking.k8s.io/{version}"), "kind": "Gateway",
+                "metadata": {"namespace": "ports", "name": "gateway", "generation": 1},
+                "spec": {"gatewayClassName": "test", "listeners": [
+                    {"name": "http", "protocol": "HTTP", "port": 80},
+                    {"name": "bounded", "protocol": "HTTP", "port": port}
+                ]}
+            })
+            .to_string(),
+        )
+        .unwrap()
+    }
+
+    async fn apply(processor: &ResourceProcessor<Gateway>, gateway: Gateway) {
+        processor.on_event_key("ports/gateway".into()).await;
+        let queue = processor.workqueue();
+        let item = tokio::time::timeout(Duration::from_secs(1), queue.dequeue())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(item.key, "ports/gateway");
+        processor
+            .process_work_item(&item.key, Some(gateway), None, item.trigger_chain)
+            .await;
+        queue.done(&item.key);
+    }
+
+    fn assert_status(processor: &ResourceProcessor<Gateway>, valid: bool) {
+        let published = processor.get("ports/gateway").unwrap();
+        let status = published.spec.current_status.as_ref().unwrap();
+        for name in ["Accepted", "Programmed"] {
+            let condition = status
+                .conditions
+                .as_ref()
+                .unwrap()
+                .iter()
+                .find(|condition| condition.type_ == name)
+                .unwrap();
+            assert_eq!(condition.status, if valid { "True" } else { "False" });
+            if !valid && name == "Accepted" {
+                assert_eq!(condition.message, "spec.listeners[1].port must be within 1..=65535");
+            }
+        }
+        assert_eq!(published.spec.listeners.is_some(), valid);
+    }
+
+    for version in ["v1", "v1beta1"] {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let processor = Arc::new(ResourceProcessor::new(
+            "Gateway",
+            16,
+            Arc::new(GatewayHandler::new(None, None)),
+            runtime.clone(),
+        ));
+        runtime.processor_registry.register(processor.clone());
+        processor.on_init_apply(source(version, 1), None).await;
+        processor.on_init_done();
+        assert_status(&processor, true);
+        assert_eq!(runtime.listener_port_manager.stats(), (2, 1));
+
+        for port in [i32::MIN, -1, 0, 65536, 65537, i32::MAX] {
+            apply(&processor, source(version, port)).await;
+            assert_status(&processor, false);
+            assert_eq!(runtime.listener_port_manager.stats(), (0, 0), "port={port}");
+
+            // A differing peer policy would conflict with any stale Disabled
+            // contribution at an old or truncated socket identity.
+            let keys: std::collections::BTreeSet<u16> = [80, 1, 65535, port as u16].into_iter().collect();
+            runtime.proxy_protocol_listener_policy.replace_gateway_contributions(
+                "probe/peer",
+                keys.into_iter()
+                    .map(|port| ProxyProtocolListenerContribution {
+                        listener_name: format!("probe-{port}"),
+                        listener_key: ListenerKey::new(format!("0.0.0.0:{port}").parse().unwrap(), "HTTP"),
+                        deployment_scope: String::new(),
+                        declaration: ProxyProtocolPolicyDeclaration::Required,
+                    })
+                    .collect(),
+            );
+            assert!(runtime
+                .proxy_protocol_listener_policy
+                .conflicting_listener_names("probe/peer")
+                .is_empty());
+            runtime
+                .proxy_protocol_listener_policy
+                .replace_gateway_contributions("probe/peer", Vec::new());
+
+            for valid_port in [1, 65535] {
+                apply(&processor, source(version, valid_port)).await;
+                assert_status(&processor, true);
+                assert_eq!(runtime.listener_port_manager.stats(), (2, 1));
+            }
+        }
+    }
+}

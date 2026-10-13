@@ -513,6 +513,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                 errors.push(format!("spec.{name} is unsupported"));
             }
         }
+        errors.extend(validate_listener_ports(g));
         errors.extend(validate_standard_frontend_tls(g));
         for listener in g.spec.listeners.as_deref().unwrap_or_default() {
             if listener
@@ -597,6 +598,12 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             .as_ref()
             .is_some_and(|listeners| listeners.len() > edgion_resources::resources::gateway::MAX_GATEWAY_LISTENERS)
         {
+            g.spec.listeners = None;
+        }
+
+        // Withdraw the entire generation before any socket identity is derived.
+        // Validation remains advisory, so reporting an error alone is insufficient.
+        if !validate_listener_ports(&g).is_empty() {
             g.spec.listeners = None;
         }
 
@@ -1434,6 +1441,19 @@ fn empty_gateway_tls_config() -> GatewayTLSConfig {
         resolved_frontend_ca_refs: None,
         frontend_matcher_eligibility: None,
     }
+}
+
+fn validate_listener_ports(gateway: &Gateway) -> Vec<String> {
+    gateway
+        .spec
+        .listeners
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+        .filter(|(_, listener)| !edgion_resources::gwapi_types::is_valid_port(i64::from(listener.port)))
+        .map(|(index, _)| format!("spec.listeners[{index}].port must be within 1..=65535"))
+        .collect()
 }
 
 fn validate_standard_frontend_tls(gateway: &Gateway) -> Vec<String> {

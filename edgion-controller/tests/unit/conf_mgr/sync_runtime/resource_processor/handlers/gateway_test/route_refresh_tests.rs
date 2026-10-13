@@ -350,3 +350,19 @@ async fn beta_gateway_conversion_keeps_route_requeues_on_invalid_and_corrected_u
     assert_eq!(fixture.attachments().len(), 1);
     assert_eq!(fixture.route_requeues(), 2);
 }
+
+#[tokio::test]
+async fn invalid_listener_port_withdraws_route_attachment_and_recovers_through_queue() {
+    let mut source = gateway(serde_json::json!([listener("tls", None, 8443)]));
+    let fixture = Fixture::new(&source, &["example.com"]).await;
+    assert_eq!(fixture.attachments()[0].1, "0.0.0.0:8443/TLS");
+    source.spec.listeners.as_mut().unwrap()[0].port = 65537;
+    fixture.update(Some(source.clone())).await;
+    assert!(fixture.attachments().is_empty());
+    assert!(fixture.gateways.get(GATEWAY).unwrap().spec.listeners.is_none());
+    assert_eq!(fixture.runtime.listener_port_manager.stats().1, 0);
+    source.spec.listeners.as_mut().unwrap()[0].port = 8443;
+    fixture.update(Some(source)).await;
+    assert_eq!(fixture.attachments()[0].1, "0.0.0.0:8443/TLS");
+    assert_eq!(fixture.runtime.listener_port_manager.stats().1, 1);
+}

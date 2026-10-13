@@ -33,6 +33,15 @@ cache mutation, so ownership checks see the published incarnation or its absence
 
 ### parse
 
+Ordinary `spec.listeners[].port` is validated through the canonical
+`gwapi_types::is_valid_port` range, including FileSystem/etcd inputs where serde
+does not enforce schema bounds. Any invalid port withdraws the entire listener
+projection before PROXY policy contributions, port registration or TLS projection
+derive a socket identity. The identifiable Gateway still receives indexed validation
+diagnostics and `Accepted=False`/`Programmed=False`; normal empty replacement and
+post-publication route requeues remove the previous generation and allow recovery.
+This does not unbind a socket or change the startup-only listener lifecycle (ARCH-152).
+
 1. **Clear stale references**: clear records for this Gateway from SecretRefManager and CrossNsRefManager (handles the update case)
 2. **Resolve the backend client certificate**: resolve
    `spec.tls.backend.clientCertificateRef`, register it in SecretRefManager, and populate
