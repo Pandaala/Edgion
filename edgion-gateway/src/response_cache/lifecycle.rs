@@ -91,6 +91,20 @@ pub(crate) fn capture_headers(ctx: &mut EdgionHttpContext, response: &ResponseHe
     }
 }
 
+/// Seal the selected final onion header before Pingora applies transport headers.
+pub(crate) fn seal_headers(ctx: &mut EdgionHttpContext, chosen_header: &ResponseHeader) {
+    if ctx.response_cache.is_none() {
+        return;
+    }
+    if !compatible(ctx) {
+        abandon(ctx);
+        return;
+    }
+    if let Some(state) = ctx.response_cache.as_mut() {
+        state.seal_pending_headers(chosen_header);
+    }
+}
+
 pub(crate) fn capture_body(ctx: &mut EdgionHttpContext, body: Option<&Bytes>, eos: bool) {
     if let Some(state) = ctx.response_cache.as_mut() {
         state.push(body, eos);

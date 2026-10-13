@@ -136,7 +136,9 @@ pub(crate) fn response_head_will_commit(
     if chosen_header.status == http::StatusCode::SWITCHING_PROTOCOLS {
         return Ok(());
     }
-    claim_response_head(chosen_header, ctx)
+    claim_response_head(chosen_header, ctx)?;
+    crate::response_cache::lifecycle::seal_headers(ctx, chosen_header);
+    Ok(())
 }
 
 fn claim_response_head(chosen_header: &ResponseHeader, ctx: &mut EdgionHttpContext) -> Result<()> {

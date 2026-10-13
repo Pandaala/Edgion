@@ -101,3 +101,137 @@ fn boundary_failures_are_nonretryable() {
         assert!(!error.retry());
     }
 }
+
+async fn cache_fill_across_real_transport_date(session: &mut Session) {
+    use crate::response_cache::{lifecycle, tests::Harness};
+    let harness = Harness::new(1024);
+    let mut ctx = EdgionHttpContext::default();
+    harness.arm(&mut ctx);
+    let mut header = harness.response();
+    header.insert_header("content-length", "5").unwrap();
+    header
+        .insert_header(
+            "date",
+            httpdate::fmt_http_date(std::time::SystemTime::now() - Duration::from_secs(5)),
+        )
+        .unwrap();
+    let origin_date = header.headers.get("date").unwrap().clone();
+    lifecycle::capture_headers(&mut ctx, &header);
+    response_head_will_commit(session, &header, &mut ctx).unwrap();
+    lifecycle::capture_body(&mut ctx, Some(&bytes::Bytes::from_static(b"hello")), true);
+    session.write_response_header(Box::new(header), false).await.unwrap();
+    assert_ne!(
+        session.response_written().unwrap().headers.get("date").unwrap(),
+        &origin_date,
+        "real downstream transport rewrites origin Date without a sleep"
+    );
+    session
+        .write_response_body(Some(bytes::Bytes::from_static(b"hello")), true)
+        .await
+        .unwrap();
+    lifecycle::finalize(session, &mut ctx, None).await;
+    assert_eq!(harness.entry_count(), 1);
+    assert_eq!(harness.pending_bytes(), 0);
+    let (mut client, server) = tokio::io::duplex(64 * 1024);
+    client
+        .write_all(b"GET /cache HTTP/1.1\r\nHost: test\r\n\r\n")
+        .await
+        .unwrap();
+    let mut replay = Session::new_h1(Box::new(server));
+    replay.read_request().await.unwrap();
+    let mut replay_ctx = EdgionHttpContext::default();
+    harness.arm(&mut replay_ctx);
+    let hit = lifecycle::prepare_hit(&mut replay, &mut replay_ctx).unwrap();
+    assert_eq!(&hit.body[..], b"hello");
+    lifecycle::deliver_hit(&mut replay, &mut replay_ctx, hit).await.unwrap();
+    assert!(
+        replay
+            .response_written()
+            .unwrap()
+            .headers
+            .get("age")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+            >= 5,
+        "actual replay Age survives transport Date replacement"
+    );
+}
+
+#[tokio::test]
+async fn cache_h1_commit_seal_accepts_transport_date_rewrite() {
+    let (mut client, server) = tokio::io::duplex(64 * 1024);
+    client
+        .write_all(b"GET /cache HTTP/1.1\r\nHost: test\r\n\r\n")
+        .await
+        .unwrap();
+    let mut session = Session::new_h1(Box::new(server));
+    session.read_request().await.unwrap();
+    cache_fill_across_real_transport_date(&mut session).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cache_h2_commit_seal_accepts_transport_date_rewrite() {
+    use pingora_core::protocols::http::v2::server::{handshake, H2Accept, HttpSession};
+    use pingora_core::protocols::Digest;
+    use std::sync::Arc;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+        let client = tokio::spawn(async move {
+            let (mut sender, connection) = h2::client::handshake(client_io).await.unwrap();
+            let driver = tokio::spawn(connection);
+            sender = sender.ready().await.unwrap();
+            let request = http::Request::builder().uri("https://test/cache").body(()).unwrap();
+            let (response, _) = sender.send_request(request, true).unwrap();
+            let mut stream = response.await.unwrap().into_body();
+            let mut bytes = Vec::new();
+            while let Some(chunk) = stream.data().await {
+                let chunk = chunk.unwrap();
+                stream.flow_control().release_capacity(chunk.len()).unwrap();
+                bytes.extend_from_slice(&chunk);
+            }
+            assert_eq!(bytes, b"hello");
+            assert!(stream.trailers().await.unwrap().is_none());
+            driver.abort();
+        });
+        let mut connection = handshake(Box::new(server_io), None).await.unwrap();
+        let Some(H2Accept::Session(downstream)) =
+            HttpSession::from_h2_conn(&mut connection, Arc::new(Digest::default()))
+                .await
+                .unwrap()
+        else {
+            panic!("real H2 request reaches commit boundary");
+        };
+        let (_unused, placeholder) = tokio::io::duplex(1);
+        let mut session = Session::new_h1(Box::new(placeholder));
+        *session.downstream_session = pingora_core::protocols::http::server::Session::new_http2(downstream);
+        let driver = tokio::spawn(async move { while connection.accept().await.is_some() {} });
+        cache_fill_across_real_transport_date(&mut session).await;
+        client.await.unwrap();
+        driver.abort();
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn cache_commit_hook_rejects_onion_date_mutation_before_transport() {
+    use crate::response_cache::{lifecycle, tests::Harness};
+    let harness = Harness::new(1024);
+    let session = session().await;
+    let mut ctx = EdgionHttpContext::default();
+    harness.arm(&mut ctx);
+    let header = harness.response();
+    lifecycle::capture_headers(&mut ctx, &header);
+    let mut changed = header.clone();
+    changed.insert_header("date", "Tue, 14 Nov 2023 22:13:20 GMT").unwrap();
+    response_head_will_commit(&session, &changed, &mut ctx).unwrap();
+    assert_eq!(harness.pending_bytes(), 0);
+    assert_eq!(harness.entry_count(), 0);
+    assert!(
+        ctx.response_write_started(),
+        "cache refusal does not refuse ordinary forwarding"
+    );
+}

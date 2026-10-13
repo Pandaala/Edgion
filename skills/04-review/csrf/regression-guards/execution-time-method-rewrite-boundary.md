@@ -72,10 +72,11 @@ missing/valid tokens, unsafe later rewrites, and GraphQL entry GET query/mutatio
 Independent static review passed after correcting multi-backend counter aggregation.
 The local composition case is not registered in Kubernetes mode, whose fixture
 resources do not include the dedicated listener. No Kubernetes claim is made.
-Workspace check/clippy and the integration build are blocked by pre-existing merge
-conflict markers in plugin_runtime.rs, session_adapter.rs and
-pg_upstream_response_body_filter.rs. Fresh integration verification is pending;
-historical tests are not evidence for this run. The active T03-B task is retained.
+Historical T03-B verification recorded workspace check/clippy and integration-build
+blockers from merge conflict markers in plugin_runtime.rs, session_adapter.rs and
+pg_upstream_response_body_filter.rs. Those conflict markers have since been resolved.
+This historical note does not establish fresh integration acceptance of the
+composition case. The referenced parent-task tree is absent from the current tree.
 Re-evaluate if CSRF changes identity view, scoped ordering, token sources,
 late-mutation policy, or RestToGraphql admission/operation semantics.
 

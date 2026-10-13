@@ -20,6 +20,7 @@ fn capture_and_reader_slices_allocate_nothing_and_charge_unused_capacity() {
     assert_eq!(pending.entry.arena.capacity(), 1024);
     assert_eq!(pending.entry.used, 6);
     assert_eq!(store.stats().1, 1024 + MAX_METADATA + ENTRY_CONTROL);
+    assert!(state.seal_pending_headers(&header));
     assert!(state.prepare_publication(Some(&header)));
     state.publish();
     assert_eq!(store.stats().1, 0);
@@ -66,6 +67,7 @@ fn private_eos_overflow_cancellation_and_retirement_never_publish() {
                 state.push(None, true);
                 let mut denied = header.clone();
                 denied.insert_header("set-cookie", "test=1").unwrap();
+                assert!(state.seal_pending_headers(&header));
                 assert!(!state.prepare_publication(Some(&denied)));
             }
         }
@@ -111,6 +113,7 @@ fn header_decode_and_owner_wrapper_requested_capacity_fit_precharged_work() {
     assert_eq!(header.headers.len(), MAX_FIELDS);
     state.capture(&header, Instant::now());
     state.push(None, true);
+    assert!(state.seal_pending_headers(&header));
     assert!(state.prepare_publication(Some(&header)));
     let before = state.pending.as_ref().unwrap().entry.arena.as_ptr();
     let (_, stats) = crate::test_allocation_counter::count_allocation_stats(|| state.publish());
@@ -149,6 +152,7 @@ fn suspended_intents_and_hit_header_refusal_preserve_exact_capacity_ledger() {
     let header = response();
     state.capture(&header, Instant::now());
     state.push(None, true);
+    assert!(state.seal_pending_headers(&header));
     assert!(state.prepare_publication(Some(&header)));
     state.publish();
     let before = store.stats();
@@ -196,6 +200,7 @@ fn replacement_and_expiration_remove_visibility_but_retained_slice_pins_old_aren
         .unwrap();
     state.capture(&header, Instant::now());
     state.push(Some(&Bytes::from_static(b"old")), true);
+    assert!(state.seal_pending_headers(&header));
     assert!(state.prepare_publication(Some(&header)));
     state.publish();
     let hit = state.lookup().unwrap();
@@ -204,6 +209,7 @@ fn replacement_and_expiration_remove_visibility_but_retained_slice_pins_old_aren
     state.max_ttl = Duration::from_millis(5);
     state.capture(&header, Instant::now());
     state.push(Some(&Bytes::from_static(b"new")), true);
+    assert!(state.seal_pending_headers(&header));
     assert!(state.prepare_publication(Some(&header)));
     state.publish();
     assert_eq!(store.stats().3, 1);
@@ -250,6 +256,7 @@ fn metadata_and_reader_control_refusals_allocate_nothing_and_release_work_reserv
     let header = response();
     state.capture(&header, Instant::now());
     state.push(None, true);
+    assert!(state.seal_pending_headers(&header));
     assert!(state.prepare_publication(Some(&header)));
     state.publish();
     assert_eq!(store.stats().0, base);
@@ -280,6 +287,7 @@ fn corrupt_metadata_never_decodes_a_valid_prefix_and_rolls_back_all_temporary_le
         let header = response();
         state.capture(&header, Instant::now());
         state.push(Some(&Bytes::from_static(b"private")), true);
+        assert!(state.seal_pending_headers(&header));
         assert!(state.prepare_publication(Some(&header)));
         state.publish();
         store.corrupt_tail(&tail);
@@ -300,6 +308,7 @@ fn corrupt_body_bound_and_excess_metadata_fields_are_rejected_before_replay() {
         let header = response();
         state.capture(&header, Instant::now());
         state.push(None, true);
+        assert!(state.seal_pending_headers(&header));
         assert!(state.prepare_publication(Some(&header)));
         state.publish();
         let mut entry = store.entries.remove(&[7; 32]).unwrap();
@@ -324,11 +333,13 @@ fn stale_reader_corruption_veto_cannot_remove_a_newer_replacement() {
     let header = response();
     state.capture(&header, Instant::now());
     state.push(Some(&Bytes::from_static(b"old")), true);
+    assert!(state.seal_pending_headers(&header));
     assert!(state.prepare_publication(Some(&header)));
     state.publish();
     let old = store.entries.get(&[7; 32]).unwrap();
     state.capture(&header, Instant::now());
     state.push(Some(&Bytes::from_static(b"new")), true);
+    assert!(state.seal_pending_headers(&header));
     assert!(state.prepare_publication(Some(&header)));
     state.publish();
     store.remove_if_current(&[7; 32], &old);
@@ -487,11 +498,13 @@ fn refused_epoch_publication_clears_entries_and_fences_private_pending_commit() 
     let header = response();
     state.capture(&header, Instant::now());
     state.push(Some(&Bytes::from_static(b"first")), true);
+    assert!(state.seal_pending_headers(&header));
     assert!(state.prepare_publication(Some(&header)));
     state.publish();
     assert_eq!(store.stats().3, 1);
     state.capture(&header, Instant::now());
     state.push(Some(&Bytes::from_static(b"pending")), true);
+    assert!(state.seal_pending_headers(&header));
     assert!(state.prepare_publication(Some(&header)));
     let pressure = Lease::acquire(&store.ledger, store.ledger.limit - store.stats().0, false).unwrap();
     let (token, calls) = crate::test_allocation_counter::count_allocations(|| store.advance_epoch());
@@ -550,6 +563,7 @@ fn response_cache_missing_or_drifting_actual_origin_evidence_never_admits_or_pub
     state.observe_authority(Ok(None));
     state.capture(&header, Instant::now());
     assert!(state.pending.is_some());
+    assert!(state.seal_pending_headers(&header));
     state.push(None, true);
     state.record_traffic(Some(TrafficStamp {
         generation: 6,
@@ -565,6 +579,7 @@ fn response_cache_missing_or_drifting_actual_origin_evidence_never_admits_or_pub
         state.pending.is_none(),
         "drift bypass is permanent even if a later read matches"
     );
+    assert!(!state.seal_pending_headers(&header));
     assert!(!state.prepare_publication(Some(&header)));
     assert_eq!(state.store.stats().3, 0);
 }
@@ -611,6 +626,7 @@ fn response_cache_authority_actual_absence_result_error_and_drift_fence_publicat
         state.capture(&response(), Instant::now());
         if actual == Ok(Some("tenant.sandbox.internal")) {
             assert!(state.pending.is_some());
+            assert!(state.seal_pending_headers(&response()));
             state.push(None, true);
             state.observe_authority(Ok(None));
             assert!(state.pending.is_none(), "later absence discards the admitted arena");
@@ -618,6 +634,7 @@ fn response_cache_authority_actual_absence_result_error_and_drift_fence_publicat
             state.capture(&response(), Instant::now());
         }
         assert!(state.pending.is_none());
+        assert!(!state.seal_pending_headers(&response()));
         assert!(!state.prepare_publication(Some(&response())));
         assert_eq!(state.store.stats().3, 0);
     }
@@ -636,6 +653,7 @@ fn response_cache_vary_requires_hashed_header_certificate_and_decode_integrity()
     state.header_certificate = Some(certificate);
     state.capture(&header, Instant::now());
     state.push(Some(&Bytes::from_static(b"public")), true);
+    assert!(state.seal_pending_headers(&header));
     assert!(state.prepare_publication(Some(&header)));
     state.publish();
     assert_eq!(&state.lookup().unwrap().body[..], b"public");
@@ -649,6 +667,7 @@ fn response_cache_vary_requires_hashed_header_certificate_and_decode_integrity()
     assert_eq!(store.stats().3, 0);
     state.capture(&header, Instant::now());
     state.push(Some(&Bytes::from_static(b"selected")), true);
+    assert!(state.seal_pending_headers(&header));
     assert!(state.prepare_publication(Some(&header)));
     state.publish();
     let mut hit = state.lookup().unwrap();
@@ -682,4 +701,134 @@ fn response_cache_startup_store_empty_baseline_includes_actual_index_and_standin
     let (refused, calls) = crate::test_allocation_counter::count_allocations(|| Store::from_limits(&invalid));
     assert!(refused.is_err());
     assert_eq!(calls, 0, "invalid physical limits fail before owner allocation");
+}
+
+#[test]
+fn pretransport_seal_preserves_strict_headers_and_origin_freshness() {
+    let (store, _, mut state) = fixture(1024);
+    let mut header = response();
+    header
+        .insert_header(
+            "date",
+            httpdate::fmt_http_date(SystemTime::now() - Duration::from_secs(5)),
+        )
+        .unwrap();
+    state.capture(&header, Instant::now());
+    state.push(None, true);
+    assert!(
+        !state.prepare_publication(Some(&header)),
+        "unsealed fills are never published"
+    );
+    assert_eq!(store.stats().1, 0);
+    state.capture(&header, Instant::now());
+    assert!(state.seal_pending_headers(&header));
+    state.push(None, true);
+    let mut transported = header.clone();
+    transported
+        .insert_header("date", httpdate::fmt_http_date(SystemTime::now()))
+        .unwrap();
+    let entry = &state.pending.as_ref().unwrap().entry;
+    assert!(!entry.matches_contract(&transported), "generic integrity remains exact");
+    assert!(entry.matches_final_transport_contract(&transported));
+    let remaining = entry.freshness.remaining(Instant::now()).unwrap();
+    assert!(
+        remaining <= Duration::from_secs(55),
+        "transport Date cannot refresh origin TTL"
+    );
+    assert!(state.prepare_publication(Some(&transported)));
+    state.publish();
+    let hit = state.lookup().unwrap();
+    assert!(
+        hit.entry.freshness.age(Instant::now()).unwrap() >= Duration::from_secs(5),
+        "replay Age is derived from stored origin freshness"
+    );
+    drop(hit);
+    state.capture(&header, Instant::now());
+    assert!(state.seal_pending_headers(&header));
+    state.capture(&header, Instant::now());
+    state.push(None, true);
+    assert!(
+        !state.prepare_publication(Some(&transported)),
+        "recapture invalidates previous seal"
+    );
+}
+
+#[test]
+fn sealed_transport_rejects_every_change_except_valid_singleton_date() {
+    for case in 0..8 {
+        let (store, _, mut state) = fixture(1024);
+        let header = response();
+        state.capture(&header, Instant::now());
+        assert!(state.seal_pending_headers(&header));
+        state.push(None, true);
+        let mut final_header = header.clone();
+        match case {
+            0 => {
+                final_header.remove_header("date");
+            }
+            1 => {
+                final_header.insert_header("date", "invalid").unwrap();
+            }
+            2 => {
+                final_header
+                    .append_header("date", "Tue, 14 Nov 2023 22:13:20 GMT")
+                    .unwrap();
+            }
+            3 => {
+                final_header
+                    .insert_header("cache-control", "public, max-age=30")
+                    .unwrap();
+            }
+            4 => {
+                final_header.insert_header("age", "1").unwrap();
+            }
+            5 => {
+                final_header.set_status(201).unwrap();
+            }
+            6 => {
+                final_header.insert_header("set-cookie", "session=fixed").unwrap();
+            }
+            _ => {
+                state.pending.as_mut().unwrap().entry.metadata.push(0);
+            }
+        }
+        assert!(!state.prepare_publication(Some(&final_header)), "case {case}");
+        assert_eq!(store.stats().1, 0, "case {case} releases pending ownership");
+        assert_eq!(store.stats().3, 0);
+    }
+}
+
+#[test]
+fn pretransport_plugin_header_mutation_discards_fill_and_expired_origin_stays_uncacheable() {
+    for name in ["date", "cache-control", "age"] {
+        let (store, _, mut state) = fixture(1024);
+        let header = response();
+        state.capture(&header, Instant::now());
+        let mut changed = header.clone();
+        changed
+            .insert_header(
+                name,
+                match name {
+                    "date" => "Tue, 14 Nov 2023 22:13:20 GMT",
+                    "cache-control" => "public, max-age=30",
+                    _ => "1",
+                },
+            )
+            .unwrap();
+        assert!(!state.seal_pending_headers(&changed));
+        assert_eq!(store.stats().1, 0);
+    }
+    let (_, _, mut state) = fixture(1024);
+    let mut stale = response();
+    stale
+        .insert_header(
+            "date",
+            httpdate::fmt_http_date(SystemTime::now() - Duration::from_secs(120)),
+        )
+        .unwrap();
+    state.capture(&stale, Instant::now());
+    assert!(
+        state.pending.is_none(),
+        "fresh transport Date cannot rescue stale origin admission"
+    );
 }

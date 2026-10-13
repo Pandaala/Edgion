@@ -17,6 +17,13 @@ are 1 MiB per arena, 16 KiB/64 fields metadata, 16 MiB concurrent pending and
 128 MiB total process ownership. Body callbacks copy bounded chunks without
 allocation or tracing. Overflow, errors, cancellation and trailers discard the
 private fill while the origin response keeps its ordinary forwarding behavior.
+Seal the actual final onion header at the canonical response_head_will_commit
+boundary, before transport preparation. The seal requires the exact captured
+Cache-Control, Date and Age contract. Terminal publication retains all integrity,
+policy, origin, epoch and body checks; only a valid singleton Date may differ
+after the locked H1/H2 transport rewrites it. A missing seal or recapture cannot
+reuse an earlier seal. Plugin-side Date changes remain strict failures. Freshness
+and replay Age stay bound to the origin timestamp, never the transport timestamp.
 Publish only after actual typed clean terminal state and bounded finish_body.
 H1 proves local flush; H2 proves accepted EOS, not peer receipt.
 

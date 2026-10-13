@@ -352,6 +352,28 @@ impl Entry {
                             .map(|(_, v)| v)
             })
     }
+    fn matches_final_transport_contract(&self, header: &ResponseHeader) -> bool {
+        let mut dates = header.headers.get_all("date").iter();
+        let valid_date = dates.next().is_some_and(|date| {
+            date.to_str()
+                .ok()
+                .and_then(|date| httpdate::parse_http_date(date).ok())
+                .is_some()
+        }) && dates.next().is_none();
+        valid_date
+            && fields(&self.metadata).all(|field| field.is_ok())
+            && policy::supported_headers(header)
+            && ["cache-control", "age"].iter().all(|name| {
+                let mut actual = header.headers.get_all(*name).iter();
+                let first = actual.next().map(|value| value.as_bytes());
+                actual.next().is_none()
+                    && first
+                        == fields(&self.metadata)
+                            .filter_map(Result::ok)
+                            .find(|(key, _)| key.eq_ignore_ascii_case(name.as_bytes()))
+                            .map(|(_, value)| value)
+            })
+    }
 }
 
 fn fields(metadata: &[u8]) -> impl Iterator<Item = Result<(&[u8], &[u8]), ()>> {
@@ -405,6 +427,7 @@ pub(crate) struct Hit {
 pub(super) struct Pending {
     entry: Entry,
     complete: bool,
+    pretransport_sealed: bool,
 }
 
 impl Pending {
@@ -464,6 +487,7 @@ impl Pending {
                 _lease: lease,
             },
             complete: false,
+            pretransport_sealed: false,
         })
     }
 
@@ -848,11 +872,30 @@ impl RequestState {
         self.delivered_header_lease = hit.header_lease.take();
     }
 
+    pub(super) fn seal_pending_headers(&mut self, chosen_header: &ResponseHeader) -> bool {
+        let Some(pending) = self.pending.as_mut() else {
+            return false;
+        };
+        pending.pretransport_sealed = false;
+        if !pending.entry.matches_contract(chosen_header) || !self.permitted_vary(chosen_header) {
+            self.abandon();
+            return false;
+        }
+        if let Some(pending) = self.pending.as_mut() {
+            pending.pretransport_sealed = true;
+            true
+        } else {
+            false
+        }
+    }
+
     pub(super) fn prepare_publication(&mut self, final_header: Option<&ResponseHeader>) -> bool {
         if self.pending.as_ref().is_none_or(|pending| {
             !pending.complete
-                || final_header
-                    .is_none_or(|header| !pending.entry.matches_contract(header) || !self.permitted_vary(header))
+                || !pending.pretransport_sealed
+                || final_header.is_none_or(|header| {
+                    !pending.entry.matches_final_transport_contract(header) || !self.permitted_vary(header)
+                })
         }) || !self.origin_matches()
             || !self.epoch.active.load(Ordering::Acquire)
         {

@@ -543,6 +543,7 @@ async fn actual_typed_header_only_terminal_publishes_but_trailer_boundary_discar
                 .unwrap();
         }
         assert_eq!(fixture.entry_count(), 0);
+        proxy.response_head_will_commit(&session, &header, &mut ctx).unwrap();
         session.write_response_header(Box::new(header), false).await.unwrap();
         session.write_response_body(None, true).await.unwrap();
         crate::response_cache::lifecycle::finalize(&mut session, &mut ctx, None).await;

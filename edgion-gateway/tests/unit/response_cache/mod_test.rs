@@ -103,6 +103,7 @@ impl Harness {
         let header = response();
         state.capture(&header, std::time::Instant::now());
         state.push(Some(&bytes::Bytes::from_static(bytes)), true);
+        assert!(state.seal_pending_headers(&header));
         assert!(state.prepare_publication(Some(&header)));
         state.publish();
     }

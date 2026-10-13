@@ -94,6 +94,7 @@ async fn final_flush_error_timeout_and_cancellation_release_fill_without_publica
         let mut header = response();
         header.insert_header("content-length", "5").unwrap();
         capture_headers(&mut ctx, &header);
+        seal_headers(&mut ctx, &header);
         capture_body(&mut ctx, Some(&Bytes::from_static(b"hello")), true);
         session.write_response_header(Box::new(header), false).await.unwrap();
         session
@@ -131,6 +132,7 @@ async fn postheader_hit_flush_failure_keeps_header_charge_and_never_starts_origi
     let header = response();
     state.capture(&header, Instant::now());
     state.push(Some(&Bytes::from_static(b"hello")), true);
+    assert!(state.seal_pending_headers(&header));
     assert!(state.prepare_publication(Some(&header)));
     state.publish();
     let (mut client, inner) = tokio::io::duplex(64 * 1024);
@@ -197,6 +199,7 @@ async fn h1_terminal_flush_publishes_once_and_replays_without_origin() {
     let mut header = response();
     header.insert_header("content-length", "5").unwrap();
     capture_headers(&mut ctx, &header);
+    seal_headers(&mut ctx, &header);
     capture_body(&mut ctx, Some(&Bytes::from_static(b"hello")), true);
     assert_eq!(store.stats().3, 0);
     session.write_response_header(Box::new(header), false).await.unwrap();
@@ -236,6 +239,7 @@ async fn unread_post_body_bypasses_hit_until_physical_eof() {
     let header = response();
     state.capture(&header, Instant::now());
     state.push(None, true);
+    assert!(state.seal_pending_headers(&header));
     assert!(state.prepare_publication(Some(&header)));
     state.publish();
     let (mut session, _client) =
@@ -255,6 +259,7 @@ async fn captured_rewritten_post_hit_allows_real_h1_connection_reuse() {
     let header = response();
     state.capture(&header, Instant::now());
     state.push(Some(&Bytes::from_static(b"hello")), true);
+    assert!(state.seal_pending_headers(&header));
     assert!(state.prepare_publication(Some(&header)));
     state.publish();
     let (mut session, mut client) =
@@ -355,6 +360,7 @@ async fn h2_hit_accepts_clean_eos_for_empty_and_nonempty_payload() {
             let header = response();
             state.capture(&header, Instant::now());
             state.push(Some(&Bytes::copy_from_slice(payload)), true);
+            assert!(state.seal_pending_headers(&header));
             assert!(state.prepare_publication(Some(&header)));
             state.publish();
             let mut ctx = EdgionHttpContext::default();
