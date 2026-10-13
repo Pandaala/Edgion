@@ -124,6 +124,14 @@ Only the last guard removes it, including early return and task cancellation
 contract does not change the stream's bounded send backpressure or establish a
 count-delivery deadline.
 
+Metadata observation (ARCH-119) starts with the count captured for the initial
+RPC event. Its baseline advances only after that exact snapshot is enqueued,
+not after an unrelated registry read. Each loop constructs the actual Tokio
+`Notified` before scanning the count, and keeps lifecycle branches in the same
+select as count publication. The next loop rescans after a bounded send, so a
+change during backpressure is projected once capacity returns. This is latest
+state projection, not every intermediate membership state or remote acknowledgement.
+
 Main uses:
 - **Cluster-level rate limiting**: Gateway receives `gateway_instance_count` via WatchServerMeta to compute cluster-level rate-limit quotas (per-instance quota = total cluster quota / instance count)
 - **Instance monitoring**: Controller can view the list of currently connected Gateway instances and their state

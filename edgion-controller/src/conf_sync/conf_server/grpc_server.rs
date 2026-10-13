@@ -767,6 +767,9 @@ impl ConfigSync for ConfigSyncGrpcServer {
         let registry = server.client_registry();
 
         let registration = registry.register(req.client_id.clone(), req.client_name.clone());
+        // One initial snapshot belongs to this RPC; later observations must not
+        // become its baseline until their own event has been enqueued.
+        let initial_count = registry.count();
 
         let (tx, rx) = tokio::sync::mpsc::channel(8);
         let server_id = server.server_id();
@@ -808,7 +811,7 @@ impl ConfigSync for ConfigSyncGrpcServer {
             // Send initial state immediately
             let initial_event = ServerMetaEvent {
                 server_id: initial_server_id.clone(),
-                gateway_instance_count: registry.count(),
+                gateway_instance_count: initial_count,
                 timestamp: now_millis(),
             };
             if tx.send(Ok(initial_event)).await.is_err() {
@@ -817,18 +820,16 @@ impl ConfigSync for ConfigSyncGrpcServer {
 
             // Push on change (event-driven) + periodic server-switch detection (every 1s)
             // Mirrors the pattern used in watch() to detect controller reload/leader switch.
-            let mut last_count = registry.count();
+            let mut last_count = initial_count;
             let mut check_interval = tokio::time::interval(std::time::Duration::from_secs(1));
 
             loop {
+                // Arm before scanning: a concurrent change is either visible in
+                // this count or wakes this exact future. Rescan after every send.
+                let changed = registry.wait_for_change();
+                let new_count = registry.count();
                 tokio::select! {
-                    _ = registry.wait_for_change() => {
-                        let new_count = registry.count();
-                        if new_count == last_count {
-                            continue; // Spurious wakeup or concurrent change that reverted
-                        }
-                        last_count = new_count;
-
+                    _ = async {}, if new_count != last_count => {
                         let event = ServerMetaEvent {
                             server_id: initial_server_id.clone(),
                             gateway_instance_count: new_count,
@@ -844,7 +845,9 @@ impl ConfigSync for ConfigSyncGrpcServer {
                             );
                             break;
                         }
+                        last_count = new_count;
                     }
+                    _ = changed => {}
                     // Detect client disconnect even when no count-change event fires.
                     // Without this, a hard-killed gateway (no graceful FIN) would remain
                     // registered until the next count-change event, inflating the divisor

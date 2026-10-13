@@ -168,3 +168,111 @@ async fn initial_rpc_send_failure_releases_registration() {
     wait_for_registrations(&registry, 0).await;
     assert!(registry.clients.read().is_empty());
 }
+
+#[tokio::test]
+async fn unpolled_waiters_cover_changes_after_the_count_scan() {
+    let registry = Arc::new(ClientRegistry::new());
+    let _first = registry.register("first".into(), "first".into());
+    let _second = registry.register("second".into(), "second".into());
+    let one = registry.wait_for_change();
+    let two = registry.wait_for_change();
+    assert_eq!(registry.count(), 2);
+    let third = registry.register("third".into(), "third".into());
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        one.await;
+        two.await;
+    })
+    .await
+    .expect("both pre-scan waiters must observe registration without another change");
+    assert_eq!(registry.count(), 3);
+
+    let one = registry.wait_for_change();
+    let two = registry.wait_for_change();
+    assert_eq!(registry.count(), 3);
+    drop(third);
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        one.await;
+        two.await;
+    })
+    .await
+    .expect("both pre-scan waiters must observe release without another change");
+    assert_eq!(registry.count(), 2);
+}
+
+async fn next_metadata_count(
+    stream: &mut tokio_stream::wrappers::ReceiverStream<
+        Result<edgion_common::conf_sync::proto::ServerMetaEvent, tonic::Status>,
+    >,
+) -> u32 {
+    tokio::time::timeout(std::time::Duration::from_secs(3), stream.next())
+        .await
+        .expect("latest count must arrive without another membership change")
+        .unwrap()
+        .unwrap()
+        .gateway_instance_count
+}
+
+#[tokio::test]
+async fn initial_rpc_snapshot_does_not_hide_a_newer_unsent_count() {
+    let server = Arc::new(ConfigSyncServer::new());
+    let registry = server.client_registry();
+    let _h = registry.register("H".into(), "H".into());
+    let grpc = ConfigSyncGrpcServer::new(Arc::new(MetadataProvider(server)), CancellationToken::new());
+    let mut stream = grpc.watch_server_meta(metadata_request()).await.unwrap().into_inner();
+    // The RPC captured two, but its spawned sender has not run on this
+    // current-thread runtime yet. No mutation follows this third registration.
+    let _j = registry.register("J".into(), "J".into());
+    assert_eq!(next_metadata_count(&mut stream).await, 2);
+    assert_eq!(next_metadata_count(&mut stream).await, 3);
+}
+
+#[tokio::test]
+async fn multiple_metadata_consumers_observe_registration_and_release() {
+    let server = Arc::new(ConfigSyncServer::new());
+    let registry = server.client_registry();
+    let grpc = ConfigSyncGrpcServer::new(Arc::new(MetadataProvider(server)), CancellationToken::new());
+    let mut one = grpc.watch_server_meta(metadata_request()).await.unwrap().into_inner();
+    let mut two = grpc.watch_server_meta(metadata_request()).await.unwrap().into_inner();
+    assert_eq!(next_metadata_count(&mut one).await, 1);
+    assert_eq!(next_metadata_count(&mut two).await, 1);
+    let h = registry.register("H".into(), "H".into());
+    assert_eq!(next_metadata_count(&mut one).await, 2);
+    assert_eq!(next_metadata_count(&mut two).await, 2);
+    drop(h);
+    assert_eq!(next_metadata_count(&mut one).await, 1);
+    assert_eq!(next_metadata_count(&mut two).await, 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn metadata_rescans_after_a_backpressured_count_send() {
+    let server = Arc::new(ConfigSyncServer::new());
+    let registry = server.client_registry();
+    let grpc = ConfigSyncGrpcServer::new(Arc::new(MetadataProvider(server)), CancellationToken::new());
+    let mut stream = grpc.watch_server_meta(metadata_request()).await.unwrap().into_inner();
+    let mut registrations = Vec::new();
+    for count in 1..=8 {
+        if count > 1 {
+            registrations.push(registry.register(format!("gateway-{count}"), "gateway".into()));
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while stream.as_ref().len() != count {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("each count must occupy the next metadata queue slot");
+    }
+    assert_eq!(stream.as_ref().len(), 8);
+    registrations.push(registry.register("gateway-9".into(), "gateway".into()));
+    // Paused current-thread time advances only once runnable tasks are parked.
+    // With all eight slots occupied, the count-nine send is now pending.
+    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    assert_eq!(stream.as_ref().len(), 8);
+    registrations.push(registry.register("gateway-10".into(), "gateway".into()));
+    // No further membership mutation: draining must resume the pending snapshot
+    // and then project ten, even though its broadcast happened during send().
+    for expected in 1..=10 {
+        assert_eq!(next_metadata_count(&mut stream).await, expected);
+    }
+    assert_eq!(registry.count(), 10);
+}

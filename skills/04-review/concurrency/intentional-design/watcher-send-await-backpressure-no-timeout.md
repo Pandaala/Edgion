@@ -48,6 +48,15 @@ available. Separate spawned-watcher coverage checks delivery and receiver-drop
 cleanup. The boundary test does not inject a write inside the scan helper;
 source review must also preserve future construction before the store read.
 
+ARCH-119 applies the same construction-before-scan ordering to metadata counts.
+`ClientRegistry::wait_for_change` returns the actual `Notified` synchronously;
+constructing an async wrapper would not arm it. `watch_server_meta` compares the
+scan against its last successfully enqueued count, including the initial RPC
+snapshot, and rescans after each send. This closes missed latest-count projection
+without changing the eight-entry metadata queue, awaited sends, or lifecycle
+selection. Enqueue success is not a remote acknowledgement, and intermediate
+membership states may coalesce.
+
 ## Core Rationale
 
 **1. Watchers are already per-client isolated; a slow Gateway does not stall others.**

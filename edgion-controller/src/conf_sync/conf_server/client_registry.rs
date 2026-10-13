@@ -82,9 +82,10 @@ impl ClientRegistry {
         self.clients.read().len().max(1) as u32
     }
 
-    /// Wait until the count changes
-    pub async fn wait_for_change(&self) {
-        self.notify.notified().await;
+    /// Prepare a broadcast waiter before scanning the current count. Construction
+    /// observes notify_waiters even if the returned future has not been polled.
+    pub(super) fn wait_for_change(&self) -> tokio::sync::futures::Notified<'_> {
+        self.notify.notified()
     }
 }
 
