@@ -139,6 +139,14 @@ also enables `includeRawUri` and checks the unchanged entry path and query
 through `AccessLogClient`; the shared Kubernetes suite runs the origin checks
 without that local admin capability.
 
+The six origin-form ForwardView cases likewise require the complete expected
+path and preserved query. The selected `test-http` catch-all backend emits
+`Path:` and `Query:` separately; path-prefix acceptance can hide an appended
+segment or suffix (ARCH-382). `origin_form_assertions_require_complete_path_and_query`
+challenges the shared assertion with those wrong outputs, missing paths, and
+missing or incorrect queries for all six expectations. These pure checks verify
+the assertion, not a fresh live Gateway or Kubernetes forwarding run.
+
 ---
 
 ## Frozen query cache source

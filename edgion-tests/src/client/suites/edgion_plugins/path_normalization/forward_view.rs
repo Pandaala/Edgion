@@ -82,6 +82,11 @@ fn parse_echo_query(text: &str) -> Option<String> {
     None
 }
 
+// The selected backend emits the complete path and query on separate lines.
+fn echo_target_matches(body: &str, expected_path: &str, expected_query: &str) -> bool {
+    parse_echo_path(body).as_deref() == Some(expected_path) && parse_echo_query(body).as_deref() == Some(expected_query)
+}
+
 /// Return a placeholder struct for unused header parsing (mirrors proxy_rewrite pattern).
 #[derive(Debug, Default)]
 #[allow(dead_code)]
@@ -189,19 +194,14 @@ impl PathNormalizationForwardViewTestSuite {
                                 Ok(body) => {
                                     let echo_path = parse_echo_path(&body);
                                     match echo_path {
-                                        Some(ref p) if p == "/api/data" => TestResult::passed_with_message(
-                                            start.elapsed(),
-                                            format!(
-                                                "upstream received normalized path: {} (query preserved: {:?})",
-                                                p,
-                                                parse_echo_query(&body)
-                                            ),
-                                        ),
-                                        Some(ref p) if p.starts_with("/api/data") => {
-                                            // Path may include query string in some echo formats
+                                        Some(ref p) if echo_target_matches(&body, "/api/data", "x=1") => {
                                             TestResult::passed_with_message(
                                                 start.elapsed(),
-                                                format!("upstream received normalized path (with query): {}", p),
+                                                format!(
+                                                    "upstream received normalized path: {} (query preserved: {:?})",
+                                                    p,
+                                                    parse_echo_query(&body)
+                                                ),
                                             )
                                         }
                                         Some(ref p) => TestResult::failed(
@@ -262,14 +262,12 @@ impl PathNormalizationForwardViewTestSuite {
                                 Ok(body) => {
                                     let echo_path = parse_echo_path(&body);
                                     match echo_path {
-                                        Some(ref p) if p == "/%61pi/data" => TestResult::passed_with_message(
-                                            start.elapsed(),
-                                            format!("upstream received raw path: {}", p),
-                                        ),
-                                        Some(ref p) if p.starts_with("/%61pi/data") => TestResult::passed_with_message(
-                                            start.elapsed(),
-                                            format!("upstream received raw path (with query): {}", p),
-                                        ),
+                                        Some(ref p) if echo_target_matches(&body, "/%61pi/data", "x=1") => {
+                                            TestResult::passed_with_message(
+                                                start.elapsed(),
+                                                format!("upstream received raw path: {}", p),
+                                            )
+                                        }
                                         Some(ref p) => TestResult::failed(
                                             start.elapsed(),
                                             format!(
@@ -333,18 +331,16 @@ impl PathNormalizationForwardViewTestSuite {
                                 Ok(body) => {
                                     let echo_path = parse_echo_path(&body);
                                     match echo_path {
-                                        Some(ref p) if p == "/api/data" => TestResult::passed_with_message(
-                                            start.elapsed(),
-                                            format!(
-                                                "upstream received normalized path: {} \
+                                        Some(ref p) if echo_target_matches(&body, "/api/data", "x=1") => {
+                                            TestResult::passed_with_message(
+                                                start.elapsed(),
+                                                format!(
+                                                    "upstream received normalized path: {} \
                                                      (annotation forward-raw-path: false forces normalization)",
-                                                p
-                                            ),
-                                        ),
-                                        Some(ref p) if p.starts_with("/api/data") => TestResult::passed_with_message(
-                                            start.elapsed(),
-                                            format!("upstream received normalized path (with query): {}", p),
-                                        ),
+                                                    p
+                                                ),
+                                            )
+                                        }
                                         Some(ref p) => TestResult::failed(
                                             start.elapsed(),
                                             format!(
@@ -410,7 +406,7 @@ impl PathNormalizationForwardViewTestSuite {
                             }
                             match r.text().await {
                                 Ok(body) => match parse_echo_path(&body) {
-                                    Some(ref p) if p == "/rewritten/data" || p.starts_with("/rewritten/data") => {
+                                    Some(ref p) if echo_target_matches(&body, "/rewritten/data", "q=1") => {
                                         TestResult::passed_with_message(
                                             start.elapsed(),
                                             format!(
@@ -489,7 +485,7 @@ impl PathNormalizationForwardViewTestSuite {
                             }
                             match r.text().await {
                                 Ok(body) => match parse_echo_path(&body) {
-                                    Some(ref p) if p == "/api/foo/bar" || p.starts_with("/api/foo/bar") => {
+                                    Some(ref p) if echo_target_matches(&body, "/api/foo/bar", "q=1") => {
                                         TestResult::passed_with_message(
                                             start.elapsed(),
                                             format!(
@@ -551,7 +547,7 @@ impl PathNormalizationForwardViewTestSuite {
                             }
                             match r.text().await {
                                 Ok(body) => match parse_echo_path(&body) {
-                                    Some(ref p) if p == "/api/data" || p.starts_with("/api/data") => {
+                                    Some(ref p) if echo_target_matches(&body, "/api/data", "x=1") => {
                                         TestResult::passed_with_message(
                                             start.elapsed(),
                                             format!(
@@ -604,5 +600,39 @@ impl TestSuite for PathNormalizationForwardViewTestSuite {
             Self::tc_e_multi_step_normalization(),
             Self::tc_f_invalid_annotation_falls_through(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn origin_form_assertions_require_complete_path_and_query() {
+        for (case, path, query) in [
+            ("default", "/api/data", "x=1"),
+            ("raw", "/%61pi/data", "x=1"),
+            ("normalized", "/api/data", "x=1"),
+            ("rewrite", "/rewritten/data", "q=1"),
+            ("multi_step", "/api/foo/bar", "q=1"),
+            ("invalid_annotation", "/api/data", "x=1"),
+        ] {
+            let echo = |path: &str, query: &str| {
+                format!("Server: test-http\nMethod: GET\nPath: {path}\nQuery: {query}\nHeaders:\n")
+            };
+            assert!(echo_target_matches(&echo(path, query), path, query), "{case}");
+            for suffix in ["/extra", "-wrong", "?unexpected=1"] {
+                assert!(
+                    !echo_target_matches(&echo(&format!("{path}{suffix}"), query), path, query),
+                    "{case}: {suffix}"
+                );
+            }
+            assert!(
+                !echo_target_matches(&format!("Query: {query}\n"), path, query),
+                "{case}"
+            );
+            assert!(!echo_target_matches(&echo(path, "wrong=1"), path, query), "{case}");
+            assert!(!echo_target_matches(&format!("Path: {path}\n"), path, query), "{case}");
+        }
     }
 }
