@@ -90,25 +90,31 @@ fn get_tls_info(host: &str, port: u16, servername: &str, tls_version: &str) -> R
         tls_version,
     ])?;
 
-    // Parse Protocol and Cipher from output
-    let protocol = extract_field(&combined, "Protocol  :")
-        .or_else(|| extract_field(&combined, "Protocol:"))
-        .unwrap_or_default();
-    let cipher = extract_field(&combined, "Cipher    :")
-        .or_else(|| extract_field(&combined, "Cipher:"))
-        .unwrap_or_default();
+    Ok(parse_tls_info(&combined))
+}
 
+fn parse_tls_info(combined: &str) -> TlsConnectionInfo {
+    let protocol = extract_field(combined, "Protocol  :")
+        .or_else(|| extract_field(combined, "Protocol:"))
+        .unwrap_or_default();
+    let cipher = extract_field(combined, "Cipher    :")
+        .or_else(|| extract_field(combined, "Cipher:"))
+        .unwrap_or_default();
     let connected = combined.contains("CONNECTED") && !cipher.is_empty() && cipher != "(NONE)";
-
-    Ok(TlsConnectionInfo {
+    TlsConnectionInfo {
         connected,
         protocol,
         cipher,
-    })
+    }
 }
 
 /// Test connection with a specific cipher (verify server accepts/rejects it)
-fn test_with_specific_cipher(host: &str, port: u16, servername: &str, cipher: &str) -> Result<(bool, String), String> {
+fn test_with_specific_cipher(
+    host: &str,
+    port: u16,
+    servername: &str,
+    cipher: &str,
+) -> Result<TlsConnectionInfo, String> {
     let combined = run_openssl_s_client(&[
         "s_client",
         "-connect",
@@ -120,29 +126,38 @@ fn test_with_specific_cipher(host: &str, port: u16, servername: &str, cipher: &s
         "-tls1_2",
     ])?;
 
-    let negotiated_cipher = extract_field(&combined, "Cipher    :")
-        .or_else(|| extract_field(&combined, "Cipher:"))
-        .unwrap_or_default();
-
-    let success = combined.contains("CONNECTED") && !negotiated_cipher.is_empty() && negotiated_cipher != "(NONE)";
-
-    Ok((success, negotiated_cipher))
+    Ok(parse_tls_info(&combined))
 }
 
 /// Strict handshake success check: rejects `Cipher=0000` and `(NONE)` placeholders
-/// that openssl s_client emits when handshake aborts. Used by the
-/// `cipher_client_cipher_mismatch` and `cipher_multi_sni_different_policy` tests
-/// which need to distinguish actual handshake completion from openssl's lenient
-/// session-info dump on failure.
+/// that openssl s_client emits when handshake aborts. All positive probes and
+/// the policy-rejection cases share this completion boundary.
 fn handshake_truly_completed(info: &TlsConnectionInfo) -> bool {
     info.connected && info.cipher != "0000" && info.cipher != "(NONE)" && !info.cipher.is_empty()
 }
 
 // Legacy ciphers that should be accepted by the legacy endpoint
-const LEGACY_CIPHERS: &[&str] = &["AES128-SHA", "AES256-SHA", "ECDHE-RSA-AES128-SHA"];
+const LEGACY_CIPHERS: &[&str] = &[
+    "AES128-SHA",
+    "AES256-SHA",
+    "ECDHE-RSA-AES128-SHA",
+    "ECDHE-RSA-AES256-SHA",
+];
 
 // Modern ciphers that should be accepted by the modern endpoint
-const MODERN_CIPHERS: &[&str] = &["ECDHE-RSA-AES256-GCM-SHA384", "ECDHE-RSA-AES128-GCM-SHA256"];
+const MODERN_CIPHERS: &[&str] = &[
+    "ECDHE-RSA-AES256-GCM-SHA384",
+    "ECDHE-RSA-AES128-GCM-SHA256",
+    "ECDHE-ECDSA-AES256-GCM-SHA384",
+    "ECDHE-ECDSA-AES128-GCM-SHA256",
+];
+
+fn positive_negotiation(info: &TlsConnectionInfo, allowed: &[&str], requested: Option<&str>) -> bool {
+    handshake_truly_completed(info)
+        && info.protocol == "TLSv1.2"
+        && allowed.contains(&info.cipher.as_str())
+        && requested.is_none_or(|cipher| info.cipher == cipher)
+}
 
 impl CipherTestSuite {
     fn test_tls12_legacy_cipher() -> TestCase {
@@ -158,28 +173,16 @@ impl CipherTestSuite {
 
                     match get_tls_info(&ctx.target_host, port, hostname, "-tls1_2") {
                         Ok(info) => {
-                            if info.connected {
-                                // Check if negotiated cipher is in legacy list
-                                let is_legacy = LEGACY_CIPHERS.iter().any(|c| info.cipher.contains(c));
-                                if is_legacy || info.cipher.contains("SHA") {
-                                    TestResult::passed_with_message(
-                                        start.elapsed(),
-                                        format!(
-                                            "TLS 1.2 connected with legacy cipher: {} (Protocol: {})",
-                                            info.cipher, info.protocol
-                                        ),
-                                    )
-                                } else {
-                                    TestResult::passed_with_message(
-                                        start.elapsed(),
-                                        format!("Connected with cipher: {} (Protocol: {})", info.cipher, info.protocol),
-                                    )
-                                }
+                            if positive_negotiation(&info, LEGACY_CIPHERS, None) {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("TLS 1.2 connected with legacy cipher: {}", info.cipher),
+                                )
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
                                     format!(
-                                        "TLS connection failed. Protocol: {}, Cipher: {}",
+                                        "Expected completed TLS 1.2 negotiation with a configured legacy cipher; Protocol={}, Cipher={}",
                                         info.protocol, info.cipher
                                     ),
                                 )
@@ -205,29 +208,16 @@ impl CipherTestSuite {
 
                     match get_tls_info(&ctx.target_host, port, hostname, "-tls1_2") {
                         Ok(info) => {
-                            if info.connected {
-                                // Check if negotiated cipher is in modern list (GCM ciphers)
-                                let is_modern = MODERN_CIPHERS.iter().any(|c| info.cipher.contains(c))
-                                    || info.cipher.contains("GCM");
-                                if is_modern {
-                                    TestResult::passed_with_message(
-                                        start.elapsed(),
-                                        format!(
-                                            "TLS 1.2 connected with modern cipher: {} (Protocol: {})",
-                                            info.cipher, info.protocol
-                                        ),
-                                    )
-                                } else {
-                                    TestResult::passed_with_message(
-                                        start.elapsed(),
-                                        format!("Connected with cipher: {} (Protocol: {})", info.cipher, info.protocol),
-                                    )
-                                }
+                            if positive_negotiation(&info, MODERN_CIPHERS, None) {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("TLS 1.2 connected with modern cipher: {}", info.cipher),
+                                )
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
                                     format!(
-                                        "TLS connection failed. Protocol: {}, Cipher: {}",
+                                        "Expected completed TLS 1.2 negotiation with a configured modern cipher; Protocol={}, Cipher={}",
                                         info.protocol, info.cipher
                                     ),
                                 )
@@ -253,11 +243,11 @@ impl CipherTestSuite {
                     let test_cipher = "AES128-SHA";
 
                     match test_with_specific_cipher(&ctx.target_host, port, hostname, test_cipher) {
-                        Ok((success, negotiated)) => {
-                            if success {
+                        Ok(info) => {
+                            if positive_negotiation(&info, LEGACY_CIPHERS, Some(test_cipher)) {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    format!("Legacy cipher {} accepted, negotiated: {}", test_cipher, negotiated),
+                                    format!("Legacy cipher {} accepted, negotiated: {}", test_cipher, info.cipher),
                                 )
                             } else {
                                 TestResult::failed(
@@ -286,11 +276,11 @@ impl CipherTestSuite {
                     let test_cipher = "ECDHE-RSA-AES256-GCM-SHA384";
 
                     match test_with_specific_cipher(&ctx.target_host, port, hostname, test_cipher) {
-                        Ok((success, negotiated)) => {
-                            if success {
+                        Ok(info) => {
+                            if positive_negotiation(&info, MODERN_CIPHERS, Some(test_cipher)) {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    format!("Modern cipher {} accepted, negotiated: {}", test_cipher, negotiated),
+                                    format!("Modern cipher {} accepted, negotiated: {}", test_cipher, info.cipher),
                                 )
                             } else {
                                 TestResult::failed(
@@ -479,5 +469,108 @@ impl TestSuite for CipherTestSuite {
             Self::test_bad_cipher_name_failclosed(),
             Self::test_multi_sni_different_policy(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn info(cipher: &str) -> TlsConnectionInfo {
+        TlsConnectionInfo {
+            connected: true,
+            protocol: "TLSv1.2".to_string(),
+            cipher: cipher.to_string(),
+        }
+    }
+
+    #[test]
+    fn positive_verdict_requires_complete_exact_fixture_negotiation() {
+        for allowed in [LEGACY_CIPHERS, MODERN_CIPHERS] {
+            for cipher in allowed {
+                assert!(positive_negotiation(&info(cipher), allowed, None));
+                assert!(positive_negotiation(&info(cipher), allowed, Some(cipher)));
+            }
+            for cipher in ["", "(NONE)", "0000", "AES128-SHA-extra", "ECDHE-RSA-CHACHA20-POLY1305"] {
+                assert!(!positive_negotiation(&info(cipher), allowed, None));
+            }
+            for protocol in ["", "TLSv1", "TLSv1.1", "TLSv1.3"] {
+                let mut parsed = info(allowed[0]);
+                parsed.protocol = protocol.to_string();
+                assert!(!positive_negotiation(&parsed, allowed, None));
+            }
+            let mut parsed = info(allowed[0]);
+            parsed.connected = false;
+            assert!(!positive_negotiation(&parsed, allowed, None));
+            assert!(!positive_negotiation(&info(allowed[0]), allowed, Some(allowed[1])));
+        }
+        assert!(!positive_negotiation(&info(MODERN_CIPHERS[0]), LEGACY_CIPHERS, None));
+        assert!(!positive_negotiation(&info(LEGACY_CIPHERS[0]), MODERN_CIPHERS, None));
+    }
+
+    #[test]
+    fn both_openssl_field_formats_share_the_strict_positive_verdict() {
+        for output in [
+            "CONNECTED(00000003)\n    Protocol  : TLSv1.2\n    Cipher    : AES128-SHA\n",
+            "CONNECTED(00000003)\nProtocol: TLSv1.2\nCipher: AES128-SHA\n",
+        ] {
+            assert!(positive_negotiation(
+                &parse_tls_info(output),
+                LEGACY_CIPHERS,
+                Some("AES128-SHA")
+            ));
+        }
+        for output in [
+            "CONNECTED(00000003)\nProtocol: TLSv1.2\nCipher: 0000\n",
+            "CONNECTED(00000003)\nProtocol: TLSv1.2\nCipher: (NONE)\n",
+            "CONNECTED(00000003)\nProtocol: TLSv1.2\n",
+            "CONNECTED(00000003)\nCipher: AES128-SHA\n",
+            "Protocol: TLSv1.2\nCipher: AES128-SHA\n",
+        ] {
+            assert!(!positive_negotiation(&parse_tls_info(output), LEGACY_CIPHERS, None));
+        }
+    }
+
+    #[test]
+    fn exact_allowlists_match_both_fixture_topologies() {
+        for (yaml, expected) in [
+            (
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/integration/conf/EdgionTls/cipher/EdgionTls_cipher_legacy.yaml"
+                )),
+                LEGACY_CIPHERS,
+            ),
+            (
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/integration/conf/EdgionTls/cipher/EdgionTls_cipher_modern.yaml"
+                )),
+                MODERN_CIPHERS,
+            ),
+            (
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/k8s/conf/EdgionTls/cipher/EdgionTls_cipher_legacy.yaml"
+                )),
+                LEGACY_CIPHERS,
+            ),
+            (
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/k8s/conf/EdgionTls/cipher/EdgionTls_cipher_modern.yaml"
+                )),
+                MODERN_CIPHERS,
+            ),
+        ] {
+            let fixture: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
+            let ciphers: Vec<_> = fixture["spec"]["ciphers"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .map(|cipher| cipher.as_str().unwrap())
+                .collect();
+            assert_eq!(ciphers, expected);
+        }
     }
 }

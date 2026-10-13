@@ -107,8 +107,31 @@ branches in `apply_edgion_tls_cert` and `apply_gateway_tls_cert`; see
   with an obviously-invalid cipher name and asserts the openssl `s_client` handshake does
   NOT complete. Before the fix this test would have failed (handshake completed with a
   default-suite cipher).
-- The pre-existing legacy / modern positive cases still pass: valid cipher names continue
-  to be applied through the same path.
+- The historical production correction retained the legacy / modern positive
+  cases. That result is not fresh evidence for their current assertion strength
+  or for a current live negotiation run.
+
+## Positive negotiation evidence
+
+ARCH-282 tightens all four positive cipher probes in the existing harness suite.
+The shared parsed-result predicate requires `handshake_truly_completed`, exact
+`TLSv1.2`, and exact membership in the relevant fixture's complete four-cipher
+list. The two constrained probes additionally require the negotiated cipher to
+equal the requested cipher. `CONNECTED` plus `0000`, an absent protocol, a broad
+`SHA`/`GCM` substring or an unrelated completed cipher cannot establish success.
+
+The generic and constrained probes use the same parser. Network-free tests cover
+both existing OpenSSL field formats, all eight configured cipher names, empty/
+placeholder ciphers, missing/wrong protocol, policy mismatches and requested
+cipher mismatches. A parity test checks the complete lists against the committed
+local and Kubernetes fixtures, including the modern ECDSA entries. Membership
+does not claim that every cipher can negotiate with the current RSA identity.
+
+The seven case identities, OpenSSL invocation/deadline behavior, listener ports,
+SNI values and negative/shared-SNI assertions are retained. Pure verdict and
+fixture tests do not establish a live OpenSSL or Gateway negotiation run.
+Re-evaluate the lists and parser when fixtures or supported OpenSSL output
+formats change; production cipher policy remains a separate owner.
 
 ## Out-of-scope follow-up (not done in this fix)
 
