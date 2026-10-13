@@ -13,8 +13,8 @@
 // Scenarios:
 //   1. override_data_exists: Verify that the pre-created RegionRouteOverride EdgionConfigData "data-managed"
 //      exists with correct regions via the configserver API.
-//   2. ep_resolves_pm_chain: Verify that EdgionPlugins "data-managed" is Accepted (overrideRef resolves).
-//   3. pm_validated_accepted: Verify that EdgionPlugins "data-validated" is also accepted
+//   2. ep_resolves_pm_chain: Verify that EdgionPlugins "data-managed" has current Accepted and ResolvedRefs observations for its overrideRef.
+//   3. pm_validated_accepted: Verify that EdgionPlugins "data-validated" also resolves its declared override
 //      when its pre-created RegionRouteOverride EdgionConfigData is present.
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
@@ -22,6 +22,48 @@ use crate::suites::status::helpers::controller_local_conditions;
 use std::time::Instant;
 
 const PM_MANAGED_NS: &str = "edgion-default";
+
+fn validate_overlay_resolution(resource: &serde_json::Value, expected: &str) -> Result<(), &'static str> {
+    if resource["metadata"]["namespace"] != PM_MANAGED_NS || resource["metadata"]["name"] != expected {
+        return Err("Unexpected EdgionPlugins identity");
+    }
+    let entries = resource["spec"]["requestPlugins"]
+        .as_array()
+        .ok_or("Missing request plugins")?;
+    let mut regions = entries.iter().filter(|entry| entry["type"] == "RegionRoute");
+    let entry = regions.next().ok_or("Missing RegionRoute entry")?;
+    if regions.next().is_some() {
+        return Err("Ambiguous RegionRoute entries");
+    }
+    match entry.get("enable") {
+        None | Some(serde_json::Value::Null) | Some(serde_json::Value::Bool(true)) => {}
+        _ => return Err("RegionRoute entry is not enabled"),
+    }
+    let reference = &entry["config"]["overrideRef"];
+    let namespace = match reference.get("namespace") {
+        None | Some(serde_json::Value::Null) => PM_MANAGED_NS,
+        Some(value) => value.as_str().ok_or("Invalid override namespace")?,
+    };
+    if reference["name"] != expected || namespace != PM_MANAGED_NS {
+        return Err("Unexpected RegionRoute override reference");
+    }
+    let generation = match resource["metadata"].get("generation") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(value) => Some(value.as_i64().ok_or("Invalid resource generation")?),
+    };
+    let conditions = controller_local_conditions(&resource["status"]).ok_or("Missing Controller conditions")?;
+    for kind in ["Accepted", "ResolvedRefs"] {
+        let mut matching = conditions.iter().filter(|condition| condition["type"] == kind);
+        let condition = matching.next().ok_or("Missing Accepted or ResolvedRefs condition")?;
+        if matching.next().is_some() || condition["status"] != "True" {
+            return Err("Accepted and ResolvedRefs must each be True");
+        }
+        if generation.is_some_and(|value| condition["observedGeneration"].as_i64() != Some(value)) {
+            return Err("Stale Accepted or ResolvedRefs observation");
+        }
+    }
+    Ok(())
+}
 
 pub struct EdgionConfigDataManagedTestSuite;
 
@@ -134,12 +176,12 @@ impl EdgionConfigDataManagedTestSuite {
     // Test 2: ep_resolves_pm_chain
     // =========================================================================
 
-    /// Verify that EdgionPlugins "data-managed" is processed successfully (Accepted condition).
-    /// The overrideRef must resolve to the pre-created RegionRouteOverride EdgionConfigData for the EP to be accepted.
+    /// Verify the declared override edge and current Accepted/ResolvedRefs observations.
+    /// Structural acceptance alone permits a valid base with an unresolved overlay.
     fn ep_resolves_pm_chain() -> TestCase {
         TestCase::new(
             "ep_resolves_pm_chain",
-            "EdgionPlugins 'data-managed' is Accepted after resolving overrideRef to RegionRouteOverride EdgionConfigData",
+            "EdgionPlugins 'data-managed' has Accepted=True and ResolvedRefs=True for its declared override",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -160,39 +202,23 @@ impl EdgionConfigDataManagedTestSuite {
                         }
 
                         match req.send().await {
-                            Ok(resp) if resp.status().is_success() => {
-                                match resp.json::<serde_json::Value>().await {
-                                    Ok(body) if body["success"].as_bool().unwrap_or(false) => {
-                                        let conditions = controller_local_conditions(&body["data"]["status"]);
-                                        if let Some(arr) = conditions {
-                                            let is_accepted = arr.iter().any(|c| {
-                                                c["type"].as_str() == Some("Accepted")
-                                                    && c["status"].as_str() == Some("True")
-                                            });
-                                            if is_accepted {
-                                                accepted = true;
-                                                break;
-                                            } else {
-                                                last_err = format!(
-                                                    "EdgionPlugins found but Accepted condition not True: {:?}",
-                                                    arr
-                                                );
-                                            }
-                                        } else {
-                                            // No conditions yet — resource may still be processing
-                                            last_err =
-                                                "EdgionPlugins found but status.conditions not present yet".to_string();
+                            Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
+                                Ok(body) if body["success"].as_bool().unwrap_or(false) => {
+                                    match validate_overlay_resolution(&body["data"], "data-managed") {
+                                        Ok(()) => {
+                                            accepted = true;
+                                            break;
                                         }
-                                    }
-                                    Ok(body) => {
-                                        last_err =
-                                            format!("API error: {}", body["error"].as_str().unwrap_or("unknown"));
-                                    }
-                                    Err(e) => {
-                                        last_err = format!("JSON parse error: {}", e);
+                                        Err(error) => last_err = error.to_string(),
                                     }
                                 }
-                            }
+                                Ok(body) => {
+                                    last_err = format!("API error: {}", body["error"].as_str().unwrap_or("unknown"));
+                                }
+                                Err(e) => {
+                                    last_err = format!("JSON parse error: {}", e);
+                                }
+                            },
                             Ok(resp) => {
                                 last_err = format!("HTTP {}", resp.status());
                             }
@@ -213,7 +239,7 @@ impl EdgionConfigDataManagedTestSuite {
                         TestResult::failed(
                             start.elapsed(),
                             format!(
-                                "EdgionPlugins 'data-managed' not Accepted within timeout. Last error: {}",
+                                "EdgionPlugins 'data-managed' override not resolved within timeout. Last error: {}",
                                 last_err
                             ),
                         )
@@ -227,12 +253,12 @@ impl EdgionConfigDataManagedTestSuite {
     // Test 3: pm_validated_accepted
     // =========================================================================
 
-    /// Verify that EdgionPlugins "data-validated" is also accepted when its pre-created
+    /// Verify that EdgionPlugins "data-validated" also resolves its declared override when its pre-created
     /// RegionRouteOverride EdgionConfigData "data-validated" is present.
     fn pm_validated_accepted() -> TestCase {
         TestCase::new(
             "pm_validated_accepted",
-            "EdgionPlugins 'data-validated' is Accepted with pre-created Service PM present",
+            "EdgionPlugins 'data-validated' has Accepted=True and ResolvedRefs=True for its declared override",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -290,24 +316,12 @@ impl EdgionConfigDataManagedTestSuite {
                         match req.send().await {
                             Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
                                 Ok(body) if body["success"].as_bool().unwrap_or(false) => {
-                                    let conditions = controller_local_conditions(&body["data"]["status"]);
-                                    if let Some(arr) = conditions {
-                                        let is_accepted = arr.iter().any(|c| {
-                                            c["type"].as_str() == Some("Accepted")
-                                                && c["status"].as_str() == Some("True")
-                                        });
-                                        if is_accepted {
+                                    match validate_overlay_resolution(&body["data"], "data-validated") {
+                                        Ok(()) => {
                                             accepted = true;
                                             break;
-                                        } else {
-                                            last_err = format!(
-                                                "EdgionPlugins found but Accepted condition not True: {:?}",
-                                                arr
-                                            );
                                         }
-                                    } else {
-                                        last_err =
-                                            "EdgionPlugins found but status.conditions not present yet".to_string();
+                                        Err(error) => last_err = error.to_string(),
                                     }
                                 }
                                 Ok(body) => {
@@ -338,7 +352,7 @@ impl EdgionConfigDataManagedTestSuite {
                         TestResult::failed(
                             start.elapsed(),
                             format!(
-                                "EdgionPlugins 'data-validated' not Accepted within timeout. Last error: {}",
+                                "EdgionPlugins 'data-validated' override not resolved within timeout. Last error: {}",
                                 last_err
                             ),
                         )
@@ -360,8 +374,67 @@ impl TestSuite for EdgionConfigDataManagedTestSuite {
             Self::override_data_exists(),
             // Test 2: EdgionPlugins resolves overrideRef and is accepted
             Self::ep_resolves_pm_chain(),
-            // Test 3: data-validated EdgionPlugins is also accepted with its pre-created RegionRouteOverride EdgionConfigData
+            // Test 3: data-validated EdgionPlugins also resolves its declared override with its pre-created RegionRouteOverride EdgionConfigData
             Self::pm_validated_accepted(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod overlay_resolution_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn healthy() -> serde_json::Value {
+        json!({"metadata": {"namespace": PM_MANAGED_NS, "name": "data-managed"},
+            "spec": {"requestPlugins": [{"type": "RegionRoute", "config": {"overrideRef": {"name": "data-managed"}}}]},
+            "status": {"conditions": [{"type": "Accepted", "status": "True"}, {"type": "ResolvedRefs", "status": "True"}]}})
+    }
+
+    #[test]
+    fn overlay_resolution_accepts_native_and_current_owned_observations() {
+        let mut resource = healthy();
+        assert!(validate_overlay_resolution(&resource, "data-managed").is_ok());
+        resource["metadata"]["generation"] = json!(3);
+        for condition in resource["status"]["conditions"].as_array_mut().unwrap() {
+            condition["observedGeneration"] = json!(3);
+        }
+        let native = resource["status"].clone();
+        resource["status"] = json!({"controllers": [
+            {"controllerName": "foreign/controller", "status": {"conditions": []}},
+            {"controllerName": "edgion.io/gateway-controller", "status": native}
+        ]});
+        assert!(validate_overlay_resolution(&resource, "data-managed").is_ok());
+        resource["status"]["controllers"][1]["status"]["conditions"][1]["observedGeneration"] = json!(2);
+        assert!(validate_overlay_resolution(&resource, "data-managed").is_err());
+    }
+
+    #[test]
+    fn overlay_resolution_rejects_accepted_but_unproved_edges() {
+        for (pointer, value) in [
+            ("/status/conditions/1/status", json!("False")),
+            ("/status/conditions/0/status", json!("Unknown")),
+            ("/status/conditions", json!([])),
+            (
+                "/spec/requestPlugins/0/config/overrideRef/name",
+                json!("missing-target"),
+            ),
+            ("/metadata/namespace", json!("wrong-namespace")),
+        ] {
+            let mut resource = healthy();
+            *resource.pointer_mut(pointer).unwrap() = value;
+            assert!(validate_overlay_resolution(&resource, "data-managed").is_err());
+        }
+        let mut resource = healthy();
+        resource["spec"]["requestPlugins"][0]["enable"] = json!(false);
+        assert!(validate_overlay_resolution(&resource, "data-managed").is_err());
+        let mut resource = healthy();
+        resource["spec"]["requestPlugins"][0]["config"]["overrideRef"]["namespace"] = json!(17);
+        assert!(validate_overlay_resolution(&resource, "data-managed").is_err());
+        for generation in [json!("bad"), json!(4)] {
+            let mut resource = healthy();
+            resource["metadata"]["generation"] = generation;
+            assert!(validate_overlay_resolution(&resource, "data-managed").is_err());
+        }
     }
 }

@@ -178,3 +178,20 @@ they compare the complete stored spec and version behavior. Rejected invalid-tar
 and idempotent-invalid-table commands return 422; missing/wrong-type/table-region
 cases return 404. All rejected cases preserve stored bytes, including the version.
 These tests cover the storage command boundary, not new Gateway traffic behavior.
+
+
+## Managed overlay integration evidence (ARCH-355)
+
+The two managed-overlay plugin cases verify the actual enabled RegionRoute
+`overrideRef` identity as well as Controller-local Accepted=True and
+ResolvedRefs=True. When the resource supplies a generation, both observations
+must match it; generation-less native filesystem/etcd status remains supported.
+Missing, malformed, stale or unresolved observations keep the existing bounded
+poll unsatisfied. Structural acceptance alone permits safe base fallback and
+cannot prove the overlay edge.
+
+Pure predicate tests cover native and partitioned status, unresolved or
+mistargeted references, disabled entries, stale/missing conditions, and malformed
+identity/generation inputs. Existing ConfigData presence/type checks and polling
+IO behavior remain unchanged. These checks do not establish a live managed-overlay
+or data-plane acceptance run.
