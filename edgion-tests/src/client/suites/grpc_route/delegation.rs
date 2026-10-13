@@ -21,10 +21,11 @@
 // - status: parent gets PartiallyInvalid=True naming the dropped out-of-scope child rule while
 //   ResolvedRefs stays True; child gets Accepted=True for its kind:GRPCRoute reverse-lock parentRef
 
+use crate::access_log_client::{trace_id_for_marker, traceparent_for_marker, AccessLogEntry};
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use crate::suites::status::helpers as status_helpers;
 use async_trait::async_trait;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use super::test::test_service_client::TestServiceClient;
 use super::test::{HelloRequest, HelloResponse, NumberRequest};
@@ -47,6 +48,18 @@ fn make_endpoint(ctx: &TestContext, hostname: &str, port: u16) -> Result<tonic::
         .parse()
         .map_err(|e| format!("Invalid origin URI: {e}"))?;
     Ok(endpoint.origin(origin_uri))
+}
+
+fn verify_delegation_rejection(code: tonic::Code, entry: &AccessLogEntry, trace_id: &str) -> Result<(), String> {
+    if code != tonic::Code::Unimplemented {
+        return Err("Expected UNIMPLEMENTED for the out-of-scope service".to_string());
+    }
+    if entry.get_nested_str("request_info.trace_id") != Some(trace_id)
+        || !entry.has_diagnostic("error", "RouteNotFound")
+    {
+        return Err("Missing trace-correlated Gateway RouteNotFound evidence".to_string());
+    }
+    Ok(())
 }
 
 pub struct GrpcDelegationTestSuite;
@@ -114,45 +127,74 @@ impl GrpcDelegationTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let endpoint = match make_endpoint(&ctx, HOST, ctx.grpc_port) {
-                        Ok(ep) => ep,
-                        Err(e) => return TestResult::failed(start.elapsed(), e),
+                    let marker = format!("grpc-delegation-denial-{}", uuid::Uuid::new_v4());
+                    let trace_id = trace_id_for_marker(&marker);
+                    let access_logs = ctx.access_log_client();
+                    // Reserve time for terminal observation and cleanup within the case deadline.
+                    let operation = tokio::time::timeout(Duration::from_secs(15), async {
+                        let endpoint = make_endpoint(&ctx, HOST, ctx.grpc_port)?;
+                        let channel = endpoint
+                            .connect()
+                            .await
+                            .map_err(|_| "Failed to connect delegation probe".to_string())?;
+                        let mut grpc = tonic::client::Grpc::new(channel);
+                        grpc.ready()
+                            .await
+                            .map_err(|_| "Delegation probe service was not ready".to_string())?;
+                        // This service is deliberately absent from the backend. Its status alone
+                        // cannot establish that the Gateway rejected the out-of-scope rule.
+                        let codec = tonic::codec::ProstCodec::<HelloRequest, HelloResponse>::default();
+                        let path = http::uri::PathAndQuery::from_static("/test.OtherService/Whatever");
+                        let mut req = tonic::Request::new(HelloRequest {
+                            name: "probe".to_string(),
+                        });
+                        req.metadata_mut().insert(
+                            "traceparent",
+                            traceparent_for_marker(&marker)
+                                .parse()
+                                .map_err(|_| "Invalid probe traceparent".to_string())?,
+                        );
+                        req.metadata_mut()
+                            .insert("access_log", "test_store".parse().expect("static metadata"));
+                        Ok::<_, String>(match grpc.unary(req, path, codec).await {
+                            Ok(_) => tonic::Code::Ok,
+                            Err(status) => status.code(),
+                        })
+                    })
+                    .await;
+                    let outcome = match operation {
+                        Ok(Ok(code)) => match tokio::time::timeout(
+                            Duration::from_secs(5),
+                            access_logs.get_access_log_with_retry(&marker, 20, 100),
+                        )
+                        .await
+                        {
+                            Ok(Ok(entry)) => verify_delegation_rejection(code, &entry, &trace_id),
+                            _ => Err("Failed to observe delegation probe access log".to_string()),
+                        },
+                        Ok(Err(error)) => Err(error),
+                        Err(_) => Err("Delegation probe timed out".to_string()),
                     };
-                    let channel = match endpoint.connect().await {
-                        Ok(c) => c,
-                        Err(e) => return TestResult::failed(start.elapsed(), format!("Failed to connect: {e}")),
-                    };
-                    let mut grpc = tonic::client::Grpc::new(channel);
-                    if let Err(e) = grpc.ready().await {
-                        return TestResult::failed(start.elapsed(), format!("service was not ready: {e}"));
-                    }
-                    // No generated client exists for "test.OtherService" (it isn't a real
-                    // service the test gRPC server implements — the point is that the
-                    // *route* must never forward to it), so this builds the unary call
-                    // directly against the raw path, reusing HelloRequest/HelloResponse
-                    // as a stand-in codec shape; the call is expected to be rejected by
-                    // the gateway's routing layer before any backend is contacted.
-                    let codec = tonic::codec::ProstCodec::<HelloRequest, HelloResponse>::default();
-                    let path = http::uri::PathAndQuery::from_static("/test.OtherService/Whatever");
-                    let req = tonic::Request::new(HelloRequest {
-                        name: "probe".to_string(),
-                    });
-                    match grpc.unary(req, path, codec).await {
-                        Ok(_) => TestResult::failed(
+                    // Only delete this probe's entry; a late terminal entry after a timeout
+                    // or outer cancellation is outside this bounded cleanup attempt.
+                    let cleanup_ok = matches!(
+                        tokio::time::timeout(Duration::from_secs(5), access_logs.delete_access_log(&marker)).await,
+                        Ok(Ok(true))
+                    );
+                    match (outcome, cleanup_ok) {
+                        (Ok(()), true) => TestResult::passed_with_message(
                             start.elapsed(),
-                            "expected UNIMPLEMENTED for an out-of-scope service, but the call succeeded".to_string(),
+                            "Gateway rejected the out-of-scope service with RouteNotFound and UNIMPLEMENTED"
+                                .to_string(),
                         ),
-                        Err(status) if status.code() == tonic::Code::Unimplemented => TestResult::passed_with_message(
+                        (Err(error), true) => TestResult::failed(start.elapsed(), error),
+                        (Ok(()), false) => TestResult::failed(
                             start.elapsed(),
-                            format!("correctly UNIMPLEMENTED: {}", status.message()),
+                            "Failed to clean up delegation probe access log".to_string(),
                         ),
-                        Err(status) => TestResult::failed(
+                        (Err(error), false) => TestResult::failed(
                             start.elapsed(),
-                            format!(
-                                "expected UNIMPLEMENTED(12), got {:?}: {}",
-                                status.code(),
-                                status.message()
-                            ),
+                            format!("{error}; failed to clean up delegation probe access log"),
                         ),
                     }
                 })
@@ -422,5 +464,26 @@ impl TestSuite for GrpcDelegationDynamicUpdateTestSuite {
     }
     fn test_cases(&self) -> Vec<TestCase> {
         vec![Self::stream_numbers_routes_say_hello_missing()]
+    }
+}
+
+#[cfg(test)]
+mod rejection_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn delegation_rejection_requires_correlated_gateway_evidence() {
+        let trace = trace_id_for_marker("delegation-verdict");
+        let mut entry = AccessLogEntry {
+            data: json!({"request_info": {"trace_id": trace}, "diagnostics": []}),
+        };
+        assert!(verify_delegation_rejection(tonic::Code::Unimplemented, &entry, &trace).is_err());
+        entry.data["diagnostics"] = json!([{"kind": "error", "code": "RouteNotFound"}]);
+        assert!(verify_delegation_rejection(tonic::Code::Unimplemented, &entry, &trace).is_ok());
+        assert!(verify_delegation_rejection(tonic::Code::Unavailable, &entry, &trace).is_err());
+        assert!(verify_delegation_rejection(tonic::Code::Unimplemented, &entry, "another-trace").is_err());
+        entry.data["diagnostics"] = json!([{"kind": "info", "code": "RouteNotFound"}]);
+        assert!(verify_delegation_rejection(tonic::Code::Unimplemented, &entry, &trace).is_err());
     }
 }

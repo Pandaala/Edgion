@@ -146,3 +146,19 @@ helpers are outside this contract and remain unchanged.
 - `Astra-doc-01`: corrected the over-broad helper-level HTTP fallback claim;
   request-entry policy remains conditional on protocol and whether the current
   Listener's published gRPC route table contains candidates.
+
+## Delegation rejection attribution (ARCH-343)
+
+The static delegation probe for `/test.OtherService/Whatever` requires both
+UNIMPLEMENTED and the same request's canonical `error/RouteNotFound` access-log
+entry. Backend status 12 alone is not Gateway routing evidence. The probe sends
+a unique W3C traceparent and uses the existing integration test-store projection
+and authenticated client; no additional production observability is introduced.
+
+Connection/readiness/RPC work is bounded to 15 seconds, complete log polling to
+five seconds, and deletion of only this marker to five seconds, within the
+existing 30-second case deadline. Cleanup failure fails the case; cleanup is a
+bounded attempt and cannot guarantee removal after outer cancellation or a late
+terminal entry. Pure verdict tests distinguish wrong trace, missing diagnostic,
+wrong diagnostic kind and unrelated RPC status from the expected rejection.
+These tests do not establish live delegation acceptance.
