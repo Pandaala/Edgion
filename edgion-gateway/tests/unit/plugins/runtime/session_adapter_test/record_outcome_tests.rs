@@ -1588,6 +1588,33 @@ async fn bodyless_request_body_mutations_install_replay_owner() {
     assert_eq!(ctx.request_body.modified_len_for_framing().unwrap(), Some(1));
 }
 
+/// ForwardAuth's body accessor observes the latest committed generation, in
+/// memory and after spill, rather than keeping the entry payload for auth.
+#[tokio::test]
+async fn auth_body_read_observes_committed_rewrite() {
+    for memory_limit in [64, 1] {
+        let mut session = test_session_with_body(b"entry body").await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.body_declared = Some(true);
+        ctx.request_info.in_request_body_stage = true;
+        ctx.request_body_config.memory_buffer_bytes = memory_limit;
+        ctx.request_body_config.max_body_size_bytes = 64;
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        assert_eq!(
+            adapter.read_request_body(None).await.unwrap(),
+            Bytes::from_static(b"entry body")
+        );
+        adapter
+            .request_body_replace_literal(Bytes::from_static(b"entry"), Bytes::from_static(b"rewritten"), 64)
+            .await
+            .unwrap();
+        assert_eq!(
+            adapter.read_request_body(None).await.unwrap(),
+            Bytes::from_static(b"rewritten body")
+        );
+    }
+}
+
 /// A late consumer may reuse an existing request-scoped body cache, but
 /// may not initiate capture after the request-body service window.
 #[tokio::test]

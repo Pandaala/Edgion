@@ -1,6 +1,6 @@
 //! ForwardAuth plugin configuration.
 //!
-//! Sends the original request metadata to an external authentication service.
+//! Sends execution-time request metadata to an external authentication service.
 //! If the auth service responds with 2xx, the request is forwarded to upstream.
 //! Otherwise, the auth service's response is returned to the client.
 
@@ -67,7 +67,9 @@ fn default_forward_auth_request() -> OutboundRequestSpec {
 
 /// ForwardAuth plugin configuration.
 ///
-/// Sends the original request metadata to an external authentication service.
+/// Sends execution-time request metadata to an external authentication service.
+/// Earlier rewrites are visible in the automatic X-Forwarded-* headers, which
+/// override configured same-name headers regardless of forwardAll.
 /// If the auth service responds with 2xx, the request is forwarded to upstream.
 /// Otherwise, the auth service's response is returned to the client.
 ///
@@ -116,10 +118,12 @@ pub struct ForwardAuthConfig {
     /// and cookies are forwarded to the auth service.
     ///
     /// Default: forward all request headers (forward_auth default behavior).
+    /// Omitted method/path use entry values; explicit templates may read current
+    /// values. Ordinary headers are read at execution time, before automatic metadata.
     #[serde(default = "default_forward_auth_request")]
     pub request: OutboundRequestSpec,
 
-    /// Forward the complete original request body to the authentication
+    /// Forward the complete current committed request body to the authentication
     /// service. The plugin entry must also declare its body policy and limit.
     #[serde(default)]
     pub forward_body: bool,

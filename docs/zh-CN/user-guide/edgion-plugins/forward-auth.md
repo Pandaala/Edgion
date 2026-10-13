@@ -93,7 +93,7 @@ spec:
 |------|------|--------|------|
 | `target` | object | 必填 | Kubernetes Service 后端：`{name, namespace, port}`。端口必填；namespace 默认为插件所在命名空间。 |
 | `timeoutMs` | integer | `5000` | 请求超时（毫秒）。 |
-| `forwardBody` | boolean | `false` | 将缓冲后的入站请求 body 原样转发给鉴权服务。不能与 `request.body` 同时配置。启用时，网关移除 `Transfer-Encoding`，并将出站 `Content-Length` 设置为缓冲 body 的实际字节数。 |
+| `forwardBody` | boolean | `false` | 将当前已提交的缓冲请求 body 原样转发给鉴权服务，包括此前插件的 body 重写。不能与 `request.body` 同时配置。启用时，网关移除 `Transfer-Encoding`，并将出站 `Content-Length` 设置为该 body 的实际字节数。 |
 | `timeoutMsTemplate` | string | `null` | 渲染单次请求超时的模板，如 `"${ctx:desired_timeout_ms}"`。**只接受 `${ctx:...}`、`${remoteIp}` 以及匹配路由变量**——客户端可控的来源（`header`/`query`/`cookie`/`path`/`method`/`uri`）会在准入时被拒绝，因为它会让攻击者把鉴权服务的超时压得足够低，从而强制每次调用都超时。渲染结果非数字、为空或低于下限（< 50 毫秒）时回退到 `timeoutMs`；无论如何，渲染值都会被限幅到 60000 毫秒。在准入时编译并校验。 |
 | `success` | object | `null` | 成功判定条件：`statusCodes`（数组，省略或非空时任意 2xx；显式的空列表会在准入时被拒绝）加上可选的 `body` 断言（`pointer` + **恰好一个** `equals`/`notEquals`/`exists`/`in`，在准入时强制校验），按与运算组合。**取代已移除的 `successStatusCodes`**——参见上方破坏性变更说明，以及 [运维指南 → 连接器 → Success](../../ops-guide/infrastructure/connectors.md#成功判定-success) 中的完整 schema、严格类型规则、指针缺失语义，以及 `body` 设置时 `maxResponseBytes >= 4096` 的要求。 |
 | `statusOnError` | integer | `503` | 鉴权服务不可达时（连接失败、超时、服务宕机）返回的状态码，范围 200–599。总是失败关闭，不存在 fail-open 模式。 |
@@ -106,10 +106,10 @@ spec:
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `request.path` | object | `null` | 覆盖鉴权请求路径。`{ template: "/verify" }`。省略则复用入站路径。 |
-| `request.method` | object | `null` | 覆盖 HTTP 方法。`{ template: "GET" }`。省略则复用入站方法。 |
-| `request.headers.forwardAll` | boolean | **`true`** | 转发原始请求中所有非 hop-by-hop、非消息分帧请求头。这是 forward_auth 的默认值。 |
-| `request.headers.origin` | array | `[]` | 从原始请求选择性转发的请求头列表。每项：`{ name, presence }`。presence 策略：`skipIfMissing`（默认）、`required`、`warnIfMissing`。`Content-Length` 和 `Transfer-Encoding` 由代理管理，配置时会被拒绝。 |
+| `request.path` | object | `null` | 覆盖鉴权请求路径。`{ template: "/verify" }`。省略则复用冻结的入口路径；`${path}` 模板读取当前路径。 |
+| `request.method` | object | `null` | 覆盖鉴权 HTTP 方法。`{ template: "GET" }`。省略则复用冻结的入口方法；`${method}` 模板读取当前方法。 |
+| `request.headers.forwardAll` | boolean | **`true`** | 转发执行时请求中所有符合过滤规则的普通请求头。这是 forward_auth 的默认值；自动元数据另行注入。 |
+| `request.headers.origin` | array | `[]` | 从执行时请求选择性转发的请求头列表。每项：`{ name, presence }`。presence 策略：`skipIfMissing`（默认）、`required`、`warnIfMissing`。`Content-Length` 和 `Transfer-Encoding` 由代理管理，配置时会被拒绝。 |
 | `request.headers.custom` | array | `[]` | 从配置或 Secret 注入的自定义请求头。字面量：`{ name, value: "..." }`；模板：`{ name, template: "..." }`（可包含 `${secretRef:ns/name:key}`）。`Content-Length` 和 `Transfer-Encoding` 由代理管理，配置时会被拒绝。 |
 
 缺失的 `warnIfMissing` 原始字段会被省略，每次鉴权调用最多合并写入一条 `warn outbound field missing` PluginLog 记录，不包含字段名或值。重试不会重复记录。`skipIfMissing` 仍保持静默，`required` 仍使调用失败。失败时的告警保留与日志容量边界见[存在性策略](../../ops-guide/infrastructure/connectors.md#存在性策略)。
@@ -127,7 +127,7 @@ spec:
 
 ### `request.headers.forwardAll` 默认语义
 
-`ForwardAuthConfig` 默认将 `request.headers.forwardAll` 设为 `true`——鉴权服务将收到原始请求中**所有**非 hop-by-hop、非消息分帧请求头（包括 `Authorization`、`Cookie`、自定义头等）。这保留了经典的"透明透传"行为，并与 Traefik / Envoy 的默认策略一致。
+`ForwardAuthConfig` 默认将 `request.headers.forwardAll` 设为 `true`——鉴权服务将收到执行时请求中**所有符合下方过滤规则**的请求头（包括 `Authorization`、`Cookie`、自定义头等）。这保留了经典的"透明透传"行为，并与 Traefik / Envoy 的默认策略一致。四个自动元数据头会在最后覆盖同名值。
 
 如需选择性转发，请将 `forwardAll` 显式设为 `false`，并在 `request.headers.origin` 中列举所需请求头。
 
@@ -137,10 +137,29 @@ spec:
 
 | Header | 说明 | 示例 |
 |--------|------|------|
-| `X-Forwarded-Host` | 原始请求 Host | `api.example.com` |
-| `X-Forwarded-Uri` | 原始请求 URI 路径 | `/api/v1/users` |
-| `X-Forwarded-Method` | 原始请求 HTTP 方法 | `POST` |
-| `X-Forwarded-Query` | 原始请求 Query 参数 | `page=1&size=20` |
+| `X-Forwarded-Host` | 执行时请求的 Host 头，缺失时为空 | `api.example.com` |
+| `X-Forwarded-Uri` | 执行时请求的规范化路径，不包含 query | `/api/v1/users` |
+| `X-Forwarded-Method` | 执行时请求的 HTTP 方法 | `POST` |
+| `X-Forwarded-Query` | 执行时请求的原始 query 字符串，不含 `?`；缺失时为空 | `page=1&size=20` |
+
+### 鉴权上下文与鉴权 HTTP 调用
+
+ForwardAuth 鉴权的是插件执行时的请求。此前的可信重写会出现在元数据、普通转发头和 `forwardBody` 中；这些值不是客户端入口请求的完整快照。HTTPRoute 内联 `ExternalAuth` 使用同一实现，具有相同边界。
+
+| 数据 | 身份与来源 |
+|------|------------|
+| 四个自动 `X-Forwarded-*` 头 | 执行时的当前 Host、规范化路径、方法和原始 query 字符串 |
+| 转发的普通头与 cookie | 执行时请求中的值，受各自转发配置控制 |
+| `forwardBody: true` | 当前已提交的完整请求体，受统一请求 body 上限约束；没有入口 body 副本 |
+| 省略的鉴权调用 method/path | 冻结的入口方法和路径；不是自动元数据的来源 |
+| 显式配置的鉴权调用 method/path | 按字面量或模板构建；`${method}`、`${path}` 读取当前值 |
+| `request.body` | 配置生成的鉴权调用 body，与 `forwardBody` 互斥 |
+
+例如，入口为 `GET /users/42?verbose=1`、Host 为 `entry.example.com`，在 ForwardAuth 前重写为 `POST /graphql?mode=rest`、Host 为 `rewritten.example.com`。四个自动头分别为 `rewritten.example.com`、`/graphql`、`POST`、`mode=rest`。未重写时则分别为 `entry.example.com`、`/users/42`、`GET`、`verbose=1`。鉴权调用自身仍可配置为 `GET /verify`；省略其 method/path 时则使用入口 `GET /users/42`。调用自身的 query 参数由 `request.args` 控制。
+
+普通头先按 `forwardAll`、`origin`、`custom` 顺序构建，再插入四个自动元数据头。因此，客户端伪造头、`origin` 转发值和 `custom` 同名值都不能替换自动元数据。`forwardAll: false` 只限制普通头，不关闭自动注入；没有元数据注入开关。`required` 等普通字段构建规则仍先执行，不能通过自动注入补足缺失的 required 字段。
+
+选择执行时契约是为了让鉴权服务检查已经完成前置适配的请求。需要按客户端入口对象鉴权时，应将鉴权放在相关重写之前。鉴权后的重写仍由配置顺序控制；该契约不冻结请求，也不承诺验证最终上游请求。
 
 ### Hop-by-Hop 头过滤
 
@@ -204,7 +223,7 @@ spec:
             - X-User-Email
 ```
 
-所有原始请求头（hop-by-hop 除外）被转发给鉴权服务。鉴权成功后，`X-User-ID`、`X-User-Role`、`X-User-Email` 从鉴权响应复制到上游请求。
+执行时请求中符合过滤规则的头被转发给鉴权服务，四个自动元数据头最后注入。鉴权成功后，`X-User-ID`、`X-User-Role`、`X-User-Email` 从鉴权响应复制到上游请求。
 
 ### 示例 2：选择性转发 Header
 
@@ -241,7 +260,7 @@ spec:
           clientHeaders:   [WWW-Authenticate, X-Auth-Error-Code]
 ```
 
-仅转发 `Authorization`、`Cookie`、`X-Request-ID` 给鉴权服务。使用 POST 方法、5 秒超时。200 和 204 视为成功。鉴权失败时将 `WWW-Authenticate` 和 `X-Auth-Error-Code` 返回给客户端。
+普通请求头仅转发 `Authorization`、`Cookie`、`X-Request-ID`，另行注入四个自动元数据头。使用 POST 方法、5 秒超时。200 和 204 视为成功。鉴权失败时将 `WWW-Authenticate` 和 `X-Auth-Error-Code` 返回给客户端。
 
 ### 示例 3：Secret 注入
 
@@ -324,10 +343,10 @@ spec:
 ### 接口约定
 
 **网关发送给鉴权服务的请求：**
-- 方法：`request.method.template`（默认：复用入站方法）
-- 路径：`request.path.template`
-- Header：原始请求头（或选择性子集）+ `X-Forwarded-*` 元数据 + `request.headers.custom`
-- Body：默认不发送；`forwardBody: true` 时发送完整的缓冲入站 body
+- 方法：`request.method.template`（默认：复用冻结的入口方法）
+- 路径：`request.path.template`（默认：复用冻结的入口路径）
+- Header：当前请求头（或选择性子集），随后应用 `request.headers.custom`，最后由四个自动 `X-Forwarded-*` 元数据头覆盖同名值
+- Body：默认不发送；`forwardBody: true` 时发送当前已提交的完整缓冲 body，也可单独配置 `request.body`
 
 **鉴权服务返回给网关的响应：**
 - **成功**（满足 `success` 判定条件——状态码在 `success.statusCodes`，默认任意 2xx，与 `success.body` 断言按与运算组合）：鉴权通过
@@ -368,7 +387,7 @@ func authHandler(w http.ResponseWriter, r *http.Request) {
 1. **backendRef 目标**：`target` 字段是 Kubernetes Service 引用（`name`/`namespace`/`port`），不是 URI。网关通过 EndpointSlice 在调用时动态解析 Pod endpoints。
 2. **SSRF 防护**：每个解析出的 Pod IP 在拨号前经 `validate_endpoint_backend_addr` 校验，回环地址和链路本地地址会被拒绝。
 3. **不跟随重定向**：HTTP Client 不自动跟随重定向。鉴权服务返回 301/302 会被视为鉴权失败。
-4. **可选 Body 转发**：默认不向鉴权服务发送原始请求 body。仅在鉴权决策确实需要时设置 `forwardBody: true`；这会启用请求缓冲，并受网关统一的 body 大小上限约束。
+4. **可选 Body 转发**：默认不向鉴权服务发送请求 body。仅在鉴权决策确实需要时设置 `forwardBody: true`；这会读取当前已提交的 body，启用请求缓冲，并受网关统一的 body 大小上限约束。
 5. **热重载**：更新 `EdgionPlugins` 资源后自动热重载，无需重启网关。
 6. **forwardAll 默认值**：`request.headers.forwardAll` 对 forward_auth 默认为 `true`（与 webhook 插件默认 `false` 不同）。
 
@@ -378,7 +397,7 @@ func authHandler(w http.ResponseWriter, r *http.Request) {
 
 A:
 - **`forwardAll: true`（默认）**：鉴权服务可使用任意请求头，配置简单。适合内部鉴权服务或安全要求不高的场景。
-- **`forwardAll: false` + `origin` 列表**：仅传递必要的头，减少数据传输，更安全。适合外部鉴权服务或需要最小权限原则的场景。
+- **`forwardAll: false` + `origin` 列表**：普通头仅传递列举的必要值，另行注入四个自动元数据头。适合外部鉴权服务或需要最小权限原则的场景。
 
 ### Q: Cookie 如何转发？
 

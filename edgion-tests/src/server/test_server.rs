@@ -24,6 +24,7 @@ use tracing::{error, info};
 // module tree because it is a self-contained protocol harness (raw H1, raw H2,
 // a global event log) rather than another axum endpoint.
 mod ai_performance;
+mod csrf_method_boundary;
 mod l4_duplex;
 #[path = "transport/mod.rs"]
 mod transport;
@@ -917,6 +918,18 @@ fn create_echo_router(server_addr_str: String) -> Router {
         .route("/vhost-health", get(vhost_health_handler))
         .route("/multi-set-cookie", get(multi_set_cookie_handler))
         .route("/auth-header-probe", get(auth_header_probe_handler))
+        .route(
+            "/csrf-method-boundary/action",
+            get(csrf_method_boundary::action).post(csrf_method_boundary::action),
+        )
+        .route(
+            "/csrf-method-boundary/graphql",
+            axum::routing::post(csrf_method_boundary::graphql),
+        )
+        .route(
+            "/csrf-method-boundary/observation",
+            get(csrf_method_boundary::observation),
+        )
         .route("/oauth2/token", axum::routing::post(oauth2_token_handler))
         .route(
             "/webhook/resolve",

@@ -1,0 +1,39 @@
+{
+  "apiVersion": "edgion.io/v1",
+  "kind": "EdgionPlugins",
+  "metadata": {
+    "name": "csrf-boundary-global",
+    "namespace": "edgion-default"
+  },
+  "spec": {
+    "requestPlugins": [
+      {
+        "type": "Csrf",
+        "config": {
+          "secretRef": {
+            "name": "csrf-key",
+            "namespace": "edgion-default"
+          },
+          "name": "X-CSRF-Token",
+          "cookieSecure": false
+        },
+        "conditions": {
+          "run": {
+            "allOf": [
+              {
+                "type": "keyMatch",
+                "key": {
+                  "type": "header",
+                  "name": "host"
+                },
+                "regex": [
+                  "^csrf-boundary-global-"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

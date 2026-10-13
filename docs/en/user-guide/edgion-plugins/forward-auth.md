@@ -94,7 +94,7 @@ spec:
 |-------|------|---------|-------------|
 | `target` | object | required | Either a Kubernetes Service backend `{name, namespace, port}` (port required; namespace defaults to the plugin namespace), or an external URL target `{url, blockPrivate}`. The two forms are mutually exclusive. See [Target](#target). |
 | `timeoutMs` | integer | `5000` | Request timeout in milliseconds. |
-| `forwardBody` | boolean | `false` | Forward the exact buffered incoming request body to the auth service. Mutually exclusive with `request.body`. When enabled, the gateway removes `Transfer-Encoding` and sets the outbound `Content-Length` to the buffered size. |
+| `forwardBody` | boolean | `false` | Forward the exact current committed buffered request body to the auth service, including earlier plugin body rewrites. Mutually exclusive with `request.body`. When enabled, the gateway removes `Transfer-Encoding` and sets the outbound `Content-Length` to this body's size. |
 | `timeoutMsTemplate` | string | `null` | Template rendering a per-request timeout, e.g. `"${ctx:desired_timeout_ms}"`. **Only `${ctx:...}`, `${remoteIp}`, and matched-route variables are accepted** — a client-controlled source (`header`/`query`/`cookie`/`path`/`method`/`uri`) is rejected at admission, because it would let an attacker pin the auth-service deadline low enough to force every call to time out. A non-numeric, empty, or below-floor (< 50 ms) render falls back to `timeoutMs`; the rendered value is clamped to 60000 ms regardless. Compiled and validated at admission. |
 | `success` | object | `null` | Success criteria: `statusCodes` (array, omitted or present-but-non-empty → any 2xx; an explicit empty list is rejected at admission) plus optional `body` predicates (`pointer` + **exactly one** of `equals`/`notEquals`/`exists`/`in`, enforced at admission). ANDed. **Replaces the removed `successStatusCodes`** — see the breaking-change note above and [Ops guide → Connectors → Success](../../ops-guide/infrastructure/connectors.md#success) for the full schema, strict-typing rule, missing-pointer semantics, and the `maxResponseBytes >= 4096` requirement when `body` is set. |
 | `statusOnError` | integer | `503` | Status code returned when the auth service is unreachable (connection failure, timeout, service down). Range: 200–599. Always fail-close; there is no fail-open mode. |
@@ -107,10 +107,10 @@ spec:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `request.path` | object | `null` | Override the auth request path. `{ template: "/verify" }`. Omit to reuse the incoming path. |
-| `request.method` | object | `null` | Override the HTTP method. `{ template: "GET" }`. Omit to reuse the incoming method. |
-| `request.headers.forwardAll` | boolean | **`true`** | Forward all non-hop-by-hop, non-framing headers from the original request. This is the forward_auth default. |
-| `request.headers.origin` | array | `[]` | Specific headers forwarded from the original request. Each entry: `{ name, presence }`. Presence policy: `skipIfMissing` (default), `required`, `warnIfMissing`. `Content-Length` and `Transfer-Encoding` are rejected because the proxy owns outbound framing. |
+| `request.path` | object | `null` | Override the auth request path. `{ template: "/verify" }`. Omit to reuse the frozen entry path; a `${path}` template reads the current path. |
+| `request.method` | object | `null` | Override the auth HTTP method. `{ template: "GET" }`. Omit to reuse the frozen entry method; a `${method}` template reads the current method. |
+| `request.headers.forwardAll` | boolean | **`true`** | Forward all ordinary execution-time request headers that pass the filtering rules. This is the forward_auth default; automatic metadata is injected separately. |
+| `request.headers.origin` | array | `[]` | Specific headers forwarded from the execution-time request. Each entry: `{ name, presence }`. Presence policy: `skipIfMissing` (default), `required`, `warnIfMissing`. `Content-Length` and `Transfer-Encoding` are rejected because the proxy owns outbound framing. |
 | `request.headers.custom` | array | `[]` | Headers injected from config or resolved secrets. Each entry: `{ name, value: "..." }` for a literal, or `{ name, template: "..." }` for a template (may contain `${secretRef:ns/name:key}`). `Content-Length` and `Transfer-Encoding` are rejected because the proxy owns outbound framing. |
 
 Missing `warnIfMissing` origin fields are omitted and share at most one `warn outbound field missing` PluginLog entry per auth call, with no field names or values. Retries do not duplicate it. `skipIfMissing` stays silent; `required` still fails the call. See [presence policies](../../ops-guide/infrastructure/connectors.md#presence-policies) for failure and log-capacity boundaries.
@@ -128,7 +128,7 @@ Missing `warnIfMissing` origin fields are omitted and share at most one `warn ou
 
 ### `request.headers.forwardAll` Default Semantics
 
-`ForwardAuthConfig` defaults to `request.headers.forwardAll: true`. The auth service therefore receives **all** non-hop-by-hop, non-framing headers from the original request (including `Authorization`, `Cookie`, custom headers, etc.). This preserves the classic "transparent passthrough" behavior expected by most auth services and matches Traefik / Envoy defaults.
+`ForwardAuthConfig` defaults to `request.headers.forwardAll: true`. The auth service therefore receives **all execution-time request headers that pass the filtering rules below** (including `Authorization`, `Cookie`, custom headers, etc.). This preserves the classic "transparent passthrough" behavior expected by most auth services and matches Traefik / Envoy defaults. The four automatic metadata headers overwrite same-name values last.
 
 To use selective forwarding instead, explicitly set `forwardAll: false` and enumerate the headers you need in `request.headers.origin`.
 
@@ -138,10 +138,29 @@ Regardless of the `forwardAll` setting, the plugin always injects the following 
 
 | Header | Description | Example |
 |--------|-------------|---------|
-| `X-Forwarded-Host` | Original request Host | `api.example.com` |
-| `X-Forwarded-Uri` | Original request URI path | `/api/v1/users` |
-| `X-Forwarded-Method` | Original request HTTP method | `POST` |
-| `X-Forwarded-Query` | Original request query string | `page=1&size=20` |
+| `X-Forwarded-Host` | Execution-time request Host header; empty when absent | `api.example.com` |
+| `X-Forwarded-Uri` | Execution-time normalized request path, without query | `/api/v1/users` |
+| `X-Forwarded-Method` | Execution-time request HTTP method | `POST` |
+| `X-Forwarded-Query` | Execution-time raw query string, without `?`; empty when absent | `page=1&size=20` |
+
+### Authorization Context and the Auth HTTP Hop
+
+ForwardAuth authorizes the request at plugin execution time. Earlier trusted rewrites appear in the metadata, ordinary forwarded headers and `forwardBody`; these values are not a complete snapshot of the client entry request. Inline HTTPRoute `ExternalAuth` uses the same implementation and boundary.
+
+| Data | Identity and source |
+|------|---------------------|
+| Four automatic `X-Forwarded-*` headers | Current Host, normalized path, method and raw query string at execution time |
+| Forwarded ordinary headers and cookies | Execution-time request values, controlled by their respective forwarding configuration |
+| `forwardBody: true` | Complete current committed request body, subject to the shared request-body cap; no entry-body copy |
+| Omitted auth-hop method/path | Frozen entry method and path; these do not supply the automatic metadata |
+| Explicit auth-hop method/path | Built from literals or templates; `${method}` and `${path}` read current values |
+| `request.body` | Configured auth-hop body, mutually exclusive with `forwardBody` |
+
+For example, an entry `GET /users/42?verbose=1` with Host `entry.example.com` is rewritten before ForwardAuth to `POST /graphql?mode=rest` with Host `rewritten.example.com`. The four automatic headers are respectively `rewritten.example.com`, `/graphql`, `POST` and `mode=rest`. Without a rewrite they are `entry.example.com`, `/users/42`, `GET` and `verbose=1`. The auth hop itself can still be configured as `GET /verify`; omitting its method/path uses entry `GET /users/42`. The hop's own query arguments are controlled by `request.args`.
+
+Ordinary headers are built in `forwardAll`, `origin`, then `custom` order, followed by the four automatic metadata headers. Spoofed client headers, `origin` values and same-name `custom` values cannot replace the automatic metadata. `forwardAll: false` restricts ordinary headers and does not disable automatic injection; there is no metadata injection switch. Ordinary field-building rules such as `required` still run first: automatic injection does not satisfy a missing required field.
+
+The execution-time contract lets the auth service inspect a request after earlier adaptation. To authorize the client entry object, place auth before the relevant rewrites. Later rewrites remain controlled by configuration order; this contract does not freeze the request or promise verification of the final upstream request.
 
 ### Hop-by-Hop Header Filtering
 
@@ -238,7 +257,7 @@ spec:
             - X-User-Email
 ```
 
-All original request headers are forwarded to the auth service (hop-by-hop headers excluded). On auth success, `X-User-ID`, `X-User-Role`, and `X-User-Email` are copied from the auth response to the upstream request.
+Execution-time request headers that pass the filtering rules are forwarded to the auth service, with the four automatic metadata headers injected last. On auth success, `X-User-ID`, `X-User-Role`, and `X-User-Email` are copied from the auth response to the upstream request.
 
 ### Example 2: Selective Header Forwarding
 
@@ -275,7 +294,7 @@ spec:
           clientHeaders:   [WWW-Authenticate, X-Auth-Error-Code]
 ```
 
-Only `Authorization`, `Cookie`, and `X-Request-ID` are forwarded to the auth service. Uses POST with a 5-second timeout. Status codes 200 and 204 are treated as success. On failure, `WWW-Authenticate` and `X-Auth-Error-Code` are returned to the client.
+Only `Authorization`, `Cookie`, and `X-Request-ID` are forwarded as ordinary headers, with the four automatic metadata headers injected separately. Uses POST with a 5-second timeout. Status codes 200 and 204 are treated as success. On failure, `WWW-Authenticate` and `X-Auth-Error-Code` are returned to the client.
 
 ### Example 3: Secret Injection
 
@@ -358,10 +377,10 @@ spec:
 ### Interface Contract
 
 **Request from gateway to auth service:**
-- Method: `request.method.template` (default: reuse incoming method)
-- Path: `request.path.template`
-- Headers: original request headers (or a selected subset) + `X-Forwarded-*` metadata + `request.headers.custom`
-- Body: empty by default; the exact buffered incoming body when `forwardBody: true`
+- Method: `request.method.template` (default: reuse frozen entry method)
+- Path: `request.path.template` (default: reuse frozen entry path)
+- Headers: current request headers (or a selected subset), then `request.headers.custom`, then the four automatic `X-Forwarded-*` metadata headers overwrite same-name values
+- Body: empty by default; the exact current committed buffered body when `forwardBody: true`, or a separately configured `request.body`
 
 **Response from auth service to gateway:**
 - **Success** (matches `success` criteria — status in `success.statusCodes`, default any 2xx, ANDed with any `success.body` predicates): authentication passed
@@ -402,7 +421,7 @@ func authHandler(w http.ResponseWriter, r *http.Request) {
 1. **Two target forms**: `target` is either a Kubernetes Service reference (`name`/`namespace`/`port`) or an external URL (`url`/`blockPrivate`); see [Target](#target). The gateway resolves pod endpoints at call time via EndpointSlice for a Service target.
 2. **SSRF guard**: a Service target's resolved pod IPs are validated by `validate_endpoint_backend_addr` before dialing (loopback and link-local rejected). A URL target has its own guard, documented in [Connectors (LinkSys) → Egress policy](../../ops-guide/infrastructure/connectors.md#egress-policy-ssrf-protection).
 3. **No redirect following**: the HTTP client does not follow redirects. A 301/302 from the auth service is treated as an auth failure.
-4. **Optional body forwarding**: the original request body is omitted by default. Set `forwardBody: true` only when the auth decision requires it; this activates request buffering and its gateway-wide size limit.
+4. **Optional body forwarding**: the request body is omitted by default. Set `forwardBody: true` only when the auth decision requires it; this reads the current committed body and activates request buffering and its gateway-wide size limit.
 5. **Hot reload**: updating the `EdgionPlugins` resource triggers an automatic hot reload; no gateway restart is required.
 6. **forwardAll default**: `request.headers.forwardAll` defaults to `true` for forward_auth (unlike the webhook plugin where it defaults to `false`).
 
@@ -412,7 +431,7 @@ func authHandler(w http.ResponseWriter, r *http.Request) {
 
 A:
 - **`forwardAll: true`** (default): the auth service can inspect any header. Simple; suitable for internal auth services and scenarios with relaxed security requirements.
-- **`forwardAll: false` + `origin` list**: only listed headers are forwarded. Reduces data transferred; suitable for external auth services and scenarios requiring the principle of least privilege.
+- **`forwardAll: false` + `origin` list**: only listed ordinary headers are forwarded, with the four automatic metadata headers injected separately. Suitable for external auth services and scenarios requiring the principle of least privilege.
 
 ### Q: How do I forward cookies?
 

@@ -48,6 +48,59 @@ fn response(status: u16, headers: HeaderMap, body: Bytes) -> OutboundResponse {
 // ── Tests ────────────────────────────────────────────────────────────────
 
 #[test]
+fn context_metadata_describes_current_request_after_rewrite_or_without_rewrite() {
+    for (host, path, method, query) in [
+        ("entry.test", "/users/42", "GET", "verbose=1"),
+        ("rewritten.test", "/graphql", "POST", "mode=rest"),
+        ("entry.test", "/users/42", "GET", ""),
+    ] {
+        let mut session = MockPluginSession::new();
+        setup_header_mocks(&mut session, &[("host", host), ("X-Forwarded-Method", "spoofed")]);
+        session.expect_get_path().return_const(path.to_string());
+        session.expect_get_method().return_const(method.to_string());
+        session.expect_get_query().return_const(if query.is_empty() {
+            None
+        } else {
+            Some(query.to_string())
+        });
+        // Entry accessors are deliberately unset: metadata must use the live view.
+        let current_query = session.get_query().unwrap_or_default();
+        assert_eq!(
+            ForwardAuth::context_headers(&session, &current_query),
+            [
+                ("X-Forwarded-Host", host),
+                ("X-Forwarded-Uri", path),
+                ("X-Forwarded-Method", method),
+                ("X-Forwarded-Query", query),
+            ]
+        );
+    }
+}
+
+#[tokio::test]
+async fn forward_body_reads_current_committed_body_before_outbound_gate() {
+    let mut fa = make_forward_auth(ForwardAuthDecision::default());
+    fa.forward_body = true;
+    fa.client
+        .health
+        .healthy
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+    let mut session = make_request_session();
+    session
+        .expect_read_request_body()
+        .withf(|limit| limit.is_none())
+        .times(1)
+        .returning(|_| Ok(Bytes::from_static(b"rewritten body")));
+    session.expect_record_error().return_const(());
+    session.expect_record_outcome().return_const(());
+    session.expect_write_response_header().returning(|_, _| Ok(()));
+    session.expect_write_response_body().returning(|_, _| Ok(()));
+    session.expect_shutdown().return_const(());
+    let result = fa.run_request(&mut session, &mut PluginLog::new("ForwardAuth")).await;
+    assert!(matches!(result, PluginRunningResult::ErrTerminateRequest));
+}
+
+#[test]
 fn name_is_static_across_instances() {
     let first = make_forward_auth(ForwardAuthDecision::default());
     let second = make_forward_auth(ForwardAuthDecision::default());

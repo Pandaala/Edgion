@@ -1,0 +1,36 @@
+{
+  "apiVersion": "edgion.io/v1",
+  "kind": "EdgionPlugins",
+  "metadata": {
+    "name": "csrf-boundary-query-rewritten",
+    "namespace": "edgion-default"
+  },
+  "spec": {
+    "requestPlugins": [
+      {
+        "type": "Csrf",
+        "config": {
+          "secretRef": {
+            "name": "csrf-key",
+            "namespace": "edgion-default"
+          },
+          "name": "X-CSRF-Token",
+          "cookieSecure": false
+        }
+      },
+      {
+        "type": "ProxyRewrite",
+        "config": {
+          "method": "POST"
+        }
+      },
+      {
+        "type": "RestToGraphql",
+        "config": {
+          "query": "query Read{read}",
+          "path": "/csrf-method-boundary/graphql"
+        }
+      }
+    ]
+  }
+}

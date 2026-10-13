@@ -1,0 +1,15 @@
+{
+  "apiVersion": "edgion.io/v1alpha1",
+  "kind": "EdgionGatewayConfig",
+  "metadata": {
+    "name": "csrf-boundary"
+  },
+  "spec": {
+    "globalPluginsRef": [
+      {
+        "name": "csrf-boundary-global",
+        "namespace": "edgion-default"
+      }
+    ]
+  }
+}

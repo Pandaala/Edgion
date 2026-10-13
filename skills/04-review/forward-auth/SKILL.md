@@ -11,6 +11,7 @@ before applying a decision to current code.
 
 ## Intentional design
 
+- [Execution-Time Authorization Context and Metadata Precedence](intentional-design/execution-time-authorization-context.md)
 - [ForwardAuth Default Forwards All Request Headers: Design Tradeoff, Not Vulnerability](intentional-design/default-header-forwarding.md)
 
 ## Regression guards

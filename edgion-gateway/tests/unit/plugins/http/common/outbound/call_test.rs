@@ -1,6 +1,102 @@
 use super::*;
 
 #[test]
+fn auth_metadata_wins_over_forwarded_origin_and_custom_headers() {
+    use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
+    use edgion_resources::resources::common::outbound_request::{
+        CustomField, CustomSource, ListFields, OriginField, PresencePolicy,
+    };
+
+    let metadata = [
+        ("X-Forwarded-Host", "rewritten.test"),
+        ("X-Forwarded-Uri", "/graphql"),
+        ("X-Forwarded-Method", "POST"),
+        ("X-Forwarded-Query", "mode=rest"),
+    ];
+    for forward_all in [false, true] {
+        for configured in [false, true] {
+            let mut spec = OutboundRequestSpec::default();
+            spec.headers = ListFields {
+                forward_all,
+                origin: if configured {
+                    metadata
+                        .iter()
+                        .map(|(name, _)| OriginField {
+                            name: (*name).into(),
+                            presence: PresencePolicy::Required,
+                        })
+                        .chain(std::iter::once(OriginField {
+                            name: "X-Selected".into(),
+                            presence: PresencePolicy::Required,
+                        }))
+                        .collect()
+                } else {
+                    vec![]
+                },
+                custom: if configured {
+                    metadata
+                        .iter()
+                        .map(|(name, _)| CustomField {
+                            name: name.to_ascii_lowercase(),
+                            source: CustomSource::Value("custom-spoof".into()),
+                        })
+                        .collect()
+                } else {
+                    vec![]
+                },
+            };
+            let mut session = MockPluginSession::new();
+            setup_header_mocks(
+                &mut session,
+                &[
+                    ("X-Forwarded-Host", "inbound-spoof"),
+                    ("X-Forwarded-Host", "second-spoof"),
+                    ("X-Forwarded-Uri", "/spoof"),
+                    ("X-Forwarded-Method", "DELETE"),
+                    ("X-Forwarded-Query", "spoof=1"),
+                    ("X-Unselected", "omit-me"),
+                    ("X-Selected", "selected"),
+                ],
+            );
+            session.expect_get_request_method().return_const(Some("GET"));
+            session.expect_get_request_path().return_const("/users/42".to_string());
+            let mut req = CompiledRequest::from_spec(&spec)
+                .unwrap()
+                .build_request(&session, None, "http://auth.test", None, &mut Default::default())
+                .unwrap();
+            if configured {
+                assert_eq!(req.headers()["x-forwarded-method"], "custom-spoof");
+            }
+            finalize_request(&mut req, &metadata, None).unwrap();
+            for (name, value) in metadata {
+                assert_eq!(req.headers().get(name).unwrap(), value);
+                assert_eq!(req.headers().get_all(name).iter().count(), 1);
+            }
+            assert_eq!(req.headers().contains_key("x-unselected"), forward_all);
+            assert_eq!(req.headers().contains_key("x-selected"), forward_all || configured);
+            // Auth-hop defaults describe entry identity, independently of metadata.
+            assert_eq!(req.method(), reqwest::Method::GET);
+            assert_eq!(req.url().path(), "/users/42");
+            assert!(req.body().is_none());
+        }
+    }
+}
+
+#[test]
+fn forwarded_current_body_owns_final_bytes_and_framing() {
+    for body in [Bytes::from_static(b"rewritten body"), Bytes::new()] {
+        let mut req = reqwest::Request::new(reqwest::Method::POST, "http://auth.test/verify".parse().unwrap());
+        req.headers_mut().insert("content-length", "99".parse().unwrap());
+        req.headers_mut()
+            .insert("transfer-encoding", "chunked".parse().unwrap());
+        finalize_request(&mut req, &[], Some(body.clone())).unwrap();
+        assert_eq!(req.body().unwrap().as_bytes().unwrap(), body.as_ref());
+        assert_eq!(req.headers()["content-length"], body.len().to_string());
+        assert!(!req.headers().contains_key("transfer-encoding"));
+    }
+}
+
+#[test]
 fn outbound_response_debug_omits_auth_payload() {
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert("x-private-token", "private-token".parse().unwrap());

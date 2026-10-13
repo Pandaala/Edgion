@@ -93,6 +93,30 @@ impl std::fmt::Display for OutboundCallError {
 // Core call function
 // ============================================================
 
+/// Finish assembly after configured fields: caller metadata wins, then the final
+/// body owns framing. Do not supply Content-Type here: it would override the
+/// body-derived value and bypass admission's conflict check; no current caller does.
+fn finalize_request(
+    req: &mut reqwest::Request,
+    extra_headers: &[(&str, &str)],
+    body_override: Option<Bytes>,
+) -> Result<(), OutboundCallError> {
+    for &(name, val) in extra_headers {
+        if let (Ok(n), Ok(v)) = (
+            reqwest::header::HeaderName::from_bytes(name.as_bytes()),
+            reqwest::header::HeaderValue::from_str(val),
+        ) {
+            req.headers_mut().insert(n, v);
+        } else {
+            crate::observe::metrics::record_injected_header_skipped();
+        }
+    }
+    if let Some(body) = body_override {
+        *req.body_mut() = Some(body.into());
+    }
+    sync_outbound_body_framing(req).map_err(|_| OutboundCallError::Connect)
+}
+
 /// Execute an outbound HTTP call using the given [`ManagedOutboundClient`].
 ///
 /// ## Behavior
@@ -299,25 +323,7 @@ async fn outbound_call_with_body_using<T: OutboundTransport>(
         ) {
             Ok(mut req) => {
                 *req.timeout_mut() = Some(effective_timeout);
-                // Inject caller-supplied extra headers (e.g. X-Forwarded-* from ForwardAuth).
-                // Silently skip headers with invalid names or values (data-plane rule).
-                // NOTE: these run after build_request, so a caller passing Content-Type
-                // here would override the body-derived CT and bypass the admission-time
-                // conflict check — no current caller does; keep it that way.
-                for &(name, val) in extra_headers {
-                    if let (Ok(n), Ok(v)) = (
-                        reqwest::header::HeaderName::from_bytes(name.as_bytes()),
-                        reqwest::header::HeaderValue::from_str(val),
-                    ) {
-                        req.headers_mut().insert(n, v);
-                    } else {
-                        crate::observe::metrics::record_injected_header_skipped();
-                    }
-                }
-                if let Some(body) = body_override {
-                    *req.body_mut() = Some(body.into());
-                }
-                sync_outbound_body_framing(&mut req).map_err(|_| OutboundCallError::Connect)?;
+                finalize_request(&mut req, extra_headers, body_override)?;
                 req
             }
             // Build failure (missing required origin field, invalid URL/method) is a

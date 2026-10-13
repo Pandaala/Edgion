@@ -15,6 +15,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Execution-time CSRF protection and method rewrites](regression-guards/execution-time-method-rewrite-boundary.md)
+
 - [CSRF cookie `Secure` is operator-configurable — FIXED](regression-guards/cookie-secure-configurable.md)
 - [CSRF Secret Rotation Has Shared Ref/Requeue Logic Plus Dedicated Integration Coverage — FIXED](regression-guards/csrf-secret-rotation-integration-coverage.md)
 - [Plugins queue Set-Cookie via set_response_header, wiping other Set-Cookie values (gateway-plugins-02)](regression-guards/set-cookie-append.md)

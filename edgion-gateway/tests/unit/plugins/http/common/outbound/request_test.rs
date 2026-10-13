@@ -818,6 +818,38 @@ fn outbound_default_method_uses_entry_while_method_template_uses_current() {
 }
 
 #[test]
+fn outbound_default_path_uses_entry_while_path_template_uses_current() {
+    use edgion_resources::resources::common::outbound_request::PathSpec;
+    for current in ["/users/42", "/graphql"] {
+        for template in [None, Some("${path}"), Some("/verify")] {
+            let spec = OutboundRequestSpec {
+                path: template.map(|template| PathSpec {
+                    template: template.into(),
+                    allow_override: false,
+                }),
+                ..Default::default()
+            };
+            let mut session = MockPluginSession::new();
+            session.expect_get_request_path().return_const("/users/42".to_string());
+            session.expect_get_request_method().return_const(Some("GET"));
+            session.expect_get_path().return_const(current.to_string());
+            let req = CompiledRequest::from_spec(&spec)
+                .unwrap()
+                .build_request(&session, None, "http://auth.test", None, &mut Default::default())
+                .unwrap();
+            assert_eq!(
+                req.url().path(),
+                match template {
+                    None => "/users/42",
+                    Some("${path}") => current,
+                    Some(_) => "/verify",
+                }
+            );
+        }
+    }
+}
+
+#[test]
 fn outbound_missing_entry_method_fails_without_live_fallback_but_explicit_method_works() {
     use edgion_resources::resources::common::outbound_request::MethodSpec;
     for template in [None, Some("${method}"), Some("PUT")] {

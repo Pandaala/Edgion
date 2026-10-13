@@ -1,5 +1,5 @@
 {
-  "current_max": 31990,
+  "current_max": 31991,
   "suites": {
     "PluginPolicy": {
       "udp": 58338,
@@ -121,6 +121,9 @@
     },
     "EdgionPlugins": {
       "http": 31180
+    },
+    "EdgionPlugins/Csrf/MethodBoundary": {
+      "http": 31991
     },
     "EdgionPlugins/AccessLogExtern": {
       "http": 31395

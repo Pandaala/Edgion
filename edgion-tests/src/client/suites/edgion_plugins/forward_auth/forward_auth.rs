@@ -1,6 +1,6 @@
 // ForwardAuth Plugin Test Suite
 //
-// Tests the ForwardAuth plugin which sends original request metadata to an
+// Tests the ForwardAuth plugin which sends execution-time request metadata to an
 // external authentication service and decides to allow or deny the request
 // based on the auth service's response.
 //

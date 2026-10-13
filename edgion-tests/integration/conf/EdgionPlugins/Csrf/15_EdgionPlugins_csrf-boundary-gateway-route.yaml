@@ -1,0 +1,19 @@
+{
+  "apiVersion": "edgion.io/v1",
+  "kind": "EdgionPlugins",
+  "metadata": {
+    "name": "csrf-boundary-gateway-route",
+    "namespace": "edgion-default"
+  },
+  "spec": {
+    "requestPlugins": [
+      {
+        "type": "ProxyRewrite",
+        "config": {
+          "method": "POST",
+          "uri": "/csrf-method-boundary/action"
+        }
+      }
+    ]
+  }
+}

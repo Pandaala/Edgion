@@ -364,9 +364,56 @@ export default {
 | `DELETE` | ✅ 验证 | 必须提供有效 token |
 | `PATCH` | ✅ 验证 | 必须提供有效 token |
 
-**说明**：
-- 安全方法（GET/HEAD/OPTIONS）被认为是幂等的，不会修改数据
-- 不安全方法（POST/PUT/DELETE/PATCH）会修改数据，需要 CSRF 保护
+**CSRF 在插件执行时读取当前方法及 token 来源。** GET/HEAD/OPTIONS 必须对应真正的
+只读操作；幂等不等于安全，POST 传输也可能承载只读查询。
+
+### 方法改写与插件顺序
+
+ProxyRewrite 或 DSL 改写方法后，CSRF 不会自动重新检查请求。
+`GET -> Csrf -> 改写 POST -> 认证写操作` 不在保护保证内：CSRF 跳过 GET，
+后续 POST 若携带认证 Cookie，就可能在未验证 token 的情况下执行写操作。
+
+对于写操作，应先改写，再执行 CSRF，保留客户端真实的 token 请求头与 Cookie，
+并确保后续插件不会引入未经保护的写操作。先创建前文的签名密钥 Secret，
+再通过 HTTPRoute 的 ExtensionRef 引用以下资源：
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: protected-write
+  namespace: default
+spec:
+  requestPlugins:
+    - type: ProxyRewrite
+      config:
+        method: POST
+        uri: /internal/action
+    - type: Csrf
+      config:
+        secretRef:
+          name: csrf-signing-key
+```
+
+GET 在此检查前变成 POST：缺少 token 返回 401；请求头和 Cookie 中的 token 匹配、
+签名有效且未过期时允许继续。客户端应先从另一个真正只读的 GET 入口获取 token；
+该入口使用相同签名密钥和 token 名称。不要在插件链中把 Cookie 复制为 token 请求头，
+这会破坏双重提交校验。
+
+普通请求插件依次执行：GatewayClass 全局插件（`globalPluginsRef`）、
+Gateway 注解（`edgion.io/edgion-plugins`）、Route filters、选中的 BackendRef filters；
+每条链内部按声明顺序执行。仅调整 Route 内顺序，无法让较早的 Global CSRF 覆盖
+后续 Route 或 BackendRef 改写。应在相关改写后执行 CSRF，必要时放在 BackendRef 链内。
+还需核对条件执行、token 来源变化及所有可选后端。这是操作员配置契约，
+系统不会自动验证或拒绝所有危险组合。
+
+对于 `POST -> 改写 GET -> Csrf`，CSRF 跳过校验；只有最终操作真正只读时才符合契约。
+对于 `POST -> Csrf -> 改写 GET`，即使最终操作只读，CSRF 仍要求有效 token。
+两种顺序都不能证明 GET 端点不会修改数据。
+
+RestToGraphql 独立拒绝入口 GET mutation，包括前面的插件已将当前方法从 GET
+改成 POST 的情况。入口 GET query 可以转成 POST GraphQL 传输并保持只读。
+这属于该适配器的准入规则，不是通用 CSRF 最终方法检查；应核对实际操作和完整链路。
 
 ---
 

@@ -1,0 +1,30 @@
+{
+  "apiVersion": "edgion.io/v1",
+  "kind": "EdgionPlugins",
+  "metadata": {
+    "name": "csrf-boundary-rewrite-before",
+    "namespace": "edgion-default"
+  },
+  "spec": {
+    "requestPlugins": [
+      {
+        "type": "ProxyRewrite",
+        "config": {
+          "method": "POST",
+          "uri": "/csrf-method-boundary/action"
+        }
+      },
+      {
+        "type": "Csrf",
+        "config": {
+          "secretRef": {
+            "name": "csrf-key",
+            "namespace": "edgion-default"
+          },
+          "name": "X-CSRF-Token",
+          "cookieSecure": false
+        }
+      }
+    ]
+  }
+}

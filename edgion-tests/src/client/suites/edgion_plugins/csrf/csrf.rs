@@ -28,7 +28,7 @@ const MISSING_SECRET_HOST: &str = "csrf-missing-secret.example.com";
 
 /// Extract the CSRF token value from a Set-Cookie header string.
 /// The cookie looks like: X-CSRF-Token=<value>; Path=/; ...
-fn extract_csrf_token(set_cookie: &str, name: &str) -> Option<String> {
+pub(super) fn extract_csrf_token(set_cookie: &str, name: &str) -> Option<String> {
     for part in set_cookie.split(';') {
         let part = part.trim();
         if let Some(value) = part.strip_prefix(&format!("{}=", name)) {
@@ -421,7 +421,7 @@ impl TestSuite for CsrfTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![
+        let mut cases = vec![
             Self::test_safe_method_sets_cookie(),
             Self::test_upstream_cookies_preserved(),
             Self::test_valid_csrf_token_passes(),
@@ -430,6 +430,13 @@ impl TestSuite for CsrfTestSuite {
             Self::test_mismatched_tokens_returns_401(),
             Self::test_invalid_signature_returns_401(),
             Self::test_missing_secret_fails_closed(),
-        ]
+        ];
+        // The composition fixture owns a local-only listener and configuration.
+        if !std::env::var("EDGION_TEST_K8S_MODE")
+            .is_ok_and(|mode| matches!(mode.to_ascii_lowercase().as_str(), "true" | "1" | "yes"))
+        {
+            cases.push(super::method_boundary::test_case());
+        }
+        cases
     }
 }

@@ -364,9 +364,64 @@ export default {
 | `DELETE` | ✅ Validated | Must provide a valid token |
 | `PATCH` | ✅ Validated | Must provide a valid token |
 
-**Note**:
-- Safe methods (GET/HEAD/OPTIONS) are considered idempotent and do not modify data
-- Unsafe methods (POST/PUT/DELETE/PATCH) modify data and require CSRF protection
+**CSRF checks the method and token sources when the plugin executes.**
+GET/HEAD/OPTIONS must lead to genuinely read-only operations; idempotence alone
+does not make an operation safe. POST transport can also carry a read-only query.
+
+### Method rewrites and plugin ordering
+
+CSRF does not automatically recheck a request after ProxyRewrite or DSL changes
+its method. `GET -> Csrf -> rewrite POST -> authenticated write` is outside the
+protection guarantee: CSRF skips GET, and the later POST can execute without
+token verification if authentication cookies accompany the request.
+
+For a write operation, perform the rewrite before CSRF, preserve the client's
+real token header and cookie, and ensure later plugins do not introduce an
+unprotected write. Create the signing-key Secret shown above and attach this
+resource through the HTTPRoute's ExtensionRef:
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: protected-write
+  namespace: default
+spec:
+  requestPlugins:
+    - type: ProxyRewrite
+      config:
+        method: POST
+        uri: /internal/action
+    - type: Csrf
+      config:
+        secretRef:
+          name: csrf-signing-key
+```
+
+GET becomes POST before this check: missing tokens return 401; matching, signed,
+unexpired header and cookie tokens permit continuation. Obtain tokens beforehand
+from a separate read-only GET endpoint using the same signing key and token name.
+Do not copy a cookie into the token header within the chain: that defeats the
+double-submit check.
+
+Ordinary request plugins execute in order: GatewayClass-global
+(`globalPluginsRef`), Gateway annotation (`edgion.io/edgion-plugins`), Route
+filters, then selected BackendRef filters. Each chain follows declaration order.
+Moving entries within a Route cannot make an earlier Global CSRF cover a later
+Route or BackendRef rewrite. Put a CSRF check after the relevant rewrite,
+including within the BackendRef chain when needed. Audit conditional execution,
+token-source changes and all selected backends. This is an operator contract;
+unsafe chains are not automatically validated or rejected.
+
+For `POST -> rewrite GET -> Csrf`, CSRF skips verification; this is within the
+contract only if the resulting operation is genuinely read-only.
+For `POST -> Csrf -> rewrite GET`, CSRF requires a token even if the eventual
+operation is read-only. Neither ordering proves that a GET endpoint cannot write.
+
+RestToGraphql separately rejects entry GET mutations, including after an earlier
+GET-to-POST rewrite. Entry GET queries can legitimately become POST GraphQL
+transport and remain read-only. This adapter admission rule is not a general
+CSRF final-method check. Audit the actual operation and complete chain.
 
 ---
 

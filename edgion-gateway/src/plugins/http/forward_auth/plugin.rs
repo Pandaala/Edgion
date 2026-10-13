@@ -1,6 +1,6 @@
 //! ForwardAuth plugin implementation
 //!
-//! Sends the original request's key information (headers, method, URI, etc.) to an
+//! Sends execution-time request context (headers, method, path, query, etc.) to an
 //! external authentication service and decides whether to allow or deny the request
 //! based on the auth service's response status code.
 //!
@@ -12,7 +12,7 @@
 //!
 //! ## Flow
 //!
-//! 1. Build auth request with original request metadata (all headers by default)
+//! 1. Build auth request with current request metadata (all eligible headers by default)
 //! 2. Inject X-Forwarded-Host/Uri/Method/Query so the auth service has full context
 //! 3. Send to external auth service via the shared outbound engine
 //! 4. If auth service returns 2xx → copy `upstream_headers`, forward to upstream
@@ -95,6 +95,17 @@ pub struct ForwardAuth {
 }
 
 impl ForwardAuth {
+    /// Describe the request at authorization time, independently of the auth hop.
+    /// The shared outbound engine inserts these after ordinary configured headers.
+    fn context_headers<'a>(session: &'a dyn PluginSession, query: &'a str) -> [(&'static str, &'a str); 4] {
+        [
+            ("X-Forwarded-Host", session.header_str("host").unwrap_or_default()),
+            ("X-Forwarded-Uri", session.get_path()),
+            ("X-Forwarded-Method", session.get_method()),
+            ("X-Forwarded-Query", query),
+        ]
+    }
+
     /// Construct only from the same actual Route field that prepared the client.
     pub(crate) fn from_route(input: &PreparedRouteAuth<'_>) -> Result<Self, String> {
         let config = input.config();
@@ -299,22 +310,10 @@ impl RequestFilter for ForwardAuth {
             None
         };
 
-        // Build the X-Forwarded-* context headers so the auth service knows which
-        // host, path, method, and query the original client request targeted.
-        // These are injected as extra_headers into the outbound request rather than
-        // compiled into the request spec, because they are per-request dynamic values
-        // (not static config-time constants).
-        let host = session.header_str("host").unwrap_or_default();
-        let path = session.get_path();
-        let method = session.get_method();
+        // Read current context after earlier rewrites. Auth-hop method/path defaults
+        // separately use entry identity; they do not determine these metadata values.
         let query = session.get_query().unwrap_or_default();
-
-        let extra_headers: &[(&str, &str)] = &[
-            ("X-Forwarded-Host", host),
-            ("X-Forwarded-Uri", path),
-            ("X-Forwarded-Method", method),
-            ("X-Forwarded-Query", query.as_str()),
-        ];
+        let extra_headers = Self::context_headers(session, &query);
 
         // Call the shared outbound engine:
         //   health gate → rate gate → compile+build request → retry loop →
@@ -326,7 +325,7 @@ impl RequestFilter for ForwardAuth {
             session,
             None,
             FORWARD_AUTH_GLOBAL_MAX_BYTES,
-            extra_headers,
+            &extra_headers,
             body,
             &mut diagnostics,
         )
