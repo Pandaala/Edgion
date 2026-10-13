@@ -97,7 +97,7 @@ fn same_root_store_keeps_established_sessions_alive() {
         .unwrap();
     let handle =
         ServerIdentityHandle::new(ServerIdentity::from_pems(&a.cert_pem, &a.key_pem, ca.ca_cert_pem()).unwrap());
-    let token = handle.trust_token();
+    let (old_config, token) = handle.handshake_material();
     let generation = handle.trust_generation();
 
     handle.store(ServerIdentity::from_pems(&b.cert_pem, &b.key_pem, ca.ca_cert_pem()).unwrap());
@@ -107,7 +107,13 @@ fn same_root_store_keeps_established_sessions_alive() {
         "a same-root leaf rotation must NOT kill sessions"
     );
     assert_eq!(handle.trust_generation(), generation);
-    assert!(Arc::ptr_eq(&token, &handle.trust_token()), "token must be unchanged");
+    let (new_config, _) = handle.handshake_material();
+    assert!(!Arc::ptr_eq(&old_config, &new_config));
+    assert!(Arc::ptr_eq(&new_config, &handle.load().config));
+    assert!(
+        Arc::ptr_eq(&token, &handle.handshake_material().1),
+        "token must be unchanged"
+    );
 }
 
 /// Trust-ROOT change (emergency re-key / BYO-root swap): the old token must be
@@ -126,14 +132,18 @@ fn root_change_store_cancels_established_sessions() {
         .unwrap();
     let handle =
         ServerIdentityHandle::new(ServerIdentity::from_pems(&a.cert_pem, &a.key_pem, ca_a.ca_cert_pem()).unwrap());
-    let old = handle.trust_token();
+    let (old_config, old) = handle.handshake_material();
+    assert!(Arc::ptr_eq(&old_config, &handle.load().config));
     assert_eq!(handle.trust_generation(), 0);
 
     handle.store(ServerIdentity::from_pems(&b.cert_pem, &b.key_pem, ca_b.ca_cert_pem()).unwrap());
 
     assert!(old.is_cancelled(), "a root change MUST tear down old sessions");
     assert_eq!(handle.trust_generation(), 1);
-    let fresh = handle.trust_token();
+    // The retained pre-change handshake cannot borrow the new root's live token.
+    let (fresh_config, fresh) = handle.handshake_material();
+    assert!(!Arc::ptr_eq(&old_config, &fresh_config));
+    assert!(Arc::ptr_eq(&fresh_config, &handle.load().config));
     assert!(!fresh.is_cancelled(), "connections accepted after the re-key must live");
     assert!(!Arc::ptr_eq(&old, &fresh));
 }
@@ -150,7 +160,7 @@ fn same_key_root_renewal_counts_as_a_root_change() {
     let renewed = ca.renew_root_same_key(time::Duration::days(60)).unwrap();
     let handle =
         ServerIdentityHandle::new(ServerIdentity::from_pems(&leaf.cert_pem, &leaf.key_pem, ca.ca_cert_pem()).unwrap());
-    let old = handle.trust_token();
+    let old = handle.handshake_material().1;
     let leaf2 = renewed
         .sign_server(&["localhost".to_string()], time::Duration::days(7))
         .unwrap();
@@ -174,4 +184,49 @@ fn handle_swaps_atomically() {
     let na_a = handle.load().not_after;
     handle.store(ServerIdentity::from_pems(&b.cert_pem, &b.key_pem, ca.ca_cert_pem()).unwrap());
     assert!(handle.load().not_after > na_a);
+}
+
+#[test]
+fn concurrent_same_root_stores_publish_one_live_trust_generation() {
+    install_test_crypto_provider();
+    let old_ca = Ca::generate_root(time::Duration::days(30)).unwrap();
+    let new_ca = Ca::generate_root(time::Duration::days(30)).unwrap();
+    let make_identity = |ca: &Ca| {
+        let leaf = ca
+            .sign_server(&["localhost".to_string()], time::Duration::days(7))
+            .unwrap();
+        ServerIdentity::from_pems(&leaf.cert_pem, &leaf.key_pem, ca.ca_cert_pem()).unwrap()
+    };
+    let handle = ServerIdentityHandle::new(make_identity(&old_ca));
+    let (old_config, old_token) = handle.handshake_material();
+    let identities: Vec<_> = (0..8).map(|_| make_identity(&new_ca)).collect();
+    let configs: Vec<_> = identities.iter().map(|id| id.config.clone()).collect();
+    let barrier = std::sync::Barrier::new(identities.len());
+    let tokens = std::thread::scope(|scope| {
+        let writers: Vec<_> = identities
+            .into_iter()
+            .map(|id| {
+                let handle = &handle;
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    handle.store(id);
+                    handle.handshake_material().1
+                })
+            })
+            .collect();
+        writers
+            .into_iter()
+            .map(|writer| writer.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    let (config, token) = handle.handshake_material();
+    assert_eq!(handle.trust_generation(), 1);
+    assert!(old_token.is_cancelled());
+    assert!(!Arc::ptr_eq(&old_config, &config));
+    assert!(configs.iter().any(|candidate| Arc::ptr_eq(candidate, &config)));
+    assert!(Arc::ptr_eq(&config, &handle.load().config));
+    assert_eq!(handle.load().ca_cert_pem, new_ca.ca_cert_pem());
+    assert!(!token.is_cancelled());
+    assert!(tokens.iter().all(|captured| Arc::ptr_eq(captured, &token)));
 }

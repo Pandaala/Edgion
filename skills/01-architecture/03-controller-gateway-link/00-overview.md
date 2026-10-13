@@ -194,8 +194,8 @@ POST-creates and adopts on a 409, so two replicas racing at cold start converge 
 root.
 
 **Hot reload, both ends, no process restarts.** Controller: an owned TCP accept loop
-feeds tonic `serve_with_incoming_shutdown` from an `ArcSwap<ServerIdentity>`, so the
-listener is never rebound and the identity swaps atomically
+feeds tonic `serve_with_incoming_shutdown` from one immutable identity-and-revocation-token ArcSwap snapshot, so the
+listener is never rebound and each handshake receives a matched verifier and token
 (`conf_sync/conf_server/{tls_identity,grpc_server,cert_watch}.rs`). Gateway: a `notify`
 file-watch (+ 5-min re-stat backstop) rebuilds the client Channel and cancels old streams
 via a generation token (`conf_sync/conf_client/{grpc_client,cert_watch}.rs`).
@@ -209,7 +209,11 @@ handshake, so swapping the client-CA verifier governs only *future* handshakes.
 - **Root change (re-key — the only true revocation, or a BYO-root swap)** → every
   controller **tears its existing sessions down**. `ServerIdentityHandle::store()`
   compares the incoming CA bytes to the held ones and, iff the root changed, bumps a trust
-  generation and cancels a `CancellationToken`; each accepted connection is wrapped in a
+  generation and cancels a `CancellationToken`. Cold stores serialize comparison,
+  publication and cancellation; handshake reads remain lock-free. Same-root leaf
+  updates retain the token. A pre-change snapshot always retains the old token, which
+  is cancelled before the root-changing store returns (ARCH-117). This does not
+  impose source-generation ordering on identity producers. Each accepted connection is wrapped in a
   `TrustScopedStream` that holds the token captured at accept time and fails the socket
   (`ConnectionAborted`) the instant it is cancelled. Without this, an attacker on an
   already-open connection with a leaked leaf would keep streaming Secrets forever after a

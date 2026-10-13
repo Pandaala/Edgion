@@ -361,13 +361,11 @@ impl ConfigSyncGrpcServer {
                                 };
                                 // tonic's serve_with_incoming discards Server TCP settings; restore nodelay.
                                 let _ = tcp.set_nodelay(true);
-                                let acceptor = tokio_rustls::TlsAcceptor::from(handle.load().config.clone());
-                                // Capture the trust token that governs the root we are about to
-                                // authenticate this peer against. Taken BEFORE the handshake, so a
-                                // re-key that lands mid-handshake cancels this connection too
-                                // (the token is already cancelled when the stream is built, and
-                                // TrustScopedStream fails on its first poll).
-                                let trust = handle.trust_token();
+                                // One snapshot binds the verifier to its revocation token.
+                                // A re-key during or before the handshake cancels this exact
+                                // token; TrustScopedStream then fails on its first poll.
+                                let (config, trust) = handle.handshake_material();
+                                let acceptor = tokio_rustls::TlsAcceptor::from(config);
                                 let tx = tx.clone();
                                 let handoff_shutdown = accept_shutdown.clone();
                                 tokio::spawn(async move {

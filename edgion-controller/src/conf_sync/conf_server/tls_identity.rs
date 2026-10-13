@@ -15,10 +15,11 @@
 //! governs every connection accepted under the CURRENT trust root. [`ServerIdentityHandle::store`]
 //! cancels it **if and only if the root certificate changed**; a same-root leaf rotation
 //! leaves it untouched. `grpc_server`'s accept loop hands each accepted stream the token
-//! that was live at accept time, so a root change tears those sessions down and a
-//! rotation does not.
+//! paired with its verifier in one snapshot, so a root change tears those sessions
+//! down even when it overlaps a handshake; a leaf rotation does not.
 
 use arc_swap::ArcSwap;
+use parking_lot::Mutex;
 use rustls::server::WebPkiClientVerifier;
 use rustls::{RootCertStore, ServerConfig};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -93,31 +94,40 @@ impl ServerIdentity {
     }
 }
 
+struct InstalledIdentity {
+    identity: Arc<ServerIdentity>,
+    trust_token: Arc<CancellationToken>,
+}
+
 pub struct ServerIdentityHandle {
-    identity: ArcSwap<ServerIdentity>,
-    /// Bumped on every trust-ROOT change (never on a leaf rotation). Exposed for
-    /// tests/observability; the token below is what actually enforces anything.
+    // Retain lock-free reads on the existing TLS accept path, publishing the verifier
+    // and its revocation token together even though cold Controller stores use locks.
+    installed: ArcSwap<InstalledIdentity>,
+    /// Serializes cold compare/publish/cancel, never handshake reads.
+    store_lock: Mutex<()>,
+    /// Diagnostic only; the installed token enforces revocation.
     trust_generation: AtomicU64,
-    /// Governs every connection accepted under the current trust root.
-    trust_token: ArcSwap<CancellationToken>,
 }
 
 impl ServerIdentityHandle {
     pub fn new(id: ServerIdentity) -> Self {
         Self {
-            identity: ArcSwap::from_pointee(id),
+            installed: ArcSwap::from_pointee(InstalledIdentity {
+                identity: Arc::new(id),
+                trust_token: Arc::new(CancellationToken::new()),
+            }),
+            store_lock: Mutex::new(()),
             trust_generation: AtomicU64::new(0),
-            trust_token: ArcSwap::from_pointee(CancellationToken::new()),
         }
     }
     pub fn load(&self) -> Arc<ServerIdentity> {
-        self.identity.load_full()
+        self.installed.load().identity.clone()
     }
 
-    /// The token to hand a newly-accepted connection: it is cancelled when the trust
-    /// root this connection was authenticated against is replaced.
-    pub fn trust_token(&self) -> Arc<CancellationToken> {
-        self.trust_token.load_full()
+    /// Load the verifier and its governing revocation token from one snapshot.
+    pub(super) fn handshake_material(&self) -> (Arc<ServerConfig>, Arc<CancellationToken>) {
+        let installed = self.installed.load();
+        (installed.identity.config.clone(), installed.trust_token.clone())
     }
 
     /// How many times the trust ROOT has changed since process start.
@@ -150,15 +160,29 @@ impl ServerIdentityHandle {
     /// old leaves still chain, but the anchor is a different certificate; tearing the
     /// sessions down is the conservative, correct call, and a renewal is rare).
     pub fn store(&self, id: ServerIdentity) {
-        let root_changed = self.identity.load().ca_cert_pem.trim() != id.ca_cert_pem.trim();
-        // Install the identity FIRST: any handshake racing this store must land on the
-        // new config, and any connection that races in on the old token is torn down by
-        // the cancel below anyway.
-        self.identity.store(Arc::new(id));
-        if root_changed {
-            let generation = self.trust_generation.fetch_add(1, Ordering::SeqCst) + 1;
-            let old = self.trust_token.swap(Arc::new(CancellationToken::new()));
-            old.cancel();
+        let generation = {
+            let _guard = self.store_lock.lock();
+            let old = self.installed.load_full();
+            let root_changed = old.identity.ca_cert_pem.trim() != id.ca_cert_pem.trim();
+            let trust_token = if root_changed {
+                Arc::new(CancellationToken::new())
+            } else {
+                old.trust_token.clone()
+            };
+            self.installed.store(Arc::new(InstalledIdentity {
+                identity: Arc::new(id),
+                trust_token,
+            }));
+            if root_changed {
+                // A retained old snapshot always carries this old token, never the
+                // new root's live token, even if its handshake has not started yet.
+                old.trust_token.cancel();
+                Some(self.trust_generation.fetch_add(1, Ordering::SeqCst) + 1)
+            } else {
+                None
+            }
+        };
+        if let Some(generation) = generation {
             tracing::warn!(
                 component = "conf_sync_tls",
                 event = "conf_sync_trust_root_changed",

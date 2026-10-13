@@ -123,7 +123,7 @@ async fn relabeled_valid_prefix_cannot_replace_identity_with_expired_same_key_le
         ServerIdentity::from_pems(&current.cert_pem, &current.key_pem, ca.ca_cert_pem()).unwrap(),
     );
     let old = handle.load();
-    let token = handle.trust_token();
+    let token = handle.handshake_material().1;
     let generation = handle.trust_generation();
     let dir = tempfile::tempdir().unwrap();
     let paths = CertPaths {
@@ -146,6 +146,6 @@ async fn relabeled_valid_prefix_cannot_replace_identity_with_expired_same_key_le
         (old.not_before, old.not_after, &old.serial)
     );
     assert_eq!(handle.trust_generation(), generation);
-    assert!(Arc::ptr_eq(&token, &handle.trust_token()));
+    assert!(Arc::ptr_eq(&token, &handle.handshake_material().1));
     assert!(!token.is_cancelled());
 }
