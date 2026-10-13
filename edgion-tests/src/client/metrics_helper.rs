@@ -27,6 +27,197 @@ pub fn counter_value(raw: &str, metric: &str, labels: &[(&str, &str)]) -> f64 {
         .sum()
 }
 
+/// Read a counter only from a successful observation. Absence is zero, but
+/// malformed selected samples cannot become a synthetic baseline.
+pub fn checked_counter_value(observation: Result<String>, metric: &str, labels: &[(&str, &str)]) -> Result<f64> {
+    let raw = observation.map_err(|_| anyhow!("failed to scrape counter {metric}"))?;
+    let parse = || -> Result<f64> {
+        let mut total = 0.0;
+        let mut seen = std::collections::HashSet::new();
+        for line in raw.lines().map(str::trim) {
+            let Some(rest) = line.strip_prefix(metric) else {
+                continue;
+            };
+            if !rest.is_empty() && !rest.starts_with('{') && !rest.starts_with(char::is_whitespace) {
+                continue;
+            }
+            let (parsed_labels, sample) = if rest.starts_with('{') {
+                strict_counter_labels(rest)?
+            } else {
+                (HashMap::new(), rest)
+            };
+            if !labels
+                .iter()
+                .all(|(key, value)| parsed_labels.get(*key).map(String::as_str) == Some(*value))
+            {
+                continue;
+            }
+            let mut identity: Vec<_> = parsed_labels.into_iter().collect();
+            identity.sort();
+            anyhow::ensure!(seen.insert(identity), "duplicate counter series");
+            let mut fields = sample.split_whitespace();
+            let value = fields.next().and_then(|value| value.parse::<f64>().ok());
+            let value = value
+                .filter(|value| value.is_finite() && *value >= 0.0)
+                .ok_or_else(|| anyhow!("invalid counter sample"))?;
+            if let Some(timestamp) = fields.next() {
+                anyhow::ensure!(timestamp.parse::<i64>().is_ok(), "invalid counter timestamp");
+            }
+            anyhow::ensure!(fields.next().is_none(), "unsupported counter sample suffix");
+            total += value;
+            anyhow::ensure!(total.is_finite(), "counter sum overflow");
+        }
+        Ok(total)
+    };
+    parse().map_err(|error| anyhow!("counter {metric} observation failed: {error}"))
+}
+
+/// Reject a reset instead of attributing an undefined window to test traffic.
+pub fn checked_counter_delta(before: f64, after: f64) -> Result<f64> {
+    anyhow::ensure!(
+        before.is_finite() && after.is_finite() && before >= 0.0 && after >= 0.0,
+        "invalid counter observation"
+    );
+    anyhow::ensure!(after >= before, "counter decreased during observation window");
+    Ok(after - before)
+}
+
+// Strict text-exposition labels for the checked counter path. The existing
+// permissive backend/legacy readers retain their separate decoding behavior.
+fn strict_counter_labels(mut rest: &str) -> Result<(HashMap<String, String>, &str)> {
+    rest = rest.strip_prefix('{').ok_or_else(|| anyhow!("missing label block"))?;
+    let mut labels = HashMap::new();
+    loop {
+        rest = rest.trim_start();
+        if let Some(sample) = rest.strip_prefix('}') {
+            anyhow::ensure!(
+                sample.starts_with(char::is_whitespace),
+                "missing counter sample separator"
+            );
+            return Ok((labels, sample));
+        }
+        let end = rest
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(rest.len());
+        let name = &rest[..end];
+        anyhow::ensure!(
+            name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_'),
+            "invalid label name"
+        );
+        rest = rest[end..]
+            .trim_start()
+            .strip_prefix('=')
+            .ok_or_else(|| anyhow!("missing label equals"))?
+            .trim_start();
+        let (value, tail) = strict_counter_label_value(rest)?;
+        anyhow::ensure!(labels.insert(name.to_owned(), value).is_none(), "duplicate label name");
+        rest = tail.trim_start();
+        if let Some(tail) = rest.strip_prefix(',') {
+            rest = tail;
+        } else {
+            anyhow::ensure!(rest.starts_with('}'), "missing label separator");
+        }
+    }
+}
+
+fn strict_counter_label_value(raw: &str) -> Result<(String, &str)> {
+    let raw = raw.strip_prefix('"').ok_or_else(|| anyhow!("unquoted label value"))?;
+    let mut chars = raw.char_indices();
+    let mut value = String::new();
+    while let Some((index, ch)) = chars.next() {
+        match ch {
+            '"' => return Ok((value, &raw[index + 1..])),
+            '\\' => value.push(match chars.next().map(|(_, ch)| ch) {
+                Some('n') => '\n',
+                Some('"') => '"',
+                Some('\\') => '\\',
+                _ => anyhow::bail!("invalid label escape"),
+            }),
+            '\n' | '\r' => anyhow::bail!("newline in label value"),
+            _ => value.push(ch),
+        }
+    }
+    anyhow::bail!("unterminated label value")
+}
+
+#[cfg(test)]
+mod checked_counter_tests {
+    use super::{checked_counter_delta, checked_counter_value};
+
+    fn read(raw: &str) -> anyhow::Result<f64> {
+        checked_counter_value(Ok(raw.to_owned()), "test_counter", &[("reason", "deny")])
+    }
+
+    #[test]
+    fn exact_metric_and_decoded_label_identity_keep_missing_series_zero() {
+        assert_eq!(read("# TYPE test_counter counter\nother_counter 9\n").unwrap(), 0.0);
+        assert_eq!(read("test_counter_extra{reason=\"deny\"} 99\n").unwrap(), 0.0);
+        assert_eq!(read("test_counter{other_reason=\"deny\"} 99\n").unwrap(), 0.0);
+        assert_eq!(read("test_counter{reason=\"other\"} 99\n").unwrap(), 0.0);
+        assert_eq!(
+            read("test_counter{service=\"edgion-gateway\",reason=\"deny\"} 12 1700000000000\n").unwrap(),
+            12.0
+        );
+        assert_eq!(
+            checked_counter_value(Ok("test_counter 7\n".into()), "test_counter", &[]).unwrap(),
+            7.0
+        );
+        let escaped = "test_counter{note=\"comma,quote\\\"slash\\\\line\\n\",reason=\"deny\"} 3\n";
+        assert_eq!(read(escaped).unwrap(), 3.0);
+    }
+
+    #[test]
+    fn selected_invalid_samples_and_ambiguous_series_fail() {
+        for sample in ["", "bad", "NaN", "+Inf", "-Inf", "-1", "1e999", "1 bad", "1 123 extra"] {
+            assert!(
+                read(&format!("test_counter{{reason=\"deny\"}} {sample}\n")).is_err(),
+                "{sample}"
+            );
+        }
+        for raw in [
+            "test_counter{reason=\"deny} 1",
+            "test_counter{reason=\"deny\",reason=\"deny\"} 1",
+            "test_counter{reason=deny} 1",
+            "test_counter{reason=\"deny\" other=\"value\"} 1",
+            "test_counter{reason=\"deny\",bad=\"escape\\q\"} 1",
+            "test_counter{reason=\"deny\"}1",
+            "test_counter{reason=\"deny\"} 1\ntest_counter{reason=\"deny\"} 2",
+            "test_counter{reason=\"deny\",service=\"a\"} 1\ntest_counter{service=\"a\",reason=\"deny\"} 2",
+            "test_counter{reason=\"deny\",service=\"a\"} 1e308\ntest_counter{reason=\"deny\",service=\"b\"} 1e308",
+        ] {
+            assert!(read(raw).is_err());
+        }
+    }
+
+    #[test]
+    fn failed_observations_cannot_turn_old_history_into_a_delta_or_leak_diagnostics() {
+        let previous = read("test_counter{reason=\"deny\"} 20").unwrap();
+        let failed_before = checked_counter_value(
+            Err(anyhow::anyhow!("transport included private diagnostic sentinel")),
+            "test_counter",
+            &[("reason", "deny")],
+        );
+        let error = failed_before
+            .and_then(|before| checked_counter_delta(before, previous))
+            .unwrap_err();
+        assert_eq!(error.to_string(), "failed to scrape counter test_counter");
+        let failed_after = checked_counter_value(
+            Err(anyhow::anyhow!("response included private diagnostic sentinel")),
+            "test_counter",
+            &[("reason", "deny")],
+        );
+        assert!(failed_after
+            .and_then(|after| checked_counter_delta(previous, after))
+            .is_err());
+        assert_eq!(checked_counter_delta(previous, previous).unwrap(), 0.0);
+        assert_eq!(checked_counter_delta(previous, 28.0).unwrap(), 8.0);
+        assert!(checked_counter_delta(previous, 0.0).is_err());
+        assert!(checked_counter_delta(f64::NAN, previous).is_err());
+        assert!(checked_counter_delta(previous, f64::INFINITY).is_err());
+        assert!(checked_counter_delta(-1.0, previous).is_err());
+    }
+}
+
 /// Backend request metric data
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackendMetric {

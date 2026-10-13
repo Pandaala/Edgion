@@ -53,20 +53,14 @@ const HOST: &str = "upstream-authority.example.com";
 /// pattern already used by the LB suites — NOT `ctx.admin_port`, which is the
 /// *Controller's* Admin API port). Returns 0.0 if the metric/reason has never
 /// been recorded yet (metrics crate does not pre-register label combinations).
-async fn rejected_total(ctx: &TestContext, reason: &str) -> f64 {
+async fn rejected_total(ctx: &TestContext, reason: &str) -> Result<f64, String> {
     let metrics_client = crate::metrics_helper::MetricsClient::from_host_port(&ctx.target_host, 12090);
-    let Ok(raw) = metrics_client.fetch_raw_metrics().await else {
-        return 0.0;
-    };
-    let needle = format!("reason=\"{}\"", reason);
-    for line in raw.lines() {
-        if line.starts_with("edgion_gateway_upstream_authority_rejected_total") && line.contains(&needle) {
-            if let Some(value) = line.split_whitespace().last() {
-                return value.parse().unwrap_or(0.0);
-            }
-        }
-    }
-    0.0
+    crate::metrics_helper::checked_counter_value(
+        metrics_client.fetch_raw_metrics().await,
+        "edgion_gateway_upstream_authority_rejected_total",
+        &[("reason", reason)],
+    )
+    .map_err(|error| error.to_string())
 }
 
 /// Extract a header value from the plain-text response body of
@@ -160,7 +154,15 @@ impl UpstreamAuthorityTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let before = rejected_total(&ctx, "render_empty").await;
+                    let before = match rejected_total(&ctx, "render_empty").await {
+                        Ok(value) => value,
+                        Err(error) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("baseline metrics observation failed: {error}"),
+                            )
+                        }
+                    };
 
                     let url = format!("{}/tls/echo", ctx.http_url());
                     let resp = match ctx.http_client.get(&url).header("Host", HOST).send().await {
@@ -176,8 +178,25 @@ impl UpstreamAuthorityTestSuite {
                         );
                     }
 
-                    let after = rejected_total(&ctx, "render_empty").await;
-                    if after <= before {
+                    let after = match rejected_total(&ctx, "render_empty").await {
+                        Ok(value) => value,
+                        Err(error) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("afterward metrics observation failed: {error}"),
+                            )
+                        }
+                    };
+                    let delta = match crate::metrics_helper::checked_counter_delta(before, after) {
+                        Ok(delta) => delta,
+                        Err(error) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("edgion_gateway_upstream_authority_rejected_total delta failed: {error}"),
+                            )
+                        }
+                    };
+                    if delta <= 0.0 {
                         return TestResult::failed(
                             start.elapsed(),
                             format!(
@@ -248,7 +267,15 @@ impl UpstreamAuthorityTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let before = rejected_total(&ctx, "invalid_label").await;
+                    let before = match rejected_total(&ctx, "invalid_label").await {
+                        Ok(value) => value,
+                        Err(error) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("baseline metrics observation failed: {error}"),
+                            )
+                        }
+                    };
 
                     let url = format!("{}/tls/echo", ctx.http_url());
                     for payload in ["evil.com", "a@evil.com"] {
@@ -278,8 +305,25 @@ impl UpstreamAuthorityTestSuite {
                         }
                     }
 
-                    let after = rejected_total(&ctx, "invalid_label").await;
-                    if after < before + 2.0 {
+                    let after = match rejected_total(&ctx, "invalid_label").await {
+                        Ok(value) => value,
+                        Err(error) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("afterward metrics observation failed: {error}"),
+                            )
+                        }
+                    };
+                    let delta = match crate::metrics_helper::checked_counter_delta(before, after) {
+                        Ok(delta) => delta,
+                        Err(error) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("edgion_gateway_upstream_authority_rejected_total delta failed: {error}"),
+                            )
+                        }
+                    };
+                    if delta < 2.0 {
                         return TestResult::failed(
                             start.elapsed(),
                             format!(

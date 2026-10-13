@@ -46,20 +46,14 @@ const HOST: &str = "retry-budget.example.com";
 /// Controller's Admin API port). Returns 0.0 if the counter has never been
 /// incremented yet (Prometheus does not expose a series before its first
 /// increment).
-async fn denied_total(ctx: &TestContext) -> f64 {
+async fn denied_total(ctx: &TestContext) -> Result<f64, String> {
     let metrics_client = crate::metrics_helper::MetricsClient::from_host_port(&ctx.target_host, 12090);
-    let Ok(raw) = metrics_client.fetch_raw_metrics().await else {
-        return 0.0;
-    };
-    for line in raw.lines() {
-        // Skip "# HELP" / "# TYPE" comment lines (they also contain the name).
-        if line.starts_with("edgion_gateway_retry_budget_denied_total") {
-            if let Some(value) = line.split_whitespace().last() {
-                return value.parse().unwrap_or(0.0);
-            }
-        }
-    }
-    0.0
+    crate::metrics_helper::checked_counter_value(
+        metrics_client.fetch_raw_metrics().await,
+        "edgion_gateway_retry_budget_denied_total",
+        &[],
+    )
+    .map_err(|error| error.to_string())
 }
 
 /// Count the upstream attempts recorded for a request in its access-log entry.
@@ -163,7 +157,15 @@ impl RetryBudgetTestSuite {
                     let start = Instant::now();
                     let url = format!("{}/status/503", ctx.http_url());
 
-                    let denied_before = denied_total(&ctx).await;
+                    let denied_before = match denied_total(&ctx).await {
+                        Ok(value) => value,
+                        Err(error) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("baseline metrics observation failed: {error}"),
+                            )
+                        }
+                    };
 
                     // Fire a concurrent burst. Each request's original attempt is
                     // a 503 the route wants to retry; the budget admits only a
@@ -231,8 +233,24 @@ impl RetryBudgetTestSuite {
 
                     // Allow a brief moment for the counter to settle, then read.
                     tokio::time::sleep(Duration::from_millis(200)).await;
-                    let denied_after = denied_total(&ctx).await;
-                    let delta = denied_after - denied_before;
+                    let denied_after = match denied_total(&ctx).await {
+                        Ok(value) => value,
+                        Err(error) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("afterward metrics observation failed: {error}"),
+                            )
+                        }
+                    };
+                    let delta = match crate::metrics_helper::checked_counter_delta(denied_before, denied_after) {
+                        Ok(delta) => delta,
+                        Err(error) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("edgion_gateway_retry_budget_denied_total delta failed: {error}"),
+                            )
+                        }
+                    };
 
                     // Soft band: with 60 always-503 requests and a 20% ceiling +
                     // 5/1s floor, most first-retry decisions are refused, so the

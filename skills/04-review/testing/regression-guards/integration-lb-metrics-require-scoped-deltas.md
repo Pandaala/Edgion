@@ -38,6 +38,27 @@ Request transport errors, task join errors, and unexpected HTTP status codes are
 as `is_balanced` or variance only count as validation when they control the verdict, not when they appear only
 in a success message.
 
+## Counter observation failures are not zero baselines
+
+ARCH-337 makes RetryBudget's denial counter and UpstreamAuthority's rejection
+counters use the fallible `checked_counter_value` observation adapter. A failed
+scrape stops the case; only a successful observation with no matching series is
+zero. Exact metric-name and decoded label identity select the samples, including
+the recorder's global `service` label. Malformed labels or selected samples,
+duplicate labels/series, nonfinite/negative values and sum overflow fail with
+fixed safe context. Sample values are distinct from optional integer timestamps.
+
+The three measured cases fail before generating traffic when their baseline
+fails, propagate afterward observation errors and reject a counter decrease.
+Their original thresholds, concurrency, response assertions and fixtures remain
+unchanged. Existing permissive analyzers are outside this additive reader's
+scope. These counters remain aggregate evidence, not per-request attribution.
+
+Network-free tests exercise the shared adapter with scrape errors and retained
+history, absent series, exact label selection, malformed data, resets and valid
+increments. They do not establish a live scrape outage or integration run.
+Re-evaluate if the exporter changes its text format or the counter dimensions.
+
 ## Retry-storm evidence is separate from distribution
 
 ARCH-281 adds invocation-unique canonical W3C markers and stored access-log
