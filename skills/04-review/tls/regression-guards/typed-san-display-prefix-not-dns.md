@@ -40,3 +40,19 @@ BOOLEAN, INTEGER/ENUMERATED (decimal, INTEGER capped at 64 bytes), OBJECT
 IDENTIFIER, NULL (empty string), and string types including BMP/Universal
 (embedded NULs are kept; do not truncate at `\0`). OCTET STRING, BIT STRING,
 RELATIVE-OID, nested extra tags, incomplete BER, and raw UTF-8 are skipped.
+
+
+## Live probe evidence boundary (ARCH-352)
+
+The BackendTLSSAN negative integration case requires both its original 5xx
+response and the same request's canonical `error/BackendTlsSanValidationFailed`
+diagnostic. A fresh W3C trace marker and existing test-store projection prevent
+an unrelated backend failure or stale record from establishing SAN enforcement.
+The positive case, fixture SAN constraints and production matching stay unchanged.
+
+The negative exchange/body read has a ten-second budget, complete log polling
+five seconds, and exact-marker deletion five seconds, within the 30-second case.
+Observation or cleanup failures fail the case. Deletion is a bounded attempt;
+outer cancellation or a late terminal record can outlive it. Pure verdict tests
+cover unrelated 502/503, absent/wrong-kind diagnostics, wrong trace and successful
+HTTP responses. They do not establish a fresh live TLS integration run.
