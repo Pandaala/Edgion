@@ -673,6 +673,7 @@ impl TestSuite for ProxyRewriteTestSuite {
             Self::test_header_arg_always_encoded(),
             // Header $1 (regex capture) always url-encoded
             Self::test_header_capture_always_encoded(),
+            Self::test_combined(),
         ]
     }
 }

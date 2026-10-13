@@ -73,3 +73,15 @@ semantics, or match-time capture ownership changes.
 ## Resolution references
 
 - `ARCH-037` — final-stage original-span replacement and escaped-dollar boundary.
+
+## Combined integration registration
+
+`ProxyRewriteTestSuite::test_cases` includes the existing `combined` case exactly
+once alongside the nine URI/template cases (ARCH-386). Both fixture trees route
+`/combined` to `proxy-rewrite-combined`; its assertions observe Host replacement,
+X-Gateway addition, a URI-derived X-Original-Path value, and removal of the two
+sent header markers. A declared fixture and an unregistered case do not establish
+execution coverage. This registration correction leaves the assertion body and
+fixture topology unchanged; source/fixture checks are not live integration or
+mutation-test results. Multi-value append remains covered by its separate
+canonical regression, and this case does not assert X-Request-Id.
