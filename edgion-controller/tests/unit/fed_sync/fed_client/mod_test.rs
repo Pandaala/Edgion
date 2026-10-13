@@ -350,3 +350,126 @@ async fn http_proxy_reload_post_reaches_router() {
     assert_eq!(resp.status_code, 200);
     assert_eq!(String::from_utf8(resp.body).expect("utf8"), "reload-ok");
 }
+
+/// ARCH-082: successful forwarding must not create spelling-dependent metric series.
+#[tokio::test(flavor = "current_thread")]
+async fn successful_watch_metrics_use_one_canonical_kind() {
+    use crate::conf_mgr::{ConfCenterConfig, ConfMgr, FileSystemConfig, ShutdownHandle};
+    use crate::conf_sync::conf_server::{WatchObj, WatchResponseSimple};
+    use crate::fed_sync::proto::FedWatchRequest;
+    use edgion_common::observe::cardinality_guard::{CardinalityGuard, CardinalityMode};
+    use tokio::sync::mpsc;
+
+    struct ReadyWatch;
+    impl WatchObj for ReadyWatch {
+        fn kind_name(&self) -> &'static str {
+            "HTTPRoute"
+        }
+        fn list_json(&self) -> Result<(String, u64), String> {
+            Ok(("[]".into(), 2))
+        }
+        fn current_version(&self) -> u64 {
+            2
+        }
+        fn watch_json(&self, _: String, _: String, from_version: u64) -> mpsc::Receiver<WatchResponseSimple> {
+            assert_eq!(from_version, 1);
+            let (tx, rx) = mpsc::channel(1);
+            tx.try_send(WatchResponseSimple::new("fixture-event".into(), 2))
+                .unwrap();
+            rx
+        }
+        fn is_ready(&self) -> bool {
+            true
+        }
+        fn set_ready(&self) {}
+        fn set_not_ready(&self) {}
+        fn clear(&self) {}
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let manager = Arc::new(
+        ConfMgr::create(ConfCenterConfig::FileSystem(
+            FileSystemConfig::new(tmp.path().to_path_buf()).with_controller_name("edgion.io/gateway-controller"),
+        ))
+        .await
+        .unwrap(),
+    );
+    let shutdown = ShutdownHandle::new();
+    let lifecycle = {
+        let manager = manager.clone();
+        let shutdown = shutdown.clone();
+        tokio::spawn(async move { manager.start_with_shutdown(shutdown).await })
+    };
+    let server = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(server) = manager.config_sync_server() {
+                break server;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    server.register_all(std::collections::HashMap::from([(
+        "HTTPRoute".into(),
+        Arc::new(ReadyWatch) as Arc<dyn WatchObj>,
+    )]));
+
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let handle = recorder.handle();
+    let recorder = CardinalityGuard::new(recorder, 64, CardinalityMode::Enforce);
+    // This runtime and its forwarding tasks stay on the same thread.
+    let _local_recorder = metrics::set_default_local_recorder(&recorder);
+    let authorizer = Arc::new(Authorizer::new(crate::fed_sync::default_policy::default_center_policy()));
+    let (tx, mut rx) = mpsc::channel(8);
+    let tx = Arc::new(tx);
+    let mut cancel = None;
+    for (index, kind) in ["HTTPRoute", "httproute", "hTtPrOuTe"].into_iter().enumerate() {
+        let request_id = format!("watch-{index}");
+        handle_center_message(
+            CenterPayload::WatchRequest(FedWatchRequest {
+                request_id: request_id.clone(),
+                kind: kind.into(),
+                from_version: 1,
+            }),
+            tx.clone(),
+            axum::Router::new(),
+            manager.clone(),
+            &mut cancel,
+            Arc::new(tokio::sync::Semaphore::new(1)),
+            authorizer.clone(),
+        )
+        .await
+        .unwrap();
+        let message = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let Some(CtrlPayload::WatchEventResponse(event)) = message.payload else {
+            panic!("expected successful watch event");
+        };
+        assert_eq!(event.request_id, request_id);
+        assert_eq!(event.data, "fixture-event");
+        assert_eq!(event.sync_version, 2);
+        assert_eq!(event.server_id, server.server_id());
+        assert!(event.error.is_empty());
+    }
+    let output = handle.render();
+    let samples: Vec<_> = output
+        .lines()
+        .filter(|line| line.starts_with(fed_metrics::names::WATCH_EVENTS_TOTAL))
+        .collect();
+    assert_eq!(samples.len(), 1, "{output}");
+    assert!(samples[0].contains("kind=\"HTTPRoute\""), "{output}");
+    assert!(samples[0].contains("direction=\"sent\""), "{output}");
+    assert!(samples[0].ends_with(" 3"), "{output}");
+    if let Some(cancel) = cancel {
+        cancel.cancel();
+    }
+    shutdown.shutdown();
+    tokio::time::timeout(Duration::from_secs(5), lifecycle)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}

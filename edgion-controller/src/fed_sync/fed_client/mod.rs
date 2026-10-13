@@ -801,7 +801,7 @@ async fn handle_center_message(
 
                     let tx = tx.clone();
                     let request_id = req.request_id.clone();
-                    let watch_kind = req.kind.clone();
+                    let watch_kind = crate::api::authz_classifier::bounded_kind_label(&kind);
                     let initial_server_id = css.server_id();
                     let reload_conf_mgr = conf_mgr.clone();
                     tokio::spawn(async move {
@@ -824,7 +824,7 @@ async fn handle_center_message(
                                                 })),
                                             };
                                             fed_metrics::record_watch_event(
-                                                &watch_kind,
+                                                watch_kind,
                                                 fed_metrics::labels::direction::SENT,
                                             );
                                             if tx.send(msg).await.is_err() {
