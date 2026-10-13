@@ -181,7 +181,7 @@ spec:
     );
 }
 
-/// The non-fatal guarantee: a document that re-parses as a `serde_yaml::Value`
+/// The non-fatal guarantee: a document parsed as a `serde_yaml::Value`
 /// but cannot convert to `serde_json::Value` (a non-string mapping key, which
 /// JSON has no representation for) must still load successfully via the normal
 /// typed parse — the diagnostic just skips itself instead of failing the load.
@@ -211,7 +211,7 @@ fn json_conversion_failure_is_skipped_and_leaves_object_untouched() {
 
     super::populate_unknown_fields_non_fatal(
         edgion_resources::ResourceKind::EdgionPlugins,
-        unconvertible_content,
+        &serde_yaml::from_str(unconvertible_content).unwrap(),
         &mut parsed,
     );
 
@@ -236,4 +236,22 @@ spec:
 "#;
     let parsed: HTTPRoute = parse_resource_content(content).expect("HTTPRoute must still parse normally");
     assert_eq!(parsed.metadata.name.as_deref(), Some("r1"));
+}
+
+#[test]
+fn advisory_kinds_preserve_raw_failure_precedence_and_text_type_errors() {
+    let duplicate = CLEAN_PLUGINS.replace("name: clean-plugins", "name: first\n  name: second");
+    let expected = serde_yaml::from_str::<serde_yaml::Value>(&duplicate).unwrap_err();
+    let actual = parse_resource_content::<EdgionPlugins>(&duplicate).unwrap_err();
+    assert_eq!(actual.to_string(), expected.to_string());
+
+    let invalid = CLEAN_PLUGINS.replace("requestPlugins:", "requestPlugins: invalid\n  ignored:");
+    assert!(serde_yaml::from_str::<serde_yaml::Value>(&invalid).is_ok());
+    let expected = serde_yaml::from_str::<EdgionPlugins>(&invalid).unwrap_err();
+    let actual = parse_resource_content::<EdgionPlugins>(&invalid).unwrap_err();
+    assert_eq!(actual.to_string(), expected.to_string());
+    assert_eq!(
+        actual.location().map(|p| (p.line(), p.column())),
+        expected.location().map(|p| (p.line(), p.column()))
+    );
 }

@@ -222,41 +222,21 @@ where
 {
     let kind = K::resource_kind();
 
-    validate_resource_api_version::<K>(content)?;
+    let raw: serde_yaml::Value = serde_yaml::from_str(content)?;
+    validate_gateway_api_source(kind, &raw).map_err(serde_yaml::Error::custom)?;
+    let source_version = raw.get("apiVersion").and_then(serde_yaml::Value::as_str);
+    let beta_source = source_version == Some("gateway.networking.k8s.io/v1beta1");
 
-    let beta_source = serde_yaml::from_str::<serde_yaml::Value>(content)?
-        .get("apiVersion")
-        .and_then(serde_yaml::Value::as_str)
-        == Some("gateway.networking.k8s.io/v1beta1");
-    let mut parsed = if kind == ResourceKind::Gateway && beta_source {
-        let beta: edgion_resources::GatewayBeta = serde_yaml::from_str(content)?;
-        let canonical: edgion_resources::Gateway = beta.into();
-        serde_yaml::from_value(serde_yaml::to_value(canonical)?)?
-    } else if kind == ResourceKind::HTTPRoute && beta_source {
-        let beta: edgion_resources::HTTPRouteBeta = serde_yaml::from_str(content)?;
-        let canonical: edgion_resources::HTTPRoute = beta.into();
-        serde_yaml::from_value(serde_yaml::to_value(canonical)?)?
-    } else if kind == ResourceKind::GatewayClass && beta_source {
-        let beta: edgion_resources::GatewayClassBeta = serde_yaml::from_str(content)?;
-        let canonical: edgion_resources::GatewayClass = beta.into();
-        serde_yaml::from_value(serde_yaml::to_value(canonical)?)?
-    } else if kind == ResourceKind::ReferenceGrant && beta_source {
-        let beta: edgion_resources::ReferenceGrantBeta = serde_yaml::from_str(content)?;
-        let canonical: edgion_resources::ReferenceGrant = beta.into();
-        serde_yaml::from_value(serde_yaml::to_value(canonical)?)?
-    } else if matches!(
+    if matches!(
         kind,
         ResourceKind::GRPCRoute
             | ResourceKind::TLSRoute
             | ResourceKind::BackendTLSPolicy
             | ResourceKind::TCPRoute
             | ResourceKind::UDPRoute
-    ) && serde_yaml::from_str::<serde_yaml::Value>(content)?
-        .get("apiVersion")
-        .and_then(serde_yaml::Value::as_str)
-        != Some("gateway.networking.k8s.io/v1")
+    ) && source_version != Some("gateway.networking.k8s.io/v1")
     {
-        let mut source: serde_yaml::Value = serde_yaml::from_str(content)?;
+        let mut source = raw;
         if validate_alpha_schema {
             let version = source
                 .get("apiVersion")
@@ -283,7 +263,34 @@ where
                 .map_err(serde_yaml::Error::custom)?;
         }
         source["apiVersion"] = serde_yaml::Value::String("gateway.networking.k8s.io/v1".to_string());
-        serde_yaml::from_value(source)?
+        return serde_yaml::from_value(source);
+    }
+
+    // Drop the raw view before text decoding unless advisory diagnostics need it.
+    let diagnostic_raw = matches!(
+        kind,
+        ResourceKind::EdgionPlugins
+            | ResourceKind::EdgionStreamPlugins
+            | ResourceKind::EdgionConfigData
+            | ResourceKind::LinkSys
+    )
+    .then_some(raw);
+    let mut parsed = if kind == ResourceKind::Gateway && beta_source {
+        let beta: edgion_resources::GatewayBeta = serde_yaml::from_str(content)?;
+        let canonical: edgion_resources::Gateway = beta.into();
+        serde_yaml::from_value(serde_yaml::to_value(canonical)?)?
+    } else if kind == ResourceKind::HTTPRoute && beta_source {
+        let beta: edgion_resources::HTTPRouteBeta = serde_yaml::from_str(content)?;
+        let canonical: edgion_resources::HTTPRoute = beta.into();
+        serde_yaml::from_value(serde_yaml::to_value(canonical)?)?
+    } else if kind == ResourceKind::GatewayClass && beta_source {
+        let beta: edgion_resources::GatewayClassBeta = serde_yaml::from_str(content)?;
+        let canonical: edgion_resources::GatewayClass = beta.into();
+        serde_yaml::from_value(serde_yaml::to_value(canonical)?)?
+    } else if kind == ResourceKind::ReferenceGrant && beta_source {
+        let beta: edgion_resources::ReferenceGrantBeta = serde_yaml::from_str(content)?;
+        let canonical: edgion_resources::ReferenceGrant = beta.into();
+        serde_yaml::from_value(serde_yaml::to_value(canonical)?)?
     } else {
         serde_yaml::from_str::<K>(content)?
     };
@@ -294,14 +301,8 @@ where
     // `strict_ingest_enabled`. That gate means
     // "Kubernetes ingress" specifically (see its doc comment), so it is NOT
     // consulted here — FileSystem/etcd content is checked unconditionally.
-    if matches!(
-        kind,
-        ResourceKind::EdgionPlugins
-            | ResourceKind::EdgionStreamPlugins
-            | ResourceKind::EdgionConfigData
-            | ResourceKind::LinkSys
-    ) {
-        populate_unknown_fields_non_fatal(kind, content, &mut parsed);
+    if let Some(raw) = diagnostic_raw {
+        populate_unknown_fields_non_fatal(kind, &raw, &mut parsed);
     }
 
     Ok(parsed)
@@ -335,10 +336,10 @@ mod gateway_api_version_guard_tests;
 /// the unknown-field diagnostic, for the FileSystem/etcd loader seam.
 ///
 /// Non-fatal by design: unlike the Kubernetes hook, this
-/// runs on YAML content that may contain shapes `serde_json::Value` cannot
+/// borrows a raw YAML view that may contain shapes `serde_json::Value` cannot
 /// represent (a non-string map key, `!!binary`, a YAML tag). This diagnostic
 /// must never turn an otherwise-loadable document into a load failure, so any
-/// parse/convert error here just skips the check and the caller's typed
+/// conversion error here just skips the check and the caller's typed
 /// parse (already completed above) is returned unchanged.
 ///
 /// `K` is generic over every resource kind `parse_resource_content` serves,
@@ -347,21 +348,8 @@ mod gateway_api_version_guard_tests;
 /// for a diagnostic only four kinds need. The
 /// `K: 'static` bound `parse_resource_content` already carries makes this
 /// sound.
-fn populate_unknown_fields_non_fatal<K: 'static>(kind: ResourceKind, content: &str, parsed: &mut K) {
-    let yaml_value: serde_yaml::Value = match serde_yaml::from_str(content) {
-        Ok(v) => v,
-        Err(err) => {
-            tracing::debug!(
-                component = "conf_center",
-                event = "unknown_fields_yaml_parse_skip",
-                kind = ?kind,
-                error = %err,
-                "skipping unknown-field check: content did not re-parse as YAML"
-            );
-            return;
-        }
-    };
-    let json_value: Value = match serde_json::to_value(&yaml_value) {
+fn populate_unknown_fields_non_fatal<K: 'static>(kind: ResourceKind, yaml_value: &serde_yaml::Value, parsed: &mut K) {
+    let json_value: Value = match serde_json::to_value(yaml_value) {
         Ok(v) => v,
         Err(err) => {
             tracing::warn!(

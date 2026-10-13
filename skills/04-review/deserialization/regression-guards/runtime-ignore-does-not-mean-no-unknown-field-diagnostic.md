@@ -33,6 +33,25 @@ This distinction matters for migration guidance. Operators must know both the
 effective fallback behavior and where to find the diagnostic without being
 told that apply is rejected when the mechanism is intentionally warn-not-block.
 
+## Call-local YAML preparation
+
+ARCH-091 gives `conf_center/common.rs::parse_resource_content_inner` one raw YAML
+view per invocation. Source-GVK checks and source selection borrow that view;
+selected alpha conversion consumes it after the existing schema check. Advisory
+unknown-field projection borrows the same raw view after typed decoding, so
+unknown keys are not lost through a typed round-trip. Other branches drop the
+view before original-text typed decoding. No view survives the call or enters a
+resource, cache or transport object.
+
+The standalone API-version validator still parses and validates its own input.
+Normal and beta source decoding still use original text; malformed YAML and raw
+source identity errors retain precedence over typed failures. The diagnostic
+helper's JSON conversion remains non-fatal and leaves existing findings unchanged
+on failure. Shared parser tests preserve adapter/metadata/status behavior, clean
+and typo paths, malformed/duplicate/tagged-text controls and error locations.
+The direct non-string-key conversion test is defensive seam coverage, not a claim
+that the same malformed key is accepted by the typed ingress path.
+
 ## Review checklist
 
 - Describe the runtime fallback after the stale field is dropped.

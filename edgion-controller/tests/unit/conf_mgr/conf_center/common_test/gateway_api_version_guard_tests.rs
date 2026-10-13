@@ -22,7 +22,7 @@ fn last_pre_v1_sources_convert_to_canonical_resources() {
         if kind == "BackendTLSPolicy" {
             source["spec"] = serde_json::json!({
                 "targetRefs": [{"group": "", "kind": "Service", "name": "backend"}],
-                "validation": {"hostname": "backend.example.com"}
+                "validation": {"hostname": "backend.example.com", "wellKnownCACertificates": "System"}
             });
             source["status"] = serde_json::json!({"ancestors": []});
         } else {
@@ -253,6 +253,62 @@ fn tcp_and_udp_alpha_ingress_converts_to_v1() {
                 route.spec.rules.as_ref().unwrap()[0].backend_refs.as_ref().unwrap()[0].name,
                 "backend"
             );
+        }
+    }
+}
+
+#[test]
+fn raw_yaml_failures_precede_source_and_typed_validation() {
+    for raw in [
+        "kind: Wrong\napiVersion: unsupported\nspec: [unterminated\n",
+        "kind: Wrong\napiVersion: unsupported\nmetadata: {name: one, name: two}\nspec: {}\n",
+    ] {
+        let expected = serde_yaml::from_str::<serde_yaml::Value>(raw).unwrap_err();
+        let actual = super::parse_resource_content::<GatewayClass>(raw).unwrap_err();
+        assert_eq!(actual.to_string(), expected.to_string());
+        assert_eq!(
+            actual.location().map(|p| (p.line(), p.column())),
+            expected.location().map(|p| (p.line(), p.column()))
+        );
+    }
+    let raw = "kind: Wrong\napiVersion: unsupported\nmetadata: []\nspec: []\n";
+    assert!(serde_yaml::from_str::<serde_yaml::Value>(raw).is_ok());
+    let actual = super::parse_resource_content::<GatewayClass>(raw).unwrap_err();
+    assert_eq!(actual.to_string(), "GatewayClass kind must be GatewayClass");
+}
+
+#[test]
+fn canonical_and_beta_keep_original_text_deserializer_behavior() {
+    for version in ["v1", "v1beta1"] {
+        for value in [
+            "example.com/controller",
+            "!label example.com/controller",
+            "[invalid, sequence]",
+        ] {
+            let raw = format!(
+                "apiVersion: gateway.networking.k8s.io/{version}\nkind: GatewayClass\nmetadata:\n  name: edge\nspec:\n  controllerName: {value}\n"
+            );
+            assert!(serde_yaml::from_str::<serde_yaml::Value>(&raw).is_ok());
+            let expected = if version == "v1beta1" {
+                serde_yaml::from_str::<edgion_resources::GatewayClassBeta>(&raw).map(GatewayClass::from)
+            } else {
+                serde_yaml::from_str::<GatewayClass>(&raw)
+            };
+            let actual = super::parse_resource_content::<GatewayClass>(&raw);
+            match (expected, actual) {
+                (Ok(expected), Ok(actual)) => assert_eq!(
+                    serde_json::to_value(actual).unwrap(),
+                    serde_json::to_value(expected).unwrap()
+                ),
+                (Err(expected), Err(actual)) => {
+                    assert_eq!(actual.to_string(), expected.to_string());
+                    assert_eq!(
+                        actual.location().map(|p| (p.line(), p.column())),
+                        expected.location().map(|p| (p.line(), p.column()))
+                    );
+                }
+                (expected, actual) => panic!("text decoding changed: expected={expected:?}, actual={actual:?}"),
+            }
         }
     }
 }
