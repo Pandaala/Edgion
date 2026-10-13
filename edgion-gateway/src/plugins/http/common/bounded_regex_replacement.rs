@@ -240,11 +240,19 @@ fn checked_output_len(current: usize, additional: usize, limit: usize) -> Result
     Ok(len)
 }
 
+fn output_growth_target(capacity: usize, next: usize, limit: usize) -> usize {
+    next.max(capacity.saturating_mul(2)).min(limit)
+}
+
 fn append_bounded(output: &mut String, value: &str, limit: usize) -> Result<(), BoundedRegexReplacementError> {
-    checked_output_len(output.len(), value.len(), limit)?;
-    output
-        .try_reserve_exact(value.len())
-        .map_err(|_| BoundedRegexReplacementError::AllocationFailed)?;
+    let next = checked_output_len(output.len(), value.len(), limit)?;
+    if next > output.capacity() {
+        // Retain amortized growth without requesting capacity beyond the limit.
+        let target = output_growth_target(output.capacity(), next, limit);
+        output
+            .try_reserve_exact(target - output.len())
+            .map_err(|_| BoundedRegexReplacementError::AllocationFailed)?;
+    }
     output.push_str(value);
     Ok(())
 }

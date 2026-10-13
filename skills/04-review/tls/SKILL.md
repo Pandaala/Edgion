@@ -29,6 +29,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [HTTPS frontend HTTP/2 policy reaches its ALPN owner](regression-guards/https-http2-alpn-policy-handoff.md)
+
 - [Allowed SAN regex case mode](regression-guards/allowed-san-regex-case-mode.md)
 - [Downstream TLS offload budget and cancellation](regression-guards/downstream-handshake-offload-budget-and-cancellation.md)
 - [TLS log backend-address masking and plaintext SNI scope](regression-guards/tls-log-address-redaction.md)

@@ -17,11 +17,93 @@
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub struct HttpsTestSuite;
 
 impl HttpsTestSuite {
+    fn frontend_http2_policy_cases() -> Vec<TestCase> {
+        // Read the shared fixture port inventory instead of duplicating ports.
+        let ports: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/conf/ports.json"
+        )))
+        .expect("committed port inventory must parse");
+        let ports = &ports["suites"]["EdgionTls/https"];
+        let mut cases = Vec::new();
+        for (policy, port_key, negotiated_version) in [
+            ("default", "https", reqwest::Version::HTTP_2),
+            ("enabled", "https_enabled", reqwest::Version::HTTP_2),
+            ("disabled", "https_disabled", reqwest::Version::HTTP_11),
+        ] {
+            let port = u16::try_from(ports[port_key].as_u64().expect("fixture port must exist"))
+                .expect("fixture port must fit u16");
+            for force_http1 in [false, true] {
+                let expected = if force_http1 {
+                    reqwest::Version::HTTP_11
+                } else {
+                    negotiated_version
+                };
+                let client_mode = if force_http1 { "forced_h1" } else { "negotiating" };
+                cases.push(TestCase::new(
+                    format!("https_http2_{policy}_{client_mode}"),
+                    format!("ARCH-040: HTTPS {policy} policy, {client_mode} client"),
+                    move |ctx: TestContext| {
+                        Box::pin(async move {
+                            let start = Instant::now();
+                            let result: anyhow::Result<()> = async {
+                                let host = ctx.http_host.as_deref().unwrap_or("test.example.com");
+                                let mut addresses = tokio::time::timeout(
+                                    Duration::from_secs(2),
+                                    tokio::net::lookup_host((ctx.target_host.as_str(), port)),
+                                )
+                                .await??;
+                                let address = addresses.next().ok_or_else(|| anyhow::anyhow!("No target address"))?;
+                                let mut builder = reqwest::Client::builder()
+                                    .no_proxy()
+                                    .danger_accept_invalid_certs(true)
+                                    .timeout(Duration::from_secs(5))
+                                    .resolve(host, address);
+                                if force_http1 {
+                                    builder = builder.http1_only();
+                                }
+                                // The normal client offers h2 and HTTP/1.1 through ALPN.
+                                // No prior knowledge: disabled must fall back to usable H1.
+                                let response = builder
+                                    .build()?
+                                    .get(format!("https://{host}:{port}/secure/health"))
+                                    .send()
+                                    .await?;
+                                anyhow::ensure!(response.status() == reqwest::StatusCode::OK, "Expected HTTP 200");
+                                anyhow::ensure!(
+                                    response.version() == expected,
+                                    "Expected {expected:?}, got {:?}",
+                                    response.version()
+                                );
+                                let body = response.text().await?;
+                                anyhow::ensure!(
+                                    body.contains("healthy") || body.contains("Path: /secure/health"),
+                                    "Expected complete health response"
+                                );
+                                Ok(())
+                            }
+                            .await;
+                            match result {
+                                Ok(()) => {
+                                    TestResult::passed_with_message(start.elapsed(), format!("Verified {expected:?}"))
+                                }
+                                Err(error) => {
+                                    TestResult::failed(start.elapsed(), format!("HTTPS policy failed: {error:#}"))
+                                }
+                            }
+                        })
+                    },
+                ));
+            }
+        }
+        cases
+    }
+
     fn test_https_secure_health() -> TestCase {
         TestCase::new(
             "https_secure_health",
@@ -143,10 +225,12 @@ impl TestSuite for HttpsTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![
+        let mut cases = vec![
             Self::test_https_secure_health(),
             Self::test_https_secure_echo(),
             Self::test_https_secure_status(),
-        ]
+        ];
+        cases.extend(Self::frontend_http2_policy_cases());
+        cases
     }
 }

@@ -177,6 +177,15 @@ ExtensionRef wrapper's stage traits. Disabled/policy-masked entries remain inert
 and conditions do not weaken conservative construction-time admission. Dynamic
 ExtProc modes and installed processor checks remain separate request-state checks.
 
+ExtProc buffered requests retain the early-read immutable request `Bytes` across
+the headers verdict. Request-phase descriptors carry no wire payload: the body
+message is constructed only when the direction continues and the validated
+effective mode still admits BUFFERED. Header EOS follows the original configured
+phases, including empty buffered bodies. Reductions and replacements finish the
+same attached stream when terminal, or retain it for enabled response phases.
+Keep replacement publication before header mutation and preserve the existing
+failure/cancellation contracts; see the [interactive ExtProc regression boundary](../../04-review/ext-proc/regression-guards/ext-proc-interactive-continue-and-replace.md).
+
 Adding a plugin type does not require a CRD change. All stage-entry `type` fields are open
 strings and `config` preserves unknown fields. The Controller rejects unsupported types with
 `Accepted=False`; the Gateway seals a failure runtime, including disabled or policy-masked

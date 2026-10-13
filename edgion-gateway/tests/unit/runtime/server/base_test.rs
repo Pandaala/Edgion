@@ -1,6 +1,42 @@
 use super::*;
 
 #[test]
+fn parse_enable_http2_annotation_preserves_frontend_policy() {
+    let mut gateway: Gateway = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "http2-policy"},
+        "spec": {"gatewayClassName": "public"}
+    }))
+    .unwrap();
+    assert!(parse_enable_http2_annotation(&gateway));
+    gateway.metadata.annotations = Some(Default::default());
+    assert!(parse_enable_http2_annotation(&gateway));
+    for (value, enabled) in [
+        ("false", false),
+        ("FALSE", false),
+        ("FaLsE", false),
+        ("0", false),
+        ("no", false),
+        ("NO", false),
+        ("No", false),
+        ("off", false),
+        ("OFF", false),
+        ("OfF", false),
+        ("true", true),
+        ("TRUE", true),
+        ("1", true),
+        ("arbitrary", true),
+        ("", true),
+        (" false ", true),
+    ] {
+        gateway.metadata.annotations.as_mut().unwrap().insert(
+            edgion_resources::constants::annotations::edgion::ENABLE_HTTP2.into(),
+            value.into(),
+        );
+        assert_eq!(parse_enable_http2_annotation(&gateway), enabled, "value: {value:?}");
+    }
+}
+
+#[test]
 fn same_port_distinct_host_ips_are_independent() {
     let first = "192.0.2.10:8080".parse().unwrap();
     let second = "192.0.2.11:8080".parse().unwrap();

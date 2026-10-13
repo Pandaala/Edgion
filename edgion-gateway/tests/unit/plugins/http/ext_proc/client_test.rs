@@ -2,6 +2,29 @@ use super::*;
 use edgion_resources::plugin_configs::ExtProcConfig;
 use edgion_resources::resources::refs::plugin_fields::PreparedPluginReferences;
 
+impl ExtProcStream {
+    pub(crate) async fn test_channel(
+        sessions: Arc<Semaphore>,
+    ) -> (
+        Self,
+        tokio::sync::mpsc::Receiver<ProcessingRequest>,
+        tokio::sync::mpsc::Sender<Result<ProcessingResponse, tonic::Status>>,
+    ) {
+        let (request_tx, request_rx) = tokio::sync::mpsc::channel(4);
+        let (response_tx, response_rx) = tokio::sync::mpsc::channel(4);
+        (
+            Self {
+                sender: Some(request_tx),
+                inbound: InboundState::Test(response_rx),
+                timeout: Duration::from_secs(2),
+                _permit: sessions.acquire_owned().await.unwrap(),
+            },
+            request_rx,
+            response_tx,
+        )
+    }
+}
+
 pub(in super::super) fn actual_owner(config: &ExtProcConfig) -> edgion_resources::EdgionPlugins {
     serde_json::from_value(
         serde_json::json!({"metadata":{"name":"ext-proc-test","namespace":"default"},

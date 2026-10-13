@@ -106,3 +106,71 @@ fn checked_length_overflow_reports_maximum_length() {
         Err(BoundedRegexReplacementError::OutputTooLong { len: usize::MAX })
     );
 }
+
+#[test]
+fn output_growth_target_handles_large_appends_clamping_and_saturation() {
+    assert_eq!(output_growth_target(0, 1, 1024), 1);
+    assert_eq!(output_growth_target(8, 9, 1024), 16);
+    assert_eq!(output_growth_target(8, 24, 1024), 24);
+    assert_eq!(output_growth_target(8, 9, 12), 12);
+    assert_eq!(output_growth_target(0, 0, 0), 0);
+    let overflowing_capacity = usize::MAX / 2 + 1;
+    assert_eq!(
+        output_growth_target(overflowing_capacity, overflowing_capacity + 1, usize::MAX),
+        usize::MAX
+    );
+    assert_eq!(
+        output_growth_target(usize::MAX / 2 + 1, usize::MAX, usize::MAX),
+        usize::MAX
+    );
+    assert_eq!(
+        output_growth_target(usize::MAX / 2 + 1, usize::MAX - 1, usize::MAX - 1),
+        usize::MAX - 1
+    );
+}
+
+#[test]
+fn small_appends_reuse_geometric_capacity() {
+    let limit = 1024;
+    let mut output = String::new();
+    let mut growths = 0;
+    for next in 1..=limit {
+        let capacity = output.capacity();
+        let pointer = output.as_ptr();
+        append_bounded(&mut output, "x", limit).expect("prefix fits the limit");
+        assert_eq!(output.len(), next);
+        if next > capacity {
+            growths += 1;
+            // Allocators may grant more capacity than the requested target.
+            assert!(output.capacity() >= next.max(capacity.saturating_mul(2)).min(limit));
+        } else {
+            assert_eq!(output.capacity(), capacity);
+            assert_eq!(output.as_ptr(), pointer);
+        }
+    }
+    assert!(growths <= 11, "1024 one-byte appends need at most 11 growths");
+    assert_eq!(output, "x".repeat(limit));
+}
+
+#[test]
+fn rejected_prefix_preserves_output_and_capacity() {
+    let mut output = String::from("x");
+    let capacity = output.capacity();
+    let pointer = output.as_ptr();
+    let value = "y".repeat(capacity + 1);
+    assert_eq!(
+        append_bounded(&mut output, &value, 1),
+        Err(BoundedRegexReplacementError::OutputTooLong { len: capacity + 2 })
+    );
+    assert_eq!(output, "x");
+    assert_eq!(output.capacity(), capacity);
+    assert_eq!(output.as_ptr(), pointer);
+}
+
+#[test]
+fn empty_append_at_zero_limit_keeps_output_unallocated() {
+    let mut output = String::new();
+    assert_eq!(append_bounded(&mut output, "", 0), Ok(()));
+    assert_eq!(output.len(), 0);
+    assert_eq!(output.capacity(), 0);
+}

@@ -17,6 +17,14 @@ the original body; `CONTINUE_AND_REPLACE` applies the valid request mutations
 and stops that direction, while the final outbound phase immediately
 half-closes the request stream.
 
+ARCH-032 additionally defers buffered body-message construction. The early
+canonical storage read still occurs before the headers exchange; its immutable
+`Bytes` remains the exact original generation. Only the admitted body phase
+converts it into the generated protobuf `Vec<u8>`. NONE reduction,
+CONTINUE_AND_REPLACE, immediate reply, malformed verdict and dependency failure
+therefore exit or skip that conversion before it occurs. Header EOS remains
+derived from the original configuration, even for an empty buffered body.
+
 If a valid request-body replacement cannot be published to the canonical
 request `BodyStorage`, the replacement and later header mutation are not
 applied. The configured failure policy still chooses fail-open or fail-close,
@@ -104,6 +112,19 @@ Re-open the terminal-status decision only if:
 
 ## Verification Boundaries
 
+The additive `plugin::tests::buffered_request` cases drive the real request
+orchestration, attached owner and client state machine through bounded in-memory
+channels. Replies rendezvous with outbound requests, rather than being queued
+before phase admission. They cover early materialization, SEND/SKIP/empty bodies,
+NONE reduction and replacement with/without future response headers, publication
+ordering and failures, opaque immediate replies/suppression, malformed/dependency
+verdicts, final half-close and cancellation/permit release. These cases open no
+network connection and do not establish live gRPC interoperability or storage
+atomicity. Structural source evidence, independently checked against the actual
+diff, establishes that body-message construction follows admission; message-count
+assertions alone do not establish allocation absence. No RSS, latency, throughput
+or total-allocation measurements are claimed.
+
 The ExtProc publication-failure tests deterministically mock
 `overwrite_request_body` rejection. They verify policy results, terminal
 summary replacement, skipped later header mutation, and response-companion
@@ -132,6 +153,8 @@ storage publication boundary changes.
 
 ## Resolution references
 
+- `ARCH-032` — defer buffered protobuf materialization until phase admission,
+  while retaining the early immutable capture and existing interactive owner.
 - `BODY-004` — 2026-07-27.
 - `ext-proc-terminalize-owner-on-request-body-publication-failure` — request-body
   publication failure terminalizes the shared owner for both failure policies.

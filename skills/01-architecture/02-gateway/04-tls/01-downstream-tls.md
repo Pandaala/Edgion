@@ -9,6 +9,15 @@ description: Downstream TLS (client→gateway) — Pingora Listener TLS callback
 
 Downstream TLS handles the TLS handshake from clients to the Gateway. The core implementation is the `TlsCallback` struct, which implements Pingora's `TlsAccept` trait and injects custom logic at key stages of the TLS handshake.
 
+HTTPS listener construction passes the resolved Gateway `edgion.io/enable-http2`
+flag to `TlsCallback::new_tls_settings_with_callback`; that factory alone enables
+HTTP ALPN. The default and enabled policies advertise h2 with HTTP/1.1 fallback.
+The disabled policy leaves HTTP ALPN unset and accepts HTTP/1.1. TLS-to-TCP calls
+the same factory with `false`, independently of the Gateway HTTP/2 flag, so it
+advertises no HTTP ALPN. These settings are captured at listener startup; changing
+the annotation requires a restart. See the
+[HTTPS ALPN regression guard](../../../04-review/tls/regression-guards/https-http2-alpn-policy-handoff.md).
+
 ## Pingora TLS callbacks
 
 `TlsCallback` implements two callbacks of the `TlsAccept` trait, plus an additional early callback registered through BoringSSL FFI. There are 4 ssl.log write stages, fired in BoringSSL state-machine order:

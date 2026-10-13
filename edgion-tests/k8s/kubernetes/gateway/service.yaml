@@ -751,3 +751,11 @@ spec:
     port: 32001
     targetPort: 32001
     protocol: TCP
+  - name: p31992
+    port: 31992
+    targetPort: 31992
+    protocol: TCP
+  - name: p31993
+    port: 31993
+    targetPort: 31993
+    protocol: TCP

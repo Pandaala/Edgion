@@ -30,6 +30,12 @@ use edgion_resources::EdgionPlugin;
 
 const PLUGIN_NAME: &str = "ExtProc";
 
+#[derive(Clone, Copy)]
+enum BufferedRequestPhase {
+    Headers,
+    Body,
+}
+
 fn has_future_response_phase(mode: &ProcessingMode) -> bool {
     mode.response_header_mode.is_send() || mode.response_body_mode.is_streamed() || mode.response_trailer_mode.is_send()
 }
@@ -737,27 +743,11 @@ impl RequestFilter for ExtProc {
         } else {
             None
         };
-        let mut requests = Vec::with_capacity(2);
-        if send_headers {
-            requests.push(ProcessingRequest {
-                request: Some(processing_request::Request::RequestHeaders(HttpHeaders {
-                    headers: Some(mutation::collect_request_headers(session)),
-                    end_of_stream: !send_body,
-                })),
-            });
-        }
-        if let Some(body) = body {
-            requests.push(ProcessingRequest {
-                request: Some(processing_request::Request::RequestBody(HttpBody {
-                    body: body.to_vec(),
-                    end_of_stream: true,
-                })),
-            });
-        }
-
-        let request_count = requests.len();
-        for (index, request) in requests.into_iter().enumerate() {
-            let is_request_body = matches!(request.request, Some(processing_request::Request::RequestBody(_)));
+        for phase in [BufferedRequestPhase::Headers, BufferedRequestPhase::Body] {
+            let is_request_body = matches!(phase, BufferedRequestPhase::Body);
+            if (is_request_body && !send_body) || (!is_request_body && !send_headers) {
+                continue;
+            }
             let effective_before = match owner.effective_mode() {
                 Ok(mode) => mode,
                 Err(detail) => return self.fail_request_owner(&owner, session, log, "bad verdict", Some(detail)),
@@ -766,7 +756,28 @@ impl RequestFilter for ExtProc {
                 continue;
             }
             let future_response = has_future_response_phase(&effective_before);
-            let last = index + 1 == request_count && !future_response;
+            let last = (is_request_body || !send_body) && !future_response;
+            let request = match phase {
+                BufferedRequestPhase::Headers => ProcessingRequest {
+                    request: Some(processing_request::Request::RequestHeaders(HttpHeaders {
+                        headers: Some(mutation::collect_request_headers(session)),
+                        end_of_stream: !send_body,
+                    })),
+                },
+                BufferedRequestPhase::Body => {
+                    // Keep the captured generation across the headers verdict;
+                    // materialize its wire payload only after body admission.
+                    let Some(body) = body.as_ref() else {
+                        continue;
+                    };
+                    ProcessingRequest {
+                        request: Some(processing_request::Request::RequestBody(HttpBody {
+                            body: body.to_vec(),
+                            end_of_stream: true,
+                        })),
+                    }
+                }
+            };
             let response = match owner
                 .exchange_suppressible_immediate(request, last, !self.disable_immediate_response)
                 .await

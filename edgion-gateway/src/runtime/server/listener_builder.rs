@@ -278,13 +278,9 @@ pub fn add_http_listener(
                 port,
                 context.listener_key.clone(),
                 context.egc.clone(),
-                true,
+                enable_http2,
             )?;
             tls_settings.set_offload_threadpool_from_server_conf(&context.server_conf);
-            // Enable HTTP/2 for HTTPS if enable_http2 is true
-            if enable_http2 {
-                tls_settings.enable_h2();
-            }
             probe_tcp_bind(&addr, &context.gateway_key, &listener_name)?;
             http_service.add_tls_with_settings(&addr, tcp_sock_opts(context), tls_settings);
             let protocol = if enable_http2 {

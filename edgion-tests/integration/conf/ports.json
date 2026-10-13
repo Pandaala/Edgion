@@ -1,5 +1,5 @@
 {
-  "current_max": 31991,
+  "current_max": 31993,
   "suites": {
     "PluginPolicy": {
       "udp": 58338,
@@ -129,7 +129,9 @@
       "http": 31395
     },
     "EdgionTls/https": {
-      "https": 31190
+      "https": 31190,
+      "https_enabled": 31992,
+      "https_disabled": 31993
     },
     "EdgionTls/grpctls": {
       "grpc_tls": 31200

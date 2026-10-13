@@ -421,6 +421,12 @@ pub(crate) fn test_body_owner(response_body: bool) -> AttachedExtProc {
 }
 
 impl AttachedExtProc {
+    pub(crate) fn install_test_stream(&self, stream: ExtProcStream) {
+        let mut state = self.state.lock();
+        assert!(matches!(*state, StreamState::Lazy));
+        *state = StreamState::Open(stream);
+    }
+
     pub(crate) fn test_lazy() -> Self {
         use edgion_resources::plugin_configs::ExtProcConfig;
 
