@@ -22,3 +22,5 @@ before applying a decision to current code.
 
 - [`key_auth` `hideCredentials` query/cookie no-op — FIXED (fr-auth2-02)](regression-guards/hide-credentials-query-cookie-strip.md)
 - [Auth Query Stripping Preserves an Unmatched Query — FIXED](regression-guards/strip-query-param-no-match-preserves-query.md)
+
+- [Anonymous identity integration evidence](regression-guards/anonymous-identity-integration-evidence.md)

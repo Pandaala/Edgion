@@ -47,6 +47,29 @@ const CONFIGURED_DELAY_MS: u64 = 300;
 /// Tolerance: allow 50ms below the configured value
 const DELAY_MIN_MS: u64 = CONFIGURED_DELAY_MS - 50;
 
+fn validate_anonymous_identity(body: &str, anonymous: bool) -> Result<(), &'static str> {
+    let response: serde_json::Value = serde_json::from_str(body).map_err(|_| "Invalid identity echo JSON")?;
+    let headers = response
+        .get("headers")
+        .and_then(|value| value.as_object())
+        .ok_or("Missing identity echo headers object")?;
+    let expected = if anonymous { "anonymous-user" } else { "jack" };
+    if headers.get("x-consumer-username").and_then(|value| value.as_str()) != Some(expected) {
+        return Err("Missing or mismatched x-consumer-username");
+    }
+    let marker = match headers.get("x-anonymous-consumer") {
+        None => None,
+        Some(value) => Some(value.as_str().ok_or("Invalid x-anonymous-consumer value")?),
+    };
+    if anonymous && marker != Some("true") {
+        return Err("Missing or mismatched x-anonymous-consumer");
+    }
+    if !anonymous && marker.is_some_and(|value| value.eq_ignore_ascii_case("true")) {
+        return Err("Authenticated identity has affirmative x-anonymous-consumer");
+    }
+    Ok(())
+}
+
 impl KeyAuthTestSuite {
     /// Test: Valid API key in header should return 200
     fn test_valid_key_in_header() -> TestCase {
@@ -384,18 +407,21 @@ impl KeyAuthTestSuite {
                                 );
                             }
 
-                            // Check that X-Anonymous-Consumer header was set
-                            let body = response.text().await.unwrap_or_default();
-                            if body.contains("x-anonymous-consumer") || body.contains("X-Anonymous-Consumer") {
-                                TestResult::passed_with_message(
+                            let body = match response.text().await {
+                                Ok(body) => body,
+                                Err(_) => {
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        "Failed to read anonymous identity echo".to_string(),
+                                    )
+                                }
+                            };
+                            match validate_anonymous_identity(&body, true) {
+                                Ok(()) => TestResult::passed_with_message(
                                     start.elapsed(),
-                                    "Anonymous access granted with X-Anonymous-Consumer header".to_string(),
-                                )
-                            } else {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "Anonymous access granted (200 OK)".to_string(),
-                                )
+                                    "Anonymous username and marker observed".to_string(),
+                                ),
+                                Err(error) => TestResult::failed(start.elapsed(), error.to_string()),
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -425,18 +451,21 @@ impl KeyAuthTestSuite {
                         Ok(response) => {
                             let status = response.status().as_u16();
                             if status == 200 {
-                                // Check that user-specific header was set (not anonymous)
-                                let body = response.text().await.unwrap_or_default();
-                                if body.contains("x-consumer-username") && body.contains("jack") {
-                                    TestResult::passed_with_message(
+                                let body = match response.text().await {
+                                    Ok(body) => body,
+                                    Err(_) => {
+                                        return TestResult::failed(
+                                            start.elapsed(),
+                                            "Failed to read authenticated identity echo".to_string(),
+                                        )
+                                    }
+                                };
+                                match validate_anonymous_identity(&body, false) {
+                                    Ok(()) => TestResult::passed_with_message(
                                         start.elapsed(),
-                                        "Valid key accepted, X-Consumer-Username: jack".to_string(),
-                                    )
-                                } else {
-                                    TestResult::passed_with_message(
-                                        start.elapsed(),
-                                        "Valid key accepted (200 OK)".to_string(),
-                                    )
+                                        "Authenticated username observed without anonymous marker".to_string(),
+                                    ),
+                                    Err(error) => TestResult::failed(start.elapsed(), error.to_string()),
                                 }
                             } else {
                                 TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status))
@@ -1049,5 +1078,56 @@ impl TestSuite for KeyAuthTestSuite {
             // Anon-only test (secretGroups absent)
             Self::test_anon_only_no_key_returns_200(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod anonymous_identity_tests {
+    use super::validate_anonymous_identity;
+    use serde_json::json;
+
+    #[test]
+    fn anonymous_and_authenticated_echoes_require_distinct_identities() {
+        assert!(validate_anonymous_identity(
+            r#"{"headers":{"x-consumer-username":"anonymous-user","x-anonymous-consumer":"true"}}"#,
+            true
+        )
+        .is_ok());
+        for marker in [None, Some("false")] {
+            let mut value = json!({"headers": {"x-consumer-username": "jack"}});
+            if let Some(marker) = marker {
+                value["headers"]["x-anonymous-consumer"] = json!(marker);
+            }
+            assert!(validate_anonymous_identity(&value.to_string(), false).is_ok());
+        }
+        for marker in [json!("true"), json!("TRUE"), json!(true), json!(null)] {
+            let value = json!({"headers":{"x-consumer-username":"jack","x-anonymous-consumer":marker}});
+            assert!(validate_anonymous_identity(&value.to_string(), false).is_err());
+        }
+        assert!(validate_anonymous_identity(
+            r#"{"headers":{"x-consumer-username":"anonymous-user","x-anonymous-consumer":"true"}}"#,
+            false
+        )
+        .is_err());
+        assert!(validate_anonymous_identity(r#"{"headers":{"x-consumer-username":"anonymous-user"}}"#, true).is_err());
+    }
+
+    #[test]
+    fn identity_echo_errors_are_safe_and_fail_closed() {
+        for input in [
+            "",
+            "[]",
+            "null",
+            "{}",
+            r#"{"headers":[]}"#,
+            r#"{"headers":{}}"#,
+            r#"{"headers":{"x-consumer-username":7}}"#,
+            r#"{"headers":{"x-consumer-username":"sensitive-identity-sentinel","x-api-key":"sensitive-key-sentinel"}}"#,
+        ] {
+            for anonymous in [true, false] {
+                let error = validate_anonymous_identity(input, anonymous).unwrap_err();
+                assert!(!error.contains("sensitive-"));
+            }
+        }
     }
 }
