@@ -1,5 +1,145 @@
 use super::*;
 
+fn startup_context(gateway: &Gateway) -> listener_builder::ListenerContext {
+    let listener = gateway.spec.listeners.as_ref().unwrap()[0].clone();
+    listener_builder::ListenerContext {
+        gateway_namespace: gateway.metadata.namespace.clone(),
+        gateway_name: gateway.name_any(),
+        gateway_key: gateway.key_name(),
+        listener_key: ListenerKey::new(resolve_listener_addr(gateway, listener.port), &listener.protocol),
+        listener,
+        bind_ip: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        access_logger: Arc::new(AccessLogger::new()),
+        egc: crate::config::bind_gateway_config(None),
+        server_conf: Arc::new(Default::default()),
+        downstream_h2_policy: DownstreamH2Policy::try_from(&crate::cli::config::ServerConfig::default()).unwrap(),
+        enable_http2: parse_enable_http2_annotation(gateway),
+        gateway_annotations: gateway
+            .metadata
+            .annotations
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .collect(),
+        proxy_protocol_policy: PreparedProxyProtocolPolicy::Disabled,
+        proxy_protocol_source: None,
+    }
+}
+
+fn startup_gateway(name: &str, protocol: &str) -> Gateway {
+    crate::test_current_status::from_value(serde_json::json!({
+        "metadata": {"name": name, "namespace": "test"},
+        "spec": {"gatewayClassName": "shared", "listeners": [{"name": "listener", "port": 8443, "protocol": protocol}]}
+    }))
+    .unwrap()
+}
+
+#[test]
+fn startup_prefers_admitted_physical_policy_over_native_fallback_in_both_orders() {
+    use edgion_resources::resources::gateway::HttpServiceDeclaration;
+    for protocol in ["HTTP", "HTTPS"] {
+        let mut pending = startup_gateway("pending", protocol);
+        pending.spec.current_status = None;
+        pending.metadata.annotations = Some(std::collections::BTreeMap::from([
+            ("edgion.io/http-to-https-redirect".into(), "true".into()),
+            ("edgion.io/enable-http2".into(), "true".into()),
+        ]));
+        let mut admitted = startup_gateway("admitted", protocol);
+        admitted.metadata.annotations = Some(std::collections::BTreeMap::from([(
+            "edgion.io/enable-http2".into(),
+            "false".into(),
+        )]));
+        for gateways in [[&pending, &admitted], [&admitted, &pending]] {
+            let contexts = gateways
+                .into_iter()
+                .map(|gateway| {
+                    (
+                        startup_listener_priority(gateway, "listener").unwrap(),
+                        startup_context(gateway),
+                    )
+                })
+                .collect();
+            let selected = select_startup_listener_contexts(contexts).unwrap();
+            assert_eq!(selected.len(), 1);
+            assert_eq!(selected[0].gateway_name, "admitted");
+            assert!(!selected[0].enable_http2);
+            assert_eq!(
+                HttpServiceDeclaration::from_annotation_lookup(protocol, |key| {
+                    selected[0].gateway_annotations.get(key).map(String::as_str)
+                }),
+                HttpServiceDeclaration::from_gateway(&admitted, protocol)
+            );
+        }
+        let selected = select_startup_listener_contexts(vec![(true, startup_context(&pending))]).unwrap();
+        assert_eq!(selected.len(), 1, "native fallback must retain a physical acceptor");
+        assert_eq!(selected[0].gateway_name, "pending");
+        let equal = select_startup_listener_contexts(vec![
+            (false, startup_context(&admitted)),
+            (false, startup_context(&pending)),
+        ])
+        .unwrap();
+        assert_eq!(
+            equal[0].gateway_name, "admitted",
+            "equal priority preserves source order"
+        );
+    }
+}
+
+#[test]
+fn startup_excludes_policy_conflicts_but_keeps_recoverable_native_tls() {
+    let mut gateway = startup_gateway("tls", "HTTPS");
+    let conditions = &mut gateway
+        .spec
+        .current_status
+        .as_mut()
+        .unwrap()
+        .listeners
+        .as_mut()
+        .unwrap()[0]
+        .conditions;
+    let mut programmed = conditions[0].clone();
+    programmed.type_ = "Programmed".into();
+    programmed.status = "False".into();
+    programmed.reason = "Invalid".into();
+    conditions.push(programmed);
+    assert_eq!(startup_listener_priority(&gateway, "listener"), Some(true));
+    let conditions = &mut gateway
+        .spec
+        .current_status
+        .as_mut()
+        .unwrap()
+        .listeners
+        .as_mut()
+        .unwrap()[0]
+        .conditions;
+    let accepted = conditions
+        .iter_mut()
+        .find(|condition| condition.type_ == "Accepted")
+        .unwrap();
+    accepted.status = "False".into();
+    accepted.reason = "SharedListenerPolicyConflict".into();
+    assert_eq!(startup_listener_priority(&gateway, "listener"), None);
+    let conditions = &mut gateway
+        .spec
+        .current_status
+        .as_mut()
+        .unwrap()
+        .listeners
+        .as_mut()
+        .unwrap()[0]
+        .conditions;
+    conditions
+        .iter_mut()
+        .find(|condition| condition.type_ == "Accepted")
+        .unwrap()
+        .reason = "Invalid".into();
+    let mut conflicted = conditions[0].clone();
+    conflicted.type_ = "Conflicted".into();
+    conflicted.status = "True".into();
+    conditions.push(conflicted);
+    assert_eq!(startup_listener_priority(&gateway, "listener"), None);
+}
+
 #[test]
 fn parse_enable_http2_annotation_preserves_frontend_policy() {
     let mut gateway: Gateway = serde_json::from_value(serde_json::json!({

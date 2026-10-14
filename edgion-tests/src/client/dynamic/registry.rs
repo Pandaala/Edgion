@@ -14,6 +14,7 @@ pub fn all() -> Vec<&'static Scenario> {
         crate::dynamic::scenarios::response_cache::SCENARIO,
         crate::dynamic::scenarios::graphql_safelist::SCENARIO,
         crate::dynamic::scenarios::duplicate_host_policy_hot_reload::SCENARIO,
+        crate::dynamic::scenarios::shared_http_policy_admission::SCENARIO,
         crate::dynamic::scenarios::preflight_policy_hot_reload::SCENARIO,
         crate::dynamic::scenarios::egc_runtime_hot_reload::SCENARIO,
         crate::dynamic::scenarios::cors_validation::SCENARIO,

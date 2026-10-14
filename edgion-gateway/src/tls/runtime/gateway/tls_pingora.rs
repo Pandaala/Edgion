@@ -1,7 +1,7 @@
 use crate::observe::logs::ssl_log::log_ssl;
 use crate::observe::logs::LogBuffer;
 use crate::runtime::matching::tls::CompiledServingCertificate;
-use crate::runtime::matching::{match_gateway_tls, FrontendMtlsOutcome, GatewayTlsEntry};
+use crate::runtime::matching::{FrontendMtlsOutcome, GatewayTlsEntry};
 use crate::tls::runtime::backend::cert_extractor::extract_client_cert_info;
 use crate::tls::runtime::backend::set_mtls_verify_callback;
 use crate::tls::store::cert_matcher::get_tls_cert_matcher;
@@ -516,9 +516,11 @@ impl TlsCallback {
                 // EdgionTls certificate may overlay it only when its complete
                 // logical attachment identifies that exact winning listener.
                 let et_matcher_snapshot = get_tls_cert_matcher().snapshot();
-                let et_candidates = et_matcher_snapshot.match_sni_candidates(&lk, &sni);
-                let et = et_candidates.first().cloned();
-                let gw = match_gateway_tls(&lk, &sni);
+                let gateway_snapshot = crate::runtime::matching::tls::get_gateway_tls_matcher().snapshot();
+                let et = et_matcher_snapshot.match_eligible_sni(&lk, &sni, |attachment| {
+                    gateway_snapshot.listener_is_eligible(attachment)
+                });
+                let gw = gateway_snapshot.match_sni(&lk, &sni);
                 if let Some(gw) = gw
                     .as_ref()
                     .filter(|entry| entry.frontend_mtls != FrontendMtlsOutcome::NotConfigured)

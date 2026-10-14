@@ -1146,3 +1146,41 @@ fn server_identity_lkg_and_ca_identity_revocation_keep_distinct_generations() {
         .match_sni_candidates(&listener(443), "bound.example.com")
         .is_empty());
 }
+
+#[test]
+fn eligible_certificate_lookup_skips_withdrawn_slot_and_uses_rfc_wildcard_fallback() {
+    let store = TlsStore::new();
+    let mut first = make_valid_tls("ns", "a", &["shared.example.com"]);
+    let mut second = make_valid_tls("ns", "b", &["shared.example.com"]);
+    let mut wildcard = make_valid_tls("ns", "c", &["*.example.com"]);
+    for (tls, owner) in [(&mut first, "a"), (&mut second, "b"), (&mut wildcard, "c")] {
+        let mut bound = attachment(443);
+        bound.gateway_name = owner.into();
+        Arc::get_mut(tls).unwrap().spec.resolved_listener_attachments = Some(vec![bound]);
+    }
+    store.replace_all_tls(HashMap::from([
+        ("ns/a".into(), first),
+        ("ns/b".into(), second),
+        ("ns/c".into(), wildcard),
+    ]));
+    let snapshot = store.snapshot();
+    let key = listener(443);
+    let choose = |owner: &str, sni: &str| snapshot.match_eligible_sni(&key, sni, |bound| bound.gateway_name == owner);
+    assert_eq!(
+        choose("b", "shared.example.com").unwrap().tls.metadata.name.as_deref(),
+        Some("b")
+    );
+    assert_eq!(
+        choose("c", "shared.example.com").unwrap().tls.metadata.name.as_deref(),
+        Some("c")
+    );
+    assert!(choose("c", "deep.shared.example.com").is_none());
+    assert!(snapshot
+        .match_eligible_sni(&key, "shared.example.com", |_| false)
+        .is_none());
+    assert_eq!(
+        store.entry_count(),
+        3,
+        "withdrawal does not require a delayed TLS update"
+    );
+}

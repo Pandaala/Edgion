@@ -31,6 +31,31 @@ impl TlsCertMatcherSnapshot {
             .unwrap_or_else(|| EMPTY_TLS_CANDIDATES.clone())
     }
 
+    /// Use canonical exact/wildcard fallback while skipping withdrawn owners.
+    /// The native Gateway snapshot is captured by the caller for the handshake.
+    pub fn match_eligible_sni(
+        &self,
+        key: &ListenerKey,
+        sni: &str,
+        eligible: impl Fn(&ResolvedListenerAttachment) -> bool,
+    ) -> Option<Arc<CompiledEdgionTls>> {
+        let bucket = self.data.listeners.get(key)?;
+        lookup(sni, |host| {
+            bucket.hosts.get(host).and_then(|slot| {
+                slot.ordered.iter().find(|candidate| {
+                    candidate
+                        .tls
+                        .spec
+                        .resolved_listener_attachments
+                        .iter()
+                        .flatten()
+                        .any(|attachment| &attachment.listener_key == key && eligible(attachment))
+                })
+            })
+        })
+        .cloned()
+    }
+
     pub fn match_attachment_sni(
         &self,
         attachment: &ResolvedListenerAttachment,

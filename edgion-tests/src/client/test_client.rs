@@ -91,6 +91,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "RetainedListenerHandles",
     "EgcRuntimeHotReload",
     "DuplicateHostPolicyHotReload",
+    "SharedHttpPolicyAdmission",
     "PreflightPolicyHotReload",
 ];
 
@@ -1889,6 +1890,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         "RetainedListenerHandles" => Some(("Gateway/RetainedListenerHandles", PortKind::Http)),
         "EgcRuntimeHotReload" => Some(("Gateway/EgcRuntimeHotReload", PortKind::Http)),
         "DuplicateHostPolicyHotReload" => Some(("Gateway/DuplicateHostPolicyHotReload", PortKind::Http)),
+        "SharedHttpPolicyAdmission" => Some(("Gateway/SharedHttpPolicyAdmission", PortKind::Http)),
         "PreflightPolicyHotReload" => Some(("Gateway/PreflightPolicyHotReload", PortKind::Http)),
         "TlsRoutePluginsReload" => Some(("TLSRoute/StreamPlugins", PortKind::Tls)),
         "TlsLastKnownGood" => Some(("EdgionTls/LastKnownGood", PortKind::Https)),

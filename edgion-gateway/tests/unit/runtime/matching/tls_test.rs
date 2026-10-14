@@ -1392,3 +1392,77 @@ fn native_gateway_tls_omitted_namespace_compiles_complete_material_and_exact_att
         }
     }
 }
+
+#[test]
+fn logical_tls_membership_ignores_proof_echo_and_withdraws_rejected_owner() {
+    let matcher = GatewayTlsMatcher::new();
+    let mut gateway = create_test_gateway("owner", "default", vec![create_test_listener("https", None, None)]);
+    let mut attachment = ResolvedListenerAttachment {
+        gateway_namespace: "default".into(),
+        gateway_name: "owner".into(),
+        listener_name: "https".into(),
+        listener_key: test_listener_key(443),
+        gateway_proof: GatewayAttachmentProof {
+            instance: "old".into(),
+            generation: 1,
+            epoch: "boot:1".into(),
+            attachment_digest: "a".repeat(64),
+        },
+    };
+    matcher.rebuild_from_gateways(std::slice::from_ref(&gateway));
+    let pinned = matcher.snapshot();
+    assert!(pinned.listener_is_eligible(&attachment));
+    assert_eq!(matcher.stats().eligible_listener_count, 1);
+    assert_eq!(matcher.stats().eligible_listener_keys.len(), 1);
+    attachment.gateway_proof.epoch = "boot:2".into();
+    assert!(matcher.snapshot().listener_is_eligible(&attachment));
+    let accepted = &mut gateway
+        .spec
+        .current_status
+        .as_mut()
+        .unwrap()
+        .listeners
+        .as_mut()
+        .unwrap()[0]
+        .conditions[0];
+    accepted.status = "False".into();
+    accepted.reason = "SharedListenerPolicyConflict".into();
+    matcher.rebuild_from_gateways(std::slice::from_ref(&gateway));
+    assert!(!matcher.snapshot().listener_is_eligible(&attachment));
+    assert!(pinned.listener_is_eligible(&attachment));
+    assert_eq!(matcher.stats().eligible_listener_count, 0);
+    assert!(matcher.stats().eligible_listener_keys.is_empty());
+    gateway.spec.listeners.as_mut().unwrap()[0].protocol = "HTTP".into();
+    gateway.spec.current_status = None;
+    gateway = crate::test_current_status::processed(gateway);
+    matcher.rebuild_from_gateways(&[gateway]);
+    assert!(matcher.is_empty());
+    assert_eq!(matcher.stats().eligible_listener_count, 0);
+}
+
+#[test]
+fn shared_policy_rejection_preserves_native_strict_reject_shadow() {
+    let matcher = GatewayTlsMatcher::new();
+    let mut tls = make_tls_config("cert", None);
+    tls.frontend_matcher_eligibility = Some(FrontendMatcherEligibility::StrictReject);
+    let mut gateway = create_test_gateway(
+        "owner",
+        "default",
+        vec![create_test_listener("https", Some("api.example.com"), Some(tls))],
+    );
+    let accepted = &mut gateway
+        .spec
+        .current_status
+        .as_mut()
+        .unwrap()
+        .listeners
+        .as_mut()
+        .unwrap()[0]
+        .conditions[0];
+    accepted.status = "False".into();
+    accepted.reason = "SharedListenerPolicyConflict".into();
+    matcher.rebuild_from_gateways(&[gateway]);
+    let entry = matcher.match_sni(&test_listener_key(443), "api.example.com").unwrap();
+    assert!(matches!(entry.frontend_mtls, FrontendMtlsOutcome::StrictReject { .. }));
+    assert_eq!(matcher.stats().eligible_listener_count, 0);
+}

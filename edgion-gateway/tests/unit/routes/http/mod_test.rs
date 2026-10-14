@@ -375,6 +375,13 @@ mod route_matching_tests {
         data.into_iter().map(|(k, v)| (k, Arc::new(v))).collect()
     }
 
+    fn publish_test_gateway(gateway: Gateway) {
+        let store = get_global_gateway_store();
+        let mut store = store.write();
+        let _ = store.add_gateway(gateway);
+        crate::runtime::store::listener_gateway_info::rebuild_listener_gateway_infos(&store.list_gateways());
+    }
+
     /// Helper function to create a test Gateway from JSON
     fn create_test_gateway(namespace: &str, name: &str, hostnames: Vec<&str>) -> Gateway {
         let listeners_json: Vec<serde_json::Value> = hostnames
@@ -626,16 +633,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_full_set_with_normal_routes() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // Create test routes with normal paths
         let mut data = HashMap::new();
@@ -667,16 +671,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_full_set_with_regex_routes() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // Create test routes with regex paths
         let mut data = HashMap::new();
@@ -700,16 +701,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_full_set_with_mixed_routes() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // Create test routes with both normal and regex paths
         let mut data = HashMap::new();
@@ -741,16 +739,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_add_route() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // Initially no routes
         verify_route_exists(&domain_routes, "api.example.com", false);
@@ -775,16 +770,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_remove_route() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // First add a route
         let mut add_or_update = HashMap::new();
@@ -811,16 +803,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_change_hostname() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com", "api1.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // First add a route with hostname api.example.com
         let mut add_or_update = HashMap::new();
@@ -856,16 +845,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_remove_hostname_from_route() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // First add a route with hostname api.example.com
         let mut add_or_update = HashMap::new();
@@ -903,16 +889,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_multiple_routes_same_hostname() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // Add first route
         let mut add_or_update = HashMap::new();
@@ -952,16 +935,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_regex_only_to_normal_only() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // First add regex route
         let mut add_or_update = HashMap::new();
@@ -994,16 +974,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_remove_last_route_cleans_hostname() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // Add route
         let mut add_or_update = HashMap::new();
@@ -1030,16 +1007,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_regex_and_normal_both_empty_removes_hostname() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // Add both normal and regex routes
         let mut add_or_update = HashMap::new();
@@ -1075,16 +1049,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_keep_regex_remove_normal() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // Add both normal and regex routes
         let mut add_or_update = HashMap::new();
@@ -1120,16 +1091,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_full_set_only_exact_routes() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // Create test routes with only Exact paths
         let mut data = HashMap::new();
@@ -1161,16 +1129,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_full_set_only_prefix_routes() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // Create test routes with only PathPrefix paths
         let mut data = HashMap::new();
@@ -1202,16 +1167,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_full_set_mixed_exact_and_prefix_routes() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // Create test routes with both Exact and PathPrefix paths
         let mut data = HashMap::new();
@@ -1243,16 +1205,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_full_set_only_regex_routes_multiple() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // Create test routes with multiple regex paths
         let mut data = HashMap::new();
@@ -1284,16 +1243,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_full_set_all_types_mixed() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // Create test routes with all types: Exact, PathPrefix, and Regex
         let mut data = HashMap::new();
@@ -1333,16 +1289,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_add_prefix_route() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // Add a prefix route via partial_update
         let mut add_or_update = HashMap::new();
@@ -1364,16 +1317,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_add_regex_route() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // Add a regex route via partial_update
         let mut add_or_update = HashMap::new();
@@ -1395,16 +1345,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_add_mixed_routes() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // Add both normal and regex routes via partial_update
         let mut add_or_update = HashMap::new();
@@ -1434,16 +1381,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_remove_normal_keep_regex() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // Add both normal and regex routes
         let mut add_or_update = HashMap::new();
@@ -1479,16 +1423,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_remove_regex_keep_normal() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // Add both normal and regex routes
         let mut add_or_update = HashMap::new();
@@ -1524,16 +1465,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_change_from_prefix_to_exact() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // First add prefix route
         let mut add_or_update = HashMap::new();
@@ -1566,16 +1504,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_change_from_normal_to_regex() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // First add normal route
         let mut add_or_update = HashMap::new();
@@ -1608,16 +1543,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_add_multiple_regex_routes() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // Add first regex route
         let mut add_or_update = HashMap::new();
@@ -1650,16 +1582,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_add_multiple_prefix_routes() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // Add first prefix route
         let mut add_or_update = HashMap::new();
@@ -1692,16 +1621,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_remove_all_routes_cleans_hostname() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // Add multiple routes
         let mut add_or_update = HashMap::new();
@@ -1746,16 +1672,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_add_regex_then_add_normal() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // First add regex route
         let mut add_or_update = HashMap::new();
@@ -1788,16 +1711,13 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_add_normal_then_add_regex() {
+        let _guard = crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK.lock();
         let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
         let domain_routes = mgr.get_global_routes();
-        {
-            let store = get_global_gateway_store();
-            let mut store_guard = store.write();
-            let _ = store_guard.add_gateway(gateway);
-        }
+        publish_test_gateway(gateway);
 
         // First add normal route
         let mut add_or_update = HashMap::new();
@@ -1834,7 +1754,7 @@ mod route_matching_tests {
         let stale = make_listener_key(9810);
         let retained = seed_nonempty_manager(&managers, &stale);
 
-        managers.rebuild_all_listener_managers_with_active(Vec::new());
+        managers.rebuild_all_listener_managers_with_active(Vec::new(), HashSet::new());
 
         assert!(!managers.by_listener.contains_key(&stale));
         assert!(retained.load_route_table().hosts.is_empty());
@@ -1854,11 +1774,31 @@ mod route_matching_tests {
             &affected_set,
             vec![affected],
             &HttpRouteChanges::default(),
+            HashSet::new(),
         );
 
         assert!(!managers.by_listener.contains_key(&orphan));
         assert!(retained.load_route_table().hosts.is_empty());
         let recreated = managers.get_or_create_listener_manager(&orphan);
         assert!(!Arc::ptr_eq(&retained, &recreated));
+    }
+    #[test]
+    fn declared_but_rejected_listener_retains_empty_http_handle_through_partial_updates() {
+        let managers = GlobalHttpRouteManagers::new();
+        let key = make_listener_key(9850);
+        let retained = seed_nonempty_manager(&managers, &key);
+        let declared = HashSet::from([key.clone()]);
+        managers.rebuild_all_listener_managers_with_active(Vec::new(), declared.clone());
+        assert!(Arc::ptr_eq(&retained, &managers.get_or_create_listener_manager(&key)));
+        assert!(retained.load_route_table().hosts.is_empty());
+        managers.rebuild_affected_listener_managers_with_active(
+            &HashSet::from([make_listener_key(9851)]),
+            Vec::new(),
+            &HttpRouteChanges::default(),
+            declared.clone(),
+        );
+        assert!(Arc::ptr_eq(&retained, &managers.get_or_create_listener_manager(&key)));
+        managers.rebuild_all_listener_managers_with_active(vec![key.clone()], declared);
+        assert!(Arc::ptr_eq(&retained, &managers.get_or_create_listener_manager(&key)));
     }
 }

@@ -335,7 +335,9 @@ fn compile_serving_certificates(
 }
 
 /// Combined matcher data atomically swapped via `ArcSwap`.
+type ListenerMembership = HashMap<String, HashMap<String, HashMap<String, std::collections::HashSet<ListenerKey>>>>;
 struct TlsMatcherData {
+    eligible_listeners: ListenerMembership,
     /// Hostname-based matcher: listener_key -> (hostname/SNI -> entries)
     listener_map: HashMap<ListenerKey, Rfc6125HostnameMatcher<Vec<Arc<GatewayTlsEntry>>>>,
     /// Catch-all fallback: listener_key -> entries (listeners without hostname)
@@ -354,6 +356,37 @@ struct TlsMatcherData {
 /// 3. Catch-all fallback (listeners without hostname)
 pub struct GatewayTlsMatcher {
     data: ArcSwapOption<TlsMatcherData>,
+}
+
+/// One captured native matcher and logical admission generation per handshake.
+pub struct GatewayTlsMatcherSnapshot {
+    data: Option<Arc<TlsMatcherData>>,
+}
+impl GatewayTlsMatcherSnapshot {
+    pub fn listener_is_eligible(&self, attachment: &ResolvedListenerAttachment) -> bool {
+        attachment.gateway_proof.is_resolved()
+            && self
+                .data
+                .as_ref()
+                .and_then(|data| data.eligible_listeners.get(attachment.gateway_namespace.as_str()))
+                .and_then(|gateways| gateways.get(attachment.gateway_name.as_str()))
+                .and_then(|listeners| listeners.get(attachment.listener_name.as_str()))
+                .is_some_and(|keys| keys.contains(&attachment.listener_key))
+    }
+    pub fn match_sni(&self, key: &ListenerKey, sni: &str) -> Option<Arc<GatewayTlsEntry>> {
+        let data = self.data.as_ref()?;
+        data.listener_map
+            .get(key)
+            .and_then(|matcher| matcher.get(sni))
+            .and_then(|entries| entries.first())
+            .cloned()
+            .or_else(|| {
+                data.fallback_listener_map
+                    .get(key)
+                    .and_then(|entries| entries.first())
+                    .cloned()
+            })
+    }
 }
 
 /// Deterministic ordering for entries that collide in the same matcher slot.
@@ -427,7 +460,10 @@ impl GatewayTlsMatcher {
     /// This is a fast O(1) check.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.data.load().is_none()
+        self.data
+            .load()
+            .as_ref()
+            .is_none_or(|data| data.listener_map.is_empty() && data.fallback_listener_map.is_empty())
     }
 
     /// Match SNI against Gateway Listener hostnames with listener key dimension.
@@ -453,26 +489,12 @@ impl GatewayTlsMatcher {
     ///
     #[inline]
     pub fn match_sni(&self, key: &ListenerKey, sni: &str) -> Option<Arc<GatewayTlsEntry>> {
-        let data_guard = self.data.load();
-        let data = data_guard.as_ref()?;
-
-        // 1) Hostname-based lookup (exact > wildcard)
-        if let Some(host_matcher) = data.listener_map.get(key) {
-            if let Some(entries) = host_matcher.get(sni) {
-                if let Some(entry) = entries.first() {
-                    return Some(entry.clone());
-                }
-            }
+        self.snapshot().match_sni(key, sni)
+    }
+    pub fn snapshot(&self) -> GatewayTlsMatcherSnapshot {
+        GatewayTlsMatcherSnapshot {
+            data: self.data.load_full(),
         }
-
-        // 2) Catch-all fallback (listeners without hostname)
-        if let Some(entries) = data.fallback_listener_map.get(key) {
-            if let Some(entry) = entries.first() {
-                return Some(entry.clone());
-            }
-        }
-
-        None
     }
 
     /// Rebuild matcher from Gateway list with listener key dimension
@@ -482,6 +504,7 @@ impl GatewayTlsMatcher {
     pub fn rebuild_from_gateways(&self, gateways: &[Gateway]) {
         let mut listener_map: HashMap<ListenerKey, Rfc6125HostnameMatcher<Vec<Arc<GatewayTlsEntry>>>> = HashMap::new();
         let mut fallback_listener_map: HashMap<ListenerKey, Vec<Arc<GatewayTlsEntry>>> = HashMap::new();
+        let mut eligible_listeners = ListenerMembership::new();
         let mut hostname_entry_count = 0usize;
         let mut fallback_entry_count = 0usize;
         let mut listener_count = 0usize;
@@ -508,6 +531,24 @@ impl GatewayTlsMatcher {
             let gateway_proof = gateway_attachment_proof(gateway);
 
             for listener in listeners {
+                if matches!(listener.protocol.as_str(), "HTTPS" | "TLS")
+                    && !edgion_resources::resources::gateway::gateway_listener_is_explicitly_ineligible(
+                        gateway,
+                        &listener.name,
+                    )
+                {
+                    eligible_listeners
+                        .entry(gateway_namespace.clone())
+                        .or_default()
+                        .entry(gateway_name.clone())
+                        .or_default()
+                        .entry(listener.name.clone())
+                        .or_default()
+                        .insert(ListenerKey::new(
+                            resolve_listener_addr(gateway, listener.port),
+                            &listener.protocol,
+                        ));
+                }
                 // Skip listeners without TLS config
                 let Some(tls_config) = &listener.tls else {
                     continue;
@@ -516,6 +557,13 @@ impl GatewayTlsMatcher {
                 let eligibility = tls_config
                     .frontend_matcher_eligibility
                     .unwrap_or(FrontendMatcherEligibility::Omit);
+                let shared_rejected = edgion_resources::resources::gateway::gateway_listener_has_shared_policy_conflict(
+                    gateway,
+                    &listener.name,
+                );
+                if shared_rejected && eligibility != FrontendMatcherEligibility::StrictReject {
+                    continue;
+                }
                 if eligibility == FrontendMatcherEligibility::Omit {
                     continue;
                 }
@@ -646,8 +694,9 @@ impl GatewayTlsMatcher {
             "Rebuilt Gateway TLS matcher"
         );
 
-        if total_entries > 0 {
+        if total_entries > 0 || !eligible_listeners.is_empty() {
             self.data.store(Some(Arc::new(TlsMatcherData {
+                eligible_listeners,
                 listener_map,
                 fallback_listener_map,
             })));
@@ -659,6 +708,8 @@ impl GatewayTlsMatcher {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct GatewayTlsMatcherStats {
+    pub eligible_listener_count: usize,
+    pub eligible_listener_keys: Vec<String>,
     pub listener_count: usize,
     pub is_empty: bool,
 }
@@ -671,12 +722,29 @@ impl GatewayTlsMatcher {
             Some(d) => {
                 let mut all_keys: std::collections::HashSet<&ListenerKey> = d.listener_map.keys().collect();
                 all_keys.extend(d.fallback_listener_map.keys());
+                let mut eligible_listener_keys = d
+                    .eligible_listeners
+                    .iter()
+                    .flat_map(|(namespace, gateways)| {
+                        gateways.iter().flat_map(move |(gateway, listeners)| {
+                            listeners.iter().flat_map(move |(listener, keys)| {
+                                keys.iter()
+                                    .map(move |key| format!("{namespace}/{gateway}/{listener}/{key}"))
+                            })
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                eligible_listener_keys.sort();
                 GatewayTlsMatcherStats {
+                    eligible_listener_count: eligible_listener_keys.len(),
+                    eligible_listener_keys,
                     listener_count: all_keys.len(),
-                    is_empty: false,
+                    is_empty: all_keys.is_empty(),
                 }
             }
             None => GatewayTlsMatcherStats {
+                eligible_listener_count: 0,
+                eligible_listener_keys: Vec::new(),
                 listener_count: 0,
                 is_empty: true,
             },

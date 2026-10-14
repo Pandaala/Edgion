@@ -29,7 +29,7 @@ use std::sync::Arc;
 ///
 /// Listener-level routing state is rebuilt into `ListenerGatewayInfoStore`
 /// (see `rebuild_listener_gateway_infos`); per-listener route managers are
-/// only rebuilt when the listener key set actually changes.
+/// rebuilt when physical keys or effective serving listener membership change.
 pub struct GatewayHandler {
     policy_runtime: Arc<ProxyProtocolPolicyRuntime>,
     gateway_scope: Option<String>,
@@ -104,6 +104,8 @@ impl ConfHandler<Gateway> for GatewayHandler {
             data.len()
         );
 
+        let eligibility_before = serving_listener_inventory(&get_global_gateway_store().read().list_gateways());
+        let declared_before = get_global_gateway_store().read().declared_http_listener_keys();
         let gateways = {
             let global_store = get_global_gateway_store();
             let mut store = global_store.write();
@@ -148,9 +150,15 @@ impl ConfHandler<Gateway> for GatewayHandler {
         // removed: route delete only checks active_listeners (ListenerGatewayInfoStore)
         // while Gateway still exists, so empty buckets are not removed; once Gateway
         // disappears there is no other trigger to clean up the now-orphan listener entries.
-        if listeners_changed(&keys_before, &keys_after) {
+        let declared_after = get_global_gateway_store().read().declared_http_listener_keys();
+        if eligibility_before != serving_listener_inventory(&gateways)
+            || declared_before != declared_after
+            || listeners_changed(&keys_before, &keys_after)
+        {
             get_global_http_route_managers().rebuild_all_listener_managers();
             get_global_grpc_route_managers().rebuild_all_listener_managers();
+        }
+        if listeners_changed(&keys_before, &keys_after) {
             get_global_tcp_route_managers().rebuild_all_listener_managers();
             get_global_tls_route_managers().rebuild_all_listener_managers();
             get_global_udp_route_managers().rebuild_all_listener_managers();
@@ -239,6 +247,8 @@ impl ConfHandler<Gateway> for GatewayHandler {
         // and snapshot `list_gateways()` before dropping the write guard. The
         // rebuild functions below do not read GatewayStore, so holding the lock
         // across them would only stall unrelated GatewayStore consumers.
+        let eligibility_before = serving_listener_inventory(&get_global_gateway_store().read().list_gateways());
+        let declared_before = get_global_gateway_store().read().declared_http_listener_keys();
         let gateways = {
             let global_store = get_global_gateway_store();
             let mut store = global_store.write();
@@ -354,9 +364,15 @@ impl ConfHandler<Gateway> for GatewayHandler {
             rebuild_listener_gateway_infos(&gateways);
             let keys_after = get_listener_gateway_info_store().all_listener_keys();
 
-            if listeners_changed(&keys_before, &keys_after) {
+            let declared_after = get_global_gateway_store().read().declared_http_listener_keys();
+            if eligibility_before != serving_listener_inventory(&gateways)
+                || declared_before != declared_after
+                || listeners_changed(&keys_before, &keys_after)
+            {
                 get_global_http_route_managers().rebuild_all_listener_managers();
                 get_global_grpc_route_managers().rebuild_all_listener_managers();
+            }
+            if listeners_changed(&keys_before, &keys_after) {
                 get_global_tcp_route_managers().rebuild_all_listener_managers();
                 get_global_tls_route_managers().rebuild_all_listener_managers();
                 get_global_udp_route_managers().rebuild_all_listener_managers();
@@ -412,6 +428,23 @@ fn update_gateway_backend_tls_store(gateway_key: &str, gateway: &Gateway) {
 
 /// Check whether the set of listener keys changed between two snapshots.
 /// Order-independent comparison using sorted vecs.
+fn serving_listener_inventory(gateways: &[Gateway]) -> std::collections::BTreeSet<(String, String, ListenerKey)> {
+    gateways
+        .iter()
+        .flat_map(|gateway| {
+            crate::runtime::store::listener_gateway_info::gateway_listener_entries(gateway)
+                .into_iter()
+                .map(|(key, entry)| {
+                    (
+                        gateway.key_name(),
+                        entry.info.listener_name.clone().unwrap_or_default(),
+                        key,
+                    )
+                })
+        })
+        .collect()
+}
+
 fn listeners_changed(before: &[ListenerKey], after: &[ListenerKey]) -> bool {
     if before.len() != after.len() {
         return true;

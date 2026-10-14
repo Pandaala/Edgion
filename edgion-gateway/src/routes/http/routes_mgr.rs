@@ -383,10 +383,17 @@ impl GlobalHttpRouteManagers {
     /// Rebuild body. The caller MUST hold `rebuild_lock`.
     pub(crate) fn rebuild_all_listener_managers_locked(&self) {
         let active_listener_keys = crate::runtime::store::get_listener_gateway_info_store().all_listener_keys();
-        self.rebuild_all_listener_managers_with_active(active_listener_keys);
+        let declared = crate::runtime::store::get_global_gateway_store()
+            .read()
+            .declared_http_listener_keys();
+        self.rebuild_all_listener_managers_with_active(active_listener_keys, declared);
     }
 
-    pub(crate) fn rebuild_all_listener_managers_with_active(&self, active_listener_keys: Vec<ListenerKey>) {
+    pub(crate) fn rebuild_all_listener_managers_with_active(
+        &self,
+        active_listener_keys: Vec<ListenerKey>,
+        declared: HashSet<ListenerKey>,
+    ) {
         // Pre-create listener managers for all known listeners from ListenerGatewayInfoStore
         // Physical listener keys the request path reads from; routes whose
         // resolved_listeners are not among these are unreachable.
@@ -399,7 +406,9 @@ impl GlobalHttpRouteManagers {
             self.get_or_create_listener_manager(key);
         }
 
-        let listener_buckets = self.bucket_routes_by_listener();
+        let mut listener_buckets = self.bucket_routes_by_listener();
+        let eligible: HashSet<_> = active_listener_keys.iter().cloned().collect();
+        listener_buckets.retain(|key, _| !declared.contains(key) || eligible.contains(key));
 
         let mut rebuilt_listeners = 0u32;
 
@@ -415,7 +424,8 @@ impl GlobalHttpRouteManagers {
 
         // Remove stale listener entries: listeners that have no routes AND are not
         // registered in ListenerGatewayInfoStore (i.e. no Gateway listener for that key).
-        let active_listeners: HashSet<ListenerKey> = active_listener_keys.into_iter().collect();
+        let mut active_listeners: HashSet<ListenerKey> = active_listener_keys.into_iter().collect();
+        active_listeners.extend(declared.iter().cloned());
         let stale_listeners: Vec<ListenerKey> = self
             .by_listener
             .iter()
@@ -461,7 +471,15 @@ impl GlobalHttpRouteManagers {
             return;
         }
         let active_listener_keys = crate::runtime::store::get_listener_gateway_info_store().all_listener_keys();
-        self.rebuild_affected_listener_managers_with_active(affected_listeners, active_listener_keys, changes);
+        let declared = crate::runtime::store::get_global_gateway_store()
+            .read()
+            .declared_http_listener_keys();
+        self.rebuild_affected_listener_managers_with_active(
+            affected_listeners,
+            active_listener_keys,
+            changes,
+            declared,
+        );
     }
 
     pub(crate) fn rebuild_affected_listener_managers_with_active(
@@ -469,7 +487,9 @@ impl GlobalHttpRouteManagers {
         affected_listeners: &HashSet<ListenerKey>,
         active_listener_keys: Vec<ListenerKey>,
         changes: &HttpRouteChanges,
+        declared: HashSet<ListenerKey>,
     ) {
+        let eligible: HashSet<_> = active_listener_keys.iter().cloned().collect();
         let mut listener_buckets: HashMap<ListenerKey, HashMap<String, Arc<HTTPRoute>>> = HashMap::new();
         for key in affected_listeners {
             listener_buckets.insert(key.clone(), HashMap::new());
@@ -483,6 +503,9 @@ impl GlobalHttpRouteManagers {
             let route = entry.value();
             let listeners = resolved_listeners_for_route(route); // &Arc coerces to &HTTPRoute
             for key in listeners {
+                if declared.contains(key) && !eligible.contains(key) {
+                    continue;
+                }
                 if let Some(bucket) = listener_buckets.get_mut(key) {
                     bucket.insert(entry.key().clone(), entry.value().clone()); // Arc clone
                 }
@@ -490,7 +513,8 @@ impl GlobalHttpRouteManagers {
             }
         }
 
-        let active_listeners: HashSet<ListenerKey> = active_listener_keys.into_iter().collect();
+        let mut active_listeners: HashSet<ListenerKey> = active_listener_keys.into_iter().collect();
+        active_listeners.extend(declared.iter().cloned());
         let mut removed_stale = 0usize;
         for (key, routes) in &listener_buckets {
             let manager = self.get_or_create_listener_manager(key);

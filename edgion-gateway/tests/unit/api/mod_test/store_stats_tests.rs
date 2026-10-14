@@ -71,6 +71,8 @@ fn store_stats_response_serializes() {
             total_entries: 0,
         },
         gateway_tls_matcher: crate::runtime::matching::tls::GatewayTlsMatcherStats {
+            eligible_listener_count: 0,
+            eligible_listener_keys: Vec::new(),
             listener_count: 0,
             is_empty: true,
         },

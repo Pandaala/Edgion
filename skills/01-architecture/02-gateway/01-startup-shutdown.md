@@ -72,6 +72,8 @@ states, noncanonical transported CIDRs, and conflicting declarations for one phy
 `required` maps to Pingora's unbounded-source representation, while `trustedSources` always builds
 an explicit matcher.
 
+Shared HTTP-family policy admission is performed by the existing Controller Gateway queue. Startup excludes shared-policy-rejected and native Conflicted listeners before deduplicating physical services. Admitted declarations take priority over native readiness failures; absent a healthy declaration, native TLS placeholder services remain bound so a missing certificate Secret can recover without restarting. Runtime admission changes refresh eligible route, TLS and redirect ownership on existing listeners. HTTP/gRPC manager handles remain present while their Gateway declarations exist, with empty tables during complete rejection; true deletion retains the existing old-handle fail-closed behavior. This does not dynamically bind new ports or switch an existing service between HTTP, redirect or H2 policies: those physical changes require restart.
+
 ### 4. Pingora handoff
 
 `create_and_configure_server()` runs in `spawn_blocking` while the Tokio runtime is active:

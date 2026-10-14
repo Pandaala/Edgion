@@ -53,6 +53,10 @@ struct Args {
     #[arg(long, value_delimiter = ',', default_value = "ReferenceGrant,Secret")]
     skip_kinds: Vec<String>,
 
+    /// Expected negative-test reference, encoded as kind:namespace/resource:namespace/secret.
+    #[arg(long)]
+    expected_missing_secret: Vec<String>,
+
     /// Bearer token for the gateway admin API. Defaults from the
     /// EDGION_GATEWAY_ADMIN_TOKEN env var (exported by the test harness).
     #[arg(long, env = "EDGION_GATEWAY_ADMIN_TOKEN")]
@@ -103,6 +107,17 @@ struct SecretIssue {
     resource: String,
     kind: String,
     missing_secrets: Vec<String>,
+}
+
+fn exclude_expected_missing_secrets(issues: &mut Vec<SecretIssue>, expected: &[String]) {
+    for issue in issues.iter_mut() {
+        issue.missing_secrets.retain(|secret| {
+            !expected
+                .iter()
+                .any(|entry| entry == &format!("{}:{}:{}", issue.kind, issue.resource, secret))
+        });
+    }
+    issues.retain(|issue| !issue.missing_secrets.is_empty());
 }
 
 /// Overall diff result
@@ -701,6 +716,8 @@ async fn main() {
         }
     };
 
+    exclude_expected_missing_secrets(&mut result.secret_issues, &args.expected_missing_secret);
+
     // Print report
     match args.output_format.as_str() {
         "json" => print_json_report(&result, &args.controller_url, &args.gateway_url),
@@ -718,6 +735,41 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expected_missing_secret_exempts_only_the_exact_reference() {
+        let mut result = DiffResult {
+            differences: vec![ResourceDiff {
+                kind: "Gateway".into(),
+                missing_in_gateway: vec!["test/other".into()],
+                extra_in_gateway: vec![],
+            }],
+            secret_issues: vec![
+                SecretIssue {
+                    kind: "Gateway".into(),
+                    resource: "test/expected".into(),
+                    missing_secrets: vec!["test/cert".into(), "test/other-cert".into()],
+                },
+                SecretIssue {
+                    kind: "Gateway".into(),
+                    resource: "test/other".into(),
+                    missing_secrets: vec!["test/cert".into()],
+                },
+                SecretIssue {
+                    kind: "EdgionTls".into(),
+                    resource: "test/expected".into(),
+                    missing_secrets: vec!["test/cert".into()],
+                },
+            ],
+        };
+        exclude_expected_missing_secrets(&mut result.secret_issues, &["Gateway:test/expected:test/cert".into()]);
+        assert_eq!(result.secret_issues.len(), 3);
+        assert_eq!(result.secret_issues[0].missing_secrets, ["test/other-cert"]);
+        assert_eq!(result.secret_issues[1].missing_secrets, ["test/cert"]);
+        assert_eq!(result.secret_issues[2].missing_secrets, ["test/cert"]);
+        assert!(result.has_issues());
+        assert_eq!(result.differences.len(), 1);
+    }
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 

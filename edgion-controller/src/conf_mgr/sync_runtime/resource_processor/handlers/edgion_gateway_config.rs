@@ -165,7 +165,7 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         ProcessResult::Continue(egc)
     }
 
-    async fn on_change(&self, _egc: &EdgionGatewayConfig, ctx: &HandlerContext) {
+    async fn after_publish(&self, _egc: &EdgionGatewayConfig, ctx: &HandlerContext) {
         // A GatewayClass's ResolvedRefs/Accepted conditions depend on whether the
         // EdgionGatewayConfig it references exists, so recompute them on every EGC change.
         requeue_all_gateway_classes(ctx).await;
@@ -185,8 +185,11 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
             resource_ref.kind_str(),
             resource_ref.resource_key()
         ));
-        // A GatewayClass's ResolvedRefs/Accepted conditions depend on whether the
-        // EdgionGatewayConfig it references exists, so recompute them on every EGC delete.
+    }
+
+    async fn after_unpublish(&self, _egc: &EdgionGatewayConfig, ctx: &HandlerContext) {
+        // Shared listener admission consumes the published configuration view.
+        // Notify Class dependents after that view has removed this generation.
         requeue_all_gateway_classes(ctx).await;
     }
 

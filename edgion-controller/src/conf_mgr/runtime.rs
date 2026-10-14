@@ -200,7 +200,6 @@ impl ControllerRuntime {
     ///   so they remain valid across resets. Clearing them would permanently break
     ///   ReferenceGrant revalidation because nothing re-registers them.
     /// - `NamespaceStore`: self-heals via `Event::InitDone` on reconnect.
-    /// - `ListenerPortManager`: re-populated when Gateway reconcile runs after restart.
     ///
     /// **Arc cycles**: `processor_registry` holds `Arc<ResourceProcessor>` which holds
     /// `Arc<ControllerRuntime>`, and `ref_grant_dispatcher` holds `Arc<CrossNsRevalidationListener>`
@@ -208,6 +207,7 @@ impl ControllerRuntime {
     /// is process-scoped and never dropped. `clear_processors()` breaks the first cycle
     /// on each restart; dispatcher listeners are left alive by design (see above).
     pub fn reset(&self) {
+        self.listener_port_manager.clear();
         *self.status_identity.write() = None;
         self.processor_registry.clear_processors();
         tracing::info!(component = "controller_runtime", "Cleared ProcessorRegistry");

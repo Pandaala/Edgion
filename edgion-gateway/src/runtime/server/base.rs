@@ -27,13 +27,10 @@ pub struct GatewayBase {
 /// Returns `true` if the annotation is absent or any value other than "false", "0", "no", "off".
 /// Returns `false` for those falsy values (case-insensitive).
 fn parse_enable_http2_annotation(gateway: &Gateway) -> bool {
-    gateway
-        .metadata
-        .annotations
-        .as_ref()
-        .and_then(|annotations| annotations.get(edgion_resources::constants::annotations::edgion::ENABLE_HTTP2))
-        .map(|value| !matches!(value.to_lowercase().as_str(), "false" | "0" | "no" | "off"))
-        .unwrap_or(true) // Default to true if annotation is not present
+    matches!(
+        edgion_resources::resources::gateway::HttpServiceDeclaration::from_gateway(gateway, "HTTPS"),
+        Some(edgion_resources::resources::gateway::HttpServiceDeclaration::Https { enable_http2: true })
+    )
 }
 
 /// Resolve the class-owned target before querying startup configuration.
@@ -111,8 +108,10 @@ impl GatewayBase {
         let server_conf_arc = pingora_server.configuration.clone();
         let mut offload_budget = listener_builder::TlsOffloadBudget::new(&server_conf_arc)?;
 
-        // Track bound listeners to avoid duplicate physical bindings
-        let mut bound_listeners: HashMap<ListenerKey, (std::net::SocketAddr, bool)> = HashMap::new();
+        // Collect only constructible candidates. Admitted declarations take
+        // precedence over native readiness failures, whose sockets still permit
+        // certificate recovery when no admitted service owns the key.
+        let mut candidates = Vec::new();
 
         // Process each Gateway and configure listeners
         for gateway in gateways.iter() {
@@ -192,55 +191,11 @@ impl GatewayBase {
                 }
 
                 for listener in listeners {
+                    let Some(native_fallback) = startup_listener_priority(gateway, &listener.name) else {
+                        continue;
+                    };
                     let addr = resolve_listener_addr(gateway, listener.port);
                     let listener_key = ListenerKey::new(addr, &listener.protocol);
-                    let socket_addr = std::net::SocketAddr::new(gateway_bind_ip, listener.port as u16);
-                    let is_udp = listener.protocol.eq_ignore_ascii_case("UDP");
-
-                    if let Some((previous_addr, _)) = bound_listeners.get(&listener_key) {
-                        anyhow::ensure!(
-                            *previous_addr == socket_addr,
-                            "Gateway '{}' listener '{}' shares logical listener '{}' but binds {} instead of {}",
-                            gateway.key_name(),
-                            listener.name,
-                            listener_key,
-                            socket_addr,
-                            previous_addr
-                        );
-                        tracing::info!(
-                            gateway = %gateway.key_name(),
-                            listener = %listener.name,
-                            key = %listener_key,
-                            "Listener skipped - already bound (routes served via global table)"
-                        );
-                        continue;
-                    }
-
-                    if is_listener_conflicted(gateway, &listener.name) {
-                        tracing::warn!(
-                            gateway = %gateway.key_name(),
-                            listener = %listener.name,
-                            key = %listener_key,
-                            "Listener skipped - marked as Conflicted by Controller (port conflict)"
-                        );
-                        continue;
-                    }
-
-                    if let Some((previous_key, (previous_addr, _))) =
-                        bound_listeners.iter().find(|(_, (previous_addr, previous_udp))| {
-                            socket_bindings_overlap(*previous_addr, *previous_udp, socket_addr, is_udp)
-                        })
-                    {
-                        anyhow::bail!(
-                            "Gateway '{}' listener '{}' binds {} which overlaps listener '{}' on {}",
-                            gateway.key_name(),
-                            listener.name,
-                            socket_addr,
-                            previous_key,
-                            previous_addr
-                        );
-                    }
-
                     tracing::info!(
                         "  Listener: name={}, protocol={}, port={}",
                         listener.name,
@@ -283,11 +238,13 @@ impl GatewayBase {
                         },
                     };
 
-                    // Add listener to pingora_server
-                    listener_builder::add_listener(pingora_server, context, &mut offload_budget)?;
-                    bound_listeners.insert(listener_key, (socket_addr, is_udp));
+                    candidates.push((native_fallback, context));
                 }
             }
+        }
+
+        for context in select_startup_listener_contexts(candidates)? {
+            listener_builder::add_listener(pingora_server, context, &mut offload_budget)?;
         }
 
         // Print summary
@@ -311,6 +268,62 @@ impl GatewayBase {
 
         Ok(())
     }
+}
+
+fn startup_listener_priority(gateway: &Gateway, listener_name: &str) -> Option<bool> {
+    use edgion_resources::resources::gateway::{
+        gateway_listener_has_shared_policy_conflict, gateway_listener_is_explicitly_ineligible,
+    };
+    if gateway_listener_has_shared_policy_conflict(gateway, listener_name)
+        || is_listener_conflicted(gateway, listener_name)
+    {
+        return None;
+    }
+    Some(gateway_listener_is_explicitly_ineligible(gateway, listener_name))
+}
+
+fn select_startup_listener_contexts(
+    mut candidates: Vec<(bool, listener_builder::ListenerContext)>,
+) -> Result<Vec<listener_builder::ListenerContext>> {
+    // Stable ordering preserves input precedence among equally eligible owners.
+    candidates.sort_by_key(|(native_fallback, _)| *native_fallback);
+    let mut bound_listeners: HashMap<ListenerKey, (SocketAddr, bool)> = HashMap::new();
+    let mut selected = Vec::new();
+    for (_, context) in candidates {
+        let socket_addr = SocketAddr::new(context.bind_ip, context.listener.port as u16);
+        let is_udp = context.listener.protocol.eq_ignore_ascii_case("UDP");
+        if let Some((previous_addr, _)) = bound_listeners.get(&context.listener_key) {
+            anyhow::ensure!(
+                *previous_addr == socket_addr,
+                "Gateway '{}' listener '{}' shares logical listener '{}' but binds {} instead of {}",
+                context.gateway_key,
+                context.listener.name,
+                context.listener_key,
+                socket_addr,
+                previous_addr
+            );
+            tracing::info!(gateway = %context.gateway_key, listener = %context.listener.name,
+                key = %context.listener_key, "Listener skipped - already bound (routes served via global table)");
+            continue;
+        }
+        if let Some((previous_key, (previous_addr, _))) =
+            bound_listeners.iter().find(|(_, (previous_addr, previous_udp))| {
+                socket_bindings_overlap(*previous_addr, *previous_udp, socket_addr, is_udp)
+            })
+        {
+            anyhow::bail!(
+                "Gateway '{}' listener '{}' binds {} which overlaps listener '{}' on {}",
+                context.gateway_key,
+                context.listener.name,
+                socket_addr,
+                previous_key,
+                previous_addr
+            );
+        }
+        bound_listeners.insert(context.listener_key.clone(), (socket_addr, is_udp));
+        selected.push(context);
+    }
+    Ok(selected)
 }
 
 fn socket_bindings_overlap(previous: SocketAddr, previous_udp: bool, current: SocketAddr, current_udp: bool) -> bool {

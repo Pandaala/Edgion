@@ -1,4 +1,68 @@
 use edgion_resources::resources::http_route::LocalObjectReference;
+
+#[tokio::test]
+async fn ordinary_http_and_grpc_parent_acceptance_and_resolution_ignore_listener_admission_status() {
+    use super::*;
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::GatewayHandler;
+    use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+    use serde_json::json;
+
+    let runtime = Arc::new(ControllerRuntime::default());
+    let processor = Arc::new(ResourceProcessor::<Gateway>::new(
+        "Gateway",
+        16,
+        Arc::new(GatewayHandler::new(None, None)),
+        runtime.clone(),
+    ));
+    let raw = Arc::new(LocalRawStore::new());
+    processor.set_raw_store(raw.clone());
+    runtime.processor_registry.register(processor.clone());
+    let mut gateway: Gateway = serde_json::from_value(json!({
+        "metadata": {"name": "gateway", "namespace": "apps"},
+        "spec": {"gatewayClassName": "test", "listeners": [
+            {"name": "shared", "protocol": "HTTP", "port": 8080},
+            {"name": "healthy", "protocol": "HTTP", "port": 8081}
+        ]}
+    }))
+    .unwrap();
+    let parent: ParentReference = serde_json::from_value(json!({"name": "gateway"})).unwrap();
+    // The baseline filesystem fixture has no Kubernetes ownership identity.
+    // Neither absent publication status nor partial/full shared rejection adds
+    // an ordinary Route acceptance or attachment-resolution precondition.
+    for rejected_listeners in [0, 1, 2] {
+        gateway.spec.current_status = if rejected_listeners == 0 {
+            None
+        } else {
+            Some(serde_json::from_value(json!({
+                "listeners": (["shared", "healthy"].into_iter().enumerate().map(|(index, name)| json!({
+                    "name": name, "supportedKinds": [], "attachedRoutes": 0,
+                    "conditions": if index < rejected_listeners {
+                        json!([
+                            {"type": "Accepted", "status": "False", "reason": "SharedListenerPolicyConflict", "message": "Blocked by apps/owner", "lastTransitionTime": "2026-10-14T00:00:00Z"},
+                            {"type": "Programmed", "status": "False", "reason": "Pending", "message": "Listener rejected", "lastTransitionTime": "2026-10-14T00:00:00Z"}
+                        ])
+                    } else { json!([]) }
+                })).collect::<Vec<_>>())
+            })).unwrap())
+        };
+        raw.upsert("apps/gateway".into(), Arc::new(gateway.clone()));
+        if rejected_listeners != 0 {
+            processor.save(gateway.clone(), None);
+        }
+        for kind in ["HTTPRoute", "GRPCRoute"] {
+            let accepted = validate_parent_ref_accepted("apps", &parent, None, kind, &runtime);
+            assert!(accepted.errors.is_empty(), "listener status must not reject {kind}");
+            assert_eq!(accepted.matched_listeners, ["shared", "healthy"]);
+        }
+        let keys = resolve_listener_keys(std::slice::from_ref(&parent), "apps", Some("apps"), &runtime);
+        assert_eq!(
+            keys.len(),
+            2,
+            "listener status must not remove ordinary Route attachments"
+        );
+    }
+}
+
 #[test]
 fn invalid_patterns_never_intersect() {
     for invalid in ["*", "A.example.com", "127.0.0.1", "a..b"] {

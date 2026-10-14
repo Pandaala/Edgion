@@ -220,16 +220,25 @@ impl GlobalGrpcRouteManagers {
     /// Rebuild body. The caller MUST hold `rebuild_lock`.
     pub(crate) fn rebuild_all_listener_managers_locked(&self) {
         let active_listener_keys = crate::runtime::store::get_listener_gateway_info_store().all_listener_keys();
-        self.rebuild_all_listener_managers_with_active(active_listener_keys);
+        let declared = crate::runtime::store::get_global_gateway_store()
+            .read()
+            .declared_http_listener_keys();
+        self.rebuild_all_listener_managers_with_active(active_listener_keys, declared);
     }
 
-    fn rebuild_all_listener_managers_with_active(&self, active_listener_keys: Vec<ListenerKey>) {
+    fn rebuild_all_listener_managers_with_active(
+        &self,
+        active_listener_keys: Vec<ListenerKey>,
+        declared: HashSet<ListenerKey>,
+    ) {
         // Pre-create listener managers for all known listeners from ListenerGatewayInfoStore
         for key in &active_listener_keys {
             self.get_or_create_listener_manager(key);
         }
 
-        let listener_buckets = self.bucket_units_by_listener();
+        let mut listener_buckets = self.bucket_units_by_listener();
+        let eligible: HashSet<_> = active_listener_keys.iter().cloned().collect();
+        listener_buckets.retain(|key, _| !declared.contains(key) || eligible.contains(key));
 
         let mut rebuilt_listeners = 0u32;
 
@@ -241,7 +250,8 @@ impl GlobalGrpcRouteManagers {
             rebuilt_listeners += 1;
         }
 
-        let active_listeners: HashSet<ListenerKey> = active_listener_keys.into_iter().collect();
+        let mut active_listeners: HashSet<ListenerKey> = active_listener_keys.into_iter().collect();
+        active_listeners.extend(declared.iter().cloned());
         let stale_listeners: Vec<ListenerKey> = self
             .by_listener
             .iter()
@@ -277,15 +287,20 @@ impl GlobalGrpcRouteManagers {
             return;
         }
         let active_listener_keys = crate::runtime::store::get_listener_gateway_info_store().all_listener_keys();
-        self.rebuild_affected_listener_managers_with_active(affected_listeners, active_listener_keys);
+        let declared = crate::runtime::store::get_global_gateway_store()
+            .read()
+            .declared_http_listener_keys();
+        self.rebuild_affected_listener_managers_with_active(affected_listeners, active_listener_keys, declared);
     }
 
     fn rebuild_affected_listener_managers_with_active(
         &self,
         affected_listeners: &HashSet<ListenerKey>,
         active_listener_keys: Vec<ListenerKey>,
+        declared: HashSet<ListenerKey>,
     ) {
         let units_cache = self.route_units_cache.lock();
+        let eligible: HashSet<_> = active_listener_keys.iter().cloned().collect();
         let mut listener_buckets: HashMap<ListenerKey, HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>> = HashMap::new();
         for key in affected_listeners {
             listener_buckets.insert(key.clone(), HashMap::new());
@@ -295,6 +310,9 @@ impl GlobalGrpcRouteManagers {
             let route = entry.value();
             let listeners = resolved_listeners_for_grpc_route(route);
             for key in listeners {
+                if declared.contains(key) && !eligible.contains(key) {
+                    continue;
+                }
                 if let Some(bucket) = listener_buckets.get_mut(key) {
                     if let Some(units) = units_cache.get(entry.key()) {
                         bucket.insert(entry.key().clone(), units.clone());
@@ -304,7 +322,8 @@ impl GlobalGrpcRouteManagers {
         }
         drop(units_cache);
 
-        let active_listeners: HashSet<ListenerKey> = active_listener_keys.into_iter().collect();
+        let mut active_listeners: HashSet<ListenerKey> = active_listener_keys.into_iter().collect();
+        active_listeners.extend(declared.iter().cloned());
         let mut removed_stale = 0usize;
         for (key, units) in &listener_buckets {
             let manager = self.get_or_create_listener_manager(key);

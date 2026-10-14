@@ -33,6 +33,8 @@ impl From<RefManagerStats> for SecretRefManagerStats {
 
 #[derive(Serialize)]
 pub struct ControllerStoreStats {
+    pub shared_http_listeners:
+        crate::conf_mgr::sync_runtime::resource_processor::listener_port_manager::SharedListenerStats,
     pub conf_center_storage: BTreeMap<String, usize>,
     pub raw_cache: BTreeMap<String, usize>,
     /// Stable-sorted raw identities, including resources filtered from ServerCache.
@@ -82,6 +84,7 @@ pub async fn store_stats(State(state): State<Arc<AdminState>>) -> Json<ApiRespon
         .unwrap_or(0);
 
     Json(ApiResponse::ok_body(ControllerStoreStats {
+        shared_http_listeners: runtime.listener_port_manager.shared_stats(),
         conf_center_storage,
         raw_cache,
         raw_cache_keys,

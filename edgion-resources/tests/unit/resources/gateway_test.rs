@@ -387,3 +387,39 @@ fn listener_projection_fields_are_schema_hidden_and_ca_material_is_redacted() {
     assert_eq!(redacted["resolvedFrontendCaRefs"], "[redacted]");
     assert!(!redacted.to_string().contains("PRIVATE-CLIENT-CA"));
 }
+
+#[test]
+fn http_service_declaration_normalizes_only_effective_service_inputs() {
+    let declaration = |protocol: &str, redirect: &str, port: &str, h2: &str| {
+        HttpServiceDeclaration::from_annotation_lookup(protocol, |key| {
+            use crate::constants::annotations::edgion;
+            match key {
+                edgion::HTTP_TO_HTTPS_REDIRECT => Some(redirect),
+                edgion::HTTPS_REDIRECT_PORT => Some(port),
+                edgion::ENABLE_HTTP2 => Some(h2),
+                _ => None,
+            }
+        })
+    };
+    assert_eq!(
+        declaration("HTTP", "false", "8443", "OFF"),
+        Some(HttpServiceDeclaration::Http { enable_http2: false })
+    );
+    assert_eq!(
+        declaration("HTTP", "false", "9443", "OFF"),
+        declaration("HTTP", "false", "8443", "OFF")
+    );
+    assert_eq!(
+        declaration("HTTP", "TRUE", "invalid", "off"),
+        Some(HttpServiceDeclaration::Redirect { https_port: 443 })
+    );
+    assert_eq!(
+        declaration("HTTP", "true", "443", "false"),
+        declaration("HTTP", "true", "443", "true")
+    );
+    assert_eq!(
+        declaration("HTTPS", "true", "8443", "off"),
+        Some(HttpServiceDeclaration::Https { enable_http2: false })
+    );
+    assert!(declaration("TCP", "true", "443", "true").is_none());
+}

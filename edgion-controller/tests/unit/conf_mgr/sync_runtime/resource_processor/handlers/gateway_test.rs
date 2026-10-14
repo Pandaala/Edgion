@@ -3464,3 +3464,224 @@ async fn offline_listener_port_bounds_withdraw_invalid_generations_and_recover()
         }
     }
 }
+
+#[tokio::test]
+async fn shared_http_admission_preserves_partial_listeners_and_native_status_contract() {
+    let runtime = Arc::new(ControllerRuntime::new());
+    let classes = Arc::new(ResourceProcessor::<edgion_resources::GatewayClass>::new(
+        "GatewayClass",
+        16,
+        Arc::new(super::super::GatewayClassHandler::new(
+            super::super::GatewayClassOwnership::new("edgion.io/gateway-controller".into()),
+        )),
+        runtime.clone(),
+    ));
+    runtime.processor_registry.register(classes.clone());
+    classes
+        .on_init_apply(
+            serde_json::from_value(serde_json::json!({
+                "metadata": {"name": "shared"}, "spec": {"controllerName": "edgion.io/gateway-controller"}
+            }))
+            .unwrap(),
+            None,
+        )
+        .await;
+    let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, runtime.clone());
+    let handler = GatewayHandler::new(None, None);
+    let document = |name: &str, redirect: bool, sibling: bool| {
+        let mut gateway: Gateway = serde_json::from_value(serde_json::json!({"metadata":{"name":name,"namespace":"test","annotations":{"edgion.io/http-to-https-redirect":redirect.to_string()}},"spec":{"gatewayClassName":"shared","listeners":[{"name":"http","port":8080,"protocol":"HTTP","hostname":format!("{name}.example.com")} ]}})).unwrap();
+        if sibling {
+            let mut listener = gateway.spec.listeners.as_ref().unwrap()[0].clone();
+            listener.name = "healthy".into();
+            listener.port = 8081;
+            gateway.spec.listeners.as_mut().unwrap().push(listener);
+        }
+        gateway
+    };
+    let ProcessResult::Continue(mut incumbent) = handler.parse(document("a", false, false), &ctx).await else {
+        panic!("native parse failed");
+    };
+    handler.update_status(&mut incumbent, &ctx, &[]);
+    let ProcessResult::Continue(mut partial) = handler.parse(document("b", true, true), &ctx).await else {
+        panic!("native parse failed");
+    };
+    handler.update_status(&mut partial, &ctx, &[]);
+    let statuses = partial.status.as_ref().unwrap().listeners.as_ref().unwrap();
+    assert!(statuses[0]
+        .conditions
+        .iter()
+        .any(|condition| condition.type_ == "Accepted"
+            && condition.status == "False"
+            && condition.reason == "SharedListenerPolicyConflict"
+            && condition.message.contains("test/a")));
+    assert!(statuses[1]
+        .conditions
+        .iter()
+        .any(|condition| condition.type_ == "Accepted" && condition.status == "True"));
+    assert!(partial
+        .status
+        .as_ref()
+        .unwrap()
+        .conditions
+        .as_ref()
+        .unwrap()
+        .iter()
+        .any(|condition| condition.type_ == "Accepted" && condition.status == "True"));
+    let ProcessResult::Continue(mut rejected) = handler.parse(document("b", true, false), &ctx).await else {
+        panic!("native parse failed");
+    };
+    handler.update_status(&mut rejected, &ctx, &[]);
+    assert!(rejected
+        .status
+        .as_ref()
+        .unwrap()
+        .conditions
+        .as_ref()
+        .unwrap()
+        .iter()
+        .any(|condition| condition.type_ == "Programmed" && condition.status == "False"));
+    handler.on_delete(&incumbent, &ctx).await;
+    handler.update_status(&mut rejected, &ctx, &[]);
+    assert!(rejected.status.as_ref().unwrap().listeners.as_ref().unwrap()[0]
+        .conditions
+        .iter()
+        .any(|condition| condition.type_ == "Accepted" && condition.status == "True"));
+}
+
+#[tokio::test]
+async fn shared_admission_ignores_unconstructible_class_and_recovers_through_published_config_queues() {
+    use super::super::{EdgionGatewayConfigHandler, GatewayClassHandler, GatewayClassOwnership};
+    use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, RawStore};
+    use edgion_resources::{EdgionGatewayConfig, GatewayClass};
+    use std::time::Duration;
+    let runtime = Arc::new(ControllerRuntime::default());
+    let classes = Arc::new(ResourceProcessor::<GatewayClass>::new(
+        "GatewayClass",
+        16,
+        Arc::new(GatewayClassHandler::new(GatewayClassOwnership::new(
+            "edgion.io/gateway-controller".into(),
+        ))),
+        runtime.clone(),
+    ));
+    let class_raw = Arc::new(LocalRawStore::new());
+    classes.set_raw_store(class_raw.clone());
+    runtime.processor_registry.register(classes.clone());
+    let gateways = Arc::new(ResourceProcessor::<Gateway>::new(
+        "Gateway",
+        16,
+        Arc::new(GatewayHandler::new(None, None)),
+        runtime.clone(),
+    ));
+    let gateway_raw = Arc::new(LocalRawStore::new());
+    gateways.set_raw_store(gateway_raw.clone());
+    runtime.processor_registry.register(gateways.clone());
+    let configs = Arc::new(ResourceProcessor::<EdgionGatewayConfig>::new(
+        "EdgionGatewayConfig",
+        16,
+        Arc::new(EdgionGatewayConfigHandler::new()),
+        runtime.clone(),
+    ));
+    let config_raw = Arc::new(LocalRawStore::new());
+    configs.set_raw_store(config_raw.clone());
+    runtime.processor_registry.register(configs.clone());
+    for (name, parameters) in [
+        (
+            "pending",
+            serde_json::json!({"group":"edgion.io","kind":"EdgionGatewayConfig","name":"missing"}),
+        ),
+        ("healthy", serde_json::Value::Null),
+    ] {
+        let class: GatewayClass = serde_json::from_value(serde_json::json!({"metadata":{"name":name},"spec":{"controllerName":"edgion.io/gateway-controller","parametersRef":parameters}})).unwrap();
+        class_raw.upsert(name.into(), Arc::new(class.clone()));
+        classes.on_init_apply(class, None).await;
+    }
+    for (name, enabled) in [("pending", true), ("healthy", false)] {
+        let gateway: Gateway = serde_json::from_value(serde_json::json!({"metadata":{"name":name,"namespace":"test","annotations":{"edgion.io/enable-http2":enabled.to_string()}},"spec":{"gatewayClassName":name,"listeners":[{"name":"http","protocol":"HTTP","port":8080}]}})).unwrap();
+        gateway_raw.upsert(format!("test/{name}"), Arc::new(gateway.clone()));
+        gateways.on_init_apply(gateway, None).await;
+    }
+    let is_accepted = |name: &str| {
+        gateways
+            .get(&format!("test/{name}"))
+            .unwrap()
+            .status
+            .unwrap()
+            .listeners
+            .unwrap()[0]
+            .conditions
+            .iter()
+            .any(|condition| condition.type_ == "Accepted" && condition.status == "True")
+    };
+    assert!(is_accepted("healthy"));
+    assert_eq!(runtime.listener_port_manager.shared_stats().members, 1);
+    let config = EdgionGatewayConfig::new("missing", Default::default());
+    config_raw.upsert("missing".into(), Arc::new(config.clone()));
+    // The raw generation alone cannot grant shared contribution authority.
+    assert!(!super::shared_gateway_is_constructible(
+        &gateway_raw.get("test/pending").unwrap(),
+        &runtime
+    ));
+    let drain_dependents = || async {
+        for _ in 0..2 {
+            let item = tokio::time::timeout(Duration::from_secs(2), classes.workqueue().dequeue())
+                .await
+                .unwrap()
+                .unwrap();
+            classes
+                .process_work_item(
+                    &item.key,
+                    class_raw.get(&item.key).map(|class| (*class).clone()),
+                    None,
+                    item.trigger_chain.clone(),
+                )
+                .await;
+            classes.workqueue().done(&item.key);
+        }
+        for _ in 0..2 {
+            let item = tokio::time::timeout(Duration::from_secs(2), gateways.workqueue().dequeue())
+                .await
+                .unwrap()
+                .unwrap();
+            gateways
+                .process_work_item(
+                    &item.key,
+                    gateway_raw.get(&item.key).map(|gateway| (*gateway).clone()),
+                    None,
+                    item.trigger_chain.clone(),
+                )
+                .await;
+            gateways.workqueue().done(&item.key);
+        }
+    };
+    configs.on_event_key("missing".into()).await;
+    let item = configs.workqueue().dequeue().await.unwrap();
+    configs
+        .process_work_item(&item.key, Some(config), None, item.trigger_chain.clone())
+        .await;
+    configs.workqueue().done(&item.key);
+    assert!(configs.get("missing").is_some());
+    drain_dependents().await;
+    assert!(is_accepted("healthy"));
+    assert!(
+        !is_accepted("pending"),
+        "newly constructible owner cannot preempt the running peer"
+    );
+    assert_eq!(runtime.listener_port_manager.shared_stats().blocker_references, 1);
+    config_raw.remove("missing");
+    configs.on_event_key("missing".into()).await;
+    let item = configs.workqueue().dequeue().await.unwrap();
+    configs
+        .process_work_item(&item.key, None, None, item.trigger_chain.clone())
+        .await;
+    configs.workqueue().done(&item.key);
+    assert!(configs.get("missing").is_none());
+    drain_dependents().await;
+    assert!(is_accepted("healthy"));
+    assert_eq!(runtime.listener_port_manager.shared_stats().blocker_references, 0);
+    assert!(!super::shared_gateway_is_constructible(
+        &gateway_raw.get("test/pending").unwrap(),
+        &runtime
+    ));
+    // Conditions are not a generic Ready prerequisite; only class/target shape
+    // and the published constructor inputs above establish constructibility.
+}

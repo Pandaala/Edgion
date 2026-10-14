@@ -1136,6 +1136,13 @@ verify_sync() {
     local max_retries=5
     local retry_delay=2
     local attempt=1
+    local expected_reference_args=()
+    case " $(get_suites_to_load) " in
+        *" Gateway/SharedHttpPolicyAdmission "*|*" Gateway/SharedHttpPolicyAdmission/DynamicTest "*)
+            expected_reference_args+=(--expected-missing-secret \
+                "Gateway:edgion-test/shared-policy-tls:edgion-test/shared-policy-recovery-cert")
+            ;;
+    esac
     
     while [ $attempt -le $max_retries ]; do
         # Note: resource_diff now skips ReferenceGrant and Secret by default (--skip-kinds)
@@ -1144,6 +1151,7 @@ verify_sync() {
             --controller-probe-url "http://127.0.0.1:${CONTROLLER_PROBE_PORT}" \
             --gateway-url "http://127.0.0.1:${GATEWAY_ADMIN_PORT}" \
             --gateway-probe-url "http://127.0.0.1:${GATEWAY_PROBE_PORT}" \
+            "${expected_reference_args[@]}" \
             > "${LOG_DIR}/resource_diff.log" 2>&1; then
             log_success "resourcesyncverifypassed"
             return 0

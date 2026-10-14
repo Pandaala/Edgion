@@ -31,6 +31,14 @@ fn redirect_log_json(error: Option<String>) -> serde_json::Value {
     .unwrap()
 }
 
+fn admit_redirect_gateway(hostname: Option<&str>) {
+    let gateway: edgion_resources::Gateway = crate::test_current_status::from_value(serde_json::json!({
+        "metadata": {"name": "redirect", "namespace": "test"},
+        "spec": {"gatewayClassName": "shared", "listeners": [{"name": "http", "port": 8080, "protocol": "HTTP", "hostname": hostname}]}
+    })).unwrap();
+    crate::runtime::store::listener_gateway_info::rebuild_listener_gateway_infos(&[gateway]);
+}
+
 fn test_access_logger() -> Arc<AccessLogger> {
     Arc::new(AccessLogger::new())
 }
@@ -88,16 +96,31 @@ async fn redirect_listener_wire_request_count(
 
 #[test]
 fn test_redirect_creation() {
-    let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger(), crate::config::bind_gateway_config(None));
+    let redirect = EdgionHttpRedirectProxy::new(
+        443,
+        test_access_logger(),
+        crate::config::bind_gateway_config(None),
+        edgion_resources::ListenerKey("0.0.0.0:8080/HTTP".into()),
+    );
     assert_eq!(redirect.https_port, 443);
 
-    let redirect = EdgionHttpRedirectProxy::new(8443, test_access_logger(), crate::config::bind_gateway_config(None));
+    let redirect = EdgionHttpRedirectProxy::new(
+        8443,
+        test_access_logger(),
+        crate::config::bind_gateway_config(None),
+        edgion_resources::ListenerKey("0.0.0.0:8080/HTTP".into()),
+    );
     assert_eq!(redirect.https_port, 8443);
 }
 
 #[test]
 fn test_build_redirect_url_default_port() {
-    let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger(), crate::config::bind_gateway_config(None));
+    let redirect = EdgionHttpRedirectProxy::new(
+        443,
+        test_access_logger(),
+        crate::config::bind_gateway_config(None),
+        edgion_resources::ListenerKey("0.0.0.0:8080/HTTP".into()),
+    );
 
     // Simple path
     assert_eq!(
@@ -120,7 +143,12 @@ fn test_build_redirect_url_default_port() {
 
 #[test]
 fn test_build_redirect_url_custom_port() {
-    let redirect = EdgionHttpRedirectProxy::new(8443, test_access_logger(), crate::config::bind_gateway_config(None));
+    let redirect = EdgionHttpRedirectProxy::new(
+        8443,
+        test_access_logger(),
+        crate::config::bind_gateway_config(None),
+        edgion_resources::ListenerKey("0.0.0.0:8080/HTTP".into()),
+    );
 
     // Simple path
     assert_eq!(
@@ -143,7 +171,12 @@ fn test_build_redirect_url_custom_port() {
 
 #[test]
 fn test_build_redirect_url_special_cases() {
-    let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger(), crate::config::bind_gateway_config(None));
+    let redirect = EdgionHttpRedirectProxy::new(
+        443,
+        test_access_logger(),
+        crate::config::bind_gateway_config(None),
+        edgion_resources::ListenerKey("0.0.0.0:8080/HTTP".into()),
+    );
 
     // IPv4 address
     assert_eq!(
@@ -196,7 +229,12 @@ fn test_host_is_missing() {
 
 #[test]
 fn test_new_ctx() {
-    let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger(), crate::config::bind_gateway_config(None));
+    let redirect = EdgionHttpRedirectProxy::new(
+        443,
+        test_access_logger(),
+        crate::config::bind_gateway_config(None),
+        edgion_resources::ListenerKey("0.0.0.0:8080/HTTP".into()),
+    );
     let _ctx = redirect.new_ctx(); // Should not panic
 }
 
@@ -237,6 +275,8 @@ fn absent_redirect_error_stays_null_under_masking() {
 
 #[tokio::test]
 async fn redirect_connection_policy_matches_wire_and_stream_reuse() {
+    let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+    admit_redirect_gateway(None);
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         for (host_headers, expected_status) in [
             ("Host: example.com\r\n", 301),
@@ -244,8 +284,12 @@ async fn redirect_connection_policy_matches_wire_and_stream_reuse() {
             ("Host: :8080\r\n", 400),
         ] {
             for client_close in [false, true] {
-                let redirect =
-                    EdgionHttpRedirectProxy::new(443, test_access_logger(), crate::config::bind_gateway_config(None));
+                let redirect = EdgionHttpRedirectProxy::new(
+                    443,
+                    test_access_logger(),
+                    crate::config::bind_gateway_config(None),
+                    edgion_resources::ListenerKey("0.0.0.0:8080/HTTP".into()),
+                );
                 let (mut client, server) = tokio::io::duplex(4096);
                 let connection = if client_close { "Connection: close\r\n" } else { "" };
                 client
@@ -311,6 +355,7 @@ async fn redirect_connection_policy_matches_wire_and_stream_reuse() {
 #[tokio::test(flavor = "current_thread")]
 async fn redirect_listener_enforces_total_request_limit_on_the_wire() {
     let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+    admit_redirect_gateway(None);
     let handler = crate::config::edgion_gateway::create_edgion_gateway_config_handler();
     let configs = [0_u32, 1, 2]
         .into_iter()
@@ -333,6 +378,7 @@ async fn redirect_listener_enforces_total_request_limit_on_the_wire() {
             443,
             test_access_logger(),
             crate::config::bind_gateway_config(Some(&format!("redirect-keepalive-{limit}"))),
+            edgion_resources::ListenerKey("0.0.0.0:8080/HTTP".into()),
         );
         let (served, wire) = redirect_listener_wire_request_count(&redirect, limit, request_cap).await;
         let wire_lower = wire.to_ascii_lowercase();
@@ -359,7 +405,12 @@ async fn redirect_listener_enforces_total_request_limit_on_the_wire() {
 
 #[tokio::test]
 async fn redirect_duplicate_host_is_rejected_by_protocol_validation() {
-    let _redirect = EdgionHttpRedirectProxy::new(443, test_access_logger(), crate::config::bind_gateway_config(None));
+    let _redirect = EdgionHttpRedirectProxy::new(
+        443,
+        test_access_logger(),
+        crate::config::bind_gateway_config(None),
+        edgion_resources::ListenerKey("0.0.0.0:8080/HTTP".into()),
+    );
     let request = b"GET /path?query=1 HTTP/1.1\r\nHost: first.test\r\nHost: second.test\r\nConnection: close\r\n\r\n";
     let (mut client, server) = tokio::io::duplex(4096);
     client.write_all(request).await.unwrap();
@@ -369,7 +420,14 @@ async fn redirect_duplicate_host_is_rejected_by_protocol_validation() {
 
 #[tokio::test]
 async fn redirect_wire_preserves_query_percent_encoding_ipv6_port_and_client_requested_close() {
-    let redirect = EdgionHttpRedirectProxy::new(8443, test_access_logger(), crate::config::bind_gateway_config(None));
+    let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+    admit_redirect_gateway(None);
+    let redirect = EdgionHttpRedirectProxy::new(
+        8443,
+        test_access_logger(),
+        crate::config::bind_gateway_config(None),
+        edgion_resources::ListenerKey("0.0.0.0:8080/HTTP".into()),
+    );
     let (mut client, server) = tokio::io::duplex(4096);
     // Pingora derives the response Connection header from session keepalive;
     // exercise the client-requested close branch without changing that policy.
@@ -407,4 +465,42 @@ async fn redirect_wire_preserves_query_percent_encoding_ipv6_port_and_client_req
     assert!(wire.ends_with("\r\n\r\n"));
     assert!(!ctx.path.contains("token="));
     assert!(!ctx.redirect_url.contains("token="));
+}
+
+#[tokio::test]
+async fn redirect_rejected_or_unowned_hostname_returns_wire_404() {
+    let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+    admit_redirect_gateway(Some("allowed.example.com"));
+    let redirect = EdgionHttpRedirectProxy::new(
+        443,
+        test_access_logger(),
+        crate::config::bind_gateway_config(None),
+        edgion_resources::ListenerKey("0.0.0.0:8080/HTTP".into()),
+    );
+    assert!(redirect.hostname_is_admitted("ALLOWED.EXAMPLE.COM:8080"));
+    for clear_owner in [false, true] {
+        if clear_owner {
+            crate::runtime::store::listener_gateway_info::rebuild_listener_gateway_infos(&[]);
+        }
+        let host = if clear_owner {
+            "allowed.example.com"
+        } else {
+            "unowned.example.com"
+        };
+        let (mut client, server) = tokio::io::duplex(4096);
+        client
+            .write_all(format!("GET / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
+        let mut session = Session::new_h1(Box::new(server));
+        assert!(session.read_request().await.unwrap());
+        let mut ctx = redirect.new_ctx();
+        assert!(redirect.request_filter(&mut session, &mut ctx).await.unwrap());
+        assert_eq!(ctx.status, 404);
+        drop(session);
+        let mut wire = String::new();
+        client.read_to_string(&mut wire).await.unwrap();
+        assert!(wire.starts_with("HTTP/1.1 404"));
+        assert!(!wire.to_ascii_lowercase().contains("location:"));
+    }
 }

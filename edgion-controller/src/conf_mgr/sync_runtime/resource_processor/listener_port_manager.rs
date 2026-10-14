@@ -18,6 +18,9 @@
 //!
 //! Within each conflict key group, hostname intersection determines actual conflicts.
 
+use super::{BidirectionalRefManager, ResourceRef};
+use edgion_resources::resources::gateway::HttpServiceDeclaration;
+use edgion_resources::{Gateway, ListenerKey, ResourceKind, ResourceMeta};
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 
@@ -74,13 +77,40 @@ fn hostnames_conflict(a: Option<&str>, b: Option<&str>) -> bool {
     a == b
 }
 
-/// Manages listener port usage for intra-gateway conflict detection.
-///
-/// Tracks which listeners are using which ports across all Gateways,
-/// but only reports conflicts within the same Gateway.
-/// Two listeners conflict only when their hostnames are identical
-/// (both wildcard, or the same concrete hostname string).
+/// A member of the first admitted compatible HTTP service group.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SharedListenerMember {
+    pub gateway_key: String,
+    pub listener_name: String,
+    pub declaration: HttpServiceDeclaration,
+}
+#[derive(Default)]
+struct SharedListenerState {
+    groups: HashMap<ListenerKey, Vec<SharedListenerMember>>,
+    gateway_groups: HashMap<String, HashSet<ListenerKey>>,
+    changed: HashMap<String, HashSet<String>>,
+}
+#[derive(serde::Serialize)]
+pub struct SharedListenerStats {
+    pub groups: usize,
+    pub members: usize,
+    pub group_keys: Vec<String>,
+    pub gateway_keys: Vec<String>,
+    pub pending_publications: usize,
+    pub pending_gateway_keys: Vec<String>,
+    pub blocker_gateways: usize,
+    pub blocked_gateways: usize,
+    pub blocker_references: usize,
+    pub blocker_keys: Vec<String>,
+    pub blocked_keys: Vec<String>,
+}
+
+/// Tracks native intra-Gateway socket conflicts and compatible shared HTTP groups.
+/// Native conflicts require identical hostnames within one Gateway. Shared service
+/// admission compares effective physical policy across the shared process.
 pub struct ListenerPortManager {
+    shared: RwLock<SharedListenerState>,
+    blockers: BidirectionalRefManager<ResourceRef>,
     /// Forward index: conflict_key → listeners using this socket address
     port_to_listeners: RwLock<HashMap<ConflictKey, HashSet<ListenerRef>>>,
 
@@ -91,8 +121,155 @@ pub struct ListenerPortManager {
 impl ListenerPortManager {
     pub fn new() -> Self {
         Self {
+            shared: RwLock::new(SharedListenerState::default()),
+            blockers: BidirectionalRefManager::with_component("shared_listener_blockers"),
             port_to_listeners: RwLock::new(HashMap::new()),
             gateway_to_ports: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// Replace this worker item's admission and complete blocking dependency set.
+    /// Native listener validation has already run; compatible admitted peers remain.
+    pub(crate) fn replace_shared_listeners(
+        &self,
+        gateway: &Gateway,
+        eligible: &HashSet<String>,
+    ) -> HashMap<String, Vec<SharedListenerMember>> {
+        let key = gateway.key_name();
+        let owner = ResourceRef::new(
+            ResourceKind::Gateway,
+            gateway.metadata.namespace.clone(),
+            gateway.metadata.name.clone().unwrap_or_default(),
+        );
+        let mut state = self.shared.write();
+        let mut previous = Vec::new();
+        let mut affected_sources = HashSet::from([key.clone()]);
+        for domain in state.gateway_groups.remove(&key).unwrap_or_default() {
+            if let Some(members) = state.groups.get_mut(&domain) {
+                affected_sources.extend(members.iter().map(|member| member.gateway_key.clone()));
+                previous.extend(
+                    members
+                        .iter()
+                        .filter(|member| member.gateway_key == key)
+                        .cloned()
+                        .map(|member| (domain.clone(), member)),
+                );
+                members.retain(|member| member.gateway_key != key);
+                if members.is_empty() {
+                    state.groups.remove(&domain);
+                }
+            }
+        }
+        self.blockers.clear_value_refs(&owner);
+        let dedicated = gateway
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|values| values.get(edgion_resources::constants::annotations::edgion::DEDICATED_GATEWAY_INSTANCE))
+            .is_some_and(|value| value == "true");
+        let mut incoming = Vec::new();
+        let mut rejected = HashMap::new();
+        let mut domains = HashSet::new();
+        if !dedicated {
+            for listener in gateway
+                .spec
+                .listeners
+                .iter()
+                .flatten()
+                .filter(|listener| eligible.contains(&listener.name))
+            {
+                let Some(declaration) = HttpServiceDeclaration::from_gateway(gateway, &listener.protocol) else {
+                    continue;
+                };
+                let domain = ListenerKey::new(
+                    edgion_resources::listener_key::resolve_listener_addr(gateway, listener.port),
+                    &listener.protocol,
+                );
+                let members = state.groups.entry(domain.clone()).or_default();
+                affected_sources.extend(members.iter().map(|member| member.gateway_key.clone()));
+                if members.first().is_some_and(|member| member.declaration != declaration) {
+                    let blocking = members.clone();
+                    for member in &blocking {
+                        self.blockers.add_ref(member.gateway_key.clone(), owner.clone());
+                    }
+                    rejected.insert(listener.name.clone(), blocking);
+                } else {
+                    let member = SharedListenerMember {
+                        gateway_key: key.clone(),
+                        listener_name: listener.name.clone(),
+                        declaration,
+                    };
+                    incoming.push((domain.clone(), member.clone()));
+                    members.push(member);
+                    domains.insert(domain);
+                }
+            }
+        }
+        if !domains.is_empty() {
+            state.gateway_groups.insert(key.clone(), domains);
+        }
+        let normalize = |entries: &mut Vec<(ListenerKey, SharedListenerMember)>| {
+            entries.sort_by(|a, b| (&a.0, &a.1.listener_name).cmp(&(&b.0, &b.1.listener_name)))
+        };
+        normalize(&mut previous);
+        normalize(&mut incoming);
+        if previous != incoming {
+            state.changed.entry(key).or_default().extend(affected_sources);
+        }
+        rejected
+    }
+
+    pub(crate) fn published_shared_dependents(&self, key: &str) -> Vec<ResourceRef> {
+        let Some(sources) = self.shared.write().changed.remove(key) else {
+            return Vec::new();
+        };
+        sources
+            .into_iter()
+            .flat_map(|source| self.blockers.get_refs(&source))
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect()
+    }
+    pub(crate) fn remove_shared_gateway(&self, gateway: &Gateway) -> Vec<ResourceRef> {
+        self.replace_shared_listeners(gateway, &HashSet::new());
+        let mut dependents = self
+            .published_shared_dependents(&gateway.key_name())
+            .into_iter()
+            .collect::<HashSet<_>>();
+        dependents.extend(self.blockers.clear_source_refs(&gateway.key_name()));
+        dependents.into_iter().collect()
+    }
+    pub fn shared_stats(&self) -> SharedListenerStats {
+        let state = self.shared.read();
+        let mut gateway_keys = state.gateway_groups.keys().cloned().collect::<Vec<_>>();
+        gateway_keys.sort();
+        let mut blocker_keys = self.blockers.all_source_keys();
+        blocker_keys.sort();
+        let mut group_keys = state.groups.keys().map(ToString::to_string).collect::<Vec<_>>();
+        group_keys.sort();
+        let mut pending_gateway_keys = state.changed.keys().cloned().collect::<Vec<_>>();
+        pending_gateway_keys.sort();
+        let mut blocked_keys = blocker_keys
+            .iter()
+            .flat_map(|key| self.blockers.get_refs(key))
+            .map(|value| value.resource_key())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        blocked_keys.sort();
+        let refs = self.blockers.stats();
+        SharedListenerStats {
+            groups: state.groups.len(),
+            members: state.groups.values().map(Vec::len).sum(),
+            gateway_keys,
+            pending_publications: state.changed.len(),
+            blocker_gateways: refs.source_count,
+            blocked_gateways: refs.value_count,
+            blocker_references: refs.total_references,
+            blocker_keys,
+            group_keys,
+            pending_gateway_keys,
+            blocked_keys,
         }
     }
 
@@ -230,6 +407,8 @@ impl ListenerPortManager {
     /// # Lock Order
     /// Always acquires locks in order: gateway_to_ports -> port_to_listeners
     pub fn clear(&self) {
+        *self.shared.write() = SharedListenerState::default();
+        self.blockers.clear();
         let mut gw_map = self.gateway_to_ports.write();
         let mut port_map = self.port_to_listeners.write();
         gw_map.clear();

@@ -74,6 +74,9 @@ async fn empty_conf_center_reports_every_resource_kind_as_zero() {
 #[test]
 fn response_serializes_with_expected_keys() {
     let resp = ControllerStoreStats {
+        shared_http_listeners:
+            crate::conf_mgr::sync_runtime::resource_processor::listener_port_manager::ListenerPortManager::new()
+                .shared_stats(),
         conf_center_storage: BTreeMap::from_iter([("HTTPRoute".to_string(), 0)]),
         raw_cache: BTreeMap::new(),
         raw_cache_keys: BTreeMap::new(),

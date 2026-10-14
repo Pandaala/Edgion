@@ -296,3 +296,102 @@ fn test_conflict_two_wildcards_and_concrete() {
     assert!(conflicts.contains_key("catchall-2"));
     assert!(!conflicts.contains_key("api"));
 }
+
+fn shared_gateway(name: &str, redirect: bool) -> Gateway {
+    serde_json::from_value(serde_json::json!({"metadata":{"name":name,"namespace":"test","annotations":{"edgion.io/http-to-https-redirect":redirect.to_string()}},
+        "spec":{"gatewayClassName":"shared","listeners":[{"name":"http","port":8080,"protocol":"HTTP","hostname":format!("{name}.example.com")} ]}})).unwrap()
+}
+
+#[test]
+fn shared_compatible_group_replaces_all_blockers_and_recovers_on_member_delete() {
+    let manager = ListenerPortManager::new();
+    let eligible = HashSet::from(["http".into()]);
+    let a = shared_gateway("a", false);
+    let b = shared_gateway("b", true);
+    let c = shared_gateway("c", false);
+    assert!(manager.replace_shared_listeners(&a, &eligible).is_empty());
+    manager.published_shared_dependents("test/a");
+    assert_eq!(manager.replace_shared_listeners(&b, &eligible)["http"].len(), 1);
+    assert!(manager.replace_shared_listeners(&c, &eligible).is_empty());
+    assert_eq!(
+        manager.published_shared_dependents("test/c")[0].resource_key(),
+        "test/b"
+    );
+    assert_eq!(manager.replace_shared_listeners(&b, &eligible)["http"].len(), 2);
+    assert_eq!(manager.shared_stats().blocker_references, 2);
+    assert_eq!(manager.remove_shared_gateway(&a)[0].resource_key(), "test/b");
+    assert_eq!(
+        manager.replace_shared_listeners(&b, &eligible)["http"][0].gateway_key,
+        "test/c"
+    );
+    assert_eq!(manager.shared_stats().blocker_keys, vec!["test/c"]);
+    assert_eq!(manager.remove_shared_gateway(&c)[0].resource_key(), "test/b");
+    assert!(manager.replace_shared_listeners(&b, &eligible).is_empty());
+    assert_eq!(manager.shared_stats().blocked_gateways, 0);
+    manager.published_shared_dependents("test/b");
+    assert!(manager.replace_shared_listeners(&b, &eligible).is_empty());
+    assert!(manager.published_shared_dependents("test/b").is_empty());
+    manager.clear();
+    let stats = manager.shared_stats();
+    assert_eq!(
+        (
+            stats.groups,
+            stats.members,
+            stats.pending_publications,
+            stats.blocker_references
+        ),
+        (0, 0, 0, 0)
+    );
+    assert!(stats.gateway_keys.is_empty());
+    assert!(stats.blocker_keys.is_empty());
+    assert!(stats.group_keys.is_empty());
+    assert!(stats.pending_gateway_keys.is_empty());
+    assert!(stats.blocked_keys.is_empty());
+}
+
+#[test]
+fn shared_arbitration_is_processing_order_local_and_cross_class() {
+    let manager = ListenerPortManager::new();
+    let eligible = HashSet::from(["http".into()]);
+    let z = shared_gateway("z", true);
+    let mut a = shared_gateway("a", false);
+    assert!(manager.replace_shared_listeners(&z, &eligible).is_empty());
+    assert_eq!(
+        manager.replace_shared_listeners(&a, &eligible)["http"][0].gateway_key,
+        "test/z"
+    );
+    a.spec.gateway_class_name = "other".into();
+    assert_eq!(
+        manager.replace_shared_listeners(&a, &eligible)["http"][0].gateway_key,
+        "test/z"
+    );
+    assert_eq!(manager.remove_shared_gateway(&z)[0].resource_key(), "test/a");
+    assert!(manager.replace_shared_listeners(&a, &eligible).is_empty());
+    let mut compatible = shared_gateway("compatible", false);
+    compatible.spec.gateway_class_name = "third".into();
+    assert!(manager.replace_shared_listeners(&compatible, &eligible).is_empty());
+    a.metadata
+        .annotations
+        .as_mut()
+        .unwrap()
+        .insert("edgion.io/dedicated-gateway-instance".into(), "true".into());
+    assert!(manager.replace_shared_listeners(&a, &eligible).is_empty());
+    assert_eq!(manager.shared_stats().groups, 1);
+}
+
+#[test]
+fn shared_dependencies_use_canonical_namespace_less_keys() {
+    let manager = ListenerPortManager::new();
+    let eligible = HashSet::from(["http".into()]);
+    let mut a = shared_gateway("a", false);
+    a.metadata.namespace = None;
+    let mut b = shared_gateway("b", true);
+    b.metadata.namespace = None;
+    manager.replace_shared_listeners(&a, &eligible);
+    manager.published_shared_dependents(&a.key_name());
+    manager.replace_shared_listeners(&b, &eligible);
+    assert_eq!(manager.remove_shared_gateway(&a)[0].resource_key(), "b");
+    assert!(manager.replace_shared_listeners(&b, &eligible).is_empty());
+    manager.published_shared_dependents(&b.key_name());
+    assert_eq!(manager.shared_stats().pending_publications, 0);
+}

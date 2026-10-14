@@ -734,6 +734,13 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
     }
 
     async fn after_publish(&self, gateway: &Gateway, ctx: &HandlerContext) {
+        for dependent in ctx
+            .runtime()
+            .listener_port_manager
+            .published_shared_dependents(&gateway.key_name())
+        {
+            ctx.requeue("Gateway", dependent.resource_key()).await;
+        }
         let gateway_key = format!(
             "{}/{}",
             gateway.metadata.namespace.as_deref().unwrap_or(""),
@@ -787,6 +794,9 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
     }
 
     async fn on_delete(&self, g: &Gateway, ctx: &HandlerContext) {
+        for dependent in ctx.runtime().listener_port_manager.remove_shared_gateway(g) {
+            ctx.requeue("Gateway", dependent.resource_key()).await;
+        }
         let resource_ref = ResourceRef::new(
             ResourceKind::Gateway,
             g.metadata.namespace.clone(),
@@ -1365,6 +1375,8 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             status.listeners = Some(Vec::new());
         }
 
+        apply_shared_http_admission(gateway, _ctx);
+
         // Strip a denied cross-namespace `dns-resolver-ref` after conditions are
         // reported, so the data plane never honors an unpermitted reference. Only
         // the shipped/cached copy is mutated (status write-back touches the status
@@ -1373,6 +1385,125 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         if dns_resolver_ref_error.is_some() {
             super::dns_resolver_guard::strip_dns_resolver_ref(&mut gateway.metadata.annotations);
         }
+    }
+}
+
+fn apply_shared_http_admission(gateway: &mut Gateway, ctx: &HandlerContext) {
+    let constructible = shared_gateway_is_constructible(gateway, ctx.runtime());
+    let eligible = gateway
+        .status
+        .as_ref()
+        .and_then(|status| status.listeners.as_ref())
+        .into_iter()
+        .flatten()
+        .filter(|listener| {
+            constructible
+                && ["Accepted", "Programmed"].iter().all(|kind| {
+                    listener
+                        .conditions
+                        .iter()
+                        .any(|condition| condition.type_ == *kind && condition.status == "True")
+                })
+        })
+        .map(|listener| listener.name.clone())
+        .collect::<std::collections::HashSet<_>>();
+    let rejected = ctx
+        .runtime()
+        .listener_port_manager
+        .replace_shared_listeners(gateway, &eligible);
+    if rejected.is_empty() {
+        return;
+    }
+    let generation = gateway.metadata.generation;
+    let declarations = gateway
+        .spec
+        .listeners
+        .iter()
+        .flatten()
+        .filter_map(|listener| {
+            edgion_resources::resources::gateway::HttpServiceDeclaration::from_gateway(gateway, &listener.protocol)
+                .map(|declaration| (listener.name.clone(), declaration))
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    let Some(status) = gateway.status.as_mut() else {
+        return;
+    };
+    for listener in status.listeners.iter_mut().flatten() {
+        if let Some(blockers) = rejected.get(&listener.name) {
+            let declaration = declarations.get(&listener.name).copied();
+            let mut descriptions = blockers
+                .iter()
+                .map(|blocker| {
+                    format!(
+                        "Gateway '{}' listener '{}' ({})",
+                        blocker.gateway_key,
+                        blocker.listener_name,
+                        declaration
+                            .map(|declaration| blocker.declaration.conflicting_field(declaration))
+                            .unwrap_or("serviceMode")
+                    )
+                })
+                .collect::<Vec<_>>();
+            descriptions.sort();
+            descriptions.dedup();
+            let message = format!(
+                "Shared HTTP listener policy conflicts with {}; use compatible settings or another local address/port",
+                descriptions.join(", ")
+            );
+            update_gateway_condition(
+                &mut listener.conditions,
+                condition_false("Accepted", "SharedListenerPolicyConflict", message.clone(), generation),
+            );
+            update_gateway_condition(
+                &mut listener.conditions,
+                condition_false("Programmed", "Invalid", message, generation),
+            );
+        }
+    }
+    // Preserve the native aggregation contract unless this policy decision
+    // removed every otherwise eligible listener from the Gateway.
+    if eligible.iter().all(|name| rejected.contains_key(name)) {
+        let conditions = status.conditions.get_or_insert_with(Vec::new);
+        update_gateway_condition(
+            conditions,
+            condition_false(
+                "Accepted",
+                "ListenersNotValid",
+                "No eligible listeners remain after shared HTTP policy admission",
+                generation,
+            ),
+        );
+        update_gateway_condition(
+            conditions,
+            condition_false(
+                "Programmed",
+                "Invalid",
+                "No eligible listeners remain after shared HTTP policy admission",
+                generation,
+            ),
+        );
+    }
+}
+
+fn shared_gateway_is_constructible(gateway: &Gateway, runtime: &ControllerRuntime) -> bool {
+    use edgion_resources::resources::refs::gateway_class_fields::GatewayClassParametersRef;
+    let Some(class) = runtime
+        .processor_registry
+        .get("GatewayClass")
+        .and_then(|processor| processor.get_cached_any(&gateway.spec.gateway_class_name))
+        .and_then(|class| class.downcast::<edgion_resources::GatewayClass>().ok())
+    else {
+        return false;
+    };
+    match GatewayClassParametersRef::from_class(&class) {
+        Ok(None) => true,
+        Ok(Some(reference)) => runtime
+            .processor_registry
+            .get("EdgionGatewayConfig")
+            .and_then(|processor| processor.get_cached_any(reference.target().name()))
+            .and_then(|config| config.downcast::<edgion_resources::EdgionGatewayConfig>().ok())
+            .is_some(),
+        Err(_) => false,
     }
 }
 

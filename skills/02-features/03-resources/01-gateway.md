@@ -167,7 +167,13 @@ status:
 
 ## Listener Conflict Detection
 
-When the same `(socket_addr, hostname)` combination conflicts across multiple Gateways, the Listener of the later-created Gateway is marked `Conflicted=True`. Conflict detection keys are grouped by socket address (rather than port+protocol) via `make_conflict_key(SocketAddr)`. After the conflicting Gateway is deleted, the state recovers automatically.
+Native `Conflicted` detection compares listeners within one Gateway using socket address and identical hostname. Cross-Gateway compatible sharing remains allowed.
+
+For HTTP-family listeners in one shared Gateway process, across GatewayClasses, the first eligible compatible group processed by the Gateway queue establishes the effective service policy. An incompatible later listener receives `Accepted=False` with reason `SharedListenerPolicyConflict` and `Programmed=False`; its message identifies the blocking Gateways and differing policy field. Healthy sibling listeners remain enabled. Blocker updates and deletion requeue dependent Gateways to reevaluate admission; processing order is reconsidered after Controller restart. Dedicated Gateways are isolated from this shared-service arbitration. Gateways whose published class or parametersRef cannot construct a service do not contribute blockers; existing EGC-to-Class-to-Gateway requeues reevaluate them after publication.
+
+Ordinary HTTPRoute/GRPCRoute acceptance and attachment resolution retain their existing semantics, without a new Gateway Ready precondition. The data plane excludes rejected listeners from routing, TLS and redirect matching, including when a Route still carries its original attachments.
+
+Configuration recovery does not rebuild physical services. New ports or changes between HTTP, redirect, and H2 service behavior retain the existing Gateway restart requirement.
 
 ## Edgion Extension Annotations
 

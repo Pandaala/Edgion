@@ -43,6 +43,19 @@ Source: `processor.rs::{get_raw_any,get_cached_any}` and
 The lifecycle authority is
 [resource processing](../../../01-architecture/01-controller/05-resource-processor.md).
 
+Shared HTTP listener admission (ARCH-041) leaves ordinary HTTPRoute/GRPCRoute
+acceptance and attachment resolution unchanged. It adds no Gateway Ready or
+listener-status precondition to those Controller decisions. Existing ownership
+and incarnation checks remain unchanged.
+ListenerPortManager replaces compatible contributions and the complete blocker
+dependency group on apply, and changed owners requeue blocked Gateway keys through
+the existing queue after publication. The Gateway updates its listener inventory
+and route, TLS and redirect matching to exclude rejected listeners, while healthy
+listeners remain available. Logical recovery does not require Route acceptance
+to change or an additional Route requeue trigger.
+This is processing-order admission, without durable winner recovery. Configuration
+recovery does not reconstruct physical services or bind new ports without restart.
+
 ## Historical boundary
 
 `ctrl-04` was closed on 2026-08-09 after AI admission read raw plugin input rather

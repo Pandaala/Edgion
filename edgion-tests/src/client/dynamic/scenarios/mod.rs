@@ -76,3 +76,5 @@ pub mod response_cache;
 pub mod rest_to_graphql;
 
 pub mod dsl_query_lookup;
+
+pub mod shared_http_policy_admission;

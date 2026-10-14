@@ -1900,6 +1900,9 @@ run_all_tests() {
                     run_test "Gateway_TLS_NoHostnameListener" "${EDGION_TEST_CLIENT_BIN} -g -r Gateway -i TLS/NoHostnameListener" || test_failed=true
                     run_test "Gateway_FrontendValidation" "${EDGION_TEST_CLIENT_BIN} -g -r Gateway -i FrontendValidation" || test_failed=true
                     run_test "Gateway_PortConflict" "${EDGION_TEST_CLIENT_BIN} -g -r Gateway -i PortConflict" || test_failed=true
+                elif [ "$G_ITEM" = "SharedHttpPolicyAdmission" ]; then
+                    run_test "Dyn_SharedHttpPolicyAdmission" \
+                        "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario SharedHttpPolicyAdmission" || test_failed=true
                 elif [ "$G_ITEM" = "RetainedListenerHandles" ]; then
                     run_test "Dyn_RetainedListenerHandles" \
                         "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario RetainedListenerHandles" || test_failed=true

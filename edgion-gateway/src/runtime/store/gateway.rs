@@ -57,6 +57,29 @@ impl GatewayStore {
         self.gateways.values().cloned().collect()
     }
 
+    /// Logical declarations retain existing manager handles while temporarily
+    /// rejected. This inventory does not imply an OS socket is bound.
+    pub fn declared_http_listener_keys(&self) -> std::collections::HashSet<edgion_resources::ListenerKey> {
+        self.gateways
+            .values()
+            .flat_map(|gateway| {
+                gateway
+                    .spec
+                    .listeners
+                    .iter()
+                    .flatten()
+                    .take(edgion_resources::resources::gateway::MAX_GATEWAY_LISTENERS)
+                    .filter(|listener| matches!(listener.protocol.as_str(), "HTTP" | "HTTPS"))
+                    .map(|listener| {
+                        edgion_resources::ListenerKey::new(
+                            edgion_resources::listener_key::resolve_listener_addr(gateway, listener.port),
+                            &listener.protocol,
+                        )
+                    })
+            })
+            .collect()
+    }
+
     /// Number of Gateway resources currently held.
     pub fn count(&self) -> usize {
         self.gateways.len()

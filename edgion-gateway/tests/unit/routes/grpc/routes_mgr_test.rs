@@ -107,7 +107,7 @@ fn rebuild_all_clears_a_nonempty_retained_manager_before_drop() {
     let stale = make_listener_key(9830);
     let retained = seed_nonempty_manager(&managers, &stale);
 
-    managers.rebuild_all_listener_managers_with_active(Vec::new());
+    managers.rebuild_all_listener_managers_with_active(Vec::new(), HashSet::new());
 
     assert!(!managers.by_listener.contains_key(&stale));
     assert!(!retained.load_route_table().has_routes());
@@ -123,10 +123,29 @@ fn affected_orphan_sweep_clears_a_nonempty_retained_manager_before_drop() {
     let retained = seed_nonempty_manager(&managers, &orphan);
     let affected_set = HashSet::from([affected.clone()]);
 
-    managers.rebuild_affected_listener_managers_with_active(&affected_set, vec![affected]);
+    managers.rebuild_affected_listener_managers_with_active(&affected_set, vec![affected], HashSet::new());
 
     assert!(!managers.by_listener.contains_key(&orphan));
     assert!(!retained.load_route_table().has_routes());
     let recreated = managers.get_or_create_listener_manager(&orphan);
     assert!(!Arc::ptr_eq(&retained, &recreated));
+}
+
+#[test]
+fn declared_but_rejected_listener_retains_empty_grpc_handle_through_partial_updates() {
+    let managers = GlobalGrpcRouteManagers::new();
+    let key = make_listener_key(9850);
+    let retained = seed_nonempty_manager(&managers, &key);
+    let declared = HashSet::from([key.clone()]);
+    managers.rebuild_all_listener_managers_with_active(Vec::new(), declared.clone());
+    assert!(Arc::ptr_eq(&retained, &managers.get_or_create_listener_manager(&key)));
+    assert!(!retained.load_route_table().has_routes());
+    managers.rebuild_affected_listener_managers_with_active(
+        &HashSet::from([make_listener_key(9851)]),
+        Vec::new(),
+        declared.clone(),
+    );
+    assert!(Arc::ptr_eq(&retained, &managers.get_or_create_listener_manager(&key)));
+    managers.rebuild_all_listener_managers_with_active(vec![key.clone()], declared);
+    assert!(Arc::ptr_eq(&retained, &managers.get_or_create_listener_manager(&key)));
 }

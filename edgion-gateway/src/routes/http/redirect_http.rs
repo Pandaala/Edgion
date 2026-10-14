@@ -65,6 +65,7 @@ pub struct RedirectContext {
 pub struct EdgionHttpRedirectProxy {
     /// Target HTTPS port (default: 443)
     pub https_port: u16,
+    pub listener_key: edgion_resources::ListenerKey,
     /// Access logger for recording redirect events
     pub access_logger: Arc<AccessLogger>,
     /// Stable EGC binding shared with the listener configuration publisher.
@@ -77,12 +78,27 @@ impl EdgionHttpRedirectProxy {
         https_port: u16,
         access_logger: Arc<AccessLogger>,
         egc: Arc<crate::config::GatewayConfigHandle>,
+        listener_key: edgion_resources::ListenerKey,
     ) -> Self {
         Self {
             https_port,
+            listener_key,
             access_logger,
             egc,
         }
+    }
+
+    fn hostname_is_admitted(&self, host: &str) -> bool {
+        let index = crate::runtime::store::get_listener_gateway_info_store().get_index(&self.listener_key);
+        let normalized = NormalizedHostname::new(host);
+        let admitted = index.iter_gateways().any(|(_, listeners)| {
+            listeners.iter().any(|entry| {
+                entry.hostname.as_deref().is_none_or(|hostname| {
+                    crate::runtime::matching::route::hostname_matches_listener(normalized.as_str(), hostname)
+                })
+            })
+        });
+        admitted
     }
 
     /// Whether the request authority is absent for redirect purposes.
@@ -200,6 +216,14 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
             let mut resp = ResponseHeader::build(StatusCode::BAD_REQUEST, Some(2))?;
             resp.insert_header("Content-Length", "0")?;
             session.write_response_header(Box::new(resp), true).await?;
+            return Ok(true);
+        }
+
+        if !self.hostname_is_admitted(raw_host) {
+            ctx.status = 404;
+            let mut response = ResponseHeader::build(StatusCode::NOT_FOUND, Some(1))?;
+            response.insert_header("Content-Length", "0")?;
+            session.write_response_header(Box::new(response), true).await?;
             return Ok(true);
         }
 

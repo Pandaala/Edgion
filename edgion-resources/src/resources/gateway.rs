@@ -545,6 +545,75 @@ pub struct ListenerStatus {
     pub conditions: Vec<Condition>,
 }
 
+/// Effective startup behavior of an HTTP-family physical service.
+/// This is a comparison helper, not an operator or transport field.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HttpServiceDeclaration {
+    Http { enable_http2: bool },
+    Redirect { https_port: u16 },
+    Https { enable_http2: bool },
+}
+impl HttpServiceDeclaration {
+    pub fn from_gateway(gateway: &Gateway, protocol: &str) -> Option<Self> {
+        Self::from_annotation_lookup(protocol, |key| {
+            gateway
+                .metadata
+                .annotations
+                .as_ref()
+                .and_then(|values| values.get(key))
+                .map(String::as_str)
+        })
+    }
+    pub fn from_annotation_lookup<'a>(protocol: &str, value: impl Fn(&str) -> Option<&'a str>) -> Option<Self> {
+        use crate::constants::annotations::edgion;
+        let enable_http2 = value(edgion::ENABLE_HTTP2).is_none_or(|value| {
+            !["false", "0", "no", "off"]
+                .iter()
+                .any(|falsy| value.eq_ignore_ascii_case(falsy))
+        });
+        if protocol.eq_ignore_ascii_case("HTTPS") {
+            Some(Self::Https { enable_http2 })
+        } else if protocol.eq_ignore_ascii_case("HTTP") {
+            if value(edgion::HTTP_TO_HTTPS_REDIRECT).is_some_and(|value| value.eq_ignore_ascii_case("true")) {
+                Some(Self::Redirect {
+                    https_port: value(edgion::HTTPS_REDIRECT_PORT)
+                        .and_then(|value| value.parse().ok())
+                        .unwrap_or(443),
+                })
+            } else {
+                Some(Self::Http { enable_http2 })
+            }
+        } else {
+            None
+        }
+    }
+    pub fn conflicting_field(self, other: Self) -> &'static str {
+        match (self, other) {
+            (Self::Http { .. }, Self::Http { .. }) | (Self::Https { .. }, Self::Https { .. }) => "enableHttp2",
+            (Self::Redirect { .. }, Self::Redirect { .. }) => "httpsRedirectPort",
+            _ => "serviceMode",
+        }
+    }
+}
+
+/// Return whether shared physical-service admission rejected this listener.
+/// Native readiness failures are separate and can recover on a bound service.
+pub fn gateway_listener_has_shared_policy_conflict(gateway: &Gateway, listener_name: &str) -> bool {
+    gateway
+        .spec
+        .current_status
+        .as_ref()
+        .and_then(|status| status.listeners.as_ref())
+        .and_then(|listeners| listeners.iter().find(|listener| listener.name == listener_name))
+        .is_some_and(|listener| {
+            listener.conditions.iter().any(|condition| {
+                condition.type_ == "Accepted"
+                    && condition.status == "False"
+                    && condition.reason == "SharedListenerPolicyConflict"
+            })
+        })
+}
+
 /// Return whether Controller status explicitly excludes a Gateway listener
 /// from data-plane publication.
 ///

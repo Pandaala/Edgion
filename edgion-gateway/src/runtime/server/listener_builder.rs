@@ -192,23 +192,17 @@ pub fn add_http_listener(
     let listener_name = context.listener.name.clone();
     let addr = std::net::SocketAddr::new(context.bind_ip, context.listener.port as u16).to_string();
 
-    // Check if HTTP to HTTPS redirect is enabled (only for non-TLS listeners)
-    let http_to_https_redirect = !enable_tls
-        && context
-            .gateway_annotations
-            .get(edgion::HTTP_TO_HTTPS_REDIRECT)
-            .map(|v| v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-
-    if http_to_https_redirect {
-        let https_port: u16 = context
-            .gateway_annotations
-            .get(edgion::HTTPS_REDIRECT_PORT)
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(443);
-
-        let redirect_handler =
-            EdgionHttpRedirectProxy::new(https_port, context.access_logger.clone(), context.egc.clone());
+    let declaration = edgion_resources::resources::gateway::HttpServiceDeclaration::from_annotation_lookup(
+        if enable_tls { "HTTPS" } else { "HTTP" },
+        |key| context.gateway_annotations.get(key).map(String::as_str),
+    );
+    if let Some(edgion_resources::resources::gateway::HttpServiceDeclaration::Redirect { https_port }) = declaration {
+        let redirect_handler = EdgionHttpRedirectProxy::new(
+            https_port,
+            context.access_logger.clone(),
+            context.egc.clone(),
+            context.listener_key.clone(),
+        );
         let mut http_service = http_proxy_service(&context.server_conf, redirect_handler);
         apply_connection_filter(&mut http_service, context);
         probe_tcp_bind(&addr, &context.gateway_key, &listener_name)?;

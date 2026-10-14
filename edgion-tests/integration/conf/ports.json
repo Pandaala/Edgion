@@ -1,5 +1,5 @@
 {
-  "current_max": 31993,
+  "current_max": 32004,
   "suites": {
     "PluginPolicy": {
       "udp": 58338,
@@ -414,7 +414,9 @@
     "UDPRoute/DeniedBackendRef": {
       "udp": 31955
     },
-    "GRPCRoute/TerminalHeadersWire": {"grpc": 32001},
+    "GRPCRoute/TerminalHeadersWire": {
+      "grpc": 32001
+    },
     "GRPCRoute/TimeoutRewriteWire": {
       "grpc": 31972
     },
@@ -453,6 +455,15 @@
     },
     "EdgionBackend/Messages": {
       "http": 31990
+    },
+    "Gateway/SharedHttpPolicyAdmission": {
+      "http": 32002
+    },
+    "Gateway/SharedHttpPolicyAdmission/Healthy": {
+      "http": 32003
+    },
+    "Gateway/SharedHttpPolicyAdmission/SecretRecovery": {
+      "https": 32004
     }
   }
 }
