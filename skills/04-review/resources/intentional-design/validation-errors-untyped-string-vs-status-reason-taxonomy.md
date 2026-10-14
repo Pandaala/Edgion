@@ -49,11 +49,13 @@ reconstructed from a data-plane round trip.
   typed reason (`SecretNotFound` / `EdgionConfigDataNotFound`) chosen by
   `pick_resolved_refs_reason` (`edgion_plugins.rs:178-200`).
 - `SchemaViolation` / `PreparseFailure` → already `Accepted=False` with reason
-  `Invalid` (`edgion_plugins.rs:170-176`); `edgion_stream_plugins.rs:172-183` even
-  adds a dedicated `LegacySchemaDeprecated` reason mapping, locked by the tests
-  `update_status_maps_structural_error_to_invalid_reason` /
-  `update_status_maps_legacy_marker_to_dedicated_reason` /
-  `update_status_uses_invalid_reason_for_non_legacy_errors`.
+  `Invalid` in HTTP and Stream plugin handlers. Stream tests
+  `update_status_maps_structural_error_to_invalid_reason` and
+  `inline_acl_remains_invalid_with_current_references_and_advisory_fields`
+  protect that boundary. ARCH-056 removed the historical Stream-only
+  `LegacySchemaDeprecated` marker/reason; ignored HTTP keys now receive advisory
+  unknown-field feedback. That scoped retirement does not change this accepted
+  conclusion or justify a parallel typed validation-error taxonomy.
 - `InvalidDependency { kind, key, reason }` → already covered by the `Invalid*Ref`
   reason family (`InvalidCertificateRef`, `InvalidCACertificateRef`,
   `InvalidEdgionConfigDataRef`, `InvalidStreamPluginsRef`).

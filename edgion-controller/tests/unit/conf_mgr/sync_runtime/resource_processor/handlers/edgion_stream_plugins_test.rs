@@ -331,7 +331,7 @@ fn make_ctx_with_runtime(runtime: Arc<ControllerRuntime>) -> HandlerContext {
     HandlerContext::new(None, None, TriggerChain::default(), 3, 20, runtime)
 }
 
-fn legacy_yaml_esp() -> EdgionStreamPlugins {
+fn advisory_yaml_esp() -> EdgionStreamPlugins {
     let yaml = r#"
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
@@ -342,14 +342,19 @@ spec:
   plugins:
     - type: IpRestriction
       config:
-        allow:
+        allowRefs:
           - name: default
-            cidrs: ["10.0.0.0/8"]
         ipSource: DirectPeerIp
         message: blocked
         status: 403
 "#;
-    serde_yaml::from_str(yaml).expect("legacy yaml must now parse (detection moved to preparse)")
+    let raw: serde_json::Value = serde_yaml::from_str(yaml).unwrap();
+    let mut esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+    esp.spec.unknown_fields = edgion_resources::schema_check::unknown_key_paths(
+        &raw["spec"],
+        edgion_resources::resources::edgion_stream_plugins::edgion_stream_plugins_spec_schema(),
+    );
+    esp
 }
 
 fn clean_esp() -> EdgionStreamPlugins {
@@ -371,24 +376,23 @@ spec:
 }
 
 #[test]
-fn preparse_emits_legacy_marker_when_old_fields_present() {
-    let handler = EdgionStreamPluginsHandler::new();
-    let mut esp = legacy_yaml_esp();
-    let errors = handler.preparse(&mut esp, &make_ctx());
-    assert_eq!(errors.len(), 1);
-    let e = &errors[0];
-    assert!(
-        e.starts_with(LEGACY_SCHEMA_MARKER),
-        "preparse error must carry LEGACY_SCHEMA_DEPRECATED marker so update_status maps the reason; got: {e}"
+fn preparse_accepts_current_references_with_advisory_http_fields() {
+    let mut esp = advisory_yaml_esp();
+    assert_eq!(
+        esp.spec.unknown_fields,
+        vec![
+            "plugins[0].config.ipSource",
+            "plugins[0].config.message",
+            "plugins[0].config.status"
+        ]
     );
-    assert!(e.contains("ipSource"));
-    assert!(e.contains("message"));
-    assert!(e.contains("status"));
-    assert!(e.contains(MIGRATION_DOC_PATH));
+    assert!(EdgionStreamPluginsHandler::new()
+        .preparse(&mut esp, &make_ctx())
+        .is_empty());
 }
 
 fn invalid_esp() -> EdgionStreamPlugins {
-    // Structurally invalid: IpRestriction with neither `allow` nor `deny`.
+    // Structurally invalid: IpRestriction with neither allowRefs nor denyRefs.
     let yaml = r#"
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
@@ -415,10 +419,6 @@ fn preparse_rejects_structurally_invalid_config() {
         "expected one structural validation error; got: {errors:?}"
     );
     let e = &errors[0];
-    assert!(
-        !e.starts_with(LEGACY_SCHEMA_MARKER),
-        "structural error must not carry the legacy marker so update_status uses the Invalid reason; got: {e}"
-    );
     assert!(e.contains("plugins[0] (IpRestriction)"));
     assert!(e.contains("allow") && e.contains("deny"));
 }
@@ -448,7 +448,6 @@ spec:
         "expected one Stage 2 validation error; got: {errors:?}"
     );
     let e = &errors[0];
-    assert!(!e.starts_with(LEGACY_SCHEMA_MARKER));
     assert!(e.contains("tlsRoutePlugins[0] (IpRestriction)"), "got: {e}");
 }
 
@@ -518,10 +517,6 @@ spec:
     let errors = handler.preparse(&mut esp, &make_ctx());
     assert_eq!(errors.len(), 1, "expected one validation error; got: {errors:?}");
     let e = &errors[0];
-    assert!(
-        !e.starts_with(LEGACY_SCHEMA_MARKER),
-        "ConnectionRateLimit error must not carry legacy marker; got: {e}"
-    );
     assert!(e.contains("plugins[0] (ConnectionRateLimit)"), "got: {e}");
     assert!(e.contains("perListener") || e.contains("perSourceIp"), "got: {e}");
 }
@@ -539,25 +534,46 @@ fn preparse_is_quiet_on_clean_config() {
 }
 
 #[test]
-fn update_status_maps_legacy_marker_to_dedicated_reason() {
+fn update_status_keeps_advisory_fields_separate_from_acceptance() {
     let handler = EdgionStreamPluginsHandler::new();
-    let mut esp = legacy_yaml_esp();
+    let mut esp = advisory_yaml_esp();
     let errors = handler.preparse(&mut esp, &make_ctx());
     handler.update_status(&mut esp, &make_ctx(), &errors);
+    let conditions = &esp.status.as_ref().unwrap().as_local().unwrap().conditions;
+    let accepted = conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
+    assert_eq!(accepted.status, "True");
+    assert_eq!(accepted.reason, "Accepted");
+    let unknown = conditions.iter().find(|c| c.type_ == "UnknownConfigFields").unwrap();
+    for path in &esp.spec.unknown_fields {
+        assert!(unknown.message.contains(path));
+    }
+}
 
-    let status = esp.status.as_ref().expect("status populated");
-    let accepted = status
+#[test]
+fn inline_acl_remains_invalid_with_current_references_and_advisory_fields() {
+    let mut esp: EdgionStreamPlugins = serde_json::from_value(serde_json::json!({
+        "metadata":{"name":"inline","namespace":"default"},
+        "spec":{"plugins":[{"type":"IpRestriction","config":{"allowRefs":[{"name":"office"}],"allow":[],"message":"ignored","invalidInput":false}}]}
+    })).unwrap();
+    let handler = EdgionStreamPluginsHandler::new();
+    let errors = handler.preparse(&mut esp, &make_ctx());
+    assert_eq!(
+        errors,
+        vec!["plugins[0] (IpRestriction): Inline ACL allow/deny fields are not supported; use allowRefs/denyRefs"]
+    );
+    handler.update_status(&mut esp, &make_ctx(), &errors);
+    let accepted = esp
+        .status
+        .as_ref()
+        .unwrap()
         .as_local()
-        .expect("native test status")
+        .unwrap()
         .conditions
         .iter()
         .find(|c| c.type_ == "Accepted")
-        .expect("Accepted condition present");
+        .unwrap();
     assert_eq!(accepted.status, "False");
-    assert_eq!(accepted.reason, REASON_LEGACY_SCHEMA_DEPRECATED);
-    // Message must not leak the internal marker prefix.
-    assert!(!accepted.message.contains(LEGACY_SCHEMA_MARKER));
-    assert!(accepted.message.contains("legacy HTTP fields"));
+    assert_eq!(accepted.reason, "Invalid");
 }
 
 #[test]

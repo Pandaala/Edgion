@@ -180,3 +180,34 @@ async fn blank_reference_name_preserves_structural_constructor_failure() {
         assert!(result.is_err());
     }
 }
+
+#[tokio::test]
+async fn removed_http_fields_do_not_change_reference_acl_runtime_decisions() {
+    use crate::plugins::stream::stream_plugin_runtime::StreamPluginRuntime;
+    let ns = "arch056-advisory-acl";
+    seed_iplist(ns, "blocked", "192.0.2.1/32");
+    let rules: ConnectionIpRestrictionRules = serde_json::from_value(serde_json::json!({
+        "denyRefs":[{"name":"blocked"}], "ipSource":"RemoteIp", "message":"ignored", "status":200,
+        "legacyHttpFields":7
+    }))
+    .unwrap();
+    let source = owner(&rules, ns);
+    let plugin = from_owner(&source);
+    let runtime = StreamPluginRuntime::from_stream_plugins(
+        source.spec.plugins.as_deref().unwrap(),
+        ns,
+        "arch056-advisory-acl/runtime",
+    );
+    let denied = StreamContext::new("192.0.2.1".parse().unwrap(), 8080, StreamLayer::Stage1);
+    let allowed = StreamContext::new("198.51.100.1".parse().unwrap(), 8080, StreamLayer::Stage1);
+    assert!(matches!(
+        plugin.on_connection(&denied).await,
+        StreamPluginResult::Deny(_)
+    ));
+    assert!(matches!(
+        plugin.on_connection(&allowed).await,
+        StreamPluginResult::Allow
+    ));
+    assert!(matches!(runtime.run(&denied).await, StreamPluginResult::Deny(_)));
+    assert!(matches!(runtime.run(&allowed).await, StreamPluginResult::Allow));
+}

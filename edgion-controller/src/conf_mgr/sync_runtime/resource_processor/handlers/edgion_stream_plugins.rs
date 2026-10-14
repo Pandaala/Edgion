@@ -24,19 +24,6 @@ use edgion_resources::resources::edgion_stream_plugins::{
     EdgionStreamPlugin, EdgionStreamPluginsStatus, TlsRouteStreamPlugin,
 };
 
-/// Prefix used to mark preparse errors that indicate a legacy-schema upgrade issue.
-/// When present, `update_status` maps the condition reason to `LegacySchemaDeprecated`
-/// (instead of the generic `Invalid`) so operators can grep status and find migration hints.
-const LEGACY_SCHEMA_MARKER: &str = "[LEGACY_SCHEMA_DEPRECATED] ";
-
-/// Condition reason emitted when an upgrade path collides with a breaking schema change.
-const REASON_LEGACY_SCHEMA_DEPRECATED: &str = "LegacySchemaDeprecated";
-
-/// Single source of truth for the migration doc path referenced from status conditions.
-/// Keep this in sync with the actual file location; renaming the doc without updating this
-/// constant leaves operators clicking a broken link.
-const MIGRATION_DOC_PATH: &str = "docs/migrations/ec4e000-ip-restriction-stream-schema.md";
-
 /// EdgionStreamPlugins handler
 pub struct EdgionStreamPluginsHandler;
 
@@ -140,7 +127,7 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
         // the actual-owner Stream/TLS cold construction gates. Both stage plugins fail
         // closed on an invalid config — every connection denied — but without surfacing
         // the error here the CR keeps a healthy-looking `Accepted=True`, i.e. a silent
-        // blackhole. Emitting a non-legacy error makes `update_status` set
+        // blackhole. Emitting a validation error makes `update_status` set
         // `Accepted=False` with the `Invalid` reason.
 
         // Stage 1: ConnectionFilter plugins (pre-TLS, reference-only L4 `ConnectionIpRestrictionRules`).
@@ -149,15 +136,6 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
                 continue;
             }
             if let EdgionStreamPlugin::IpRestriction(rules) = &entry.plugin {
-                let legacy = rules.legacy_http_fields();
-                if !legacy.is_empty() {
-                    errors.push(format!(
-                        "{}plugins[{}] (IpRestriction): legacy HTTP fields {:?} detected on L4 config; \
-                         remove them and use only allow/deny/defaultAction (see {})",
-                        LEGACY_SCHEMA_MARKER, idx, legacy, MIGRATION_DOC_PATH
-                    ));
-                    continue;
-                }
                 if let Some(e) = rules.validation_error() {
                     errors.push(format!("plugins[{idx}] (IpRestriction): {e}"));
                 }
@@ -265,7 +243,7 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
     fn update_status(&self, esp: &mut EdgionStreamPlugins, ctx: &HandlerContext, validation_errors: &[String]) {
         let generation = esp.metadata.generation;
 
-        // Accepted: preparse/validate errors (with legacy-schema reason mapping).
+        // Accepted: current-schema preparse/validate errors.
         let accepted = if validation_errors.is_empty() {
             condition_true(
                 condition_types::ACCEPTED,
@@ -274,18 +252,12 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
                 generation,
             )
         } else {
-            let has_legacy = validation_errors.iter().any(|e| e.starts_with(LEGACY_SCHEMA_MARKER));
-            let reason = if has_legacy {
-                REASON_LEGACY_SCHEMA_DEPRECATED
-            } else {
-                condition_reasons::INVALID
-            };
-            let message = validation_errors
-                .iter()
-                .map(|e| e.strip_prefix(LEGACY_SCHEMA_MARKER).unwrap_or(e))
-                .collect::<Vec<_>>()
-                .join("; ");
-            condition_false(condition_types::ACCEPTED, reason, message, generation)
+            condition_false(
+                condition_types::ACCEPTED,
+                condition_reasons::INVALID,
+                validation_errors.join("; "),
+                generation,
+            )
         };
 
         // ResolvedRefs: each GlobalConnectionIpRestriction activeProfileRef must

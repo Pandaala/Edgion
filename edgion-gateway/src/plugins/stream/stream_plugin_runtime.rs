@@ -198,7 +198,7 @@ impl StreamPluginRuntime {
         match &entry.plugin {
             EdgionStreamPlugin::Unsupported => Err("unsupported stream plugin type"),
             EdgionStreamPlugin::IpRestriction(config) => {
-                if !config.legacy_http_fields().is_empty() || config.validation_error().is_some() {
+                if config.validation_error().is_some() {
                     return Err("invalid stream/IpRestriction configuration");
                 }
                 StreamIpRestriction::from_bound(binding.connection_entry(index).ok_or("invalid owning IP reference")?)

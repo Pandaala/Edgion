@@ -218,18 +218,20 @@ async fn invalid_ip_restriction_is_a_front_gate_without_state_consumption() {
 }
 
 #[tokio::test]
-async fn legacy_http_ip_field_is_a_front_gate_without_state_consumption() {
+async fn inline_acl_is_a_front_gate_without_state_consumption() {
     let rules: ConnectionIpRestrictionRules = serde_json::from_str(
         r#"{
-                "allow": [{"name": "office", "cidrs": ["127.0.0.0/8"]}],
+                "allowRefs": [{"name": "office"}],
+                "allow": [],
+                "invalidInput": false,
                 "message": "legacy response text"
             }"#,
     )
-    .expect("legacy flattened field and valid stream rules must deserialize");
+    .expect("inline input must deserialize as typed invalidity");
     assert_invalid_gate_precedes_rate_limit(
         EdgionStreamPlugin::IpRestriction(rules),
         "invalid stream/IpRestriction configuration",
-        "default/legacy-http-ip-field-front-gate",
+        "default/inline-acl-front-gate",
     )
     .await;
 }

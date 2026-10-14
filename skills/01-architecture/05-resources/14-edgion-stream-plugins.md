@@ -18,12 +18,12 @@ EdgionStreamPlugins is Edgion's custom-extension resource that defines Stream/TC
 
 ### preparse
 
-Current code scans the Stage 1 `plugins` array for removed HTTP fields and maps
-the marker to `LegacySchemaDeprecated`. That special legacy reason is
-pre-release removal debt: current manifests must use the L4 schema, and new
-validation must not add more legacy markers. Remove the detector, reason, and
-its tests together when code changes are in scope; ordinary current-schema
-errors use `Invalid`.
+Shared stateless `PluginValidation` checks enabled current-schema policies.
+Unknown connection IpRestriction keys, including removed HTTP-only
+`ipSource`/`message`/`status`, receive canonical raw-ingress advisory diagnostics;
+they are dropped from typed configuration and never change `Accepted` by themselves.
+Removed inline `allow`/`deny` remains structural invalidity even alongside valid
+references. Unsupported plugin types are rejected even when disabled.
 
 ### parse
 
@@ -39,8 +39,7 @@ errors use `Invalid`.
 Uses `k8s_openapi::Condition`, writing three conditions:
 
 - **`Accepted`**: True (reason=Accepted) when there are no validation errors;
-  current code still emits `LegacySchemaDeprecated` for the removal debt above,
-  and `Invalid` for current-schema errors. Referenced IpList validation is separate; it stays `True` when referenced IP lists
+  `Invalid` for current-schema errors. Referenced IpList validation is separate; it stays `True` when referenced IP lists
   have bad entries (partial-good; see `PartiallyInvalid` below).
 - **`ResolvedRefs`**: iterates all EdgionConfigData references:
   - `GlobalConnectionIpRestriction.activeProfileRef` (→ Selector): must exist as a `Selector` EdgionConfigData. If `ref_denied` is set (cross-ns without grant / target `visibility: Namespace` without a `ReferenceGrant`): reason `RefNotPermitted`. If missing or wrong-type: reason `InvalidEdgionConfigDataRef`.

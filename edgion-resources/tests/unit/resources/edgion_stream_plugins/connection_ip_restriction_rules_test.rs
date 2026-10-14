@@ -108,34 +108,89 @@ fn deny_wins_over_allow() {
 }
 
 #[test]
-fn legacy_http_fields_captured_for_preparse() {
-    for value in [json!(null), json!([]), json!("discarded")] {
-        let c = config(json!({"allowRefs":[{"name":"office"}],"ipSource":value,"message":value,"status":value}));
-        let mut fields = c.legacy_http_fields();
-        fields.sort();
-        assert_eq!(fields, vec!["ipSource", "message", "status"]);
-        assert!(c.validation_error().is_some());
-        let wire = serde_json::to_value(c).unwrap();
-        assert!(wire.get("ipSource").is_none());
-        assert!(wire.get("message").is_none());
-        assert!(wire.get("status").is_none());
-        let back: ConnectionIpRestrictionRules = serde_json::from_value(wire).unwrap();
-        assert_eq!(back.legacy_http_fields().len(), 3);
+fn removed_http_fields_are_ignored_and_not_transported() {
+    for value in [
+        json!(null),
+        json!([]),
+        json!("discarded"),
+        json!({"nested":"discarded"}),
+    ] {
+        let raw = json!({"allowRefs":[{"name":"office"}],"ipSource":value,"message":value,"status":value,"legacyHttpFields":value});
+        for c in [
+            config(raw.clone()),
+            serde_yaml::from_str::<ConnectionIpRestrictionRules>(&serde_yaml::to_string(&raw).unwrap()).unwrap(),
+        ] {
+            assert!(c.validation_error().is_none());
+            assert!(matches!(c.default_action, DefaultAction::Allow));
+            let wire = serde_json::to_value(c).unwrap();
+            for key in ["ipSource", "message", "status", "legacyHttpFields"] {
+                assert!(wire.get(key).is_none(), "{key} must not be transported");
+            }
+            assert_eq!(wire["allowRefs"], raw["allowRefs"]);
+            assert!(config(wire).validation_error().is_none());
+        }
     }
+}
+
+#[test]
+fn inline_acl_invalidity_is_monotone_through_flattened_wire() {
+    for field in ["allow", "deny"] {
+        let mut raw = json!({"allowRefs":[{"name":"office"}],"invalidInput":false,"defaultAction":"deny"});
+        raw[field] = json!(null);
+        for c in [
+            config(raw.clone()),
+            serde_yaml::from_str::<ConnectionIpRestrictionRules>(&serde_yaml::to_string(&raw).unwrap()).unwrap(),
+        ] {
+            assert!(c.refs.invalid_input);
+            assert!(matches!(c.default_action, DefaultAction::Deny));
+            assert_eq!(
+                c.validation_error().as_deref(),
+                Some("Inline ACL allow/deny fields are not supported; use allowRefs/denyRefs")
+            );
+            let wire = serde_json::to_value(c).unwrap();
+            assert!(wire.get(field).is_none());
+            assert!(config(wire).refs.invalid_input);
+        }
+    }
+    assert!(config(json!({"allowRefs":[{"name":"office"}],"invalidInput":true}))
+        .validation_error()
+        .is_some());
+    assert!(config(json!({"message":"ignored"})).validation_error().is_some());
+    assert!(config(json!({"allowRefs":[{"name":" "}],"message":"ignored"}))
+        .validation_error()
+        .is_some());
+}
+
+#[test]
+fn removed_http_fields_have_exact_advisory_schema_paths() {
+    use crate::resources::edgion_stream_plugins::{edgion_stream_plugins_spec_schema, EdgionStreamPluginsSpec};
+    let raw = json!({"plugins":[{"type":"IpRestriction","config":{"allowRefs":[{"name":"office"}],"ipSource":null,"message":"ignored","status":403,"legacyHttpFields":7}}]});
+    assert_eq!(
+        crate::schema_check::unknown_key_paths(&raw, edgion_stream_plugins_spec_schema()),
+        vec![
+            "plugins[0].config.ipSource",
+            "plugins[0].config.legacyHttpFields",
+            "plugins[0].config.message",
+            "plugins[0].config.status"
+        ]
+    );
+    let mut spec: EdgionStreamPluginsSpec = serde_json::from_value(raw).unwrap();
+    spec.unknown_fields = vec!["plugins[0].config.message".into()];
+    let wire = serde_json::to_value(spec).unwrap();
+    assert!(wire.get("unknownFields").is_none());
+    assert!(wire.get("unknown_fields").is_none());
 }
 
 #[test]
 fn clean_config_has_no_unknown_fields() {
     let c = config(json!({"allowRefs":[{"name":"office"}],"defaultAction":"deny"}));
-    assert!(c.legacy_http_fields().is_empty());
     assert!(!c.refs.invalid_input);
     assert!(c.validation_error().is_none());
 }
 
 #[test]
-fn non_legacy_unknown_field_does_not_trigger_legacy_detection() {
+fn ordinary_unknown_field_is_ignored() {
     let c = config(json!({"allowRefs":[{"name":"office"}],"typoedField":"oops"}));
-    assert!(c.legacy_http_fields().is_empty());
     assert!(c.validation_error().is_none());
     assert!(serde_json::to_value(c).unwrap().get("typoedField").is_none());
 }

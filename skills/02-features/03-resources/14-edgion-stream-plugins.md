@@ -187,6 +187,12 @@ for allow/deny semantics, lifecycle boundaries and unavailable-policy behavior.
 Ordinary advisory unknown-key handling follows `EdgionPlugins`: entry config
 interiors preserve unknown fields, the Controller reports `UnknownConfigFields`,
 and a clean apply removes that condition without changing Accepted.
+Connection IpRestriction ignores HTTP-only `ipSource`, `message` and `status`:
+valid `allowRefs`/`denyRefs` remain accepted with advisory unknown-key feedback.
+These keys do not select a client identity or customize an HTTP response at L4.
+Removed inline `allow`/`deny` is different: its presence is invalid even alongside
+valid references and produces `Accepted=False` with reason `Invalid` and a
+Gateway denial gate. Missing or malformed current policy also remains invalid.
 GeoIpLocation is a fail-closed exception: config/group/rule unknown or removed
 fields form a typed invalid generation, Accepted=False, and a live denial gate.
 See `13-edgion-plugins.md` for the full

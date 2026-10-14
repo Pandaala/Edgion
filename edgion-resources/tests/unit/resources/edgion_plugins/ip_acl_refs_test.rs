@@ -275,7 +275,7 @@ fn reference_only_acl_fixtures_decode_through_canonical_resource_types() {
         }
     }
     assert_eq!(paths.len(), 115);
-    assert_eq!(documents, 136);
+    assert_eq!(documents, 135);
     assert_eq!(partial_targets.len(), 4);
     assert_eq!(
         invalid_policies.len(),
