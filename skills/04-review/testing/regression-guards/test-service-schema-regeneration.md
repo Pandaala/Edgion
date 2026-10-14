@@ -46,13 +46,14 @@ This is not a repository-wide protoc-free build guarantee or a runtime change.
 
 ## Verification and re-evaluation
 
-Focused helper regressions cover missing and malformed schemas preserving the
-old artifact, with temporary staging cleaned after a generation error. Acceptance
+Both focused helper regressions passed via `cargo test -p edgion-tests --bin
+build_test_proto`: missing and malformed schemas preserve the old artifact,
+with temporary staging cleaned after a generation error. Acceptance
 also requires compilation of both existing include consumers. Fresh local checks
 passed real root/alternate-directory generation, repeat-output comparison, missing
 protoc and failing rustfmt artifact preservation, repository formatting, and exact
 original TestService structs/service code comparison modulo comments/format.
-Task records hold the executed commands and remaining consumer-build results. Re-evaluate when changing schema imports, generated
+Workflow records hold the detailed generation, test, and consumer-build results. Re-evaluate when changing schema imports, generated
 package references, generator versions, service registration or publication.
 
 ## Resolution references

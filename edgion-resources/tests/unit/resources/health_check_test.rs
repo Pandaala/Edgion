@@ -259,3 +259,164 @@ fn encrypted_tls_material_is_redacted_and_not_operator_schema() {
     changed.resolved_client_certificate = None;
     assert_ne!(changed, active, "identity rotation must affect generation equality");
 }
+
+#[test]
+fn encrypted_tls_reference_names_preserve_health_length_and_syntax_boundaries() {
+    let label63 = "a".repeat(63);
+    let name253 = format!("{label63}.{label63}.{label63}.{}", "a".repeat(61));
+    let name254 = format!("{name253}a");
+    let cases = [
+        ("a-1".to_string(), true, true),
+        ("123".to_string(), true, true),
+        ("ca.example".to_string(), true, false),
+        (label63, true, true),
+        ("a".repeat(64), false, false),
+        (name253, true, false),
+        (name254, false, false),
+        (String::new(), false, false),
+        ("Upper".to_string(), false, false),
+        ("under_score".to_string(), false, false),
+        ("café".to_string(), false, false),
+        ("-edge".to_string(), false, false),
+        ("edge-".to_string(), false, false),
+        (".edge".to_string(), false, false),
+        ("edge.".to_string(), false, false),
+        ("empty..label".to_string(), false, false),
+    ];
+    for protocol in ["https", "grpcs"] {
+        for kind in ["Secret", "ConfigMap", "client"] {
+            for field in ["name", "namespace"] {
+                for (value, valid_name, valid_namespace) in &cases {
+                    let mut reference = serde_json::json!({"kind": kind, "name": "ca", "namespace": "ns"});
+                    reference[field] = serde_json::json!(value);
+                    let mut tls = serde_json::json!({"validation": {"hostname": "health.example.com"}});
+                    let error = if kind == "client" {
+                        reference["kind"] = serde_json::json!("Secret");
+                        tls["clientCertificateRef"] = reference;
+                        "health check client certificate reference is invalid"
+                    } else {
+                        tls["validation"]["caCertificateRefs"] = serde_json::json!([reference]);
+                        "health check CA reference is invalid"
+                    };
+                    let active: ActiveHealthCheckConfig =
+                        serde_json::from_value(serde_json::json!({"type": protocol, "tls": tls})).unwrap();
+                    let valid = if field == "name" { *valid_name } else { *valid_namespace };
+                    assert_eq!(
+                        active.tls_validation_error(),
+                        (!valid).then_some(error),
+                        "{protocol} {kind} {field}={value:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn encrypted_tls_hostname_preserves_component_and_total_bounds() {
+    let label63 = "a".repeat(63);
+    let hostname253 = format!("{label63}.{label63}.{label63}.{}", "a".repeat(61));
+    for protocol in ["https", "grpcs"] {
+        for (hostname, expected) in [
+            ("a-1.example".to_string(), None),
+            (
+                String::new(),
+                Some("health check TLS hostname or subjectAltNames is invalid"),
+            ),
+            (
+                "Upper".to_string(),
+                Some("health check TLS hostname or subjectAltNames is invalid"),
+            ),
+            (
+                "under_score".to_string(),
+                Some("health check TLS hostname or subjectAltNames is invalid"),
+            ),
+            (
+                "café".to_string(),
+                Some("health check TLS hostname or subjectAltNames is invalid"),
+            ),
+            (
+                "-edge".to_string(),
+                Some("health check TLS hostname or subjectAltNames is invalid"),
+            ),
+            (
+                "edge-".to_string(),
+                Some("health check TLS hostname or subjectAltNames is invalid"),
+            ),
+            (
+                ".edge".to_string(),
+                Some("health check TLS hostname or subjectAltNames is invalid"),
+            ),
+            (
+                "edge.".to_string(),
+                Some("health check TLS hostname or subjectAltNames is invalid"),
+            ),
+            (
+                "empty..label".to_string(),
+                Some("health check TLS hostname or subjectAltNames is invalid"),
+            ),
+            (label63.clone(), None),
+            ("a".repeat(64), Some("health check TLS hostname must be a DNS name")),
+            (hostname253.clone(), None),
+            (
+                format!("{hostname253}a"),
+                Some("health check TLS hostname or subjectAltNames is invalid"),
+            ),
+        ] {
+            let active: ActiveHealthCheckConfig = serde_json::from_value(serde_json::json!({
+                "type": protocol, "tls": {"validation": {"hostname": hostname}}
+            }))
+            .unwrap();
+            assert_eq!(active.tls_validation_error(), expected, "{protocol}: {hostname}");
+        }
+    }
+}
+
+#[test]
+fn encrypted_tls_validation_preserves_error_precedence() {
+    for protocol in ["https", "grpcs"] {
+        let mut document = serde_json::json!({"type": protocol, "tls": {
+            "verify": false,
+            "validation": {"hostname": "*.example.com", "caCertificateRefs": [{"kind": "Secret", "name": "bad_name"}]},
+            "clientCertificateRef": {"name": "bad_name"}
+        }});
+        for (verify, hostname, ca_name, expected) in [
+            (
+                false,
+                "*.example.com",
+                "bad_name",
+                Some("encrypted health checks require certificate verification"),
+            ),
+            (
+                true,
+                "*.example.com",
+                "bad_name",
+                Some("health check TLS hostname or subjectAltNames is invalid"),
+            ),
+            (
+                true,
+                "2130706433",
+                "bad_name",
+                Some("health check TLS hostname must be a DNS name"),
+            ),
+            (
+                true,
+                "health.example.com",
+                "bad_name",
+                Some("health check CA reference is invalid"),
+            ),
+            (
+                true,
+                "health.example.com",
+                "ca",
+                Some("health check client certificate reference is invalid"),
+            ),
+        ] {
+            document["tls"]["verify"] = serde_json::json!(verify);
+            document["tls"]["validation"]["hostname"] = serde_json::json!(hostname);
+            document["tls"]["validation"]["caCertificateRefs"][0]["name"] = serde_json::json!(ca_name);
+            let active: ActiveHealthCheckConfig = serde_json::from_value(document.clone()).unwrap();
+            assert_eq!(active.tls_validation_error(), expected, "{document}");
+        }
+    }
+}

@@ -28,6 +28,16 @@ Kubernetes Service metadata admission for such names or remove a dedicated
 Service-63 validator. Actual Service metadata, DNS hostname/SNI/certificate names,
 section labels and other explicit label validators have separate contracts.
 
+Health-check TLS validation retains its existing local composition: 253 total
+bytes and at most 63 bytes per component, with the shared `is_dns_label` predicate
+also validating explicit namespaces. ARCH-059 removes only the duplicate lexical
+implementation; substituting `is_dns_subdomain` would broaden health acceptance.
+The component cap on health Secret/ConfigMap references is observed behavior
+preserved by this refactor, not a newly approved product requirement. Whether
+those references should accept broader Kubernetes object names remains a separate
+semantic decision. Health hostname identity, numeric-host rejection and TLS
+error precedence remain independently enforced by `tls_validation_error`.
+
 ## Rationale and evidence
 
 Kubernetes v0.36.1 `apiextensions-apiserver/pkg/registry/customresource/validator.go`
@@ -75,3 +85,5 @@ independent product grammar.
 ## Resolution references
 
 - S-R1-01 / R12a: canonical resource subdomain validation and bounded BTP parser reuse.
+- ARCH-059: health-specific composition reuses the label predicate; focused
+  `resources::health_check` tests cover reference/hostname bounds and error order.

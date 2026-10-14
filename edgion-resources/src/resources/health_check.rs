@@ -1,4 +1,5 @@
 use crate::duration::parse_duration;
+use crate::resources::common::kubernetes_name::is_dns_label;
 use crate::resources::common::OutboundTlsLocal;
 use k8s_openapi::api::core::v1::Secret;
 use schemars::JsonSchema;
@@ -202,13 +203,7 @@ impl ActiveHealthCheckConfig {
 }
 
 fn valid_reference_namespace(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 63
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-        && value.as_bytes()[0].is_ascii_alphanumeric()
-        && value.as_bytes()[value.len() - 1].is_ascii_alphanumeric()
+    is_dns_label(value, 63)
 }
 
 fn valid_reference_name(value: &str) -> bool {
