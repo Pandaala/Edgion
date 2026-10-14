@@ -107,9 +107,7 @@ impl Fixture {
             let units = parse_route_to_units_for_test("request-entry-test/grpc-existing", &Arc::new(route));
             assert_eq!(units.len(), 1, "the unmatched table must contain a real compiled Route");
             let rules = GrpcRouteRules {
-                resource_keys: units.iter().map(|unit| unit.resource_key.clone()).collect(),
-                match_engine: Some(Arc::new(GrpcMatchEngine::new(units.clone()))),
-                route_rules_list: units,
+                match_engine: Some(Arc::new(GrpcMatchEngine::new(units))),
             };
             grpc_route_manager.store_route_table(DomainGrpcRouteRules {
                 grpc_routes: Arc::new(rules),

@@ -40,8 +40,9 @@ a straightforward field `.clone()`. Construction at
 outer `ArcSwap<DomainRouteRules>` on `HttpPortRouteManager.route_table`
 continues to be the single snapshot-exchange point used by config reload and
 by `pg_request_filter::load_route_table()` — hot-reload semantics unchanged.
-Sibling gRPC `RouteRules` (`routes/grpc/routes_mgr.rs:25-28`) already used
-plain `HashSet`/`Vec`; the HTTP fix aligns the two route subtrees.
+At the time of the HTTP fix, sibling gRPC `GrpcRouteRules` already used plain
+`HashSet`/`Vec`. ARCH-045 subsequently removes those unused gRPC inventories;
+the immutable outer-snapshot principle remains shared, but the fields differ.
 
 ## Why the Naive Form Was Wrong
 
@@ -84,12 +85,38 @@ For any struct whose fields are wrapped in `RwLock` / `Mutex` consider:
 - Source: `edgion-gateway/src/routes/http/routes_mgr.rs` (field declarations,
   `Clone`), `edgion-gateway/src/routes/http/conf_handler_impl.rs`
   (construction at `build_domain_route_rules_from_routes`).
-- Sibling already-plain reference:
-  `edgion-gateway/src/routes/grpc/routes_mgr.rs:25-28` (`resource_keys`,
-  `route_rules_list` as plain fields).
+- Current gRPC ownership: `edgion-gateway/src/routes/grpc/routes_mgr.rs`
+  (`GrpcRouteRules` retains only its engine).
 - Outer swap point preserved: `HttpPortRouteManager.route_table:
   ArcSwap<DomainRouteRules>`.
 
 ## Resolution references
 
 - `routes-http-FB03` — 2026-05-28.
+- `ARCH-045` — unused published gRPC inventories removed.
+
+## gRPC published inventory ownership (ARCH-045)
+
+`GrpcRouteRules` formerly retained a resource-name set and an unsorted unit
+vector alongside the ranked inventory inside `GrpcMatchEngine`. Production
+matching used the engine; rebuilding and statistics used manager caches. The
+duplicate inventories therefore had no production reader requiring retention.
+The builder now moves its collected vector into the engine. Failure diagnostics
+keep scalar counts of nonempty input buckets and pre-filter input units, and
+the failure helper still publishes a complete empty table.
+
+The engine owns the published ranked inventory, not exclusive ownership of
+the underlying unit Arcs: `route_units_cache` retains compiled units for reuse.
+Outer ArcSwap publication, retained old snapshots, coherent ranked indexes,
+hostname-tree reuse and cached runtime/selector identity remain unchanged.
+`has_routes()` still means engine presence, including a successful build whose
+nonempty inputs were all filtered out. HTTP's `patch_domain_route_rules` reads
+its inventories for incremental patching, so their removal is not implied.
+
+Regression coverage lives in the existing gRPC manager and configuration-handler
+unit tests: fail-empty publication, empty versus filtered input, old snapshots,
+retirement clearing and actual selected-unit identity against the compile cache.
+Request-entry tests retain native gRPC, empty-table and gRPC-Web fallback cases.
+These checks establish no measured heap-byte, latency or throughput gain and no
+live HTTP/2 wire behavior. Re-evaluate if a real published-inventory consumer is
+introduced; do not add a second stored inventory solely for inspection.

@@ -451,13 +451,10 @@ async fn partial_and_full_rebuild_share_hostname_tree_with_coherent_payloads() {
     ]));
     let manager = managers.by_listener.get(&listener).unwrap().clone();
     let old = Arc::clone(&manager.load_route_table());
-    let unchanged = old
-        .grpc_routes
-        .route_rules_list
-        .iter()
-        .find(|unit| unit.resource_key == "default/fallback")
-        .unwrap()
-        .clone();
+    let unchanged = {
+        let cache = managers.route_units_cache.lock();
+        Arc::clone(&cache["default/fallback"][0])
+    };
     let replacement = matching_route("first", "api.example.com", json!({"method":{"method":"List"}}));
     managers.partial_update(
         HashMap::new(),
@@ -468,11 +465,6 @@ async fn partial_and_full_rebuild_share_hostname_tree_with_coherent_payloads() {
     let old_engine = old.grpc_routes.match_engine.as_ref().unwrap();
     let new_engine = updated.grpc_routes.match_engine.as_ref().unwrap();
     assert!(old_engine.shares_hosts(new_engine));
-    assert!(updated
-        .grpc_routes
-        .route_rules_list
-        .iter()
-        .any(|unit| Arc::ptr_eq(unit, &unchanged)));
     let index = matching_index();
     let (mut session, ctx) = matching_session("/svc/Get", "api.example.com", "").await;
     assert_eq!(
@@ -482,14 +474,14 @@ async fn partial_and_full_rebuild_share_hostname_tree_with_coherent_payloads() {
             .resource_key,
         "default/first"
     );
-    assert_eq!(
-        updated
-            .match_route(&mut session, &ctx, &index, "api.example.com")
-            .unwrap()
-            .0
-            .resource_key,
-        "default/fallback"
-    );
+    let selected = updated
+        .match_route(&mut session, &ctx, &index, "api.example.com")
+        .unwrap()
+        .0;
+    assert_eq!(selected.resource_key, "default/fallback");
+    assert!(Arc::ptr_eq(&selected, &unchanged));
+    assert!(Arc::ptr_eq(&selected.plugin_runtime, &unchanged.plugin_runtime));
+    assert!(Arc::ptr_eq(&selected.backend_finder, &unchanged.backend_finder));
     let (mut list_session, list_ctx) = matching_session("/svc/List", "api.example.com", "").await;
     assert_eq!(
         updated

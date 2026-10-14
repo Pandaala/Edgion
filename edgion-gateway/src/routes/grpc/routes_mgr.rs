@@ -20,13 +20,6 @@ use edgion_resources::{GRPCRoute, ListenerKey};
 /// (no `RwLock`/`Mutex`) is required.
 #[derive(Clone)]
 pub struct GrpcRouteRules {
-    /// All resource keys (GRPCRoute) that apply to this hostname
-    /// Format: "namespace/name"
-    pub resource_keys: HashSet<String>,
-
-    /// All route rule units (stored as Arc to avoid cloning)
-    pub route_rules_list: Vec<Arc<GrpcRouteRuleUnit>>,
-
     /// Match engine for service/method routing
     /// None if there are no routes
     pub match_engine: Option<Arc<GrpcMatchEngine>>,
@@ -40,11 +33,7 @@ impl Default for GrpcRouteRules {
 
 impl GrpcRouteRules {
     pub fn new() -> Self {
-        Self {
-            resource_keys: HashSet::new(),
-            route_rules_list: Vec::new(),
-            match_engine: None,
-        }
+        Self { match_engine: None }
     }
 
     /// Match a gRPC route.
@@ -403,22 +392,20 @@ impl GlobalGrpcRouteManagers {
 /// Build DomainGrpcRouteRules from a per-listener units map.
 fn domain_table_from_engine_result(
     result: Result<GrpcMatchEngine, impl Display>,
-    resource_keys: HashSet<String>,
-    route_rules_list: Vec<Arc<GrpcRouteRuleUnit>>,
+    resource_count: usize,
+    route_count: usize,
 ) -> DomainGrpcRouteRules {
     match result {
         Ok(engine) => DomainGrpcRouteRules {
             grpc_routes: Arc::new(GrpcRouteRules {
-                resource_keys,
-                route_rules_list,
                 match_engine: Some(Arc::new(engine)),
             }),
         },
         Err(error) => {
             tracing::error!(
                 component = "grpc_route_hostname_index",
-                resource_count = resource_keys.len(),
-                route_count = route_rules_list.len(),
+                resource_count,
+                route_count,
                 err = %error,
                 "Failed to build the gRPC Route hostname index; publishing an empty Listener table"
             );
@@ -431,31 +418,26 @@ fn build_grpc_route_rules_from_units(
     all_units: &HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>,
     previous: Option<&DomainGrpcRouteRules>,
 ) -> DomainGrpcRouteRules {
-    let mut resource_keys = HashSet::new();
+    let mut resource_count = 0;
     let mut route_rules_list: Vec<Arc<GrpcRouteRuleUnit>> = Vec::new();
 
-    for (key, units) in all_units {
+    for units in all_units.values() {
         if !units.is_empty() {
-            resource_keys.insert(key.clone());
+            resource_count += 1;
             route_rules_list.extend(units.iter().cloned());
         }
     }
 
     if !route_rules_list.is_empty() {
+        let route_count = route_rules_list.len();
         let result = GrpcMatchEngine::rebuild(
-            route_rules_list.clone(),
+            route_rules_list,
             previous.and_then(|table| table.grpc_routes.match_engine.as_deref()),
         );
-        return domain_table_from_engine_result(result, resource_keys, route_rules_list);
+        return domain_table_from_engine_result(result, resource_count, route_count);
     }
 
-    DomainGrpcRouteRules {
-        grpc_routes: Arc::new(GrpcRouteRules {
-            resource_keys,
-            route_rules_list,
-            match_engine: None,
-        }),
-    }
+    DomainGrpcRouteRules::new()
 }
 
 /// Get the resolved listeners for a GRPCRoute.

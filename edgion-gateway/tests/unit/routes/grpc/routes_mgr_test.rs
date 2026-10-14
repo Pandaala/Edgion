@@ -7,13 +7,25 @@ use edgion_resources::{GRPCMethodMatch, GRPCRouteMatch, GRPCRouteRule};
 
 #[test]
 fn hostname_build_failure_clears_the_complete_grpc_listener_table() {
-    let unit = route_unit("discarded");
     let result: Result<GrpcMatchEngine, &str> = Err("injected capacity failure");
-    let table = domain_table_from_engine_result(result, HashSet::from([unit.resource_key.clone()]), vec![unit]);
+    let table = domain_table_from_engine_result(result, 1, 1);
     assert!(!table.has_routes());
-    assert!(table.grpc_routes.resource_keys.is_empty());
-    assert!(table.grpc_routes.route_rules_list.is_empty());
     assert!(table.grpc_routes.match_engine.is_none());
+}
+
+#[test]
+fn empty_buckets_and_filtered_inputs_preserve_engine_presence_semantics() {
+    let mut units = HashMap::from([("default/empty".to_string(), Vec::new())]);
+    let empty = build_grpc_route_rules_from_units(&units, None);
+    assert!(!empty.has_routes());
+    assert!(empty.grpc_routes.match_engine.is_none());
+
+    let mut filtered = route_unit("filtered");
+    Arc::get_mut(&mut filtered).unwrap().matched_info.compiled_method_match = None;
+    units.insert("default/filtered".to_string(), vec![filtered]);
+    let table = build_grpc_route_rules_from_units(&units, Some(&empty));
+    assert!(table.has_routes());
+    assert!(table.grpc_routes.match_engine.is_some());
 }
 
 fn make_listener_key(port: u16) -> ListenerKey {

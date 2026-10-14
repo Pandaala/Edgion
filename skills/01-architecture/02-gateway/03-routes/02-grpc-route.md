@@ -144,6 +144,11 @@ Specifics:
 
 - `route_units_cache` caches parsed route units to avoid re-parsing on every listener rebuild.
 - One per-listener `GrpcRouteRules` owns the ranked engine and its hostname indexes.
+  The engine owns the published ranked unit inventory; the unit Arcs remain
+  shared with `route_units_cache`. The snapshot retains no separate resource-name
+  set or unsorted unit list. Rebuild moves its collected units into the engine;
+  failure diagnostics retain only nonempty input-bucket and pre-filter unit counts.
+  Manager statistics still derive from the manager caches.
 - A rank-changing rebuild replaces the rank array and all five-stream candidate
   contents together; old numeric ranks never enter a new array. The hostname
   tree is reused whenever final keys agree, including full-list and Gateway
