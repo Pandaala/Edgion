@@ -222,3 +222,8 @@ harness = false
 name = "waf_supported_profile"
 path = "tests/benches/waf_supported_profile.rs"
 harness = false
+
+[[bench]]
+name = "wasm_instance_reuse"
+path = "tests/benches/wasm_instance_reuse.rs"
+harness = false
