@@ -78,6 +78,15 @@ Supported SAN types:
 - **IP**: parses the binary as IPv4 (4 bytes) or IPv6 (16 bytes, formatted via `std::net::Ipv6Addr`); prefixed with `IP:`.
 - **Email**: prefixed with `email:`.
 - **URI**: prefixed with `uri:`.
+- **OtherName**: prefixed with `otherName:<oid>=<value>`; supported values are decoded through the shared BER decoder.
+
+The certificate extractor selects display strings or ASN.1-typed `PresentedSan`
+identities before constructing the owned result. One private enumeration owns
+classification and IP formatting; ordinary SANs retain certificate order and
+duplicates, followed by supported OtherNames in certificate order. The typed
+allowlist path never derives identity types from display prefixes. See the
+[SAN regression guard](../../../04-review/tls/regression-guards/typed-san-display-prefix-not-dns.md)
+for decoding and projection boundaries.
 
 The function is mainly used in downstream mTLS scenarios (the `handshake_complete_callback` extracting client certs), but it can also be used to inspect upstream-connection certificates.
 

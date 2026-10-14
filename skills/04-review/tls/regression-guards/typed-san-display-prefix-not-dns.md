@@ -41,6 +41,26 @@ IDENTIFIER, NULL (empty string), and string types including BMP/Universal
 (embedded NULs are kept; do not truncate at `\0`). OCTET STRING, BIT STRING,
 RELATIVE-OID, nested extra tags, incomplete BER, and raw UTF-8 are skipped.
 
+## Requested projection ownership (ARCH-042)
+
+`tls/runtime/backend/cert_extractor.rs` owns one private SAN enumeration with
+separate display and typed projections. Select the projection before materializing
+owned results: display extraction must not populate a discarded `PresentedSan`
+vector, and typed extraction must not populate discarded prefixed strings.
+Borrowed DNS/email/URI values are consumed synchronously; canonical IP strings
+and decoded OtherName OID/value temporaries move into typed output. The BER
+decoder remains shared. This changes ownership cost without changing trust policy
+or merging the ordinary BoringSSL and OtherName DER passes.
+
+The mirrored `tests/unit/tls/runtime/backend/cert_extractor_test.rs` contains
+real signed mixed-SAN certificates with independently specified outputs for both
+projections: DNS and OtherName duplicates, IPv4/IPv6, email/URI, multiple OIDs,
+UTF8/BMP embedded NULs, unsupported OtherName values, invalid IP lengths and absent
+SANs. OtherNames remain appended after ordinary entries even when interleaved in
+certificate DER. Decoder regressions retain complete-input, wrapper and scalar
+boundaries. These tests cover extraction contracts; they are not performance
+measurements or a live TLS handshake/integration probe.
+
 
 ## Live probe evidence boundary (ARCH-352)
 

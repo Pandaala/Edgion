@@ -1,7 +1,8 @@
-use super::{encode_fingerprint, extract_client_cert_info_from_cert, extract_sans};
+use super::{encode_fingerprint, extract_client_cert_info_from_cert, extract_presented_sans, extract_sans};
+use edgion_common::allowed_san::PresentedSan;
 use pingora_core::tls::hash::MessageDigest;
 use pingora_core::tls::x509::X509;
-use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
+use rcgen::{CertificateParams, CustomExtension, DistinguishedName, DnType, KeyPair, SanType};
 
 fn canonical_client_cert() -> X509 {
     let key = KeyPair::generate().expect("test key generation must succeed");
@@ -79,6 +80,112 @@ fn other_name_explicit(inner: &[u8]) -> Vec<u8> {
     encoded.push(u8::try_from(inner.len()).expect("test OtherName payload fits short-form length"));
     encoded.extend_from_slice(inner);
     encoded
+}
+
+fn san_der(tag: u8, content: &[u8]) -> Vec<u8> {
+    let mut encoded = vec![tag];
+    if content.len() < 128 {
+        encoded.push(content.len() as u8);
+    } else {
+        encoded.extend_from_slice(&[
+            0x81,
+            u8::try_from(content.len()).expect("fixture fits one-byte DER length"),
+        ]);
+    }
+    encoded.extend_from_slice(content);
+    encoded
+}
+
+fn other_name_der(oid: &[u8], inner: &[u8]) -> Vec<u8> {
+    let mut content = san_der(0x06, oid);
+    content.extend(other_name_explicit(inner));
+    san_der(0xa0, &content)
+}
+
+fn cert_with_raw_sans(names: &[Vec<u8>]) -> X509 {
+    let key = KeyPair::generate().expect("test key generation must succeed");
+    let mut params = CertificateParams::new(Vec::<String>::new()).expect("empty SAN list must be valid");
+    params.custom_extensions.push(CustomExtension::from_oid_content(
+        &[2, 5, 29, 17],
+        san_der(0x30, &names.concat()),
+    ));
+    let certificate = params.self_signed(&key).expect("test certificate signing must succeed");
+    X509::from_der(certificate.der()).expect("generated certificate must parse")
+}
+
+#[test]
+fn mixed_certificate_preserves_both_san_projections_and_two_pass_order() {
+    // OtherNames precede ordinary names in DER, but extraction appends them.
+    let cert = cert_with_raw_sans(&[
+        other_name_der(&[0x2a, 0x03, 0x04], &[0x0c, 0x03, b'a', 0, b'b']),
+        san_der(0x82, b"client.example"),
+        san_der(0x87, &[127, 0, 0, 1]),
+        other_name_der(&[0x2a, 0x03, 0x05], &[0x1e, 0x06, 0, b'x', 0, 0, 0, b'y']),
+        san_der(0x81, b"client@example.test"),
+        san_der(0x86, b"spiffe://example/client"),
+        san_der(0x87, &std::net::Ipv6Addr::LOCALHOST.octets()),
+        san_der(0x82, b"client.example"),
+        other_name_der(&[0x2a, 0x03, 0x04], &[0x0c, 0x03, b'a', 0, b'b']),
+        other_name_der(&[0x2a, 0x03, 0x06], &[0x04, 0x01, b'z']),
+    ]);
+
+    assert_eq!(
+        extract_sans(&cert),
+        [
+            "client.example",
+            "IP:127.0.0.1",
+            "email:client@example.test",
+            "uri:spiffe://example/client",
+            "IP:::1",
+            "client.example",
+            "otherName:1.2.3.4=a\0b",
+            "otherName:1.2.3.5=x\0y",
+            "otherName:1.2.3.4=a\0b",
+        ]
+    );
+    assert_eq!(
+        extract_presented_sans(&cert),
+        vec![
+            PresentedSan::dns("client.example"),
+            PresentedSan::ip("127.0.0.1"),
+            PresentedSan::email("client@example.test"),
+            PresentedSan::uri("spiffe://example/client"),
+            PresentedSan::ip("::1"),
+            PresentedSan::dns("client.example"),
+            PresentedSan::other_name("1.2.3.4", "a\0b"),
+            PresentedSan::other_name("1.2.3.5", "x\0y"),
+            PresentedSan::other_name("1.2.3.4", "a\0b"),
+        ]
+    );
+}
+
+#[test]
+fn invalid_ip_and_absent_sans_produce_no_invented_identities() {
+    let cert = cert_with_raw_sans(&[san_der(0x87, &[127, 0, 1]), san_der(0x82, b"valid.example")]);
+    assert_eq!(extract_sans(&cert), ["valid.example"]);
+    assert_eq!(extract_presented_sans(&cert), [PresentedSan::dns("valid.example")]);
+
+    let cert = subject_only_cert();
+    assert!(extract_sans(&cert).is_empty());
+    assert!(extract_presented_sans(&cert).is_empty());
+}
+
+#[test]
+fn other_name_decode_rejects_trailing_incomplete_and_oversized_integer_values() {
+    let mut trailing = other_name_explicit(&[0x0c, 0x01, b'a']);
+    trailing.push(0);
+    assert_eq!(super::decode_other_name_value(&trailing), None);
+    assert_eq!(
+        super::decode_other_name_value(&other_name_explicit(&[0x0c, 0x02, b'a'])),
+        None
+    );
+    assert_eq!(
+        super::decode_other_name_value(&other_name_explicit(&[0x0c, 0x01, b'a', 0x05, 0x00])),
+        None
+    );
+    let mut integer = vec![0x02, 65];
+    integer.extend([1; 65]);
+    assert_eq!(super::decode_other_name_value(&other_name_explicit(&integer)), None);
 }
 
 #[test]

@@ -4,8 +4,10 @@
 //! Requires BoringSSL for X.509 certificate access.
 
 use crate::ctx::ClientCertInfo;
+use edgion_common::allowed_san::PresentedSan;
 use pingora_core::tls::ssl::SslRef;
 use pingora_core::tls::x509::X509Ref;
+use std::net::Ipv6Addr;
 
 /// Extract client certificate information from SSL connection
 /// Returns None if no client certificate is present
@@ -72,24 +74,51 @@ fn encode_fingerprint(bytes: &[u8]) -> String {
 
 /// Extract Subject Alternative Names from certificate
 fn extract_sans(cert: &X509Ref) -> Vec<String> {
-    extract_san_sets(cert).0
+    extract_san_projection(cert, |san| san.into_display())
 }
 
-pub(crate) fn extract_presented_sans(cert: &X509Ref) -> Vec<edgion_common::allowed_san::PresentedSan> {
-    extract_san_sets(cert).1
+pub(crate) fn extract_presented_sans(cert: &X509Ref) -> Vec<PresentedSan> {
+    extract_san_projection(cert, |san| san.into_presented())
 }
 
-fn extract_san_sets(cert: &X509Ref) -> (Vec<String>, Vec<edgion_common::allowed_san::PresentedSan>) {
-    use edgion_common::allowed_san::PresentedSan;
+/// Borrow ordinary text until projection; move shared decoding temporaries.
+enum ClassifiedSan<'a> {
+    Dns(&'a str),
+    Ip(String),
+    Email(&'a str),
+    Uri(&'a str),
+    OtherName { oid: String, value: String },
+}
 
-    let mut display = Vec::new();
-    let mut presented = Vec::new();
+impl ClassifiedSan<'_> {
+    fn into_display(self) -> String {
+        match self {
+            Self::Dns(value) => value.to_string(),
+            Self::Ip(value) => format!("IP:{value}"),
+            Self::Email(value) => format!("email:{value}"),
+            Self::Uri(value) => format!("uri:{value}"),
+            Self::OtherName { oid, value } => format!("otherName:{oid}={value}"),
+        }
+    }
+
+    fn into_presented(self) -> PresentedSan {
+        match self {
+            Self::Dns(value) => PresentedSan::dns(value),
+            Self::Ip(value) => PresentedSan::ip(value),
+            Self::Email(value) => PresentedSan::email(value),
+            Self::Uri(value) => PresentedSan::uri(value),
+            Self::OtherName { oid, value } => PresentedSan::other_name(oid, value),
+        }
+    }
+}
+
+fn extract_san_projection<T>(cert: &X509Ref, mut project: impl FnMut(ClassifiedSan<'_>) -> T) -> Vec<T> {
+    let mut output = Vec::new();
 
     if let Some(san_ext) = cert.subject_alt_names() {
         for san in san_ext {
             if let Some(dns_name) = san.dnsname() {
-                display.push(dns_name.to_string());
-                presented.push(PresentedSan::dns(dns_name.to_string()));
+                output.push(project(ClassifiedSan::Dns(dns_name)));
             }
             if let Some(ip_bytes) = san.ipaddress() {
                 let ip_str = match ip_bytes.len() {
@@ -101,34 +130,26 @@ fn extract_san_sets(cert: &X509Ref) -> (Vec<String>, Vec<edgion_common::allowed_
                             Ok(arr) => arr,
                             Err(_) => continue,
                         };
-                        std::net::Ipv6Addr::from(octets).to_string()
+                        Ipv6Addr::from(octets).to_string()
                     }
                     _ => continue,
                 };
-                display.push(format!("IP:{}", ip_str));
-                presented.push(PresentedSan::ip(ip_str));
+                output.push(project(ClassifiedSan::Ip(ip_str)));
             }
             if let Some(email) = san.email() {
-                display.push(format!("email:{}", email));
-                presented.push(PresentedSan::email(email.to_string()));
+                output.push(project(ClassifiedSan::Email(email)));
             }
             if let Some(uri) = san.uri() {
-                display.push(format!("uri:{}", uri));
-                presented.push(PresentedSan::uri(uri.to_string()));
+                output.push(project(ClassifiedSan::Uri(uri)));
             }
         }
     }
 
-    extract_other_names(cert, &mut display, &mut presented);
-    (display, presented)
+    extract_other_names(cert, &mut output, &mut project);
+    output
 }
 
-fn extract_other_names(
-    cert: &X509Ref,
-    display: &mut Vec<String>,
-    presented: &mut Vec<edgion_common::allowed_san::PresentedSan>,
-) {
-    use edgion_common::allowed_san::PresentedSan;
+fn extract_other_names<T>(cert: &X509Ref, output: &mut Vec<T>, project: &mut impl FnMut(ClassifiedSan<'_>) -> T) {
     use x509_parser::prelude::{FromDer, GeneralName, X509Certificate};
 
     let Ok(der) = cert.to_der() else {
@@ -145,9 +166,10 @@ fn extract_other_names(
             let Some(decoded) = decode_other_name_value(value) else {
                 continue;
             };
-            let oid = oid.to_string();
-            display.push(format!("otherName:{oid}={decoded}"));
-            presented.push(PresentedSan::other_name(oid, decoded));
+            output.push(project(ClassifiedSan::OtherName {
+                oid: oid.to_string(),
+                value: decoded,
+            }));
         }
     }
 }
