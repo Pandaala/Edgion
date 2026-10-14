@@ -22,6 +22,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Work-directory probe ownership](regression-guards/work-directory-probe-ownership.md)
+
 - [Authentication claim header projection is precompiled and deterministic](regression-guards/auth-claim-header-projection.md)
 - [Deferred credential Connection nominations fail before materialization](regression-guards/deferred-credential-connection-nomination.md)
 - [Credential material Debug redaction](regression-guards/credential-material-debug-redaction.md)

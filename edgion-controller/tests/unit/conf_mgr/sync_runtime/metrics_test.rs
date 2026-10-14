@@ -29,6 +29,50 @@ fn active(handle: &TestRecorder) -> f64 {
 }
 
 #[test]
+fn status_writes_collect_all_backends_and_reject_dynamic_backend_labels() {
+    let recorder = TestRecorder::new(RecorderConfig {
+        service: "test",
+        idle_timeout_secs: 0,
+        histogram_buckets: &[],
+        cardinality_cap: 2,
+        cardinality_mode: CardinalityMode::Enforce,
+    })
+    .unwrap();
+    recorder.with(|| {
+        for backend in ["kubernetes", "filesystem", "etcd"] {
+            record_status_write("HTTPRoute", backend);
+            record_status_write("HTTPRoute", backend);
+            record_status_write_error("HTTPRoute", backend);
+        }
+        let admitted = recorder.stats().admission_count;
+        assert_eq!(admitted, 8, "six fixed tuples plus two guard self metrics");
+        for backend in ["", "etcd-epoch-123", "tenant-backend-123", "http://127.0.0.1"] {
+            record_status_write("HTTPRoute", backend);
+            record_status_write_error("HTTPRoute", backend);
+        }
+        assert_eq!(recorder.stats().admission_count, admitted);
+
+        let output = recorder.render();
+        let prefix = format!("{}{{", names::STATUS_WRITES_TOTAL);
+        let samples: Vec<_> = output.lines().filter(|line| line.starts_with(&prefix)).collect();
+        assert_eq!(samples.len(), 6, "only legal fixed tuples may export: {output}");
+        for backend in ["kubernetes", "filesystem", "etcd"] {
+            for (result, expected) in [("success", "2"), ("error", "1")] {
+                let sample = samples
+                    .iter()
+                    .find(|line| {
+                        line.contains("kind=\"HTTPRoute\"")
+                            && line.contains(&format!("backend=\"{backend}\""))
+                            && line.contains(&format!("result=\"{result}\""))
+                    })
+                    .unwrap_or_else(|| panic!("missing {backend}/{result} sample: {output}"));
+                assert_eq!(sample.split_whitespace().last(), Some(expected));
+            }
+        }
+    });
+}
+
+#[test]
 fn active_scopes_restore_their_own_contribution() {
     let (owner, handle) = isolated_metrics();
     let baseline = owner.active_controller();

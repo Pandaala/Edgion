@@ -220,9 +220,9 @@ impl ReloadMetrics {
 
 // ==================== Status Write Metrics ====================
 
-/// Record a successful status write (K8s API or FileSystem).
+/// Record a successful status write (Kubernetes, FileSystem, or etcd).
 ///
-/// Labels: `kind` (resource kind), `backend` ("kubernetes" or "filesystem").
+/// Labels: `kind` (resource kind), `backend` ("kubernetes", "filesystem", or "etcd").
 #[inline]
 pub fn record_status_write(kind: &str, backend: &str) {
     fixed_counter!(names::STATUS_WRITES_TOTAL, "kind" => kind.to_string(), "backend" => backend.to_string(), "result" => "success").increment(1);

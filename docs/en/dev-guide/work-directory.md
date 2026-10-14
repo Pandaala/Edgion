@@ -136,33 +136,21 @@ init_work_dir(base_work_dir)?;
 ### 2. Validate Directory
 
 ```rust
-// edgion-resources/src/work_dir.rs
-impl WorkDir {
-    pub fn validate(&self) -> anyhow::Result<()> {
-        // 1. Check if base directory exists, create if not
-        if !self.base.exists() {
-            std::fs::create_dir_all(&self.base)?;
-        }
-        
-        // 2. Check if it is a directory
-        if !self.base.is_dir() {
-            return Err(anyhow!("Not a directory"));
-        }
-        
-        // 3. Check writability
-        let test_file = self.base.join(".edgion_write_test");
-        std::fs::write(&test_file, b"test")?;
-        std::fs::remove_file(&test_file)?;
-        
-        // 4. Create subdirectories
-        for dir in [&self.logs, &self.runtime, &self.config] {
-            std::fs::create_dir_all(dir)?;
-        }
-        
-        Ok(())
-    }
-}
+use edgion_resources::WorkDir;
+
+let wd = WorkDir::new("./work")?;
+wd.validate()?;
 ```
+
+Validation creates the base directory if needed, verifies it is a directory,
+and creates the `logs`, `runtime`, and `config` subdirectories. The writability
+check exclusively creates a uniquely named probe inside the base directory,
+making at most 16 creation attempts and retrying only name collisions. It writes through the created handle
+and attempts cleanup after both successful and failed writes. Files and symbolic
+links already present at creation time are preserved; this does not protect
+against malicious pathname replacement after creation. Cleanup failure only
+emits a warning.
+See [the implementation](../../../edgion-resources/src/work_dir.rs).
 
 ### 3. Use work_dir
 

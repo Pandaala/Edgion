@@ -7,7 +7,10 @@
 //!
 //! Priority order: CLI --work-dir > ENV EDGION_WORK_DIR > Config > Default (".")
 
+use std::fs::{File, OpenOptions};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
 /// Global working directory configuration
@@ -103,18 +106,17 @@ impl WorkDir {
         }
 
         // 2. Check write permission
-        let test_file = self.base.join(".edgion_write_test");
-        std::fs::write(&test_file, b"test").map_err(|e| {
-            format!(
-                "Work directory {} is not writable: {}\n\
-                 Please check directory permissions",
-                self.base.display(),
-                e
-            )
-        })?;
-        if let Err(e) = std::fs::remove_file(&test_file) {
-            tracing::warn!(path = %test_file.display(), error = %e, "Failed to remove write-test file");
-        }
+        static NEXT_PROBE_ID: AtomicU64 = AtomicU64::new(0);
+        WriteProbe::create(&self.base, NEXT_PROBE_ID.fetch_add(1, Ordering::Relaxed))
+            .and_then(WriteProbe::check)
+            .map_err(|e| {
+                format!(
+                    "Work directory {} is not writable: {}\n\
+                     Please check directory permissions",
+                    self.base.display(),
+                    e
+                )
+            })?;
 
         // 3. Check/create subdirectories
         for (name, dir) in [
@@ -132,6 +134,42 @@ impl WorkDir {
         );
 
         Ok(())
+    }
+}
+
+/// A startup probe owns only a file it created exclusively.
+struct WriteProbe {
+    file: File,
+    path: PathBuf,
+}
+
+impl WriteProbe {
+    const MAX_ATTEMPTS: u32 = 16;
+
+    fn create(base: &Path, id: u64) -> io::Result<Self> {
+        for attempt in 0..Self::MAX_ATTEMPTS {
+            let path = base.join(format!(".edgion_write_test.{}.{id}.{attempt}", std::process::id()));
+            match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(file) => return Ok(Self { file, path }),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "All work-directory write-probe candidates already exist",
+        ))
+    }
+
+    fn check(mut self) -> io::Result<()> {
+        let result = self.file.write_all(b"test");
+        // Close before unlinking for portability, even when writing failed.
+        drop(self.file);
+        // Exclusive creation does not protect against later hostile path replacement.
+        if let Err(error) = std::fs::remove_file(&self.path) {
+            tracing::warn!(path = %self.path.display(), error = %error, "Failed to remove write-test file");
+        }
+        result
     }
 }
 

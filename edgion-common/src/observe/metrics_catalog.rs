@@ -962,7 +962,7 @@ pub static DEFINITIONS: &[Definition] = &[
             },
             LabelDefinition {
                 key: "backend",
-                domain: LabelDomain::Closed(&["kubernetes", "filesystem"]),
+                domain: LabelDomain::Closed(&["kubernetes", "filesystem", "etcd"]),
                 required: true,
             },
             LabelDefinition {

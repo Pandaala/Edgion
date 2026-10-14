@@ -136,33 +136,17 @@ init_work_dir(base_work_dir)?;
 ### 2. 验证目录
 
 ```rust
-// edgion-resources/src/work_dir.rs
-impl WorkDir {
-    pub fn validate(&self) -> anyhow::Result<()> {
-        // 1. 检查 base 目录是否存在，不存在则创建
-        if !self.base.exists() {
-            std::fs::create_dir_all(&self.base)?;
-        }
-        
-        // 2. 检查是否为目录
-        if !self.base.is_dir() {
-            return Err(anyhow!("Not a directory"));
-        }
-        
-        // 3. 检查可写性
-        let test_file = self.base.join(".edgion_write_test");
-        std::fs::write(&test_file, b"test")?;
-        std::fs::remove_file(&test_file)?;
-        
-        // 4. 创建子目录
-        for dir in [&self.logs, &self.runtime, &self.config] {
-            std::fs::create_dir_all(dir)?;
-        }
-        
-        Ok(())
-    }
-}
+use edgion_resources::WorkDir;
+
+let wd = WorkDir::new("./work")?;
+wd.validate()?;
 ```
+
+验证会按需创建工作目录，确认其为目录，并创建 `logs`、`runtime` 和 `config`
+子目录。可写性检查在工作目录内独占创建唯一命名的探测文件，最多进行 16 次创建尝试，
+且仅在重名时重试。通过创建所得句柄写入，无论写入成功或失败都尝试清理。
+创建时已有的文件和符号链接会被保留；这一保证不涵盖创建后恶意替换路径的情况。
+清理失败只记录警告。参见[实现](../../../edgion-resources/src/work_dir.rs)。
 
 ### 3. 使用 work_dir
 

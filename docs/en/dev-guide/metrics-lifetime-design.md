@@ -309,7 +309,7 @@ The old cold-slot extraction decision concerned boilerplate, not this lifetime/c
 | edgion_controller_reload_total | Counter | controller | Fixed | none |
 | edgion_controller_reload_duration_seconds_last | Gauge | controller | Fixed | none |
 | edgion_controller_reload_client_notifications_total | Counter | controller | Fixed | none |
-| edgion_controller_status_writes_total | Counter | controller | Fixed | kind, backend (kubernetes/filesystem), result (success/error) |
+| edgion_controller_status_writes_total | Counter | controller | Fixed | kind, backend (kubernetes/filesystem/etcd), result (success/error) |
 | edgion_controller_status_writes_skipped_total | Counter | controller | Fixed | kind |
 | edgion_controller_status_conditions_max | Gauge | controller | Dynamic snapshot | kind, namespace, name |
 | edgion_controller_unexpected_apply_during_init_total | Counter | controller | Fixed | kind |
