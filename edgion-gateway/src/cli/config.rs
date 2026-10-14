@@ -1255,6 +1255,10 @@ impl EdgionGatewayConfig {
             base.work_dir = cli.work_dir.clone();
         }
 
+        if cli.server.threads.is_some() {
+            base.server.threads = cli.server.threads;
+        }
+
         if cli.server.downstream_h2_stream_window_size.is_some() {
             base.server.downstream_h2_stream_window_size = cli.server.downstream_h2_stream_window_size;
         }
@@ -1270,6 +1274,22 @@ impl EdgionGatewayConfig {
         }
         if cli.server.downstream_tls_offload_thread_per_pool.is_some() {
             base.server.downstream_tls_offload_thread_per_pool = cli.server.downstream_tls_offload_thread_per_pool;
+        }
+
+        if cli.server.work_stealing.is_some() {
+            base.server.work_stealing = cli.server.work_stealing;
+        }
+        if cli.server.grace_period_seconds.is_some() {
+            base.server.grace_period_seconds = cli.server.grace_period_seconds;
+        }
+        if cli.server.graceful_shutdown_timeout_seconds.is_some() {
+            base.server.graceful_shutdown_timeout_seconds = cli.server.graceful_shutdown_timeout_seconds;
+        }
+        if cli.server.upstream_keepalive_pool_size.is_some() {
+            base.server.upstream_keepalive_pool_size = cli.server.upstream_keepalive_pool_size;
+        }
+        if cli.server.error_log.is_some() {
+            base.server.error_log = cli.server.error_log.clone();
         }
 
         // Gateway config. `server_addrs` is a Vec: an EMPTY CLI vec means the

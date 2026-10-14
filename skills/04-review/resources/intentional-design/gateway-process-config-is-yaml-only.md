@@ -23,6 +23,11 @@ configuration loaded by `edgion-gateway/src/cli/config.rs` (default path
 They are local-only, process-wide, and restart-bound. They must not be exposed by
 the cluster-synced `EdgionGatewayConfig` CRD.
 
+Local process ownership includes the declared CLI overrides: an explicitly
+supplied server option wins over YAML, while an omitted option preserves YAML
+or the constructor default. Explicit `false` and zero are present values;
+`threads: 0` still selects the constructor's nonzero platform fallback.
+
 `EdgionGatewayConfig.spec.server` instead owns two GatewayClass-scoped HTTP
 runtime settings: `enableCompression` and
 `downstreamKeepaliveRequestLimit`. Updates are published through the shared EGC
@@ -60,6 +65,14 @@ the general struct-to-CRD coverage comparison. D0006 removed the six ignored
 process-field copies from the resource schema and the ignored local downstream
 limit from the Gateway CLI schema.
 
+ARCH-044 corrected the local loader's omission of all six process CLI overrides
+from `EdgionGatewayConfig::merge`. The tests in
+`edgion-gateway/tests/unit/cli/pingora_test/server_conf_tests.rs` drive real Clap
+parsing through production `load` and the private `create_server_conf`, covering
+conflicting YAML, omission, false/zero values, and the loader's no-file branch.
+The error-log check establishes path propagation into `ServerConf`, not file
+creation or log delivery by a running Pingora server.
+
 ## Configuration format history
 
 Gateway and Controller process configuration files are YAML, not TOML. The
@@ -82,3 +95,4 @@ This format history is independent of the process-versus-CRD ownership rule.
 
 - `types-misc-02` — 2026-05-25.
 - `D0006` / `define-gatewayclass-process-config-ownership`.
+- `ARCH-044` / server CLI precedence through the local process loader.
