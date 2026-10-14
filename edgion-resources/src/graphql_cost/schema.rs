@@ -2,6 +2,7 @@ use super::{name, parse_document, CompiledGraphqlCost, GraphqlError, Work};
 use crate::resources::edgion_plugins::plugin_configs::GraphqlCostRule;
 use apollo_parser::cst;
 use std::collections::{HashMap, HashSet};
+use std::num::NonZeroU16;
 
 pub(super) use crate::graphql_request::TypeRef;
 
@@ -35,6 +36,8 @@ pub(super) struct Argument {
 pub(super) struct Field {
     pub ty: TypeRef,
     pub args: HashMap<String, Argument>,
+    // One-based index into the rules owned by the same immutable cost model.
+    pub rule_index: Option<NonZeroU16>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Kind {
@@ -164,7 +167,17 @@ fn fields(
             }
             let n = name(field.name())?;
             let ty = TypeRef::parse(field.ty().ok_or(GraphqlError::Invalid)?)?;
-            if fields.insert(n, Field { ty, args }).is_some() {
+            if fields
+                .insert(
+                    n,
+                    Field {
+                        ty,
+                        args,
+                        rule_index: None,
+                    },
+                )
+                .is_some()
+            {
                 return Err(GraphqlError::Invalid);
             }
         }
@@ -452,8 +465,8 @@ impl CompiledGraphqlCost {
         if !(1..=1_000_000).contains(&max_cost) || !(1..=32).contains(&max_depth) || rules.len() > 256 {
             return Err(GraphqlError::Invalid);
         }
-        let (schema, mut work) = Schema::compile(source)?;
-        let mut compiled = HashMap::new();
+        let (mut schema, mut work) = Schema::compile(source)?;
+        let mut compiled = Vec::with_capacity(rules.len());
         for rule in rules {
             work.step()?;
             if !(1..=1_000_000).contains(&rule.weight)
@@ -462,13 +475,13 @@ impl CompiledGraphqlCost {
             {
                 return Err(GraphqlError::Invalid);
             }
-            let (ty, field) = rule.field.split_once('.').ok_or(GraphqlError::Invalid)?;
+            let (type_name, field_name) = rule.field.split_once('.').ok_or(GraphqlError::Invalid)?;
             let ty = schema
                 .types
-                .get(ty)
+                .get(type_name)
                 .filter(|t| matches!(t.kind, Kind::Object | Kind::Interface))
                 .ok_or(GraphqlError::Invalid)?;
-            let field = ty.fields.get(field).ok_or(GraphqlError::Invalid)?;
+            let field = ty.fields.get(field_name).ok_or(GraphqlError::Invalid)?;
             if !rule.multipliers.is_empty() && !schema.types[&field.ty.name].composite() {
                 return Err(GraphqlError::Invalid);
             }
@@ -487,8 +500,7 @@ impl CompiledGraphqlCost {
                 // The concrete field's default wins even for an interface rule.
                 for concrete in &ty.possible {
                     work.step()?;
-                    let a = &schema.types[concrete].fields[rule.field.split_once('.').ok_or(GraphqlError::Invalid)?.1]
-                        .args[n];
+                    let a = &schema.types[concrete].fields[field_name].args[n];
                     match a.default {
                         DefaultValue::Missing => {}
                         DefaultValue::Int(i) if (0..=1_000_000).contains(&i) => {}
@@ -496,9 +508,17 @@ impl CompiledGraphqlCost {
                     }
                 }
             }
-            if compiled.insert(rule.field.clone(), rule.clone()).is_some() {
+            let field = schema
+                .types
+                .get_mut(type_name)
+                .and_then(|ty| ty.fields.get_mut(field_name))
+                .ok_or(GraphqlError::Invalid)?;
+            if field.rule_index.is_some() {
                 return Err(GraphqlError::Invalid);
             }
+            let index = u16::try_from(compiled.len() + 1).map_err(|_| GraphqlError::Invalid)?;
+            field.rule_index = Some(NonZeroU16::new(index).ok_or(GraphqlError::Invalid)?);
+            compiled.push(rule.clone());
         }
         Ok(Self {
             schema,

@@ -287,10 +287,20 @@ impl Evaluation<'_> {
         };
         let concrete = &self.model.schema.types[object];
         let mut cost = None;
-        for coordinate in std::iter::once(object).chain(concrete.interfaces.iter().map(String::as_str)) {
+        for candidate in std::iter::once(Some(actual)).chain(
+            concrete
+                .interfaces
+                .iter()
+                .map(|interface| self.model.schema.types[interface].fields.get(&n)),
+        ) {
+            // Missing interface fields and unconfigured candidates still consume work.
             self.work.step()?;
-            let coordinate = format!("{coordinate}.{n}");
-            if let Some(rule) = self.model.rules.get(&coordinate) {
+            if let Some(index) = candidate.and_then(|field| field.rule_index) {
+                let rule = self
+                    .model
+                    .rules
+                    .get(usize::from(index.get()) - 1)
+                    .ok_or(GraphqlError::Invalid)?;
                 let mut factor = 1u32;
                 for argument in &rule.multipliers {
                     self.work.step()?;

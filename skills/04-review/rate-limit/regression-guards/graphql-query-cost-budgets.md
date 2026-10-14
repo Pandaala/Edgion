@@ -177,3 +177,30 @@ Later body mutation through DSL/ProxyRewrite/Wasm or REST adaptation is refused;
 multiple adapters before inspection remain allowed. Query/URI/method/header
 changes still require the documented trusted-chain ordering. See the
 [adapter/body ownership contract](../../http-body/regression-guards/rest-to-graphql-request-adaptation.md).
+
+## Cold cost-rule identity
+
+ARCH-053 retains cold-resolved rule identity on each private SDL field as an
+optional one-based NonZeroU16 index into the same CompiledGraphqlCost generation's
+bounded rule vector. Cold validation attaches the index only after validating the
+rule and rejects duplicate coordinates. All 256 supported rules remain usable.
+Runtime borrows the actual concrete field followed by matching fields on its
+declared interfaces, without rebuilding owned Type.field coordinates. Missing
+interface fields and absent slots are misses; a populated out-of-range index
+rejects instead of silently default charging. Every candidate still consumes its
+original Work step, including misses, before multiplier/root accounting.
+
+Schema and rules have one immutable owner; there is no expanded applicability
+matrix, replicated interface rule or request cache. The optional field slots add
+bounded per-generation storage under the existing field cap. The parser's
+per-evaluation estimate excludes compiled generations; this refactor establishes
+neither a process-wide schema-memory bound nor measured latency, heap or RSS gains.
+The remaining frontend/name/argument allocations are outside this change.
+
+The cost-model tests cover empty/sparse and missing-interface lookups, duplicates,
+the 256th rule, independent generations, corrupt-index rejection, and exact
+near-exhausted Work thresholds, alongside existing complete-charge maxima,
+concrete defaults, covariance, variable and root regressions. Re-evaluate changes
+to field/rule ownership, index representation, candidate ordering or rule bounds
+against these tests and the unchanged canonical Gateway admission/Redis lifetime
+contracts. Fresh command results belong to the implementation record.

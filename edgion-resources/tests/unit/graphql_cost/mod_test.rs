@@ -510,3 +510,128 @@ fn root_evaluation_does_not_reset_frontend_work() {
     while parsed.work.step().is_ok() {}
     assert_eq!(m.estimate_quotas(parsed), Err(GraphqlError::Invalid));
 }
+
+#[test]
+fn cold_rule_bindings_preserve_empty_sparse_and_missing_interface_fields() {
+    let schema = "type Query implements I { x:Int y:Int } interface I { y:Int }";
+    for rules in [vec![], vec![("I.y", 7, &[][..], 1)]] {
+        let m = model(schema, &rules);
+        assert_eq!(estimate(&m, "{x}"), Ok(2));
+        assert_eq!(estimate(&m, "{x y}"), Ok(if rules.is_empty() { 3 } else { 9 }));
+    }
+}
+
+#[test]
+fn cold_rule_bindings_reject_duplicates_and_support_all_256_rules() {
+    let schema = "type Query implements I { x:Int } interface I { x:Int }";
+    for coordinate in ["Query.x", "I.x"] {
+        let rule = GraphqlCostRule {
+            field: coordinate.into(),
+            weight: 7,
+            multipliers: vec![],
+            default_multiplier: 1,
+        };
+        assert!(CompiledGraphqlCost::compile(schema, &[rule.clone(), rule], 100, 20).is_err());
+    }
+    let fields = (0..256).map(|i| format!("f{i}:Int ")).collect::<String>();
+    let schema = format!("type Query {{{fields}}}");
+    let mut rules: Vec<_> = (0..256)
+        .map(|i| GraphqlCostRule {
+            field: format!("Query.f{i}"),
+            weight: i + 1,
+            multipliers: vec![],
+            default_multiplier: 1,
+        })
+        .collect();
+    let m = CompiledGraphqlCost::compile(&schema, &rules, 1000, 20).unwrap();
+    assert_eq!(estimate(&m, "{f0}"), Ok(2));
+    assert_eq!(estimate(&m, "{f255}"), Ok(257));
+    assert_eq!(estimate(&m, "{f0 f255}"), Ok(258));
+    rules.push(rules[0].clone());
+    assert!(CompiledGraphqlCost::compile(&schema, &rules, 1000, 20).is_err());
+}
+
+#[test]
+fn cold_rule_bindings_stay_with_their_immutable_generation() {
+    let schema = "type Query { x:Int y:Int }";
+    let first = model(schema, &[("Query.x", 3, &[], 1), ("Query.y", 7, &[], 1)]);
+    let second = model(schema, &[("Query.y", 11, &[], 1), ("Query.x", 17, &[], 1)]);
+    for _ in 0..3 {
+        assert_eq!(estimate(&first, "{x}"), Ok(4));
+        assert_eq!(estimate(&second, "{x}"), Ok(18));
+        assert_eq!(estimate(&first, "{y}"), Ok(8));
+        assert_eq!(estimate(&second, "{y}"), Ok(12));
+    }
+    drop(first);
+    assert_eq!(estimate(&second, "{x y}"), Ok(29));
+}
+
+fn estimate_with_remaining_work(
+    model: &CompiledGraphqlCost,
+    query: &str,
+    remaining: usize,
+) -> Result<GraphqlQuotaCosts, GraphqlError> {
+    use crate::graphql_request::ParsedGraphqlRequest;
+    let bytes = serde_json::json!({"query":query}).to_string();
+    let mut probe = ParsedGraphqlRequest::parse_post(bytes.as_bytes(), MAX_ENVELOPE_BYTES).unwrap();
+    let mut available = 0;
+    while probe.work.step().is_ok() {
+        available += 1;
+    }
+    assert!(available >= remaining);
+    let mut parsed = ParsedGraphqlRequest::parse_post(bytes.as_bytes(), MAX_ENVELOPE_BYTES).unwrap();
+    for _ in 0..available - remaining {
+        parsed.work.step().unwrap();
+    }
+    model.estimate_quotas(parsed)
+}
+
+#[test]
+fn cold_rule_bindings_preserve_exact_candidate_multiplier_and_root_work() {
+    let schema = "type Query implements I { x:Int y:Int } interface I { y:Int }";
+    for rules in [vec![], vec![("I.y", 7, &[][..], 1)]] {
+        let m = model(schema, &rules);
+        // One validation, one possible object, one selection, and two candidates,
+        // including the interface without x. Baseline succeeds at 5, fails at 4.
+        assert_eq!(estimate_with_remaining_work(&m, "{x}", 5).unwrap().total, 2);
+        assert_eq!(estimate_with_remaining_work(&m, "{x}", 4), Err(GraphqlError::Invalid));
+        let m = m.with_root_fields(["Query.x", "Query.y"]).unwrap();
+        // Both matching and missing root slots still charge one step each.
+        let report = estimate_with_remaining_work(&m, "{x}", 7).unwrap();
+        assert_eq!(report.total, 2);
+        assert_eq!(&report.roots[..2], &[1, 0]);
+        assert_eq!(estimate_with_remaining_work(&m, "{x}", 6), Err(GraphqlError::Invalid));
+    }
+    let m = model(
+        "type Query implements I { children(n:Int=3):Leaf other:Int } interface I { children(n:Int=2):Leaf } type Leaf { value:Int }",
+        &[("Query.children", 1, &["n"], 1), ("I.children", 5, &["n"], 1), ("Leaf.value", 2, &[], 1)],
+    ).with_root_fields(["Query.children", "Query.other"]).unwrap();
+    // Two validations, two possible objects, two selections, three candidates,
+    // two multipliers, two root slots: 13 steps, with concrete default 3.
+    let report = estimate_with_remaining_work(&m, "{children{value}}", 13).unwrap();
+    assert_eq!(report.total, 12);
+    assert_eq!(&report.roots[..2], &[11, 0]);
+    assert_eq!(
+        estimate_with_remaining_work(&m, "{children{value}}", 12),
+        Err(GraphqlError::Invalid)
+    );
+}
+
+#[test]
+fn populated_out_of_range_rule_index_rejects_instead_of_default_charging() {
+    for coordinate in ["Query", "I"] {
+        let mut m = model(
+            "type Query implements I { x:Int } interface I { x:Int }",
+            &[("I.x", 7, &[], 1)],
+        );
+        m.schema
+            .types
+            .get_mut(coordinate)
+            .unwrap()
+            .fields
+            .get_mut("x")
+            .unwrap()
+            .rule_index = std::num::NonZeroU16::new(2);
+        assert_eq!(estimate(&m, "{x}"), Err(GraphqlError::Invalid));
+    }
+}
