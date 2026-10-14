@@ -413,6 +413,12 @@ pub struct GatewayConfig {
     #[serde(default = "default_outbound_http2_max_header_list_size")]
     pub outbound_http2_max_header_list_size: u32,
 
+    /// Aggregate guest linear-memory and table-slot bytes across all Wasm Stores.
+    /// Restart-only; excludes host payloads, compiler heap and Engine reservations.
+    #[arg(skip)]
+    #[serde(default = "default_wasm_guest_memory_bytes")]
+    pub wasm_guest_memory_bytes: usize,
+
     /// Seconds since last use before an OCI memory-cache entry expires (default 24h).
     /// Zero is clamped to one second at startup.
     #[arg(skip)]
@@ -461,6 +467,10 @@ fn default_outbound_http2_max_header_list_size() -> u32 {
     edgion_common::link_sys_core::http_client::DEFAULT_OUTBOUND_HTTP2_MAX_HEADER_LIST_SIZE
 }
 
+fn default_wasm_guest_memory_bytes() -> usize {
+    crate::plugins::http::wasm::admission::DEFAULT_GUEST_MEMORY_BYTES
+}
+
 fn default_wasm_oci_cache_ttl_secs() -> u64 {
     86_400
 }
@@ -494,6 +504,7 @@ impl Default for GatewayConfig {
             outbound_egress_block_private: false,
             outbound_egress_dns_cache_ttl_ms: default_outbound_egress_dns_cache_ttl_ms(),
             outbound_http2_max_header_list_size: default_outbound_http2_max_header_list_size(),
+            wasm_guest_memory_bytes: default_wasm_guest_memory_bytes(),
             wasm_oci_cache_ttl_secs: default_wasm_oci_cache_ttl_secs(),
             wasm_oci_cache_purge_interval_secs: default_wasm_oci_cache_purge_interval_secs(),
             wasm_oci_cache_max_bytes: default_wasm_oci_cache_max_bytes(),

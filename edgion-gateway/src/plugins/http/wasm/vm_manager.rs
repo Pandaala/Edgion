@@ -348,6 +348,12 @@ impl WasmVmManager {
     fn new_with_epoch_ticker_spawner(spawn_epoch_ticker: impl FnOnce(Engine) -> std::io::Result<EpochTicker>) -> Self {
         let mut cfg = Config::new();
         cfg.epoch_interruption(true);
+        // Shared memories bypass ResourceLimiter callbacks.
+        cfg.wasm_threads(false);
+        // Freeze the wasm32/64-KiB-page profile used by growth rollback:
+        // these features can fail before calling the synchronous limiter.
+        cfg.wasm_memory64(false);
+        cfg.wasm_custom_page_sizes(false);
         // Pooling allocator: fast instantiation for per-request leases (avoids
         // mmap/munmap churn on the hot path of the on-demand allocator).
         let pooling = PoolingAllocationConfig::default();
@@ -466,7 +472,7 @@ impl Drop for WasmRuntime {
         // cancelled compile completes later on a blocking worker.
         self.tasks.close();
         if let Some(entry) = self.state.slot.published.swap(None) {
-            entry.stop_tick();
+            entry.retire();
         }
         super::oci::cache::unregister_owner();
     }
@@ -605,11 +611,12 @@ impl RuntimeState {
     where
         F: FnOnce(&mut Linker<HostState>) -> Result<(), String> + Send,
     {
+        let preparation = super::admission::try_prepare()?;
         let vm_config = decode_guest_config("vmConfig", config.vm_config.as_ref())?;
         let plugin_config = decode_guest_config("pluginConfig", config.plugin_config.as_ref())?;
         let (bytes, oci_meta, oci_pipeline) = match &config.source.oci {
             Some(spec) => {
-                let fetched = super::oci::fetch_oci_bytes(spec).await?;
+                let fetched = super::oci::fetch_oci_bytes(spec, preparation.clone()).await?;
                 (
                     fetched.bytes,
                     Some(OciLoadedMeta {
@@ -651,13 +658,12 @@ impl RuntimeState {
                 Instant::now().saturating_duration_since(compile_start),
             ))
         };
-        let (module, compatibility, compile_duration) = if let Some(pipeline) = oci_pipeline {
-            super::oci::blocking_stage(&pipeline, compile).await?
-        } else {
-            tokio::task::spawn_blocking(compile)
-                .await
-                .map_err(|_| "wasm validation/compile task failed".to_string())??
-        };
+        let (compiled, _oci_pipeline) = super::admission::prepare_blocking(&preparation, move || {
+            // Keep OCI admission beside even an undelivered compiler result.
+            Ok((compile(), oci_pipeline))
+        })
+        .await?;
+        let (module, compatibility, compile_duration) = compiled?;
         record_wasm_compile_duration(&label, compile_duration.as_secs_f64() * 1000.0);
         if compatibility
             .warnings
@@ -693,6 +699,7 @@ impl RuntimeState {
             engine,
             instance_pre,
             pool: Mutex::new(Vec::new()),
+            retired: AtomicBool::new(false),
             pool_metric: wasm_pool_size_contribution(&label),
             pool_cap: config.instance_pool_size,
             vm_config,
@@ -786,7 +793,7 @@ impl RuntimeState {
         self.tasks.with_active(|| {
             // No await between stopping the old task and publishing its successor.
             // A running old guest may finish its bounded call during the swap.
-            old_entry.stop_tick();
+            old_entry.retire();
             self.slot.refresh_due_ms.store(
                 next_oci_refresh_deadline(&self.slot, prepared.oci.is_some()),
                 Ordering::Release,
@@ -1088,6 +1095,7 @@ pub struct ModuleEntry {
     engine: Engine,
     instance_pre: InstancePre<HostState>,
     pool: Mutex<Vec<PooledVm>>,
+    retired: AtomicBool,
     pool_metric: edgion_common::observe::metrics_facade::GaugeContribution,
     pool_cap: usize,
     vm_config: Vec<u8>,
@@ -1145,6 +1153,7 @@ struct PooledVm {
     callbacks: super::callbacks::GuestCallbacks,
     next_ctx_id: i32,
     /// Released after the Store, including while retained in an idle pool.
+    _guest_memory: Arc<super::admission::GuestMemory>,
     _instance_permit: tokio::sync::OwnedSemaphorePermit,
 }
 
@@ -1180,7 +1189,11 @@ impl ModuleEntry {
         let vm = {
             let mut pool = self.pool.lock();
             let vm = pool.pop();
-            self.pool_metric.set(pool.len() as f64);
+            if self.retired.load(Ordering::Acquire) {
+                self.pool_metric.clear();
+            } else {
+                self.pool_metric.set(pool.len() as f64);
+            }
             vm
         };
         let vm = match vm {
@@ -1309,7 +1322,7 @@ impl ModuleEntry {
                                 // so `open_context` cannot cover this like it
                                 // covers the request path.
                                 lease.poison();
-                                match resolve_callouts_on(&mut lease, ROOT_CONTEXT_ID, timeout_ms, &label).await {
+                                match resolve_callouts_on(&mut lease, ROOT_CONTEXT_ID, timeout_ms, &label, None).await {
                                     Ok(outcome) => {
                                         if outcome.leftover != 0 {
                                             drop(lease);
@@ -1354,7 +1367,21 @@ impl ModuleEntry {
         *guard = Some(handle);
     }
 
-    /// Stop future tick work without invalidating in-flight request leases.
+    /// Retire publication without invalidating in-flight request leases.
+    fn retire(&self) {
+        // Serialize retirement with pool returns. Existing leases stay valid,
+        // but their eventual return cannot retain retired guest heaps.
+        let idle = {
+            let mut pool = self.pool.lock();
+            self.retired.store(true, Ordering::Release);
+            self.pool_metric.clear();
+            std::mem::take(&mut *pool)
+        };
+        drop(idle);
+        self.stop_tick();
+    }
+
+    /// Stop future tick work without resetting healthy request guests.
     fn stop_tick(&self) {
         let handle = {
             let mut task = self.tick_task.lock();
@@ -1399,15 +1426,15 @@ impl ModuleEntry {
             .clone()
             .try_acquire_owned()
             .map_err(|_| "wasm process instance limit reached".to_string())?;
-        let mut store = Store::new(
-            &self.engine,
-            HostState::new(
-                self.vm_config.clone(),
-                self.plugin_config.clone(),
-                self.metrics_label.clone(),
-                self.shared_data.clone(),
-            ),
+        let host = HostState::new(
+            self.vm_config.clone(),
+            self.plugin_config.clone(),
+            self.metrics_label.clone(),
+            self.shared_data.clone(),
         );
+        // Declared before Store so failed initialization destroys Store first.
+        let guest_memory = host.guest_memory.clone();
+        let mut store = Store::new(&self.engine, host);
         store.set_epoch_deadline(timeout_ms / EPOCH_TICK_MS + 2);
         // Cap guest linear-memory/table growth (defense in depth). The pooling
         // allocator's default per-instance memory cap is effectively the full
@@ -1457,6 +1484,7 @@ impl ModuleEntry {
         let callbacks = super::callbacks::GuestCallbacks::resolve(instance, &mut store);
         Ok(PooledVm {
             _instance_permit: instance_permit,
+            _guest_memory: guest_memory,
             store,
             callbacks,
             next_ctx_id: ROOT_CONTEXT_ID + 1,
@@ -1852,14 +1880,18 @@ impl Drop for VmLease {
                 vm.store.data_mut().release_phase_payloads();
                 {
                     let mut pool = self.entry.pool.lock();
-                    if pool.len() < self.entry.pool_cap {
+                    if !self.entry.retired.load(Ordering::Acquire) && pool.len() < self.entry.pool_cap {
                         pool.push(vm);
                     } else {
                         // Over-cap: drop `vm`, freeing its pooling-allocator slot.
                         drop(vm);
                         record_wasm_instance_discard(&self.entry.metrics_label, "over_capacity");
                     }
-                    self.entry.pool_metric.set(pool.len() as f64);
+                    if self.entry.retired.load(Ordering::Acquire) {
+                        self.entry.pool_metric.clear();
+                    } else {
+                        self.entry.pool_metric.set(pool.len() as f64);
+                    }
                 }
             } else {
                 // A trapped lease and a healthy lease abandoned with an open

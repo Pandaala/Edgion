@@ -236,12 +236,33 @@ fn file_config(path: &std::path::Path) -> edgion_resources::plugin_configs::Wasm
     c
 }
 
-/// Load an entry for synchronous lease tests. Tick tests retain a runtime owner.
+/// Keep publication alive for synchronous lease/pool tests. A naked entry Arc
+/// intentionally no longer preserves an idle pool after runtime retirement.
+struct LoadedTestEntry {
+    entry: Arc<ModuleEntry>,
+    _runtime: WasmRuntime,
+}
+impl std::ops::Deref for LoadedTestEntry {
+    type Target = Arc<ModuleEntry>;
+    fn deref(&self) -> &Self::Target {
+        &self.entry
+    }
+}
+impl std::fmt::Debug for LoadedTestEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.entry.fmt(f)
+    }
+}
 async fn load(
     mgr: &WasmVmManager,
     config: &edgion_resources::plugin_configs::WasmConfig,
-) -> Result<Arc<ModuleEntry>, String> {
-    actual_runtime(mgr, config, CalloutGrant::none()).get_or_load().await
+) -> Result<LoadedTestEntry, String> {
+    let runtime = actual_runtime(mgr, config, CalloutGrant::none());
+    let entry = runtime.get_or_load().await?;
+    Ok(LoadedTestEntry {
+        entry,
+        _runtime: runtime,
+    })
 }
 
 fn call_panic_site(lease: &mut VmLease, site: PanicSite) -> Result<(), String> {
@@ -2799,10 +2820,127 @@ async fn pool_metric_aggregates_generations_and_old_retirement_does_not_resurrec
     recorder.advance(std::time::Duration::from_secs(2));
     assert!(!recorder.render().contains("edgion_wasm_pool_size"));
     drop(lease);
-    // Returning to the retired pool is a real update; final entry destruction
-    // then withdraws only its own contribution. Expire that final zero epoch.
+    // Late return to a retired pool must not resurrect its gauge epoch.
     recorder.advance(std::time::Duration::from_secs(2));
     assert!(!recorder.render().contains("edgion_wasm_pool_size"));
     assert_eq!(recorder.stats().gauge_owners, 0);
     assert_eq!(recorder.stats().attached_gauge_owners, 0);
+}
+
+#[tokio::test]
+async fn retirement_drains_idle_guests_and_late_returns_do_not_repopulate() {
+    let manager = WasmVmManager::new_for_test();
+    let file = write_temp_wasm(MINI_GUEST);
+    let runtime = actual_runtime(&manager, &file_config(file.path()), CalloutGrant::none());
+    let entry = runtime.get_or_load().await.unwrap();
+    let mut active = entry.acquire(100).unwrap();
+    active.open_request(0, true).unwrap();
+    let spare = entry.acquire(100).unwrap();
+    drop(spare);
+    assert_eq!(entry.pool_len(), 1);
+    drop(runtime);
+    assert_eq!(entry.pool_len(), 0);
+    assert!(entry.retired.load(Ordering::Acquire));
+    let id = active.context_id().unwrap();
+    active.close_context(id).unwrap();
+    drop(active);
+    assert_eq!(entry.pool_len(), 0, "late healthy return cannot retain retired memory");
+}
+
+#[tokio::test]
+async fn engine_rejects_shared_memory_that_would_bypass_guest_admission() {
+    let manager = WasmVmManager::new_for_test();
+    let file = write_temp_wasm("(module (memory (export \"memory\") 1 1 shared))");
+    assert!(load(&manager, &file_config(file.path())).await.is_err());
+}
+
+#[test]
+fn process_guest_budget_survives_runtime_replacement_and_cancellation() {
+    crate::test_subprocess::assert_in_subprocess(
+        "plugins::http::wasm::vm_manager::tests",
+        "process_guest_budget_survives_runtime_replacement_and_cancellation",
+        "EDGION_WASM_GUEST_BUDGET_CHILD",
+        "bounded",
+        || {
+            tokio::runtime::Runtime::new().unwrap().block_on(async {
+                super::super::admission::initialize(2 * 65536).unwrap();
+                let bytes = || {
+                    serde_json::to_value(super::super::admission::stats()).unwrap()["guest_bytes"]
+                        .as_u64()
+                        .unwrap()
+                };
+                assert_eq!(bytes(), 0);
+                let manager = WasmVmManager::new_for_test();
+                let file = write_temp_wasm(MINI_GUEST);
+                let config = file_config(file.path());
+                let old_runtime = actual_runtime(&manager, &config, CalloutGrant::none());
+                let old = old_runtime.get_or_load().await.unwrap();
+                let mut lease = old.acquire(100).unwrap();
+                lease.open_request(0, true).unwrap();
+                drop(old_runtime);
+                assert_eq!(bytes(), 65536, "active retired guest remains charged");
+                let new_runtime = actual_runtime(&manager, &config, CalloutGrant::none());
+                let new = new_runtime.get_or_load().await.unwrap();
+                assert_eq!(bytes(), 2 * 65536);
+                assert!(new.acquire_timer().is_err());
+                assert_eq!(
+                    bytes(),
+                    2 * 65536,
+                    "failed initialization rolls back without freeing live bytes"
+                );
+                drop(new_runtime);
+                assert_eq!(bytes(), 65536, "retirement drains idle even when entry Arc survives");
+                drop(new);
+                lease.poison();
+                drop(lease);
+                assert_eq!(bytes(), 0);
+                assert_eq!(old.pool_len(), 0);
+            });
+        },
+    );
+}
+
+#[test]
+fn all_source_preparation_rejects_before_fetch_when_full() {
+    crate::test_subprocess::assert_in_subprocess(
+        "plugins::http::wasm::vm_manager::tests",
+        "all_source_preparation_rejects_before_fetch_when_full",
+        "EDGION_WASM_PREPARATION_CHILD",
+        "bounded",
+        || {
+            tokio::runtime::Runtime::new().unwrap().block_on(async {
+                let permits: Vec<_> = (0..4)
+                    .map(|_| super::super::admission::try_prepare().unwrap())
+                    .collect();
+                assert!(super::super::admission::try_prepare().is_err());
+                let manager = WasmVmManager::new_for_test();
+                let file = write_temp_wasm(MINI_GUEST);
+                let config = file_config(file.path());
+                let error = load(&manager, &config).await.unwrap_err();
+                assert!(error.contains("preparation capacity"), "{error}");
+                drop(permits);
+                let entry = load(&manager, &config).await.unwrap();
+                assert_eq!(entry.pool_len(), 1);
+                let stats = serde_json::to_value(super::super::admission::stats()).unwrap();
+                assert_eq!(stats["preparations"], 0);
+            });
+        },
+    );
+}
+
+#[test]
+fn engine_freezes_supported_memory_profile_for_growth_failure_accounting() {
+    let manager = WasmVmManager::new_for_test();
+    let engine = manager.engine.as_ref().unwrap();
+    for guest in [
+        "(module (memory i64 1))",
+        "(module (memory 1 (pagesize 1)))",
+        "(module (memory 1 1 shared))",
+    ] {
+        let bytes = wat::parse_str(guest).unwrap();
+        assert!(
+            Module::new(engine, bytes).is_err(),
+            "unsupported memory profile: {guest}"
+        );
+    }
 }

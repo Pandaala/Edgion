@@ -826,3 +826,11 @@ fn response_cache_restart_limits_include_standing_epoch_and_reject_partial_popul
     assert!(reduced.validate().is_err());
     assert!(serde_yaml::from_str::<EdgionGatewayConfig>("response_cache:\n  unknown: 1\n").is_err());
 }
+
+#[test]
+fn wasm_guest_memory_budget_is_restart_only_and_parses() {
+    let cfg: GatewayConfig = serde_yaml::from_str("wasm_guest_memory_bytes: 1048576\n").unwrap();
+    assert_eq!(cfg.wasm_guest_memory_bytes, 1048576);
+    assert_eq!(GatewayConfig::default().wasm_guest_memory_bytes, 512 * 1024 * 1024);
+    assert!(serde_yaml::from_str::<GatewayConfig>("wasm_guest_memory_bytes: -1").is_err());
+}

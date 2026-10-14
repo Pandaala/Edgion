@@ -814,3 +814,30 @@ and reader pins. Empty index does not imply zero allocated bytes: admitted index
 and current epoch remain standing infrastructure. After retirement and release,
 allocated minus infrastructure, pending bytes, entries and reader pins reach zero.
 Arc aliases do not add memory charges; distinct pinned retired guards do.
+
+
+## Wasm guest allocation admission
+
+`gateway.wasm_guest_memory_bytes` is a restart-only positive byte count, default
+`536870912` (512 MiB). It caps the sum of admitted linear-memory growth and
+pointer-sized table slots across all Wasm Stores: initializing, active, idle,
+timer-owned, and old configuration/OCI generations. It must fit the platform's
+allocation range; zero is rejected during startup. There is no environment/CLI
+override or per-plugin bypass. Guest growth refusal follows Wasmtime's ordinary
+failed-growth result; failed initial allocation follows the existing Wasm load
+failure and `failOpen` policy.
+
+This is a logical guest-allocation budget, not an RSS limit. Wasmtime allocator
+reservations/retained pages, runtime metadata, GC heap, compiled code, compiler
+working memory, host ABI payloads, BodyStorage and transport buffers are excluded.
+Existing per-memory/table, ABI, request body, artifact cache and callout limits
+continue to apply independently. Shared Wasm memories are disabled because they
+bypass the synchronous resource limiter.
+
+All source types also share four immediate-admission preparation slots before
+config decoding, source fetch and compilation. Cancellation retains a slot until
+running blocking work and its abandoned result release their ownership. OCI
+network/cache pipeline controls remain independent. Saturation uses existing
+load failure/negative caching; it does not create a new queue or failure mode.
+Admin store-stats exposes `wasm_admission.guest_bytes`, `guest_limit_bytes` and
+`preparations`; counts follow actual owners, including retired live requests.

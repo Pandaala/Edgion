@@ -232,6 +232,9 @@ pub struct CalloutResponse {
 /// installed only for the currently executing event and released afterwards.
 #[derive(Default)]
 pub struct HostState {
+    pub(super) guest_memory: Arc<super::admission::GuestMemory>,
+    pending_memory_growth: usize,
+    pending_table_growth: usize,
     pub frame: CallbackFrame,
     pub vm_config: Vec<u8>,
     pub plugin_config: Vec<u8>,
@@ -467,12 +470,61 @@ impl HostState {
 /// memory — within a sane bound. It does NOT bound host-side accumulation
 /// across calls; that is `charge_abi`'s job.
 impl wasmtime::ResourceLimiter for HostState {
-    fn memory_growing(&mut self, _current: usize, desired: usize, _maximum: Option<usize>) -> wasmtime::Result<bool> {
-        Ok(desired <= MAX_GUEST_MEMORY_BYTES)
+    fn memory_growing(&mut self, current: usize, desired: usize, maximum: Option<usize>) -> wasmtime::Result<bool> {
+        self.pending_memory_growth = 0;
+        if desired > MAX_GUEST_MEMORY_BYTES || maximum.is_some_and(|max| desired > max) {
+            return Ok(false);
+        }
+        let Some(delta) = desired.checked_sub(current) else {
+            return Ok(false);
+        };
+        if !self.guest_memory.reserve(delta) {
+            return Ok(false);
+        }
+        self.pending_memory_growth = delta;
+        Ok(true)
     }
 
-    fn table_growing(&mut self, _current: usize, desired: usize, _maximum: Option<usize>) -> wasmtime::Result<bool> {
-        Ok(desired <= MAX_GUEST_TABLE_ELEMENTS)
+    fn memory_grow_failed(&mut self, _error: wasmtime::Error) -> wasmtime::Result<()> {
+        self.guest_memory
+            .rollback(std::mem::take(&mut self.pending_memory_growth));
+        Ok(())
+    }
+
+    fn table_growing(&mut self, current: usize, desired: usize, maximum: Option<usize>) -> wasmtime::Result<bool> {
+        self.pending_table_growth = 0;
+        if desired > MAX_GUEST_TABLE_ELEMENTS || maximum.is_some_and(|max| desired > max) {
+            return Ok(false);
+        }
+        // Wasmtime 49 stores one pointer-sized slot per table element.
+        let Some(delta) = desired
+            .checked_sub(current)
+            .and_then(|n| n.checked_mul(size_of::<usize>()))
+        else {
+            return Ok(false);
+        };
+        if !self.guest_memory.reserve(delta) {
+            return Ok(false);
+        }
+        self.pending_table_growth = delta;
+        Ok(true)
+    }
+
+    fn table_grow_failed(&mut self, _error: wasmtime::Error) -> wasmtime::Result<()> {
+        self.guest_memory
+            .rollback(std::mem::take(&mut self.pending_table_growth));
+        Ok(())
+    }
+
+    // Match the Engine pooling profile explicitly; these are per Store.
+    fn instances(&self) -> usize {
+        1
+    }
+    fn memories(&self) -> usize {
+        1
+    }
+    fn tables(&self) -> usize {
+        1
     }
 }
 

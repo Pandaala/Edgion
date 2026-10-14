@@ -479,6 +479,7 @@ fn local_response_preserves_duplicate_set_cookie() {
 fn callout_mock(target: &str) -> MockPluginSession {
     let mut s = MockPluginSession::new();
     install_mock_wasm_owner(&mut s);
+    s.expect_ctx().return_const(crate::EdgionHttpContext::new());
     let target = target.to_string();
     s.expect_request_headers().returning(move || {
         vec![
@@ -1800,4 +1801,13 @@ async fn wasm_bound_crypto_load_failure_preserves_both_failure_modes() {
             assert!(matches!(result, PluginRunningResult::ErrResponse { status: 500, .. }));
         }
     }
+}
+
+#[test]
+fn callout_deadline_preserves_absolute_grpc_bound_and_unlimited_streams() {
+    let mut ctx = crate::EdgionHttpContext::new();
+    assert!(request_deadline(&ctx).is_none());
+    let deadline = std::time::Instant::now() - std::time::Duration::from_secs(1);
+    ctx.request_info.set_grpc_client_deadline(deadline);
+    assert_eq!(request_deadline(&ctx), Some(tokio::time::Instant::from_std(deadline)));
 }

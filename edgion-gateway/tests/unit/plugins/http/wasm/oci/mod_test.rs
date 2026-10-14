@@ -915,3 +915,7 @@ async fn oversized_token_response_is_rejected_at_the_cap() {
     let err = fetch_oci_bytes(&spec).await.unwrap_err();
     assert!(err.contains("response exceeds"), "got: {err}");
 }
+
+async fn fetch_oci_bytes(spec: &WasmOciSpec) -> Result<OciFetched, String> {
+    super::fetch_oci_bytes(spec, crate::plugins::http::wasm::admission::try_prepare()?).await
+}

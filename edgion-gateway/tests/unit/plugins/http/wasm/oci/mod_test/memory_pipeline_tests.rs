@@ -19,8 +19,11 @@ fn digest() -> String {
     format!("sha256:{}", hex::encode(Sha256::digest(ARTIFACT)))
 }
 
-async fn lease() -> Arc<OwnedSemaphorePermit> {
-    Arc::new(Arc::new(Semaphore::new(1)).acquire_owned().await.unwrap())
+async fn lease() -> Arc<OciPipeline> {
+    Arc::new(OciPipeline {
+        _network: Arc::new(Semaphore::new(1)).acquire_owned().await.unwrap(),
+        _preparation: Arc::new(Arc::new(Semaphore::new(1)).acquire_owned().await.unwrap()),
+    })
 }
 
 #[tokio::test]
@@ -111,26 +114,37 @@ async fn cancelled_fetch_owner_allows_waiter_to_retry() {
 
 #[tokio::test]
 async fn abandoned_blocking_stage_keeps_pipeline_capacity_until_work_finishes() {
-    // The production hash, extraction AND module-compile paths all use this
-    // helper; this barrier leaves a real blocking task alive after its owner aborts.
+    // Production precompile hashing/extraction retains both admission owners.
+    // Leave a real blocking task alive after its async owner is cancelled.
     let permits = Arc::new(Semaphore::new(1));
+    let preparations = Arc::new(Semaphore::new(1));
     #[derive(Debug)]
     struct CheckedOutput {
         permits: Arc<Semaphore>,
+        preparations: Arc<Semaphore>,
         dropped: Arc<AtomicUsize>,
     }
     impl Drop for CheckedOutput {
         fn drop(&mut self) {
             assert_eq!(self.permits.available_permits(), 0, "output must drop before its lease");
+            assert_eq!(
+                self.preparations.available_permits(),
+                0,
+                "precompile result retains global admission"
+            );
             self.dropped.fetch_add(1, Ordering::SeqCst);
         }
     }
     let dropped = Arc::new(AtomicUsize::new(0));
     let output = CheckedOutput {
         permits: permits.clone(),
+        preparations: preparations.clone(),
         dropped: dropped.clone(),
     };
-    let lease = Arc::new(permits.clone().acquire_owned().await.unwrap());
+    let lease = Arc::new(OciPipeline {
+        _network: permits.clone().acquire_owned().await.unwrap(),
+        _preparation: Arc::new(preparations.clone().acquire_owned().await.unwrap()),
+    });
     let (started_tx, started_rx) = tokio::sync::oneshot::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
@@ -147,6 +161,7 @@ async fn abandoned_blocking_stage_keeps_pipeline_capacity_until_work_finishes() 
     task.abort();
     assert!(task.await.unwrap_err().is_cancelled());
     assert_eq!(permits.available_permits(), 0);
+    assert_eq!(preparations.available_permits(), 0);
     release_tx.send(()).unwrap();
     finished_rx.await.unwrap();
     let permit = tokio::time::timeout(Duration::from_secs(1), permits.acquire())
@@ -156,6 +171,12 @@ async fn abandoned_blocking_stage_keeps_pipeline_capacity_until_work_finishes() 
     drop(permit);
     assert_eq!(permits.available_permits(), 1);
     assert_eq!(dropped.load(Ordering::SeqCst), 1);
+    let permit = tokio::time::timeout(Duration::from_secs(1), preparations.acquire())
+        .await
+        .unwrap()
+        .unwrap();
+    drop(permit);
+    assert_eq!(preparations.available_permits(), 1);
 }
 
 #[tokio::test]

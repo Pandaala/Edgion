@@ -269,7 +269,10 @@ impl WasmPlugin {
         let paused = action != 0;
         let had_callouts = !lease.state().frame.pending_callouts.is_empty();
         if paused && had_callouts {
-            match self.resolve_callouts(lease, ctx_id, log).await {
+            match self
+                .resolve_callouts(lease, ctx_id, log, request_deadline(session.ctx()))
+                .await
+            {
                 Ok(true) => {}
                 Ok(false) if lease.state().frame.local_response.is_some() => {
                     return self.finish_callback(lease, session, log, action, true);
@@ -430,12 +433,19 @@ impl WasmPlugin {
     /// the delivered/leftover counts in the plugin log. Leftovers after the
     /// round cap or early resume poison the execution. The caller preserves a
     /// successful local response, otherwise applies the configured failure mode.
-    async fn resolve_callouts(&self, lease: &mut VmLease, ctx_id: i32, log: &mut PluginLog) -> Result<bool, String> {
+    async fn resolve_callouts(
+        &self,
+        lease: &mut VmLease,
+        ctx_id: i32,
+        log: &mut PluginLog,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Result<bool, String> {
         let outcome = resolve_callouts_on(
             lease,
             ctx_id,
             self.runtime.config().callout_timeout_ms,
             &self.metrics_label,
+            deadline,
         )
         .await?;
         log.push_fmt(
@@ -778,3 +788,16 @@ impl UpstreamResponseFilter for WasmPlugin {
 #[cfg(test)]
 #[path = "../../../../tests/unit/plugins/http/wasm/plugin_test.rs"]
 pub(super) mod tests;
+
+/// Use the existing absolute transport/request deadlines, never a new Wasm
+/// binding lifetime. Long streams without such a deadline remain unbounded.
+fn request_deadline(ctx: &crate::EdgionHttpContext) -> Option<tokio::time::Instant> {
+    let route = ctx
+        .request_timeout()
+        .and_then(|timeout| ctx.start_time.checked_add(timeout));
+    [route, ctx.request_info.grpc_client_deadline()]
+        .into_iter()
+        .flatten()
+        .min()
+        .map(tokio::time::Instant::from_std)
+}

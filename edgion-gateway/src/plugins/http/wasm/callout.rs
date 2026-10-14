@@ -93,6 +93,7 @@ pub(super) async fn resolve_callouts_on(
     ctx_id: i32,
     timeout_cap_ms: u64,
     metrics_label: &str,
+    request_deadline: Option<tokio::time::Instant>,
 ) -> Result<CalloutOutcome, String> {
     const MAX_ROUNDS: usize = 4;
     let mut delivered = 0usize;
@@ -109,7 +110,24 @@ pub(super) async fn resolve_callouts_on(
                 abandoned += 1 + pending.len();
                 break;
             }
-            let response = execute_callout(callout, timeout_cap_ms, metrics_label).await;
+            if request_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
+                lease.poison();
+                return Err("wasm request deadline expired".into());
+            }
+            let response = execute_callout_with_client_and_permits(
+                callout,
+                timeout_cap_ms,
+                metrics_label,
+                callout_client().map_err(|_| ()),
+                callout_permits(),
+                request_deadline,
+            )
+            .await;
+            // An expired request cannot re-enter the guest with a late response.
+            if request_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
+                lease.poison();
+                return Err("wasm request deadline expired".into());
+            }
             let num_headers = response.headers.len() as i32;
             let body_size = response.body.len() as i32;
             let token = response.token;
@@ -142,6 +160,7 @@ pub async fn execute_callout(callout: PendingCallout, timeout_cap_ms: u64, metri
         metrics_label,
         callout_client().map_err(|_| ()),
         callout_permits(),
+        None,
     )
     .await
 }
@@ -160,16 +179,28 @@ async fn execute_callout_with_client_and_permits(
     metrics_label: &str,
     client: Result<&reqwest::Client, ()>,
     permits: &tokio::sync::Semaphore,
+    request_deadline: Option<tokio::time::Instant>,
 ) -> CalloutResponse {
     let failure = failed_callout_response(callout.token);
     let timeout_ms = match callout.timeout_ms as u64 {
         0 => timeout_cap_ms,
         t => t.min(timeout_cap_ms),
     };
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms.max(1));
+    let now = tokio::time::Instant::now();
+    let deadline = now + Duration::from_millis(timeout_ms.max(1));
+    let deadline = request_deadline.map_or(deadline, |request| request.min(deadline));
+    if deadline <= now {
+        record_wasm_callout(metrics_label, "error");
+        return failure;
+    }
 
     let attempt = async {
         let _permit = permits.acquire().await.map_err(|_| ())?;
+        // A permit can become ready at the timeout boundary. Recheck before
+        // constructing/sending the request even if timeout_at polls us first.
+        if tokio::time::Instant::now() >= deadline {
+            return Err(());
+        }
         let client = client?;
         execute_callout_attempt(callout, client).await
     };
@@ -214,11 +245,27 @@ fn build_callout_request(callout: PendingCallout, client: &reqwest::Client) -> R
     Ok((token, req))
 }
 
+/// Check before copying. Lossy UTF-8 can expand values at most threefold,
+/// so payload copies stay below 192 KiB plus the fixed status and 1,025 pairs.
+fn validate_response_headers(headers: &reqwest::header::HeaderMap) -> Result<(), ()> {
+    if headers.len() > 1024 {
+        return Err(());
+    }
+    let total = headers.iter().try_fold(0usize, |total, (name, value)| {
+        total.checked_add(name.as_str().len())?.checked_add(value.len())
+    });
+    if total.is_none_or(|total| total > 64 * 1024) {
+        return Err(());
+    }
+    Ok(())
+}
+
 async fn execute_callout_attempt(callout: PendingCallout, client: &reqwest::Client) -> Result<CalloutResponse, ()> {
     let (token, req) = build_callout_request(callout, client)?;
     let resp = client.execute(req).await.map_err(|_| ())?;
 
     let status = resp.status().as_u16();
+    validate_response_headers(resp.headers())?;
     let mut headers = Vec::with_capacity(resp.headers().len() + 1);
     headers.push((":status".to_string(), status.to_string()));
     for (name, value) in resp.headers() {

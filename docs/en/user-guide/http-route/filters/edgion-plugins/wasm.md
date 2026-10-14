@@ -603,3 +603,41 @@ Yes — via `proxy_{get,set}_shared_data`, which is shared across pooled VMs bel
 Response map operations and local reply headers follow this policy. Replace-all replaces editable fields while retaining protected fields; allowed duplicate `Set-Cookie` values remain separate. Rejected operations retain existing best-effort handling.
 
 [Response header policy](../gateway-api/response-header-modifier.md#response-header-policy).
+
+
+## Process resource admission and retirement
+
+Set the restart-only guest allocation budget in local Gateway YAML:
+
+```yaml
+gateway:
+  wasm_guest_memory_bytes: 536870912 # 512 MiB, default
+```
+
+The positive byte budget accounts linear memories and table slots across all
+plugins and generations, including idle instances and background timers. A failed
+guest growth returns the normal Wasm failure result; inability to initialize a
+Store uses the existing load failure and `failOpen` behavior. The 128-instance
+process limit and per-runtime `maxActiveRequests` remain separate controls.
+Shared memories are unsupported. This budget does not cap process RSS, compiler
+heap, Engine virtual reservations, retained allocator pages, GC heap or host
+payloads; size the deployment with headroom for those separate owners.
+
+All source types share four preparation slots with immediate overload rejection.
+They cover source acquisition and compilation, including blocking work that is
+still running after its caller is cancelled. Existing retry/negative-cache
+behavior applies; there is no unbounded preparation waiter queue.
+
+Request callouts use the earlier of their configured timeout and the applicable
+route request/gRPC deadline. The deadline includes network permit waiting and
+is not restarted between serial callouts. An expired request does not receive
+another guest callout callback. Response-header snapshots reject more than 1,024
+headers or 64 KiB of raw name/value bytes before copying (lossy UTF-8 expansion
+can use up to three times that payload size). These limits supplement the existing
+256 KiB callout body cap and egress restrictions.
+
+Replacing or destroying a runtime drains its idle pool immediately. Existing
+requests retain their own generation until terminal cleanup, but cannot return
+instances into the retired pool. No active request or timer root is reset merely
+to reclaim a high memory watermark. Valid streaming responses gain no new short
+lifetime timeout. This does not guarantee fair allocation among active plugins.

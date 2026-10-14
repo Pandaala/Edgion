@@ -69,8 +69,11 @@ manifest parsing and gzip/tar extraction. Both manifest/index parse call sites
 and compatibility extraction in `oci/mod.rs::fetch_oci_inner` invoke
 `blocking_stage`. The helper moves the work closure into `spawn_blocking`;
 artifact handles share their immutable allocation rather than copying bodies.
-`vm_manager.rs::load_inner_with_linker` consumes OCI bytes through the same helper
-for digest validation, compatibility analysis, and compilation.
+`vm_manager.rs::load_inner_with_linker` consumes OCI bytes through the all-source
+`admission::prepare_blocking` helper for digest validation, compatibility analysis,
+and compilation. It retains the OCI pipeline permit beside the result as well as
+the process preparation permit; cancellation releases neither before the work
+and its result are destroyed.
 
 The pipeline permit survives asynchronous cancellation inside the blocking
 closure and beside its output. Abandoned output drops before the permit,

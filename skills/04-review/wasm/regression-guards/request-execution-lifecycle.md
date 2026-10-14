@@ -57,3 +57,31 @@ Evidence lives in the real Rust SDK `lifecycle-demo` fixture and gateway tests
 `attached_test.rs`, `request_test.rs`, `vm_manager_test.rs`, and `host_abi_test.rs`.
 Re-evaluate when introducing multiple concurrent HTTP contexts per instance,
 response mutations, deferred completion, or shared timer/request root semantics.
+
+
+## Aggregate admission and retired pools
+
+Task 03 implementation adds restart-only `gateway.wasm_guest_memory_bytes`
+(default 512 MiB) for aggregate logical linear-memory/table-slot allocations.
+The limiter reserves before growth and rolls back only the current failed growth.
+An external charge guard outlives Store destruction, including initialization
+errors; the same budget spans independent configured runtimes and OCI generations.
+Shared memories are disabled because Wasmtime does not invoke this limiter for
+them. The Store memory/table/instance counts match the single-memory/table
+pooling profile. This is not an RSS, GC heap, compiler-heap or host-payload budget.
+
+Four immediate preparation slots cover all source types before decoding/fetch.
+Blocking work and undelivered results retain admission after caller cancellation.
+OCI artifact ownership/permits continue through compilation independently.
+Runtime destruction and OCI replacement serialize retirement with pool returns,
+drain idle Stores and reject late repooling. Gauge contributions clear without
+reattaching an expired metric epoch. Active old-generation executions stay valid.
+
+Callout deadlines fold the existing absolute route/gRPC bound into every network
+wait without restarting it between calls; expiry poisons pending guest tokens
+before any late callback. Tick calls have no request deadline. Callout response
+header snapshots validate count/byte bounds before owned copies. Neither change
+adds a response aggregate, a short SSE lifetime nor a new failure-policy term.
+
+Regression sources: `admission_test.rs`, `vm_manager_test.rs`, `callout_test.rs`
+and the existing request/attached SDK lifecycle tests under the Gateway unit tree.

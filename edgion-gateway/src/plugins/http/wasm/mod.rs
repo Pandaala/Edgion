@@ -2,6 +2,7 @@
 //! vm_manager.rs for plugin-owned runtimes / instance pooling, host_abi.rs for the
 //! ABI bridge.
 
+pub mod admission;
 mod attached;
 mod callbacks;
 pub mod callout;

@@ -101,7 +101,7 @@ async fn unavailable_guarded_client_fails_without_network() {
     let token = callout.token;
     let permits = tokio::sync::Semaphore::new(1);
 
-    let response = execute_callout_with_client_and_permits(callout, 1_000, "test", Err(()), &permits).await;
+    let response = execute_callout_with_client_and_permits(callout, 1_000, "test", Err(()), &permits, None).await;
 
     assert_eq!(response.token, token);
     assert!(response.headers.is_empty());
@@ -120,7 +120,7 @@ async fn zero_permit_semaphore_is_bounded_by_callout_deadline() {
 
     let response = tokio::time::timeout(
         Duration::from_secs(2),
-        execute_callout_with_client_and_permits(callout, 25, "test", Ok(&client), &permits),
+        execute_callout_with_client_and_permits(callout, 25, "test", Ok(&client), &permits, None),
     )
     .await
     .expect("callout deadline must bound semaphore wait");
@@ -139,7 +139,7 @@ async fn held_permit_until_deadline_prevents_network_request() {
 
     let response = tokio::time::timeout(
         Duration::from_secs(2),
-        execute_callout_with_client_and_permits(callout, 1_000, "test", Ok(&client), &permits),
+        execute_callout_with_client_and_permits(callout, 1_000, "test", Ok(&client), &permits, None),
     )
     .await
     .expect("callout deadline must expire");
@@ -163,7 +163,7 @@ async fn permit_released_before_deadline_allows_real_callout() {
     let held = permits.acquire().await.expect("hold only permit");
     let callout = callout(server.uri(), 1_000);
 
-    let run_callout = execute_callout_with_client_and_permits(callout, 1_000, "test", Ok(&client), &permits);
+    let run_callout = execute_callout_with_client_and_permits(callout, 1_000, "test", Ok(&client), &permits, None);
     let release = async move {
         tokio::task::yield_now().await;
         drop(held);
@@ -202,7 +202,7 @@ async fn body_stream_timeout_drops_in_flight_permit_without_leak() {
     let call_client = client.clone();
     let call_permits = permits.clone();
     let call_task = tokio::spawn(async move {
-        execute_callout_with_client_and_permits(callout, 1_000, "test", Ok(&call_client), &call_permits).await
+        execute_callout_with_client_and_permits(callout, 1_000, "test", Ok(&call_client), &call_permits, None).await
     });
 
     tokio::time::timeout(Duration::from_secs(2), headers_sent_rx)
@@ -252,8 +252,102 @@ async fn early_resume_counts_taken_remainder_and_poisoned_vm_is_not_reused() {
         lease.state_mut().frame.pending_callouts.push(pending);
     }
     let id = lease.context_id().unwrap();
-    let outcome = resolve_callouts_on(&mut lease, id, 100, "callout-test").await.unwrap();
+    let outcome = resolve_callouts_on(&mut lease, id, 100, "callout-test", None)
+        .await
+        .unwrap();
     assert_eq!((outcome.delivered, outcome.leftover), (1, 2));
+    assert!(!lease.is_healthy());
+    drop(lease);
+    assert_eq!(entry.pool_len(), 0);
+}
+
+#[tokio::test]
+async fn expired_request_and_waiting_cancellation_do_not_consume_network_capacity() {
+    let permits = tokio::sync::Semaphore::new(0);
+    let expired = tokio::time::Instant::now();
+    let response = execute_callout_with_client_and_permits(
+        callout("https://example.test".into(), 1000),
+        1000,
+        "deadline-test",
+        Err(()),
+        &permits,
+        Some(expired),
+    )
+    .await;
+    assert!(response.headers.is_empty());
+    assert_eq!(response.token, 7);
+    let future = execute_callout_with_client_and_permits(
+        callout("https://example.test".into(), 1000),
+        1000,
+        "deadline-test",
+        Err(()),
+        &permits,
+        None,
+    );
+    let mut future = Box::pin(future);
+    assert!(futures::poll!(future.as_mut()).is_pending());
+    drop(future);
+    permits.add_permits(1);
+    let held = permits.try_acquire().expect("cancelled waiter must be removed");
+    // Timeout also cancels a waiter without creating a deliverable late callback.
+    let response = execute_callout_with_client_and_permits(
+        callout("https://example.test".into(), 1000),
+        1000,
+        "deadline-test",
+        Err(()),
+        &permits,
+        Some(tokio::time::Instant::now() + Duration::from_millis(1)),
+    )
+    .await;
+    assert!(response.headers.is_empty());
+    drop(held);
+}
+
+#[test]
+fn response_header_snapshot_rejects_bytes_and_count_before_copying() {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        "x",
+        reqwest::header::HeaderValue::from_bytes(&vec![b'a'; 65535]).unwrap(),
+    );
+    assert!(validate_response_headers(&headers).is_ok());
+    headers.append("x", reqwest::header::HeaderValue::from_static("a"));
+    assert!(validate_response_headers(&headers).is_err());
+    headers.clear();
+    for _ in 0..1024 {
+        headers.append("x", reqwest::header::HeaderValue::from_static(""));
+    }
+    assert!(validate_response_headers(&headers).is_ok());
+    headers.append("x", reqwest::header::HeaderValue::from_static(""));
+    assert!(validate_response_headers(&headers).is_err());
+}
+
+#[tokio::test]
+async fn expired_request_abandons_tokens_without_guest_callback() {
+    use super::super::vm_manager::{tests::actual_runtime, CalloutGrant, WasmVmManager};
+    let guest = r#"(module (memory (export "memory") 1)
+        (func (export "proxy_on_request_headers") (param i32 i32 i32) (result i32) i32.const 1)
+        (func (export "proxy_on_http_call_response") (param i32 i32 i32 i32 i32) unreachable))"#;
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(file.path(), wat::parse_str(guest).unwrap()).unwrap();
+    let mut config = edgion_resources::plugin_configs::WasmConfig::default();
+    config.source.file = Some(file.path().to_string_lossy().into_owned());
+    let manager = WasmVmManager::new_for_test();
+    let runtime = actual_runtime(&manager, &config, CalloutGrant::none());
+    let entry = runtime.get_or_load().await.unwrap();
+    let mut lease = entry.acquire(100).unwrap();
+    lease.open_request(0, true).unwrap();
+    lease
+        .state_mut()
+        .frame
+        .pending_callouts
+        .push(callout("https://example.test".into(), 1000));
+    let id = lease.context_id().unwrap();
+    let error = resolve_callouts_on(&mut lease, id, 1000, "expired", Some(tokio::time::Instant::now()))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error, "wasm request deadline expired");
     assert!(!lease.is_healthy());
     drop(lease);
     assert_eq!(entry.pool_len(), 0);

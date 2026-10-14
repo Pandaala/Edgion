@@ -562,6 +562,9 @@ impl EdgionGatewayCli {
             Duration::from_millis(outbound_egress_dns_cache_ttl_ms),
         );
 
+        crate::plugins::http::wasm::admission::initialize(config.gateway.wasm_guest_memory_bytes)
+            .map_err(anyhow::Error::msg)?;
+
         // 4f. Wasm OCI artifacts are retained only in bounded process memory.
         {
             use crate::plugins::http::wasm::oci::cache::{configure_oci_memory_cache, OciMemoryCacheConfig};

@@ -95,7 +95,7 @@ pub struct OciFetched {
     pub bytes: ArtifactBytes,
     /// Held through the caller's byte-consuming compile stage, including
     /// abandoned blocking work after async cancellation.
-    pub(super) pipeline: Arc<OwnedSemaphorePermit>,
+    pub(super) pipeline: Arc<OciPipeline>,
     /// The digest (`sha256:<hex>`) that the image reference resolves to at
     /// the TOP level — an image manifest digest, or an index digest when the
     /// reference points at a multi-platform index. This is the value the
@@ -106,30 +106,45 @@ pub struct OciFetched {
     pub manifest_digest: String,
 }
 
-/// Fetch the wasm bytes for `spec`, memory-cache-first. The caller
-/// (`vm_manager`) already serializes same-key loads via the `LoadSlot`.
-pub async fn fetch_oci_bytes(spec: &WasmOciSpec) -> Result<OciFetched, String> {
-    let pipeline = acquire_pipeline().await?;
+/// Paired admission follows every OCI stage and its owned result.
+#[derive(Debug)]
+pub(super) struct OciPipeline {
+    _network: OwnedSemaphorePermit,
+    _preparation: Arc<OwnedSemaphorePermit>,
+}
+
+/// Fetch bytes under the caller's existing all-source preparation admission.
+/// The caller serializes same-runtime loads through its LoadSlot.
+pub(super) async fn fetch_oci_bytes(
+    spec: &WasmOciSpec,
+    preparation: Arc<OwnedSemaphorePermit>,
+) -> Result<OciFetched, String> {
+    let pipeline = acquire_pipeline(preparation).await?;
     let image = OciImageRef::parse(&spec.image).map_err(|e| format!("source.oci.image: {e}"))?;
     let session = RegistrySession::new(&image, spec)?;
     fetch_oci_inner(session, image, pipeline).await
 }
 
-async fn acquire_pipeline() -> Result<Arc<OwnedSemaphorePermit>, String> {
+async fn acquire_pipeline(preparation: Arc<OwnedSemaphorePermit>) -> Result<Arc<OciPipeline>, String> {
     static PIPELINES: OnceLock<Arc<Semaphore>> = OnceLock::new();
     PIPELINES
         .get_or_init(|| Arc::new(Semaphore::new(4)))
         .clone()
         .acquire_owned()
         .await
-        .map(Arc::new)
+        .map(|network| {
+            Arc::new(OciPipeline {
+                _network: network,
+                _preparation: preparation,
+            })
+        })
         .map_err(|_| "Wasm OCI acquisition capacity is closed".to_string())
 }
 
 /// Every CPU stage captures a lease clone so aborting its async waiter cannot
 /// admit another pipeline while this stage still owns full artifact buffers.
 pub(super) async fn blocking_stage<T: Send + 'static>(
-    pipeline: &Arc<OwnedSemaphorePermit>,
+    pipeline: &Arc<OciPipeline>,
     work: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
     let pipeline = pipeline.clone();
@@ -146,7 +161,7 @@ pub(super) async fn blocking_stage<T: Send + 'static>(
 async fn fetch_oci_inner(
     mut session: RegistrySession,
     image: OciImageRef,
-    pipeline: Arc<OwnedSemaphorePermit>,
+    pipeline: Arc<OciPipeline>,
 ) -> Result<OciFetched, String> {
     // Manifest: memory-first for digest refs (zero network on a hit); tag refs
     // resolve over the network.
@@ -198,7 +213,8 @@ pub async fn resolve_manifest_digest(spec: &WasmOciSpec) -> Result<String, Strin
     if let Some(d) = &image.digest {
         return Ok(d.clone());
     }
-    let pipeline = acquire_pipeline().await?;
+    let preparation = super::admission::try_prepare()?;
+    let pipeline = acquire_pipeline(preparation).await?;
     let mut session = RegistrySession::new(&image, spec)?;
     let (_, digest) = fetch_manifest(&mut session, &image, &pipeline).await?;
     Ok(digest)
@@ -577,7 +593,7 @@ fn verify_digest(bytes: &[u8], digest: &str) -> Result<(), String> {
 async fn fetch_manifest(
     session: &mut RegistrySession,
     image: &OciImageRef,
-    pipeline: &Arc<OwnedSemaphorePermit>,
+    pipeline: &Arc<OciPipeline>,
 ) -> Result<(ArtifactBytes, String), String> {
     if let Some(digest) = &image.digest {
         let bytes = fetch_manifest_by_digest(session, digest, pipeline).await?;
@@ -598,7 +614,7 @@ async fn fetch_manifest(
 async fn fetch_manifest_by_digest(
     session: &mut RegistrySession,
     digest: &str,
-    pipeline: &Arc<OwnedSemaphorePermit>,
+    pipeline: &Arc<OciPipeline>,
 ) -> Result<ArtifactBytes, String> {
     let url = format!("{}/v2/{}/manifests/{}", session.base, session.repo, digest);
     cached_verified_fetch(session.cache.clone(), CacheKind::Manifest, digest, pipeline, || {
@@ -610,7 +626,7 @@ async fn fetch_manifest_by_digest(
 async fn fetch_blob(
     session: &mut RegistrySession,
     digest: &str,
-    pipeline: &Arc<OwnedSemaphorePermit>,
+    pipeline: &Arc<OciPipeline>,
 ) -> Result<ArtifactBytes, String> {
     let url = format!("{}/v2/{}/blobs/{}", session.base, session.repo, digest);
     cached_verified_fetch(session.cache.clone(), CacheKind::Blob, digest, pipeline, || {
@@ -625,7 +641,7 @@ async fn cached_verified_fetch<F, Fut>(
     cache: CacheAccess,
     kind: CacheKind,
     digest: &str,
-    pipeline: &Arc<OwnedSemaphorePermit>,
+    pipeline: &Arc<OciPipeline>,
     load: F,
 ) -> Result<ArtifactBytes, String>
 where

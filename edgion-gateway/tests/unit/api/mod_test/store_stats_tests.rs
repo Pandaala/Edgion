@@ -32,6 +32,7 @@ fn store_stats_response_serializes() {
         metrics: Default::default(),
         plugin_publication: Default::default(),
         plugin_publication_inventory: Default::default(),
+        wasm_admission: crate::plugins::http::wasm::admission::stats(),
         wasm_oci_cache: crate::plugins::http::wasm::oci::cache::OciMemoryCacheStats {
             entries: 0,
             keys: Vec::new(),
