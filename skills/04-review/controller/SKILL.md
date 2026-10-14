@@ -15,6 +15,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Structured file initialization envelopes](regression-guards/structured-file-init-envelope.md)
+
 - [Configuration writer error has one export](regression-guards/conf-writer-error-single-export.md)
 - [Reference-manager APIs use canonical names](regression-guards/reference-manager-canonical-surface.md)
 - [TLSRoute canonical API ingress](regression-guards/tls-route-canonical-api-ingress.md)

@@ -327,3 +327,121 @@ async fn second_watcher_generation_replays_existing_resources() {
     let second = FileSystemWatcher::new(dir.path().to_path_buf(), registry, None);
     assert_eq!(init_apply_count(&second).await, 1);
 }
+
+// ARCH-047: exercise the real scan and channel boundary, including misleading
+// nested kinds. A successful envelope lookup alone would not prove dispatch.
+#[tokio::test]
+async fn structured_root_kind_controls_init_channel() {
+    let documents = [
+        "apiVersion: gateway.networking.k8s.io/v1\n'kind': 'HTTPRoute'\nmetadata: {name: route, namespace: default}\nspec: {}\n",
+        r#"{"spec":{"rules":[{"backendRefs":[{"name":"backend","kind":"Service","port":80}]}]},"apiVersion":"gateway.networking.k8s.io/v1","kind":"HTTPRoute","metadata":{"name":"route","namespace":"default"}}"#,
+        "kind: HTTPRoute\napiVersion: gateway.networking.k8s.io/v1\nmetadata: {name: route, namespace: default}\nspec: {rules: [{backendRefs: [{name: backend, kind: Service, port: 80}]}]}\n",
+        "metadata: {name: route, namespace: default}\napiVersion: gateway.networking.k8s.io/v1\n\"kind\": HTTPRoute\nspec: {}\n",
+    ];
+    for document in documents {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("HTTPRoute_default_route.yaml");
+        std::fs::write(&path, document).unwrap();
+        let registry = Arc::new(PathRegistry::new());
+        let watcher = FileSystemWatcher::new(dir.path().to_path_buf(), registry.clone(), None);
+        let mut routes = watcher.subscribe("HTTPRoute").await;
+        let mut services = watcher.subscribe("Service").await;
+        watcher.prime().await.unwrap();
+        assert!(routes.try_recv().is_err());
+        assert!(services.try_recv().is_err());
+        assert_eq!(
+            registry.winner_of(&ResourceKey::new("HTTPRoute", "default/route")),
+            Some(path.clone())
+        );
+        watcher.dispatch_init(&["HTTPRoute", "Service"]).await.unwrap();
+        assert!(matches!(routes.try_recv().unwrap(), FileSystemEvent::Init));
+        match routes.try_recv().unwrap() {
+            FileSystemEvent::InitApply { path: actual, content } => {
+                assert_eq!(actual, path);
+                assert_eq!(content, document);
+            }
+            event => panic!("unexpected route event: {event:?}"),
+        }
+        assert!(matches!(routes.try_recv().unwrap(), FileSystemEvent::InitDone));
+        assert!(routes.try_recv().is_err());
+        assert!(matches!(services.try_recv().unwrap(), FileSystemEvent::Init));
+        assert!(matches!(services.try_recv().unwrap(), FileSystemEvent::InitDone));
+        assert!(services.try_recv().is_err());
+        assert!(watcher.primed.lock().as_ref().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn invalid_init_envelopes_do_not_register_or_dispatch() {
+    for document in [
+        "kind: HTTPRoute\nmetadata: [",
+        "kind: UnknownResource\nmetadata: {}",
+        "kind: 42\nmetadata: {}",
+        "kind: null\nmetadata: {}",
+        "kind: [HTTPRoute]\nmetadata: {}",
+        "metadata: {}\nspec: {kind: HTTPRoute}",
+        "kind: HTTPRoute",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("HTTPRoute_default_route.yaml");
+        std::fs::write(&path, document).unwrap();
+        let registry = Arc::new(PathRegistry::new());
+        let watcher = FileSystemWatcher::new(dir.path().to_path_buf(), registry.clone(), None);
+        let mut routes = watcher.subscribe("HTTPRoute").await;
+        watcher.prime().await.unwrap();
+        assert!(registry
+            .winner_of(&ResourceKey::new("HTTPRoute", "default/route"))
+            .is_none());
+        watcher.dispatch_init(&["HTTPRoute"]).await.unwrap();
+        assert!(matches!(routes.try_recv().unwrap(), FileSystemEvent::Init));
+        assert!(matches!(routes.try_recv().unwrap(), FileSystemEvent::InitDone));
+        assert!(routes.try_recv().is_err());
+    }
+}
+
+#[tokio::test]
+async fn repaired_structured_envelope_reloads_with_filename_collision_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let first_dir = dir.path().join("a");
+    let second_dir = dir.path().join("b");
+    std::fs::create_dir_all(&first_dir).unwrap();
+    std::fs::create_dir_all(&second_dir).unwrap();
+    let winner = first_dir.join("HTTPRoute_default_route.yaml");
+    let loser = second_dir.join("HTTPRoute_default_route.yaml");
+    std::fs::write(&winner, "kind: HTTPRoute\nmetadata: [").unwrap();
+    let registry = Arc::new(PathRegistry::new());
+    let key = ResourceKey::new("HTTPRoute", "default/route");
+    let first = FileSystemWatcher::new(dir.path().to_path_buf(), registry.clone(), None);
+    first.prime().await.unwrap();
+    assert!(registry.winner_of(&key).is_none());
+
+    // Scan identity stays filename-owned. Typed processing, not prime, rejects
+    // the deliberate metadata mismatch; the second file remains a conflict.
+    let repaired = "apiVersion: gateway.networking.k8s.io/v1\n'kind': HTTPRoute\nmetadata: {name: different, namespace: other}\nspec: {}";
+    std::fs::write(&winner, repaired).unwrap();
+    std::fs::write(&loser, repaired).unwrap();
+    for _ in 0..2 {
+        let watcher = FileSystemWatcher::new(dir.path().to_path_buf(), registry.clone(), None);
+        let mut routes = watcher.subscribe("HTTPRoute").await;
+        watcher.prime().await.unwrap();
+        assert_eq!(registry.winner_of(&key), Some(winner.clone()));
+        assert!(registry
+            .winner_of(&ResourceKey::new("HTTPRoute", "other/different"))
+            .is_none());
+        let conflicts = registry.snapshot_conflicts();
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].losers, vec![loser.clone()]);
+        watcher.dispatch_init(&["HTTPRoute"]).await.unwrap();
+        assert!(matches!(routes.try_recv().unwrap(), FileSystemEvent::Init));
+        match routes.try_recv().unwrap() {
+            FileSystemEvent::InitApply { path, content } => {
+                assert_eq!(path, winner);
+                assert_eq!(content, repaired);
+            }
+            event => panic!("unexpected route event: {event:?}"),
+        }
+        assert!(matches!(routes.try_recv().unwrap(), FileSystemEvent::InitDone));
+        assert!(routes.try_recv().is_err());
+        assert!(watcher.primed.lock().as_ref().unwrap().is_empty());
+    }
+}

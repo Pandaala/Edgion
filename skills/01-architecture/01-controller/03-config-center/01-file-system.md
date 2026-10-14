@@ -80,16 +80,9 @@ start(shutdown_handle)
     │   ├── spawn_all_controllers (shared with EtcdController):
     │   │   ├── FileSystemWatcher.prime(): scan dir once → resolve key collisions →
     │   │   │   swap PathRegistry → snapshot files-by-kind (NO events emitted)
-    │   │   ├── Phase 1: spawn base resource controllers
-    │   │   │   (GatewayClass, Gateway, Secret, ConfigMap, ReferenceGrant, Service, EndpointSlice)
-    │   │   ├── dispatch_init(phase1_kinds): emit Init/InitApply/InitDone for Phase-1 kinds from the snapshot
-    │   │   ├── wait_kinds_ready(phase1_kinds, 15s)  ← real gate: the init pump has already run,
-    │   │   │   so Phase-1 processors reach ready and Phase 2 only starts after (no more dead 15s wait)
-    │   │   ├── Phase 2: spawn dependent resource controllers
-    │   │   │   (HTTPRoute, GRPCRoute, TCPRoute, UDPRoute, TLSRoute, EdgionTls,
-    │   │   │    BackendTLSPolicy, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData,
-    │   │   │    LinkSys, EdgionAcme, EdgionGatewayConfig, EdgionBackendTrafficPolicy)
-    │   │   └── dispatch_init(phase2_kinds): emit init for Phase-2 kinds from the same snapshot
+    │   │   ├── Spawn provider controllers → dispatch_init(provider_kinds) → wait for readiness
+    │   │   ├── Spawn Gateway → dispatch_init(gateway_kinds) → wait for readiness
+    │   │   └── Spawn dependents → dispatch_init(dependent_kinds)
     │   └── FileSystemWatcher.run_runtime()
     │       └── runtime_phase: PollWatcher (adaptive interval) → Apply/Delete dispatched directly
     ├── 3. wait_registry_ready(30s)
@@ -106,18 +99,33 @@ start(shutdown_handle)
 ### Init Phase Details
 
 The init phase is split into a snapshot step (`prime`) and a per-phase dispatch
-step (`dispatch_init`), so `spawn_all_controllers` can pump Phase-1 init and gate
-on Phase-1 readiness **before** spawning Phase 2 (the K8s backend achieves the
-same ordering via its per-kind informers).
+step (`dispatch_init`). `non_kube_common::spawn_all_controllers` owns the
+provider, Gateway, and dependent ordering and gates the next phase on readiness.
 
 `FileSystemWatcher.prime()` performs one synchronous directory scan and stores a
 snapshot — it emits **no** events:
 
 1. WalkDir recursively traverses the configuration directory
 2. Filter `.yaml` / `.yml` files, exclude `.status` files
-3. Read file contents and identify Kind via `ResourceKind::from_content()`
+3. Read file contents and extract the structured root kind through Resources
+   `resource::meta::extract_resource_metadata`, then map the string through
+   `ResourceKind::from_kind_name`
 4. Resolve key collisions into a new `PathRegistry` generation and swap it atomically
 5. Store the winning `(path, content)` list grouped by Kind for `dispatch_init`
+
+The envelope helper is shared with Admin, CLI and FS storage. Quoted YAML keys,
+flow mappings and JSON field order therefore do not change the selected channel;
+nested `kind` fields never select it (ARCH-047). Unparseable documents, absent
+metadata, and absent/non-string/unknown root kinds are skipped. Metadata presence
+alone is not schema validation: filename identity, source API version and typed
+resource checks still run in the resource controller. The filename remains the
+registry key even when content metadata differs.
+
+Extraction builds a temporary document tree and releases it before returning.
+The snapshot retains only the existing raw text; dispatch transfers subscribed
+kinds out of the snapshot and runtime startup discards leftovers. This cold-scan
+choice avoids a second parser policy; it does not establish a memory bound or
+change gateway request processing. See the [regression guard](../../../04-review/controller/regression-guards/structured-file-init-envelope.md).
 
 `FileSystemWatcher.dispatch_init(kinds)` replays the snapshot for exactly the
 requested kinds:
@@ -166,18 +174,16 @@ processing time; do not assume a universal 1.5-second bound for large trees.
 **Known limitations**
 
 - **Delete-then-immediately-recreate within the same 1s window is coalesced into a single Modify**: PollWatcher only sees snapshot diffs; the intermediate deleted state is invisible. If a ConfHandler relies on diff computation between on_delete / on_change (for example, to clean up reverse references), it must instead compare "old vs new value" inside `parse()` rather than relying on on_delete. See the implementations in `reference_grant.rs` and `backend_tls_policy.rs` for the pattern.
-- The runtime PollWatcher establishes its baseline only after `prime()` has scanned, so a file created/changed in the window between the `prime()` scan and the `run_runtime()` baseline is not seen until its next change. This window is now slightly wider — it spans the Phase-1 `dispatch_init` + readiness wait — and remains an **accepted** limitation of the dev/test FS backend. The etcd backend has no equivalent: its watch resumes from the primed revision (`R + 1`) and replays that gap. See `docs/superpowers/specs/2026-07-20-etcd-fs-phase1-ordering-design.md`.
+- The runtime PollWatcher establishes its baseline only after `prime()` has scanned, so a file created/changed in the window between the `prime()` scan and the `run_runtime()` baseline is not seen until its next change. This window is now slightly wider — it spans the provider/Gateway `dispatch_init` and readiness waits — and remains an **accepted** limitation of the dev/test FS backend. The etcd backend has no equivalent: its watch resumes from the primed revision (`R + 1`) and replays that gap. See `docs/superpowers/specs/2026-07-20-etcd-fs-phase1-ordering-design.md`.
 
 ## Phased Initialization
 
-Like KubernetesCenter, FileSystemCenter uses a two-phase initialization:
-
-| Phase | Resources | Description |
-|-------|-----------|-------------|
-| Phase 1 (base) | GatewayClass, Gateway, Secret, ConfigMap, ReferenceGrant, Service, EndpointSlice | Other resources query these during `parse()` |
-| Phase 2 (dependent) | Remaining kinds in `non_kube_common::spawn_all_controllers`, including routes, policies, extensions, ACME, and LinkSys | Started after Phase 1 completes |
-
-Phase 2 waits on `runtime.processor_registry` for Phase 1 readiness — a **real** gate as of the 2026-07-20 phase-1-ordering fix. Before that fix the init pump (`init_phase`) started only after `spawn_all_controllers` returned, so `wait_kinds_ready` always timed out (a dead 15 s per start / leader promotion) and provided no ordering; `prime` + phased `dispatch_init` now run the pump inline so the wait resolves promptly.
+FileSystemCenter uses provider, Gateway and dependent phases. The authoritative
+kind lists and readiness gates live in `non_kube_common::spawn_all_controllers`.
+Each phase dispatches its subscribed kinds from the same scan snapshot; an empty
+kind still receives Init/InitDone. Provider and Gateway readiness failures abort
+startup instead of advancing to dependents. This extraction change does not alter
+that ordering or the single-worker completion guard.
 
 ## LocalRawStore Maintenance
 
@@ -221,22 +227,16 @@ or promise cross-kind atomicity.
 
 ## Multi-version Resource Compatibility
 
-FileSystemCenter has no API Server to perform CRD multi-version conversion.
-The current contract therefore accepts only the repository's canonical API
-versions at the file-read boundary. Do not add legacy deserializers or
-conversion shims for older YAML in this pre-release project.
+FileSystemCenter has no API Server to perform resource-version conversion.
+`common::parse_resource_content_offline` validates the submitted kind and API
+version against the shared Gateway API source inventory, validates applicable
+alpha schemas, and converts supported sources to the canonical model. The same
+parser is used for initial input and worker re-reads. See the
+[API version upgrade contract](../../../08-kubernetes/04-api-version-upgrade.md).
 
-- The watcher still dispatches by `kind`, not by `apiVersion`
-- After `ResourceController` reads YAML, it must first identify the `apiVersion`
-- Reject a noncanonical `apiVersion` with a clear validation error before writing
-  to `LocalRawStore` or entering the workqueue.
-- When the worker re-reads the file after dequeue, it must reuse the same
-  canonical parse-and-validate logic.
-
-Recommended principles:
-
-- Each FileSystem controller maintains only one internal type
-- Status persistence and downstream Gateway sync use the canonical type
+Envelope extraction only selects a kind channel; it neither selects a source
+adapter nor permits an otherwise unsupported API version. Typed parsing and
+filename identity validation still precede raw-store insertion and processing.
 
 ## Key Files
 

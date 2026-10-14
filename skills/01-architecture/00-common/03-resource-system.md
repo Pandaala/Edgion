@@ -56,6 +56,21 @@ The auto-generated enum contains all 20 resource types:
 
 `GatewayClass`, `EdgionGatewayConfig`, `Gateway`, `HTTPRoute`, `GRPCRoute`, `TCPRoute`, `TLSRoute`, `UDPRoute`, `Service`, `EndpointSlice`, `Secret`, `EdgionTls`, `EdgionPlugins`, `EdgionStreamPlugins`, `EdgionConfigData`, `LinkSys`, `ReferenceGrant`, `BackendTLSPolicy`, `EdgionAcme`, `ConfigMap`
 
+## Untyped resource envelope
+
+`edgion-resources::resource::meta::extract_resource_metadata` owns structured
+YAML/JSON extraction of the root kind and metadata identity before a caller knows
+the resource type. Controller Admin, FS storage, FS startup/reload scanning and
+CLI apply/delete share it. `ResourceKind::from_kind_name` separately maps kind
+strings and existing aliases; wire discriminants and registration stay unchanged.
+
+The helper requires a metadata key, not a validated metadata object, and returns
+optional string fields. It tries YAML first, then JSON on parse failure; typed
+validation belongs to the consumer. Its temporary document tree is dropped before
+returning, with no opaque spec retained in the result. Do not reintroduce lexical
+kind scanning: nested fields and quoting cannot identify the root envelope. See
+[ARCH-047's regression boundary](../../04-review/controller/regression-guards/structured-file-init-envelope.md).
+
 ## Full resource type table
 
 | Category | Resource | Cluster-scoped | Synced to Gateway | Description |

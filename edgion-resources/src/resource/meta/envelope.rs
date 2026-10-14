@@ -3,7 +3,7 @@
 //! Pulls the `kind`, `namespace`, and `name` identity fields out of raw
 //! YAML/JSON resource documents before they have been typed into a specific
 //! schema. Used by the controller's admin API and file-system storage, and by
-//! the CLI's apply/delete commands to dispatch on `kind` ahead of typed
+//! the file watcher startup/reload scan and the CLI's apply/delete commands to dispatch on `kind` ahead of typed
 //! deserialization.
 
 /// Resource metadata extracted from YAML/JSON content.
@@ -23,7 +23,8 @@ pub struct ResourceMetadata {
 /// requiring a specific type.
 ///
 /// Tries YAML first, then falls back to JSON. Returns `None` if neither parses
-/// or if the document has no `metadata` object. Individual fields inside the
+/// or if the document has no `metadata` key. The value need not be a mapping;
+/// this extraction is not typed resource validation. Individual fields inside the
 /// returned `ResourceMetadata` may still be `None` when absent.
 pub fn extract_resource_metadata(content: &str) -> Option<ResourceMetadata> {
     let value: serde_yaml::Value = match serde_yaml::from_str(content) {

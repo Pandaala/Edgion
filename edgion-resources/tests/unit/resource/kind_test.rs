@@ -11,3 +11,15 @@ fn edgion_backend_exclusively_owns_wire_value_23() {
     );
     assert_eq!(ResourceKind::from_kind_name("UnknownResource"), None);
 }
+
+#[test]
+fn kind_name_mapping_preserves_case_and_aliases() {
+    for (name, expected) in [
+        ("hTtPrOuTe", ResourceKind::HTTPRoute),
+        ("EdgionGwConfig", ResourceKind::EdgionGatewayConfig),
+        ("ReferenceGrants", ResourceKind::ReferenceGrant),
+        ("BackendTlsPolicies", ResourceKind::BackendTLSPolicy),
+    ] {
+        assert_eq!(ResourceKind::from_kind_name(name), Some(expected));
+    }
+}

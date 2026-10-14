@@ -116,28 +116,6 @@ impl ResourceKind {
 const _: () = ResourceKind::_compile_time_sync_check();
 
 impl ResourceKind {
-    /// Extract resource kind from content (supports both YAML and JSON formats)
-    pub fn from_content(content: &str) -> Option<Self> {
-        static RE_JSON: std::sync::LazyLock<regex::Regex> =
-            std::sync::LazyLock::new(|| regex::Regex::new(r#""kind"\s*:\s*"(\w+)""#).unwrap());
-        static RE_YAML: std::sync::LazyLock<regex::Regex> =
-            std::sync::LazyLock::new(|| regex::Regex::new(r"(?:^|\n)kind:\s*(\w+)").unwrap());
-
-        // Try JSON format first: "kind":"GatewayClass" or "kind": "GatewayClass"
-        if let Some(caps) = RE_JSON.captures(content) {
-            let kind_str = caps.get(1)?.as_str();
-            return Self::from_kind_name(kind_str);
-        }
-
-        // Fallback to YAML format: "kind: GatewayClass" or "\nkind: Gateway"
-        if let Some(caps) = RE_YAML.captures(content) {
-            let kind_str = caps.get(1)?.as_str();
-            return Self::from_kind_name(kind_str);
-        }
-
-        None
-    }
-
     pub fn from_kind_name(kind_str: &str) -> Option<Self> {
         // Case-insensitive matching for API convenience
         match kind_str.to_lowercase().as_str() {

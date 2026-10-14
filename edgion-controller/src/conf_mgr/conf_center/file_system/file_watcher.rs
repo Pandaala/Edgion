@@ -15,6 +15,7 @@ use super::event::{FileSystemEvent, ParsedFileInfo};
 use super::path_registry::{ForgetOutcome, PathRegistry, RecordOutcome, ResourceKey};
 use crate::conf_mgr::sync_runtime::ShutdownSignal;
 use anyhow::{Context, Result};
+use edgion_resources::resource::meta::extract_resource_metadata;
 use edgion_resources::ResourceKind;
 use notify::event::{ModifyKind, RenameMode};
 use notify::{Config, Event, EventKind, PollWatcher, RecursiveMode, Watcher};
@@ -163,7 +164,11 @@ impl FileSystemWatcher {
         let next_registry = PathRegistry::new();
 
         for (path, content) in scan {
-            let Some(kind) = ResourceKind::from_content(&content) else {
+            let Some(kind) = extract_resource_metadata(&content)
+                .and_then(|metadata| metadata.kind)
+                .as_deref()
+                .and_then(ResourceKind::from_kind_name)
+            else {
                 continue;
             };
             let kind_str = kind.as_str();
