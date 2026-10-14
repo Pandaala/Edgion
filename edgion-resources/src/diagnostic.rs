@@ -33,6 +33,9 @@ impl serde::Serialize for EdgionInfoCode {
 pub enum EdgionErrorCode {
     Unknown,
 
+    /// Wasm execution or terminal cleanup failed; guest detail is not exposed.
+    WasmExecutionError,
+
     /// AccessLogEntry self-serialization failed; emitted as a fixed-string JSON
     /// fallback so downstream log parsers still see a parseable record.
     /// Practically unreachable — the entry struct contains only primitives.
@@ -384,6 +387,7 @@ impl EdgionErrorCode {
     const fn wire_code(self) -> &'static str {
         match self {
             Self::Unknown => "Unknown",
+            Self::WasmExecutionError => "WasmExecutionError",
             Self::AccessLogSerializeFailed => "AccessLogSerializeFailed",
             Self::AiResponseTranslationFailed => "AiResponseTranslationFailed",
             Self::AiQuotaReconciliationFailed => "AiQuotaReconciliationFailed",

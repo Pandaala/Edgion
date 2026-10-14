@@ -62,7 +62,7 @@ use arc_swap::ArcSwapOption;
 use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
 use wasmtime::{
-    Config, Engine, Instance, InstanceAllocationStrategy, InstancePre, Linker, Module, PoolingAllocationConfig, Store,
+    Config, Engine, InstanceAllocationStrategy, InstancePre, Linker, Module, PoolingAllocationConfig, Store,
 };
 
 use super::callout::resolve_callouts_on;
@@ -82,6 +82,11 @@ use edgion_resources::{resources::refs::plugin_fields::BoundPluginEntry, EdgionP
 /// How often the background thread bumps the engine epoch. Guest deadlines
 /// are expressed in multiples of this tick.
 const EPOCH_TICK_MS: u64 = 10;
+
+/// Shared per-chunk execution budget for standalone and request-bound observers.
+pub(super) fn response_body_timeout_ms(timeout_ms: u64) -> u64 {
+    (timeout_ms / 10).max(10)
+}
 /// How long a load error is cached before a fresh `get_or_load` retries the
 /// source instead of returning the cached failure immediately.
 const LOAD_RETRY_SECS: u64 = 30;
@@ -105,6 +110,14 @@ const MIN_TICK_PERIOD_MS: u64 = 100;
 const WASM_HOST_PANIC_ERROR: &str = "wasm host call panicked";
 const PRELOAD_TASK: usize = 0;
 const REFRESH_TASK: usize = 1;
+
+/// Process bound includes idle pools, live requests, timers and retiring generations.
+/// Idle pools can consume admission capacity; this is not a fairness guarantee.
+const MAX_PROCESS_INSTANCES: usize = 128;
+fn instance_permits() -> &'static Arc<tokio::sync::Semaphore> {
+    static PERMITS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+    PERMITS.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(MAX_PROCESS_INSTANCES)))
+}
 
 /// Run one synchronous Wasmtime guest boundary under the process-wide panic
 /// redaction policy. Ordinary Wasmtime and host-function errors retain their
@@ -224,14 +237,17 @@ impl CalloutGrant {
 /// Immutable authorization owned by exactly one plugin runtime.
 struct TickCalloutState {
     grant: CalloutGrant,
+    /// One configured-runtime admission owner, including overlapping OCI generations.
+    active_requests: Arc<tokio::sync::Semaphore>,
     #[cfg(test)]
     active_tick_tasks: AtomicUsize,
 }
 
 impl TickCalloutState {
-    fn new(grant: CalloutGrant) -> Self {
+    fn new(grant: CalloutGrant, max_active_requests: usize) -> Self {
         Self {
             grant,
+            active_requests: Arc::new(tokio::sync::Semaphore::new(max_active_requests)),
             #[cfg(test)]
             active_tick_tasks: AtomicUsize::new(0),
         }
@@ -421,7 +437,7 @@ impl WasmVmManager {
                 config: owned_config,
                 url_client,
                 slot: Arc::new(LoadSlot::new(effective_oci_always(config))),
-                tick_callouts: Arc::new(TickCalloutState::new(grant)),
+                tick_callouts: Arc::new(TickCalloutState::new(grant, config.max_active_requests)),
                 tasks: tasks.handle(),
             }),
             tasks,
@@ -1124,8 +1140,10 @@ impl std::fmt::Debug for ModuleEntry {
 
 struct PooledVm {
     store: Store<HostState>,
-    instance: Instance,
+    callbacks: super::callbacks::GuestCallbacks,
     next_ctx_id: i32,
+    /// Released after the Store, including while retained in an idle pool.
+    _instance_permit: tokio::sync::OwnedSemaphorePermit,
 }
 
 impl ModuleEntry {
@@ -1138,7 +1156,15 @@ impl ModuleEntry {
     /// fresh from `InstancePre`. `timeout_ms` bounds the guest calls made
     /// through the returned lease (via epoch interruption).
     pub fn acquire(self: &Arc<Self>, timeout_ms: u64) -> Result<VmLease, String> {
-        self.acquire_inner(timeout_ms, true)
+        let permit = self
+            .tick_callouts
+            .active_requests
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| "wasm active request limit reached".to_string())?;
+        let mut lease = self.acquire_inner(timeout_ms, true)?;
+        lease.request_permit = Some(permit);
+        Ok(lease)
     }
 
     /// Eager initialization for an entry that is not published yet. Guest
@@ -1182,13 +1208,27 @@ impl ModuleEntry {
             timeout_ms,
             healthy: true,
             open_context: None,
+            request_permit: None,
+            return_to_pool: true,
+        })
+    }
+
+    fn acquire_timer(self: &Arc<Self>) -> Result<VmLease, String> {
+        Ok(VmLease {
+            entry: self.clone(),
+            vm: Some(self.new_vm(self.hook_timeout_ms)?),
+            timeout_ms: self.hook_timeout_ms,
+            healthy: true,
+            open_context: None,
+            request_permit: None,
+            return_to_pool: false,
         })
     }
 
     /// Start the module tick task once a guest requested a nonzero period.
     /// Idempotent; requires a tokio runtime (skipped otherwise, e.g. in
-    /// sync-only unit tests). The task holds only a `Weak` back-reference,
-    /// while the plugin owner explicitly aborts it when shutting down.
+    /// sync-only unit tests). The resident timer lease retains its loaded entry;
+    /// the separate plugin owner explicitly aborts the task when shutting down.
     fn activate_tick(self: &Arc<Self>, period_ms: u64) {
         self.tick_enabled.store(true, Ordering::Release);
         self.maybe_start_tick(period_ms);
@@ -1214,10 +1254,11 @@ impl ModuleEntry {
             #[cfg(test)]
             let _test_task = TestTickTaskGuard::new(test_tick_state);
             let mut period = period_ms.max(MIN_TICK_PERIOD_MS);
+            let mut resident: Option<VmLease> = None;
             loop {
                 tokio::time::sleep(Duration::from_millis(period)).await;
                 let Some(entry) = weak.upgrade() else { break };
-                let mut lease = match entry.acquire(entry.hook_timeout_ms) {
+                let mut lease = match resident.take().map(Ok).unwrap_or_else(|| entry.acquire_timer()) {
                     Ok(l) => l,
                     Err(e) => {
                         tracing::warn!(error = %e, module = %label, "wasm tick: instance acquire failed");
@@ -1254,7 +1295,7 @@ impl ModuleEntry {
                         // for the whole VM lifetime, so unlike the request
                         // path there is no context to open/close here.
                         if let Some(timeout_ms) = armed {
-                            if !lease.state().pending_callouts.is_empty() {
+                            if !lease.state().frame.pending_callouts.is_empty() {
                                 // Cancellation safety: eviction aborts this task
                                 // at an await point inside callout resolution,
                                 // which drops the lease with guest state mid-
@@ -1268,6 +1309,10 @@ impl ModuleEntry {
                                 lease.poison();
                                 match resolve_callouts_on(&mut lease, ROOT_CONTEXT_ID, timeout_ms, &label).await {
                                     Ok(outcome) => {
+                                        if outcome.leftover != 0 {
+                                            drop(lease);
+                                            continue;
+                                        }
                                         // The round completed without a trap or
                                         // cancellation: the VM is reusable again.
                                         lease.healthy = true;
@@ -1293,7 +1338,8 @@ impl ModuleEntry {
                 }
                 // The guest may adjust (or stop) its own tick period.
                 let next = lease.state().tick_period_ms;
-                drop(lease);
+                lease.state_mut().release_phase_payloads();
+                resident = Some(lease);
                 entry.tick_period_ms.store(next, Ordering::Release);
                 if next == 0 {
                     entry.tick_enabled.store(false, Ordering::Release);
@@ -1347,6 +1393,10 @@ impl ModuleEntry {
     }
 
     fn new_vm(&self, timeout_ms: u64) -> Result<PooledVm, String> {
+        let instance_permit = instance_permits()
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| "wasm process instance limit reached".to_string())?;
         let mut store = Store::new(
             &self.engine,
             HostState::new(
@@ -1402,9 +1452,11 @@ impl ModuleEntry {
                 return Err("proxy_on_configure returned false".to_string());
             }
         }
+        let callbacks = super::callbacks::GuestCallbacks::resolve(instance, &mut store);
         Ok(PooledVm {
+            _instance_permit: instance_permit,
             store,
-            instance,
+            callbacks,
             next_ctx_id: ROOT_CONTEXT_ID + 1,
         })
     }
@@ -1438,12 +1490,104 @@ pub struct VmLease {
     /// the VM must be discarded rather than pooled with abandoned guest
     /// state. Drop never calls guest lifecycle hooks.
     open_context: Option<i32>,
+    request_permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    return_to_pool: bool,
 }
 
 impl VmLease {
+    /// Open one HTTP context for an entire request binding. Header EOS is
+    /// supplied by the transport/body driver, not assumed from the hook type.
+    pub fn open_request(&mut self, num_headers: i32, eos: bool) -> Result<i32, String> {
+        if self.open_context.is_some() || !self.healthy {
+            self.poison();
+            return Err("wasm request context unavailable".into());
+        }
+        let (id, action) =
+            self.open_and_call_with("proxy_on_request_headers", "request_headers", num_headers, eos as i32)?;
+        self.open_context = Some(id);
+        Ok(action)
+    }
+
+    pub fn context_id(&self) -> Option<i32> {
+        self.open_context
+    }
+
+    /// Invoke a later event on the existing guest object without create/delete.
+    pub fn call_bound(&mut self, hook: &'static str, size: i32, eos: bool) -> Result<i32, String> {
+        let id = self
+            .open_context
+            .filter(|_| self.healthy)
+            .ok_or_else(|| "wasm request context unavailable".to_string())?;
+        // Preserve header/request-body hook metrics. Streaming observation uses
+        // only its once-per-request diagnostic, never new per-chunk telemetry.
+        let phase = match hook {
+            "proxy_on_request_body" => Some("request_body"),
+            "proxy_on_response_headers" => Some("response_headers"),
+            _ => None,
+        };
+        let started = phase.map(|_| Instant::now());
+        let timeout = if hook == "proxy_on_response_body" {
+            response_body_timeout_ms(self.timeout_ms)
+        } else {
+            self.timeout_ms
+        };
+        let result = (|| {
+            let vm = self.vm_mut();
+            vm.store.set_epoch_deadline(timeout / EPOCH_TICK_MS + 2);
+            let Some(f) = vm.callbacks.http(hook) else {
+                return Ok(0);
+            };
+            run_guest_boundary(|| {
+                f.call(&mut vm.store, (id, size, eos as i32))
+                    .map_err(|_| "wasm bound hook trapped".into())
+            })
+        })();
+        if let (Some(phase), Some(started)) = (phase, started) {
+            record_wasm_hook_duration(
+                &self.entry.metrics_label,
+                phase,
+                started.elapsed().as_secs_f64() * 1000.0,
+            );
+            if result.is_err() {
+                record_wasm_trap(&self.entry.metrics_label, phase);
+            }
+        }
+        if result.is_err() {
+            self.poison();
+        }
+        result
+    }
+
+    pub fn call_bound_trailers(&mut self, count: i32) -> Result<i32, String> {
+        let id = self
+            .open_context
+            .filter(|_| self.healthy)
+            .ok_or_else(|| "wasm request context unavailable".to_string())?;
+        let timeout = self.timeout_ms;
+        let result = (|| {
+            let vm = self.vm_mut();
+            vm.store.set_epoch_deadline(timeout / EPOCH_TICK_MS + 2);
+            let Some(f) = vm.callbacks.response_trailers.clone() else {
+                return Ok(0);
+            };
+            run_guest_boundary(|| {
+                f.call(&mut vm.store, (id, count))
+                    .map_err(|_| "wasm trailer hook trapped".into())
+            })
+        })();
+        if result.is_err() {
+            self.poison();
+        }
+        result
+    }
+
     /// Mark this lease unhealthy so `Drop` discards the VM instead of
     /// returning it to the pool. Public so callers (the Task-5 plugin) can
     /// poison on their own detected failure modes too.
+    pub(crate) fn is_healthy(&self) -> bool {
+        self.healthy
+    }
+
     pub fn poison(&mut self) {
         self.healthy = false;
     }
@@ -1485,11 +1629,7 @@ impl VmLease {
     pub fn call_on_response_body(&mut self, body_size: i32, end_of_stream: bool) -> Result<i32, String> {
         {
             let vm = self.vm.as_mut().expect("lease taken");
-            if vm
-                .instance
-                .get_typed_func::<(i32, i32, i32), i32>(&mut vm.store, "proxy_on_response_body")
-                .is_err()
-            {
+            if vm.callbacks.http("proxy_on_response_body").is_none() {
                 return Ok(0);
             }
         }
@@ -1510,11 +1650,7 @@ impl VmLease {
     pub fn call_on_request_body(&mut self, body_size: i32, end_of_stream: bool) -> Result<i32, String> {
         {
             let vm = self.vm.as_mut().expect("lease taken");
-            if vm
-                .instance
-                .get_typed_func::<(i32, i32, i32), i32>(&mut vm.store, "proxy_on_request_body")
-                .is_err()
-            {
+            if vm.callbacks.http("proxy_on_request_body").is_none() {
                 return Ok(0);
             }
         }
@@ -1558,9 +1694,10 @@ impl VmLease {
             // SDKs route by token internally; the context id parameter names
             // the dispatching context.
             let f = vm
-                .instance
-                .get_typed_func::<(i32, i32, i32, i32, i32), ()>(&mut vm.store, "proxy_on_http_call_response")
-                .map_err(|e| format!("guest dispatched a callout but exports no proxy_on_http_call_response: {e}"))?;
+                .callbacks
+                .callout
+                .clone()
+                .ok_or_else(|| "guest missing proxy_on_http_call_response".to_string())?;
             run_guest_boundary(|| {
                 f.call(&mut vm.store, (ctx_id, token as i32, num_headers, body_size, 0))
                     .map_err(|e| format!("proxy_on_http_call_response trapped: {e}"))
@@ -1588,7 +1725,7 @@ impl VmLease {
         let result = (|| -> Result<(), String> {
             let vm = self.vm.as_mut().expect("lease taken");
             vm.store.set_epoch_deadline(timeout_ms / EPOCH_TICK_MS + 2);
-            let Ok(f) = vm.instance.get_typed_func::<i32, ()>(&mut vm.store, "proxy_on_tick") else {
+            let Some(f) = vm.callbacks.tick.clone() else {
                 return Ok(());
             };
             run_guest_boundary(|| {
@@ -1611,14 +1748,21 @@ impl VmLease {
     /// Close a context opened by `call_on_request_headers_open`
     /// (`proxy_on_done` + `proxy_on_delete`). Failures poison the lease.
     pub fn close_context(&mut self, ctx_id: i32) -> Result<(), String> {
+        if !self.healthy {
+            return Err("wasm context is poisoned".into());
+        }
         let timeout_ms = self.timeout_ms;
         let result = (|| -> Result<(), String> {
             let vm = self.vm.as_mut().expect("lease taken");
             vm.store.set_epoch_deadline(timeout_ms / EPOCH_TICK_MS + 2);
-            if let Ok(f) = vm.instance.get_typed_func::<i32, i32>(&mut vm.store, "proxy_on_done") {
-                run_guest_boundary(|| f.call(&mut vm.store, ctx_id).map_err(|e| format!("proxy_on_done: {e}")))?;
+            if let Some(f) = vm.callbacks.done.clone() {
+                let done =
+                    run_guest_boundary(|| f.call(&mut vm.store, ctx_id).map_err(|e| format!("proxy_on_done: {e}")))?;
+                if done == 0 {
+                    return Err("wasm deferred completion is unsupported".into());
+                }
             }
-            if let Ok(f) = vm.instance.get_typed_func::<i32, ()>(&mut vm.store, "proxy_on_delete") {
+            if let Some(f) = vm.callbacks.delete.clone() {
                 run_guest_boundary(|| {
                     f.call(&mut vm.store, ctx_id)
                         .map_err(|e| format!("proxy_on_delete: {e}"))
@@ -1661,19 +1805,13 @@ impl VmLease {
             // hook call actually runs. `+2` ticks of slack so a call right
             // before a tick boundary still gets ~timeout_ms.
             vm.store.set_epoch_deadline(timeout_ms / EPOCH_TICK_MS + 2);
-            if let Ok(f) = vm
-                .instance
-                .get_typed_func::<(i32, i32), ()>(&mut vm.store, "proxy_on_context_create")
-            {
+            if let Some(f) = vm.callbacks.create.clone() {
                 run_guest_boundary(|| {
                     f.call(&mut vm.store, (ctx_id, ROOT_CONTEXT_ID))
                         .map_err(|e| format!("proxy_on_context_create: {e}"))
                 })?;
             }
-            let f = vm
-                .instance
-                .get_typed_func::<(i32, i32, i32), i32>(&mut vm.store, hook)
-                .map_err(|e| format!("guest missing {hook}: {e}"))?;
+            let f = vm.callbacks.http(hook).ok_or_else(|| format!("guest missing {hook}"))?;
             let action = run_guest_boundary(|| {
                 f.call(&mut vm.store, (ctx_id, arg2, arg3))
                     .map_err(|e| format!("{hook} trapped: {e}"))
@@ -1707,8 +1845,9 @@ impl VmLease {
 
 impl Drop for VmLease {
     fn drop(&mut self) {
-        if let Some(vm) = self.vm.take() {
-            if self.healthy && self.open_context.is_none() {
+        if let Some(mut vm) = self.vm.take() {
+            if self.return_to_pool && self.healthy && self.open_context.is_none() {
+                vm.store.data_mut().release_phase_payloads();
                 let pool_len = {
                     let mut pool = self.entry.pool.lock();
                     if pool.len() < self.entry.pool_cap {
@@ -1726,7 +1865,9 @@ impl Drop for VmLease {
                 // A trapped lease and a healthy lease abandoned with an open
                 // request context are both unsafe to reuse. Drop the Store
                 // without invoking guest code or returning it to the pool.
-                record_wasm_instance_discard(&self.entry.metrics_label, "poisoned");
+                if !self.healthy || self.open_context.is_some() {
+                    record_wasm_instance_discard(&self.entry.metrics_label, "poisoned");
+                }
             }
         }
     }

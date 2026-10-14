@@ -60,6 +60,16 @@ pub enum RouteProto {
 #[cfg_attr(test, allow(clippy::disallowed_types))]
 #[async_trait]
 pub trait PluginSession: Send + Sync {
+    /// Transfer a Wasm execution to the request's typed lifecycle owner.
+    /// Unsupported adapters reject the offer; they must not silently lose it.
+    fn install_wasm_binding(&mut self, binding: Arc<crate::plugins::http::wasm::request::WasmRequestBinding>) -> bool {
+        drop(binding);
+        false
+    }
+
+    fn wasm_binding(&self, identity: &Arc<()>) -> Option<Arc<crate::plugins::http::wasm::request::WasmRequestBinding>> {
+        self.ctx().wasm.as_deref().and_then(|state| state.get(identity))
+    }
     /// Monotone failure signal for the outer response transport owner.
     fn mark_ip_body_denied(&mut self);
     /// Evaluate only an actual-owner cold ACL plan against this dispatch's captured view.

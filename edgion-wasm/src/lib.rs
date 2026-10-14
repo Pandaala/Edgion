@@ -478,7 +478,7 @@ const HOOKS: &[HookProfile] = &[
     },
     HookProfile {
         name: "proxy_on_response_trailers",
-        support: HookSupport::KnownNotInvoked,
+        support: HookSupport::Implemented,
         params: &[WasmValueType::I32, WasmValueType::I32],
         results: I32_RESULT,
     },

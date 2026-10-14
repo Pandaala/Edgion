@@ -199,8 +199,23 @@ fn config_for(path: &std::path::Path, fail_open: bool) -> WasmConfig {
     c
 }
 
+fn install_mock_wasm_owner(session: &mut MockPluginSession) {
+    let state = Arc::new(parking_lot::Mutex::new(
+        super::super::request::WasmRequestState::default(),
+    ));
+    let install = state.clone();
+    session
+        .expect_install_wasm_binding()
+        .returning(move |binding| install.lock().install(binding));
+    session
+        .expect_wasm_binding()
+        .returning(move |identity| state.lock().get(identity));
+    session.expect_request_headers_end_stream().return_const(Some(true));
+}
+
 fn base_mock() -> MockPluginSession {
     let mut s = MockPluginSession::new();
+    install_mock_wasm_owner(&mut s);
     s.expect_request_headers()
         .returning(|| vec![("host".to_string(), "t.example.com".to_string())]);
     s.expect_get_path().return_const("/x".to_string());
@@ -354,6 +369,7 @@ fn local_response_forwards_non_utf8_body_verbatim() {
     const RAW: &[u8] = &[0x89, 0x50, 0x4e, 0x47, 0xff, 0x00];
 
     let mut session = MockPluginSession::new();
+    install_mock_wasm_owner(&mut session);
     session.expect_set_response_header().returning(|_, _| Ok(()));
     session.expect_append_response_header().returning(|_, _| Ok(()));
 
@@ -377,6 +393,7 @@ fn local_response_forwards_non_utf8_body_verbatim() {
 #[test]
 fn local_response_empty_guest_body_is_absent() {
     let mut session = MockPluginSession::new();
+    install_mock_wasm_owner(&mut session);
     session.expect_set_response_header().returning(|_, _| Ok(()));
     session.expect_append_response_header().returning(|_, _| Ok(()));
 
@@ -408,6 +425,7 @@ fn local_response_preserves_duplicate_set_cookie() {
 
     let queue: Arc<Mutex<Vec<PendingHeaderOp>>> = Arc::new(Mutex::new(Vec::new()));
     let mut session = MockPluginSession::new();
+    install_mock_wasm_owner(&mut session);
     let q_set = queue.clone();
     session.expect_set_response_header().returning(move |name, value| {
         q_set.lock().push(PendingHeaderOp::Set {
@@ -460,6 +478,7 @@ fn local_response_preserves_duplicate_set_cookie() {
 /// the `x-callout-url` request header.
 fn callout_mock(target: &str) -> MockPluginSession {
     let mut s = MockPluginSession::new();
+    install_mock_wasm_owner(&mut s);
     let target = target.to_string();
     s.expect_request_headers().returning(move || {
         vec![
@@ -633,7 +652,7 @@ async fn body_observation_guest_sees_chunk_window() {
         Vec::new(),
         std::collections::HashMap::new(),
     );
-    lease.state_mut().body_chunk = Bytes::from_static(b"hello-chunk");
+    lease.state_mut().frame.body_chunk = Bytes::from_static(b"hello-chunk");
     let seen = lease.call_on_response_body(11, false).expect("hook ok");
     assert_eq!(seen, 11, "guest must observe exactly the staged chunk bytes");
 
@@ -644,7 +663,7 @@ async fn body_observation_guest_sees_chunk_window() {
         Vec::new(),
         std::collections::HashMap::new(),
     );
-    lease.state_mut().body_chunk = Bytes::from_static(b"x");
+    lease.state_mut().frame.body_chunk = Bytes::from_static(b"x");
     let seen = lease.call_on_response_body(1, true).expect("hook ok");
     assert_eq!(seen, 1, "window must be the current chunk only");
 }
@@ -684,6 +703,7 @@ async fn body_pause_is_metered_and_never_breaks_the_stream() {
 
     // Plugin path: a Pausing guest must not throttle or break the stream.
     let mut session = MockPluginSession::new();
+    install_mock_wasm_owner(&mut session);
     let chunk = Some(bytes::Bytes::from_static(b"abc"));
     for eos in [false, true] {
         assert!(
@@ -702,6 +722,7 @@ async fn body_filter_releases_chunk_before_returning_lease_to_pool() {
     let plugin = actual_plugin(&c);
     let entry = plugin.runtime.get_or_load().await.expect("module loads");
     let mut session = MockPluginSession::new();
+    install_mock_wasm_owner(&mut session);
     let chunk = Bytes::from(vec![1, 2, 3, 4]);
     let body = Some(chunk.clone());
 
@@ -711,7 +732,7 @@ async fn body_filter_releases_chunk_before_returning_lease_to_pool() {
     drop(body);
 
     let lease = entry.acquire(100).expect("reacquire pooled VM");
-    assert!(lease.state().body_chunk.is_empty());
+    assert!(lease.state().frame.body_chunk.is_empty());
     drop(lease);
     assert!(
         chunk.try_into_mut().is_ok(),
@@ -745,6 +766,7 @@ async fn body_filter_is_nonintrusive() {
         let plugin = actual_plugin(&c);
         plugin.runtime.get_or_load().await.expect("loads");
         let mut session = MockPluginSession::new();
+        install_mock_wasm_owner(&mut session);
         let chunk = Some(bytes::Bytes::from_static(b"data"));
         let r = plugin.run_upstream_response_body_filter(&chunk, false, &mut session);
         assert!(r.is_none(), "body observation must never throttle");
@@ -854,6 +876,7 @@ fn ref_artifact_temp() -> Option<tempfile::NamedTempFile> {
 
 fn ref_mock(headers: Vec<(&str, &str)>) -> MockPluginSession {
     let mut s = MockPluginSession::new();
+    install_mock_wasm_owner(&mut s);
     let owned: Vec<(String, String)> = headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
     s.expect_request_headers().returning(move || owned.clone());
     let hmap: std::collections::HashMap<String, String> =
@@ -1092,6 +1115,7 @@ async fn reference_guest_body_observation_accumulates_bytes() {
 
     // Drive two response-body chunks through the body filter.
     let mut bsession = MockPluginSession::new();
+    install_mock_wasm_owner(&mut bsession);
     let chunk = Some(bytes::Bytes::from_static(&[b'x'; 100]));
     assert!(plugin
         .run_upstream_response_body_filter(&chunk, false, &mut bsession)
@@ -1199,6 +1223,7 @@ const GUEST_REQUEST_BODY_REWRITE_THEN_TRAP: &str = r#"
 /// (mockall matches FIFO; `base_mock`'s unlimited stub would otherwise win).
 fn body_mock(read: crate::request_body::BodyReadResult) -> MockPluginSession {
     let mut s = MockPluginSession::new();
+    install_mock_wasm_owner(&mut s);
     s.expect_request_headers()
         .returning(|| vec![("host".to_string(), "t.example.com".to_string())]);
     s.expect_get_path().return_const("/x".to_string());
@@ -1227,6 +1252,32 @@ async fn request_body_guest_receives_full_body_and_can_deny() {
             body: None
         }
     );
+}
+
+#[tokio::test]
+async fn completed_body_phase_releases_unchanged_body_on_continue_and_denial() {
+    for deny in [false, true] {
+        let guest = if deny {
+            GUEST_REQUEST_BODY_DENY.to_owned()
+        } else {
+            GUEST_REQUEST_BODY_DENY.replace("i32.gt_s", "i32.lt_s")
+        };
+        let file = write_temp_wasm(&guest);
+        let plugin = actual_plugin(&config_for(file.path(), false));
+        let entry = plugin.runtime.get_or_load().await.unwrap();
+        let mut session = body_mock(Ok(bytes::Bytes::from(vec![b'x'; 64 * 1024])));
+        let mut log = PluginLog::new("Wasm");
+        let result = plugin.run_request(&mut session, &mut log).await;
+        assert_eq!(matches!(result, PluginRunningResult::ErrResponse { .. }), deny);
+        let binding = session.wasm_binding(&plugin.identity).unwrap();
+        let mut loan = binding.take().unwrap();
+        assert_eq!(loan.execution().lease.state().frame.request_body.capacity(), 0);
+        loan.complete();
+        assert!(binding.finish());
+        let lease = entry.acquire(100).unwrap();
+        assert_eq!(lease.state().frame.request_body.capacity(), 0);
+        assert_eq!(lease.state().frame.request_headers.capacity(), 0);
+    }
 }
 
 #[tokio::test]
@@ -1517,6 +1568,7 @@ async fn body_gate_and_wasm_body_phase_both_read_request_body() {
     );
 
     let mut session = MockPluginSession::new();
+    install_mock_wasm_owner(&mut session);
     session
         .expect_request_headers()
         .returning(|| vec![("host".to_string(), "t.example.com".to_string())]);
@@ -1561,6 +1613,7 @@ fn apply_ops_replace_all_removes_omitted_request_headers() {
         pairs: vec![("x-keep".to_string(), "new".to_string())],
     }];
     let mut session = MockPluginSession::new();
+    install_mock_wasm_owner(&mut session);
     session
         .expect_remove_request_header()
         .withf(|n| n == "authorization")
@@ -1599,6 +1652,7 @@ fn apply_ops_replace_all_preserves_duplicate_response_values() {
         ],
     }];
     let mut session = MockPluginSession::new();
+    install_mock_wasm_owner(&mut session);
     session
         .expect_remove_response_header()
         .withf(|n| n == "set-cookie")
@@ -1683,7 +1737,7 @@ fn wasm_owner(config: &WasmConfig) -> edgion_resources::EdgionPlugins {
     .unwrap()
 }
 
-fn actual_plugin(config: &WasmConfig) -> WasmPlugin {
+pub(in crate::plugins::http::wasm) fn actual_plugin(config: &WasmConfig) -> WasmPlugin {
     let owner = wasm_owner(config);
     let prepared = PreparedPluginReferences::from_plugins(&owner);
     let binding = prepared.bind(&owner).unwrap();

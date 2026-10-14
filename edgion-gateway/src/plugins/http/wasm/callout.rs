@@ -96,31 +96,37 @@ pub(super) async fn resolve_callouts_on(
 ) -> Result<CalloutOutcome, String> {
     const MAX_ROUNDS: usize = 4;
     let mut delivered = 0usize;
+    let mut abandoned = 0usize;
     for _round in 0..MAX_ROUNDS {
-        let pending = std::mem::take(&mut lease.state_mut().pending_callouts);
+        let pending = std::mem::take(&mut lease.state_mut().frame.pending_callouts);
         if pending.is_empty() {
             break;
         }
-        for callout in pending {
-            if lease.state().continue_requested || lease.state().local_response.is_some() {
-                // The guest already decided; remaining callouts are moot.
+        let mut pending = pending.into_iter();
+        while let Some(callout) = pending.next() {
+            if lease.state().frame.continue_requested || lease.state().frame.local_response.is_some() {
+                // The SDK still owns registrations for these undelivered tokens.
+                abandoned += 1 + pending.len();
                 break;
             }
             let response = execute_callout(callout, timeout_cap_ms, metrics_label).await;
             let num_headers = response.headers.len() as i32;
             let body_size = response.body.len() as i32;
             let token = response.token;
-            lease.state_mut().callout_response = Some(response);
+            lease.state_mut().frame.callout_response = Some(response);
             lease.call_on_http_call_response(ctx_id, token, num_headers, body_size)?;
-            lease.state_mut().callout_response = None;
+            lease.state_mut().frame.callout_response = None;
             delivered += 1;
         }
-        if lease.state().continue_requested || lease.state().local_response.is_some() {
+        if lease.state().frame.continue_requested || lease.state().frame.local_response.is_some() {
             break;
         }
     }
-    let leftover = lease.state_mut().pending_callouts.len();
-    lease.state_mut().pending_callouts.clear();
+    let leftover = abandoned + lease.state_mut().frame.pending_callouts.len();
+    lease.state_mut().frame.pending_callouts.clear();
+    if leftover != 0 {
+        lease.poison();
+    }
     Ok(CalloutOutcome { delivered, leftover })
 }
 

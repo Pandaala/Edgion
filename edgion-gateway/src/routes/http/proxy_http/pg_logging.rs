@@ -26,6 +26,12 @@ pub async fn logging(
     // releases the active-context gauge charge.
     let _active_context_release = global_metrics().active_context_release_guard();
 
+    if let Some(mut wasm) = ctx.wasm.take() {
+        if !wasm.finish() {
+            ctx.record_error(edgion_resources::EdgionErrorCode::WasmExecutionError);
+        }
+    }
+
     crate::response_cache::lifecycle::finalize(session, ctx, _e).await;
 
     if ctx.grpc_transcoding.is_some() {

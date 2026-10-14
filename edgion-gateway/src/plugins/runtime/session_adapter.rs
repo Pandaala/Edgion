@@ -1661,6 +1661,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx
     }
 
+    fn install_wasm_binding(&mut self, binding: Arc<crate::plugins::http::wasm::request::WasmRequestBinding>) -> bool {
+        self.ctx.wasm.get_or_insert_with(Default::default).install(binding)
+    }
+
     fn waf(&mut self) -> &mut dyn WafSessionCapability {
         self
     }

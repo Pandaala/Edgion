@@ -192,11 +192,12 @@ fn guest_set_header_queues_op_and_mutates_snapshot() {
     assert_eq!(action, 0); // Continue
     let state = store.data();
     assert!(state
+        .frame
         .request_headers
         .iter()
         .any(|(k, v)| k == "x-wat-added" && v == "yes"));
     assert!(matches!(
-        state.pending_ops.as_slice(),
+        state.frame.pending_ops.as_slice(),
         [HeaderOp::Set { map: MAP_HTTP_REQUEST_HEADERS, name, value }]
             if name == "x-wat-added" && value == "yes"
     ));
@@ -212,7 +213,7 @@ fn guest_send_local_response_recorded() {
         .get_typed_func::<(i32, i32, i32), i32>(&mut store, "proxy_on_response_headers")
         .unwrap();
     f.call(&mut store, (2, 0, 1)).unwrap();
-    let lr = store.data().local_response.as_ref().expect("local response set");
+    let lr = store.data().frame.local_response.as_ref().expect("local response set");
     assert_eq!(lr.status, 403);
     assert_eq!(lr.body, b"denied");
 }
@@ -230,7 +231,7 @@ fn guest_local_response_uses_only_final_statuses() {
         } else {
             500
         };
-        assert_eq!(store.data().local_response.as_ref().unwrap().status, expected);
+        assert_eq!(store.data().frame.local_response.as_ref().unwrap().status, expected);
     }
 }
 
@@ -240,12 +241,12 @@ fn guest_local_response_uses_only_final_statuses() {
 fn charge_abi_rejects_over_byte_budget_atomically() {
     let mut s = HostState::default();
     assert_eq!(s.charge_abi(MAX_RETAINED_ABI_BYTES), Err(STATUS_INTERNAL_FAILURE));
-    assert_eq!(s.retained_bytes, 0);
-    assert_eq!(s.retained_ops, 0);
+    assert_eq!(s.frame.retained_bytes, 0);
+    assert_eq!(s.frame.retained_ops, 0);
     // A payload that fits is charged with the fixed per-op overhead.
     assert_eq!(s.charge_abi(10), Ok(()));
-    assert_eq!(s.retained_bytes, 10 + ABI_OP_OVERHEAD_BYTES);
-    assert_eq!(s.retained_ops, 1);
+    assert_eq!(s.frame.retained_bytes, 10 + ABI_OP_OVERHEAD_BYTES);
+    assert_eq!(s.frame.retained_ops, 1);
 }
 
 /// A flood of zero-byte operations is bounded by the op-count budget even
@@ -257,8 +258,8 @@ fn charge_abi_rejects_over_op_budget() {
         assert_eq!(s.charge_abi(0), Ok(()));
     }
     assert_eq!(s.charge_abi(0), Err(STATUS_INTERNAL_FAILURE));
-    assert_eq!(s.retained_ops, MAX_RETAINED_ABI_OPS);
-    assert!(s.retained_bytes < MAX_RETAINED_ABI_BYTES);
+    assert_eq!(s.frame.retained_ops, MAX_RETAINED_ABI_OPS);
+    assert!(s.frame.retained_bytes < MAX_RETAINED_ABI_BYTES);
 }
 
 const CALLOUT_BUDGET_GUEST: &str = r#"
@@ -317,7 +318,7 @@ fn callout_budget_rejects_next_dispatch_without_partial_state() {
     let (mut store, instance) = instantiate_callout_guest();
     let dispatch = instance.get_typed_func::<i32, i32>(&mut store, "dispatch").unwrap();
     assert_eq!(dispatch.call(&mut store, 124).unwrap(), STATUS_OK);
-    let callout_cost = store.data().retained_bytes;
+    let callout_cost = store.data().frame.retained_bytes;
     store
         .data_mut()
         .begin_phase(WasmPhase::RequestHeaders, Vec::new(), Vec::new(), HashMap::new());
@@ -328,23 +329,23 @@ fn callout_budget_rejects_next_dispatch_without_partial_state() {
         callout_allocation_preflight_payload(b"http://example.com", &[0, 0, 0, 0], 0).unwrap() + ABI_OP_OVERHEAD_BYTES;
     let admission_cost = callout_cost.max(preflight_cost);
     let retained_before = MAX_RETAINED_ABI_BYTES - admission_cost;
-    store.data_mut().retained_bytes = retained_before;
+    store.data_mut().frame.retained_bytes = retained_before;
 
     assert_eq!(dispatch.call(&mut store, 128).unwrap(), STATUS_OK);
     let state = store.data();
-    assert_eq!(state.retained_bytes, retained_before + callout_cost);
-    assert_eq!(state.retained_ops, 1);
-    assert_eq!(state.pending_callouts.len(), 1);
-    assert_eq!(state.callouts_dispatched, 1);
-    assert_eq!(state.next_callout_token, 2);
+    assert_eq!(state.frame.retained_bytes, retained_before + callout_cost);
+    assert_eq!(state.frame.retained_ops, 1);
+    assert_eq!(state.frame.pending_callouts.len(), 1);
+    assert_eq!(state.frame.callouts_dispatched, 1);
+    assert_eq!(state.last_callout_token, 2);
 
     assert_eq!(dispatch.call(&mut store, 132).unwrap(), STATUS_INTERNAL_FAILURE);
     let state = store.data();
-    assert_eq!(state.retained_bytes, retained_before + callout_cost);
-    assert_eq!(state.retained_ops, 1);
-    assert_eq!(state.pending_callouts.len(), 1);
-    assert_eq!(state.callouts_dispatched, 1);
-    assert_eq!(state.next_callout_token, 2);
+    assert_eq!(state.frame.retained_bytes, retained_before + callout_cost);
+    assert_eq!(state.frame.retained_ops, 1);
+    assert_eq!(state.frame.pending_callouts.len(), 1);
+    assert_eq!(state.frame.callouts_dispatched, 1);
+    assert_eq!(state.last_callout_token, 2);
 }
 
 #[test]
@@ -355,11 +356,11 @@ fn malformed_callout_map_count_is_bad_argument_without_state_change() {
         .unwrap();
     assert_eq!(dispatch.call(&mut store, 128).unwrap(), STATUS_BAD_ARGUMENT);
     let state = store.data();
-    assert_eq!(state.retained_bytes, 0);
-    assert_eq!(state.retained_ops, 0);
-    assert!(state.pending_callouts.is_empty());
-    assert_eq!(state.callouts_dispatched, 0);
-    assert_eq!(state.next_callout_token, 1);
+    assert_eq!(state.frame.retained_bytes, 0);
+    assert_eq!(state.frame.retained_ops, 0);
+    assert!(state.frame.pending_callouts.is_empty());
+    assert_eq!(state.frame.callouts_dispatched, 0);
+    assert_eq!(state.last_callout_token, 0);
 }
 
 #[test]
@@ -368,7 +369,7 @@ fn final_callout_capacity_charge_rejects_atomically_after_raw_preflight() {
     let dispatch = instance.get_typed_func::<i32, i32>(&mut store, "dispatch").unwrap();
     let raw_preflight_cost = 18 + 4 + ABI_OP_OVERHEAD_BYTES;
     let retained_before = MAX_RETAINED_ABI_BYTES - raw_preflight_cost;
-    store.data_mut().retained_bytes = retained_before;
+    store.data_mut().frame.retained_bytes = retained_before;
     let memory = instance.get_memory(&mut store, "memory").unwrap();
     memory.write(&mut store, 128, &[0xA5; 4]).unwrap();
 
@@ -377,11 +378,11 @@ fn final_callout_capacity_charge_rejects_atomically_after_raw_preflight() {
     memory.read(&store, 128, &mut token_bytes).unwrap();
     assert_eq!(token_bytes, [0xA5; 4]);
     let state = store.data();
-    assert_eq!(state.retained_bytes, retained_before);
-    assert_eq!(state.retained_ops, 0);
-    assert!(state.pending_callouts.is_empty());
-    assert_eq!(state.callouts_dispatched, 0);
-    assert_eq!(state.next_callout_token, 1);
+    assert_eq!(state.frame.retained_bytes, retained_before);
+    assert_eq!(state.frame.retained_ops, 0);
+    assert!(state.frame.pending_callouts.is_empty());
+    assert_eq!(state.frame.callouts_dispatched, 0);
+    assert_eq!(state.last_callout_token, 0);
 }
 
 #[test]
@@ -393,11 +394,11 @@ fn invalid_callout_token_pointer_commits_nothing() {
         STATUS_INVALID_MEMORY_ACCESS
     );
     let state = store.data();
-    assert_eq!(state.retained_bytes, 0);
-    assert_eq!(state.retained_ops, 0);
-    assert!(state.pending_callouts.is_empty());
-    assert_eq!(state.callouts_dispatched, 0);
-    assert_eq!(state.next_callout_token, 1);
+    assert_eq!(state.frame.retained_bytes, 0);
+    assert_eq!(state.frame.retained_ops, 0);
+    assert!(state.frame.pending_callouts.is_empty());
+    assert_eq!(state.frame.callouts_dispatched, 0);
+    assert_eq!(state.last_callout_token, 0);
 }
 
 #[test]
@@ -416,7 +417,7 @@ fn callout_budget_precheck_and_phase_reset_use_canonical_budget() {
         Err(STATUS_INTERNAL_FAILURE)
     );
 
-    state.retained_bytes = MAX_RETAINED_ABI_BYTES;
+    state.frame.retained_bytes = MAX_RETAINED_ABI_BYTES;
     let large_input = callout_input_payload_bytes(i32::MAX, i32::MAX, i32::MAX).unwrap();
     assert_eq!(
         state.checked_abi_charge(large_input),
@@ -425,8 +426,8 @@ fn callout_budget_precheck_and_phase_reset_use_canonical_budget() {
     );
 
     state.begin_phase(WasmPhase::Tick, Vec::new(), Vec::new(), HashMap::new());
-    assert_eq!(state.retained_bytes, 0);
-    assert_eq!(state.retained_ops, 0);
+    assert_eq!(state.frame.retained_bytes, 0);
+    assert_eq!(state.frame.retained_ops, 0);
 }
 
 #[test]
@@ -446,18 +447,21 @@ fn callout_preflight_rejects_lossy_utf8_expansion_without_retained_state_change(
     );
 
     let state = HostState {
-        retained_bytes: MAX_RETAINED_ABI_BYTES - raw_payload - ABI_OP_OVERHEAD_BYTES,
+        frame: CallbackFrame {
+            retained_bytes: MAX_RETAINED_ABI_BYTES - raw_payload - ABI_OP_OVERHEAD_BYTES,
+            ..Default::default()
+        },
         ..Default::default()
     };
-    let retained_before = state.retained_bytes;
+    let retained_before = state.frame.retained_bytes;
     assert!(state.checked_abi_charge(raw_payload).is_ok());
     assert_eq!(
         state.checked_abi_charge(allocation_payload),
         Err(STATUS_INTERNAL_FAILURE)
     );
-    assert_eq!(state.retained_bytes, retained_before);
-    assert_eq!(state.retained_ops, 0);
-    assert!(state.pending_callouts.is_empty());
+    assert_eq!(state.frame.retained_bytes, retained_before);
+    assert_eq!(state.frame.retained_ops, 0);
+    assert!(state.frame.pending_callouts.is_empty());
 }
 
 #[test]
@@ -476,7 +480,7 @@ fn high_pair_count_is_rejected_on_real_host_call_before_token_or_state_commit() 
 
     let raw_payload = b"http://example.com".len() + headers.len();
     let retained_before = MAX_RETAINED_ABI_BYTES - raw_payload - ABI_OP_OVERHEAD_BYTES;
-    store.data_mut().retained_bytes = retained_before;
+    store.data_mut().frame.retained_bytes = retained_before;
     assert_eq!(
         dispatch
             .call(&mut store, (headers_ptr as i32, headers.len() as i32, token_ptr as i32),)
@@ -488,11 +492,11 @@ fn high_pair_count_is_rejected_on_real_host_call_before_token_or_state_commit() 
     memory.read(&store, token_ptr, &mut token).unwrap();
     assert_eq!(token, [0xA5; 4]);
     let state = store.data();
-    assert_eq!(state.retained_bytes, retained_before);
-    assert_eq!(state.retained_ops, 0);
-    assert!(state.pending_callouts.is_empty());
-    assert_eq!(state.callouts_dispatched, 0);
-    assert_eq!(state.next_callout_token, 1);
+    assert_eq!(state.frame.retained_bytes, retained_before);
+    assert_eq!(state.frame.retained_ops, 0);
+    assert!(state.frame.pending_callouts.is_empty());
+    assert_eq!(state.frame.callouts_dispatched, 0);
+    assert_eq!(state.last_callout_token, 0);
 }
 
 #[test]
@@ -508,18 +512,21 @@ fn callout_preflight_rejects_high_pair_count_without_retained_state_change() {
     );
 
     let state = HostState {
-        retained_bytes: MAX_RETAINED_ABI_BYTES - raw_payload - ABI_OP_OVERHEAD_BYTES,
+        frame: CallbackFrame {
+            retained_bytes: MAX_RETAINED_ABI_BYTES - raw_payload - ABI_OP_OVERHEAD_BYTES,
+            ..Default::default()
+        },
         ..Default::default()
     };
-    let retained_before = state.retained_bytes;
+    let retained_before = state.frame.retained_bytes;
     assert!(state.checked_abi_charge(raw_payload).is_ok());
     assert_eq!(
         state.checked_abi_charge(allocation_payload),
         Err(STATUS_INTERNAL_FAILURE)
     );
-    assert_eq!(state.retained_bytes, retained_before);
-    assert_eq!(state.retained_ops, 0);
-    assert!(state.pending_callouts.is_empty());
+    assert_eq!(state.frame.retained_bytes, retained_before);
+    assert_eq!(state.frame.retained_ops, 0);
+    assert!(state.frame.pending_callouts.is_empty());
 }
 
 /// `begin_phase` must clear the staged request body between phases so a
@@ -527,29 +534,29 @@ fn callout_preflight_rejects_high_pair_count_without_retained_state_change() {
 #[test]
 fn begin_phase_clears_request_body() {
     let mut state = HostState::default();
-    state.request_body = vec![1, 2, 3];
-    state.request_body_limit = 9;
-    state.request_body_modified = true;
-    state.request_body_mutation_work = 123;
+    state.frame.request_body = vec![1, 2, 3];
+    state.frame.request_body_limit = 9;
+    state.frame.request_body_modified = true;
+    state.frame.request_body_mutation_work = 123;
     state.begin_phase(WasmPhase::RequestBody, vec![], vec![], HashMap::new());
-    assert!(state.request_body.is_empty());
-    assert_eq!(state.request_body_limit, 0);
-    assert!(!state.request_body_modified);
-    assert_eq!(state.request_body_mutation_work, 0);
-    assert_eq!(state.phase, WasmPhase::RequestBody);
+    assert!(state.frame.request_body.is_empty());
+    assert_eq!(state.frame.request_body_limit, 0);
+    assert!(!state.frame.request_body_modified);
+    assert_eq!(state.frame.request_body_mutation_work, 0);
+    assert_eq!(state.frame.phase, WasmPhase::RequestBody);
 }
 
 /// Request snapshots own only the selected range and survive source mutation.
 #[test]
 fn buffer_select_preserves_owned_request_body() {
     let mut state = HostState::default();
-    state.request_body = vec![b'a'; 1024 * 1024];
-    state.request_body[42..45].copy_from_slice(b"XYZ");
+    state.frame.request_body = vec![b'a'; 1024 * 1024];
+    state.frame.request_body[42..45].copy_from_slice(b"XYZ");
     let selected = select_buffer(&state, BUF_HTTP_REQUEST_BODY)
         .unwrap()
         .snapshot(42, 3)
         .unwrap();
-    state.request_body.clear();
+    state.frame.request_body.clear();
     assert_eq!(selected.as_ref(), b"XYZ");
     let BufferSnapshot::Owned(bytes) = selected else {
         panic!("request range must be independently owned");
@@ -562,12 +569,12 @@ fn buffer_select_preserves_owned_request_body() {
 fn response_buffer_selection_shares_chunk_backing_storage() {
     let chunk = Bytes::from(vec![1, 2, 3, 4]);
     let mut state = HostState::default();
-    state.body_chunk = chunk.clone();
+    state.frame.body_chunk = chunk.clone();
     let selected = select_buffer(&state, BUF_HTTP_RESPONSE_BODY)
         .unwrap()
         .snapshot(1, 2)
         .unwrap();
-    state.body_chunk = Bytes::new();
+    state.frame.body_chunk = Bytes::new();
     assert_eq!(selected.as_ref(), &[2, 3]);
     assert_eq!(selected.as_ref().as_ptr(), chunk[1..].as_ptr());
     assert!(matches!(selected, BufferSnapshot::Shared(_)));
@@ -578,8 +585,8 @@ fn buffer_snapshots_cover_vec_sources_and_empty_callout() {
     let mut state = HostState::default();
     state.vm_config = b"vm-config".to_vec();
     state.plugin_config = b"plugin-config".to_vec();
-    state.request_body = b"request".to_vec();
-    state.callout_response = Some(CalloutResponse {
+    state.frame.request_body = b"request".to_vec();
+    state.frame.callout_response = Some(CalloutResponse {
         body: b"callout".to_vec(),
         ..Default::default()
     });
@@ -603,8 +610,8 @@ fn buffer_snapshots_cover_vec_sources_and_empty_callout() {
     }
     state.vm_config.clear();
     state.plugin_config.clear();
-    state.request_body.clear();
-    state.callout_response = None;
+    state.frame.request_body.clear();
+    state.frame.callout_response = None;
     for (snapshot, expected) in snapshots.iter().zip([b"m-", b"lu", b"eq", b"al"]) {
         assert_eq!(snapshot.as_ref(), expected);
         assert!(matches!(snapshot, BufferSnapshot::Owned(bytes) if bytes.len() == 2));
@@ -663,8 +670,8 @@ fn guest_log_flood_stopped_by_byte_budget() {
     let state = store.data();
     // ~32 successful 1 MiB lines fit under the 32 MiB budget; the flood
     // stops well before the 5000-iteration safety cap.
-    assert!(state.log_lines.len() >= 30 && state.log_lines.len() <= 34);
-    assert!(state.retained_bytes <= MAX_RETAINED_ABI_BYTES);
+    assert!(state.frame.log_lines.len() >= 30 && state.frame.log_lines.len() <= 34);
+    assert!(state.frame.retained_bytes <= MAX_RETAINED_ABI_BYTES);
 }
 
 /// Adversarial guest: loops `proxy_add_header_map_value` with a fixed ~1 MiB
@@ -707,124 +714,124 @@ fn guest_add_header_flood_no_partial_mutation() {
     // Every successful add pushes exactly one snapshot entry AND one
     // pending_op; a rejected add pushes neither. Lockstep counts prove the
     // rejected op left no partial mutation.
-    assert!(!state.pending_ops.is_empty());
-    assert_eq!(state.request_headers.len(), state.pending_ops.len());
-    assert!(state.request_headers.len() < 5000); // stopped by budget, not the cap
+    assert!(!state.frame.pending_ops.is_empty());
+    assert_eq!(state.frame.request_headers.len(), state.frame.pending_ops.len());
+    assert!(state.frame.request_headers.len() < 5000); // stopped by budget, not the cap
 }
 
 #[test]
 fn request_body_range_mutations_are_atomic_and_bounded() {
     let mut state = HostState::default();
     state.begin_phase(WasmPhase::RequestBody, vec![], vec![], HashMap::new());
-    state.request_body = b"abcdef".to_vec();
-    state.request_body_limit = 12;
+    state.frame.request_body = b"abcdef".to_vec();
+    state.frame.request_body_limit = 12;
 
     assert_eq!(replace_request_body_buffer(&mut state, 0, 0, Vec::new()), STATUS_OK);
-    assert!(!state.request_body_modified, "an empty insertion is a no-op");
+    assert!(!state.frame.request_body_modified, "an empty insertion is a no-op");
     assert_eq!(
         replace_request_body_buffer(&mut state, 1, 2, b"XYZ".to_vec()),
         STATUS_OK
     );
-    assert_eq!(state.request_body, b"aXYZdef");
+    assert_eq!(state.frame.request_body, b"aXYZdef");
     assert_eq!(replace_request_body_buffer(&mut state, 1, 0, b"+".to_vec()), STATUS_OK);
-    assert_eq!(state.request_body, b"a+XYZdef");
-    let end = state.request_body.len();
+    assert_eq!(state.frame.request_body, b"a+XYZdef");
+    let end = state.frame.request_body.len();
     assert_eq!(
         replace_request_body_buffer(&mut state, end, 0, b"!".to_vec()),
         STATUS_OK
     );
-    assert_eq!(state.request_body, b"a+XYZdef!");
+    assert_eq!(state.frame.request_body, b"a+XYZdef!");
     assert_eq!(replace_request_body_buffer(&mut state, 2, 3, Vec::new()), STATUS_OK);
-    assert_eq!(state.request_body, b"a+def!");
+    assert_eq!(state.frame.request_body, b"a+def!");
 
-    let before = state.request_body.clone();
+    let before = state.frame.request_body.clone();
     assert_eq!(
         replace_request_body_buffer(&mut state, before.len() + 1, 0, b"x".to_vec()),
         STATUS_BAD_ARGUMENT
     );
-    assert_eq!(state.request_body, before);
+    assert_eq!(state.frame.request_body, before);
     assert_eq!(
         replace_request_body_buffer(&mut state, 0, 0, vec![b'x'; 20]),
         STATUS_INTERNAL_FAILURE
     );
-    assert_eq!(state.request_body, before);
+    assert_eq!(state.frame.request_body, before);
 
     // Body replacement payload is not append-only retained ABI memory, so
     // it uses the separate mutation-work counter. Even near the generic
     // retained-byte budget, one equal-size rewrite succeeds.
-    state.retained_bytes = MAX_RETAINED_ABI_BYTES - ABI_OP_OVERHEAD_BYTES;
-    let replacement = vec![b'z'; state.request_body.len()];
-    let body_len = state.request_body.len();
-    let work_before = state.request_body_mutation_work;
+    state.frame.retained_bytes = MAX_RETAINED_ABI_BYTES - ABI_OP_OVERHEAD_BYTES;
+    let replacement = vec![b'z'; state.frame.request_body.len()];
+    let body_len = state.frame.request_body.len();
+    let work_before = state.frame.request_body_mutation_work;
     assert_eq!(
         replace_request_body_buffer(&mut state, 0, body_len, replacement),
         STATUS_OK
     );
-    assert_eq!(state.retained_bytes, MAX_RETAINED_ABI_BYTES);
-    assert_eq!(state.request_body_mutation_work, work_before + body_len);
-    assert!(state.request_body_modified);
+    assert_eq!(state.frame.retained_bytes, MAX_RETAINED_ABI_BYTES);
+    assert_eq!(state.frame.request_body_mutation_work, work_before + body_len);
+    assert!(state.frame.request_body_modified);
 }
 
 #[test]
 fn request_body_repeated_full_rewrites_stop_at_work_budget_atomically() {
     let mut state = HostState::default();
     state.begin_phase(WasmPhase::RequestBody, vec![], vec![], HashMap::new());
-    state.request_body = b"abcd".to_vec();
-    state.request_body_limit = 4;
-    state.request_body_mutation_work = request_body_mutation_work_limit(state.request_body_limit) - 4;
+    state.frame.request_body = b"abcd".to_vec();
+    state.frame.request_body_limit = 4;
+    state.frame.request_body_mutation_work = request_body_mutation_work_limit(state.frame.request_body_limit) - 4;
 
     assert_eq!(
         replace_request_body_buffer(&mut state, 0, 4, b"WXYZ".to_vec()),
         STATUS_OK
     );
-    assert_eq!(state.request_body, b"WXYZ");
+    assert_eq!(state.frame.request_body, b"WXYZ");
     assert_eq!(
-        state.request_body_mutation_work,
-        request_body_mutation_work_limit(state.request_body_limit)
+        state.frame.request_body_mutation_work,
+        request_body_mutation_work_limit(state.frame.request_body_limit)
     );
 
-    let retained_bytes = state.retained_bytes;
-    let retained_ops = state.retained_ops;
+    let retained_bytes = state.frame.retained_bytes;
+    let retained_ops = state.frame.retained_ops;
     assert_eq!(
         replace_request_body_buffer(&mut state, 0, 4, b"nope".to_vec()),
         STATUS_INTERNAL_FAILURE
     );
-    assert_eq!(state.request_body, b"WXYZ");
+    assert_eq!(state.frame.request_body, b"WXYZ");
     assert_eq!(
-        state.request_body_mutation_work,
-        request_body_mutation_work_limit(state.request_body_limit)
+        state.frame.request_body_mutation_work,
+        request_body_mutation_work_limit(state.frame.request_body_limit)
     );
-    assert_eq!(state.retained_bytes, retained_bytes);
-    assert_eq!(state.retained_ops, retained_ops);
+    assert_eq!(state.frame.retained_bytes, retained_bytes);
+    assert_eq!(state.frame.retained_ops, retained_ops);
 }
 
 #[test]
 fn request_body_length_change_charges_shifted_tail_work() {
     let mut state = HostState::default();
     state.begin_phase(WasmPhase::RequestBody, vec![], vec![], HashMap::new());
-    state.request_body = b"abcd".to_vec();
-    state.request_body_limit = 4;
-    state.request_body_mutation_work = request_body_mutation_work_limit(state.request_body_limit) - 3;
+    state.frame.request_body = b"abcd".to_vec();
+    state.frame.request_body_limit = 4;
+    state.frame.request_body_mutation_work = request_body_mutation_work_limit(state.frame.request_body_limit) - 3;
 
     // Deleting the first byte moves the remaining three-byte tail.
     assert_eq!(replace_request_body_buffer(&mut state, 0, 1, Vec::new()), STATUS_OK);
-    assert_eq!(state.request_body, b"bcd");
+    assert_eq!(state.frame.request_body, b"bcd");
     assert_eq!(
-        state.request_body_mutation_work,
-        request_body_mutation_work_limit(state.request_body_limit)
+        state.frame.request_body_mutation_work,
+        request_body_mutation_work_limit(state.frame.request_body_limit)
     );
 
     // A second front deletion would move another two-byte tail and must
     // be rejected without changing either the body or the counters.
-    let retained_bytes = state.retained_bytes;
-    let retained_ops = state.retained_ops;
+    let retained_bytes = state.frame.retained_bytes;
+    let retained_ops = state.frame.retained_ops;
     assert_eq!(
         replace_request_body_buffer(&mut state, 0, 1, Vec::new()),
         STATUS_INTERNAL_FAILURE
     );
-    assert_eq!(state.request_body, b"bcd");
-    assert_eq!(state.retained_bytes, retained_bytes);
-    assert_eq!(state.retained_ops, retained_ops);
+    assert_eq!(state.frame.request_body, b"bcd");
+    assert_eq!(state.frame.retained_bytes, retained_bytes);
+    assert_eq!(state.frame.retained_ops, retained_ops);
 }
 
 #[test]
@@ -899,14 +906,14 @@ fn set_buffer_bytes_enforces_phase_and_buffer_type() {
     store
         .data_mut()
         .begin_phase(WasmPhase::RequestBody, vec![], vec![], HashMap::new());
-    store.data_mut().request_body = b"abcdef".to_vec();
-    store.data_mut().request_body_limit = 16;
+    store.data_mut().frame.request_body = b"abcdef".to_vec();
+    store.data_mut().frame.request_body_limit = 16;
     assert_eq!(
         f.call(&mut store, (BUF_HTTP_REQUEST_BODY, 1, 2, 0, 3)).unwrap(),
         STATUS_OK
     );
-    assert_eq!(store.data().request_body, b"aXYZdef");
-    assert!(store.data().request_body_modified);
+    assert_eq!(store.data().frame.request_body, b"aXYZdef");
+    assert!(store.data().frame.request_body_modified);
     assert_eq!(
         f.call(&mut store, (BUF_HTTP_REQUEST_BODY, 99, 0, i32::MAX, 3)).unwrap(),
         STATUS_BAD_ARGUMENT,
@@ -916,15 +923,15 @@ fn set_buffer_bytes_enforces_phase_and_buffer_type() {
         f.call(&mut store, (BUF_HTTP_REQUEST_BODY, 0, 0, i32::MAX, 3)).unwrap(),
         STATUS_INVALID_MEMORY_ACCESS
     );
-    let mutation_limit = request_body_mutation_work_limit(store.data().request_body_limit);
-    store.data_mut().request_body_mutation_work = mutation_limit;
-    let body_before = store.data().request_body.clone();
+    let mutation_limit = request_body_mutation_work_limit(store.data().frame.request_body_limit);
+    store.data_mut().frame.request_body_mutation_work = mutation_limit;
+    let body_before = store.data().frame.request_body.clone();
     assert_eq!(
         f.call(&mut store, (BUF_HTTP_REQUEST_BODY, 0, 3, i32::MAX, 3)).unwrap(),
         STATUS_INTERNAL_FAILURE,
         "an exhausted work budget must reject before guest-memory copying"
     );
-    assert_eq!(store.data().request_body, body_before);
+    assert_eq!(store.data().frame.request_body, body_before);
     assert_eq!(
         f.call(&mut store, (BUF_HTTP_REQUEST_BODY, 0, 0, 0, -1)).unwrap(),
         STATUS_BAD_ARGUMENT
@@ -937,7 +944,7 @@ fn set_buffer_bytes_enforces_phase_and_buffer_type() {
     for populated in [false, true] {
         store.data_mut().vm_config = if populated { b"vm".to_vec() } else { Vec::new() };
         store.data_mut().plugin_config = if populated { b"plugin".to_vec() } else { Vec::new() };
-        store.data_mut().callout_response = populated.then(|| CalloutResponse {
+        store.data_mut().frame.callout_response = populated.then(|| CalloutResponse {
             body: b"callout".to_vec(),
             ..Default::default()
         });
@@ -1007,9 +1014,9 @@ fn get_buffer_bytes_preserves_unsigned_ranges_and_status_precedence() {
     let state = store.data_mut();
     state.vm_config = b"abcdef".to_vec();
     state.plugin_config = b"abcdef".to_vec();
-    state.request_body = b"abcdef".to_vec();
-    state.body_chunk = Bytes::from_static(b"abcdef");
-    state.callout_response = Some(CalloutResponse {
+    state.frame.request_body = b"abcdef".to_vec();
+    state.frame.body_chunk = Bytes::from_static(b"abcdef");
+    state.frame.callout_response = Some(CalloutResponse {
         body: b"abcdef".to_vec(),
         ..Default::default()
     });
@@ -1096,8 +1103,8 @@ fn get_buffer_bytes_snapshot_survives_allocator_reentry_mutation() {
     store
         .data_mut()
         .begin_phase(WasmPhase::RequestBody, vec![], vec![], HashMap::new());
-    store.data_mut().request_body = b"abcdef".to_vec();
-    store.data_mut().request_body_limit = 16;
+    store.data_mut().frame.request_body = b"abcdef".to_vec();
+    store.data_mut().frame.request_body_limit = 16;
     let mode = instance
         .get_typed_func::<i32, ()>(&mut store, "allocator_mode")
         .unwrap();
@@ -1110,8 +1117,8 @@ fn get_buffer_bytes_snapshot_survives_allocator_reentry_mutation() {
         STATUS_OK
     );
     assert_eq!(guest_u32(&mut store, &instance, 24), STATUS_OK as u32);
-    assert_eq!(store.data().request_body, b"aXYZef");
-    assert!(store.data().request_body_modified);
+    assert_eq!(store.data().frame.request_body, b"aXYZef");
+    assert!(store.data().frame.request_body_modified);
     assert_eq!(
         guest_buffer(&mut store, &instance),
         b"bcd",
@@ -1210,22 +1217,22 @@ fn log_preflight_rejection_has_no_partial_state_or_accounting() {
     let allocation = 3 + size_of::<(i32, String)>();
     set_test_allocation_limits(&mut store, allocation, allocation + ABI_OP_OVERHEAD_BYTES);
     assert_eq!(log.call(&mut store, (0, 3)).unwrap(), STATUS_OK);
-    let charged = store.data().retained_bytes;
+    let charged = store.data().frame.retained_bytes;
     assert_eq!(charged, allocation + ABI_OP_OVERHEAD_BYTES);
-    assert_eq!(store.data().log_lines.len(), 1);
+    assert_eq!(store.data().frame.log_lines.len(), 1);
     assert_eq!(log.call(&mut store, (0, 3)).unwrap(), STATUS_INTERNAL_FAILURE);
-    assert_eq!(store.data().retained_bytes, charged);
-    assert_eq!(store.data().retained_ops, 1);
-    assert_eq!(store.data().log_lines.len(), 1);
+    assert_eq!(store.data().frame.retained_bytes, charged);
+    assert_eq!(store.data().frame.retained_ops, 1);
+    assert_eq!(store.data().frame.log_lines.len(), 1);
 
     let (mut store, instance) = instantiate_allocation_guest();
     write_guest(&instance, &mut store, 0, b"abc");
     let log = instance.get_typed_func::<(i32, i32), i32>(&mut store, "log").unwrap();
     set_test_allocation_limits(&mut store, 2, usize::MAX);
     assert_eq!(log.call(&mut store, (0, 3)).unwrap(), STATUS_INTERNAL_FAILURE);
-    assert!(store.data().log_lines.is_empty());
-    assert_eq!(store.data().retained_bytes, 0);
-    assert_eq!(store.data().retained_ops, 0);
+    assert!(store.data().frame.log_lines.is_empty());
+    assert_eq!(store.data().frame.retained_bytes, 0);
+    assert_eq!(store.data().frame.retained_ops, 0);
 }
 
 #[test]
@@ -1253,7 +1260,7 @@ fn replace_all_profiles_structure_and_keeps_first_header_spelling() {
         .unwrap();
 
     let (mut store, instance) = instantiate_allocation_guest();
-    store.data_mut().request_headers = existing.clone();
+    store.data_mut().frame.request_headers = existing.clone();
     write_guest(&instance, &mut store, 0, &encoded);
     set_test_allocation_limits(&mut store, transient.bytes, retained.bytes + ABI_OP_OVERHEAD_BYTES);
     let set_pairs = instance
@@ -1266,16 +1273,16 @@ fn replace_all_profiles_structure_and_keeps_first_header_spelling() {
         STATUS_OK
     );
     assert_eq!(
-        store.data().request_headers,
+        store.data().frame.request_headers,
         vec![("new".to_string(), "value".to_string())]
     );
     assert!(matches!(
-        store.data().pending_ops.as_slice(),
+        store.data().frame.pending_ops.as_slice(),
         [HeaderOp::ReplaceAll { remove, .. }] if remove == &["First", "Second"]
     ));
 
     let (mut store, instance) = instantiate_allocation_guest();
-    store.data_mut().request_headers = existing.clone();
+    store.data_mut().frame.request_headers = existing.clone();
     write_guest(&instance, &mut store, 0, &encoded);
     set_test_allocation_limits(&mut store, transient.bytes - 1, usize::MAX);
     let set_pairs = instance
@@ -1287,13 +1294,13 @@ fn replace_all_profiles_structure_and_keeps_first_header_spelling() {
             .unwrap(),
         STATUS_INTERNAL_FAILURE
     );
-    assert_eq!(store.data().request_headers, existing);
-    assert!(store.data().pending_ops.is_empty());
-    assert_eq!(store.data().retained_bytes, 0);
-    assert_eq!(store.data().retained_ops, 0);
+    assert_eq!(store.data().frame.request_headers, existing);
+    assert!(store.data().frame.pending_ops.is_empty());
+    assert_eq!(store.data().frame.retained_bytes, 0);
+    assert_eq!(store.data().frame.retained_ops, 0);
 
     let (mut store, instance) = instantiate_allocation_guest();
-    store.data_mut().request_headers = vec![("kept".to_string(), "value".to_string())];
+    store.data_mut().frame.request_headers = vec![("kept".to_string(), "value".to_string())];
     write_guest(&instance, &mut store, 0, &encoded);
     let set_pairs = instance
         .get_typed_func::<(i32, i32, i32), i32>(&mut store, "set_pairs")
@@ -1311,12 +1318,12 @@ fn replace_all_profiles_structure_and_keeps_first_header_spelling() {
         STATUS_BAD_ARGUMENT
     );
     assert_eq!(
-        store.data().request_headers,
+        store.data().frame.request_headers,
         vec![("kept".to_string(), "value".to_string())]
     );
-    assert!(store.data().pending_ops.is_empty());
-    assert_eq!(store.data().retained_bytes, 0);
-    assert_eq!(store.data().retained_ops, 0);
+    assert!(store.data().frame.pending_ops.is_empty());
+    assert_eq!(store.data().frame.retained_bytes, 0);
+    assert_eq!(store.data().frame.retained_ops, 0);
 }
 
 #[test]
@@ -1345,8 +1352,8 @@ fn high_segment_property_uses_exact_single_string_profile() {
             .unwrap(),
         STATUS_OK
     );
-    assert_eq!(store.data().properties.len(), 1);
-    let key = store.data().properties.keys().next().unwrap();
+    assert_eq!(store.data().frame.properties.len(), 1);
+    let key = store.data().frame.properties.keys().next().unwrap();
     assert_eq!(key.len(), decoded_len);
     assert!(key.contains('\u{FFFD}'));
 
@@ -1363,9 +1370,9 @@ fn high_segment_property_uses_exact_single_string_profile() {
             .unwrap(),
         STATUS_INTERNAL_FAILURE
     );
-    assert!(store.data().properties.is_empty());
-    assert_eq!(store.data().retained_bytes, 0);
-    assert_eq!(store.data().retained_ops, 0);
+    assert!(store.data().frame.properties.is_empty());
+    assert_eq!(store.data().frame.retained_bytes, 0);
+    assert_eq!(store.data().frame.retained_ops, 0);
 }
 
 #[test]
@@ -1389,7 +1396,7 @@ fn local_response_preflight_is_atomic_and_keeps_compatibility_precedence() {
             .unwrap(),
         STATUS_OK
     );
-    let accepted = store.data().local_response.clone().unwrap();
+    let accepted = store.data().frame.local_response.clone().unwrap();
     assert_eq!(accepted.body, body);
     assert_eq!(accepted.headers, vec![("x-test".to_string(), "yes".to_string())]);
 
@@ -1400,13 +1407,19 @@ fn local_response_preflight_is_atomic_and_keeps_compatibility_precedence() {
             .unwrap(),
         STATUS_INTERNAL_FAILURE
     );
-    assert_eq!(store.data().local_response.as_ref().unwrap().status, accepted.status);
-    assert_eq!(store.data().local_response.as_ref().unwrap().body, accepted.body);
-    assert_eq!(store.data().local_response.as_ref().unwrap().headers, accepted.headers);
+    assert_eq!(
+        store.data().frame.local_response.as_ref().unwrap().status,
+        accepted.status
+    );
+    assert_eq!(store.data().frame.local_response.as_ref().unwrap().body, accepted.body);
+    assert_eq!(
+        store.data().frame.local_response.as_ref().unwrap().headers,
+        accepted.headers
+    );
 
     let malformed = [0xFF, 0xFF, 0xFF, 0xFF];
     write_guest(&instance, &mut store, 128, &malformed);
-    let existing_allocation = local_response_allocation(store.data().local_response.as_ref().unwrap())
+    let existing_allocation = local_response_allocation(store.data().frame.local_response.as_ref().unwrap())
         .unwrap()
         .bytes;
     set_test_allocation_limits(&mut store, existing_allocation, usize::MAX);
@@ -1417,8 +1430,8 @@ fn local_response_preflight_is_atomic_and_keeps_compatibility_precedence() {
         STATUS_OK,
         "nonpositive body ignores its pointer and malformed headers become empty"
     );
-    assert!(store.data().local_response.as_ref().unwrap().body.is_empty());
-    assert!(store.data().local_response.as_ref().unwrap().headers.is_empty());
+    assert!(store.data().frame.local_response.as_ref().unwrap().body.is_empty());
+    assert!(store.data().frame.local_response.as_ref().unwrap().headers.is_empty());
     assert_eq!(
         local.call(&mut store, (204, 300_000, 1, 300_000, 1)).unwrap(),
         STATUS_INVALID_MEMORY_ACCESS,
@@ -1458,8 +1471,8 @@ fn local_response_replacement_profiles_old_and_candidate_peak() {
         .unwrap();
 
     let (mut store, instance) = instantiate_allocation_guest();
-    store.data_mut().local_response = Some(local_response_with_spare_capacity());
-    let old_allocation = local_response_allocation(store.data().local_response.as_ref().unwrap()).unwrap();
+    store.data_mut().frame.local_response = Some(local_response_with_spare_capacity());
+    let old_allocation = local_response_allocation(store.data().frame.local_response.as_ref().unwrap()).unwrap();
     let exact_peak = old_allocation.add_bytes(candidate_allocation.bytes).unwrap().bytes;
     write_guest(&instance, &mut store, 0, candidate_body);
     write_guest(&instance, &mut store, 64, &candidate_headers);
@@ -1476,17 +1489,17 @@ fn local_response_replacement_profiles_old_and_candidate_peak() {
             .unwrap(),
         STATUS_OK
     );
-    assert_eq!(store.data().local_response.as_ref().unwrap().body, candidate_body);
+    assert_eq!(store.data().frame.local_response.as_ref().unwrap().body, candidate_body);
 
     let (mut store, instance) = instantiate_allocation_guest();
-    store.data_mut().local_response = Some(local_response_with_spare_capacity());
-    let preserved_allocation = local_response_allocation(store.data().local_response.as_ref().unwrap()).unwrap();
+    store.data_mut().frame.local_response = Some(local_response_with_spare_capacity());
+    let preserved_allocation = local_response_allocation(store.data().frame.local_response.as_ref().unwrap()).unwrap();
     let rejected_peak = preserved_allocation
         .add_bytes(candidate_allocation.bytes)
         .unwrap()
         .bytes;
-    store.data_mut().retained_bytes = 123;
-    store.data_mut().retained_ops = 2;
+    store.data_mut().frame.retained_bytes = 123;
+    store.data_mut().frame.retained_ops = 2;
     write_guest(&instance, &mut store, 0, candidate_body);
     write_guest(&instance, &mut store, 64, &candidate_headers);
     set_test_allocation_limits(&mut store, rejected_peak - 1, usize::MAX);
@@ -1502,7 +1515,7 @@ fn local_response_replacement_profiles_old_and_candidate_peak() {
             .unwrap(),
         STATUS_INTERNAL_FAILURE
     );
-    let preserved = store.data().local_response.as_ref().unwrap();
+    let preserved = store.data().frame.local_response.as_ref().unwrap();
     assert_eq!(preserved.status, 409);
     assert_eq!(preserved.body, b"old");
     assert_eq!(preserved.body.capacity(), 32);
@@ -1510,8 +1523,8 @@ fn local_response_replacement_profiles_old_and_candidate_peak() {
     assert_eq!(preserved.headers.capacity(), 4);
     assert_eq!(preserved.headers[0].0.capacity(), 16);
     assert_eq!(preserved.headers[0].1.capacity(), 24);
-    assert_eq!(store.data().retained_bytes, 123);
-    assert_eq!(store.data().retained_ops, 2);
+    assert_eq!(store.data().frame.retained_bytes, 123);
+    assert_eq!(store.data().frame.retained_ops, 2);
 }
 
 #[test]
@@ -1557,6 +1570,35 @@ fn shared_data_preflight_preserves_ranges_empty_writes_and_cas() {
         STATUS_BAD_ARGUMENT
     );
     assert!(store.data().shared_data.get("k").is_none());
-    assert_eq!(store.data().retained_bytes, 0);
-    assert_eq!(store.data().retained_ops, 0);
+    assert_eq!(store.data().frame.retained_bytes, 0);
+    assert_eq!(store.data().frame.retained_ops, 0);
+}
+
+#[test]
+fn callout_tokens_survive_frames_and_exhaust_without_reuse() {
+    let (mut store, instance) = instantiate_callout_guest();
+    let dispatch = instance.get_typed_func::<i32, i32>(&mut store, "dispatch").unwrap();
+    let memory = instance.get_memory(&mut store, "memory").unwrap();
+    for expected in [1u32, 2] {
+        store
+            .data_mut()
+            .begin_phase(WasmPhase::RequestHeaders, vec![], vec![], HashMap::new());
+        store
+            .data_mut()
+            .arm_dispatch(Arc::from(vec!["http://example.com:80".into()]), 1000);
+        assert_eq!(dispatch.call(&mut store, 128).unwrap(), STATUS_OK);
+        let mut bytes = [0; 4];
+        memory.read(&store, 128, &mut bytes).unwrap();
+        assert_eq!(u32::from_le_bytes(bytes), expected);
+    }
+    store.data_mut().last_callout_token = u32::MAX;
+    store
+        .data_mut()
+        .begin_phase(WasmPhase::RequestHeaders, vec![], vec![], HashMap::new());
+    store
+        .data_mut()
+        .arm_dispatch(Arc::from(vec!["http://example.com:80".into()]), 1000);
+    assert_eq!(dispatch.call(&mut store, 128).unwrap(), STATUS_INTERNAL_FAILURE);
+    assert!(store.data().frame.pending_callouts.is_empty());
+    assert_eq!(store.data().last_callout_token, u32::MAX);
 }

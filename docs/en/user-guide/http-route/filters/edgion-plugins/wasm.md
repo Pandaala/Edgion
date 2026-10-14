@@ -19,6 +19,41 @@ proxy-wasm is a portable ABI for writing proxy extensions once and running them 
 
 The implemented ABI is a deliberate subset (see below): header read/write, local responses, **HTTP callouts** (request phase with Pause/resume, and from `on_tick`), **request-body buffer mode** (whole-body, guest-declared, can deny or rewrite), **read-only response-body observation** (per-chunk), **shared data**, and **timers** (`on_tick`). Whole-response buffering and response-body modification are not supported: the main upstream response always remains streaming.
 
+## Request-owned execution and response hooks
+
+```yaml
+requestPlugins:
+  - type: Wasm
+    config:
+      source:
+        file: plugins/example.wasm
+      maxActiveRequests: 32
+      response:
+        headers: true
+        body: true
+        trailers: true
+```
+
+All three response flags default to false and are valid only on `requestPlugins`.
+One request retains the exact loaded generation, exclusive VM, and HTTP context
+from request headers through final cleanup. Request body and opted-in response
+hooks see the same guest object; overlapping requests have different instances.
+A request admits at most 64 bindings and one binding per constructed entry;
+a repeated installation uses the configured failure mode.
+The final async upstream-header companion can mutate headers or reply locally.
+The streaming body and trailer companions are observational: mutation, local
+responses, logging and Pause are unsupported. There is no response accumulation.
+Before-trailers is not EOS; real trailers close the stream, and a headers-only
+response does not receive a duplicate synthetic body EOS after a header EOS.
+
+Host callback snapshots are released after each callback, even while the guest
+context stays alive. Normal request termination invokes done/delete once in
+the universal logging hook. Cancellation of an execution future or dropping the request owner discards
+the execution without guest code from Drop. A healthy transport-error terminal
+that reaches logging still runs normal cleanup. A skipped request entry never runs its response companion.
+This bounded exclusive model intentionally trades instance occupancy for simple
+ownership; it is not a high-density multi-context runtime.
+
 ## Supported ABI subset
 
 ### Hooks
@@ -29,12 +64,15 @@ The implemented ABI is a deliberate subset (see below): header read/write, local
 | `proxy_on_request_headers` | `requestPlugins` (`RequestFilter`) | Request headers received, before the backend is contacted |
 | `proxy_on_request_body` | `requestPlugins` (`RequestFilter`), same entry as headers | Once per request, **after** `proxy_on_request_headers`, only if the guest module exports this hook — see [Request-body buffer mode](#request-body-buffer-mode) |
 | `proxy_on_http_call_response` | — (callout callback) | Once per completed callout: on the paused request context for callouts dispatched from `proxy_on_request_headers`, or on the root context for callouts dispatched from `proxy_on_tick` |
-| `proxy_on_response_headers` | `upstreamResponseFilterPlugins` (`UpstreamResponseFilter`) | Upstream response headers received |
-| `proxy_on_response_body` | `upstreamResponseBodyFilterPlugins` (`UpstreamResponseBodyFilter`) | Once per upstream body chunk, **read-only** (see [Response-body observation](#response-body-observation-read-only)) |
+| `proxy_on_response_headers` | Explicit request `response.headers`, or standalone `upstreamResponseFilterPlugins` | Final upstream response headers |
+| `proxy_on_response_body` | Explicit request `response.body`, or standalone `upstreamResponseBodyFilterPlugins` | Once per upstream body chunk, **read-only** (see [Response-body observation](#response-body-observation-read-only)) |
+| `proxy_on_response_trailers` | Explicit request `response.trailers` | Real upstream trailers, read-only; bounded to 64KiB and 1024 pairs |
 | `proxy_on_tick` | — (background) | Periodically, once the guest set a tick period (see [Timers](#shared-data-and-timers)) |
 | `proxy_on_done` / `proxy_on_delete` | — (per-context cleanup) | After each per-request context finishes |
 
-Wasm is **not** available at `upstreamResponsePlugins` (async response stage).
+Wasm is not configured directly at `upstreamResponsePlugins`. A request entry
+can explicitly attach response companions using `response` below; they share
+its request execution and run at the final upstream-response stage.
 If a module needs the complete request body, place it in `requestPlugins`.
 `RequestBodyBuffer` can preserve a request body for supported later consumers
 such as DSL, but response-stage Wasm host phases do not expose that cache.
@@ -43,7 +81,7 @@ such as DSL, but response-stage Wasm host phases do not expose that cache.
 
 | Host function | Supported | Notes |
 |---|:---:|---|
-| `proxy_get_header_map_pairs` / `proxy_get_header_map_value` | ✅ | Request headers, response headers, and (inside the callout callback) `HttpCallResponseHeaders` — the callout's response headers plus a synthetic `:status` pair |
+| `proxy_get_header_map_pairs` / `proxy_get_header_map_value` | ✅ | Request headers, response headers, attached response trailers, and (inside the callout callback) `HttpCallResponseHeaders` — the callout's response headers plus a synthetic `:status` pair |
 | `proxy_replace_header_map_value` / `proxy_add_header_map_value` / `proxy_remove_header_map_value` / `proxy_set_header_map_pairs` | ✅ | Set / add / remove / bulk-replace; applied to the real request/response after the hook returns. Header-map writes to the callout response map are rejected |
 | `proxy_send_local_response` | ✅ | Short-circuits the request with a final HTTP status (`200`–`599`), body, and headers. An invalid status is replaced with `500`. The body is forwarded byte-for-byte, so a binary payload (an image, protobuf, ...) is delivered unchanged; an empty body produces a bodyless response. Also valid from inside `proxy_on_http_call_response` (deny after an auth callout) |
 | `proxy_http_call` | ✅ (request-headers + tick phases) | See [HTTP callouts](#http-callouts-pauseresume). In the request-body, response-headers, and response-body phases it returns `UNIMPLEMENTED` (12); tick calls require the owning plugin's allowlist (see [Timers](#shared-data-and-timers)) |
@@ -106,6 +144,8 @@ config:
 | `failOpen` | Boolean | `false` | Governs behavior on load failure / trap / timeout / Body access failure / callout no-resume — see [Failure semantics](#failure-semantics). |
 | `timeoutMs` | Integer | `100` | Per-hook wall-clock budget in milliseconds (epoch interruption). Range `1..=10000`. Body-chunk hooks run at `timeoutMs / 10`. |
 | `instancePoolSize` | Integer | `8` | Max pooled instances kept per compiled module, per gateway process. Range `1..=64`. |
+| `maxActiveRequests` | Integer | `32` | Live request leases per configured runtime, across OCI generations; range `1..=64`. |
+| `response` | Object | All false | Request-only `{headers, body, trailers}` companion selection, sharing one HTTP context. |
 | `calloutAllowlist` | String list | `[]` | Origins (`scheme://host[:port]`) the guest may target with `proxy_http_call`. **Empty = callouts disabled** (dispatch fails with a host error the guest can observe). Exact-origin match after normalization. |
 | `calloutTimeoutMs` | Integer | `5000` | Upper bound on each callout's guest-supplied timeout (also the effective timeout when the guest passes 0). Range `1..=10000`. |
 
@@ -244,7 +284,7 @@ Semantics and guardrails:
 - **Addressing**: the `upstream` parameter is the target **origin URL** (`https://auth.internal:8443`), not an Envoy cluster name. The `:path`, `:method`, and `:authority` pseudo headers from the dispatched header map drive the outbound request (`:authority` is sent as `Host`).
 - **Allowlist**: the origin must exactly match an entry in `calloutAllowlist` (after normalization). No allowlist = no callouts. A denied dispatch returns `INTERNAL_FAILURE` from `proxy_http_call` synchronously.
 - **Request and tick phases**: the response-headers/body stages are synchronous and cannot await; dispatch there returns `UNIMPLEMENTED`. Callouts from `on_tick` use the owning plugin's authorization and root-context callbacks — see [Timers](#shared-data-and-timers).
-- **Pause required** (request phase): `dispatch` + `Action::Continue` is not supported — the queued callouts are dropped and logged (`callouts-dropped=N`). Dispatch must be followed by `Pause`. (`on_tick` has no Pause concept: callouts dispatched there are always executed after the hook returns.)
+- **Pause required**: request-header dispatch followed by Continue applies `failOpen` and discards the execution (`callout requires pause`). Tick callouts have no Pause action and are delivered after the hook returns.
 - **Budgets**: at most 8 dispatches per request (or per tick), 4 callback rounds (a callback may dispatch follow-ups), 64 concurrent callouts process-wide, 256KiB response-body cap per callout. Each callout's timeout is `min(guest_timeout, calloutTimeoutMs)`.
 - **Callout failure** (connect error, timeout, oversized body): the callback fires with **0 headers** — the proxy-wasm convention — and the guest decides its own fail behavior. The host never traps the guest for a failed callout.
 - **Guest never resumes**: if after all callouts the guest neither continued nor answered, the host applies `failOpen` (reason `no-resume`).
@@ -347,7 +387,14 @@ Working within the per-chunk model:
 
 ### Timers (`on_tick`)
 
-A guest that calls `proxy_set_tick_period_milliseconds(N)` (typically from `on_configure`) gets `proxy_on_tick` invoked every `N` ms (floor 100ms) on a background task, one per plugin runtime. The tick instance is leased from the same pool as request instances and runs under the normal `timeoutMs` epoch budget, and **consecutive ticks may run on different pooled instances** — root-context struct fields are per-instance, so state that must survive across ticks belongs in shared data (state *initialized* in `on_configure`, like a parsed config, is fine: every pooled instance runs `on_configure` at init). The guest can change the period or stop ticking (`0`) from inside `on_tick`. The tick task is cancelled when its owning plugin instance is released or its loaded module is replaced. An executing synchronous hook remains bounded by its epoch deadline.
+A guest that calls `proxy_set_tick_period_milliseconds(N)` gets one background
+task per loaded runtime generation (floor 100ms). It owns a dedicated persistent
+VM under `timeoutMs`; consecutive successful ticks preserve its root fields.
+A trap discards that VM, so a replacement starts with a new root. Request VMs
+have separate roots: only explicit host shared KV crosses this boundary. A
+root-field update in `on_tick` is not visible to request contexts. The guest can
+change the period or stop ticking (`0`); plugin retirement or module replacement
+cancels the task, with synchronous work bounded by its epoch deadline.
 
 Typical pattern: `on_tick` dispatches a callout to fetch the latest ruleset and writes it into shared data; request hooks read it (rate-limit rule refresh, denylist sync, config polling).
 
@@ -361,7 +408,13 @@ Typical pattern: `on_tick` dispatches a callout to fetch the latest ruleset and 
 
 ## Failure semantics
 
-All failure modes route through the same `failOpen` decision:
+Request and response-header execution failures use `failOpen`. Attached streaming
+body/trailer failures disable the binding and record `WasmExecutionError` once,
+while preserving the already-started response. Terminal cleanup failures also
+record this bounded access-log diagnostic and discard the VM. They cannot
+retroactively replace a response.
+
+Pre-commit failure decisions:
 
 | Reason | Trigger | PluginLog |
 |---|---|---|
@@ -401,7 +454,7 @@ Each configured Wasm entry owns its loaded module, instance pool, shared data, a
 - **Reload tradeoff.** Rebuilds may recompile and reset shared data. Only the process-wide engine and bounded OCI artifact-byte cache remain shared. Old and new generations may briefly overlap; state continuity across configuration replacement is not guaranteed.
 - **File replacement.** Overwriting a `.wasm` file takes effect when the owning plugin is rebuilt and loads the file again. A bare overwrite does not replace an already-loaded runtime.
 - **Preload and refresh.** Eager initialization starts configured ticks before the first request. Cold failures are negative-cached. OCI `Always` refresh keeps the last successful generation on failure; successful replacement cancels the old tick and starts the new generation.
-- **Capacity.** All runtimes use the shared engine's pooling allocator. Size capacity for all configured plugin entries and temporarily overlapping generations; `edgion_wasm_modules_loaded` counts live compiled runtime generations.
+- **Capacity.** `maxActiveRequests` bounds live request leases per configured runtime, including overlapping OCI module generations. The default is 32, range 1..=64. Long streams hold admission until terminal cleanup. A process-wide limit of 128 actual instances includes idle, active, dedicated timer, and retiring-generation VMs. Admission fails immediately through the existing fail mode; there is no waiting queue. Idle pools consume capacity, so this is neither a fairness guarantee nor a process RSS budget. `instancePoolSize` only bounds idle retention.
 
 ## Metrics
 
@@ -413,9 +466,9 @@ Source-scoped metrics carry a `module` label; `edgion_wasm_modules_loaded` is pr
 | `edgion_wasm_module_compile_duration_ms` | histogram | | `Module::new` wall time |
 | `edgion_wasm_module_released_total` | counter | | Loaded runtime generations released after their last holder exits |
 | `edgion_wasm_instance_instantiate_total` | counter | | Fresh instantiations (pool misses) |
-| `edgion_wasm_instance_discard_total` | counter | `reason=poisoned\|over_capacity` | Instances dropped instead of pooled |
+| `edgion_wasm_instance_discard_total` | counter | `reason=poisoned\|over_capacity` | Poisoned or over-capacity instances discarded; normal dedicated timer retirement is not counted |
 | `edgion_wasm_pool_size` | gauge | | Last reported pool size for the source label; not a sum across independent runtimes |
-| `edgion_wasm_hook_duration_ms` | histogram | `phase` | Guest hook wall time (`request_headers`, `request_body`, `response_headers`, `response_body`, `http_call_response`, `tick`) |
+| `edgion_wasm_hook_duration_ms` | histogram | `phase` | Guest hook wall time (attached streaming observers use only request diagnostics; `request_headers`, `request_body`, `response_headers`, `response_body`, `http_call_response`, `tick`) |
 | `edgion_wasm_trap_total` | counter | `phase` | Traps / protocol violations |
 | `edgion_wasm_fail_mode_total` | counter | `reason`, `mode=open\|close` | Fail-mode decisions |
 | `edgion_wasm_callout_total` | counter | `result=ok\|error\|denied\|over_limit` | Callout outcomes under the owning plugin's grant |
@@ -429,8 +482,8 @@ A trap storm shows up as `edgion_wasm_trap_total` and `edgion_wasm_instance_disc
 
 - `wasm ok ops=N logs=M` — success; `N` header operations applied, `M` guest log lines (content goes to the debug log).
 - `wasm ok ops=N pause-ignored` — the guest returned `Pause` without dispatching a callout or sending a local response; the request continues.
-- `wasm callouts=N leftover=M` — request phase resolved `N` callouts (`M` dropped by the round cap).
-- `wasm callouts-dropped=N` — the guest dispatched callouts but returned `Continue`; they were dropped (unsupported pattern).
+- `wasm callouts=N leftover=M` — request phase resolved `N` callouts (`M` undelivered; any undelivered token discards the VM).
+- **Pause required**: request-header dispatch followed by Continue applies `failOpen` and discards the execution (`callout requires pause`). Tick callouts have no Pause action and are delivered after the hook returns.
 - `wasm local <status>` — the guest sent a local response.
 - `wasm <reason>:fail-open` / `wasm <reason>:fail-close` — one of the failure reasons above.
 
@@ -441,9 +494,9 @@ A trap storm shows up as `edgion_wasm_trap_total` and `edgion_wasm_instance_disc
 - **Request-body rewrite only**: `proxy_set_buffer_bytes(HttpRequestBody, ...)` is valid only during the whole request-body hook. Response-body writes remain `STATUS_UNIMPLEMENTED`; other phases return a defined ABI error.
 - **Static mode selection, not dynamic Pause/Continue**: unlike Envoy, the body mode a plugin gets is fixed at module-load time by which hooks the compiled guest exports, not chosen per-request by the guest's `Action` return value. See [Two body modes, chosen statically](#two-body-modes-chosen-statically).
 - **No gRPC callouts** (`proxy_dispatch_grpc_call`): calling it traps.
-- **No callouts from the response/body phases** (sync stages), and request-phase dispatch without `Pause` is dropped. Tick-phase callouts use their owning plugin's `calloutAllowlist` (see [Timers](#shared-data-and-timers)).
+- **No callouts from the response/body phases** (sync stages), and request-phase dispatch without `Pause` fails through `failOpen` and discards the execution. Tick-phase callouts use their owning plugin's `calloutAllowlist` (see [Timers](#shared-data-and-timers)).
 - **No shared queues, foreign functions, or guest-defined metrics**: calling them traps.
-- **Per-request contexts are per-hook-call**: the request-headers and response-headers hooks of the same request may run on different pooled instances with fresh context ids. Use an explicit request header to correlate separately configured stages; those entries do not share guest memory or shared data.
+- **Explicit ownership profiles**: a request entry retains one VM and HTTP context through its attached response callbacks. Independently configured synchronous response/header/body entries still use separate per-hook contexts and independent runtimes. Neither profile promises root-field sharing between request and timer VMs. Request trailers, deferred completion (`on_done = false`), and `on_log` are not supported.
 - **`source.oci` v1 constraints**: registries must present a publicly-verifiable TLS certificate (loopback registries may use plain HTTP for local testing); no registry mirrors. See [`source.oci` — pull from an OCI registry](#sourceoci--pull-from-an-oci-registry).
 
 ## Building a guest
@@ -518,7 +571,7 @@ See `edgion-tests/wasm/README.md` for the full contract the reference guest impl
 
 ### Q: My callout is never executed?
 
-Check, in order: (1) the target origin is listed in `calloutAllowlist` — empty list disables callouts entirely; (2) for request-headers-phase dispatch, the guest returns `Action::Pause` — dispatch followed by `Continue` is dropped (`callouts-dropped=N` in the access log); (3) the dispatch happens in the request-headers or tick phase — request-body, response-headers, and response-body phases return `UNIMPLEMENTED`; (4) for tick-phase dispatch, the owning plugin itself must authorize the origin — another entry's allowlist does not apply.
+Check, in order: (1) the target origin is listed in `calloutAllowlist` — empty list disables callouts entirely; (2) for request-headers-phase dispatch, the guest returns `Action::Pause` — dispatch followed by `Continue` fails through `failOpen` (`callout requires pause` in the access log); (3) the dispatch happens in the request-headers or tick phase — request-body, response-headers, and response-body phases return `UNIMPLEMENTED`; (4) for tick-phase dispatch, the owning plugin itself must authorize the origin — another entry's allowlist does not apply.
 
 ### Q: My request is failing with an unexpected `500` instead of running `proxy_on_request_body`?
 
@@ -526,11 +579,11 @@ Confirm that the `Wasm` entry is under `requestPlugins` and the compiled guest a
 
 ### Q: My guest module isn't taking effect on the response phase?
 
-Confirm you listed the entry under `upstreamResponseFilterPlugins` (headers) or `upstreamResponseBodyFilterPlugins` (read-only body), not `upstreamResponsePlugins`. ExtProc is configured once in `requestPlugins`; its response work is an internal companion owned by that request entry, not a separately configurable async-stage entry.
+For stateful execution, configure one `requestPlugins` entry with explicit `response` hooks. For independent per-hook execution, use `upstreamResponseFilterPlugins` (headers) or `upstreamResponseBodyFilterPlugins` (read-only body). Neither is configured directly under `upstreamResponsePlugins`.
 
 ### Q: The controller rejected my EdgionPlugins resource?
 
-Common causes: `source` has zero or more than one of `file`/`inline`/`url`/`oci` set; `source.url` without `sha256`; `sha256` isn't 64 hex chars; `source.inline` isn't valid base64 or decodes to more than 1MiB; `source.fetch` without `source.url`; `source.oci.image` isn't a valid `registry/repo:tag` or `registry/repo@sha256:<digest>` reference; `calloutAllowlist` entries that aren't clean `scheme://host[:port]` origins; `timeoutMs`/`calloutTimeoutMs` out of `1..=10000`; `instancePoolSize` out of `1..=64`.
+Common causes: `source` has zero or more than one of `file`/`inline`/`url`/`oci` set; `source.url` without `sha256`; `sha256` isn't 64 hex chars; `source.inline` isn't valid base64 or decodes to more than 1MiB; `source.fetch` without `source.url`; `source.oci.image` isn't a valid `registry/repo:tag` or `registry/repo@sha256:<digest>` reference; `calloutAllowlist` entries that aren't clean `scheme://host[:port]` origins; `timeoutMs`/`calloutTimeoutMs` out of `1..=10000`; `instancePoolSize` or `maxActiveRequests` out of `1..=64`, or `response` hooks on a standalone response-stage entry.
 
 ### Q: I replaced the `.wasm` file on disk but the gateway still runs the old build?
 

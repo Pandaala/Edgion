@@ -8,14 +8,16 @@ knowledge_type: intentional-design
 
 ## Decision and scope
 
-The native 64-bit `EdgionHttpContext` budget is 1328 bytes and `RequestInfo`
-retains its audited 432-byte layout. Inline `ResolvedRequestBodyConfig` has a
+The user-approved interim `EdgionHttpContext` ceiling is strictly below 1800
+bytes on all pointer widths (2026-10-14). `RequestInfo` retains its audited
+432-byte layout. The earlier 1328-byte context ledger below is historical. Inline `ResolvedRequestBodyConfig` has a
 48-byte budget. These are review boundaries, not a stable Rust ABI or permission
-for future growth. Other pointer widths retain the previous context ceiling.
+for unreviewed future growth. The interim ceiling includes deliberate headroom;
+it is not a claim that every current context field has been audited.
 Ordinary context construction and absent-state reads remain allocation-free;
 feature owners retain their existing nullable boxes.
 
-## Accounted growth and necessity
+## Historical accounted growth and necessity
 
 Commit d9854dd5 introduced the 1280-byte context ceiling on 2026-10-06. Original
 field declarations reconstruct a 1264-byte layout, with 16 bytes of headroom.
@@ -61,7 +63,7 @@ ordinary request allocation; a bespoke compact representation adds method mappin
 and extension ownership without measured performance evidence. No measured
 performance case justifies these production changes for this assertion correction.
 
-The user-authorized follow-up refreshes the two stale assertions to 1328/432
+The earlier user-authorized follow-up refreshed the two stale assertions to 1328/432
 without extra headroom and retains tight current limits, useful measured-size
 diagnostics, and a separate inline-policy guard.
 It does not change runtime storage or loosen future admission, memory or transport
@@ -100,3 +102,25 @@ provides the same audited-budget and independent-allocation-guard precedent.
   The semantic fixture repair supplies the same frozen-method contract without
   altering production transport policy. Completed temporary task records were
   removed; the current layout decision and regression tests remain canonical.
+
+## Wasm lifecycle observation (2026-10-14)
+
+The request-owned Wasm lifecycle change adds one nullable typed owner pointer
+(`Option<Box<WasmRequestState>>`), costing 8 inline bytes on this native 64-bit
+target and no allocation for an ordinary request. The pointer pins execution
+across hooks; a generic registry or eager owner would weaken ownership or add
+ordinary-path allocations.
+
+An exact run of `ai::context::tests::ordinary_context_size_stays_within_budget`
+measured 1408 bytes against the existing 1328 ceiling. The current diff adds only
+that pointer to the context: a 1400-byte pre-change layout is an inference from
+field width/alignment, not an executed baseline measurement. The other 72 bytes
+have not been audited here. The user subsequently authorized a strict 1800-byte
+ceiling and deferred size reduction to
+`tasks/todo/http-context-layout-budget-revalidation.md`. This replaces the old
+absolute context ceiling without claiming that the historical growth is audited.
+
+The isolated allocation test was also corrected to prepare the shared LazyLock
+configuration before measuring `with_gateway_config`, matching production
+`pg_new_ctx`. Fresh execution passes with zero allocation calls/bytes and absent
+Wasm state; allocation freedom remains an independent gate from inline size.

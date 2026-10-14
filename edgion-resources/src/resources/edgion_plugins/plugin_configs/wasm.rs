@@ -2,8 +2,7 @@
 //!
 //! Executes a WebAssembly guest module implementing the proxy-wasm ABI (v0.2
 //! subset: request/response header hooks, local responses, logging, basic
-//! properties). The gateway compiles and caches the module globally and pools
-//! initialized instances per module.
+//! properties). Each configured entry owns its loaded generations and instances.
 
 use schemars::JsonSchema;
 
@@ -266,6 +265,16 @@ pub struct WasmConfig {
     #[serde(default = "default_pool_size")]
     pub instance_pool_size: usize,
 
+    /// Maximum active request leases for this configured entry, shared across
+    /// loaded OCI generations. Admission fails immediately when exhausted.
+    #[serde(default = "default_max_active_requests")]
+    pub max_active_requests: usize,
+
+    /// Explicit response companions for a request-stage entry. These callbacks
+    /// share its HTTP context. Separate response-stage entries remain isolated.
+    #[serde(default)]
+    pub response: WasmResponseHooks,
+
     /// Origins (`scheme://host[:port]`) the guest may target with
     /// `proxy_dispatch_http_call`. Empty (default) disables callouts: a
     /// dispatch attempt fails with a host error the guest can observe.
@@ -278,6 +287,25 @@ pub struct WasmConfig {
     /// milliseconds. Also the effective timeout when the guest passes 0.
     #[serde(default = "default_callout_timeout_ms")]
     pub callout_timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WasmResponseHooks {
+    #[serde(default)]
+    pub headers: bool,
+    /// Read-only, bounded per-stream observation. No buffering or Pause support.
+    #[serde(default)]
+    pub body: bool,
+    /// Read-only observation of real upstream trailers.
+    #[serde(default)]
+    pub trailers: bool,
+}
+
+impl WasmResponseHooks {
+    pub fn enabled(self) -> bool {
+        self.headers || self.body || self.trailers
+    }
 }
 
 /// One strict representation of opaque bytes passed to a Proxy-Wasm guest.
@@ -489,6 +517,10 @@ fn default_pool_size() -> usize {
     8
 }
 
+fn default_max_active_requests() -> usize {
+    32
+}
+
 fn default_callout_timeout_ms() -> u64 {
     5_000
 }
@@ -503,6 +535,8 @@ impl Default for WasmConfig {
             fail_open: false,
             timeout_ms: default_timeout_ms(),
             instance_pool_size: default_pool_size(),
+            max_active_requests: default_max_active_requests(),
+            response: WasmResponseHooks::default(),
             callout_allowlist: Vec::new(),
             callout_timeout_ms: default_callout_timeout_ms(),
         }
@@ -522,6 +556,9 @@ pub const INLINE_WARN_DECODED_BYTES: usize = 512 * 1024;
 
 impl WasmConfig {
     pub fn validate(&self) -> Result<(), String> {
+        if !(1..=64).contains(&self.max_active_requests) {
+            return Err("maxActiveRequests must be in 1..=64".into());
+        }
         let set = [
             self.source.file.is_some(),
             self.source.inline.is_some(),

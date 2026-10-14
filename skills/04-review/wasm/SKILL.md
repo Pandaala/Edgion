@@ -25,3 +25,5 @@ before applying a decision to current code.
 ## Intentional design
 
 - [Bounded OCI artifact memory cache](intentional-design/bounded-oci-artifact-memory-cache.md)
+
+- [Request execution, callback frames, admission and attached response lifecycle](regression-guards/request-execution-lifecycle.md)

@@ -38,8 +38,10 @@ The counters are cumulative shared Wasm state. Checked before/after deltas
 isolate the current request and remain valid across repeated runs and runtime
 reloads without introducing a test-only reset path. Counter-read probes are
 excluded by inspecting their marker header in the body-phase context; a
-per-context flag is insufficient because headers and body phases use distinct
-guest contexts.
+per-context flag was insufficient in the former per-hook execution model.
+The current request binding keeps headers and body on the same HTTP context;
+the existing marker-based probes remain valid, and lifecycle SDK coverage
+separately verifies field continuity.
 
 ## Fix Suggestions Not Accepted
 

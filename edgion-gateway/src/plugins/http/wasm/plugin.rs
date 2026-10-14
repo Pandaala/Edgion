@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use super::callout::resolve_callouts_on;
 use super::host_abi::{HeaderOp, LocalResponse, WasmPhase, MAP_HTTP_REQUEST_HEADERS, MAP_HTTP_RESPONSE_HEADERS};
-use super::vm_manager::{global_vm_manager, CalloutGrant, ModuleEntry, VmLease, WasmRuntime};
+use super::vm_manager::{global_vm_manager, response_body_timeout_ms, CalloutGrant, ModuleEntry, VmLease, WasmRuntime};
 use crate::observe::metrics::registry::{record_wasm_body_pause_unsupported, record_wasm_fail_mode};
 use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{
@@ -32,10 +32,11 @@ use edgion_resources::{EdgionErrorCode, EdgionPlugin};
 const PLUGIN_NAME: &str = "Wasm";
 
 pub struct WasmPlugin {
+    pub(super) identity: Arc<()>,
     name: String,
     /// Mutable Wasm state belongs to this plugin instance. The common plugin
     /// runtime keeps this owner alive while requests still use the plugin.
-    runtime: WasmRuntime,
+    pub(super) runtime: WasmRuntime,
     /// Bounded-cardinality source descriptor for metrics.
     metrics_label: String,
     /// Normalized callout allowlist origins, shared into each phase's
@@ -44,6 +45,16 @@ pub struct WasmPlugin {
 }
 
 impl WasmPlugin {
+    pub(crate) fn create_attached(
+        entry: &BoundPluginEntry<'_>,
+        defaults: &GlobalOutboundTlsSnapshot,
+    ) -> Option<(
+        Box<dyn RequestFilter>,
+        Box<dyn crate::plugins::runtime::UpstreamResponse>,
+    )> {
+        let plugin = Arc::new(Self::build(entry, defaults).ok()?);
+        Some((Box::new(plugin.clone()), Box::new(plugin)))
+    }
     pub(crate) fn validate_tls_entry<'a>(
         entry: &'a BoundPluginEntry<'_>,
         defaults: &GlobalOutboundTlsSnapshot,
@@ -67,6 +78,9 @@ impl WasmPlugin {
         let EdgionPlugin::Wasm(config) = entry.config() else {
             return Err("wasm TLS configuration is invalid".to_string());
         };
+        config
+            .validate()
+            .map_err(|_| "wasm configuration is invalid".to_string())?;
         // Admission validation already rejects malformed entries; a residual
         // bad entry here (e.g. a file-mode gateway without the controller
         // validation) is dropped with a WARN rather than failing the plugin.
@@ -96,6 +110,7 @@ impl WasmPlugin {
             },
         )?;
         let plugin = WasmPlugin {
+            identity: Arc::new(()),
             name: PLUGIN_NAME.to_string(),
             runtime,
             metrics_label: config.source.metrics_label(),
@@ -120,6 +135,9 @@ impl WasmPlugin {
         entry: &BoundPluginEntry<'_>,
         defaults: &GlobalOutboundTlsSnapshot,
     ) -> Option<Box<dyn UpstreamResponseFilter>> {
+        if matches!(entry.config(), EdgionPlugin::Wasm(config) if config.response.enabled()) {
+            return None;
+        }
         Self::build(entry, defaults)
             .ok()
             .map(|plugin| Box::new(plugin) as Box<dyn UpstreamResponseFilter>)
@@ -129,6 +147,9 @@ impl WasmPlugin {
         entry: &BoundPluginEntry<'_>,
         defaults: &GlobalOutboundTlsSnapshot,
     ) -> Option<Box<dyn UpstreamResponseBodyFilter>> {
+        if matches!(entry.config(), EdgionPlugin::Wasm(config) if config.response.enabled()) {
+            return None;
+        }
         Self::build(entry, defaults)
             .ok()
             .map(|plugin| Box::new(plugin) as Box<dyn UpstreamResponseBodyFilter>)
@@ -143,7 +164,12 @@ impl WasmPlugin {
     /// (e.g. VM trap vs. epoch-deadline trap are not distinguished at this
     /// call site), so the kebab-cased `reason` itself is the most accurate
     /// cause available.
-    fn fail_mode(&self, session: &mut dyn PluginSession, log: &mut PluginLog, reason: &str) -> PluginRunningResult {
+    pub(super) fn fail_mode(
+        &self,
+        session: &mut dyn PluginSession,
+        log: &mut PluginLog,
+        reason: &str,
+    ) -> PluginRunningResult {
         let cause = reason.replace(' ', "-");
         if self.runtime.config().fail_open {
             record_wasm_fail_mode(&self.metrics_label, reason, "open");
@@ -161,7 +187,7 @@ impl WasmPlugin {
         }
     }
 
-    fn properties(&self, session: &dyn PluginSession, phase: WasmPhase) -> HashMap<String, String> {
+    pub(super) fn properties(&self, session: &dyn PluginSession, phase: WasmPhase) -> HashMap<String, String> {
         let mut p = HashMap::new();
         p.insert("request.path".to_string(), session.get_path().to_string());
         p.insert("request.method".to_string(), session.get_method().to_string());
@@ -211,63 +237,65 @@ impl WasmPlugin {
     async fn run_leased_request(
         &self,
         entry: Arc<ModuleEntry>,
-        mut lease: VmLease,
+        lease: VmLease,
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> PluginRunningResult {
+        let binding = super::request::WasmRequestBinding::new(self.identity.clone(), lease);
+        if !session.install_wasm_binding(binding.clone()) {
+            binding.abort();
+            return self.fail_mode(session, log, "binding");
+        }
+        let Some(mut loan) = binding.take() else {
+            return self.fail_mode(session, log, "binding");
+        };
+        let lease = &mut loan.execution().lease;
         let request_headers = session.request_headers();
         let num_headers = request_headers.len() as i32;
         let props = self.properties(session, WasmPhase::RequestHeaders);
+        // Whole-body mode always has its own terminal callback, even for an
+        // empty body. Otherwise use actual transport evidence when available.
+        let eos = !entry.has_request_body_hook() && session.request_headers_end_stream() == Some(true);
         lease
             .state_mut()
             .begin_phase(WasmPhase::RequestHeaders, request_headers, Vec::new(), props);
         lease
             .state_mut()
             .arm_dispatch(self.callout_allowlist.clone(), self.runtime.config().callout_timeout_ms);
-
-        let Ok((ctx_id, action)) = lease.call_on_request_headers_open(num_headers) else {
-            // Hot path: `fail_mode` records the metric and PluginLog entry; no tracing.
+        let Ok(action) = lease.open_request(num_headers, eos) else {
             return self.fail_mode(session, log, "trap");
         };
-
+        let ctx_id = lease.context_id().expect("opened request context");
         let paused = action != 0;
-        let had_callouts = !lease.state().pending_callouts.is_empty();
+        let had_callouts = !lease.state().frame.pending_callouts.is_empty();
         if paused && had_callouts {
-            if self.resolve_callouts(&mut lease, ctx_id, log).await.is_err() {
-                // Hot path: `fail_mode` records the metric and PluginLog entry; no tracing.
-                return self.fail_mode(session, log, "callout");
+            match self.resolve_callouts(lease, ctx_id, log).await {
+                Ok(true) => {}
+                Ok(false) if lease.state().frame.local_response.is_some() => {
+                    return self.finish_callback(lease, session, log, action, true);
+                }
+                _ => return self.fail_mode(session, log, "callout"),
             }
-        } else if !paused && had_callouts {
-            // Fire-and-forget dispatch without Pause is not supported: the
-            // lease returns to the pool when this call ends, so there is no
-            // execution context left to deliver the callback on. Documented
-            // v1 semantics: dispatch must be followed by Action::Pause.
-            let dropped = lease.state_mut().pending_callouts.len();
-            lease.state_mut().pending_callouts.clear();
-            log.push_fmt("wasm callouts-dropped={}", la![dropped.to_string().as_str()]);
+        } else if had_callouts {
+            // An undelivered SDK token can outlive a deleted HTTP context.
+            // Reject the unsupported fire-and-forget contract and discard.
+            return self.fail_mode(session, log, "callout requires pause");
         }
-
-        if lease.close_context(ctx_id).is_err() {
-            return self.fail_mode(session, log, "trap");
-        }
-
-        // A paused guest that neither continued nor answered locally after
-        // all callouts completed gets the fail-mode treatment; a pause
-        // without any callout keeps the v1 "pause-ignored" behavior.
-        let state = lease.state();
-        if paused && had_callouts && !state.continue_requested && state.local_response.is_none() {
-            drop(lease);
+        if paused
+            && had_callouts
+            && !lease.state().frame.continue_requested
+            && lease.state().frame.local_response.is_none()
+        {
             return self.fail_mode(session, log, "no-resume");
         }
-        // The headers-phase result is produced exactly as before (the lease is
-        // returned to the pool inside `finish_phase`). Only a clean GoodNext
-        // continues into the request-body phase; any deny / local response /
-        // fail-mode short-circuits and never buffers the body.
-        let headers_result = self.finish_phase(lease, session, log, action, had_callouts);
-        if !matches!(headers_result, PluginRunningResult::GoodNext) {
-            return headers_result;
-        }
-        self.run_request_body_phase(&entry, session, log).await
+        let headers_result = self.finish_callback(lease, session, log, action, had_callouts);
+        let result = if matches!(headers_result, PluginRunningResult::GoodNext) {
+            self.run_request_body_phase(&entry, lease, session, log).await
+        } else {
+            headers_result
+        };
+        loan.complete();
+        result
     }
 
     /// Buffer-mode request-body drive. Runs only when the guest exports
@@ -278,14 +306,11 @@ impl WasmPlugin {
     /// like any other body-read failure. A `NotBuffered` refusal is distinct: it
     /// fails closed unconditionally regardless of `failOpen`, since the guest's
     /// body hook would otherwise inspect nothing (see the read match below).
-    /// A fresh lease is re-acquired from `entry` (the same
-    /// already-loaded `ModuleEntry` the headers phase used, passed in so no
-    /// racy `try_get` re-lookup is needed): the headers phase already
-    /// returned its lease to the pool via `finish_phase`. A guest deny (local
-    /// response) is drained the same way as the other phases.
+    /// The existing HTTP object remains alive across capture and publication.
     async fn run_request_body_phase(
         &self,
         entry: &Arc<ModuleEntry>,
+        lease: &mut VmLease,
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> PluginRunningResult {
@@ -300,6 +325,7 @@ impl WasmPlugin {
             // runtime failures, not admission. The precise reason is already on
             // ctx as an `EdgionErrorCode`, recorded by the read adapter.
             Err(BodyReadError::NotBuffered) => {
+                lease.poison();
                 log.push_err("wasm body-refused");
                 return PluginRunningResult::ErrResponse {
                     status: 500,
@@ -307,6 +333,7 @@ impl WasmPlugin {
                 };
             }
             Err(BodyReadError::BufferLimitExceeded { .. }) => {
+                lease.poison();
                 session.record_error(EdgionErrorCode::BodyReadTooLarge);
                 log.push_err("wasm body-buffer-limit");
                 return PluginRunningResult::ErrResponse {
@@ -319,6 +346,7 @@ impl WasmPlugin {
             // never stored, so no forwarding copy of the body exists and
             // `failOpen` cannot help this request.
             Err(BodyReadError::StorageFailure) => {
+                lease.poison();
                 session.record_error(EdgionErrorCode::BodyCaptureStorageFailed);
                 log.push_err("wasm body-storage-failed");
                 return PluginRunningResult::ErrResponse {
@@ -333,6 +361,7 @@ impl WasmPlugin {
             // `body_gate.rs::body_read_failure_result` mapping so both paths
             // agree.
             Err(err) => {
+                lease.poison();
                 session.record_error(match err {
                     BodyReadError::TooLarge { .. } => EdgionErrorCode::BodyReadTooLarge,
                     BodyReadError::BufferLimitExceeded { .. } => EdgionErrorCode::BodyReadTooLarge,
@@ -347,9 +376,6 @@ impl WasmPlugin {
                 return self.fail_mode(session, log, "body read");
             }
         };
-        let Ok(mut lease) = entry.acquire(self.runtime.config().timeout_ms) else {
-            return self.fail_mode(session, log, "acquire");
-        };
         let size = body.len() as i32;
         let request_headers = session.request_headers();
         let props = self.properties(session, WasmPhase::RequestBody);
@@ -358,25 +384,27 @@ impl WasmPlugin {
             .begin_phase(WasmPhase::RequestBody, request_headers, Vec::new(), props);
         {
             let state = lease.state_mut();
-            state.request_body = body.to_vec();
-            state.request_body_limit = usize::try_from(cap).unwrap_or(usize::MAX);
+            state.frame.request_body = body.to_vec();
+            state.frame.request_body_limit = usize::try_from(cap).unwrap_or(usize::MAX);
         }
-        let Ok(action) = lease.call_on_request_body(size, true) else {
+        let Ok(action) = lease.call_bound("proxy_on_request_body", size, true) else {
             return self.fail_mode(session, log, "trap");
         };
-        if lease.state().local_response.is_some() {
+        if lease.state().frame.local_response.is_some() {
             // The proxied request has ended. Finish the deliberate local
             // response without attempting an irrelevant BodyStorage write.
-            return self.finish_phase(lease, session, log, action, false);
+            return self.finish_callback(lease, session, log, action, false);
         }
         let request_body = {
             let state = lease.state_mut();
             state
+                .frame
                 .request_body_modified
-                .then(|| bytes::Bytes::from(std::mem::take(&mut state.request_body)))
+                .then(|| bytes::Bytes::from(std::mem::take(&mut state.frame.request_body)))
         };
         if let Some(body) = request_body {
             if let Err(error) = session.overwrite_request_body(body).await {
+                lease.poison();
                 session.record_error(match error {
                     BodyReadError::BufferLimitExceeded { .. } | BodyReadError::TooLarge { .. } => {
                         EdgionErrorCode::BodyReadTooLarge
@@ -394,15 +422,15 @@ impl WasmPlugin {
         // Apply request-header operations only after the Body generation is
         // committed. On fail-open publication failure, neither half of a
         // guest's logically coupled Content-Type/body rewrite leaks through.
-        self.finish_phase(lease, session, log, action, false)
+        self.finish_callback(lease, session, log, action, false)
     }
 
     /// Execute queued callouts and deliver each result to the paused guest
     /// (see [`resolve_callouts_on`] for the bounded delivery loop), recording
     /// the delivered/leftover counts in the plugin log. Leftovers after the
-    /// round cap are dropped (guest is dispatching in a loop); the no-resume
-    /// fallback in the caller decides the request's fate.
-    async fn resolve_callouts(&self, lease: &mut VmLease, ctx_id: i32, log: &mut PluginLog) -> Result<(), String> {
+    /// round cap or early resume poison the execution. The caller preserves a
+    /// successful local response, otherwise applies the configured failure mode.
+    async fn resolve_callouts(&self, lease: &mut VmLease, ctx_id: i32, log: &mut PluginLog) -> Result<bool, String> {
         let outcome = resolve_callouts_on(
             lease,
             ctx_id,
@@ -417,7 +445,7 @@ impl WasmPlugin {
                 outcome.leftover.to_string().as_str()
             ],
         );
-        Ok(())
+        Ok(outcome.leftover == 0)
     }
 
     /// Drain guest results (header ops, local response, logs) onto the
@@ -430,12 +458,23 @@ impl WasmPlugin {
         action: i32,
         had_callouts: bool,
     ) -> PluginRunningResult {
+        self.finish_callback(&mut lease, session, log, action, had_callouts)
+    }
+
+    pub(super) fn finish_callback(
+        &self,
+        lease: &mut VmLease,
+        session: &mut dyn PluginSession,
+        log: &mut PluginLog,
+        action: i32,
+        had_callouts: bool,
+    ) -> PluginRunningResult {
         // Drain results out of the store before the lease returns to the pool.
         let state = lease.state_mut();
-        let ops = std::mem::take(&mut state.pending_ops);
-        let local = state.local_response.take();
-        let guest_logs = state.log_lines.len();
-        drop(lease);
+        let ops = std::mem::take(&mut state.frame.pending_ops);
+        let local = state.frame.local_response.take();
+        let guest_logs = state.frame.log_lines.len();
+        lease.state_mut().release_phase_payloads();
 
         let op_count = ops.len();
         apply_ops(session, ops);
@@ -561,7 +600,7 @@ impl UpstreamResponseBodyFilter for WasmPlugin {
         if !entry.has_body_hook() {
             return None;
         }
-        let chunk_budget_ms = (self.runtime.config().timeout_ms / 10).max(10);
+        let chunk_budget_ms = response_body_timeout_ms(self.runtime.config().timeout_ms);
         let Ok(mut lease) = entry.acquire(chunk_budget_ms) else {
             // Per-chunk hot path: acquire failure is non-fatal (stream continues);
             // no tracing here (Iron rule 3).
@@ -571,13 +610,13 @@ impl UpstreamResponseBodyFilter for WasmPlugin {
         // Lean phase begin: body observation needs no header snapshot or
         // property map (per-chunk cost discipline).
         state.begin_phase(WasmPhase::ResponseBody, Vec::new(), Vec::new(), HashMap::new());
-        state.body_chunk = body.clone().unwrap_or_default();
-        let size = state.body_chunk.len() as i32;
+        state.frame.body_chunk = body.clone().unwrap_or_default();
+        let size = state.frame.body_chunk.len() as i32;
         let action = lease.call_on_response_body(size, end_of_stream);
         // A healthy lease returns to the module pool when this function ends.
         // Drop the chunk reference first so an idle VM never pins response
         // payload storage between callbacks.
-        lease.state_mut().body_chunk = Bytes::new();
+        lease.state_mut().frame.body_chunk = Bytes::new();
         match action {
             Ok(action) if action != 0 => {
                 // Pause: the guest expects the spec's cumulative-buffer
@@ -738,4 +777,4 @@ impl UpstreamResponseFilter for WasmPlugin {
 
 #[cfg(test)]
 #[path = "../../../../tests/unit/plugins/http/wasm/plugin_test.rs"]
-mod tests;
+pub(super) mod tests;

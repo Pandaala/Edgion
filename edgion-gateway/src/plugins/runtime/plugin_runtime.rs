@@ -1574,6 +1574,49 @@ impl PluginRuntime {
 
                     let entry_scope = crate::plugins::common::entry_scope(resource_key, entry_alias.as_deref(), index);
 
+                    if matches!(&entry.plugin, EdgionPlugin::Wasm(config) if config.response.enabled()) {
+                        match descriptor_entries
+                            .get(index)
+                            .zip(wasm_defaults.as_deref())
+                            .and_then(|(entry, defaults)| WasmPlugin::create_attached(entry, defaults))
+                        {
+                            Some((request, response)) => {
+                                entry_runtime.has_unary_body_consumer =
+                                    matches!(&entry.plugin, EdgionPlugin::Wasm(config) if config.response.body);
+                                let gated: Box<dyn RequestFilter> = match body_req {
+                                    Some(req) => Box::new(BodyGatedRequestFilter::new(request, req)),
+                                    None => request,
+                                };
+                                entry_runtime.add_request_filter(Box::new(
+                                    ConditionalRequestFilter::with_alias_and_dye(
+                                        gated,
+                                        entry.conditions.as_ref().map(|conditions| {
+                                            super::conditions::CompiledPluginConditions::with_ip(conditions, ip)
+                                        }),
+                                        entry_alias.clone(),
+                                        dye_plan.clone(),
+                                    ),
+                                ));
+                                // Conditions are request-owned. The companion only
+                                // observes the exact attached identity installed by
+                                // the matched request wrapper.
+                                entry_runtime.add_upstream_response(Box::new(
+                                    ConditionalUpstreamResponse::with_alias_and_dye(
+                                        response,
+                                        None,
+                                        entry_alias,
+                                        dye_plan,
+                                    ),
+                                ));
+                            }
+                            None => {
+                                errors.push(format!("requestPlugins[{}] (Wasm): plugin construction failed", index));
+                                entry_runtime.invalid_plugins.record(&entry.plugin);
+                            }
+                        }
+                        break 'build_entry;
+                    }
+
                     if let EdgionPlugin::ExtProc(_) = &entry.plugin {
                         let identity = format!(
                             "{resource_key}/requestPlugins/{}",

@@ -3708,3 +3708,45 @@ async fn acl_and_required_condition_share_actual_dispatch_adapter_snapshot() {
         AccessDecision::DenyByWhitelistMiss
     ));
 }
+
+#[tokio::test]
+async fn wasm_attached_bundle_retains_body_metadata_and_skipped_companion_is_inert() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    let owner: edgion_resources::EdgionPlugins = serde_json::from_value(serde_json::json!({
+        "metadata": {"name": "wasm-attached", "namespace": "apps"},
+        "spec": {"requestPlugins": [{"type": "Wasm",
+            "conditions": {"skip": {"allOf": [{"type": "probability", "ratio": 1.0}]}},
+            "config": {"source": {"file": "absent-lifecycle-test.wasm"},
+                "response": {"body": true, "trailers": true}}
+        }]}
+    }))
+    .unwrap();
+    let mut cache = EntryCache::default();
+    let mut first = PluginRuntime::new();
+    assert!(first.add_resource_filters_with_cache(&owner, &mut cache).is_empty());
+    assert!(first.has_unary_body_consumer());
+    let mut retained = PluginRuntime::new();
+    assert!(retained.add_resource_filters_with_cache(&owner, &mut cache).is_empty());
+    assert!(retained.has_unary_body_consumer());
+    assert_eq!(retained.upstream_response_async_plugins_count(), 1);
+    assert!(Arc::ptr_eq(&first.request_plugins[0], &retained.request_plugins[0]));
+    let mut session = MockPluginSession::new();
+    session.expect_ctx().return_const(EdgionHttpContext::new());
+    session.expect_install_wasm_binding().times(0);
+    session.expect_wasm_binding().times(1).returning(|_| None);
+    session.expect_install_attached_response_processor().times(0);
+    let mut log = PluginLog::new("Wasm");
+    assert_eq!(
+        retained.request_plugins[0].run_request(&mut session, &mut log).await,
+        PluginRunningResult::Nothing
+    );
+    assert_eq!(
+        retained
+            .upstream_response_async_plugins_iter()
+            .next()
+            .unwrap()
+            .run_upstream_response(&mut session, &mut log)
+            .await,
+        PluginRunningResult::GoodNext
+    );
+}

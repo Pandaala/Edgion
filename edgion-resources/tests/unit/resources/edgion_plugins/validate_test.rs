@@ -789,3 +789,19 @@ fn request_config_results_do_not_survive_source_or_bytecode_changes() {
     assert_eq!(plugins.validate_plugins().len(), 1);
     assert!(!plugins.validate_plugins_before_waf_resolution().is_empty());
 }
+
+#[test]
+fn wasm_attached_response_hooks_require_request_placement() {
+    let mut config = WasmConfig::default();
+    config.source.file = Some("demo.wasm".into());
+    config.response.body = true;
+    let request = with_request_plugins(vec![RequestFilterEntry::new(EdgionPlugin::Wasm(config.clone()))]);
+    assert!(request.validate_plugins().is_empty());
+    let mut response = with_request_plugins(vec![]);
+    response.spec.upstream_response_filter_plugins =
+        Some(vec![UpstreamResponseFilterEntry::new(EdgionPlugin::Wasm(config))]);
+    assert!(response
+        .validate_plugins()
+        .iter()
+        .any(|e| e.contains("requestPlugins placement")));
+}

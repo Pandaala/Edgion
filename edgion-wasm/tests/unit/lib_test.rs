@@ -338,6 +338,7 @@ fn standard_hooks_report_invocation_support_without_affecting_load_compatibility
                 (func (export "proxy_abi_version_0_2_0"))
                 (func (export "proxy_on_request_headers") (param i32 i32 i32) (result i32)
                     i32.const 0)
+                (func (export "proxy_on_response_trailers") (param i32 i32) (result i32) i32.const 0)
                 (func (export "proxy_on_request_trailers") (param i32 i32) (result i32)
                     i32.const 0)
             )"#,
@@ -349,6 +350,15 @@ fn standard_hooks_report_invocation_support_without_affecting_load_compatibility
         .find(|hook| hook.name == "proxy_on_request_headers")
         .expect("implemented hook is classified");
     assert_eq!(implemented.support, HookSupport::Implemented);
+    assert_eq!(
+        report
+            .hooks
+            .iter()
+            .find(|h| h.name == "proxy_on_response_trailers")
+            .unwrap()
+            .support,
+        HookSupport::Implemented
+    );
     let not_invoked = report
         .hooks
         .iter()

@@ -1,5 +1,17 @@
 # Wasm 插件
 
+> **请求生命周期更新**：请求条目现在固定一个 VM、HTTP context 和模块代次直到请求终结。
+> 在 `requestPlugins` 的配置中设置 `response: {headers: true, body: true, trailers: true}`
+> 可让响应伴随钩子复用该上下文；三个开关默认均为 false。
+> 独立同步响应条目仍按钩子创建隔离上下文。`maxActiveRequests` 默认 32，范围 1..=64，
+> 覆盖同一运行时的 OCI 新旧代次；进程实际实例上限 128，包含空闲、请求和定时器 VM。
+> 配额不足立即按 failOpen 处理；长 SSE 占用请求配额直到终结。该限制不是 RSS 预算。
+> 定时器现在持有独立持久 VM，成功 tick 间保留 root 字段，但与请求 root 只共享显式 KV。
+> body/trailers 仅观察；流失败禁用绑定并记录一次 WasmExecutionError，不改写已开始的响应。
+> 执行 future 取消或请求 owner 析构直接丢弃实例，不重入 guest；正常 logging 调用 done/delete 一次。
+> dispatch 后 Continue 或其他未交付 token 不再允许健康复用。完整当前契约见
+> [English lifecycle reference](../../../../../en/user-guide/http-route/filters/edgion-plugins/wasm.md#request-owned-execution-and-response-hooks)。
+
 > 从 Envoy 迁移时，可使用 `edgion-cli wasm inspect` 按 Edgion 精确 Host
 > Profile 检查模块，并使用 `edgion-cli wasm convert-envoy` 将单个 v3 HTTP
 > Wasm Filter 或裸 PluginConfig 严格转换为 `WasmConfig` 片段。参见
@@ -231,7 +243,7 @@ requestPlugins:
 - **寻址**：`upstream` 参数是目标 **origin URL**（`https://auth.internal:8443`），不是 Envoy 的 cluster 名。dispatch 的 header map 里的 `:path`、`:method`、`:authority` 伪头驱动外呼请求（`:authority` 作为 `Host` 发送）。
 - **允许列表**：origin 必须（规范化后）精确匹配 `calloutAllowlist` 的某一项。没有允许列表 = 没有 callout。被拒绝的 dispatch 同步返回 `INTERNAL_FAILURE`。
 - **请求 + tick 阶段**：响应头/body 阶段是同步的、无法 await，dispatch 返回 `UNIMPLEMENTED`。`on_tick` 内的 callout 使用所属插件的授权，回调投递到 root context，见[定时器](#shared-data-与定时器)。
-- **必须 Pause**（请求阶段）：`dispatch` + `Action::Continue` 不受支持——排队的 callout 被丢弃并记日志（`callouts-dropped=N`）。dispatch 之后必须 Pause。（`on_tick` 没有 Pause 概念：在那里 dispatch 的 callout 总是在钩子返回后执行。）
+请求头 callout 要求返回 Action::Pause，且目标 origin 已由 calloutAllowlist 授权。dispatch 后返回 Continue 会按 failOpen 处理并丢弃实例。body/响应阶段不能 dispatch；tick 使用所属插件的授权。
 - **预算**：每请求（或每 tick）最多 8 次 dispatch、4 轮回调（回调里可以追发 callout）、全进程 64 个并发 callout、单 callout 响应体上限 256KiB。每个 callout 的超时为 `min(guest 超时, calloutTimeoutMs)`。
 - **callout 失败**（连接错误、超时、响应体超限）：回调以 **0 个 header** 触发（proxy-wasm 惯例），guest 自行决定失败行为。宿主绝不因 callout 失败而 trap guest。
 - **guest 不恢复**：所有 callout 完成后 guest 既没 continue 也没本地应答 → 宿主按 `failOpen` 处理（reason `no-resume`）。
@@ -334,7 +346,7 @@ impl HttpContext for BodyScanner {
 
 ### 定时器（`on_tick`）
 
-guest 调用 `proxy_set_tick_period_milliseconds(N)`（通常在 `on_configure` 里）后，后台任务（每个插件运行时一个）每 `N` ms（下限 100ms）调用一次 `proxy_on_tick`。tick 实例从与请求相同的池租借，受正常 `timeoutMs` epoch 预算约束，且**相邻两次 tick 可能落在不同的池化实例上**——root context 的结构体字段是实例本地的，需要跨 tick 存活的状态请放 shared data（在 `on_configure` 里*初始化*的状态没问题，比如解析好的配置：每个池化实例初始化时都会跑 `on_configure`）。guest 可在 `on_tick` 内调整周期或停止（`0`）。所属插件实例释放或加载的模块被替换时，tick 任务会被取消；正在执行的同步钩子仍受 epoch 超时约束。
+定时器使用独立持久 VM，成功 tick 之间保留 root 字段。该实例与请求 VM 分离，只通过显式 shared KV 共享状态；trap 会导致定时器 VM 被替换。周期下限仍为 100ms，退休会取消任务，同步执行受钩子截止时间约束。
 
 典型模式：`on_tick` 发 callout 拉取最新规则集写进 shared data，请求钩子读取（限流规则热刷新、风控名单同步、配置轮询）。
 
@@ -417,7 +429,7 @@ trap 风暴表现为 `edgion_wasm_trap_total` 与 `edgion_wasm_instance_discard_
 - `wasm ok ops=N logs=M`——成功；应用了 `N` 个 header 操作，guest 输出 `M` 行日志（内容进 debug 日志）。
 - `wasm ok ops=N pause-ignored`——guest 返回 `Pause` 但既没 dispatch callout 也没发本地响应；请求继续。
 - `wasm callouts=N leftover=M`——请求阶段解析了 `N` 个 callout（`M` 个被轮次上限丢弃）。
-- `wasm callouts-dropped=N`——guest dispatch 了 callout 却返回 `Continue`，被丢弃（不支持的用法）。
+请求头 callout 要求返回 Action::Pause，且目标 origin 已由 calloutAllowlist 授权。dispatch 后返回 Continue 会按 failOpen 处理并丢弃实例。body/响应阶段不能 dispatch；tick 使用所属插件的授权。
 - `wasm local <status>`——guest 发送了本地响应。
 - `wasm <reason>:fail-open` / `wasm <reason>:fail-close`——上文失败原因之一。
 
@@ -428,9 +440,9 @@ trap 风暴表现为 `edgion_wasm_trap_total` 与 `edgion_wasm_instance_discard_
 - **仅支持请求 body 改写**：`proxy_set_buffer_bytes(HttpRequestBody, ...)` 仅在完整请求 body 钩子内有效。响应 body 写入仍返回 `STATUS_UNIMPLEMENTED`，其他阶段返回明确的 ABI 错误。
 - **静态选模式，非动态 Pause/Continue**：不同于 Envoy，插件拿到哪种 body 模式在模块加载时就由编译出的 guest 导出了哪些钩子决定，而不是由 guest 每次请求返回的 `Action` 决定。见[两种 body 模式，静态选择](#两种-body-模式静态选择)。
 - **无 gRPC callout**（`proxy_dispatch_grpc_call`）：调用即 trap。
-- **响应/body 阶段不能 callout**（同步阶段），且请求阶段 dispatch 后不 Pause 会被丢弃。tick 阶段的 callout 使用所属插件的 `calloutAllowlist`（见[定时器](#shared-data-与定时器)）。
+- 请求头 dispatch 必须返回 Pause，否则按 failOpen 处理并丢弃执行实例。body/响应阶段不能 dispatch；tick callout 仍使用插件自身的授权。
 - **无 shared queue、foreign function、guest 自定义 metrics**：调用即 trap。
-- **请求级上下文按钩子调用创建**：同一请求的请求头钩子与响应头钩子可能运行在不同池化实例上、拿到全新 context id。分别配置的阶段通过显式请求头关联；这些条目不共享 guest 内存或 shared data。
+- 请求条目及其显式响应伴随钩子共用一个 HTTP context。独立配置的同步响应条目仍逐钩子创建上下文，拥有独立 shared-data store。
 - **`source.oci` v1 限制**：镜像仓库必须提供可公开验证的 TLS 证书（本地测试用的 loopback 仓库可使用明文 HTTP）；不支持镜像仓库镜像（registry mirror）。见[`source.oci`——从 OCI 镜像仓库拉取](#sourceoci从-oci-镜像仓库拉取)。
 
 ## 编写 guest
@@ -505,7 +517,7 @@ impl Context for AuthPlugin {
 
 ### Q：我的 callout 从未被执行？
 
-依次检查：（1）目标 origin 是否列在 `calloutAllowlist`——空列表完全禁用 callout；（2）请求头阶段 dispatch 后 guest 是否返回了 `Action::Pause`——dispatch 后 `Continue` 会被丢弃（访问日志出现 `callouts-dropped=N`）；（3）dispatch 是否发生在请求头或 tick 阶段——请求 body、响应头、响应 body 阶段均返回 `UNIMPLEMENTED`；（4）tick 阶段必须由所属插件自身授权目标地址，其他条目的 allowlist 不适用。
+请求头 callout 要求返回 Action::Pause，且目标 origin 已由 calloutAllowlist 授权。dispatch 后返回 Continue 会按 failOpen 处理并丢弃实例。body/响应阶段不能 dispatch；tick 使用所属插件的授权。
 
 ### Q：我的请求意外返回了 `500`，而不是运行 `proxy_on_request_body`？
 

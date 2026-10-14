@@ -2057,6 +2057,8 @@ pub(crate) struct ResponseHeadHoldClaim {
 }
 
 pub struct EdgionHttpContext {
+    /// Sparse, generation-pinned Wasm request executions.
+    pub(crate) wasm: Option<Box<crate::plugins::http::wasm::request::WasmRequestState>>,
     /// Optional bounded cache owner; absent until explicit request policy admission.
     pub(crate) response_cache: Option<Box<crate::response_cache::RequestState>>,
     pub(crate) response_cache_bypassed: bool,
@@ -3298,6 +3300,7 @@ impl EdgionHttpContext {
             plugin_execution: PluginExecutionState::default(),
             plugin_aux: None,
             waf: None,
+            wasm: None,
             waf_selection_complete: false,
             try_cnt: 0,
             pingora_decided_retries: 0,

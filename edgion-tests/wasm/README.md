@@ -77,3 +77,13 @@ copies the result to `artifacts/header_demo.wasm`.
 out of the main Edgion Cargo workspace (it only builds for wasm32 targets and
 has no reason to participate in `cargo check --workspace` / `cargo test
 --all`). Its `target/` build directory is git-ignored.
+
+## Request lifecycle SDK fixture
+
+`lifecycle-demo` pins the official Rust SDK at 0.2.5. Its HTTP object retains a
+request marker and state through headers, complete request body, response
+headers, streaming chunks, real trailers, and once-only completion. Its root
+retains an incrementing field across ticks. The committed `lifecycle_demo.wasm`
+is used by gateway unit tests to catch context replacement, interleaved request
+contamination, duplicate EOS, and cancellation re-entry. Run `./build.sh` to
+rebuild both fixtures; this standalone workspace is outside normal host tests.

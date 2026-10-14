@@ -22,6 +22,7 @@ use super::shared_data::{SharedData, SharedDataError, ENTRY_OVERHEAD_BYTES, MAX_
 
 pub const MAP_HTTP_REQUEST_HEADERS: i32 = 0;
 pub const MAP_HTTP_RESPONSE_HEADERS: i32 = 2;
+pub const MAP_HTTP_RESPONSE_TRAILERS: i32 = 3;
 pub const MAP_HTTP_CALL_RESPONSE_HEADERS: i32 = 6;
 
 /// proxy-wasm `BufferType::HttpRequestBody`. Numerically 0 like
@@ -152,6 +153,7 @@ pub enum WasmPhase {
     RequestHeaders,
     ResponseHeaders,
     ResponseBody,
+    ResponseTrailers,
     /// Request-body buffer-mode hook: the full request body has been buffered
     /// by the body gate and is driven to the guest once with end_of_stream.
     RequestBody,
@@ -226,28 +228,51 @@ pub struct CalloutResponse {
     pub body: Vec<u8>,
 }
 
-/// Per-Store host state. Config fields persist across leases; request-scoped
-/// fields are reset by `begin_phase`.
+/// Per-Store persistent configuration and execution identity. Callback data is
+/// installed only for the currently executing event and released afterwards.
 #[derive(Default)]
 pub struct HostState {
+    pub frame: CallbackFrame,
+    pub vm_config: Vec<u8>,
+    pub plugin_config: Vec<u8>,
+    /// Metrics label of the owning module (set once per Store).
+    pub metrics_label: String,
+    last_callout_token: u32,
+
+    /// Guest-requested tick period in ms (0 = no tick). Module-lifetime
+    /// state (typically set during `on_configure`), NOT reset per phase;
+    /// the module tick task reads it after instance init.
+    pub tick_period_ms: u64,
+
+    /// Module-wide shared KV (proxy-wasm shared data). Shared by every
+    /// pooled VM of the same `ModuleEntry`; process-local by design.
+    pub shared_data: Arc<SharedData>,
+    /// Internal safety limits. Production always uses [`AbiAllocationLimits::default`];
+    /// inline tests may lower them to exercise boundaries without attack-sized
+    /// allocations.
+    allocation_limits: AbiAllocationLimits,
+}
+
+/// Bounded temporary host payloads for one guest callback sequence.
+#[derive(Default)]
+pub struct CallbackFrame {
+    pub read_only: bool,
+    pub response_trailers: Vec<(String, String)>,
+
     pub phase: WasmPhase,
     pub request_headers: Vec<(String, String)>,
     pub response_headers: Vec<(String, String)>,
     pub pending_ops: Vec<HeaderOp>,
     pub local_response: Option<LocalResponse>,
     pub properties: HashMap<String, String>,
-    pub vm_config: Vec<u8>,
-    pub plugin_config: Vec<u8>,
     /// (level, message) lines emitted via proxy_log during the current phase.
     pub log_lines: Vec<(i32, String)>,
-    /// Metrics label of the owning module (set once per Store).
-    pub metrics_label: String,
 
     // ---- Callout state (armed per phase; see `arm_dispatch`) ----
     /// Whether `proxy_dispatch_http_call` is accepted in the current phase.
     pub dispatch_enabled: bool,
     /// Normalized origins the guest may call out to (empty = deny all).
-    pub callout_allowlist: Arc<[String]>,
+    pub callout_allowlist: Option<Arc<[String]>>,
     /// Cap (and 0-fallback) for guest-supplied callout timeouts, ms.
     pub callout_timeout_cap_ms: u64,
     /// Callouts queued by the guest, drained by the plugin's async path.
@@ -259,7 +284,6 @@ pub struct HostState {
     pub continue_requested: bool,
     /// Total callouts dispatched in this phase (cap enforcement).
     callouts_dispatched: u32,
-    next_callout_token: u32,
 
     // ---- Body state ----
     /// Current response-body chunk exposed via
@@ -283,15 +307,6 @@ pub struct HostState {
     /// replacements retain only the final bounded staging buffer.
     request_body_mutation_work: usize,
 
-    /// Guest-requested tick period in ms (0 = no tick). Module-lifetime
-    /// state (typically set during `on_configure`), NOT reset per phase;
-    /// the module tick task reads it after instance init.
-    pub tick_period_ms: u64,
-
-    /// Module-wide shared KV (proxy-wasm shared data). Shared by every
-    /// pooled VM of the same `ModuleEntry`; process-local by design.
-    pub shared_data: Arc<SharedData>,
-
     // ---- Per-phase ABI retention budget (see `charge_abi`) ----
     /// Host-retained ABI payload bytes charged this phase across the
     /// append-only accumulators (`pending_ops`, `pending_callouts`,
@@ -302,13 +317,16 @@ pub struct HostState {
     /// Host-retained ABI operation count charged this phase. Reset by
     /// `begin_phase`. Complements `retained_bytes` for tiny-op floods.
     retained_ops: usize,
-    /// Internal safety limits. Production always uses [`AbiAllocationLimits::default`];
-    /// inline tests may lower them to exercise boundaries without attack-sized
-    /// allocations.
-    allocation_limits: AbiAllocationLimits,
 }
 
 impl HostState {
+    /// Release completed callback payloads before retaining an idle instance.
+    /// This is host-only cleanup: guest memory, configuration, shared data and
+    /// the root timer survive. Replacing containers releases their capacity.
+    pub fn release_phase_payloads(&mut self) {
+        self.frame = CallbackFrame::default();
+    }
+
     pub fn new(
         vm_config: Vec<u8>,
         plugin_config: Vec<u8>,
@@ -332,30 +350,13 @@ impl HostState {
         response_headers: Vec<(String, String)>,
         properties: HashMap<String, String>,
     ) {
-        self.phase = phase;
-        self.request_headers = request_headers;
-        self.response_headers = response_headers;
-        self.properties = properties;
-        self.pending_ops.clear();
-        self.local_response = None;
-        self.log_lines.clear();
-        self.dispatch_enabled = false;
-        self.callout_allowlist = Arc::from(Vec::new());
-        self.callout_timeout_cap_ms = 0;
-        self.pending_callouts.clear();
-        self.callout_response = None;
-        self.continue_requested = false;
-        self.callouts_dispatched = 0;
-        // Tokens start at 1: some proxy-wasm SDKs treat a 0 call-token as an
-        // invalid/sentinel value (Envoy issues nonzero tokens).
-        self.next_callout_token = 1;
-        self.body_chunk = Bytes::new();
-        self.request_body.clear();
-        self.request_body_limit = 0;
-        self.request_body_modified = false;
-        self.request_body_mutation_work = 0;
-        self.retained_bytes = 0;
-        self.retained_ops = 0;
+        self.frame = CallbackFrame {
+            phase,
+            request_headers,
+            response_headers,
+            properties,
+            ..CallbackFrame::default()
+        };
     }
 
     /// Charge `payload` bytes plus fixed per-op overhead against the per-phase
@@ -384,8 +385,8 @@ impl HostState {
         max_ops: usize,
     ) -> Result<(usize, usize), i32> {
         let cost = payload.saturating_add(ABI_OP_OVERHEAD_BYTES);
-        let new_bytes = self.retained_bytes.saturating_add(cost);
-        let new_ops = self.retained_ops.saturating_add(1);
+        let new_bytes = self.frame.retained_bytes.saturating_add(cost);
+        let new_ops = self.frame.retained_ops.saturating_add(1);
         if new_bytes > max_bytes || new_ops > max_ops {
             return Err(STATUS_INTERNAL_FAILURE);
         }
@@ -393,8 +394,8 @@ impl HostState {
     }
 
     fn commit_abi_charge(&mut self, checked: (usize, usize)) {
-        self.retained_bytes = checked.0;
-        self.retained_ops = checked.1;
+        self.frame.retained_bytes = checked.0;
+        self.frame.retained_ops = checked.1;
     }
 
     fn check_transient_allocation(&self, profile: AllocationProfile) -> Result<(), i32> {
@@ -409,36 +410,46 @@ impl HostState {
     /// keep forcing large transient reads after exhausting the work budget.
     fn check_request_body_mutation_charge(&self, work: usize) -> Result<(), i32> {
         self.checked_abi_charge(0)?;
-        checked_request_body_mutation_total(self.request_body_mutation_work, work, self.request_body_limit).map(drop)
+        checked_request_body_mutation_total(
+            self.frame.request_body_mutation_work,
+            work,
+            self.frame.request_body_limit,
+        )
+        .map(drop)
     }
 
     /// Commit a previously validated request-body mutation charge.
     fn charge_request_body_mutation(&mut self, work: usize) -> Result<(), i32> {
-        let new_work =
-            checked_request_body_mutation_total(self.request_body_mutation_work, work, self.request_body_limit)?;
+        let new_work = checked_request_body_mutation_total(
+            self.frame.request_body_mutation_work,
+            work,
+            self.frame.request_body_limit,
+        )?;
         self.charge_abi(0)?;
-        self.request_body_mutation_work = new_work;
+        self.frame.request_body_mutation_work = new_work;
         Ok(())
     }
 
     /// Enable `proxy_dispatch_http_call` for the current phase (request and
     /// tick phases — the sync response stages cannot await a callout).
     pub fn arm_dispatch(&mut self, allowlist: Arc<[String]>, timeout_cap_ms: u64) {
-        self.dispatch_enabled = true;
-        self.callout_allowlist = allowlist;
-        self.callout_timeout_cap_ms = timeout_cap_ms;
+        self.frame.dispatch_enabled = true;
+        self.frame.callout_allowlist = Some(allowlist);
+        self.frame.callout_timeout_cap_ms = timeout_cap_ms;
     }
 
     fn map_ref(&self, map: i32) -> Option<&[(String, String)]> {
         match map {
-            MAP_HTTP_REQUEST_HEADERS => Some(&self.request_headers),
-            MAP_HTTP_RESPONSE_HEADERS => Some(&self.response_headers),
+            MAP_HTTP_REQUEST_HEADERS => Some(&self.frame.request_headers),
+            MAP_HTTP_RESPONSE_HEADERS => Some(&self.frame.response_headers),
+            MAP_HTTP_RESPONSE_TRAILERS => Some(&self.frame.response_trailers),
             // The callout-response map is only populated during a
             // `proxy_on_http_call_response` delivery; elsewhere it reads empty
             // (not an error). Returned as a borrow so a per-header lookup does
             // not clone the whole map.
             MAP_HTTP_CALL_RESPONSE_HEADERS => Some(
-                self.callout_response
+                self.frame
+                    .callout_response
                     .as_ref()
                     .map(|r| r.headers.as_slice())
                     .unwrap_or(&[]),
@@ -799,15 +810,16 @@ fn select_buffer(state: &HostState, buf_type: i32) -> Option<BufferSource<'_>> {
         BUF_PLUGIN_CONFIGURATION => Some(BufferSource::Borrowed(&state.plugin_config)),
         BUF_HTTP_CALL_RESPONSE_BODY => Some(BufferSource::Borrowed(
             state
+                .frame
                 .callout_response
                 .as_ref()
                 .map(|r| r.body.as_slice())
                 .unwrap_or_default(),
         )),
         // Buffer mode: the full request body staged by the body gate.
-        BUF_HTTP_REQUEST_BODY => Some(BufferSource::Borrowed(&state.request_body)),
+        BUF_HTTP_REQUEST_BODY => Some(BufferSource::Borrowed(&state.frame.request_body)),
         // Read-only chunk window: the CURRENT chunk, never an accumulated body.
-        BUF_HTTP_RESPONSE_BODY => Some(BufferSource::Shared(&state.body_chunk)),
+        BUF_HTTP_RESPONSE_BODY => Some(BufferSource::Shared(&state.frame.body_chunk)),
         _ => None,
     }
 }
@@ -832,20 +844,21 @@ fn request_body_replacement_range(
     size: usize,
     replacement_len: usize,
 ) -> Result<std::ops::Range<usize>, i32> {
-    if state.phase != WasmPhase::RequestBody {
+    if state.frame.phase != WasmPhase::RequestBody {
         return Err(STATUS_BAD_ARGUMENT);
     }
     let end = start.checked_add(size).ok_or(STATUS_BAD_ARGUMENT)?;
-    if start > state.request_body.len() || end > state.request_body.len() {
+    if start > state.frame.request_body.len() || end > state.frame.request_body.len() {
         return Err(STATUS_BAD_ARGUMENT);
     }
     let new_len = state
+        .frame
         .request_body
         .len()
         .checked_sub(size)
         .and_then(|len| len.checked_add(replacement_len))
         .ok_or(STATUS_INTERNAL_FAILURE)?;
-    if new_len > state.request_body_limit {
+    if new_len > state.frame.request_body_limit {
         return Err(STATUS_INTERNAL_FAILURE);
     }
     Ok(start..end)
@@ -881,15 +894,15 @@ fn replace_request_body_buffer(state: &mut HostState, start: usize, size: usize,
         Ok(range) => range,
         Err(status) => return status,
     };
-    let work = request_body_mutation_work(state.request_body.len(), &range, replacement.len());
+    let work = request_body_mutation_work(state.frame.request_body.len(), &range, replacement.len());
     if let Err(status) = state.charge_request_body_mutation(work) {
         return status;
     }
     if range.is_empty() && replacement.is_empty() {
         return STATUS_OK;
     }
-    state.request_body.splice(range, replacement);
-    state.request_body_modified = true;
+    state.frame.request_body.splice(range, replacement);
+    state.frame.request_body_modified = true;
     STATUS_OK
 }
 
@@ -1216,10 +1229,10 @@ fn host_http_call(
     timeout_ms: i32,
     return_token_ptr: i32,
 ) -> i32 {
-    if !caller.data().dispatch_enabled {
+    if !caller.data().frame.dispatch_enabled {
         return STATUS_UNIMPLEMENTED;
     }
-    if caller.data().callouts_dispatched >= MAX_CALLOUTS_PER_REQUEST {
+    if caller.data().frame.callouts_dispatched >= MAX_CALLOUTS_PER_REQUEST {
         crate::observe::metrics::registry::record_wasm_callout(&caller.data().metrics_label, "over_limit");
         return STATUS_INTERNAL_FAILURE;
     }
@@ -1294,7 +1307,12 @@ fn host_http_call(
     };
 
     let state = caller.data_mut();
-    if !state.callout_allowlist.iter().any(|a| a == &origin) {
+    if !state
+        .frame
+        .callout_allowlist
+        .as_ref()
+        .is_some_and(|allowlist| allowlist.iter().any(|a| a == &origin))
+    {
         // Bounded metric carries the signal; the guest-supplied origin must not
         // reach tracing on the request path.
         crate::observe::metrics::registry::record_wasm_callout(&state.metrics_label, "denied");
@@ -1328,7 +1346,9 @@ fn host_http_call(
         None => "/".to_string(),
     };
 
-    let token = state.next_callout_token;
+    let Some(token) = state.last_callout_token.checked_add(1) else {
+        return STATUS_INTERNAL_FAILURE;
+    };
     let pending = PendingCallout {
         token,
         origin,
@@ -1362,9 +1382,9 @@ fn host_http_call(
     }
     let state = caller.data_mut();
     state.commit_abi_charge(checked_charge);
-    state.callouts_dispatched += 1;
-    state.next_callout_token = token.wrapping_add(1);
-    state.pending_callouts.push(pending);
+    state.frame.callouts_dispatched += 1;
+    state.last_callout_token = token;
+    state.frame.pending_callouts.push(pending);
     STATUS_OK
 }
 
@@ -1376,14 +1396,17 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
         host::MODULE,
         host::PROXY_LOG,
         |mut caller: Caller<'_, HostState>, level: i32, ptr: i32, len: i32| -> i32 {
+            if caller.data().frame.read_only {
+                return STATUS_UNIMPLEMENTED;
+            }
             let profile = match profile_guest_string(&mut caller, ptr, len) {
                 Ok(profile) => profile,
                 Err(status) => return status,
             };
             let allocation = match AllocationProfile::default().add_bytes(profile.decoded_len) {
                 Ok(profile) => match vector_growth_allocation::<(i32, String)>(
-                    caller.data().log_lines.len(),
-                    caller.data().log_lines.capacity(),
+                    caller.data().frame.log_lines.len(),
+                    caller.data().frame.log_lines.capacity(),
                     1,
                 )
                 .and_then(|growth| profile.add_bytes(growth.bytes))
@@ -1405,14 +1428,14 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                 Err(status) => return status,
             };
             let state = caller.data_mut();
-            if state.log_lines.try_reserve_exact(1).is_err() {
+            if state.frame.log_lines.try_reserve_exact(1).is_err() {
                 return STATUS_INTERNAL_FAILURE;
             }
             // Data-plane hot path (Iron rule 3) and a guest-controlled
             // message (Iron rule 1): never tracing the raw text. The line is
             // retained only for bounded diagnostics and reported as a count.
             state.commit_abi_charge(checked_charge);
-            state.log_lines.push((level, msg));
+            state.frame.log_lines.push((level, msg));
             STATUS_OK
         },
     )?;
@@ -1501,6 +1524,9 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
         host::MODULE,
         host::PROXY_REPLACE_HEADER_MAP_VALUE,
         |mut caller: Caller<'_, HostState>, map: i32, kp: i32, kl: i32, vp: i32, vl: i32| -> i32 {
+            if caller.data().frame.read_only {
+                return STATUS_UNIMPLEMENTED;
+            }
             let key_profile = match profile_guest_string(&mut caller, kp, kl) {
                 Ok(profile) => profile,
                 Err(status) => return status,
@@ -1526,9 +1552,9 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
             let allocation = {
                 let state = caller.data();
                 let pairs = if map == MAP_HTTP_REQUEST_HEADERS {
-                    &state.request_headers
+                    &state.frame.request_headers
                 } else {
-                    &state.response_headers
+                    &state.frame.response_headers
                 };
                 let snapshot_growth =
                     match vector_growth_allocation::<(String, String)>(pairs.len(), pairs.capacity(), 1) {
@@ -1536,8 +1562,8 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                         Err(status) => return status,
                     };
                 let pending_growth = match vector_growth_allocation::<HeaderOp>(
-                    state.pending_ops.len(),
-                    state.pending_ops.capacity(),
+                    state.frame.pending_ops.len(),
+                    state.frame.pending_ops.capacity(),
                     1,
                 ) {
                     Ok(profile) => profile,
@@ -1575,26 +1601,26 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                 Err(status) => return status,
             };
             let state = caller.data_mut();
-            if state.pending_ops.try_reserve_exact(1).is_err() {
+            if state.frame.pending_ops.try_reserve_exact(1).is_err() {
                 return STATUS_INTERNAL_FAILURE;
             }
             let pairs = if map == MAP_HTTP_REQUEST_HEADERS {
-                &mut state.request_headers
+                &mut state.frame.request_headers
             } else {
-                &mut state.response_headers
+                &mut state.frame.response_headers
             };
             if pairs.try_reserve_exact(1).is_err() {
                 return STATUS_INTERNAL_FAILURE;
             }
             state.commit_abi_charge(checked_charge);
             let pairs = if map == MAP_HTTP_REQUEST_HEADERS {
-                &mut state.request_headers
+                &mut state.frame.request_headers
             } else {
-                &mut state.response_headers
+                &mut state.frame.response_headers
             };
             pairs.retain(|(name, _)| !name.eq_ignore_ascii_case(&key));
             pairs.push((snapshot_key, snapshot_value));
-            state.pending_ops.push(HeaderOp::Set { map, name: key, value });
+            state.frame.pending_ops.push(HeaderOp::Set { map, name: key, value });
             STATUS_OK
         },
     )?;
@@ -1603,6 +1629,9 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
         host::MODULE,
         host::PROXY_ADD_HEADER_MAP_VALUE,
         |mut caller: Caller<'_, HostState>, map: i32, kp: i32, kl: i32, vp: i32, vl: i32| -> i32 {
+            if caller.data().frame.read_only {
+                return STATUS_UNIMPLEMENTED;
+            }
             let key_profile = match profile_guest_string(&mut caller, kp, kl) {
                 Ok(profile) => profile,
                 Err(status) => return status,
@@ -1628,9 +1657,9 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
             let allocation = {
                 let state = caller.data();
                 let pairs = if map == MAP_HTTP_REQUEST_HEADERS {
-                    &state.request_headers
+                    &state.frame.request_headers
                 } else {
-                    &state.response_headers
+                    &state.frame.response_headers
                 };
                 let snapshot_growth =
                     match vector_growth_allocation::<(String, String)>(pairs.len(), pairs.capacity(), 1) {
@@ -1638,8 +1667,8 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                         Err(status) => return status,
                     };
                 let pending_growth = match vector_growth_allocation::<HeaderOp>(
-                    state.pending_ops.len(),
-                    state.pending_ops.capacity(),
+                    state.frame.pending_ops.len(),
+                    state.frame.pending_ops.capacity(),
                     1,
                 ) {
                     Ok(profile) => profile,
@@ -1677,25 +1706,25 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                 Err(status) => return status,
             };
             let state = caller.data_mut();
-            if state.pending_ops.try_reserve_exact(1).is_err() {
+            if state.frame.pending_ops.try_reserve_exact(1).is_err() {
                 return STATUS_INTERNAL_FAILURE;
             }
             let pairs = if map == MAP_HTTP_REQUEST_HEADERS {
-                &mut state.request_headers
+                &mut state.frame.request_headers
             } else {
-                &mut state.response_headers
+                &mut state.frame.response_headers
             };
             if pairs.try_reserve_exact(1).is_err() {
                 return STATUS_INTERNAL_FAILURE;
             }
             state.commit_abi_charge(checked_charge);
             let pairs = if map == MAP_HTTP_REQUEST_HEADERS {
-                &mut state.request_headers
+                &mut state.frame.request_headers
             } else {
-                &mut state.response_headers
+                &mut state.frame.response_headers
             };
             pairs.push((snapshot_key, snapshot_value));
-            state.pending_ops.push(HeaderOp::Add { map, name: key, value });
+            state.frame.pending_ops.push(HeaderOp::Add { map, name: key, value });
             STATUS_OK
         },
     )?;
@@ -1704,6 +1733,9 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
         host::MODULE,
         host::PROXY_REMOVE_HEADER_MAP_VALUE,
         |mut caller: Caller<'_, HostState>, map: i32, kp: i32, kl: i32| -> i32 {
+            if caller.data().frame.read_only {
+                return STATUS_UNIMPLEMENTED;
+            }
             let key_profile = match profile_guest_string(&mut caller, kp, kl) {
                 Ok(profile) => profile,
                 Err(status) => return status,
@@ -1724,8 +1756,8 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
             let allocation = {
                 let state = caller.data();
                 let pending_growth = match vector_growth_allocation::<HeaderOp>(
-                    state.pending_ops.len(),
-                    state.pending_ops.capacity(),
+                    state.frame.pending_ops.len(),
+                    state.frame.pending_ops.capacity(),
                     1,
                 ) {
                     Ok(profile) => profile,
@@ -1748,17 +1780,17 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                 Err(status) => return status,
             };
             let state = caller.data_mut();
-            if state.pending_ops.try_reserve_exact(1).is_err() {
+            if state.frame.pending_ops.try_reserve_exact(1).is_err() {
                 return STATUS_INTERNAL_FAILURE;
             }
             state.commit_abi_charge(checked_charge);
             let pairs = if map == MAP_HTTP_REQUEST_HEADERS {
-                &mut state.request_headers
+                &mut state.frame.request_headers
             } else {
-                &mut state.response_headers
+                &mut state.frame.response_headers
             };
             pairs.retain(|(name, _)| !name.eq_ignore_ascii_case(&key));
-            state.pending_ops.push(HeaderOp::Remove { map, name: key });
+            state.frame.pending_ops.push(HeaderOp::Remove { map, name: key });
             STATUS_OK
         },
     )?;
@@ -1767,6 +1799,9 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
         host::MODULE,
         host::PROXY_SET_HEADER_MAP_PAIRS,
         |mut caller: Caller<'_, HostState>, map: i32, ptr: i32, len: i32| -> i32 {
+            if caller.data().frame.read_only {
+                return STATUS_UNIMPLEMENTED;
+            }
             let map_profile = match profile_guest_map(&mut caller, ptr, len) {
                 Ok(profile) => profile,
                 Err(status) => return status,
@@ -1791,9 +1826,9 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
 
             let (removal_retained, removal_transient) = {
                 let pairs = if map == MAP_HTTP_REQUEST_HEADERS {
-                    &caller.data().request_headers
+                    &caller.data().frame.request_headers
                 } else {
-                    &caller.data().response_headers
+                    &caller.data().frame.response_headers
                 };
                 match header_removal_profiles(pairs) {
                     Ok(profiles) => profiles,
@@ -1801,8 +1836,8 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                 }
             };
             let pending_growth = match vector_growth_allocation::<HeaderOp>(
-                caller.data().pending_ops.len(),
-                caller.data().pending_ops.capacity(),
+                caller.data().frame.pending_ops.len(),
+                caller.data().frame.pending_ops.capacity(),
                 1,
             ) {
                 Ok(profile) => profile,
@@ -1839,9 +1874,9 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
             };
             let remove = {
                 let pairs = if map == MAP_HTTP_REQUEST_HEADERS {
-                    &caller.data().request_headers
+                    &caller.data().frame.request_headers
                 } else {
-                    &caller.data().response_headers
+                    &caller.data().frame.response_headers
                 };
                 match collect_header_removals(pairs) {
                     Ok(remove) => remove,
@@ -1849,7 +1884,7 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                 }
             };
             let state = caller.data_mut();
-            if state.pending_ops.try_reserve_exact(1).is_err() {
+            if state.frame.pending_ops.try_reserve_exact(1).is_err() {
                 return STATUS_INTERNAL_FAILURE;
             }
             // Capture the names present before the replacement (case-insensitive
@@ -1857,12 +1892,12 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
             // spelling while `seen` (discarded above) owns canonical keys.
             state.commit_abi_charge(checked_charge);
             let pairs = if map == MAP_HTTP_REQUEST_HEADERS {
-                &mut state.request_headers
+                &mut state.frame.request_headers
             } else {
-                &mut state.response_headers
+                &mut state.frame.response_headers
             };
             *pairs = snapshot;
-            state.pending_ops.push(HeaderOp::ReplaceAll {
+            state.frame.pending_ops.push(HeaderOp::ReplaceAll {
                 map,
                 remove,
                 pairs: new_pairs,
@@ -1912,7 +1947,7 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                     STATUS_NOT_FOUND
                 };
             }
-            if caller.data().phase != WasmPhase::RequestBody {
+            if caller.data().frame.phase != WasmPhase::RequestBody {
                 return STATUS_BAD_ARGUMENT;
             }
             if len < 0 {
@@ -1928,7 +1963,7 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                 Ok(range) => range,
                 Err(status) => return status,
             };
-            let work = request_body_mutation_work(caller.data().request_body.len(), &range, len as usize);
+            let work = request_body_mutation_work(caller.data().frame.request_body.len(), &range, len as usize);
             if let Err(status) = caller.data().check_request_body_mutation_charge(work) {
                 return status;
             }
@@ -1953,6 +1988,9 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
          headers_size: i32,
          _grpc_status: i32|
          -> i32 {
+            if caller.data().frame.read_only {
+                return STATUS_UNIMPLEMENTED;
+            }
             // Nonpositive sizes intentionally ignore their pointer. For
             // positive inputs preserve body-range validation before headers.
             let body_profile = if body_size > 0 {
@@ -1999,7 +2037,7 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                         Err(status) => return status,
                     };
             }
-            if let Some(existing) = caller.data().local_response.as_ref() {
+            if let Some(existing) = caller.data().frame.local_response.as_ref() {
                 allocation = match local_response_allocation(existing)
                     .and_then(|existing| allocation.add_bytes(existing.bytes))
                 {
@@ -2033,7 +2071,7 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
             // calls overwrite rather than grow, so its peak is one body, bounded
             // by the `ResourceLimiter`-capped guest linear memory. Not charged
             // against the append-only ABI retention budget.
-            caller.data_mut().local_response = Some(LocalResponse { status, body, headers });
+            caller.data_mut().frame.local_response = Some(LocalResponse { status, body, headers });
             STATUS_OK
         },
     )?;
@@ -2058,7 +2096,7 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                 Err(status) => return status,
             };
             let value = {
-                let Some(value) = caller.data().properties.get(&key) else {
+                let Some(value) = caller.data().frame.properties.get(&key) else {
                     return STATUS_NOT_FOUND;
                 };
                 let allocation = match key_allocation.add_bytes(value.len()) {
@@ -2113,11 +2151,11 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                 Err(status) => return status,
             };
             let state = caller.data_mut();
-            if !state.properties.contains_key(&key) && state.properties.try_reserve(1).is_err() {
+            if !state.frame.properties.contains_key(&key) && state.frame.properties.try_reserve(1).is_err() {
                 return STATUS_INTERNAL_FAILURE;
             }
             state.commit_abi_charge(checked_charge);
-            state.properties.insert(key, value);
+            state.frame.properties.insert(key, value);
             STATUS_OK
         },
     )?;
@@ -2273,7 +2311,7 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
         host::PROXY_CONTINUE_STREAM,
         |mut caller: Caller<'_, HostState>, stream: i32| -> i32 {
             if stream == 0 {
-                caller.data_mut().continue_requested = true;
+                caller.data_mut().frame.continue_requested = true;
             }
             STATUS_OK
         },
@@ -2282,7 +2320,7 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
         host::MODULE,
         host::PROXY_CONTINUE_REQUEST,
         |mut caller: Caller<'_, HostState>| -> i32 {
-            caller.data_mut().continue_requested = true;
+            caller.data_mut().frame.continue_requested = true;
             STATUS_OK
         },
     )?;

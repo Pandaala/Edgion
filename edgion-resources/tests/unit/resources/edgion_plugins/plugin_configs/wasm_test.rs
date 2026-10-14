@@ -548,3 +548,24 @@ fn rejected_callout_origins_never_enter_validation_diagnostics() {
         );
     }
 }
+
+#[test]
+fn request_admission_and_explicit_response_hooks_validate() {
+    let config: WasmConfig = serde_json::from_value(serde_json::json!({
+        "source": {"file": "demo.wasm"},
+        "response": {"headers": true, "body": true, "trailers": true}
+    }))
+    .unwrap();
+    assert_eq!(config.max_active_requests, 32);
+    assert!(config.response.enabled());
+    assert!(config.validate().is_ok());
+    assert!(serde_json::from_value::<WasmConfig>(serde_json::json!({
+        "source": {"file": "demo.wasm"}, "response": {"header": true}
+    }))
+    .is_err());
+    for (limit, valid) in [(0, false), (1, true), (64, true), (65, false)] {
+        let mut config = file_config();
+        config.max_active_requests = limit;
+        assert_eq!(config.validate().is_ok(), valid);
+    }
+}

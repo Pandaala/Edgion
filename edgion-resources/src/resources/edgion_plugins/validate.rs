@@ -33,6 +33,13 @@ use crate::resources::common::log_labels::LOG_LABEL_MAX_COUNT;
 /// Response stages reject ConfigMap-backed transcoders without consuming descriptor bytes.
 /// Intrinsic errors retain priority; alias, dye and wrong-stage checks remain with callers.
 pub fn response_stage_plugin_validation_error(plugin: &EdgionPlugin) -> Option<String> {
+    if let EdgionPlugin::Wasm(config) = plugin {
+        if config.response.enabled() {
+            return config
+                .validation_error()
+                .or_else(|| Some("Wasm response companions require requestPlugins placement".into()));
+        }
+    }
     if let EdgionPlugin::GrpcJsonTranscoder(config) = plugin {
         if matches!(
             config.descriptor,

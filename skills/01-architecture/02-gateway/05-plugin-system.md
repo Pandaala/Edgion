@@ -477,6 +477,22 @@ ticks. See [runtime isolation](../../04-review/wasm/regression-guards/wasm-modul
 and [background shutdown](../../04-review/wasm/regression-guards/tick-quiescence-on-zero-reference-eviction.md)
 for evidence, history, and verification limits.
 
+Request-stage Wasm uses a sparse typed request owner. Each binding pins one
+exclusive VM and HTTP context; callback frames are released after each hook,
+while the guest object survives request body and explicit `response` companions.
+The universal logging terminal closes healthy contexts once. Cancellation or
+unresolved completion discards without guest re-entry. Standalone synchronous
+response entries remain independent per-hook profiles.
+
+`maxActiveRequests` defaults to 32 (1..=64), shared across OCI generations of the
+configured runtime. A process semaphore caps actual instances at 128, including
+idle pools and dedicated persistent timer VMs. Admission never waits; long streams
+retain their request permit. This bounds count, not RSS or fairness. Timer root
+fields persist between successful ticks but are distinct from request VM roots;
+only explicit shared KV crosses them. Attached body/trailer callbacks use the
+canonical stream/trailer seams with read-only frames and bounded diagnostics.
+See [request lifecycle](../../04-review/wasm/regression-guards/request-execution-lifecycle.md).
+
 ## HTTP plugin inventory
 
 The schema enum `EdgionPlugin` in

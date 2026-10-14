@@ -13,12 +13,12 @@ the main upstream response and keep request-path work bounded.
 ## Module publication and refresh
 
 - OCI `Always` uses the last successfully published module while one
-  single-flight background refresh runs. The effective pull policy participates
-  in the runtime cache key.
-- A refresh candidate remains tick-inactive until publication. Handoff stops
-  and joins the old tick before publishing and activating the new entry; a
-  cancellation guard restores the old tick only when that exact entry is still
-  current. In-flight request hooks may finish on the old entry.
+  single-flight background refresh runs. The effective pull policy belongs to
+  the private configured runtime slot; there is no global mutable runtime cache.
+- A refresh candidate remains tick-inactive until publication. Handoff cancels
+  the old tick and publishes/activates the new entry. Cancellation takes effect
+  at host await points or bounded guest boundaries; brief overlap is possible.
+  In-flight request bindings finish on the old entry without rollback choreography.
 - Preload and failed-load retry use atomic claims and a negative-cache deadline,
   preventing request-rate task and warning storms.
 - URL and OCI retry backoff occurs after releasing the shared download permit;
@@ -91,7 +91,7 @@ The guards include:
 - invalid-UTF-8 and high-pair-count allocation preflight tests;
 - request-body mutation budget scaling and atomic rejection tests;
 - real-guest cancellation and VM-pool reuse tests;
-- non-overlapping old/new tick handoff and cancellation restoration tests;
+- owner cancellation, publication closure, and old/new tick retirement tests;
 - repeated manager creation/drop tests that verify epoch ticker shutdown.
 
 The Proxy-Wasm library test module passes both serially and with the default

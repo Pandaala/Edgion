@@ -614,6 +614,47 @@ async fn pool_reuses_instance() {
 }
 
 #[tokio::test]
+async fn idle_store_releases_phase_payloads_without_resetting_persistent_state() {
+    let file = write_temp_wasm(MINI_GUEST);
+    let manager = WasmVmManager::new_for_test();
+    let entry = load(&manager, &file_config(file.path())).await.unwrap();
+    let shared = entry.shared_data.clone();
+    let mut lease = entry.acquire(100).unwrap();
+    let state = lease.state_mut();
+    state.vm_config = b"vm".to_vec();
+    state.plugin_config = b"plugin".to_vec();
+    state.tick_period_ms = 1234;
+    state.frame.request_headers = vec![("authorization".into(), "test-credential".into())];
+    state.frame.response_headers = vec![("set-cookie".into(), "test-cookie".into())];
+    state.frame.properties.insert("request.path".into(), "/private".into());
+    state.frame.request_body = vec![b'x'; 128 * 1024];
+    state.frame.body_chunk = bytes::Bytes::from_static(b"response");
+    state.frame.log_lines.push((1, "test message".into()));
+    state.arm_dispatch(Arc::from(vec!["https://example.com:443".into()]), 50);
+    state.frame.continue_requested = true;
+    drop(lease);
+
+    // Inspect before acquire/begin_phase could hide an idle retention defect.
+    let pool = entry.pool.lock();
+    let state = pool[0].store.data();
+    assert_eq!(state.frame.request_body.capacity(), 0);
+    assert_eq!(state.frame.request_headers.capacity(), 0);
+    assert_eq!(state.frame.response_headers.capacity(), 0);
+    assert_eq!(state.frame.properties.capacity(), 0);
+    assert_eq!(state.frame.log_lines.capacity(), 0);
+    assert_eq!(state.frame.pending_ops.capacity(), 0);
+    assert_eq!(state.frame.pending_callouts.capacity(), 0);
+    assert!(state.frame.body_chunk.is_empty());
+    assert!(!state.frame.dispatch_enabled);
+    assert!(!state.frame.continue_requested);
+    assert!(state.frame.callout_allowlist.is_none());
+    assert_eq!(state.vm_config, b"vm");
+    assert_eq!(state.plugin_config, b"plugin");
+    assert_eq!(state.tick_period_ms, 1234);
+    assert!(Arc::ptr_eq(&state.shared_data, &shared));
+}
+
+#[tokio::test]
 async fn repeated_test_manager_drop_releases_engine_pooling_state() {
     let f = write_temp_wasm(MINI_GUEST);
     for _ in 0..24 {
@@ -1472,7 +1513,7 @@ fn panicking_tick_callout_linker(
                       _token_ptr: i32|
                       -> i32 {
                     dispatch_calls.fetch_add(1, Ordering::SeqCst);
-                    caller.data_mut().pending_callouts.push(host_abi::PendingCallout {
+                    caller.data_mut().frame.pending_callouts.push(host_abi::PendingCallout {
                         token: 7,
                         origin: "http://example.invalid:80".to_string(),
                         path: "/".to_string(),
@@ -1516,7 +1557,7 @@ fn blocking_tick_callout_linker(
                       _token_ptr: i32|
                       -> i32 {
                     dispatch_calls.fetch_add(1, Ordering::SeqCst);
-                    caller.data_mut().pending_callouts.push(host_abi::PendingCallout {
+                    caller.data_mut().frame.pending_callouts.push(host_abi::PendingCallout {
                         token: 7,
                         origin: origin.clone(),
                         path: "/".to_string(),
@@ -1603,7 +1644,11 @@ async fn tick_host_panic_discards_vm_without_adopting_failed_state() {
         MIN_TICK_PERIOD_MS,
         "failed on_tick state must not replace the last trusted period"
     );
-    assert_eq!(entry.pool_len(), 0, "each panicking tick VM must be discarded");
+    assert_eq!(
+        entry.pool_len(),
+        1,
+        "timer failures must leave only the warm request VM"
+    );
 }
 
 #[tokio::test]
@@ -1636,7 +1681,11 @@ async fn tick_callout_callback_panic_discards_vm_without_adopting_failed_state()
         MIN_TICK_PERIOD_MS,
         "failed callout callback state must not replace the last trusted period"
     );
-    assert_eq!(entry.pool_len(), 0, "each panicking callback VM must be discarded");
+    assert_eq!(
+        entry.pool_len(),
+        1,
+        "timer callback failures must leave only the warm request VM"
+    );
 }
 
 /// Plugin destruction must stop a tick round that is parked inside
@@ -1958,6 +2007,7 @@ async fn oci_source_loads_and_always_recheck_swaps_on_digest_change() {
     let host = server.uri().trim_start_matches("http://").to_string();
     let config: WasmConfig = serde_json::from_value(serde_json::json!({
         // tag `latest` => effective pullPolicy Always
+        "maxActiveRequests": 1,
         "source": { "oci": { "image": format!("{host}/test/wasm:latest") } },
         "timeoutMs": 500
     }))
@@ -1970,6 +2020,7 @@ async fn oci_source_loads_and_always_recheck_swaps_on_digest_change() {
     let entry1b = runtime.get_or_load().await.unwrap();
     assert!(Arc::ptr_eq(&entry1, &entry1b));
 
+    let pinned = entry1.acquire(100).unwrap();
     // Registry moves the tag to new content; backdate to force a re-check.
     server.reset().await;
     mount(&server, WASM_B).await;
@@ -1982,6 +2033,9 @@ async fn oci_source_loads_and_always_recheck_swaps_on_digest_change() {
     runtime.wait_for_oci_refresh_for_test().await;
     let entry2 = runtime.try_get().expect("refreshed entry is published");
     assert!(!Arc::ptr_eq(&entry1, &entry2), "digest change must reload the module");
+    assert!(entry2.acquire(100).is_err(), "old generation retains runtime admission");
+    drop(pinned);
+    drop(entry2.acquire(100).unwrap());
 
     // Unchanged digest after another backdate: entry is kept.
     runtime.backdate_oci_check_for_test().await;
@@ -2612,6 +2666,51 @@ fn wasm_captured_globals_and_disabled_https_are_process_isolated() {
             assert!(inactive.state.url_client.is_none());
             assert!(inactive.config().source.fetch.as_ref().unwrap().tls.is_some());
             set_outbound_global_default(previous);
+        },
+    );
+}
+
+#[test]
+fn actual_instance_admission_includes_idle_and_releases_failed_initialization() {
+    crate::test_subprocess::assert_in_subprocess(
+        "plugins::http::wasm::vm_manager::tests",
+        "actual_instance_admission_includes_idle_and_releases_failed_initialization",
+        "EDGION_WASM_INSTANCE_BOUND_CHILD",
+        "bounded",
+        || {
+            tokio::runtime::Runtime::new().unwrap().block_on(async {
+                let permits = instance_permits().clone();
+                let reserved = permits
+                    .clone()
+                    .try_acquire_many_owned((MAX_PROCESS_INSTANCES - 1) as u32)
+                    .unwrap();
+                let manager = WasmVmManager::new_for_test();
+                let file = write_temp_wasm(MINI_GUEST);
+                let entry = load(&manager, &file_config(file.path())).await.unwrap();
+                assert_eq!(permits.available_permits(), 0, "warm idle VM counts");
+                let lease = entry.acquire(100).unwrap();
+                assert!(
+                    entry.acquire(100).is_err(),
+                    "fresh instance cannot bypass process admission"
+                );
+                assert!(entry.acquire_timer().is_err(), "dedicated timer counts too");
+                drop(lease);
+                assert_eq!(permits.available_permits(), 0);
+                drop(entry);
+                assert_eq!(permits.available_permits(), 1);
+                let bad = write_temp_wasm(
+                    r#"(module (memory (export "memory") 1)
+                    (func (export "proxy_on_vm_start") (param i32 i32) (result i32) (i32.const 0)))"#,
+                );
+                assert!(load(&manager, &file_config(bad.path())).await.is_err());
+                assert_eq!(
+                    permits.available_permits(),
+                    1,
+                    "failed initialization releases admission"
+                );
+                drop(reserved);
+                assert_eq!(permits.available_permits(), MAX_PROCESS_INSTANCES);
+            });
         },
     );
 }
