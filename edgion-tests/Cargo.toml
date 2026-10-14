@@ -82,6 +82,7 @@ axum-server.workspace = true
 tonic.workspace = true
 tonic-reflection.workspace = true
 prost.workspace = true
+prost-types.workspace = true
 # Used by the `build_test_proto` helper binary to regenerate the gRPC stubs.
 tonic-build.workspace = true
 reqwest.workspace = true
@@ -114,6 +115,7 @@ instant-acme.workspace = true
 ldap3.workspace = true
 
 # Misc utilities
+tempfile.workspace = true
 chrono.workspace = true
 time.workspace = true
 cookie.workspace = true
@@ -134,4 +136,3 @@ pingora-http.workspace = true
 k8s-openapi.workspace = true
 edgion-waf.workspace = true
 wiremock.workspace = true
-tempfile.workspace = true

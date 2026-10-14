@@ -1979,6 +1979,7 @@ dependencies = [
  "pingora-core",
  "pingora-http",
  "prost 0.13.5",
+ "prost-types 0.13.5",
  "proxy-header",
  "rand 0.9.5",
  "rcgen",

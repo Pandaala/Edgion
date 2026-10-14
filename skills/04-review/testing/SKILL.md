@@ -27,6 +27,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [TestService schema regeneration](regression-guards/test-service-schema-regeneration.md)
+
 - [Custom connector request contracts](regression-guards/custom-connector-request-contracts.md)
 
 - [Scripted H2 normal closure drains the response](regression-guards/h2-scripted-close-drains-response.md)

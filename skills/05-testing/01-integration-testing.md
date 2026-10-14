@@ -159,6 +159,15 @@ strictly build-free: a missing artifact is an immediate infrastructure failure, 
 invocation. The aggregate ACME child uses `--no-build`; a directly invoked ACME script may build
 the canonical artifact set through `prepare.sh`, but only before starting Pebble or any test fixture.
 
+## TestService schema regeneration
+
+The checked-in client/server Rust stubs and transcoder descriptor share
+`edgion-tests/proto/grpc_json_transcoding/test.proto` as their schema owner.
+Stub regeneration is an explicit developer operation, outside preparation and
+runtime runners. See the [schema maintenance instructions](../../edgion-tests/proto/grpc_json_transcoding/README.md)
+for the command, required tools, failure behavior, fixture-only services and
+separate descriptor refresh.
+
 ## Memorize the actual directory layout
 
 - `edgion-tests/integration/conf/`: test YAML, organized by resource/item
