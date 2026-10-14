@@ -13,7 +13,7 @@
 //! hostnames, UUIDs, or free-form paths as label values — those explode
 //! Prometheus cardinality.
 
-use metrics::{counter, gauge};
+use super::metrics_facade::{fixed_counter, fixed_gauge};
 
 /// Metric name constants. Kept here as a single source of truth so tests
 /// and docs can reference the exact strings exposed on `/metrics`.
@@ -85,19 +85,19 @@ pub mod labels {
 /// Set the current active-connection gauge for a given role.
 #[inline]
 pub fn set_connections_active(role: &'static str, count: u64) {
-    gauge!(names::CONNECTIONS_ACTIVE, "role" => role).set(count as f64);
+    fixed_gauge!(names::CONNECTIONS_ACTIVE, "role" => role).set(count as f64);
 }
 
 /// Record a connection lifecycle event.
 #[inline]
 pub fn record_connection_event(role: &'static str, event: &'static str) {
-    counter!(names::CONNECTION_EVENTS_TOTAL, "role" => role, "event" => event).increment(1);
+    fixed_counter!(names::CONNECTION_EVENTS_TOTAL, "role" => role, "event" => event).increment(1);
 }
 
 /// Record the most recent session duration (observed at disconnect).
 #[inline]
 pub fn record_connection_duration(role: &'static str, seconds: f64) {
-    gauge!(names::CONNECTION_DURATION_LAST, "role" => role).set(seconds);
+    fixed_gauge!(names::CONNECTION_DURATION_LAST, "role" => role).set(seconds);
 }
 
 // ---------- Watch plane ----------
@@ -108,14 +108,14 @@ pub fn record_connection_duration(role: &'static str, seconds: f64) {
 /// "EdgionConfigData"). Never pass raw user input.
 #[inline]
 pub fn record_watch_event(kind: &str, direction: &'static str) {
-    counter!(names::WATCH_EVENTS_TOTAL, "kind" => kind.to_string(), "direction" => direction).increment(1);
+    fixed_counter!(names::WATCH_EVENTS_TOTAL, "kind" => kind.to_string(), "direction" => direction).increment(1);
 }
 
 // ---------- Ready gate (Controller) ----------
 
 #[inline]
 pub fn record_ready_gate_wait(seconds: f64) {
-    gauge!(names::READY_GATE_WAIT_LAST).set(seconds);
+    fixed_gauge!(names::READY_GATE_WAIT_LAST).set(seconds);
 }
 
 // ---------- RBAC (Controller admin authz) ----------
@@ -132,8 +132,7 @@ pub fn record_ready_gate_wait(seconds: f64) {
 /// structured log field instead).
 #[inline]
 pub fn record_rbac_denied(verb: &str, kind: &str, source: &str) {
-    counter!(
-        names::RBAC_DENIED_TOTAL,
+    fixed_counter!(names::RBAC_DENIED_TOTAL,
         "verb" => verb.to_string(),
         "kind" => kind.to_string(),
         "source" => source.to_string()
@@ -150,7 +149,7 @@ pub fn record_rbac_denied(verb: &str, kind: &str, source: &str) {
 /// disabled it (kill-switch active).
 #[inline]
 pub fn record_kill_switch_state(enabled: bool) {
-    gauge!(names::KILL_SWITCH_STATE).set(if enabled { 1.0 } else { 0.0 });
+    fixed_gauge!(names::KILL_SWITCH_STATE).set(if enabled { 1.0 } else { 0.0 });
 }
 
 /// Set the federation client running gauge (see `names::CLIENT_RUNNING`).
@@ -160,7 +159,7 @@ pub fn record_kill_switch_state(enabled: bool) {
 /// only the leader may hold the session.
 #[inline]
 pub fn record_client_running(running: bool) {
-    gauge!(names::CLIENT_RUNNING).set(if running { 1.0 } else { 0.0 });
+    fixed_gauge!(names::CLIENT_RUNNING).set(if running { 1.0 } else { 0.0 });
 }
 
 #[cfg(test)]

@@ -19,7 +19,20 @@ Kong. The original task `lb-degrade-mode-metric-lifecycle` required gauge reset
 coverage; that proposed contract was superseded by the event-counter decision.
 The original defect was real, not an accepted stale-state behavior.
 
-## Rationale and evidence
+## Current lifetime contract (ARCH-043)
+
+The weak registry deduplicates resource-owned descriptors on the cold publication
+path and never pins an exporter epoch. Live and request-retained snapshots remain
+usable after idle eviction, but their accumulated export statistics may expire.
+The next actual selection renews the same admitted identity with a fresh counter
+epoch; admission history is never cleared. Scraping does not retain deleted
+snapshot owners or synthesize zero increments. The retained-owner selector test
+keeps selection/threshold semantics and now checks real removal and renewal.
+Earlier keepalive and cumulative-across-idle guidance/results below are historical
+and do not establish current verification. Current tests and component benchmark
+receipts must be recorded for the implemented revision.
+
+## Rationale and historical evidence
 
 Previously `degrade_engaged` set a Service gauge only after survivor evaluation.
 Threshold disable, health/outlier capability removal, empty selectors, and
@@ -30,10 +43,10 @@ a short degrade interval could also erase all evidence before the next scrape.
 
 - `GatewayMetrics::lb_degrade_selections` owns registration in the canonical
   metrics registry. Labels contain only a canonical `namespace/name` Service key.
-- `ServiceRuntimeSnapshot::with_degrade_counter` registers on the cold publication
+- `ServiceRuntimeSnapshot::with_degrade_counter` prepares a renewable descriptor on the cold publication
   path whenever health or outlier policy is present, even at a zero live threshold:
   an in-flight HTTP/gRPC request can retain a nonzero override from an older policy.
-  Snapshots reuse a prior handle across policy and membership changes, including disable.
+  First selection admits an export epoch. Snapshots reuse a prior descriptor across policy and membership changes, including disable.
 - `select_service_endpoint` uses `degrade_engaged(selector, active, threshold)`
   and the same runtime snapshot's Counter. The threshold comes from the explicit
   captured/live policy argument. There is no extra metric configuration read,
@@ -67,7 +80,7 @@ a short degrade interval could also erase all evidence before the next scrape.
 Authority: `skills/00-design-rules.md` (observability restraint, hot-path cost,
 cross-cutting ownership) and `skills/03-coding/observability/01-metrics.md`.
 
-## Alternatives and limits
+## Historical Alternatives and limits
 
 [Envoy](https://github.com/envoyproxy/envoy/blob/main/source/extensions/load_balancing_policies/common/load_balancer_impl.cc)
 increments `lb_healthy_panic` in its panic selection branch.
@@ -103,7 +116,7 @@ owns the configuration-generation contract. The threshold-coherence correction
 extends cold registration to zero-threshold health/outlier Services, ensuring
 captured nonzero overrides can never engage without an event handle.
 
-## Verification and re-evaluation
+## Historical Verification and re-evaluation
 
 Targeted tests cover ordinary Service non-registration, publication-time handles
 under a different request-time recorder, cross-section events, threshold disable
@@ -144,7 +157,7 @@ isolation under a different request-time recorder. The shared-stack
 Full command results and the capture-specific verification limits are recorded in
 the [Service policy rule](../../backends/regression-guards/ebtp-atomic-service-snapshot.md).
 
-## Resolution references
+## Historical Resolution references
 
 - `lb-degrade-mode-metric-lifecycle` — real observability defect; user-approved
   replacement of the gauge by a cached selection Counter, 2026-09-07.

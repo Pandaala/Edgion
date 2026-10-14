@@ -27,7 +27,7 @@ SCANNED = [
 
 CONST_RE = re.compile(r"const\s+\w+\s*:\s*&\s*(?:'[a-z_]+\s+)?str\s*=\s*\"(edgion_[a-z0-9_]+)\"")
 MACRO_LITERAL_RE = re.compile(
-    r'metrics::(?:counter|gauge|histogram)!\(\s*"(edgion_[a-z0-9_]+)"'
+    r'(?:metrics::|edgion_common::observe::metrics_facade::)?(?:(?:fixed|dynamic)_)?(?:counter|gauge|histogram)!\(\s*"(edgion_[a-z0-9_]+)"'
 )
 
 COMMENT_RE = re.compile(r'//[^\n]*|/\*.*?\*/', re.DOTALL)
@@ -44,7 +44,7 @@ LABEL_ALLOWLIST = {
 # identifier), not a string literal, and later arguments may contain nested
 # calls with their own parens (e.g. `"user" => normalize(p)`), which a
 # non-greedy `(.+?)\)` would stop at prematurely.
-MACRO_CALL_RE = re.compile(r'(?:metrics::)?(?:counter|gauge|histogram)!\(')
+MACRO_CALL_RE = re.compile(r'(?:metrics::)?(?:(?:fixed|dynamic)_)?(?:counter|gauge|histogram)!\(')
 LABEL_KEY_RE = re.compile(r'"([a-z_]+)"\s*=>')
 
 
@@ -90,6 +90,105 @@ def strip_comments(text):
     inside a comment is not specially handled, and that's acceptable here.
     """
     return COMMENT_RE.sub("", text)
+
+
+# Only these four implementation files may own raw exporter handles/registration.
+RAW_BACKEND_FILES = {
+    "edgion-common/src/observe/cardinality_guard.rs",
+    "edgion-common/src/observe/dynamic_metrics.rs",
+    "edgion-common/src/observe/metrics_api.rs",
+    "edgion-common/src/observe/metrics_facade.rs",
+}
+RAW_SYMBOLS = {"counter", "gauge", "histogram", "Counter", "Gauge", "Histogram",
+               "CounterFn", "GaugeFn", "HistogramFn", "Recorder"}
+EXPORTER_SYMBOLS = {"PrometheusBuilder", "PrometheusRecorder", "PrometheusHandle"}
+# Mask strings as well as comments, preserving newlines. Raw API words inside a
+# diagnostic/help literal are not Rust uses. This is a bounded lexical guard,
+# not a general Rust parser; imports and ordinary aliases are handled below.
+RUST_NON_CODE = re.compile(r'r(?P<hashes>\#{0,16})".*?"(?P=hashes)|"(?:\\.|[^"\\])*"|//[^\n]*|/\*.*?\*/', re.DOTALL)
+
+
+def rust_code(text):
+    return RUST_NON_CODE.sub(lambda match: "".join("\n" if char == "\n" else " " for char in match.group()), text)
+
+
+def raw_interface_bypass(text):
+    code = rust_code(text)
+    roots = {"metrics", "metrics_exporter_prometheus"}
+    imports = re.findall(r"\buse\s+([^;]+);", code)
+    for _ in range(len(imports)+1):
+        before=set(roots)
+        for tree in imports:
+            for root in tuple(roots):
+                roots.update(re.findall(r"\b" + re.escape(root) + r"\s+as\s+(\w+)", tree))
+                for body in re.findall(r"\b" + re.escape(root) + r"\s*::\s*\{([^;]+)\}", tree):
+                    roots.update(re.findall(r"\bself\s+as\s+(\w+)", body))
+        if roots==before:
+            break
+    roots.update(re.findall(r"\bextern\s+crate\s+metrics\s+as\s+(\w+)", code))
+    symbols = "|".join(sorted(RAW_SYMBOLS | EXPORTER_SYMBOLS))
+    for root in roots:
+        prefix = r"\b" + re.escape(root)
+        if re.search(prefix + r"\s*::\s*(?:" + symbols + r")\b", code):
+            return True
+        for tree in imports:
+            for body in re.findall(prefix + r"\s*::\s*\{([^;]+)\}", tree):
+                if "*" in body or re.search(r"\b(?:" + symbols + r")\b", body):
+                    return True
+            if re.search(prefix + r"\s*::\s*\*", tree):
+                return True
+    if re.search(r"\bregister_(?:counter|gauge|histogram)\s*\(", code):
+        return True
+    if re.search(r"#\s*\[\s*macro_use\s*\]\s*extern\s+crate\s+metrics\b", code):
+        return True
+    return False
+
+
+def production_sources(root):
+    # Every workspace product/library src tree, including CLI and leaf crates;
+    # edgion-tests is the dedicated integration harness, not production.
+    root=Path(root)
+    workspace=re.search(r"(?ms)^\[workspace\]\s*(.*?)(?=^\[|\Z)",(root/"Cargo.toml").read_text()).group(1)
+    member_array=re.search(r"(?ms)^\s*members\s*=\s*\[(.*?)\]",workspace).group(1)
+    members=re.findall(r'"([^"\n]+)"',member_array)
+    return sorted(source for member in members for crate in root.glob(member)
+                  if crate.name != "edgion-tests" and (crate / "src").is_dir()
+                  for source in (crate / "src").rglob("*.rs"))
+
+
+def guard_self_test():
+    rejected = [
+        'metrics::counter!("event");',
+        'use metrics::counter; counter!("event");',
+        'use metrics::{counter as events}; events!("event");',
+        'use metrics::Counter as Cached; struct Cache { handle: Cached }',
+        'use metrics as raw; raw::Gauge::noop();',
+        'use second::Counter; use raw as second; use metrics as raw;',
+        'use metrics::{self as raw, Key}; use raw::{Histogram as Cached};',
+        'use metrics::*;',
+        'use metrics::{Key, gauge as state};',
+        'extern crate metrics as raw; raw::Counter::noop();',
+        '#[macro_use] extern crate metrics; counter!("event");',
+        'recorder.register_counter(&key, &metadata);',
+        'metrics::Recorder::register_histogram(&recorder, &key, &metadata);',
+        'use metrics_exporter_prometheus::PrometheusBuilder;',
+    ]
+    accepted = [
+        'use metrics::{Key, Label};',
+        'use edgion_common::observe::metrics_facade::{dynamic_counter as counter, DynamicCounter as Counter}; counter!("event");',
+        'use edgion_common::observe::metrics_facade::FixedCounter; fixed_counter!("event");',
+        'use metrics_exporter_prometheus::Matcher;',
+        '// metrics::Counter\nlet help = "metrics::counter!";',
+        'let help = r#"use metrics::Counter;"#;',
+    ]
+    for fixture in rejected:
+        assert raw_interface_bypass(fixture), "raw interface escaped guard: " + fixture
+    for fixture in accepted:
+        assert not raw_interface_bypass(fixture), "canonical interface rejected: " + fixture
+    assert "edgion-common/src/observe/system_metrics.rs" not in RAW_BACKEND_FILES
+    for source in production_sources(REPO):
+        assert source.parts[-1].endswith(".rs")
+    print("OK: raw-interface imported/aliased/type/wildcard fixtures passed.")
 
 
 def extract_metric_names_from_files(paths):
@@ -164,6 +263,30 @@ def main():
             print("  - " + n)
     if missing or stale:
         return 1
+    catalog = (REPO / "edgion-common/src/observe/metrics_catalog.rs").read_text()
+    catalog_names = re.findall(r'Definition\s*\{\s*name:\s*"(edgion_[a-z0-9_]+)"', catalog)
+    if len(catalog_names) != len(set(catalog_names)) or set(catalog_names) != inv:
+        print("METRIC CATALOG MUST MATCH INVENTORY EXACTLY WITHOUT DUPLICATE FAMILIES")
+        print("  missing:", sorted(inv - set(catalog_names)))
+        print("  extra:", sorted(set(catalog_names) - inv))
+        return 1
+    declared_classes = dict(re.findall(r'Definition\s*\{\s*name:\s*"(edgion_[a-z0-9_]+)"\s*,\s*kind:\s*MetricType::\w+\s*,\s*class:\s*MetricClass::(\w+)', catalog))
+    inventory_classes = {}
+    for row in INVENTORY.read_text().splitlines():
+        if re.match(r'\|\s*edgion_', row):
+            columns = row.split('|')
+            inventory_classes[columns[1].strip()] = columns[6].strip()
+    if {name: value.lower() for name, value in declared_classes.items()} != inventory_classes:
+        print("METRIC INVENTORY LIFETIME CLASSES MUST MATCH THE CANONICAL CATALOG")
+        return 1
+    bypass = []
+    for source in production_sources(REPO):
+        relative = str(source.relative_to(REPO))
+        if relative not in RAW_BACKEND_FILES and raw_interface_bypass(source.read_text()):
+            bypass.append(relative)
+    if bypass:
+        print("RAW METRIC REGISTRATION BYPASSES CANONICAL CLASS INTERFACE:", *bypass, sep="\n  ")
+        return 1
     danger = scan_dangerous_labels([REPO / s for s in SCANNED])
     if danger:
         print("HIGH-CARDINALITY LABELS (allowlist in LABEL_ALLOWLIST with a reason, or remove):")
@@ -175,4 +298,6 @@ def main():
 
 
 if __name__ == "__main__":
+    if "--self-test" in sys.argv:
+        guard_self_test()
     sys.exit(main())

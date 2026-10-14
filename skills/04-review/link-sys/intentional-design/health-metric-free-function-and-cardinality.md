@@ -124,3 +124,13 @@ Re-open only if:
   — lifecycle and exact-counting regression boundary.
 - [Webhook publication stays outside the generic lifecycle](../regression-guards/webhook-publication-outside-generic-lifecycle.md)
   — separate Webhook manager ownership.
+
+## Classified dynamic lifetime
+
+The free functions use Common `dynamic_gauge!` / `dynamic_counter!` interfaces.
+The `link` identity remains dynamic and counts toward lifetime admission; provider
+names are not a closed fixed domain. Scrape sampling publishes active runtime
+health before canonical rendering. Removed providers have no sample source, and
+idle export epochs expire without refunding admission. Keep published-generation
+flip ownership unchanged. Never retain a raw exporter handle across dynamic idle
+expiration.

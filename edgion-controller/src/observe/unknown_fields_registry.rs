@@ -275,12 +275,15 @@ pub(crate) fn collect_unknown_fields(cap: usize) -> (usize, bool, Vec<UnknownFie
 pub(crate) const METRIC_NAME: &str = "edgion_controller_unknown_config_fields";
 pub(crate) const METRIC_HELP: &str = "Resources whose submitted document contains a key the EdgionPlugins, EdgionStreamPlugins, EdgionConfigData, or LinkSys schema does not recognize, aggregated by resource kind. Detailed findings are available from GET /api/v1/diagnostics/unknown-fields. Advisory only; does not affect Accepted or block sync.";
 
-/// Render the `edgion_controller_unknown_config_fields` Prometheus text
-/// block: one series per supported kind,
-/// never per resource. Returns "" when there are no findings anywhere, so
-/// the caller can skip appending entirely (no bare `# HELP`/`# TYPE` with
-/// zero samples).
-pub(crate) fn render_unknown_config_fields_metric() -> String {
+type SampledGauges = [Option<edgion_common::observe::metrics_facade::FixedGauge>; 4];
+static SAMPLED_GAUGES: std::sync::OnceLock<parking_lot::Mutex<SampledGauges>> = std::sync::OnceLock::new();
+fn sampled_gauges() -> &'static parking_lot::Mutex<SampledGauges> {
+    SAMPLED_GAUGES.get_or_init(|| parking_lot::Mutex::new(std::array::from_fn(|_| None)))
+}
+
+/// Sample the four closed kinds before Common renders. Untouched kinds remain
+/// absent; an initialized kind publishes zero after recovery or source removal.
+pub(crate) fn sample_unknown_config_fields_metric() {
     let mut collector = BoundedCollector::new(0);
     {
         let sources = sources_slot().lock();
@@ -288,28 +291,22 @@ pub(crate) fn render_unknown_config_fields_metric() -> String {
             source(&mut collector);
         }
     }
-    if collector.total == 0 {
-        return String::new();
+    use edgion_common::observe::metrics_catalog::{definition, LabelDomain};
+    let def = definition(METRIC_NAME).expect("unknown-fields fixed metric definition");
+    let LabelDomain::Closed(kinds) = def.labels[0].domain else {
+        return;
+    };
+    let mut gauges = sampled_gauges().lock();
+    for (index, kind) in kinds.iter().enumerate() {
+        let count = collector.by_kind.get(kind).copied().unwrap_or(0);
+        if count > 0 && gauges[index].is_none() {
+            metrics::describe_gauge!(METRIC_NAME, METRIC_HELP);
+            gauges[index] = Some(edgion_common::fixed_gauge!(METRIC_NAME,"kind"=>*kind));
+        }
+        if let Some(gauge) = &gauges[index] {
+            gauge.set(count as f64);
+        }
     }
-
-    let mut out = String::with_capacity(256 + collector.by_kind.len() * 96);
-    out.push_str("# HELP ");
-    out.push_str(METRIC_NAME);
-    out.push(' ');
-    out.push_str(METRIC_HELP);
-    out.push('\n');
-    out.push_str("# TYPE ");
-    out.push_str(METRIC_NAME);
-    out.push_str(" gauge\n");
-    for (kind, count) in collector.by_kind {
-        out.push_str(METRIC_NAME);
-        out.push_str("{kind=\"");
-        out.push_str(kind);
-        out.push_str("\"} ");
-        out.push_str(&count.to_string());
-        out.push('\n');
-    }
-    out
 }
 
 #[cfg(test)]

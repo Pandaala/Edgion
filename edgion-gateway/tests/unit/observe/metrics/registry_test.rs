@@ -1,61 +1,62 @@
 use super::*;
 use metrics_exporter_prometheus::PrometheusBuilder;
 
+pub(super) fn lifetime_recorder() -> edgion_common::observe::metrics_api::TestRecorder {
+    use edgion_common::observe::{
+        cardinality_guard::CardinalityMode,
+        metrics_api::{RecorderConfig, TestRecorder},
+    };
+    TestRecorder::with_clock(RecorderConfig {
+        service: "test",
+        idle_timeout_secs: 1,
+        histogram_buckets: &[],
+        cardinality_cap: 10000,
+        cardinality_mode: CardinalityMode::Enforce,
+    })
+    .unwrap()
+}
+fn lifetime_render(recorder: &edgion_common::observe::metrics_api::TestRecorder) -> String {
+    recorder
+        .render()
+        .replace("{service=\"test\",", "{")
+        .replace("{service=\"test\"}", "")
+}
 #[test]
 fn wasm_module_metrics_follow_overlapping_generation_lifetimes() {
-    let recorder = PrometheusBuilder::new().build_recorder();
-    let handle = recorder.handle();
-    let (old, replacement) = metrics::with_local_recorder(&recorder, || {
-        (wasm_module_metrics("test-module"), wasm_module_metrics("test-module"))
-    });
-    assert!(handle.render().contains("edgion_wasm_modules_loaded 2"));
-    // Drops can run on another executor thread without the local recorder.
+    let recorder = lifetime_recorder();
+    let (old, replacement) = recorder.with(|| (wasm_module_metrics("test-module"), wasm_module_metrics("test-module")));
+    assert!(lifetime_render(&recorder).contains("edgion_wasm_modules_loaded 2"));
     std::thread::spawn(move || drop(old)).join().unwrap();
-    assert!(handle.render().contains("edgion_wasm_modules_loaded 1"));
+    assert!(lifetime_render(&recorder).contains("edgion_wasm_modules_loaded 1"));
     drop(replacement);
-    let rendered = handle.render();
-    assert!(rendered.contains("edgion_wasm_modules_loaded 0"));
-    assert!(rendered.contains("edgion_wasm_module_released_total{module=\"test-module\"} 2"));
+    let output = lifetime_render(&recorder);
+    assert!(output.contains("edgion_wasm_modules_loaded 0"));
+    assert!(output.contains("edgion_wasm_module_released_total{module=\"test-module\"} 2"));
 }
-
 #[test]
 fn wasm_module_metrics_survive_idle_eviction_across_sources_and_generations() {
-    let recorder = PrometheusBuilder::new()
-        .idle_timeout(metrics_util::MetricKindMask::ALL, Some(std::time::Duration::ZERO))
-        .build_recorder();
-    let handle = recorder.handle();
-    let (a, b) = metrics::with_local_recorder(&recorder, || {
+    let recorder = lifetime_recorder();
+    let (a, b) = recorder.with(|| {
         (
             wasm_module_metrics("idle-runtime-a"),
             wasm_module_metrics("idle-runtime-b"),
         )
     });
-    let render = || with_live_wasm_metrics(|| handle.render());
-    for _ in 0..4 {
-        let output = render();
-        assert!(output.contains("edgion_wasm_modules_loaded 2"));
-        assert!(output.contains("edgion_wasm_module_released_total{module=\"idle-runtime-a\"} 0"));
-    }
-    let replacement = metrics::with_local_recorder(&recorder, || wasm_module_metrics("idle-runtime-a"));
-    assert!(render().contains("edgion_wasm_modules_loaded 3"));
+    recorder.advance(std::time::Duration::from_secs(2));
+    let output = lifetime_render(&recorder);
+    assert!(output.contains("edgion_wasm_modules_loaded 2"));
+    assert!(!output.contains("edgion_wasm_module_released_total"));
+    let replacement = recorder.with(|| wasm_module_metrics("idle-runtime-a"));
     drop(a);
-    for _ in 0..4 {
-        let output = render();
-        assert!(output.contains("edgion_wasm_modules_loaded 2"));
-        assert!(output.contains("edgion_wasm_module_released_total{module=\"idle-runtime-a\"} 1"));
-    }
+    assert!(lifetime_render(&recorder).contains("edgion_wasm_module_released_total{module=\"idle-runtime-a\"} 1"));
+    recorder.advance(std::time::Duration::from_secs(2));
+    assert!(!lifetime_render(&recorder).contains("edgion_wasm_module_released_total"));
     drop(b);
-    assert!(render().contains("edgion_wasm_modules_loaded 1"));
     drop(replacement);
-    let output = render();
+    let output = lifetime_render(&recorder);
     assert!(output.contains("edgion_wasm_modules_loaded 0"));
-    assert!(output.contains("edgion_wasm_module_released_total{module=\"idle-runtime-a\"} 2"));
-    assert!(!wasm_shared_data_metric_stats()
-        .keys
-        .iter()
-        .any(|key| key.starts_with("idle-runtime-")));
-    let _ = handle.render();
-    assert!(!handle.render().contains("edgion_wasm_modules_loaded"));
+    assert!(output.contains("edgion_wasm_module_released_total{module=\"idle-runtime-a\"} 1"));
+    assert_eq!(recorder.stats().gauge_owners, 0);
 }
 
 #[test]

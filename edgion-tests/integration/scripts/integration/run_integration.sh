@@ -1790,7 +1790,9 @@ run_all_tests() {
                 fi
                 ;;
             HTTPRoute)
-                if [ -z "$G_ITEM" ]; then
+                if [ "$G_ITEM" = "MetricsLifetime" ]; then
+                    run_test "Dyn_MetricsLifetime" "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario MetricsLifetime" || test_failed=true
+                elif [ -z "$G_ITEM" ]; then
                     # Run all HTTPRoute tests
                     run_test "HTTPRoute_Basic" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i Basic" || test_failed=true
                     run_test "HTTPRoute_SseStreaming" "${EDGION_TEST_CLIENT_BIN} -g -r HTTPRoute -i SseStreaming" || test_failed=true
@@ -3006,7 +3008,7 @@ main() {
     # macOS-only aliases that belong to unrelated LB and GeoIP suites.
     if { [ "$G_RESOURCE" = "EdgionBackend" ] && { [ -z "$G_ITEM" ] || [ "$G_ITEM" = "SingleProvider" ] || [ "$G_ITEM" = "AnthropicProvider" ] || [ "$G_ITEM" = "Resilience" ] || [ "$G_ITEM" = "CredentialExhaustion" ] || { [ "$G_ITEM" = "Responses" ] || [ "$G_ITEM" = "Messages" ]; }; }; } \
         || { [ "$G_RESOURCE" = "GRPCRoute" ] && [ "$G_ITEM" = "TimeoutRewriteWire" ]; } \
-        || { [ "$G_RESOURCE" = "HTTPRoute" ] && { [ "$G_ITEM" = "Backend/InformationalRetry" ] || [ "$G_ITEM" = "Transport" ]; }; } \
+        || { [ "$G_RESOURCE" = "HTTPRoute" ] && { [ "$G_ITEM" = "Backend/InformationalRetry" ] || [ "$G_ITEM" = "Transport" ] || [ "$G_ITEM" = "MetricsLifetime" ]; }; } \
         || { [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "WafDynamic" ]; } \
         || { [ "$G_RESOURCE" = "EdgionPlugins" ] && { [ "$G_ITEM" = "Waf" ] || [ "$G_ITEM" = "ForwardAuth" ] || [ "$G_ITEM" = "ExtProc" ] || [ "$G_ITEM" = "BandwidthLimit" ] || [ "$G_ITEM" = "GrpcJsonTranscoder" ] || [ "$G_ITEM" = "GraphqlRateLimit" ] || [ "$G_ITEM" = "RateLimitRedis" ] || [ "$G_ITEM" = "Dsl" ] || [ "$G_ITEM" = "DslQueryLookupDynamic" ] || [ "$G_ITEM" = "DslBody" ] || [ "$G_ITEM" = "DslXmlDynamic" ] || [ "$G_ITEM" = "GraphqlOperationRouter" ] || [ "$G_ITEM" = "GraphqlGuard" ] || [ "$G_ITEM" = "ResponseCache" ] || [ "$G_ITEM" = "GraphqlSafelist" ] || [ "$G_ITEM" = "RestToGraphql" ]; }; }; then
         log_info "Skipping loopback-alias check for ${G_RESOURCE}${G_ITEM:+/${G_ITEM}}"
@@ -3163,6 +3165,11 @@ main() {
     if $do_start; then
         log_section "Step 2: Start all services and load config"
         export EDGION_TEST_CONTROLLER_GRPC_PORT="${CONTROLLER_GRPC_PORT}"
+        if [ "$G_RESOURCE" = "HTTPRoute" ] && [ "$G_ITEM" = "MetricsLifetime" ]; then
+            export EDGION_TEST_METRICS_LIFETIME=1
+        else
+            unset EDGION_TEST_METRICS_LIFETIME
+        fi
         if [ -z "$G_RESOURCE" ] || [ "$G_RESOURCE" = "EdgionBackend" ] || [[ ",${suites}," == *",EdgionBackend/SingleProvider,"* ]] || [[ ",${suites}," == *",EdgionBackend/AnthropicProvider,"* ]] || [[ ",${suites}," == *",EdgionBackend/Resilience,"* ]] || [[ ",${suites}," == *",EdgionBackend/Responses,"* ]] || [[ ",${suites}," == *",EdgionBackend/Messages,"* ]] || [[ ",${suites}," == *",EdgionBackend/CredentialExhaustion,"* ]]; then
             export EDGION_TEST_ENABLE_GENAI_METRICS=1
         else

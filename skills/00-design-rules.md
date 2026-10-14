@@ -242,7 +242,7 @@ Each entry: **rule** — *consequence if violated* → `deep-dive pointer`.
 > These fail the build. Run them locally (`AGENTS.md` §"Pre-commit checks"); most run in parallel.
 
 - 🔴 **SSA: every `Patch::Apply` uses forced `PatchParams` (`.force()`)** — an unforced apply 409-Conflicts forever once another field manager (POST-created object, `kubectl edit`, a pre-adoption Secret) owns the object (caused a real conf_sync CA-renewal outage). `Patch::Merge`/`Json`/`Strategic` are exempt. Guard: `cicd/checks/check_ssa_force.py`.
-- 🔴 **Metrics inventory + label allowlist** — every emitted metric is listed in the inventory doc (bidirectional) and no off-allowlist high-cardinality label. Guard: `cicd/checks/check_metrics_inventory.py` (see §C).
+- 🔴 **Metrics inventory + label allowlist** — emit through the canonical Common fixed/dynamic facade; fixed domains never contain CRD or other dynamic identity. every emitted metric is listed in the inventory doc (bidirectional) and no off-allowlist high-cardinality label. Guard: `cicd/checks/check_metrics_inventory.py` (see §C).
 - 🔴 **No `tracing::*` on the gateway data-plane hot path.** Guard: `cicd/checks/check_gateway_no_tracing.py` (see §B).
 - 🔴 **CRD ↔ struct coverage** for the structural CRDs. Guard: `./cicd/checks/check_crd_coverage.sh` (see §G).
 - 🔴 **Agent-doc consistency** — `skills/`/`AGENTS.md` cross-references, frontmatter, indexes must stay consistent. Guard: `cicd/checks/validate_agent_docs.py`.

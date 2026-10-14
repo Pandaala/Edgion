@@ -45,6 +45,31 @@ inventory, so adding a resource fails the test until its deletion order is chose
 - The store has the same lifecycle as a parent object (e.g., a cache inside a plugin instance, a private map of a route handler): the whole thing is reclaimed when the parent is dropped via ArcSwap; there is no independent leak signal. Leakage is exposed by the parent's store-stats.
 - TTL-based store (e.g., access log): a clear API already exists before cache_residue is called.
 
+## Metrics lifetime state
+
+The canonical Common metrics recorder deliberately retains its lifetime admission
+ledger and initialized fixed tuples. Gateway dynamic event epochs can remain for
+600 seconds, longer than the default 75-second residue poll; Controller fixed
+state also persists until process shutdown. This persistence is intentional and
+must not be classified as a removable business cache.
+
+Both binaries expose `metrics.admission_count`, `fixed_initialized_count`,
+`live_epochs`, `key_bytes`, `overdue_epochs`, `gauge_owners` and
+`attached_gauge_owners`. The first four exact numeric paths are exempt from
+zero-after-wipe. Admission remains subject to the configured lifetime soft cap
+plus valid fixed tuples (observe mode and cap zero do not promise a memory cap).
+Key sizes are bounded at descriptor preparation. Diagnostics sweep expiration
+through the same canonical per-slot eviction path as scraping.
+
+`overdue_epochs`, `gauge_owners` and `attached_gauge_owners` must all reach zero.
+Never ignore these paths or the entire `metrics` object. Nonexpired event history
+is legitimate; resource-owned gauge contribution tokens must release after wipe.
+The dedicated MetricsLifetime scenario uses a two-second TTL to prove actual
+idle removal and later renewal. Unit tests cover the cached route matrix directly
+because integration mode uses the logging fallback path. Reverse verification
+must independently break expiration and owner release and confirm that these
+exact residue paths fail; restore both faults before final verification.
+
 ## Adding a new ignore-path
 
 An ignore-path is a structural constant (a legitimate value that never returns to zero), such as:

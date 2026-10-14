@@ -1,18 +1,28 @@
 use super::*;
-use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
+use edgion_common::observe::{
+    cardinality_guard::CardinalityMode,
+    metrics_api::{RecorderConfig, TestRecorder},
+};
 
-fn isolated_metrics() -> (ControllerMetrics, PrometheusHandle) {
-    let recorder = PrometheusBuilder::new().build_recorder();
-    let handle = recorder.handle();
-    let owner = metrics::with_local_recorder(&recorder, ControllerMetrics::new);
-    (owner, handle)
+fn isolated_metrics() -> (ControllerMetrics, TestRecorder) {
+    let recorder = TestRecorder::new(RecorderConfig {
+        service: "test",
+        idle_timeout_secs: 0,
+        histogram_buckets: &[],
+        cardinality_cap: 10000,
+        cardinality_mode: CardinalityMode::Enforce,
+    })
+    .unwrap();
+    let owner = recorder.with(ControllerMetrics::new);
+    (owner, recorder)
 }
 
-fn active(handle: &PrometheusHandle) -> f64 {
+fn active(handle: &TestRecorder) -> f64 {
     let output = handle.render();
     output
         .lines()
-        .find_map(|line| line.strip_prefix("edgion_controller_active "))
+        .find(|line| line.starts_with("edgion_controller_active{"))
+        .and_then(|line| line.split_whitespace().nth(1))
         .expect("active controller gauge must be registered")
         .parse()
         .unwrap()

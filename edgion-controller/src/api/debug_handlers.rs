@@ -35,6 +35,7 @@ impl From<RefManagerStats> for SecretRefManagerStats {
 pub struct ControllerStoreStats {
     pub shared_http_listeners:
         crate::conf_mgr::sync_runtime::resource_processor::listener_port_manager::SharedListenerStats,
+    pub metrics: edgion_common::observe::metrics_api::DynamicMetricStats,
     pub conf_center_storage: BTreeMap<String, usize>,
     pub raw_cache: BTreeMap<String, usize>,
     /// Stable-sorted raw identities, including resources filtered from ServerCache.
@@ -85,6 +86,7 @@ pub async fn store_stats(State(state): State<Arc<AdminState>>) -> Json<ApiRespon
 
     Json(ApiResponse::ok_body(ControllerStoreStats {
         shared_http_listeners: runtime.listener_port_manager.shared_stats(),
+        metrics: edgion_common::observe::metrics_api::metric_store_stats(),
         conf_center_storage,
         raw_cache,
         raw_cache_keys,

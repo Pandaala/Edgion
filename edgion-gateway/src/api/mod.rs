@@ -385,7 +385,7 @@ async fn clear_access_logs() -> Json<ApiResponse<String>> {
 #[derive(Serialize)]
 struct StoreStatsResponse {
     response_cache: crate::response_cache::Stats,
-    wasm_shared_data_metrics: crate::observe::metrics::registry::WasmSharedDataMetricStats,
+    metrics: edgion_common::observe::metrics_api::DynamicMetricStats,
     plugin_publication: crate::plugins::publication::PublicationStats,
     plugin_publication_inventory: crate::plugins::publication::PublicationInventory,
     wasm_oci_cache: crate::plugins::http::wasm::oci::cache::OciMemoryCacheStats,
@@ -616,7 +616,7 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
     let publication = crate::plugins::publication::global_publisher().snapshot();
     Json(ApiResponse::ok_body(StoreStatsResponse {
         response_cache: crate::response_cache::snapshot_stats(),
-        wasm_shared_data_metrics: crate::observe::metrics::registry::wasm_shared_data_metric_stats(),
+        metrics: edgion_common::observe::metrics_api::metric_store_stats(),
         plugin_publication: publication.stats(),
         plugin_publication_inventory: publication.inventory().clone(),
         wasm_oci_cache,

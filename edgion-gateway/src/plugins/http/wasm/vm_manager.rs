@@ -70,8 +70,8 @@ use super::host_abi::{self, HostState, WasmPhase};
 use super::shared_data::SharedData;
 use crate::observe::metrics::registry::{
     record_wasm_compile_duration, record_wasm_hook_duration, record_wasm_instance_discard,
-    record_wasm_instance_instantiate, record_wasm_module_load, record_wasm_trap, set_wasm_pool_size,
-    wasm_module_metrics, WasmModuleMetrics,
+    record_wasm_instance_instantiate, record_wasm_module_load, record_wasm_trap, wasm_module_metrics,
+    wasm_pool_size_contribution, WasmModuleMetrics,
 };
 use crate::plugins::runtime::task_scope::{PluginTaskHandle, PluginTaskOwner};
 use edgion_common::link_sys_core::outbound_tls::GlobalOutboundTlsSnapshot;
@@ -693,6 +693,7 @@ impl RuntimeState {
             engine,
             instance_pre,
             pool: Mutex::new(Vec::new()),
+            pool_metric: wasm_pool_size_contribution(&label),
             pool_cap: config.instance_pool_size,
             vm_config,
             plugin_config,
@@ -1087,6 +1088,7 @@ pub struct ModuleEntry {
     engine: Engine,
     instance_pre: InstancePre<HostState>,
     pool: Mutex<Vec<PooledVm>>,
+    pool_metric: edgion_common::observe::metrics_facade::GaugeContribution,
     pool_cap: usize,
     vm_config: Vec<u8>,
     plugin_config: Vec<u8>,
@@ -1175,12 +1177,12 @@ impl ModuleEntry {
     }
 
     fn acquire_inner(self: &Arc<Self>, timeout_ms: u64, activate_tick: bool) -> Result<VmLease, String> {
-        let (vm, pool_len) = {
+        let vm = {
             let mut pool = self.pool.lock();
             let vm = pool.pop();
-            (vm, pool.len())
+            self.pool_metric.set(pool.len() as f64);
+            vm
         };
-        set_wasm_pool_size(&self.metrics_label, pool_len);
         let vm = match vm {
             Some(vm) => vm,
             None => {
@@ -1848,19 +1850,17 @@ impl Drop for VmLease {
         if let Some(mut vm) = self.vm.take() {
             if self.return_to_pool && self.healthy && self.open_context.is_none() {
                 vm.store.data_mut().release_phase_payloads();
-                let pool_len = {
+                {
                     let mut pool = self.entry.pool.lock();
                     if pool.len() < self.entry.pool_cap {
                         pool.push(vm);
-                        pool.len()
                     } else {
                         // Over-cap: drop `vm`, freeing its pooling-allocator slot.
                         drop(vm);
                         record_wasm_instance_discard(&self.entry.metrics_label, "over_capacity");
-                        pool.len()
                     }
-                };
-                set_wasm_pool_size(&self.entry.metrics_label, pool_len);
+                    self.entry.pool_metric.set(pool.len() as f64);
+                }
             } else {
                 // A trapped lease and a healthy lease abandoned with an open
                 // request context are both unsafe to reuse. Drop the Store

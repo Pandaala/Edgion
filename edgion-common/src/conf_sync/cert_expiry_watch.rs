@@ -22,7 +22,7 @@
 //! ```
 
 use crate::cert_util::{parse_leaf_validity, LeafValidity};
-use metrics::gauge;
+use crate::observe::metrics_facade::fixed_gauge;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -247,7 +247,7 @@ pub fn check_and_report(side: &'static str, source: &CertSource, now: i64, state
 pub fn report_validity(side: &'static str, validity: LeafValidity, now: i64, state: &mut ExpiryWatchState) {
     state.consecutive_failures = 0;
 
-    gauge!(CERT_EXPIRY_METRIC, "side" => side).set(validity.not_after as f64);
+    fixed_gauge!(CERT_EXPIRY_METRIC, "side" => side).set(validity.not_after as f64);
 
     let remaining = validity.remaining_seconds(now);
     let remaining_days = remaining / 86_400;

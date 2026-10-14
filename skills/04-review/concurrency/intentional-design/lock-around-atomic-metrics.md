@@ -6,6 +6,18 @@ knowledge_type: intentional-design
 
 # Holding a Write Lock Across `metrics` Calls — Style Concern, Not a Latency Bug
 
+## Current backend boundary (ARCH-043)
+
+Fixed class handles update exporter atomics. Dynamic proxies take short per-slot
+operation gates; gauges with overlapping owners must publish committed deltas
+inside the subsystem mutation lock. Do not move this publication outside its
+owning lock or use stale absolute snapshots based on the historical claim below.
+Scrape serialization and dense sketch destruction occur after slot gates release;
+request operations never wait for full rendering. Re-evaluate real lock ordering
+and measured current latency when a dynamic metric is involved.
+
+## Historical atomic-exporter assessment
+
 **Finding pattern**: a function holds a `parking_lot::RwLock` (or `Mutex`) write lock across a call that emits `gauge!(...).set(...)` / `counter!(...).increment(...)` / similar `metrics`-crate operations. Reviewer flags it as "lock held during I/O / lock contention risk" and proposes splitting into snapshot-inside-lock + emit-outside-lock.
 
 **Verdict**: **the latency claim is wrong on `metrics` 0.24** — Prometheus / OTel exporters back gauges and counters with atomic stores; there is no I/O and no allocation on the hot edit. So today the pattern is harmless.

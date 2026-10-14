@@ -136,10 +136,30 @@ fn publish_degrade_service(name: &str) -> PublishedService {
     )
 }
 
-fn assert_degrade_count(handle: &metrics_exporter_prometheus::PrometheusHandle, key: &str, count: u64) {
-    let rendered = crate::observe::metrics::GatewayMetrics::with_live_lb_degrade_counters(|| handle.render());
-    let expected = format!("edgion_lb_degrade_selections_total{{service=\"{key}\"}} {count}");
-    assert!(rendered.lines().any(|line| line == expected), "{rendered}");
+fn isolated_degrade_recorder() -> edgion_common::observe::metrics_api::TestRecorder {
+    use edgion_common::observe::{
+        cardinality_guard::CardinalityMode,
+        metrics_api::{RecorderConfig, TestRecorder},
+    };
+    TestRecorder::new(RecorderConfig {
+        service: "test",
+        idle_timeout_secs: 0,
+        histogram_buckets: &[],
+        cardinality_cap: 10000,
+        cardinality_mode: CardinalityMode::Enforce,
+    })
+    .unwrap()
+}
+
+fn assert_degrade_count(handle: &edgion_common::observe::metrics_api::TestRecorder, key: &str, count: u64) {
+    let rendered = handle.render();
+    let prefix = format!("edgion_lb_degrade_selections_total{{service=\"{key}\"}}");
+    if count == 0 {
+        assert!(!rendered.lines().any(|line| line.starts_with(&prefix)), "{rendered}");
+    } else {
+        let expected = format!("{prefix} {count}");
+        assert!(rendered.lines().any(|line| line == expected), "{rendered}");
+    }
     assert!(!rendered.contains("edgion_lb_degrade_mode"));
 }
 
@@ -150,9 +170,9 @@ fn captured_degrade_threshold_uses_live_health_and_a_cold_counter_at_zero_live_t
 
     let _guard = GLOBAL_STORE_TEST_LOCK.lock();
     configure_lb_degrade_default(0);
-    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
-    let handle = recorder.handle();
-    metrics::with_local_recorder(&recorder, || {
+    let recorder = isolated_degrade_recorder();
+    let handle = &recorder;
+    recorder.with(|| {
         let published = publish_degrade_service("captured-zero-live");
         let key = &published.service_key;
         let coordinator = get_service_discovery_coordinator();
@@ -160,13 +180,13 @@ fn captured_degrade_threshold_uses_live_health_and_a_cold_counter_at_zero_live_t
         coordinator.set_health_policy(key, Some(Arc::clone(&policy)));
         let (available, active) = load_active_projection(key).unwrap();
         assert_eq!(active.degrade_threshold, 0);
-        assert_degrade_count(&handle, key, 0);
+        assert_degrade_count(handle, key, 0);
         let section = available.resolve_section(&section_number(80)).unwrap();
         let identity = section.all_slots[0].backend.runtime_identity().unwrap();
         let select = |degrade| select_service_endpoint(key, section_number(80), &None, degrade, None, "", None);
         let captured = ServiceDegradePolicy::CapturedOverride(Some(100));
         assert!(select(captured).is_ok());
-        assert_degrade_count(&handle, key, 0);
+        assert_degrade_count(handle, key, 0);
         assert!(coordinator.record_health_completion(&policy, available.membership_identity, identity, false, 1, 1));
 
         // A different recorder catches any accidental hot-path registration.
@@ -175,7 +195,7 @@ fn captured_degrade_threshold_uses_live_health_and_a_cold_counter_at_zero_live_t
             assert!(select(ServiceDegradePolicy::Live).is_err());
             assert!(select(captured).is_ok());
         });
-        assert_degrade_count(&handle, key, 1);
+        assert_degrade_count(handle, key, 1);
         assert!(!other.handle().render().contains("edgion_lb_degrade_selections_total"));
 
         // No captured override uses only the global default. It must not
@@ -184,18 +204,18 @@ fn captured_degrade_threshold_uses_live_health_and_a_cold_counter_at_zero_live_t
         assert!(select(ServiceDegradePolicy::CapturedOverride(None)).is_err());
         assert!(select(ServiceDegradePolicy::CapturedOverride(Some(0))).is_err());
         assert!(select(ServiceDegradePolicy::Live).is_ok());
-        assert_degrade_count(&handle, key, 2);
+        assert_degrade_count(handle, key, 2);
         configure_lb_degrade_default(100);
         assert!(select(ServiceDegradePolicy::CapturedOverride(None)).is_ok());
         assert!(select(ServiceDegradePolicy::CapturedOverride(Some(0))).is_err());
-        assert_degrade_count(&handle, key, 3);
+        assert_degrade_count(handle, key, 3);
 
         assert!(coordinator.record_health_completion(&policy, available.membership_identity, identity, true, 1, 1));
         assert!(select(captured).is_ok());
-        assert_degrade_count(&handle, key, 3);
+        assert_degrade_count(handle, key, 3);
         coordinator.set_health_policy(key, None);
         assert!(select(captured).is_ok());
-        assert_degrade_count(&handle, key, 3);
+        assert_degrade_count(handle, key, 3);
     });
 }
 
@@ -203,17 +223,23 @@ fn captured_degrade_threshold_uses_live_health_and_a_cold_counter_at_zero_live_t
 fn degrade_selections_survive_idle_scrapes_until_the_last_snapshot_is_released() {
     use crate::backends::degrade_threshold::{configure_lb_degrade_default, GLOBAL_STORE_TEST_LOCK};
     use crate::backends::discovery::HealthPolicyIdentity;
-    use crate::observe::metrics::GatewayMetrics;
     use std::time::Duration;
 
     let _guard = GLOBAL_STORE_TEST_LOCK.lock();
     configure_lb_degrade_default(50);
-    // Same eviction mask as the production recorder, with a short timeout.
-    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new()
-        .idle_timeout(metrics_util::MetricKindMask::ALL, Some(Duration::from_millis(1)))
-        .build_recorder();
-    let handle = recorder.handle();
-    metrics::with_local_recorder(&recorder, || {
+    use edgion_common::observe::{
+        cardinality_guard::CardinalityMode,
+        metrics_api::{RecorderConfig, TestRecorder},
+    };
+    let recorder = TestRecorder::with_clock(RecorderConfig {
+        service: "test",
+        idle_timeout_secs: 1,
+        histogram_buckets: &[],
+        cardinality_cap: 10000,
+        cardinality_mode: CardinalityMode::Enforce,
+    })
+    .unwrap();
+    recorder.with(|| {
         let published = publish_degrade_service("idle");
         let key = published.service_key.clone();
         let coordinator = get_service_discovery_coordinator();
@@ -231,7 +257,6 @@ fn degrade_selections_survive_idle_scrapes_until_the_last_snapshot_is_released()
         ));
         drop(available);
         let weak = Arc::downgrade(captured.degrade_selections.as_ref().unwrap());
-        metrics::counter!("test_idle_control_total").increment(1);
         select_service_endpoint(
             &key,
             section_number(80),
@@ -242,15 +267,12 @@ fn degrade_selections_survive_idle_scrapes_until_the_last_snapshot_is_released()
             None,
         )
         .unwrap();
-        assert_degrade_count(&handle, &key, 1);
+        assert!(recorder
+            .render()
+            .contains(&format!("edgion_lb_degrade_selections_total{{service=\"{key}\"}} 1")));
 
-        std::thread::sleep(Duration::from_millis(20));
-        assert_degrade_count(&handle, &key, 1);
-        let rendered = GatewayMetrics::with_live_lb_degrade_counters(|| handle.render());
-        assert!(
-            !rendered.contains("test_idle_control_total"),
-            "idle eviction must be enabled"
-        );
+        recorder.advance(Duration::from_secs(2));
+        assert!(!recorder.render().contains("edgion_lb_degrade_selections_total"));
         select_service_endpoint(
             &key,
             section_number(80),
@@ -261,21 +283,25 @@ fn degrade_selections_survive_idle_scrapes_until_the_last_snapshot_is_released()
             None,
         )
         .unwrap();
-        assert_degrade_count(&handle, &key, 2);
+        assert!(recorder
+            .render()
+            .contains(&format!("edgion_lb_degrade_selections_total{{service=\"{key}\"}} 1")));
 
         drop(published);
         assert!(coordinator.runtime_cell(&key).is_none());
-        std::thread::sleep(Duration::from_millis(20));
-        assert_degrade_count(&handle, &key, 2);
+        recorder.advance(Duration::from_secs(2));
+        assert!(!recorder.render().contains("edgion_lb_degrade_selections_total"));
         captured.degrade_selections.as_ref().unwrap().record_selection();
-        assert_degrade_count(&handle, &key, 3);
+        assert!(recorder
+            .render()
+            .contains(&format!("edgion_lb_degrade_selections_total{{service=\"{key}\"}} 1")));
         drop(captured);
         assert!(
             weak.upgrade().is_none(),
             "the metric registry must not retain deleted snapshots"
         );
-        std::thread::sleep(Duration::from_millis(20));
-        let rendered = GatewayMetrics::with_live_lb_degrade_counters(|| handle.render());
+        recorder.advance(Duration::from_secs(2));
+        let rendered = recorder.render();
         assert!(!rendered.contains("edgion_lb_degrade_selections_total"), "{rendered}");
     });
 }
@@ -287,11 +313,11 @@ fn degrade_selections_cache_handle_and_sum_sections_across_policy_updates() {
 
     let _guard = GLOBAL_STORE_TEST_LOCK.lock();
     configure_lb_degrade_default(0);
-    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
-    let handle = recorder.handle();
+    let recorder = isolated_degrade_recorder();
+    let handle = &recorder;
     let coordinator = get_service_discovery_coordinator();
     let policy = Arc::new(HealthPolicyIdentity { generation: 1 });
-    let published = metrics::with_local_recorder(&recorder, || {
+    let published = recorder.with(|| {
         let published = publish_degrade_service("health");
         for _ in 0..3 {
             select_service_endpoint(
@@ -309,7 +335,7 @@ fn degrade_selections_cache_handle_and_sum_sections_across_policy_updates() {
         configure_lb_degrade_default(50);
         assert!(!handle.render().contains("edgion_lb_degrade_selections_total"));
         coordinator.set_health_policy(&published.service_key, Some(Arc::clone(&policy)));
-        assert_degrade_count(&handle, &published.service_key, 0);
+        assert_degrade_count(handle, &published.service_key, 0);
         published
     });
     let key = &published.service_key;
@@ -351,7 +377,7 @@ fn degrade_selections_cache_handle_and_sum_sections_across_policy_updates() {
             )
             .unwrap();
         }
-        assert_degrade_count(&handle, key, 3);
+        assert_degrade_count(handle, key, 3);
         configure_lb_degrade_default(0);
         assert!(select_service_endpoint(
             key,
@@ -363,7 +389,7 @@ fn degrade_selections_cache_handle_and_sum_sections_across_policy_updates() {
             None
         )
         .is_err());
-        assert_degrade_count(&handle, key, 3);
+        assert_degrade_count(handle, key, 3);
         configure_lb_degrade_default(50);
         let metrics_section = available.resolve_section(&section_number(81)).unwrap();
         assert!(coordinator.record_health_completion(
@@ -394,7 +420,7 @@ fn degrade_selections_cache_handle_and_sum_sections_across_policy_updates() {
             None,
         )
         .unwrap();
-        assert_degrade_count(&handle, key, 5);
+        assert_degrade_count(handle, key, 5);
 
         coordinator.set_health_policy(key, None);
         select_service_endpoint(
@@ -407,7 +433,7 @@ fn degrade_selections_cache_handle_and_sum_sections_across_policy_updates() {
             None,
         )
         .unwrap();
-        assert_degrade_count(&handle, key, 5);
+        assert_degrade_count(handle, key, 5);
         assert!(!other_recorder
             .handle()
             .render()
@@ -425,9 +451,9 @@ fn degrade_selections_outlier_removal_empty_membership_and_delete_preserve_histo
 
     let _guard = GLOBAL_STORE_TEST_LOCK.lock();
     configure_lb_degrade_default(50);
-    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
-    let handle = recorder.handle();
-    metrics::with_local_recorder(&recorder, || {
+    let recorder = isolated_degrade_recorder();
+    let handle = &recorder;
+    recorder.with(|| {
         let published = publish_degrade_service("outlier");
         let key = &published.service_key;
         let coordinator = get_service_discovery_coordinator();
@@ -463,7 +489,7 @@ fn degrade_selections_outlier_removal_empty_membership_and_delete_preserve_histo
             None,
         )
         .unwrap();
-        assert_degrade_count(&handle, key, 1);
+        assert_degrade_count(handle, key, 1);
         outliers.set_service_config_in(&coordinator, key, None);
         select_service_endpoint(
             key,
@@ -475,7 +501,7 @@ fn degrade_selections_outlier_removal_empty_membership_and_delete_preserve_histo
             None,
         )
         .unwrap();
-        assert_degrade_count(&handle, key, 1);
+        assert_degrade_count(handle, key, 1);
 
         outliers.set_service_config_in(&coordinator, key, Some(config));
         let token = outliers.capture_completion_token(&endpoint.backend).unwrap();
@@ -490,7 +516,7 @@ fn degrade_selections_outlier_removal_empty_membership_and_delete_preserve_histo
             None,
         )
         .unwrap();
-        assert_degrade_count(&handle, key, 2);
+        assert_degrade_count(handle, key, 2);
         let (_, captured) = load_active_projection(key).unwrap();
         coordinator.update_endpoint_slices(
             HashMap::new(),
@@ -515,7 +541,7 @@ fn degrade_selections_outlier_removal_empty_membership_and_delete_preserve_histo
             None
         )
         .is_err());
-        assert_degrade_count(&handle, key, 2);
+        assert_degrade_count(handle, key, 2);
         coordinator.update_services(HashMap::new(), HashMap::new(), HashSet::from([key.clone()]));
         assert!(load_active_projection(key).is_none());
         assert!(coordinator.runtime_cell(key).is_none());
@@ -529,14 +555,14 @@ fn degrade_selections_outlier_removal_empty_membership_and_delete_preserve_histo
             None
         )
         .is_err());
-        assert_degrade_count(&handle, key, 2);
+        assert_degrade_count(handle, key, 2);
 
         // A worker already holding an old event handle can finish after
         // deletion. This adds history; it cannot overwrite a current state.
         std::thread::spawn(move || captured.degrade_selections.as_ref().unwrap().record_selection())
             .join()
             .unwrap();
-        assert_degrade_count(&handle, key, 3);
+        assert_degrade_count(handle, key, 3);
     });
 }
 

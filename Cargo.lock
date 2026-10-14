@@ -1683,6 +1683,7 @@ dependencies = [
  "metrics-util",
  "parking_lot",
  "prost 0.13.5",
+ "quanta",
  "rand 0.9.5",
  "rcgen",
  "regex",

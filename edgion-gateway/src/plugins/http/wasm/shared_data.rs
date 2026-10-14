@@ -15,7 +15,6 @@
 //! of 0 writes unconditionally. Setting a null value deletes the key.
 
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
-use std::sync::Arc;
 
 use dashmap::DashMap;
 
@@ -71,7 +70,7 @@ pub struct SharedData {
     /// Zero is reserved for unconditional guest writes and is never issued.
     last_cas_token: AtomicU32,
     /// Shared exporter handle for all live stores with the same module label.
-    bytes_gauge: Option<Arc<metrics::Gauge>>,
+    bytes_gauge: Option<edgion_common::observe::metrics_facade::GaugeContribution>,
 }
 
 impl SharedData {
@@ -236,28 +235,19 @@ impl SharedData {
 
     fn increment_bytes_gauge(&self, bytes: usize) {
         if let Some(gauge) = &self.bytes_gauge {
-            gauge.increment(bytes as f64);
+            gauge.increase(bytes as f64);
         }
     }
 
     fn decrement_bytes_gauge(&self, bytes: usize) {
         if let Some(gauge) = &self.bytes_gauge {
-            gauge.decrement(bytes as f64);
+            gauge.decrease(bytes as f64);
         }
     }
 
     #[cfg(test)]
     pub fn total_bytes(&self) -> usize {
         self.total_bytes.load(Ordering::Relaxed)
-    }
-}
-
-impl Drop for SharedData {
-    fn drop(&mut self) {
-        // Exclusive destruction means every mutation and reservation has
-        // finished. Withdraw only this store's remaining contribution.
-        let remaining = *self.total_bytes.get_mut();
-        self.decrement_bytes_gauge(remaining);
     }
 }
 

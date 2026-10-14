@@ -1,11 +1,15 @@
-//! Pre-resolved metric handles attached to route units.
+//! Prepared dynamic metric descriptors attached to route units.
 //!
 //! See `docs/superpowers/specs/2026-06-10-observe-f002-route-unit-metric-handles-design.md`.
 //! Hot-path contract: a request that finds its matrix entry pays 0 allocations,
-//! 0 hash lookups, 0 locks — only a handful of `&str` equality checks plus two
-//! atomic ops.
+//! 0 name/label construction or registry lookups after first use, plus short
+//! per-metric gates that coordinate accumulation with idle eviction.
 
-use metrics::{counter, histogram, Counter, Histogram, Label};
+use edgion_common::observe::metrics_facade::{
+    dynamic_counter as counter, dynamic_histogram as histogram, DynamicCounter as Counter,
+    DynamicHistogram as Histogram,
+};
+use metrics::Label;
 
 use crate::cli::config::{
     get_backend_requests_config, get_request_duration_config, BackendRequestsLabels, RequestDurationConfig,

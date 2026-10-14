@@ -1273,7 +1273,6 @@ fn service_degrade_capture_controls_actual_selection_across_retries() {
     use crate::backends::{
         captured_degrade_policy, select_service_endpoint, service_section_key_from_port, ServiceDegradePolicy,
     };
-    use crate::observe::metrics::GatewayMetrics;
     use edgion_resources::resources::edgion_backend_traffic_policy::LoadBalancerType;
     use serde_json::json;
     use std::collections::{HashMap, HashSet};
@@ -1390,7 +1389,7 @@ fn service_degrade_capture_controls_actual_selection_across_retries() {
             } else {
                 assert_eq!(endpoint.backend.addr.as_inet().unwrap().ip().to_string(), "10.8.2.1");
             }
-            let rendered = GatewayMetrics::with_live_lb_degrade_counters(|| handle.render());
+            let rendered = handle.render();
             assert!(
                 rendered
                     .lines()

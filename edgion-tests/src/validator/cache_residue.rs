@@ -119,6 +119,17 @@ const IGNORE_PATHS: &[&str] = &[
     // Live bindings belong to startup-owned listeners, which survive resource wipe.
     // Expired bindings remain checked: the EGC publication path must prune them.
     "gateway.egc_bindings.count",
+    // Metrics admission is lifetime history, not removable business state.
+    // Unexpired events can legitimately outlive this gate's 75-second poll.
+    // Overdue epochs and all contribution owners remain mandatory zero checks.
+    "gateway.metrics.admission_count",
+    "gateway.metrics.fixed_initialized_count",
+    "gateway.metrics.live_epochs",
+    "gateway.metrics.key_bytes",
+    "controller.metrics.admission_count",
+    "controller.metrics.fixed_initialized_count",
+    "controller.metrics.live_epochs",
+    "controller.metrics.key_bytes",
     "controller.event_store.next_resource_version",
     "controller.watch_objects.count",
 ];
@@ -1100,9 +1111,14 @@ mod e2e_tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "success": true,
                 "data": {
-                    "wasm_shared_data_metrics": {
-                        "count": 1,
-                        "keys": ["file:test-module.wasm"]
+                    "metrics": {
+                        "admission_count": 10,
+                        "fixed_initialized_count": 4,
+                        "live_epochs": 6,
+                        "key_bytes": 100,
+                        "gauge_owners": 1,
+                        "overdue_epochs": 1,
+                        "keys": ["edgion_wasm_shared_data_bytes"]
                     }
                 }
             })))
@@ -1130,7 +1146,10 @@ mod e2e_tests {
             .await
             .unwrap();
 
-        assert_eq!(snap.residue.get("gateway.wasm_shared_data_metrics.count"), Some(&1));
+        assert_eq!(snap.residue.get("gateway.metrics.gauge_owners"), Some(&1));
+        assert_eq!(snap.residue.get("gateway.metrics.overdue_epochs"), Some(&1));
+        assert!(!snap.residue.contains_key("gateway.metrics.admission_count"));
+        assert!(!snap.residue.contains_key("gateway.metrics.live_epochs"));
         assert!(matches!(
             decide_exit(snap.is_empty(), &args.mode).unwrap(),
             ExitDecision::Residue

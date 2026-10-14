@@ -76,6 +76,14 @@ pub struct TestContext {
     pub admin_token: Option<String>,
 }
 
+fn listener_attachment_matches(kind: &str, field: &str, attachment: &serde_json::Value, expected: &str) -> bool {
+    if kind == "HTTPRoute" && field == "resolvedListeners" {
+        attachment.as_str() == Some(expected)
+    } else {
+        attachment["listenerName"] == expected
+    }
+}
+
 impl TestContext {
     fn resolve_target_ip(target_host: &str) -> Option<IpAddr> {
         if target_host.eq_ignore_ascii_case("localhost") {
@@ -338,7 +346,7 @@ impl TestContext {
                 .ok_or_else(|| format!("{namespace}/{name} has no {attachment_field} in {prefix}"))?;
             if !attachments
                 .iter()
-                .any(|listener| listener["listenerName"] == listener_name)
+                .any(|listener| listener_attachment_matches(kind, attachment_field, listener, listener_name))
             {
                 return Ok(false);
             }
@@ -833,6 +841,48 @@ impl TestResults {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn listener_projection_uses_exact_http_route_keys_and_preserves_tls_objects() {
+        use serde_json::json;
+        let expected = "0.0.0.0:31149/HTTP";
+        assert!(super::listener_attachment_matches(
+            "HTTPRoute",
+            "resolvedListeners",
+            &json!(expected),
+            expected
+        ));
+        for invalid in [
+            json!("0.0.0.0:31148/HTTP"),
+            json!("0.0.0.0:31149/HTTPS"),
+            json!({"listenerName": expected}),
+        ] {
+            assert!(!super::listener_attachment_matches(
+                "HTTPRoute",
+                "resolvedListeners",
+                &invalid,
+                expected
+            ));
+        }
+        assert!(super::listener_attachment_matches(
+            "TLSRoute",
+            "resolvedListeners",
+            &json!({"listenerName":"tls"}),
+            "tls"
+        ));
+        assert!(!super::listener_attachment_matches(
+            "TLSRoute",
+            "resolvedListeners",
+            &json!({"listenerName":"other"}),
+            "tls"
+        ));
+        assert!(!super::listener_attachment_matches(
+            "TLSRoute",
+            "resolvedListeners",
+            &json!("tls"),
+            "tls"
+        ));
+    }
+
     use super::*;
     use anyhow::bail;
 

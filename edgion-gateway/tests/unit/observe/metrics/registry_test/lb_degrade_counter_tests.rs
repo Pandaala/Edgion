@@ -1,6 +1,5 @@
 use super::*;
 use metrics_exporter_prometheus::PrometheusBuilder;
-use std::sync::Barrier;
 
 #[test]
 fn degrade_counter_last_owner_does_not_wait_for_scrape_before_weak_upgrade() {
@@ -26,34 +25,26 @@ fn degrade_counter_last_owner_does_not_wait_for_scrape_before_weak_upgrade() {
 
 #[test]
 fn degrade_counter_scrape_pins_the_last_owner_without_blocking_event_writes() {
-    let recorder = PrometheusBuilder::new().build_recorder();
-    let handle = recorder.handle();
-    let counter = metrics::with_local_recorder(&recorder, || GatewayMetrics::lb_degrade_selections("pin/inflight"));
+    let recorder = super::tests::lifetime_recorder();
+    let counter = recorder.with(|| GatewayMetrics::lb_degrade_selections("pin/inflight"));
     let weak = Arc::downgrade(&counter);
-    let reached = Arc::new(Barrier::new(2));
-    let resume = Arc::new(Barrier::new(2));
-    let scrape = {
-        let reached = Arc::clone(&reached);
-        let resume = Arc::clone(&resume);
-        std::thread::spawn(move || {
-            GatewayMetrics::with_live_lb_degrade_counters(|| {
-                reached.wait();
-                resume.wait();
-                handle.render()
-            })
-        })
-    };
-    reached.wait();
-    // The scrape holds the cold-path lock. Selection must not acquire it.
+    let locked = LB_DEGRADE_COUNTERS.lock();
     counter.record_selection();
     drop(counter);
-    let pinned_during_render = weak.strong_count() > 0;
-    resume.wait();
-    let rendered = scrape.join().unwrap();
-    assert!(pinned_during_render);
-    assert!(rendered.contains("edgion_lb_degrade_selections_total{service=\"pin/inflight\"} 1"));
-    assert!(weak.upgrade().is_none());
-    assert!(!lock_degrade_counters().contains_key("pin/inflight"));
+    assert!(
+        weak.upgrade().is_none(),
+        "scrapes no longer pin resource-owned descriptors"
+    );
+    drop(locked);
+    let output = recorder.render();
+    assert!(output.contains("edgion_lb_degrade_selections_total{service=\"pin/inflight\"} 1"));
+    recorder.advance(std::time::Duration::from_secs(2));
+    assert!(!recorder.render().contains("edgion_lb_degrade_selections_total"));
+    let counter = recorder.with(|| GatewayMetrics::lb_degrade_selections("pin/inflight"));
+    counter.record_selection();
+    assert!(recorder
+        .render()
+        .contains("edgion_lb_degrade_selections_total{service=\"pin/inflight\"} 1"));
 }
 
 #[test]
@@ -71,7 +62,7 @@ fn degrade_counter_recreation_reuses_history_and_cleans_weak_entries_without_scr
         assert!(!lock_degrade_counters().contains_key("pin/recreated"));
         let recreated = GatewayMetrics::lb_degrade_selections("pin/recreated");
         recreated.record_selection();
-        let rendered = GatewayMetrics::with_live_lb_degrade_counters(|| handle.render());
+        let rendered = handle.render();
         assert!(rendered.contains("edgion_lb_degrade_selections_total{service=\"pin/recreated\"} 3"));
         drop(recreated);
         assert!(!lock_degrade_counters().contains_key("pin/recreated"));

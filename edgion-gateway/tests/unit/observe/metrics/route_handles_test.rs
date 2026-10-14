@@ -311,3 +311,82 @@ fn handle_path_emits_same_labels_as_fallback() {
             .collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn unchanged_matrix_renews_after_idle_without_spending_more_keys() {
+    use edgion_common::observe::{
+        cardinality_guard::CardinalityMode,
+        metrics_api::{RecorderConfig, TestRecorder},
+    };
+    let buckets = [(
+        metrics_exporter_prometheus::Matcher::Full("edgion_gateway_request_duration_ms".into()),
+        vec![1., 10., 100.],
+    )];
+    let recorder = TestRecorder::with_clock(RecorderConfig {
+        service: "test",
+        idle_timeout_secs: 1,
+        histogram_buckets: &buckets,
+        cardinality_cap: 100,
+        cardinality_mode: CardinalityMode::Enforce,
+    })
+    .unwrap();
+    let handles = recorder.with(|| {
+        RouteMetricHandles::build_with(
+            &[("ns".into(), "gw".into())],
+            "ns",
+            "route",
+            &[("ns".into(), "backend".into())],
+            &BackendRequestsLabels::default(),
+            &RequestDurationConfig {
+                enabled: true,
+                ..Default::default()
+            },
+        )
+    });
+    assert_eq!(recorder.stats().admission_count, 2);
+    assert_eq!(recorder.stats().live_epochs, 0);
+    assert!(
+        !recorder.render().contains("edgion_gateway_request_duration_ms"),
+        "preparation must not create synthetic histogram samples"
+    );
+    let entry = handles.lookup("ns", "gw").unwrap();
+    assert!(entry.record(0, ps_index(ProtocolIdx::Http, StatusIdx::S2xx), 5.));
+    let admitted = recorder.stats().admission_count;
+    assert_eq!(recorder.stats().live_epochs, 2);
+    assert!(entry.record(0, ps_index(ProtocolIdx::Http, StatusIdx::S2xx), 50.));
+    let before = recorder.render();
+    assert!(before
+        .lines()
+        .any(|line| line.starts_with("edgion_gateway_request_duration_ms_count{") && line.ends_with(" 2")));
+    assert!(before
+        .lines()
+        .any(|line| line.starts_with("edgion_gateway_request_duration_ms_sum{") && line.ends_with(" 55")));
+    recorder.advance(std::time::Duration::from_secs(2));
+    assert!(!recorder.render().contains("edgion_backend_requests_total"));
+    assert_eq!(recorder.stats().live_epochs, 0);
+    assert!(!recorder.render().contains("edgion_gateway_request_duration_ms"));
+    assert!(entry.record(0, ps_index(ProtocolIdx::Http, StatusIdx::S2xx), 5.));
+    assert_eq!(recorder.stats().admission_count, admitted);
+    assert_eq!(recorder.stats().live_epochs, 2);
+    assert!(recorder
+        .render()
+        .lines()
+        .any(|line| line.starts_with("edgion_backend_requests_total{") && line.ends_with(" 1")));
+    let renewed = recorder.render();
+    assert!(renewed
+        .lines()
+        .any(|line| line.starts_with("edgion_gateway_request_duration_ms_count{") && line.ends_with(" 1")));
+    assert!(renewed
+        .lines()
+        .any(|line| line.starts_with("edgion_gateway_request_duration_ms_sum{") && line.ends_with(" 5")));
+    for (bound, count) in [("1", 0), ("10", 1), ("100", 1), ("+Inf", 1)] {
+        assert!(
+            renewed
+                .lines()
+                .any(|line| line.starts_with("edgion_gateway_request_duration_ms_bucket{")
+                    && line.contains(&format!("le=\"{bound}\""))
+                    && line.ends_with(&format!(" {count}"))),
+            "fresh epoch must contain exactly the one real sample: {renewed}"
+        );
+    }
+}

@@ -10,6 +10,9 @@
     "HTTPRoute/Basic": {
       "http": 31000
     },
+    "HTTPRoute/MetricsLifetime": {
+      "http": 31149
+    },
     "HTTPRoute/NamedParameterPrecedence": {
       "http": 31977
     },

@@ -321,6 +321,7 @@ pub struct EndpointRuntimeState {
     frozen_outlier_ejected: AtomicBool,
     outlier_until_millis: std::sync::atomic::AtomicU64,
     gauge_accounted: AtomicBool,
+    ejected_metric: edgion_common::observe::metrics_facade::GaugeContribution,
     passive_outlier: ArcSwapOption<crate::backends::outlier_detection::PassiveEjectionState>,
 }
 
@@ -349,6 +350,9 @@ impl EndpointRuntimeState {
         outlier_policy: Option<Arc<OutlierPolicyIdentity>>,
     ) -> Self {
         Self {
+            ejected_metric: crate::observe::metrics::registry::cb_ejected_endpoint_contribution(
+                identity.service_key.as_ref(),
+            ),
             identity,
             backend,
             completion_lock: Mutex::new(EndpointCompletionState {
@@ -441,17 +445,22 @@ impl EndpointRuntimeState {
         self.passive_outlier.store(None);
         let was_ejected = self.outlier_ejected.swap(false, Ordering::AcqRel);
         if was_ejected && self.gauge_accounted.swap(false, Ordering::AcqRel) {
-            crate::observe::metrics::record_cb_recovery(self.identity.service_key.as_ref());
+            self.ejected_metric.set(0.);
         }
         was_ejected
     }
 
     pub(crate) fn set_gauge_accounted(&self, accounted: bool) {
         self.gauge_accounted.store(accounted, Ordering::Release);
+        self.ejected_metric.set(if accounted { 1. } else { 0. });
     }
 
     fn settle_detached_gauge(&self) -> bool {
-        self.gauge_accounted.swap(false, Ordering::AcqRel)
+        let was_accounted = self.gauge_accounted.swap(false, Ordering::AcqRel);
+        if was_accounted {
+            self.ejected_metric.clear();
+        }
+        was_accounted
     }
 
     fn freeze_detached(&self) {
@@ -1079,9 +1088,7 @@ impl ServiceDiscoveryCoordinator {
                     } else {
                         crate::lb::runtime_state::remove_backend_exact(service_key, &address, &old.backend);
                     }
-                    if old.settle_detached_gauge() {
-                        crate::observe::metrics::record_cb_recovery(service_key);
-                    }
+                    old.settle_detached_gauge();
                 }
                 cell.active.store(Arc::new(
                     ServiceRuntimeSnapshot {
@@ -1108,9 +1115,7 @@ impl ServiceDiscoveryCoordinator {
                     } else {
                         crate::lb::runtime_state::remove_backend_exact(service_key, &address, &old.backend);
                     }
-                    if old.settle_detached_gauge() {
-                        crate::observe::metrics::record_cb_recovery(service_key);
-                    }
+                    old.settle_detached_gauge();
                 }
                 let _guard = cell.sp_build_lock.lock();
                 cell.sp.store(Arc::new(BTreeMap::new()));

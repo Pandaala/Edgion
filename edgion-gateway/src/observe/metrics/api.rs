@@ -69,13 +69,11 @@ impl MetricsState {
 async fn metrics_handler(State(state): State<Arc<MetricsState>>) -> Response {
     state.record_cert_expiry();
     crate::link_sys::runtime::store::record_published_link_sys_health();
-    crate::observe::metrics::GatewayMetrics::with_live_lb_degrade_counters(|| {
-        super::registry::with_live_wasm_metrics(render_metrics)
-    })
+    render_metrics()
 }
 
 /// Gateway's standalone metrics listener. All Gateway scrapes must use the
-/// keepalive boundary rather than mounting the shared handler directly.
+/// published-state sampling boundary before the shared render owner.
 pub fn create_metrics_router(sync_client: Arc<ConfigSyncClient>) -> Router {
     Router::new()
         .route("/metrics", get(metrics_handler))

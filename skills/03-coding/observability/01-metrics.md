@@ -1,7 +1,7 @@
 # Metrics rules
 
-> Core principle: keep Gateway metrics bounded through strict label review and unified
-> `GatewayMetrics` management. Most request detail belongs in access logs. Existing
+> Core principle: keep Gateway metrics bounded through strict label review and the canonical Common
+> fixed/dynamic facade, with Gateway business helpers in `GatewayMetrics`. Most request detail belongs in access logs. Existing
 > histograms are explicit exceptions, not a general pattern. The Controller similarly
 > prefers structured tracing and status conditions unless a low-cardinality metric is
 > needed for alerting, trends, or cross-process aggregation.
@@ -29,9 +29,23 @@
   Namespace/resource/module names scale with deployment size and require explicit opt-in,
   series-count estimates, and operational monitoring. Never use unbounded request values
   such as path, user ID, IP, or trace ID as labels.
-- **Hybrid registration policy**: the handles in `GatewayMetrics` are split into two categories by "call hotness":
-  - **Hot (per-request path)** → `Counter`/`Gauge` stored directly; eagerly registered in `new()` via `counter!()/gauge!()`. Zero per-call overhead; a brief 0 value before the first request is acceptable (ctx_created, ctx_active, gateway_request_bytes, gateway_response_bytes)
-  - **Cold / failure path / low-frequency control plane** → stored as `OnceLock<Counter>/<Gauge>`, registered only on the first record call. Untriggered metrics do not appear in `/metrics`, avoiding zero-value noise and scrape waste
+- **Classify lifetime before call frequency**: register each family and its kind,
+  class and exact label domains in Common `metrics_catalog.rs`. Fixed tuples use
+  `FixedCounter` / `FixedGauge` and `fixed_counter!` / `fixed_gauge!`; all labels
+  must be closed domains, never CRD namespace/name, service identity or module
+  identity. Dynamic tuples use `DynamicCounter` / `DynamicGauge` /
+  `DynamicHistogram` and the `dynamic_*` macros. Preparation may bind a private
+  renewable proxy but never admits an export key or creates a dynamic epoch.
+  `try_new` reports invalid preparation as `MetricDefinitionError`; convenience
+  event macros safely drop invalid observations without consuming admission.
+  Fixed state does not expire. Dynamic epochs expire after inactivity and the
+  same descriptor can renew the already-admitted identity. Retain no raw exporter
+  handle in a dynamic owner. Dynamic resource gauges with overlapping owners use
+  non-cloneable `GaugeContribution` tokens; commit local deltas under the owner's
+  mutation lock, and retirement must never recreate an expired epoch.
+- **Hybrid registration policy within each class**: the handles in `GatewayMetrics` are split into two categories by "call hotness":
+  - **Hot (per-request path)** → `FixedCounter`/`FixedGauge` stored directly; eagerly registered in `new()` via `fixed_counter!()/fixed_gauge!()`. No warmed fixed-path allocation; a brief 0 value before the first request is acceptable (ctx_created, ctx_active, gateway_request_bytes, gateway_response_bytes)
+  - **Cold / failure path / low-frequency control plane** → stored as `OnceLock<FixedCounter>/<FixedGauge>`, registered only on the first record call. Untriggered metrics do not appear in `/metrics`, avoiding zero-value noise and scrape waste
   - Free functions with labels (`record_backend_request` / `record_cb_*` / `record_mirror_*` / `record_acme_*`) are naturally lazily registered — uninvoked label combinations have no time series
 - **Before adding a metric, ask**: can an existing metric express it? Can it be derived without storing extra? Can a field already in the access log express it via aggregation (usually yes)?
 - **Naming convention**: `edgion_<component>_<what>_<unit>_total / _active`, all lowercase with underscores
@@ -40,7 +54,7 @@
 
 ## Steps to add a new metric
 
-`edgion-gateway/src/observe/metrics/registry.rs` — the only metrics definition file; all metrics are unified here. The Prometheus exposure entry is `edgion-gateway/src/observe/metrics/api.rs`.
+`edgion-common/src/observe/metrics_catalog.rs` owns class/kind/label validation for every family. `edgion-gateway/src/observe/metrics/registry.rs` owns Gateway business names and helpers; Controller/Common producers use the same class-specific facade. The Prometheus exposure entry is `edgion-gateway/src/observe/metrics/api.rs`.
 
 **1. Define the constant name in the `names` mod**
 
@@ -50,17 +64,17 @@ pub mod names {
 }
 ```
 
-**2. Decide Hot vs Cold first; the field type follows**
+**2. Declare fixed or dynamic in the Common catalog, then decide Hot vs Cold**
 
 Criterion: **per-request path = Hot** (definitely non-zero within seconds); **failure / low frequency / may never trigger = Cold**.
 
 ```rust
 pub struct GatewayMetrics {
     // --- Hot per-request handles (eager registration) ---
-    my_hot_counter: Counter,              // Counter / Gauge only — no Histogram
+    my_hot_counter: FixedCounter,              // Counter / Gauge only — no Histogram
 
     // --- Cold / rare-event handles (lazy registration via OnceLock) ---
-    my_cold_counter: OnceLock<Counter>,
+    my_cold_counter: OnceLock<FixedCounter>,
 }
 ```
 
@@ -70,7 +84,7 @@ pub struct GatewayMetrics {
 fn new() -> Self {
     Self {
         // Hot: eager
-        my_hot_counter: counter!(names::MY_HOT_COUNTER),
+        my_hot_counter: fixed_counter!(names::MY_HOT_COUNTER),
         // Cold: lazy
         my_cold_counter: OnceLock::new(),
     }
@@ -109,7 +123,8 @@ global_metrics().my_event();
 
 | Forbidden | Scope | Reason |
 |------|--------|------|
-| Unreviewed `metrics::histogram!(...)` | **Gateway data plane** | Existing request-duration and Wasm histograms are adjudicated exceptions; every new family needs bucket/cardinality review |
+| Raw `metrics::{counter,gauge,histogram}!` or raw exporter handles outside the canonical Common backend | All production crates | Use the fixed/dynamic facade so admission and handle lifetime are enforced |
+| A new Histogram family without review | **Gateway data plane** | Existing request-duration and Wasm histograms are adjudicated exceptions; every new family needs bucket/cardinality review |
 | Using path / user_id / ip etc. as label values | Data plane + control plane | Causes metrics explosion (time-series count = number of label combinations) |
 | Each plugin registers its own metrics | Gateway data plane | Distributed management is hard to audit; unified through `GatewayMetrics` |
 | Counter incremented with floats | Data plane + control plane | Use the integer `increment(n: u64)` |
@@ -119,19 +134,20 @@ global_metrics().my_event();
 
 ## Reasonable label usage
 
-Labels are only for bounded enums (cardinality ≤ tens):
+Fixed labels are closed enums. Existing reviewed resource-identity families are dynamic and use the lifetime cap:
 
 ```rust
-// Reasonable label: bounded enum
-counter!(
+// Dynamic family: bounded enums together with a resource identity
+dynamic_counter!(
     names::BACKEND_REQUESTS_TOTAL,
     "status" => status_group(ctx.request_info.status_option()), // "2xx"/"3xx"/"4xx"/"5xx"/"failed"
     "protocol" => "grpc",
-    "gateway_name" => gateway_name,                       // bounded number of instances
+    "gateway_namespace" => gateway_namespace,
+    "gateway_name" => gateway_name,                       // dynamic Gateway identity
 )
 
-// Dangerous label: high cardinality
-counter!(
+// Forbidden label inputs: the canonical catalog rejects this identity
+dynamic_counter!(
     "edgion_requests",
     "path" => request_path,    // unbounded paths → cardinality explosion
     "user_id" => user_id,      // same
@@ -144,7 +160,7 @@ For metrics like `edgion_backend_requests_total` and `edgion_gateway_request_dur
 
 1. Define an `XxxLabels` struct in `edgion-gateway/src/cli/config.rs` whose fields are a bool toggle per resource category. **Do not split `*_namespace` and `*_name` into two toggles** — K8s resource identity is naturally paired; one toggle controls the pair
 2. Hang the config off `MetricsConfig`; a global `OnceLock<...Config>` is initialized at startup (see `init_request_duration_config` / `init_backend_requests_config`)
-3. The first parameter of the record function takes `&XxxLabels`; internally use `Vec::with_capacity(N)` + `labels.push(...)` conditionally accumulated by toggle, and finally `counter!(..., &labels[..]).increment(1)`
+3. The first parameter of the record function takes `&XxxLabels`; internally use `Vec::with_capacity(N)` + `labels.push(...)` conditionally accumulated by toggle, and finally `dynamic_counter!(..., &labels[..]).increment(1)` (or `dynamic_histogram!` for the reviewed duration family)
 4. Default values are conservative: enable the gateway identity + bounded enum labels (protocol/status); do not enable route/backend. Let operators **explicitly opt-in** to drill-down dimensions
 5. For optional labels gated by a runtime flag (test_key / test_data), even if not controlled by a struct field, they must still **conditionally push (push only when non-empty)**, to avoid time series with `label_name=""`
 
@@ -250,7 +266,7 @@ Implementation rules:
    `metrics.listen`. Do not mount scrape output onto the Admin listener.
 3. **No application auth**: restrict the dedicated listener at the network layer. Metric
    labels may reveal resource identity even though request bodies and Secrets are absent.
-4. **Registration style**: follow the style of `edgion-controller/src/conf_mgr/sync_runtime/metrics.rs` — direct `counter!/gauge!` macros without `OnceLock` lazy wrapping (control-plane call frequency is low; eager registration suffices)
+4. **Registration style**: follow `edgion-controller/src/conf_mgr/sync_runtime/metrics.rs` — use the canonical catalog's `fixed_counter!` / `fixed_gauge!` interfaces for closed Controller families without an additional Controller `OnceLock` wrapper. Identity-bearing families use the corresponding dynamic interface; raw `counter!` / `gauge!` calls are restricted to the Common backend.
 5. **Federation metrics**: Controller-side federation metrics go through `edgion-common/src/observe/fed_metrics.rs` (`edgion_fed_*` prefix). Center-side implementation lives in the separate EdgionCenter repository. Protocol labels use `&'static str` constants from `labels::`; resource-kind labels use the canonical static `authz_classifier::bounded_kind_label` projection. Successful watch forwarding captures this projection from the already authorized canonical kind, so accepted spelling variants share one series (ARCH-082). Do not splice request strings into labels.
 6. **If a histogram really must be added**: control plane allows it, but: (a) explain why a `_seconds_last` gauge / counter cannot express it; (b) explain why access log aggregation is insufficient; (c) set buckets explicitly via `set_buckets_for_metric` or inject through `RecorderConfig.histogram_buckets` (avoid the default seconds buckets mismatching ms-recorded values, which dumps everything into `+Inf` — see the original `MIRROR_DURATION_MS` incident)
 
@@ -322,8 +338,27 @@ In `metrics/test_metrics.rs`:
 First check whether `metrics/registry.rs` already has a suitable Counter. If not:
 1. Confirm that cardinality is bounded
 2. Add it uniformly in `metrics/registry.rs` per the steps above
-3. Do not create floating metrics directly with the `metrics::counter!()` macro inside the local module
+3. Do not create floating metrics directly with the raw `metrics::counter!()` macro inside the local module
 
 ### Scenario: integration test needs to verify a specific behavior
 
 Extend `TestData` in `metrics/test_metrics.rs`; do not pollute the production access log or metrics. Test data is explicitly activated via Gateway annotation; production has zero overhead.
+
+## Lifetime admission and wire semantics
+
+One lifetime soft cap (default 10,000) counts both classes, including the guard's
+two self metrics. Valid fixed tuples are always accepted even at saturation.
+Dynamic new keys are rejected in enforce mode; existing keys remain usable after
+idle renewal and eviction never refunds admission. Concurrent cold admissions
+retain the existing soft race. Cap zero and observe mode are not hard memory
+limits. Idle TTL applies to all dynamic kinds, including counters and gauges;
+fixed metrics never expire. The existing Gateway `request_duration.idle_timeout_secs`
+setting supplies the dynamic TTL, default 600 seconds.
+
+Classic configured duration buckets preserve upstream `record_many` semantics,
+including configured order and nonfinite inputs. Empty bucket configuration and
+Wasm durations preserve the exporter summary with three 20-second rolling windows,
+fixed quantiles, and cumulative count/sum. Aggregation is bounded, not a raw-sample
+queue. Serialize snapshots after releasing operation gates. Fixed writes remain
+raw exporter atomics; warm dynamic writes use short per-slot gates to coordinate
+with eviction and need no identity construction or registry lookup.

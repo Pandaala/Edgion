@@ -8,11 +8,14 @@
 //! See `metrics_api` for the recorder helpers and Axum handler.
 
 pub mod cardinality_guard;
+mod dynamic_metrics;
 pub mod fed_metrics;
 /// System logging bootstrap (`SysLogConfig`, `init_logging`),
 /// shared by Gateway, Controller, and the shared config loader.
 pub mod logs;
 pub mod metrics_api;
+pub mod metrics_catalog;
+pub mod metrics_facade;
 pub mod system_metrics;
 
 pub use logs::{init_logging, LogConfig as SysLogConfig};

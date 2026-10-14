@@ -11,3 +11,23 @@ fn guard_self_metrics_registered_when_enabled() {
     let out = h.render();
     assert!(out.contains("edgion_metrics_cardinality_limit_active"));
 }
+
+#[test]
+fn arbitrary_service_role_cannot_install_a_production_recorder() {
+    use crate::observe::{
+        cardinality_guard::CardinalityMode,
+        metrics_api::{install_global_recorder, recorder_installed, RecorderConfig},
+    };
+    let before = recorder_installed();
+    for service in ["tenant-name", "resource-123", "test", "bench", "edgion-cli"] {
+        assert!(install_global_recorder(RecorderConfig {
+            service,
+            idle_timeout_secs: 600,
+            histogram_buckets: &[],
+            cardinality_cap: 10000,
+            cardinality_mode: CardinalityMode::Enforce
+        })
+        .is_err());
+        assert_eq!(recorder_installed(), before);
+    }
+}

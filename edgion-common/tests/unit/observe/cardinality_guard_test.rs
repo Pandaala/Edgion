@@ -61,3 +61,17 @@ fn observe_mode_registers_but_flags() {
     assert!(out.contains("edgion_u_c_total")); // NOT dropped in observe
     assert!(out.contains("edgion_metrics_cardinality_limit_active 1"));
 }
+
+// Unit-only access to the actual soft-admission permission/commit interval.
+// A sequentially denied key cannot recover: the ledger never refunds capacity.
+impl Admission {
+    pub(crate) fn test_cold_permission(&self, key: &Key) -> bool {
+        self.permitted(key)
+    }
+    pub(crate) fn test_commit_prior_permission(&self, key: &Key, permitted: bool) {
+        assert!(permitted, "commit requires a permission granted before saturation");
+        // This is the identity-entry step used by dynamic_slot. The public
+        // facade subsequently creates the real slot and attaches contributions.
+        self.seen.entry(key.clone()).or_insert(None);
+    }
+}

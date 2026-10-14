@@ -5,7 +5,11 @@
 
 use edgion_common::cert_util::LeafValidity;
 use edgion_common::conf_sync::cert_expiry_watch::ExpiryWatchState;
-use metrics::{counter, gauge, histogram, Counter, Gauge, Label};
+use edgion_common::observe::metrics_facade::{
+    dynamic_counter, dynamic_gauge, dynamic_histogram, fixed_counter, fixed_gauge, DynamicCounter,
+    FixedCounter as Counter, FixedGauge as Gauge, GaugeContribution,
+};
+use metrics::Label;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -184,8 +188,7 @@ pub fn global_metrics() -> &'static GatewayMetrics {
 }
 
 pub fn record_request_body_storage_io_failure(operation: &'static str, reason: &'static str) {
-    counter!(
-        names::REQUEST_BODY_STORAGE_IO_FAILURES_TOTAL,
+    fixed_counter!(names::REQUEST_BODY_STORAGE_IO_FAILURES_TOTAL,
         "operation" => operation,
         "reason" => reason
     )
@@ -193,7 +196,7 @@ pub fn record_request_body_storage_io_failure(operation: &'static str, reason: &
 }
 
 pub fn adjust_request_body_storage_io_inflight(delta: f64) {
-    let metric = gauge!(names::REQUEST_BODY_STORAGE_IO_INFLIGHT);
+    let metric = fixed_gauge!(names::REQUEST_BODY_STORAGE_IO_INFLIGHT);
     if delta >= 0.0 {
         metric.increment(delta);
     } else {
@@ -237,15 +240,13 @@ pub fn record_genai_tokens(
     }
     let provider = provider.as_str();
     let usage_source = usage_source.as_str();
-    counter!(
-        names::GENAI_TOKENS_TOTAL,
+    fixed_counter!(names::GENAI_TOKENS_TOTAL,
         "direction" => "input",
         "provider" => provider,
         "usage_source" => usage_source,
     )
     .increment(input_tokens);
-    counter!(
-        names::GENAI_TOKENS_TOTAL,
+    fixed_counter!(names::GENAI_TOKENS_TOTAL,
         "direction" => "output",
         "provider" => provider,
         "usage_source" => usage_source,
@@ -255,12 +256,12 @@ pub fn record_genai_tokens(
 
 /// Gateway metrics collection
 ///
-/// Provides high-performance, thread-safe metrics using sharded counters.
+/// Fixed writes use exporter atomics; dynamic descriptors use renewable Common slots.
 /// All metrics are automatically exported via the metrics facade.
 ///
 /// Registration policy (hybrid):
 /// - **Hot per-request** handles are eagerly registered in `new()` for zero
-///   per-call overhead; they become non-zero within the first request so the
+///   warmed allocation cost; they become non-zero within the first request so the
 ///   brief zero-value window is not observable in practice.
 /// - **Cold / failure-path** handles are `OnceLock`-wrapped and registered on
 ///   first call, so metrics that are never touched do not appear in `/metrics`
@@ -301,12 +302,12 @@ impl Drop for ActiveContextReleaseGuard<'_> {
 
 #[inline]
 fn get_or_register_counter<'a>(slot: &'a OnceLock<Counter>, name: &'static str) -> &'a Counter {
-    slot.get_or_init(|| counter!(name))
+    slot.get_or_init(|| fixed_counter!(name))
 }
 
-/// Weak ownership lets current and in-flight Service snapshots pin a real
-/// exporter Counter without keeping deleted Services alive. Registration,
-/// and scrape keepalive/render share this lock. Final-owner removal never waits.
+/// Weak ownership deduplicates renewable descriptors for current/in-flight
+/// Service snapshots. It never pins export accumulation or participates in
+/// scraping. Cold registration uses this lock; final-owner removal never waits.
 type DegradeCounters = HashMap<Arc<str>, Weak<DegradeSelectionCounter>>;
 static LB_DEGRADE_COUNTERS: LazyLock<Mutex<DegradeCounters>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 static LB_DEGRADE_CLEANUP_PENDING: AtomicBool = AtomicBool::new(false);
@@ -321,7 +322,7 @@ fn lock_degrade_counters() -> parking_lot::MutexGuard<'static, DegradeCounters> 
 
 pub(crate) struct DegradeSelectionCounter {
     service_key: Arc<str>,
-    counter: Counter,
+    counter: DynamicCounter,
 }
 
 impl DegradeSelectionCounter {
@@ -358,9 +359,9 @@ impl GatewayMetrics {
         report_validity(sides::CLIENT, validity, now, state);
     }
 
-    /// Register once on the Service configuration path, then retain the handle
-    /// in runtime snapshots. Only Services with degrade capability register a
-    /// series; request selection never constructs labels or queries the registry.
+    /// Prepare a descriptor on the Service configuration path and retain it in
+    /// snapshots. The first real selection admits an export epoch; later idle
+    /// renewal uses the same identity. Warm writes construct no labels/lookups.
     pub(crate) fn lb_degrade_selections(service_key: &str) -> Arc<DegradeSelectionCounter> {
         let mut counters = lock_degrade_counters();
         if let Some(counter) = counters.get(service_key).and_then(Weak::upgrade) {
@@ -368,31 +369,11 @@ impl GatewayMetrics {
         }
         let service_key: Arc<str> = service_key.into();
         let counter = Arc::new(DegradeSelectionCounter {
-            counter: counter!(names::LB_DEGRADE_SELECTIONS_TOTAL, "service" => service_key.to_string()),
+            counter: dynamic_counter!(names::LB_DEGRADE_SELECTIONS_TOTAL, "service" => service_key.to_string()),
             service_key: Arc::clone(&service_key),
         });
         counters.insert(service_key, Arc::downgrade(&counter));
         counter
-    }
-
-    /// `metrics-util` advances the update generation even for increment(0).
-    /// Touching live handles immediately before render prevents idle eviction
-    /// from detaching them from the exporter. Dead owners are not touched and
-    /// their series remain eligible for the configured idle timeout.
-    pub(crate) fn with_live_lb_degrade_counters<R>(render: impl FnOnce() -> R) -> R {
-        // Keep upgraded Arcs outside the lock scope: dropping the last owner
-        // removes its weak entry and must never recursively acquire this lock.
-        let live;
-        let result;
-        {
-            let counters = lock_degrade_counters();
-            live = counters.values().filter_map(Weak::upgrade).collect::<Vec<_>>();
-            for counter in &live {
-                counter.counter.increment(0);
-            }
-            result = render();
-        }
-        result
     }
 
     /// Bounded store-residue signal; includes handles retained by old snapshots.
@@ -411,10 +392,10 @@ impl GatewayMetrics {
     fn new() -> Self {
         Self {
             // Hot handles: eager
-            ctx_created: counter!(names::CTX_CREATED),
-            ctx_active: gauge!(names::CTX_ACTIVE),
-            gateway_request_bytes: counter!(names::GATEWAY_REQUEST_BYTES),
-            gateway_response_bytes: counter!(names::GATEWAY_RESPONSE_BYTES),
+            ctx_created: fixed_counter!(names::CTX_CREATED),
+            ctx_active: fixed_gauge!(names::CTX_ACTIVE),
+            gateway_request_bytes: fixed_counter!(names::GATEWAY_REQUEST_BYTES),
+            gateway_response_bytes: fixed_counter!(names::GATEWAY_RESPONSE_BYTES),
             // Cold handles: lazy
             access_log_dropped: OnceLock::new(),
             ssl_log_dropped: OnceLock::new(),
@@ -580,7 +561,7 @@ pub fn record_backend_request(
     if !test_data.is_empty() {
         labels.push(Label::new("test_data", test_data.to_string()));
     }
-    counter!(names::BACKEND_REQUESTS_TOTAL, labels).increment(1);
+    dynamic_counter!(names::BACKEND_REQUESTS_TOTAL, labels).increment(1);
 }
 
 /// Convert HTTP status code to status group
@@ -602,14 +583,14 @@ pub fn status_group(status: Option<u16>) -> &'static str {
 /// `result` is a closed set (`ok` / `error`). A cumulative microsecond
 /// counter keeps latency observable without adding an unsanctioned histogram.
 pub fn record_waf_compile(result: &'static str, elapsed_micros: u64) {
-    counter!(names::WAF_COMPILE_TOTAL, "result" => result).increment(1);
-    counter!(names::WAF_COMPILE_MICROSECONDS_TOTAL, "result" => result).increment(elapsed_micros);
+    fixed_counter!(names::WAF_COMPILE_TOTAL, "result" => result).increment(1);
+    fixed_counter!(names::WAF_COMPILE_MICROSECONDS_TOTAL, "result" => result).increment(elapsed_micros);
 }
 
 /// Adjust retained bytes for live compiled WAF generations.
 /// Callers enforce +N/-N symmetry with an RAII lease.
 pub fn adjust_waf_generation_bytes(delta: i64) {
-    let metric = gauge!(names::WAF_GENERATION_BYTES);
+    let metric = fixed_gauge!(names::WAF_GENERATION_BYTES);
     if delta >= 0 {
         metric.increment(delta as f64);
     } else {
@@ -620,7 +601,7 @@ pub fn adjust_waf_generation_bytes(delta: i64) {
 /// Adjust logical WAF transaction/scratch charge and known provisional JSON
 /// capacities with symmetric ownership. Excludes body storage and RSS.
 pub fn adjust_waf_runtime_bytes_active(delta: i64) {
-    let metric = gauge!(names::WAF_RUNTIME_BYTES_ACTIVE);
+    let metric = fixed_gauge!(names::WAF_RUNTIME_BYTES_ACTIVE);
     if delta >= 0 {
         metric.increment(delta as f64);
     } else {
@@ -630,14 +611,14 @@ pub fn adjust_waf_runtime_bytes_active(delta: i64) {
 
 /// Record request source admitted once by prefix, Full, or JSON lexer inspection.
 pub fn record_waf_body_bytes_inspected(direction: &'static str, bytes: usize) {
-    counter!(names::WAF_BODY_BYTES_INSPECTED_TOTAL, "direction" => direction)
+    fixed_counter!(names::WAF_BODY_BYTES_INSPECTED_TOTAL, "direction" => direction)
         .increment(u64::try_from(bytes).unwrap_or(u64::MAX));
 }
 
 /// Record cumulative WAF execution time for a fixed phase name.
 pub fn record_waf_execution_micros(phase: &'static str, elapsed_micros: u64) {
-    counter!(names::WAF_EXECUTION_TOTAL, "phase" => phase).increment(1);
-    counter!(names::WAF_EXECUTION_MICROSECONDS_TOTAL, "phase" => phase).increment(elapsed_micros);
+    fixed_counter!(names::WAF_EXECUTION_TOTAL, "phase" => phase).increment(1);
+    fixed_counter!(names::WAF_EXECUTION_MICROSECONDS_TOTAL, "phase" => phase).increment(elapsed_micros);
 }
 
 /// Record a mirror request outcome.
@@ -649,8 +630,7 @@ pub fn record_waf_execution_micros(phase: &'static str, elapsed_micros: u64) {
 /// `mirror_log` is enabled.
 #[inline]
 pub fn record_mirror_metric(status: &'static str) {
-    counter!(
-        names::MIRROR_REQUESTS_TOTAL,
+    fixed_counter!(names::MIRROR_REQUESTS_TOTAL,
         "status" => status,
     )
     .increment(1);
@@ -709,7 +689,7 @@ pub fn record_request_duration(
         label_vec.push(Label::new("status", status.to_string()));
     }
 
-    histogram!(names::GATEWAY_REQUEST_DURATION_MS, label_vec).record(duration_ms);
+    dynamic_histogram!(names::GATEWAY_REQUEST_DURATION_MS, label_vec).record(duration_ms);
 }
 
 /// Record a circuit breaker ejection event. `class` is the bounded failure-class
@@ -718,18 +698,20 @@ pub fn record_request_duration(
 /// from upstream-origin 5xx ejections. The gauge stays unlabelled by class so its
 /// +1/-1 balance with `record_cb_recovery` (which has no class context) holds.
 pub fn record_cb_ejection(service_key: &str, class: &'static str) {
-    counter!(names::CB_EJECTIONS_TOTAL, "service" => service_key.to_string(), "class" => class).increment(1);
-    gauge!(names::CB_EJECTED_ENDPOINTS, "service" => service_key.to_string()).increment(1.0);
+    dynamic_counter!(names::CB_EJECTIONS_TOTAL, "service" => service_key.to_string(), "class" => class).increment(1);
 }
 
-/// Record a circuit breaker recovery event (ejection expired)
-pub fn record_cb_recovery(service_key: &str) {
-    gauge!(names::CB_EJECTED_ENDPOINTS, "service" => service_key.to_string()).decrement(1.0);
+/// One endpoint generation owns its ejected-state contribution.
+pub(crate) fn cb_ejected_endpoint_contribution(service_key: &str) -> GaugeContribution {
+    GaugeContribution::new(metrics::Key::from_parts(
+        names::CB_EJECTED_ENDPOINTS,
+        vec![Label::new("service", service_key.to_string())],
+    ))
 }
 
 /// Record a circuit breaker rejection (request blocked by ejected backend)
 pub fn record_cb_rejection(service_key: &str) {
-    counter!(names::CB_REJECTIONS_TOTAL, "service" => service_key.to_string()).increment(1);
+    dynamic_counter!(names::CB_REJECTIONS_TOTAL, "service" => service_key.to_string()).increment(1);
 }
 
 /// Set the link-sys provider health gauge: 1.0 = healthy, 0.0 = unhealthy.
@@ -738,7 +720,7 @@ pub fn record_cb_rejection(service_key: &str) {
 /// has not been published cannot write the shared series. `link` cardinality
 /// is bounded by the configured provider count.
 pub fn record_link_sys_health(name: &str, healthy: bool) {
-    gauge!(names::LINK_SYS_HEALTH, "link" => name.to_string()).set(if healthy { 1.0 } else { 0.0 });
+    dynamic_gauge!(names::LINK_SYS_HEALTH, "link" => name.to_string()).set(if healthy { 1.0 } else { 0.0 });
 }
 
 /// Increment the link-sys health flip counter, labelled by provider and direction.
@@ -746,8 +728,7 @@ pub fn record_link_sys_health(name: &str, healthy: bool) {
 /// A level gauge cannot represent sub-scrape flapping (it only shows the last value
 /// at scrape time); this monotonic counter does. `direction` is a fixed 2-value set.
 pub fn record_link_sys_health_flip(name: &str, to_healthy: bool) {
-    counter!(
-        names::LINK_SYS_HEALTH_FLIPS_TOTAL,
+    dynamic_counter!(names::LINK_SYS_HEALTH_FLIPS_TOTAL,
         "link" => name.to_string(),
         "direction" => if to_healthy { "recovered" } else { "degraded" }
     )
@@ -759,7 +740,7 @@ pub fn record_link_sys_health_flip(name: &str, to_healthy: bool) {
 /// `result` must be one of: `"hit"`, `"expired"`, `"domain_mismatch"`, `"not_found"`, `"empty_host"`.
 /// Low, fixed cardinality — safe as a label.
 pub fn record_acme_challenge_lookup(result: &'static str) {
-    counter!(names::ACME_CHALLENGE_LOOKUP_TOTAL, "result" => result).increment(1);
+    fixed_counter!(names::ACME_CHALLENGE_LOOKUP_TOTAL, "result" => result).increment(1);
 }
 
 /// Record a watch payload, event-envelope, or resource decode failure (per kind).
@@ -774,7 +755,7 @@ pub fn record_acme_challenge_lookup(result: &'static str) {
 /// existing retry loop. This counter does not imply successful cache recovery;
 /// backend-specific withdrawal and relist behavior is separate.
 pub fn record_config_event_parse_error(kind: &'static str) {
-    counter!(names::CONFIG_EVENT_PARSE_ERRORS_TOTAL, "kind" => kind).increment(1);
+    fixed_counter!(names::CONFIG_EVENT_PARSE_ERRORS_TOTAL, "kind" => kind).increment(1);
 }
 
 /// Record a RegionRoute overlay resolution event.
@@ -791,7 +772,7 @@ pub fn record_config_event_parse_error(kind: &'static str) {
 ///
 /// Low, fixed cardinality — safe as a label.
 pub fn record_region_route_overlay_event(result: &'static str) {
-    counter!(names::REGION_ROUTE_OVERLAY_EVENTS_TOTAL, "result" => result).increment(1);
+    fixed_counter!(names::REGION_ROUTE_OVERLAY_EVENTS_TOTAL, "result" => result).increment(1);
 }
 
 /// Record a `GlobalConnectionIpRestriction` stream plugin decision event.
@@ -807,7 +788,7 @@ pub fn record_region_route_overlay_event(result: &'static str) {
 ///
 /// Low, fixed cardinality — safe as a label.
 pub fn record_conn_ip_restriction_event(result: &'static str) {
-    counter!(names::CONN_IP_RESTRICTION_EVENTS_TOTAL, "result" => result).increment(1);
+    fixed_counter!(names::CONN_IP_RESTRICTION_EVENTS_TOTAL, "result" => result).increment(1);
 }
 
 /// A config-aggregation conflict silently fell back to a default. `field` is a bounded
@@ -816,14 +797,14 @@ pub fn record_conn_ip_restriction_event(result: &'static str) {
 /// Zero-event sentinel: it stays absent until an operator ships genuinely conflicting
 /// configs, at which point the resolved value is order-independent but non-obvious.
 pub fn record_config_conflict(field: &'static str) {
-    counter!(names::CONFIG_CONFLICT_TOTAL, "field" => field).increment(1);
+    fixed_counter!(names::CONFIG_CONFLICT_TOTAL, "field" => field).increment(1);
 }
 
 /// A caller-injected outbound header (e.g. X-Forwarded-* from ForwardAuth) was dropped
 /// at request build because its name or value was invalid — the operator's configured
 /// header silently no-ops. Label-free zero-event sentinel.
 pub fn record_injected_header_skipped() {
-    counter!(names::OUTBOUND_INJECTED_HEADER_SKIPPED_TOTAL).increment(1);
+    fixed_counter!(names::OUTBOUND_INJECTED_HEADER_SKIPPED_TOTAL).increment(1);
 }
 
 /// Record a connection rejected by the ConnectionRateLimit stream plugin.
@@ -832,8 +813,7 @@ pub fn record_injected_header_skipped() {
 /// `stage` must be `"local"` or `"redis"`.
 /// Both are fixed, low-cardinality `&'static str` — safe as labels.
 pub fn record_connection_rate_limit_reject(dimension: &'static str, stage: &'static str) {
-    counter!(
-        names::CONNECTION_RATE_LIMIT_REJECTED_TOTAL,
+    fixed_counter!(names::CONNECTION_RATE_LIMIT_REJECTED_TOTAL,
         "dimension" => dimension,
         "stage" => stage
     )
@@ -849,8 +829,7 @@ pub fn record_connection_rate_limit_reject(dimension: &'static str, stage: &'sta
 /// (command error or accept-path timeout). Both are fixed, low-cardinality
 /// `&'static str` — safe as labels.
 pub fn record_connection_rate_limit_redis_failure(dimension: &'static str, cause: &'static str) {
-    counter!(
-        names::CONNECTION_RATE_LIMIT_REDIS_FAILURE_TOTAL,
+    fixed_counter!(names::CONNECTION_RATE_LIMIT_REDIS_FAILURE_TOTAL,
         "dimension" => dimension,
         "cause" => cause
     )
@@ -865,7 +844,7 @@ pub fn record_connection_rate_limit_redis_failure(dimension: &'static str, cause
 /// can detect that they should raise `bulk.channelSize` before the backpressure
 /// becomes visible at the request layer.
 pub fn record_link_sys_es_bulk_channel_full() {
-    counter!(names::LINK_SYS_ES_BULK_CHANNEL_FULL_TOTAL).increment(1);
+    fixed_counter!(names::LINK_SYS_ES_BULK_CHANNEL_FULL_TOTAL).increment(1);
 }
 
 /// Record a `RoundRobinSelector` backend-count truncation.
@@ -875,7 +854,7 @@ pub fn record_link_sys_es_bulk_channel_full() {
 /// route is best done via logs; the counter exists purely as an alarm signal
 /// so operators can detect silent truncation.
 pub fn record_rr_selector_truncated() {
-    counter!(names::RR_SELECTOR_TRUNCATED_TOTAL).increment(1);
+    fixed_counter!(names::RR_SELECTOR_TRUNCATED_TOTAL).increment(1);
 }
 
 /// Record a LDAP auth plugin error event.
@@ -883,7 +862,7 @@ pub fn record_rr_selector_truncated() {
 /// `kind` must be one of: `"unreachable"`, `"timeout"`, `"bind_fail"`,
 /// `"tls_san_mismatch"`. Fixed cardinality — safe as a label.
 pub fn record_ldap_auth_error(kind: &'static str) {
-    counter!(names::LDAP_AUTH_ERRORS_TOTAL, "kind" => kind).increment(1);
+    fixed_counter!(names::LDAP_AUTH_ERRORS_TOTAL, "kind" => kind).increment(1);
 }
 
 /// Record an outbound TLS SAN-pinning rejection.
@@ -891,7 +870,7 @@ pub fn record_ldap_auth_error(kind: &'static str) {
 /// `plugin` must be one of: `"ldap_auth"`, `"openid_connect"`.
 /// Fixed cardinality — safe as a label.
 pub fn record_outbound_tls_san_mismatch(plugin: &'static str) {
-    counter!(names::OUTBOUND_TLS_SAN_MISMATCH_TOTAL, "plugin" => plugin).increment(1);
+    fixed_counter!(names::OUTBOUND_TLS_SAN_MISMATCH_TOTAL, "plugin" => plugin).increment(1);
 }
 
 /// Record a webhook key-resolver failure.
@@ -900,14 +879,14 @@ pub fn record_outbound_tls_san_mismatch(plugin: &'static str) {
 /// `"status_error"`, `"call_failed"`, `"authority_rejected"`. Fixed cardinality —
 /// safe as a label.
 pub fn record_webhook_resolve_error(reason: &'static str) {
-    counter!(names::WEBHOOK_RESOLVE_ERRORS_TOTAL, "reason" => reason).increment(1);
+    fixed_counter!(names::WEBHOOK_RESOLVE_ERRORS_TOTAL, "reason" => reason).increment(1);
 }
 
 /// Record an outbound address rejected by the egress policy.
 ///
 /// `reason` is one of `"loopback"`, `"link_local"`, `"private"`, `"unspecified"`.
 pub fn record_egress_blocked(reason: &'static str) {
-    counter!(names::EGRESS_BLOCKED_TOTAL, "reason" => reason).increment(1);
+    fixed_counter!(names::EGRESS_BLOCKED_TOTAL, "reason" => reason).increment(1);
 }
 
 /// Record an upstream authority the gateway refused to use. `reason` is
@@ -915,14 +894,14 @@ pub fn record_egress_blocked(reason: &'static str) {
 /// by a plugin that runs after `upstream_peer`) or `"invalid_label"` (the rendered
 /// label is not a valid DNS label — a broken template, or an attack).
 pub fn record_authority_rejected(reason: &'static str) {
-    counter!(names::UPSTREAM_AUTHORITY_REJECTED_TOTAL, "reason" => reason).increment(1);
+    fixed_counter!(names::UPSTREAM_AUTHORITY_REJECTED_TOTAL, "reason" => reason).increment(1);
 }
 
 /// Record a response whose status was accepted but whose `success.body` predicate
 /// classified it as a failure — the "200 OK but error in the body" case, which is
 /// otherwise invisible (the data plane must not log).
 pub fn record_outbound_success_predicate_fail() {
-    counter!(names::OUTBOUND_SUCCESS_PREDICATE_FAIL_TOTAL).increment(1);
+    fixed_counter!(names::OUTBOUND_SUCCESS_PREDICATE_FAIL_TOTAL).increment(1);
 }
 
 /// Record a template field that failed to render to a usable value and fell back
@@ -930,7 +909,7 @@ pub fn record_outbound_success_predicate_fail() {
 /// Fixed cardinality — safe as a label. The data plane must not log, so this
 /// counter is the only signal an operator gets for a silently-falling-back template.
 pub fn record_outbound_template_fallback(field: &'static str) {
-    counter!(names::OUTBOUND_TEMPLATE_FALLBACK_TOTAL, "field" => field).increment(1);
+    fixed_counter!(names::OUTBOUND_TEMPLATE_FALLBACK_TOTAL, "field" => field).increment(1);
 }
 
 // ============================================================
@@ -945,82 +924,75 @@ pub fn record_outbound_template_fallback(field: &'static str) {
 
 /// Record a Wasm module load attempt outcome. `result` is `"ok"` or `"error"`.
 pub fn record_wasm_module_load(module: &str, result: &'static str) {
-    counter!(names::WASM_MODULE_LOAD_TOTAL, "module" => module.to_string(), "result" => result).increment(1);
+    dynamic_counter!(names::WASM_MODULE_LOAD_TOTAL, "module" => module.to_string(), "result" => result).increment(1);
 }
 
 /// Record the wall-clock duration of one `Module::new` compilation.
 pub fn record_wasm_compile_duration(module: &str, ms: f64) {
-    histogram!(names::WASM_MODULE_COMPILE_DURATION_MS, "module" => module.to_string()).record(ms);
+    dynamic_histogram!(names::WASM_MODULE_COMPILE_DURATION_MS, "module" => module.to_string()).record(ms);
 }
 
 /// Accounts for one live compiled runtime generation, including initialization
-/// and old generations retained by outstanding leases. Capturing the handles
+/// and old generations retained by outstanding leases. Capturing the fixed handle
+/// and private renewable release proxy
 /// keeps destruction paired with the same recorder as construction.
 pub(crate) struct WasmModuleMetrics {
-    handles: Arc<WasmModuleMetricHandles>,
-}
-
-struct WasmModuleMetricHandles {
     loaded: Gauge,
-    released: Counter,
+    released: DynamicCounter,
 }
 
 pub(crate) fn wasm_module_metrics(module: &str) -> WasmModuleMetrics {
-    let mut registry = live_wasm_metric_handles();
-    let live = registry.entry(module.to_string()).or_default();
-    let handles = live.modules.upgrade().unwrap_or_else(|| {
-        let handles = Arc::new(WasmModuleMetricHandles {
-            loaded: gauge!(names::WASM_MODULES_LOADED),
-            released: counter!(names::WASM_MODULE_RELEASED_TOTAL, "module" => module.to_string()),
-        });
-        live.modules = Arc::downgrade(&handles);
-        handles
-    });
-    handles.loaded.increment(1.0);
-    WasmModuleMetrics { handles }
+    let loaded = fixed_gauge!(names::WASM_MODULES_LOADED);
+    loaded.increment(1.);
+    WasmModuleMetrics {
+        loaded,
+        released: dynamic_counter!(names::WASM_MODULE_RELEASED_TOTAL,"module"=>module.to_string()),
+    }
 }
-
 impl Drop for WasmModuleMetrics {
     fn drop(&mut self) {
-        self.handles.loaded.decrement(1.0);
-        self.handles.released.increment(1);
+        self.loaded.decrement(1.);
+        self.released.increment(1);
     }
 }
 
 /// Record a fresh VM instantiation (pool miss).
 pub fn record_wasm_instance_instantiate(module: &str) {
-    counter!(names::WASM_INSTANCE_INSTANTIATE_TOTAL, "module" => module.to_string()).increment(1);
+    dynamic_counter!(names::WASM_INSTANCE_INSTANTIATE_TOTAL, "module" => module.to_string()).increment(1);
 }
 
 /// Record a VM discarded instead of returned to the pool.
 /// `reason` is `"poisoned"` or `"over_capacity"`.
 pub fn record_wasm_instance_discard(module: &str, reason: &'static str) {
-    counter!(names::WASM_INSTANCE_DISCARD_TOTAL, "module" => module.to_string(), "reason" => reason).increment(1);
+    dynamic_counter!(names::WASM_INSTANCE_DISCARD_TOTAL, "module" => module.to_string(), "reason" => reason)
+        .increment(1);
 }
 
-/// Set the current pooled-instance count for a module.
-pub fn set_wasm_pool_size(module: &str, size: usize) {
-    gauge!(names::WASM_POOL_SIZE, "module" => module.to_string()).set(size as f64);
+/// One module generation owns its pooled VM contribution.
+pub(crate) fn wasm_pool_size_contribution(module: &str) -> GaugeContribution {
+    GaugeContribution::new(metrics::Key::from_parts(
+        names::WASM_POOL_SIZE,
+        vec![Label::new("module", module.to_string())],
+    ))
 }
 
 /// Record the duration of one guest hook invocation.
 /// `phase` is one of `"request_headers"`, `"response_headers"`,
 /// `"response_body"`, `"http_call_response"`, `"tick"`.
 pub fn record_wasm_hook_duration(module: &str, phase: &'static str, ms: f64) {
-    histogram!(names::WASM_HOOK_DURATION_MS, "module" => module.to_string(), "phase" => phase).record(ms);
+    dynamic_histogram!(names::WASM_HOOK_DURATION_MS, "module" => module.to_string(), "phase" => phase).record(ms);
 }
 
 /// Record a guest trap (or protocol violation that poisons the lease).
 pub fn record_wasm_trap(module: &str, phase: &'static str) {
-    counter!(names::WASM_TRAP_TOTAL, "module" => module.to_string(), "phase" => phase).increment(1);
+    dynamic_counter!(names::WASM_TRAP_TOTAL, "module" => module.to_string(), "phase" => phase).increment(1);
 }
 
 /// Record a fail-mode decision taken by the Wasm plugin.
 /// `reason` is one of `"load"`, `"acquire"`, `"trap"`, `"not loaded"`,
 /// `"callout"`, `"no-resume"`; `mode` is `"open"` or `"close"`.
 pub fn record_wasm_fail_mode(module: &str, reason: &str, mode: &'static str) {
-    counter!(
-        names::WASM_FAIL_MODE_TOTAL,
+    dynamic_counter!(names::WASM_FAIL_MODE_TOTAL,
         "module" => module.to_string(),
         "reason" => reason.to_string(),
         "mode" => mode
@@ -1031,86 +1003,15 @@ pub fn record_wasm_fail_mode(module: &str, reason: &str, mode: &'static str) {
 /// Record a guest-dispatched HTTP callout outcome. `result` is one of
 /// `"ok"`, `"error"`, `"denied"`, `"over_limit"`
 pub fn record_wasm_callout(module: &str, result: &'static str) {
-    counter!(names::WASM_CALLOUT_TOTAL, "module" => module.to_string(), "result" => result).increment(1);
+    dynamic_counter!(names::WASM_CALLOUT_TOTAL, "module" => module.to_string(), "result" => result).increment(1);
 }
 
-// No byte ledger: the exporter gauge itself aggregates mutation deltas.
-// Weak handles cover old request-held generations without retaining stores.
-#[derive(Default)]
-struct LiveWasmMetricHandles {
-    bytes: Weak<Gauge>,
-    modules: Weak<WasmModuleMetricHandles>,
-}
-
-impl LiveWasmMetricHandles {
-    fn is_live(&self) -> bool {
-        self.bytes.strong_count() > 0 || self.modules.strong_count() > 0
-    }
-}
-
-static WASM_METRIC_HANDLES: LazyLock<Mutex<HashMap<String, LiveWasmMetricHandles>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-fn live_wasm_metric_handles() -> parking_lot::MutexGuard<'static, HashMap<String, LiveWasmMetricHandles>> {
-    let mut gauges = WASM_METRIC_HANDLES.lock();
-    gauges.retain(|_, handles| handles.is_live());
-    gauges
-}
-
-/// Register once per live module label; never reset another store's contribution.
-pub(crate) fn wasm_shared_data_bytes_gauge(module: &str) -> Arc<Gauge> {
-    let mut gauges = live_wasm_metric_handles();
-    let live = gauges.entry(module.to_string()).or_default();
-    if let Some(gauge) = live.bytes.upgrade() {
-        return gauge;
-    }
-    let gauge = Arc::new(gauge!(names::WASM_SHARED_DATA_BYTES, "module" => module.to_string()));
-    live.bytes = Arc::downgrade(&gauge);
-    gauge
-}
-
-/// Keep live Wasm handles attached across exporter idle eviction. Registration
-/// shares this cold-path lock with render; mutation and store Drop never do.
-pub(crate) fn with_live_wasm_metrics<R>(render: impl FnOnce() -> R) -> R {
-    let mut gauges = live_wasm_metric_handles();
-    let bytes: Vec<_> = gauges.values().filter_map(|handles| handles.bytes.upgrade()).collect();
-    let modules: Vec<_> = gauges
-        .values()
-        .filter_map(|handles| handles.modules.upgrade())
-        .collect();
-    for gauge in &bytes {
-        gauge.increment(0.0);
-    }
-    for handles in &modules {
-        handles.loaded.increment(0.0);
-        handles.released.increment(0);
-    }
-    let result = render();
-    drop(bytes);
-    drop(modules);
-    gauges.retain(|_, handles| handles.is_live());
-    result
-}
-
-#[derive(Default, serde::Serialize)]
-pub(crate) struct WasmSharedDataMetricStats {
-    pub count: usize,
-    pub keys: Vec<String>,
-}
-
-pub(crate) fn wasm_shared_data_metric_stats() -> WasmSharedDataMetricStats {
-    let gauges = live_wasm_metric_handles();
-    shared_data_metric_stats(&gauges)
-}
-
-fn shared_data_metric_stats(gauges: &HashMap<String, LiveWasmMetricHandles>) -> WasmSharedDataMetricStats {
-    let mut keys: Vec<_> = gauges.keys().cloned().collect();
-    keys.sort_unstable();
-    keys.truncate(100);
-    WasmSharedDataMetricStats {
-        count: gauges.len(),
-        keys,
-    }
+/// Each store owns a committed contribution; same-module generations aggregate.
+pub(crate) fn wasm_shared_data_bytes_gauge(module: &str) -> GaugeContribution {
+    GaugeContribution::new(metrics::Key::from_parts(
+        names::WASM_SHARED_DATA_BYTES,
+        vec![Label::new("module", module.to_string())],
+    ))
 }
 
 /// Record a guest returning `Action::Pause` from the response-body hook.
@@ -1120,7 +1021,7 @@ fn shared_data_metric_stats(gauges: &HashMap<String, LiveWasmMetricHandles>) -> 
 /// written against the standard buffering idiom and will silently observe only
 /// the current chunk instead of the whole body — alert on this counter.
 pub fn record_wasm_body_pause_unsupported(module: &str) {
-    counter!(names::WASM_BODY_PAUSE_UNSUPPORTED_TOTAL, "module" => module.to_string()).increment(1);
+    dynamic_counter!(names::WASM_BODY_PAUSE_UNSUPPORTED_TOTAL, "module" => module.to_string()).increment(1);
 }
 
 // ============================================================
@@ -1135,12 +1036,12 @@ pub fn record_wasm_body_pause_unsupported(module: &str) {
 
 /// A request was rejected because its scoped policy blocks a plugin.
 pub fn record_plugin_policy_blocked(plugin: &str) {
-    counter!(names::PLUGIN_POLICY_BLOCKED_TOTAL, "plugin" => plugin.to_string()).increment(1);
+    dynamic_counter!(names::PLUGIN_POLICY_BLOCKED_TOTAL, "plugin" => plugin.to_string()).increment(1);
 }
 
 /// A request passed through a chain with a plugin bypassed by its scoped policy.
 pub fn record_plugin_policy_bypassed(plugin: &str) {
-    counter!(names::PLUGIN_POLICY_BYPASSED_TOTAL, "plugin" => plugin.to_string()).increment(1);
+    dynamic_counter!(names::PLUGIN_POLICY_BYPASSED_TOTAL, "plugin" => plugin.to_string()).increment(1);
 }
 
 // ============================================================
@@ -1157,7 +1058,7 @@ pub fn record_plugin_policy_bypassed(plugin: &str) {
 
 /// A retry attempt was refused by a `retryConstraint` budget.
 pub fn record_retry_budget_denied() {
-    counter!(names::RETRY_BUDGET_DENIED_TOTAL).increment(1);
+    fixed_counter!(names::RETRY_BUDGET_DENIED_TOTAL).increment(1);
 }
 
 // ============================================================
@@ -1175,7 +1076,7 @@ pub fn record_retry_budget_denied() {
 /// Labelled by `service` only — never per-endpoint or per-request — to stay
 /// low-cardinality.
 pub fn record_cb_shed(service_key: &str) {
-    counter!(names::CB_SHED_TOTAL, "service" => service_key.to_string()).increment(1);
+    dynamic_counter!(names::CB_SHED_TOTAL, "service" => service_key.to_string()).increment(1);
 }
 
 // ============================================================
@@ -1197,12 +1098,12 @@ pub fn record_cb_shed(service_key: &str) {
 /// Alert on `edgion_geoip_db_loaded == 0` while geo rules are configured: that
 /// is the dangerous silent failure — the control is not running.
 pub fn set_geoip_db_loaded(loaded: bool) {
-    gauge!(names::GEOIP_DB_LOADED).set(if loaded { 1.0 } else { 0.0 });
+    fixed_gauge!(names::GEOIP_DB_LOADED).set(if loaded { 1.0 } else { 0.0 });
 }
 
 /// The loaded database's build timestamp. Alert on staleness.
 pub fn set_geoip_db_build_epoch(epoch: u64) {
-    gauge!(names::GEOIP_DB_BUILD_EPOCH).set(epoch as f64);
+    fixed_gauge!(names::GEOIP_DB_BUILD_EPOCH).set(epoch as f64);
 }
 
 /// `reason` is a bounded enum, never free text:
@@ -1211,7 +1112,7 @@ pub fn set_geoip_db_build_epoch(epoch: u64) {
 /// lookup panic is a distinct, per-request event recorded by
 /// `record_geoip_lookup_panic` instead, not folded in here.
 pub fn record_geoip_update_failed(reason: &'static str) {
-    counter!(names::GEOIP_UPDATE_FAILED, "reason" => reason).increment(1);
+    fixed_counter!(names::GEOIP_UPDATE_FAILED, "reason" => reason).increment(1);
 }
 
 /// A per-request MMDB lookup inside `GeoIpProvider::lookup` panicked (caught
@@ -1220,7 +1121,7 @@ pub fn record_geoip_update_failed(reason: &'static str) {
 /// slice by request attributes. Decode-without-panic failures share the
 /// `Failed` outcome but do not increment this counter.
 pub fn record_geoip_lookup_panic() {
-    counter!(names::GEOIP_LOOKUP_PANIC).increment(1);
+    fixed_counter!(names::GEOIP_LOOKUP_PANIC).increment(1);
 }
 
 /// L4 geo denials, which are never logged (see the design's §6.6).
@@ -1228,7 +1129,7 @@ pub fn record_geoip_lookup_panic() {
 /// db_unavailable | lookup_failed | ref_unavailable.
 /// Neither label carries a client address.
 pub fn record_geoip_denied(layer: StreamLayer, reason: &'static str) {
-    counter!(names::GEOIP_DENIED, "layer" => layer.as_metric_label(), "reason" => reason).increment(1);
+    fixed_counter!(names::GEOIP_DENIED, "layer" => layer.as_metric_label(), "reason" => reason).increment(1);
 }
 
 #[cfg(test)]

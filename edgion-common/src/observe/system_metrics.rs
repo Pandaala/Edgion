@@ -36,7 +36,7 @@
 //! bounded constants in `components` and `reasons` below — never pass raw
 //! config values or free-form strings (Prometheus cardinality risk).
 
-use metrics::gauge;
+use super::metrics_facade::fixed_gauge;
 
 /// Metric name constants.
 pub mod names {
@@ -173,8 +173,7 @@ pub mod reasons {
 /// [`reasons`]. Callers that pass ad-hoc strings will pollute Prometheus
 /// cardinality and should be audited.
 pub fn mark_system_error(component: &'static str, reason: &'static str) {
-    gauge!(
-        names::SYSTEM_ERROR_STATE,
+    fixed_gauge!(names::SYSTEM_ERROR_STATE,
         "component" => component,
         "reason" => reason,
     )
@@ -192,8 +191,7 @@ pub fn mark_system_error(component: &'static str, reason: &'static str) {
 ///
 /// `component` should come from [`components`] and `reason` from [`reasons`].
 pub fn clear_system_error(component: &'static str, reason: &'static str) {
-    gauge!(
-        names::SYSTEM_ERROR_STATE,
+    fixed_gauge!(names::SYSTEM_ERROR_STATE,
         "component" => component,
         "reason" => reason,
     )

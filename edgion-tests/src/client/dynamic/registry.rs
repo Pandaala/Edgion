@@ -4,7 +4,11 @@ use crate::dynamic::scenario::Scenario;
 
 /// All registered dynamic scenarios.
 pub fn all() -> Vec<&'static Scenario> {
-    vec![
+    scenarios_for_fixture(std::env::var("EDGION_TEST_METRICS_LIFETIME").as_deref() == Ok("1"))
+}
+
+fn scenarios_for_fixture(metrics_lifetime: bool) -> Vec<&'static Scenario> {
+    let mut scenarios = vec![
         crate::dynamic::scenarios::rest_to_graphql::SCENARIO,
         crate::dynamic::scenarios::ai_messages_binding::SCENARIO,
         crate::dynamic::scenarios::grpc_json_transcoder::SCENARIO,
@@ -77,10 +81,35 @@ pub fn all() -> Vec<&'static Scenario> {
         crate::dynamic::scenarios::wasm_runtime_ownership::SCENARIO,
         crate::dynamic::scenarios::l4_timeout_hot_reload::SCENARIO,
         crate::dynamic::scenarios::retained_listener_handles::SCENARIO,
-    ]
+    ];
+    if metrics_lifetime {
+        scenarios.push(crate::dynamic::scenarios::metrics_lifetime::SCENARIO);
+    }
+    scenarios
 }
 
 /// Look up a scenario by id.
 pub fn find(id: &str) -> Option<&'static Scenario> {
     all().into_iter().find(|s| s.id == id)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn metrics_lifetime_requires_its_explicit_fixture() {
+        let ordinary = super::scenarios_for_fixture(false);
+        assert!(!ordinary.iter().any(|scenario| scenario.id == "MetricsLifetime"));
+        let dedicated = super::scenarios_for_fixture(true);
+        assert_eq!(dedicated.len(), ordinary.len() + 1);
+        assert_eq!(
+            dedicated
+                .iter()
+                .filter(|scenario| scenario.id == "MetricsLifetime")
+                .count(),
+            1
+        );
+        for scenario in ordinary {
+            assert!(dedicated.iter().any(|candidate| candidate.id == scenario.id));
+        }
+    }
 }

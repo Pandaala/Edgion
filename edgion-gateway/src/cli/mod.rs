@@ -11,6 +11,7 @@ use crate::routes::udp::get_udp_listener_registry;
 use crate::runtime::server::proxy_protocol_policy::init_global_proxy_protocol_policy_runtime;
 use anyhow::{anyhow, bail, Result};
 use clap::Parser;
+use edgion_common::observe::metrics_facade::fixed_gauge;
 use edgion_resources::{init_work_dir, work_dir};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -472,14 +473,14 @@ impl EdgionGatewayCli {
         // production-unsafe modes.
         let host_state = fips_host::detect_host_fips(integration_testing);
 
-        ::metrics::gauge!(crate::observe::metrics::registry::names::FIPS_MODULE_ENABLED).set(if fips_available {
+        fixed_gauge!(crate::observe::metrics::registry::names::FIPS_MODULE_ENABLED).set(if fips_available {
             1.0
         } else {
             0.0
         });
-        ::metrics::gauge!(crate::observe::metrics::registry::names::FIPS_HOST_ENABLED)
+        fixed_gauge!(crate::observe::metrics::registry::names::FIPS_HOST_ENABLED)
             .set(if host_state == HostFipsState::Enabled { 1.0 } else { 0.0 });
-        ::metrics::gauge!(crate::observe::metrics::registry::names::FIPS_HOST_DETECT_ERROR)
+        fixed_gauge!(crate::observe::metrics::registry::names::FIPS_HOST_DETECT_ERROR)
             .set(if host_state == HostFipsState::Unknown { 1.0 } else { 0.0 });
 
         let require_fips = config.gateway.require_fips
@@ -522,8 +523,7 @@ impl EdgionGatewayCli {
         fips_profile::set_fips_policy_forced(fips_profile::resolve_policy(mode, host_state));
 
         let policy_active = fips_profile::fips_policy_active();
-        ::metrics::gauge!(
-            crate::observe::metrics::registry::names::FIPS_POLICY_ACTIVE,
+        fixed_gauge!(crate::observe::metrics::registry::names::FIPS_POLICY_ACTIVE,
             "module_enabled" => if fips_available { "true" } else { "false" },
         )
         .set(if policy_active { 1.0 } else { 0.0 });

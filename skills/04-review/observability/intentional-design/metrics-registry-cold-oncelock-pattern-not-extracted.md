@@ -1,6 +1,6 @@
 ---
 name: metrics-registry-cold-oncelock-pattern-not-extracted
-description: Decision record for observe F-011 — the 12 cold `OnceLock<Counter/Gauge>` fields in `GatewayMetrics` (struct field + `new()` initializer + `record_*` method, three wiring points per metric) are intentionally not folded into a `cold_counter!` / `cold_gauge!` declarative macro.
+description: Decision record for observe F-011 — the 9 cold `OnceLock<Counter/Gauge>` fields in `GatewayMetrics` (struct field + `new()` initializer + `record_*` method, three wiring points per metric) are intentionally not folded into a `cold_counter!` / `cold_gauge!` declarative macro.
 knowledge_type: intentional-design
 ---
 
@@ -8,8 +8,8 @@ knowledge_type: intentional-design
 
 ## Conclusion
 
-`edgion-gateway/src/observe/metrics/registry.rs` declares 12 cold metrics as
-`OnceLock<Counter>` / `OnceLock<Gauge>` fields. Each metric is wired in three
+`edgion-gateway/src/observe/metrics/registry.rs` declares 9 cold metrics as
+`OnceLock<FixedCounter>` / `OnceLock<FixedGauge>` fields. Each metric is wired in three
 places:
 
 1. Struct field declaration on `GatewayMetrics`.
@@ -145,3 +145,13 @@ Re-open this decision only if:
   - `skills/04-review/observability/intentional-design/protocol-logger-oncelock-pattern-not-extracted.md`
   - `skills/04-review/review-method/intentional-design/style-consolidation-thresholds.md`
   - `skills/04-review/conf-sync/intentional-design/conf-handler-simple-map-pattern.md`
+
+## Class-specific interface boundary
+
+This decision concerns Gateway business field/method boilerplate only. It does
+not reject the canonical Common fixed/dynamic facade or catalog. Class and label
+domains are decided first; fixed fields then retain the existing hot/cold policy.
+Dynamic descriptors are renewable proxies with first-event admission and idle
+export-epoch expiration, so they cannot be replaced with cached raw exporter
+handles. The lifetime cap counts fixed initialized tuples too and prioritizes
+valid fixed tuples without another budget.

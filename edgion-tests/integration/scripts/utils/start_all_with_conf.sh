@@ -1421,6 +1421,10 @@ main() {
     fi
     printf '\nmetrics:\n  backend_requests:\n    labels:\n      backend: true\n' >> "${GATEWAY_CONFIG}"
     log_info "Enabled backend identity metrics for integration assertions"
+    if [ "${EDGION_TEST_METRICS_LIFETIME:-0}" = "1" ]; then
+        printf '      route: true\n  cardinality_cap: 64\n  request_duration:\n    enabled: true\n    idle_timeout_secs: 2\n    labels:\n      route_name: true\n      route_namespace: true\n' >> "${GATEWAY_CONFIG}"
+        log_info "Enabled short-lived dynamic metrics in the owned integration config"
+    fi
     if [ "${EDGION_TEST_ENABLE_GENAI_METRICS:-0}" = "1" ]; then
         printf '  genai_tokens:\n    enabled: true\n' >> "${GATEWAY_CONFIG}"
         log_info "Enabled GenAI token metrics in the integration workdir config"

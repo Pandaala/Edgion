@@ -168,6 +168,10 @@ fn capability_registry() -> Result<&'static str> {
 }
 
 fn validate_dynamic_scenario_ids(ids: &[&str]) -> Result<()> {
+    validate_dynamic_scenario_ids_for_fixture(ids, std::env::var("EDGION_TEST_METRICS_LIFETIME").as_deref() == Ok("1"))
+}
+
+fn validate_dynamic_scenario_ids_for_fixture(ids: &[&str], metrics_lifetime: bool) -> Result<()> {
     if ids.is_empty() {
         anyhow::bail!("dynamic scenario registry is empty");
     }
@@ -178,7 +182,10 @@ fn validate_dynamic_scenario_ids(ids: &[&str]) -> Result<()> {
     if actual.len() != ids.len() {
         anyhow::bail!("dynamic scenario registry contains duplicate ids");
     }
-    let expected: HashSet<&str> = EXPECTED_DYNAMIC_SCENARIO_IDS.iter().copied().collect();
+    let mut expected: HashSet<&str> = EXPECTED_DYNAMIC_SCENARIO_IDS.iter().copied().collect();
+    if metrics_lifetime {
+        expected.insert("MetricsLifetime");
+    }
     if actual != expected {
         let mut missing: Vec<_> = expected.difference(&actual).copied().collect();
         let mut unexpected: Vec<_> = actual.difference(&expected).copied().collect();
@@ -234,7 +241,8 @@ fn missing_capability(kind: &str, id: &str) -> Result<Option<&'static str>> {
 mod capability_tests {
     use super::{
         capability_entry_applies, dynamic_port_contract, required_port_kind, resolve_suite, suite_to_port_key,
-        validate_capability_registry, validate_dynamic_scenario_ids, EXPECTED_DYNAMIC_SCENARIO_IDS,
+        validate_capability_registry, validate_dynamic_scenario_ids, validate_dynamic_scenario_ids_for_fixture,
+        EXPECTED_DYNAMIC_SCENARIO_IDS,
     };
     use edgion_tests::{dynamic, port_config::PortConfig};
     use std::collections::BTreeSet;
@@ -546,13 +554,56 @@ run_test "Dyn_Unknown" "client --dynamic-scenario GraphqlRateLimitTypo" || test_
 
     #[test]
     fn dynamic_registry_manifest_is_complete_unique_and_nonempty() {
-        let actual: Vec<_> = dynamic::all().iter().map(|scenario| scenario.id).collect();
-        validate_dynamic_scenario_ids(&actual).unwrap();
+        let actual: Vec<_> = dynamic::all()
+            .iter()
+            .map(|scenario| scenario.id)
+            .filter(|id| *id != "MetricsLifetime")
+            .collect();
+        validate_dynamic_scenario_ids_for_fixture(&actual, false).unwrap();
         assert_eq!(actual.len(), EXPECTED_DYNAMIC_SCENARIO_IDS.len());
+        assert!(validate_dynamic_scenario_ids_for_fixture(&actual, true).is_err());
 
-        assert!(validate_dynamic_scenario_ids(&[]).is_err());
-        assert!(validate_dynamic_scenario_ids(&["AiBackendLifecycle", "AiBackendLifecycle"]).is_err());
-        assert!(validate_dynamic_scenario_ids(&[""]).is_err());
+        let mut dedicated = actual.clone();
+        dedicated.push("MetricsLifetime");
+        validate_dynamic_scenario_ids_for_fixture(&dedicated, true).unwrap();
+        assert!(validate_dynamic_scenario_ids_for_fixture(&dedicated, false).is_err());
+
+        for fixture in [false, true] {
+            assert!(validate_dynamic_scenario_ids_for_fixture(&[], fixture).is_err());
+            assert!(validate_dynamic_scenario_ids_for_fixture(&[""], fixture).is_err());
+            let mut duplicate = if fixture { dedicated.clone() } else { actual.clone() };
+            duplicate.push(actual[0]);
+            assert!(validate_dynamic_scenario_ids_for_fixture(&duplicate, fixture).is_err());
+            let mut missing = if fixture { dedicated.clone() } else { actual.clone() };
+            missing.remove(0);
+            assert!(validate_dynamic_scenario_ids_for_fixture(&missing, fixture).is_err());
+            let mut unexpected = if fixture { dedicated.clone() } else { actual.clone() };
+            unexpected.push("UnknownScenario");
+            assert!(validate_dynamic_scenario_ids_for_fixture(&unexpected, fixture).is_err());
+        }
+    }
+
+    #[test]
+    fn metrics_lifetime_listener_matches_its_canonical_port_contract() {
+        let config: PortConfig = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/conf/ports.json"
+        )))
+        .unwrap();
+        let (key, kind) = dynamic_port_contract("MetricsLifetime").unwrap().unwrap();
+        assert_eq!(key, "HTTPRoute/MetricsLifetime");
+        assert_eq!(kind, edgion_tests::port_config::PortKind::Http);
+        let port = config.require_port(key, kind).unwrap();
+        assert_eq!(port, 31149);
+        let gateway: serde_yaml::Value = serde_yaml::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/conf/HTTPRoute/MetricsLifetime/Gateway_default_metrics-lifetime.yaml"
+        )))
+        .unwrap();
+        let listener = &gateway["spec"]["listeners"][0];
+        assert_eq!(listener["name"].as_str(), Some("http"));
+        assert_eq!(listener["protocol"].as_str(), Some("HTTP"));
+        assert_eq!(listener["port"].as_u64(), Some(u64::from(port)));
     }
 
     #[test]
@@ -1823,6 +1874,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
     use port_config::PortKind;
 
     let contract = match id {
+        "MetricsLifetime" => Some(("HTTPRoute/MetricsLifetime", PortKind::Http)),
         "HttpRouteDuplicateHeaders" => Some(("HTTPRoute/Match", PortKind::Http)),
         "HttpRouteNamedParameterPrecedence" => Some(("HTTPRoute/NamedParameterPrecedence", PortKind::Http)),
         "HttpRoutePathPrefixTrailingSlash" => Some(("HTTPRoute/Basic", PortKind::Http)),

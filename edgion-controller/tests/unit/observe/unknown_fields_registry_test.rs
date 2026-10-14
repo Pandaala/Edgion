@@ -7,6 +7,37 @@ use edgion_resources::{
 
 fn reset() {
     sources_slot().lock().clear();
+    *sampled_gauges().lock() = std::array::from_fn(|_| None);
+    METRIC_RECORDER.with(|slot| {
+        *slot.borrow_mut() = Some(
+            edgion_common::observe::metrics_api::TestRecorder::new(
+                edgion_common::observe::metrics_api::RecorderConfig {
+                    service: "test",
+                    idle_timeout_secs: 0,
+                    histogram_buckets: &[],
+                    cardinality_cap: 10000,
+                    cardinality_mode: edgion_common::observe::cardinality_guard::CardinalityMode::Enforce,
+                },
+            )
+            .unwrap(),
+        )
+    });
+}
+
+thread_local! {static METRIC_RECORDER:std::cell::RefCell<Option<edgion_common::observe::metrics_api::TestRecorder>>=const {std::cell::RefCell::new(None)};}
+fn render_unknown_config_fields_metric() -> String {
+    METRIC_RECORDER.with(|slot| {
+        let binding = slot.borrow();
+        let recorder = binding.as_ref().unwrap();
+        recorder.with(sample_unknown_config_fields_metric);
+        let rendered = recorder.render();
+        let mut output = String::new();
+        for line in rendered.lines().filter(|line| line.contains(METRIC_NAME)) {
+            output.push_str(&line.replace("service=\"test\",", ""));
+            output.push('\n');
+        }
+        output
+    })
 }
 
 fn plugins_with_findings(ns: &str, name: &str, paths: Vec<String>) -> Arc<EdgionPlugins> {
@@ -373,7 +404,8 @@ mod metric_rendering {
         register_unknown_fields_source::<LinkSys>("LinkSys", link_sys_store);
 
         let block = render_unknown_config_fields_metric();
-        let samples: Vec<&str> = block.lines().filter(|l| !l.starts_with('#')).collect();
+        let mut samples: Vec<&str> = block.lines().filter(|l| !l.starts_with('#')).collect();
+        samples.sort_unstable();
         assert_eq!(samples.len(), 4, "at most one series per kind: {block}");
         assert!(samples[0].starts_with("edgion_controller_unknown_config_fields{kind=\"EdgionConfigData\""));
         assert!(samples[1].starts_with("edgion_controller_unknown_config_fields{kind=\"EdgionPlugins\""));
@@ -505,4 +537,23 @@ mod metric_rendering {
         let block = render_unknown_config_fields_metric();
         assert!(block.contains("edgion_controller_unknown_config_fields{kind=\"EdgionPlugins\""));
     }
+}
+
+#[test]
+fn initialized_fixed_unknown_field_gauge_recovers_to_zero() {
+    let _guard = TEST_MUTEX.lock();
+    reset();
+    let store = Arc::new(LocalRawStore::<EdgionPlugins>::new());
+    store.upsert(
+        "default/metric-recovery".into(),
+        plugins_with_findings("default", "metric-recovery", vec!["config.typo".into()]),
+    );
+    register_unknown_fields_source::<EdgionPlugins>("EdgionPlugins", store.clone());
+    assert!(render_unknown_config_fields_metric().contains("{kind=\"EdgionPlugins\"} 1"));
+    store.upsert(
+        "default/metric-recovery".into(),
+        plugins_with_findings("default", "metric-recovery", vec![]),
+    );
+    assert!(render_unknown_config_fields_metric().contains("{kind=\"EdgionPlugins\"} 0"));
+    assert!(!render_unknown_config_fields_metric().contains("metric-recovery"));
 }

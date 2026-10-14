@@ -77,6 +77,7 @@ fn response_serializes_with_expected_keys() {
         shared_http_listeners:
             crate::conf_mgr::sync_runtime::resource_processor::listener_port_manager::ListenerPortManager::new()
                 .shared_stats(),
+        metrics: edgion_common::observe::metrics_api::DynamicMetricStats::default(),
         conf_center_storage: BTreeMap::from_iter([("HTTPRoute".to_string(), 0)]),
         raw_cache: BTreeMap::new(),
         raw_cache_keys: BTreeMap::new(),

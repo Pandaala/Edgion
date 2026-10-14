@@ -6,7 +6,9 @@
 //! - Leader election status
 //! - Reload operations
 
-use metrics::{counter, gauge, Counter, Gauge};
+use edgion_common::observe::metrics_facade::{
+    fixed_counter, fixed_gauge, FixedCounter as Counter, FixedGauge as Gauge,
+};
 use std::sync::LazyLock;
 use std::time::Instant;
 
@@ -67,7 +69,7 @@ pub fn controller_metrics() -> &'static ControllerMetrics {
 /// live worker (drain-based stops outlive the stop call) or mint a permanent
 /// 0-series for a job that never started.
 pub fn leader_job_gauge(job: &'static str) -> Gauge {
-    gauge!(names::LEADER_JOB_ALIVE, "leader_job" => job)
+    fixed_gauge!(names::LEADER_JOB_ALIVE, "leader_job" => job)
 }
 
 /// Controller metrics collection
@@ -93,9 +95,9 @@ impl Drop for ActiveController<'_> {
 impl ControllerMetrics {
     fn new() -> Self {
         Self {
-            active_controllers: gauge!(names::ACTIVE_CONTROLLERS),
-            leader_status: gauge!(names::LEADER_STATUS),
-            leader_transitions: counter!(names::LEADER_TRANSITIONS_TOTAL),
+            active_controllers: fixed_gauge!(names::ACTIVE_CONTROLLERS),
+            leader_status: fixed_gauge!(names::LEADER_STATUS),
+            leader_transitions: fixed_counter!(names::LEADER_TRANSITIONS_TOTAL),
         }
     }
 
@@ -126,8 +128,8 @@ impl ResourceMetrics {
     /// Create metrics for a specific resource kind
     pub fn new(kind: &'static str) -> Self {
         Self {
-            init_sync_duration: gauge!(names::INIT_SYNC_DURATION, "kind" => kind),
-            resources_watched: gauge!(names::RESOURCES_WATCHED, "kind" => kind),
+            init_sync_duration: fixed_gauge!(names::INIT_SYNC_DURATION, "kind" => kind),
+            resources_watched: fixed_gauge!(names::RESOURCES_WATCHED, "kind" => kind),
         }
     }
 
@@ -191,9 +193,9 @@ pub struct ReloadMetrics {
 impl ReloadMetrics {
     fn new() -> Self {
         Self {
-            reload_total: counter!(names::RELOAD_TOTAL),
-            reload_duration: gauge!(names::RELOAD_DURATION),
-            client_notifications: counter!(names::RELOAD_CLIENT_NOTIFICATIONS),
+            reload_total: fixed_counter!(names::RELOAD_TOTAL),
+            reload_duration: fixed_gauge!(names::RELOAD_DURATION),
+            client_notifications: fixed_counter!(names::RELOAD_CLIENT_NOTIFICATIONS),
         }
     }
 
@@ -223,20 +225,20 @@ impl ReloadMetrics {
 /// Labels: `kind` (resource kind), `backend` ("kubernetes" or "filesystem").
 #[inline]
 pub fn record_status_write(kind: &str, backend: &str) {
-    counter!(names::STATUS_WRITES_TOTAL, "kind" => kind.to_string(), "backend" => backend.to_string(), "result" => "success").increment(1);
+    fixed_counter!(names::STATUS_WRITES_TOTAL, "kind" => kind.to_string(), "backend" => backend.to_string(), "result" => "success").increment(1);
 }
 
 /// Record a failed status write.
 #[inline]
 pub fn record_status_write_error(kind: &str, backend: &str) {
-    counter!(names::STATUS_WRITES_TOTAL, "kind" => kind.to_string(), "backend" => backend.to_string(), "result" => "error").increment(1);
+    fixed_counter!(names::STATUS_WRITES_TOTAL, "kind" => kind.to_string(), "backend" => backend.to_string(), "result" => "error").increment(1);
 }
 
 /// Record a status write that was skipped because semantic diff detected
 /// no meaningful change.
 #[inline]
 pub fn record_status_write_skipped(kind: &str) {
-    counter!(names::STATUS_WRITES_SKIPPED_TOTAL, "kind" => kind.to_string()).increment(1);
+    fixed_counter!(names::STATUS_WRITES_SKIPPED_TOTAL, "kind" => kind.to_string()).increment(1);
 }
 
 #[cfg(test)]

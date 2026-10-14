@@ -63,6 +63,7 @@ etcd-client.workspace = true
 metrics.workspace = true
 metrics-exporter-prometheus.workspace = true
 metrics-util.workspace = true
+quanta.workspace = true
 dashmap.workspace = true
 
 # CLI / logging
@@ -90,3 +91,9 @@ h2.workspace = true
 kube.workspace = true
 rcgen.workspace = true
 tempfile.workspace = true
+
+[[bench]]
+name = "metrics_lifetime"
+path = "tests/benches/metrics_lifetime.rs"
+harness = false
+required-features = ["test-util"]

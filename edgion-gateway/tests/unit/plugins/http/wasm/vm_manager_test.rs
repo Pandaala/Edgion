@@ -448,23 +448,32 @@ async fn plugin_drop_releases_publication_but_preserves_in_flight_lease() {
     assert!(weak.upgrade().is_none());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn shared_data_metric_handle_follows_plugin_and_lease_lifetime() {
+    use edgion_common::observe::{
+        cardinality_guard::CardinalityMode,
+        metrics_api::{RecorderConfig, TestRecorder},
+    };
+    let recorder = TestRecorder::new(RecorderConfig {
+        service: "test",
+        idle_timeout_secs: 600,
+        histogram_buckets: &[],
+        cardinality_cap: 10000,
+        cardinality_mode: CardinalityMode::Enforce,
+    })
+    .unwrap();
     let file = write_temp_wasm(MINI_GUEST);
     let manager = WasmVmManager::new_for_test();
     let runtime = actual_runtime(&manager, &file_config(file.path()), CalloutGrant::none());
-    let entry = runtime.get_or_load().await.unwrap();
-    let label = entry.metrics_label.clone();
+    let entry = recorder
+        .with(|| tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(runtime.get_or_load())))
+        .unwrap();
     let lease = entry.acquire(100).unwrap();
     drop(entry);
     drop(runtime);
-    assert!(crate::observe::metrics::registry::wasm_shared_data_metric_stats()
-        .keys
-        .contains(&label));
+    assert!(recorder.stats().gauge_owners >= 2);
     drop(lease);
-    assert!(!crate::observe::metrics::registry::wasm_shared_data_metric_stats()
-        .keys
-        .contains(&label));
+    assert_eq!(recorder.stats().gauge_owners, 0);
 }
 
 #[tokio::test]
@@ -2713,4 +2722,87 @@ fn actual_instance_admission_includes_idle_and_releases_failed_initialization() 
             });
         },
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pool_metric_aggregates_generations_and_old_retirement_does_not_resurrect() {
+    use edgion_common::observe::{
+        cardinality_guard::CardinalityMode,
+        metrics_api::{RecorderConfig, TestRecorder},
+    };
+    let recorder = TestRecorder::with_clock(RecorderConfig {
+        service: "pool-fixture",
+        idle_timeout_secs: 1,
+        histogram_buckets: &[],
+        cardinality_cap: 10000,
+        cardinality_mode: CardinalityMode::Enforce,
+    })
+    .unwrap();
+    let file = write_temp_wasm(MINI_GUEST);
+    let manager = WasmVmManager::new_for_test();
+    let mut old_cfg = file_config(file.path());
+    old_cfg.plugin_config = Some(WasmRawConfig::string("old"));
+    let mut new_cfg = old_cfg.clone();
+    new_cfg.plugin_config = Some(WasmRawConfig::string("replacement"));
+    let old_runtime = actual_runtime(&manager, &old_cfg, CalloutGrant::none());
+    let new_runtime = actual_runtime(&manager, &new_cfg, CalloutGrant::none());
+    let (old, new) = recorder.with(|| {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                (
+                    old_runtime.get_or_load().await.unwrap(),
+                    new_runtime.get_or_load().await.unwrap(),
+                )
+            })
+        })
+    });
+    assert!(!Arc::ptr_eq(&old, &new));
+    assert_eq!(old.metrics_label, new.metrics_label);
+    let label = old.metrics_label.clone();
+    let assert_pool = |expected: usize| {
+        let output = recorder.render();
+        assert!(
+            output.lines().any(|line| line.starts_with("edgion_wasm_pool_size{")
+                && line.contains(&format!("module=\"{label}\""))
+                && line.ends_with(&format!(" {expected}"))),
+            "pool aggregate expected{expected}: {output}"
+        );
+    };
+    assert_eq!(old.pool_len(), 1);
+    assert_eq!(new.pool_len(), 1);
+    assert_pool(2);
+    let old_lease = old.acquire(100).unwrap();
+    assert_pool(1);
+    let new_lease = new.acquire(100).unwrap();
+    assert_pool(0);
+    drop(new_lease);
+    assert_pool(1);
+    drop(old_lease);
+    assert_pool(2);
+    recorder.advance(std::time::Duration::from_secs(2));
+    assert!(!recorder.render().contains("edgion_wasm_pool_size"));
+    drop(old_runtime);
+    drop(old);
+    assert!(
+        !recorder.render().contains("edgion_wasm_pool_size"),
+        "old generation retirement must not recreate the expired epoch"
+    );
+    assert_eq!(
+        new.pool_len(),
+        1,
+        "old retirement cannot overwrite the replacement contribution"
+    );
+    let lease = new.acquire(100).unwrap();
+    assert_pool(0);
+    drop(new_runtime);
+    drop(new);
+    recorder.advance(std::time::Duration::from_secs(2));
+    assert!(!recorder.render().contains("edgion_wasm_pool_size"));
+    drop(lease);
+    // Returning to the retired pool is a real update; final entry destruction
+    // then withdraws only its own contribution. Expire that final zero epoch.
+    recorder.advance(std::time::Duration::from_secs(2));
+    assert!(!recorder.render().contains("edgion_wasm_pool_size"));
+    assert_eq!(recorder.stats().gauge_owners, 0);
+    assert_eq!(recorder.stats().attached_gauge_owners, 0);
 }

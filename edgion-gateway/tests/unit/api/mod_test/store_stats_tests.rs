@@ -29,7 +29,7 @@ fn store_stats_response_serializes() {
     };
     let resp = StoreStatsResponse {
         response_cache: Default::default(),
-        wasm_shared_data_metrics: Default::default(),
+        metrics: Default::default(),
         plugin_publication: Default::default(),
         plugin_publication_inventory: Default::default(),
         wasm_oci_cache: crate::plugins::http::wasm::oci::cache::OciMemoryCacheStats {

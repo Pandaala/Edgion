@@ -527,6 +527,7 @@ use http::{header, StatusCode};
 /// by delegating to it first, then appending the resource-abnormal
 /// block when the snapshot is non-empty.
 pub(crate) async fn metrics_handler() -> Response {
+    crate::observe::unknown_fields_registry::sample_unknown_config_fields_metric();
     let base = edgion_common::observe::metrics_api::metrics_handler().await;
     let (parts, body) = base.into_parts();
     if parts.status != StatusCode::OK {
@@ -552,19 +553,6 @@ pub(crate) async fn metrics_handler() -> Response {
             text.push('\n');
         }
         text.push_str(&cond_block);
-    }
-
-    // `edgion_controller_unknown_config_fields` — separate data source
-    // (live `unknown_fields_registry` scan of `spec.unknown_fields`, not
-    // the status-condition snapshot above), appended at the same seam.
-    // See `unknown_fields_registry::render_unknown_config_fields_metric`
-    // for why it deliberately does NOT reuse `classify()`.
-    let unknown_fields_block = crate::observe::unknown_fields_registry::render_unknown_config_fields_metric();
-    if !unknown_fields_block.is_empty() {
-        if !text.ends_with('\n') {
-            text.push('\n');
-        }
-        text.push_str(&unknown_fields_block);
     }
 
     (

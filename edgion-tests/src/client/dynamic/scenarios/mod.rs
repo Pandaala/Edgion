@@ -77,4 +77,5 @@ pub mod rest_to_graphql;
 
 pub mod dsl_query_lookup;
 
+pub mod metrics_lifetime;
 pub mod shared_http_policy_admission;
