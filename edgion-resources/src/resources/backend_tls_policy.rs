@@ -39,6 +39,12 @@ pub struct BackendTLSPolicySpec {
     #[schemars(skip)]
     pub current_status: Option<BackendTLSPolicyStatus>,
 
+    /// Complete Controller-derived creation instant for policy arbitration.
+    /// Recomputed from source metadata on every parse; not operator input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub prepared_precedence: Option<super::common::policy_precedence::PreparedPolicyPrecedence>,
+
     /// TargetRefs identifies the API object(s) to apply the policy to.
     pub target_refs: Vec<BackendTLSPolicyTargetRef>,
 

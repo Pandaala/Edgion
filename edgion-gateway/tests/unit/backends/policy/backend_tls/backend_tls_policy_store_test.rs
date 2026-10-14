@@ -25,6 +25,11 @@ fn policy(
             ..Default::default()
         },
         spec: BackendTLSPolicySpec {
+            prepared_precedence: Some(
+                edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
+                    creation_timestamp: None,
+                },
+            ),
             current_status: None,
             target_refs: vec![BackendTLSPolicyTargetRef {
                 group: group.to_string(),
@@ -314,6 +319,11 @@ fn valid_exact_section_skips_older_invalid_exact_section() {
         Some(ResolvedPolicyTargetClass::Service),
     );
     Arc::make_mut(&mut older_invalid).metadata.creation_timestamp = Some(Time("2026-01-01T00:00:00Z".parse().unwrap()));
+    Arc::make_mut(&mut older_invalid).spec.prepared_precedence = Some(
+        edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
+            creation_timestamp: older_invalid.metadata.creation_timestamp.as_ref().map(|time| time.0),
+        },
+    );
     Arc::make_mut(&mut older_invalid).spec.validation.hostname = "bad host".to_string();
     let mut newer_valid = policy(
         "newer",
@@ -323,6 +333,11 @@ fn valid_exact_section_skips_older_invalid_exact_section() {
         Some(ResolvedPolicyTargetClass::Service),
     );
     Arc::make_mut(&mut newer_valid).metadata.creation_timestamp = Some(Time("2026-02-01T00:00:00Z".parse().unwrap()));
+    Arc::make_mut(&mut newer_valid).spec.prepared_precedence = Some(
+        edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
+            creation_timestamp: newer_valid.metadata.creation_timestamp.as_ref().map(|time| time.0),
+        },
+    );
     store.replace_all(HashMap::from([
         ("tenant/older".to_string(), older_invalid),
         ("tenant/newer".to_string(), newer_valid),
@@ -675,6 +690,11 @@ fn removing_winner_promotes_next_candidate_locally() {
         Some(ResolvedPolicyTargetClass::Service),
     );
     Arc::make_mut(&mut older).metadata.creation_timestamp = Some(Time("2026-01-01T00:00:00Z".parse().unwrap()));
+    Arc::make_mut(&mut older).spec.prepared_precedence = Some(
+        edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
+            creation_timestamp: older.metadata.creation_timestamp.as_ref().map(|time| time.0),
+        },
+    );
     let mut newer = policy(
         "newer",
         PolicyTargetKind::Service,
@@ -683,6 +703,11 @@ fn removing_winner_promotes_next_candidate_locally() {
         Some(ResolvedPolicyTargetClass::Service),
     );
     Arc::make_mut(&mut newer).metadata.creation_timestamp = Some(Time("2026-02-01T00:00:00Z".parse().unwrap()));
+    Arc::make_mut(&mut newer).spec.prepared_precedence = Some(
+        edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
+            creation_timestamp: newer.metadata.creation_timestamp.as_ref().map(|time| time.0),
+        },
+    );
     store.replace_all(HashMap::from([
         ("tenant/older".to_string(), older),
         ("tenant/newer".to_string(), newer),
@@ -951,6 +976,11 @@ fn missing_timestamp_loses_and_uid_change_replaces_arc() {
         Some(ResolvedPolicyTargetClass::Service),
     );
     Arc::make_mut(&mut missing).metadata.creation_timestamp = None;
+    Arc::make_mut(&mut missing).spec.prepared_precedence = Some(
+        edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
+            creation_timestamp: missing.metadata.creation_timestamp.as_ref().map(|time| time.0),
+        },
+    );
     let mut dated = policy(
         "dated",
         PolicyTargetKind::Service,
@@ -959,6 +989,11 @@ fn missing_timestamp_loses_and_uid_change_replaces_arc() {
         Some(ResolvedPolicyTargetClass::Service),
     );
     Arc::make_mut(&mut dated).metadata.creation_timestamp = Some(Time("2026-01-01T00:00:00Z".parse().unwrap()));
+    Arc::make_mut(&mut dated).spec.prepared_precedence = Some(
+        edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
+            creation_timestamp: dated.metadata.creation_timestamp.as_ref().map(|time| time.0),
+        },
+    );
     store.replace_all(HashMap::from([
         ("tenant/missing".to_string(), missing),
         ("tenant/dated".to_string(), dated),
@@ -1488,4 +1523,112 @@ fn winner_preparation_is_shared_across_noops_metadata_and_losing_candidate_chang
     assert!(rotated.prepared.san_hook.is_some());
     assert!(promoted.prepared.san_hook.is_none());
     assert_eq!(first.policy.metadata.name.as_deref(), Some("a-winner"));
+}
+
+#[test]
+fn policy_precedence_unprepared_keeps_invalid_exact_and_whole_occupancy() {
+    let store = BackendTLSPolicyStore::new();
+    let mut exact = policy(
+        "exact",
+        PolicyTargetKind::Service,
+        "shared",
+        Some("https"),
+        Some(ResolvedPolicyTargetClass::Service),
+    );
+    Arc::make_mut(&mut exact).spec.prepared_precedence = None;
+    let whole = policy(
+        "whole",
+        PolicyTargetKind::Service,
+        "shared",
+        None,
+        Some(ResolvedPolicyTargetClass::Service),
+    );
+    store.replace_all(HashMap::from([
+        ("tenant/exact".into(), exact),
+        ("tenant/whole".into(), whole.clone()),
+    ]));
+    assert!(store
+        .snapshot()
+        .lookup(&target(PolicyTargetKind::Service), Some("https"))
+        .is_invalid());
+    assert_eq!(
+        effective_name(store.snapshot().lookup(&target(PolicyTargetKind::Service), None)).as_deref(),
+        Some("whole")
+    );
+    let mut unprepared = (*whole).clone();
+    unprepared.spec.prepared_precedence = None;
+    store.replace_all(HashMap::from([("tenant/whole".into(), Arc::new(unprepared))]));
+    assert!(store
+        .snapshot()
+        .lookup(&target(PolicyTargetKind::Service), None)
+        .is_invalid());
+    assert!(store.contains("tenant/whole"));
+}
+
+#[test]
+fn policy_precedence_fraction_only_replacement_preserves_captured_generation() {
+    use edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence;
+    let store = BackendTLSPolicyStore::new();
+    let make = |name: &str, fraction: &str| {
+        let mut value = policy(
+            name,
+            PolicyTargetKind::Service,
+            "shared",
+            None,
+            Some(ResolvedPolicyTargetClass::Service),
+        );
+        Arc::make_mut(&mut value).spec.prepared_precedence = Some(PreparedPolicyPrecedence {
+            creation_timestamp: Some(format!("2026-01-01T00:00:00.{fraction}Z").parse().unwrap()),
+        });
+        value
+    };
+    let older = make("b", "100");
+    let newer = make("a", "900");
+    store.replace_all(HashMap::from([
+        ("tenant/b".into(), older.clone()),
+        ("tenant/a".into(), newer.clone()),
+    ]));
+    let old = store.snapshot();
+    let old_lookup = old.lookup(&target(PolicyTargetKind::Service), None);
+    let old_effective = old_lookup.effective().unwrap();
+    store.update(
+        HashMap::new(),
+        HashMap::from([("tenant/b".into(), Arc::new((*older).clone()))]),
+        &HashSet::new(),
+    );
+    assert_eq!(store.snapshot().generation(), old.generation());
+    assert!(Arc::ptr_eq(
+        &store.snapshot().get("tenant/b").unwrap(),
+        &old.get("tenant/b").unwrap()
+    ));
+    assert!(Arc::ptr_eq(
+        store
+            .snapshot()
+            .lookup(&target(PolicyTargetKind::Service), None)
+            .effective()
+            .unwrap(),
+        old_effective
+    ));
+    let replacement = make("b", "950");
+    assert_eq!(replacement.metadata, older.metadata);
+    store.update(
+        HashMap::new(),
+        HashMap::from([("tenant/b".into(), replacement.clone())]),
+        &HashSet::new(),
+    );
+    assert_eq!(store.snapshot().generation(), old.generation() + 1);
+    assert_eq!(
+        effective_name(store.snapshot().lookup(&target(PolicyTargetKind::Service), None)).as_deref(),
+        Some("a")
+    );
+    assert_eq!(
+        effective_name(old.lookup(&target(PolicyTargetKind::Service), None)).as_deref(),
+        Some("b")
+    );
+    let generation = store.snapshot().generation();
+    store.replace_all(HashMap::from([
+        ("tenant/b".into(), replacement),
+        ("tenant/a".into(), newer),
+    ]));
+    assert_eq!(store.snapshot().generation(), generation);
 }

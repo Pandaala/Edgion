@@ -9,7 +9,6 @@ use super::health_check::ServiceHealthCheck;
 use super::lb_policy::{ConsistentHashOn, ParsedLBPolicy};
 use super::outlier_detection::OutlierDetectionConfig;
 use super::upstream_authority::{validate_upstream_authority, UpstreamAuthorityConfig};
-use kube::core::ObjectMeta;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -33,6 +32,12 @@ pub struct EdgionBackendTrafficPolicySpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub current_status: Option<EdgionBackendTrafficPolicyStatus>,
+
+    /// Complete Controller-derived creation instant for policy arbitration.
+    /// Recomputed from source metadata on every parse; not operator input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub prepared_precedence: Option<super::common::policy_precedence::PreparedPolicyPrecedence>,
 
     /// Homogeneous Service or EdgionBackend targets in the policy namespace.
     #[schemars(length(min = 1))]
@@ -434,18 +439,6 @@ impl LoadBalancerConfig {
             }
         }
     }
-}
-
-/// Oldest-wins conflict ordering: lower key wins. Absent creationTimestamp
-/// (file-system conf center) loses to any timestamped policy; final tie-break
-/// is the resource name.
-pub fn precedence_key(meta: &ObjectMeta) -> (i64, String) {
-    let ts = meta
-        .creation_timestamp
-        .as_ref()
-        .map(|t| t.0.timestamp())
-        .unwrap_or(i64::MAX);
-    (ts, meta.name.clone().unwrap_or_default())
 }
 
 #[cfg(test)]

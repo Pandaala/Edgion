@@ -10,8 +10,9 @@ use crate::backends::degrade_threshold::get_degrade_threshold_store;
 use crate::backends::health::check::{get_hc_config_store, get_health_check_manager};
 use crate::backends::outlier_detection::get_outlier_detection_store;
 use arc_swap::ArcSwap;
+use edgion_resources::resources::common::policy_precedence::policy_precedence_key;
 use edgion_resources::resources::edgion_backend_traffic_policy::{
-    precedence_key, PolicyTargetKey, PolicyTargetKind, ResolvedPolicyTargetClass, RetryConstraintConfig,
+    PolicyTargetKey, PolicyTargetKind, ResolvedPolicyTargetClass, RetryConstraintConfig,
 };
 use edgion_resources::resources::lb_policy::ParsedLBPolicy;
 use edgion_resources::resources::outlier_detection::OutlierDetectionResolved;
@@ -41,7 +42,7 @@ struct PreparedPolicy {
     policy: Arc<EdgionBackendTrafficPolicy>,
     eligible: bool,
     target_keys: Vec<PolicyTargetKey>,
-    precedence: (i64, String),
+    precedence: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Effective destination policy captured once by a request. Live retry
@@ -235,10 +236,16 @@ impl BackendTrafficPolicyStore {
                 )
             })
         });
-        let eligible = policy.spec.get_validation_errors().is_empty() && class_matches && !target_keys.is_empty();
+        let eligible = policy.spec.prepared_precedence.is_some()
+            && policy.spec.get_validation_errors().is_empty()
+            && class_matches
+            && !target_keys.is_empty();
         PreparedPolicy {
             key,
-            precedence: precedence_key(&policy.metadata),
+            precedence: policy
+                .spec
+                .prepared_precedence
+                .and_then(|prepared| prepared.creation_timestamp),
             policy,
             eligible,
             target_keys,
@@ -250,6 +257,7 @@ impl BackendTrafficPolicyStore {
             && left.metadata.namespace == right.metadata.namespace
             && left.metadata.uid == right.metadata.uid
             && left.metadata.creation_timestamp == right.metadata.creation_timestamp
+            && left.spec.prepared_precedence == right.spec.prepared_precedence
             && left.spec.target_refs == right.spec.target_refs
             && left.spec.resolved_target_class == right.spec.resolved_target_class
             && left.spec.load_balancer == right.spec.load_balancer
@@ -308,7 +316,11 @@ impl BackendTrafficPolicyStore {
             }
         }
         for candidates in index.values_mut() {
-            candidates.sort_by_key(|prepared| prepared.precedence.clone());
+            candidates.sort_by(|a, b| {
+                policy_precedence_key(a.precedence, a.policy.metadata.name.as_deref().unwrap_or_default()).cmp(
+                    &policy_precedence_key(b.precedence, b.policy.metadata.name.as_deref().unwrap_or_default()),
+                )
+            });
         }
         index
     }
@@ -334,7 +346,11 @@ impl BackendTrafficPolicyStore {
                 if !list.iter().any(|prepared| Arc::ptr_eq(&prepared.policy, &new.policy)) {
                     list.push(Arc::clone(new));
                 }
-                list.sort_by_key(|prepared| prepared.precedence.clone());
+                list.sort_by(|a, b| {
+                    policy_precedence_key(a.precedence, a.policy.metadata.name.as_deref().unwrap_or_default()).cmp(
+                        &policy_precedence_key(b.precedence, b.policy.metadata.name.as_deref().unwrap_or_default()),
+                    )
+                });
             }
         }
     }

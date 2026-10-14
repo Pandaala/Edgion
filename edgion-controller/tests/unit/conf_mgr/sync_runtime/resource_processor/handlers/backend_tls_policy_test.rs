@@ -85,6 +85,7 @@ fn make_btp(ns: &str, name: &str, target_svc: &str, creation_ts: &str) -> Backen
             ..Default::default()
         },
         spec: BackendTLSPolicySpec {
+            prepared_precedence: None,
             current_status: None,
             target_refs: vec![BackendTLSPolicyTargetRef {
                 group: "".to_string(),

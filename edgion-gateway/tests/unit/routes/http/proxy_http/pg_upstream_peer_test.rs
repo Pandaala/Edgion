@@ -848,6 +848,11 @@ fn service_policy_fields(
             ..Default::default()
         },
         spec: EdgionBackendTrafficPolicySpec {
+            prepared_precedence: Some(
+                edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
+                    creation_timestamp: Some("2026-01-01T00:00:00Z".parse().expect("rfc3339")),
+                },
+            ),
             current_status: None,
             target_refs: vec![PolicyTargetRef {
                 group: Some(String::new()),
@@ -1031,6 +1036,11 @@ fn begin_upstream_attempt_does_not_recapture_on_retry() {
             ..Default::default()
         },
         spec: EdgionBackendTrafficPolicySpec {
+            prepared_precedence: Some(
+                edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
+                    creation_timestamp: Some("2026-01-01T00:00:00Z".parse().expect("rfc3339")),
+                },
+            ),
             current_status: None,
             target_refs: vec![PolicyTargetRef {
                 group: Some(String::new()),
@@ -1076,6 +1086,11 @@ fn begin_upstream_attempt_does_not_recapture_on_retry() {
             ..Default::default()
         },
         spec: EdgionBackendTrafficPolicySpec {
+            prepared_precedence: Some(
+                edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
+                    creation_timestamp: Some("2026-01-01T00:00:00Z".parse().expect("rfc3339")),
+                },
+            ),
             current_status: None,
             target_refs: vec![PolicyTargetRef {
                 group: Some(String::new()),
@@ -1135,6 +1150,11 @@ fn grpc_begin_upstream_attempt_captures_without_selected_backend() {
             ..Default::default()
         },
         spec: EdgionBackendTrafficPolicySpec {
+            prepared_precedence: Some(
+                edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
+                    creation_timestamp: Some("2026-01-01T00:00:00Z".parse().expect("rfc3339")),
+                },
+            ),
             current_status: None,
             target_refs: vec![PolicyTargetRef {
                 group: Some(String::new()),

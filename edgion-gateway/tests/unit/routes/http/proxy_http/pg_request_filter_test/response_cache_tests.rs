@@ -886,7 +886,7 @@ async fn response_cache_real_tail_to_peer_store_reload_discards_fill_and_preserv
                 let tls = serde_json::from_value(json!({
                     "metadata":{"namespace":"cache-c0","name":"cache-c1-drift-tls"},
                     "spec":{"targetRefs":[{"group":"","kind":"Service","name":"unrelated-drift-origin"}],
-                        "resolvedTargetClass":"service","validation":{"hostname":"backend.example.com","wellKnownCACertificates":"System"},"useSystemCa":true}
+                        "resolvedTargetClass":"service","preparedPrecedence":{},"validation":{"hostname":"backend.example.com","wellKnownCACertificates":"System"},"useSystemCa":true}
                 })).unwrap();
                 store.update(
                     HashMap::from([(ActualPolicyCleanup::TLS_KEY.into(), Arc::new(tls))]),
@@ -901,7 +901,7 @@ async fn response_cache_real_tail_to_peer_store_reload_discards_fill_and_preserv
                 let traffic = serde_json::from_value(json!({
                     "metadata":{"namespace":"cache-c0","name":"cache-c1-drift-traffic"},
                     "spec":{"targetRefs":[{"group":"","kind":"Service","name":"origin"}],
-                        "resolvedTargetClass":"service","connection":{"connectTimeout":"1s"}}
+                        "resolvedTargetClass":"service","preparedPrecedence":{},"connection":{"connectTimeout":"1s"}}
                 }))
                 .unwrap();
                 store.partial_update_policies(

@@ -366,7 +366,7 @@ request-visible DashMaps.
 
 - **Arbitration** (`reapply_target(PolicyTargetKey)`): among eligible cached
   policies whose `targetRefs` include the typed target, pick the minimum
-  `precedence_key` (oldest `creationTimestamp`, then name) — same rule as
+  `common::policy_precedence::policy_precedence_key` (oldest complete creation instant, then name) — same rule as
   `BackendTLSPolicy`. The winner's request-visible sections are published in
   one `EffectiveBackendTrafficPolicy`. Health/outlier **status** stays live
   and is not frozen into the generation.
@@ -522,3 +522,15 @@ uses its strict typed explicit namespace/name object contract and cluster owner;
 an invalid configured reference yields System without trying its inline list or
 another EGC. Inline-only settings and TTL do not acquire object-reference authority
 requirements. Controller remains responsible for tenant ReferenceGrant stripping.
+
+### Policy precedence precision
+
+BTP and EBTP cold preparation consume schema-hidden `spec.preparedPrecedence`,
+derived on every Controller parse from source metadata. Its chrono timestamp
+preserves fractional precision through conf-sync List/Watch; metadata Time is
+not a fallback. Prepared missing time sorts last, whereas missing preparation is
+invalid. BTP retains invalid target occupancy, and EBTP withdraws eligibility.
+Explicit resource equality includes the carrier so a fraction-only replacement
+cannot reuse obsolete precedence. Existing immutable publication, target-local
+rebuilds, prepared-owner sharing and winner-first native TLS construction remain
+in place. This is the ARCH-055 precision repair, not a new arbitration policy.

@@ -362,21 +362,15 @@ fn validation_rejects_bad_specs() {
 
 #[test]
 fn precedence_key_orders_oldest_then_name() {
-    use kube::core::ObjectMeta;
-    let mk = |name: &str, ts: Option<&str>| ObjectMeta {
-        name: Some(name.into()),
-        creation_timestamp: ts
-            .map(|t| k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(t.parse().expect("rfc3339"))),
-        ..Default::default()
-    };
-    let older = precedence_key(&mk("b", Some("2026-01-01T00:00:00Z")));
-    let newer = precedence_key(&mk("a", Some("2026-06-01T00:00:00Z")));
-    let no_ts = precedence_key(&mk("a", None));
+    use crate::resources::common::policy_precedence::policy_precedence_key;
+    let older = policy_precedence_key(Some("2026-01-01T00:00:00Z".parse().unwrap()), "b");
+    let newer = policy_precedence_key(Some("2026-06-01T00:00:00Z".parse().unwrap()), "a");
+    let no_ts = policy_precedence_key(None, "a");
     assert!(older < newer, "older timestamp wins regardless of name");
     assert!(newer < no_ts, "any timestamp beats absent timestamp");
     // Equal timestamps: the remaining tie breaks by name lexicographically.
-    let tie_a = precedence_key(&mk("a", Some("2026-01-01T00:00:00Z")));
-    let tie_b = precedence_key(&mk("b", Some("2026-01-01T00:00:00Z")));
+    let tie_a = policy_precedence_key(Some("2026-01-01T00:00:00Z".parse().unwrap()), "a");
+    let tie_b = policy_precedence_key(Some("2026-01-01T00:00:00Z".parse().unwrap()), "b");
     assert!(tie_a < tie_b, "equal timestamps break ties by name (a < b)");
 }
 
@@ -386,6 +380,7 @@ fn upstream_authority_validation_flows_through_spec() {
     use crate::resources::upstream_authority::UpstreamAuthorityConfig;
 
     let base = |ua: Option<UpstreamAuthorityConfig>, hc: bool| EdgionBackendTrafficPolicySpec {
+        prepared_precedence: None,
         current_status: None,
         target_refs: vec![PolicyTargetRef {
             group: Some(String::new()),

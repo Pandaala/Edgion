@@ -44,10 +44,15 @@ fn policy(
         metadata: ObjectMeta {
             name: Some(name.to_string()),
             namespace: Some(ns.to_string()),
-            creation_timestamp: creation,
+            creation_timestamp: creation.clone(),
             ..Default::default()
         },
         spec: EdgionBackendTrafficPolicySpec {
+            prepared_precedence: Some(
+                edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
+                    creation_timestamp: creation.as_ref().map(|time| time.0),
+                },
+            ),
             current_status: None,
             target_refs: vec![PolicyTargetRef {
                 group: Some(String::new()),
@@ -81,6 +86,11 @@ fn ai_policy(ns: &str, name: &str, target: &str, percent: u8, timeout: &str) -> 
             ..Default::default()
         },
         spec: EdgionBackendTrafficPolicySpec {
+            prepared_precedence: Some(
+                edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
+                    creation_timestamp: Some(ts("2026-01-01T00:00:00Z").0),
+                },
+            ),
             current_status: None,
             target_refs: vec![PolicyTargetRef {
                 group: Some("edgion.io".to_string()),
@@ -303,6 +313,11 @@ fn invalid_policy_is_skipped() {
             ..Default::default()
         },
         spec: EdgionBackendTrafficPolicySpec {
+            prepared_precedence: Some(
+                edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
+                    creation_timestamp: Some(ts("2026-01-01T00:00:00Z").0),
+                },
+            ),
             current_status: None,
             target_refs: vec![PolicyTargetRef {
                 group: Some(String::new()),
@@ -1981,4 +1996,78 @@ fn distinct_service_fanout_shares_prepared_owner_across_publications() {
         }
         store.full_set_policies(HashMap::new());
     }
+}
+
+#[test]
+fn policy_precedence_fraction_only_replacement_and_unprepared_withdrawal() {
+    let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+    let store = BackendTrafficPolicyStore::new();
+    let make = |name: &str, fraction: &str| {
+        let mut value = policy(
+            "precision",
+            name,
+            "backend",
+            Some(ts(&format!("2026-01-01T00:00:00.{fraction}Z"))),
+            None,
+            None,
+            false,
+            false,
+        );
+        // Simulate actual wire metadata rounding; the prepared instant is the
+        // only changed input on subsequent fractional replacements.
+        Arc::make_mut(&mut value).metadata.creation_timestamp = Some(ts("2026-01-01T00:00:00Z"));
+        value
+    };
+    let key = service_target("precision", "backend");
+    let older = make("b", "100");
+    let newer = make("a", "900");
+    store.full_set_policies(HashMap::from([
+        ("precision/b".into(), older.clone()),
+        ("precision/a".into(), newer.clone()),
+    ]));
+    let old = store.snapshot();
+    let old_effective = old.get_effective(&key).unwrap();
+    let old_prepared = old.inner.policies.get("precision/b").unwrap().clone();
+    assert_eq!(old_effective.winning_policy_key, "precision/b");
+    store.partial_update_policies(
+        HashMap::new(),
+        HashMap::from([("precision/b".into(), Arc::new((*older).clone()))]),
+        HashSet::new(),
+    );
+    assert_eq!(store.snapshot().generation(), old.generation());
+    assert!(Arc::ptr_eq(
+        &old_prepared,
+        store.snapshot().inner.policies.get("precision/b").unwrap()
+    ));
+    assert!(Arc::ptr_eq(&old_effective, &store.get_effective(&key).unwrap()));
+    let replacement = make("b", "950");
+    assert_eq!(replacement.metadata, older.metadata);
+    store.partial_update_policies(
+        HashMap::new(),
+        HashMap::from([("precision/b".into(), replacement.clone())]),
+        HashSet::new(),
+    );
+    assert_eq!(store.snapshot().generation(), old.generation() + 1);
+    assert!(!Arc::ptr_eq(
+        &old_prepared,
+        store.snapshot().inner.policies.get("precision/b").unwrap()
+    ));
+    assert_eq!(store.get_effective(&key).unwrap().winning_policy_key, "precision/a");
+    assert_eq!(old.get_effective(&key).unwrap().winning_policy_key, "precision/b");
+    let generation = store.snapshot().generation();
+    store.full_set_policies(HashMap::from([
+        ("precision/b".into(), replacement),
+        ("precision/a".into(), newer.clone()),
+    ]));
+    assert_eq!(store.snapshot().generation(), generation);
+    let mut unprepared = (*newer).clone();
+    unprepared.spec.prepared_precedence = None;
+    store.partial_update_policies(
+        HashMap::new(),
+        HashMap::from([("precision/a".into(), Arc::new(unprepared))]),
+        HashSet::new(),
+    );
+    assert_eq!(store.get_effective(&key).unwrap().winning_policy_key, "precision/b");
+    assert!(store.snapshot().inner.policies.contains_key("precision/a"));
+    store.full_set_policies(HashMap::new());
 }

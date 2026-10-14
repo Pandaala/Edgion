@@ -71,6 +71,7 @@ use chrono::{DateTime, Utc};
 #[cfg(test)]
 use edgion_resources::prelude_resources::EdgionBackend;
 use edgion_resources::prelude_resources::{BackendTLSPolicy, EdgionBackendTrafficPolicy};
+use edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence;
 use edgion_resources::resources::common::{ParentReference, PolicyAncestorStatus};
 use edgion_resources::resources::edgion_backend_traffic_policy::{
     EdgionBackendTrafficPolicyStatus, PolicyTargetKey, PolicyTargetKind, ResolvedPolicyTargetClass,
@@ -475,6 +476,9 @@ impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicy
         // The transport marker is controller-owned and never trusted from any
         // input backend. Clear it before the complete current-generation stage.
         p.spec.resolved_target_class = None;
+        p.spec.prepared_precedence = Some(PreparedPolicyPrecedence {
+            creation_timestamp: p.metadata.creation_timestamp.as_ref().map(|time| time.0),
+        });
 
         // Clear old registrations, then re-register with the current targetRefs.
         // Two managers are updated:
@@ -518,7 +522,10 @@ impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicy
         new_target_keys.sort();
         new_target_keys.dedup();
 
-        let new_timestamp = p.metadata.creation_timestamp.as_ref().map(|t| t.0);
+        let new_timestamp = p
+            .spec
+            .prepared_precedence
+            .and_then(|prepared| prepared.creation_timestamp);
         state.set_timestamp(&policy_resource_key, new_timestamp);
 
         if should_requeue_siblings(&old_target_keys, &new_target_keys, old_timestamp, new_timestamp) {

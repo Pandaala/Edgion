@@ -548,6 +548,11 @@ fn service_pool_client_gets_pinned_resolver_before_authority_policy_exists() {
                 ..Default::default()
             },
             spec: EdgionBackendTrafficPolicySpec {
+                prepared_precedence: Some(
+                    edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
+                        creation_timestamp: None,
+                    },
+                ),
                 current_status: None,
                 target_refs: vec![PolicyTargetRef {
                     group: Some(String::new()),
@@ -628,6 +633,11 @@ fn resolve_probe_base_uses_authority_health_check_host() {
                 ..Default::default()
             },
             spec: EdgionBackendTrafficPolicySpec {
+                prepared_precedence: Some(
+                    edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
+                        creation_timestamp: None,
+                    },
+                ),
                 current_status: None,
                 target_refs: vec![PolicyTargetRef {
                     group: Some(String::new()),

@@ -221,6 +221,11 @@ fn effective_peer_sets_profile_group_key_without_sans() {
             ..Default::default()
         },
         spec: BackendTLSPolicySpec {
+            prepared_precedence: Some(
+                edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
+                    creation_timestamp: None,
+                },
+            ),
             current_status: None,
             target_refs: vec![BackendTLSPolicyTargetRef {
                 group: String::new(),

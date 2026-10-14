@@ -132,3 +132,32 @@ the new raw policy while exact identity/CA/SAN input equality permits prepared
 Arc reuse. Native outcomes, raw policy and complete profile stay in the same
 immutable effective object; preparation adds no cache, second publication or
 unrelated-target scan. Existing captured handles retain their original objects.
+
+## Complete precedence across transport (ARCH-055)
+
+The former seconds-based Gateway key and whole-resource status seeding could
+reverse two same-second fractional candidates: `b` at `.100` must beat `a` at
+`.900`. Resources now owns complete-instant ordering with explicit missing-last
+semantics. Both Controller handlers overwrite a schema-hidden serialized
+`preparedPrecedence` carrier from source metadata, and policy status seeding
+reuses typed status replacement to preserve that metadata. Gateway cold
+eligibility requires preparation, and explicit resource equality includes it;
+there is no rounded-metadata fallback. Prepared missing time is distinct from
+unprepared input. Existing snapshot/target ownership and native TLS preparation
+remain authoritative; this does not supersede ARCH-023/024/099.
+
+Regression coverage uses one shared checked wire fixture. Controller tests run
+canonical static parsing, real registered policy processors, serial sibling
+queues, persisted status seeding and actual ServerCache List/Watch serialization.
+Gateway dispatch tests consume the same complete expected wire objects through
+production List/Watch decoders and real policy ConfHandlers. Fraction-only updates,
+missing preparation, captured snapshots and equivalent replay have store-level
+regressions. Resources and Controller ingress tests cover chrono extrema,
+fractions, extended years and leap seconds. This composes in-process boundaries;
+it does not claim socket-level integration or a Kubernetes production incident.
+Fresh execution results belong to the implementation verification record.
+
+A new Gateway rejects unprepared output from an old Controller until coordinated
+upgrade/reprocessing supplies current prepared policies. Re-evaluate if source
+metadata ingestion, status seeding, timestamp serialization, eligibility,
+resource equality or precedence ownership changes.

@@ -658,3 +658,230 @@ async fn delete_flows_through_worker_arm() {
     assert!(matches!(result, WorkItemResult::Deleted { .. }));
     assert!(processor.get("obj1").is_none());
 }
+
+mod policy_precedence_test {
+    use super::*;
+    use crate::conf_mgr::conf_center::common::parse_resource_content_offline;
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::{
+        BackendTlsPolicyHandler, EdgionBackendTrafficPolicyHandler,
+    };
+    use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceRef};
+    use crate::conf_sync::conf_server::WatchObj;
+    use edgion_resources::resources::common::ParentReference;
+    use edgion_resources::{BackendTLSPolicy, EdgionBackendTrafficPolicy, ResourceKind};
+    use k8s_openapi::api::core::v1::Service;
+    use serde_json::{json, Value};
+    use std::time::Duration;
+
+    const FIXTURE: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../edgion-resources/tests/fixtures/policy_precedence_wire.json"
+    ));
+
+    fn runtime_with_backend() -> Arc<ControllerRuntime> {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let service: Service = serde_json::from_value(
+            json!({"metadata":{"name":"backend","namespace":"precision"},"spec":{"ports":[{"name":"https","port":443}]}}),
+        )
+        .unwrap();
+        let raw = Arc::new(LocalRawStore::new());
+        raw.upsert("precision/backend".into(), Arc::new(service.clone()));
+        let processor = Arc::new(ResourceProcessor::<Service>::new(
+            "Service",
+            16,
+            Arc::new(TestHandler),
+            runtime.clone(),
+        ));
+        processor.set_raw_store(raw);
+        processor.save(service, None);
+        runtime.processor_registry.register(processor);
+        runtime.service_ref_mgr.add_ref(
+            "precision/backend".into(),
+            ResourceRef::new(ResourceKind::HTTPRoute, Some("precision".into()), "route".into()),
+        );
+        runtime.gateway_route_index.update_route(
+            ResourceKind::HTTPRoute,
+            "precision/route",
+            &[ParentReference {
+                group: Some("gateway.networking.k8s.io".into()),
+                kind: Some("Gateway".into()),
+                namespace: Some("precision".into()),
+                name: "gateway".into(),
+                section_name: None,
+                port: None,
+            }],
+            "precision",
+        );
+        runtime
+    }
+
+    // Remove only volatile transport metadata and native status. Every store-relevant
+    // spec field is compared against the exact object consumed by Gateway tests.
+    fn stable_wire(mut wire: Value) -> Value {
+        wire.as_object_mut().unwrap().remove("status");
+        wire["spec"].as_object_mut().unwrap().remove("currentStatus");
+        let meta = wire["metadata"].as_object_mut().unwrap();
+        meta.remove("resourceVersion");
+        meta.remove("annotations");
+        wire
+    }
+
+    fn accepted(status: &Value) -> &Value {
+        let ancestors = status["ancestors"].as_array().unwrap();
+        let ancestor = ancestors
+            .iter()
+            .find(|ancestor| ancestor["ancestorRef"]["name"] == "gateway")
+            .expect("actual Gateway ancestor");
+        ancestor["conditions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|condition| condition["type"] == "Accepted")
+            .unwrap()
+    }
+
+    macro_rules! policy_boundary_test {
+        ($test:ident, $ty:ty, $handler:ty) => {
+            #[tokio::test]
+            async fn $test() {
+                let fixtures: Vec<Value> = serde_json::from_str(FIXTURE).unwrap();
+                let fixture = fixtures.iter().find(|value| value["kind"] == <$ty>::kind_name()).unwrap();
+                for initial_status in [None, Some("not-json"), Some("{\"ancestors\":false}"), Some("{\"ancestors\":[]}"), Some("{\"conditions\":[{\"type\":\"Ready\",\"status\":\"False\",\"reason\":\"ParseError\",\"message\":\"invalid\"}]}")] {
+                    let runtime = runtime_with_backend();
+                    let processor = Arc::new(ResourceProcessor::<$ty>::new(<$ty>::kind_name(), 32, Arc::new(<$handler>::new("test.edgion.io/controller".into())), runtime.clone()));
+                    runtime.processor_registry.register(processor.clone());
+                    let sources = fixture["source"].as_array().unwrap();
+                    for source in sources {
+                        let mut forged = source.clone();
+                        forged["spec"]["preparedPrecedence"] = json!({"creationTimestamp":"1900-01-01T00:00:00Z"});
+                        let resource: $ty = parse_resource_content_offline(&forged.to_string()).unwrap();
+                        processor.on_init_apply(resource, initial_status.map(str::to_owned)).await;
+                    }
+                    processor.on_init_done();
+                    let queue = processor.workqueue();
+                    // Parsing a queues the registered older sibling b. Exercise the
+                    // real queue and original source reread, not a manual handler call.
+                    let item = tokio::time::timeout(Duration::from_secs(3), queue.dequeue()).await.unwrap().unwrap();
+                    assert_eq!(item.key, "precision/b");
+                    let prior = processor.get(&item.key).unwrap();
+                    let status = serde_json::to_string(&prior.status).unwrap();
+                    let resource: $ty = parse_resource_content_offline(&sources[0].to_string()).unwrap();
+                    processor.process_work_item(&item.key, Some(resource), Some(status), item.trigger_chain).await;
+                    queue.done(&item.key);
+                    for (index, name) in ["b", "a"].iter().enumerate() {
+                        let cached = processor.get(&format!("precision/{name}")).unwrap();
+                        assert_eq!(cached.metadata.creation_timestamp.as_ref().unwrap().0,
+                            sources[index]["metadata"]["creationTimestamp"].as_str().unwrap().parse::<chrono::DateTime<chrono::Utc>>().unwrap());
+                        assert_eq!(cached.spec.prepared_precedence.unwrap().creation_timestamp, cached.metadata.creation_timestamp.map(|time| time.0));
+                        let status = serde_json::to_value(&cached.status).unwrap();
+                        assert_eq!(accepted(&status)["reason"], if index == 0 { "Accepted" } else { "Conflicted" });
+                    }
+                    let cache = processor.cache();
+                    let (list, version) = cache.list_json().unwrap();
+                    let resources: Vec<Value> = serde_json::from_str(&list).unwrap();
+                    for expected in fixture["wire"].as_array().unwrap() {
+                        let actual = resources.iter().find(|resource| resource["metadata"]["name"] == expected["metadata"]["name"]).unwrap();
+                        assert_eq!(stable_wire(actual.clone()), *expected);
+                    }
+                    // Normal no-op reconciliation with a valid persisted sidecar
+                    // preserves the complete instant and condition transition time.
+                    let before = processor.get("precision/b").unwrap();
+                    let mut before_status = serde_json::to_value(&before.status).unwrap();
+                    // A fixed old transition time makes this assertion distinguish
+                    // preservation from recomputation within the same wall-clock second.
+                    for ancestor in before_status["ancestors"].as_array_mut().unwrap() {
+                        for condition in ancestor["conditions"].as_array_mut().unwrap() {
+                            condition["lastTransitionTime"] = json!("2000-01-01T00:00:00Z");
+                        }
+                    }
+                    let mut watch = cache.watch_json("precision-test".into(), "precision-test".into(), version);
+                    processor.on_event_key("precision/b".into()).await;
+                    let item = tokio::time::timeout(Duration::from_secs(3), queue.dequeue()).await.unwrap().unwrap();
+                    assert_eq!(item.key, "precision/b");
+                    processor.process_work_item(&item.key, Some(parse_resource_content_offline::<$ty>(&sources[0].to_string()).unwrap()), Some(before_status.to_string()), item.trigger_chain).await;
+                    queue.done(&item.key);
+                    let after = processor.get("precision/b").unwrap();
+                    let after_status = serde_json::to_value(&after.status).unwrap();
+                    assert!(accepted(&before_status)["lastTransitionTime"].as_str().is_some());
+                    assert_eq!(accepted(&before_status)["lastTransitionTime"], accepted(&after_status)["lastTransitionTime"]);
+                    let response = tokio::time::timeout(Duration::from_secs(3), watch.recv()).await.unwrap().unwrap();
+                    assert!(response.err.is_none(), "{:?}", response.err);
+                    let events: Vec<Value> = serde_json::from_str(&response.data).unwrap();
+                    assert!(events.iter().any(|event| stable_wire(event["data"].clone()) == fixture["wire"][0]));
+                    drop(watch);
+
+                    let (_, version) = cache.list_json().unwrap();
+                    let mut watch = cache.watch_json("precision-update".into(), "precision-update".into(), version);
+                    processor.on_event_key("precision/b".into()).await;
+                    let item = tokio::time::timeout(Duration::from_secs(3), queue.dequeue()).await.unwrap().unwrap();
+                    processor.process_work_item(&item.key, Some(parse_resource_content_offline::<$ty>(&fixture["replacementSource"].to_string()).unwrap()), Some(after_status.to_string()), item.trigger_chain).await;
+                    queue.done(&item.key);
+                    let response = tokio::time::timeout(Duration::from_secs(3), watch.recv()).await.unwrap().unwrap();
+                    assert!(response.err.is_none());
+                    let events: Vec<Value> = serde_json::from_str(&response.data).unwrap();
+                    assert!(events.iter().any(|event| stable_wire(event["data"].clone()) == fixture["replacementWire"]));
+                    drop(watch);
+                    // A fraction-only replacement must enqueue a and change its
+                    // real ancestor status after serial processing.
+                    let sibling = tokio::time::timeout(Duration::from_secs(3), queue.dequeue()).await.unwrap().unwrap();
+                    assert_eq!(sibling.key, "precision/a");
+                    let prior = processor.get(&sibling.key).unwrap();
+                    processor.process_work_item(&sibling.key, Some(parse_resource_content_offline::<$ty>(&sources[1].to_string()).unwrap()), Some(serde_json::to_string(&prior.status).unwrap()), sibling.trigger_chain).await;
+                    queue.done(&sibling.key);
+                    assert_eq!(accepted(&serde_json::to_value(processor.get("precision/a").unwrap().status).unwrap())["reason"], "Accepted");
+                    assert_eq!(accepted(&serde_json::to_value(processor.get("precision/b").unwrap().status).unwrap())["reason"], "Conflicted");
+                    assert!(queue.is_empty());
+                }
+            }
+        };
+    }
+
+    policy_boundary_test!(
+        policy_precedence_tls_source_status_list_watch,
+        BackendTLSPolicy,
+        BackendTlsPolicyHandler
+    );
+    policy_boundary_test!(
+        policy_precedence_traffic_source_status_list_watch,
+        EdgionBackendTrafficPolicy,
+        EdgionBackendTrafficPolicyHandler
+    );
+
+    #[tokio::test]
+    async fn policy_precedence_canonical_ingress_domain_and_missing_source() {
+        let fixtures: Vec<Value> = serde_json::from_str(FIXTURE).unwrap();
+        macro_rules! check {
+            ($ty:ty, $handler:ty) => {{
+                let fixture = fixtures.iter().find(|value| value["kind"] == <$ty>::kind_name()).unwrap();
+                let runtime = runtime_with_backend();
+                let processor = ResourceProcessor::<$ty>::new(<$ty>::kind_name(), 32, Arc::new(<$handler>::new("test.edgion.io/controller".into())), runtime);
+                let instants = [
+                    Some(chrono::DateTime::<chrono::Utc>::MIN_UTC),
+                    Some(chrono::DateTime::<chrono::Utc>::MAX_UTC),
+                    Some("2016-12-31T23:59:60.123456789Z".parse().unwrap()),
+                    Some("1969-12-31T23:59:59.999999999Z".parse().unwrap()),
+                    Some("+10000-01-01T00:00:00.123456789Z".parse().unwrap()),
+                    Some("-0001-01-01T00:00:00.123456789Z".parse().unwrap()),
+                    Some("2026-01-01T01:00:00.123456789+01:00".parse().unwrap()),
+                    None,
+                ];
+                for instant in instants {
+                    let mut source = fixture["source"][0].clone();
+                    source["metadata"]["creationTimestamp"] = serde_json::to_value(instant).unwrap();
+                    source["spec"]["preparedPrecedence"] = json!({"creationTimestamp":"1900-01-01T00:00:00Z"});
+                    let resource: $ty = parse_resource_content_offline(&source.to_string()).unwrap();
+                    assert_eq!(resource.metadata.creation_timestamp.as_ref().map(|time| time.0), instant);
+                    let result = processor.on_init_apply(resource, Some("{\"ancestors\":[]}".into())).await;
+                    let WorkItemResult::Processed { obj, .. } = result else { panic!("policy must be processed") };
+                    assert_eq!(obj.metadata.creation_timestamp.as_ref().map(|time| time.0), instant);
+                    assert_eq!(obj.spec.prepared_precedence.unwrap().creation_timestamp, instant);
+                    let wire = serde_json::to_string(&obj).unwrap();
+                    let decoded: $ty = serde_json::from_str(&wire).unwrap();
+                    assert_eq!(decoded.spec.prepared_precedence.unwrap().creation_timestamp, instant);
+                }
+            }};
+        }
+        check!(BackendTLSPolicy, BackendTlsPolicyHandler);
+        check!(EdgionBackendTrafficPolicy, EdgionBackendTrafficPolicyHandler);
+    }
+}

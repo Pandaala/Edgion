@@ -998,3 +998,97 @@ fn backend_watch_unsafe_batch_aborts_later_events_and_relist_restores_runtime() 
     assert_eq!(store.keys(), vec!["ns-1/backend-restored"]);
     assert_eq!(&*handler.full_set_sizes.lock(), &[1, 0, 1, 0, 1]);
 }
+
+// This is the same complete wire fixture checked against production Controller
+// List/Watch output. Do not synthesize preparation or eligibility in this consumer.
+const POLICY_PRECEDENCE_WIRE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../edgion-resources/tests/fixtures/policy_precedence_wire.json"
+));
+
+macro_rules! policy_precedence_dispatch_test {
+    ($name:ident, $ty:ty, $store:ty, $winner:expr) => {
+        #[test]
+        fn $name() {
+            let _guard = crate::backends::policy::backend_traffic::store::GLOBAL_STORE_TEST_LOCK.lock();
+            let fixtures: Vec<serde_json::Value> = serde_json::from_str(POLICY_PRECEDENCE_WIRE).unwrap();
+            let fixture = fixtures.iter().find(|value| value["kind"] == <$ty>::kind_name()).unwrap();
+            let cache = Arc::new(RwLock::new(CacheData::<$ty>::new()));
+            let store = Arc::new(<$store>::new());
+            cache.write().set_conf_processor_for_test(Box::new(store.clone()));
+            let winner = $winner;
+            publish_list_payload(&cache, fixture["wire"].to_string().as_bytes(), 1).unwrap();
+            assert_eq!(winner(&store).as_deref(), Some("b"));
+            let old = store.snapshot();
+            let old_generation = old.generation();
+            // The replacement differs only in the prepared fraction, while
+            // serialized metadata has the exact same second.
+            assert_eq!(fixture["replacementWire"]["metadata"], fixture["wire"][0]["metadata"]);
+            let watch = serde_json::json!([{ "type":"update", "sync_version":2, "data":fixture["replacementWire"] }]);
+            apply_generic_watch_payload(&cache, &watch.to_string(), 2).unwrap();
+            CacheData::flush_compressed_events_for_test(&cache);
+            assert_eq!(winner(&store).as_deref(), Some("a"));
+            assert_eq!(store.snapshot().generation(), old_generation + 1);
+            assert_eq!(old.generation(), old_generation);
+            let partial_generation = store.snapshot().generation();
+            let final_wire = serde_json::json!([fixture["replacementWire"], fixture["wire"][1]]);
+            publish_list_payload(&cache, final_wire.to_string().as_bytes(), 3).unwrap();
+            assert_eq!(winner(&store).as_deref(), Some("a"));
+            // EBTP ignores sync-only metadata; BTP intentionally publishes it.
+            assert!(store.snapshot().generation() >= partial_generation);
+            let mut invalid = fixture["wire"][1].clone();
+            invalid["spec"].as_object_mut().unwrap().remove("preparedPrecedence");
+            let watch = serde_json::json!([{ "type":"update", "sync_version":4, "data":invalid }]);
+            apply_generic_watch_payload(&cache, &watch.to_string(), 4).unwrap();
+            CacheData::flush_compressed_events_for_test(&cache);
+            assert_eq!(winner(&store).as_deref(), Some("b"));
+            // Watch initial Add publication must agree with List publication.
+            publish_list_payload(&cache, b"[]", 5).unwrap();
+            let watch = serde_json::json!([
+                {"type":"add","sync_version":6,"data":fixture["wire"][1]},
+                {"type":"add","sync_version":7,"data":fixture["wire"][0]}
+            ]);
+            apply_generic_watch_payload(&cache, &watch.to_string(), 7).unwrap();
+            CacheData::flush_compressed_events_for_test(&cache);
+            assert_eq!(winner(&store).as_deref(), Some("b"));
+            publish_list_payload(&cache, b"[]", 8).unwrap();
+        }
+    };
+}
+
+policy_precedence_dispatch_test!(
+    policy_precedence_tls_actual_list_watch_publication,
+    edgion_resources::BackendTLSPolicy,
+    crate::backends::BackendTLSPolicyStore,
+    |store: &crate::backends::BackendTLSPolicyStore| {
+        let key = edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKey {
+            target_kind: edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKind::Service,
+            namespace: "precision".into(),
+            name: "backend".into(),
+        };
+        store
+            .snapshot()
+            .lookup(&key, None)
+            .effective()
+            .map(|effective| effective.policy.name().to_owned())
+    }
+);
+policy_precedence_dispatch_test!(
+    policy_precedence_traffic_actual_list_watch_publication,
+    edgion_resources::EdgionBackendTrafficPolicy,
+    crate::backends::policy::backend_traffic::store::BackendTrafficPolicyStore,
+    |store: &crate::backends::policy::backend_traffic::store::BackendTrafficPolicyStore| {
+        let key = edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKey {
+            target_kind: edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKind::Service,
+            namespace: "precision".into(),
+            name: "backend".into(),
+        };
+        store.get_effective(&key).map(|effective| {
+            effective
+                .winning_policy_key
+                .strip_prefix("precision/")
+                .unwrap()
+                .to_owned()
+        })
+    }
+);

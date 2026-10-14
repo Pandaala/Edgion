@@ -8,6 +8,7 @@ pub(crate) mod kubernetes_name;
 pub mod log_labels;
 pub mod outbound_request;
 pub mod outbound_tls;
+pub mod policy_precedence;
 pub mod request_template;
 pub mod secret_object_ref;
 pub mod secret_slot;

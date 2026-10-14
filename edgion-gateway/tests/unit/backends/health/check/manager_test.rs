@@ -104,6 +104,11 @@ mod resolve_probe_host_tests {
                 ..Default::default()
             },
             spec: EdgionBackendTrafficPolicySpec {
+                prepared_precedence: Some(
+                    edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
+                        creation_timestamp: None,
+                    },
+                ),
                 current_status: None,
                 target_refs: vec![PolicyTargetRef {
                     group: Some(String::new()),

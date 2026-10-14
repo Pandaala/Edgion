@@ -60,6 +60,11 @@ fn policy_store(valid: bool) -> BackendTLSPolicyStore {
         }
     }))
     .unwrap();
+    policy.spec.prepared_precedence = Some(
+        edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
+            creation_timestamp: None,
+        },
+    );
     policy.spec.resolved_target_class = Some(ResolvedPolicyTargetClass::Service);
     policy.spec.use_system_ca = true;
     if !valid {

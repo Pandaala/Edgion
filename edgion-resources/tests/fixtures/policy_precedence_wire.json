@@ -1,0 +1,301 @@
+[
+  {
+    "kind": "BackendTLSPolicy",
+    "source": [
+      {
+        "apiVersion": "gateway.networking.k8s.io/v1",
+        "kind": "BackendTLSPolicy",
+        "metadata": {
+          "namespace": "precision",
+          "name": "b",
+          "creationTimestamp": "2026-01-01T00:00:00.100Z"
+        },
+        "spec": {
+          "targetRefs": [
+            {
+              "group": "",
+              "kind": "Service",
+              "name": "backend"
+            }
+          ],
+          "validation": {
+            "hostname": "b.example.com",
+            "wellKnownCACertificates": "System"
+          }
+        }
+      },
+      {
+        "apiVersion": "gateway.networking.k8s.io/v1",
+        "kind": "BackendTLSPolicy",
+        "metadata": {
+          "namespace": "precision",
+          "name": "a",
+          "creationTimestamp": "2026-01-01T00:00:00.900Z"
+        },
+        "spec": {
+          "targetRefs": [
+            {
+              "group": "",
+              "kind": "Service",
+              "name": "backend"
+            }
+          ],
+          "validation": {
+            "hostname": "a.example.com",
+            "wellKnownCACertificates": "System"
+          }
+        }
+      }
+    ],
+    "wire": [
+      {
+        "apiVersion": "gateway.networking.k8s.io/v1",
+        "kind": "BackendTLSPolicy",
+        "metadata": {
+          "namespace": "precision",
+          "name": "b",
+          "creationTimestamp": "2026-01-01T00:00:00Z"
+        },
+        "spec": {
+          "targetRefs": [
+            {
+              "group": "",
+              "kind": "Service",
+              "name": "backend"
+            }
+          ],
+          "validation": {
+            "hostname": "b.example.com",
+            "wellKnownCACertificates": "System"
+          },
+          "resolvedTargetClass": "service",
+          "preparedPrecedence": {
+            "creationTimestamp": "2026-01-01T00:00:00.100Z"
+          },
+          "useSystemCa": true
+        }
+      },
+      {
+        "apiVersion": "gateway.networking.k8s.io/v1",
+        "kind": "BackendTLSPolicy",
+        "metadata": {
+          "namespace": "precision",
+          "name": "a",
+          "creationTimestamp": "2026-01-01T00:00:00Z"
+        },
+        "spec": {
+          "targetRefs": [
+            {
+              "group": "",
+              "kind": "Service",
+              "name": "backend"
+            }
+          ],
+          "validation": {
+            "hostname": "a.example.com",
+            "wellKnownCACertificates": "System"
+          },
+          "resolvedTargetClass": "service",
+          "preparedPrecedence": {
+            "creationTimestamp": "2026-01-01T00:00:00.900Z"
+          },
+          "useSystemCa": true
+        }
+      }
+    ],
+    "replacementSource": {
+      "apiVersion": "gateway.networking.k8s.io/v1",
+      "kind": "BackendTLSPolicy",
+      "metadata": {
+        "namespace": "precision",
+        "name": "b",
+        "creationTimestamp": "2026-01-01T00:00:00.950Z"
+      },
+      "spec": {
+        "targetRefs": [
+          {
+            "group": "",
+            "kind": "Service",
+            "name": "backend"
+          }
+        ],
+        "validation": {
+          "hostname": "b.example.com",
+          "wellKnownCACertificates": "System"
+        }
+      }
+    },
+    "replacementWire": {
+      "apiVersion": "gateway.networking.k8s.io/v1",
+      "kind": "BackendTLSPolicy",
+      "metadata": {
+        "namespace": "precision",
+        "name": "b",
+        "creationTimestamp": "2026-01-01T00:00:00Z"
+      },
+      "spec": {
+        "targetRefs": [
+          {
+            "group": "",
+            "kind": "Service",
+            "name": "backend"
+          }
+        ],
+        "validation": {
+          "hostname": "b.example.com",
+          "wellKnownCACertificates": "System"
+        },
+        "resolvedTargetClass": "service",
+        "preparedPrecedence": {
+          "creationTimestamp": "2026-01-01T00:00:00.950Z"
+        },
+        "useSystemCa": true
+      }
+    }
+  },
+  {
+    "kind": "EdgionBackendTrafficPolicy",
+    "source": [
+      {
+        "apiVersion": "edgion.io/v1",
+        "kind": "EdgionBackendTrafficPolicy",
+        "metadata": {
+          "namespace": "precision",
+          "name": "b",
+          "creationTimestamp": "2026-01-01T00:00:00.100Z"
+        },
+        "spec": {
+          "targetRefs": [
+            {
+              "group": "",
+              "kind": "Service",
+              "name": "backend"
+            }
+          ],
+          "connection": {
+            "connectTimeout": "1s"
+          }
+        }
+      },
+      {
+        "apiVersion": "edgion.io/v1",
+        "kind": "EdgionBackendTrafficPolicy",
+        "metadata": {
+          "namespace": "precision",
+          "name": "a",
+          "creationTimestamp": "2026-01-01T00:00:00.900Z"
+        },
+        "spec": {
+          "targetRefs": [
+            {
+              "group": "",
+              "kind": "Service",
+              "name": "backend"
+            }
+          ],
+          "connection": {
+            "connectTimeout": "2s"
+          }
+        }
+      }
+    ],
+    "wire": [
+      {
+        "apiVersion": "edgion.io/v1",
+        "kind": "EdgionBackendTrafficPolicy",
+        "metadata": {
+          "namespace": "precision",
+          "name": "b",
+          "creationTimestamp": "2026-01-01T00:00:00Z"
+        },
+        "spec": {
+          "targetRefs": [
+            {
+              "group": "",
+              "kind": "Service",
+              "name": "backend"
+            }
+          ],
+          "connection": {
+            "connectTimeout": "1s"
+          },
+          "resolvedTargetClass": "service",
+          "preparedPrecedence": {
+            "creationTimestamp": "2026-01-01T00:00:00.100Z"
+          }
+        }
+      },
+      {
+        "apiVersion": "edgion.io/v1",
+        "kind": "EdgionBackendTrafficPolicy",
+        "metadata": {
+          "namespace": "precision",
+          "name": "a",
+          "creationTimestamp": "2026-01-01T00:00:00Z"
+        },
+        "spec": {
+          "targetRefs": [
+            {
+              "group": "",
+              "kind": "Service",
+              "name": "backend"
+            }
+          ],
+          "connection": {
+            "connectTimeout": "2s"
+          },
+          "resolvedTargetClass": "service",
+          "preparedPrecedence": {
+            "creationTimestamp": "2026-01-01T00:00:00.900Z"
+          }
+        }
+      }
+    ],
+    "replacementSource": {
+      "apiVersion": "edgion.io/v1",
+      "kind": "EdgionBackendTrafficPolicy",
+      "metadata": {
+        "namespace": "precision",
+        "name": "b",
+        "creationTimestamp": "2026-01-01T00:00:00.950Z"
+      },
+      "spec": {
+        "targetRefs": [
+          {
+            "group": "",
+            "kind": "Service",
+            "name": "backend"
+          }
+        ],
+        "connection": {
+          "connectTimeout": "1s"
+        }
+      }
+    },
+    "replacementWire": {
+      "apiVersion": "edgion.io/v1",
+      "kind": "EdgionBackendTrafficPolicy",
+      "metadata": {
+        "namespace": "precision",
+        "name": "b",
+        "creationTimestamp": "2026-01-01T00:00:00Z"
+      },
+      "spec": {
+        "targetRefs": [
+          {
+            "group": "",
+            "kind": "Service",
+            "name": "backend"
+          }
+        ],
+        "connection": {
+          "connectTimeout": "1s"
+        },
+        "resolvedTargetClass": "service",
+        "preparedPrecedence": {
+          "creationTimestamp": "2026-01-01T00:00:00.950Z"
+        }
+      }
+    }
+  }
+]

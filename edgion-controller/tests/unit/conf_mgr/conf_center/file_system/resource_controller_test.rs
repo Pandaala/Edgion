@@ -62,6 +62,7 @@ fn make_policy() -> BackendTLSPolicy {
             ..Default::default()
         },
         spec: BackendTLSPolicySpec {
+            prepared_precedence: None,
             current_status: None,
             target_refs: vec![BackendTLSPolicyTargetRef {
                 group: "".to_string(),

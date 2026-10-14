@@ -3,14 +3,20 @@ use edgion_resources::resources::backend_tls_policy::*;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
 fn create_test_policy(namespace: &str, name: &str, target_name: &str) -> BackendTLSPolicy {
+    let creation_timestamp = chrono::Utc::now();
     BackendTLSPolicy {
         metadata: ObjectMeta {
             name: Some(name.to_string()),
             namespace: Some(namespace.to_string()),
-            creation_timestamp: Some(k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(chrono::Utc::now())),
+            creation_timestamp: Some(k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(creation_timestamp)),
             ..Default::default()
         },
         spec: BackendTLSPolicySpec {
+            prepared_precedence: Some(
+                edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
+                    creation_timestamp: Some(creation_timestamp),
+                },
+            ),
             current_status: None,
             target_refs: vec![BackendTLSPolicyTargetRef {
                 group: "".to_string(),

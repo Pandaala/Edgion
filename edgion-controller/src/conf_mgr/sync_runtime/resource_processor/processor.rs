@@ -173,6 +173,16 @@ fn seed_existing_status<T: Serialize + DeserializeOwned + 'static>(obj: &mut T, 
     if crate::conf_mgr::conf_center::common::is_error_status_sidecar(&status) {
         return;
     }
+    // Policy arbitration needs the source's complete creation instant. Replacing
+    // only typed status avoids Kubernetes Time's whole-second serialization.
+    if (obj as &dyn Any).is::<edgion_resources::BackendTLSPolicy>()
+        || (obj as &dyn Any).is::<edgion_resources::EdgionBackendTrafficPolicy>()
+    {
+        if let Err(e) = status_pipeline::replace_status(obj, status) {
+            tracing::debug!(error = %e, "Existing status not seedable into object; conditions start fresh");
+        }
+        return;
+    }
     let unknown_fields = capture_unknown_fields_sidecar(obj);
     let Ok(mut obj_value) = serde_json::to_value(&*obj) else {
         return;
@@ -653,7 +663,8 @@ where
         // 3.5. Seed previously persisted status (FileSystem/Etcd `.status`
         // sidecar) into the object, so update_condition later sees the prior
         // conditions and preserves lastTransitionTime across reconciles.
-        // This MUST run before preparse/parse: the seed is a serde roundtrip
+        // Policies replace only typed status to preserve creation-time precision.
+        // This MUST run before preparse/parse: other kinds use a serde roundtrip
         // that resets `#[serde(skip)]` runtime fields. The four ingest-only
         // unknown-field sidecars are preserved explicitly by
         // `seed_existing_status`; all other runtime fields are populated only

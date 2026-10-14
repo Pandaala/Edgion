@@ -9,6 +9,7 @@
 //! and ServiceRefManager.
 
 use chrono::{DateTime, Utc};
+use edgion_resources::resources::common::policy_precedence::policy_precedence_key;
 use edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKey;
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -111,12 +112,7 @@ impl BackendTLSPolicyState {
                 .collect()
         };
 
-        entries.sort_by(|a, b| match (&a.1, &b.1) {
-            (Some(ts_a), Some(ts_b)) => ts_a.cmp(ts_b).then_with(|| a.0.cmp(&b.0)),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => a.0.cmp(&b.0),
-        });
+        entries.sort_by(|a, b| policy_precedence_key(a.1, &a.0).cmp(&policy_precedence_key(b.1, &b.0)));
 
         entries.first().map(|(key, _)| key == policy_key).unwrap_or(true)
     }

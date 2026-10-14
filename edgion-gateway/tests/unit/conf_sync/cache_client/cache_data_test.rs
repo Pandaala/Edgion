@@ -296,6 +296,7 @@ fn compressed_replacement_add_reconciles_backend_traffic_policy_ownership() {
             "spec": {
                 "targetRefs": [{"kind": "Service", "name": target}],
                 "resolvedTargetClass": "service",
+                "preparedPrecedence": {},
                 "loadBalancer": {"type": algorithm, "degradeThreshold": threshold},
                 "healthCheck": {"active": {"type": "http"}},
                 "outlierDetection": {"consecutiveErrors": 3, "ejectionTime": "30s", "maxEjectionPercent": 50}

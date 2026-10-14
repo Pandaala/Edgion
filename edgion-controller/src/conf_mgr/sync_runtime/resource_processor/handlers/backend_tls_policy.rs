@@ -25,6 +25,7 @@ use edgion_resources::prelude_resources::EdgionBackend;
 use edgion_resources::resources::backend_tls_policy::{
     parse_client_certificate_option, BackendTLSPolicyCACertificateRef, BackendTLSPolicySpec, BackendTLSPolicyStatus,
 };
+use edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence;
 use edgion_resources::resources::common::{ParentReference, PolicyAncestorStatus};
 use edgion_resources::resources::edgion_backend_traffic_policy::{
     PolicyTargetKey, PolicyTargetKind, ResolvedPolicyTargetClass,
@@ -285,6 +286,9 @@ impl BackendTlsPolicyHandler {
         ctx.secret_ref_manager().clear_value_refs(&resource_ref);
 
         btp.spec.resolved_target_class = None;
+        btp.spec.prepared_precedence = Some(PreparedPolicyPrecedence {
+            creation_timestamp: btp.metadata.creation_timestamp.as_ref().map(|time| time.0),
+        });
         btp.spec.resolved_ca_certificates = None;
         btp.spec.resolved_client_certificate = None;
 
@@ -371,7 +375,10 @@ impl BackendTlsPolicyHandler {
         }
         new_target_keys.sort();
 
-        let new_timestamp = btp.metadata.creation_timestamp.as_ref().map(|t| t.0);
+        let new_timestamp = btp
+            .spec
+            .prepared_precedence
+            .and_then(|prepared| prepared.creation_timestamp);
         ctx.runtime()
             .backend_tls_policy
             .set_timestamp(&policy_resource_key, new_timestamp);

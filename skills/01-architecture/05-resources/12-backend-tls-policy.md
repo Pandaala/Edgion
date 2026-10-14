@@ -27,8 +27,8 @@ BackendTLSPolicy is a Gateway API standard policy resource used to configure ups
    - Register the canonical dependency before existence lookup, so target creation can self-heal a missing policy
    - Resolve Service existence or the validated raw EdgionBackend capability; all EdgionBackend variants reject `sectionName`, and external/AI targets reject plaintext endpoints
    - Set the schema-hidden `resolvedTargetClass` marker and enter conflict arbitration only after complete eligibility
-   - Store `creationTimestamp` for conflict-priority ordering
-   - Requeue old siblings (when targets change, old siblings need to re-evaluate their conflict status)
+   - Recompute schema-hidden `preparedPrecedence` from complete source `creationTimestamp`, and store that same instant for conflict-priority ordering
+   - Requeue old and new siblings only when the eligible target set or complete creation instant changes
 2. **Clear stale references**: clear records for this BackendTLSPolicy in SecretRefManager
 3. **Resolve CA certificates**: use `BackendTlsRefs` on the actual policy after the shared native eight-reference bound:
    - Borrow each CA ordinal and validate its native local target before effects
@@ -41,7 +41,7 @@ BackendTLSPolicy is a Gateway API standard policy resource used to configure ups
 
 ### on_change
 
-Requeue current siblings (other BackendTLSPolicies sharing the same target) so their conflict status is re-evaluated.
+Sibling requeue occurs during parse, gated on eligible target or timestamp changes. The on_change hook notifies dependent EBTPs; it does not unconditionally requeue TLS siblings.
 
 ### on_delete
 
@@ -69,7 +69,7 @@ Uses `BackendTLSPolicyTargetManager` (a `BidirectionalRefManager<ResourceRef>` i
 
 - **Conflict key**: typed target kind + namespace + name + optional section; same-name Service and EdgionBackend targets never collide
 - **Priority**: creationTimestamp ASC → `{namespace}/{name}` lexicographic order; the first is the winner
-- **Sibling requeue**: parse stage requeues old siblings; on_change stage requeues new siblings; on_delete stage requeues all siblings
+- **Sibling requeue**: parse stage requeues old/new siblings on precedence-relevant changes; on_delete requeues remaining siblings
 - **Section lookup**: an exact Service-port winner is preferred, then the whole-Service winner; another section is never a fallback. EdgionBackend is whole-target only.
 
 ## Gateway-side processing
@@ -116,3 +116,21 @@ Nondefault acquisition never reads bare keys. These two cache reads are not an
 atomic snapshot: ordinary typed dependencies precede acquisition, and source
 events requeue the policy for reconciliation. Bare-key semantic notifications
 are limited to Gateway and BackendTLSPolicy; raw-key observers remain intact.
+
+## Full-instant arbitration transport (ARCH-055)
+
+Resources owns `common::policy_precedence::policy_precedence_key`: complete UTC
+instants sort oldest first, present timestamps precede missing timestamps, and
+existing lexical identities break exact ties. Controller uses raw resource keys;
+Gateway uses resource names within its existing target buckets. Identity and
+namespace normalization are unchanged.
+
+Every parse overwrites `spec.preparedPrecedence` from source metadata. Its optional
+`creationTimestamp` uses chrono serde, preserving fractions and the accepted date
+range across conf-sync even though Kubernetes metadata Time serializes seconds.
+An empty prepared object denotes a legitimately absent source timestamp; absent
+preparation is invalid on Gateway and preserves invalid exact/whole occupancy.
+The carrier is serialized but hidden from the operator schema. Status sidecar
+seeding replaces only typed policy status, preserving the source instant and
+condition transition history. New Gateways require refreshed prepared output;
+upgrade Controller/Gateway together and reprocess configuration.

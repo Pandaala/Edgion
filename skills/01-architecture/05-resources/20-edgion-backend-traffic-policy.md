@@ -64,3 +64,22 @@ The probe task borrows that owner and constructs TLS once at startup using
 explicit empty defaults. Existing poll fencing prevents superseded tasks from
 continuing. Invalid TLS keeps the winning check attached and failing; no sibling
 policy or global/backend trust supplies a fallback.
+
+## Full-instant arbitration transport (ARCH-055)
+
+EBTP shares Resources' `common::policy_precedence` ordering and prepared carrier
+with BackendTLSPolicy. Controller policy-only status seeding preserves source
+metadata, and every parse replaces submitted `spec.preparedPrecedence` with the
+complete source instant (including legitimate absence). The same instant updates
+conflict state and gates sibling requeues. Chrono serialization retains fractions
+across List/Watch independently of rounded Kubernetes metadata Time.
+
+Gateway requires the outer prepared value in addition to complete target
+eligibility. An empty prepared object is a valid missing timestamp, sorting last;
+missing preparation withdraws eligibility without falling back to metadata.
+Carrier equality participates in raw/prepared-owner reuse, so fraction-only
+replacement rebuilds the existing old/new affected target union. Snapshot,
+Service fan-out, AI limits and runtime-handle ownership remain unchanged. A new
+Gateway requires fresh prepared Controller output after coordinated upgrade and
+reprocessing; there is no legacy fallback. See the
+[BackendTLSPolicy transport contract](12-backend-tls-policy.md#full-instant-arbitration-transport-arch-055).

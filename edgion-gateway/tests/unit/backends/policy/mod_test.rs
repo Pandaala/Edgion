@@ -15,6 +15,11 @@ fn policy(name: &str, refs: &[(&str, Option<&str>)]) -> Arc<BackendTLSPolicy> {
             ..Default::default()
         },
         spec: BackendTLSPolicySpec {
+            prepared_precedence: Some(
+                edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
+                    creation_timestamp: None,
+                },
+            ),
             current_status: None,
             target_refs: refs
                 .iter()

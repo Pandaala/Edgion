@@ -3,7 +3,7 @@
 use arc_swap::ArcSwap;
 use edgion_resources::constants::secret_keys::tls::CA_CERT;
 use edgion_resources::resources::backend_tls_policy::backend_tls_identity_validation_errors;
-use edgion_resources::resources::edgion_backend_traffic_policy::precedence_key;
+use edgion_resources::resources::common::policy_precedence::policy_precedence_key;
 use edgion_resources::resources::edgion_backend_traffic_policy::{
     PolicyTargetKey, PolicyTargetKind, ResolvedPolicyTargetClass,
 };
@@ -212,6 +212,7 @@ impl BackendTLSPolicyStore {
     #[inline]
     fn policy_resource_equivalent(left: &BackendTLSPolicy, right: &BackendTLSPolicy) -> bool {
         left.metadata == right.metadata
+            && left.spec.prepared_precedence == right.spec.prepared_precedence
             && left.spec.target_refs == right.spec.target_refs
             && left.spec.resolved_target_class == right.spec.resolved_target_class
             && left.spec.validation == right.spec.validation
@@ -224,6 +225,9 @@ impl BackendTLSPolicyStore {
     }
 
     fn is_valid_candidate(policy: &BackendTLSPolicy) -> bool {
+        if policy.spec.prepared_precedence.is_none() {
+            return false;
+        }
         if matches!(
             policy.spec.validation.well_known_ca_certificates.as_ref(),
             Some(edgion_resources::resources::backend_tls_policy::WellKnownCACertificates::Other(_))
@@ -272,7 +276,16 @@ impl BackendTLSPolicyStore {
     }
 
     fn sort_policies_by_precedence(policies: &mut [Arc<BackendTLSPolicy>]) {
-        policies.sort_by_key(|policy| precedence_key(&policy.metadata));
+        // Unprepared policies remain in invalid occupancy, never valid winners.
+        policies.sort_by(|a, b| {
+            let key = |policy: &BackendTLSPolicy| {
+                policy
+                    .spec
+                    .prepared_precedence
+                    .and_then(|prepared| prepared.creation_timestamp)
+            };
+            policy_precedence_key(key(a), a.name()).cmp(&policy_precedence_key(key(b), b.name()))
+        });
     }
 
     pub(crate) fn profile_identity(policy: &BackendTLSPolicy) -> Arc<BackendTlsProfileIdentity> {

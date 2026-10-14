@@ -10,6 +10,7 @@ fn make_policy(options: Option<HashMap<String, String>>) -> BackendTLSPolicy {
             ..Default::default()
         },
         spec: BackendTLSPolicySpec {
+            prepared_precedence: None,
             current_status: None,
             target_refs: vec![BackendTLSPolicyTargetRef {
                 group: "".to_string(),
