@@ -2182,6 +2182,7 @@ fn jump_route_unit(backend_refs: Vec<HTTPBackendRef>) -> Arc<HttpRouteRuleUnit> 
     let backend_finder = HttpRouteRuleUnit::build_backend_selector(&runtime.backends);
 
     Arc::new(HttpRouteRuleUnit {
+        session_persistence_ttl_secs: None,
         resource_key: "test-ns/test-route".to_string(),
         matched_info: crate::MatchInfo {
             rsc: crate::Rsc::new("HTTPRoute", "test-ns", "test-route"),

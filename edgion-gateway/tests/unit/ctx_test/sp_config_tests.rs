@@ -27,7 +27,7 @@ fn grpc_only_falls_back_to_grpc() {
 
 #[test]
 fn neither_yields_none() {
-    assert!(pick_effective_sp(None, None).is_none());
+    assert!(pick_effective_sp::<&SessionPersistence>(None, None).is_none());
 }
 
 #[test]

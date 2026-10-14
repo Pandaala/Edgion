@@ -267,3 +267,20 @@ The optional `resolvedExternalAuth` filter sidecar is serialized for conf_sync a
 hidden from schema. It proves only Controller-derived locality under the existing
 trusted transport boundary. It does not represent a borrowed child object,
 ReferenceGrant authority or ongoing request-time revocation.
+
+### Session persistence lifetime ownership
+
+Gateway rule compilation validates the final effective `sessionPersistence` and
+resolves its optional lifetime before publishing any match units. The shared
+resource policy uses the canonical duration parser with strict surrounding
+whitespace rejection and whole-second ceiling/minimum-one semantics (including
+zero). Both direct compilation and normal full/incremental publication reject an
+invalid policy, including Permanent cookies without `absoluteTimeout`.
+
+The scalar belongs to the immutable Gateway rule unit alongside its effective
+rule, not to the serialized resource. A request retains that same generation
+through response issuance after reload. Response code borrows config and lifetime
+together and uses one scalar for wire expiry and Permanent-cookie Max-Age; it
+never parses configured duration text. See the
+[session persistence regression guard](../../04-review/routing/regression-guards/session-persistence-token-extraction.md)
+for ARCH-060 verification boundaries.

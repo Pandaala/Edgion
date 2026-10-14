@@ -704,3 +704,34 @@ fn request_mirror_lexical_namespaces_and_names_use_canonical_service_validation(
         serde_json::from_value(serde_json::json!({"backendRef":{"name":"copy","group":"","port":80}})).unwrap();
     assert!(filter.validation_error().is_none());
 }
+
+#[test]
+fn session_lifetime_projection_preserves_strictness_and_rounding() {
+    use super::SessionPersistence;
+    for (text, expected) in [
+        ("0s", 1),
+        ("0ms", 1),
+        ("1ms", 1),
+        ("1001ms", 2),
+        ("1s1ms", 2),
+        ("2s1h2s", 3604),
+        ("99999h99999h99999h99999h", 1439985600),
+    ] {
+        let policy: SessionPersistence = serde_json::from_value(serde_json::json!({"absoluteTimeout": text})).unwrap();
+        assert_eq!(policy.validated_lifetime_secs().unwrap(), Some(expected), "{text}");
+        assert!(policy.validate().is_ok());
+    }
+    for text in ["", " 1s", "1s ", "\t1s", "1s\n", "1 s", "1d", "100000s", "1s1s1s1s1s"] {
+        let policy: SessionPersistence = serde_json::from_value(serde_json::json!({"absoluteTimeout": text})).unwrap();
+        assert!(policy.validated_lifetime_secs().is_err(), "{text:?}");
+        assert!(policy.validate().is_err());
+    }
+    let absent: SessionPersistence = serde_json::from_value(serde_json::json!({})).unwrap();
+    assert_eq!(absent.validated_lifetime_secs().unwrap(), None);
+    let permanent: SessionPersistence =
+        serde_json::from_value(serde_json::json!({"cookieConfig": {"lifetimeType": "Permanent"}})).unwrap();
+    assert_eq!(
+        permanent.validated_lifetime_secs().unwrap_err(),
+        "cookieConfig.lifetimeType 'Permanent' requires absoluteTimeout"
+    );
+}

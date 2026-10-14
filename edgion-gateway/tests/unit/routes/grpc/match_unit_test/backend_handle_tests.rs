@@ -468,3 +468,61 @@ fn actual_owner_gates_factories_and_effective_backend_proofs() {
     assert!(effective.backends[2].permitted_service().is_none());
     assert_eq!(authored.backends[0].permitted_service().unwrap().key(), "default/api");
 }
+
+#[test]
+fn session_lifetime_direct_compile_uses_effective_rule_without_preparse() {
+    for resolved in [false, true] {
+        for (policy, expected, valid) in [
+            (serde_json::json!(null), None, true),
+            (serde_json::json!({}), None, true),
+            (serde_json::json!({"absoluteTimeout": "1500ms"}), Some(2), true),
+            (serde_json::json!({"absoluteTimeout": "0s"}), Some(1), true),
+            (serde_json::json!({"absoluteTimeout": "bad"}), None, false),
+            (serde_json::json!({"absoluteTimeout": " 1s"}), None, false),
+            (
+                serde_json::json!({"cookieConfig": {"lifetimeType": "Permanent"}}),
+                None,
+                false,
+            ),
+        ] {
+            let mut route: edgion_resources::GRPCRoute = serde_json::from_value(serde_json::json!({
+                "metadata": {"name": "session-compile", "namespace": "default"},
+                "spec": {"rules": [{"sessionPersistence": {"absoluteTimeout": "99s"}}]}
+            }))
+            .unwrap();
+            let rule = serde_json::from_value(serde_json::json!({"sessionPersistence": policy})).unwrap();
+            if resolved {
+                route.spec.resolved_rules = Some(vec![rule]);
+            } else {
+                route.spec.rules = Some(vec![rule]);
+            }
+            // conf_sync transports only policy text; compilation derives the scalar anew.
+            let wire = serde_json::to_string(&route).unwrap();
+            assert!(!wire.contains("session_persistence_ttl_secs"));
+            assert!(!wire.contains("sessionPersistenceTtlSecs"));
+            let route = serde_json::from_str(&wire).unwrap();
+            let runtime = GrpcRouteRuleUnit::compile_grpc_rule(&route, 0);
+            if valid {
+                assert_eq!(runtime.unwrap().session_persistence_ttl_secs, expected);
+            } else {
+                assert!(runtime.is_none());
+            }
+        }
+    }
+}
+
+#[test]
+fn session_lifetime_invalid_policy_rejects_before_plugin_factories() {
+    let route: edgion_resources::GRPCRoute = serde_json::from_value(serde_json::json!({
+        "metadata": {"name":"invalid-session", "namespace":"default"},
+        "spec": {"rules":[{"sessionPersistence":{"absoluteTimeout":"bad"}, "backendRefs":[{"name":"svc", "port":80}]}]}
+    }))
+    .unwrap();
+    let runtime = GrpcRouteRuleUnit::compile_with_factories(
+        &route,
+        0,
+        |_, _| panic!("invalid session must reject before rule plugins"),
+        |_, _, _| panic!("invalid session must reject before backend plugins"),
+    );
+    assert!(runtime.is_none());
+}

@@ -1589,49 +1589,14 @@ pub enum CookieLifetimeType {
 /// or >4 segments). Segments may be unordered and units may repeat; values
 /// accumulate.
 pub fn parse_gep2257_duration_secs(s: &str) -> Option<u64> {
-    if s.is_empty() {
+    if s.trim() != s {
         return None;
     }
-    let bytes = s.as_bytes();
-    let mut i = 0usize;
-    let mut total_ms: u64 = 0;
-    let mut segments = 0u32;
-    while i < bytes.len() {
-        // Digits: 1..=5 of them.
-        let digit_start = i;
-        while i < bytes.len() && bytes[i].is_ascii_digit() {
-            i += 1;
-        }
-        let digit_len = i - digit_start;
-        if digit_len == 0 || digit_len > 5 {
-            return None;
-        }
-        let value: u64 = s[digit_start..i].parse().ok()?;
-        // Unit: match `ms` before `m`.
-        let unit_ms: u64 = if s[i..].starts_with("ms") {
-            i += 2;
-            1
-        } else if s[i..].starts_with('h') {
-            i += 1;
-            3_600_000
-        } else if s[i..].starts_with('m') {
-            i += 1;
-            60_000
-        } else if s[i..].starts_with('s') {
-            i += 1;
-            1_000
-        } else {
-            return None;
-        };
-        total_ms = total_ms.checked_add(value.checked_mul(unit_ms)?)?;
-        segments += 1;
-        if segments > 4 {
-            return None;
-        }
-    }
-    // ceil to seconds, floor 1.
-    let secs = total_ms.div_ceil(1_000);
-    Some(secs.max(1))
+    let duration = crate::duration::parse_duration(s).ok()?;
+    duration
+        .as_secs()
+        .checked_add(u64::from(duration.subsec_nanos() != 0))
+        .map(|seconds| seconds.max(1))
 }
 
 impl SessionPersistence {
@@ -1641,13 +1606,23 @@ impl SessionPersistence {
     /// operator-readable message; a failing rule is dropped via
     /// `invalid_rule_indices` (never silently downgraded).
     pub fn validate(&self) -> Result<(), String> {
-        if let Some(t) = self.absolute_timeout.as_deref() {
-            if parse_gep2257_duration_secs(t).is_none() {
-                return Err(format!(
-                    "absoluteTimeout '{t}' is not a valid Gateway API duration (GEP-2257: e.g. 1h, 30m, 1h30m, 500ms)"
-                ));
-            }
-        }
+        self.validated_lifetime_secs().map(|_| ())
+    }
+
+    /// Validate the complete policy and resolve its optional lifetime at rule compilation.
+    /// An invalid configured lifetime is an error, never an omitted lifetime.
+    pub fn validated_lifetime_secs(&self) -> Result<Option<u64>, String> {
+        let lifetime = self
+            .absolute_timeout
+            .as_deref()
+            .map(|t| {
+                parse_gep2257_duration_secs(t).ok_or_else(|| {
+                    format!(
+                        "absoluteTimeout '{t}' is not a valid Gateway API duration (GEP-2257: e.g. 1h, 30m, 1h30m, 500ms)"
+                    )
+                })
+            })
+            .transpose()?;
         let is_permanent = self
             .cookie_config
             .as_ref()
@@ -1656,7 +1631,7 @@ impl SessionPersistence {
         if is_permanent && self.absolute_timeout.is_none() {
             return Err("cookieConfig.lifetimeType 'Permanent' requires absoluteTimeout".to_string());
         }
-        Ok(())
+        Ok(lifetime)
     }
 }
 

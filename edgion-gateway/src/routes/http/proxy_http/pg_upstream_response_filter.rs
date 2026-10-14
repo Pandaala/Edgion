@@ -282,9 +282,9 @@ pub fn upstream_response_filter(
                 // GRPCRoute responses inject tokens too. Placement is unchanged:
                 // still after the retry-on-status decision, so a discarded
                 // response never consumes the inject state.
-                let sp_config = ctx.effective_session_persistence().cloned();
+                let sp_config = ctx.effective_session_persistence_with_lifetime();
 
-                if let Some(sp) = sp_config {
+                if let Some((sp, ttl_secs)) = sp_config {
                     // Derive the token from the LB cell address (`lb_backend_addr`),
                     // formatted with `std::net::SocketAddr::to_string()`, so it is
                     // byte-identical to the affinity-map key built in
@@ -305,18 +305,12 @@ pub fn upstream_response_filter(
                             .session_persistence()
                             .and_then(|persistence| persistence.token_scope.as_deref());
                         let addrhash = session_persistence::generate_scoped_session_token(token_scope, &addr);
-                        // Freeze the absolute expiry at issuance: compute the ttl
-                        // once (GEP-2257) and feed both the wire token and the
-                        // Cookie Max-Age so the browser hint can never desync from
-                        // the gateway-enforced expiry.
+                        // Freeze expiry at issuance using the captured rule's compiled
+                        // lifetime for both the token and Permanent Cookie Max-Age.
                         let now = session_persistence::now_unix_secs();
-                        let ttl_secs = sp
-                            .absolute_timeout
-                            .as_deref()
-                            .and_then(edgion_resources::resources::http_route::parse_gep2257_duration_secs);
                         let token = session_persistence::build_wire_token(&addrhash, now, ttl_secs);
 
-                        match session_persistence::get_persistence_type(&sp) {
+                        match session_persistence::get_persistence_type(sp) {
                             SessionPersistenceType::Cookie => {
                                 let is_tls = session.as_downstream().digest().is_some_and(|d| d.ssl_digest.is_some());
                                 // NOTE (filter-04c): this Set-Cookie is appended
@@ -330,11 +324,11 @@ pub fn upstream_response_filter(
                                 // reply). Accepted as designed; see
                                 // skills/04-review/routing/intentional-design/local-reply-drops-sticky-set-cookie.md
                                 let cookie_value =
-                                    session_persistence::build_set_cookie_value(&sp, &token, is_tls, ttl_secs);
+                                    session_persistence::build_set_cookie_value(sp, &token, is_tls, ttl_secs);
                                 let _ = upstream_response.append_header("Set-Cookie", &cookie_value);
                             }
                             SessionPersistenceType::Header => {
-                                let header_name = session_persistence::get_session_name(&sp).to_owned();
+                                let header_name = session_persistence::get_session_name(sp).to_owned();
                                 let _ = upstream_response.append_header(header_name, &token);
                             }
                         }

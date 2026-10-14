@@ -105,6 +105,7 @@ fn http_route_unit(runtime: Arc<PluginRuntime>) -> Arc<HttpRouteRuleUnit> {
         method: None,
     };
     Arc::new(HttpRouteRuleUnit {
+        session_persistence_ttl_secs: None,
         resource_key: "default/http".to_string(),
         matched_info: MatchInfo {
             rsc: Rsc::new("HTTPRoute", "default", "http"),

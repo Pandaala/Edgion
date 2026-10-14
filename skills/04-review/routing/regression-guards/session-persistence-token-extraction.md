@@ -106,3 +106,30 @@ conformance or behavior through an intermediary that rewrites Cookie fields.
 - D0109 / `add-session-cookie-field-integration`: HTTP/gRPC wire coverage completed
   on 2026-09-09; production behavior unchanged. The existing rule is extended,
   not replaced by a separate finding archive.
+
+## ARCH-060: cold lifetime projection
+
+`SessionPersistence::validated_lifetime_secs` shares the canonical GEP-2257
+parser while retaining session-specific whitespace rejection, ceiling to seconds
+and minimum one second even for zero. Controller validation and Gateway rule
+compilation call the same policy. Direct HTTP/gRPC compilation rejects malformed
+lifetimes or Permanent cookies without a timeout before constructing plugin
+runtimes; invalid never means omitted.
+
+The compiled scalar and effective config are published in one immutable rule
+unit. Context selection chooses the HTTP config block first, then gRPC; an HTTP
+block with no timeout cannot borrow a gRPC timeout. Full and incremental rebuilds
+create fresh projections from effective authored/resolved rules. Old requests
+retain their old rule Arc. Response issuance borrows that policy and uses one
+scalar for expiry and Max-Age, without configured-duration parsing or a config
+clone. Retry, interim/101 and local-reply ordering are unchanged.
+
+Targeted regressions cover strict/zero/subsecond policy, direct compilation,
+authored/resolved publication replacement and withdrawal, parent/nearest/child
+inheritance, HTTP/gRPC actual response Cookie/Header issuance and captured
+config precedence. These are in-process tests, not live conf_sync/Kubernetes
+admission evidence. No throughput or allocation measurements are claimed.
+Re-evaluate if compilation can bypass the policy gate, units acquire independently
+mutable config/lifetime, or response selection begins consulting a global latest
+route. ARCH-060 establishes lifetime ownership without changing the affinity
+threat model or token format.

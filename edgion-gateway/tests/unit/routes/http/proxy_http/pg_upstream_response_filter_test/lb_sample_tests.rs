@@ -66,6 +66,7 @@ fn ctx_with_attempt(
 
 fn route_unit_with_retry_codes(codes: Vec<u16>) -> HttpRouteRuleUnit {
     HttpRouteRuleUnit {
+        session_persistence_ttl_secs: None,
         resource_key: "test-ns/lb-sample".to_string(),
         matched_info: MatchInfo {
             rsc: Rsc::new("HTTPRoute", "test-ns", "lb-sample"),

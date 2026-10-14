@@ -3697,13 +3697,27 @@ impl EdgionHttpContext {
     /// for consistency with the retry helpers.
     #[inline]
     pub fn effective_session_persistence(&self) -> Option<&SessionPersistence> {
+        self.effective_session_persistence_with_lifetime()
+            .map(|(policy, _)| policy)
+    }
+
+    /// Borrow policy and compiled lifetime from the same request-pinned rule generation.
+    /// Select the policy block before considering its optional lifetime.
+    #[inline]
+    pub(crate) fn effective_session_persistence_with_lifetime(&self) -> Option<(&SessionPersistence, Option<u64>)> {
         pick_effective_sp(
-            self.route_unit
-                .as_ref()
-                .and_then(|u| u.rule.session_persistence.as_ref()),
-            self.grpc_route_unit
-                .as_ref()
-                .and_then(|u| u.rule.session_persistence.as_ref()),
+            self.route_unit.as_ref().and_then(|unit| {
+                unit.rule
+                    .session_persistence
+                    .as_ref()
+                    .map(|policy| (policy, unit.session_persistence_ttl_secs))
+            }),
+            self.grpc_route_unit.as_ref().and_then(|unit| {
+                unit.rule
+                    .session_persistence
+                    .as_ref()
+                    .map(|policy| (policy, unit.session_persistence_ttl_secs))
+            }),
         )
     }
 
@@ -3946,10 +3960,7 @@ impl EdgionHttpContext {
 /// config wins over the gRPC rule's. Split out so the precedence is
 /// unit-testable without constructing route units.
 #[inline]
-pub(crate) fn pick_effective_sp<'a>(
-    http_sp: Option<&'a SessionPersistence>,
-    grpc_sp: Option<&'a SessionPersistence>,
-) -> Option<&'a SessionPersistence> {
+pub(crate) fn pick_effective_sp<T>(http_sp: Option<T>, grpc_sp: Option<T>) -> Option<T> {
     http_sp.or(grpc_sp)
 }
 

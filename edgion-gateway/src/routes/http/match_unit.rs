@@ -165,6 +165,8 @@ impl std::ops::Deref for CompiledBackend {
 
 #[derive(Clone)]
 pub struct HttpRouteRuleUnit {
+    /// Validated lifetime from this effective rule generation, resolved before publication.
+    pub session_persistence_ttl_secs: Option<u64>,
     pub resource_key: String,
     /// Match info containing namespace, name and match item
     pub matched_info: MatchInfo,
@@ -215,6 +217,8 @@ pub struct HttpRouteRuleUnit {
 /// state, so a fresh runtime per match-item would split that state. See
 /// `compile_http_rule`.
 pub struct HttpRuleRuntime {
+    /// Validated lifetime from this effective rule generation, resolved before publication.
+    pub session_persistence_ttl_secs: Option<u64>,
     /// Rule-level compiled plugin chain (one per rule, shared across all units).
     pub plugin_runtime: Arc<PluginRuntime>,
     /// Compiled backends (each with its own per-rule-shared plugin runtime). The
@@ -251,8 +255,8 @@ impl HttpRouteRuleUnit {
         }
         Self::compile_prevalidated_http_rule(route, rule_index).ok_or_else(|| {
             edgion_resources::RequestTransformViolation {
-                path: "metadata".to_string(),
-                message: "invalid Route reference source".to_string(),
+                path: String::new(),
+                message: "invalid effective rule or Route reference source".to_string(),
             }
         })
     }
@@ -295,6 +299,13 @@ impl HttpRouteRuleUnit {
     ) -> Option<HttpRuleRuntime> {
         let references = HttpRouteBackendRefs::from_route(route).ok()?;
         let rule = route.effective_rules()?.get(rule_index)?;
+        let session_persistence_ttl_secs = rule
+            .session_persistence
+            .as_ref()
+            .map(|policy| policy.validated_lifetime_secs())
+            .transpose()
+            .ok()?
+            .flatten();
         let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
         let plugin_runtime = rule_factory(route, rule_index);
         let backends = rule.backend_refs.as_ref().map_or_else(Vec::new, |refs| {
@@ -324,6 +335,7 @@ impl HttpRouteRuleUnit {
                 .collect::<Vec<_>>()
         });
         Some(HttpRuleRuntime {
+            session_persistence_ttl_secs,
             plugin_runtime,
             backends: backends.into(),
         })

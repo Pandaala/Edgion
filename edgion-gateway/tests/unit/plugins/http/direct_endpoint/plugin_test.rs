@@ -95,6 +95,7 @@ fn test_route_unit(ns: &str, backend_refs: Vec<HTTPBackendRef>) -> HttpRouteRule
         })
         .collect::<Vec<_>>();
     HttpRouteRuleUnit {
+        session_persistence_ttl_secs: None,
         resource_key: format!("{}/test-route", ns),
         matched_info: MatchInfo {
             rsc: Rsc::new("HTTPRoute", ns, "test-route"),

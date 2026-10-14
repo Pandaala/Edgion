@@ -260,6 +260,7 @@ fn parse_route_to_units(resource_key: &str, route: &Arc<GRPCRoute>) -> Vec<Arc<G
                     match_index: matched_info.match_id as u32,
                 };
                 units.push(Arc::new(GrpcRouteRuleUnit {
+                    session_persistence_ttl_secs: rule_runtime.session_persistence_ttl_secs,
                     resource_key: resource_key.to_string(),
                     matched_info,
                     rule: Arc::clone(&rule_arc),

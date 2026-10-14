@@ -312,6 +312,7 @@ fn is_regex_path(match_item: &HTTPRouteMatch) -> bool {
 
 /// Shared context for building one `HttpRouteRuleUnit` (normal or regex).
 struct RouteUnitCtx<'a> {
+    session_persistence_ttl_secs: Option<u64>,
     namespace: &'a str,
     name: &'a str,
     rule_id: usize,
@@ -361,6 +362,7 @@ fn create_regex_route_unit(ctx: RouteUnitCtx<'_>) -> Result<HttpRouteRuleUnit, S
     let plugin_runtime = ctx.plugin_runtime.clone();
     let backend_finder = ctx.backend_finder.clone();
     Ok(HttpRouteRuleUnit {
+        session_persistence_ttl_secs: ctx.session_persistence_ttl_secs,
         plugin_runtime,
         backends: ctx.backends.clone(),
         backend_finder,
@@ -399,6 +401,7 @@ fn build_normal_route_unit(ctx: RouteUnitCtx<'_>) -> HttpRouteRuleUnit {
     let plugin_runtime = ctx.plugin_runtime.clone();
     let backend_finder = ctx.backend_finder.clone();
     HttpRouteRuleUnit {
+        session_persistence_ttl_secs: ctx.session_persistence_ttl_secs,
         plugin_runtime,
         backends: ctx.backends.clone(),
         backend_finder,
@@ -496,6 +499,7 @@ fn append_route_to_domains(
                 domain_rules,
                 hostnames,
                 RouteUnitCtx {
+                    session_persistence_ttl_secs: rule_rt.session_persistence_ttl_secs,
                     namespace: &validated.namespace,
                     name: &validated.name,
                     rule_id,

@@ -151,6 +151,8 @@ impl CompiledGrpcBackend {
 /// match-item units of that rule. In-memory RateLimitLocal owns per-rule CMS state,
 /// so rebuilding per-unit would split the counter N×.
 pub struct GrpcRuleRuntime {
+    /// Validated lifetime from this effective rule generation, resolved before publication.
+    pub session_persistence_ttl_secs: Option<u64>,
     /// Rule-level compiled plugin chain.
     pub plugin_runtime: Arc<PluginRuntime>,
     /// Compiled backends (each with its own plugin runtime).
@@ -343,6 +345,8 @@ impl GrpcMatchInfo {
 /// gRPC route rule unit
 #[derive(Clone)]
 pub struct GrpcRouteRuleUnit {
+    /// Validated lifetime from this effective rule generation, resolved before publication.
+    pub session_persistence_ttl_secs: Option<u64>,
     pub resource_key: String,
     pub matched_info: GrpcMatchInfo,
     pub rule: Arc<GRPCRouteRule>,
@@ -395,6 +399,13 @@ impl GrpcRouteRuleUnit {
     ) -> Option<GrpcRuleRuntime> {
         let references = GrpcRouteBackendRefs::from_route(route).ok()?;
         let rule = route.effective_rules()?.get(rule_index)?;
+        let session_persistence_ttl_secs = rule
+            .session_persistence
+            .as_ref()
+            .map(|policy| policy.validated_lifetime_secs())
+            .transpose()
+            .ok()?
+            .flatten();
         let plugin_runtime = rule_factory(route, rule_index);
         let backends = rule
             .backend_refs
@@ -421,6 +432,7 @@ impl GrpcRouteRuleUnit {
             })
             .collect::<Vec<_>>();
         Some(GrpcRuleRuntime {
+            session_persistence_ttl_secs,
             plugin_runtime,
             backends: backends.into(),
         })

@@ -43,6 +43,7 @@ fn route_unit(name: &str) -> Arc<GrpcRouteRuleUnit> {
         headers: None,
     };
     Arc::new(GrpcRouteRuleUnit {
+        session_persistence_ttl_secs: None,
         resource_key: format!("default/{name}"),
         matched_info: GrpcMatchInfo::new("default".to_string(), name.to_string(), 0, 0, route_match, 0, None),
         rule: Arc::new(GRPCRouteRule {

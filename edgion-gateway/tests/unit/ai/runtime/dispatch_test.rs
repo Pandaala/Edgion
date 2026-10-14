@@ -206,6 +206,7 @@ fn denied_route_unit() -> Arc<HttpRouteRuleUnit> {
         Arc::new(PluginRuntime::new()),
     );
     Arc::new(HttpRouteRuleUnit {
+        session_persistence_ttl_secs: None,
         resource_key: "tenant-a/route".to_string(),
         matched_info: MatchInfo {
             rsc: Rsc::new("HTTPRoute", "tenant-a", "route"),

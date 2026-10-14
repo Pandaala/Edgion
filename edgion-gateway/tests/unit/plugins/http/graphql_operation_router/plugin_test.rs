@@ -125,6 +125,7 @@ fn test_route_unit(backend_refs: Vec<HTTPBackendRef>) -> HttpRouteRuleUnit {
     let backend_finder = HttpRouteRuleUnit::build_backend_selector(&runtime.backends);
 
     HttpRouteRuleUnit {
+        session_persistence_ttl_secs: None,
         resource_key: "apps/test-route".to_string(),
         matched_info: MatchInfo {
             rsc: Rsc::new("HTTPRoute", "apps", "test-route"),

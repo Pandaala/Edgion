@@ -797,3 +797,72 @@ fn compiled_grpc_empty_backend_selector_retains_no_backend_error() {
     let selector = GrpcRouteRuleUnit::build_backend_selector(&[]);
     assert_eq!(selector.select(), Err(crate::lb::ERR_NO_BACKEND_REFS));
 }
+
+#[test]
+fn session_lifetime_publication_retains_old_grpc_generation() {
+    for resolved in [false, true] {
+        let managers = GlobalGrpcRouteManagers::new();
+        let key = "default/session-reload".to_string();
+        let make_route = |timeout: Option<&str>| {
+            let mut route = (*matching_route(
+                "session-reload",
+                "session.example.com",
+                json!({"method":{"service":"svc.User", "method":"Get"}}),
+            ))
+            .clone();
+            route.spec.rules.as_mut().unwrap()[0].session_persistence =
+                Some(serde_json::from_value(json!({"absoluteTimeout": timeout})).unwrap());
+            if resolved {
+                route.spec.resolved_rules = route.spec.rules.clone();
+            }
+            route.pre_parse();
+            Arc::new(route)
+        };
+        managers.full_set(&HashMap::from([(key.clone(), make_route(Some("1500ms")))]));
+        let old_unit = managers.route_units_cache.lock().get(&key).unwrap()[0].clone();
+        let mut old_ctx = EdgionHttpContext::default();
+        old_ctx.grpc_route_unit = Some(old_unit);
+        for (timeout, expected) in [(Some("5s"), Some(5)), (None, None)] {
+            managers.partial_update(
+                HashMap::new(),
+                HashMap::from([(key.clone(), make_route(timeout))]),
+                HashSet::new(),
+            );
+            let cache = managers.route_units_cache.lock();
+            let unit = &cache.get(&key).unwrap()[0];
+            assert_eq!(unit.session_persistence_ttl_secs, expected);
+            assert_eq!(
+                unit.rule
+                    .session_persistence
+                    .as_ref()
+                    .unwrap()
+                    .absolute_timeout
+                    .as_deref(),
+                timeout
+            );
+            assert_eq!(
+                old_ctx.effective_session_persistence_with_lifetime().unwrap().1,
+                Some(2)
+            );
+        }
+        managers.partial_update(
+            HashMap::new(),
+            HashMap::from([(key.clone(), make_route(Some("bad")))]),
+            HashSet::new(),
+        );
+        assert!(managers
+            .route_units_cache
+            .lock()
+            .get(&key)
+            .is_none_or(|units| units.is_empty()));
+        assert_eq!(
+            old_ctx.effective_session_persistence_with_lifetime().unwrap().1,
+            Some(2)
+        );
+        managers.full_set(&HashMap::from([(key.clone(), make_route(Some("7s")))]));
+        assert_eq!(
+            managers.route_units_cache.lock().get(&key).unwrap()[0].session_persistence_ttl_secs,
+            Some(7)
+        );
+    }
+}

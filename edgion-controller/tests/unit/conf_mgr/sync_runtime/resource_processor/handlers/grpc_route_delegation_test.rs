@@ -1549,3 +1549,68 @@ fn child_extension_loans_register_before_scope_drops_and_preserve_source_identit
     assert!(flatten_route(&invalid_parent, &spy).resolved_rules.unwrap().is_empty());
     assert!(spy.registered.borrow().is_empty());
 }
+
+#[test]
+fn session_lifetime_child_first_else_inherited_across_two_levels() {
+    for (mid_policy, child_policy, expected) in [
+        (None, None, Some("30s")),
+        (Some(serde_json::json!({"absoluteTimeout":"5s"})), None, Some("5s")),
+        (
+            Some(serde_json::json!({"absoluteTimeout":"5s"})),
+            Some(serde_json::json!({})),
+            None,
+        ),
+        (None, Some(serde_json::json!({"absoluteTimeout":"1ms"})), Some("1ms")),
+    ] {
+        let parent = parent_with_rules(serde_json::json!([{
+            "matches": [{"method": {"service": "svc.Billing"}}],
+            "sessionPersistence": {"absoluteTimeout": "30s"},
+            "timeouts": {"request": "30s"},
+            "retry": {"attempts": 5},
+            "backendRefs": [{
+                "group": "gateway.networking.k8s.io", "kind": "GRPCRoute",
+                "name": "mid", "namespace": "billing"
+            }]
+        }]));
+        let mut mid = route(
+            "billing",
+            "mid",
+            serde_json::json!({"rules": [{
+                "matches": [{"method": {"service": "svc.Billing"}}],
+                "retry": {"attempts": 2},
+                "backendRefs": [{
+                    "group": "gateway.networking.k8s.io", "kind": "GRPCRoute",
+                    "name": "leaf", "namespace": "billing"
+                }]
+            }]}),
+        );
+        let mut leaf = route(
+            "billing",
+            "leaf",
+            serde_json::json!({"rules": [service_rule("svc.Billing", "svc")]}),
+        );
+        mid.spec.rules.as_mut().unwrap()[0].session_persistence =
+            mid_policy.map(|p| serde_json::from_value(p).unwrap());
+        leaf.spec.rules.as_mut().unwrap()[0].session_persistence =
+            child_policy.map(|p| serde_json::from_value(p).unwrap());
+        let outcome = flatten_route(&parent, &FakeLookup::new(vec![mid, leaf]));
+        let rules = outcome.resolved_rules.clone().unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(
+            rules[0]
+                .session_persistence
+                .as_ref()
+                .unwrap()
+                .absolute_timeout
+                .as_deref(),
+            expected
+        );
+        assert_eq!(
+            rules[0].timeouts.as_ref().and_then(|t| t.request.as_deref()),
+            Some("30s")
+        );
+        assert_eq!(rules[0].retry.as_ref().and_then(|r| r.attempts), Some(2));
+        assert!(outcome.named_children.contains("billing/mid"));
+        assert!(outcome.named_children.contains("billing/leaf"));
+    }
+}

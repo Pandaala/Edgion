@@ -46,6 +46,7 @@ fn create_test_route_unit(namespace: &str, name: &str, regex_pattern: &str, rule
     let backends = rule_rt.backends;
     let plugin_runtime = rule_rt.plugin_runtime;
     Arc::new(HttpRouteRuleUnit {
+        session_persistence_ttl_secs: None,
         plugin_runtime,
         backends,
         backend_finder,
