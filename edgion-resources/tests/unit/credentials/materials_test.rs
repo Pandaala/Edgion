@@ -11,12 +11,6 @@ fn credential_material_debug_never_formats_fields() {
             api_key_id: "private-id".into(),
             api_key_secret: "private-key".into(),
         }),
-        Box::new(HmacMaterial {
-            key: "private-key".into(),
-        }),
-        Box::new(WebhookApiKeyMaterial {
-            api_key: "private-key".into(),
-        }),
         Box::new(AiApiKeyMaterial {
             api_key: "private-key".into(),
         }),
@@ -61,8 +55,6 @@ fn types_are_send_sync() {
     assert_send_sync::<BasicAuthMaterial>();
     assert_send_sync::<EsApiKeyMaterial>();
     assert_send_sync::<BearerMaterial>();
-    assert_send_sync::<HmacMaterial>();
-    assert_send_sync::<WebhookApiKeyMaterial>();
     assert_send_sync::<AiApiKeyMaterial>();
     assert_send_sync::<AcmeAccountMaterial>();
     assert_send_sync::<TlsMaterial>();

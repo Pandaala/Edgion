@@ -21,17 +21,6 @@ fn redis_auth_provider_name() {
 }
 
 #[test]
-fn webhook_auth_apikey_slot_view() {
-    let a = WebhookAuth::ApiKey {
-        slot: slot("w"),
-        r#in: "header".into(),
-        header_name: Some("X-API-Key".into()),
-        query_param: None,
-    };
-    assert_eq!(<WebhookAuth as AuthSpec>::slot(&a).secret_ref.name, "w");
-}
-
-#[test]
 fn es_auth_basic_slot_view() {
     let a = ElasticsearchAuth::Basic { slot: slot("es") };
     assert_eq!(<ElasticsearchAuth as AuthSpec>::slot(&a).secret_ref.name, "es");

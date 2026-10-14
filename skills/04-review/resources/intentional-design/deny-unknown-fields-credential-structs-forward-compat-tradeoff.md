@@ -1,6 +1,6 @@
 ---
 name: deny-unknown-fields-credential-structs-forward-compat-tradeoff
-description: Use when reviewing findings that compare Edgion against Envoy/xDS proto3 "preserve-and-ignore unknown fields" and claim "serde deny_unknown_fields on LinkSys credential/auth sub-structs (SecretSlot / RedisAuth / EtcdAuth / ElasticsearchAuth / WebhookAuth / WebhookTarget / GlobalConnectionIpRestrictionEntry) breaks forward compatibility at the Controller→Gateway boundary / a future additive sub-struct field makes an old Gateway reject the whole LinkSys resource / decouple the inline-credential block from deny_unknown_fields via a custom validator or a separate wire struct / at minimum add a definition-site comment". Covers why deny_unknown_fields is intentional (it is the inline-credential-injection defense) and why the decoupling fixes are wide cross-layer features, not narrow review fixes.
+description: Use when reviewing findings that compare Edgion against Envoy/xDS proto3 "preserve-and-ignore unknown fields" and claim "serde deny_unknown_fields on LinkSys credential/auth sub-structs (SecretSlot / RedisAuth / EtcdAuth / ElasticsearchAuth / GlobalConnectionIpRestrictionEntry) breaks forward compatibility at the Controller→Gateway boundary / a future additive sub-struct field makes an old Gateway reject the whole LinkSys resource / decouple the inline-credential block from deny_unknown_fields via a custom validator or a separate wire struct / at minimum add a definition-site comment". Covers why deny_unknown_fields is intentional (it is the inline-credential-injection defense) and why the decoupling fixes are wide cross-layer features, not narrow review fixes.
 status: accepted-tradeoff
 finding_id: resource-05
 closed: 2026-06-14
@@ -14,8 +14,7 @@ knowledge_type: intentional-design
 Several LinkSys credential/auth sub-structs carry `#[serde(... deny_unknown_fields)]`:
 `SecretSlot` (`edgion-resources/src/resources/common/secret_slot.rs:18`), `RedisAuth`
 (`link_sys/redis.rs:54`), `EtcdAuth` (`link_sys/etcd.rs:66`), `ElasticsearchAuth`
-(`link_sys/elasticsearch.rs:58`), `WebhookAuth` / `WebhookTarget`
-(`link_sys/webhook.rs:19/62`), and `GlobalConnectionIpRestrictionEntry`
+(`link_sys/elasticsearch.rs:58`), and `GlobalConnectionIpRestrictionEntry`
 (`edgion_stream_plugins/stream_plugins.rs:25`). Because Controller and Gateway share these
 types via `edgion-resources` and the Gateway re-parses the conf_sync JSON with the same
 `serde_json::from_str` path (`event_dispatch.rs:95/323`), a Controller-newer-than-Gateway
@@ -33,6 +32,10 @@ Fix suggestions of the form "remove `deny_unknown_fields` and add a custom forbi
 validator", "introduce a separate `deny_unknown_fields`-free wire struct for the
 Controller→Gateway payload", or "at minimum annotate every `deny_unknown_fields` site" are
 **not accepted** as a narrow review fix.
+
+ARCH-051 removed the orphan `WebhookAuth` type; it did not relax any live auth
+strictness. `WebhookTarget` now lives in `resources/common/external_http.rs` and
+does not carry `deny_unknown_fields`, so it is not an example of this boundary.
 
 ## Core Rationale
 

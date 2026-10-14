@@ -156,12 +156,6 @@ fn apply_auth(
             )
         }
         ResolvedCredential::Bearer(m) => format!("Bearer {}", m.token),
-        ResolvedCredential::Hmac(_) => anyhow::bail!(
-            "Elasticsearch auth does not support HMAC material (internal bug: resolver selected wrong variant)"
-        ),
-        ResolvedCredential::WebhookApiKey(_) => anyhow::bail!(
-            "Elasticsearch auth does not support WebhookApiKey material (internal bug: resolver selected wrong variant)"
-        ),
     };
     let mut value = HeaderValue::from_str(&auth_header).context("invalid auth header value")?;
     value.set_sensitive(true);

@@ -17,9 +17,7 @@
 //! instead of a silent empty-credential fallback.
 
 use anyhow::{bail, Result};
-use edgion_resources::credentials::materials::{
-    BasicAuthMaterial, BearerMaterial, EsApiKeyMaterial, HmacMaterial, WebhookApiKeyMaterial,
-};
+use edgion_resources::credentials::materials::{BasicAuthMaterial, BearerMaterial, EsApiKeyMaterial};
 use edgion_resources::credentials::resolvers::{BasicAuthResolver, BearerResolver, EsApiKeyResolver};
 use edgion_resources::credentials::SecretMaterialResolver;
 use edgion_resources::resources::common::TlsConfig;
@@ -60,7 +58,7 @@ impl std::fmt::Display for InvalidReason {
 ///
 /// Generic over the material type `M` so the same enum shape serves both
 /// Redis/Etcd basic auth (`CredentialState<BasicAuthMaterial>`) and
-/// Elasticsearch/Webhook multi-variant auth
+/// Elasticsearch/OTLP/Kafka auth
 /// (`CredentialState<ResolvedCredential>`).
 ///
 /// # Security
@@ -135,10 +133,10 @@ impl<M> std::fmt::Display for CredentialState<M> {
 }
 
 // ============================================================================
-// ResolvedCredential — the material type stored in CredentialState for ES / Webhook
+// ResolvedCredential — the material type stored in CredentialState for Elasticsearch / OTLP / Kafka
 // ============================================================================
 
-/// Materialised credential for Elasticsearch / Webhook dispatch.
+/// Materialised credential for Elasticsearch / OTLP / Kafka dispatch.
 ///
 /// Variant selection is driven by the CRD's auth kind; [`resolved_state`]
 /// guarantees the variant always matches the CRD's declaration, so providers
@@ -148,8 +146,6 @@ pub enum ResolvedCredential {
     Basic(BasicAuthMaterial),
     EsApiKey(EsApiKeyMaterial),
     Bearer(BearerMaterial),
-    Hmac(HmacMaterial),
-    WebhookApiKey(WebhookApiKeyMaterial),
 }
 
 // ============================================================================
@@ -206,7 +202,7 @@ pub fn basic_state(ls: &LinkSys) -> CredentialState<BasicAuthMaterial> {
     state_from_auth_secret(ls, &BasicAuthResolver)
 }
 
-/// Credential state for Elasticsearch / Webhook auth.
+/// Credential state for Elasticsearch / OTLP / Kafka auth.
 ///
 /// The resolver is selected from the CRD's auth variant, so a
 /// `Resolved(ResolvedCredential::Bearer(_))` result against
@@ -264,7 +260,7 @@ pub fn require_basic_material<'a>(
     }
 }
 
-/// Helper: same shape as [`require_basic_material`] but for ES/Webhook-style
+/// Helper: same shape as [`require_basic_material`] but for Elasticsearch/OTLP/Kafka
 /// `CredentialState<ResolvedCredential>` where caller always requires a
 /// resolved material (no `NotRequired` early return).
 ///

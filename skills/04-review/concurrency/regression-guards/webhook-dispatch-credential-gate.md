@@ -18,9 +18,11 @@ remove the old provider first and may temporarily have no current client.
 `webhook_with_unresolved_secret_ref_is_not_ready` covers the request-template gate.
 
 `credential::resolved_state` returns `NotRequired` for Webhook. It is not the
-current authentication gate. The legacy `auth` JSON placeholder is accepted but
-ignored, so the old `auth.secretRef` fail-closed assertion below does not describe
-current behavior. See the [superseded authentication decision](../../webhook-key/superseded/webhook-auth-hmac-fail-closed-upsert-guard.md).
+current authentication gate. The legacy `auth` field is absent from the typed
+configuration and produces advisory unknown-field feedback with lenient admission;
+it has no runtime effect. ARCH-051 also removed the orphan auth type and parsers.
+The old `auth.secretRef` fail-closed assertion below does not describe current
+behavior. See the [removed-field guard](../../link-sys/regression-guards/webhook-removed-fields-unknown-feedback.md). See the [superseded authentication decision](../../webhook-key/superseded/webhook-auth-hmac-fail-closed-upsert-guard.md).
 Do not treat historical symbols or rejection statements as current evidence.
 
 ## Historical WebhookAuth resolution (inactive)

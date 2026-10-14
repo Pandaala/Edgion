@@ -8,14 +8,14 @@ knowledge_type: superseded
 
 ## Current conclusion
 
-The manager upsert guard no longer exists, and the legacy WebhookAuth enum is no
-longer the type of WebhookServiceConfig.auth. Current Webhook requests use
-declarative request fields, including Secret-backed
-header templates. `WebhookServiceConfig.auth` is still an accepted-but-ignored
-JSON placeholder; this predates the unified runtime refactor and does not provide
-HMAC signing or fail-closed rejection. Do not use the historical verdict to
-suppress findings against current behavior. Removing ignored legacy fields is
-separate schema-cleanup debt, not a runtime ownership fix. See the current
+The manager upsert guard no longer exists. Current Webhook requests use
+declarative request fields, including Secret-backed header templates. The old
+`auth` field is absent from `WebhookServiceConfig` and produces advisory
+unknown-field feedback with lenient admission; it provides neither HMAC signing
+nor fail-closed rejection. ARCH-051 retired the orphan `WebhookAuth` type and
+its unused credential family, without changing the shared CRD auth interior.
+Do not use the historical verdict to suppress findings against current behavior.
+See the current
 [Webhook contract](../../../01-architecture/03-controller-gateway-link/webhook.md#migration-operator-facing).
 
 ## Historical resolution (inactive)

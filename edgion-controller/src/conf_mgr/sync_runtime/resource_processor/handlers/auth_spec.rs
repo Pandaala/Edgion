@@ -4,16 +4,13 @@
 use crate::conf_mgr::sync_runtime::resource_processor::credential::{resolve_bound_secret, AuthorizedSecret};
 use crate::conf_mgr::sync_runtime::resource_processor::credential_source_state::CredentialSecretInput;
 use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResolvedRefsError, ResourceRef};
-use edgion_resources::credentials::resolvers::{
-    BasicAuthResolver, BearerResolver, EsApiKeyResolver, HmacResolver, TlsCertsResolver, WebhookApiKeyResolver,
-};
+use edgion_resources::credentials::resolvers::{BasicAuthResolver, BearerResolver, EsApiKeyResolver, TlsCertsResolver};
 use edgion_resources::resources::common::{SecretSlot, TlsConfig};
 use edgion_resources::resources::link_sys::elasticsearch::ElasticsearchAuth;
 use edgion_resources::resources::link_sys::etcd::EtcdAuth;
 use edgion_resources::resources::link_sys::kafka::KafkaSaslConfig;
 use edgion_resources::resources::link_sys::otlp::{OtlpAuth, OtlpBearerResolver};
 use edgion_resources::resources::link_sys::redis::RedisAuth;
-use edgion_resources::resources::link_sys::webhook::WebhookAuth;
 use edgion_resources::resources::refs::link_sys_fields::{LinkSysCaSlot, LinkSysTlsReferences};
 use edgion_resources::resources::refs::ReferenceToken;
 use k8s_openapi::api::core::v1::Secret;
@@ -83,36 +80,6 @@ impl AuthSpec for ElasticsearchAuth {
             Self::Basic { .. } => resolve_bound_secret(ctx, owner, token, &BasicAuthResolver),
             Self::ApiKey { .. } => resolve_bound_secret(ctx, owner, token, &EsApiKeyResolver),
             Self::Bearer { .. } => resolve_bound_secret(ctx, owner, token, &BearerResolver),
-        }
-    }
-}
-
-// This schema type is not a LinkSys config field and mints no owning token.
-impl AuthSpec for WebhookAuth {
-    fn slot(&self) -> &SecretSlot {
-        match self {
-            Self::Basic { slot } | Self::Bearer { slot } | Self::Hmac { slot } | Self::ApiKey { slot, .. } => slot,
-        }
-    }
-    fn slot_mut(&mut self) -> &mut SecretSlot {
-        match self {
-            Self::Basic { slot } | Self::Bearer { slot } | Self::Hmac { slot } | Self::ApiKey { slot, .. } => slot,
-        }
-    }
-    fn provider_name(&self) -> &'static str {
-        "Webhook"
-    }
-    fn resolve(
-        &self,
-        ctx: &HandlerContext,
-        owner: &ResourceRef,
-        token: ReferenceToken<'_>,
-    ) -> Result<AuthorizedSecret, ResolvedRefsError> {
-        match self {
-            Self::Basic { .. } => resolve_bound_secret(ctx, owner, token, &BasicAuthResolver),
-            Self::Bearer { .. } => resolve_bound_secret(ctx, owner, token, &BearerResolver),
-            Self::Hmac { .. } => resolve_bound_secret(ctx, owner, token, &HmacResolver),
-            Self::ApiKey { .. } => resolve_bound_secret(ctx, owner, token, &WebhookApiKeyResolver),
         }
     }
 }

@@ -69,12 +69,17 @@ pub trait SecretMaterialResolver: Send + Sync {
 |----------|------------------------------|----------------------|----------|
 | `BasicAuthResolver` | `password` required, `username` optional | `kubernetes.io/basic-auth`, `Opaque`, `""` | `BasicAuthMaterial` |
 | `BearerResolver` | `bearerToken` | `Opaque`, `""` | `BearerMaterial` |
-| `HmacResolver` | `hmacKey` | `Opaque`, `""` | `HmacMaterial` |
 | `EsApiKeyResolver` | `apiKeyId` + `apiKeySecret` | `Opaque`, `""` | `EsApiKeyMaterial` |
 | `AcmeAccountResolver` | `accountCredentials` (JSON) | `Opaque`, `""` | `AcmeAccountMaterial` |
 | `TlsCertsResolver` | at least one of `tls.crt` / `tls.key` / `ca.crt` (all three are listed in `required_keys()` so status can print the full candidate set) | `kubernetes.io/tls`, `Opaque`, `""` | `TlsMaterial` |
 
 Application-layer keys use camelCase; TLS keys follow the `kubernetes.io/tls` standard.
+
+Webhook credentials use request-template Secret references, resolved by the Controller
+into `config.resolvedSecrets`; they do not use a separate auth enum or credential
+material parser. See the [Webhook flow](../03-controller-gateway-link/webhook.md).
+ARCH-051 retired the orphan Webhook auth types and dedicated parsers; live HmacAuth
+retains its independent grouped credential resolver.
 
 ### Which resources go through these resolvers
 
@@ -82,7 +87,6 @@ Application-layer keys use camelCase; TLS keys follow the `kubernetes.io/tls` st
 |------|------|----------|
 | `LinkSys` (Redis / Etcd) | `spec.config.auth.secretRef` | `BasicAuthResolver` |
 | `LinkSys` (Elasticsearch) | `spec.config.auth` (tagged enum) | `BasicAuth` / `EsApiKey` / `Bearer` |
-| `LinkSys` (Webhook) | `spec.config.auth` (tagged enum) | `BasicAuth` / `Bearer` / `Hmac` |
 | `LinkSys` (all providers) | `spec.config.tls.certs.secretRef` | `TlsCertsResolver` |
 | `EdgionAcme` | `spec.privateKeySecretRef` | `AcmeAccountResolver` |
 
@@ -146,7 +150,9 @@ async fn resolve_for_spec(...) -> Vec<ResolvedRefsError> {
 Only Material fields that **hold raw private keys** are wrapped in `Zeroizing`:
 - `AcmeAccountMaterial.credentials` (`Zeroizing<String>`)
 - `TlsMaterial.client_key_pem` (`Option<Zeroizing<Vec<u8>>>`)
-- The rest (Basic / Bearer / Hmac / EsApiKey) use bare `String`, aligning with cert-manager.
+- Application credentials (`BasicAuthMaterial`, `BearerMaterial`, `EsApiKeyMaterial`,
+  and `AiApiKeyMaterial`) use owned `String` values; their Debug output is redacted
+  independently of zeroization.
 
 The following plaintext copies are **not** zeroized: `SecretStore` cache, `serde_json` serialization buffer, conf_sync gRPC transport, Gateway runtime store cache, the `Value` tree from `serde_json::from_str::<Value>` inside `AcmeAccountResolver::parse`, intermediate Strings such as `json.to_string()`. The upstream K8s apiserver response buffer itself cannot be zeroized; the marginal value of end-to-end zeroization is limited, so this layer guarantees only "the final material container is zeroized". For details, see the `materials.rs` module-header caveat and the NOTE in `resolvers/acme.rs`.
 
@@ -158,5 +164,5 @@ The following plaintext copies are **not** zeroized: `SecretStore` cache, `serde
 | Secret → EdgionTls | EdgionTls | SecretRefManager | `secret_ref` / `ca_secret_ref` |
 | Secret → EdgionPlugins | EdgionPlugins | SecretRefManager | JWT / BasicAuth / HMAC / KeyAuth / OIDC, etc. |
 | Secret → EdgionAcme | EdgionAcme | SecretRefManager | `privateKeySecretRef` (account private key, `AcmeAccountResolver`) |
-| Secret → LinkSys | LinkSys | SecretRefManager | `auth.secretRef` (basic/apiKey/bearer/hmac) + `tls.certs.secretRef` (mTLS private key) |
+| Secret → LinkSys | LinkSys | SecretRefManager | Provider auth references (Redis/Etcd basic, Elasticsearch basic/apiKey/bearer, OTLP bearer), Kafka `sasl.password.secretRef`, enabled TLS CA/client-certificate references, and Webhook request-template Secret references |
 | Secret → BackendTLSPolicy | BackendTLSPolicy | SecretRefManager | Backend TLS CA and client certificate |

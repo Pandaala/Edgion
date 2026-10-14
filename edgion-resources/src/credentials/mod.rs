@@ -7,7 +7,7 @@
 //! Layout:
 //! - [`materials`] — strongly-typed credential material structs
 //! - [`resolver`] — [`SecretMaterialResolver`] trait + [`ResolveError`]
-//! - [`resolvers`] — concrete implementations (Basic/Bearer/Hmac/EsApiKey/Acme)
+//! - [`resolvers`] — concrete implementations (Basic/Bearer/EsApiKey/AI/Acme/TLS)
 //!
 //! The Controller still owns the top-level owning-field credential pipeline
 //! (cross-namespace `ReferenceGrant` enforcement, `SecretRefManager`
@@ -19,11 +19,10 @@ pub mod resolver;
 pub mod resolvers;
 
 pub use materials::{
-    AcmeAccountMaterial, AiApiKeyMaterial, BasicAuthMaterial, BearerMaterial, EsApiKeyMaterial, HmacMaterial,
-    TlsMaterial,
+    AcmeAccountMaterial, AiApiKeyMaterial, BasicAuthMaterial, BearerMaterial, EsApiKeyMaterial, TlsMaterial,
 };
 pub use resolver::{InvalidValueClass, ResolveError, SecretMaterialResolver};
 pub use resolvers::{
-    AcmeAccountResolver, AiApiKeyResolver, BasicAuthResolver, BearerResolver, EsApiKeyResolver, HmacResolver,
-    TlsCertsResolver, ACME_ACCOUNT_KEY, BEARER_TOKEN_KEY, TLS_CA_KEY, TLS_CERT_KEY, TLS_KEY_KEY,
+    AcmeAccountResolver, AiApiKeyResolver, BasicAuthResolver, BearerResolver, EsApiKeyResolver, TlsCertsResolver,
+    ACME_ACCOUNT_KEY, BEARER_TOKEN_KEY, TLS_CA_KEY, TLS_CERT_KEY, TLS_KEY_KEY,
 };

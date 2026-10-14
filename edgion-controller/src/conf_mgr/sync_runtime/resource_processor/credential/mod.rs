@@ -23,6 +23,6 @@ pub use request_secrets::{request_secret_errors_readonly, resolve_request_secret
 // edgion_resources; discoverable here for controller call sites.
 pub use edgion_resources::credentials::{
     materials, resolver, resolvers, AcmeAccountMaterial, AcmeAccountResolver, BasicAuthMaterial, BasicAuthResolver,
-    BearerMaterial, BearerResolver, EsApiKeyMaterial, EsApiKeyResolver, HmacMaterial, HmacResolver, ResolveError,
-    SecretMaterialResolver, ACME_ACCOUNT_KEY,
+    BearerMaterial, BearerResolver, EsApiKeyMaterial, EsApiKeyResolver, ResolveError, SecretMaterialResolver,
+    ACME_ACCOUNT_KEY,
 };

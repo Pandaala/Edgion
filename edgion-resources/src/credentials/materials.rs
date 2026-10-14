@@ -32,7 +32,7 @@ use std::fmt;
 
 use zeroize::Zeroizing;
 
-/// Shared by Redis / Etcd / ES basic / Webhook basic auth.
+/// Shared by Redis / Etcd / Elasticsearch / Kafka basic credentials.
 #[derive(Clone)]
 pub struct BasicAuthMaterial {
     pub username: Option<String>,
@@ -46,7 +46,7 @@ pub struct EsApiKeyMaterial {
     pub api_key_secret: String,
 }
 
-/// Elasticsearch / Webhook bearer auth.
+/// Elasticsearch / OTLP bearer auth.
 #[derive(Clone)]
 pub struct BearerMaterial {
     pub token: String,
@@ -59,18 +59,6 @@ impl fmt::Debug for BearerMaterial {
             .field("token", &"[redacted]")
             .finish()
     }
-}
-
-/// Webhook HMAC auth.
-#[derive(Clone)]
-pub struct HmacMaterial {
-    pub key: String,
-}
-
-/// Webhook API Key auth.
-#[derive(Clone)]
-pub struct WebhookApiKeyMaterial {
-    pub api_key: String,
 }
 
 /// API key used to authenticate an AI provider request.
@@ -142,8 +130,6 @@ pub struct TlsMaterial {
 crate::redact::impl_redacted_debug!(
     BasicAuthMaterial,
     EsApiKeyMaterial,
-    HmacMaterial,
-    WebhookApiKeyMaterial,
     AiApiKeyMaterial,
     AcmeAccountMaterial,
     TlsMaterial,

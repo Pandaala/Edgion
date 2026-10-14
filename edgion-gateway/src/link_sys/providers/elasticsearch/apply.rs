@@ -165,14 +165,6 @@ fn hash_auth_material(h: &mut FingerprintHasher, ls: &LinkSys) {
                     h.tag(2);
                     h.bytes(bearer.token.as_bytes());
                 }
-                ResolvedCredential::Hmac(hmac) => {
-                    h.tag(3);
-                    h.bytes(hmac.key.as_bytes());
-                }
-                ResolvedCredential::WebhookApiKey(key) => {
-                    h.tag(4);
-                    h.bytes(key.api_key.as_bytes());
-                }
             }
         }
     }

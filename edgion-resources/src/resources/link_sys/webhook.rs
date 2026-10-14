@@ -6,48 +6,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::resources::common::{ExternalHttpConnection, ListFields, OutboundRequestSpec, ResolvedSecrets, SecretSlot};
-
-// ============================================================
-// WebhookAuth — authentication configuration
-// ============================================================
-
-/// Webhook authentication configuration.
-///
-/// Uses `type` field to select auth method. All methods require a Secret reference.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
-pub enum WebhookAuth {
-    /// Basic authentication (username + password in Secret)
-    Basic {
-        #[serde(flatten)]
-        slot: SecretSlot,
-    },
-    /// Bearer token authentication (bearerToken in Secret)
-    Bearer {
-        #[serde(flatten)]
-        slot: SecretSlot,
-    },
-    /// HMAC signature authentication (hmacKey in Secret)
-    Hmac {
-        #[serde(flatten)]
-        slot: SecretSlot,
-    },
-    /// API Key authentication — injects the key as a header or query parameter.
-    /// The secret must contain a `apiKey` data key.
-    ApiKey {
-        #[serde(flatten)]
-        slot: SecretSlot,
-        /// Where to inject the key: "header" or "query"
-        r#in: String,
-        /// Header name when `in = "header"` (e.g. "X-API-Key")
-        #[serde(default, skip_serializing_if = "Option::is_none", rename = "headerName")]
-        header_name: Option<String>,
-        /// Query parameter name when `in = "query"` (e.g. "api_key")
-        #[serde(default, skip_serializing_if = "Option::is_none", rename = "queryParam")]
-        query_param: Option<String>,
-    },
-}
+use crate::resources::common::{ExternalHttpConnection, ListFields, OutboundRequestSpec, ResolvedSecrets};
 
 // ============================================================
 // WebhookServiceConfig — main configuration
