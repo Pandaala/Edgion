@@ -13,11 +13,17 @@ enum Reply {
     Success,
     Hold,
     Error(u16),
+    DeferCommit,
 }
 
 #[derive(Default)]
 struct ApiState {
     lease: Value,
+    pod: Value,
+    pod_get: Reply,
+    pod_gets: usize,
+    pending_patches: Vec<Value>,
+    invalid_ack: Option<&'static str>,
     get: Reply,
     put: Reply,
     patch: Reply,
@@ -25,6 +31,35 @@ struct ApiState {
     puts: Vec<Value>,
     labels: Vec<bool>,
     held: Vec<oneshot::Sender<()>>,
+}
+
+// This server-side operation outlives any canceled client response future.
+// No-op writes deliberately retain RV, as Kubernetes storage does.
+fn commit_patch(pod: &mut Value, patch: &Value) -> u16 {
+    if patch["metadata"]["uid"] != pod["metadata"]["uid"]
+        || patch["metadata"]["resourceVersion"] != pod["metadata"]["resourceVersion"]
+    {
+        return 409;
+    }
+    let mut updated = pod.clone();
+    for field in ["labels", "annotations"] {
+        if let Some(values) = patch["metadata"][field].as_object() {
+            for (key, value) in values {
+                updated["metadata"][field][key] = value.clone();
+            }
+        }
+    }
+    if updated != *pod {
+        let version = pod["metadata"]["resourceVersion"]
+            .as_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+            + 1;
+        updated["metadata"]["resourceVersion"] = json!(version.to_string());
+        *pod = updated;
+    }
+    200
 }
 
 fn response(value: Value, code: u16) -> Response<Body> {
@@ -45,6 +80,10 @@ struct Harness {
 impl Harness {
     fn new(deadline: u64) -> Self {
         let api = Arc::new(RwLock::new(ApiState {
+            pod: json!({"apiVersion":"v1", "kind":"Pod", "metadata":{
+                "name":"controller-a", "uid":"pod-uid", "resourceVersion":"1",
+                "labels":{"edgion.io/leader":"false", "app":"controller"},
+                "annotations":{"other":"preserved"}}}),
             lease: json!({"apiVersion":"coordination.k8s.io/v1", "kind":"Lease",
                 "metadata":{"name":"controller", "namespace":"default", "uid":"uid", "resourceVersion":"1"},
                 "spec":{"holderIdentity":"controller-a", "leaseTransitions":3}}),
@@ -55,12 +94,17 @@ impl Harness {
             service_fn(move |request: http::Request<Body>| {
                 let state = state.clone();
                 async move {
+                    let is_pod = request.uri().path().contains("/pods/");
                     let method = request.method().clone();
                     let bytes = request.into_body().collect_bytes().await.unwrap();
                     let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
                     let (reply, value, held) = {
                         let mut state = state.write();
                         let (reply, value) = match method {
+                            Method::GET if is_pod => {
+                                state.pod_gets += 1;
+                                (state.pod_get, state.pod.clone())
+                            }
                             Method::GET => {
                                 state.gets += 1;
                                 (state.get, state.lease.clone())
@@ -80,10 +124,32 @@ impl Harness {
                                 state
                                     .labels
                                     .push(body["metadata"]["labels"]["edgion.io/leader"] == "true");
-                                (
-                                    state.patch,
-                                    json!({"apiVersion":"v1", "kind":"Pod", "metadata":{"name":"controller-a"}}),
-                                )
+                                let reply = state.patch;
+                                if matches!(reply, Reply::DeferCommit) {
+                                    state.pending_patches.push(body);
+                                    (Reply::Hold, state.pod.clone())
+                                } else if matches!(reply, Reply::Error(_)) {
+                                    (reply, state.pod.clone())
+                                } else {
+                                    let code = commit_patch(&mut state.pod, &body);
+                                    let mut value = state.pod.clone();
+                                    match state.invalid_ack {
+                                        Some("resourceVersion") => {
+                                            value["metadata"]["resourceVersion"] =
+                                                body["metadata"]["resourceVersion"].clone()
+                                        }
+                                        Some("uid") => value["metadata"]["uid"] = json!("wrong-uid"),
+                                        Some("label") => {
+                                            value["metadata"]["labels"]["edgion.io/leader"] = json!("false")
+                                        }
+                                        Some("marker") => {
+                                            value["metadata"]["annotations"][LEADER_LABEL_WRITE_ID_ANNOTATION] =
+                                                json!("wrong-marker")
+                                        }
+                                        _ => {}
+                                    }
+                                    (if code == 200 { reply } else { Reply::Error(code) }, value)
+                                }
                             }
                             Method::POST => (Reply::Success, state.lease.clone()),
                             _ => panic!("unexpected method"),
@@ -362,5 +428,187 @@ async fn failed_label_retries_current_state_without_flapping_authority() {
         );
         assert_eq!(state.labels.last(), Some(&false));
     }
+    h.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn canceled_label_commits_cannot_overwrite_newer_noop_state() {
+    for old_value in [false, true] {
+        let h = Harness::new(10);
+        if !old_value {
+            h.tick(2).await;
+            h.api.write().put = Reply::Error(409);
+        }
+        h.api.write().patch = Reply::DeferCommit;
+        h.tick(2).await;
+        let old = h.api.write().pending_patches.pop().unwrap();
+        assert_eq!(
+            old["metadata"]["labels"]["edgion.io/leader"],
+            json!(old_value.to_string())
+        );
+        h.api.write().patch = Reply::Success;
+        h.api.write().put = if old_value { Reply::Error(409) } else { Reply::Success };
+        h.tick(2).await;
+        {
+            let mut state = h.api.write();
+            assert_eq!(
+                state.pod["metadata"]["labels"]["edgion.io/leader"],
+                json!((!old_value).to_string())
+            );
+            assert_eq!(commit_patch(&mut state.pod, &old), 409);
+            assert_eq!(state.pod["metadata"]["labels"]["app"], "controller");
+            assert_eq!(state.pod["metadata"]["annotations"]["other"], "preserved");
+        }
+        let reads = h.api.read().pod_gets;
+        h.tick(2).await;
+        assert_eq!(h.api.read().pod_gets, reads);
+        h.stop().await;
+    }
+}
+
+#[test]
+fn server_model_retains_noop_version_and_exposes_rv_only_race() {
+    let mut pod = json!({"metadata":{"uid":"uid", "resourceVersion":"1", "labels":{"edgion.io/leader":"true"}}});
+    let same = pod.clone();
+    assert_eq!(commit_patch(&mut pod, &same), 200);
+    assert_eq!(pod["metadata"]["resourceVersion"], "1");
+    let mut old = same;
+    old["metadata"]["labels"]["edgion.io/leader"] = json!("false");
+    assert_eq!(commit_patch(&mut pod, &old), 200);
+    assert_eq!(pod["metadata"]["labels"]["edgion.io/leader"], "false");
+}
+
+#[tokio::test(start_paused = true)]
+async fn pod_get_stalls_preserve_tight_renewal_and_shutdown_bounds() {
+    let h = Harness::new(3);
+    h.api.write().pod_get = Reply::Hold;
+    h.tick(2).await;
+    let fence = h.election.handle().current_fence().unwrap();
+    for _ in 0..3 {
+        h.tick(2).await;
+        assert_eq!(h.election.handle().current_fence().unwrap(), fence);
+    }
+    assert!(h.api.read().labels.is_empty());
+    h.api.write().get = Reply::Error(503);
+    h.tick(2).await;
+    h.tick(1).await;
+    h.withdrawn();
+    h.stop().await;
+
+    let h = Harness::new(3);
+    h.api.write().pod_get = Reply::Hold;
+    h.tick(2).await;
+    h.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn pod_conflict_retries_fresh_read_without_losing_leadership() {
+    let h = Harness::new(3);
+    h.api.write().pod_get = Reply::Hold;
+    h.tick(2).await;
+    // Change the resource after GET captured its response, before PATCH arrives.
+    h.api.write().pod["metadata"]["resourceVersion"] = json!("2");
+    for response in std::mem::take(&mut h.api.write().held) {
+        let _ = response.send(());
+    }
+    settle().await;
+    assert!(h.election.is_leader());
+    assert_eq!(h.api.read().pod["metadata"]["labels"]["edgion.io/leader"], "false");
+    h.api.write().pod_get = Reply::Success;
+    h.tick(2).await;
+    assert!(h.election.is_leader());
+    assert_eq!(h.api.read().pod["metadata"]["labels"]["edgion.io/leader"], "true");
+    assert_eq!(h.api.read().pod_gets, 2);
+    h.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn pod_preflight_requires_metadata_and_distinguishes_permissions() {
+    for field in ["uid", "resourceVersion"] {
+        for value in [Value::Null, json!("")] {
+            let h = Harness::new(10);
+            h.api.write().pod["metadata"][field] = value;
+            assert!(h.election.preflight_check().await.is_err());
+            assert!(h.api.read().labels.is_empty());
+            h.stop().await;
+        }
+    }
+    for get in [false, true] {
+        let h = Harness::new(10);
+        if get {
+            h.api.write().pod_get = Reply::Error(403);
+        } else {
+            h.api.write().patch = Reply::Error(403);
+        }
+        let error = h.election.preflight_check().await.unwrap_err().to_string();
+        assert!(
+            error.contains(if get { "cannot get Pod" } else { "cannot patch Pod" }),
+            "{error}"
+        );
+        h.stop().await;
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn recreated_pod_rejects_prepared_patch_and_invalid_ack_retries() {
+    let h = Harness::new(10);
+    h.api.write().patch = Reply::DeferCommit;
+    h.tick(2).await;
+    let old = h.api.write().pending_patches.pop().unwrap();
+    {
+        let mut state = h.api.write();
+        state.pod["metadata"]["uid"] = json!("replacement-uid");
+        assert_eq!(commit_patch(&mut state.pod, &old), 409);
+        state.patch = Reply::Success;
+        state.invalid_ack = Some("resourceVersion");
+    }
+    h.tick(2).await;
+    let reads = h.api.read().pod_gets;
+    h.api.write().invalid_ack = None;
+    h.tick(2).await;
+    assert_eq!(h.api.read().pod_gets, reads + 1);
+    h.tick(2).await;
+    assert_eq!(h.api.read().pod_gets, reads + 1);
+    h.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn altered_success_responses_remain_dirty_until_verified() {
+    for field in ["uid", "resourceVersion", "label", "marker"] {
+        let h = Harness::new(10);
+        h.api.write().invalid_ack = Some(field);
+        h.tick(2).await;
+        h.tick(2).await;
+        assert_eq!(h.api.read().pod_gets, 2, "{field}");
+        h.api.write().invalid_ack = None;
+        h.tick(2).await;
+        h.tick(2).await;
+        assert_eq!(h.api.read().pod_gets, 3, "{field}");
+        h.stop().await;
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn older_patch_committing_first_forces_fresh_read_retry() {
+    let h = Harness::new(10);
+    h.api.write().patch = Reply::DeferCommit;
+    h.tick(2).await;
+    let old = h.api.write().pending_patches.pop().unwrap();
+    h.api.write().patch = Reply::Success;
+    h.api.write().put = Reply::Error(409);
+    h.api.write().pod_get = Reply::Hold;
+    h.tick(2).await;
+    h.withdrawn();
+    // The new false attempt already read r1; the canceled true commits first.
+    assert_eq!(commit_patch(&mut h.api.write().pod, &old), 200);
+    for response in std::mem::take(&mut h.api.write().held) {
+        let _ = response.send(());
+    }
+    settle().await;
+    assert_eq!(h.api.read().pod["metadata"]["labels"]["edgion.io/leader"], "true");
+    h.api.write().pod_get = Reply::Success;
+    h.tick(2).await;
+    assert_eq!(h.api.read().pod["metadata"]["labels"]["edgion.io/leader"], "false");
+    assert_eq!(h.api.read().pod_gets, 3);
     h.stop().await;
 }

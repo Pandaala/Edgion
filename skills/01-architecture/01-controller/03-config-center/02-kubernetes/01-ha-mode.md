@@ -20,7 +20,12 @@ Transient Lease errors retain authority only within the remaining window; 404,
 409 and a competing holder cause immediate withdrawal. Pod-label convergence runs
 after Lease processing and consumes only the existing retry interval, so a slow
 label patch does not postpone the next renewal. Timed-out patches retry current
-state on later ticks. Labels never establish or extend leadership.
+state on later ticks. Each attempt reads the Pod and conditionally patches its
+UID/resourceVersion plus a fresh internal `edgion.io/leader-label-write-id` marker.
+The marker advances the object version even when the desired label already matches,
+so a delayed older patch cannot overwrite a newer acknowledged synchronization.
+Conflicts retry with a fresh read; GET and PATCH share the existing time bound.
+Labels never establish or extend leadership.
 
 Cancelling a request does not roll back a server write or fence already submitted
 status writes. The leader-only lifecycle and all-serve per-write guards retain

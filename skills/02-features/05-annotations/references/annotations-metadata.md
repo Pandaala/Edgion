@@ -242,3 +242,11 @@ For new work, prefer:
 - `edgion.io/edgion-stream-plugins`
 
 If you touch an old example or doc, update it instead of copying the legacy key forward.
+
+## Controller Pod label write marker
+
+`edgion.io/leader-label-write-id` is a Controller-written UUID annotation on its
+Pod. Every conditional leader-label patch changes it to ensure a real object
+version change even when the label already matches. Do not configure it manually;
+it is not a leadership credential. See the [system-managed keys](annotations-system-and-test-keys.md)
+and [HA architecture](../../../01-architecture/01-controller/03-config-center/02-kubernetes/01-ha-mode.md).

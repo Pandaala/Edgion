@@ -33,9 +33,27 @@ renew deadline=3s. Transient Lease errors preserve the existing absolute deadlin
 blanket statement that all label-desync reports were disproved: the old tests and
 implementation did not establish behavior under pending IO.
 
-Cancellation is local: a submitted server write may still complete, including a
-late label patch. Current-state retries provide convergence opportunities, not
-exactly-once remote ordering, server-side fencing, or a bounded recovery guarantee.
+Cancellation is local: a submitted server write may still complete. Each label
+attempt now reads the Pod and merge-patches with its nonempty UID/resourceVersion,
+the desired label and a fresh `edgion.io/leader-label-write-id` UUID. The marker
+forces a real metadata change even when the label already matches; a label-only
+no-op can retain resourceVersion and would leave an earlier opposite patch valid.
+Only a response preserving UID, label and marker with a changed nonempty version
+acknowledges synchronization. Missing metadata, conflicts, mutated responses and
+errors remain dirty for a fresh read on the next tick, within the existing bounds.
+
+An earlier prepared patch cannot overwrite a newer acknowledged synchronization:
+if the newer write commits first, the old resourceVersion conflicts; if the old
+write commits first, the newer attempt conflicts and retries. UID protects against
+Pod recreation between read and write. Merge preserves unrelated labels and
+annotations. Both Pod `get` and `patch` permissions are required; the canonical
+controller Role already grants both and preflight identifies the failed operation.
+
+This is conditional-write protection for submitted patches, not leadership
+fencing or exactly-once execution. It does not stop another process from performing
+a fresh GET against the same Pod name, prevent external label edits after success,
+or guarantee bounded recovery under persistent API/admission failures. Shutdown
+remains a one-shot best effort. Labels remain derived routing state.
 
 ## Core Rationale
 
@@ -105,6 +123,11 @@ Production-owner regressions live in
 They drive the real loop through an in-process kube service with paused Tokio time,
 covering held GET/replace, acquisition/retry label stalls, tight cadence, sleep
 expiry, grace/recovery, deadline/result competition, late response and fresh term,
-authoritative loss, shutdown and preflight. No sockets or Kubernetes cluster are
+authoritative loss, shutdown and preflight. The Pod model preserves state and
+resourceVersion, deliberately retains versions for no-op writes, and commits held
+patches independently of canceled client response futures. Regressions cover late
+opposite-value writes in both directions, fresh-read conflict recovery, Pod GET
+stalls, metadata/permission failures, recreation, response validation and preservation
+of unrelated metadata. No sockets or Kubernetes cluster are
 used. These checks do not prove remote write cancellation or scheduler progress
 when the runtime cannot poll the election task.

@@ -6,6 +6,7 @@ Use this file when a key is reserved, injected by the system, or only intended f
 
 | Key | Writer | Meaning | Guidance |
 |-----|--------|---------|----------|
+| `edgion.io/leader-label-write-id` | Controller Kubernetes election owner | Fresh UUID with every conditional Pod leader-label patch, including same-value label updates | Internal only; do not author or mutate. Not a leadership credential. |
 | `edgion.io/hostname-resolution` | controller route handlers | Diagnostic summary of effective hostname resolution for `HTTPRoute` / `GRPCRoute` | Do not hand-author. Treat as system-reserved. |
 | `edgion.io/sync-version` | Gateway sync/meta layer | Correlates data-plane state with control-plane sync version | Do not hand-author in manifests. |
 | `edgion.io/dns-resolved-at` | Controller DNS resolver | RFC3339 freshness stamp on a synthetic ExternalName EndpointSlice | Do not hand-author. |

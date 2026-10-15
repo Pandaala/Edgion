@@ -3,7 +3,7 @@
 //! Uses Kubernetes Lease resources for distributed leader election.
 //! Only the leader instance will run reconciliation loops.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use k8s_openapi::api::coordination::v1::Lease;
 use k8s_openapi::api::core::v1::Pod;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::MicroTime;
@@ -35,6 +35,7 @@ const DEFAULT_RETRY_PERIOD_SECS: u64 = 2;
 /// client's much longer default request timeout. Any failure mode degrades to
 /// natural lease expiry, i.e. the pre-release behavior.
 const RELEASE_LEASE_TIMEOUT_SECS: u64 = 3;
+const LEADER_LABEL_WRITE_ID_ANNOTATION: &str = "edgion.io/leader-label-write-id";
 pub(crate) const LEADER_TERM_ANNOTATION: &str = "edgion.io/leader-term";
 
 /// Stable identity for one successful local leadership acquisition.
@@ -224,7 +225,7 @@ impl LeaderElection {
     ///
     /// This validates:
     /// - Lease resource can be created/read in `lease_namespace`
-    /// - Current Pod label can be patched in `pod_namespace`
+    /// - Current Pod can be read and its label patched in `pod_namespace`
     pub async fn preflight_check(&self) -> Result<()> {
         // Fail fast on bad timing config before touching the apiserver: bad
         // values here can cause split-brain at runtime, which is much worse
@@ -445,7 +446,7 @@ impl LeaderElection {
                     identity = %self.config.identity,
                     pod_namespace = %self.config.pod_namespace,
                     is_leader = is_leader,
-                    error = %e,
+                    error = %format_args!("{e:#}"),
                     "Failed to update pod leader label; will retry on next election tick"
                 );
                 false
@@ -457,7 +458,7 @@ impl LeaderElection {
     async fn ensure_pod_label_patch_ready(&self) -> Result<()> {
         self.try_patch_pod_leader_label(false).await.map_err(|e| {
             anyhow::anyhow!(
-                "Failed startup pod label permission check: cannot patch pod '{}' in namespace '{}': {}",
+                "Failed startup pod label permission check for pod '{}' in namespace '{}': {:#}",
                 self.config.identity,
                 self.config.pod_namespace,
                 e
@@ -467,17 +468,68 @@ impl LeaderElection {
 
     async fn try_patch_pod_leader_label(&self, is_leader: bool) -> Result<()> {
         let pod_api: Api<Pod> = Api::namespaced(self.client.clone(), &self.config.pod_namespace);
+        let pod = pod_api
+            .get(&self.config.identity)
+            .await
+            .context("cannot get Pod for label update")?;
+        let uid = pod
+            .metadata
+            .uid
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .context("cannot patch Pod label: GET returned no UID")?;
+        let version = pod
+            .metadata
+            .resource_version
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .context("cannot patch Pod label: GET returned no resourceVersion")?;
+        let write_id = uuid::Uuid::new_v4().to_string();
+        anyhow::ensure!(
+            pod.metadata
+                .annotations
+                .as_ref()
+                .and_then(|values| values.get(LEADER_LABEL_WRITE_ID_ANNOTATION))
+                != Some(&write_id),
+            "cannot patch Pod label: write ID did not change"
+        );
         let label_value = if is_leader { "true" } else { "false" };
+        // A matching label alone can be a no-op and leave resourceVersion unchanged.
+        // Changing this private marker fences earlier submitted patches even then.
         let patch = serde_json::json!({
             "metadata": {
-                "labels": {
-                    "edgion.io/leader": label_value
-                }
+                "uid": uid,
+                "resourceVersion": version,
+                "labels": { "edgion.io/leader": label_value },
+                "annotations": { LEADER_LABEL_WRITE_ID_ANNOTATION: write_id }
             }
         });
-        pod_api
+        let applied = pod_api
             .patch(&self.config.identity, &PatchParams::default(), &Patch::Merge(&patch))
-            .await?;
+            .await
+            .context("cannot patch Pod label")?;
+        anyhow::ensure!(
+            applied.metadata.uid.as_deref() == Some(uid)
+                && applied
+                    .metadata
+                    .resource_version
+                    .as_deref()
+                    .is_some_and(|value| !value.is_empty() && value != version)
+                && applied
+                    .metadata
+                    .labels
+                    .as_ref()
+                    .and_then(|values| values.get("edgion.io/leader"))
+                    .map(String::as_str)
+                    == Some(label_value)
+                && applied
+                    .metadata
+                    .annotations
+                    .as_ref()
+                    .and_then(|values| values.get(LEADER_LABEL_WRITE_ID_ANNOTATION))
+                    == Some(&write_id),
+            "cannot confirm Pod label update: response does not preserve the conditional write"
+        );
         Ok(())
     }
 

@@ -173,6 +173,7 @@ The following annotations are managed automatically by the system; **do not set 
 
 | Annotation | Description |
 |------------|-------------|
+| `edgion.io/leader-label-write-id` | Controller-written UUID on its Pod; forces a version change for conditional leader-label updates |
 | `edgion.io/hostname-resolution` | DNS resolution results injected by the Controller |
 | `edgion.io/sync-version` | Configuration sync version number |
 | `edgion.io/dns-resolved-at` | Controller-written freshness timestamp on synthetic EndpointSlices |
