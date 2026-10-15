@@ -1987,13 +1987,8 @@ fn copy_target_plan(
             CandidateTargetSelector::Literal(range) | CandidateTargetSelector::Path(range) => {
                 let source = byte_range(candidate_bytes, range)?;
                 let start = target_bytes.len();
-                target_bytes
-                    .try_reserve_exact(source.len())
-                    .map_err(|_| CompilerError::Allocation {
-                        operation: "canonical target bytes",
-                    })?;
+                work.reserve_canonical(target_bytes, source.len(), "canonical target bytes")?;
                 target_bytes.extend_from_slice(source);
-                work.retain_compiler_bytes(source.len())?;
                 let owned = ByteRange {
                     start,
                     len: source.len(),
@@ -2006,16 +2001,14 @@ fn copy_target_plan(
             }
             CandidateTargetSelector::Regex { style, program } => CompiledTargetSelector::Regex { style, program },
         };
-        reserve_one(target_records, "canonical target records")?;
-        work.retain_compiler_records::<CompiledTargetRecord>(1)?;
+        work.reserve_canonical(target_records, 1, "canonical target records")?;
         target_records.push(CompiledTargetRecord {
             collection: record.collection,
             modifier: record.modifier,
             selector,
         });
     }
-    reserve_one(target_plans, "canonical target plans")?;
-    work.retain_compiler_records::<CompiledTargetPlan>(1)?;
+    work.reserve_canonical(target_plans, 1, "canonical target plans")?;
     let id = target_plans.len();
     target_plans.push(CompiledTargetPlan {
         record_start,
@@ -2138,15 +2131,9 @@ fn insert_transformation_plan(
         let slot = slots[index];
         if slot.is_empty() {
             let transformation_start = values.len();
-            values
-                .try_reserve_exact(candidate.len())
-                .map_err(|_| CompilerError::Allocation {
-                    operation: "canonical transformations",
-                })?;
+            compile_work.reserve_canonical(values, candidate.len(), "canonical transformations")?;
             values.extend_from_slice(candidate);
-            compile_work.retain_compiler_records::<TransformationKind>(candidate.len())?;
-            reserve_one(plans, "canonical transformation plans")?;
-            compile_work.retain_compiler_records::<CompiledTransformationPlan>(1)?;
+            compile_work.reserve_canonical(plans, 1, "canonical transformation plans")?;
             let id = plans.len();
             plans.push(CompiledTransformationPlan {
                 transformation_start,
@@ -3099,19 +3086,15 @@ impl<'source> GroupedMatcherState<'source> {
         let mut target_plans = Vec::new();
         let mut canonical_transformations = Vec::new();
         let mut transformation_plans = Vec::new();
-        target_bytes
-            .try_reserve_exact(target_selector_bytes)
-            .map_err(|_| CompilerError::Allocation {
-                operation: "canonical target bytes",
-            })?;
-        reserve_exact(&mut target_records, target_records_count, "canonical target records")?;
-        reserve_exact(&mut target_plans, active_members, "canonical target plans")?;
-        reserve_exact(
+        compile_work.reserve_canonical(&mut target_bytes, target_selector_bytes, "canonical target bytes")?;
+        compile_work.reserve_canonical(&mut target_records, target_records_count, "canonical target records")?;
+        compile_work.reserve_canonical(&mut target_plans, active_members, "canonical target plans")?;
+        compile_work.reserve_canonical(
             &mut canonical_transformations,
             state.asset_templates.transformations.len(),
             "canonical transformations",
         )?;
-        reserve_exact(
+        compile_work.reserve_canonical(
             &mut transformation_plans,
             active_members,
             "canonical transformation plans",
@@ -3769,16 +3752,11 @@ impl CompiledGeneration {
                             location: action.location,
                         });
                     }
-                    work.retain_compiler_bytes(value.len())?;
                     let range = ByteRange {
                         start: target_bytes.len(),
                         len: value.len(),
                     };
-                    target_bytes
-                        .try_reserve(value.len())
-                        .map_err(|_| CompilerError::Allocation {
-                            operation: "compiled ctl target bytes",
-                        })?;
+                    work.reserve_canonical(&mut target_bytes, value.len(), "compiled ctl target bytes")?;
                     target_bytes.extend_from_slice(value);
                     if matches!(*selector, CompiledCtlSelector::Literal(_)) {
                         CompiledTargetSelector::Literal(range)
@@ -4066,6 +4044,35 @@ fn install_optional_regex_hint(
 }
 
 impl MatcherCompileWork {
+    // Canonical identity counts are independent of retained backing capacity.
+    // Admit growth and old/new overlap before allocation, then reconcile excess.
+    fn reserve_canonical<T>(
+        &mut self,
+        values: &mut Vec<T>,
+        additional: usize,
+        operation: &'static str,
+    ) -> Result<(), CompilerError> {
+        let required = checked_add(values.len(), additional)?;
+        let old = values.capacity();
+        if required <= old {
+            return Ok(());
+        }
+        let overlap = old
+            .checked_mul(size_of::<T>())
+            .ok_or(CompilerError::PreflightArithmetic)?;
+        self.retain_compiler_records::<T>(required - old)?;
+        self.record_matcher_peak(overlap)?;
+        reserve_exact(values, additional, operation)?;
+        let excess = values
+            .capacity()
+            .checked_sub(required)
+            .ok_or(CompilerError::PrivateInvariant {
+                kind: CompilerInvariant::InvalidByteRange,
+            })?;
+        self.retain_compiler_records::<T>(excess)?;
+        self.record_matcher_peak(overlap)
+    }
+
     fn matcher_peak_base(&self) -> Result<usize, CompilerError> {
         self.validated_bytes
             .checked_add(self.compiler_owned_bytes)

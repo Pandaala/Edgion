@@ -2335,3 +2335,191 @@ impl CompiledGeneration {
         Self::publish_with_work(state, limits).map(|result| result.0)
     }
 }
+
+fn canonical_capacity_work(limits: CompilerLimits) -> MatcherCompileWork {
+    MatcherCompileWork {
+        limits,
+        validated_bytes: 11,
+        working_bytes: 13,
+        compiler_owned_bytes: 0,
+        matcher_charged_bytes: 17,
+        peak_bytes: 0,
+        requirement_cursors: [0; 8],
+    }
+}
+
+#[test]
+fn canonical_capacity_admission_counts_spare_storage_and_growth_overlap() {
+    let mut work = canonical_capacity_work(CompilerLimits::default());
+    let mut values = Vec::<u64>::new();
+    work.reserve_canonical(&mut values, 0, "test arena").unwrap();
+    assert_eq!(work.compiler_owned_bytes, 0);
+    work.reserve_canonical(&mut values, 4, "test arena").unwrap();
+    let old_bytes = values.capacity() * size_of::<u64>();
+    assert_eq!(work.compiler_owned_bytes, old_bytes);
+    values.push(1);
+    work.reserve_canonical(&mut values, 1, "test arena").unwrap();
+    assert_eq!(work.compiler_owned_bytes, old_bytes);
+    values.resize(values.capacity(), 1);
+    work.reserve_canonical(&mut values, 1, "test arena").unwrap();
+    let new_bytes = values.capacity() * size_of::<u64>();
+    assert_eq!(work.compiler_owned_bytes, new_bytes);
+    assert_eq!(work.peak_bytes, 11 + 13 + 17 + old_bytes + new_bytes);
+    assert_eq!(values, vec![1; old_bytes / size_of::<u64>()]);
+    assert_eq!(
+        work.reserve_canonical(&mut values, usize::MAX, "test arena"),
+        Err(CompilerError::PreflightArithmetic)
+    );
+}
+
+#[test]
+fn canonical_capacity_limits_admit_exact_sizes_and_reject_before_growth() {
+    for boundary in 0..3 {
+        for short in [false, true] {
+            let mut values = vec![1_u64; 4];
+            let old = values.capacity() * size_of::<u64>();
+            let new = (values.len() + 1) * size_of::<u64>();
+            let mut limits = CompilerLimits::default();
+            let deficit = usize::from(short);
+            match boundary {
+                0 => limits.max_compiler_owned_non_matcher_bytes = new - deficit,
+                1 => limits.max_generation_bytes = new + 17 - deficit,
+                _ => limits.max_compilation_peak_bytes = 11 + 13 + 17 + old + new - deficit,
+            }
+            let mut work = canonical_capacity_work(limits);
+            work.compiler_owned_bytes = old;
+            let result = work.reserve_canonical(&mut values, 1, "test arena");
+            assert_eq!(result.is_ok(), !short, "boundary {boundary}: {result:?}");
+            if short {
+                assert_eq!(values.capacity() * size_of::<u64>(), old);
+                let expected = match boundary {
+                    0 => CompilerError::OwnedByteLimit { limit: new - 1 },
+                    1 => CompilerError::GenerationByteLimit { limit: new + 17 - 1 },
+                    _ => CompilerError::PeakByteLimit {
+                        limit: 11 + 13 + 17 + old + new - 1,
+                    },
+                };
+                assert_eq!(result, Err(expected));
+            } else {
+                assert_eq!(work.compiler_owned_bytes, values.capacity() * size_of::<u64>());
+            }
+        }
+    }
+}
+
+fn grouped_arena_capacity(grouped: &GroupedMatcherState<'_>) -> usize {
+    grouped.target_bytes.capacity()
+        + grouped.target_records.capacity() * size_of::<CompiledTargetRecord>()
+        + grouped.target_plans.capacity() * size_of::<CompiledTargetPlan>()
+        + grouped.canonical_transformations.capacity() * size_of::<TransformationKind>()
+        + grouped.transformation_plans.capacity() * size_of::<CompiledTransformationPlan>()
+}
+
+#[test]
+fn canonical_grouping_retains_all_five_capacities_after_deduplication() {
+    for text in [
+        concat!(
+            "SecRule REQUEST_HEADERS:key \"@eq 1\" \"id:1,phase:1,pass,t:lowercase\"\n",
+            "SecRule REQUEST_HEADERS:key \"@eq 2\" \"id:2,phase:1,pass,t:lowercase\"\n",
+            "SecRule REQUEST_HEADERS:other \"@eq 3\" \"id:3,phase:1,pass\"\n",
+        ),
+        concat!(
+            "SecRule XML:/* \"@eq 1\" \"id:1,phase:2,pass,t:length,chain\"\n",
+            "SecRule XML:/* \"@eq 2\" \"t:length\"\n",
+            "SecRule XML://@* \"@eq 3\" \"id:3,phase:2,pass\"\n",
+        ),
+    ] {
+        with_validated(text, |validated| {
+            let limits = CompilerLimits::default();
+            let prepared = CompilerBuilder::new(validated, None, limits).prepare().unwrap();
+            let matched = MatcherState::compile(prepared, limits).unwrap();
+            let incoming = matched.compiler_owned_bytes;
+            let replaced = matched.asset_templates.transformations.len() * size_of::<TransformationKind>();
+            let grouped = GroupedMatcherState::compile(matched, limits).unwrap();
+            assert!(grouped.groups.is_empty());
+            assert!(grouped.pattern_mappings.is_empty());
+            assert_eq!(
+                grouped.compiler_owned_bytes,
+                incoming - replaced + grouped_arena_capacity(&grouped)
+            );
+            assert_eq!(grouped.target_plans.len(), 2);
+            assert_eq!(grouped.target_records.len(), 2);
+            assert_eq!(grouped.transformation_plans.len(), 2);
+            assert_eq!(grouped.canonical_transformations.len(), 1);
+            assert!(grouped.target_plans.capacity() >= 3);
+            let members = &grouped.matchers.asset_templates.members;
+            assert_eq!(members[0].target_plan, members[1].target_plan);
+            assert_ne!(members[1].target_plan, members[2].target_plan);
+        });
+    }
+}
+
+#[test]
+fn canonical_publication_keeps_capacity_charge_and_accounts_ctl_appends() {
+    for ctl in [
+        "",
+        ",ctl:ruleRemoveTargetByTag=probe;ARGS:x",
+        ",ctl:ruleRemoveTargetByTag=probe;ARGS:long-selector,ctl:ruleRemoveTargetByTag=probe;XML:/*",
+    ] {
+        let text = format!(
+            "SecRule REQUEST_HEADERS:key \"@eq 1\" \"id:1,phase:1,pass,t:lowercase{ctl}\"\n\
+             SecRule REQUEST_HEADERS:key \"@eq 2\" \"id:2,phase:1,pass,t:lowercase\"\n"
+        );
+        with_validated(&text, |validated| {
+            let limits = CompilerLimits::default();
+            let prepared = CompilerBuilder::new(validated, None, limits).prepare().unwrap();
+            let matched = MatcherState::compile(prepared, limits).unwrap();
+            let incoming = matched.compiler_owned_bytes;
+            let replaced = matched.asset_templates.transformations.len() * size_of::<TransformationKind>();
+            let grouped = GroupedMatcherState::compile(matched, limits).unwrap();
+            let old_capacity = grouped.target_bytes.capacity();
+            let initial_capacity = grouped_arena_capacity(&grouped);
+            let (generation, _) = CompiledGeneration::publish_with_work(grouped, limits).unwrap();
+            let final_capacity = generation.target_bytes.capacity()
+                + generation.target_records.capacity() * size_of::<CompiledTargetRecord>()
+                + generation.target_plans.capacity() * size_of::<CompiledTargetPlan>()
+                + generation.transformations.capacity() * size_of::<TransformationKind>()
+                + generation.transformation_plans.capacity() * size_of::<CompiledTransformationPlan>();
+            assert_eq!(
+                generation.compiler_owned_bytes(),
+                incoming - replaced
+                    + final_capacity
+                    + 2 * size_of::<CompiledRuleUnit>()
+                    + 2 * size_of::<CompiledScheduleEntry>()
+                    + (generation.json_inspection.members.capacity() + generation.xml_inspection.members.capacity())
+                        * size_of::<json_inspection_plan::JsonMemberPlan>()
+            );
+            assert_eq!(generation.retained_bytes(), generation.compiler_owned_bytes());
+            if ctl.contains("long-selector") {
+                assert!(generation.target_bytes.capacity() > old_capacity);
+                assert_eq!(generation.target_bytes, b"keylong-selector/*");
+                assert!(final_capacity > initial_capacity);
+            } else {
+                assert_eq!(generation.target_bytes.capacity(), old_capacity);
+                assert_eq!(final_capacity, initial_capacity);
+                assert_eq!(
+                    generation.target_bytes,
+                    if ctl.is_empty() {
+                        b"key".as_slice()
+                    } else {
+                        b"keyx".as_slice()
+                    }
+                );
+            }
+            for action in &generation.actions {
+                if let CompiledActionOperand::Ctl(CompiledCtl::RuleRemoveTargetByTag {
+                    selector: CompiledCtlSelector::Resolved(selector),
+                    ..
+                }) = action.operand
+                {
+                    let (CompiledTargetSelector::Literal(range) | CompiledTargetSelector::Path(range)) = selector
+                    else {
+                        panic!("expected byte selector");
+                    };
+                    let bytes = byte_range(&generation.target_bytes, range).unwrap();
+                    assert!(matches!(bytes, b"x" | b"long-selector" | b"/*"));
+                }
+            }
+        });
+    }
+}

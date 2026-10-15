@@ -187,6 +187,32 @@ hands off once to installed transaction charging. Errors and cancellation releas
 the charge. Inline storage, BodyStorage, allocator overhead and RSS are excluded;
 independent component peaks are not a simultaneous aggregate peak.
 
+## Canonical compiler arena capacity
+
+ARCH-231 corrected a distinct base-compiler accounting gap: occurrence-sized
+reservations for target bytes, target records/plans and transformation values/plans
+were retained by the generation but charged only for unique inserted lengths.
+Deduplication reduced logical inventory without releasing those backing allocations.
+
+`MatcherCompileWork::reserve_canonical` owns all five arenas' capacity admission,
+including publication-time literal/path `ctl` selector appends. It admits requested
+growth before fallible reservation, reconciles actual capacity, and checks old/new
+allocation overlap both before reservation and after excess-capacity reconciliation.
+Within-capacity insertions add no second retained charge. Existing occurrence-sized
+preallocation and canonical IDs/order/equality remain unchanged; corrected headroom
+can reject tight candidates earlier or reduce optional acceleration under unchanged
+limits. This is not a whole-compiler heap audit or an RSS/throughput improvement.
+
+Compiler regression tests independently sum capacity times element size at grouping
+and publication, separating replaced transformation storage and unrelated publication
+records. They cover repeated/distinct literal/path plans, chains, empty/nonempty
+transformations, ctl spare-capacity and repeated-growth appends, exact/one-less
+compiler/generation/overlap limits, and arithmetic rejection before allocation.
+Existing strict-selection, collision, ordering, optional-fallback and body tests
+remain required. Allocator excess reconciliation is checked in source; tests do not
+force a particular allocator to return excess capacity. Re-evaluate on any new
+canonical arena writer, reservation policy or publication-owner change.
+
 ## Verification and re-evaluation
 
 Historical rule classification is not compiler admission or runtime acceptance.
