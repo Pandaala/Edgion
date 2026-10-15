@@ -24,6 +24,7 @@
 // Tests that expect 200 use routes that pass through to the normal backend (test-http:30001).
 // Tests that expect 502 verify the plugin correctly set ExternalJumpPreset (access log check).
 
+use crate::access_log_client::AccessLogEntry;
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use edgion_gateway::plugins::http::region_route::log_consts as log_t;
 use std::time::Instant;
@@ -32,6 +33,44 @@ const MAIN_HOST: &str = "region-route-main.example.com";
 const NORULES_HOST: &str = "region-route-norules.example.com";
 const MYREGION_HOST: &str = "region-route-myregion.example.com";
 const BROKEN_REF_HOST: &str = "region-route-broken-ref.example.com";
+
+// Observe selection and terminal rejection independently: the target is logged before
+// the jump setter runs, while an arbitrary 500/502 does not prove the loopback guard.
+fn observed_nonlocal_failover(entry: &AccessLogEntry) -> bool {
+    if entry.route_name() != Some("region-route-myregion-test")
+        || !entry.has_diagnostic("error", "BackendLocalhostNotAllowed")
+    {
+        return false;
+    }
+    let Some(stages) = entry.data["stage_logs"].as_array() else {
+        return false;
+    };
+    let mut executions = stages
+        .iter()
+        .filter_map(|stage| stage["edgion_plugins"].as_array())
+        .flatten()
+        .filter(|group| group["name"] == "region-route-myregion")
+        .filter_map(|group| group["logs"].as_array())
+        .flatten()
+        .filter(|plugin| plugin["name"] == "RegionRoute");
+    let Some(execution) = executions.next() else {
+        return false;
+    };
+    if executions.next().is_some() {
+        return false;
+    }
+    let Some(messages) = execution["log"].as_array() else {
+        return false;
+    };
+    let redirect = format!("{}europe→ohio", log_t::FAILOVER_REDIRECT);
+    messages
+        .iter()
+        .any(|message| message.as_str() == Some(redirect.as_str()))
+        && messages.iter().filter_map(|message| message.as_str()).any(|message| {
+            // Include the delimiter so another port cannot match by prefix.
+            message.starts_with("→ohio 127.0.0.1:30002 ")
+        })
+}
 
 pub struct RegionRouteTestSuite;
 
@@ -968,19 +1007,14 @@ impl RegionRouteTestSuite {
                             let al_client = ctx.access_log_client();
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => {
-                                    let log_str = entry.data.to_string();
-                                    // Plugin emits `failover europe→ohio` then external jump `→ohio`.
-                                    let has_redirect =
-                                        log_str.contains(log_t::FAILOVER_REDIRECT) && log_str.contains("europe→ohio");
-                                    let has_jump = log_str.contains("→ohio");
-                                    if has_redirect && has_jump {
+                                    if observed_nonlocal_failover(&entry) {
                                         TestResult::passed(start.elapsed())
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
                                             format!(
-                                                "Expected 'failover europe→ohio' and '→ohio'. has_redirect={}, has_jump={}. log: {}",
-                                                has_redirect, has_jump, log_str
+                                                "Expected route region-route-myregion-test, one RegionRoute execution in region-route-myregion with 'failover europe→ohio' and target '→ohio 127.0.0.1:30002', and error BackendLocalhostNotAllowed. log: {}",
+                                                entry.data
                                             ),
                                         )
                                     }
@@ -1085,5 +1119,107 @@ impl TestSuite for RegionRouteTestSuite {
             Self::my_region_failover_to_local(),
             Self::my_region_failover_to_nonlocal(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{observed_nonlocal_failover, AccessLogEntry};
+    use serde_json::json;
+
+    fn nonlocal_failover() -> AccessLogEntry {
+        AccessLogEntry {
+            data: json!({
+                "match_info": {"rsc": {"name": "region-route-myregion-test"}},
+                "stage_logs": [{"edgion_plugins": [{
+                    "name": "region-route-myregion",
+                    "logs": [{"name": "RegionRoute", "log": [
+                        "failover europe→ohio",
+                        "→ohio 127.0.0.1:30002 sni=region-route-myregion.example.com"
+                    ]}]
+                }]}],
+                "diagnostics": [{"kind": "error", "code": "BackendLocalhostNotAllowed"}]
+            }),
+        }
+    }
+
+    #[test]
+    fn nonlocal_failover_accepts_independent_selection_and_rejection() {
+        assert!(observed_nonlocal_failover(&nonlocal_failover()));
+    }
+
+    #[test]
+    fn nonlocal_failover_rejects_incomplete_or_wrong_selection() {
+        for messages in [
+            json!(["failover europe→ohio"]),
+            json!(["→ohio 127.0.0.1:30002 sni=example.com"]),
+            json!(["failover europe→ohio", "→ohio 127.0.0.1:30003 sni=example.com"]),
+            json!(["failover europe→ohio", "→ohio 127.0.0.1:300020 sni=example.com"]),
+            json!(["failover europe→ohio", "→virginia 127.0.0.1:30001 sni=example.com"]),
+            json!([
+                "unrelated failover europe→ohio",
+                "→ohio 127.0.0.1:30002 sni=example.com"
+            ]),
+            json!("failover europe→ohio; →ohio 127.0.0.1:30002 sni=example.com"),
+            json!(null),
+        ] {
+            let mut entry = nonlocal_failover();
+            entry.data["stage_logs"][0]["edgion_plugins"][0]["logs"][0]["log"] = messages;
+            assert!(!observed_nonlocal_failover(&entry), "{}", entry.data);
+        }
+    }
+
+    #[test]
+    fn nonlocal_failover_requires_typed_terminal_rejection() {
+        for diagnostics in [
+            json!([]),
+            json!(null),
+            json!([{"kind": "error", "code": "BackendConnectError"}]),
+            json!([{"kind": "info", "code": "BackendLocalhostNotAllowed"}]),
+        ] {
+            let mut entry = nonlocal_failover();
+            entry.data["diagnostics"] = diagnostics;
+            assert!(!observed_nonlocal_failover(&entry), "{}", entry.data);
+        }
+    }
+
+    #[test]
+    fn nonlocal_failover_requires_expected_scope_and_unique_execution() {
+        for path in [
+            "/match_info/rsc/name",
+            "/stage_logs/0/edgion_plugins/0/name",
+            "/stage_logs/0/edgion_plugins/0/logs/0/name",
+        ] {
+            let mut entry = nonlocal_failover();
+            *entry.data.pointer_mut(path).unwrap() = json!("unrelated");
+            assert!(!observed_nonlocal_failover(&entry), "{path}");
+        }
+        for path in [
+            "/stage_logs",
+            "/stage_logs/0/edgion_plugins",
+            "/stage_logs/0/edgion_plugins/0/logs",
+        ] {
+            for replacement in [json!(null), json!([]), json!({})] {
+                let mut entry = nonlocal_failover();
+                *entry.data.pointer_mut(path).unwrap() = replacement;
+                assert!(!observed_nonlocal_failover(&entry), "{path}");
+            }
+        }
+        let mut entry = nonlocal_failover();
+        let duplicate = entry.data["stage_logs"][0].clone();
+        entry.data["stage_logs"].as_array_mut().unwrap().push(duplicate);
+        assert!(!observed_nonlocal_failover(&entry));
+    }
+
+    #[test]
+    fn nonlocal_failover_ignores_messages_outside_execution() {
+        let mut entry = nonlocal_failover();
+        let messages = entry.data["stage_logs"][0]["edgion_plugins"][0]["logs"][0]["log"].take();
+        entry.data["stage_logs"][0]["edgion_plugins"][0]["logs"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"name": "OtherPlugin", "log": messages.clone()}));
+        entry.data["unrelated_metadata"] = messages;
+        assert!(!observed_nonlocal_failover(&entry));
     }
 }

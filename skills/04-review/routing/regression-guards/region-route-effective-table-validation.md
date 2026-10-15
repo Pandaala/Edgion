@@ -195,3 +195,25 @@ mistargeted references, disabled entries, stale/missing conditions, and malforme
 identity/generation inputs. Existing ConfigData presence/type checks and polling
 IO behavior remain unchanged. These checks do not establish a live managed-overlay
 or data-plane acceptance run.
+
+## Independent failover selection and rejection evidence (ARCH-390)
+
+The `my_region_failover_to_nonlocal` integration case scopes its trace-correlated
+access log to route `region-route-myregion-test` and exactly one RegionRoute
+execution in plugin resource `region-route-myregion`. Its private observation
+predicate requires separate canonical message-array entries for exact
+`failover europe→ohio` and target `→ohio 127.0.0.1:30002` with an endpoint delimiter,
+plus the typed `error` diagnostic `BackendLocalhostNotAllowed`. The redirect alone
+cannot prove endpoint selection, and the target message precedes the jump setter,
+so it cannot substitute for terminal loopback rejection. HTTP 500/502 remains a
+separate response check.
+
+Focused predicate regressions cover wrong ports (including a prefix collision),
+redirect-only and target-only observations, missing or unrelated diagnostics,
+wrong route/resource/plugin, missing or duplicate execution, malformed log shapes
+and matching text outside the selected execution. These synthetic observations
+test assertion discrimination; they do not establish live integration success or
+successful remote delivery. The original fixture, request/retry contract,
+one-hop behavior and loopback guard remain unchanged. Re-evaluate the assertions
+if canonical plugin message serialization, fixture identities/endpoints or the
+terminal diagnostic contract changes.
