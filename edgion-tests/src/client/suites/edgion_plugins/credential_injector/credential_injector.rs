@@ -290,6 +290,29 @@ async fn assert_upstream_header(
     }
 }
 
+async fn observe_fail_closed_response(response: reqwest::Response) -> Result<(), &'static str> {
+    if response.status().as_u16() != 500 {
+        return Err("Expected fail-closed HTTP 500");
+    }
+    let body = response
+        .text()
+        .await
+        .map_err(|_| "Fail-closed response body read failed")?;
+    let lower = body.to_ascii_lowercase();
+    if [
+        "client-spoof",
+        "bearertoken",
+        "credentialinjector",
+        "credential_injector",
+    ]
+    .iter()
+    .any(|detail| lower.contains(detail))
+    {
+        return Err("Fail-closed response exposed credential detail");
+    }
+    Ok(())
+}
+
 async fn assert_fail_closed(ctx: TestContext, host: &str) -> TestResult {
     let start = Instant::now();
     match ctx
@@ -300,31 +323,11 @@ async fn assert_fail_closed(ctx: TestContext, host: &str) -> TestResult {
         .send()
         .await
     {
-        Ok(response) if response.status().as_u16() == 500 => {
-            let body = response.text().await.unwrap_or_default();
-            let lower = body.to_ascii_lowercase();
-            if [
-                "client-spoof",
-                "bearertoken",
-                "credentialinjector",
-                "credential_injector",
-            ]
-            .iter()
-            .any(|detail| lower.contains(detail))
-            {
-                TestResult::failed(
-                    start.elapsed(),
-                    "Fail-closed response exposed credential detail".to_string(),
-                )
-            } else {
-                TestResult::passed(start.elapsed())
-            }
-        }
-        Ok(response) => TestResult::failed(
-            start.elapsed(),
-            format!("Expected fail-closed 500, got {}", response.status().as_u16()),
-        ),
-        Err(error) => TestResult::failed(start.elapsed(), format!("Request failed: {error}")),
+        Ok(response) => match observe_fail_closed_response(response).await {
+            Ok(()) => TestResult::passed(start.elapsed()),
+            Err(message) => TestResult::failed(start.elapsed(), message.to_string()),
+        },
+        Err(_) => TestResult::failed(start.elapsed(), "Fail-closed credential request failed".to_string()),
     }
 }
 
@@ -633,5 +636,70 @@ mod tests {
         let body = r#"{"headers":{"authorization":"Bearer value","x-other":"ok"}}"#;
         assert_eq!(echoed_header(body, "authorization").as_deref(), Some("Bearer value"));
         assert_eq!(echoed_header(body, "missing"), None);
+    }
+}
+
+#[cfg(test)]
+mod observation_tests {
+    use super::observe_fail_closed_response;
+
+    use bytes::Bytes;
+    use futures::stream;
+    use http::Response as HttpResponse;
+    use reqwest::{Body, Response};
+    use std::io;
+
+    fn response(status: u16, body: &str) -> Response {
+        HttpResponse::builder()
+            .status(status)
+            .body(body.to_string())
+            .unwrap()
+            .into()
+    }
+
+    fn interrupted_response(status: u16, prefix: &str) -> Response {
+        let chunks = [
+            Ok(Bytes::copy_from_slice(prefix.as_bytes())),
+            Err(io::Error::other("sensitive-observation-sentinel")),
+        ];
+        HttpResponse::builder()
+            .status(status)
+            .body(Body::wrap_stream(stream::iter(chunks)))
+            .unwrap()
+            .into()
+    }
+
+    #[tokio::test]
+    async fn credential_fail_closed_accepts_completed_empty_and_generic_bodies() {
+        for body in ["", "Internal server error"] {
+            assert_eq!(observe_fail_closed_response(response(500, body)).await, Ok(()));
+        }
+        assert!(observe_fail_closed_response(response(200, "")).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn credential_fail_closed_retains_each_prohibited_marker() {
+        for marker in [
+            "CLIENT-SPOOF",
+            "BearerToken",
+            "CredentialInjector",
+            "credential_injector",
+        ] {
+            let body = format!("Internal server error: {marker} sensitive-observation-sentinel");
+            assert_eq!(
+                observe_fail_closed_response(response(500, &body)).await,
+                Err("Fail-closed response exposed credential detail"),
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn credential_fail_closed_distinguishes_empty_completion_from_read_failure() {
+        for prefix in ["", "Internal server error"] {
+            assert_eq!(
+                observe_fail_closed_response(interrupted_response(500, prefix)).await,
+                Err("Fail-closed response body read failed"),
+            );
+        }
     }
 }

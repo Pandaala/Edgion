@@ -1593,6 +1593,47 @@ fn is_sanitized_fail_close_body(body: &str) -> bool {
             .any(|detail| lower.contains(detail))
 }
 
+async fn observe_sanitized_fail_close_response(response: reqwest::Response) -> Result<(), &'static str> {
+    if response.status().as_u16() != 500 {
+        return Err("Expected sanitized fail-closed HTTP 500");
+    }
+    let body = response
+        .text()
+        .await
+        .map_err(|_| "ExtProc fail-closed response body read failed")?;
+    if !is_sanitized_fail_close_body(&body) {
+        return Err("Fail-closed response was not generic or exposed internal detail");
+    }
+    Ok(())
+}
+
+async fn observe_fail_open_response(response: reqwest::Response) -> Result<(), &'static str> {
+    if response.status().as_u16() != 200 {
+        return Err("Expected HTTP 200 for the ExtProc fail-open echo observation");
+    }
+    let body = response
+        .text()
+        .await
+        .map_err(|_| "ExtProc fail-open response body read failed")?;
+    let expected_backend = body.lines().any(|line| {
+        line.strip_prefix("Server: ")
+            .and_then(|address| address.rsplit_once(':'))
+            .and_then(|(_, port)| port.trim().parse::<u16>().ok())
+            == Some(30001)
+    });
+    if !expected_backend
+        || !["Method: GET", "Path: /get", "Headers:"]
+            .iter()
+            .all(|expected| body.lines().any(|line| line == *expected))
+    {
+        return Err("ExtProc fail-open response did not identify the expected backend echo");
+    }
+    if body.to_lowercase().contains("x-ext-proc-req") {
+        return Err("fail-open but processor header present (unexpected)");
+    }
+    Ok(())
+}
+
 pub struct ExtProcTestSuite {
     full_test: bool,
 }
@@ -1832,31 +1873,22 @@ impl ExtProcTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("{}/headers", ctx.http_url());
-                    let response = match ctx
+                    let Ok(response) = ctx
                         .http_client
                         .get(&url)
                         .header("host", BASIC_HOST)
                         .header("x-ext-proc-test-mode", "close-before-verdict")
                         .send()
                         .await
-                    {
-                        Ok(response) => response,
-                        Err(error) => {
-                            return TestResult::failed(start.elapsed(), format!("Request failed: {}", error));
-                        }
+                    else {
+                        return TestResult::failed(start.elapsed(), "ExtProc observation request failed".to_string());
                     };
-                    let status = response.status().as_u16();
-                    let body = response.text().await.unwrap_or_default();
-                    if status == 500 && is_sanitized_fail_close_body(&body) {
-                        TestResult::passed_with_message(
+                    match observe_sanitized_fail_close_response(response).await {
+                        Ok(()) => TestResult::passed_with_message(
                             start.elapsed(),
                             "clean-close before request verdict failed closed".to_string(),
-                        )
-                    } else {
-                        TestResult::failed(
-                            start.elapsed(),
-                            format!("Expected sanitized 500, got status={} body={}", status, body),
-                        )
+                        ),
+                        Err(message) => TestResult::failed(start.elapsed(), message.to_string()),
                     }
                 })
             },
@@ -1873,31 +1905,22 @@ impl ExtProcTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("{}/headers", ctx.http_url());
-                    let response = match ctx
+                    let Ok(response) = ctx
                         .http_client
                         .get(&url)
                         .header("host", BASIC_HOST)
                         .header("x-ext-proc-test-mode", "close-on-response-headers")
                         .send()
                         .await
-                    {
-                        Ok(response) => response,
-                        Err(error) => {
-                            return TestResult::failed(start.elapsed(), format!("Request failed: {}", error));
-                        }
+                    else {
+                        return TestResult::failed(start.elapsed(), "ExtProc observation request failed".to_string());
                     };
-                    let status = response.status().as_u16();
-                    let body = response.text().await.unwrap_or_default();
-                    if status == 500 && is_sanitized_fail_close_body(&body) {
-                        TestResult::passed_with_message(
+                    match observe_sanitized_fail_close_response(response).await {
+                        Ok(()) => TestResult::passed_with_message(
                             start.elapsed(),
                             "clean-close before response verdict failed closed".to_string(),
-                        )
-                    } else {
-                        TestResult::failed(
-                            start.elapsed(),
-                            format!("Expected sanitized 500, got status={} body={}", status, body),
-                        )
+                        ),
+                        Err(message) => TestResult::failed(start.elapsed(), message.to_string()),
                     }
                 })
             },
@@ -3029,19 +3052,14 @@ impl ExtProcTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("{}/get", ctx.http_url());
-                    let response = match ctx.http_client.get(&url).header("host", FAILCLOSE_HOST).send().await {
-                        Ok(r) => r,
-                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    let Ok(response) = ctx.http_client.get(&url).header("host", FAILCLOSE_HOST).send().await else {
+                        return TestResult::failed(start.elapsed(), "ExtProc observation request failed".to_string());
                     };
-                    let status = response.status().as_u16();
-                    if status != 500 {
-                        return TestResult::failed(start.elapsed(), format!("Expected 500, got {}", status));
-                    }
-                    let body = response.text().await.unwrap_or_default();
-                    if is_sanitized_fail_close_body(&body) {
-                        TestResult::passed_with_message(start.elapsed(), "fail-close returned 500".to_string())
-                    } else {
-                        TestResult::failed(start.elapsed(), format!("500 body leaked internal detail: {}", body))
+                    match observe_sanitized_fail_close_response(response).await {
+                        Ok(()) => {
+                            TestResult::passed_with_message(start.elapsed(), "fail-close returned 500".to_string())
+                        }
+                        Err(message) => TestResult::failed(start.elapsed(), message.to_string()),
                     }
                 })
             },
@@ -3057,28 +3075,15 @@ impl ExtProcTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("{}/get", ctx.http_url());
-                    let response = match ctx.http_client.get(&url).header("host", FAILOPEN_HOST).send().await {
-                        Ok(r) => r,
-                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    let Ok(response) = ctx.http_client.get(&url).header("host", FAILOPEN_HOST).send().await else {
+                        return TestResult::failed(start.elapsed(), "ExtProc observation request failed".to_string());
                     };
-                    let status = response.status().as_u16();
-                    if status != 200 {
-                        return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
-                    }
-                    // The processor is dead, so it cannot have injected its header —
-                    // assert the bypass is real (not "plugin silently did nothing
-                    // but the route happened to work").
-                    let body = response.text().await.unwrap_or_default();
-                    if body.to_lowercase().contains("x-ext-proc-req") {
-                        TestResult::failed(
-                            start.elapsed(),
-                            "fail-open but processor header present (unexpected)".to_string(),
-                        )
-                    } else {
-                        TestResult::passed_with_message(
+                    match observe_fail_open_response(response).await {
+                        Ok(()) => TestResult::passed_with_message(
                             start.elapsed(),
                             "fail-open bypassed, reached backend".to_string(),
-                        )
+                        ),
+                        Err(message) => TestResult::failed(start.elapsed(), message.to_string()),
                     }
                 })
             },
@@ -3095,29 +3100,22 @@ impl ExtProcTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("{}/headers", ctx.http_url());
-                    let response = match ctx
+                    let Ok(response) = ctx
                         .http_client
                         .get(&url)
                         .header("host", BASIC_HOST)
                         .header("x-ext-proc-badverdict", "1")
                         .send()
                         .await
-                    {
-                        Ok(r) => r,
-                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    else {
+                        return TestResult::failed(start.elapsed(), "ExtProc observation request failed".to_string());
                     };
-                    let status = response.status().as_u16();
-                    if status != 500 {
-                        return TestResult::failed(
+                    match observe_sanitized_fail_close_response(response).await {
+                        Ok(()) => TestResult::passed_with_message(
                             start.elapsed(),
-                            format!("Expected 500 (fail-close on bad verdict), got {}", status),
-                        );
-                    }
-                    let body = response.text().await.unwrap_or_default();
-                    if is_sanitized_fail_close_body(&body) {
-                        TestResult::passed_with_message(start.elapsed(), "bad verdict fail-closed (500)".to_string())
-                    } else {
-                        TestResult::failed(start.elapsed(), format!("500 body leaked internal detail: {}", body))
+                            "bad verdict fail-closed (500)".to_string(),
+                        ),
+                        Err(message) => TestResult::failed(start.elapsed(), message.to_string()),
                     }
                 })
             },
@@ -3309,29 +3307,21 @@ impl ExtProcTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("{}/headers", ctx.http_url());
-                    let response = match ctx
+                    let Ok(response) = ctx
                         .http_client
                         .get(&url)
                         .header("host", STREAMED_HOST)
                         .header("x-ext-proc-test-mode", "continue-and-replace")
                         .send()
                         .await
-                    {
-                        Ok(r) => r,
-                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    else {
+                        return TestResult::failed(start.elapsed(), "ExtProc observation request failed".to_string());
                     };
-                    let status = response.status().as_u16();
-                    if status != 500 {
-                        return TestResult::failed(
-                            start.elapsed(),
-                            format!("Expected 500 (CR rejected in streamed mode), got {}", status),
-                        );
-                    }
-                    let body = response.text().await.unwrap_or_default();
-                    if is_sanitized_fail_close_body(&body) {
-                        TestResult::passed_with_message(start.elapsed(), "CR rejected fail-close".to_string())
-                    } else {
-                        TestResult::failed(start.elapsed(), format!("500 body leaked internal detail: {}", body))
+                    match observe_sanitized_fail_close_response(response).await {
+                        Ok(()) => {
+                            TestResult::passed_with_message(start.elapsed(), "CR rejected fail-close".to_string())
+                        }
+                        Err(message) => TestResult::failed(start.elapsed(), message.to_string()),
                     }
                 })
             },
@@ -3684,6 +3674,106 @@ mod tests {
             let plan = seeded_chunk_plan(*seed, SEEDED_BODY_BYTES).unwrap();
             assert_eq!(plan.iter().sum::<usize>(), SEEDED_BODY_BYTES);
             assert!(plan.iter().all(|chunk| *chunk != 0 && *chunk <= SEEDED_MAX_CHUNK_BYTES));
+        }
+    }
+}
+
+#[cfg(test)]
+mod observation_tests {
+    use super::{observe_fail_open_response, observe_sanitized_fail_close_response};
+
+    use bytes::Bytes;
+    use futures::stream;
+    use http::Response as HttpResponse;
+    use reqwest::{Body, Response};
+    use std::io;
+
+    fn response(status: u16, body: &str) -> Response {
+        HttpResponse::builder()
+            .status(status)
+            .body(body.to_string())
+            .unwrap()
+            .into()
+    }
+
+    fn interrupted_response(status: u16, prefix: &str) -> Response {
+        let chunks = [
+            Ok(Bytes::copy_from_slice(prefix.as_bytes())),
+            Err(io::Error::other("sensitive-observation-sentinel")),
+        ];
+        HttpResponse::builder()
+            .status(status)
+            .body(Body::wrap_stream(stream::iter(chunks)))
+            .unwrap()
+            .into()
+    }
+
+    const ECHO: &str = "Server: 0.0.0.0:30001\nClient: 127.0.0.1:40000\nMethod: GET\nPath: /get\nQuery: \n\nHeaders:\n  Host: ext-proc-failopen.example.com\n";
+
+    #[tokio::test]
+    async fn ext_proc_fail_closed_preserves_completed_empty_and_generic_shapes() {
+        for body in ["", "Plugin configuration error", "Internal server error"] {
+            assert_eq!(observe_sanitized_fail_close_response(response(500, body)).await, Ok(()));
+        }
+        assert!(observe_sanitized_fail_close_response(response(200, "")).await.is_err());
+        assert!(observe_sanitized_fail_close_response(response(500, "unrelated"))
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn ext_proc_fail_closed_preserves_every_prohibited_detail() {
+        for detail in ["EXT_PROC", "gRPC", "UNAVAILABLE", "127.0.0.1", "target", "processor"] {
+            let body = format!("Internal server error: {detail} sensitive-observation-sentinel");
+            assert_eq!(
+                observe_sanitized_fail_close_response(response(500, &body)).await,
+                Err("Fail-closed response was not generic or exposed internal detail"),
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn ext_proc_fail_closed_read_errors_are_not_successful_empty_bodies() {
+        for prefix in ["", "Internal server error"] {
+            assert_eq!(
+                observe_sanitized_fail_close_response(interrupted_response(500, prefix)).await,
+                Err("ExtProc fail-closed response body read failed"),
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn ext_proc_fail_open_requires_the_completed_expected_echo() {
+        assert_eq!(observe_fail_open_response(response(200, ECHO)).await, Ok(()));
+        for body in [
+            String::new(),
+            "unrelated success".to_string(),
+            ECHO.replace("30001", "30002"),
+            ECHO.replace("Method: GET", "Method: POST"),
+            ECHO.replace("Path: /get", "Path: /other"),
+            ECHO.replace("Headers:", "Other:"),
+        ] {
+            assert!(observe_fail_open_response(response(200, &body)).await.is_err());
+        }
+        assert!(observe_fail_open_response(response(500, ECHO)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn ext_proc_fail_open_rejects_processor_headers_without_disclosing_the_body() {
+        let body = format!("{ECHO}  X-Ext-Proc-Req: sensitive-observation-sentinel\n");
+        assert_eq!(
+            observe_fail_open_response(response(200, &body)).await,
+            Err("fail-open but processor header present (unexpected)"),
+        );
+    }
+
+    #[tokio::test]
+    async fn ext_proc_fail_open_read_errors_fail_even_after_valid_echo_bytes() {
+        for prefix in ["", ECHO] {
+            assert_eq!(
+                observe_fail_open_response(interrupted_response(200, prefix)).await,
+                Err("ExtProc fail-open response body read failed"),
+            );
         }
     }
 }

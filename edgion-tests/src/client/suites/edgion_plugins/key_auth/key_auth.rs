@@ -70,6 +70,26 @@ fn validate_anonymous_identity(body: &str, anonymous: bool) -> Result<(), &'stat
     Ok(())
 }
 
+async fn observe_hidden_key_response(response: reqwest::Response) -> Result<(), &'static str> {
+    if response.status().as_u16() != 200 {
+        return Err("Expected HTTP 200 for the hidden-credential header observation");
+    }
+    let body = response
+        .text()
+        .await
+        .map_err(|_| "Hidden-credential response body read failed")?;
+    let echoed: serde_json::Value =
+        serde_json::from_str(&body).map_err(|_| "Hidden-credential response was not valid headers JSON")?;
+    if echoed.get("headers").and_then(serde_json::Value::as_object).is_none() {
+        return Err("Hidden-credential response did not contain an object-valued headers member");
+    }
+    let body_lower = body.to_lowercase();
+    if body_lower.contains("x-api-key") && body_lower.contains("test-key-jack") {
+        return Err("X-API-Key was NOT removed from request");
+    }
+    Ok(())
+}
+
 impl KeyAuthTestSuite {
     /// Test: Valid API key in header should return 200
     fn test_valid_key_in_header() -> TestCase {
@@ -500,30 +520,14 @@ impl KeyAuthTestSuite {
                         .header("X-API-Key", VALID_KEY_JACK);
 
                     match request.send().await {
-                        Ok(response) => {
-                            let status = response.status().as_u16();
-                            if status != 200 {
-                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
-                            }
-
-                            // Parse response body to check if X-API-Key was forwarded
-                            let body = response.text().await.unwrap_or_default();
-                            let body_lower = body.to_lowercase();
-
-                            // The X-API-Key should NOT be present in echoed headers
-                            if body_lower.contains("x-api-key") && body_lower.contains("test-key-jack") {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("X-API-Key was NOT removed from request: {}", body),
-                                )
-                            } else {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "X-API-Key header was removed from upstream request".to_string(),
-                                )
-                            }
-                        }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                        Ok(response) => match observe_hidden_key_response(response).await {
+                            Ok(()) => TestResult::passed_with_message(
+                                start.elapsed(),
+                                "X-API-Key header was removed from upstream request".to_string(),
+                            ),
+                            Err(message) => TestResult::failed(start.elapsed(), message.to_string()),
+                        },
+                        Err(_) => TestResult::failed(start.elapsed(), "Hidden-credential request failed".to_string()),
                     }
                 })
             },
@@ -1128,6 +1132,82 @@ mod anonymous_identity_tests {
                 let error = validate_anonymous_identity(input, anonymous).unwrap_err();
                 assert!(!error.contains("sensitive-"));
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod observation_tests {
+    use super::observe_hidden_key_response;
+    use bytes::Bytes;
+    use futures::stream;
+    use http::Response as HttpResponse;
+    use reqwest::{Body, Response};
+    use std::io;
+
+    fn response(status: u16, body: &str) -> Response {
+        HttpResponse::builder()
+            .status(status)
+            .body(body.to_string())
+            .unwrap()
+            .into()
+    }
+
+    fn interrupted_response(status: u16, prefix: &str) -> Response {
+        let chunks = [
+            Ok(Bytes::copy_from_slice(prefix.as_bytes())),
+            Err(io::Error::other("sensitive-observation-sentinel")),
+        ];
+        HttpResponse::builder()
+            .status(status)
+            .body(Body::wrap_stream(stream::iter(chunks)))
+            .unwrap()
+            .into()
+    }
+
+    const HEADERS: &str = r#"{"headers":{"host":"key-auth-hide-creds.example.com","x-consumer-username":"jack"}}"#;
+
+    #[tokio::test]
+    async fn key_hidden_credentials_requires_an_observed_headers_object() {
+        assert_eq!(observe_hidden_key_response(response(200, HEADERS)).await, Ok(()));
+        for body in [
+            "",
+            "unrelated success",
+            "{",
+            "null",
+            "[]",
+            "{}",
+            r#"{"headers":null}"#,
+            r#"{"headers":[]}"#,
+            r#"{"headers":"empty"}"#,
+        ] {
+            assert!(observe_hidden_key_response(response(200, body)).await.is_err());
+        }
+        assert!(observe_hidden_key_response(response(500, HEADERS)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn key_hidden_credentials_preserves_the_two_marker_conjunction() {
+        for body in [
+            r#"{"headers":{"x-api-key":"other"}}"#,
+            r#"{"headers":{"x-other":"test-key-jack"}}"#,
+        ] {
+            assert_eq!(observe_hidden_key_response(response(200, body)).await, Ok(()));
+        }
+        let body = r#"{"headers":{"X-API-Key":"test-key-jack sensitive-observation-sentinel"}}"#;
+        assert_eq!(
+            observe_hidden_key_response(response(200, body)).await,
+            Err("X-API-Key was NOT removed from request"),
+        );
+    }
+
+    #[tokio::test]
+    async fn key_hidden_credentials_read_errors_fail_even_after_valid_header_bytes() {
+        for prefix in ["", HEADERS] {
+            assert_eq!(
+                observe_hidden_key_response(interrupted_response(200, prefix)).await,
+                Err("Hidden-credential response body read failed"),
+            );
         }
     }
 }

@@ -20,6 +20,26 @@ const GROUPED_SECRET_PARTNER_A: &[u8] = b"partner-a-secret-key-at-least-32-bytes
 const GROUPED_USER_PARTNER_B: &str = "partner-b-user";
 const GROUPED_SECRET_PARTNER_B: &[u8] = b"partner-b-secret-key-at-least-32-bytes-long-padding";
 
+async fn observe_hidden_authorization_response(response: reqwest::Response) -> Result<(), &'static str> {
+    if response.status().as_u16() != 200 {
+        return Err("Expected HTTP 200 for the hidden-credential header observation");
+    }
+    let body = response
+        .text()
+        .await
+        .map_err(|_| "Hidden-credential response body read failed")?;
+    let echoed: serde_json::Value =
+        serde_json::from_str(&body).map_err(|_| "Hidden-credential response was not valid headers JSON")?;
+    if echoed.get("headers").and_then(serde_json::Value::as_object).is_none() {
+        return Err("Hidden-credential response did not contain an object-valued headers member");
+    }
+    let body_lower = body.to_lowercase();
+    if body_lower.contains("authorization") {
+        return Err("Authorization header still exists in upstream body");
+    }
+    Ok(())
+}
+
 impl HmacAuthTestSuite {
     fn test_valid_signature_returns_200() -> TestCase {
         TestCase::new(
@@ -196,26 +216,14 @@ impl HmacAuthTestSuite {
                         .header("authorization", signed.authorization);
 
                     match request.send().await {
-                        Ok(response) => {
-                            let status = response.status().as_u16();
-                            if status != 200 {
-                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
-                            }
-
-                            let body = response.text().await.unwrap_or_default().to_lowercase();
-                            if body.contains("authorization") {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Authorization header still exists in upstream body: {}", body),
-                                )
-                            } else {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "Authorization header removed before upstream".to_string(),
-                                )
-                            }
-                        }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                        Ok(response) => match observe_hidden_authorization_response(response).await {
+                            Ok(()) => TestResult::passed_with_message(
+                                start.elapsed(),
+                                "Authorization header removed before upstream".to_string(),
+                            ),
+                            Err(message) => TestResult::failed(start.elapsed(), message.to_string()),
+                        },
+                        Err(_) => TestResult::failed(start.elapsed(), "Hidden-credential request failed".to_string()),
                     }
                 })
             },
@@ -372,5 +380,82 @@ impl TestSuite for HmacAuthTestSuite {
             Self::test_grouped_partner_a_returns_200(),
             Self::test_grouped_partner_b_returns_200(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod observation_tests {
+    use super::observe_hidden_authorization_response;
+    use bytes::Bytes;
+    use futures::stream;
+    use http::Response as HttpResponse;
+    use reqwest::{Body, Response};
+    use std::io;
+
+    fn response(status: u16, body: &str) -> Response {
+        HttpResponse::builder()
+            .status(status)
+            .body(body.to_string())
+            .unwrap()
+            .into()
+    }
+
+    fn interrupted_response(status: u16, prefix: &str) -> Response {
+        let chunks = [
+            Ok(Bytes::copy_from_slice(prefix.as_bytes())),
+            Err(io::Error::other("sensitive-observation-sentinel")),
+        ];
+        HttpResponse::builder()
+            .status(status)
+            .body(Body::wrap_stream(stream::iter(chunks)))
+            .unwrap()
+            .into()
+    }
+
+    const HEADERS: &str = r#"{"headers":{"host":"hmac-auth-test.example.com","date":"Tue, 01 Jan 2030 00:00:00 GMT"}}"#;
+
+    #[tokio::test]
+    async fn hmac_hidden_credentials_requires_an_observed_headers_object() {
+        assert_eq!(
+            observe_hidden_authorization_response(response(200, HEADERS)).await,
+            Ok(())
+        );
+        for body in [
+            "",
+            "unrelated success",
+            "{",
+            "null",
+            "[]",
+            "{}",
+            r#"{"headers":null}"#,
+            r#"{"headers":[]}"#,
+            r#"{"headers":"empty"}"#,
+        ] {
+            assert!(observe_hidden_authorization_response(response(200, body))
+                .await
+                .is_err());
+        }
+        assert!(observe_hidden_authorization_response(response(500, HEADERS))
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn hmac_hidden_credentials_rejects_authorization_without_disclosing_the_body() {
+        let body = r#"{"headers":{"Authorization":"sensitive-observation-sentinel"}}"#;
+        assert_eq!(
+            observe_hidden_authorization_response(response(200, body)).await,
+            Err("Authorization header still exists in upstream body"),
+        );
+    }
+
+    #[tokio::test]
+    async fn hmac_hidden_credentials_read_errors_fail_even_after_valid_header_bytes() {
+        for prefix in ["", HEADERS] {
+            assert_eq!(
+                observe_hidden_authorization_response(interrupted_response(200, prefix)).await,
+                Err("Hidden-credential response body read failed"),
+            );
+        }
     }
 }

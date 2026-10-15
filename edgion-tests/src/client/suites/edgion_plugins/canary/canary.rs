@@ -57,6 +57,27 @@ fn extract_server_port(body: &str) -> Option<u16> {
     None
 }
 
+async fn observe_spoofed_dye_response(response: reqwest::Response) -> Result<(), &'static str> {
+    if response.status().as_u16() != 200 {
+        return Err("Expected HTTP 200 for the Canary echo observation");
+    }
+    let body = response
+        .text()
+        .await
+        .map_err(|_| "Canary echo response body read failed")?;
+    if extract_server_port(&body) != Some(30001)
+        || !["Method: GET", "Path: /echo", "Headers:"]
+            .iter()
+            .all(|expected| body.lines().any(|line| line == *expected))
+    {
+        return Err("Canary response did not identify the expected backend echo");
+    }
+    if body.contains("x-canary-active") {
+        return Err("Spoofed x-canary-active leaked to upstream");
+    }
+    Ok(())
+}
+
 impl CanaryTestSuite {
     fn base_routes_to_stable() -> TestCase {
         TestCase::new(
@@ -233,22 +254,11 @@ impl CanaryTestSuite {
                         .send()
                         .await
                     {
-                        Ok(response) => {
-                            let status = response.status().as_u16();
-                            if status != 200 {
-                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
-                            }
-                            let body = response.text().await.unwrap_or_default();
-                            if body.contains("x-canary-active") {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Spoofed x-canary-active leaked to upstream: {}", body),
-                                )
-                            } else {
-                                TestResult::passed(start.elapsed())
-                            }
-                        }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                        Ok(response) => match observe_spoofed_dye_response(response).await {
+                            Ok(()) => TestResult::passed(start.elapsed()),
+                            Err(message) => TestResult::failed(start.elapsed(), message.to_string()),
+                        },
+                        Err(_) => TestResult::failed(start.elapsed(), "Canary echo request failed".to_string()),
                     }
                 })
             },
@@ -578,22 +588,11 @@ impl CanaryTestSuite {
                         .send()
                         .await
                     {
-                        Ok(response) => {
-                            let status = response.status().as_u16();
-                            if status != 200 {
-                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
-                            }
-                            let body = response.text().await.unwrap_or_default();
-                            if body.contains("x-canary-active") {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Spoofed x-canary-active leaked to upstream: {}", body),
-                                )
-                            } else {
-                                TestResult::passed(start.elapsed())
-                            }
-                        }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                        Ok(response) => match observe_spoofed_dye_response(response).await {
+                            Ok(()) => TestResult::passed(start.elapsed()),
+                            Err(message) => TestResult::failed(start.elapsed(), message.to_string()),
+                        },
+                        Err(_) => TestResult::failed(start.elapsed(), "Canary echo request failed".to_string()),
                     }
                 })
             },
@@ -662,5 +661,73 @@ impl TestSuite for CanaryTestSuite {
             Self::spoofed_dye_header_stripped_when_kill_switched(),
             Self::fallback_dye_outcome_observable_on_invalid_fallback(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod observation_tests {
+    use super::observe_spoofed_dye_response;
+
+    use bytes::Bytes;
+    use futures::stream;
+    use http::Response as HttpResponse;
+    use reqwest::{Body, Response};
+    use std::io;
+
+    fn response(status: u16, body: &str) -> Response {
+        HttpResponse::builder()
+            .status(status)
+            .body(body.to_string())
+            .unwrap()
+            .into()
+    }
+
+    fn interrupted_response(status: u16, prefix: &str) -> Response {
+        let chunks = [
+            Ok(Bytes::copy_from_slice(prefix.as_bytes())),
+            Err(io::Error::other("sensitive-observation-sentinel")),
+        ];
+        HttpResponse::builder()
+            .status(status)
+            .body(Body::wrap_stream(stream::iter(chunks)))
+            .unwrap()
+            .into()
+    }
+
+    const ECHO: &str = "Server: 0.0.0.0:30001\nClient: 127.0.0.1:40000\nMethod: GET\nPath: /echo\n\nHeaders:\n  host: canary-test.example.com\n";
+
+    #[tokio::test]
+    async fn canary_requires_the_completed_expected_echo() {
+        assert_eq!(observe_spoofed_dye_response(response(200, ECHO)).await, Ok(()));
+        for body in [
+            String::new(),
+            "unrelated success".to_string(),
+            ECHO.replace("30001", "30002"),
+            ECHO.replace("Method: GET", "Method: POST"),
+            ECHO.replace("Path: /echo", "Path: /other"),
+            ECHO.replace("Headers:", "Other:"),
+        ] {
+            assert!(observe_spoofed_dye_response(response(200, &body)).await.is_err());
+        }
+        assert!(observe_spoofed_dye_response(response(500, ECHO)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn canary_rejects_a_completed_spoofed_header_without_disclosing_the_body() {
+        let leaked = format!("{ECHO}  x-canary-active: sensitive-observation-sentinel\n");
+        assert_eq!(
+            observe_spoofed_dye_response(response(200, &leaked)).await,
+            Err("Spoofed x-canary-active leaked to upstream"),
+        );
+    }
+
+    #[tokio::test]
+    async fn canary_read_errors_fail_even_after_valid_echo_bytes() {
+        for prefix in ["", ECHO] {
+            assert_eq!(
+                observe_spoofed_dye_response(interrupted_response(200, prefix)).await,
+                Err("Canary echo response body read failed"),
+            );
+        }
     }
 }

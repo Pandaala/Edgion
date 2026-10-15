@@ -57,7 +57,7 @@ before applying a decision to current code.
 - [Integration reports must cover the whole run](regression-guards/integration-report-must-cover-the-whole-run.md)
 - [Integration suite lifecycle errors must fail](regression-guards/integration-suite-lifecycle-errors-must-fail.md)
 - [Integration suite registrations must be checked per sweep — FIXED](regression-guards/integration-suite-registrations-must-be-checked-per-sweep.md)
-- [Mandatory integration gates fail closed](regression-guards/mandatory-integration-gates-fail-closed.md)
+- [Mandatory integration and complete-response observation gates fail closed](regression-guards/mandatory-integration-gates-fail-closed.md)
 - [Request restriction resolved conditions coverage](regression-guards/request-restriction-resolved-conditions-coverage.md)
 - [Redis TLS container reuse follows current-run certificate identity](regression-guards/redis-tls-container-reuse-certificate-identity.md)
 - [Resource diff must fail on incomplete reads](regression-guards/resource-diff-must-fail-on-incomplete-reads.md)

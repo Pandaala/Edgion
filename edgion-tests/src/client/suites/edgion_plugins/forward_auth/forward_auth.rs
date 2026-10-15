@@ -59,6 +59,27 @@ const CONFIGURED_DELAY_MS: u64 = 300;
 /// Tolerance: allow 50ms below the configured value
 const DELAY_MIN_MS: u64 = CONFIGURED_DELAY_MS - 50;
 
+async fn observe_strict_status_failure_response(response: reqwest::Response) -> Result<(), &'static str> {
+    if response.status().as_u16() != 200 {
+        return Err("Expected HTTP 200 relayed from the rejected auth response");
+    }
+    let body = response
+        .text()
+        .await
+        .map_err(|_| "Strict-status auth response body read failed")?;
+    let auth: serde_json::Value =
+        serde_json::from_str(&body).map_err(|_| "Strict-status auth response was not valid auth JSON")?;
+    let body_lower = body.to_lowercase();
+    let backend_body = body_lower.trim() == "ok" || body_lower.contains("path:");
+    if auth.get("status").and_then(serde_json::Value::as_str) != Some("ok")
+        || auth.get("user").and_then(serde_json::Value::as_str) != Some("test-user")
+        || backend_body
+    {
+        return Err("Strict-status response did not identify the authored auth failure body");
+    }
+    Ok(())
+}
+
 impl ForwardAuthTestSuite {
     // ==========================================
     // Basic Mode Tests (forward all headers)
@@ -1454,58 +1475,23 @@ impl ForwardAuthTestSuite {
                     // the auth server's JSON body (contains "test-user" / "status").
                     let url = format!("{}/health", ctx.http_url());
 
-                    let resp = match client
+                    let Ok(resp) = client
                         .get(&url)
                         .header("host", STRICT_204_HOST)
                         .header("Authorization", "Bearer valid-token")
                         .send()
                         .await
-                    {
-                        Ok(r) => r,
-                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    else {
+                        return TestResult::failed(start.elapsed(), "Strict-status auth request failed".to_string());
                     };
 
-                    let status = resp.status().as_u16();
-                    let body = resp.text().await.unwrap_or_default();
-                    let body_lower = body.to_lowercase();
-
-                    // The gateway short-circuits with the auth server's 200 response.
-                    // Auth server body contains "status":"ok" and "user":"test-user".
-                    // Backend /health body is plain "OK" (no JSON, no "test-user").
-                    let auth_body_markers = body_lower.contains("test-user") || body_lower.contains("\"status\"");
-                    let backend_body = body_lower.trim() == "ok" || body_lower.contains("path:");
-
-                    if status == 200 && auth_body_markers && !backend_body {
-                        TestResult::passed_with_message(
+                    match observe_strict_status_failure_response(resp).await {
+                        Ok(()) => TestResult::passed_with_message(
                             start.elapsed(),
-                            format!(
-                                "success.statusCodes [204]: auth 200 treated as failure, got status=200 + auth body \
-                                 (not backend). Body: {}",
-                                &body[..body.len().min(200)]
-                            ),
-                        )
-                    } else if status == 200 && !backend_body {
-                        // Status is correct (200 short-circuit); body check was loose — accept.
-                        TestResult::passed_with_message(
-                            start.elapsed(),
-                            format!(
-                                "success.statusCodes [204]: auth 200 treated as failure, status=200 \
-                                 (short-circuit confirmed). Body: {}",
-                                &body[..body.len().min(200)]
-                            ),
-                        )
-                    } else {
-                        TestResult::failed(
-                            start.elapsed(),
-                            format!(
-                                "Expected status=200 with auth-server body (failure path). \
-                                 Got status={}, auth_body_markers={}, backend_body={}. Body: {}",
-                                status,
-                                auth_body_markers,
-                                backend_body,
-                                &body[..body.len().min(400)]
-                            ),
-                        )
+                            "success.statusCodes [204]: auth 200 treated as failure, returned authored auth body"
+                                .to_string(),
+                        ),
+                        Err(message) => TestResult::failed(start.elapsed(), message.to_string()),
                     }
                 })
             },
@@ -1650,5 +1636,91 @@ impl TestSuite for ForwardAuthTestSuite {
             // LB round-robin smoke test (multi-endpoint EndpointSlice)
             Self::test_backendref_lb_round_robin(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod observation_tests {
+    use super::observe_strict_status_failure_response;
+    use bytes::Bytes;
+    use futures::stream;
+    use http::Response as HttpResponse;
+    use reqwest::{Body, Response};
+    use std::io;
+
+    fn response(status: u16, body: &str) -> Response {
+        HttpResponse::builder()
+            .status(status)
+            .body(body.to_string())
+            .unwrap()
+            .into()
+    }
+
+    fn interrupted_response(status: u16, prefix: &str) -> Response {
+        let chunks = [
+            Ok(Bytes::copy_from_slice(prefix.as_bytes())),
+            Err(io::Error::other("sensitive-observation-sentinel")),
+        ];
+        HttpResponse::builder()
+            .status(status)
+            .body(Body::wrap_stream(stream::iter(chunks)))
+            .unwrap()
+            .into()
+    }
+
+    const AUTH: &str = r#"{"status":"ok","user":"test-user","received_headers":{"authorization":"Bearer sensitive-observation-sentinel"}}"#;
+
+    #[tokio::test]
+    async fn forward_auth_strict_status_requires_the_authored_json_and_excludes_backend_evidence() {
+        assert_eq!(
+            observe_strict_status_failure_response(response(200, AUTH)).await,
+            Ok(())
+        );
+        for body in [
+            "",
+            "OK",
+            "Server: 0.0.0.0:30001\nPath: /health",
+            "{",
+            "null",
+            "[]",
+            "{}",
+            r#"{"status":"ok"}"#,
+            r#"{"user":"test-user"}"#,
+            r#"{"status":"denied","user":"test-user"}"#,
+            r#"{"status":"ok","user":"other"}"#,
+            r#"{"status":true,"user":"test-user"}"#,
+            r#"{"status":"ok","user":null}"#,
+            r#"{"status":"ok","user":"test-user","note":"Path: /health"}"#,
+        ] {
+            assert!(observe_strict_status_failure_response(response(200, body))
+                .await
+                .is_err());
+        }
+        assert!(observe_strict_status_failure_response(response(204, AUTH))
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn forward_auth_strict_status_failures_do_not_disclose_body_values() {
+        let body = r#"{"status":"denied","user":"sensitive-observation-sentinel"}"#;
+        assert_eq!(
+            observe_strict_status_failure_response(response(200, body)).await,
+            Err("Strict-status response did not identify the authored auth failure body"),
+        );
+        assert_eq!(
+            observe_strict_status_failure_response(response(200, "sensitive-observation-sentinel")).await,
+            Err("Strict-status auth response was not valid auth JSON"),
+        );
+    }
+
+    #[tokio::test]
+    async fn forward_auth_strict_status_read_errors_fail_even_after_valid_auth_bytes() {
+        for prefix in ["", AUTH] {
+            assert_eq!(
+                observe_strict_status_failure_response(interrupted_response(200, prefix)).await,
+                Err("Strict-status auth response body read failed"),
+            );
+        }
     }
 }
