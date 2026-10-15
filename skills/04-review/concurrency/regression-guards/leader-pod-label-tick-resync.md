@@ -123,7 +123,14 @@ Production-owner regressions live in
 They drive the real loop through an in-process kube service with paused Tokio time,
 covering held GET/replace, acquisition/retry label stalls, tight cadence, sleep
 expiry, grace/recovery, deadline/result competition, late response and fresh term,
-authoritative loss, shutdown and preflight. The Pod model preserves state and
+authoritative loss, shutdown and preflight. Direct `election_wait` tests manually
+poll a readiness-controlled operation before, exactly at and after the absolute
+deadline, without relying on kube buffer scheduling. The Lease replace model
+checks UID/resourceVersion, preserves state on rejection, and advances the stored
+version only on mutation. A competing-write regression drives an actual modeled
+409 through the election loop and checks both successor preservation and local
+authority withdrawal. These are scoped service models, not complete API server
+validation. The Pod model preserves state and
 resourceVersion, deliberately retains versions for no-op writes, and commits held
 patches independently of canceled client response futures. Regressions cover late
 opposite-value writes in both directions, fresh-read conflict recovery, Pod GET

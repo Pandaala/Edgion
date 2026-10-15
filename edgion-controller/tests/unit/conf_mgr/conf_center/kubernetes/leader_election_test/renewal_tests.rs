@@ -3,7 +3,10 @@ use crate::conf_mgr::sync_runtime::ShutdownHandle;
 use http::{Method, Response, StatusCode};
 use kube::client::Body;
 use serde_json::{json, Value};
+use std::cell::Cell;
 use std::convert::Infallible;
+use std::future::poll_fn;
+use std::task::Poll;
 use tokio::sync::oneshot;
 use tower::service_fn;
 
@@ -29,6 +32,7 @@ struct ApiState {
     patch: Reply,
     gets: usize,
     puts: Vec<Value>,
+    put_codes: Vec<u16>,
     labels: Vec<bool>,
     held: Vec<oneshot::Sender<()>>,
 }
@@ -58,6 +62,27 @@ fn commit_patch(pod: &mut Value, patch: &Value) -> u16 {
             + 1;
         updated["metadata"]["resourceVersion"] = json!(version.to_string());
         *pod = updated;
+    }
+    200
+}
+
+// Model the replace preconditions used by these tests, not full API validation.
+fn commit_lease(lease: &mut Value, replacement: &Value) -> u16 {
+    if replacement["metadata"]["uid"] != lease["metadata"]["uid"] {
+        return 422;
+    }
+    if replacement["metadata"]["resourceVersion"] != lease["metadata"]["resourceVersion"] {
+        return 409;
+    }
+    if replacement != lease {
+        let version = lease["metadata"]["resourceVersion"]
+            .as_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+            + 1;
+        *lease = replacement.clone();
+        lease["metadata"]["resourceVersion"] = json!(version.to_string());
     }
     200
 }
@@ -111,14 +136,19 @@ impl Harness {
                             }
                             Method::PUT => {
                                 state.puts.push(body.clone());
-                                if !matches!(state.put, Reply::Error(_)) {
-                                    // A submitted write can land even if the client
-                                    // subsequently cancels waiting for its response.
-                                    state.lease = body.clone();
-                                    let version = state.puts.len() + 1;
-                                    state.lease["metadata"]["resourceVersion"] = json!(version.to_string());
-                                }
-                                (state.put, state.lease.clone())
+                                let reply = state.put;
+                                let code = if let Reply::Error(code) = reply {
+                                    code
+                                } else {
+                                    // Commit before holding the response: cancellation
+                                    // cannot undo a successful server-side write.
+                                    commit_lease(&mut state.lease, &body)
+                                };
+                                state.put_codes.push(code);
+                                (
+                                    if code == 200 { reply } else { Reply::Error(code) },
+                                    state.lease.clone(),
+                                )
                             }
                             Method::PATCH => {
                                 state
@@ -339,7 +369,8 @@ async fn simultaneous_success_and_expiry_cannot_republish_fence() {
     for response in std::mem::take(&mut h.api.write().held) {
         let _ = response.send(());
     }
-    // Both the queued response and deadline are ready before the owner runs.
+    // Release the response before advancing to expiry. The direct election_wait
+    // boundary test below controls readiness without the kube buffer in between.
     tokio::time::advance(Duration::from_secs(8)).await;
     settle().await;
     h.withdrawn();
@@ -611,4 +642,89 @@ async fn older_patch_committing_first_forces_fresh_read_retry() {
     assert_eq!(h.api.read().pod["metadata"]["labels"]["edgion.io/leader"], "false");
     assert_eq!(h.api.read().pod_gets, 3);
     h.stop().await;
+}
+
+#[test]
+fn lease_replace_model_rejects_stale_metadata_without_mutation() {
+    let mut lease = json!({"metadata":{"uid":"lease-uid", "resourceVersion":"7"},
+        "spec":{"holderIdentity":"controller-a"}});
+    let original = lease.clone();
+    assert_eq!(commit_lease(&mut lease, &original), 200);
+    assert_eq!(lease, original);
+    for (field, value, code) in [("uid", "old-uid", 422), ("resourceVersion", "6", 409)] {
+        let mut stale = original.clone();
+        stale["metadata"][field] = json!(value);
+        stale["spec"]["holderIdentity"] = json!("stale-writer");
+        assert_eq!(commit_lease(&mut lease, &stale), code);
+        assert_eq!(lease, original);
+    }
+    let mut replacement = original.clone();
+    replacement["spec"]["holderIdentity"] = json!("controller-b");
+    assert_eq!(commit_lease(&mut lease, &replacement), 200);
+    replacement["metadata"]["resourceVersion"] = json!("8");
+    assert_eq!(lease, replacement);
+}
+
+#[tokio::test(start_paused = true)]
+async fn competing_lease_write_rejects_stale_renewal_and_withdraws_authority() {
+    let h = Harness::new(10);
+    h.tick(2).await;
+    assert!(h.election.is_leader());
+    let snapshot = h.api.read().lease.clone();
+    h.api.write().get = Reply::Hold;
+    h.tick(2).await;
+    assert_eq!(h.api.read().held.len(), 1);
+    let successor = {
+        let mut state = h.api.write();
+        let mut replacement = state.lease.clone();
+        replacement["spec"]["holderIdentity"] = json!("controller-b");
+        replacement["metadata"]["annotations"][LEADER_TERM_ANNOTATION] = json!("successor-term");
+        assert_eq!(commit_lease(&mut state.lease, &replacement), 200);
+        state.get = Reply::Success;
+        state.lease.clone()
+    };
+    for response in std::mem::take(&mut h.api.write().held) {
+        response.send(()).unwrap();
+    }
+    settle().await;
+    h.withdrawn();
+    {
+        let state = h.api.read();
+        assert_eq!(state.puts.len(), 2);
+        assert_eq!(state.put_codes, [200, 409]);
+        assert_eq!(
+            state.puts[1]["metadata"]["resourceVersion"],
+            snapshot["metadata"]["resourceVersion"]
+        );
+        assert_ne!(
+            snapshot["metadata"]["resourceVersion"],
+            successor["metadata"]["resourceVersion"]
+        );
+        assert_eq!(state.lease, successor);
+    }
+    h.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn election_wait_accepts_success_only_before_absolute_deadline() {
+    for seconds in [9, 10, 11] {
+        let ready = Cell::new(false);
+        let operation = poll_fn(|_| if ready.get() { Poll::Ready(42) } else { Poll::Pending });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut shutdown = None;
+        let wait = election_wait(operation, Some(deadline), &mut shutdown);
+        tokio::pin!(wait);
+        // Register the expiry timer while the operation is definitely pending.
+        assert!(futures::poll!(wait.as_mut()).is_pending());
+        tokio::time::advance(Duration::from_secs(seconds)).await;
+        ready.set(true);
+        // Poll explicitly on this task: no response transport or wakeup ordering
+        // can prevent the operation from being ready at this exact instant.
+        let result = futures::poll!(wait.as_mut());
+        if seconds < 10 {
+            assert!(matches!(result, Poll::Ready(ElectionWait::Completed(42))));
+        } else {
+            assert!(matches!(result, Poll::Ready(ElectionWait::Expired)));
+        }
+    }
 }
