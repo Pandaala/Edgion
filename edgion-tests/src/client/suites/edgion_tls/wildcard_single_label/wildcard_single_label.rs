@@ -16,9 +16,11 @@
 // This is ensured by edgion-tests/integration/scripts/gen_certs/generate_tls_certs.sh.
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use crate::tls_child::{self, OPERATION_TIMEOUT};
 use async_trait::async_trait;
-use std::process::Command;
 use std::time::Instant;
+use tokio::process::Command;
+use tokio::time::Instant as TokioInstant;
 
 pub struct WildcardSingleLabelTestSuite;
 
@@ -55,13 +57,13 @@ fn find_openssl() -> String {
 ///
 /// Returns a `ProbeResult` describing whether the handshake completed and
 /// which protocol/cipher were negotiated.
-fn run_openssl_probe(host: &str, port: u16, servername: &str) -> Result<ProbeResult, String> {
+async fn run_openssl_probe(host: &str, port: u16, servername: &str) -> Result<ProbeResult, String> {
     let target = format!("{}:{}", host, port);
     let openssl_bin = find_openssl();
-    let output = Command::new(&openssl_bin)
-        .args(["s_client", "-connect", &target, "-servername", servername])
-        .stdin(std::process::Stdio::null())
-        .output()
+    let mut command = Command::new(&openssl_bin);
+    command.args(["s_client", "-connect", &target, "-servername", servername]);
+    let output = tls_child::output(command, None, TokioInstant::now() + OPERATION_TIMEOUT)
+        .await
         .map_err(|e| format!("Failed to run openssl ({}): {}", openssl_bin, e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -130,7 +132,7 @@ impl WildcardSingleLabelTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    match run_openssl_probe(&ctx.target_host, LISTENER_PORT, "foo.example.com") {
+                    match run_openssl_probe(&ctx.target_host, LISTENER_PORT, "foo.example.com").await {
                         Ok(info) => {
                             if info.handshake_complete {
                                 TestResult::passed_with_message(
@@ -167,7 +169,7 @@ impl WildcardSingleLabelTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    match run_openssl_probe(&ctx.target_host, LISTENER_PORT, "a.b.example.com") {
+                    match run_openssl_probe(&ctx.target_host, LISTENER_PORT, "a.b.example.com").await {
                         Ok(info) => {
                             if !info.handshake_complete {
                                 TestResult::passed_with_message(
@@ -204,7 +206,7 @@ impl WildcardSingleLabelTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    match run_openssl_probe(&ctx.target_host, LISTENER_PORT, "example.com") {
+                    match run_openssl_probe(&ctx.target_host, LISTENER_PORT, "example.com").await {
                         Ok(info) => {
                             if !info.handshake_complete {
                                 TestResult::passed_with_message(

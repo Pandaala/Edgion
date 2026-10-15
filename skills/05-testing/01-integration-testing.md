@@ -542,6 +542,42 @@ the test-only ResolverSpec injection is not an operator configuration field.
 
 Center/federation topology tests are maintained in the separate EdgionCenter repository.
 
+### Direct OpenSSL child ownership
+
+The LKG generation/serial helpers and the SNI collision, fallback-SNI and
+single-label wildcard suites use private `edgion-tests/src/client/tls_child.rs`.
+Keep command construction, binary discovery criteria and output interpretation
+inside their owning suite. Pass an absolute deadline to the child owner;
+discovery and its handshake share one ten-second budget, as do served-certificate
+probing and serial extraction. Standalone fixture extraction and rotation
+generation each have a ten-second budget. Do not replace this with synchronous
+`Command::output`, sequential pipe IO, or `timeout(wait_with_output())`.
+
+The detached operation supervisor retains Child after requester cancellation.
+It concurrently writes stdin, drains stdout/stderr and waits. Deadline, IO failure
+or receiver closure drops the pipes, requests termination and explicitly awaits
+reaping. Failed operations return after the termination attempt, before reaping
+finishes; cleanup remains owned independently. This lets a captured LKG transition
+failure reach its existing restoration path. It does not restore Secrets after
+arbitrary cancellation of the scenario itself.
+
+Deadline and operational errors fail the case. Only actual completed output can
+be interpreted as a negative handshake; discovery timeouts cannot become a
+LibreSSL skip or an unsupported-tool fallback. Missing candidate executables are
+distinct from other spawn errors. Do not include child arguments, stdin, PEM,
+private keys, generated Secrets or captured output in lifecycle diagnostics.
+
+The owner covers direct children only. Tokio runtime shutdown/panic still relies
+on kill-on-drop and best-effort runtime reaping, and OS signaling/reaping has no
+universal wall-clock guarantee. The outer process-group watchdog remains useful
+containment. Cipher's separate existing watchdog is outside this migration.
+Network-free controlled-child regressions run with
+`cargo test --locked -p edgion-tests --lib tls_child::tests`; suite-local discovery,
+fixture serial/rotation and restoration regressions run with the corresponding
+module test filters. Live listener and status assertions continue through the
+existing shared-topology suites and `TlsLastKnownGood` dynamic scenario.
+See the [review boundary](../04-review/testing/regression-guards/integration-orchestrators-need-owned-deadlines.md).
+
 ### Antipatterns (signals that block reviewer approval)
 
 When a new suite / new script contains any of the following, the reviewer must block the merge and ask the author to either reuse the main process or be added to the exception list above:

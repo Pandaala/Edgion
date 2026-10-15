@@ -180,7 +180,7 @@ The Gateway certificate matchers' catch-all behavior is unaffected.
 
 Integration scenario `EdgionTls/sni_collision` (`edgion-tests/integration/conf/EdgionTls/sni_collision/`
 + suite `edgion-tests/src/client/suites/edgion_tls/sni_collision/`): two EdgionTls bind the same
-host `shared-collision.example.com` on one HTTPS listener — older (`creationTimestamp`
+host `gateway-tls.test.com` on one HTTPS listener — older (`creationTimestamp`
 2020-01-01) → RSA `edge-tls` (CN=test.example.com), newer (2024-01-01) → ECDSA
 `edge-tls-ecdsa` (CN=ecdsa-dualcert.example.com). The test does an `openssl s_client`
 handshake with that SNI and asserts the served subject CN is `test.example.com` (older), NOT
@@ -188,6 +188,9 @@ handshake with that SNI and asserts the served subject CN is `test.example.com` 
 config-sync (FileSystem mode honors it because the fixtures set it explicitly) and the
 `edgion_tls_precedence` sort picks the older cert on the wire. Like the `gateway_tls` dual-cert
 test, it **skips when only LibreSSL is present** (macOS dev) and runs under genuine OpenSSL (CI).
+Discovery and handshake use the private direct-child owner with one shared
+ten-second deadline; an operational timeout fails rather than becoming that
+LibreSSL skip. See the [ARCH-288 lifecycle boundary](../../testing/regression-guards/integration-orchestrators-need-owned-deadlines.md#direct-openssl-operations-inside-the-test-client).
 
 ## Re-evaluation triggers
 

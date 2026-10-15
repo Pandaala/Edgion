@@ -19,9 +19,11 @@
 //   - Service.yaml / EndpointSlice.yaml  # shared HTTP backend (test-http:30001)
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use crate::tls_child::{self, ChildError, OPERATION_TIMEOUT};
 use async_trait::async_trait;
-use std::process::Command;
 use std::time::Instant;
+use tokio::process::Command;
+use tokio::time::Instant as TokioInstant;
 
 pub struct SniCollisionTestSuite;
 
@@ -30,15 +32,28 @@ pub struct SniCollisionTestSuite;
 /// real OpenSSL build (CI already has it on PATH; local dev usually via brew).
 /// Returns None when only LibreSSL is available so the caller can skip rather
 /// than report a false failure.
-fn openssl_bin() -> Option<String> {
-    for cand in ["openssl", "/opt/homebrew/bin/openssl", "/usr/local/bin/openssl"] {
-        if let Ok(out) = Command::new(cand).arg("version").output() {
-            if String::from_utf8_lossy(&out.stdout).starts_with("OpenSSL") {
-                return Some(cand.to_string());
+async fn openssl_bin(deadline: TokioInstant) -> Result<Option<String>, ChildError> {
+    openssl_from_candidates(
+        &["openssl", "/opt/homebrew/bin/openssl", "/usr/local/bin/openssl"],
+        deadline,
+    )
+    .await
+}
+
+async fn openssl_from_candidates(candidates: &[&str], deadline: TokioInstant) -> Result<Option<String>, ChildError> {
+    for candidate in candidates {
+        let mut command = Command::new(candidate);
+        command.arg("version");
+        match tls_child::output(command, None, deadline).await {
+            Ok(out) if String::from_utf8_lossy(&out.stdout).starts_with("OpenSSL") => {
+                return Ok(Some((*candidate).to_string()));
             }
+            Ok(_) => {}
+            Err(error) if error.is_not_found() => {}
+            Err(error) => return Err(error),
         }
     }
-    None
+    Ok(None)
 }
 
 impl SniCollisionTestSuite {
@@ -51,7 +66,14 @@ impl SniCollisionTestSuite {
                     let start = Instant::now();
                     let servername = "gateway-tls.test.com";
 
-                    let Some(openssl) = openssl_bin() else {
+                    let deadline = TokioInstant::now() + OPERATION_TIMEOUT;
+                    let openssl = match openssl_bin(deadline).await {
+                        Ok(openssl) => openssl,
+                        Err(error) => {
+                            return TestResult::failed(start.elapsed(), format!("OpenSSL discovery failed: {error}"))
+                        }
+                    };
+                    let Some(openssl) = openssl else {
                         return TestResult::passed_with_message(
                             start.elapsed(),
                             "skipped: genuine OpenSSL not found (LibreSSL s_client unreliable against BoringSSL)"
@@ -63,20 +85,18 @@ impl SniCollisionTestSuite {
                     // only in SNI (-servername). openssl s_client does real DNS for -connect
                     // (unlike the reqwest suites, which install a custom resolver), so a name
                     // here would resolve to the public example.com instead of the local gateway.
-                    let output = match Command::new(&openssl)
-                        .args([
-                            "s_client",
-                            "-connect",
-                            &format!("{}:{}", ctx.target_host, ctx.https_port),
-                            "-servername",
-                            servername,
-                            // ALPN mirrors the gateway_tls suite (BoringSSL HTTPS listener, HTTP/2 enabled).
-                            "-alpn",
-                            "h2,http/1.1",
-                        ])
-                        .stdin(std::process::Stdio::null())
-                        .output()
-                    {
+                    let mut command = Command::new(&openssl);
+                    command.args([
+                        "s_client",
+                        "-connect",
+                        &format!("{}:{}", ctx.target_host, ctx.https_port),
+                        "-servername",
+                        servername,
+                        // ALPN mirrors the gateway_tls suite (BoringSSL HTTPS listener, HTTP/2 enabled).
+                        "-alpn",
+                        "h2,http/1.1",
+                    ]);
+                    let output = match tls_child::output(command, None, deadline).await {
                         Ok(o) => o,
                         Err(e) => return TestResult::failed(start.elapsed(), format!("Failed to run openssl: {}", e)),
                     };
@@ -137,3 +157,7 @@ impl TestSuite for SniCollisionTestSuite {
         vec![Self::test_oldest_wins()]
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../tests/unit/client/suites/edgion_tls/sni_collision/sni_collision_test.rs"]
+mod tests;

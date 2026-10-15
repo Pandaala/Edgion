@@ -35,5 +35,7 @@ pub mod reporter;
 pub mod scratch;
 #[path = "client/suites/mod.rs"]
 pub mod suites;
+#[path = "client/tls_child.rs"]
+mod tls_child;
 #[path = "client/transport.rs"]
 pub mod transport;

@@ -14,9 +14,11 @@
 //   securityProtect.fallbackSni = "default.example.com" (already configured).
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use crate::tls_child::{self, ChildError, OPERATION_TIMEOUT};
 use async_trait::async_trait;
-use std::process::Command;
 use std::time::Instant;
+use tokio::process::Command;
+use tokio::time::Instant as TokioInstant;
 
 pub struct FallbackSniTestSuite;
 
@@ -32,7 +34,7 @@ struct ProbeResult {
 /// macOS ships LibreSSL which does NOT have `-noservername`. Try well-known
 /// Homebrew paths first (arm64 then x86_64), then fall back to whatever
 /// `openssl` resolves to in $PATH.
-fn find_openssl_with_noservername() -> String {
+async fn find_openssl_with_noservername(deadline: TokioInstant) -> Result<String, ChildError> {
     let candidates = [
         "/opt/homebrew/opt/openssl@3/bin/openssl",
         "/opt/homebrew/opt/openssl@3.6/bin/openssl",
@@ -41,25 +43,30 @@ fn find_openssl_with_noservername() -> String {
         "/usr/local/opt/openssl/bin/openssl",
         "openssl",
     ];
+    openssl_from_candidates(&candidates, deadline).await
+}
+
+async fn openssl_from_candidates(candidates: &[&str], deadline: TokioInstant) -> Result<String, ChildError> {
     for candidate in candidates {
         // Probe: run `openssl s_client --help` and look for "-noservername"
-        if let Ok(out) = Command::new(candidate)
-            .args(["s_client", "--help"])
-            .stdin(std::process::Stdio::null())
-            .output()
-        {
-            let combined = format!(
-                "{}{}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            );
-            if combined.contains("noservername") {
-                return candidate.to_string();
-            }
+        let mut command = Command::new(candidate);
+        command.args(["s_client", "--help"]);
+        let out = match tls_child::output(command, None, deadline).await {
+            Ok(out) => out,
+            Err(error) if error.is_not_found() => continue,
+            Err(error) => return Err(error),
+        };
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        if combined.contains("noservername") {
+            return Ok((*candidate).to_string());
         }
     }
     // Last resort: system openssl (may not support -noservername on macOS LibreSSL)
-    "openssl".to_string()
+    Ok("openssl".to_string())
 }
 
 /// Run `openssl s_client` and parse Protocol/Cipher. `extra_args` lets the
@@ -71,18 +78,19 @@ fn find_openssl_with_noservername() -> String {
 /// and OpenSSL 3.x output format:
 ///   `Protocol: TLSv1.3`
 ///   `New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384`
-fn run_openssl_probe(host: &str, port: u16, extra_args: &[&str]) -> Result<ProbeResult, String> {
+async fn run_openssl_probe(host: &str, port: u16, extra_args: &[&str]) -> Result<ProbeResult, String> {
     let target = format!("{}:{}", host, port);
-    let openssl_bin = find_openssl_with_noservername();
+    let deadline = TokioInstant::now() + OPERATION_TIMEOUT;
+    let openssl_bin = find_openssl_with_noservername(deadline)
+        .await
+        .map_err(|error| format!("OpenSSL discovery failed: {error}"))?;
     let mut cmd = Command::new(&openssl_bin);
     cmd.args(["s_client", "-connect", &target]);
     for arg in extra_args {
         cmd.arg(arg);
     }
-    cmd.stdin(std::process::Stdio::null());
-
-    let output = cmd
-        .output()
+    let output = tls_child::output(cmd, None, deadline)
+        .await
         .map_err(|e| format!("Failed to run openssl ({}): {}", openssl_bin, e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -154,7 +162,7 @@ impl FallbackSniTestSuite {
                     let start = Instant::now();
                     let port = 31198;
 
-                    match run_openssl_probe(&ctx.target_host, port, &["-noservername"]) {
+                    match run_openssl_probe(&ctx.target_host, port, &["-noservername"]).await {
                         Ok(info) => {
                             if info.handshake_complete {
                                 TestResult::passed_with_message(
@@ -196,7 +204,9 @@ impl FallbackSniTestSuite {
                         &ctx.target_host,
                         port,
                         &["-servername", "definitely-not-registered.example.invalid"],
-                    ) {
+                    )
+                    .await
+                    {
                         Ok(info) => {
                             if !info.handshake_complete {
                                 TestResult::passed_with_message(
@@ -239,3 +249,7 @@ impl TestSuite for FallbackSniTestSuite {
         ]
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../tests/unit/client/suites/edgion_tls/fallback_sni/fallback_sni_test.rs"]
+mod tests;

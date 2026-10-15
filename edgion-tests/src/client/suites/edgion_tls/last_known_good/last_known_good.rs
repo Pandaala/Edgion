@@ -30,10 +30,11 @@
 //   - updates_garbage/Secret_lkg-secret.yaml  # garbage tls.crt/tls.key (the bad update)
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
-use std::io::Write;
+use crate::tls_child::{self, OPERATION_TIMEOUT};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::Instant;
+use tokio::process::Command;
+use tokio::time::Instant as TokioInstant;
 
 const HOST: &str = "lkg.example.com";
 const PORT: u16 = 31201;
@@ -54,60 +55,47 @@ fn stash_path(ctx: &TestContext) -> PathBuf {
 /// Drive `openssl s_client` against the HTTPS listener and return the served
 /// leaf certificate's serial (via `openssl x509 -noout -serial`). An Err here
 /// also means the handshake did not complete (no server certificate in output).
-fn get_served_serial(host: &str, port: u16, servername: &str) -> Result<String, String> {
-    let s_out = Command::new("openssl")
-        .args([
-            "s_client",
-            "-connect",
-            &format!("{}:{}", host, port),
-            "-servername",
-            servername,
-        ])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| format!("failed to run openssl s_client: {}", e))?;
+async fn get_served_serial(host: &str, port: u16, servername: &str) -> Result<String, String> {
+    let deadline = TokioInstant::now() + OPERATION_TIMEOUT;
+    let mut command = Command::new("openssl");
+    command.args([
+        "s_client",
+        "-connect",
+        &format!("{}:{}", host, port),
+        "-servername",
+        servername,
+    ]);
+    let s_out = tls_child::output(command, None, deadline)
+        .await
+        .map_err(|e| format!("failed to run openssl s_client: {e}"))?;
 
     let stdout = String::from_utf8_lossy(&s_out.stdout);
     let begin = "-----BEGIN CERTIFICATE-----";
     let end = "-----END CERTIFICATE-----";
-    let start_idx = stdout.find(begin).ok_or_else(|| {
-        format!(
-            "no server certificate in s_client output (handshake failed?); stderr: {}",
-            String::from_utf8_lossy(&s_out.stderr)
-        )
-    })?;
+    let start_idx = stdout
+        .find(begin)
+        .ok_or_else(|| "no server certificate in s_client output (handshake failed?)".to_string())?;
     let end_rel = stdout[start_idx..]
         .find(end)
         .ok_or_else(|| "malformed certificate PEM in s_client output".to_string())?;
     let end_idx = start_idx + end_rel + end.len();
     let pem = &stdout[start_idx..end_idx];
 
-    get_pem_serial(pem.as_bytes())
+    get_pem_serial(pem.as_bytes(), deadline).await
 }
 
-fn get_pem_serial(pem: &[u8]) -> Result<String, String> {
-    let mut child = Command::new("openssl")
-        .args(["x509", "-noout", "-serial"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("failed to spawn openssl x509: {}", e))?;
-    child
-        .stdin
-        .as_mut()
-        .ok_or_else(|| "openssl x509 stdin unavailable".to_string())?
-        .write_all(pem)
-        .map_err(|e| format!("failed to write PEM to openssl x509: {}", e))?;
-    let out = child
-        .wait_with_output()
-        .map_err(|e| format!("failed to read openssl x509 output: {}", e))?;
+async fn get_pem_serial(pem: &[u8], deadline: TokioInstant) -> Result<String, String> {
+    let mut command = Command::new("openssl");
+    command.args(["x509", "-noout", "-serial"]);
+    let out = tls_child::output(command, Some(pem.to_vec()), deadline)
+        .await
+        .map_err(|e| format!("failed to run openssl x509: {e}"))?;
 
     let parsed = String::from_utf8_lossy(&out.stdout);
     let serial = parsed
         .trim()
         .strip_prefix("serial=")
-        .ok_or_else(|| format!("unexpected openssl x509 serial output: '{}'", parsed.trim()))?
+        .ok_or_else(|| "unexpected openssl x509 serial output".to_string())?
         .trim()
         .to_string();
     if serial.is_empty() {
@@ -205,7 +193,7 @@ pub struct LastKnownGoodInitialTestSuite;
 impl LastKnownGoodInitialTestSuite {
     /// Seed the dynamic baseline from the exact Secret being applied, so an old
     /// certificate plus an already-True status cannot satisfy its initial phase.
-    pub(crate) fn stash_fixture_serial(ctx: &TestContext, fixture: &Path) -> Result<String, String> {
+    pub(crate) async fn stash_fixture_serial(ctx: &TestContext, fixture: &Path) -> Result<String, String> {
         use base64::Engine;
 
         let content =
@@ -218,7 +206,7 @@ impl LastKnownGoodInitialTestSuite {
         let pem = base64::engine::general_purpose::STANDARD
             .decode(encoded)
             .map_err(|_| "valid TLS Secret fixture has invalid certificate base64".to_string())?;
-        let serial = get_pem_serial(&pem)?;
+        let serial = get_pem_serial(&pem, TokioInstant::now() + OPERATION_TIMEOUT).await?;
         let path = stash_path(ctx);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
@@ -243,7 +231,7 @@ impl LastKnownGoodInitialTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    match get_served_serial(&ctx.target_host, PORT, HOST) {
+                    match get_served_serial(&ctx.target_host, PORT, HOST).await {
                         Ok(serial) => {
                             let path = stash_path(&ctx);
                             if let Some(parent) = path.parent() {
@@ -337,7 +325,7 @@ impl LastKnownGoodFallbackTestSuite {
                         return TestResult::failed(start.elapsed(), "stashed serial is empty".to_string());
                     }
 
-                    match get_served_serial(&ctx.target_host, PORT, HOST) {
+                    match get_served_serial(&ctx.target_host, PORT, HOST).await {
                         Ok(current) if current == stashed => TestResult::passed_with_message(
                             start.elapsed(),
                             format!("old cert still served (serial={})", current),
@@ -420,3 +408,7 @@ impl TestSuite for LastKnownGoodFallbackTestSuite {
         vec![Self::serves_old_cert(), Self::resolved_refs_false_invalid_certificate()]
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../tests/unit/client/suites/edgion_tls/last_known_good/last_known_good_test.rs"]
+mod tests;

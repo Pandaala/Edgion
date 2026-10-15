@@ -16,11 +16,13 @@ use crate::dynamic::scenario::{PhaseSuite, Scenario, ScenarioRunFuture};
 use crate::dynamic::ScenarioCtx;
 use crate::framework::{TestCase, TestSuite};
 use crate::suites;
+use crate::tls_child::{self, OPERATION_TIMEOUT};
 use anyhow::Context;
 use base64::Engine;
 use std::path::PathBuf;
-use std::process::Command;
 use std::time::Duration;
+use tokio::process::Command;
+use tokio::time::Instant;
 
 fn initial() -> Box<dyn TestSuite> {
     // These assertions form a certificate-convergence barrier: an old served
@@ -60,7 +62,7 @@ fn rotated() -> Box<dyn TestSuite> {
     })
 }
 
-fn generate_rotated_secret(ctx: &ScenarioCtx) -> anyhow::Result<PathBuf> {
+async fn generate_rotated_secret(ctx: &ScenarioCtx) -> anyhow::Result<PathBuf> {
     let output_dir = ctx
         .test_ctx
         .access_log_path
@@ -70,7 +72,8 @@ fn generate_rotated_secret(ctx: &ScenarioCtx) -> anyhow::Result<PathBuf> {
     std::fs::create_dir_all(&output_dir).context("failed to create TLS rotation directory")?;
     let cert_path = output_dir.join("rotated.crt");
     let key_path = output_dir.join("rotated.key");
-    let status = Command::new("openssl")
+    let mut command = Command::new("openssl");
+    command
         .args(["req", "-x509", "-newkey", "rsa:2048", "-nodes"])
         .arg("-keyout")
         .arg(&key_path)
@@ -83,8 +86,9 @@ fn generate_rotated_secret(ctx: &ScenarioCtx) -> anyhow::Result<PathBuf> {
             "/CN=lkg.example.com",
             "-addext",
             "subjectAltName=DNS:lkg.example.com",
-        ])
-        .output()
+        ]);
+    let status = tls_child::output(command, None, Instant::now() + OPERATION_TIMEOUT)
+        .await
         .context("failed to invoke openssl for TLS rotation")?;
     if !status.status.success() {
         anyhow::bail!("failed to generate valid TLS rotation certificate");
@@ -129,6 +133,7 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
         const VALID_SECRET: &str = "initial/Secret_lkg-secret.yaml";
         let initial_serial =
             suites::LastKnownGoodInitialTestSuite::stash_fixture_serial(&ctx.test_ctx, &ctx.resolve(VALID_SECRET))
+                .await
                 .map_err(anyhow::Error::msg)?;
         let update_path = if std::env::var("EDGION_TEST_K8S_MODE").as_deref() == Ok("true") {
             "DynamicTest/updates/garbage"
@@ -142,9 +147,10 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
             ctx.wait_phase(scenario, "fallback", Duration::from_secs(15)).await?;
             ctx.apply_dir(VALID_SECRET).await?;
             ctx.wait_phase(scenario, "recovered", Duration::from_secs(15)).await?;
-            let rotated_secret = generate_rotated_secret(&ctx)?;
+            let rotated_secret = generate_rotated_secret(&ctx).await?;
             let rotated_serial =
                 suites::LastKnownGoodInitialTestSuite::stash_fixture_serial(&ctx.test_ctx, &rotated_secret)
+                    .await
                     .map_err(anyhow::Error::msg)?;
             if rotated_serial == initial_serial {
                 anyhow::bail!("rotated certificate serial matches the original certificate");
@@ -157,23 +163,29 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
         }
         .await;
 
-        let restore_result = async {
+        restore_after_result(result, async {
             suites::LastKnownGoodInitialTestSuite::stash_fixture_serial(&ctx.test_ctx, &ctx.resolve(VALID_SECRET))
+                .await
                 .map_err(anyhow::Error::msg)?;
             ctx.apply_dir(VALID_SECRET).await?;
             ctx.wait_phase(scenario, "recovered", Duration::from_secs(15)).await
-        }
-        .await;
-
-        match (result, restore_result) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(error), Ok(())) => Err(error),
-            (Ok(()), Err(error)) => Err(error.context("failed to restore the valid TLS Secret")),
-            (Err(error), Err(restore_error)) => Err(error.context(format!(
-                "also failed to restore the valid TLS Secret: {restore_error:#}"
-            ))),
-        }
+        })
+        .await
     })
+}
+
+async fn restore_after_result(
+    result: anyhow::Result<()>,
+    restore: impl std::future::Future<Output = anyhow::Result<()>>,
+) -> anyhow::Result<()> {
+    match (result, restore.await) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(error)) => Err(error.context("failed to restore the valid TLS Secret")),
+        (Err(error), Err(restore_error)) => Err(error.context(format!(
+            "also failed to restore the valid TLS Secret: {restore_error:#}"
+        ))),
+    }
 }
 
 pub static SCENARIO: &Scenario = &Scenario {
@@ -182,3 +194,7 @@ pub static SCENARIO: &Scenario = &Scenario {
     run,
     phases: PHASES,
 };
+
+#[cfg(test)]
+#[path = "../../../../tests/unit/client/dynamic/scenarios/edgion_tls_last_known_good_test.rs"]
+mod tests;

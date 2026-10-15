@@ -67,7 +67,54 @@ The original ITEST-006 entry below remains historical evidence.
 Re-evaluate when changing session ownership, leader reaping, signal forwarding,
 process visibility, supported `ps` implementations, or timeout exit mapping.
 
+## Direct OpenSSL operations inside the test client
+
+ARCH-288 identified a separate boundary inside the Rust client: synchronous
+OpenSSL waits in LKG generation/serial helpers and SNI collision, fallback-SNI
+and single-label wildcard suites prevented cooperative case and phase timeouts
+from running. An outer job watchdog did not make those local waits cooperative
+or let a captured transition error reach LKG restoration.
+
+These selected helpers now delegate direct-child ownership to private
+`edgion-tests/src/client/tls_child.rs`. A detached supervisor keeps Child while
+concurrently writing stdin, reading both output pipes and waiting, under one
+absolute operation deadline. Caller receiver closure cancels the exchange but
+does not cancel the supervisor's termination and explicit wait. Failure is sent
+after the kill attempt and before wait finishes; bounded failure decisions and
+cleanup completion are distinct. Successful/nonzero Output is returned only
+after normal explicit wait and both output streams complete.
+
+Discovery and its handshake share ten seconds across candidates; LKG served
+certificate extraction shares ten seconds across s_client/x509. Standalone
+fixture extraction and rotation generation each have ten seconds. Missing
+candidates can be ignored; other spawn/IO errors and deadlines fail. In
+particular, timeout is neither expected handshake rejection nor a LibreSSL skip.
+The suites retain their own candidate policy, parsing and domain assertions.
+
+Network-free tests include concurrent saturated input/output, genuine nonzero
+output, blocked input/completion deadlines, input/output caller cancellation and
+test-only acknowledgments of actual explicit wait completion. Discovery tests
+exercise missing, unsupported, pending and permission-denied candidates. LKG
+tests cover real fixture serial extraction, A/B rotation, initial seeding failure
+before mutation, and captured failure/restoration error combination. The terminal
+helper test proves restoration invocation, not real Controller Secret restoration.
+Live handshake/status/restore evidence requires the existing shared integration
+topology; these controlled-child tests make no network assertion.
+
+Run `cargo test --locked -p edgion-tests --lib tls_child::tests` and the relevant
+suite/scenario module test filters. Fresh run results are recorded in the scoped
+implementation record; this description does not claim live integration or
+cross-platform execution. Re-evaluate on owner cancellation/IO changes, runtime
+lifetime changes, new child consumers or changed discovery semantics.
+
+This is direct-child ownership, not a general subprocess-tree framework. OS
+uninterruptible state and runtime shutdown/panic prevent absolute cleanup-time
+guarantees; kill-on-drop is only a shutdown fallback. Arbitrary cancellation of
+the enclosing scenario does not promise async Secret restoration. Cipher's
+existing watchdog and the outer Python process-group helper remain separate.
+
 ## Resolution references
 
 - `ITEST-006` — 2026-08-26.
 - `ITEST-DEADLINE-EPERM` — 2026-09-09; corrected macOS zombie-group handling.
+- `ARCH-288` — selected Rust OpenSSL helpers now own deadline/cancellation cleanup.
