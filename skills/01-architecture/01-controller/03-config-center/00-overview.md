@@ -63,12 +63,29 @@ The differences are only at the two ends:
 | Difference | FileSystemCenter | KubernetesCenter | EtcdCenter |
 |------------|-----------------|-----------------|------------|
 | Event source | `notify` crate, inotify/kqueue file watching | K8s API Reflector watch stream | etcd watch stream |
-| Status persistence | `.status` file (YAML) | K8s API `PATCH /status` (JSON Merge Patch) | None (status is not persisted) |
+| Status persistence | `.status` file (YAML) | K8s API `PATCH /status` (JSON Merge Patch) | `{prefix}/status/{kind}/{namespace}/{name}` keys (YAML; leadership-gated writes) |
 | Leader election | None (single instance) | Lease-based distributed election | etcd `v3election` + self-managed lease keepalive (active-passive) |
 | 410 Gone handling | N/A | Watcher obtains a fresh source LIST; commit its complete snapshot and resync source keys through the existing worker | N/A |
 | Concurrent-write constraint | Single process; check-then-write is non-atomic | K8s API Server provides atomicity | **Single active writer, guaranteed by leader election**; check-then-write is non-atomic, but active-passive HA (etcd `v3election` + a pre-write leadership gate) ensures exactly one leader writes at a time. The single-writer assumption is now enforced by leader election, not by operator discipline |
 
 The middle layers (Workqueue, ResourceProcessor, ProcessorHandler, ServerCache, reference managers, etc.) are fully reused.
+
+### Etcd document ingress
+
+The watcher tracks key presence independently of value decoding. Initial lists,
+live Put events and compaction resync carry either decoded text or an explicit
+invalid-UTF-8 marker through the existing per-kind channel. Invalid bytes are
+not retained in events or diagnostics. Resync emits Delete only for absent keys.
+
+The resource controller owns malformed-document policy under the authoritative
+etcd key: initial failures use the pre-worker diagnostic path; runtime failures
+remove raw state, retain a ParseError envelope and enqueue through on_event_key.
+The single worker revokes the previous processed generation and writes error
+status inline. Valid repair and actual Delete clear the invalid envelope. This
+does not add a status-write retry or guarantee deletion of an old error sidecar
+when the existing processor returns Skipped for an already-absent generation.
+See [etcd ingress regression boundaries](../../../04-review/controller/regression-guards/etcd-key-content-identity.md)
+for ARCH-086 coverage and limits.
 
 ### Etcd election diagnostics and term supervision
 

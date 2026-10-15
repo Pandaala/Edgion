@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio::task::JoinHandle;
 
-use super::event::EtcdEvent;
+use super::event::{EtcdDocument, EtcdEvent};
 use super::status::EtcdStatusHandler;
 use super::watcher::KindEventReceiver;
 use crate::conf_mgr::conf_center::common::{
@@ -125,7 +125,7 @@ where
                             self.processor.on_init();
                         }
                     }
-                    EtcdEvent::InitApply { key, content } => match parse_resource_content_offline::<K>(&content) {
+                    EtcdEvent::InitApply { key, content } => match parse_etcd_document::<K>(&content) {
                         Ok(obj) => {
                             let content_key = make_resource_key(&obj);
                             let Some(rkey) =
@@ -212,7 +212,7 @@ where
                     EtcdEvent::Apply { key, content } => {
                         if !init_done {
                             // During init, treat as InitApply
-                            if let Ok(obj) = parse_resource_content_offline::<K>(&content) {
+                            if let Ok(obj) = parse_etcd_document::<K>(&content) {
                                 let content_key = make_resource_key(&obj);
                                 let Some(rkey) = validated_init_key(
                                     &self.status_handler,
@@ -246,65 +246,12 @@ where
                                 }
                             }
                         } else {
-                            match parse_resource_content_offline::<K>(&content) {
-                                Ok(obj) => {
-                                    let content_key = make_resource_key(&obj);
-                                    let rkey = match validate_etcd_identity(&key, &self.conf_prefix, kind, &content_key)
-                                    {
-                                        Ok(rkey) => rkey,
-                                        Err(EtcdIdentityError::Mismatch { key_identity }) => {
-                                            let message = identity_mismatch_message(&content_key, &key_identity);
-                                            store_runtime_invalid(
-                                                &self.invalid_envelopes,
-                                                key_identity.clone(),
-                                                "IdentityMismatch",
-                                                message,
-                                            );
-                                            self.fs_raw_store.remove(&key_identity);
-                                            log_identity_mismatch(kind, &key, &content_key, &key_identity);
-                                            self.processor.on_event_key(key_identity).await;
-                                            continue;
-                                        }
-                                        Err(EtcdIdentityError::MalformedKey) => {
-                                            log_malformed_etcd_key(kind, &key);
-                                            continue;
-                                        }
-                                    };
-                                    clear_runtime_invalid(&self.invalid_envelopes, &rkey);
-                                    self.fs_raw_store.upsert(rkey.clone(), Arc::new(obj.clone()));
-                                    self.processor.on_event_key(rkey).await;
-                                }
-                                Err(e) => {
-                                    if let Some(rkey) = extract_key_from_etcd_key(&key, &self.conf_prefix, kind) {
-                                        self.fs_raw_store.remove(&rkey);
-                                        store_runtime_invalid(
-                                            &self.invalid_envelopes,
-                                            rkey.clone(),
-                                            "ParseError",
-                                            e.to_string(),
-                                        );
-                                        self.processor.on_event_key(rkey).await;
-                                    }
-                                    tracing::warn!(
-                                        component = "etcd_resource_controller",
-                                        kind = kind,
-                                        key = %key,
-                                        error = %e,
-                                        "Failed to parse resource for apply"
-                                    );
-                                }
-                            }
+                            self.apply_runtime_document(&key, &content).await;
                         }
                     }
                     EtcdEvent::Delete { key } => {
                         if init_done {
-                            if let Some(rkey) = extract_key_from_etcd_key(&key, &self.conf_prefix, kind) {
-                                clear_runtime_invalid(&self.invalid_envelopes, &rkey);
-                                self.fs_raw_store.remove(&rkey);
-                                self.processor.on_event_key(rkey).await;
-                            } else {
-                                log_malformed_etcd_key(kind, &key);
-                            }
+                            self.delete_runtime_document(&key).await;
                         }
                     }
                 },
@@ -349,6 +296,63 @@ where
         Ok(())
     }
 
+    async fn apply_runtime_document(&self, key: &str, content: &EtcdDocument) {
+        let kind = self.kind;
+        match parse_etcd_document::<K>(content) {
+            Ok(obj) => {
+                let content_key = make_resource_key(&obj);
+                let rkey = match validate_etcd_identity(key, &self.conf_prefix, kind, &content_key) {
+                    Ok(rkey) => rkey,
+                    Err(EtcdIdentityError::Mismatch { key_identity }) => {
+                        let message = identity_mismatch_message(&content_key, &key_identity);
+                        store_runtime_invalid(
+                            &self.invalid_envelopes,
+                            key_identity.clone(),
+                            "IdentityMismatch",
+                            message,
+                        );
+                        self.fs_raw_store.remove(&key_identity);
+                        log_identity_mismatch(kind, key, &content_key, &key_identity);
+                        self.processor.on_event_key(key_identity).await;
+                        return;
+                    }
+                    Err(EtcdIdentityError::MalformedKey) => {
+                        log_malformed_etcd_key(kind, key);
+                        return;
+                    }
+                };
+                clear_runtime_invalid(&self.invalid_envelopes, &rkey);
+                self.fs_raw_store.upsert(rkey.clone(), Arc::new(obj.clone()));
+                self.processor.on_event_key(rkey).await;
+            }
+            Err(e) => {
+                if let Some(rkey) = extract_key_from_etcd_key(key, &self.conf_prefix, kind) {
+                    self.fs_raw_store.remove(&rkey);
+                    store_runtime_invalid(&self.invalid_envelopes, rkey.clone(), "ParseError", e.to_string());
+                    self.processor.on_event_key(rkey).await;
+                }
+                tracing::warn!(
+                    component = "etcd_resource_controller",
+                    kind = kind,
+                    key = %key,
+                    error = %e,
+                    "Failed to parse resource for apply"
+                );
+            }
+        }
+    }
+
+    async fn delete_runtime_document(&self, key: &str) {
+        let kind = self.kind;
+        if let Some(rkey) = extract_key_from_etcd_key(key, &self.conf_prefix, kind) {
+            clear_runtime_invalid(&self.invalid_envelopes, &rkey);
+            self.fs_raw_store.remove(&rkey);
+            self.processor.on_event_key(rkey).await;
+        } else {
+            log_malformed_etcd_key(kind, key);
+        }
+    }
+
     /// Persist status to etcd.
     async fn persist_status(&self, kind: &str, key: &str, obj: &K) {
         if let Some(status_value) = extract_status_value(obj) {
@@ -382,6 +386,19 @@ where
                 "Failed to clear stale error status after repair"
             );
         }
+    }
+}
+
+/// Interpret the watcher outcome at the existing malformed-resource owner.
+fn parse_etcd_document<K>(content: &EtcdDocument) -> Result<K>
+where
+    K: ResourceMeta + Resource + Clone + Send + Sync + Debug + Serialize + DeserializeOwned + 'static,
+{
+    match content {
+        EtcdDocument::Text(text) => Ok(parse_resource_content_offline(text)?),
+        EtcdDocument::InvalidUtf8 => Err(anyhow::anyhow!(
+            "etcd resource value is not valid UTF-8; replace it with UTF-8 YAML"
+        )),
     }
 }
 

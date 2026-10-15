@@ -23,7 +23,7 @@ use etcd_client::EventType;
 use parking_lot::RwLock as SyncRwLock;
 use tokio::sync::{mpsc, RwLock};
 
-use super::event::EtcdEvent;
+use super::event::{EtcdDocument, EtcdEvent};
 use crate::conf_mgr::sync_runtime::ShutdownSignal;
 use edgion_common::link_sys_core::providers::etcd::EtcdLinkClient;
 
@@ -35,7 +35,7 @@ pub type KindEventReceiver = mpsc::Receiver<EtcdEvent>;
 /// Snapshot captured by `prime`, consumed by `dispatch_init` / `run_runtime`.
 struct PrimedSnapshot {
     /// Resources grouped by kind: kind -> Vec<(key, content)>.
-    by_kind: HashMap<&'static str, Vec<(String, String)>>,
+    by_kind: HashMap<&'static str, Vec<(String, EtcdDocument)>>,
     /// Cluster revision at list time; the runtime watch resumes from `revision + 1`.
     revision: i64,
 }
@@ -90,29 +90,30 @@ impl EtcdWatcher {
 
         let (kvs, revision) = self.client.get_prefix_with_revision(&self.conf_prefix).await?;
 
-        let mut by_kind: HashMap<&'static str, Vec<(String, String)>> = HashMap::new();
+        self.install_prime(&kvs, revision);
+        Ok(())
+    }
+
+    fn install_prime(&self, kvs: &[(String, Vec<u8>, i64)], revision: i64) {
+        let mut by_kind: HashMap<&'static str, Vec<(String, EtcdDocument)>> = HashMap::new();
         let mut new_known: HashMap<&'static str, HashSet<String>> = HashMap::new();
-        for (key, value, _rev) in &kvs {
+        for (key, value, _rev) in kvs {
             if let Some(kind) = self.parse_kind_from_key(key) {
-                if let Ok(content) = std::str::from_utf8(value) {
-                    by_kind
-                        .entry(kind)
-                        .or_default()
-                        .push((key.clone(), content.to_string()));
-                    new_known.entry(kind).or_default().insert(key.clone());
-                }
+                by_kind
+                    .entry(kind)
+                    .or_default()
+                    .push((key.clone(), EtcdDocument::from_bytes(value)));
+                new_known.entry(kind).or_default().insert(key.clone());
             }
         }
-
         *self.known_keys.write() = new_known;
         tracing::info!(
             component = "etcd_watcher",
             kinds = by_kind.len(),
-            revision = revision,
+            revision,
             "Prime complete"
         );
         *self.primed.write() = Some(PrimedSnapshot { by_kind, revision });
-        Ok(())
     }
 
     /// Dispatch `Init` -> `InitApply` x N -> `InitDone` for exactly `kinds`,
@@ -121,7 +122,7 @@ impl EtcdWatcher {
     pub async fn dispatch_init(&self, kinds: &[&'static str]) -> Result<()> {
         let senders = self.senders.read().await.clone();
         // Transfer only subscribed kinds; later phases still need their documents.
-        let mut per_kind: HashMap<&'static str, Vec<(String, String)>> = {
+        let mut per_kind: HashMap<&'static str, Vec<(String, EtcdDocument)>> = {
             let mut guard = self.primed.write();
             let snap = guard
                 .as_mut()
@@ -182,16 +183,19 @@ impl EtcdWatcher {
 
         let (kvs, revision) = self.client.get_prefix_with_revision(&self.conf_prefix).await?;
 
+        self.dispatch_resync(&kvs, revision).await;
+        Ok(revision)
+    }
+
+    async fn dispatch_resync(&self, kvs: &[(String, Vec<u8>, i64)], revision: i64) {
         // Build current key set grouped by kind
-        let mut current_by_kind: HashMap<&'static str, HashMap<String, String>> = HashMap::new();
-        for (key, value, _rev) in &kvs {
+        let mut current_by_kind: HashMap<&'static str, HashMap<String, EtcdDocument>> = HashMap::new();
+        for (key, value, _rev) in kvs {
             if let Some(kind) = self.parse_kind_from_key(key) {
-                if let Ok(content) = std::str::from_utf8(value) {
-                    current_by_kind
-                        .entry(kind)
-                        .or_default()
-                        .insert(key.clone(), content.to_string());
-                }
+                current_by_kind
+                    .entry(kind)
+                    .or_default()
+                    .insert(key.clone(), EtcdDocument::from_bytes(value));
             }
         }
 
@@ -238,8 +242,6 @@ impl EtcdWatcher {
             revision = revision,
             "Resync phase complete"
         );
-
-        Ok(revision)
     }
 
     // ==================== Runtime Phase ====================
@@ -315,45 +317,14 @@ impl EtcdWatcher {
                                         // Process events and maintain known_keys
                                         for event in resp.events() {
                                             if let Some(kv) = event.kv() {
-                                                let key = kv.key_str().unwrap_or("").to_string();
-                                                revision = kv.mod_revision();
-
-                                                if let Some(kind) = self.parse_kind_from_key(&key) {
-                                                    if let Some(tx) = senders.get(kind) {
-                                                        match event.event_type() {
-                                                            EventType::Put => {
-                                                                let content = match std::str::from_utf8(kv.value()) {
-                                                                    Ok(s) => s.to_string(),
-                                                                    Err(e) => {
-                                                                        tracing::warn!(
-                                                                            component = "etcd_watcher",
-                                                                            key = %key,
-                                                                            error = %e,
-                                                                            "Skipping non-UTF8 value"
-                                                                        );
-                                                                        continue;
-                                                                    }
-                                                                };
-                                                                let _ = tx.send(EtcdEvent::Apply {
-                                                                    key: key.clone(),
-                                                                    content,
-                                                                }).await;
-                                                                self.known_keys.write()
-                                                                    .entry(kind)
-                                                                    .or_default()
-                                                                    .insert(key);
-                                                            }
-                                                            EventType::Delete => {
-                                                                let _ = tx.send(EtcdEvent::Delete {
-                                                                    key: key.clone(),
-                                                                }).await;
-                                                                if let Some(set) = self.known_keys.write().get_mut(kind) {
-                                                                    set.remove(&key);
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
+                                                self.dispatch_watch_event(
+                                                    &senders,
+                                                    kv.key_str().unwrap_or(""),
+                                                    kv.value(),
+                                                    event.event_type(),
+                                                    kv.mod_revision(),
+                                                    &mut revision,
+                                                ).await;
                                             }
                                         }
                                     }
@@ -389,6 +360,42 @@ impl EtcdWatcher {
                 _ = tokio::time::sleep(reconnect_backoff) => {}
             }
             reconnect_backoff = std::cmp::min(reconnect_backoff * 2, MAX_BACKOFF);
+        }
+    }
+
+    async fn dispatch_watch_event(
+        &self,
+        senders: &HashMap<&'static str, KindEventSender>,
+        key: &str,
+        value: &[u8],
+        event_type: EventType,
+        mod_revision: i64,
+        revision: &mut i64,
+    ) {
+        *revision = mod_revision;
+        let Some(kind) = self.parse_kind_from_key(key) else {
+            return;
+        };
+        let Some(tx) = senders.get(kind) else {
+            return;
+        };
+        match event_type {
+            EventType::Put => {
+                let content = EtcdDocument::from_bytes(value);
+                let _ = tx
+                    .send(EtcdEvent::Apply {
+                        key: key.to_owned(),
+                        content,
+                    })
+                    .await;
+                self.known_keys.write().entry(kind).or_default().insert(key.to_owned());
+            }
+            EventType::Delete => {
+                let _ = tx.send(EtcdEvent::Delete { key: key.to_owned() }).await;
+                if let Some(set) = self.known_keys.write().get_mut(kind) {
+                    set.remove(key);
+                }
+            }
         }
     }
 

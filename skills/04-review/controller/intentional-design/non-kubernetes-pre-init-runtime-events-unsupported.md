@@ -26,7 +26,10 @@ path after `InitDone`.
 
 `non_kube_common::spawn_all_controllers` primes the backend, launches each
 resource controller, calls `dispatch_init` for each dependency phase, and waits
-for those kinds to become ready before returning. Both watcher implementations
+for provider and Gateway readiness before starting their dependent phases.
+The final dependent phase dispatches initialization without awaiting every
+kind's readiness. Each per-kind FIFO still places InitDone before runtime
+events; global readiness of all dependent controllers is not required here. Both watcher implementations
 make `dispatch_init` send `Init`, zero or more `InitApply` events, and `InitDone`.
 Only after `spawn_all_controllers` returns do
 `FileSystemController::run` and `EtcdController::run` call `run_runtime`, which
@@ -55,7 +58,7 @@ pre-init branches must be re-evaluated before that change is accepted.
 ## Verification and re-evaluation
 
 The source ordering was revalidated when closing the task: the common startup
-orchestrator completes phased initialization before returning, and each backend
+orchestrator completes phased initialization dispatch before returning, and each backend
 calls `run_runtime` only afterward. Independent review and repository checks for
 the closure are reported in the task run rather than treated as permanent test
 evidence here.

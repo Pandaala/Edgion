@@ -36,7 +36,7 @@ ConfCenter trait
 FileSystemCenter      KubernetesCenter         EtcdCenter
 ├── Local YAML files  ├── K8s API Server        ├── etcd KV store
 ├── inotify watching  ├── Reflector watch        ├── etcd watch events
-├── .status files     ├── Status subresource    ├── No status persistence
+├── .status files     ├── Status subresource    ├── /status/ keys (YAML)
 ├── No leader elect   ├── Lease-based election  ├── v3election + lease keepalive
 └── Use: dev/test     └── Use: production K8s   └── Use: non-K8s production (HA)
 ```

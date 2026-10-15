@@ -2,6 +2,7 @@ use super::{validate_etcd_identity, EtcdIdentityError};
 use crate::conf_mgr::conf_center::common::{
     clear_runtime_invalid, get_runtime_invalid, parse_resource_content, store_runtime_invalid, RuntimeInvalidEnvelopes,
 };
+use crate::conf_mgr::sync_runtime::resource_processor::raw_store::RawStore;
 use crate::conf_mgr::sync_runtime::resource_processor::{
     HandlerContext, LocalRawStore, ProcessResult, ProcessorHandler, ResourceProcessor, WorkItemResult,
 };
@@ -259,4 +260,215 @@ spec:
         Some(&["repaired.example.com".to_string()][..])
     );
     assert!(get_runtime_invalid(&invalid, key).is_none());
+}
+
+fn runtime_controller(prefix: &str) -> super::EtcdResourceController<HTTPRoute> {
+    use edgion_common::link_sys_core::providers::etcd::{EtcdBootstrapConfig, EtcdLinkClient};
+    let client = EtcdLinkClient::from_bootstrap(
+        "test/invalid-ingress",
+        EtcdBootstrapConfig {
+            endpoints: vec!["http://127.0.0.1:2379".into()],
+            auth: None,
+            tls: None,
+            timeout: None,
+            keep_alive: None,
+            namespace: None,
+        },
+    )
+    .unwrap();
+    let processor = Arc::new(ResourceProcessor::new(
+        "HTTPRoute",
+        100,
+        Arc::new(NoopHttpRouteHandler),
+        Arc::new(ControllerRuntime::default()),
+    ));
+    let (_, rx) = tokio::sync::mpsc::channel(256);
+    super::EtcdResourceController::new(
+        "HTTPRoute",
+        processor,
+        Arc::new(super::EtcdStatusHandler::new(
+            Arc::new(client),
+            prefix.trim_end_matches("/conf/").to_owned(),
+        )),
+        rx,
+        Arc::from(prefix),
+    )
+}
+
+fn route_document(host: &str) -> super::EtcdDocument {
+    super::EtcdDocument::Text(format!("apiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata:\n  name: r1\n  namespace: default\nspec:\n  hostnames: [{host}]\n  rules: []\n"))
+}
+
+// Exercise the real queue and processor without status RPCs. Ingress is performed
+// exclusively through the production controller methods below.
+async fn process_next(controller: &super::EtcdResourceController<HTTPRoute>) -> WorkItemResult<HTTPRoute> {
+    let queue = controller.processor.workqueue();
+    let item = tokio::time::timeout(std::time::Duration::from_secs(1), queue.dequeue())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(item.key, "default/r1");
+    let raw = controller.fs_raw_store.get(&item.key).map(|obj| (*obj).clone());
+    let result = controller
+        .processor
+        .process_work_item(&item.key, raw, None, item.trigger_chain)
+        .await;
+    queue.done(&item.key);
+    result
+}
+
+#[tokio::test]
+async fn invalid_utf8_runtime_revokes_recovers_and_clears_on_delete() {
+    let controller = runtime_controller(CONF_PREFIX);
+    let key = "/edgion/conf/HTTPRoute/default/r1";
+    controller
+        .apply_runtime_document(key, &route_document("valid.example.com"))
+        .await;
+    assert!(matches!(
+        process_next(&controller).await,
+        WorkItemResult::Processed { .. }
+    ));
+    controller
+        .apply_runtime_document(key, &super::EtcdDocument::InvalidUtf8)
+        .await;
+    assert!(controller.fs_raw_store.get("default/r1").is_none());
+    let invalid = get_runtime_invalid(&controller.invalid_envelopes, "default/r1").unwrap();
+    assert_eq!(invalid.reason, "ParseError");
+    assert_eq!(
+        invalid.message,
+        "etcd resource value is not valid UTF-8; replace it with UTF-8 YAML"
+    );
+    assert!(matches!(
+        process_next(&controller).await,
+        WorkItemResult::Deleted { .. }
+    ));
+    assert!(controller.processor.get("default/r1").is_none());
+    controller
+        .apply_runtime_document(key, &super::EtcdDocument::InvalidUtf8)
+        .await;
+    assert_eq!(
+        get_runtime_invalid(&controller.invalid_envelopes, "default/r1").unwrap(),
+        invalid
+    );
+    assert!(matches!(process_next(&controller).await, WorkItemResult::Skipped));
+    controller
+        .apply_runtime_document(key, &route_document("repaired.example.com"))
+        .await;
+    assert!(get_runtime_invalid(&controller.invalid_envelopes, "default/r1").is_none());
+    assert!(matches!(
+        process_next(&controller).await,
+        WorkItemResult::Processed { .. }
+    ));
+    assert_eq!(
+        controller
+            .processor
+            .get("default/r1")
+            .unwrap()
+            .spec
+            .hostnames
+            .as_deref(),
+        Some(&["repaired.example.com".to_owned()][..])
+    );
+    controller
+        .apply_runtime_document(key, &super::EtcdDocument::InvalidUtf8)
+        .await;
+    assert!(matches!(
+        process_next(&controller).await,
+        WorkItemResult::Deleted { .. }
+    ));
+    controller.delete_runtime_document(key).await;
+    assert!(get_runtime_invalid(&controller.invalid_envelopes, "default/r1").is_none());
+    assert!(matches!(process_next(&controller).await, WorkItemResult::Skipped));
+}
+
+#[tokio::test]
+async fn invalid_utf8_coalesces_to_latest_repair_or_delete() {
+    let controller = runtime_controller(CONF_PREFIX);
+    let key = "/edgion/conf/HTTPRoute/default/r1";
+    controller
+        .apply_runtime_document(key, &route_document("valid.example.com"))
+        .await;
+    let _ = process_next(&controller).await;
+    controller
+        .apply_runtime_document(key, &super::EtcdDocument::InvalidUtf8)
+        .await;
+    controller
+        .apply_runtime_document(key, &route_document("repaired.example.com"))
+        .await;
+    assert!(matches!(
+        process_next(&controller).await,
+        WorkItemResult::Processed { .. }
+    ));
+    assert!(get_runtime_invalid(&controller.invalid_envelopes, "default/r1").is_none());
+    assert_eq!(
+        controller
+            .processor
+            .get("default/r1")
+            .unwrap()
+            .spec
+            .hostnames
+            .as_deref(),
+        Some(&["repaired.example.com".to_owned()][..])
+    );
+    controller
+        .apply_runtime_document(key, &super::EtcdDocument::InvalidUtf8)
+        .await;
+    controller.delete_runtime_document(key).await;
+    assert!(matches!(
+        process_next(&controller).await,
+        WorkItemResult::Deleted { .. }
+    ));
+    assert!(controller.processor.get("default/r1").is_none());
+    assert!(controller.fs_raw_store.get("default/r1").is_none());
+    assert!(get_runtime_invalid(&controller.invalid_envelopes, "default/r1").is_none());
+    assert_eq!(controller.processor.workqueue().len(), 0);
+}
+
+#[tokio::test]
+async fn invalid_utf8_respects_exact_configured_key_identity() {
+    let prefix = "/tenant/conf/edgion/conf/";
+    let controller = runtime_controller(prefix);
+    let valid_key = format!("{prefix}HTTPRoute/default/r1");
+    controller
+        .apply_runtime_document(&valid_key, &route_document("valid.example.com"))
+        .await;
+    let _ = process_next(&controller).await;
+    for key in [
+        "/edgion/conf/HTTPRoute/default/r1",
+        "/tenant/conf/edgion/conf/HTTPRoute/default/",
+        "/tenant/conf/edgion/conf/HTTPRoute/default/r1/extra",
+        "/tenant/conf/edgion/conf/Secret/default/r1",
+        "/tenant/conf/edgion/conf/HTTPRoute//r1",
+    ] {
+        controller
+            .apply_runtime_document(key, &super::EtcdDocument::InvalidUtf8)
+            .await;
+        assert_eq!(controller.processor.workqueue().len(), 0);
+        assert!(controller.fs_raw_store.get("default/r1").is_some());
+        assert!(get_runtime_invalid(&controller.invalid_envelopes, "default/r1").is_none());
+    }
+    controller
+        .apply_runtime_document(&valid_key, &super::EtcdDocument::InvalidUtf8)
+        .await;
+    assert!(matches!(
+        process_next(&controller).await,
+        WorkItemResult::Deleted { .. }
+    ));
+}
+
+#[test]
+fn invalid_document_parser_has_fixed_deduplicated_error() {
+    use crate::conf_mgr::conf_center::common::ErrorStatus;
+    let error = super::parse_etcd_document::<HTTPRoute>(&super::EtcdDocument::InvalidUtf8)
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        error,
+        "etcd resource value is not valid UTF-8; replace it with UTF-8 YAML"
+    );
+    let status = ErrorStatus::error_for_persist("ParseError", &error, None).unwrap();
+    let persisted = serde_json::to_string(&status).unwrap();
+    assert!(ErrorStatus::error_for_persist("ParseError", &error, Some(&persisted)).is_none());
+    assert!(super::parse_etcd_document::<HTTPRoute>(&route_document("valid.example.com")).is_ok());
+    assert!(super::parse_etcd_document::<HTTPRoute>(&super::EtcdDocument::Text("not: [yaml".into())).is_err());
 }
