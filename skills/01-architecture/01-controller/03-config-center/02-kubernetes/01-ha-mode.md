@@ -7,6 +7,26 @@ description: Kubernetes HA modes — leader-only vs all-serve behavior matrix, a
 
 The `ha_mode` configuration option supports two multi-replica modes for different scale and availability requirements.
 
+## Active leader renewal deadline
+
+The Kubernetes election task owns one monotonic deadline measured from the last
+acknowledged Lease acquisition or renewal. It remains active while sleeping,
+awaiting Lease GET/CAS, or updating the derived Pod label. Expiry withdraws the
+local leader flag and stored fence before further IO. A successful response ready
+at or after expiry cannot restore that term; reacquisition requires a fresh Lease
+read and successful resourceVersion CAS with a new local term.
+
+Transient Lease errors retain authority only within the remaining window; 404,
+409 and a competing holder cause immediate withdrawal. Pod-label convergence runs
+after Lease processing and consumes only the existing retry interval, so a slow
+label patch does not postpone the next renewal. Timed-out patches retry current
+state on later ticks. Labels never establish or extend leadership.
+
+Cancelling a request does not roll back a server write or fence already submitted
+status writes. The leader-only lifecycle and all-serve per-write guards retain
+their separate semantics. See the [renewal and label regression guard](../../../../04-review/concurrency/regression-guards/leader-pod-label-tick-resync.md)
+for ARCH-112 and its verification boundaries.
+
 ## Mode Overview
 
 | Mode | Name | Description | Use case |

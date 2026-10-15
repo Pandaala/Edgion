@@ -11,9 +11,11 @@ use k8s_openapi::chrono::Utc;
 use kube::api::{Api, Patch, PatchParams, PostParams};
 use kube::Client;
 use parking_lot::RwLock;
+use std::future::{pending, Future};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::watch;
+use tokio::time::Instant;
 
 use super::controller_metrics;
 
@@ -253,208 +255,125 @@ impl LeaderElection {
             "Starting leader election"
         );
 
-        let renew_deadline = Duration::from_secs(self.config.renew_deadline_secs);
-        // Tracks the last successful renew/acquire. Local to this loop because
-        // only the run loop reads/writes it.
-        let mut last_renewed: Option<Instant> = None;
-        // Tracks whether the pod's `edgion.io/leader` label matches the actual
-        // leadership state. The label is the selector of the leader Service, so
-        // a patch failure at a state transition must not be permanent: when
-        // false, the loop re-patches with the current state on every tick until
-        // it converges.
+        let renew_window = Duration::from_secs(self.config.renew_deadline_secs);
+        let retry_period = Duration::from_secs(self.config.retry_period_secs);
+        let mut deadline = None;
+        let mut next_attempt = Instant::now() + retry_period;
         let mut label_synced = true;
 
-        loop {
-            // Single sleep cadence (matches client-go's RetryPeriod): a
-            // transient failure window of renew_deadline_secs produces
-            // ~renew_deadline_secs/retry_period_secs retry attempts.
-            let sleep_duration = Duration::from_secs(self.config.retry_period_secs);
-
-            // Check for shutdown signal during sleep
-            if let Some(ref mut signal) = shutdown_signal {
-                tokio::select! {
-                    _ = tokio::time::sleep(sleep_duration) => {}
-                    _ = signal.wait() => {
-                        tracing::info!(
-                            component = "leader_election",
-                            identity = %self.config.identity,
-                            "Shutdown signal received, stopping leader election"
-                        );
-                        if self.is_leader.send_replace(false) {
-                            controller_metrics().set_leader(false);
-                            // Release the lease so a successor can take over on
-                            // its next tick instead of waiting out
-                            // lease_duration_secs (~17s of leaderless time on
-                            // every rolling upgrade). Best-effort and bounded:
-                            // on failure the lease simply expires naturally,
-                            // which is the pre-release behavior.
-                            match tokio::time::timeout(
-                                Duration::from_secs(RELEASE_LEASE_TIMEOUT_SECS),
-                                self.release_lease(&lease_api),
-                            )
-                            .await
-                            {
-                                Ok(Ok(())) => {}
-                                Ok(Err(e)) => tracing::warn!(
-                                    component = "leader_election",
-                                    identity = %self.config.identity,
-                                    error = %e,
-                                    "Failed to release lease on shutdown; successor takeover falls back to lease expiry (or recreate)"
-                                ),
-                                Err(_) => tracing::warn!(
-                                    component = "leader_election",
-                                    identity = %self.config.identity,
-                                    timeout_secs = RELEASE_LEASE_TIMEOUT_SECS,
-                                    "Timed out releasing lease on shutdown; successor takeover falls back to lease expiry"
-                                ),
-                            }
-                            // Best-effort: the loop exits here, so there is no
-                            // tick left to retry on. A restarting pod resets the
-                            // label in preflight, and a terminating pod drops
-                            // out of Service endpoints anyway.
-                            self.update_pod_leader_label(false).await;
-                        }
-                        *self.current_fence.write() = None;
-                        return Ok(());
-                    }
+        'election: loop {
+            // Labels consume this same interval, never an extra retry period.
+            let attempt = async {
+                tokio::time::sleep_until(next_attempt).await;
+                self.try_acquire_or_renew(&lease_api).await
+            };
+            match election_wait(attempt, deadline, &mut shutdown_signal).await {
+                ElectionWait::Shutdown => break,
+                ElectionWait::Expired => {
+                    self.withdraw_leadership();
+                    deadline = None;
+                    label_synced = false;
+                    tracing::warn!(
+                        component = "leader_election",
+                        "Lost leadership: renew deadline exceeded"
+                    );
                 }
-            } else {
-                tokio::time::sleep(sleep_duration).await;
-            }
-
-            // Re-converge the pod label if a previous patch failed. Without
-            // this, a transient apiserver error at a state transition would
-            // leave the leader Service selector permanently out of sync (no
-            // further transition would ever rewrite the label).
-            if !label_synced {
-                label_synced = self.update_pod_leader_label(self.is_leader()).await;
-            }
-
-            match self.try_acquire_or_renew(&lease_api).await {
-                Ok(true) => {
-                    last_renewed = Some(Instant::now());
+                ElectionWait::Completed(Ok(Some(fence))) => {
+                    deadline = Some(Instant::now() + renew_window);
+                    *self.current_fence.write() = Some(fence);
                     if !self.is_leader.send_replace(true) {
-                        tracing::info!(
-                            component = "leader_election",
-                            identity = %self.config.identity,
-                            "Acquired leadership"
-                        );
                         controller_metrics().set_leader(true);
-                        label_synced = self.update_pod_leader_label(true).await;
+                        label_synced = false;
+                        tracing::info!(component = "leader_election", identity = %self.config.identity, "Acquired leadership");
                     }
                 }
-                Ok(false) => {
-                    // Clean step-down: the apiserver replied; lease is held by
-                    // someone else (or we lost a CAS race). Reset deadline
-                    // tracking so a future re-acquire starts a fresh window.
-                    last_renewed = None;
-                    *self.current_fence.write() = None;
-                    if self.is_leader.send_replace(false) {
-                        tracing::info!(
-                            component = "leader_election",
-                            identity = %self.config.identity,
-                            "Lost leadership"
-                        );
-                        controller_metrics().set_leader(false);
-                        label_synced = self.update_pod_leader_label(false).await;
-                    }
+                ElectionWait::Completed(Ok(None)) => {
+                    label_synced &= !self.withdraw_leadership();
+                    deadline = None;
                 }
-                Err(e) => {
-                    // Detect 404: lease was deleted out-of-band. The
-                    // RenewDeadline reasoning ("lease still valid server-side
-                    // until expiry") does not apply when the lease object
-                    // itself is gone, so we must step down immediately to
-                    // avoid split-brain if another actor recreates the lease
-                    // within our deadline window. Then attempt recreation so
-                    // the cluster can resume electing without operator
-                    // intervention. 404 can originate from either api.get()
-                    // or api.replace() inside try_acquire_or_renew; downcast
-                    // covers both paths.
-                    let is_lease_missing = e
+                ElectionWait::Completed(Err(error)) => {
+                    let missing = error
                         .downcast_ref::<kube::Error>()
-                        .map(|ke| matches!(ke, kube::Error::Api(api_err) if api_err.code == 404))
-                        .unwrap_or(false);
-
-                    if is_lease_missing {
+                        .is_some_and(|error| matches!(error, kube::Error::Api(response) if response.code == 404));
+                    if missing {
+                        label_synced &= !self.withdraw_leadership();
+                        deadline = None;
                         tracing::warn!(
                             component = "leader_election",
-                            identity = %self.config.identity,
-                            lease_name = %self.config.lease_name,
-                            lease_namespace = %self.config.lease_namespace,
-                            "Lease resource missing (404); forcing step-down and attempting recreate"
+                            "Lease missing; withdrawing leadership and recreating lease"
                         );
-                        if self.is_leader.send_replace(false) {
-                            tracing::info!(
-                                component = "leader_election",
-                                identity = %self.config.identity,
-                                "Lost leadership: lease resource was deleted out-of-band"
-                            );
-                            controller_metrics().set_leader(false);
-                            label_synced = self.update_pod_leader_label(false).await;
+                        match election_wait(self.ensure_lease_exists(&lease_api), None, &mut shutdown_signal).await {
+                            ElectionWait::Shutdown => break,
+                            ElectionWait::Completed(Err(error)) => {
+                                tracing::warn!(component = "leader_election", error = %error, "Failed to recreate lease; will retry on next tick");
+                            }
+                            _ => {}
                         }
-                        *self.current_fence.write() = None;
-                        last_renewed = None;
-                        if let Err(recreate_err) = self.ensure_lease_exists(&lease_api).await {
-                            tracing::warn!(
-                                component = "leader_election",
-                                identity = %self.config.identity,
-                                error = %recreate_err,
-                                "Failed to recreate missing lease; will retry on next tick"
-                            );
-                        }
-                        // Skip the deadline-aware logic below: either we now
-                        // have a fresh lease (next tick re-acquires cleanly)
-                        // or recreate failed and we'll retry the same path.
-                        continue;
-                    }
-
-                    let was_leader = self.is_leader();
-                    let within_deadline = was_leader
-                        && last_renewed
-                            .map(|t| Instant::now().saturating_duration_since(t) < renew_deadline)
-                            .unwrap_or(false);
-
-                    if within_deadline {
-                        // Lease is still valid on the apiserver (renew_time +
-                        // lease_duration > now), so no other replica will
-                        // take over. Retain leadership and retry — this
-                        // absorbs apiserver flakes (5xx, network) without
-                        // flapping pod label / metrics / reconcile.
-                        let remaining = renew_deadline.saturating_sub(Instant::now().saturating_duration_since(
-                            last_renewed.expect("within_deadline implies last_renewed is Some"),
-                        ));
-                        tracing::warn!(
-                            component = "leader_election",
-                            identity = %self.config.identity,
-                            error = %e,
-                            deadline_remaining_secs = remaining.as_secs(),
-                            "Transient lease error; retaining leadership within renew deadline"
-                        );
                     } else {
+                        // The active deadline remains armed across this error,
+                        // the label opportunity, and the next sleep/Lease request.
+                        tracing::warn!(component = "leader_election", error = %error,
+                            retaining_leadership = self.is_leader(), "Failed to acquire/renew lease; retrying within active deadline");
+                    }
+                }
+            }
+            next_attempt = Instant::now() + retry_period;
+            while !label_synced {
+                let patch = tokio::time::timeout_at(next_attempt, self.update_pod_leader_label(self.is_leader()));
+                match election_wait(patch, deadline, &mut shutdown_signal).await {
+                    ElectionWait::Shutdown => break 'election,
+                    ElectionWait::Expired => {
+                        self.withdraw_leadership();
+                        deadline = None;
+                        // Pace reacquisition from withdrawal, even if the old
+                        // retry timestamp is already due. Try the false label
+                        // only after both local authority surfaces are cleared.
+                        next_attempt = Instant::now() + retry_period;
                         tracing::warn!(
                             component = "leader_election",
-                            error = %e,
-                            "Failed to acquire/renew lease"
+                            "Lost leadership: renew deadline exceeded"
                         );
-                        if self.is_leader.send_replace(false) {
-                            tracing::info!(
-                                component = "leader_election",
-                                identity = %self.config.identity,
-                                "Lost leadership: renew deadline exceeded after lease error"
-                            );
-                            controller_metrics().set_leader(false);
-                            label_synced = self.update_pod_leader_label(false).await;
-                        }
-                        *self.current_fence.write() = None;
-                        // Reset unconditionally for symmetry with the 404 branch:
-                        // any future re-acquire should start a fresh deadline
-                        // window, regardless of whether we held leadership when
-                        // this error fired.
-                        last_renewed = None;
+                    }
+                    ElectionWait::Completed(result) => {
+                        label_synced = result.unwrap_or(false);
+                        break;
                     }
                 }
             }
         }
+
+        tracing::info!(component = "leader_election", identity = %self.config.identity,
+            "Shutdown signal received, stopping leader election");
+        // Withdrawal precedes every shutdown IO, including a hung release.
+        if self.withdraw_leadership() {
+            match tokio::time::timeout(
+                Duration::from_secs(RELEASE_LEASE_TIMEOUT_SECS),
+                self.release_lease(&lease_api),
+            )
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => tracing::warn!(component = "leader_election", error = %error,
+                    "Failed to release lease on shutdown; successor takeover falls back to lease expiry"),
+                Err(_) => tracing::warn!(
+                    component = "leader_election",
+                    "Timed out releasing lease on shutdown; successor takeover falls back to lease expiry"
+                ),
+            }
+            let _ = tokio::time::timeout(retry_period, self.update_pod_leader_label(false)).await;
+        }
+        Ok(())
+    }
+
+    /// Withdraw both local authority surfaces before any best-effort IO.
+    fn withdraw_leadership(&self) -> bool {
+        let was_leader = self.is_leader.send_replace(false);
+        *self.current_fence.write() = None;
+        if was_leader {
+            tracing::info!(component = "leader_election", identity = %self.config.identity, "Lost leadership");
+            controller_metrics().set_leader(false);
+        }
+        was_leader
     }
 
     /// Ensure the lease resource exists
@@ -567,10 +486,10 @@ impl LeaderElection {
     /// Uses optimistic concurrency control: the `replace()` call carries the
     /// `resourceVersion` from the prior `get()`, so if another replica writes
     /// the Lease in between, the API server returns 409 Conflict and we
-    /// return `Ok(false)` (lost the race). This prevents split-brain at the
+    /// return `Ok(None)` (lost the race). This prevents split-brain at the
     /// lease-expiry edge where two replicas could otherwise both observe
     /// `is_expired=true` and both succeed in writing.
-    async fn try_acquire_or_renew(&self, api: &Api<Lease>) -> Result<bool> {
+    async fn try_acquire_or_renew(&self, api: &Api<Lease>) -> Result<Option<LeaderFence>> {
         let lease = api.get(&self.config.lease_name).await?;
         let spec = lease.spec.as_ref();
 
@@ -596,7 +515,7 @@ impl LeaderElection {
                 identity = %self.config.identity,
                 "Lease held by another instance"
             );
-            return Ok(false);
+            return Ok(None);
         }
 
         let now = Utc::now();
@@ -653,19 +572,17 @@ impl LeaderElection {
             Ok(applied) => {
                 let lease_uid = applied.metadata.uid.unwrap_or_default();
                 if lease_uid.is_empty() {
-                    *self.current_fence.write() = None;
-                    return Ok(false);
+                    return Ok(None);
                 }
-                *self.current_fence.write() = Some(LeaderFence {
+                Ok(Some(LeaderFence {
                     lease_uid,
                     holder_identity: self.config.identity.clone(),
                     term,
                     lease_transitions: transitions,
-                });
-                Ok(true)
+                }))
             }
             // 409 Conflict: another writer modified the Lease between our get
-            // and replace. Lost the race — return Ok(false) so the run loop
+            // and replace. Lost the race — return Ok(None) so the run loop
             // steps down and re-reads on the next tick. (We deliberately do
             // not "debounce" by re-fetching and checking ownership here: that
             // could re-introduce a brief split-brain window if the lease
@@ -676,7 +593,7 @@ impl LeaderElection {
                     identity = %self.config.identity,
                     "Lost lease race (409 Conflict); will retry"
                 );
-                Ok(false)
+                Ok(None)
             }
             Err(e) => Err(e.into()),
         }
@@ -735,6 +652,46 @@ impl LeaderElection {
             // Either way there is nothing worth retrying on an exit path.
             Err(kube::Error::Api(e)) if e.code == 409 => Ok(()),
             Err(e) => Err(e.into()),
+        }
+    }
+}
+
+/// One election owner races each awaited phase against its unchanged deadline.
+enum ElectionWait<T> {
+    Completed(T),
+    Expired,
+    Shutdown,
+}
+
+async fn election_wait<T>(
+    operation: impl Future<Output = T>,
+    deadline: Option<Instant>,
+    shutdown: &mut Option<super::ShutdownSignal>,
+) -> ElectionWait<T> {
+    let expiry = async {
+        match deadline {
+            Some(deadline) => tokio::time::sleep_until(deadline).await,
+            None => pending().await,
+        }
+    };
+    let stopped = async {
+        match shutdown {
+            Some(signal) => signal.wait().await,
+            None => pending().await,
+        }
+    };
+    tokio::select! {
+        biased;
+        _ = stopped => ElectionWait::Shutdown,
+        _ = expiry => ElectionWait::Expired,
+        result = operation => {
+            // The operation may become ready in a poll that crosses expiry.
+            // In particular, it must not publish a returned candidate fence.
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                ElectionWait::Expired
+            } else {
+                ElectionWait::Completed(result)
+            }
         }
     }
 }
@@ -825,3 +782,7 @@ impl LeaderHandle {
 #[cfg(test)]
 #[path = "../../../../tests/unit/conf_mgr/conf_center/kubernetes/leader_election_test/fence_tests.rs"]
 mod fence_tests;
+
+#[cfg(test)]
+#[path = "../../../../tests/unit/conf_mgr/conf_center/kubernetes/leader_election_test/renewal_tests.rs"]
+mod renewal_tests;

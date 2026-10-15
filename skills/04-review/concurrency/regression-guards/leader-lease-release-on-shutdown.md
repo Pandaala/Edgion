@@ -26,6 +26,22 @@ Fix suggestions of the form "release in a `Drop` impl", "delete the Lease
 object on shutdown", or "make the release blocking/retried until success" are
 **not accepted**.
 
+## Active cancellation correction (ARCH-112)
+
+Shutdown is selected during every normal election phase, including pending Lease
+and label IO. The owner clears the local watch flag and stored fence before
+release IO. The existing three-second release bound remains; the subsequent
+one-shot false-label patch is bounded by `retry_period_secs`. A pending label
+request therefore cannot keep the election task alive indefinitely after release.
+Follower shutdown still skips release, and cancellation does not undo submitted
+server writes. The process-exit and same-identity caveats below remain applicable.
+
+`renewal_tests.rs` under the election owner's external unit-test directory drives
+pending Lease/label shutdown through the real loop with paused Tokio time and an
+in-process kube service. It asserts immediate local withdrawal, bounded completion,
+and successful release clearing both holder and renewal time with resourceVersion
+preserved. This does not claim that process shutdown joins the detached task.
+
 ## Core Rationale
 
 **1. Clearing `holder_identity` alone would NOT unblock a successor.**
@@ -51,8 +67,9 @@ label patch (see [leader-pod-label-tick-resync.md](leader-pod-label-tick-resync.
 
 `release_lease` re-reads the Lease, no-ops if this identity is no longer the
 recorded holder, and carries the read `resourceVersion` into `replace()`; a
-409 means another writer (a successor acquiring) won the race — the release
-goal is already met, so 409 is success.
+409 means another write changed the Lease. This may be a successor acquisition
+or a delayed renewal by this identity; it does not prove the release goal was
+met. The best-effort exit path does not retry and may fall back to natural expiry.
 
 **Known hazards, verified acceptable (adversarial re-review, 2026-07-16):**
 
@@ -75,8 +92,9 @@ goal is already met, so 409 is success.
 - *Follower-shutdown gap*: shutdown with local `is_leader == false` (e.g.
   renew-deadline step-down immediately followed by SIGTERM) skips the release
   while the server may still record this pod as holder. In that state the
-  apiserver was already unreachable, so a release would fail too — the gap
-  forgoes an improvement but is never a regression.
+  loop intentionally skips release while locally a follower. The remote Lease
+  may still name this pod until natural expiry; this does not establish that a
+  release request would fail. No release-on-demotion guarantee is provided.
 
 ## Fix Suggestions Not Accepted
 

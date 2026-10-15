@@ -11,15 +11,31 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
-The `edgion.io/leader` pod label is no longer fire-and-forget. `update_pod_leader_label`
-returns success, and the `run()` loop tracks a local `label_synced` flag: when a patch
-fails at a state transition, every subsequent election tick (default 2s) re-patches the
-label with the *current* leadership state until it converges. Re-reports of the form
-"label patch failure is swallowed / label permanently desyncs from the lease holder /
-leader Service selector loses its endpoint" are **not accepted**.
+The `edgion.io/leader` Pod label is derived routing state. The election loop tracks
+`label_synced` and retries the current state on subsequent ticks after an error or
+timeout. It announces acquired authority before label IO. Dedicated retry tasks,
+label-failure-driven elections and blocking leadership announcement on label
+success remain rejected within this scope.
 
-Fix suggestions of the form "spawn a dedicated retry task with backoff" or "make the
-label patch blocking before announcing leadership" are **not accepted**.
+ARCH-112 corrects an uncovered boundary in the original fix: a pending Lease or
+label request previously prevented the loop from checking `renew_deadline`.
+`run` now owns an absolute Tokio deadline across sleep, Lease GET/CAS and label
+IO. Expiry clears both the watch flag and stored fence before further IO.
+`try_acquire_or_renew` returns a candidate fence without publishing it; the owner
+rejects results at or after expiry. Reacquisition requires a fresh GET/CAS and new
+local term, even when a cancelled server write left this identity as holder.
+
+Label attempts run after Lease processing and are bounded by the next scheduled
+attempt, followed by only the remaining retry sleep. Thus permanently stalled
+labels do not double the cadence or cause avoidable loss even with retry=2s and
+renew deadline=3s. Transient Lease errors preserve the existing absolute deadline;
+404/409/competing-holder loss remains immediate. This supersedes the original
+blanket statement that all label-desync reports were disproved: the old tests and
+implementation did not establish behavior under pending IO.
+
+Cancellation is local: a submitted server write may still complete, including a
+late label patch. Current-state retries provide convergence opportunities, not
+exactly-once remote ordering, server-side fencing, or a bounded recovery guarantee.
 
 ## Core Rationale
 
@@ -34,7 +50,7 @@ blackhole observable only as one `error` log line.
 
 **2. The election loop is already the retry scheduler**
 
-`run()` ticks every `retry_period_secs` regardless. Piggybacking the resync on the tick
+`run()` schedules the next attempt after `retry_period_secs` from Lease completion. Piggybacking the resync on the tick
 (re-patch only while `label_synced == false`, always with the current `is_leader()`
 state) is bounded, needs no extra task/lock/shared state, and is naturally correct when
 leadership flips again between a failure and its retry.
@@ -72,8 +88,7 @@ Re-open this decision only if:
 
 - The label gains consumers beyond Service selectors that need stronger guarantees
   (e.g. ordering with reconcile start).
-- The election loop's single-tick cadence is removed/refactored so there is no longer a
-  natural retry point.
+- The election loop's cadence, active deadline ownership or cancellation boundaries change.
 
 ## Reference Cases
 
@@ -82,3 +97,14 @@ Re-open this decision only if:
   `label_synced` in `run()`, `update_pod_leader_label` returning `bool`
 - `skills/01-architecture/01-controller/03-config-center/02-kubernetes/01-ha-mode.md` —
   leader-only mode, leader Service routing
+
+## Verification boundary
+
+Production-owner regressions live in
+`edgion-controller/tests/unit/conf_mgr/conf_center/kubernetes/leader_election_test/renewal_tests.rs`.
+They drive the real loop through an in-process kube service with paused Tokio time,
+covering held GET/replace, acquisition/retry label stalls, tight cadence, sleep
+expiry, grace/recovery, deadline/result competition, late response and fresh term,
+authoritative loss, shutdown and preflight. No sockets or Kubernetes cluster are
+used. These checks do not prove remote write cancellation or scheduler progress
+when the runtime cannot poll the election task.
