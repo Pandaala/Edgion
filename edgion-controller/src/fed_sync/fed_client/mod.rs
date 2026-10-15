@@ -11,7 +11,8 @@ use anyhow::Result;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{watch, Semaphore};
-use tokio_util::sync::CancellationToken;
+use tokio_stream::StreamExt;
+use tokio_util::sync::{CancellationToken, DropGuard};
 use tonic::transport::Channel;
 
 use crate::authz::{Authorizer, Verb};
@@ -233,32 +234,35 @@ pub async fn run(
 
     loop {
         let connect_start = std::time::Instant::now();
-        tokio::select! {
-            _ = shutdown.changed() => {
-                tracing::info!(component = "fed_client", "Shutdown signal received, exiting");
-                return;
-            }
-            result = connect_and_run(&config, admin_router.clone(), conf_mgr.clone(), authorizer.clone()) => {
-                match result {
-                    Ok(()) => {
-                        // Only reset backoff if connection was alive long enough.
-                        // Prevents rapid reconnection when Center crash-loops
-                        // (connects briefly then dies), which would cause repeated
-                        // TLS handshakes + full resource serialization.
-                        if std::time::Instant::now().saturating_duration_since(connect_start) > Duration::from_secs(MIN_STABLE_CONNECTION_SECS) {
-                            backoff.reset();
-                        }
-                        tracing::info!(component = "fed_client", "Stream ended cleanly, reconnecting");
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            component = "fed_client",
-                            error = %e,
-                            retry_secs = backoff.current_secs(),
-                            "Connection failed, will retry"
-                        );
-                    }
+        let Some(result) = until_shutdown(
+            &mut shutdown,
+            connect_and_run(&config, admin_router.clone(), conf_mgr.clone(), authorizer.clone()),
+        )
+        .await
+        else {
+            tracing::info!(component = "fed_client", "Shutdown signal received, exiting");
+            return;
+        };
+        match result {
+            Ok(()) => {
+                // Only reset backoff if connection was alive long enough.
+                // Prevents rapid reconnection when Center crash-loops
+                // (connects briefly then dies), which would cause repeated
+                // TLS handshakes + full resource serialization.
+                if std::time::Instant::now().saturating_duration_since(connect_start)
+                    > Duration::from_secs(MIN_STABLE_CONNECTION_SECS)
+                {
+                    backoff.reset();
                 }
+                tracing::info!(component = "fed_client", "Stream ended cleanly, reconnecting");
+            }
+            Err(e) => {
+                tracing::warn!(
+                    component = "fed_client",
+                    error = %e,
+                    retry_secs = backoff.current_secs(),
+                    "Connection failed, will retry"
+                );
             }
         }
 
@@ -272,6 +276,17 @@ pub async fn run(
                 return;
             }
         }
+    }
+}
+
+/// Own the connection future so shutdown drops its session guards before returning.
+async fn until_shutdown(
+    shutdown: &mut watch::Receiver<bool>,
+    connection: impl std::future::Future<Output = Result<()>>,
+) -> Option<Result<()>> {
+    tokio::select! {
+        _ = shutdown.changed() => None,
+        result = connection => Some(result),
     }
 }
 
@@ -321,7 +336,7 @@ async fn connect_and_run(
     tx.send(register).await?;
 
     let outbound = tokio_stream::wrappers::ReceiverStream::new(rx);
-    let mut inbound = client.sync(outbound).await?.into_inner();
+    let inbound = client.sync(outbound).await?.into_inner();
 
     fed_metrics::record_connection_event(
         fed_metrics::labels::role::CONTROLLER,
@@ -336,11 +351,24 @@ async fn connect_and_run(
         "Connected and registered with center"
     );
 
+    run_session(inbound, tx, admin_router, conf_mgr, authorizer, session_started_at).await
+}
+
+/// Established-session state is owned by this future, including cancellation on drop.
+async fn run_session(
+    mut inbound: impl tokio_stream::Stream<Item = std::result::Result<CenterMessage, tonic::Status>> + Unpin,
+    tx: Arc<tokio::sync::mpsc::Sender<ControllerMessage>>,
+    admin_router: axum::Router,
+    conf_mgr: Arc<ConfMgr>,
+    authorizer: Arc<Authorizer>,
+    session_started_at: std::time::Instant,
+) -> Result<()> {
     // Spawn stats coalescing task: every STATS_COALESCE_INTERVAL, ask the
     // processor registry whether any kind has changed since last tick. If so,
     // push a StatsReport over the same fed_sync stream. Cancelled at session
-    // teardown so it cannot outlive the gRPC channel.
+    // teardown; descendants release asynchronously without delaying shutdown.
     let stats_cancel = CancellationToken::new();
+    let _stats_guard = stats_cancel.clone().drop_guard();
     {
         let conf_mgr = conf_mgr.clone();
         let tx = tx.clone();
@@ -396,8 +424,11 @@ async fn connect_and_run(
                             // Best effort: if the channel is closed (session
                             // ending), drop the report -- the next session will
                             // emit a fresh one with stats_dirty=true.
-                            if tx.send(msg).await.is_err() {
-                                break;
+                            tokio::select! {
+                                _ = cancel.cancelled() => break,
+                                result = tx.send(msg) => {
+                                    if result.is_err() { break; }
+                                }
                             }
                         }
                     }
@@ -407,23 +438,23 @@ async fn connect_and_run(
         });
     }
 
-    // Tracks the cancellation token for the active watch forwarding task, if any.
+    // Owns cancellation on drop for the active watch forwarding task, if any.
     // A new WatchRequest cancels the previous one before starting a new task.
-    let mut active_watch_cancel: Option<CancellationToken> = None;
+    let mut active_watch_cancel: Option<DropGuard> = None;
 
     // Limit concurrent HttpProxy tasks to prevent Center from overwhelming Controller.
     let proxy_semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_PROXY));
 
     let result: Result<()> = loop {
         tokio::select! {
-            msg = inbound.message() => {
+            msg = inbound.next() => {
                 match msg {
-                    Err(e) => break Err(e.into()),
-                    Ok(None) => {
+                    Some(Err(e)) => break Err(e.into()),
+                    None => {
                         tracing::info!(component = "fed_client", "Center closed stream");
                         break Ok(());
                     }
-                    Ok(Some(CenterMessage { payload: Some(payload) })) => {
+                    Some(Ok(CenterMessage { payload: Some(payload) })) => {
                         if let Err(e) = handle_center_message(
                             payload,
                             tx.clone(),
@@ -436,7 +467,7 @@ async fn connect_and_run(
                             break Err(e);
                         }
                     }
-                    Ok(Some(_)) => {} // empty payload, ignore
+                    Some(Ok(_)) => {} // empty payload, ignore
                 }
             }
         }
@@ -445,9 +476,7 @@ async fn connect_and_run(
     // Cleanup: cancel any active watch forwarding task on disconnect.
     // Without this, old forwarding tasks linger until the gRPC stream's
     // internal channels detect the disconnect asynchronously.
-    if let Some(prev) = active_watch_cancel.take() {
-        prev.cancel();
-    }
+    drop(active_watch_cancel.take());
     // Stop the stats coalescing task tied to this session. A new session
     // will start a fresh one, and `stats_dirty=true` initial state ensures
     // the next register emits an up-to-date report.
@@ -476,7 +505,7 @@ async fn handle_center_message(
     tx: Arc<tokio::sync::mpsc::Sender<ControllerMessage>>,
     admin_router: axum::Router,
     conf_mgr: Arc<ConfMgr>,
-    active_watch_cancel: &mut Option<CancellationToken>,
+    active_watch_cancel: &mut Option<DropGuard>,
     proxy_semaphore: Arc<Semaphore>,
     authorizer: Arc<Authorizer>,
 ) -> Result<()> {
@@ -788,16 +817,14 @@ async fn handle_center_message(
 
             // Step 2: start watch forwarding task
             // Cancel any previously active watch task before starting a new one.
-            if let Some(prev) = active_watch_cancel.take() {
-                prev.cancel();
-            }
+            drop(active_watch_cancel.take());
 
             let watch_id = format!("center-{}", req.request_id);
             // Use the pre-normalized `kind` for the same reason as css.list above.
             match css.watch(&kind, watch_id, "center".to_string(), watch_from) {
                 Ok(mut event_rx) => {
                     let cancel = CancellationToken::new();
-                    *active_watch_cancel = Some(cancel.clone());
+                    *active_watch_cancel = Some(cancel.clone().drop_guard());
 
                     let tx = tx.clone();
                     let request_id = req.request_id.clone();
@@ -809,7 +836,7 @@ async fn handle_center_message(
                         loop {
                             tokio::select! {
                                 _ = cancel.cancelled() => {
-                                    break; // Explicitly cancelled by a new WatchRequest
+                                    break; // Session ended or a new WatchRequest replaced this watch
                                 }
                                 event = event_rx.recv() => {
                                     match event {
@@ -827,8 +854,11 @@ async fn handle_center_message(
                                                 watch_kind,
                                                 fed_metrics::labels::direction::SENT,
                                             );
-                                            if tx.send(msg).await.is_err() {
-                                                break; // federation stream closed
+                                            tokio::select! {
+                                                _ = cancel.cancelled() => break,
+                                                result = tx.send(msg) => {
+                                                    if result.is_err() { break; }
+                                                }
                                             }
                                         }
                                         None => break, // channel closed
@@ -854,7 +884,10 @@ async fn handle_center_message(
                                                     ..Default::default()
                                                 })),
                                             };
-                                            let _ = tx.send(msg).await;
+                                            tokio::select! {
+                                                _ = cancel.cancelled() => {},
+                                                _ = tx.send(msg) => {},
+                                            }
                                             break;
                                         }
                                     }

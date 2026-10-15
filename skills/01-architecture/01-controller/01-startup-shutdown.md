@@ -124,6 +124,17 @@ Shutdown order:
 4. ConfMgr receives the signal and stops watcher/worker loops
 5. The service join is bounded by the process shutdown budget (25 seconds after the signal); the process exits after completion or timeout
 
+### Federation session cancellation
+
+The federation client drops its connection future when its shutdown channel changes.
+The established session owns drop guards for stats and the current watch, so both
+receive cancellation even when normal disconnect cleanup is skipped. Cancellation
+also interrupts their bounded-channel sends. This adds no child-task join, drain,
+or shutdown timeout: the parent returns while descendants release asynchronously.
+The supervisor retains its existing ten-second top-level stop timeout policy. See
+[the session cancellation guard](../../04-review/federation/regression-guards/session-drop-cancellation.md)
+for replacement, backpressure, and regression boundaries.
+
 ### Design Highlights
 
 - **Single signal source**: the CLI creates a single `ShutdownHandle` and passes clones to ConfMgr, avoiding duplicate signal-handler registration

@@ -13,3 +13,5 @@ before applying a decision to current code.
 
 - [Federation HttpProxy: Controller Client Fails Closed Without mTLS — FIXED](regression-guards/fed-proxy-mtls-fail-close.md)
 - [Federation HttpProxy: Center-Supplied Request Is Sanitised Before the Admin Router — FIXED](regression-guards/fed-proxy-request-sanitisation.md)
+
+- [Session drop cancels watch and stats without waiting](regression-guards/session-drop-cancellation.md)
