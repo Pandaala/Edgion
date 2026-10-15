@@ -90,6 +90,7 @@ fn tls_policy(name: &str, hostname: &str) -> Arc<BackendTLSPolicy> {
             ..Default::default()
         },
         spec: BackendTLSPolicySpec {
+            prepared_ancestor_admission: Some(edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission::Unrestricted),
             prepared_precedence: Some(
                 edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
                     creation_timestamp: None,

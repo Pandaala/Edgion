@@ -221,6 +221,7 @@ fn effective_peer_sets_profile_group_key_without_sans() {
             ..Default::default()
         },
         spec: BackendTLSPolicySpec {
+            prepared_ancestor_admission: Some(edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission::Unrestricted),
             prepared_precedence: Some(
                 edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
                     creation_timestamp: None,
@@ -317,4 +318,32 @@ fn gateway_identity_pairing_gates_actual_peer_fallback_without_changing_policy_p
             store.remove(key);
         },
     );
+}
+
+#[test]
+fn policy_ancestor_refusal_blocks_actual_peer_construction() {
+    let mut policy: BackendTLSPolicy = serde_json::from_value(serde_json::json!({
+        "metadata":{"namespace":"capacity-peer","name":"tls"},"spec":{
+        "targetRefs":[{"group":"","kind":"Service","name":"backend"}],
+        "validation":{"hostname":"backend.example","wellKnownCACertificates":"System"},"useSystemCa":true}
+    }))
+    .unwrap();
+    policy.spec.prepared_ancestor_admission = Some(
+        edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission::Scoped(vec![
+            "capacity-peer/represented".into(),
+        ]),
+    );
+    let lookup = BackendTlsPolicyLookup::effective_from_policy(Arc::new(policy));
+    for key in [None, Some("capacity-peer/new")] {
+        assert_eq!(
+            peer_from_backend_tls_lookup(SocketAddr::Inet("127.0.0.1:443".parse().unwrap()), &lookup, key).unwrap_err(),
+            EdgionErrorCode::BackendTlsPolicyInvalid
+        );
+    }
+    assert!(peer_from_backend_tls_lookup(
+        SocketAddr::Inet("127.0.0.1:443".parse().unwrap()),
+        &lookup,
+        Some("capacity-peer/represented")
+    )
+    .is_ok());
 }

@@ -134,3 +134,38 @@ The carrier is serialized but hidden from the operator schema. Status sidecar
 seeding replaces only typed policy status, preserving the source instant and
 condition transition history. New Gateways require refreshed prepared output;
 upgrade Controller/Gateway together and reprocess configuration.
+
+## Final ancestor capacity and serving admission (ARCH-106)
+
+The Controller composes the final ancestor list against the observed status,
+including every foreign-controller entry and same-controller entry without
+current Gateway ownership proof. The shared cold composer reserves existing
+canonical owned keys before sorted new keys and admits at most 16 total entries.
+Discovery itself is not truncated: a lexical newcomer cannot displace a
+represented Gateway. An overfull protected observation is retained, with status
+persistence suppressed; it never authorizes a write exceeding the schema limit.
+
+The schema-hidden `preparedAncestorAdmission` carrier records the admitted
+Gateway keys for Kubernetes or explicit unrestricted admission for native
+FS/etcd configurations. Parsing replaces submitted values. Missing or malformed
+preparation fails closed. This is separate from policy eligibility: the actual
+winning exact/whole target policy remains selected even when its Gateway is
+refused, so refusal cannot reveal a fallback policy. Shared Resources candidate
+eligibility and cold arbitration keep Route diagnostics aligned with Gateway
+selection, including invalid exact-section occupancy.
+
+HTTP/gRPC, AI, direct Service endpoints, response-cache eligibility and all L4
+selected-backend resolution paths check the winning policy against the matched
+logical Gateway. The check borrows a bounded prepared set; it does not allocate,
+format keys or acquire a lock. Weighted and named selection retain denied slots.
+The five Route kinds report `ResolvedRefs=False` with `PolicyAncestorLimit` for
+affected attachments; unrelated backends and represented Gateway attachments
+remain usable. Admission-only changes rotate effective policy generations.
+
+After policy publication or removal, changed preparation requeues dependents of
+both old and new targets through their existing queues. Unchanged preparation
+does not fan out. This ordering allows source-status-only slot release to restore
+Route diagnostics and serving without a second queue or handler IO. HTTP/AI keep
+their captured policy generation. L4 performs admission before discovery using
+one read of each policy store, preserving its existing live discovery/degrade
+behavior; separate stores are not one atomic snapshot.

@@ -15,6 +15,7 @@ fn policy(name: &str, refs: &[(&str, Option<&str>)]) -> Arc<BackendTLSPolicy> {
             ..Default::default()
         },
         spec: BackendTLSPolicySpec {
+            prepared_ancestor_admission: Some(edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission::Unrestricted),
             prepared_precedence: Some(
                 edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
                     creation_timestamp: None,
@@ -192,4 +193,79 @@ fn number_only_mapping_still_takes_whole_target() {
             .as_deref(),
         Some("whole-a")
     );
+}
+
+#[test]
+fn policy_ancestor_capacity_selects_winner_before_admission_without_fallback() {
+    use edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission;
+    use edgion_resources::resources::common::policy_candidates::{
+        select_backend_tls_candidate, PolicyCandidate, PolicySection,
+    };
+    let mut exact = (*policy("a-exact", &[("svc", Some("https"))])).clone();
+    exact.spec.prepared_ancestor_admission =
+        Some(PreparedPolicyAncestorAdmission::Scoped(vec!["default/existing".into()]));
+    let mut loser = (*policy("z-loser", &[("svc", Some("https"))])).clone();
+    loser.spec.prepared_ancestor_admission = Some(PreparedPolicyAncestorAdmission::Scoped(Vec::new()));
+    let whole = policy("whole", &[("svc", None)]);
+    let store = BackendTLSPolicyStore::new();
+    let data = std::collections::HashMap::from([
+        ("default/a-exact".into(), Arc::new(exact.clone())),
+        ("default/z-loser".into(), Arc::new(loser.clone())),
+        ("default/whole".into(), whole.clone()),
+    ]);
+    store.replace_all(data);
+    let target = PolicyTargetKey {
+        target_kind: PolicyTargetKind::Service,
+        namespace: "default".into(),
+        name: "svc".into(),
+    };
+    let lookup = store.snapshot().lookup(&target, Some("https"));
+    assert_eq!(
+        lookup.effective().unwrap().policy.metadata.name.as_deref(),
+        Some("a-exact")
+    );
+    assert!(ancestor_admitted(&lookup, None, Some("default/existing")));
+    assert!(!ancestor_admitted(&lookup, None, Some("default/new")));
+    assert!(!ancestor_admitted(&lookup, None, None));
+    assert!(ancestor_admitted(
+        &store.snapshot().lookup(&target, Some("other")),
+        None,
+        Some("default/new")
+    ));
+    assert!(
+        matches!(select_backend_tls_candidate([&exact,&loser,whole.as_ref()], &target, PolicySection::Named("https")),PolicyCandidate::Effective(p) if p.metadata.name.as_deref()==Some("a-exact"))
+    );
+    let before = store.snapshot();
+    exact.spec.prepared_ancestor_admission = Some(PreparedPolicyAncestorAdmission::Scoped(vec![
+        "default/existing".into(),
+        "default/new".into(),
+    ]));
+    store.replace_all(std::collections::HashMap::from([(
+        "default/a-exact".into(),
+        Arc::new(exact),
+    )]));
+    assert!(store.snapshot().generation() > before.generation());
+    assert!(ancestor_admitted(
+        &store.snapshot().lookup(&target, Some("https")),
+        None,
+        Some("default/new")
+    ));
+    assert!(!ancestor_admitted(&lookup, None, Some("default/new")));
+}
+
+#[test]
+fn policy_ancestor_hot_check_borrows_bounded_keys_without_allocating() {
+    use edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission;
+    let mut policy = (*policy("bounded", &[("svc", None)])).clone();
+    policy.spec.prepared_ancestor_admission = Some(PreparedPolicyAncestorAdmission::Scoped(
+        (0..16).map(|i| format!("default/gateway-{i}")).collect(),
+    ));
+    let lookup = BackendTlsPolicyLookup::effective_from_policy(Arc::new(policy));
+    let (_, allocations) = crate::test_allocation_counter::count_allocations(|| {
+        for _ in 0..100 {
+            assert!(ancestor_admitted(&lookup, None, Some("default/gateway-15")));
+            assert!(!ancestor_admitted(&lookup, None, Some("default/new")));
+        }
+    });
+    assert_eq!(allocations, 0);
 }

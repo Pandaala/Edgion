@@ -522,3 +522,57 @@ async fn receiver_error_retires_session_and_releases_permit() {
     drop(session);
     assert_eq!(proxy.session_permits.available_permits(), MAX_UDP_SESSIONS);
 }
+
+#[tokio::test]
+async fn policy_ancestor_refusal_preserves_selected_weight_and_skips_resolution() {
+    use crate::backends::policy::{
+        get_global_backend_tls_policy_store, resolve_l4_policy_backend, GLOBAL_TLS_STORE_TEST_LOCK,
+    };
+    let _guard = GLOBAL_TLS_STORE_TEST_LOCK.lock().await;
+    let policy: edgion_resources::BackendTLSPolicy = serde_json::from_value(serde_json::json!({
+        "metadata":{"namespace":"capacity-udp","name":"limited"},
+        "spec":{"targetRefs":[{"group":"","kind":"Service","name":"limited"}],
+        "validation":{"hostname":"backend.example","wellKnownCACertificates":"System"},
+        "preparedPrecedence":{"creationTimestamp":null},"resolvedTargetClass":"service",
+        "preparedAncestorAdmission":{"mode":"scoped","gateways":["capacity-udp/represented"]}}
+    }))
+    .unwrap();
+    let mut policy = policy;
+    policy.spec.use_system_ca = true;
+    assert!(edgion_resources::resources::common::policy_candidates::prepared_backend_tls_target(&policy).is_some());
+    policy.spec.prepared_ancestor_admission = Some(
+        edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission::Scoped(vec![
+            "capacity-udp/represented".into(),
+        ]),
+    );
+    let store = get_global_backend_tls_policy_store();
+    store.replace_all(std::collections::HashMap::from([(
+        "capacity-udp/limited".into(),
+        Arc::new(policy),
+    )]));
+    let route = serde_json::from_value(serde_json::json!({
+        "metadata":{"namespace":"capacity-udp","name":"mixed"},
+        "spec":{"rules":[{"backendRefs":[{"name":"limited","port":80,"weight":1},{"name":"plain","port":80,"weight":1}]}]}
+    })).unwrap();
+    let unit = crate::routes::udp::UdpRouteUnit::from_route(Arc::new(route)).unwrap();
+    let calls = std::cell::Cell::new(0);
+    let result = resolve_l4_policy_backend(unit.select_backend().unwrap(), Some("capacity-udp/new"), |_| {
+        calls.set(calls.get() + 1);
+        Ok::<_, ()>(())
+    });
+    assert!(matches!(
+        result,
+        Err(crate::backends::L4ResolveError::Rejected(
+            crate::backends::L4BackendRejection::Denied
+        ))
+    ));
+    assert_eq!(calls.get(), 0);
+    assert_eq!(unit.select_backend().unwrap().service().unwrap().name(), "plain");
+    let result = resolve_l4_policy_backend(unit.select_backend().unwrap(), Some("capacity-udp/represented"), |_| {
+        calls.set(calls.get() + 1);
+        Ok::<_, ()>(())
+    });
+    assert!(result.is_ok());
+    assert_eq!(calls.get(), 1);
+    store.replace_all(std::collections::HashMap::new());
+}

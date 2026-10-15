@@ -103,6 +103,7 @@ fn setup_committed_attempt(
             upstreams: Vec::new(),
             current_upstream_id: None,
             backend_ref_idx: None,
+            effective_policy_captured: false,
             effective_policy: None,
         });
     }
@@ -148,6 +149,7 @@ fn cleanup_no_increment_does_not_touch_other_inflight() {
         upstreams: Vec::new(),
         current_upstream_id: None,
         backend_ref_idx: None,
+        effective_policy_captured: false,
         effective_policy: None,
     });
     ctx.push_upstream(None, None);
@@ -280,6 +282,7 @@ fn ewma_policy_balances_conn_like_leastconn() {
         upstreams: Vec::new(),
         current_upstream_id: None,
         backend_ref_idx: None,
+        effective_policy_captured: false,
         effective_policy: None,
     });
     ctx.push_upstream(None, None);

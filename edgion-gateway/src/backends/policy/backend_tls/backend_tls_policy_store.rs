@@ -2,11 +2,10 @@
 
 use arc_swap::ArcSwap;
 use edgion_resources::constants::secret_keys::tls::CA_CERT;
-use edgion_resources::resources::backend_tls_policy::backend_tls_identity_validation_errors;
 use edgion_resources::resources::common::policy_precedence::policy_precedence_key;
-use edgion_resources::resources::edgion_backend_traffic_policy::{
-    PolicyTargetKey, PolicyTargetKind, ResolvedPolicyTargetClass,
-};
+use edgion_resources::resources::edgion_backend_traffic_policy::PolicyTargetKey;
+#[cfg(test)]
+use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKind, ResolvedPolicyTargetClass};
 use edgion_resources::resources::refs::policy_fields::BackendTlsPolicyTargets;
 use edgion_resources::resources::BackendTLSPolicy;
 use rpds::{HashTrieMapSync as PersistentHashMap, HashTrieSetSync as PersistentHashSet};
@@ -75,6 +74,8 @@ impl std::fmt::Debug for BackendTlsPolicyLookup {
 }
 
 pub struct EffectiveBackendTlsPolicy {
+    pub ancestor_admission:
+        Option<edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission>,
     pub policy: Arc<BackendTLSPolicy>,
     pub profile: Arc<BackendTlsProfileIdentity>,
     #[cfg(feature = "boringssl")]
@@ -90,6 +91,11 @@ impl EffectiveBackendTlsPolicy {
     pub(crate) fn from_policy(policy: Arc<BackendTLSPolicy>) -> Arc<Self> {
         Arc::new(Self {
             profile: BackendTLSPolicyStore::profile_identity(&policy),
+            ancestor_admission: policy
+                .spec
+                .prepared_ancestor_admission
+                .clone()
+                .map(|value| value.validated()),
             #[cfg(feature = "boringssl")]
             prepared: Arc::new(crate::backends::prepared_backend_tls::PreparedBackendTls::new(&policy)),
             policy,
@@ -213,6 +219,7 @@ impl BackendTLSPolicyStore {
     fn policy_resource_equivalent(left: &BackendTLSPolicy, right: &BackendTLSPolicy) -> bool {
         left.metadata == right.metadata
             && left.spec.prepared_precedence == right.spec.prepared_precedence
+            && left.spec.prepared_ancestor_admission == right.spec.prepared_ancestor_admission
             && left.spec.target_refs == right.spec.target_refs
             && left.spec.resolved_target_class == right.spec.resolved_target_class
             && left.spec.validation == right.spec.validation
@@ -224,55 +231,8 @@ impl BackendTLSPolicyStore {
                 == right.spec.current_status.as_ref().map(|status| &status.ancestors)
     }
 
-    fn is_valid_candidate(policy: &BackendTLSPolicy) -> bool {
-        if policy.spec.prepared_precedence.is_none() {
-            return false;
-        }
-        if matches!(
-            policy.spec.validation.well_known_ca_certificates.as_ref(),
-            Some(edgion_resources::resources::backend_tls_policy::WellKnownCACertificates::Other(_))
-        ) {
-            return false;
-        }
-        if policy.spec.target_refs.len() != 1 {
-            return false;
-        }
-        let Some(resolved_class) = policy.spec.resolved_target_class else {
-            return false;
-        };
-        let Some(field) = BackendTlsPolicyTargets::from_policy(policy).fields().next() else {
-            return false;
-        };
-        let Ok(key) = field.canonical_key() else {
-            return false;
-        };
-        let class_matches = matches!(
-            (resolved_class, key.target_kind),
-            (ResolvedPolicyTargetClass::Service, PolicyTargetKind::Service)
-                | (ResolvedPolicyTargetClass::Ai, PolicyTargetKind::EdgionBackend)
-        );
-        if !class_matches {
-            return false;
-        }
-        if field.section_name().is_some() && key.target_kind != PolicyTargetKind::Service {
-            return false;
-        }
-        if !backend_tls_identity_validation_errors(&policy.spec.validation).is_empty() {
-            return false;
-        }
-        edgion_resources::resources::refs::backend_tls_fields::BackendTlsRefs::from_policy(policy)
-            .all_materials_resolved()
-    }
-
     fn valid_target_key(policy: &BackendTLSPolicy) -> Option<PolicyTargetKey> {
-        Self::is_valid_candidate(policy).then(|| {
-            BackendTlsPolicyTargets::from_policy(policy)
-                .fields()
-                .next()
-                .expect("valid candidate has one target")
-                .canonical_key()
-                .expect("valid candidate has a typed target key")
-        })
+        edgion_resources::resources::common::policy_candidates::prepared_backend_tls_target(policy)
     }
 
     fn sort_policies_by_precedence(policies: &mut [Arc<BackendTLSPolicy>]) {
@@ -371,6 +331,11 @@ impl BackendTLSPolicyStore {
         }
         Arc::new(EffectiveBackendTlsPolicy {
             policy: Arc::clone(policy),
+            ancestor_admission: policy
+                .spec
+                .prepared_ancestor_admission
+                .clone()
+                .map(|value| value.validated()),
             profile: Self::profile_identity(policy),
             #[cfg(feature = "boringssl")]
             prepared: existing

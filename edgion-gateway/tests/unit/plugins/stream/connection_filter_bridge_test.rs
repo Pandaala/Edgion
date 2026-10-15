@@ -109,6 +109,14 @@ fn stream_parent_ports_preserve_scope_across_gateway_publications() {
         assert!(Arc::ptr_eq(&first_scope, &old.gateway("default/a").unwrap().scope));
         assert!(Arc::ptr_eq(&shared_scope, &old.gateway("default/b").unwrap().scope));
         assert!(!Arc::ptr_eq(&first_scope, &shared_scope));
+        let (first_owner, first_owned_scope) =
+            resolve_route_owner_scope(&old, &first_key, &parents, "", "default", kind).unwrap();
+        let (shared_owner, shared_owned_scope) =
+            resolve_route_owner_scope(&old, &shared_key, &parents, "", "default", kind).unwrap();
+        assert_eq!(first_owner.gateway_key(), "default/a");
+        assert_eq!(shared_owner.gateway_key(), "default/b");
+        assert!(Arc::ptr_eq(&first_scope, &first_owned_scope));
+        assert!(Arc::ptr_eq(&shared_scope, &shared_owned_scope));
 
         // Moving B leaves only A's unreferenced 8081 listener on the shared socket.
         publisher.update_gateways(
@@ -241,4 +249,15 @@ async fn listener_annotation_can_be_added_and_removed_after_startup() {
     publisher.update_gateways(HashMap::from([("default/dynamic".into(), input)]), &HashSet::new());
     assert!(accept_connection_view(publisher.snapshot().connection(&key), Some(&peer), 18094).await);
     assert_eq!(publisher.snapshot().stats().stream_cached_entries, 0);
+}
+
+fn resolve_route_scope(
+    publication: &PluginPublication,
+    listener: &ListenerKey,
+    parents: &[ResolvedParentRef],
+    hostname: &str,
+    namespace: &str,
+    kind: &str,
+) -> Option<Arc<PluginScope>> {
+    resolve_route_owner_scope(publication, listener, parents, hostname, namespace, kind).map(|(_, scope)| scope)
 }

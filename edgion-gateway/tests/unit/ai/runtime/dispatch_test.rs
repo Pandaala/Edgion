@@ -86,6 +86,7 @@ fn retry_policy(percent: u8) -> (Arc<EffectiveBackendTrafficPolicy>, Arc<RetryBu
         min_retry_rate: None,
     }));
     let policy = Arc::new(EffectiveBackendTrafficPolicy {
+        ancestor_admission: Some(edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission::Unrestricted),
         resolved_target_class:
             edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass::Ai,
         winning_policy_key: "default/policy".to_string(),
@@ -145,6 +146,7 @@ fn selectable_plan(credentials: Vec<RuntimeAiCredential>) -> ReadyAiAttemptPlan 
     let mut plan = candidate_plan();
     plan.scheduler = AttemptScheduler::new(&[BackendCredentials { weights: &weights }], 0).unwrap();
     plan.candidates = vec![AiPlanCandidate {
+        policy_ancestor_admitted: true,
         logical: compiled_ai_logical(None),
         slot: 0,
         order: 0,
@@ -1617,4 +1619,29 @@ async fn prepared_admission_rejects_invalid_selection_and_committed_context() {
         prepared.admission_input(),
         Err(AiDispatchError::InvalidConfiguration)
     ));
+}
+
+#[test]
+fn policy_ancestor_refusal_is_terminal_before_initial_and_retry_credentials() {
+    let mut plan = selectable_plan(vec![RuntimeAiCredential {
+        name: "primary".into(),
+        weight: 1,
+        credential: "test-token".into(),
+        limits: None,
+    }]);
+    plan.candidates[0].policy_ancestor_admitted = false;
+    assert!(matches!(
+        select_target(&mut plan, 0),
+        Err(AiDispatchError::InvalidConfiguration)
+    ));
+    assert_eq!(plan.scheduler.dispatch_count(), 0);
+    assert!(matches!(plan.scheduler.next_step(), NextStep::PickBackend(_)));
+    // The retry entry point must independently reject before credential selection.
+    assert!(matches!(
+        select_credential(&mut plan, 0, 0),
+        Err(AiDispatchError::InvalidConfiguration)
+    ));
+    assert_eq!(plan.scheduler.dispatch_count(), 0);
+    plan.candidates[0].policy_ancestor_admitted = true;
+    assert!(select_target(&mut plan, 0).is_ok());
 }

@@ -438,6 +438,12 @@ pub async fn upstream_peer_grpc(
 
     // 4. Push placeholder upstream so LB / TLS / CB writes during peer construction land on
     //    a valid entry (`current_upstream_id` is None right after `init_backend_context`).
+    if !prepare_selected_policy_admission(ctx) {
+        return Err(PingoraError::explain(
+            ErrorType::HTTPStatus(500),
+            "backend policy ancestor limit",
+        ));
+    }
     begin_upstream_attempt(ctx);
 
     // 5. Get peer — mirrors upstream_peer_http: on a strict cross-attempt retry,
@@ -509,6 +515,12 @@ pub async fn upstream_peer_http(
     // 4. Push placeholder upstream so LB metadata / TLS / CB writes inside try_get_peer
     //    land on a valid entry — `init_backend_context_if_needed` leaves `current_upstream_id`
     //    as None, which would otherwise silently drop those writes (P0 g1-001).
+    if !prepare_selected_policy_admission(ctx) {
+        return Err(PingoraError::explain(
+            ErrorType::HTTPStatus(500),
+            "backend policy ancestor limit",
+        ));
+    }
     begin_upstream_attempt(ctx);
 
     let selected_logical = ctx.selected_backend.as_ref().and_then(SelectedHttpBackend::routed);
@@ -635,6 +647,7 @@ pub async fn select_http_backend(
                 upstreams: Vec::new(),
                 current_upstream_id: None,
                 backend_ref_idx: Some(slot),
+                effective_policy_captured: false,
                 effective_policy: None,
             });
             ctx.record_error(EdgionErrorCode::BackendUnsupportedKind);
@@ -661,6 +674,26 @@ pub async fn select_http_backend(
     };
 
     let backend_plugin_runtime = Arc::clone(&backend_ref.compiled().plugin_runtime);
+    ctx.selected_backend = Some(match backend_ref.target() {
+        CompiledBackendTarget::Service { .. } => {
+            let selected = SelectedServiceBackend::new(backend_ref, backend_tls_policy)
+                .ok_or_else(|| PingoraError::new(ErrorType::InternalError))?;
+            SelectedHttpBackend::Service(selected)
+        }
+        CompiledBackendTarget::Invalid { .. } => SelectedHttpBackend::Invalid(backend_ref),
+        CompiledBackendTarget::EdgionBackend { .. } => {
+            ctx.record_error(EdgionErrorCode::UpstreamNotBackendRefs);
+            end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
+            return Err(PingoraError::new(ErrorType::InternalError));
+        }
+    });
+    if !prepare_selected_policy_admission(ctx) {
+        return Err(PingoraError::explain(
+            ErrorType::HTTPStatus(500),
+            "backend policy ancestor limit",
+        ));
+    }
+
     if !backend_plugin_runtime.backend_compatible(ctx) {
         if ctx.grpc_transcoding.is_some() {
             return Err(crate::plugins::http::grpc_json_transcoder::failure());
@@ -683,19 +716,6 @@ pub async fn select_http_backend(
         ));
     }
 
-    ctx.selected_backend = Some(match backend_ref.target() {
-        CompiledBackendTarget::Service { .. } => {
-            let selected = SelectedServiceBackend::new(backend_ref, backend_tls_policy)
-                .ok_or_else(|| PingoraError::new(ErrorType::InternalError))?;
-            SelectedHttpBackend::Service(selected)
-        }
-        CompiledBackendTarget::Invalid { .. } => SelectedHttpBackend::Invalid(backend_ref),
-        CompiledBackendTarget::EdgionBackend { .. } => {
-            ctx.record_error(EdgionErrorCode::UpstreamNotBackendRefs);
-            end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
-            return Err(PingoraError::new(ErrorType::InternalError));
-        }
-    });
     Ok(())
 }
 
@@ -1096,6 +1116,11 @@ pub fn configure_peer_timeouts(_edgion_http: &EdgionHttpProxy, peer: &mut Box<Ht
 /// this cleanup MUST run before `push_upstream` advances `current_upstream_id`.
 #[inline]
 pub fn begin_upstream_attempt(ctx: &mut EdgionHttpContext) {
+    // First-attempt callers without early preparation still capture before effects.
+    // Retries retain release-before-live-lookup ordering and never recapture.
+    if ctx.try_cnt == 0 {
+        capture_service_effective_policy(ctx);
+    }
     // The previous endpoint admission belongs to the previous attempt. Release
     // it before any live policy lookup or endpoint resolution for the next one.
     ctx.cb_permit = None;
@@ -1108,11 +1133,6 @@ pub fn begin_upstream_attempt(ctx: &mut EdgionHttpContext) {
 
     ctx.try_cnt += 1;
     ctx.push_upstream(None, None);
-    // A missing policy is also a captured result. Never recapture it after a
-    // hot reload adds a policy between attempts of this request.
-    if ctx.try_cnt == 1 {
-        capture_service_effective_policy(ctx);
-    }
 
     if ctx.upstream_start_time.is_none() {
         ctx.upstream_start_time = Some(std::time::Instant::now());
@@ -1167,12 +1187,42 @@ fn selected_service_target(ctx: &EdgionHttpContext) -> Option<&CompiledServiceTa
     }
 }
 
+/// Check the selected logical target before backend plugins or upstream work.
+pub(crate) fn prepare_selected_policy_admission(ctx: &mut EdgionHttpContext) -> bool {
+    if init_backend_context_if_needed(ctx).is_err() {
+        return false;
+    }
+    if ctx.try_cnt == 0 {
+        capture_service_effective_policy(ctx);
+    }
+    let tls = match ctx.jump.as_deref() {
+        Some(UpstreamJumpTarget::Direct(direct)) => &direct.tls_policy,
+        Some(UpstreamJumpTarget::External(_)) => return true,
+        _ => match (&ctx.selected_backend, &ctx.selected_grpc_backend) {
+            (Some(SelectedHttpBackend::Service(selected)), _) => selected.backend_tls_policy(),
+            (_, Some(selected)) => selected.backend_tls_policy(),
+            _ => return true,
+        },
+    };
+    let admitted = crate::backends::policy::ancestor_admitted(
+        tls,
+        ctx.backend_context
+            .as_ref()
+            .and_then(|backend| backend.effective_policy.as_deref()),
+        ctx.gateway_info.as_deref().map(|gateway| gateway.gateway_key()),
+    );
+    if !admitted {
+        ctx.record_error(EdgionErrorCode::RefDenied);
+    }
+    admitted
+}
+
 fn capture_service_effective_policy(ctx: &mut EdgionHttpContext) {
     let observe = ctx.response_cache.is_some();
     let mut observed = None;
     capture_service_effective_policy_with(ctx, |target| {
         // This closure runs only after all ordinary lookup guards pass. An
-        // absent result remains eligible for a later ordinary real lookup.
+        // absent result is pinned alongside presence by the context latch.
         let snapshot = get_backend_traffic_policy_store().snapshot();
         let policy = snapshot.get_effective(target);
         if observe {
@@ -1197,7 +1247,13 @@ fn capture_service_effective_policy_with(
     let Some(context) = ctx.backend_context.as_ref() else {
         return;
     };
+    if context.effective_policy_captured {
+        return;
+    }
     if context.effective_policy.is_some() {
+        if let Some(context) = ctx.backend_context.as_mut() {
+            context.effective_policy_captured = true;
+        }
         return;
     }
     let Some(service) = selected_service_target(ctx) else {
@@ -1209,6 +1265,7 @@ fn capture_service_effective_policy_with(
     let policy = lookup(service.policy_target());
     if let Some(context) = ctx.backend_context.as_mut() {
         context.effective_policy = policy;
+        context.effective_policy_captured = true;
     }
 }
 
@@ -1237,6 +1294,12 @@ fn finish_static_peer(
     mut peer: Box<HttpPeer>,
 ) -> pingora_core::Result<Box<HttpPeer>> {
     init_backend_context_if_needed(ctx)?;
+    if !prepare_selected_policy_admission(ctx) {
+        return Err(PingoraError::explain(
+            ErrorType::HTTPStatus(500),
+            "backend policy ancestor limit",
+        ));
+    }
     begin_upstream_attempt(ctx);
     configure_peer_timeouts(edgion_http, &mut peer, ctx);
     backfill_upstream_addr(&peer, ctx);
@@ -1324,6 +1387,7 @@ async fn try_external_jump_peer(
             upstreams: Vec::new(),
             current_upstream_id: None,
             backend_ref_idx: None,
+            effective_policy_captured: true,
             effective_policy: None,
         });
     }
@@ -1393,6 +1457,7 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
             upstreams: Vec::new(),
             current_upstream_id: None,
             backend_ref_idx: Some(logical.slot()),
+            effective_policy_captured: false,
             effective_policy: None,
         });
         return Ok(());

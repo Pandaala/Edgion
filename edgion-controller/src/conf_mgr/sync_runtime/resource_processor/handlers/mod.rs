@@ -190,11 +190,9 @@ fn ebtp_refs_for_target(target_ref_mgr: &SecretRefManager, target_key: &str) -> 
 /// EdgionBackend resources from sharing dependency or ancestor edges.
 pub(crate) fn resolve_policy_ancestor_gateways_for_targets(
     targets: &[PolicyTargetKey],
-    policy_key: &str,
+    _policy_key: &str,
     ctx: &HandlerContext,
 ) -> BTreeMap<String, BTreeSet<PolicyTargetKey>> {
-    const MAX_POLICY_ANCESTORS: usize = 16;
-
     let route_index = &ctx.runtime().gateway_route_index;
     let mut map: BTreeMap<String, BTreeSet<PolicyTargetKey>> = BTreeMap::new();
     for target in targets {
@@ -219,18 +217,6 @@ pub(crate) fn resolve_policy_ancestor_gateways_for_targets(
         }
     }
 
-    if map.len() > MAX_POLICY_ANCESTORS {
-        tracing::warn!(
-            policy = %policy_key,
-            total = map.len(),
-            "policy ancestors truncated to {} per Gateway API limit",
-            MAX_POLICY_ANCESTORS,
-        );
-        let overflow: Vec<String> = map.keys().skip(MAX_POLICY_ANCESTORS).cloned().collect();
-        for key in overflow {
-            map.remove(&key);
-        }
-    }
     map
 }
 
@@ -348,3 +334,5 @@ mod tests;
 mod test_support;
 #[cfg(test)]
 use test_support::*;
+
+pub(crate) mod policy_ancestor_admission;

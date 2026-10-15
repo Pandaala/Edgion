@@ -50,6 +50,7 @@ fn init_backend_context(ctx: &mut EdgionHttpContext) {
         upstreams: Vec::new(),
         current_upstream_id: None,
         backend_ref_idx: None,
+        effective_policy_captured: false,
         effective_policy: None,
     });
 }

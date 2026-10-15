@@ -590,6 +590,13 @@ impl RequestState {
         }
         let traffic_snapshot = crate::backends::policy::get_backend_traffic_policy_store().snapshot();
         let effective = traffic_snapshot.get_effective(service.policy_target());
+        if !crate::backends::policy::ancestor_admitted(
+            &tls_lookup,
+            effective.as_deref(),
+            ctx.gateway_info.as_deref().map(|gateway| gateway.gateway_key()),
+        ) {
+            return None;
+        }
         let traffic = super::key::traffic_stamp(traffic_snapshot.generation(), effective.as_deref())?;
         let authority = if let Some(compiled) = effective.as_ref().and_then(|policy| policy.upstream_authority.as_ref())
         {

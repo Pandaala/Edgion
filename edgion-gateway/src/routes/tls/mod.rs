@@ -28,6 +28,7 @@ pub use conf_handler_impl::create_tls_route_handler;
 
 /// An eligible Route has already won. Missing policy is terminal, not no-match.
 struct SelectedTlsRoute {
+    owner: Arc<crate::runtime::gateway_info::GatewayInfo>,
     unit: Arc<TlsRouteUnit>,
     scope: Option<Arc<PluginScope>>,
 }
@@ -46,7 +47,7 @@ fn select_tls_route(
         .gateway(owner.gateway_key())
         .filter(|gateway| gateway.scope.available)
         .map(|gateway| Arc::clone(&gateway.scope));
-    Some(SelectedTlsRoute { unit, scope })
+    Some(SelectedTlsRoute { unit, scope, owner })
 }
 
 use crate::backends::{CompiledServiceTarget, L4ResolveError, SelectedL4Backend};
@@ -91,15 +92,23 @@ pub(super) enum TlsBackendAttempt<'a, T> {
 pub(super) fn resolve_tls_backend_attempt<'a, T, E>(
     unit: &'a TlsRouteUnit,
     ctx: &mut TlsContext,
+    gateway_key: Option<&str>,
     resolve: impl FnOnce(&'a CompiledServiceTarget) -> Result<T, E>,
 ) -> TlsBackendAttempt<'a, T> {
     let Ok(selected) = unit.select_backend() else {
         ctx.err_log = Some("no backend".to_string());
         return TlsBackendAttempt::Terminal;
     };
-    match selected.with_service(|target| resolve(target).map_err(|_| target)) {
+    match crate::backends::policy::resolve_l4_policy_backend(selected, gateway_key, |target| {
+        resolve(target).map_err(|_| target)
+    }) {
         Ok((target, endpoint)) => TlsBackendAttempt::Ready(target, endpoint),
         Err(L4ResolveError::Unavailable(target)) => TlsBackendAttempt::Retryable(target),
+        Err(L4ResolveError::Rejected(crate::backends::L4BackendRejection::Denied)) => {
+            ctx.status = Some(crate::routes::common::L4_BACKEND_REF_DENIED_STATUS);
+            ctx.err_log = Some(crate::routes::common::L4_BACKEND_REF_DENIED_LOG.to_owned());
+            TlsBackendAttempt::Terminal
+        }
         Err(L4ResolveError::Rejected(_)) => {
             apply_tls_l4_post_select(ctx, selected);
             TlsBackendAttempt::Terminal

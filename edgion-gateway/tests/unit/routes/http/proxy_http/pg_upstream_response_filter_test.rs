@@ -193,6 +193,7 @@ async fn session_lifetime_actual_response_issuance_uses_captured_policy() {
                     "127.0.0.1:8080".parse().unwrap(),
                 ));
                 ctx.backend_context = Some(crate::BackendContext {
+                    effective_policy_captured: false,
                     effective_policy: None,
                     source: None,
                     rsc: None,

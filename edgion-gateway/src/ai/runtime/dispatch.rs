@@ -767,6 +767,9 @@ fn select_target(plan: &mut ReadyAiAttemptPlan, entropy: u128) -> Result<Selecte
             .iter()
             .position(|candidate| candidate.slot == usize::from(selected.slot))
             .ok_or(AiDispatchError::InvalidConfiguration)?;
+        if !plan.candidates[candidate_index].policy_ancestor_admitted {
+            return Err(AiDispatchError::InvalidConfiguration);
+        }
         plan.scheduler
             .select_backend(u8::try_from(candidate_index).map_err(|_| AiDispatchError::InvalidConfiguration)?)
             .map_err(|_| AiDispatchError::InvalidConfiguration)?;
@@ -782,6 +785,9 @@ fn select_credential(
     candidate_index: usize,
     entropy: u128,
 ) -> Result<SelectedTarget, AiDispatchError> {
+    if !plan.candidates[candidate_index].policy_ancestor_admitted {
+        return Err(AiDispatchError::InvalidConfiguration);
+    }
     let backend = plan.candidates[candidate_index]
         .backend
         .as_ref()

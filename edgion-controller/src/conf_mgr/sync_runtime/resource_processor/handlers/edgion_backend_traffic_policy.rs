@@ -32,8 +32,8 @@
 //! target-conflict + creation-timestamp index) exactly as `BackendTLSPolicy`
 //! does.
 //!
-//! Requeue edges (this handler is a sink in the requeue DAG — it never
-//! requeues routes, gateways, or Services; it only requeues its own siblings):
+//! Requeue edges (policy publication changes notify dependent Routes only after
+//! cache publication; unchanged signatures stop the Route/Policy return wave):
 //! - Service or EdgionBackend appear/disappear requeues every policy ref
 //!   registered under the corresponding typed dependency key.
 //! - Route change -> `requeue_backend_policies_for_owner` /
@@ -476,6 +476,7 @@ impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicy
         // The transport marker is controller-owned and never trusted from any
         // input backend. Clear it before the complete current-generation stage.
         p.spec.resolved_target_class = None;
+        p.spec.prepared_ancestor_admission = None;
         p.spec.prepared_precedence = Some(PreparedPolicyPrecedence {
             creation_timestamp: p.metadata.creation_timestamp.as_ref().map(|time| time.0),
         });
@@ -734,6 +735,14 @@ impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicy
                 controller_name: self.controller_name.clone(),
                 conditions,
             });
+        }
+        if ctx.runtime().status_identity().is_none() {
+            super::super::policy_ancestor_capacity::compose_native(
+                p.metadata.namespace.as_deref().unwrap_or("default"),
+                &self.controller_name,
+                &old_ancestors,
+                &mut status.ancestors,
+            );
         }
     }
 }

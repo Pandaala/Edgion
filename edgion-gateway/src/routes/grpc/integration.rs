@@ -151,6 +151,16 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
     // Run backend-level request plugins.
     // TODO: evaluate whether backend plugins should run before route-level plugins
     let backend_plugin_runtime = Arc::clone(&backend_ref.plugin_runtime);
+    ctx.selected_grpc_backend =
+        Some(super::SelectedGrpcBackend::new(logical, backend_tls_policy).ok_or_else(EdError::BackendNotFound)?);
+    if !crate::routes::http::proxy_http::prepare_selected_policy_admission(ctx) {
+        return Err(EdError::RefDenied {
+            target_namespace: String::new(),
+            target_name: String::new(),
+            reason: "PolicyAncestorLimit".into(),
+        });
+    }
+
     backend_plugin_runtime.run_request_plugins(session, ctx).await;
 
     if ctx.plugin_terminated() {
@@ -161,8 +171,6 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
     }
 
     // Backend context is initialized in upstream_peer_grpc by init_backend_context_if_needed
-    ctx.selected_grpc_backend =
-        Some(super::SelectedGrpcBackend::new(logical, backend_tls_policy).ok_or_else(EdError::BackendNotFound)?);
 
     Ok(Some(())) // Handled
 }

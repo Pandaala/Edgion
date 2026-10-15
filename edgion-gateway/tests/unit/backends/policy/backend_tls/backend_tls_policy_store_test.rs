@@ -25,6 +25,7 @@ fn policy(
             ..Default::default()
         },
         spec: BackendTLSPolicySpec {
+            prepared_ancestor_admission: Some(edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission::Unrestricted),
             prepared_precedence: Some(
                 edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
                     creation_timestamp: None,
@@ -78,7 +79,7 @@ fn unsupported_named_ca_is_not_a_runtime_candidate() {
             "example.com/Custom".to_string(),
         ),
     );
-    assert!(!BackendTLSPolicyStore::is_valid_candidate(&candidate));
+    assert!(BackendTLSPolicyStore::valid_target_key(&candidate).is_none());
 }
 
 #[test]
@@ -1236,7 +1237,7 @@ fn cold_backend_tls_publication_rejects_typed_decoys_and_missing_client_identity
             _ => unreachable!(),
         }
         assert_eq!(
-            BackendTLSPolicyStore::is_valid_candidate(candidate),
+            BackendTLSPolicyStore::valid_target_key(candidate).is_some(),
             case == "valid",
             "{case}"
         );
@@ -1261,7 +1262,7 @@ fn cold_backend_tls_publication_rejects_typed_decoys_and_missing_client_identity
     let candidate = Arc::make_mut(&mut system);
     candidate.spec.options = base.spec.options.clone();
     candidate.spec.resolved_client_certificate = base.spec.resolved_client_certificate.clone();
-    assert!(BackendTLSPolicyStore::is_valid_candidate(candidate));
+    assert!(BackendTLSPolicyStore::valid_target_key(candidate).is_some());
     candidate
         .spec
         .resolved_client_certificate
@@ -1269,7 +1270,7 @@ fn cold_backend_tls_publication_rejects_typed_decoys_and_missing_client_identity
         .unwrap()
         .metadata
         .name = Some("decoy".into());
-    assert!(!BackendTLSPolicyStore::is_valid_candidate(candidate));
+    assert!(BackendTLSPolicyStore::valid_target_key(candidate).is_none());
 }
 
 #[test]

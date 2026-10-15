@@ -450,6 +450,7 @@ fn context_attribution_wires_deadline_diagnostic_and_current_attempt_error() {
         upstreams: Vec::new(),
         current_upstream_id: None,
         backend_ref_idx: None,
+        effective_policy_captured: false,
         effective_policy: None,
     });
     ctx.push_upstream(None, None);

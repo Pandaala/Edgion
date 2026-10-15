@@ -341,6 +341,7 @@ fn install_zero_retry_budget(ctx: &mut EdgionHttpContext) {
         min_retry_rate: None,
     }));
     ctx.ensure_ai_state().effective_policy = Some(Arc::new(EffectiveBackendTrafficPolicy {
+        ancestor_admission: Some(edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission::Unrestricted),
         resolved_target_class:
             edgion_resources::resources::edgion_backend_traffic_policy::ResolvedPolicyTargetClass::Ai,
         winning_policy_key: "default/policy".to_string(),

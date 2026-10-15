@@ -13,6 +13,7 @@ use std::time::Instant;
 fn ctx_with_attempt() -> EdgionHttpContext {
     let mut ctx = EdgionHttpContext::new();
     ctx.backend_context = Some(BackendContext {
+        effective_policy_captured: false,
         effective_policy: None,
         source: None,
         rsc: None,

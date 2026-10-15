@@ -104,6 +104,7 @@ mod resolve_probe_host_tests {
                 ..Default::default()
             },
             spec: EdgionBackendTrafficPolicySpec {
+            prepared_ancestor_admission: Some(edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission::Unrestricted),
                 prepared_precedence: Some(
                     edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
                         creation_timestamp: None,

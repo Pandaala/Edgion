@@ -917,6 +917,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             route.spec.hostnames.as_ref(),
             _ctx.runtime(),
         );
+        super::policy_ancestor_admission::annotate(route, &self.controller_name, _ctx);
     }
 }
 

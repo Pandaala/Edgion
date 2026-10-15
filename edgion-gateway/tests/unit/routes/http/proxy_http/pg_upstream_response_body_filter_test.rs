@@ -55,6 +55,7 @@ fn ctx_with_upstream() -> crate::EdgionHttpContext {
         upstreams: Vec::new(),
         current_upstream_id: None,
         backend_ref_idx: None,
+        effective_policy_captured: false,
         effective_policy: None,
     });
     ctx.push_upstream(None, None);

@@ -380,6 +380,9 @@ fn upstream_authority_validation_flows_through_spec() {
     use crate::resources::upstream_authority::UpstreamAuthorityConfig;
 
     let base = |ua: Option<UpstreamAuthorityConfig>, hc: bool| EdgionBackendTrafficPolicySpec {
+        prepared_ancestor_admission: Some(
+            crate::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission::Unrestricted,
+        ),
         prepared_precedence: None,
         current_status: None,
         target_refs: vec![PolicyTargetRef {

@@ -50,6 +50,8 @@ struct PreparedPolicy {
 /// normalized values.
 #[derive(Clone)]
 pub struct EffectiveBackendTrafficPolicy {
+    pub ancestor_admission:
+        Option<edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission>,
     pub resolved_target_class: ResolvedPolicyTargetClass,
     pub winning_policy_key: String,
     pub load_balancer: Option<ParsedLBPolicy>,
@@ -118,7 +120,8 @@ fn effective_snapshot_eq(
     match (left, right) {
         (None, None) => true,
         (Some(left), Some(right)) => {
-            left.resolved_target_class == right.resolved_target_class
+            left.ancestor_admission == right.ancestor_admission
+                && left.resolved_target_class == right.resolved_target_class
                 && left.winning_policy_key == right.winning_policy_key
                 && left.circuit_breaker_limit == right.circuit_breaker_limit
                 && left.load_balancer == right.load_balancer
@@ -226,20 +229,8 @@ impl BackendTrafficPolicyStore {
         publish_counters::PREPARE_POLICY_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
         let target_keys = Self::dedup_target_keys(Self::canonical_target_keys(&policy));
-        let resolved_class = policy.spec.resolved_target_class;
-        let class_matches = resolved_class.is_some_and(|resolved_class| {
-            target_keys.iter().all(|key| {
-                matches!(
-                    (resolved_class, key.target_kind),
-                    (ResolvedPolicyTargetClass::Service, PolicyTargetKind::Service)
-                        | (ResolvedPolicyTargetClass::Ai, PolicyTargetKind::EdgionBackend)
-                )
-            })
-        });
-        let eligible = policy.spec.prepared_precedence.is_some()
-            && policy.spec.get_validation_errors().is_empty()
-            && class_matches
-            && !target_keys.is_empty();
+        let eligible =
+            edgion_resources::resources::common::policy_candidates::prepared_backend_traffic_targets(&policy).is_some();
         PreparedPolicy {
             key,
             precedence: policy
@@ -258,6 +249,7 @@ impl BackendTrafficPolicyStore {
             && left.metadata.uid == right.metadata.uid
             && left.metadata.creation_timestamp == right.metadata.creation_timestamp
             && left.spec.prepared_precedence == right.spec.prepared_precedence
+            && left.spec.prepared_ancestor_admission == right.spec.prepared_ancestor_admission
             && left.spec.target_refs == right.spec.target_refs
             && left.spec.resolved_target_class == right.spec.resolved_target_class
             && left.spec.load_balancer == right.spec.load_balancer
@@ -510,6 +502,11 @@ impl BackendTrafficPolicyStore {
             .expect("eligible policy has a resolved target class");
 
         Arc::new(EffectiveBackendTrafficPolicy {
+            ancestor_admission: policy
+                .spec
+                .prepared_ancestor_admission
+                .clone()
+                .map(|value| value.validated()),
             resolved_target_class: target_class,
             winning_policy_key: winner_key.to_string(),
             load_balancer,

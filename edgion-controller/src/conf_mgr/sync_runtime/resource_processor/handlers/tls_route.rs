@@ -309,6 +309,7 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
 
     fn update_status(&self, route: &mut TLSRoute, _ctx: &HandlerContext, validation_errors: &[String]) {
         self.update_route_status(route, _ctx, validation_errors);
+        super::policy_ancestor_admission::annotate(route, &self.controller_name, _ctx);
     }
 }
 

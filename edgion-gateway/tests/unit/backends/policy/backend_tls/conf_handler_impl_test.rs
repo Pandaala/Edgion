@@ -12,6 +12,7 @@ fn create_test_policy(namespace: &str, name: &str, target_name: &str) -> Backend
             ..Default::default()
         },
         spec: BackendTLSPolicySpec {
+            prepared_ancestor_admission: Some(edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission::Unrestricted),
             prepared_precedence: Some(
                 edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
                     creation_timestamp: Some(creation_timestamp),

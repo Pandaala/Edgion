@@ -423,3 +423,5 @@ impl ProxyHttp for EdgionHttpProxy {
 #[cfg(test)]
 #[path = "../../../../tests/unit/routes/http/proxy_http/mod_test/retry_budget_tests.rs"]
 mod retry_budget_tests;
+
+pub(crate) use pg_upstream_peer::prepare_selected_policy_admission;

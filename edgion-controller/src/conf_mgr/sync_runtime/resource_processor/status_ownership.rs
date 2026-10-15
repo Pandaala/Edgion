@@ -186,6 +186,23 @@ pub fn native_status_projection(
         "BackendTLSPolicy" | "EdgionBackendTrafficPolicy" => ("ancestors", "ancestorRef"),
         _ => return None,
     };
+    if list == "ancestors" {
+        let composition = super::policy_ancestor_capacity::compose(
+            namespace,
+            &owner.controller_name,
+            observed_status,
+            computed_status,
+            |parent| parent_is_owned(parent, namespace, runtime),
+        );
+        return Some((
+            composition.local,
+            if composition.persistable {
+                composition.persisted
+            } else {
+                observed_status.clone()
+            },
+        ));
+    }
     let raw_refs: Vec<ParentReference> = raw_resource
         .pointer("/spec/parentRefs")
         .and_then(|value| serde_json::from_value(value.clone()).ok())

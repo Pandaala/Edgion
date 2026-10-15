@@ -799,6 +799,7 @@ fn unstarted_service_ctx(service_key: &str) -> EdgionHttpContext {
         upstreams: Vec::new(),
         current_upstream_id: None,
         backend_ref_idx: Some(0),
+        effective_policy_captured: false,
         effective_policy: None,
     });
     ctx
@@ -848,6 +849,7 @@ fn service_policy_fields(
             ..Default::default()
         },
         spec: EdgionBackendTrafficPolicySpec {
+            prepared_ancestor_admission: Some(edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission::Unrestricted),
             prepared_precedence: Some(
                 edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
                     creation_timestamp: Some("2026-01-01T00:00:00Z".parse().expect("rfc3339")),
@@ -1036,6 +1038,7 @@ fn begin_upstream_attempt_does_not_recapture_on_retry() {
             ..Default::default()
         },
         spec: EdgionBackendTrafficPolicySpec {
+            prepared_ancestor_admission: Some(edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission::Unrestricted),
             prepared_precedence: Some(
                 edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
                     creation_timestamp: Some("2026-01-01T00:00:00Z".parse().expect("rfc3339")),
@@ -1086,6 +1089,7 @@ fn begin_upstream_attempt_does_not_recapture_on_retry() {
             ..Default::default()
         },
         spec: EdgionBackendTrafficPolicySpec {
+            prepared_ancestor_admission: Some(edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission::Unrestricted),
             prepared_precedence: Some(
                 edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
                     creation_timestamp: Some("2026-01-01T00:00:00Z".parse().expect("rfc3339")),
@@ -1150,6 +1154,7 @@ fn grpc_begin_upstream_attempt_captures_without_selected_backend() {
             ..Default::default()
         },
         spec: EdgionBackendTrafficPolicySpec {
+            prepared_ancestor_admission: Some(edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission::Unrestricted),
             prepared_precedence: Some(
                 edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
                     creation_timestamp: Some("2026-01-01T00:00:00Z".parse().expect("rfc3339")),
@@ -1734,6 +1739,7 @@ fn invalid_backend_with_service_key_still_captures() {
         upstreams: Vec::new(),
         current_upstream_id: None,
         backend_ref_idx: None,
+        effective_policy_captured: false,
         effective_policy: None,
     });
     // The historical test name is retained; the unsafe context-only capture
@@ -1924,6 +1930,7 @@ fn ctx_with_static_tls_sni(sni: &str) -> EdgionHttpContext {
         upstreams: Vec::new(),
         current_upstream_id: None,
         backend_ref_idx: None,
+        effective_policy_captured: false,
         effective_policy: None,
     });
     let bc = ctx.backend_context.as_mut().unwrap();
@@ -2464,4 +2471,114 @@ async fn invalid_grpc_backend_keeps_terminal_unavailable_wire_mapping() {
         assert!(wire.starts_with("http/1.1 200"));
         assert!(wire.contains("grpc-status: 14"));
     }
+}
+
+#[tokio::test]
+async fn policy_ancestor_admission_precedes_http_attempt_and_pins_recovery_generation() {
+    use edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission;
+    let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+    let store = get_backend_traffic_policy_store();
+    let mut policy =
+        (*service_policy_fields("capacity-http", "limited", "svc", None, None, None, None, None, None)).clone();
+    policy.spec.prepared_ancestor_admission = Some(PreparedPolicyAncestorAdmission::Scoped(vec![
+        "capacity-http/represented".into(),
+    ]));
+    store.full_set_policies(std::collections::HashMap::from([(
+        "capacity-http/limited".into(),
+        Arc::new(policy.clone()),
+    )]));
+    let owner = |name: &str| {
+        Arc::new(crate::runtime::GatewayInfo::new(
+            Some("capacity-http".into()),
+            name.into(),
+            Some("http".into()),
+            None,
+            None,
+            None,
+            Vec::new(),
+            None,
+        ))
+    };
+    let mut denied = unstarted_service_ctx("capacity-http/svc");
+    denied.gateway_info = Some(owner("new"));
+    assert!(!super::prepare_selected_policy_admission(&mut denied));
+    assert!(denied.backend_context.as_ref().unwrap().upstreams.is_empty());
+    let mut grpc = unstarted_service_ctx("capacity-http/svc");
+    grpc.gateway_info = Some(owner("new"));
+    grpc.selected_backend = None;
+    let route: edgion_resources::GRPCRoute=serde_json::from_value(serde_json::json!({"metadata":{"namespace":"capacity-http","name":"grpc"},"spec":{"rules":[{"backendRefs":[{"name":"svc","port":80}]}]}})).unwrap();
+    let runtime = crate::routes::grpc::GrpcRouteRuleUnit::compile_grpc_rule(&route, 0).unwrap();
+    let logical = crate::routes::grpc::GrpcBackendHandle::new(runtime.backends, 0).unwrap();
+    grpc.selected_grpc_backend = Some(
+        crate::routes::grpc::SelectedGrpcBackend::new(logical, crate::backends::BackendTlsPolicyLookup::Absent)
+            .unwrap(),
+    );
+    assert!(!super::prepare_selected_policy_admission(&mut grpc));
+    assert!(grpc.backend_context.as_ref().unwrap().upstreams.is_empty());
+
+    let mut represented = unstarted_service_ctx("capacity-http/svc");
+    represented.gateway_info = Some(owner("represented"));
+    assert!(super::prepare_selected_policy_admission(&mut represented));
+    super::begin_upstream_attempt(&mut represented);
+    policy.spec.prepared_ancestor_admission =
+        Some(PreparedPolicyAncestorAdmission::Scoped(
+            vec!["capacity-http/new".into()],
+        ));
+    store.full_set_policies(std::collections::HashMap::from([(
+        "capacity-http/limited".into(),
+        Arc::new(policy),
+    )]));
+    // The selected request keeps its earlier policy; a fresh request sees release.
+    assert!(super::prepare_selected_policy_admission(&mut represented));
+    let mut fresh = unstarted_service_ctx("capacity-http/svc");
+    fresh.gateway_info = Some(owner("new"));
+    assert!(super::prepare_selected_policy_admission(&mut fresh));
+    store.full_set_policies(std::collections::HashMap::new());
+}
+
+#[test]
+fn policy_ancestor_absence_is_pinned_before_first_attempt_and_retries() {
+    use edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission;
+    let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+    let store = get_backend_traffic_policy_store();
+    for grpc in [false, true] {
+        store.full_set_policies(std::collections::HashMap::new());
+        let mut ctx = unstarted_service_ctx("absence/svc");
+        if grpc {
+            ctx.selected_backend = None;
+            let route:edgion_resources::GRPCRoute=serde_json::from_value(serde_json::json!({"metadata":{"namespace":"absence","name":"grpc"},"spec":{"rules":[{"backendRefs":[{"name":"svc","port":80}]}]}})).unwrap();
+            let runtime = crate::routes::grpc::GrpcRouteRuleUnit::compile_grpc_rule(&route, 0).unwrap();
+            let logical = crate::routes::grpc::GrpcBackendHandle::new(runtime.backends, 0).unwrap();
+            ctx.selected_grpc_backend = Some(
+                crate::routes::grpc::SelectedGrpcBackend::new(logical, crate::backends::BackendTlsPolicyLookup::Absent)
+                    .unwrap(),
+            );
+        }
+        assert!(super::prepare_selected_policy_admission(&mut ctx));
+        assert!(ctx.backend_context.as_ref().unwrap().effective_policy_captured);
+        let mut policy =
+            (*service_policy_fields("absence", "limited", "svc", None, None, None, None, None, None)).clone();
+        policy.spec.prepared_ancestor_admission = Some(PreparedPolicyAncestorAdmission::Scoped(Vec::new()));
+        store.full_set_policies(std::collections::HashMap::from([(
+            "absence/limited".into(),
+            Arc::new(policy),
+        )]));
+        assert!(super::prepare_selected_policy_admission(&mut ctx));
+        super::capture_service_effective_policy_with(&mut ctx, |_| panic!("captured absence must not query again"));
+        super::begin_upstream_attempt(&mut ctx);
+        assert!(ctx.backend_context.as_ref().unwrap().effective_policy.is_none());
+        super::begin_upstream_attempt(&mut ctx);
+        assert!(ctx.backend_context.as_ref().unwrap().effective_policy.is_none());
+        let mut fresh = unstarted_service_ctx("absence/svc");
+        assert!(!super::prepare_selected_policy_admission(&mut fresh));
+        assert!(fresh.backend_context.as_ref().unwrap().upstreams.is_empty());
+        let captured = captured_policy(&fresh);
+        fresh.backend_context.as_mut().unwrap().effective_policy_captured = false;
+        super::capture_service_effective_policy_with(&mut fresh, |_| {
+            panic!("pre-seeded presence remains authoritative")
+        });
+        assert!(fresh.backend_context.as_ref().unwrap().effective_policy_captured);
+        assert!(Arc::ptr_eq(&captured, &captured_policy(&fresh)));
+    }
+    store.full_set_policies(std::collections::HashMap::new());
 }

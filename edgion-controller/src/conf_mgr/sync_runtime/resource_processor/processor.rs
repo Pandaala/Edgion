@@ -780,6 +780,21 @@ where
                         }
                     }
                 }
+                if matches!(self.kind, "BackendTLSPolicy" | "EdgionBackendTrafficPolicy") {
+                    let local = extract_status_value(&parsed_obj).unwrap_or_default();
+                    super::policy_ancestor_capacity::stamp(&mut parsed_obj, &namespace, &local, kubernetes);
+                    if persisted_status
+                        .as_ref()
+                        .and_then(|status| status.get("ancestors"))
+                        .and_then(serde_json::Value::as_array)
+                        .is_some_and(|entries| {
+                            entries.len()
+                                > edgion_resources::resources::common::policy_ancestor_admission::MAX_POLICY_ANCESTORS
+                        })
+                    {
+                        persistence_allowed = false;
+                    }
+                }
                 if !persistence_allowed {
                     persisted_status = None;
                 }
@@ -867,6 +882,9 @@ where
                 // 11. Save to cache
                 // Use InitAdd during init phase (synchronous), EventUpdate at runtime (async).
                 // `None` means "assign sync_version at the store, under its write lock".
+                let previous_policy = matches!(self.kind, "BackendTLSPolicy" | "EdgionBackendTrafficPolicy")
+                    .then(|| self.cache.get_by_key(&make_resource_key(&parsed_obj)))
+                    .flatten();
                 let obj_for_result = parsed_obj.clone();
                 if !publish {
                     if let Some(cached) = self.cache.get_by_key(&make_resource_key(&parsed_obj)) {
@@ -883,6 +901,14 @@ where
                 // object just published above, never the previous cache value.
                 if publish {
                     self.handler.after_publish(&obj_for_result, ctx).await;
+                    super::handlers::policy_ancestor_admission::notify_policy_ancestor_change(
+                        previous_policy
+                            .as_ref()
+                            .map(|value| value as &(dyn std::any::Any + Send + Sync)),
+                        Some(&obj_for_result as &(dyn std::any::Any + Send + Sync)),
+                        ctx,
+                    )
+                    .await;
                 }
 
                 // Merge Patch must remove the retired native siblings when first
@@ -944,6 +970,12 @@ where
             // 3. Requeue consumers only after they can observe the absence of
             // this exact generation in ServerCache.
             self.handler.after_unpublish(cached_obj, ctx).await;
+            super::handlers::policy_ancestor_admission::notify_policy_ancestor_change(
+                Some(cached_obj as &(dyn std::any::Any + Send + Sync)),
+                None,
+                ctx,
+            )
+            .await;
 
             tracing::debug!("Resource deleted from cache");
         }

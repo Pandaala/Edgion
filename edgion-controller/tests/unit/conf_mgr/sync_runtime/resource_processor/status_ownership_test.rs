@@ -417,3 +417,169 @@ fn dependency_signature_ignores_echo_order_and_explicit_defaults() {
         ownership_dependency_signature("HTTPRoute", &recreated)
     );
 }
+
+#[async_trait::async_trait]
+impl ProcessorHandler<k8s_openapi::api::core::v1::Service> for Passthrough {}
+
+#[tokio::test]
+async fn policy_ancestor_capacity_pipeline_both_families_recover_from_status_only_release() {
+    use crate::conf_mgr::sync_runtime::resource_processor::{
+        handlers::{BackendTlsPolicyHandler, EdgionBackendTrafficPolicyHandler},
+        ResourceRef,
+    };
+    use crate::conf_mgr::sync_runtime::workqueue::TriggerChain;
+    use edgion_resources::{BackendTLSPolicy, EdgionBackendTrafficPolicy, ResourceKind};
+    let fixture = Fixture::new("a").await;
+    let service_processor = Arc::new(ResourceProcessor::new(
+        "Service",
+        16,
+        Arc::new(Passthrough),
+        fixture.runtime.clone(),
+    ));
+    fixture.runtime.processor_registry.register(service_processor.clone());
+    let service: k8s_openapi::api::core::v1::Service = serde_json::from_value(
+        json!({"metadata":{"namespace":"apps","name":"backend"},"spec":{"ports":[{"port":443,"name":"https"}]}}),
+    )
+    .unwrap();
+    let service_raw = Arc::new(LocalRawStore::new());
+    service_raw.upsert("apps/backend".into(), Arc::new(service.clone()));
+    service_processor.set_raw_store(service_raw);
+    service_processor.on_init_apply(service, None).await;
+    fixture.runtime.service_ref_mgr.add_ref(
+        "apps/backend".into(),
+        ResourceRef::new(ResourceKind::HTTPRoute, Some("apps".into()), "route".into()),
+    );
+    fixture
+        .runtime
+        .gateway_route_index
+        .update_route(ResourceKind::HTTPRoute, "apps/route", &[parent("a")], "apps");
+    let protected:Vec<_>=(0..16).map(|i|json!({"controllerName":"foreign/controller","ancestorRef":{"name":format!("foreign-{i}")},"conditions":[]})).collect();
+    macro_rules! route_processor {
+        ($ty:ty, $kind:literal, $handler:ty) => {{
+            let route_processor = Arc::new(ResourceProcessor::<$ty>::new($kind,16,Arc::new(<$handler>::new("example.com/controller".into())),fixture.runtime.clone()));
+            let route_raw = Arc::new(LocalRawStore::new());
+            route_processor.set_raw_store(route_raw.clone());
+            fixture.runtime.processor_registry.register(route_processor.clone());
+            let route:$ty = serde_json::from_value(json!({"metadata":{"namespace":"apps","name":"route","uid":"route"},"spec":{"parentRefs":[{"name":"a"}],"rules":[{"backendRefs":[{"name":"backend","port":443}]}]}})).unwrap();
+            route_raw.upsert("apps/route".into(),Arc::new(route.clone()));
+            Box::pin(route_processor.on_init_apply(route.clone(),None)).await;
+            assert!(route_processor.get("apps/route").unwrap().spec.current_status.as_ref().unwrap().parents.iter().any(|parent| parent.conditions.iter().any(|c|c.reason=="PolicyAncestorLimit")), "{} must report capacity refusal: {}", $kind, serde_json::to_string(&route_processor.get("apps/route").unwrap()).unwrap());
+            (route_processor,route)
+        }};
+    }
+    macro_rules! recover_route {
+        ($pair:ident) => {{
+            let (route_processor, route) = &$pair;
+            let queue = route_processor.workqueue();
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            assert_eq!(queue.len(), 1);
+            let item = tokio::time::timeout(std::time::Duration::from_secs(2), queue.dequeue())
+                .await
+                .unwrap()
+                .unwrap();
+            Box::pin(route_processor.process_work_item(&item.key, Some(route.clone()), None, item.trigger_chain)).await;
+            queue.done(&item.key);
+            assert!(!route_processor
+                .get("apps/route")
+                .unwrap()
+                .spec
+                .current_status
+                .as_ref()
+                .unwrap()
+                .parents
+                .iter()
+                .any(|parent| parent.conditions.iter().any(|c| c.reason == "PolicyAncestorLimit")));
+        }};
+    }
+    macro_rules! exercise {
+        ($ty:ty,$kind:literal,$handler:expr,$spec:expr) => {{
+            let processor=Arc::new(ResourceProcessor::<$ty>::new($kind,16,Arc::new($handler),fixture.runtime.clone()));
+            let raw=Arc::new(LocalRawStore::new());
+            processor.set_raw_store(raw.clone());
+            fixture.runtime.processor_registry.register(processor.clone());
+            let mut policy:$ty=serde_json::from_value(json!({"metadata":{"namespace":"apps","name":"policy","uid":"policy","resourceVersion":"one"},"spec":$spec,"status":{"ancestors":protected}})).unwrap();
+            raw.upsert("apps/policy".into(),Arc::new(policy.clone()));
+            Box::pin(processor.on_init_apply(policy.clone(),None)).await;
+            let published=processor.get("apps/policy").unwrap();
+            assert_eq!(published.status.as_ref().unwrap().ancestors.len(),16);
+            assert!(published.spec.current_status.as_ref().unwrap().ancestors.is_empty());
+            assert!(!published.spec.prepared_ancestor_admission.as_ref().unwrap().permits(Some("apps/a")));
+            let http = route_processor!(edgion_resources::HTTPRoute,"HTTPRoute",crate::conf_mgr::sync_runtime::resource_processor::handlers::HttpRouteHandler);
+            let grpc = route_processor!(edgion_resources::GRPCRoute,"GRPCRoute",crate::conf_mgr::sync_runtime::resource_processor::handlers::GrpcRouteHandler);
+            let tcp = route_processor!(edgion_resources::TCPRoute,"TCPRoute",crate::conf_mgr::sync_runtime::resource_processor::handlers::TcpRouteHandler);
+            let tls = route_processor!(edgion_resources::TLSRoute,"TLSRoute",crate::conf_mgr::sync_runtime::resource_processor::handlers::TlsRouteHandler);
+            let udp = route_processor!(edgion_resources::UDPRoute,"UDPRoute",crate::conf_mgr::sync_runtime::resource_processor::handlers::UdpRouteHandler);
+            policy.status.as_mut().unwrap().ancestors.pop();
+            policy.metadata.resource_version=Some("two".into());
+            raw.upsert("apps/policy".into(),Arc::new(policy.clone()));
+            Box::pin(processor.process_work_item("apps/policy",Some(policy.clone()),None,TriggerChain::default())).await;
+            let recovered=processor.get("apps/policy").unwrap();
+            assert_eq!(recovered.status.as_ref().unwrap().ancestors.len(),16);
+            assert_eq!(recovered.spec.current_status.as_ref().unwrap().ancestors.len(),1);
+            assert!(recovered.spec.prepared_ancestor_admission.as_ref().unwrap().permits(Some("apps/a")));
+            assert!(!recovered.spec.prepared_ancestor_admission.as_ref().unwrap().permits(Some("apps/b")));
+            recover_route!(http);
+            recover_route!(grpc);
+            recover_route!(tcp);
+            recover_route!(tls);
+            recover_route!(udp);
+            // Drain the actual Route -> Policy return edge; unchanged admission must
+            // stop there instead of generating another Policy -> Route wave.
+            let queue=processor.workqueue();
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            while !queue.is_empty() {
+                let item=tokio::time::timeout(std::time::Duration::from_secs(2),queue.dequeue()).await.unwrap().unwrap();
+                Box::pin(processor.process_work_item(&item.key,Some(policy.clone()),None,item.trigger_chain)).await;
+                queue.done(&item.key);
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            assert!(http.0.workqueue().is_empty());
+            assert!(grpc.0.workqueue().is_empty());
+            assert!(tcp.0.workqueue().is_empty());
+            assert!(tls.0.workqueue().is_empty());
+            assert!(udp.0.workqueue().is_empty());
+
+            // Raw settings arrive before policy preparation. Route diagnostics see
+            // the generation mismatch, then must recover after same-target publish.
+            let mut changed=serde_json::to_value(&policy).unwrap();
+            changed["metadata"]["generation"]=json!(2);
+            if $kind=="BackendTLSPolicy" { changed["spec"]["validation"]["hostname"]=json!("updated.example"); }
+            else { changed["spec"]["connection"]=json!({"connectTimeout":"2s"}); }
+            policy=serde_json::from_value(changed).unwrap();
+            raw.upsert("apps/policy".into(),Arc::new(policy.clone()));
+            Box::pin(http.0.process_work_item("apps/route",Some(http.1.clone()),None,TriggerChain::default())).await;
+            assert!(http.0.get("apps/route").unwrap().spec.current_status.as_ref().unwrap().parents.iter().any(|parent|parent.conditions.iter().any(|condition|condition.message.contains("pending publication"))));
+            Box::pin(processor.process_work_item("apps/policy",Some(policy.clone()),None,TriggerChain::default())).await;
+            recover_route!(http);
+            recover_route!(grpc);
+            recover_route!(tcp);
+            recover_route!(tls);
+            recover_route!(udp);
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            while !queue.is_empty() {
+                let item=tokio::time::timeout(std::time::Duration::from_secs(2),queue.dequeue()).await.unwrap().unwrap();
+                Box::pin(processor.process_work_item(&item.key,Some(policy.clone()),None,item.trigger_chain)).await;
+                queue.done(&item.key);
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            assert!(http.0.workqueue().is_empty());
+            assert!(grpc.0.workqueue().is_empty());
+            assert!(tcp.0.workqueue().is_empty());
+            assert!(tls.0.workqueue().is_empty());
+            assert!(udp.0.workqueue().is_empty());
+
+        }};
+    }
+    exercise!(
+        BackendTLSPolicy,
+        "BackendTLSPolicy",
+        BackendTlsPolicyHandler::new("example.com/controller".into()),
+        json!({"targetRefs":[{"group":"","kind":"Service","name":"backend"}],"validation":{"hostname":"backend.example","wellKnownCACertificates":"System"}})
+    );
+    exercise!(
+        EdgionBackendTrafficPolicy,
+        "EdgionBackendTrafficPolicy",
+        EdgionBackendTrafficPolicyHandler::new("example.com/controller".into()),
+        json!({"targetRefs":[{"group":"","kind":"Service","name":"backend"}]})
+    );
+}

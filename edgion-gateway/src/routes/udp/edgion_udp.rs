@@ -1,5 +1,5 @@
 use crate::plugins::publication::global_publisher;
-use crate::plugins::stream::connection_filter_bridge::resolve_route_scope;
+use crate::plugins::stream::connection_filter_bridge::resolve_route_owner_scope;
 use dashmap::{mapref::entry::Entry, DashMap};
 use parking_lot::Mutex;
 use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
@@ -306,7 +306,7 @@ impl EdgionUdpProxy {
 
         // Established sessions returned above; only new sessions acquire policy.
         let publication = global_publisher().snapshot();
-        let Some(scope) = resolve_route_scope(
+        let Some((owner, scope)) = resolve_route_owner_scope(
             &publication,
             &self.listener_key,
             unit.resolved_parent_refs(),
@@ -356,34 +356,35 @@ impl EdgionUdpProxy {
             .await;
             return;
         };
-        let endpoint = match selected.with_service(|target| {
-            select_service_endpoint(
-                target.key(),
-                target.section().clone(),
-                &None,
-                ServiceDegradePolicy::Live,
-                None,
-                "",
-                None,
-            )
-        }) {
-            Ok((_, endpoint)) => endpoint,
-            Err(error) => {
-                let status = match error {
-                    L4ResolveError::Rejected(L4BackendRejection::Denied) => UdpStatus::RefDenied,
-                    L4ResolveError::Rejected(L4BackendRejection::Invalid) => UdpStatus::UnsupportedBackend,
-                    L4ResolveError::Unavailable(_) => UdpStatus::NoBackendResolved,
-                };
-                log_udp(&UdpLogEntry::failure(
-                    self.listener_port,
-                    direct_peer_ip,
-                    direct_peer_port,
-                    status.as_str(),
-                ))
-                .await;
-                return;
-            }
-        };
+        let endpoint =
+            match crate::backends::policy::resolve_l4_policy_backend(selected, Some(owner.gateway_key()), |target| {
+                select_service_endpoint(
+                    target.key(),
+                    target.section().clone(),
+                    &None,
+                    ServiceDegradePolicy::Live,
+                    None,
+                    "",
+                    None,
+                )
+            }) {
+                Ok((_, endpoint)) => endpoint,
+                Err(error) => {
+                    let status = match error {
+                        L4ResolveError::Rejected(L4BackendRejection::Denied) => UdpStatus::RefDenied,
+                        L4ResolveError::Rejected(L4BackendRejection::Invalid) => UdpStatus::UnsupportedBackend,
+                        L4ResolveError::Unavailable(_) => UdpStatus::NoBackendResolved,
+                    };
+                    log_udp(&UdpLogEntry::failure(
+                        self.listener_port,
+                        direct_peer_ip,
+                        direct_peer_port,
+                        status.as_str(),
+                    ))
+                    .await;
+                    return;
+                }
+            };
 
         let upstream_pingora_addr = endpoint.backend.inner().addr.clone();
         let PingoraSocketAddr::Inet(upstream_addr) = upstream_pingora_addr else {

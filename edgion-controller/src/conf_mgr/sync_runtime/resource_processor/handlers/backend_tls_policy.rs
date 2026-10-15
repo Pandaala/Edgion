@@ -286,6 +286,7 @@ impl BackendTlsPolicyHandler {
         ctx.secret_ref_manager().clear_value_refs(&resource_ref);
 
         btp.spec.resolved_target_class = None;
+        btp.spec.prepared_ancestor_admission = None;
         btp.spec.prepared_precedence = Some(PreparedPolicyPrecedence {
             creation_timestamp: btp.metadata.creation_timestamp.as_ref().map(|time| time.0),
         });
@@ -695,6 +696,14 @@ impl BackendTlsPolicyHandler {
                 conditions,
             });
         }
+        if ctx.runtime().status_identity().is_none() {
+            super::super::policy_ancestor_capacity::compose_native(
+                meta.namespace.as_deref().unwrap_or("default"),
+                &self.controller_name,
+                &old_ancestors,
+                &mut status.ancestors,
+            );
+        }
     }
 
     async fn on_change_policy(&self, policy: &BackendTLSPolicy, ctx: &HandlerContext) {
@@ -718,8 +727,8 @@ impl BackendTlsPolicyHandler {
     ///
     /// Chain: BTP.targetRef(Service) -> ServiceRefManager(service->routes) -> GatewayRouteIndex(route->gateways)
     ///
-    /// Returns deduplicated, sorted list of (gateway_ns, gateway_name), capped at 16
-    /// per Gateway API `+kubebuilder:validation:MaxItems=16` on `status.ancestors`.
+    /// Returns every deduplicated, sorted Gateway candidate. The final ownership
+    /// composer applies the 16-entry budget after accounting for protected history.
     fn resolve_ancestor_gateways(
         meta: &ObjectMeta,
         evaluation: &PolicyTargetEvaluation,

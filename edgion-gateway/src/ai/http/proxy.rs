@@ -485,7 +485,17 @@ impl AiProxy {
                             .collect()
                     })
                     .unwrap_or_default();
+                let policy_ancestor_admitted = crate::backends::policy::ancestor_admitted(
+                    &backend_tls_policy,
+                    effective_policy.as_deref(),
+                    session
+                        .ctx()
+                        .gateway_info
+                        .as_deref()
+                        .map(|gateway| gateway.gateway_key()),
+                );
                 AiPlanCandidate {
+                    policy_ancestor_admitted,
                     logical,
                     slot,
                     order: u8::try_from(order).expect("AI route candidates are bounded before body read"),

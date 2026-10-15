@@ -32,18 +32,18 @@ use edgion_resources::ListenerKey;
 /// Resolve the logical route owner and policy from one immutable publication.
 /// The index is used only for ownership; business Gateway metadata stays with
 /// its existing protocol context.
-pub(crate) fn resolve_route_scope(
+pub(crate) fn resolve_route_owner_scope(
     publication: &PluginPublication,
     listener: &ListenerKey,
     parents: &[ResolvedParentRef],
     hostname: &str,
     namespace: &str,
     kind: &str,
-) -> Option<Arc<PluginScope>> {
+) -> Option<(Arc<crate::runtime::gateway_info::GatewayInfo>, Arc<PluginScope>)> {
     let index = publication.listener_index(listener)?;
     let owner = check_gateway_listener_match(parents, index, hostname, namespace, kind)?;
     let gateway = publication.gateway(owner.gateway_key())?;
-    gateway.scope.available.then(|| Arc::clone(&gateway.scope))
+    gateway.scope.available.then(|| (owner, Arc::clone(&gateway.scope)))
 }
 
 /// Dynamic listener admission. Every call pins the latest common connection

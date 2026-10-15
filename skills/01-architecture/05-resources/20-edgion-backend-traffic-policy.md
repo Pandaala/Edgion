@@ -35,8 +35,11 @@ own configuration recovers. See [active probe transport](../02-gateway/07-backen
 
 The Gateway publishes one immutable ArcSwap snapshot keyed by typed target. AI requests capture the
 complete effective-policy Arc for the selected backend at plan time. Core Service HTTP/gRPC
-requests capture the same Arc once at first `begin_upstream_attempt` onto
-`BackendContext.effective_policy` and reuse it for later attempts of that request. Health-check
+requests capture the same Arc before backend plugins and attempt side effects onto
+`BackendContext.effective_policy`. Its `effective_policy_captured` latch pins absence
+as well as presence; repeated preparation and later attempts cannot reacquire a
+policy published after that decision. Direct callers capture at the start of
+`begin_upstream_attempt` before effects when no earlier preparation occurred. Health-check
 and outlier **status** stay live; only configuration (including the outlier handle Arc) is
 captured. HTTPRoute retry configuration authorizes retries, while `retryConstraint` only limits
 aggregate retry volume.
@@ -83,3 +86,21 @@ Service fan-out, AI limits and runtime-handle ownership remain unchanged. A new
 Gateway requires fresh prepared Controller output after coordinated upgrade and
 reprocessing; there is no legacy fallback. See the
 [BackendTLSPolicy transport contract](12-backend-tls-policy.md#full-instant-arbitration-transport-arch-055).
+
+## Final ancestor admission (ARCH-106)
+
+EBTP uses the same final-history capacity composer and schema-hidden
+`preparedAncestorAdmission` transport as BackendTLSPolicy. Protected history
+consumes the 16-entry budget; existing owned keys retain priority, and only new
+unrepresentable Gateway attachments are refused. Admission is checked after the
+canonical winning policy is selected, so capacity never promotes a conflicted
+candidate or denies unrelated backends. Missing preparation fails closed;
+native FS/etcd preparation explicitly marks unrestricted admission.
+
+Admission participates in effective-policy equality and generation reuse. HTTP,
+gRPC and AI use their captured policy; cache eligibility checks admission before
+lookup/publication; L4 checks before endpoint resolution while retaining existing
+live application behavior. Change-gated fanout runs after publication/removal,
+includes dropped targets and restores dependents after status-only slot release.
+See the [shared capacity contract](12-backend-tls-policy.md#final-ancestor-capacity-and-serving-admission-arch-106)
+for ownership, arbitration, bounded checks and cross-store limits.

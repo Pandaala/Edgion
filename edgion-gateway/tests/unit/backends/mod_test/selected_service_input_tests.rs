@@ -33,6 +33,7 @@ fn backend_context(service_key: &str) -> crate::BackendContext {
         upstreams: Vec::new(),
         current_upstream_id: None,
         backend_ref_idx: Some(0),
+        effective_policy_captured: false,
         effective_policy: None,
     }
 }

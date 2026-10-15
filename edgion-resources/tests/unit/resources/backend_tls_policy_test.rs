@@ -10,6 +10,9 @@ fn make_policy(options: Option<HashMap<String, String>>) -> BackendTLSPolicy {
             ..Default::default()
         },
         spec: BackendTLSPolicySpec {
+            prepared_ancestor_admission: Some(
+                crate::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission::Unrestricted,
+            ),
             prepared_precedence: None,
             current_status: None,
             target_refs: vec![BackendTLSPolicyTargetRef {

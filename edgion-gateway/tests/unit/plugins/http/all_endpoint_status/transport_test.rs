@@ -46,6 +46,7 @@ fn mixed_valid_and_empty_ca_maps_to_generic_probe_configuration_error() {
     let policy = BackendTLSPolicy {
         metadata: Default::default(),
         spec: BackendTLSPolicySpec {
+            prepared_ancestor_admission: Some(edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission::Unrestricted),
             prepared_precedence: Some(
                 edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
                     creation_timestamp: None,

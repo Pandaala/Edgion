@@ -48,6 +48,7 @@ fn policy(
             ..Default::default()
         },
         spec: EdgionBackendTrafficPolicySpec {
+            prepared_ancestor_admission: Some(edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission::Unrestricted),
             prepared_precedence: Some(
                 edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
                     creation_timestamp: creation.as_ref().map(|time| time.0),
@@ -86,6 +87,7 @@ fn ai_policy(ns: &str, name: &str, target: &str, percent: u8, timeout: &str) -> 
             ..Default::default()
         },
         spec: EdgionBackendTrafficPolicySpec {
+            prepared_ancestor_admission: Some(edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission::Unrestricted),
             prepared_precedence: Some(
                 edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
                     creation_timestamp: Some(ts("2026-01-01T00:00:00Z").0),
@@ -313,6 +315,7 @@ fn invalid_policy_is_skipped() {
             ..Default::default()
         },
         spec: EdgionBackendTrafficPolicySpec {
+            prepared_ancestor_admission: Some(edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission::Unrestricted),
             prepared_precedence: Some(
                 edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
                     creation_timestamp: Some(ts("2026-01-01T00:00:00Z").0),
@@ -2070,4 +2073,38 @@ fn policy_precedence_fraction_only_replacement_and_unprepared_withdrawal() {
     assert_eq!(store.get_effective(&key).unwrap().winning_policy_key, "precision/b");
     assert!(store.snapshot().inner.policies.contains_key("precision/a"));
     store.full_set_policies(HashMap::new());
+}
+
+#[test]
+fn policy_ancestor_capacity_traffic_republishes_without_changing_winner() {
+    use edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission;
+    let store = BackendTrafficPolicyStore::new();
+    let mut winner = (*policy("ns", "a", "backend", None, None, None, false, false)).clone();
+    winner.spec.prepared_ancestor_admission = Some(PreparedPolicyAncestorAdmission::Scoped(vec!["ns/existing".into()]));
+    let loser = policy("ns", "z", "backend", None, None, None, false, false);
+    store.full_set_policies(std::collections::HashMap::from([
+        ("ns/a".into(), Arc::new(winner.clone())),
+        ("ns/z".into(), loser),
+    ]));
+    let target = BackendTrafficPolicyStore::service_target("ns/backend");
+    let before = store.snapshot();
+    let pinned = before.get_effective(&target).unwrap();
+    assert_eq!(pinned.winning_policy_key, "ns/a");
+    assert!(pinned.ancestor_admission.as_ref().unwrap().permits(Some("ns/existing")));
+    assert!(!pinned.ancestor_admission.as_ref().unwrap().permits(Some("ns/new")));
+    winner.spec.prepared_ancestor_admission = Some(PreparedPolicyAncestorAdmission::Scoped(vec![
+        "ns/existing".into(),
+        "ns/new".into(),
+    ]));
+    store.full_set_policies(std::collections::HashMap::from([("ns/a".into(), Arc::new(winner))]));
+    let after = store.snapshot();
+    assert!(after.generation() > before.generation());
+    assert!(after
+        .get_effective(&target)
+        .unwrap()
+        .ancestor_admission
+        .as_ref()
+        .unwrap()
+        .permits(Some("ns/new")));
+    assert!(!pinned.ancestor_admission.as_ref().unwrap().permits(Some("ns/new")));
 }

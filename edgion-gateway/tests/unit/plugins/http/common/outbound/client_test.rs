@@ -548,6 +548,7 @@ fn service_pool_client_gets_pinned_resolver_before_authority_policy_exists() {
                 ..Default::default()
             },
             spec: EdgionBackendTrafficPolicySpec {
+            prepared_ancestor_admission: Some(edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission::Unrestricted),
                 prepared_precedence: Some(
                     edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
                         creation_timestamp: None,
@@ -633,6 +634,7 @@ fn resolve_probe_base_uses_authority_health_check_host() {
                 ..Default::default()
             },
             spec: EdgionBackendTrafficPolicySpec {
+            prepared_ancestor_admission: Some(edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission::Unrestricted),
                 prepared_precedence: Some(
                     edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence {
                         creation_timestamp: None,

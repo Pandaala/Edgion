@@ -277,6 +277,7 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
                 _ctx.runtime(),
             );
         }
+        super::policy_ancestor_admission::annotate(route, &self.controller_name, _ctx);
     }
 }
 

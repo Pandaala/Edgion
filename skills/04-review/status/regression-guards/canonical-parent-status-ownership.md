@@ -135,3 +135,20 @@ API conformance result is claimed.
   covers that separate mechanism and its distinct-identity deployment contract.
 - `route-parent-status-canonical-identity`: canonical identity and configured ownership corrected;
   concurrent status persistence is covered by the separate guard above.
+
+
+## Policy final capacity (ARCH-106)
+
+Both policy families compose capacity only after canonical ownership projection.
+Foreign and unknown same-controller observations remain protected; existing owned
+keys reserve slots before new sorted candidates. The exact admitted local
+projection produces the schema-hidden serving admission set. Do not cap discovery
+before this step, derive admission independently, or reclaim protected history.
+
+Capacity is attachment-specific and follows the actual winning policy. A refused
+exact policy cannot expose a whole-target fallback; a refused losing candidate
+cannot block a winner. Five Route diagnostics use shared prepared candidate
+semantics. Publication precedes changed-preparation dependent requeue, including
+old targets and deletion; unchanged reprocessing stops the return wave. Status-only
+slot release must be tested through real processors and queued Route recovery.
+See the [policy capacity contract](../../../01-architecture/05-resources/12-backend-tls-policy.md#final-ancestor-capacity-and-serving-admission-arch-106).

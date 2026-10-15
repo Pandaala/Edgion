@@ -619,7 +619,7 @@ fn actual_tls_attempt_distinguishes_terminal_descriptors_from_live_retry() {
             let unit = TlsRouteUnit::from_route(Arc::new(route)).unwrap();
             let mut ctx = TlsContext::new(443, "127.0.0.1".into(), 50000, "127.0.0.1".into(), 50000);
             let reads = std::cell::Cell::new(0);
-            let attempt = resolve_tls_backend_attempt(&unit, &mut ctx, |_| {
+            let attempt = resolve_tls_backend_attempt(&unit, &mut ctx, None, |_| {
                 reads.set(reads.get() + 1);
                 Ok::<_, ()>(())
             });
@@ -642,13 +642,13 @@ fn actual_tls_attempt_distinguishes_terminal_descriptors_from_live_retry() {
     let unit = TlsRouteUnit::from_route(Arc::new(route)).unwrap();
     let mut ctx = TlsContext::new(443, "127.0.0.1".into(), 50000, "127.0.0.1".into(), 50000);
     let reads = std::cell::Cell::new(0);
-    let failed = resolve_tls_backend_attempt(&unit, &mut ctx, |target| {
+    let failed = resolve_tls_backend_attempt(&unit, &mut ctx, None, |target| {
         reads.set(reads.get() + 1);
         assert_eq!(target.key(), "default/good");
         Err::<(), _>("live endpoint unavailable")
     });
     assert!(matches!(failed, TlsBackendAttempt::Retryable(_)));
-    let ready = resolve_tls_backend_attempt(&unit, &mut ctx, |_| {
+    let ready = resolve_tls_backend_attempt(&unit, &mut ctx, None, |_| {
         reads.set(reads.get() + 1);
         Ok::<_, ()>(42)
     });
@@ -669,4 +669,53 @@ fn actual_tls_connect_retry_delay_preserves_bounds_and_exhaustion() {
     assert_eq!(tls_connect_retry_backoff(31), Duration::from_millis(250));
     assert_eq!(cap_tls_connect_retries(0), 1);
     assert_eq!(cap_tls_connect_retries(100), 5);
+}
+
+#[tokio::test]
+async fn policy_ancestor_refusal_preserves_selected_weight_and_skips_resolution() {
+    use crate::backends::policy::{get_global_backend_tls_policy_store, GLOBAL_TLS_STORE_TEST_LOCK};
+    let _guard = GLOBAL_TLS_STORE_TEST_LOCK.lock().await;
+    let policy: edgion_resources::BackendTLSPolicy = serde_json::from_value(serde_json::json!({
+        "metadata":{"namespace":"capacity-tls","name":"limited"},
+        "spec":{"targetRefs":[{"group":"","kind":"Service","name":"limited"}],
+        "validation":{"hostname":"backend.example","wellKnownCACertificates":"System"},
+        "preparedPrecedence":{"creationTimestamp":null},"resolvedTargetClass":"service",
+        "preparedAncestorAdmission":{"mode":"scoped","gateways":["capacity-tls/represented"]}}
+    }))
+    .unwrap();
+    let mut policy = policy;
+    policy.spec.use_system_ca = true;
+    assert!(edgion_resources::resources::common::policy_candidates::prepared_backend_tls_target(&policy).is_some());
+    policy.spec.prepared_ancestor_admission = Some(
+        edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission::Scoped(vec![
+            "capacity-tls/represented".into(),
+        ]),
+    );
+    let store = get_global_backend_tls_policy_store();
+    store.replace_all(std::collections::HashMap::from([(
+        "capacity-tls/limited".into(),
+        Arc::new(policy),
+    )]));
+    let route = serde_json::from_value(serde_json::json!({
+        "metadata":{"namespace":"capacity-tls","name":"mixed"},
+        "spec":{"rules":[{"backendRefs":[{"name":"limited","port":80,"weight":1},{"name":"plain","port":80,"weight":1}]}]}
+    })).unwrap();
+    let unit = TlsRouteUnit::from_route(Arc::new(route)).unwrap();
+    let calls = std::cell::Cell::new(0);
+    let mut ctx = TlsContext::new(443, "127.0.0.1".into(), 50000, "127.0.0.1".into(), 50000);
+    let result = resolve_tls_backend_attempt(&unit, &mut ctx, Some("capacity-tls/new"), |_| {
+        calls.set(calls.get() + 1);
+        Ok::<_, ()>(())
+    });
+    assert!(matches!(result, TlsBackendAttempt::Terminal));
+    assert_eq!(ctx.status, Some("RefDenied"));
+    assert_eq!(calls.get(), 0);
+    assert_eq!(unit.select_backend().unwrap().service().unwrap().name(), "plain");
+    let result = resolve_tls_backend_attempt(&unit, &mut ctx, Some("capacity-tls/represented"), |_| {
+        calls.set(calls.get() + 1);
+        Ok::<_, ()>(())
+    });
+    assert!(matches!(result, TlsBackendAttempt::Ready(_, ())));
+    assert_eq!(calls.get(), 1);
+    store.replace_all(std::collections::HashMap::new());
 }

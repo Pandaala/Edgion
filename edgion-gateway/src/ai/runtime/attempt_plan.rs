@@ -40,6 +40,7 @@ pub struct AiPlanCandidate {
     pub backend: Option<Arc<RuntimeAiBackend>>,
     pub model: Option<AiCandidateModel>,
     pub effective_policy: Option<Arc<EffectiveBackendTrafficPolicy>>,
+    pub policy_ancestor_admitted: bool,
     /// TLS policy winner captured with this candidate's request-stable plan.
     pub backend_tls_policy: BackendTlsPolicyLookup,
     /// Route/rule/target/model telemetry generation captured with this plan.

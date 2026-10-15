@@ -85,6 +85,7 @@ fn make_btp(ns: &str, name: &str, target_svc: &str, creation_ts: &str) -> Backen
             ..Default::default()
         },
         spec: BackendTLSPolicySpec {
+            prepared_ancestor_admission: Some(edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission::Unrestricted),
             prepared_precedence: None,
             current_status: None,
             target_refs: vec![BackendTLSPolicyTargetRef {

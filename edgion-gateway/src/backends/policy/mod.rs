@@ -103,3 +103,43 @@ fn lookup_for_service_mapping(
 #[cfg(test)]
 #[path = "../../../tests/unit/backends/policy/mod_test.rs"]
 mod tests;
+
+/// Apply the winning policies' attachment constraints without changing arbitration.
+pub(crate) fn ancestor_admitted(
+    tls: &BackendTlsPolicyLookup,
+    traffic: Option<&backend_traffic::EffectiveBackendTrafficPolicy>,
+    gateway_key: Option<&str>,
+) -> bool {
+    use edgion_resources::resources::common::policy_ancestor_admission::policy_ancestor_permitted;
+    let tls_allowed = match tls {
+        BackendTlsPolicyLookup::Effective(policy) => {
+            policy_ancestor_permitted(policy.ancestor_admission.as_ref(), gateway_key)
+        }
+        BackendTlsPolicyLookup::Absent | BackendTlsPolicyLookup::Invalid => true,
+    };
+    tls_allowed
+        && traffic.is_none_or(|policy| policy_ancestor_permitted(policy.ancestor_admission.as_ref(), gateway_key))
+}
+
+/// L4 preserves live discovery policy application; admission samples each winner once.
+pub(crate) fn service_ancestor_admitted(service: &CompiledServiceTarget, gateway_key: Option<&str>) -> bool {
+    let tls = query_backend_tls_policy_for_service(service);
+    let traffic = get_backend_traffic_policy_store()
+        .snapshot()
+        .get_effective(service.policy_target());
+    ancestor_admitted(&tls, traffic.as_deref(), gateway_key)
+}
+
+/// Shared terminal L4 gate: refusal never invokes discovery or retries a sibling.
+pub(crate) fn resolve_l4_policy_backend<'a, T, E>(
+    selected: crate::backends::SelectedL4Backend<'a>,
+    gateway_key: Option<&str>,
+    resolve: impl FnOnce(&'a CompiledServiceTarget) -> Result<T, E>,
+) -> Result<(&'a CompiledServiceTarget, T), crate::backends::L4ResolveError<E>> {
+    use crate::backends::{L4BackendRejection, L4ResolveError};
+    let target = selected.service().map_err(L4ResolveError::Rejected)?;
+    if !service_ancestor_admitted(target, gateway_key) {
+        return Err(L4ResolveError::Rejected(L4BackendRejection::Denied));
+    }
+    selected.with_service(resolve)
+}

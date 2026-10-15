@@ -203,3 +203,6 @@ pub(crate) struct ExtensionEnvelope<'a, T: serde::Serialize + ?Sized> {
 /// Required config envelope for unsupported extensions, with no retained payload.
 #[derive(serde::Serialize)]
 pub(crate) struct EmptyExtensionConfig {}
+
+pub mod policy_ancestor_admission;
+pub mod policy_candidates;

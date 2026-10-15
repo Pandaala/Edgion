@@ -39,6 +39,11 @@ pub struct EdgionBackendTrafficPolicySpec {
     #[schemars(skip)]
     pub prepared_precedence: Option<super::common::policy_precedence::PreparedPolicyPrecedence>,
 
+    /// Controller-owned attachment capacity decision; never operator authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub prepared_ancestor_admission: Option<super::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission>,
+
     /// Homogeneous Service or EdgionBackend targets in the policy namespace.
     #[schemars(length(min = 1))]
     pub target_refs: Vec<PolicyTargetRef>,

@@ -416,6 +416,7 @@ fn downgrade_re_resolves_models_from_captured_candidates_without_passthrough() {
     let compiled = compiled_ai_backend(None);
     let logical = crate::backends::LogicalBackendHandle::new(Arc::from(vec![compiled]), 0).unwrap();
     let mut candidates = vec![AiPlanCandidate {
+        policy_ancestor_admitted: true,
         logical,
         slot: 0,
         order: 0,

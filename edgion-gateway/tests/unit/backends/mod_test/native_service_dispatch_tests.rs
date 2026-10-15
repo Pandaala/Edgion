@@ -44,6 +44,7 @@ fn context(key: &str) -> EdgionHttpContext {
         upstreams: vec![],
         current_upstream_id: None,
         backend_ref_idx: Some(0),
+        effective_policy_captured: false,
         effective_policy: None,
     });
     ctx.push_upstream(None, None);

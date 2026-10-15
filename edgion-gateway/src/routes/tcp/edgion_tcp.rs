@@ -14,7 +14,7 @@ use crate::backends::{
 use crate::config::ResolvedGatewayConfig;
 use crate::observe::{log_tcp, TcpLogEntry};
 use crate::plugins::publication::global_publisher;
-use crate::plugins::stream::connection_filter_bridge::resolve_route_scope;
+use crate::plugins::stream::connection_filter_bridge::resolve_route_owner_scope;
 use crate::plugins::stream::CompiledStreamPlugins;
 use crate::plugins::{StreamContext, StreamLayer, StreamPluginResult};
 use crate::routes::common::{
@@ -166,7 +166,7 @@ impl EdgionTcpProxy {
         }
 
         let publication = global_publisher().snapshot();
-        let Some(scope) = resolve_route_scope(
+        let Some((owner, scope)) = resolve_route_owner_scope(
             &publication,
             &self.listener_key,
             unit.resolved_parent_refs(),
@@ -202,33 +202,34 @@ impl EdgionTcpProxy {
             ctx.status = TcpStatus::NoBackendSelected;
             return;
         };
-        let endpoint = match selected.with_service(|target| {
-            select_service_endpoint(
-                target.key(),
-                target.section().clone(),
-                &None,
-                ServiceDegradePolicy::Live,
-                None,
-                "",
-                None,
-            )
-        }) {
-            Ok((_, endpoint)) => endpoint,
-            Err(L4ResolveError::Rejected(L4BackendRejection::Denied)) => {
-                ctx.status = TcpStatus::RefDenied;
-                ctx.deny_reason = Some(L4_BACKEND_REF_DENIED_LOG);
-                return;
-            }
-            Err(L4ResolveError::Rejected(L4BackendRejection::Invalid)) => {
-                ctx.status = TcpStatus::UnsupportedBackend;
-                ctx.deny_reason = Some(L4_BACKEND_UNSUPPORTED_KIND_LOG);
-                return;
-            }
-            Err(L4ResolveError::Unavailable(_)) => {
-                ctx.status = TcpStatus::NoBackendResolved;
-                return;
-            }
-        };
+        let endpoint =
+            match crate::backends::policy::resolve_l4_policy_backend(selected, Some(owner.gateway_key()), |target| {
+                select_service_endpoint(
+                    target.key(),
+                    target.section().clone(),
+                    &None,
+                    ServiceDegradePolicy::Live,
+                    None,
+                    "",
+                    None,
+                )
+            }) {
+                Ok((_, endpoint)) => endpoint,
+                Err(L4ResolveError::Rejected(L4BackendRejection::Denied)) => {
+                    ctx.status = TcpStatus::RefDenied;
+                    ctx.deny_reason = Some(L4_BACKEND_REF_DENIED_LOG);
+                    return;
+                }
+                Err(L4ResolveError::Rejected(L4BackendRejection::Invalid)) => {
+                    ctx.status = TcpStatus::UnsupportedBackend;
+                    ctx.deny_reason = Some(L4_BACKEND_UNSUPPORTED_KIND_LOG);
+                    return;
+                }
+                Err(L4ResolveError::Unavailable(_)) => {
+                    ctx.status = TcpStatus::NoBackendResolved;
+                    return;
+                }
+            };
         let backend = endpoint.backend;
 
         // 6. Build upstream address

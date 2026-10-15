@@ -109,6 +109,9 @@ pub(crate) fn peer_from_backend_tls_lookup(
     lookup: &BackendTlsPolicyLookup,
     gateway_key: Option<&str>,
 ) -> Result<Box<HttpPeer>, EdgionErrorCode> {
+    if !crate::backends::policy::ancestor_admitted(lookup, None, gateway_key) {
+        return Err(EdgionErrorCode::BackendTlsPolicyInvalid);
+    }
     match lookup {
         BackendTlsPolicyLookup::Absent => Ok(Box::new(HttpPeer::new(addr, false, String::new()))),
         BackendTlsPolicyLookup::Effective(effective) => create_tls_peer(addr, effective, gateway_key),

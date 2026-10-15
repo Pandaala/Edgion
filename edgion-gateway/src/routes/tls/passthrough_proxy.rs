@@ -241,24 +241,25 @@ impl EdgionTlsPassthroughProxy {
         let mut last_err = String::new();
 
         for attempt in 0..max_attempts {
-            let (target, endpoint) = match super::resolve_tls_backend_attempt(&unit, ctx, |target| {
-                select_service_endpoint(
-                    target.key(),
-                    target.section().clone(),
-                    &None,
-                    ServiceDegradePolicy::Live,
-                    None,
-                    "",
-                    None,
-                )
-            }) {
-                super::TlsBackendAttempt::Ready(target, endpoint) => (target, endpoint),
-                super::TlsBackendAttempt::Terminal => return,
-                super::TlsBackendAttempt::Retryable(target) => {
-                    last_err = format!("no endpoint: {}", target.key());
-                    continue;
-                }
-            };
+            let (target, endpoint) =
+                match super::resolve_tls_backend_attempt(&unit, ctx, Some(selected.owner.gateway_key()), |target| {
+                    select_service_endpoint(
+                        target.key(),
+                        target.section().clone(),
+                        &None,
+                        ServiceDegradePolicy::Live,
+                        None,
+                        "",
+                        None,
+                    )
+                }) {
+                    super::TlsBackendAttempt::Ready(target, endpoint) => (target, endpoint),
+                    super::TlsBackendAttempt::Terminal => return,
+                    super::TlsBackendAttempt::Retryable(target) => {
+                        last_err = format!("no endpoint: {}", target.key());
+                        continue;
+                    }
+                };
             let backend = endpoint.backend;
 
             let upstream_addr = &backend.inner().addr;

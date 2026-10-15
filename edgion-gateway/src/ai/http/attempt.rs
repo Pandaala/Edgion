@@ -210,6 +210,7 @@ async fn try_ai_backend_peer(
         upstreams: Vec::new(),
         current_upstream_id: None,
         backend_ref_idx: Some(target.selected.logical().slot()),
+        effective_policy_captured: true,
         effective_policy: None,
     });
     ctx.ensure_ai_state().effective_policy = target.selected.effective_policy.clone();

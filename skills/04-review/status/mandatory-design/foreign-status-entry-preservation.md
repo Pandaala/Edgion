@@ -33,11 +33,11 @@ no MUST.
 
 ## Rationale and evidence
 
-Canonical authority: the vendored Gateway API v1.5.0 CRDs in
+Canonical authority: the vendored Gateway API v1.6.2 CRDs in
 `config/crd/gateway-api/`, and [GEP-713](https://gateway-api.sigs.k8s.io/geps/gep-713/).
 
 The policy ancestor contract is verbatim in
-`config/crd/gateway-api/gateway-api-experimental-v1.5.0.yaml` (standard channel
+`config/crd/gateway-api/gateway-api-experimental-v1.6.2.yaml` (standard channel
 carries the same text): implementations MUST use the ControllerName field to
 uniquely identify the entries in the list they are responsible for, and the list
 MUST be treated as a map with a composite key made up of the AncestorRef and
@@ -50,10 +50,16 @@ ancestors, a full list means implementations MUST NOT add further entries and
 MUST instead consider the policy unimplementable and signal that on related
 resources. Route parents bound at 32.
 
-Edgion's native path complies. `status_ownership::native_status_projection`
-matches entries through `own_entry`, which compares `controllerName` alone, and
-`continue`s past every foreign entry before inspecting it; foreign entries from
-the observed snapshot are pushed through unchanged.
+Preservation and capacity enforcement are separate obligations. The canonical
+projection preserves foreign observed entries; same-controller entries also
+require current attachment ownership proof before replacement. ARCH-106 adds
+final policy capacity composition after that proof: protected history consumes
+the 16-entry budget, existing owned keys reserve slots first, and new attachments
+without slots are refused in both diagnostics and serving. A protected input
+already exceeding 16 suppresses persistence instead of truncating history or
+writing an oversized list. See the [shared policy capacity contract](../../../01-architecture/05-resources/12-backend-tls-policy.md#final-ancestor-capacity-and-serving-admission-arch-106).
+The earlier preservation-only compliance statement did not establish overflow
+behavior and is superseded by these separate checks.
 
 **Externally sourced, not corroborable in this repository:** upstream
 conformance reinforces preservation directly. `kubernetes-sigs/gateway-api` PRs
