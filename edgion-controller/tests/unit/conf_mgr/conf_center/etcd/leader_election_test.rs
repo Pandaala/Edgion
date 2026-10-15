@@ -308,12 +308,7 @@ async fn candidate_survives_and_wins() {
         wait_until(Duration::from_secs(15), || handle2.is_leader()).await,
         "second election must win after the first released the key"
     );
-    // `current_leader` is refreshed one etcd round-trip AFTER `is_leader`
-    // flips, so wait for it rather than reading it immediately.
-    assert!(
-        wait_until(Duration::from_secs(5), || handle2.current_leader().is_some()).await,
-        "current_leader must be populated shortly after winning"
-    );
+    // Winner identity is published locally before the leadership flag.
     assert_eq!(handle2.current_leader().unwrap().admin_addr, "10.0.0.12:8080");
     sd2.shutdown();
     let _ = task2.await;
@@ -392,3 +387,226 @@ async fn sweeper_removes_leaseless_key_but_not_leader_key() {
 // partition test), not here. A contrived unit shim would only re-assert the
 // literal match arms above without adding real confidence, so it is omitted
 // deliberately rather than faked.
+
+/// Construct only; none of these lifecycle tests initializes a network client.
+fn local_election() -> EtcdLeaderElection {
+    let client = EtcdLinkClient::from_bootstrap(
+        "default/local-election",
+        EtcdBootstrapConfig {
+            endpoints: vec!["http://localhost:2379".into()],
+            auth: None,
+            tls: None,
+            timeout: None,
+            keep_alive: None,
+            namespace: None,
+        },
+    )
+    .unwrap();
+    EtcdLeaderElection::new(
+        Arc::new(client),
+        "/local-election",
+        test_cfg("10.0.0.11:9090", "10.0.0.11:8080", "cold-identity"),
+    )
+    .unwrap()
+}
+
+fn token_slot() -> Arc<ArcSwap<CancellationToken>> {
+    Arc::new(ArcSwap::from_pointee(CancellationToken::new()))
+}
+
+#[tokio::test]
+async fn winner_publishes_cold_campaign_identity_and_fresh_token() {
+    let mut election = local_election();
+    let cold: LeaderInfo = serde_json::from_slice(&election.value_bytes).unwrap();
+    assert_eq!(cold, election.local_info);
+    election.config.identity = Some("changed-after-construction".into());
+    election.config.grpc_addr = "10.0.0.99:9090".into();
+    election.config.admin_addr = "10.0.0.99:8080".into();
+    let slot = token_slot();
+    let old = slot.load_full();
+    old.cancel();
+    let token = CancellationToken::new();
+    let mut signal = election.handle().subscribe();
+    election.publish_term(&slot, &token);
+    signal.changed().await.unwrap();
+    assert!(*signal.borrow());
+    assert!(!slot.load().is_cancelled());
+    assert_eq!(election.handle().current_leader(), Some(cold));
+    assert!(election.gate().check().is_ok());
+    token.cancel();
+    assert!(slot.load().is_cancelled(), "slot must contain this term's token");
+}
+
+#[tokio::test]
+async fn candidate_diagnostic_is_dropped_before_winner_publication() {
+    use tokio::sync::oneshot;
+
+    for late_ready_at_win in [false, true] {
+        let election = local_election();
+        let (started_tx, started_rx) = oneshot::channel();
+        let (late_tx, late_rx) = oneshot::channel();
+        let mut late_tx = Some(late_tx);
+        let follower = LeaderInfo {
+            identity: "previous-leader".into(),
+            grpc_addr: "10.0.0.12:9090".into(),
+            admin_addr: "10.0.0.12:8080".into(),
+        };
+        let diagnostic = async {
+            election.state.set_current_leader(Some(follower.clone()));
+            started_tx.send(()).unwrap();
+            late_rx.await.unwrap();
+            election.state.set_current_leader(Some(follower));
+            std::future::pending::<Infallible>().await
+        };
+        let campaign = async {
+            started_rx.await.unwrap();
+            assert_eq!(election.handle().current_leader().unwrap().identity, "previous-leader");
+            if late_ready_at_win {
+                late_tx.take().unwrap().send(()).unwrap();
+            }
+            CampaignResult::Won(LeaderKey::default())
+        };
+        assert!(matches!(
+            campaign_with_refresher(campaign, diagnostic).await,
+            CampaignResult::Won(_)
+        ));
+        election.publish_term(&token_slot(), &CancellationToken::new());
+        if let Some(tx) = late_tx {
+            assert!(tx.send(()).is_err(), "pending diagnostic receiver must be dropped");
+        }
+        tokio::task::yield_now().await;
+        assert_eq!(election.handle().current_leader(), Some(election.local_info.clone()));
+    }
+}
+
+#[tokio::test]
+async fn candidate_exit_drops_pending_diagnostic_without_publishing() {
+    use tokio::sync::oneshot;
+
+    for shutdown in [false, true] {
+        let election = local_election();
+        let (started_tx, started_rx) = oneshot::channel();
+        let (late_tx, late_rx) = oneshot::channel::<()>();
+        let diagnostic = async {
+            started_tx.send(()).unwrap();
+            late_rx.await.unwrap();
+            std::future::pending::<Infallible>().await
+        };
+        let result = campaign_with_refresher(
+            async {
+                started_rx.await.unwrap();
+                if shutdown {
+                    CampaignResult::Shutdown
+                } else {
+                    CampaignResult::LeaseDead
+                }
+            },
+            diagnostic,
+        )
+        .await;
+        assert!(matches!(
+            (shutdown, result),
+            (true, CampaignResult::Shutdown) | (false, CampaignResult::LeaseDead)
+        ));
+        assert!(late_tx.send(()).is_err());
+        assert!(!election.handle().is_leader());
+        assert!(election.handle().current_leader().is_none());
+    }
+}
+
+#[tokio::test]
+async fn diagnostic_panic_preserves_pending_campaign_and_shutdown() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::oneshot;
+
+    for shutdown in [false, true] {
+        let starts = AtomicUsize::new(0);
+        let sd = ShutdownHandle::new();
+        let mut signal = sd.signal();
+        let (panic_tx, panic_rx) = oneshot::channel::<()>();
+        let (win_tx, win_rx) = oneshot::channel::<()>();
+        let campaign = async {
+            starts.fetch_add(1, Ordering::SeqCst);
+            tokio::select! {
+                _ = signal.wait() => CampaignResult::Shutdown,
+                _ = win_rx => CampaignResult::Won(LeaderKey::default()),
+            }
+        };
+        let diagnostic = async {
+            let _notify_on_drop = panic_tx;
+            panic!("injected candidate diagnostic panic");
+            #[allow(unreachable_code)]
+            std::future::pending::<Infallible>().await
+        };
+        let controller = async {
+            assert!(panic_rx.await.is_err(), "diagnostic panic must drop its owned state");
+            if shutdown {
+                sd.shutdown();
+            } else {
+                win_tx.send(()).unwrap();
+            }
+        };
+        let (result, ()) = tokio::join!(campaign_with_refresher(campaign, diagnostic), controller);
+        assert!(matches!(
+            (shutdown, result),
+            (true, CampaignResult::Shutdown) | (false, CampaignResult::Won(_))
+        ));
+        assert_eq!(starts.load(Ordering::SeqCst), 1, "campaign must not restart");
+    }
+}
+
+#[tokio::test]
+async fn supervised_term_demotes_and_cancels_before_cleanup() {
+    use std::time::Instant;
+
+    for cause in ["shutdown", "lease-dead", "guard-lost", "task-panic", "renew-expired"] {
+        let election = local_election();
+        let slot = token_slot();
+        let token = CancellationToken::new();
+        election.publish_term(&slot, &token);
+        let sd = ShutdownHandle::new();
+        let mut tasks = JoinSet::new();
+        match cause {
+            "shutdown" => sd.shutdown(),
+            "lease-dead" => {
+                tasks.spawn(async { TaskExit::LeaseDead });
+            }
+            "guard-lost" => {
+                tasks.spawn(async { TaskExit::GuardLost });
+            }
+            "task-panic" => {
+                tasks.spawn(async {
+                    panic!("injected term task panic");
+                });
+            }
+            "renew-expired" => election
+                .state
+                .record_keepalive_at(Instant::now(), wall_now().saturating_sub(5_000)),
+            _ => unreachable!(),
+        }
+        let outcome = timeout(
+            Duration::from_secs(1),
+            election.supervise_term(&mut sd.signal(), &mut tasks, &token),
+        )
+        .await
+        .expect("local supervision must not wait on network cleanup");
+        match outcome {
+            SuperviseOutcome::Shutdown => assert_eq!(cause, "shutdown"),
+            SuperviseOutcome::Demoted => assert_ne!(cause, "shutdown"),
+        }
+        assert!(!election.handle().is_leader(), "{cause}");
+        assert!(election.gate().check().is_err(), "{cause}");
+        assert!(election.handle().current_leader().is_none(), "{cause}");
+        assert!(slot.load().is_cancelled(), "{cause}");
+        assert!(election.state.elapsed_since_last_ok() > Duration::from_secs(60));
+
+        let successor = CancellationToken::new();
+        election.publish_term(&slot, &successor);
+        token.cancel();
+        assert!(
+            !slot.load().is_cancelled(),
+            "old term cancellation must not cancel successor"
+        );
+        assert!(election.gate().check().is_ok());
+    }
+}

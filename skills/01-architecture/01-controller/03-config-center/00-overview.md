@@ -70,6 +70,27 @@ The differences are only at the two ends:
 
 The middle layers (Workqueue, ResourceProcessor, ProcessorHandler, ServerCache, reference managers, etc.) are fully reused.
 
+### Etcd election diagnostics and term supervision
+
+`EtcdLeaderElection` resolves its advertised `LeaderInfo` once at construction
+and serializes that exact identity into the campaign value. While campaign is
+pending, a bounded, session-reusing diagnostic future discovers the current
+leader for follower Admin API responses. The campaign scope owns and polls this
+future; returning from candidacy drops it before publishing the winner. There
+is no independently scheduled diagnostic cache writer that can overwrite the
+winner with a late result. A diagnostic polling panic stops only that diagnostic
+future; the same campaign keeps observing shutdown and keepalive-driver exit.
+
+On an acknowledged win, local publication stores the new term token, freshness
+and cold identity before the leadership flag. Guard startup and timer/join/shutdown
+supervision follow without a diagnostic network await. Local demotion invalidates
+authority, clears the diagnostic cache and cancels that term's token before
+asynchronous task cleanup and best-effort resign/revoke. Diagnostic changes must
+not add network dependencies between publication and supervision. This preserves
+the existing local pre-write gate; it does not add transaction-level fencing.
+See the [diagnostic supervision regression boundary](../../../04-review/concurrency/regression-guards/etcd-leader-diagnostic-supervision.md)
+for ARCH-081 evidence and verification limits.
+
 ### Requeue and Self-Healing
 
 There is no exponential-backoff retry (`requeue_with_backoff` is intentionally not implemented).

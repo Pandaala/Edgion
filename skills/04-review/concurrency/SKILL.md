@@ -28,6 +28,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Etcd leader diagnostics cannot delay term supervision](regression-guards/etcd-leader-diagnostic-supervision.md)
+
 - [Proxy shutdown notification and streaming drain](regression-guards/proxy-shutdown-notification.md)
 - [AsyncRwLock Write Guard Held Across an RPC — Clone-and-Drop, Don't Re-derive](regression-guards/async-write-lock-across-rpc.md)
 - [LinkSys ES bulk_ingest_loop Empty endpoints Panic](regression-guards/es-bulk-ingest-empty-endpoints-fail-closed.md)

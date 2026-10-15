@@ -3,11 +3,15 @@
 //! term SUPERVISOR awaits ONLY timers and `JoinSet` completions so it can never
 //! be starved by a hung etcd call (spec §4.1/§4.2).
 
+use std::convert::Infallible;
+use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
 use arc_swap::ArcSwap;
+use futures::FutureExt;
 use tokio::task::JoinSet;
 use tokio::time::{interval, timeout, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
@@ -29,6 +33,8 @@ pub struct EtcdLeaderElection {
     config: EtcdLeaderElectionConfig,
     /// Election name: "{key_prefix}/leader".
     election_name: String,
+    /// The exact cold identity serialized for every campaign.
+    local_info: LeaderInfo,
     /// Serialized `LeaderInfo` written as the leader-key value.
     value_bytes: Vec<u8>,
 }
@@ -49,6 +55,7 @@ impl EtcdLeaderElection {
             state,
             config,
             election_name: format!("{}/leader", key_prefix.trim_end_matches('/')),
+            local_info: info,
             value_bytes,
         })
     }
@@ -141,9 +148,11 @@ impl EtcdLeaderElection {
         //    "a candidate silently re-grants"). While blocked, a candidacy-scoped
         //    refresher keeps `current_leader` fresh so the Admin API 409 body can
         //    name the actual leader (spec §4.3/§6.2).
-        let refresher = self.spawn_candidate_leader_refresher();
-        let campaign_result = self.campaign(lease, shutdown, &mut tasks).await;
-        refresher.abort();
+        let campaign_result = campaign_with_refresher(
+            self.campaign(lease, shutdown, &mut tasks),
+            self.refresh_candidate_leader(),
+        )
+        .await;
         let lk = match campaign_result {
             CampaignResult::Won(lk) => lk,
             CampaignResult::LeaseDead => {
@@ -172,34 +181,16 @@ impl EtcdLeaderElection {
         // 4. WON. Publish the term token BEFORE anyone can serve as leader
         //    (spec §6.1), then flip the local flag. The keepalive driver has
         //    been running since step 2 and simply continues into the term.
-        term_token_slot.store(Arc::new(term_token.clone()));
-        self.state.record_keepalive_now();
-        self.state.set_leader(true);
-        self.refresh_current_leader().await;
-        controller_metrics().set_leader(true);
-        controller_metrics().inc_leader_transitions();
-        tracing::info!(
-            component = "etcd_election",
-            identity = %self.config.resolved_identity(),
-            "won leadership"
-        );
+        self.publish_term(term_token_slot, &term_token);
 
         // 4b. Remaining term task: the guard txn joins the same JoinSet/token.
         self.spawn_guard_task(&mut tasks, lk.clone(), lease, term_token.clone());
 
         // 5. Term supervisor: ONLY timers + joins (never an etcd call).
-        let outcome = self.supervise_term(shutdown, &mut tasks).await;
+        let outcome = self.supervise_term(shutdown, &mut tasks, &term_token).await;
 
         // 6. Demotion (spec §4.5). Flag FIRST (local, cannot block), THEN
         //    cancel + abort + bounded join, THEN best-effort resign/revoke LAST.
-        self.state.set_leader(false);
-        self.state.mark_lease_invalid();
-        // Our own cached identity is now stale; the candidacy refresher of the
-        // next loop iteration repopulates it with the successor.
-        self.state.set_current_leader(None);
-        controller_metrics().set_leader(false);
-        controller_metrics().inc_leader_transitions();
-        term_token.cancel();
         tasks.abort_all();
         let _ = timeout(Duration::from_secs(2), async {
             while tasks.join_next().await.is_some() {}
@@ -218,6 +209,40 @@ impl EtcdLeaderElection {
     }
 
     // ---- helpers ----
+
+    /// Publish only local state; no diagnostic I/O can delay term supervision.
+    fn publish_term(&self, term_token_slot: &Arc<ArcSwap<CancellationToken>>, term_token: &CancellationToken) {
+        term_token_slot.store(Arc::new(term_token.clone()));
+        self.state.record_keepalive_now();
+        self.state.set_current_leader(Some(self.local_info.clone()));
+        self.state.set_leader(true);
+        controller_metrics().set_leader(true);
+        controller_metrics().inc_leader_transitions();
+        tracing::info!(
+            component = "etcd_election",
+            identity = %self.local_info.identity,
+            "won leadership"
+        );
+    }
+
+    /// Resolve local authority before returning to any asynchronous cleanup.
+    async fn supervise_term(
+        &self,
+        shutdown: &mut ShutdownSignal,
+        tasks: &mut JoinSet<TaskExit>,
+        term_token: &CancellationToken,
+    ) -> SuperviseOutcome {
+        let outcome = self.wait_for_term_end(shutdown, tasks).await;
+        self.state.set_leader(false);
+        self.state.mark_lease_invalid();
+        // Our own cached identity is now stale; the candidacy refresher of the
+        // next loop iteration repopulates it with the successor.
+        self.state.set_current_leader(None);
+        controller_metrics().set_leader(false);
+        controller_metrics().inc_leader_transitions();
+        term_token.cancel();
+        outcome
+    }
 
     async fn grant_session_lease(&self, shutdown: &mut ShutdownSignal) -> Option<i64> {
         loop {
@@ -350,7 +375,11 @@ impl EtcdLeaderElection {
 
     /// Term supervisor (spec §4.1). Awaits ONLY `shutdown.wait()`, a timer tick,
     /// and `tasks.join_next()` — NEVER an etcd call.
-    async fn supervise_term(&self, shutdown: &mut ShutdownSignal, tasks: &mut JoinSet<TaskExit>) -> SuperviseOutcome {
+    async fn wait_for_term_end(
+        &self,
+        shutdown: &mut ShutdownSignal,
+        tasks: &mut JoinSet<TaskExit>,
+    ) -> SuperviseOutcome {
         let renew = Duration::from_secs(self.config.renew_deadline_secs);
         let mut tick = interval(Duration::from_secs(self.config.retry_period_secs));
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -398,16 +427,6 @@ impl EtcdLeaderElection {
         self.state.elapsed_since_last_ok() < within
     }
 
-    async fn refresh_current_leader(&self) {
-        if let Ok(mut sess) = self.client.election_session().await {
-            if let Ok(Some(bytes)) = sess.leader(&self.election_name).await {
-                if let Ok(info) = serde_json::from_slice::<LeaderInfo>(&bytes) {
-                    self.state.set_current_leader(Some(info));
-                }
-            }
-        }
-    }
-
     /// Leaseless-key sweeper (spec §4.8). Every `lease_duration`, scan the
     /// election prefix and delete keys carrying no lease. `v3election` keys are
     /// always lease-attached (`{name}/{lease_id_hex}`), so `lease == 0` can only
@@ -451,7 +470,7 @@ impl EtcdLeaderElection {
 
     /// Candidacy-scoped `current_leader` refresher (spec §4.3): while `campaign()`
     /// blocks, poll `leader()` on the `retry_period` cadence so a follower's Admin
-    /// API 409 body names the live leader. Aborted the moment campaign returns;
+    /// API 409 body names the live leader. Dropped before campaign ownership returns;
     /// every etcd call is explicitly time-bounded (spec §4.1).
     ///
     /// The `ElectionSession` is REUSED across ticks — `election_session()` dials a
@@ -463,41 +482,67 @@ impl EtcdLeaderElection {
     /// only reliable dead-connection signal. Steady state (leader known) does
     /// zero dials; a vacancy/outage window degrades to one dial per tick, which
     /// is bounded by the window itself.
-    fn spawn_candidate_leader_refresher(&self) -> tokio::task::JoinHandle<()> {
+    async fn refresh_candidate_leader(&self) -> Infallible {
         let client = self.client.clone();
         let state = self.state.clone();
         let name = self.election_name.clone();
         let retry = Duration::from_secs(self.config.retry_period_secs);
-        tokio::spawn(async move {
-            let mut tick = interval(retry);
-            tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
-            let mut session: Option<edgion_common::link_sys_core::providers::etcd::ElectionSession> = None;
-            loop {
-                tick.tick().await;
-                if session.is_none() {
-                    session = match timeout(retry, client.election_session()).await {
-                        Ok(Ok(s)) => Some(s),
-                        _ => None, // dial failed/timed out: retry next tick
-                    };
-                }
-                let Some(sess) = session.as_mut() else { continue };
-                match timeout(retry, sess.leader(&name)).await {
-                    Ok(Ok(Some(bytes))) => {
-                        if let Ok(info) = serde_json::from_slice::<LeaderInfo>(&bytes) {
-                            state.set_current_leader(Some(info));
-                        }
-                        // Bad payload: keep the session (the call worked) and the
-                        // previous cached value.
-                    }
-                    // No leader / transport failure / timeout: drop the session so
-                    // the next tick redials (a timed-out call may have left an
-                    // orphaned in-flight request on the connection). Keep the
-                    // previous cached value — an absent leader during churn is
-                    // expected and the 409 body is best-effort.
-                    _ => session = None,
-                }
+        let mut tick = interval(retry);
+        tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut session: Option<edgion_common::link_sys_core::providers::etcd::ElectionSession> = None;
+        loop {
+            tick.tick().await;
+            if session.is_none() {
+                session = match timeout(retry, client.election_session()).await {
+                    Ok(Ok(s)) => Some(s),
+                    _ => None, // dial failed/timed out: retry next tick
+                };
             }
-        })
+            let Some(sess) = session.as_mut() else { continue };
+            match timeout(retry, sess.leader(&name)).await {
+                Ok(Ok(Some(bytes))) => {
+                    if let Ok(info) = serde_json::from_slice::<LeaderInfo>(&bytes) {
+                        state.set_current_leader(Some(info));
+                    }
+                    // Bad payload: keep the session (the call worked) and the
+                    // previous cached value.
+                }
+                // No leader / transport failure / timeout: drop the session so
+                // the next tick redials (a timed-out call may have left an
+                // orphaned in-flight request on the connection). Keep the
+                // previous cached value — an absent leader during churn is
+                // expected and the 409 body is best-effort.
+                _ => session = None,
+            }
+        }
+    }
+}
+
+/// Candidate diagnostics have no independent cache writer after this returns.
+/// Catch only diagnostic polling: its session is discarded on panic and its
+/// sole shared mutation is a completed atomic cache publication. The campaign
+/// keeps its own shutdown/driver supervision and is never restarted.
+async fn campaign_with_refresher(
+    campaign: impl Future<Output = CampaignResult>,
+    refresher: impl Future<Output = Infallible>,
+) -> CampaignResult {
+    tokio::pin!(campaign);
+    let result = {
+        let diagnostic = AssertUnwindSafe(refresher).catch_unwind();
+        tokio::select! {
+            result = &mut campaign => Some(result),
+            result = diagnostic => match result {
+                Ok(never) => match never {},
+                Err(_) => None,
+            },
+        }
+    };
+    // The diagnostic future (including any pending cache publication) has been
+    // dropped. Preserve the former spawned task's panic isolation without a
+    // task that could publish a stale identity after the winner transition.
+    match result {
+        Some(result) => result,
+        None => campaign.await,
     }
 }
 

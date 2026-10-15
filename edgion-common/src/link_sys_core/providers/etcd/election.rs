@@ -39,7 +39,7 @@ impl ElectionSession {
     /// Current leader's value (for the not-leader 409 body). `None` = no leader
     /// is known — either the election is genuinely vacant (etcd returns a
     /// non-Unimplemented error, e.g. `Unknown "election: no leader"`) or the
-    /// call could not complete. The sole caller (`refresh_current_leader`) is
+    /// call could not complete. The Controller candidate refresher is
     /// best-effort and treats an error and a vacancy identically — it just
     /// leaves the cached leader unchanged — so both collapse to `None` here and
     /// we avoid depending on a specific error code or message string.
