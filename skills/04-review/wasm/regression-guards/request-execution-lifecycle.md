@@ -29,7 +29,7 @@ Callout tokens are monotonic per VM with checked exhaustion. Any undelivered
 token makes the VM ineligible for reuse, including early resume and round caps.
 
 Per-runtime active admission (default 32, maximum 64) spans OCI generations.
-The process limit of 128 actual instances includes idle pools and dedicated
+The configurable process limit (default 128 actual instances) includes idle pools and dedicated
 persistent timer VMs; the permit is released after Store destruction. This is
 an instance-count bound, not a heap/RSS guarantee or fairness promise. Long
 streams hold admission. Timer root fields survive successful ticks but are not
@@ -61,7 +61,7 @@ response mutations, deferred completion, or shared timer/request root semantics.
 
 ## Aggregate admission and retired pools
 
-Task 03 implementation adds restart-only `gateway.wasm_guest_memory_bytes`
+Task 03 implementation uses restart-only `gateway.wasm_limits.guest_memory_bytes`
 (default 512 MiB) for aggregate logical linear-memory/table-slot allocations.
 The limiter reserves before growth and rolls back only the current failed growth.
 An external charge guard outlives Store destruction, including initialization
@@ -70,7 +70,7 @@ Shared memories are disabled because Wasmtime does not invoke this limiter for
 them. The Store memory/table/instance counts match the single-memory/table
 pooling profile. This is not an RSS, GC heap, compiler-heap or host-payload budget.
 
-Four immediate preparation slots cover all source types before decoding/fetch.
+Configurable preparation slots (default four) cover all source types before decoding/fetch.
 Blocking work and undelivered results retain admission after caller cancellation.
 OCI artifact ownership/permits continue through compilation independently.
 Runtime destruction and OCI replacement serialize retirement with pool returns,
@@ -85,3 +85,24 @@ adds a response aggregate, a short SSE lifetime nor a new failure-policy term.
 
 Regression sources: `admission_test.rs`, `vm_manager_test.rs`, `callout_test.rs`
 and the existing request/attached SDK lifecycle tests under the Gateway unit tree.
+
+## Configurable limits and idle retention
+
+`gateway.wasm_limits` atomically publishes all process capacities before use.
+Unknown local Gateway keys and invalid limits fail startup. Per-instance guest
+and host ABI allocation profiles can only tighten their reviewed ceilings. The
+Engine pooling totals match max_instances; its table ceiling is now explicitly
+20,000 (the old effective default), rather than advertising the formerly looser
+100,000 host-only limiter. See the configuration reference for exact ranges.
+
+A healthy return first releases callback payloads and then reserves both global
+idle count and exact charged guest bytes. Failure destroys the Store; there is no
+queue or global pool registry. The idle guard follows Store and guest destruction
+in field order, while checkout releases it immediately. Retirement and late
+returns preserve the existing no-repooling rule. Idle defaults are 32 instances
+and 128 MiB; either zero disables pooling. This bounds retained idle heaps without
+resetting active/timer roots or claiming fairness or total host/RSS accounting.
+
+External unit tests cover strict configuration, failed initialization followed by
+valid publication, concurrent idle reservations/rollback, custom real-guest growth
+limits, host ABI tightening and cross-entry checkout/retirement conservation.

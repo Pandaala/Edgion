@@ -829,11 +829,28 @@ fn response_cache_restart_limits_include_standing_epoch_and_reject_partial_popul
 }
 
 #[test]
-fn wasm_guest_memory_budget_is_restart_only_and_parses() {
-    let cfg: GatewayConfig = serde_yaml::from_str("wasm_guest_memory_bytes: 1048576\n").unwrap();
-    assert_eq!(cfg.wasm_guest_memory_bytes, 1048576);
-    assert_eq!(GatewayConfig::default().wasm_guest_memory_bytes, 512 * 1024 * 1024);
-    assert!(serde_yaml::from_str::<GatewayConfig>("wasm_guest_memory_bytes: -1").is_err());
+fn wasm_resource_limits_parse_strictly_and_keep_defaults() {
+    let cfg: GatewayConfig = serde_yaml::from_str(
+        "wasm_limits:\n  guest_memory_bytes: 1048576\n  max_idle_guest_memory_bytes: 65536\n  max_preparations: 2\n",
+    )
+    .unwrap();
+    assert_eq!(cfg.wasm_limits.guest_memory_bytes, 1048576);
+    assert_eq!(cfg.wasm_limits.max_preparations, 2);
+    cfg.wasm_limits.validate().unwrap();
+    assert_eq!(cfg.wasm_limits.max_instances, 128);
+    assert_eq!(
+        GatewayConfig::default().wasm_limits.guest_memory_bytes,
+        512 * 1024 * 1024
+    );
+    for invalid in [
+        "wasm_guest_memory_bytes: 1048576",
+        "wasm_lmits: {}",
+        "wasm_limits: {max_preparation: 2}",
+        "wasm_limits: {guest_memory_bytes: -1}",
+        "wasm_limits: {max_instances: null}",
+    ] {
+        assert!(serde_yaml::from_str::<GatewayConfig>(invalid).is_err(), "{invalid}");
+    }
 }
 
 // ARCH-074: exercise deployment producers through the actual binary loader.

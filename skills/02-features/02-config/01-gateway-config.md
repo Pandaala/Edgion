@@ -815,28 +815,48 @@ allocated minus infrastructure, pending bytes, entries and reader pins reach zer
 Arc aliases do not add memory charges; distinct pinned retired guards do.
 
 
-## Wasm guest allocation admission
+## Wasm resource admission
 
-`gateway.wasm_guest_memory_bytes` is a restart-only positive byte count, default
-`536870912` (512 MiB). It caps the sum of admitted linear-memory growth and
-pointer-sized table slots across all Wasm Stores: initializing, active, idle,
-timer-owned, and old configuration/OCI generations. It must fit the platform's
-allocation range; zero is rejected during startup. There is no environment/CLI
-override or per-plugin bypass. Guest growth refusal follows Wasmtime's ordinary
-failed-growth result; failed initial allocation follows the existing Wasm load
-failure and `failOpen` policy.
+`gateway.wasm_limits` is one restart-only configuration object. The standalone
+`wasm_guest_memory_bytes` field was removed without an alias. The entire local
+`gateway` section and nested limits reject unknown keys; other process sections
+retain their own parsing policy. Invalid limits fail startup before publication.
+There is no CLI/environment override or per-plugin bypass.
 
-This is a logical guest-allocation budget, not an RSS limit. Wasmtime allocator
-reservations/retained pages, runtime metadata, GC heap, compiled code, compiler
-working memory, host ABI payloads, BodyStorage and transport buffers are excluded.
-Existing per-memory/table, ABI, request body, artifact cache and callout limits
-continue to apply independently. Shared Wasm memories are disabled because they
-bypass the synchronous resource limiter.
+| Field | Default | Accepted range |
+| --- | --- | --- |
+| `guest_memory_bytes` | `536870912` | `1..=isize::MAX` |
+| `max_instances` | `128` | `1..=1024` |
+| `max_preparations` | `4` | `1..=32` |
+| `max_instance_memory_bytes` | `134217728` | `1..=134217728` |
+| `max_instance_table_elements` | `20000` | `1..=20000` |
+| `max_idle_instances` | `32` | `0..=max_instances` |
+| `max_idle_guest_memory_bytes` | `134217728` | `0..=guest_memory_bytes` |
+| `max_host_call_bytes` | `134217728` | `1..=134217728` |
+| `max_host_abi_bytes` | `33554432` | `1..=33554432` |
+| `max_host_abi_ops` | `200000` | `1..=200000` |
 
-All source types also share four immediate-admission preparation slots before
-config decoding, source fetch and compilation. Cancellation retains a slot until
-running blocking work and its abandoned result release their ownership. OCI
-network/cache pipeline controls remain independent. Saturation uses existing
-load failure/negative caching; it does not create a new queue or failure mode.
-Admin store-stats exposes `wasm_admission.guest_bytes`, `guest_limit_bytes` and
-`preparations`; counts follow actual owners, including retired live requests.
+Both idle limits are enforced process-wide; either zero disables retention even
+for a zero-memory guest. Active, idle, timer and retiring Stores consume instance
+and guest admission. Only linear memory and pointer-sized table slots consume
+`guest_memory_bytes`. The guest/host per-owner safety envelopes can be tightened,
+not expanded. Engine pooling totals/table elements explicitly match configuration.
+Existing per-plugin concurrency and pool size limits remain subordinate.
+
+One OnceLock publishes all capacities and limits atomically. Charges outlive
+Store destruction; idle charges are removed at checkout or after destruction.
+Preparing/compiling jobs and abandoned blocking results retain their preparation
+slot. Refused work uses existing failure policy, with no waiting queue. Idle
+retention refusal discards the VM without invoking guest cleanup. Shared memories
+are unsupported because they bypass the synchronous limiter.
+
+This is not an RSS/whole-host/compiler heap cap or a fairness/eviction mechanism.
+Runtime metadata, GC, compiler/code, allocator reservations/retained pages, request
+snapshots, body storage and transport remain separate owners. Host ABI settings
+bound their existing profiles, not every host allocation. Deployment sizing must
+include these separate working sets and artifact cache budgets.
+
+Admin store-stats exposes `wasm_admission.limits` and current `guest_bytes`,
+`instances`, `preparations`, `idle_instances`, `idle_guest_bytes`. Reading stats
+before startup does not publish defaults. Independent counter samples follow real
+owners, including retired live requests; they are not a transactional heap sample.

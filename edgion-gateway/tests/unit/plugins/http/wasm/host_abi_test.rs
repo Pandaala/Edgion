@@ -1602,3 +1602,40 @@ fn callout_tokens_survive_frames_and_exhaust_without_reuse() {
     assert!(store.data().frame.pending_callouts.is_empty());
     assert_eq!(store.data().last_callout_token, u32::MAX);
 }
+
+#[test]
+fn configured_host_allocation_limits_tighten_the_existing_profiles() {
+    crate::test_subprocess::assert_in_subprocess(
+        "plugins::http::wasm::host_abi::tests",
+        "configured_host_allocation_limits_tighten_the_existing_profiles",
+        "EDGION_WASM_HOST_LIMITS_CHILD",
+        "bounded",
+        || {
+            super::super::admission::initialize(super::super::admission::WasmLimits {
+                max_host_call_bytes: 256,
+                max_host_abi_bytes: 128,
+                max_host_abi_ops: 1,
+                ..Default::default()
+            })
+            .unwrap();
+            let mut host = HostState::default();
+            assert_eq!(host.allocation_limits.transient_bytes, 256);
+            assert_eq!(host.allocation_limits.retained_bytes, 128);
+            assert_eq!(host.allocation_limits.retained_ops, 1);
+            assert!(host
+                .check_transient_allocation(AllocationProfile { bytes: 256 })
+                .is_ok());
+            assert!(host
+                .check_transient_allocation(AllocationProfile { bytes: 257 })
+                .is_err());
+            assert!(host.charge_abi(65).is_err());
+            assert_eq!(host.frame.retained_bytes, 0);
+            assert_eq!(host.frame.retained_ops, 0);
+            assert!(host.charge_abi(64).is_ok());
+            assert!(host.charge_abi(0).is_err());
+            assert_eq!(host.frame.retained_bytes, 128);
+            host.release_phase_payloads();
+            assert!(host.charge_abi(0).is_ok());
+        },
+    );
+}

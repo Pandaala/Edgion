@@ -129,6 +129,16 @@ fn store_stats_response_serializes() {
     };
     let json = serde_json::to_value(&resp).unwrap();
     assert!(json.is_object());
+    assert!(json["wasm_admission"]["limits"]["max_instances"].is_u64());
+    for name in [
+        "guest_bytes",
+        "instances",
+        "preparations",
+        "idle_instances",
+        "idle_guest_bytes",
+    ] {
+        assert!(json["wasm_admission"][name].is_u64(), "{name}");
+    }
     assert_eq!(json["wasm_oci_cache"]["entries"], 0);
     assert_eq!(json["wasm_oci_cache"]["retained_bytes"], 0);
     assert_eq!(json["wasm_oci_cache"]["keys"], serde_json::json!([]));

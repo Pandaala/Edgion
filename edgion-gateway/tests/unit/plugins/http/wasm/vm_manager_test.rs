@@ -2712,7 +2712,7 @@ fn actual_instance_admission_includes_idle_and_releases_failed_initialization() 
                 let permits = instance_permits().clone();
                 let reserved = permits
                     .clone()
-                    .try_acquire_many_owned((MAX_PROCESS_INSTANCES - 1) as u32)
+                    .try_acquire_many_owned((super::super::admission::limits().max_instances - 1) as u32)
                     .unwrap();
                 let manager = WasmVmManager::new_for_test();
                 let file = write_temp_wasm(MINI_GUEST);
@@ -2739,7 +2739,10 @@ fn actual_instance_admission_includes_idle_and_releases_failed_initialization() 
                     "failed initialization releases admission"
                 );
                 drop(reserved);
-                assert_eq!(permits.available_permits(), MAX_PROCESS_INSTANCES);
+                assert_eq!(
+                    permits.available_permits(),
+                    super::super::admission::limits().max_instances
+                );
             });
         },
     );
@@ -2863,7 +2866,12 @@ fn process_guest_budget_survives_runtime_replacement_and_cancellation() {
         "bounded",
         || {
             tokio::runtime::Runtime::new().unwrap().block_on(async {
-                super::super::admission::initialize(2 * 65536).unwrap();
+                super::super::admission::initialize(super::super::admission::WasmLimits {
+                    guest_memory_bytes: 2 * 65536,
+                    max_idle_guest_memory_bytes: 2 * 65536,
+                    ..Default::default()
+                })
+                .unwrap();
                 let bytes = || {
                     serde_json::to_value(super::super::admission::stats()).unwrap()["guest_bytes"]
                         .as_u64()
@@ -2941,6 +2949,73 @@ fn engine_freezes_supported_memory_profile_for_growth_failure_accounting() {
         assert!(
             Module::new(engine, bytes).is_err(),
             "unsupported memory profile: {guest}"
+        );
+    }
+}
+
+#[test]
+fn configured_idle_limits_span_entries_and_release_on_checkout_and_retirement() {
+    for case in ["count", "bytes", "disabled"] {
+        crate::test_subprocess::assert_in_subprocess(
+            "plugins::http::wasm::vm_manager::tests",
+            "configured_idle_limits_span_entries_and_release_on_checkout_and_retirement",
+            "EDGION_WASM_IDLE_LIMITS_CHILD",
+            case,
+            || {
+                tokio::runtime::Runtime::new().unwrap().block_on(async {
+                    use super::super::admission::{initialize, stats, WasmLimits};
+                    initialize(WasmLimits {
+                        max_instances: 3,
+                        max_idle_instances: if case == "count" { 1 } else { 3 },
+                        max_idle_guest_memory_bytes: match case {
+                            "count" => 3 * 65536,
+                            "bytes" => 65536,
+                            _ => 0,
+                        },
+                        max_instance_table_elements: 2,
+                        ..Default::default()
+                    })
+                    .unwrap();
+                    let counter = |name: &str| serde_json::to_value(stats()).unwrap()[name].as_u64().unwrap();
+                    let manager = WasmVmManager::new_for_test();
+                    let file = write_temp_wasm(MINI_GUEST);
+                    let config = file_config(file.path());
+                    let first_runtime = actual_runtime(&manager, &config, CalloutGrant::none());
+                    let first = first_runtime.get_or_load().await.unwrap();
+                    let second_runtime = actual_runtime(&manager, &config, CalloutGrant::none());
+                    let second = second_runtime.get_or_load().await.unwrap();
+                    let retained = u64::from(case != "disabled");
+                    assert_eq!(first.pool_len(), retained as usize);
+                    assert_eq!(second.pool_len(), 0);
+                    assert_eq!(counter("idle_instances"), retained);
+                    assert_eq!(counter("idle_guest_bytes"), retained * 65536);
+                    let a = first.acquire(100).unwrap();
+                    assert_eq!(counter("idle_instances"), 0);
+                    assert_eq!(counter("idle_guest_bytes"), 0);
+                    let b = second.acquire(100).unwrap();
+                    let c = first.acquire(100).unwrap();
+                    assert_eq!(counter("instances"), 3);
+                    assert!(second.acquire(100).is_err());
+                    drop(a);
+                    drop(b);
+                    drop(c);
+                    assert_eq!(counter("instances"), retained);
+                    assert_eq!(counter("idle_instances"), retained);
+                    assert_eq!(counter("idle_guest_bytes"), retained * 65536);
+                    drop(first_runtime);
+                    drop(second_runtime);
+                    assert_eq!(counter("instances"), 0);
+                    assert_eq!(counter("guest_bytes"), 0);
+                    assert_eq!(counter("idle_instances"), 0);
+                    assert_eq!(counter("idle_guest_bytes"), 0);
+                    assert_eq!(first.pool_len(), 0);
+                    assert_eq!(second.pool_len(), 0);
+                    let oversized_table = write_temp_wasm("(module (table 3 funcref))");
+                    assert!(load(&manager, &file_config(oversized_table.path())).await.is_err());
+                    assert_eq!(counter("instances"), 0);
+                    assert_eq!(counter("guest_bytes"), 0);
+                });
+            },
         );
     }
 }

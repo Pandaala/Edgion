@@ -22,19 +22,20 @@ allocation, so many successful host calls allocate between epoch checks.
 
 - **Per-phase ABI retention budget** — `HostState::charge_abi(payload)` charges
   `payload + ABI_OP_OVERHEAD_BYTES` (64 B) against `retained_bytes`/`retained_ops`,
-  capped at `MAX_RETAINED_ABI_BYTES` (32 MiB) / `MAX_RETAINED_ABI_OPS` (200k). Charged
+  capped by startup `wasm_limits.max_host_abi_bytes` / `max_host_abi_ops`, which
+  cannot exceed `MAX_RETAINED_ABI_BYTES` (32 MiB) / `MAX_RETAINED_ABI_OPS` (200k). Charged
   **before** each mutation in `proxy_log`, `proxy_add/replace/remove_header_map_value`,
   `proxy_set_header_map_pairs`, `proxy_set_property`; on exhaustion it returns
   `STATUS_INTERNAL_FAILURE` with **no** partial mutation. Reset in `begin_phase`.
 - **Guest linear-memory cap** — `impl ResourceLimiter for HostState`
-  (`MAX_GUEST_MEMORY_BYTES` = 128 MiB, tables 100k), installed via `store.limiter(...)`
+  (`MAX_GUEST_MEMORY_BYTES` = 128 MiB, effective tables 20k), installed via `store.limiter(...)`
   in `WasmVmManager::new_vm`. Bounds the guest's own footprint and thus the size of any
   single value handed to a host call, since the pooling allocator's default per-instance
   memory cap is effectively the full wasm32 4 GiB.
 
-Fix suggestions of the form "there is no aggregate ABI budget so a guest can OOM the
-host", "add a Store `ResourceLimiter`", or "epoch timeout is a time bound not an
-allocation bound" are **not accepted** — all three are now implemented.
+These mechanisms bound the covered guest and ABI allocations. Revalidate each
+reported allocation path against its actual profile; their presence does not
+establish a process RSS or complete host-heap bound.
 
 ## Core Rationale
 
@@ -68,9 +69,10 @@ finding asked for.
 - "The `ResourceLimiter` alone fixes it" — no: it bounds guest linear memory, not the
   host-side accumulation across calls (a guest reuses one small buffer). The byte/op
   budget is the primary fix; the limiter is defense in depth.
-- "Make the limits operator-tunable config" — not accepted as a narrow fix; the caps are
-  internal safety limits far above any legitimate working set, mirroring the hardcoded
-  shared-data / callout caps.
+- Historical: operator-tunable caps were excluded from the narrow 2026-07 defect
+  fix. The explicitly authorized 2026-10-15 configurable-admission work permits
+  operators to tighten these caps through `gateway.wasm_limits`, never raise the
+  reviewed ceilings or disable admission. Shared-data/callout caps remain separate.
 - "Charge `local_response` too" — unnecessary: it is replacement state bounded by the
   guest-memory cap, not an accumulator.
 

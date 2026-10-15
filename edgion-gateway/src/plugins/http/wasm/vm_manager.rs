@@ -111,13 +111,7 @@ const WASM_HOST_PANIC_ERROR: &str = "wasm host call panicked";
 const PRELOAD_TASK: usize = 0;
 const REFRESH_TASK: usize = 1;
 
-/// Process bound includes idle pools, live requests, timers and retiring generations.
-/// Idle pools can consume admission capacity; this is not a fairness guarantee.
-const MAX_PROCESS_INSTANCES: usize = 128;
-fn instance_permits() -> &'static Arc<tokio::sync::Semaphore> {
-    static PERMITS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
-    PERMITS.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(MAX_PROCESS_INSTANCES)))
-}
+use super::admission::instance_permits;
 
 /// Run one synchronous Wasmtime guest boundary under the process-wide panic
 /// redaction policy. Ordinary Wasmtime and host-function errors retain their
@@ -356,7 +350,13 @@ impl WasmVmManager {
         cfg.wasm_custom_page_sizes(false);
         // Pooling allocator: fast instantiation for per-request leases (avoids
         // mmap/munmap churn on the hot path of the on-demand allocator).
-        let pooling = PoolingAllocationConfig::default();
+        let limits = super::admission::limits();
+        let mut pooling = PoolingAllocationConfig::default();
+        pooling
+            .total_core_instances(limits.max_instances as u32)
+            .total_memories(limits.max_instances as u32)
+            .total_tables(limits.max_instances as u32)
+            .table_elements(limits.max_instance_table_elements);
         cfg.allocation_strategy(InstanceAllocationStrategy::Pooling(pooling));
         let engine = match Engine::new(&cfg) {
             Ok(engine) => engine,
@@ -1155,6 +1155,8 @@ struct PooledVm {
     /// Released after the Store, including while retained in an idle pool.
     _guest_memory: Arc<super::admission::GuestMemory>,
     _instance_permit: tokio::sync::OwnedSemaphorePermit,
+    // Must drop after Store; a retained VM owns both global idle limits.
+    idle_reservation: Option<super::admission::IdleReservation>,
 }
 
 impl ModuleEntry {
@@ -1188,7 +1190,10 @@ impl ModuleEntry {
     fn acquire_inner(self: &Arc<Self>, timeout_ms: u64, activate_tick: bool) -> Result<VmLease, String> {
         let vm = {
             let mut pool = self.pool.lock();
-            let vm = pool.pop();
+            let mut vm = pool.pop();
+            if let Some(vm) = &mut vm {
+                vm.idle_reservation.take();
+            }
             if self.retired.load(Ordering::Acquire) {
                 self.pool_metric.clear();
             } else {
@@ -1484,6 +1489,7 @@ impl ModuleEntry {
         let callbacks = super::callbacks::GuestCallbacks::resolve(instance, &mut store);
         Ok(PooledVm {
             _instance_permit: instance_permit,
+            idle_reservation: None,
             _guest_memory: guest_memory,
             store,
             callbacks,
@@ -1881,6 +1887,9 @@ impl Drop for VmLease {
                 {
                     let mut pool = self.entry.pool.lock();
                     if !self.entry.retired.load(Ordering::Acquire) && pool.len() < self.entry.pool_cap {
+                        vm.idle_reservation = super::admission::try_idle(vm._guest_memory.bytes());
+                    }
+                    if vm.idle_reservation.is_some() {
                         pool.push(vm);
                     } else {
                         // Over-cap: drop `vm`, freeing its pooling-allocator slot.

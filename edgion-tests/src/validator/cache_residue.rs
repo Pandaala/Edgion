@@ -116,6 +116,18 @@ impl Snapshot {
 // DO NOT add `gateway.tcp_routes.total_routes_in_tables` (added by the
 // cross-kind audit specifically so L4 orphan residue is OBSERVABLE).
 const IGNORE_PATHS: &[&str] = &[
+    // Restart-only Wasm configuration survives wipe; only usage is removable.
+    // Keep exact paths so new limits or usage fields require explicit review.
+    "gateway.wasm_admission.limits.guest_memory_bytes",
+    "gateway.wasm_admission.limits.max_instances",
+    "gateway.wasm_admission.limits.max_preparations",
+    "gateway.wasm_admission.limits.max_instance_memory_bytes",
+    "gateway.wasm_admission.limits.max_instance_table_elements",
+    "gateway.wasm_admission.limits.max_idle_instances",
+    "gateway.wasm_admission.limits.max_idle_guest_memory_bytes",
+    "gateway.wasm_admission.limits.max_host_call_bytes",
+    "gateway.wasm_admission.limits.max_host_abi_bytes",
+    "gateway.wasm_admission.limits.max_host_abi_ops",
     // Live bindings belong to startup-owned listeners, which survive resource wipe.
     // Expired bindings remain checked: the EGC publication path must prune them.
     "gateway.egc_bindings.count",
@@ -1518,6 +1530,46 @@ mod walk_tests {
         let v = json!({ "event_store": { "next_resource_version": 142 } });
         walk_json("controller", &v, &mut snap);
         assert!(snap.is_empty(), "ignored path must not appear");
+    }
+
+    #[test]
+    fn wasm_admission_limits_are_structural_but_usage_remains_residue() {
+        let stats = serde_json::to_value(edgion_gateway::plugins::http::wasm::admission::Stats::default()).unwrap();
+        let baseline = json!({ "wasm_admission": stats });
+        let mut clean = Snapshot::default();
+        walk_json("gateway", &baseline, &mut clean);
+        assert!(
+            clean.is_empty(),
+            "fixed limits must not count as residue: {:?}",
+            clean.residue
+        );
+
+        for field in [
+            "guest_bytes",
+            "instances",
+            "preparations",
+            "idle_instances",
+            "idle_guest_bytes",
+        ] {
+            let mut live = baseline.clone();
+            assert_eq!(live["wasm_admission"][field], json!(0), "{field}");
+            live["wasm_admission"][field] = json!(1);
+            let mut snap = Snapshot::default();
+            walk_json("gateway", &live, &mut snap);
+            assert_eq!(
+                snap.residue,
+                BTreeMap::from([(format!("gateway.wasm_admission.{field}"), 1)])
+            );
+        }
+
+        for pointer in ["/wasm_admission/limits", "/wasm_admission"] {
+            let mut unknown = baseline.clone();
+            unknown.pointer_mut(pointer).unwrap()["unexpected_usage"] = json!(1);
+            let mut snap = Snapshot::default();
+            walk_json("gateway", &unknown, &mut snap);
+            let path = format!("gateway{}.unexpected_usage", pointer.replace('/', "."));
+            assert_eq!(snap.residue, BTreeMap::from([(path, 1)]));
+        }
     }
 
     #[test]

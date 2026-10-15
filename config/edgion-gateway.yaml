@@ -64,6 +64,14 @@ ai:
         max_metadata_size: 64KiB
 
 gateway:
+  # Restart-only Wasm limits. Unknown gateway keys fail startup.
+  # Full defaults and safety ranges: docs/en/user-guide/http-route/filters/edgion-plugins/wasm.md
+  # wasm_limits:
+  #   guest_memory_bytes: 536870912
+  #   max_instances: 128
+  #   max_preparations: 4
+  #   max_idle_instances: 32
+  #   max_idle_guest_memory_bytes: 134217728
   # Controller conf_sync gRPC address.
   # Scheme: https:// when conf_sync_security carries certs (the default, see the
   # bottom of this file); http:// only under an explicit `skip_tls: true`.

@@ -443,7 +443,7 @@ Each hook call is bounded by `timeoutMs` via wasmtime **epoch interruption**: a 
 `timeoutMs` bounds execution *time*, not host *memory*. Two additional limits bound what a single hook can allocate on the host so a buggy or hostile guest cannot drive the process toward OOM (which would affect unrelated routes and tenants — `failOpen` cannot recover from process-wide memory exhaustion):
 
 - **Per-phase ABI retention budget** — the host-retained bytes a guest accumulates through repeated ABI calls in one hook (queued header ops, `proxy_log` lines, `proxy_set_property` entries) are capped at **32 MiB / 200,000 operations**. Past the budget, further ABI calls return an error status and make **no** partial change; the accumulators are cleared when the hook returns. Legitimate header/log/property use is orders of magnitude below this.
-- **Guest linear-memory cap** — guest memory growth is capped at **128 MiB** (and tables at 100,000 entries), well above any real proxy-wasm working set. This also bounds the size of any single value the guest hands to a host call.
+- **Guest linear-memory cap** — guest memory growth is capped at **128 MiB** (and tables at 20,000 entries), with lower deployment limits available through `gateway.wasm_limits`. This also bounds the size of any single value the guest hands to a host call.
 
 ## Plugin runtime lifecycle
 
@@ -454,7 +454,7 @@ Each configured Wasm entry owns its loaded module, instance pool, shared data, a
 - **Reload tradeoff.** Rebuilds may recompile and reset shared data. Only the process-wide engine and bounded OCI artifact-byte cache remain shared. Old and new generations may briefly overlap; state continuity across configuration replacement is not guaranteed.
 - **File replacement.** Overwriting a `.wasm` file takes effect when the owning plugin is rebuilt and loads the file again. A bare overwrite does not replace an already-loaded runtime.
 - **Preload and refresh.** Eager initialization starts configured ticks before the first request. Cold failures are negative-cached. OCI `Always` refresh keeps the last successful generation on failure; successful replacement cancels the old tick and starts the new generation.
-- **Capacity.** `maxActiveRequests` bounds live request leases per configured runtime, including overlapping OCI module generations. The default is 32, range 1..=64. Long streams hold admission until terminal cleanup. A process-wide limit of 128 actual instances includes idle, active, dedicated timer, and retiring-generation VMs. Admission fails immediately through the existing fail mode; there is no waiting queue. Idle pools consume capacity, so this is neither a fairness guarantee nor a process RSS budget. `instancePoolSize` only bounds idle retention.
+- **Capacity.** `maxActiveRequests` bounds live request leases per configured runtime, including overlapping OCI module generations. The default is 32, range 1..=64. Long streams hold admission until terminal cleanup. The process-wide `gateway.wasm_limits.max_instances` (default 128) includes idle, active, dedicated timer, and retiring-generation VMs. Admission fails immediately through the existing fail mode; there is no waiting queue. Idle pools consume capacity, so this is neither a fairness guarantee nor a process RSS budget. `instancePoolSize` bounds per-plugin idle retention; the global idle count and guest-byte limits further restrict it.
 
 ## Metrics
 
@@ -607,26 +607,77 @@ Response map operations and local reply headers follow this policy. Replace-all 
 
 ## Process resource admission and retirement
 
-Set the restart-only guest allocation budget in local Gateway YAML:
+Configure process admission in local Gateway YAML. These are the defaults:
 
 ```yaml
 gateway:
-  wasm_guest_memory_bytes: 536870912 # 512 MiB, default
+  wasm_limits:
+    guest_memory_bytes: 536870912          # 512 MiB across all Stores
+    max_instances: 128                    # active + idle + timer + retiring
+    max_preparations: 4                   # acquisition and compilation
+    max_instance_memory_bytes: 134217728   # 128 MiB per linear memory
+    max_instance_table_elements: 20000
+    max_idle_instances: 32
+    max_idle_guest_memory_bytes: 134217728 # 128 MiB retained in idle pools
+    max_host_call_bytes: 134217728         # per host-call allocation profile
+    max_host_abi_bytes: 33554432           # per-phase retained ABI budget
+    max_host_abi_ops: 200000
 ```
 
-The positive byte budget accounts linear memories and table slots across all
-plugins and generations, including idle instances and background timers. A failed
-guest growth returns the normal Wasm failure result; inability to initialize a
-Store uses the existing load failure and `failOpen` behavior. The 128-instance
-process limit and per-runtime `maxActiveRequests` remain separate controls.
-Shared memories are unsupported. This budget does not cap process RSS, compiler
-heap, Engine virtual reservations, retained allocator pages, GC heap or host
-payloads; size the deployment with headroom for those separate owners.
+Changes require a Gateway restart. Unknown keys in the local `gateway` section
+or `wasm_limits` fail configuration parsing; invalid limits fail startup. The
+former standalone `wasm_guest_memory_bytes` key has been removed and is rejected.
+There is no environment/CLI override or per-plugin bypass.
 
-All source types share four preparation slots with immediate overload rejection.
-They cover source acquisition and compilation, including blocking work that is
-still running after its caller is cancelled. Existing retry/negative-cache
-behavior applies; there is no unbounded preparation waiter queue.
+All limits are positive except the two idle limits: setting either to zero
+**disables pooling**, even for guests without linear memory. `max_instances` is
+at most 1,024 and `max_preparations` at most 32. Idle count cannot exceed instance
+count, and idle bytes cannot exceed total guest bytes. Per-instance memory/table
+and host ABI settings may only tighten the safety ceilings shown above. The
+Engine pool uses the configured instance/table capacities, not hidden defaults.
+Per-plugin `maxActiveRequests` and `instancePoolSize` further restrict admission.
+
+Guest bytes account linear memory and pointer-sized table slots across plugins
+and generations. Allocation is charged before growth. A refused guest growth
+returns the normal Wasm failure result; failed initialization or exhausted
+instance/preparation capacity follows existing load/admission failure and
+`failOpen` policy. `failOpen: true` may bypass an optional plugin, but never
+bypasses a resource limit. Use `failOpen: false` for mandatory enforcement.
+Admission never creates an unbounded waiter queue.
+
+All source types share preparation capacity before config decoding, fetching and
+compilation. Blocking work and undelivered results retain their slot after caller
+cancellation. Source-specific network limits still apply independently.
+
+Healthy idle instances must fit both global idle limits in addition to their
+plugin pool limit. Otherwise they are destroyed after callback payloads are
+released. Checkout releases idle admission while retaining the instance and guest
+charges. This limits pool retention across plugins; it is not active-plugin
+fairness or pressure-driven eviction. Active requests and timer roots are never
+reset to reclaim memory.
+
+These are bounds on named resources, **not a process RSS limit**. Compiler heap,
+compiled code, Engine virtual reservations/retained pages, runtime metadata,
+GC heap, host snapshots, BodyStorage and transport buffers have separate owners.
+The host ABI budgets bound their existing allocation profiles, not all host heap.
+Shared Wasm memories remain unsupported.
+
+For capacity planning, measure baseline Gateway memory and compilation peaks,
+then leave room for artifact caches, transport/body storage and concurrent host
+working sets in addition to guest bytes. Lower instance and preparation counts
+for memory-constrained deployments; lower idle bytes/count to trade warm reuse
+for less retained memory. A small guest-memory budget alone is insufficient.
+For example, a stricter profile can set `guest_memory_bytes: 134217728`,
+`max_instances: 16`, `max_preparations: 2`, `max_idle_instances: 4` and
+`max_idle_guest_memory_bytes: 33554432`; this is not a claim that 128 MiB of
+container memory is sufficient. Validate with representative plugins and traffic.
+
+Admin `/api/v1/debug/store-stats` exposes `wasm_admission.limits`, `guest_bytes`,
+`instances`, `preparations`, `idle_instances` and `idle_guest_bytes`. Counters are
+independent samples; they are not a transactional or RSS measurement. Compare
+usage against limits when tuning, including during configuration replacement.
+Deployment/container memory limits remain the final process boundary; this
+feature does not implement a Gateway-wide pressure-based overload manager.
 
 Request callouts use the earlier of their configured timeout and the applicable
 route request/gRPC deadline. The deadline includes network permit waiting and

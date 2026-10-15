@@ -98,9 +98,9 @@ struct AbiAllocationLimits {
 impl Default for AbiAllocationLimits {
     fn default() -> Self {
         Self {
-            transient_bytes: MAX_GUEST_MEMORY_BYTES,
-            retained_bytes: MAX_RETAINED_ABI_BYTES,
-            retained_ops: MAX_RETAINED_ABI_OPS,
+            transient_bytes: super::admission::limits().max_host_call_bytes,
+            retained_bytes: super::admission::limits().max_host_abi_bytes,
+            retained_ops: super::admission::limits().max_host_abi_ops,
         }
     }
 }
@@ -145,7 +145,7 @@ pub const MAX_GUEST_MEMORY_BYTES: usize = 128 * 1024 * 1024;
 /// Max guest table entries enforced by the Store `ResourceLimiter`. Bounds
 /// indirect-call table growth as defense in depth; legitimate proxy-wasm
 /// guests use tiny tables.
-pub const MAX_GUEST_TABLE_ELEMENTS: usize = 100_000;
+pub const MAX_GUEST_TABLE_ELEMENTS: usize = 20_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum WasmPhase {
@@ -250,9 +250,8 @@ pub struct HostState {
     /// Module-wide shared KV (proxy-wasm shared data). Shared by every
     /// pooled VM of the same `ModuleEntry`; process-local by design.
     pub shared_data: Arc<SharedData>,
-    /// Internal safety limits. Production always uses [`AbiAllocationLimits::default`];
-    /// inline tests may lower them to exercise boundaries without attack-sized
-    /// allocations.
+    /// Startup limits, never larger than the reviewed safety ceilings.
+    /// Unit tests may lower them further to exercise boundaries cheaply.
     allocation_limits: AbiAllocationLimits,
 }
 
@@ -472,7 +471,7 @@ impl HostState {
 impl wasmtime::ResourceLimiter for HostState {
     fn memory_growing(&mut self, current: usize, desired: usize, maximum: Option<usize>) -> wasmtime::Result<bool> {
         self.pending_memory_growth = 0;
-        if desired > MAX_GUEST_MEMORY_BYTES || maximum.is_some_and(|max| desired > max) {
+        if desired > super::admission::limits().max_instance_memory_bytes || maximum.is_some_and(|max| desired > max) {
             return Ok(false);
         }
         let Some(delta) = desired.checked_sub(current) else {
@@ -493,7 +492,8 @@ impl wasmtime::ResourceLimiter for HostState {
 
     fn table_growing(&mut self, current: usize, desired: usize, maximum: Option<usize>) -> wasmtime::Result<bool> {
         self.pending_table_growth = 0;
-        if desired > MAX_GUEST_TABLE_ELEMENTS || maximum.is_some_and(|max| desired > max) {
+        if desired > super::admission::limits().max_instance_table_elements || maximum.is_some_and(|max| desired > max)
+        {
             return Ok(false);
         }
         // Wasmtime 49 stores one pointer-sized slot per table element.
