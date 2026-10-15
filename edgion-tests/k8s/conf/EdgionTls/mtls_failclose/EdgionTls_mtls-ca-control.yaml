@@ -1,0 +1,19 @@
+# Positive control for the two client-CA fail-close probes on the same listener.
+# The serving Secret is identical; Terminate has no client-CA dependency.
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: mtls-ca-control
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: mtls-failclose-gateway
+      namespace: edgion-test
+      sectionName: https-mtls-failclose
+  hosts:
+    - mtls-ca-control.example.com
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test
+  clientAuth:
+    mode: Terminate
