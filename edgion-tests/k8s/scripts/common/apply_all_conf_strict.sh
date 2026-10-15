@@ -101,6 +101,10 @@ build_exclude_patterns() {
   patterns+=('/EdgionTls/mTLS/Secret_edge_mtls-server\.ya?ml$')
   patterns+=('/HTTPRoute/Backend/BackendTLS/Secret_backend-ca\.ya?ml$')
   patterns+=('/EdgionPlugins/HeaderCertAuth/01_Secret_default_header-cert-ca\.ya?ml$')
+  patterns+=('/EdgionPlugins/LdapAuthTls/00_Secret_default_ldap-ca-bundle\.ya?ml$')
+  patterns+=('/EdgionPlugins/LdapAuthTls/01_Secret_default_ldap-client-identity\.ya?ml$')
+  patterns+=('/EdgionPlugins/LdapAuthTls/05b_Secret_default_ldap-wrong-ca-bundle\.ya?ml$')
+  patterns+=('/EdgionPlugins/LdapAuthTls/10_Secret_edgion-test_openldap-tls\.ya?ml$')
   # The independent processor generates its CA after the test Pods start.
   # The dynamic helper installs that Secret before applying this source plugin.
   patterns+=('/EdgionPlugins/ExtProc/DynamicTest/initial/')

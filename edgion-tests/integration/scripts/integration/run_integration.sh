@@ -1106,43 +1106,38 @@ start_ldap_tls_service_if_needed() {
         return 1
     }
 
-    # Wait for the LDAPS container (openldap-tls) to become ready.
-    local container_id=""
-    container_id=$(docker compose -f "${LDAP_TLS_COMPOSE_FILE}" ps -q openldap-tls 2>/dev/null || true)
-    if [ -z "$container_id" ]; then
-        log_error "TLS OpenLDAP container (openldap-tls) was not created"
-        return 1
-    fi
-
+    # Both LDAP policies must be ready within the existing shared startup budget.
     local elapsed=0
     local timeout=60
-    while [ $elapsed -lt $timeout ]; do
-        local health=""
-        local state=""
-        health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$container_id" 2>/dev/null || true)
-        state=$(docker inspect -f '{{.State.Status}}' "$container_id" 2>/dev/null || true)
-
-        if [ "$health" = "healthy" ] || { [ -z "$health" ] && [ "$state" = "running" ]; }; then
-            LDAP_TLS_SERVICE_STARTED=true
-            log_success "TLS OpenLDAP is ready"
-            break
+    local service container_id health state
+    for service in openldap-tls openldap-tls-mtls; do
+        container_id=$(docker compose -f "${LDAP_TLS_COMPOSE_FILE}" ps -q "$service" 2>/dev/null || true)
+        if [ -z "$container_id" ]; then
+            log_error "TLS OpenLDAP container (${service}) was not created"
+            return 1
         fi
-
-        if [ "$state" = "exited" ] || [ "$state" = "dead" ]; then
-            log_error "TLS OpenLDAP container is not running (state=${state})"
+        while [ $elapsed -lt $timeout ]; do
+            health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$container_id" 2>/dev/null || true)
+            state=$(docker inspect -f '{{.State.Status}}' "$container_id" 2>/dev/null || true)
+            if [ "$health" = "healthy" ] || { [ -z "$health" ] && [ "$state" = "running" ]; }; then
+                break
+            fi
+            if [ "$state" = "exited" ] || [ "$state" = "dead" ]; then
+                log_error "TLS OpenLDAP ${service} is not running (state=${state})"
+                docker compose -f "${LDAP_TLS_COMPOSE_FILE}" logs --no-color --tail=80 || true
+                return 1
+            fi
+            sleep 1
+            elapsed=$((elapsed + 1))
+        done
+        if [ $elapsed -ge $timeout ]; then
+            log_error "TLS OpenLDAP ${service} did not become ready within ${timeout}s"
             docker compose -f "${LDAP_TLS_COMPOSE_FILE}" logs --no-color --tail=80 || true
             return 1
         fi
-
-        sleep 1
-        elapsed=$((elapsed + 1))
     done
-
-    if ! $LDAP_TLS_SERVICE_STARTED; then
-        log_error "TLS OpenLDAP did not become ready within ${timeout}s"
-        docker compose -f "${LDAP_TLS_COMPOSE_FILE}" logs --no-color --tail=80 || true
-        return 1
-    fi
+    LDAP_TLS_SERVICE_STARTED=true
+    log_success "Both TLS OpenLDAP services are ready"
 
     return 0
 }
@@ -3010,6 +3005,7 @@ main() {
         || { [ "$G_RESOURCE" = "GRPCRoute" ] && [ "$G_ITEM" = "TimeoutRewriteWire" ]; } \
         || { [ "$G_RESOURCE" = "HTTPRoute" ] && { [ "$G_ITEM" = "Backend/InformationalRetry" ] || [ "$G_ITEM" = "Transport" ] || [ "$G_ITEM" = "MetricsLifetime" ]; }; } \
         || { [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "WafDynamic" ]; } \
+        || { [ "$G_RESOURCE" = "EdgionPlugins" ] && [ "$G_ITEM" = "LdapAuthTls" ] && [ "$suites" = "base,HTTPRoute/Basic,EdgionPlugins/base,EdgionPlugins/LdapAuthTls" ]; } \
         || { [ "$G_RESOURCE" = "EdgionPlugins" ] && { [ "$G_ITEM" = "Waf" ] || [ "$G_ITEM" = "ForwardAuth" ] || [ "$G_ITEM" = "ExtProc" ] || [ "$G_ITEM" = "BandwidthLimit" ] || [ "$G_ITEM" = "GrpcJsonTranscoder" ] || [ "$G_ITEM" = "GraphqlRateLimit" ] || [ "$G_ITEM" = "RateLimitRedis" ] || [ "$G_ITEM" = "Dsl" ] || [ "$G_ITEM" = "DslQueryLookupDynamic" ] || [ "$G_ITEM" = "DslBody" ] || [ "$G_ITEM" = "DslXmlDynamic" ] || [ "$G_ITEM" = "GraphqlOperationRouter" ] || [ "$G_ITEM" = "GraphqlGuard" ] || [ "$G_ITEM" = "ResponseCache" ] || [ "$G_ITEM" = "GraphqlSafelist" ] || [ "$G_ITEM" = "RestToGraphql" ]; }; }; then
         log_info "Skipping loopback-alias check for ${G_RESOURCE}${G_ITEM:+/${G_ITEM}}"
         report_test "Preflight_LoopbackAliases" "SKIP" "0" "not required by selected suites"

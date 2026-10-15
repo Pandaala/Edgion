@@ -138,6 +138,64 @@ impl LdapAuthTlsTestSuite {
         )
     }
 
+    /// Calibrate the required endpoint around the missing-client-identity rejection.
+    fn test_mtls_without_client_cert_returns_503() -> TestCase {
+        TestCase::new(
+            "mtls_without_client_cert_returns_503",
+            "Required mTLS: matching identity succeeds before and after missing identity fails",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/health", ctx.http_url());
+                    for (host, expected) in [
+                        (TLS_MTLS_HOST, 200),
+                        ("ldap-auth-tls-mtls-no-cert.example.com", 503),
+                        (TLS_MTLS_HOST, 200),
+                    ] {
+                        let response = match ctx
+                            .http_client
+                            .get(&url)
+                            .header("host", host)
+                            .header("Authorization", Self::encode_header("ldap", "alice", "password123"))
+                            .send()
+                            .await
+                        {
+                            Ok(response) => response,
+                            Err(error) => {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Request to {host} failed: {error}"),
+                                );
+                            }
+                        };
+                        let status = response.status().as_u16();
+                        if status != expected {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("Expected {expected} from {host}, got {status}"),
+                            );
+                        }
+                        if expected == 503 {
+                            match response.text().await {
+                                Ok(body) if body == "503 An unexpected error occurred" => {}
+                                _ => {
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        "Missing identity did not return the LDAP fail-closed body".to_string(),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        "Required mTLS accepted the identity, rejected its absence, then recovered".to_string(),
+                    )
+                })
+            },
+        )
+    }
+
     /// Scenario 4: STARTTLS + custom CA injected via set_config → TLS upgrade path, 200.
     fn test_starttls_with_custom_ca() -> TestCase {
         TestCase::new(
@@ -190,6 +248,7 @@ impl TestSuite for LdapAuthTlsTestSuite {
             Self::test_wrong_ca_returns_503(),
             Self::test_mtls_client_cert_bind_succeeds(),
             Self::test_starttls_with_custom_ca(),
+            Self::test_mtls_without_client_cert_returns_503(),
         ]
     }
 }

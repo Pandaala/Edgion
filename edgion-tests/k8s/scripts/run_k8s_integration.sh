@@ -1073,6 +1073,7 @@ compute_prepare_conf_hash() {
     "${TEST_CLIENT_PEER_IDENTITY}" \
     "${COMMON_SCRIPT_DIR}/render_test_client_peer_fixtures.py" \
     "${GENERATE_CERTS_SCRIPT}" \
+    "${PROJECT_ROOT}/edgion-tests/integration/conf/Services/ldap-openldap-tls/make-test-certs.sh" \
     "${BASH_SOURCE[0]}"; do
     if [[ ! -f "${f}" ]]; then
       echo "prepare hash input file is missing: ${f}" >&2
@@ -1274,6 +1275,9 @@ verify_prepared_runtime_readiness() {
         kubectl rollout status deployment/edgion-test-client -n "${namespace}" --timeout=120s >/dev/null || return 1
         kubectl rollout status deployment/edgion-test-server -n "${namespace}" --timeout=120s >/dev/null || return 1
         kubectl rollout status deployment/edgion-test-openldap-tls -n "${namespace}" --timeout=120s >/dev/null || return 1
+        kubectl rollout status deployment/edgion-test-openldap-mtls -n "${namespace}" --timeout=120s >/dev/null || return 1
+        verify_service_manifest_ports "${namespace}" edgion-test-openldap-mtls \
+          "${CONF_ROOT}/EdgionPlugins/LdapAuthTls/14_Service_edgion-test_openldap-mtls.yaml" || return 1
         ;;
       *)
         kubectl rollout status deployment/edgion-test-server -n "${namespace}" --timeout=120s >/dev/null || return 1
@@ -1500,10 +1504,12 @@ restart_secret_dependent_workloads() {
     kubectl rollout restart deployment/edgion-test-server -n edgion-test
     kubectl rollout status deployment/edgion-test-server -n edgion-test --timeout=300s
   fi
-  if kubectl get deployment edgion-test-openldap-tls -n edgion-test >/dev/null 2>&1; then
-    echo "Waiting for edgion-test/edgion-test-openldap-tls startup..."
-    kubectl rollout status deployment/edgion-test-openldap-tls -n edgion-test --timeout=300s
-  fi
+  # LDAP init containers copy runtime Secrets into writable startup assets.
+  for deployment in edgion-test-openldap-tls edgion-test-openldap-mtls; do
+    echo "Restarting edgion-test/${deployment} to reload runtime LDAP certs..."
+    kubectl rollout restart "deployment/${deployment}" -n edgion-test
+    kubectl rollout status "deployment/${deployment}" -n edgion-test --timeout=300s
+  done
   # These backends load the generated certificate and client CA only at startup.
   # Local binary injection starts fresh processes after copying the executables.
   if ! local_test_binary_mode; then

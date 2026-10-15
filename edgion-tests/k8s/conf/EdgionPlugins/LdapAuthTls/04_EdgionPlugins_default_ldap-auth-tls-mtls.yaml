@@ -8,7 +8,7 @@ spec:
     - enable: true
       type: LdapAuth
       config:
-        ldapHost: "edgion-test-openldap-tls.edgion-test.svc.cluster.local"
+        ldapHost: "edgion-test-openldap-mtls.edgion-test.svc.cluster.local"
         ldapPort: 33637
         ldaps: true
         baseDn: "ou=people,dc=example,dc=org"

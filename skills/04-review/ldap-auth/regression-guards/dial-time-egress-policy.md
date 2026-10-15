@@ -116,6 +116,51 @@ does not replace TCP, the egress filter, ldap3, TLS, or OpenLDAP. Existing
 LDAP integration scenarios remain unchanged. User configuration, defaults,
 and production behavior are unchanged.
 
+### Shared LDAP TLS fixture prerequisite (ARCH-373)
+
+The Kubernetes shared suite previously mapped both LDAPS ports to the same
+`LDAP_TLS_VERIFY_CLIENT=try` server. Its identity-present 200 assertion did not
+establish that client identity was required. The separate
+`edgion-test-openldap-mtls` Deployment now owns `demand` on Service port 33637;
+CA-only LDAPS and STARTTLS retain the optional-client-certificate server.
+
+Both local and Kubernetes fixture trees expose a matching identity-absent route.
+The shared `mtls_without_client_cert_returns_503` case calibrates identity-present
+200, identity-absent 503 with the fixed LDAP failure body, then identity-present
+200 against the same required endpoint and otherwise identical plugin settings.
+All four original case identities and assertions remain. TCP/process readiness
+alone does not prove certificate enforcement; the calibrated bind matrix does.
+
+The existing LDAP certificate generator is shared by both preparation paths.
+Kubernetes uses a run-owned output directory and generates matching CA, client,
+server and wrong-CA Secrets. Server SANs cover both Service FQDNs; cached local
+certificates missing those identities are regenerated. The four empty Kubernetes
+Secret templates are excluded by both apply entrypoints and the ownership
+validator, so static apply cannot replace prepared material. Preparation restarts
+both LDAP Deployments because their init containers copy certificate files;
+reused readiness requires both Deployments and the required Service port.
+Namespace-owned cleanup remains unchanged.
+
+Fresh ARCH-373 verification on 2026-10-15 passed all five local shared-suite
+cases through the ordinary selected runner, including the calibrated control,
+wrong CA and STARTTLS. Certificate cache/SAN regeneration and both apply-entrypoint
+exclusions passed isolated checks. Workspace check, Clippy and formatting passed.
+The selected local runner exempts only the exact LDAP fixture list from unrelated
+macOS LB/GeoIP loopback-alias prerequisites; broader selections retain that gate.
+An isolated, owned Kubernetes namespace also passed real optional LDAPS and
+STARTTLS binds plus required-endpoint identity-present/absent/present probes.
+Those optional-endpoint probes retained container LDAP client-identity defaults;
+they prove successful binds, not identity absence. CA-only/no-client-identity
+success is established by the local shared suite.
+The absent identity received a TLS EOF; connection failures were not accepted.
+The explicit client used Python SSL with no implicit LDAP client identity.
+This fixture-only check used translated namespace SANs and Service port-forwarding,
+not a Gateway. These results are separate from historical D0054 evidence below.
+Full Kubernetes Gateway-to-LDAP acceptance requires a healthy shared
+Controller/Gateway installation; fixture-only handshakes cannot substitute for
+that end-to-end gate. Revisit this boundary when server client-auth policy,
+certificate generation, Secret apply paths or suite routes change.
+
 ### Accepted failure-path container retention
 
 On 2026-09-07, the user accepted retaining OpenLDAP containers after a timeout

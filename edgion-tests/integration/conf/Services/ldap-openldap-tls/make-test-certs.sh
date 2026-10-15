@@ -8,7 +8,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CERTS_DIR="${SCRIPT_DIR}/certs"
+CERTS_DIR="${EDGION_LDAP_CERTS_DIR:-${SCRIPT_DIR}/certs}"
 
 cert_set_is_valid() {
     local required=(
@@ -25,6 +25,22 @@ cert_set_is_valid() {
             return 1
         fi
     done
+
+    local san_text
+    san_text=$(openssl x509 -in "${CERTS_DIR}/server.crt" -noout -text 2>/dev/null) || return 1
+    local identity
+    for identity in edgion-test-openldap-tls edgion-test-openldap-mtls \
+        edgion-test-openldap-tls.edgion-test.svc.cluster.local \
+        edgion-test-openldap-mtls.edgion-test.svc.cluster.local; do
+        case "$san_text" in
+            *"DNS:${identity},"*|*"DNS:${identity}"$'\n'*|*"DNS:${identity}") ;;
+            *) return 1 ;;
+        esac
+    done
+    case "$san_text" in
+        *"IP Address:127.0.0.1"*) ;;
+        *) return 1 ;;
+    esac
 
     openssl verify -CAfile "${CERTS_DIR}/ca.crt" \
         "${CERTS_DIR}/server.crt" "${CERTS_DIR}/client.crt" >/dev/null 2>&1 &&
@@ -71,7 +87,7 @@ generate_cert_set() {
             'basicConstraints=CA:FALSE' \
             'keyUsage=digitalSignature,keyEncipherment' \
             'extendedKeyUsage=serverAuth' \
-            'subjectAltName=DNS:edgion-test-openldap-tls,IP:127.0.0.1') \
+            'subjectAltName=DNS:edgion-test-openldap-tls,DNS:edgion-test-openldap-mtls,DNS:edgion-test-openldap-tls.edgion-test.svc.cluster.local,DNS:edgion-test-openldap-mtls.edgion-test.svc.cluster.local,IP:127.0.0.1') \
         >/dev/null 2>&1
 
     openssl req -newkey rsa:2048 \

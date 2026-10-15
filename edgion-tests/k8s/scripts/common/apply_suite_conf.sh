@@ -76,6 +76,10 @@ fi
 while IFS= read -r f; do
   [[ -n "${f}" ]] || continue
   case "${f}" in
+    */EdgionPlugins/LdapAuthTls/00_Secret_default_ldap-ca-bundle.yaml|\
+    */EdgionPlugins/LdapAuthTls/01_Secret_default_ldap-client-identity.yaml|\
+    */EdgionPlugins/LdapAuthTls/05b_Secret_default_ldap-wrong-ca-bundle.yaml|\
+    */EdgionPlugins/LdapAuthTls/10_Secret_edgion-test_openldap-tls.yaml|\
     */base/Secret_edgion-test_edge-tls.yaml|\
     */EdgionTls/mTLS/Secret_edge_client-ca.yaml|\
     */EdgionTls/mTLS/Secret_edge_ca-chain.yaml|\

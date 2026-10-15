@@ -1,0 +1,23 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ldap-auth-tls-mtls-no-cert-test
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: LdapAuth
+      config:
+        ldapHost: "127.0.0.1"
+        ldapPort: 33637
+        ldaps: true
+        baseDn: "ou=people,dc=example,dc=org"
+        attribute: "uid"
+        headerType: "ldap"
+        realm: "LDAP mTLS Test"
+        timeout: 5000
+        tls:
+          validation:
+            caCertificateRefs:
+              - kind: Secret
+                name: ldap-ca-bundle

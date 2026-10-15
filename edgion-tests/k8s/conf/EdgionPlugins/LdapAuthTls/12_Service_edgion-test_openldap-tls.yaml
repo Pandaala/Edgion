@@ -11,10 +11,6 @@ spec:
       port: 33636
       protocol: TCP
       targetPort: 636
-    - name: ldaps-mtls
-      port: 33637
-      protocol: TCP
-      targetPort: 636
     - name: starttls
       port: 33389
       protocol: TCP

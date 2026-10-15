@@ -475,4 +475,27 @@ write_configmap_from_files \
   "edgion-test" \
   "${MTLS_CERTS_DIR}"
 
+# Use the canonical LDAP generator, isolated from checkout-local certificates.
+LDAP_CERTS_DIR="${CERTS_DIR}/ldap"
+LDAP_CERT_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../integration/conf/Services/ldap-openldap-tls" && pwd)/make-test-certs.sh"
+EDGION_LDAP_CERTS_DIR="${LDAP_CERTS_DIR}" EDGION_GENERATED_SECRET_DIR= bash "${LDAP_CERT_SCRIPT}"
+write_opaque_ca_secret "${SECRETS_DIR}/Secret_default_ldap-ca-bundle.yaml" \
+  ldap-ca-bundle edgion-default "${LDAP_CERTS_DIR}/ca.crt"
+write_opaque_ca_secret "${SECRETS_DIR}/Secret_default_ldap-wrong-ca-bundle.yaml" \
+  ldap-wrong-ca-bundle edgion-default "${LDAP_CERTS_DIR}/wrong-ca.crt"
+write_tls_secret "${SECRETS_DIR}/Secret_default_ldap-client-identity.yaml" \
+  ldap-client-identity edgion-default "${LDAP_CERTS_DIR}/client.crt" "${LDAP_CERTS_DIR}/client.key"
+cat >"${SECRETS_DIR}/Secret_edgion-test_openldap-tls.yaml" <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: openldap-tls-certs
+  namespace: edgion-test
+type: Opaque
+data:
+  ca.crt: $(b64 "${LDAP_CERTS_DIR}/ca.crt")
+  server.crt: $(b64 "${LDAP_CERTS_DIR}/server.crt")
+  server.key: $(b64 "${LDAP_CERTS_DIR}/server.key")
+EOF
+
 echo "[certs] runtime secrets generated: ${SECRETS_DIR}"

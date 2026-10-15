@@ -122,6 +122,10 @@ UniqueKeyLoader.add_constructor(
 # Keep these exclusions aligned with apply_all_conf_strict.sh. They describe
 # files that are not part of the effective initial fixture set.
 runtime_secret_patterns = (
+    re.compile(r"/EdgionPlugins/LdapAuthTls/00_Secret_default_ldap-ca-bundle\.ya?ml$"),
+    re.compile(r"/EdgionPlugins/LdapAuthTls/01_Secret_default_ldap-client-identity\.ya?ml$"),
+    re.compile(r"/EdgionPlugins/LdapAuthTls/05b_Secret_default_ldap-wrong-ca-bundle\.ya?ml$"),
+    re.compile(r"/EdgionPlugins/LdapAuthTls/10_Secret_edgion-test_openldap-tls\.ya?ml$"),
     re.compile(r"/base/Secret_edgion-test_edge-tls\.ya?ml$"),
     re.compile(r"/EdgionTls/mTLS/Secret_edge_client-ca\.ya?ml$"),
     re.compile(r"/EdgionTls/mTLS/Secret_edge_ca-chain\.ya?ml$"),
