@@ -482,15 +482,55 @@ identity proof can replace a repeated walk without changing downstream charges.
 
 The source argument removes repeated identity scans on exact hits, not existing
 allocations or a proved percentage of request latency. One-slot alternating
-inputs can miss every time. Tests and benchmarks for this addition are omitted
-at the user's explicit request; historical scan-cache tests are not evidence for
-the new memo. Re-evaluate when borrowed-result meaning, transform determinism,
+inputs can miss every time. Tests and benchmarks for the original memo addition
+were omitted at the user's explicit request; historical scan-cache tests are not
+evidence for that addition. ARCH-232 subsequently adds the directed alias/memo
+coverage described below, without a benchmark or performance claim. Re-evaluate
+when borrowed-result meaning, transform determinism,
 request-arena mutability, limit/checkpoint semantics or memo eligibility changes.
 
 The 2026-10-12 scoped memo implementation passed independent plan and final
 source review, format, workspace compile/clippy and static repository guards.
 These results apply to that implementation; cleanup reused them without rerunning
 code checks.
+
+### Immutable request-head source aliases (ARCH-232)
+
+`RequestState::build` decodes each query field once and copies header/cookie names
+once into its existing transaction-owned immutable arena. The four query
+collections and paired header/cookie collections retain separate ordered records
+that share only their source field's ranges. Alias records replay after the primary
+collection in the original order, preserving fallible collection-metadata growth.
+Equal nonempty source entries remain separately stored; empty ranges may coincide
+without padding. No transport borrow survives construction, and scalar/raw/path
+views retain their original decoding and ownership.
+
+The existing projection walk computes compact physical arena reservation separately
+from the original nominal alias payload. Nominal checked arithmetic and semantic
+input/count/admission precedence remain unchanged. Retained preflight uses the
+original record projection, while final retained bytes use nominal payload plus
+actual entry metadata. Constructor scratch and later body/TX/response aggregate
+admission continue to consume this nominal retained charge. A smaller physical
+arena does not grant additional logical retained headroom; allocation success may
+improve solely because the arena reservation requests fewer bytes.
+
+Shared ranges allow the existing scan cache and borrowed-transform memo to reuse
+eligible source aliases. They do not merge logical collection identity, selected
+records, operator charges, captures, TX writes or control exclusions. The existing
+profile/limit keys, successful borrowed-identity publication and mutable-source,
+multiMatch, Reference, phase and prefix exclusions remain unchanged.
+
+Private `transaction_test.rs` regressions cover literal ordered decoded records,
+range sharing and source separation, natural empty ranges, compact payload length,
+independent legacy nominal expectations, exact/one-less request/constructor/later
+body retained admission, competing validation errors, physical scan reuse and
+per-selected-value logical limits. Accelerated/Reference comparisons cover ordered
+outcomes, named captures, TX and collection-specific controls. Directed memo tests
+cover identity versus owned/failed transformations, changed profiles/limits,
+ineligible sources and empty-phase/prefix invalidation. These are bounded local
+representation/semantic checks, not allocator-count, throughput, total heap or RSS
+measurements. Re-evaluate on arena mutability, new source aliases, projection or
+admission order changes, or changes to either range consumer's key/eligibility.
 
 Current raw-name selector admission and subscription dispatch reuse successful
 boolean results within one collect_value call using two inline u64 words. The

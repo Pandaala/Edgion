@@ -5535,6 +5535,7 @@ impl RequestState<'_> {
 
         let derived_bytes = projected_derived_bytes(request, query)?;
         let retained_bytes = derived_bytes
+            .nominal
             .checked_add(
                 record_count
                     .checked_mul(size_of::<CollectionValue>())
@@ -5557,25 +5558,33 @@ impl RequestState<'_> {
         };
         state
             .bytes
-            .try_reserve_exact(derived_bytes)
+            .try_reserve_exact(derived_bytes.arena)
             .map_err(|_| RuntimeError::Allocation)?;
         let (digits, digit_start) = decimal_bytes(query_argument_combined_size(query)?);
         state.push_scalar(CollectionKind::ArgsCombinedSize, &digits[digit_start..])?;
-        state.push_query_collection(CollectionKind::Args, query, false)?;
-        state.push_query_collection(CollectionKind::ArgsGet, query, false)?;
-        state.push_query_collection(CollectionKind::ArgsNames, query, true)?;
-        state.push_query_collection(CollectionKind::ArgsGetNames, query, true)?;
+        state.push_query_collection(query)?;
+        state.push_collection_alias(CollectionKind::Args, CollectionKind::ArgsGet, false)?;
+        state.push_collection_alias(CollectionKind::Args, CollectionKind::ArgsNames, true)?;
+        state.push_collection_alias(CollectionKind::Args, CollectionKind::ArgsGetNames, true)?;
         state.push_scalar(CollectionKind::QueryString, query)?;
         state.push_scalar(CollectionKind::RemoteAddr, request.remote_addr)?;
         state.push_scalar(
             CollectionKind::ReqbodyProcessor,
             request_body_processor(request.headers).as_bytes(),
         )?;
-        state.push_cookie_collection(CollectionKind::RequestCookies, request.headers, false)?;
-        state.push_cookie_collection(CollectionKind::RequestCookiesNames, request.headers, true)?;
+        state.push_cookie_collection(request.headers)?;
+        state.push_collection_alias(
+            CollectionKind::RequestCookies,
+            CollectionKind::RequestCookiesNames,
+            true,
+        )?;
         state.push_request_path_collections(request.uri)?;
-        state.push_header_collection(CollectionKind::RequestHeaders, request.headers, false)?;
-        state.push_header_collection(CollectionKind::RequestHeadersNames, request.headers, true)?;
+        state.push_header_collection(request.headers)?;
+        state.push_collection_alias(
+            CollectionKind::RequestHeaders,
+            CollectionKind::RequestHeadersNames,
+            true,
+        )?;
         state.push_scalar(CollectionKind::RequestLine, request.request_line)?;
         state.push_scalar(CollectionKind::RequestMethod, request.method)?;
         state.push_scalar(CollectionKind::RequestProtocol, request.protocol)?;
@@ -5583,9 +5592,9 @@ impl RequestState<'_> {
         state.push_scalar(CollectionKind::RequestUriRaw, request.uri_raw)?;
         state.push_scalar(CollectionKind::UniqueId, request.unique_id)?;
 
-        state.retained_bytes = state
-            .bytes
-            .len()
+        // Logical alias payload remains charged even when immutable ranges share bytes.
+        state.retained_bytes = derived_bytes
+            .nominal
             .checked_add(
                 state
                     .entry_count
@@ -5616,17 +5625,30 @@ impl RequestState<'_> {
         self.push_record(collection, CollectionValue { name: None, value })
     }
 
-    fn push_header_collection(
+    fn push_collection_alias(
         &mut self,
-        collection: CollectionKind,
-        headers: &[RequestHeader<'_>],
+        source: CollectionKind,
+        alias: CollectionKind,
         names: bool,
     ) -> Result<(), RuntimeError> {
+        // Replay records in collection order, preserving fallible metadata growth order.
+        let source = collection_index(source);
+        for index in 0..self.collections[source].len() {
+            let mut record = self.collections[source][index];
+            if names {
+                record.value = record.name.ok_or(RuntimeError::GenerationInvariant)?;
+            }
+            self.push_record(alias, record)?;
+        }
+        Ok(())
+    }
+
+    fn push_header_collection(&mut self, headers: &[RequestHeader<'_>]) -> Result<(), RuntimeError> {
         for header in headers {
             let name = self.copy_bytes(header.name)?;
-            let value = if names { name } else { self.copy_bytes(header.value)? };
+            let value = self.copy_bytes(header.value)?;
             self.push_record(
-                collection,
+                CollectionKind::RequestHeaders,
                 CollectionValue {
                     name: Some(name),
                     value,
@@ -5636,18 +5658,13 @@ impl RequestState<'_> {
         Ok(())
     }
 
-    fn push_query_collection(
-        &mut self,
-        collection: CollectionKind,
-        query: &[u8],
-        names: bool,
-    ) -> Result<(), RuntimeError> {
+    fn push_query_collection(&mut self, query: &[u8]) -> Result<(), RuntimeError> {
         for segment in nonempty_segments(query, b'&') {
             let (name, value) = split_once(segment, b'=');
             let name = self.copy_percent_decoded(name)?;
-            let value = if names { name } else { self.copy_percent_decoded(value)? };
+            let value = self.copy_percent_decoded(value)?;
             self.push_record(
-                collection,
+                CollectionKind::Args,
                 CollectionValue {
                     name: Some(name),
                     value,
@@ -5657,12 +5674,7 @@ impl RequestState<'_> {
         Ok(())
     }
 
-    fn push_cookie_collection(
-        &mut self,
-        collection: CollectionKind,
-        headers: &[RequestHeader<'_>],
-        names: bool,
-    ) -> Result<(), RuntimeError> {
+    fn push_cookie_collection(&mut self, headers: &[RequestHeader<'_>]) -> Result<(), RuntimeError> {
         for header in headers
             .iter()
             .filter(|header| header.name.eq_ignore_ascii_case(b"cookie"))
@@ -5674,13 +5686,9 @@ impl RequestState<'_> {
                     continue;
                 }
                 let name = self.copy_bytes(name)?;
-                let value = if names {
-                    name
-                } else {
-                    self.copy_bytes(trim_ascii(value))?
-                };
+                let value = self.copy_bytes(trim_ascii(value))?;
                 self.push_record(
-                    collection,
+                    CollectionKind::RequestCookies,
                     CollectionValue {
                         name: Some(name),
                         value,
@@ -6046,7 +6054,12 @@ pub(super) fn decimal_bytes(mut value: usize) -> ([u8; 40], usize) {
     }
 }
 
-fn projected_derived_bytes(request: RequestHead<'_>, query: &[u8]) -> Result<usize, RuntimeError> {
+struct RequestHeadBytes {
+    arena: usize,
+    nominal: usize,
+}
+
+fn projected_derived_bytes(request: RequestHead<'_>, query: &[u8]) -> Result<RequestHeadBytes, RuntimeError> {
     let (_, combined_start) = decimal_bytes(query_argument_combined_size(query)?);
     let mut total = 40 - combined_start;
     for value in [
@@ -6063,14 +6076,21 @@ fn projected_derived_bytes(request: RequestHead<'_>, query: &[u8]) -> Result<usi
         total = checked_add(total, value.len())?;
     }
     total = checked_add(total, percent_decoded_len(request_filename(request.uri)))?;
+    let mut arena = total;
     for segment in nonempty_segments(query, b'&') {
         let (name, value) = split_once(segment, b'=');
-        total = checked_add(total, checked_mul(percent_decoded_len(name), 4)?)?;
-        total = checked_add(total, checked_mul(percent_decoded_len(value), 2)?)?;
+        let name = percent_decoded_len(name);
+        let value = percent_decoded_len(value);
+        total = checked_add(total, checked_mul(name, 4)?)?;
+        arena = checked_add(arena, name)?;
+        total = checked_add(total, checked_mul(value, 2)?)?;
+        arena = checked_add(arena, value)?;
     }
     for header in request.headers {
         total = checked_add(total, checked_mul(header.name.len(), 2)?)?;
+        arena = checked_add(arena, header.name.len())?;
         total = checked_add(total, header.value.len())?;
+        arena = checked_add(arena, header.value.len())?;
         if header.name.eq_ignore_ascii_case(b"cookie") {
             for segment in nonempty_segments(header.value, b';') {
                 let (name, value) = split_once(trim_ascii(segment), b'=');
@@ -6079,11 +6099,13 @@ fn projected_derived_bytes(request: RequestHead<'_>, query: &[u8]) -> Result<usi
                     continue;
                 }
                 total = checked_add(total, checked_mul(name.len(), 2)?)?;
+                arena = checked_add(arena, name.len())?;
                 total = checked_add(total, trim_ascii(value).len())?;
+                arena = checked_add(arena, trim_ascii(value).len())?;
             }
         }
     }
-    Ok(total)
+    Ok(RequestHeadBytes { arena, nominal: total })
 }
 
 fn request_body_processor(headers: &[RequestHeader<'_>]) -> super::super::BodyProcessorSelection {

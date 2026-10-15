@@ -695,6 +695,318 @@ fn every_count_and_byte_limit_rejects_first_excess() {
 }
 
 #[test]
+fn request_head_aliases_share_only_source_fields_and_preserve_decoding() {
+    let headers = [
+        RequestHeader::new(b"X-A", b"same"),
+        RequestHeader::new(b"x-a", b"same"),
+        RequestHeader::new(b"Cookie", b" a = one ; =skip; empty=; a=one "),
+        RequestHeader::new(b"cookie", b"a=one"),
+    ];
+    let head = request(
+        &headers,
+        b"/a+b%2Fc?x=one&x=one&&=v&empty=&solo&bad=%G1%2%&bin=%00%FF&plus=a+b&esc%26=%3D",
+    );
+    let state = RequestState::build(head, RuntimeLimits::default()).unwrap();
+    let query: &[(&[u8], &[u8])] = &[
+        (b"x", b"one"),
+        (b"x", b"one"),
+        (b"", b"v"),
+        (b"empty", b""),
+        (b"solo", b""),
+        (b"bad", b"%G1%2%"),
+        (b"bin", b"\0\xff"),
+        (b"plus", b"a b"),
+        (b"esc&", b"="),
+    ];
+    for (source, aliases, expected) in [
+        (
+            CollectionKind::Args,
+            vec![
+                (CollectionKind::ArgsGet, false),
+                (CollectionKind::ArgsNames, true),
+                (CollectionKind::ArgsGetNames, true),
+            ],
+            query.to_vec(),
+        ),
+        (
+            CollectionKind::RequestCookies,
+            vec![(CollectionKind::RequestCookiesNames, true)],
+            vec![
+                (b"a".as_slice(), b"one".as_slice()),
+                (b"empty", b""),
+                (b"a", b"one"),
+                (b"a", b"one"),
+            ],
+        ),
+        (
+            CollectionKind::RequestHeaders,
+            vec![(CollectionKind::RequestHeadersNames, true)],
+            headers.iter().map(|h| (h.name, h.value)).collect(),
+        ),
+    ] {
+        let records = state.collection_records(source).unwrap();
+        assert_eq!(records.len(), expected.len());
+        for (index, (record, (name, value))) in records.iter().zip(&expected).enumerate() {
+            assert_eq!(state.bytes_at(record.name.unwrap()), *name);
+            assert_eq!(state.bytes_at(record.value), *value);
+            if !name.is_empty() && !value.is_empty() {
+                assert_ne!(record.name.unwrap(), record.value);
+            }
+            for prior in &records[..index] {
+                if !name.is_empty() {
+                    assert_ne!(record.name, prior.name);
+                }
+                if !value.is_empty() && prior.value.len != 0 {
+                    assert_ne!(record.value, prior.value);
+                }
+            }
+        }
+        for (alias, names) in aliases {
+            let aliases = state.collection_records(alias).unwrap();
+            assert_eq!(aliases.len(), records.len());
+            for (record, alias) in records.iter().zip(aliases) {
+                assert_eq!(alias.name, record.name);
+                assert_eq!(alias.value, if names { record.name.unwrap() } else { record.value });
+            }
+        }
+    }
+    assert_eq!(
+        state.first_value(CollectionKind::QueryString),
+        Some(query_part(head.uri))
+    );
+    assert_eq!(state.first_value(CollectionKind::RequestUriRaw), Some(head.uri_raw));
+    assert_eq!(state.first_value(CollectionKind::RequestLine), Some(head.request_line));
+    assert_eq!(
+        state.first_value(CollectionKind::RequestFilename),
+        Some(b"/a+b/c".as_slice())
+    );
+    assert_eq!(
+        state.first_value(CollectionKind::RequestBasename),
+        Some(b"c".as_slice())
+    );
+    assert_eq!(
+        state.bytes.len(),
+        projected_derived_bytes(head, query_part(head.uri)).unwrap().arena
+    );
+
+    // Adjacent empty source fields naturally share empty ranges, without padding.
+    let empty = RequestState::build(request(&[], b"/?=&="), RuntimeLimits::default()).unwrap();
+    let records = empty.collection_records(CollectionKind::Args).unwrap();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0], records[1]);
+}
+
+#[test]
+fn request_head_aliases_keep_literal_nominal_and_aggregate_retained_charges() {
+    let headers = [RequestHeader::new(b"X", b"z"), RequestHeader::new(b"Cookie", b"a=one")];
+    let head = request(&headers, b"/?q=hello%20world");
+    // Scalars: combined-size digit, raw query, address, processor, path, request
+    // line, method, protocol, both URIs and ID. Alias payload: 26 query bytes,
+    // 3 + 17 header bytes and 5 cookie bytes (the pre-sharing representation).
+    let scalar_payload = 2
+        + b"q=hello%20world".len()
+        + 9
+        + 3
+        + 1
+        + b"GET /search?a=one&a=two%20words HTTP/1.1".len()
+        + 3
+        + 8
+        + 2 * b"/?q=hello%20world".len()
+        + 9;
+    let nominal_payload = scalar_payload + 26 + 3 + 17 + 5;
+    let entries = 12 + 4 + 4 + 2;
+    let nominal = nominal_payload
+        + entries * size_of::<CollectionValue>()
+        + size_of::<[Vec<CollectionValue>; COLLECTION_COUNT]>();
+    let state = RequestState::build(head, RuntimeLimits::default()).unwrap();
+    assert_eq!(state.entry_count, entries);
+    assert_eq!(state.retained_bytes, nominal);
+    // Query saves 14 bytes; header names save 7; cookie name saves 1.
+    assert_eq!(state.bytes.len(), nominal_payload - 22);
+    assert_eq!(
+        projected_derived_bytes(head, query_part(head.uri)).unwrap().arena,
+        nominal_payload - 22
+    );
+    for limit in [nominal - 1, nominal] {
+        let result = RequestState::build(
+            head,
+            RuntimeLimits {
+                max_retained_bytes: limit,
+                ..RuntimeLimits::default()
+            },
+        );
+        if limit == nominal {
+            assert_eq!(result.unwrap().retained_bytes, nominal);
+        } else {
+            assert!(matches!(result, Err(RuntimeError::RetainedByteLimit { .. })));
+        }
+    }
+    let g = generation("SecRule ARGS_GET:q \"@rx hello\" \"id:950,phase:1,pass\"\n");
+    let scratch = matcher_scratch_bytes(&g).unwrap();
+    assert!(scratch > 0);
+    for limit in [nominal + scratch - 1, nominal + scratch] {
+        let result = Transaction::new(
+            &g,
+            head,
+            RuntimeLimits {
+                max_retained_bytes: limit,
+                ..RuntimeLimits::default()
+            },
+        );
+        if limit == nominal + scratch {
+            assert!(result.is_ok());
+        } else {
+            assert!(matches!(result, Err(RuntimeError::RetainedByteLimit { .. })));
+        }
+    }
+    let body = || {
+        RequestBody::new(
+            bytes::Bytes::from_static(b"body"),
+            crate::seclang::BodyProcessorSelection::Raw,
+        )
+    };
+    let mut baseline = Transaction::new(&g, head, RuntimeLimits::default()).unwrap();
+    baseline.execute_request_headers().unwrap();
+    let other = baseline.retained_bytes() - nominal;
+    baseline.publish_request_body(body()).unwrap();
+    let body_charge = baseline.request.retained_bytes - nominal;
+    assert!(body_charge > 0);
+    for excess in [0, 1] {
+        let mut tx = Transaction::new(&g, head, RuntimeLimits::default()).unwrap();
+        tx.execute_request_headers().unwrap();
+        tx.limits.max_retained_bytes = nominal + other + body_charge - excess;
+        let result = tx.publish_request_body(body());
+        if excess == 0 {
+            assert_eq!(result, Ok(()));
+        } else {
+            assert!(matches!(result, Err(RuntimeError::RetainedByteLimit { .. })));
+            assert!(tx.request.body.is_none());
+        }
+    }
+}
+
+#[test]
+fn request_head_alias_admission_boundaries_and_error_precedence_stay_ordered() {
+    let headers = [RequestHeader::new(b"Cookie", b"a=1;b=2")];
+    let head = request(&headers, b"/?q=1&r=2");
+    let entries = 12 + 2 + 8 + 4;
+    let header_bytes = 13;
+    let input_bytes = head.request_line.len()
+        + head.method.len()
+        + head.uri.len()
+        + head.uri_raw.len()
+        + head.protocol.len()
+        + head.remote_addr.len()
+        + head.unique_id.len()
+        + header_bytes;
+    let max_value = head.request_line.len();
+    for excess in [0, 1] {
+        let limits = RuntimeLimits {
+            max_headers: 1 - excess,
+            max_query_arguments: 2,
+            max_cookies: 2,
+            max_collection_entries: entries,
+            max_header_bytes: header_bytes,
+            max_input_bytes: input_bytes,
+            max_value_bytes: max_value,
+            ..RuntimeLimits::default()
+        };
+        let result = RequestState::build(head, limits);
+        if excess == 0 {
+            assert!(result.is_ok());
+        } else {
+            assert!(matches!(result, Err(RuntimeError::HeaderLimit { .. })));
+        }
+    }
+    let cases = [
+        (
+            RuntimeLimits {
+                max_value_bytes: max_value - 1,
+                max_input_bytes: 0,
+                ..RuntimeLimits::default()
+            },
+            RuntimeError::ValueByteLimit {
+                actual: max_value,
+                limit: max_value - 1,
+            },
+        ),
+        (
+            RuntimeLimits {
+                max_header_bytes: header_bytes - 1,
+                max_input_bytes: 0,
+                ..RuntimeLimits::default()
+            },
+            RuntimeError::HeaderByteLimit {
+                actual: header_bytes,
+                limit: header_bytes - 1,
+            },
+        ),
+        (
+            RuntimeLimits {
+                max_input_bytes: input_bytes - 1,
+                max_query_arguments: 0,
+                ..RuntimeLimits::default()
+            },
+            RuntimeError::InputByteLimit {
+                actual: input_bytes,
+                limit: input_bytes - 1,
+            },
+        ),
+        (
+            RuntimeLimits {
+                max_query_arguments: 1,
+                max_cookies: 0,
+                ..RuntimeLimits::default()
+            },
+            RuntimeError::QueryArgumentLimit { limit: 1 },
+        ),
+        (
+            RuntimeLimits {
+                max_cookies: 1,
+                max_collection_entries: 0,
+                ..RuntimeLimits::default()
+            },
+            RuntimeError::CookieLimit { limit: 1 },
+        ),
+        (
+            RuntimeLimits {
+                max_collection_entries: entries - 1,
+                max_retained_bytes: 0,
+                ..RuntimeLimits::default()
+            },
+            RuntimeError::CollectionEntryLimit { limit: entries - 1 },
+        ),
+    ];
+    for (limits, expected) in cases {
+        assert_eq!(RequestState::build(head, limits).err(), Some(expected));
+    }
+    let invalid = [RequestHeader::new(b"Bad Name", b"\n")];
+    assert_eq!(
+        RequestState::build(
+            request(&invalid, b"/?q=1"),
+            RuntimeLimits {
+                max_query_arguments: 0,
+                ..RuntimeLimits::default()
+            }
+        )
+        .err(),
+        Some(RuntimeError::InvalidHeaderName { ordinal: 0 })
+    );
+    let invalid = [RequestHeader::new(b"X", b"\n")];
+    assert_eq!(
+        RequestState::build(
+            request(&invalid, b"/?q=1"),
+            RuntimeLimits {
+                max_query_arguments: 0,
+                ..RuntimeLimits::default()
+            }
+        )
+        .err(),
+        Some(RuntimeError::InvalidHeaderValue { ordinal: 0 })
+    );
+}
+
+#[test]
 fn invalid_headers_and_errors_are_content_free() {
     let private = [RequestHeader::new(b"Bad Name", b"private-value")];
     let Err(error) = RequestState::build(request(&private, b"/private-path"), RuntimeLimits::default()) else {
@@ -4038,6 +4350,242 @@ fn ordinary_current_input_reuses_group_bits_and_preserves_ordered_effects() {
         }
         assert_eq!(outcomes[0], outcomes[1]);
     }
+}
+
+fn query_alias_transaction<'g>(
+    generation: &'g CompiledGeneration,
+    head: RequestHead<'_>,
+    limits: RuntimeLimits,
+    mode: EvaluationMode,
+) -> Result<Transaction<'g>, RuntimeError> {
+    let mut tx = Transaction::new_with_evaluation(generation, head, limits, mode)?;
+    tx.execute_request_headers()?;
+    tx.publish_request_body(RequestBody::new(
+        bytes::Bytes::new(),
+        crate::seclang::BodyProcessorSelection::Raw,
+    ))?;
+    Ok(tx)
+}
+
+#[test]
+fn ordinary_query_aliases_reuse_scans_but_charge_each_selected_value() {
+    let g = generation("SecRule ARGS:q|ARGS_GET:q \"@rx absent[0-9]\" \"id:951,phase:2,pass,t:lowercase\"\n");
+    for uri in [b"/?q=safe".as_slice(), b"/?q=safe&q=safe"] {
+        let fields = if uri == b"/?q=safe" { 1 } else { 2 };
+        let mut results = Vec::new();
+        for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
+            let scope = measurements::start();
+            let mut tx = query_alias_transaction(&g, request(&[], uri), RuntimeLimits::default(), mode).unwrap();
+            results.push(tx.execute_request_body().unwrap());
+            // One-slot reuse applies to the adjacent aliases of one field only.
+            assert_eq!(
+                scope.counts().get(Event::FullScans),
+                if fields == 1 && mode == EvaluationMode::Accelerated {
+                    1
+                } else {
+                    2 * fields
+                }
+            );
+            assert_eq!(
+                tx.borrowed_transform_memo.key.is_some(),
+                mode == EvaluationMode::Accelerated
+            );
+        }
+        assert_eq!(results[0], results[1]);
+    }
+    for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
+        for work in [15, 16] {
+            let mut tx = query_alias_transaction(
+                &g,
+                request(&[], b"/?q=safe"),
+                RuntimeLimits {
+                    max_operator_work_bytes: work,
+                    ..RuntimeLimits::default()
+                },
+                mode,
+            )
+            .unwrap();
+            let result = tx.execute_request_body();
+            if work == 16 {
+                assert!(result.is_ok());
+            } else {
+                assert_eq!(result, Err(RuntimeError::OperatorWorkLimit { limit: work }));
+            }
+        }
+        for selected in [1, 2] {
+            let mut tx = query_alias_transaction(
+                &g,
+                request(&[], b"/?q=safe"),
+                RuntimeLimits {
+                    max_selected_values: selected,
+                    ..RuntimeLimits::default()
+                },
+                mode,
+            )
+            .unwrap();
+            let result = tx.execute_request_body();
+            if selected == 2 {
+                assert!(result.is_ok());
+            } else {
+                assert_eq!(result, Err(RuntimeError::SelectedValueLimit { limit: selected }));
+            }
+        }
+    }
+}
+
+#[test]
+fn ordinary_alias_identity_memo_preserves_captures_tx_controls_and_collection_names() {
+    let g = generation(concat!(
+        "SecRule ARGS:q \"@rx ^(?P<saved>safe)$\" \"id:952,phase:2,pass,capture,t:lowercase,setvar:tx.first=%{MATCHED_VAR_NAME}\"\n",
+        "SecRule ARGS_GET:q \"@rx ^(?P<saved>safe)$\" \"id:953,phase:2,pass,capture,t:lowercase,setvar:tx.second=%{MATCHED_VAR_NAME}\"\n",
+        "SecAction \"id:954,phase:1,pass,ctl:ruleRemoveTargetByTag=next;ARGS:q\"\n",
+        "SecRule ARGS:q|ARGS_GET:q \"@streq safe\" \"id:955,phase:2,pass,tag:next,setvar:tx.last=%{MATCHED_VAR_NAME}\"\n",
+    ));
+    let mut outcomes = Vec::new();
+    for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
+        let mut tx = query_alias_transaction(&g, request(&[], b"/?q=safe"), RuntimeLimits::default(), mode).unwrap();
+        let result = tx.execute_request_body().unwrap();
+        assert_eq!(tx.tx_value(b"first"), Some(b"ARGS:q".as_slice()));
+        assert_eq!(tx.tx_value(b"second"), Some(b"ARGS_GET:q".as_slice()));
+        assert_eq!(tx.tx_value(b"last"), Some(b"ARGS_GET:q".as_slice()));
+        assert_eq!(tx.tx_value(b"saved"), Some(b"safe".as_slice()));
+        outcomes.push(result);
+    }
+    assert_eq!(outcomes[0], outcomes[1]);
+}
+
+#[test]
+fn borrowed_transform_memo_alias_keys_bind_ranges_profiles_limits_and_eligibility() {
+    let state = RequestState::build(request(&[], b"/?q=safe&q=safe"), RuntimeLimits::default()).unwrap();
+    let first = state.collection_records(CollectionKind::Args).unwrap()[0].value;
+    let alias = state.collection_records(CollectionKind::ArgsGet).unwrap()[0].value;
+    let second = state.collection_records(CollectionKind::Args).unwrap()[1].value;
+    let limits = RuntimeLimits::default();
+    let mut memo = BorrowedTransformMemo::default();
+    let key = memo
+        .prepare(SelectedBytes::Request(first), Some(1), &state, limits)
+        .unwrap()
+        .1;
+    memo.key = Some(key);
+    let alias_key = memo
+        .prepare(SelectedBytes::Request(alias), Some(1), &state, limits)
+        .unwrap()
+        .1;
+    assert!(key == alias_key);
+    for (range, plan, changed_limits) in [
+        (second, Some(1), limits),
+        (first, Some(2), limits),
+        (
+            first,
+            Some(1),
+            RuntimeLimits {
+                max_transformation_output_bytes: 1,
+                ..limits
+            },
+        ),
+        (
+            first,
+            Some(1),
+            RuntimeLimits {
+                max_transformation_work_bytes: 1,
+                ..limits
+            },
+        ),
+    ] {
+        let changed = memo
+            .prepare(SelectedBytes::Request(range), plan, &state, changed_limits)
+            .unwrap()
+            .1;
+        assert!(key != changed);
+    }
+    for value in [
+        SelectedBytes::Body(0),
+        SelectedBytes::Tx(0),
+        SelectedBytes::Response(0),
+        SelectedBytes::ResponseWindow,
+        SelectedBytes::MatchedVar,
+        SelectedBytes::Request(ByteRange {
+            start: usize::MAX,
+            len: 1,
+        }),
+    ] {
+        memo.key = Some(key);
+        assert!(memo.prepare(value, Some(1), &state, limits).is_none());
+        assert!(memo.key.is_none());
+    }
+    memo.key = Some(key);
+    assert!(memo
+        .prepare(SelectedBytes::Request(first), None, &state, limits)
+        .is_none());
+    assert!(memo.key.is_none());
+}
+
+#[test]
+fn borrowed_transform_memo_publishes_only_successful_ordinary_identity_walks() {
+    for (actions, value, published) in [
+        ("t:lowercase", "safe", true),
+        ("t:lowercase", "SAFE", false),
+        ("t:lowercase,multiMatch", "safe", false),
+        ("t:none", "safe", false),
+    ] {
+        let g = generation(&format!(
+            "SecRule ARGS:q|ARGS_GET:q \"@rx absent\" \"id:956,phase:2,pass,{actions}\"\n"
+        ));
+        let uri = format!("/?q={value}");
+        for mode in [EvaluationMode::Accelerated, EvaluationMode::Reference] {
+            let mut tx =
+                query_alias_transaction(&g, request(&[], uri.as_bytes()), RuntimeLimits::default(), mode).unwrap();
+            tx.execute_request_body().unwrap();
+            assert_eq!(
+                tx.borrowed_transform_memo.key.is_some(),
+                published && mode == EvaluationMode::Accelerated
+            );
+        }
+    }
+    let g = generation(concat!(
+        "SecRule ARGS_GET:q \"@rx absent\" \"id:957,phase:1,pass,t:lowercase\"\n",
+        "SecRule ARGS_GET:q \"@rx absent\" \"id:958,phase:2,pass,t:lowercase\"\n",
+    ));
+    let mut tx = Transaction::new(&g, request(&[], b"/?q=safe"), RuntimeLimits::default()).unwrap();
+    tx.execute_request_headers().unwrap();
+    assert!(tx.borrowed_transform_memo.key.is_some());
+    tx.limits.max_transformation_work_bytes = 0;
+    assert!(matches!(
+        tx.evaluate_prefix_member(1, b"safe", &mut 0),
+        Err(RuntimeError::Transformation { .. })
+    ));
+    assert!(tx.borrowed_transform_memo.key.is_none());
+    assert!(tx.ordinary_scan_cache.key.is_none());
+    // A lower limit must not reuse the alias's earlier successful transform proof.
+    tx.publish_request_body(RequestBody::new(
+        bytes::Bytes::new(),
+        crate::seclang::BodyProcessorSelection::Raw,
+    ))
+    .unwrap();
+    assert!(matches!(
+        tx.execute_request_body(),
+        Err(RuntimeError::Transformation {
+            kind: RuntimeTransformError::WorkLimit
+        })
+    ));
+    assert!(tx.borrowed_transform_memo.key.is_none());
+}
+
+#[test]
+fn borrowed_transform_memo_phase_entry_clears_identity_without_another_operand() {
+    let g = generation("SecRule ARGS_GET:q \"@rx absent\" \"id:959,phase:1,pass,t:lowercase\"\n");
+    let mut tx = Transaction::new(&g, request(&[], b"/?q=safe"), RuntimeLimits::default()).unwrap();
+    tx.execute_request_headers().unwrap();
+    assert!(tx.borrowed_transform_memo.key.is_some());
+    assert!(tx.ordinary_scan_cache.key.is_some());
+    tx.publish_request_body(RequestBody::new(
+        bytes::Bytes::new(),
+        crate::seclang::BodyProcessorSelection::Raw,
+    ))
+    .unwrap();
+    tx.execute_request_body().unwrap();
+    assert!(tx.borrowed_transform_memo.key.is_none());
+    assert!(tx.ordinary_scan_cache.key.is_none());
 }
 
 #[test]
