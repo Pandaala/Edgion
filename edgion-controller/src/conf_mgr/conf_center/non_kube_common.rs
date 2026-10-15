@@ -400,7 +400,7 @@ pub trait LocalControllerBackend: Send + Sync {
     ///
     /// Different for each backend:
     /// - Etcd: `mpsc::Receiver<EtcdEvent>`
-    /// - FileSystem: `broadcast::Receiver<FileSystemEvent<String>>`
+    /// - FileSystem: `mpsc::Receiver<FileSystemEvent<String>>`
     type EventReceiver: Send + 'static;
 
     /// Subscribe to events for a resource kind, returning a channel receiver.

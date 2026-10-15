@@ -253,19 +253,20 @@ async fn admin_persisted_namespace_survives_fs_init_and_queued_update() {
     ));
     let registry = Arc::new(PathRegistry::default());
     registry.record(ResourceKey::new("HTTPRoute", "tenant-a/sample"), path.clone());
-    let (tx, rx) = tokio::sync::broadcast::channel(16);
+    let (tx, rx) = tokio::sync::mpsc::channel(16);
     let shutdown = ShutdownHandle::new();
     let controller =
         FileSystemResourceController::new("HTTPRoute", processor.clone(), tmp.path().to_path_buf(), registry, rx)
             .with_shutdown(shutdown.signal());
     let task = tokio::spawn(controller.run());
-    tx.send(FileSystemEvent::Init).unwrap();
+    tx.send(FileSystemEvent::Init).await.unwrap();
     tx.send(FileSystemEvent::InitApply {
         path: path.clone(),
         content: tokio::fs::read_to_string(&path).await.unwrap(),
     })
+    .await
     .unwrap();
-    tx.send(FileSystemEvent::InitDone).unwrap();
+    tx.send(FileSystemEvent::InitDone).await.unwrap();
     wait_hostname(&processor, "before.example.com").await;
     assert!(processor.get("sample").is_none());
     assert!(processor.get("default/sample").is_none());
@@ -283,6 +284,7 @@ async fn admin_persisted_namespace_survives_fs_init_and_queued_update() {
         path: path.clone(),
         content: tokio::fs::read_to_string(&path).await.unwrap(),
     })
+    .await
     .unwrap();
     wait_hostname(&processor, "after.example.com").await;
     assert!(processor.get("sample").is_none());

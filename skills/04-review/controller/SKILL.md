@@ -15,6 +15,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [FS initialization delivery and backpressure](regression-guards/fs-initial-delivery-backpressure.md)
+
 - [Structured file initialization envelopes](regression-guards/structured-file-init-envelope.md)
 
 - [Configuration writer error has one export](regression-guards/conf-writer-error-single-export.md)

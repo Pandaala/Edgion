@@ -1,6 +1,6 @@
 //! FileSystemResourceController - Per-resource controller for FileSystem mode
 //!
-//! This controller receives events from FileSystemWatcher's broadcast channel
+//! This controller receives events from FileSystemWatcher's bounded channel
 //! and processes them using the same logic as Kubernetes mode.
 //!
 //! The event handling logic mirrors K8s mode's ResourceController:
@@ -132,7 +132,7 @@ where
             };
 
             match event {
-                Ok(event) => {
+                Some(event) => {
                     match event {
                         FileSystemEvent::Init => {
                             if init_done {
@@ -502,21 +502,10 @@ where
                         }
                     }
                 }
-                Err(broadcast::error::RecvError::Lagged(n)) => {
-                    // NOTE: Unlike Kubernetes mode (which triggers a full relink on 410 Gone),
-                    // FileSystem mode has no automatic recovery for lagged events. If the
-                    // broadcast channel drops messages, the in-memory cache may permanently
-                    // diverge from the filesystem until the controller restarts.
-                    // FileSystem mode is intended for static/low-churn configs, so this risk
-                    // is acceptable in practice, but monitor the warn log for anomalies.
-                    tracing::warn!(
-                        component = "fs_resource_controller",
-                        kind = kind,
-                        lagged = n,
-                        "Event receiver lagged, some events may be missed — cache may diverge until restart"
-                    );
-                }
-                Err(broadcast::error::RecvError::Closed) => {
+                None => {
+                    if !init_done {
+                        anyhow::bail!("FS initialization channel closed before completion for kind {kind}");
+                    }
                     tracing::warn!(
                         component = "fs_resource_controller",
                         kind = kind,
@@ -570,8 +559,6 @@ where
         Ok(())
     }
 }
-
-use tokio::sync::broadcast;
 
 /// Spawn worker task for processing workqueue items
 fn spawn_worker<K>(

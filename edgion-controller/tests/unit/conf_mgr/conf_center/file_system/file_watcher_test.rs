@@ -445,3 +445,169 @@ async fn repaired_structured_envelope_reloads_with_filename_collision_identity()
         assert!(watcher.primed.lock().as_ref().unwrap().is_empty());
     }
 }
+
+#[tokio::test]
+async fn initial_delivery_backpressures_without_losing_documents() {
+    let dir = tempfile::tempdir().unwrap();
+    let watcher = FileSystemWatcher::new(dir.path().to_path_buf(), Arc::new(PathRegistry::new()), None);
+    let count = KIND_EVENT_CAPACITY + 17;
+    let documents: Vec<_> = (0..count)
+        .map(|i| {
+            (
+                dir.path().join(format!("HTTPRoute_default_route-{i}.yaml")),
+                format!("document-{i}"),
+            )
+        })
+        .collect();
+    *watcher.primed.lock() = Some(HashMap::from([("HTTPRoute", documents.clone())]));
+    let mut rx = watcher.subscribe("HTTPRoute").await;
+    let sender = watcher.senders.read().await["HTTPRoute"].clone();
+    let mut dispatch = Box::pin(watcher.dispatch_init(&["HTTPRoute"]));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while sender.capacity() != 0 {
+            assert!(futures::poll!(&mut dispatch).is_pending());
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(rx.len(), KIND_EVENT_CAPACITY);
+    assert!(futures::poll!(&mut dispatch).is_pending());
+    assert!(watcher.senders.try_write().is_ok());
+    assert!(watcher.primed.try_lock().unwrap().as_ref().unwrap().is_empty());
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let receive = async {
+            assert!(matches!(rx.recv().await, Some(FileSystemEvent::Init)));
+            for (expected_path, expected_content) in documents {
+                match rx.recv().await.unwrap() {
+                    FileSystemEvent::InitApply { path, content } => {
+                        assert_eq!(path, expected_path);
+                        assert_eq!(content, expected_content);
+                    }
+                    event => panic!("unexpected event: {event:?}"),
+                }
+            }
+            assert!(matches!(rx.recv().await, Some(FileSystemEvent::InitDone)));
+            assert!(rx.try_recv().is_err());
+        };
+        let (result, ()) = tokio::join!(&mut dispatch, receive);
+        result.unwrap();
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn initial_receiver_closure_fails_every_delivery_stage_without_payload() {
+    for stage in ["init", "document", "done"] {
+        let dir = tempfile::tempdir().unwrap();
+        let watcher = FileSystemWatcher::new(dir.path().to_path_buf(), Arc::new(PathRegistry::new()), None);
+        let documents = vec![(
+            dir.path().join("Secret_default_test.yaml"),
+            "private-secret-sentinel".to_owned(),
+        )];
+        *watcher.primed.lock() = Some(HashMap::from([("Secret", documents)]));
+        let capacity = if stage == "done" { 2 } else { 1 };
+        let (tx, rx) = mpsc::channel(capacity);
+        watcher.senders.write().await.insert("Secret", tx.clone());
+        let mut dispatch = Box::pin(watcher.dispatch_init(&["Secret"]));
+        if stage != "init" {
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while tx.capacity() != 0 {
+                    assert!(futures::poll!(&mut dispatch).is_pending());
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(rx.len(), capacity);
+            assert!(futures::poll!(&mut dispatch).is_pending());
+        }
+        drop(rx);
+        let error = tokio::time::timeout(Duration::from_secs(2), dispatch)
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.to_string(), "FS initialization receiver closed for kind Secret");
+        assert!(!format!("{error:?}").contains("private-secret-sentinel"));
+    }
+}
+
+#[tokio::test]
+async fn duplicate_subscription_preserves_original_receiver() {
+    use futures::FutureExt;
+    use std::panic::AssertUnwindSafe;
+    let dir = tempfile::tempdir().unwrap();
+    let watcher = FileSystemWatcher::new(dir.path().to_path_buf(), Arc::new(PathRegistry::new()), None);
+    let mut rx = watcher.subscribe("Secret").await;
+    assert!(AssertUnwindSafe(watcher.subscribe("Secret"))
+        .catch_unwind()
+        .await
+        .is_err());
+    watcher.senders.read().await["Secret"]
+        .send(FileSystemEvent::Init)
+        .await
+        .unwrap();
+    assert!(matches!(rx.recv().await, Some(FileSystemEvent::Init)));
+}
+
+#[tokio::test]
+async fn runtime_full_channel_shutdown_abandons_mutated_generation() {
+    use crate::conf_mgr::sync_runtime::ShutdownHandle;
+    for action in ["apply", "delete", "promote"] {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = Arc::new(PathRegistry::new());
+        let watcher = FileSystemWatcher::new(dir.path().to_path_buf(), registry.clone(), None);
+        let path = dir.path().join("Secret_default_test.yaml");
+        let promoted = dir.path().join("nested/Secret_default_test.yaml");
+        let key = ResourceKey::new("Secret", "default/test");
+        std::fs::write(&path, "private-secret-sentinel").unwrap();
+        if action != "apply" {
+            registry.record(key.clone(), path.clone());
+        }
+        if action == "promote" {
+            std::fs::create_dir_all(promoted.parent().unwrap()).unwrap();
+            std::fs::write(&promoted, "private-secret-sentinel").unwrap();
+            registry.record(key.clone(), promoted.clone());
+        }
+        let rx = watcher.subscribe("Secret").await;
+        let tx = watcher.senders.read().await["Secret"].clone();
+        for _ in 0..KIND_EVENT_CAPACITY {
+            tx.try_send(FileSystemEvent::Init).unwrap();
+        }
+        assert_eq!(tx.capacity(), 0);
+        let shutdown = ShutdownHandle::new();
+        let mut signal = shutdown.signal();
+        let kind = if action == "apply" {
+            EventKind::Create(CreateKind::File)
+        } else {
+            EventKind::Remove(RemoveKind::File)
+        };
+        let expected = match action {
+            "apply" => Some(path.clone()),
+            "promote" => Some(promoted),
+            _ => None,
+        };
+        let mut dispatch = Box::pin(watcher.dispatch_until_shutdown(&path, kind, &mut signal));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                assert!(futures::poll!(&mut dispatch).is_pending());
+                if registry.winner_of(&key) == expected {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(rx.len(), KIND_EVENT_CAPACITY);
+        shutdown.shutdown();
+        assert!(!tokio::time::timeout(Duration::from_secs(2), dispatch)
+            .await
+            .unwrap()
+            .unwrap());
+        assert_eq!(registry.winner_of(&key), expected);
+        assert_eq!(rx.len(), KIND_EVENT_CAPACITY);
+        assert!(watcher.senders.try_write().is_ok());
+    }
+}

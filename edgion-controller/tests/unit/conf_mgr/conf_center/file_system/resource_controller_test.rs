@@ -225,7 +225,7 @@ use kube::api::ObjectMeta;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::broadcast;
+use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 struct FsNoopHandler;
@@ -246,7 +246,7 @@ async fn tls_route_ingress_rejects_invalid_versions_before_raw_store_and_recover
         Arc::new(TlsNoopHandler),
         Arc::new(ControllerRuntime::default()),
     ));
-    let (tx, rx) = broadcast::channel(16);
+    let (tx, rx) = mpsc::channel(16);
     let shutdown = ShutdownHandle::new();
     let controller = FileSystemResourceController::new(
         "TLSRoute",
@@ -258,7 +258,7 @@ async fn tls_route_ingress_rejects_invalid_versions_before_raw_store_and_recover
     .with_shutdown(shutdown.signal());
     let raw = controller.fs_raw_store.clone();
     let run = tokio::spawn(controller.run());
-    tx.send(FileSystemEvent::Init).unwrap();
+    tx.send(FileSystemEvent::Init).await.unwrap();
     for (index, version) in [
         None,
         Some(serde_json::Value::Null),
@@ -280,6 +280,7 @@ async fn tls_route_ingress_rejects_invalid_versions_before_raw_store_and_recover
             path: tmp.path().join(format!("TLSRoute_default_invalid-{index}.yaml")),
             content: serde_yaml::to_string(&document).unwrap(),
         })
+        .await
         .unwrap();
     }
     // A valid event after the invalid events proves the same stream can recover.
@@ -287,8 +288,9 @@ async fn tls_route_ingress_rejects_invalid_versions_before_raw_store_and_recover
         path: tmp.path().join("TLSRoute_default_tr.yaml"),
         content: serde_yaml::to_string(&make_tls_route()).unwrap(),
     })
+    .await
     .unwrap();
-    tx.send(FileSystemEvent::InitDone).unwrap();
+    tx.send(FileSystemEvent::InitDone).await.unwrap();
     timeout(Duration::from_secs(5), async {
         while processor.get("default/tr").is_none() {
             tokio::task::yield_now().await;
@@ -324,7 +326,7 @@ async fn duplicate_init_done_keeps_one_worker() {
         handler.clone(),
         Arc::new(ControllerRuntime::default()),
     ));
-    let (event_tx, event_rx) = broadcast::channel(16);
+    let (event_tx, event_rx) = mpsc::channel(16);
     let shutdown = ShutdownHandle::new();
     let controller = FileSystemResourceController::new(
         "HTTPRoute",
@@ -336,8 +338,8 @@ async fn duplicate_init_done_keeps_one_worker() {
     .with_shutdown(shutdown.signal());
     let mut run = Box::pin(controller.run());
 
-    event_tx.send(FileSystemEvent::Init).unwrap();
-    event_tx.send(FileSystemEvent::InitDone).unwrap();
+    event_tx.send(FileSystemEvent::Init).await.unwrap();
+    event_tx.send(FileSystemEvent::InitDone).await.unwrap();
     assert!(futures::poll!(&mut run).is_pending());
     // With no resources or awaits in the init sequence, this poll drains
     // all events. Only the test, controller, and sole worker own the processor.
@@ -347,9 +349,9 @@ async fn duplicate_init_done_keeps_one_worker() {
     // Cover both a duplicate completion and a repeated empty init sequence.
     for repeat_init in [false, true] {
         if repeat_init {
-            event_tx.send(FileSystemEvent::Init).unwrap();
+            event_tx.send(FileSystemEvent::Init).await.unwrap();
         }
-        event_tx.send(FileSystemEvent::InitDone).unwrap();
+        event_tx.send(FileSystemEvent::InitDone).await.unwrap();
         assert!(futures::poll!(&mut run).is_pending());
         assert_eq!(
             Arc::strong_count(&processor),
@@ -673,7 +675,7 @@ async fn init_clears_error_status_of_a_resource_repaired_while_down() {
     let repaired_content = serde_yaml::to_string(&repaired).unwrap();
     tokio::fs::write(&path, &repaired_content).await.unwrap();
 
-    let (event_tx, event_rx) = tokio::sync::broadcast::channel(16);
+    let (event_tx, event_rx) = tokio::sync::mpsc::channel(16);
     let shutdown = crate::conf_mgr::sync_runtime::ShutdownHandle::new();
     let controller = FileSystemResourceController::new(
         "HTTPRoute",
@@ -685,14 +687,15 @@ async fn init_clears_error_status_of_a_resource_repaired_while_down() {
     .with_shutdown(shutdown.signal());
     let controller_task = tokio::spawn(controller.run());
 
-    event_tx.send(FileSystemEvent::Init).unwrap();
+    event_tx.send(FileSystemEvent::Init).await.unwrap();
     event_tx
         .send(FileSystemEvent::InitApply {
             path: path.clone(),
             content: repaired_content,
         })
+        .await
         .unwrap();
-    event_tx.send(FileSystemEvent::InitDone).unwrap();
+    event_tx.send(FileSystemEvent::InitDone).await.unwrap();
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while processor.get(key).is_none() {
@@ -788,7 +791,7 @@ async fn valid_to_identity_mismatch_to_repair_revokes_then_recovers_via_worker()
     tokio::fs::create_dir_all(path.parent().unwrap()).await.unwrap();
     registry.record(ResourceKey::new("HTTPRoute", key), path.clone());
     let status_handler = FileSystemStatusHandler::new(tmp.path().to_path_buf()).with_registry(registry.clone());
-    let (event_tx, event_rx) = tokio::sync::broadcast::channel(16);
+    let (event_tx, event_rx) = tokio::sync::mpsc::channel(16);
     let shutdown = crate::conf_mgr::sync_runtime::ShutdownHandle::new();
     let controller = FileSystemResourceController::new(
         "HTTPRoute",
@@ -804,14 +807,15 @@ async fn valid_to_identity_mismatch_to_repair_revokes_then_recovers_via_worker()
     tokio::fs::write(&path, serde_yaml::to_string(&v1).unwrap())
         .await
         .unwrap();
-    event_tx.send(FileSystemEvent::Init).unwrap();
+    event_tx.send(FileSystemEvent::Init).await.unwrap();
     event_tx
         .send(FileSystemEvent::InitApply {
             path: path.clone(),
             content: serde_yaml::to_string(&v1).unwrap(),
         })
+        .await
         .unwrap();
-    event_tx.send(FileSystemEvent::InitDone).unwrap();
+    event_tx.send(FileSystemEvent::InitDone).await.unwrap();
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while processor.get(key).is_none() {
@@ -836,6 +840,7 @@ async fn valid_to_identity_mismatch_to_repair_revokes_then_recovers_via_worker()
             path: path.clone(),
             content: serde_yaml::to_string(&queued).unwrap(),
         })
+        .await
         .unwrap();
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -858,6 +863,7 @@ async fn valid_to_identity_mismatch_to_repair_revokes_then_recovers_via_worker()
             path: path.clone(),
             content: repaired_content,
         })
+        .await
         .unwrap();
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -948,4 +954,111 @@ async fn worker_read_failure_removes_raw_generation_and_plain_requeue_repairs_it
     assert!(invalid.read().is_empty());
     worker.abort();
     assert!(worker.await.unwrap_err().is_cancelled());
+}
+
+#[tokio::test]
+async fn readiness_waits_for_last_initial_document() {
+    use crate::conf_mgr::sync_runtime::resource_processor::{ProcessResult, ProcessorObj};
+    use tokio::sync::Notify;
+    struct GatedHandler {
+        entered: Notify,
+        release: Notify,
+        completed: AtomicUsize,
+    }
+    #[async_trait::async_trait]
+    impl ProcessorHandler<HTTPRoute> for GatedHandler {
+        async fn parse(&self, obj: HTTPRoute, _ctx: &HandlerContext) -> ProcessResult<HTTPRoute> {
+            if obj.metadata.name.as_deref() == Some("last") {
+                self.entered.notify_one();
+                self.release.notified().await;
+            }
+            ProcessResult::Continue(obj)
+        }
+        fn on_init_done(&self, _ctx: &HandlerContext) {
+            self.completed.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let handler = Arc::new(GatedHandler {
+        entered: Notify::new(),
+        release: Notify::new(),
+        completed: AtomicUsize::new(0),
+    });
+    let processor = Arc::new(ResourceProcessor::<HTTPRoute>::new(
+        "HTTPRoute",
+        100,
+        handler.clone(),
+        Arc::new(ControllerRuntime::default()),
+    ));
+    let (tx, rx) = mpsc::channel(4);
+    let shutdown = ShutdownHandle::new();
+    let controller = FileSystemResourceController::new(
+        "HTTPRoute",
+        processor.clone(),
+        dir.path().to_path_buf(),
+        Arc::new(PathRegistry::new()),
+        rx,
+    )
+    .with_shutdown(shutdown.signal());
+    let run = tokio::spawn(controller.run());
+    tx.send(FileSystemEvent::Init).await.unwrap();
+    for name in ["first", "last"] {
+        tx.send(FileSystemEvent::InitApply {
+            path: dir.path().join(format!("HTTPRoute_default_{name}.yaml")),
+            content: serde_yaml::to_string(&make_route("default", name)).unwrap(),
+        })
+        .await
+        .unwrap();
+    }
+    tx.send(FileSystemEvent::InitDone).await.unwrap();
+    timeout(Duration::from_secs(5), handler.entered.notified())
+        .await
+        .unwrap();
+    assert!(!processor.is_ready());
+    assert_eq!(handler.completed.load(Ordering::Relaxed), 0);
+    assert!(processor.get("default/first").is_some());
+    assert!(processor.get("default/last").is_none());
+    handler.release.notify_one();
+    timeout(Duration::from_secs(5), async {
+        while !processor.is_ready() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(processor.get("default/last").is_some());
+    assert_eq!(handler.completed.load(Ordering::Relaxed), 1);
+    shutdown.shutdown();
+    timeout(Duration::from_secs(5), run).await.unwrap().unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn initial_channel_closure_never_publishes_ready() {
+    use crate::conf_mgr::sync_runtime::resource_processor::ProcessorObj;
+    let dir = tempfile::tempdir().unwrap();
+    let processor = Arc::new(ResourceProcessor::<HTTPRoute>::new(
+        "HTTPRoute",
+        100,
+        Arc::new(FsNoopHandler),
+        Arc::new(ControllerRuntime::default()),
+    ));
+    let (tx, rx) = mpsc::channel(2);
+    tx.send(FileSystemEvent::Init).await.unwrap();
+    drop(tx);
+    let controller = FileSystemResourceController::new(
+        "HTTPRoute",
+        processor.clone(),
+        dir.path().to_path_buf(),
+        Arc::new(PathRegistry::new()),
+        rx,
+    );
+    let error = timeout(Duration::from_secs(2), controller.run())
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "FS initialization channel closed before completion for kind HTTPRoute"
+    );
+    assert!(!processor.is_ready());
 }

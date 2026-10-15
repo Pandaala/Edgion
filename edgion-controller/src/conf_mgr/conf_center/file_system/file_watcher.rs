@@ -1,7 +1,7 @@
 //! FileSystemWatcher - Centralized file watching with event dispatch
 //!
 //! Provides a unified `notify::PollWatcher` (stat-loop polling, 1 s interval)
-//! that dispatches events to per-kind broadcast channels. Each resource type
+//! that dispatches events to per-kind bounded channels. Each resource type
 //! gets its own independent event stream, similar to how K8s mode uses one
 //! watch per resource.
 //!
@@ -24,13 +24,15 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio::sync::{mpsc, RwLock};
 use walkdir::WalkDir;
 
 /// Sender type for parsed resource events per kind
-pub type KindEventSender = broadcast::Sender<FileSystemEvent<String>>;
+pub type KindEventSender = mpsc::Sender<FileSystemEvent<String>>;
 /// Receiver type for parsed resource events per kind
-pub type KindEventReceiver = broadcast::Receiver<FileSystemEvent<String>>;
+pub type KindEventReceiver = mpsc::Receiver<FileSystemEvent<String>>;
+const KIND_EVENT_CAPACITY: usize = 4096;
+
 type PrimedFiles = HashMap<&'static str, Vec<(PathBuf, String)>>;
 
 /// FileSystemWatcher - Centralized file watching with event dispatch by kind
@@ -78,24 +80,18 @@ impl FileSystemWatcher {
 
     /// Register a kind and get its event receiver
     ///
-    /// Must be called before `dispatch_init` for each resource kind that needs events.
+    /// Must be called exactly once before `dispatch_init` for each resource kind that needs events.
     pub async fn subscribe(&self, kind: &'static str) -> KindEventReceiver {
         let mut senders = self.senders.write().await;
 
-        if let Some(sender) = senders.get(kind) {
-            sender.subscribe()
-        } else {
-            // Per-kind broadcast capacity. PollWatcher batches all per-cycle
-            // diffs into rapid sequential sends; bulk operations like wipe-all
-            // can push many events to one kind channel before a slow consumer
-            // drains them.  4096 leaves headroom for our test-fixture loads
-            // (single-kind peaks ~110 in the integration suite); larger fleets
-            // could in principle exceed this, in which case `Lagged` would be
-            // logged with no automatic recovery.
-            let (tx, rx) = broadcast::channel(4096);
-            senders.insert(kind, tx);
-            rx
-        }
+        // Subscription is startup-only; replacing a receiver would lose its generation.
+        assert!(
+            !senders.contains_key(kind),
+            "FS kind must be subscribed once per watcher generation: {kind}"
+        );
+        let (tx, rx) = mpsc::channel(KIND_EVENT_CAPACITY);
+        senders.insert(kind, tx);
+        rx
     }
 
     /// Get the configuration directory
@@ -242,13 +238,22 @@ impl FileSystemWatcher {
             let Some(sender) = senders.get(*kind) else {
                 continue;
             };
-            let _ = sender.send(FileSystemEvent::Init);
+            sender
+                .send(FileSystemEvent::Init)
+                .await
+                .map_err(|_| anyhow::anyhow!("FS initialization receiver closed for kind {kind}"))?;
             if let Some(files) = per_kind.remove(kind) {
                 for (path, content) in files {
-                    let _ = sender.send(FileSystemEvent::InitApply { path, content });
+                    sender
+                        .send(FileSystemEvent::InitApply { path, content })
+                        .await
+                        .map_err(|_| anyhow::anyhow!("FS initialization receiver closed for kind {kind}"))?;
                 }
             }
-            let _ = sender.send(FileSystemEvent::InitDone);
+            sender
+                .send(FileSystemEvent::InitDone)
+                .await
+                .map_err(|_| anyhow::anyhow!("FS initialization receiver closed for kind {kind}"))?;
         }
         Ok(())
     }
@@ -318,9 +323,9 @@ impl FileSystemWatcher {
 
         // Unbounded channel for raw file events.  The producer is the notify
         // PollWatcher callback (runs on a non-tokio thread).  An unbounded
-        // sender means the callback never blocks; each `Event` is small and
-        // the tokio consumer drains in microseconds, so unbounded growth is
-        // not a realistic concern.
+        // sender means the callback never blocks. A slow kind backpressures the
+        // central dispatcher, so raw events can accumulate here. The bounded
+        // kind channels do not establish a total memory or byte bound.
         let (tx, mut rx) = mpsc::unbounded_channel::<Event>();
 
         let conf_dir = self.conf_dir.clone();
@@ -394,12 +399,14 @@ impl FileSystemWatcher {
         // No debounce / pending HashMap — PollWatcher already coalesces events at the
         // poll-cycle granularity (one Modify per file per cycle even if it changed
         // multiple times), so we don't need application-level debouncing.
-        loop {
+        'runtime: loop {
             tokio::select! {
                 Some(event) = rx.recv() => {
                     for path in event.paths {
-                        if is_yaml_file(&path) {
-                            self.dispatch_file_event(&path, event.kind).await;
+                        if is_yaml_file(&path)
+                            && !self.dispatch_until_shutdown(&path, event.kind, shutdown_signal).await?
+                        {
+                            break 'runtime;
                         }
                     }
                 }
@@ -419,6 +426,21 @@ impl FileSystemWatcher {
         Ok(())
     }
 
+    /// Cancellation abandons this watcher generation, including registry changes
+    /// already made before a blocked send. A subsequent prime replaces it atomically.
+    async fn dispatch_until_shutdown(
+        &self,
+        path: &Path,
+        kind: EventKind,
+        shutdown: &mut ShutdownSignal,
+    ) -> Result<bool> {
+        tokio::select! {
+            biased;
+            _ = shutdown.wait() => Ok(false),
+            result = self.dispatch_file_event(path, kind) => result.map(|()| true),
+        }
+    }
+
     /// Dispatch a file event (Apply or Delete) to the appropriate kind channel.
     ///
     /// `last_kind` is mapped to an `Apply` or `Delete` action via
@@ -432,14 +454,14 @@ impl FileSystemWatcher {
     /// - Apply: only dispatched when the path is (or becomes) the winner.
     /// - Delete: if a conflict exists, the first conflict is promoted to winner
     ///   and a synthetic Apply is dispatched instead of a Delete.
-    async fn dispatch_file_event(&self, path: &Path, last_kind: EventKind) {
+    async fn dispatch_file_event(&self, path: &Path, last_kind: EventKind) -> Result<()> {
         let Some(info) = parse_resource_filename(path) else {
             tracing::trace!(
                 component = "fs_watcher",
                 path = %path.display(),
                 "Skipping file: not a valid resource filename"
             );
-            return;
+            return Ok(());
         };
 
         // Clone the sender so we release the read-lock before any await points.
@@ -452,7 +474,7 @@ impl FileSystemWatcher {
                     path = %path.display(),
                     "No subscriber for kind"
                 );
-                return;
+                return Ok(());
             };
             s.clone()
         };
@@ -477,10 +499,13 @@ impl FileSystemWatcher {
             DispatchAction::Apply => match tokio::fs::read_to_string(path).await {
                 Ok(content) => match self.registry.record(rkey, path.to_path_buf()) {
                     RecordOutcome::NewWinner { .. } | RecordOutcome::AlreadyKnown { is_winner: true } => {
-                        let _ = sender.send(FileSystemEvent::Apply {
-                            path: path.to_path_buf(),
-                            content,
-                        });
+                        sender
+                            .send(FileSystemEvent::Apply {
+                                path: path.to_path_buf(),
+                                content,
+                            })
+                            .await
+                            .map_err(|_| anyhow::anyhow!("FS runtime receiver closed for kind {}", info.kind))?;
                         tracing::info!(
                             component = "fs_watcher",
                             kind = %info.kind,
@@ -521,7 +546,10 @@ impl FileSystemWatcher {
             DispatchAction::Delete => match self.registry.forget(path) {
                 ForgetOutcome::Removed { .. } => {
                     let delete_info = format!("__DELETE__:{}:{}", info.kind, info.key);
-                    let _ = sender.send(FileSystemEvent::Delete(delete_info));
+                    sender
+                        .send(FileSystemEvent::Delete(delete_info))
+                        .await
+                        .map_err(|_| anyhow::anyhow!("FS runtime receiver closed for kind {}", info.kind))?;
                     tracing::info!(
                         component = "fs_watcher",
                         kind = %info.kind,
@@ -532,10 +560,13 @@ impl FileSystemWatcher {
                 }
                 ForgetOutcome::Promoted { new_winner, .. } => match tokio::fs::read_to_string(&new_winner).await {
                     Ok(content) => {
-                        let _ = sender.send(FileSystemEvent::Apply {
-                            path: new_winner.clone(),
-                            content,
-                        });
+                        sender
+                            .send(FileSystemEvent::Apply {
+                                path: new_winner.clone(),
+                                content,
+                            })
+                            .await
+                            .map_err(|_| anyhow::anyhow!("FS runtime receiver closed for kind {}", info.kind))?;
                         tracing::info!(
                             component = "fs_watcher",
                             kind = %info.kind,
@@ -569,6 +600,7 @@ impl FileSystemWatcher {
             // Recheck is resolved to Apply or Delete in the block above; this arm is structurally unreachable.
             DispatchAction::Recheck => unreachable!(),
         }
+        Ok(())
     }
 }
 

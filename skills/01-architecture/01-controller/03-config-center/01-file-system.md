@@ -133,6 +133,16 @@ requested kinds:
 - For each Kind send `Init` → `InitApply(path, content) * N` → `InitDone` in order
 - For a requested Kind with no snapshot entry, still send `Init` → `InitDone` (so all controllers complete initialization and reach ready)
 
+Each kind has one receiver per watcher generation, as before. Subscription is
+startup-only and a duplicate subscription fails fast instead of replacing the
+live receiver. `dispatch_init` moves documents into awaited FIFO sends after
+releasing snapshot and sender-map guards. A closed receiver fails initialization
+with a kind-only error; the controller cannot publish ready on channel closure
+before `InitDone`. Enqueuing `InitDone` is not acknowledgement: the controller
+publishes readiness only after processing preceding initial events. See the
+[delivery regression guard](../../../04-review/controller/regression-guards/fs-initial-delivery-backpressure.md)
+(ARCH-093).
+
 `init_phase()` is retained as a thin `prime()` + `dispatch_init(all subscribed kinds)` wrapper used only by unit tests; production drives the two steps separately from `spawn_all_controllers`.
 
 ### Runtime Phase Details
@@ -147,7 +157,7 @@ requested kinds:
    - `Remove(_)` or `Modify(Name(From))` → **Delete**
    - `Create(_)` or `Modify(Name(To))` → **Apply**
    - Other ambiguous events → decide Apply / Recheck based on `path.exists()` (PollWatcher rarely emits ambiguous events; this branch is kept as defense-in-depth)
-5. Dispatched per Kind via `broadcast::channel` to the corresponding `FileSystemResourceController`
+5. Dispatched per Kind via bounded `mpsc::channel(4096)` to the corresponding `FileSystemResourceController`; sends await room without overwriting older events.
 
 ### Design Decisions and Trade-offs
 
@@ -173,6 +183,20 @@ processing time; do not assume a universal 1.5-second bound for large trees.
 
 **Known limitations**
 
+- A slow kind backpressures the centralized dispatcher and delays other kinds.
+  Raw notify callback ingress remains unbounded and may accumulate; the primed
+  snapshot also retains unconsumed documents. Bounded kind-channel event counts
+  do not establish a process-wide memory or byte bound.
+- Runtime dispatch selects shutdown while awaiting channel room. Cancellation
+  abandons that watcher generation, including registry changes made before the
+  cancelled send; it does not roll them back or continue dispatch. Reload's next
+  prime replaces the registry atomically. Receiver closure ends dispatch with a
+  metadata-only error. Blocking filesystem work, PollWatcher setup and existing
+  worker cleanup retain their own limitations; no universal shutdown deadline is
+  promised.
+- The per-phase readiness timeout starts after initial dispatch. The outer
+  lifecycle readiness deadline is separate; this change adds no per-send timeout
+  and does not guarantee immediate reporting of an initialization failure.
 - **Delete-then-immediately-recreate within the same 1s window is coalesced into a single Modify**: PollWatcher only sees snapshot diffs; the intermediate deleted state is invisible. If a ConfHandler relies on diff computation between on_delete / on_change (for example, to clean up reverse references), it must instead compare "old vs new value" inside `parse()` rather than relying on on_delete. See the implementations in `reference_grant.rs` and `backend_tls_policy.rs` for the pattern.
 - The runtime PollWatcher establishes its baseline only after `prime()` has scanned, so a file created/changed in the window between the `prime()` scan and the `run_runtime()` baseline is not seen until its next change. This window is now slightly wider — it spans the provider/Gateway `dispatch_init` and readiness waits — and remains an **accepted** limitation of the dev/test FS backend. The etcd backend has no equivalent: its watch resumes from the primed revision (`R + 1`) and replays that gap. See `docs/superpowers/specs/2026-07-20-etcd-fs-phase1-ordering-design.md`.
 
@@ -197,9 +221,9 @@ that ordering or the single-worker completion guard.
 | `Delete` | `remove(&key)` |
 | Worker: file exists and parsed successfully | `upsert(key, Arc::new(obj))` — ensure consistency with the version actually processed by the worker |
 | Worker: file read fails | `remove(&key)` before the existing processed-cache revocation and inline `ParseError` status |
-| Worker: file does not exist | `remove(&key)` — fallback in case a Delete event was lost (channel lagged) |
+| Worker: file does not exist | `remove(&key)` — authoritative disk-state check for an enqueued key |
 
-Maintaining via both the main loop and the worker is necessary: the main loop guarantees timely response, while the worker uses the freshest version re-read from disk to correct potential version drift, and also serves as a Delete fallback when the channel is lagged.
+Maintaining via both the main loop and the worker is necessary: the main loop guarantees timely response, while the worker uses the freshest version re-read from disk to correct potential version drift, and corrects the state of enqueued keys if their files have since disappeared.
 
 ARCH-096 keeps raw input consistent with the worker's existing read-failure
 revocation policy. A read error (including invalid UTF-8 in an existing winner
