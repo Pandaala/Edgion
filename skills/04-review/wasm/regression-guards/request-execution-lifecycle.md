@@ -106,3 +106,54 @@ resetting active/timer roots or claiming fairness or total host/RSS accounting.
 External unit tests cover strict configuration, failed initialization followed by
 valid publication, concurrent idle reservations/rollback, custom real-guest growth
 limits, host ABI tightening and cross-entry checkout/retirement conservation.
+
+## Execution-model selection and measurement
+
+The 2026-10-14/15 investigations retained warm exclusive request leases as the
+implemented baseline, without selecting a performance winner. Fresh instances
+can reuse compiled code and Wasmtime allocation slots while repeating guest/root
+initialization. Warm leases save that initialization but retain guest memory
+high watermarks and nondeterministically assigned root state. Host-frame release
+does not scrub guest memory or establish a generic reset contract. Choose fresh
+execution when fresh guest state is required; never zero a live heap to imitate it.
+
+Both exclusive models hold one instance throughout slow uploads, callouts and
+SSE. Warm pooling cannot remove active stream occupancy. Compare equivalent
+callback/terminal semantics under the same grants, limits, guest bytes and
+allocator before selecting a model. Separate compilation, initialization, pool
+miss and warm acquisition; include expensive initialization, bodies, callouts,
+long streams, sparse traffic and overlapping generations. Measure successful and
+offered load, rejections, CPU, latency quantiles, guest logical/resident bytes,
+host live/retained heap, virtual reservations and RSS together. Use repeated
+independent runs and workload SLOs; instance counts or a local microbenchmark
+alone cannot establish a winner. The [benchmark guide](../../../05-testing/references/wasm-instance-reuse-benchmark.md)
+records the executable comparison and its narrower evidence.
+
+A complete resident-memory ledger remains outside the implemented guest budget.
+It must include Engine/code, artifact retention, compiler jobs/results, shared
+data/configuration, every initializing/active/idle/timer Store, host snapshots,
+ABI scratch, request staging, callouts and detached outputs across retiring and
+published generations. Count shared allocations once and distinct copies
+separately; retain charges until their last owner releases them. Guest allocation
+admission and idle caps do not establish compiler/host/RSS bounds or fairness.
+
+Multi-context execution and response callout ABI extensions remain unselected.
+A shared Store requires one stable logical serial owner, independent of Tokio
+thread identity. A suspended mutable Store borrow cannot serve another context.
+Network I/O must occur outside guest entry, with generation/incarnation/context/
+phase/token-bound completions and no late re-entry. A future design needs separate
+context, queue-count/byte, current-event, callout, output and CPU bounds, fair
+ready-context scheduling and cancellation/control progress even at saturation.
+A trap or unsafe context cancellation may invalidate every context in that Store;
+reinstantiation cannot restore their guest objects. Same-root ticks would change
+the current dedicated-timer contract and require separate review.
+
+The synchronous response-body filter cannot wait or act as a hidden continuation.
+Any selected asynchronous current-event decision must use the canonical awaited
+processor, preserve backpressure, and define Pause/resume, deadline, committed
+failure and terminal ordering explicitly. Host SSE semantics reuse canonical
+decoder/window owners. Real H1/H2 proof covers current observer/gate behavior,
+not response-callout support, shared-VM fairness or production capacity; see the
+[cancellation contract](../../plugin-runtime/regression-guards/response-callback-downstream-cancellation.md).
+Reopen model selection only for a concrete workload that misses its resource or
+latency target, with an independently reviewed design and equivalent measurements.

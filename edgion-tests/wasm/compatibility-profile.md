@@ -52,6 +52,14 @@ Primary sources inspected on 2026-10-15:
 
 ## WASI decision and priority gaps
 
+On 2026-10-15 the user decided against adding WASI HTTP 0.3 support; reopening
+requires an explicit new request. Component middleware, http-wasm's
+`http_handler` ABI and core-Wasm SDK WASI imports are separate mechanisms.
+The canonical analyzer rejects Components and the Gateway uses core `Module`
+compilation. A future second ABI needs a concrete consumer and independent
+continuation, capability, streaming/trailer, cancellation and resource-admission
+design; runtime availability alone does not authorize integration.
+
 The TinyGo probe requires `wasi_snapshot_preview1` imports `fd_write`,
 `proc_exit`, `clock_time_get`, `args_sizes_get`, `args_get`, and `random_get`.
 The Go reactor also imports `sched_yield`, environment functions, `poll_oneoff`,
@@ -111,6 +119,13 @@ four-slot preparation budget. The first parallel run on 2026-10-15 failed with
 `wasm preparation capacity exhausted`; this is retained as a verification
 limitation, not silently counted as a pass.
 
-Fresh verification on 2026-10-15: 27 analyzer tests, 14 CLI Wasm tests and
-263 serial Gateway Wasm tests passed. See the [implementation record](../../tasks/pending/wasm-compatibility-profile/02-implementation.md) for checks and limitations. Real SDK seam tests do not prove HTTP socket delivery, downstream
+Historical implementation verification on 2026-10-15: 27 analyzer tests and
+263 serial Gateway Wasm tests passed; after terminal-safe text and toolchain
+selection fixes, 27 analyzer, 15 CLI Wasm and three toolchain-script regressions
+passed. Negative fixtures rebuilt reproducibly with conflicting inherited Go
+settings. The follow-up changed no Gateway code and did not rerun its suite.
+Independent plan/final reviews passed. Workspace check, format and applicable
+guards passed; Clippy exited zero with unrelated existing warnings, rather than
+a warning-free workspace. These are retained records, not a fresh cleanup-time
+test run. Real SDK seam tests do not prove HTTP socket delivery, downstream
 backpressure, complete Envoy/Higress conformance, or arbitrary SDK behavior.

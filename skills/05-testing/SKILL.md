@@ -72,6 +72,7 @@ cat ${WORK_DIR}/report.log
 - `tmp/integration_testing/` — runtime working directory (gitignored)
 
 ### Read on demand
+- [references/wasm-instance-reuse-benchmark.md](references/wasm-instance-reuse-benchmark.md) — fresh/warm lifecycle benchmark, allocation instrumentation, evidence limits and comparison gates
 - [references/integration-suite-map.md](references/integration-suite-map.md) — suite family, conf directory, Rust suite, `--gateway` mapping
 - [references/test-server-capabilities.md](references/test-server-capabilities.md) — `test_server` ports, HTTP endpoints, OIDC/auth, mirror, TLS backend capabilities
 

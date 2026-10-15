@@ -17,7 +17,7 @@ interrupt that wait. A callback holding `&mut PluginSession` also borrows the
 same transport that close detection needs. Merely having a driver cancellation
 lease does not create transport cancellation.
 
-Source issue: `wasm-stream-transport-proof/05-issues.md` (pending processor
+Historical source issue: `wasm-stream-transport-proof/05-issues.md` (pending processor
 cancellation); the real transport regression persists in
 `edgion-gateway/tests/wasm_stream_transport.rs`.
 
@@ -77,9 +77,20 @@ Required acceptance includes closed-gate body/trailer cancellation, immediate
 closure before callback entry, no late guest entry, one inflight release,
 admission recovery, one committed-status log, H2 connection isolation, normal
 SSE/backpressure/capacity, H1 half-close/upload/pipelining, and dynamic trusted
-outbound authority/endpoint behavior. Fresh execution receipts are recorded in
-the transport proof task after implementation checks; historical failure is not
-current verification.
+outbound authority/endpoint behavior. Reproduce the standalone real TCP target
+with the required feature and serialized fixtures:
+
+```sh
+cargo test -j 1 -p edgion-gateway --features test-util \
+  --test wasm_stream_transport -- --nocapture --test-threads=1
+```
+
+The three default matrices cover pending body callbacks, pending actual trailers,
+and backpressure/capacity for separately identified Rust SDK and test-WAT guests.
+They assert bounded producer plateau/resume, exact per-request terminal logging,
+guest lifecycle and admission recovery before releasing the independent gate.
+The four-stream capacity smoke includes fifth-request rejection and unrelated
+plain-route progress. It is not a load test or a complete transport heap bound.
 
 Re-evaluate when adding a response capability that needs transport I/O, changing
 lease construction or terminal logging order, broadening H1 monitoring, or
@@ -87,13 +98,14 @@ changing protocol pumps, full-duplex uploads, custom/cache/retry paths or truste
 template admission. Do not infer complete cancellation from an async signature
 or a passing timeout-driven cleanup test.
 
-Fresh 2026-10-15 acceptance passes all three real transport matrices, with no
+Historical 2026-10-15 acceptance passed all three real transport matrices, with no
 ignored tests. Closed-gate body H1/H2 cancellation was observed at 10/13 ms and
 actual-trailer cancellation at 13/10 ms with roughly 10 ms sampling; this is not
-a production SLO. Admission, terminal log and recovery complete before gate
-release, the H2 connection remains usable, guest records remain unchanged after
-abort, and fixture retirement reaches zero. Focused selections pass 391 distinct
-unit tests; workspace all-targets check/Clippy pass, retaining existing warning
-sites. Dedicated required-feature target Clippy passes without warnings and
-independent final review returns LGTM. Guard receipts live in the transport proof task. TLS and
-upstream-H2 wire coverage are not inferred from these results.
+a production SLO. Admission, terminal log and recovery completed before gate
+release, the H2 connection remained usable, guest records remained unchanged after
+abort, and fixture retirement reached zero. Focused selections passed 391 distinct
+unit tests; workspace all-targets check/Clippy passed, retaining existing warning
+sites. Dedicated required-feature target Clippy passed without warnings and
+independent final review returned LGTM. These implementation-time records are not
+fresh execution results from task cleanup. TLS and upstream-H2 wire coverage are
+not inferred from these results.

@@ -1,5 +1,5 @@
 //! Isolated Wasmtime lifecycle comparison, not a gateway throughput benchmark.
-//! See tasks/todo/wasm-execution-research/02-instance-reuse-benchmark.md.
+//! See skills/05-testing/references/wasm-instance-reuse-benchmark.md.
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
