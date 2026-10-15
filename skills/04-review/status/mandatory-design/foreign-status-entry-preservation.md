@@ -93,8 +93,12 @@ patches the status subresource. Deployment identity is stable in practice —
 `GatewayClass.spec.controllerName` is immutable upstream, and Edgion resolves an
 explicitly configured `conf_center.controller_name` first, falling back to
 `POD_NAMESPACE` plus `EDGION_CONTROLLER_DEPLOYMENT_NAME` only when it is omitted
-(`config/conf_center/controller_identity.rs`) — so reaching a cap requires many
-distinct deployments having observed the same resource.
+(`config/conf_center/controller_identity.rs`). Native policy ancestors use the
+composite `(ancestorRef, controllerName)` key: one controller observing many
+Gateway ancestors can exhaust 16 entries, and protected foreign or unknown history
+also consumes slots. Stable deployment identity does not prevent that exhaustion.
+The private `controllers[]` envelope instead keys entries by deployment identity;
+its cardinality must not be used to explain native ancestor capacity.
 
 Relevant regression coverage exists in `status_ownership.rs`,
 `handlers/tests/parent_status_identity_test.rs` and `status_observation.rs` for

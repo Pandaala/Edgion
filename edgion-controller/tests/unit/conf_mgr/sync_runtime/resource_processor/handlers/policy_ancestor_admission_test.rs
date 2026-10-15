@@ -103,11 +103,7 @@ async fn policy_ancestor_diagnostics_follow_sections_winners_and_delegated_termi
     let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 32, runtime);
     let direct:HTTPRoute=serde_json::from_value(json!({"metadata":{"namespace":"root","name":"route"},"spec":{"rules":[{"backendRefs":[{"namespace":"child","name":"backend","port":443},{"namespace":"child","name":"backend","port":80},{"namespace":"child","name":"unrelated","port":443}]}]}})).unwrap();
     let diagnostics = |route: &HTTPRoute| {
-        errors(
-            HttpRouteBackendRefs::from_route(route).unwrap().effective(),
-            "root/gateway",
-            &ctx,
-        )
+        prepare_diagnostics(HttpRouteBackendRefs::from_route(route).unwrap().effective(), &ctx).errors("root/gateway")
     };
     publish("whole", None, true, true);
     publish("a-exact", Some("https"), false, true);
@@ -136,4 +132,189 @@ async fn policy_ancestor_diagnostics_follow_sections_winners_and_delegated_termi
     assert_eq!(messages.len(), 1);
     assert!(messages[0].contains("backendRefs[1]"));
     assert!(messages[0].contains("child/b-valid"));
+}
+
+struct CountingRawStore<T> {
+    inner: crate::conf_mgr::sync_runtime::resource_processor::LocalRawStore<T>,
+    snapshots: std::sync::atomic::AtomicUsize,
+    gets: parking_lot::Mutex<HashMap<String, usize>>,
+}
+impl<T> CountingRawStore<T> {
+    fn new() -> Self {
+        Self {
+            inner: crate::conf_mgr::sync_runtime::resource_processor::LocalRawStore::new(),
+            snapshots: std::sync::atomic::AtomicUsize::new(0),
+            gets: parking_lot::Mutex::new(HashMap::new()),
+        }
+    }
+    fn reset(&self) {
+        self.snapshots.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.gets.lock().clear();
+    }
+    fn assert_one_scan(&self, population: usize) {
+        assert_eq!(self.snapshots.load(std::sync::atomic::Ordering::Relaxed), 1);
+        let gets = self.gets.lock();
+        assert_eq!(gets.len(), population);
+        assert!(gets.values().all(|count| *count == 1));
+    }
+}
+impl<T: Send + Sync + 'static> crate::conf_mgr::sync_runtime::resource_processor::RawStore<T> for CountingRawStore<T> {
+    fn get(&self, key: &str) -> Option<Arc<T>> {
+        *self.gets.lock().entry(key.into()).or_default() += 1;
+        self.inner.get(key)
+    }
+    fn snapshot(&self) -> Vec<Arc<T>> {
+        self.snapshots.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.inner.snapshot()
+    }
+}
+struct DiagnosticPolicies;
+#[async_trait::async_trait]
+impl crate::conf_mgr::sync_runtime::resource_processor::ProcessorHandler<BackendTLSPolicy> for DiagnosticPolicies {}
+#[async_trait::async_trait]
+impl crate::conf_mgr::sync_runtime::resource_processor::ProcessorHandler<EdgionBackendTrafficPolicy>
+    for DiagnosticPolicies
+{
+}
+
+#[tokio::test]
+async fn policy_ancestor_annotation_scans_once_per_kind_independent_of_parent_and_backend_counts() {
+    use crate::conf_mgr::sync_runtime::resource_processor::{
+        status_ownership::KubernetesStatusIdentity, ResourceProcessor,
+    };
+    use crate::conf_mgr::sync_runtime::workqueue::TriggerChain;
+    use crate::conf_mgr::ControllerRuntime;
+    for population in [128, 512] {
+        let runtime = Arc::new(ControllerRuntime::default());
+        runtime.set_status_identity(KubernetesStatusIdentity {
+            controller_name: "example.com/controller".into(),
+        });
+        let tls = Arc::new(ResourceProcessor::<BackendTLSPolicy>::new(
+            "BackendTLSPolicy",
+            16,
+            Arc::new(DiagnosticPolicies),
+            runtime.clone(),
+        ));
+        let traffic = Arc::new(ResourceProcessor::<EdgionBackendTrafficPolicy>::new(
+            "EdgionBackendTrafficPolicy",
+            16,
+            Arc::new(DiagnosticPolicies),
+            runtime.clone(),
+        ));
+        let tls_raw = Arc::new(CountingRawStore::new());
+        let traffic_raw = Arc::new(CountingRawStore::new());
+        tls.set_raw_store(tls_raw.clone());
+        traffic.set_raw_store(traffic_raw.clone());
+        runtime.processor_registry.register(tls.clone());
+        runtime.processor_registry.register(traffic.clone());
+        for index in 0..population {
+            let name = format!("policy-{index}");
+            let target = if index == 0 {
+                "backend".into()
+            } else {
+                format!("unrelated-{index}")
+            };
+            let tls_policy: BackendTLSPolicy = serde_json::from_value(json!({"metadata":{"namespace":"apps","name":name,"uid":name,"generation":1},"spec":{"targetRefs":[{"group":"","kind":"Service","name":target}],"validation":{"hostname":"backend.example","wellKnownCACertificates":"System"}}})).unwrap();
+            let traffic_policy: EdgionBackendTrafficPolicy = serde_json::from_value(json!({"metadata":{"namespace":"apps","name":name,"uid":name,"generation":1},"spec":{"targetRefs":[{"group":"","kind":"Service","name":target},{"group":"","kind":"Service","name":format!("{target}-second")} ]}})).unwrap();
+            tls_raw.inner.upsert(format!("apps/{name}"), Arc::new(tls_policy));
+            traffic_raw
+                .inner
+                .upsert(format!("apps/{name}"), Arc::new(traffic_policy));
+        }
+        let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 32, runtime);
+        for (parents, backends) in [(1, 2), (8, 32)] {
+            tls_raw.reset();
+            traffic_raw.reset();
+            let mut route: HTTPRoute = serde_json::from_value(json!({"metadata":{"namespace":"apps","name":"route"},"spec":{"rules":[{"backendRefs":(0..backends).map(|i| json!({"name":if i%2 == 0 {"backend"} else {"backend-second"},"port":if i%4 < 2 {443} else {80}})).collect::<Vec<_>>()}]},"status":{"parents":(0..parents).map(|i| json!({"parentRef":{"name":format!("gateway-{i}")},"controllerName":"example.com/controller","conditions":[]})).collect::<Vec<_>>()}})).unwrap();
+            annotate(&mut route, "example.com/controller", &ctx);
+            tls_raw.assert_one_scan(population);
+            traffic_raw.assert_one_scan(population);
+            for parent in &route.status.as_ref().unwrap().parents {
+                assert!(parent
+                    .conditions
+                    .iter()
+                    .any(|condition| condition.message.contains("pending publication")));
+            }
+            let prepared = prepare_diagnostics(HttpRouteBackendRefs::from_route(&route).unwrap().effective(), &ctx);
+            assert_eq!(prepared.decisions.len(), if backends == 2 { 2 } else { 4 });
+            assert_eq!(prepared.backends.len(), backends);
+        }
+        // Publication is observed by a fresh invocation, without a persistent inventory.
+        use crate::conf_mgr::sync_runtime::resource_processor::RawStore;
+        tls.save(tls_raw.inner.get("apps/policy-0").unwrap().as_ref().clone(), None);
+        traffic.save(traffic_raw.inner.get("apps/policy-0").unwrap().as_ref().clone(), None);
+        let route: HTTPRoute = serde_json::from_value(json!({"metadata":{"namespace":"apps","name":"route"},"spec":{"rules":[{"backendRefs":[{"name":"backend","port":443},{"name":"backend-second","port":80}]}]}})).unwrap();
+        let prepared = prepare_diagnostics(HttpRouteBackendRefs::from_route(&route).unwrap().effective(), &ctx);
+        assert!(prepared.decisions.values().all(|decision| !decision.pending));
+    }
+}
+
+#[tokio::test]
+async fn policy_ancestor_inventory_retains_indexed_absence_and_moved_uid_generation_pending() {
+    use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor, ResourceRef};
+    use crate::conf_mgr::sync_runtime::workqueue::TriggerChain;
+    use crate::conf_mgr::ControllerRuntime;
+    let runtime = Arc::new(ControllerRuntime::default());
+    let processor = Arc::new(ResourceProcessor::<BackendTLSPolicy>::new(
+        "BackendTLSPolicy",
+        16,
+        Arc::new(DiagnosticPolicies),
+        runtime.clone(),
+    ));
+    let raw = Arc::new(LocalRawStore::new());
+    processor.set_raw_store(raw.clone());
+    runtime.processor_registry.register(processor.clone());
+    runtime.service_ref_mgr.add_ref(
+        "apps/old".into(),
+        ResourceRef::new(
+            edgion_resources::ResourceKind::BackendTLSPolicy,
+            Some("apps".into()),
+            "policy".into(),
+        ),
+    );
+    let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 32, runtime);
+    let old: BackendTLSPolicy = serde_json::from_value(json!({"metadata":{"namespace":"apps","name":"policy","uid":"uid-1","generation":1},"spec":{"targetRefs":[{"group":"","kind":"Service","name":"old"}],"validation":{"hostname":"backend.example","wellKnownCACertificates":"System"}}})).unwrap();
+    let old_key = PolicyTargetKey {
+        target_kind: PolicyTargetKind::Service,
+        namespace: "apps".into(),
+        name: "old".into(),
+    };
+    let new_key = PolicyTargetKey {
+        name: "new".into(),
+        ..old_key.clone()
+    };
+    let targets = HashSet::from([old_key.clone(), new_key.clone()]);
+    let inventory = || {
+        policies::<BackendTLSPolicy>(
+            "BackendTLSPolicy",
+            &targets,
+            |policy| {
+                BackendTlsPolicyTargets::from_policy(policy)
+                    .fields()
+                    .filter_map(|field| field.canonical_key().ok())
+                    .collect()
+            },
+            &ctx,
+        )
+    };
+    processor.save(old.clone(), None);
+    let buckets = inventory();
+    assert_eq!(buckets[&old_key].prepared.len(), 1);
+    assert!(!buckets[&old_key].pending);
+    for (uid, generation) in [("uid-1", 2), ("uid-2", 1)] {
+        let mut moved = old.clone();
+        moved.spec.target_refs[0].name = "new".into();
+        moved.metadata.uid = Some(uid.into());
+        moved.metadata.generation = Some(generation);
+        raw.upsert("apps/policy".into(), Arc::new(moved.clone()));
+        processor.save(old.clone(), None);
+        let buckets = inventory();
+        assert!(buckets[&old_key].pending && buckets[&new_key].pending);
+        assert!(buckets[&old_key].prepared.is_empty() && buckets[&new_key].prepared.is_empty());
+        processor.save(moved, None);
+        let buckets = inventory();
+        assert!(buckets[&old_key].pending);
+        assert!(!buckets[&new_key].pending);
+        assert_eq!(buckets[&new_key].prepared.len(), 1);
+    }
 }
