@@ -95,7 +95,9 @@ data:
     # the Secret and the conf_sync client connects lazily and retries until it appears.
     conf_sync_security:
       auto_ca: true
-      tls:
-        cert: /etc/edgion/conf-sync-certs/client.crt
-        key: /etc/edgion/conf-sync-certs/client.key
-        ca: /etc/edgion/conf-sync-certs/ca.crt
+      active: primary
+      certs:
+        - name: primary
+          cert: /etc/edgion/conf-sync-certs/client.crt
+          key: /etc/edgion/conf-sync-certs/client.key
+          ca: /etc/edgion/conf-sync-certs/ca.crt

@@ -311,13 +311,16 @@ When mTLS is enabled, the Gateway automatically upgrades the `server_addrs` conn
 > fails exactly during a real failover** (the rotation lands on the second address and TLS
 > verification rejects it), so the end-to-end failover integration test asserts it.
 
-> **Backward compatibility**: The legacy single-cert format is still supported and requires no migration:
+> **File-mode migration**: Move old singular `tls` blocks into the `certs` list.
+> Select a named entry with `active`, or omit `active` when there is exactly one entry:
 > ```yaml
 > conf_sync_security:
->   tls:
->     cert: certs/grpc/server.crt
->     key: certs/grpc/server.key
->     ca: certs/grpc/ca.crt
+>   active: primary
+>   certs:
+>     - name: primary
+>       cert: certs/grpc/server.crt
+>       key: certs/grpc/server.key
+>       ca: certs/grpc/ca.crt
 > ```
 
 ### Configuration Reference
@@ -345,7 +348,7 @@ When mTLS is enabled, the Gateway automatically upgrades the `server_addrs` conn
 | Single `[[certs]]` entry, no `active` | That entry (auto-selected) |
 | Multiple `[[certs]]` entries + `active = "name"` | Entry matching `name` |
 | Multiple `[[certs]]` entries, no `active` | Startup error |
-| No `[[certs]]`, legacy `[tls]` present | Legacy `[tls]` entry |
+| `active` names no `certs` entry | Startup error |
 | No mTLS config | Startup failure (see the Behavior Matrix below) |
 
 ### Behavior Matrix
@@ -354,7 +357,7 @@ When mTLS is enabled, the Gateway automatically upgrades the `server_addrs` conn
 |--------------|--------|
 | No `conf_sync_security` section | **Refuses to start** (non-zero exit, both Controller and Gateway) |
 | Valid active cert | mTLS gRPC |
-| `auto_ca: true` (Controller: alone; Gateway: **plus** `tls` cert paths) | mTLS gRPC (Controller's internal CA provisions the certs) |
+| `auto_ca: true` (Controller: alone; Gateway: **plus** selected `certs` paths) | mTLS gRPC (Controller's internal CA provisions the certs) |
 | `auto_ca: true` with no cert paths, on the **Gateway** | Startup failure (`auto_ca` implies mTLS; the client cert must be readable from disk) |
 | `active` not matching any cert name | Startup failure |
 | Missing or invalid cert files | Startup failure (Controller) / connection failure with retry (Gateway) |
@@ -382,20 +385,23 @@ pick one before upgrading:
   # (Secret `edgion-conf-sync-certs`, mounted by the shipped manifests)
   conf_sync_security:
     auto_ca: true
-    tls:
-      cert: /etc/edgion/conf-sync-certs/client.crt
-      key: /etc/edgion/conf-sync-certs/client.key
-      ca: /etc/edgion/conf-sync-certs/ca.crt
+    active: primary
+    certs:
+      - name: primary
+        cert: /etc/edgion/conf-sync-certs/client.crt
+        key: /etc/edgion/conf-sync-certs/client.key
+        ca: /etc/edgion/conf-sync-certs/ca.crt
   ```
 
-- **File-mode mTLS**: configure `conf_sync_security.certs` (or the legacy
-  `conf_sync_security.tls` block) with `cert` / `key` / `ca` paths.
+- **File-mode mTLS**: configure a selected `conf_sync_security.certs` entry with `cert` / `key` / `ca` paths.
 - **Keep plaintext**: opt in explicitly.
 
 ```yaml
 conf_sync_security:
-  tls:
-    skip_tls: true    # INSECURE: plaintext conf_sync. Local dev / non-production only.
+  active: insecure
+  certs:
+    - name: insecure
+      skip_tls: true    # INSECURE: plaintext conf_sync. Local dev / non-production only.
 ```
 
 Plaintext (`skip_tls: true`) still logs an ERROR at startup on both ends and raises

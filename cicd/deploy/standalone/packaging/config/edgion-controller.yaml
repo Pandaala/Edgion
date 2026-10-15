@@ -20,7 +20,9 @@ conf_sync:
   no_sync_kinds: [ReferenceGrant, Secret]
   default_capacity: 200
 conf_sync_security:
-  tls:
-    cert: /etc/edgion/controller/certs/server.crt
-    key: /etc/edgion/controller/certs/server.key
-    ca: /etc/edgion/controller/certs/ca.crt
+  active: primary
+  certs:
+    - name: primary
+      cert: /etc/edgion/controller/certs/server.crt
+      key: /etc/edgion/controller/certs/server.key
+      ca: /etc/edgion/controller/certs/ca.crt

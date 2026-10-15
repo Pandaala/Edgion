@@ -38,7 +38,9 @@ tcp_log:
 udp_log:
   enabled: false
 conf_sync_security:
-  tls:
-    cert: /etc/edgion/gateway/certs/client.crt
-    key: /etc/edgion/gateway/certs/client.key
-    ca: /etc/edgion/gateway/certs/ca.crt
+  active: primary
+  certs:
+    - name: primary
+      cert: /etc/edgion/gateway/certs/client.crt
+      key: /etc/edgion/gateway/certs/client.key
+      ca: /etc/edgion/gateway/certs/ca.crt

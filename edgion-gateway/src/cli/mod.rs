@@ -121,7 +121,7 @@ impl EdgionGatewayCli {
         if security.auto_ca && security.is_plaintext_omitted() {
             bail!(
                 "conf_sync_security.auto_ca=true but no cert paths are configured. auto_ca \
-                 requires mTLS; set conf_sync_security.tls (or certs) to the Controller-provisioned \
+                 requires mTLS; set conf_sync_security.certs to the Controller-provisioned \
                  cert files (mounted from the edgion-conf-sync-certs Secret)."
             );
         }

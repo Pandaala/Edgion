@@ -47,7 +47,7 @@ migration cost for an affected deployment is one config block.
 | Configuration | Behavior |
 |---|---|
 | `auto_ca: true` (shipped K8s default, both configmaps) | mTLS. Certs auto-provisioned + rotated by the Controller's internal CA. Gateway refuses to connect in plaintext under `auto_ca`. |
-| File-mode `certs` / `tls` paths | mTLS. Unchanged. |
+| File-mode selected `certs` paths | mTLS. Unchanged. |
 | `skip_tls: true` | **Plaintext, still supported** — the only plaintext path. ERROR log on both ends + `edgion_system_error_state{reason="skip_tls"}`. A `skip_tls` that overrides `auto_ca` additionally raises a higher-severity WARN. |
 | **Section omitted entirely** | **Refuses to start** (non-zero exit) on both the Controller and the Gateway. |
 
@@ -101,3 +101,27 @@ federation-only ("refused to start").
   `docs/superpowers/specs/2026-07-12-conf-sync-cert-rotation-design.md`
 - Industry baseline: Istio secure xDS (15012/mTLS) with plaintext as a separate,
   explicitly-selected port — the same "plaintext only when you ask for it" shape.
+
+## Canonical certificate selection (ARCH-074)
+
+`ConfSyncSecurityConfig` now carries only `certs` and `active` for file-mode
+selection. The singular `tls` member and fallback are removed. An explicit selector
+must match a named entry even when the list is empty; unknown old material cannot
+satisfy it. A sole entry can still be selected without a name or selector. Duplicate
+names and multiple entries without a selector remain invalid.
+
+Legacy-only inputs no longer supply TLS material and ordinary file-mode transport
+refuses them. Existing consumer-specific unknown-field handling is unchanged:
+removal does not mean every old key becomes a deserialization error. Bare Controller
+auto-CA, Gateway mounted-path requirements, selected pathless skip-TLS, and federation
+mTLS refusal keep their existing owners and behavior. This migration does not change
+the Controller auto-CA-first startup ordering or resolve the separately identified
+auto-CA/skip-TLS precedence discrepancy in existing documentation.
+
+Regression coverage lives in Common `conf_sync/config_test.rs`, both binary config
+unit modules (real shipped/generated YAML through actual loaders), existing server
+and federation refusal tests, Gateway client tests and `conf_sync_cert_expiry`.
+These configuration checks do not prove remote handshakes or filesystem notification
+delivery. Re-evaluate if a second material representation or selector bypass is
+introduced. Fresh execution outcomes belong to the ARCH-074 implementation record;
+historical results above are not fresh verification of this change.

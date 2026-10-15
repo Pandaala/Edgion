@@ -11,7 +11,9 @@ metrics:
   listen: "0.0.0.0:12162"
 
 conf_sync_security:
-  tls:
-    cert: certs/grpc/primary/client.crt
-    key: certs/grpc/primary/client.key
-    ca: certs/grpc/primary/ca.crt
+  active: primary
+  certs:
+    - name: primary
+      cert: certs/grpc/primary/client.crt
+      key: certs/grpc/primary/client.key
+      ca: certs/grpc/primary/ca.crt

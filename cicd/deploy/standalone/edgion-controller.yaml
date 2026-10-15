@@ -83,7 +83,9 @@ conf_sync:
 # the Gateway host, and point its `server_addrs` at this Controller. No plaintext ever
 # crosses the network -- the mTLS handshake protects the Secrets this channel carries.
 conf_sync_security:
-  tls:
-    cert: certs/grpc/primary/server.crt   # Controller server certificate (PEM)
-    key: certs/grpc/primary/server.key    # Server private key (PEM)
-    ca: certs/grpc/primary/ca.crt         # CA used to verify the Gateway client certificate
+  active: primary
+  certs:
+    - name: primary
+      cert: certs/grpc/primary/server.crt   # Controller server certificate (PEM)
+      key: certs/grpc/primary/server.key    # Server private key (PEM)
+      ca: certs/grpc/primary/ca.crt         # CA used to verify the Gateway client certificate

@@ -50,15 +50,19 @@ conf_sync_security:
 #
 # Option 2 — file-mode mTLS:
 # conf_sync_security:
-#   tls:
-#     cert: certs/grpc/server.crt   # Controller server certificate (PEM)
-#     key: certs/grpc/server.key    # Server private key (PEM)
-#     ca: certs/grpc/ca.crt         # CA to verify Gateway client certificates
+#   active: primary
+#   certs:
+#     - name: primary
+#       cert: certs/grpc/server.crt   # Controller server certificate (PEM)
+#       key: certs/grpc/server.key    # Server private key (PEM)
+#       ca: certs/grpc/ca.crt         # CA to verify Gateway client certificates
 #
 # Option 3 — explicit plaintext opt-in (local dev / non-production only, logs ERROR):
 # conf_sync_security:
-#   tls:
-#     skip_tls: true
+#   active: insecure
+#   certs:
+#     - name: insecure
+#       skip_tls: true
 
 # ─── conf_center: FileSystem mode (local development) ─────────────
 conf_center:
@@ -152,18 +156,23 @@ credentials) to the data plane, so its transport must be chosen explicitly.
 | Configuration | Result |
 |---------------|--------|
 | `auto_ca: true` | mTLS — the Controller's internal CA provisions the CA and the Gateway client cert (recommended on Kubernetes) |
-| `certs` / legacy `tls` block with `cert` + `key` + `ca` | File-mode mTLS |
-| `tls.skip_tls: true` | Plaintext, explicitly opted in (logs ERROR; local dev / non-production only) |
+| Selected `certs` entry with `cert` + `key` + `ca` | File-mode mTLS |
+| `skip_tls: true` | Plaintext, explicitly opted in (logs ERROR; local dev / non-production only) |
 | *(section omitted)* | **Refuses to start** |
 
 > **Migration**: omitting the section used to mean "plaintext gRPC". Deployments that relied on
 > that will now fail to start. To keep plaintext, opt in explicitly with
-> `conf_sync_security: {tls: {skip_tls: true}}`; otherwise configure `auto_ca` or cert paths.
+> `conf_sync_security: {certs: [{skip_tls: true}]}`; otherwise configure `auto_ca` or cert paths.
 
-#### [conf_sync_security.tls]
+#### [conf_sync_security.certs]
+
+`certs` is a list of certificate sets. `active` selects an entry by `name`; it may be
+omitted when exactly one entry exists. Duplicate names and unmatched selectors are
+rejected. Replace any old singular `tls` block with a `certs` entry.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
+| `name` | `String?` | — | Entry name, used by the `active` selector |
 | `cert` | `String` | — | Server certificate path (PEM, relative to work_dir) |
 | `key` | `String` | — | Server private key path (PEM) |
 | `ca` | `String` | — | CA certificate path used to verify Gateway client certificates |
@@ -392,10 +401,12 @@ Encrypt gRPC communication between Controller and Gateway:
 
 ```yaml
 conf_sync_security:
-  tls:
-    cert: certs/grpc/server.crt
-    key: certs/grpc/server.key
-    ca: certs/grpc/ca.crt
+  active: primary
+  certs:
+    - name: primary
+      cert: certs/grpc/server.crt
+      key: certs/grpc/server.key
+      ca: certs/grpc/ca.crt
 ```
 
 ### Non-Kubernetes (VM / bare-metal) HA Deployment

@@ -278,10 +278,12 @@ conf_sync:
 # edgion_system_error_state{reason="skip_tls"}, and the Controller additionally
 # emits a high-severity WARN when it is combined with a non-loopback grpc_listen.
 conf_sync_security:
-  tls:
-    cert: certs/grpc/primary/server.crt   # Controller server certificate
-    key: certs/grpc/primary/server.key    # Controller server private key
-    ca: certs/grpc/primary/ca.crt         # CA certificate (verifies Gateway client cert)
+  active: primary
+  certs:
+    - name: primary
+      cert: certs/grpc/primary/server.crt   # Controller server certificate
+      key: certs/grpc/primary/server.key    # Controller server private key
+      ca: certs/grpc/primary/ca.crt         # CA certificate (verifies Gateway client cert)
 #
 # --- Multi-cert format (supports cert rotation / CA migration) ---
 # conf_sync_security:

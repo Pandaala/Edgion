@@ -94,10 +94,12 @@ conf_sync_security_block() {
 # conf_sync transport: mTLS (the default everywhere). Certs are placed in the work
 # dir by conf_sync_distribute_certs; these paths are work-dir relative.
 conf_sync_security:
-  tls:
-    cert: certs/grpc/primary/${leaf}.crt
-    key: certs/grpc/primary/${leaf}.key
-    ca: certs/grpc/primary/ca.crt
+  active: primary
+  certs:
+    - name: primary
+      cert: certs/grpc/primary/${leaf}.crt
+      key: certs/grpc/primary/${leaf}.key
+      ca: certs/grpc/primary/ca.crt
 EOF
 }
 
@@ -117,10 +119,12 @@ EOF
 #
 # BOTH YAML styles must be handled. Block style is
 #     conf_sync_security:
-#       tls:
-#         skip_tls: true
+#       active: insecure
+#       certs:
+#         - name: insecure
+#           skip_tls: true
 # but the flow (inline) style
-#     conf_sync_security: {tls: {skip_tls: true}}
+#     conf_sync_security: {certs: [{skip_tls: true}]}
 # is exactly what the migration docs recommend pasting in, and it is a SINGLE line with no
 # indented children. Matching only the block anchor (`^conf_sync_security:[[:space:]]*$`)
 # would let a flow-style line survive the strip; the subsequent append would then emit a
@@ -162,8 +166,10 @@ conf_sync_replace_with_skip_tls() {
 # INSECURE: explicit plaintext conf_sync. Subject under test of
 # run_conf_sync_skip_tls_metric_test.sh — never a default.
 conf_sync_security:
-  tls:
-    skip_tls: true
+  active: insecure
+  certs:
+    - name: insecure
+      skip_tls: true
 EOF
     done
 }

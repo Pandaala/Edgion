@@ -33,7 +33,9 @@ conf_sync:
   default_capacity: 200
 
 conf_sync_security:
-  tls:
-    cert: certs/grpc/primary/server.crt
-    key: certs/grpc/primary/server.key
-    ca: certs/grpc/primary/ca.crt
+  active: primary
+  certs:
+    - name: primary
+      cert: certs/grpc/primary/server.crt
+      key: certs/grpc/primary/server.key
+      ca: certs/grpc/primary/ca.crt

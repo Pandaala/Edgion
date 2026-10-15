@@ -1,4 +1,5 @@
 use super::*;
+use edgion_common::conf_sync::config::ConfSyncSecurityConfig;
 
 #[test]
 fn validation_rejects_removed_controller_plugin_policy() {
@@ -415,4 +416,145 @@ fn test_listen_address_defaults() {
     assert_eq!(cfg.admin_listen(), "127.0.0.1:12101");
     assert_eq!(cfg.probe_listen(), "0.0.0.0:12100");
     assert_eq!(cfg.metrics_listen(), "0.0.0.0:12190");
+}
+
+// ARCH-074: exercise deployment producers through the actual binary loader.
+fn load_channel_security_yaml(yaml: &str) -> ConfSyncSecurityConfig {
+    use std::io::Write;
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(yaml.as_bytes()).unwrap();
+    let loaded = EdgionControllerConfig::load(EdgionControllerConfig {
+        config_file: Some(file.path().to_string_lossy().into_owned()),
+        ..Default::default()
+    })
+    .unwrap();
+    let security = loaded.conf_sync_security;
+    security.validate().unwrap();
+    security.ensure_transport_configured().unwrap();
+    security
+}
+
+fn channel_fixture_yaml(path: &str) -> String {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let yaml = std::fs::read_to_string(root.join(path)).unwrap();
+    if path.ends_with("configmap.yaml") {
+        let configmap: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        configmap["data"]
+            .as_mapping()
+            .unwrap()
+            .values()
+            .filter_map(serde_yaml::Value::as_str)
+            .find(|value| value.contains("conf_sync_security:"))
+            .expect("ConfigMap must contain the binary configuration")
+            .to_string()
+    } else {
+        yaml
+    }
+}
+
+#[test]
+fn shipped_channel_security_configs_load_with_original_paths() {
+    let cases = [
+        (
+            "config/edgion-controller.yaml",
+            "certs/grpc/primary/server",
+            "certs/grpc/primary/ca.crt",
+            false,
+        ),
+        (
+            "cicd/deploy/standalone/edgion-controller.yaml",
+            "certs/grpc/primary/server",
+            "certs/grpc/primary/ca.crt",
+            false,
+        ),
+        (
+            "cicd/deploy/standalone/packaging/config/edgion-controller.yaml",
+            "/etc/edgion/controller/certs/server",
+            "/etc/edgion/controller/certs/ca.crt",
+            false,
+        ),
+        (
+            "edgion-tests/k8s/kubernetes/isolated/proxy-controller-config.yaml",
+            "certs/grpc/primary/server",
+            "certs/grpc/primary/ca.crt",
+            false,
+        ),
+        (
+            "config/edgion-controller-etcd.yaml",
+            "certs/grpc/primary/server",
+            "certs/grpc/primary/ca.crt",
+            false,
+        ),
+    ];
+    for (path, leaf, ca, auto_ca) in cases {
+        let security = load_channel_security_yaml(&channel_fixture_yaml(path));
+        assert_eq!(security.auto_ca, auto_ca, "{path}");
+        assert_eq!(security.active.as_deref(), Some("primary"), "{path}");
+        assert_eq!(security.certs.len(), 1, "{path}");
+        let cert = security.resolve_mtls_or_refuse().unwrap();
+        assert_eq!(cert.cert, format!("{leaf}.crt"), "{path}");
+        assert_eq!(cert.key, format!("{leaf}.key"), "{path}");
+        assert_eq!(cert.ca, ca, "{path}");
+    }
+}
+
+#[test]
+fn generated_channel_security_loads_file_and_pathless_plaintext() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let helper = root.join("edgion-tests/integration/scripts/utils/conf_sync_certs.sh");
+    let output = std::process::Command::new("bash")
+        .args([
+            "-c",
+            "source \"$1\"; conf_sync_security_block \"$2\"",
+            "channel-config-test",
+        ])
+        .arg(&helper)
+        .arg("server")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let yaml = String::from_utf8(output.stdout).unwrap();
+    let security = load_channel_security_yaml(&yaml);
+    let cert = security.resolve_mtls_or_refuse().unwrap();
+    assert_eq!(cert.cert, "certs/grpc/primary/server.crt");
+    assert_eq!(cert.key, "certs/grpc/primary/server.key");
+    assert_eq!(cert.ca, "certs/grpc/primary/ca.crt");
+
+    for original in [yaml.as_str(), "conf_sync_security: {certs: [{skip_tls: true}]}\n"] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+        std::fs::write(&path, original).unwrap();
+        let output = std::process::Command::new("bash")
+            .args([
+                "-c",
+                "source \"$1\"; conf_sync_replace_with_skip_tls \"$2\"",
+                "channel-config-test",
+            ])
+            .arg(&helper)
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let rewritten = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(rewritten.matches("conf_sync_security:").count(), 1);
+        let security = load_channel_security_yaml(&rewritten);
+        assert_eq!(security.active.as_deref(), Some("insecure"));
+        let cert = security.resolve_active_tls().unwrap();
+        assert!(cert.skip_tls);
+        assert!(cert.cert.is_empty() && cert.key.is_empty() && cert.ca.is_empty());
+    }
+}
+
+#[test]
+fn shipped_controller_bare_auto_ca_configs_keep_provisioning_choice() {
+    for path in [
+        "config/edgion-controller-k8s.yaml",
+        "cicd/deploy/kubernetes/controller/configmap.yaml",
+        "edgion-tests/k8s/kubernetes/controller/configmap.yaml",
+    ] {
+        let security = load_channel_security_yaml(&channel_fixture_yaml(path));
+        assert!(security.auto_ca, "{path}");
+        assert!(security.certs.is_empty(), "{path}");
+        assert!(security.resolve_active_tls().is_none(), "{path}");
+    }
 }

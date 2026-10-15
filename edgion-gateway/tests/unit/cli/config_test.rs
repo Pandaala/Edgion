@@ -1,4 +1,5 @@
 use super::*;
+use edgion_common::conf_sync::config::ConfSyncSecurityConfig;
 use edgion_resources::rate_limit_local_config::{
     get_gateway_instance_count, set_gateway_instance_count, DEFAULT_ESTIMATOR_SLOTS_K, DEFAULT_MAX_ESTIMATOR_SLOTS_K,
 };
@@ -833,4 +834,145 @@ fn wasm_guest_memory_budget_is_restart_only_and_parses() {
     assert_eq!(cfg.wasm_guest_memory_bytes, 1048576);
     assert_eq!(GatewayConfig::default().wasm_guest_memory_bytes, 512 * 1024 * 1024);
     assert!(serde_yaml::from_str::<GatewayConfig>("wasm_guest_memory_bytes: -1").is_err());
+}
+
+// ARCH-074: exercise deployment producers through the actual binary loader.
+fn load_channel_security_yaml(yaml: &str) -> ConfSyncSecurityConfig {
+    use std::io::Write;
+    let mut file = tempfile::NamedTempFile::new().unwrap();
+    file.write_all(yaml.as_bytes()).unwrap();
+    let loaded = EdgionGatewayConfig::load(EdgionGatewayConfig {
+        config_file: Some(file.path().to_string_lossy().into_owned()),
+        ..Default::default()
+    })
+    .unwrap();
+    assert!(
+        !loaded
+            .unknown_fields
+            .paths()
+            .any(|path| path.starts_with("conf_sync_security")),
+        "security keys must be recognized: {:?}",
+        loaded.unknown_fields.paths().collect::<Vec<_>>()
+    );
+    let security = loaded.config.conf_sync_security;
+    security.validate().unwrap();
+    security.ensure_transport_configured().unwrap();
+    security
+}
+
+fn channel_fixture_yaml(path: &str) -> String {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let yaml = std::fs::read_to_string(root.join(path)).unwrap();
+    if path.ends_with("configmap.yaml") {
+        let configmap: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        configmap["data"]
+            .as_mapping()
+            .unwrap()
+            .values()
+            .filter_map(serde_yaml::Value::as_str)
+            .find(|value| value.contains("conf_sync_security:"))
+            .expect("ConfigMap must contain the binary configuration")
+            .to_string()
+    } else {
+        yaml
+    }
+}
+
+#[test]
+fn shipped_channel_security_configs_load_with_original_paths() {
+    let cases = [
+        (
+            "config/edgion-gateway.yaml",
+            "certs/grpc/primary/client",
+            "certs/grpc/primary/ca.crt",
+            false,
+        ),
+        (
+            "cicd/deploy/standalone/edgion-gateway.yaml",
+            "certs/grpc/primary/client",
+            "certs/grpc/primary/ca.crt",
+            false,
+        ),
+        (
+            "cicd/deploy/standalone/packaging/config/edgion-gateway.yaml",
+            "/etc/edgion/gateway/certs/client",
+            "/etc/edgion/gateway/certs/ca.crt",
+            false,
+        ),
+        (
+            "edgion-tests/k8s/kubernetes/isolated/proxy-gateway-config.yaml",
+            "certs/grpc/primary/client",
+            "certs/grpc/primary/ca.crt",
+            false,
+        ),
+        (
+            "cicd/deploy/kubernetes/gateway/configmap.yaml",
+            "/etc/edgion/conf-sync-certs/client",
+            "/etc/edgion/conf-sync-certs/ca.crt",
+            true,
+        ),
+        (
+            "edgion-tests/k8s/kubernetes/gateway/configmap.yaml",
+            "/etc/edgion/conf-sync-certs/client",
+            "/etc/edgion/conf-sync-certs/ca.crt",
+            true,
+        ),
+    ];
+    for (path, leaf, ca, auto_ca) in cases {
+        let security = load_channel_security_yaml(&channel_fixture_yaml(path));
+        assert_eq!(security.auto_ca, auto_ca, "{path}");
+        assert_eq!(security.active.as_deref(), Some("primary"), "{path}");
+        assert_eq!(security.certs.len(), 1, "{path}");
+        let cert = security.resolve_mtls_or_refuse().unwrap();
+        assert_eq!(cert.cert, format!("{leaf}.crt"), "{path}");
+        assert_eq!(cert.key, format!("{leaf}.key"), "{path}");
+        assert_eq!(cert.ca, ca, "{path}");
+    }
+}
+
+#[test]
+fn generated_channel_security_loads_file_and_pathless_plaintext() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let helper = root.join("edgion-tests/integration/scripts/utils/conf_sync_certs.sh");
+    let output = std::process::Command::new("bash")
+        .args([
+            "-c",
+            "source \"$1\"; conf_sync_security_block \"$2\"",
+            "channel-config-test",
+        ])
+        .arg(&helper)
+        .arg("client")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let yaml = String::from_utf8(output.stdout).unwrap();
+    let security = load_channel_security_yaml(&yaml);
+    let cert = security.resolve_mtls_or_refuse().unwrap();
+    assert_eq!(cert.cert, "certs/grpc/primary/client.crt");
+    assert_eq!(cert.key, "certs/grpc/primary/client.key");
+    assert_eq!(cert.ca, "certs/grpc/primary/ca.crt");
+
+    for original in [yaml.as_str(), "conf_sync_security: {certs: [{skip_tls: true}]}\n"] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+        std::fs::write(&path, original).unwrap();
+        let output = std::process::Command::new("bash")
+            .args([
+                "-c",
+                "source \"$1\"; conf_sync_replace_with_skip_tls \"$2\"",
+                "channel-config-test",
+            ])
+            .arg(&helper)
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let rewritten = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(rewritten.matches("conf_sync_security:").count(), 1);
+        let security = load_channel_security_yaml(&rewritten);
+        assert_eq!(security.active.as_deref(), Some("insecure"));
+        let cert = security.resolve_active_tls().unwrap();
+        assert!(cert.skip_tls);
+        assert!(cert.cert.is_empty() && cert.key.is_empty() && cert.ca.is_empty());
+    }
 }

@@ -277,7 +277,7 @@ impl ConfigSyncClient {
             // side, whose provision() failure aborts startup.
             if security.auto_ca {
                 anyhow::bail!(
-                    "conf_sync_security.auto_ca=true but no TLS certs are configured (no `certs`/`tls`). \
+                    "conf_sync_security.auto_ca=true but no TLS certs are configured (no selected `certs` entry). \
                      auto_ca requires mTLS; refusing to connect in plaintext. Configure the conf_sync \
                      cert paths (the Controller's internal CA provisions the gateway Secret)."
                 );

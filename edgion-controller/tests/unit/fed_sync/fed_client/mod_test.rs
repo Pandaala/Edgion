@@ -62,13 +62,13 @@ fn federation_requires_mtls_channel() {
 
     // skip_tls -> SkipTls -> reason skip_tls
     let skip = ConfSyncSecurityConfig {
-        tls: Some(ConfSyncTlsConfig {
+        certs: vec![ConfSyncTlsConfig {
             name: None,
             cert: "c".into(),
             key: "k".into(),
             ca: "a".into(),
             skip_tls: true,
-        }),
+        }],
         ..Default::default()
     };
     assert_eq!(skip.resolve_mtls_or_refuse().unwrap_err(), MtlsRefusal::SkipTls);
@@ -76,13 +76,13 @@ fn federation_requires_mtls_channel() {
 
     // Real mTLS -> Ok (gate passes; client proceeds to self-check)
     let mtls = ConfSyncSecurityConfig {
-        tls: Some(ConfSyncTlsConfig {
+        certs: vec![ConfSyncTlsConfig {
             name: None,
             cert: "c".into(),
             key: "k".into(),
             ca: "a".into(),
             skip_tls: false,
-        }),
+        }],
         ..Default::default()
     };
     assert!(mtls.resolve_mtls_or_refuse().is_ok());

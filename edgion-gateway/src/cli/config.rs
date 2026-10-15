@@ -223,8 +223,9 @@ pub struct EdgionGatewayConfig {
     /// resolved Secrets to this data plane, so it must be made explicitly. Omitting it
     /// makes the Gateway REFUSE TO START (see
     /// `ConfSyncSecurityConfig::ensure_transport_configured`). Configure exactly one of:
-    /// `auto_ca: true` (Kubernetes), `certs`/legacy `tls` cert paths (file-mode mTLS), or
-    /// `tls.skip_tls: true` — the explicit opt-in for plaintext. Must match the Controller.
+    /// `auto_ca: true` with mounted `certs` paths (Kubernetes), selected `certs` paths
+    /// (file-mode mTLS), or
+    /// `skip_tls: true` on the selected entry — the explicit opt-in for plaintext. Must match the Controller.
     #[arg(skip)]
     #[serde(default)]
     pub conf_sync_security: edgion_common::conf_sync::config::ConfSyncSecurityConfig,

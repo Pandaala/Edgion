@@ -294,39 +294,6 @@ conf_sync_security:
 EOF
     log_success "Gateway YAML (multi-cert): $gateway_yaml"
 
-    # ── 4b. Also generate backward-compat YAML configs (old single-cert format) ──
-    # These are written out for reference / manual testing, but NOT used in the
-    # automated test run (which uses the multi-cert format above).
-    local controller_yaml_compat="${WORK_DIR}/edgion-controller-mtls-compat.yaml"
-    local gateway_yaml_compat="${WORK_DIR}/edgion-gateway-mtls-compat.yaml"
-
-    cp "${PROJECT_ROOT}/config/edgion-controller.yaml" "$controller_yaml_compat"
-    conf_sync_strip_security_block "$controller_yaml_compat"
-    cat >> "$controller_yaml_compat" <<EOF
-
-# ── Backward-compat single-cert mTLS (old format, still supported) ──
-conf_sync_security:
-  tls:
-    cert: certs/grpc/primary/server.crt
-    key: certs/grpc/primary/server.key
-    ca: certs/grpc/primary/ca.crt
-    skip_tls: false
-EOF
-
-    cp "${PROJECT_ROOT}/config/edgion-gateway.yaml" "$gateway_yaml_compat"
-    conf_sync_strip_security_block "$gateway_yaml_compat"
-    cat >> "$gateway_yaml_compat" <<EOF
-
-# ── Backward-compat single-cert mTLS (old format, still supported) ──
-conf_sync_security:
-  tls:
-    cert: certs/grpc/primary/client.crt
-    key: certs/grpc/primary/client.key
-    ca: certs/grpc/primary/ca.crt
-    skip_tls: false
-EOF
-    log_success "Backward-compat YAML configs written (not used in this run)"
-
     # ── 5. Generate runtime TLS/mTLS certs for test suites ──
     log_section "Generating test suite certificates"
 

@@ -73,7 +73,9 @@ udp_log:
 # mTLS handshake protects the Secrets this channel carries -- no plaintext crosses the
 # network. `server_addrs` uses the https:// scheme under mTLS (it is normalized either way).
 conf_sync_security:
-  tls:
-    cert: certs/grpc/primary/client.crt   # Gateway client certificate (PEM)
-    key: certs/grpc/primary/client.key    # Client private key (PEM)
-    ca: certs/grpc/primary/ca.crt         # CA used to verify the Controller server certificate
+  active: primary
+  certs:
+    - name: primary
+      cert: certs/grpc/primary/client.crt   # Gateway client certificate (PEM)
+      key: certs/grpc/primary/client.key    # Client private key (PEM)
+      ca: certs/grpc/primary/ca.crt         # CA used to verify the Controller server certificate

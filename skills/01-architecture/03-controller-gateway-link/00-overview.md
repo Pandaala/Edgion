@@ -239,7 +239,6 @@ handshake, so swapping the client-CA verifier governs only *future* handshakes.
 pub struct ConfSyncSecurityConfig {
     pub active: Option<String>,          // Name of the active certificate set
     pub certs: Vec<ConfSyncTlsConfig>,   // Multi-cert sets ([[...certs]] array)
-    pub tls: Option<ConfSyncTlsConfig>,  // Pre-release removal debt; do not use
     pub auto_ca: bool,                   // Kubernetes internal-CA provisioning
     pub rotation: Option<ConfSyncRotationConfig>, // controller-only rotation policy
 }
@@ -256,9 +255,12 @@ pub struct ConfSyncTlsConfig {
 `resolve_active_tls()` resolves the effective TLS configuration by priority:
 1. `certs` array: find the entry where `name == active`
 2. `certs` has only one entry and `active` is None: pick it automatically
-3. Current code falls back to `tls`; this is removal debt, not a supported configuration contract
-4. None configured → no resolved TLS set; startup fail-close rejects this unless `auto_ca` is the
+3. None configured → no resolved TLS set; startup fail-close rejects this unless `auto_ca` is the
    selected provisioning mode
+
+ARCH-074 removed the singular `tls` field and fallback. A selector without a matching
+`certs` entry is invalid, including when unknown legacy material is present. Unknown-field
+handling remains consumer-specific; removal does not impose a new strict parser policy.
 
 Path resolution is handled via `ConfSyncTlsConfig::resolve_path()` based on `work_dir`, consistent with the behavior of other configuration paths.
 

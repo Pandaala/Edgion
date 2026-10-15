@@ -313,10 +313,12 @@ udp_log:
 # never a default: the Gateway logs an ERROR and raises the metric
 # edgion_system_error_state{reason="skip_tls"} so the degraded state stays visible.
 conf_sync_security:
-  tls:
-    cert: certs/grpc/primary/client.crt   # Gateway client certificate
-    key: certs/grpc/primary/client.key    # Gateway client private key
-    ca: certs/grpc/primary/ca.crt         # CA certificate (verifies Controller server cert)
+  active: primary
+  certs:
+    - name: primary
+      cert: certs/grpc/primary/client.crt   # Gateway client certificate
+      key: certs/grpc/primary/client.key    # Gateway client private key
+      ca: certs/grpc/primary/ca.crt         # CA certificate (verifies Controller server cert)
 #
 # --- Multi-cert format (supports cert rotation / CA migration) ---
 # conf_sync_security:

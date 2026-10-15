@@ -41,13 +41,13 @@ fn omitted_security_refuses_to_serve_plaintext() {
 fn skip_tls_still_serves_plaintext() {
     // The explicit escape hatch is untouched: skip_tls is accepted (and marks SKIP_TLS).
     let security = ConfSyncSecurityConfig {
-        tls: Some(edgion_common::conf_sync::config::ConfSyncTlsConfig {
+        certs: vec![edgion_common::conf_sync::config::ConfSyncTlsConfig {
             name: None,
             cert: String::new(),
             key: String::new(),
             ca: String::new(),
             skip_tls: true,
-        }),
+        }],
         ..Default::default()
     };
     assert!(
@@ -63,13 +63,13 @@ fn skip_tls_on_non_loopback_bind_is_accepted_but_never_silent() {
     // combination (cleartext Secrets on a routable address) must always be loud: this
     // pins the WARN branch so a future refactor cannot drop it back into silence.
     let security = ConfSyncSecurityConfig {
-        tls: Some(edgion_common::conf_sync::config::ConfSyncTlsConfig {
+        certs: vec![edgion_common::conf_sync::config::ConfSyncTlsConfig {
             name: None,
             cert: String::new(),
             key: String::new(),
             ca: String::new(),
             skip_tls: true,
-        }),
+        }],
         ..Default::default()
     };
     for bind in ["0.0.0.0:12151", "192.168.1.10:12151", "[::]:12151"] {

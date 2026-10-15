@@ -127,13 +127,15 @@ access_log:
       path: logs/edgion_access.log
 
 conf_sync_security:
-  tls:
-    cert: certs/grpc/primary/client.crt
-    key: certs/grpc/primary/client.key
-    ca: certs/grpc/primary/ca.crt
+  active: primary
+  certs:
+    - name: primary
+      cert: certs/grpc/primary/client.crt
+      key: certs/grpc/primary/client.key
+      ca: certs/grpc/primary/ca.crt
 ```
 
-The `conf_sync_security` block is mandatory: both binaries refuse to start when it is omitted. Use the canonical, fully commented examples in `config/edgion-controller.yaml` and `config/edgion-gateway.yaml`; Kubernetes deployments use `auto_ca`, while plaintext requires the explicit audited `tls.skip_tls: true` escape hatch.
+The `conf_sync_security` block is mandatory: both binaries refuse to start when it is omitted. Use the canonical, fully commented examples in `config/edgion-controller.yaml` and `config/edgion-gateway.yaml`; Kubernetes deployments use `auto_ca`, while plaintext requires the explicit audited `skip_tls: true` escape hatch on the selected `certs` entry.
 
 ## Working directory
 

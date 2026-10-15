@@ -165,10 +165,12 @@ conf_sync:
 # REQUIRED — omitting this section makes the controller refuse to start.
 # File-mode mTLS (default). Generate the set with `edgion-cli gen-certs` (see Quick Start).
 conf_sync_security:
-  tls:
-    cert: certs/grpc/primary/server.crt
-    key: certs/grpc/primary/server.key
-    ca: certs/grpc/primary/ca.crt
+  active: primary
+  certs:
+    - name: primary
+      cert: certs/grpc/primary/server.crt
+      key: certs/grpc/primary/server.key
+      ca: certs/grpc/primary/ca.crt
 ```
 
 Key difference from Kubernetes mode: `conf_center.type: file_system` replaces `kubernetes`. The controller watches the `conf_dir` directory for YAML files and hot-reloads on changes.
@@ -224,10 +226,12 @@ access_log:
 # REQUIRED — omitting this section makes the gateway refuse to start.
 # File-mode mTLS (default), client side of the same set the controller uses.
 conf_sync_security:
-  tls:
-    cert: certs/grpc/primary/client.crt
-    key: certs/grpc/primary/client.key
-    ca: certs/grpc/primary/ca.crt
+  active: primary
+  certs:
+    - name: primary
+      cert: certs/grpc/primary/client.crt
+      key: certs/grpc/primary/client.key
+      ca: certs/grpc/primary/ca.crt
 ```
 
 ### conf_sync channel security
@@ -267,10 +271,12 @@ edgion-cli gen-certs --output file --output-dir /usr/local/edgion/certs/grpc \
 gateway:
   server_addrs: ["https://controller.example.internal:12151"]  # must match a --server-san above
 conf_sync_security:
-  tls:
-    cert: certs/grpc/primary/client.crt
-    key: certs/grpc/primary/client.key
-    ca: certs/grpc/primary/ca.crt
+  active: primary
+  certs:
+    - name: primary
+      cert: certs/grpc/primary/client.crt
+      key: certs/grpc/primary/client.key
+      ca: certs/grpc/primary/ca.crt
 ```
 
 `grpc_listen` is already `0.0.0.0` in the shipped controller config — no change is needed to move

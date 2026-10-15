@@ -308,13 +308,16 @@ conf_sync_security:
 > 只覆盖第一个 Controller 的 SAN 会通过所有单 Controller 测试、**恰好在真实 failover 时失败**
 > （轮转落到第二个地址后 TLS 校验拒绝），因此端到端 failover 集成测试会对此做断言。
 
-> **向后兼容**：旧版单套证书格式仍受支持，无需迁移：
+> **文件模式迁移**：将旧的单套 `tls` 配置移入 `certs` 列表。
+> 使用 `active` 选择命名条目；仅有一个条目时可以省略 `active`：
 > ```yaml
 > conf_sync_security:
->   tls:
->     cert: certs/grpc/server.crt
->     key: certs/grpc/server.key
->     ca: certs/grpc/ca.crt
+>   active: primary
+>   certs:
+>     - name: primary
+>       cert: certs/grpc/server.crt
+>       key: certs/grpc/server.key
+>       ca: certs/grpc/ca.crt
 > ```
 
 ### 配置参考
@@ -342,7 +345,7 @@ conf_sync_security:
 | 单条 `[[certs]]` 且无 `active` | 自动选中唯一那条 |
 | 多条 `[[certs]]` + `active = "name"` | 与 `name` 匹配的那条 |
 | 多条 `[[certs]]` 且无 `active` | 启动报错 |
-| 无 `[[certs]]`，存在旧格式 `[tls]` | 使用 `[tls]` 配置 |
+| `active` 未匹配任何 `certs` 条目 | 启动报错 |
 | 无任何 mTLS 配置 | 启动失败（见下方行为矩阵） |
 
 ### 行为矩阵
@@ -351,7 +354,7 @@ conf_sync_security:
 |---------|------|
 | 无 `conf_sync_security` 段 | **拒绝启动**（Controller 与 Gateway 均以非零码退出） |
 | active 证书有效 | mTLS gRPC |
-| `auto_ca: true`（Controller：只写它即可；Gateway：**还需**配 `tls` 证书路径） | mTLS gRPC（由 Controller 内置 CA 自动签发证书） |
+| `auto_ca: true`（Controller：只写它即可；Gateway：**还需**配 选中的 `certs` 证书路径） | mTLS gRPC（由 Controller 内置 CA 自动签发证书） |
 | **Gateway** 上只写 `auto_ca: true`、没有证书路径 | 启动失败（auto_ca 意味着强制 mTLS，客户端证书必须能从磁盘读到） |
 | `active` 名称不匹配任何证书集 | 启动失败 |
 | 证书文件缺失或无效 | Controller 启动失败 / Gateway 连接失败并重试 |
@@ -377,19 +380,23 @@ conf_sync 通道会把**解析后的 Secret**（TLS 私钥、后端凭证）从 
   # （Secret `edgion-conf-sync-certs`，由官方 manifest 挂载）
   conf_sync_security:
     auto_ca: true
-    tls:
-      cert: /etc/edgion/conf-sync-certs/client.crt
-      key: /etc/edgion/conf-sync-certs/client.key
-      ca: /etc/edgion/conf-sync-certs/ca.crt
+    active: primary
+    certs:
+      - name: primary
+        cert: /etc/edgion/conf-sync-certs/client.crt
+        key: /etc/edgion/conf-sync-certs/client.key
+        ca: /etc/edgion/conf-sync-certs/ca.crt
   ```
 
-- **文件模式 mTLS**：配置 `conf_sync_security.certs`（或旧格式 `conf_sync_security.tls`），提供 `cert` / `key` / `ca` 路径。
+- **文件模式 mTLS**：配置 选中的 `conf_sync_security.certs` 条目，提供 `cert` / `key` / `ca` 路径。
 - **继续使用明文**：显式声明。
 
 ```yaml
 conf_sync_security:
-  tls:
-    skip_tls: true    # 不安全：conf_sync 走明文。仅限本地开发 / 非生产环境。
+  active: insecure
+  certs:
+    - name: insecure
+      skip_tls: true    # 不安全：conf_sync 走明文。仅限本地开发 / 非生产环境。
 ```
 
 明文（`skip_tls: true`）在两端启动时仍会打印 ERROR 日志，并置位

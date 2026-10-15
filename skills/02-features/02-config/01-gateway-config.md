@@ -320,9 +320,8 @@ Each `certs` entry has:
 | `ca` | `String` | — | CA certificate path (used to verify the Controller server certificate) |
 | `skip_tls` | `bool` | `false` | Explicit plaintext opt-in: `true` skips TLS and connects in plaintext (ERROR log + `skip_tls` metric). The ONLY way to run this channel in plaintext. |
 
-> **Removal debt:** code still accepts the old singular
-> `conf_sync_security.tls` field. It is not a supported configuration contract;
-> do not use it in new configuration or examples.
+> File-mode configuration uses only `certs` and `active`. Migrate old singular
+> `tls` blocks into a selected `certs` entry; they no longer supply TLS material.
 
 > **`auto_ca` is asymmetric.** The Controller needs only `auto_ca: true` (it mints its own
 > server identity in memory). The **Gateway** needs `auto_ca: true` **plus** a selected cert

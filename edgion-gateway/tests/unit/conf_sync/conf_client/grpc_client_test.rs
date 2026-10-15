@@ -16,13 +16,13 @@ const DUMMY_ADDR: &str = "127.0.0.1:65000";
 /// cheapest way to build a client without touching cert files.
 fn skip_tls_security() -> ConfSyncSecurityConfig {
     ConfSyncSecurityConfig {
-        tls: Some(ConfSyncTlsConfig {
+        certs: vec![ConfSyncTlsConfig {
             name: None,
             cert: String::new(),
             key: String::new(),
             ca: String::new(),
             skip_tls: true,
-        }),
+        }],
         ..Default::default()
     }
 }
@@ -395,13 +395,13 @@ async fn auto_ca_with_skip_tls_is_allowed_escape_hatch() {
     // loud WARN at runtime) and must NOT bail. No cert files are read.
     let security = ConfSyncSecurityConfig {
         auto_ca: true,
-        tls: Some(ConfSyncTlsConfig {
+        certs: vec![ConfSyncTlsConfig {
             name: None,
             cert: String::new(),
             key: String::new(),
             ca: String::new(),
             skip_tls: true,
-        }),
+        }],
         ..Default::default()
     };
     let client = ConfigSyncClient::new(

@@ -63,10 +63,12 @@ data:
     # auto_ca is ENFORCED on the data plane: the Gateway will not run this channel in
     # plaintext. If the Secret is not yet provisioned at cold start it retries within the
     # startup-probe budget (the volume is `optional`); it never downgrades to plaintext.
-    # The tls block below is REQUIRED under auto_ca (auto_ca implies mTLS).
+    # The selected certs entry below is REQUIRED under auto_ca (auto_ca implies mTLS).
     conf_sync_security:
       auto_ca: true
-      tls:
-        cert: /etc/edgion/conf-sync-certs/client.crt
-        key: /etc/edgion/conf-sync-certs/client.key
-        ca: /etc/edgion/conf-sync-certs/ca.crt
+      active: primary
+      certs:
+        - name: primary
+          cert: /etc/edgion/conf-sync-certs/client.crt
+          key: /etc/edgion/conf-sync-certs/client.key
+          ca: /etc/edgion/conf-sync-certs/ca.crt

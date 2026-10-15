@@ -117,14 +117,18 @@ conf_sync:
 # the operator-managed absolute paths instead, e.g.:
 #
 #   conf_sync_security:
-#     tls:
-#       cert: /etc/edgion/conf-sync-certs/server.crt
-#       key:  /etc/edgion/conf-sync-certs/server.key
-#       ca:   /etc/edgion/conf-sync-certs/ca.crt
+#     active: primary
+#     certs:
+#       - name: primary
+#         cert: /etc/edgion/conf-sync-certs/server.crt
+#         key:  /etc/edgion/conf-sync-certs/server.key
+#         ca:   /etc/edgion/conf-sync-certs/ca.crt
 #
 # and give the Gateway the matching client cert / key / ca.
 conf_sync_security:
-  tls:
-    cert: certs/grpc/primary/server.crt
-    key: certs/grpc/primary/server.key
-    ca: certs/grpc/primary/ca.crt
+  active: primary
+  certs:
+    - name: primary
+      cert: certs/grpc/primary/server.crt
+      key: certs/grpc/primary/server.key
+      ca: certs/grpc/primary/ca.crt

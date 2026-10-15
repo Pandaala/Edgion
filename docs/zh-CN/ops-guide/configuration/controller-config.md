@@ -50,15 +50,19 @@ conf_sync_security:
 #
 # 选项 2 —— 文件模式 mTLS：
 # conf_sync_security:
-#   tls:
-#     cert: certs/grpc/server.crt   # Controller 服务端证书（PEM）
-#     key: certs/grpc/server.key    # 服务端私钥（PEM）
-#     ca: certs/grpc/ca.crt         # 验证 Gateway 客户端证书的 CA
+#   active: primary
+#   certs:
+#     - name: primary
+#       cert: certs/grpc/server.crt   # Controller 服务端证书（PEM）
+#       key: certs/grpc/server.key    # 服务端私钥（PEM）
+#       ca: certs/grpc/ca.crt         # 验证 Gateway 客户端证书的 CA
 #
 # 选项 3 —— 显式选择明文（仅限本地开发 / 非生产，会输出 ERROR 日志）：
 # conf_sync_security:
-#   tls:
-#     skip_tls: true
+#   active: insecure
+#   certs:
+#     - name: insecure
+#       skip_tls: true
 
 # ─── conf_center：FileSystem 模式（本地开发）─────────────────────
 conf_center:
@@ -147,18 +151,22 @@ Gateway 解压后再应用配置。原有的 64 MiB List 限制已移除；两�
 | 配置状态 | 结果 |
 |---------|------|
 | `auto_ca: true` | mTLS —— 由 Controller 内置 CA 自动签发 CA 与 Gateway 客户端证书（Kubernetes 推荐） |
-| `certs` / 旧格式 `tls` 段，含 `cert` + `key` + `ca` | 文件模式 mTLS |
-| `tls.skip_tls: true` | 显式选择明文（输出 ERROR 日志；仅限本地开发 / 非生产） |
+| 选中的 `certs` 条目，含 `cert` + `key` + `ca` | 文件模式 mTLS |
+| `skip_tls: true` | 显式选择明文（输出 ERROR 日志；仅限本地开发 / 非生产） |
 | *（省略该段）* | **拒绝启动** |
 
 > **迁移提示**：过去省略该段意味着"明文 gRPC"，依赖此行为的部署现在将无法启动。
-> 若要继续使用明文，请显式声明 `conf_sync_security: {tls: {skip_tls: true}}`；
+> 若要继续使用明文，请显式声明 `conf_sync_security: {certs: [{skip_tls: true}]}`；
 > 否则请配置 `auto_ca` 或证书路径。
 
-#### [conf_sync_security.tls]
+#### [conf_sync_security.certs]
+
+`certs` 是证书集列表，`active` 按 `name` 选择条目；仅有一个条目时可以省略。
+重复名称和未匹配的选择器会被拒绝。旧的单套 `tls` 配置必须迁移为 `certs` 条目。
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
+| `name` | `String?` | — | 条目名称，供 `active` 选择 |
 | `cert` | `String` | — | 服务端证书路径（PEM，相对 work_dir） |
 | `key` | `String` | — | 服务端私钥路径（PEM） |
 | `ca` | `String` | — | CA 证书路径，用于验证 Gateway 客户端证书 |
@@ -479,10 +487,12 @@ conf_center:
 
 ```yaml
 conf_sync_security:
-  tls:
-    cert: certs/grpc/server.crt
-    key: certs/grpc/server.key
-    ca: certs/grpc/ca.crt
+  active: primary
+  certs:
+    - name: primary
+      cert: certs/grpc/server.crt
+      key: certs/grpc/server.key
+      ca: certs/grpc/ca.crt
 ```
 
 ### 非 Kubernetes（虚拟机 / 裸金属）HA 部署

@@ -47,7 +47,7 @@ async fn scrapes_follow_installed_identity_through_stalled_rejected_and_successf
         skip_tls: false,
     };
     let mut security = ConfSyncSecurityConfig {
-        tls: Some(tls.clone()),
+        certs: vec![tls.clone()],
         ..Default::default()
     };
     let addresses = vec!["localhost:65000".into()];
@@ -61,7 +61,7 @@ async fn scrapes_follow_installed_identity_through_stalled_rejected_and_successf
     );
     security.auto_ca = false;
     let mut plaintext = security.clone();
-    plaintext.tls.as_mut().unwrap().skip_tls = true;
+    plaintext.certs[0].skip_tls = true;
     let plain = Arc::new(
         ConfigSyncClient::new(addresses.clone(), "test".into(), Duration::from_secs(1), &plaintext)
             .await

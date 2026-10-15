@@ -36,22 +36,28 @@ gateway:
 # in memory).
 conf_sync_security:
   auto_ca: true
-  tls:
-    cert: /etc/edgion/conf-sync-certs/client.crt
-    key: /etc/edgion/conf-sync-certs/client.key
-    ca: /etc/edgion/conf-sync-certs/ca.crt
+  active: primary
+  certs:
+    - name: primary
+      cert: /etc/edgion/conf-sync-certs/client.crt
+      key: /etc/edgion/conf-sync-certs/client.key
+      ca: /etc/edgion/conf-sync-certs/ca.crt
 #
 # Option 2 — file-mode mTLS:
 # conf_sync_security:
-#   tls:
-#     cert: certs/grpc/client.crt   # Gateway client certificate (PEM)
-#     key: certs/grpc/client.key    # Client private key (PEM)
-#     ca: certs/grpc/ca.crt         # CA to verify Controller server certificate
+#   active: primary
+#   certs:
+#     - name: primary
+#       cert: certs/grpc/client.crt   # Gateway client certificate (PEM)
+#       key: certs/grpc/client.key    # Client private key (PEM)
+#       ca: certs/grpc/ca.crt         # CA to verify Controller server certificate
 #
 # Option 3 — explicit plaintext opt-in (local dev / non-production only, logs ERROR):
 # conf_sync_security:
-#   tls:
-#     skip_tls: true
+#   active: insecure
+#   certs:
+#     - name: insecure
+#       skip_tls: true
 
 logging:
   # System logs only — does NOT affect business log paths
@@ -247,15 +253,15 @@ credentials) to the Gateway, so its transport must be chosen explicitly.
 
 | Configuration | Result |
 |---------------|--------|
-| `auto_ca: true` **plus** `tls` cert paths | mTLS — the Controller's internal CA provisions the client cert (recommended on Kubernetes) |
+| `auto_ca: true` **plus** selected `certs` paths | mTLS — the Controller's internal CA provisions the client cert (recommended on Kubernetes) |
 | `auto_ca: true` **alone**, no cert paths | **Refuses to start** — `auto_ca` implies mTLS, so the Gateway needs the paths to the provisioned cert files |
-| `certs` / legacy `tls` block with `cert` + `key` + `ca` | File-mode mTLS |
-| `tls.skip_tls: true` | Plaintext, explicitly opted in (logs ERROR; local dev / non-production only) |
+| Selected `certs` entry with `cert` + `key` + `ca` | File-mode mTLS |
+| `skip_tls: true` | Plaintext, explicitly opted in (logs ERROR; local dev / non-production only) |
 | *(section omitted)* | **Refuses to start** |
 
 > **`auto_ca` is asymmetric — do not copy the Controller's block.** The **Controller** needs
 > only `auto_ca: true`: it mints its own server identity in memory. The **Gateway** needs
-> `auto_ca: true` **and** the `tls` cert paths, because its client cert arrives as a
+> `auto_ca: true` **and** the selected `certs` paths, because its client cert arrives as a
 > Controller-provisioned Secret that must be read from disk. A bare `auto_ca: true` on the
 > Gateway exits non-zero with `conf_sync_security.auto_ca=true but no cert paths are
 > configured`.
@@ -269,24 +275,35 @@ The choice must match the Controller's — a mismatch causes a handshake failure
 > # (a) Kubernetes — auto_ca + the provisioned cert paths (matches the shipped ConfigMap)
 > conf_sync_security:
 >   auto_ca: true
->   tls:
->     cert: /etc/edgion/conf-sync-certs/client.crt
->     key: /etc/edgion/conf-sync-certs/client.key
->     ca: /etc/edgion/conf-sync-certs/ca.crt
+>   active: primary
+>   certs:
+>     - name: primary
+>       cert: /etc/edgion/conf-sync-certs/client.crt
+>       key: /etc/edgion/conf-sync-certs/client.key
+>       ca: /etc/edgion/conf-sync-certs/ca.crt
 >
 > # (b) file-mode mTLS
 > conf_sync_security:
->   tls: { cert: certs/grpc/client.crt, key: certs/grpc/client.key, ca: certs/grpc/ca.crt }
+>   active: primary
+>   certs:
+>     - { name: primary, cert: certs/grpc/client.crt, key: certs/grpc/client.key, ca: certs/grpc/ca.crt }
 >
 > # (c) keep plaintext, explicitly (INSECURE)
 > conf_sync_security:
->   tls: { skip_tls: true }
+>   active: insecure
+>   certs:
+>     - { name: insecure, skip_tls: true }
 > ```
 
-#### conf_sync_security.tls
+#### conf_sync_security.certs
+
+`certs` is a list of certificate sets. `active` selects an entry by `name`; it may be
+omitted when exactly one entry exists. Duplicate names and unmatched selectors are
+rejected. Replace any old singular `tls` block with a `certs` entry.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
+| `name` | `String?` | — | Entry name, used by the `active` selector |
 | `cert` | `String` | — | Client certificate path (PEM, relative to work_dir) |
 | `key` | `String` | — | Client private key path (PEM) |
 | `ca` | `String` | — | CA certificate path used to verify the Controller server certificate |
@@ -541,10 +558,12 @@ gateway:
   server_addrs: ["http://10.0.0.5:12151"]  # scheme is automatically switched to https://
 
 conf_sync_security:
-  tls:
-    cert: certs/grpc/client.crt
-    key: certs/grpc/client.key
-    ca: certs/grpc/ca.crt
+  active: primary
+  certs:
+    - name: primary
+      cert: certs/grpc/client.crt
+      key: certs/grpc/client.key
+      ca: certs/grpc/ca.crt
 ```
 
 ## Related Documentation

@@ -87,8 +87,6 @@ pub struct ConfSyncSecurityConfig {
     pub active: Option<String>,
     /// Certificate sets (YAML `conf_sync_security.certs` list).
     pub certs: Vec<ConfSyncTlsConfig>,
-    /// Legacy single-cert format [conf_sync_security.tls] — kept for backward compat.
-    pub tls: Option<ConfSyncTlsConfig>,
     /// When true (Kubernetes only), the Controller's internal CA auto-provisions the
     /// conf_sync mTLS certs (CA + gateway-client Secret) instead of requiring
     /// manually-mounted cert files. Default false (manual file certs).
@@ -106,8 +104,7 @@ impl ConfSyncSecurityConfig {
     /// Priority:
     /// 1. `certs` array: find entry where `name == active`
     /// 2. `certs` has exactly one entry and `active` is None: use it
-    /// 3. Fallback to legacy `tls` field
-    /// 4. `None` = no active file-based TLS config
+    /// 3. `None` = no active file-based TLS config
     ///
     /// Callers must validate the selection and enforce the transport configuration.
     /// Plaintext requires an explicit `skip_tls` on the selected config.
@@ -121,18 +118,18 @@ impl ConfSyncSecurityConfig {
             }
             return None;
         }
-        self.tls.as_ref()
+        None
     }
 
     /// True when the security section is entirely unconfigured: no cert sets,
-    /// no legacy `tls`, and no `active` selector. Since 2026-07-14 this state is
+    /// and no `active` selector. Since 2026-07-14 this state is
     /// FATAL for conf_sync on both planes — see [`Self::ensure_transport_configured`].
     ///
     /// Distinct from `skip_tls` (certs present but bypassed — still the explicit,
     /// supported way to run plaintext) and from a dangling `active` selector
     /// (rejected by `validate()`).
     pub fn is_plaintext_omitted(&self) -> bool {
-        self.certs.is_empty() && self.tls.is_none() && self.active.is_none()
+        self.certs.is_empty() && self.active.is_none()
     }
 
     /// Fail-close guard for the conf_sync transport (Controller↔Gateway).
@@ -163,8 +160,8 @@ impl ConfSyncSecurityConfig {
                  plane, so plaintext must be an explicit, audited choice — never the result of an \
                  omitted config block. Choose one: (a) set `conf_sync_security.auto_ca: true` \
                  (Kubernetes: the Controller's internal CA provisions the CA and the gateway \
-                 client cert automatically); (b) configure `conf_sync_security.certs` (or the \
-                 legacy `conf_sync_security.tls` block) with `cert`/`key`/`ca` paths for file-mode \
+                 client cert automatically); (b) configure `conf_sync_security.certs` with \
+                 `cert`/`key`/`ca` paths for file-mode \
                  mTLS; (c) if you genuinely intend plaintext, set `skip_tls: true` on the active \
                  cert set to opt in explicitly."
             );
@@ -218,10 +215,10 @@ impl ConfSyncSecurityConfig {
             }
         }
         // Reject a dangling `active` selector: it names a cert set but no certs
-        // (and no legacy `tls`) are configured. Without this guard the config
+        // are configured. Without this guard the config
         // passes validation yet `resolve_active_tls()` returns None, which would
         // be indistinguishable from a truly-omitted section at the channel builder.
-        if self.active.is_some() && self.certs.is_empty() && self.tls.is_none() {
+        if self.active.is_some() && self.certs.is_empty() {
             anyhow::bail!("conf_sync_security: 'active' is set but no certs are configured");
         }
         // Validate the active cert's paths (skip if skip_tls)
@@ -237,7 +234,7 @@ impl ConfSyncSecurityConfig {
 /// mTLS certificate file paths for conf_sync gRPC channel.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ConfSyncTlsConfig {
-    /// Unique name for this cert set. Required when using [[certs]] array format.
+    /// Name for this cert set. Required for selection with `active`.
     #[serde(default)]
     pub name: Option<String>,
     /// Certificate file path (relative to work_dir or absolute).
@@ -277,13 +274,13 @@ impl ConfSyncTlsConfig {
     /// Called before attempting to load certificates.
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.cert.trim().is_empty() {
-            anyhow::bail!("conf_sync_security.tls.cert must not be empty");
+            anyhow::bail!("conf_sync_security.certs[].cert must not be empty");
         }
         if self.key.trim().is_empty() {
-            anyhow::bail!("conf_sync_security.tls.key must not be empty");
+            anyhow::bail!("conf_sync_security.certs[].key must not be empty");
         }
         if self.ca.trim().is_empty() {
-            anyhow::bail!("conf_sync_security.tls.ca must not be empty");
+            anyhow::bail!("conf_sync_security.certs[].ca must not be empty");
         }
         Ok(())
     }

@@ -34,22 +34,28 @@ gateway:
 # （它在内存中自签服务端身份）。
 conf_sync_security:
   auto_ca: true
-  tls:
-    cert: /etc/edgion/conf-sync-certs/client.crt
-    key: /etc/edgion/conf-sync-certs/client.key
-    ca: /etc/edgion/conf-sync-certs/ca.crt
+  active: primary
+  certs:
+    - name: primary
+      cert: /etc/edgion/conf-sync-certs/client.crt
+      key: /etc/edgion/conf-sync-certs/client.key
+      ca: /etc/edgion/conf-sync-certs/ca.crt
 #
 # 选项 2 —— 文件模式 mTLS：
 # conf_sync_security:
-#   tls:
-#     cert: certs/grpc/client.crt   # Gateway 客户端证书（PEM）
-#     key: certs/grpc/client.key    # 客户端私钥（PEM）
-#     ca: certs/grpc/ca.crt         # 验证 Controller 服务端证书的 CA
+#   active: primary
+#   certs:
+#     - name: primary
+#       cert: certs/grpc/client.crt   # Gateway 客户端证书（PEM）
+#       key: certs/grpc/client.key    # 客户端私钥（PEM）
+#       ca: certs/grpc/ca.crt         # 验证 Controller 服务端证书的 CA
 #
 # 选项 3 —— 显式选择明文（仅限本地开发 / 非生产，会输出 ERROR 日志）：
 # conf_sync_security:
-#   tls:
-#     skip_tls: true
+#   active: insecure
+#   certs:
+#     - name: insecure
+#       skip_tls: true
 
 logging:
   # 系统日志（不影响业务日志路径）
@@ -188,15 +194,15 @@ leader-only 部署要求节点是能够提供服务的 leader，all-serve 部署
 
 | 配置状态 | 结果 |
 |---------|------|
-| `auto_ca: true` **并且**配置 `tls` 证书路径 | mTLS —— 由 Controller 内置 CA 自动签发客户端证书（Kubernetes 推荐） |
+| `auto_ca: true` **并且**配置选中的 `certs` 证书路径 | mTLS —— 由 Controller 内置 CA 自动签发客户端证书（Kubernetes 推荐） |
 | **只写** `auto_ca: true`、没有证书路径 | **拒绝启动** —— auto_ca 意味着强制 mTLS，Gateway 必须知道自动签发的证书文件在哪里 |
-| `certs` / 旧格式 `tls` 段，含 `cert` + `key` + `ca` | 文件模式 mTLS |
-| `tls.skip_tls: true` | 显式选择明文（输出 ERROR 日志；仅限本地开发 / 非生产） |
+| 选中的 `certs` 条目，含 `cert` + `key` + `ca` | 文件模式 mTLS |
+| `skip_tls: true` | 显式选择明文（输出 ERROR 日志；仅限本地开发 / 非生产） |
 | *（省略该段）* | **拒绝启动** |
 
 > **`auto_ca` 两端不对称——不要直接照抄 Controller 的配置块。** **Controller** 只需要
 > `auto_ca: true`：它在内存中自签服务端身份。**Gateway** 则需要 `auto_ca: true` **加上**
-> `tls` 证书路径，因为它的客户端证书是由 Controller 签发进 Secret、必须从磁盘读取的。
+> 选中的 `certs` 证书路径，因为它的客户端证书是由 Controller 签发进 Secret、必须从磁盘读取的。
 > Gateway 上只写 `auto_ca: true` 会以非零码退出，报
 > `conf_sync_security.auto_ca=true but no cert paths are configured`。
 
@@ -208,24 +214,34 @@ leader-only 部署要求节点是能够提供服务的 leader，all-serve 部署
 > # (a) Kubernetes —— auto_ca + 自动签发的证书路径（与官方 ConfigMap 一致）
 > conf_sync_security:
 >   auto_ca: true
->   tls:
->     cert: /etc/edgion/conf-sync-certs/client.crt
->     key: /etc/edgion/conf-sync-certs/client.key
->     ca: /etc/edgion/conf-sync-certs/ca.crt
+>   active: primary
+>   certs:
+>     - name: primary
+>       cert: /etc/edgion/conf-sync-certs/client.crt
+>       key: /etc/edgion/conf-sync-certs/client.key
+>       ca: /etc/edgion/conf-sync-certs/ca.crt
 >
 > # (b) 文件模式 mTLS
 > conf_sync_security:
->   tls: { cert: certs/grpc/client.crt, key: certs/grpc/client.key, ca: certs/grpc/ca.crt }
+>   active: primary
+>   certs:
+>     - { name: primary, cert: certs/grpc/client.crt, key: certs/grpc/client.key, ca: certs/grpc/ca.crt }
 >
 > # (c) 继续使用明文，显式声明（不安全）
 > conf_sync_security:
->   tls: { skip_tls: true }
+>   active: insecure
+>   certs:
+>     - { name: insecure, skip_tls: true }
 > ```
 
-#### conf_sync_security.tls
+#### conf_sync_security.certs
+
+`certs` 是证书集列表，`active` 按 `name` 选择条目；仅有一个条目时可以省略。
+重复名称和未匹配的选择器会被拒绝。旧的单套 `tls` 配置必须迁移为 `certs` 条目。
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
+| `name` | `String?` | — | 条目名称，供 `active` 选择 |
 | `cert` | `String` | — | 客户端证书路径（PEM，相对 work_dir） |
 | `key` | `String` | — | 客户端私钥路径（PEM） |
 | `ca` | `String` | — | CA 证书路径，用于验证 Controller 服务端证书 |
@@ -470,10 +486,12 @@ gateway:
   server_addrs: ["http://10.0.0.5:12151"]  # scheme 会自动切换为 https://
 
 conf_sync_security:
-  tls:
-    cert: certs/grpc/client.crt
-    key: certs/grpc/client.key
-    ca: certs/grpc/ca.crt
+  active: primary
+  certs:
+    - name: primary
+      cert: certs/grpc/client.crt
+      key: certs/grpc/client.key
+      ca: certs/grpc/ca.crt
 ```
 
 ## 相关文档

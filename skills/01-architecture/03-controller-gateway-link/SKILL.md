@@ -44,7 +44,7 @@ description: Bidirectional gRPC sync architecture between Controller and Gateway
 - **Default non-synced resources**: `ReferenceGrant` and `Secret` are the default
   `no_sync_kinds`; an explicit list replaces that default. ConfigMap is currently advertised by
   the Controller unless excluded, but the Gateway intentionally has no ConfigMap cache.
-- **Channel security (mTLS)**: `conf_sync_security` is a **required** section — omitting it makes both binaries refuse to start (fail-close, 2026-07-14), because this channel carries resolved Secrets. The current YAML contract uses the `conf_sync_security.certs` list selected by `active`. The old singular `conf_sync_security.tls` field still accepted by code is pre-release removal debt; do not use or extend it. Certificates are generated via `edgion-cli gen-certs --cert-name <name>`. See [00-overview.md § Channel security](00-overview.md) for details.
+- **Channel security (mTLS)**: `conf_sync_security` is a **required** section — omitting it makes both binaries refuse to start (fail-close, 2026-07-14), because this channel carries resolved Secrets. The current YAML contract uses the `conf_sync_security.certs` list selected by `active`. The singular `tls` field has been removed (ARCH-074); only the selected `certs` entry supplies file-mode material. Certificates are generated via `edgion-cli gen-certs --cert-name <name>`. See [00-overview.md § Channel security](00-overview.md) for details.
 - **Module distribution**: `edgion-common/src/conf_sync` (Proto, traits, transport config),
   `edgion-controller/src/conf_sync` (server), `edgion-gateway/src/conf_sync` (client), and
   `edgion-cli/src/certs` (certificate generation).

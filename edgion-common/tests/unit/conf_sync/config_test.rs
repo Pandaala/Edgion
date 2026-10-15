@@ -97,12 +97,12 @@ fn test_resolve_active_tls_scenarios() {
 
     let cases = [
         Case {
-            name: "legacy tls field falls back",
+            name: "unnamed single cert entry with no active selector",
             cfg: ConfSyncSecurityConfig {
-                tls: Some(make_tls(None, "legacy.crt")),
+                certs: vec![make_tls(None, "unnamed.crt")],
                 ..Default::default()
             },
-            expected_cert: Some("legacy.crt"),
+            expected_cert: Some("unnamed.crt"),
         },
         Case {
             name: "single cert entry with no active selector",
@@ -243,13 +243,13 @@ fn resolve_mtls_or_refuse_no_tls() {
 #[test]
 fn resolve_mtls_or_refuse_skip_tls() {
     let sec = ConfSyncSecurityConfig {
-        tls: Some(ConfSyncTlsConfig {
+        certs: vec![ConfSyncTlsConfig {
             name: None,
             cert: "c".into(),
             key: "k".into(),
             ca: "a".into(),
             skip_tls: true,
-        }),
+        }],
         ..Default::default()
     };
     assert_eq!(sec.resolve_mtls_or_refuse().unwrap_err(), MtlsRefusal::SkipTls);
@@ -258,13 +258,13 @@ fn resolve_mtls_or_refuse_skip_tls() {
 #[test]
 fn resolve_mtls_or_refuse_ok_for_mtls() {
     let sec = ConfSyncSecurityConfig {
-        tls: Some(ConfSyncTlsConfig {
+        certs: vec![ConfSyncTlsConfig {
             name: None,
             cert: "c".into(),
             key: "k".into(),
             ca: "a".into(),
             skip_tls: false,
-        }),
+        }],
         ..Default::default()
     };
     assert!(sec.resolve_mtls_or_refuse().is_ok());
@@ -275,12 +275,12 @@ fn is_plaintext_omitted_scenarios() {
     // Truly empty section → omitted.
     assert!(ConfSyncSecurityConfig::default().is_plaintext_omitted());
 
-    // Legacy tls present → not omitted.
-    let with_tls = ConfSyncSecurityConfig {
-        tls: Some(make_tls(None, "c.crt")),
+    // An unnamed single cert is also an explicit selection.
+    let with_unnamed_cert = ConfSyncSecurityConfig {
+        certs: vec![make_tls(None, "c.crt")],
         ..Default::default()
     };
-    assert!(!with_tls.is_plaintext_omitted());
+    assert!(!with_unnamed_cert.is_plaintext_omitted());
 
     // certs present → not omitted.
     let with_certs = ConfSyncSecurityConfig {
@@ -314,13 +314,13 @@ fn ensure_transport_configured_rejects_omitted_section() {
 fn ensure_transport_configured_accepts_skip_tls_and_file_mode() {
     // skip_tls stays the explicit plaintext escape hatch.
     let skip = ConfSyncSecurityConfig {
-        tls: Some(ConfSyncTlsConfig {
+        certs: vec![ConfSyncTlsConfig {
             name: None,
             cert: String::new(),
             key: String::new(),
             ca: String::new(),
             skip_tls: true,
-        }),
+        }],
         ..Default::default()
     };
     assert!(skip.ensure_transport_configured().is_ok());
@@ -350,7 +350,7 @@ fn ensure_transport_configured_accepts_bare_auto_ca() {
 fn skip_tls_escape_hatch_parses_without_cert_paths() {
     // The documented migration must be writable as a bare `skip_tls: true` — no
     // dummy cert/key/ca paths. It stays valid and is NOT the omitted state.
-    let parsed: ConfSyncSecurityConfig = serde_json::from_str(r#"{"tls": {"skip_tls": true}}"#).unwrap();
+    let parsed: ConfSyncSecurityConfig = serde_json::from_str(r#"{"certs": [{"skip_tls": true}]}"#).unwrap();
     assert!(!parsed.is_plaintext_omitted());
     assert!(parsed.validate().is_ok());
     assert!(parsed.ensure_transport_configured().is_ok());
@@ -361,7 +361,7 @@ fn skip_tls_escape_hatch_parses_without_cert_paths() {
 fn validate_still_rejects_empty_paths_without_skip_tls() {
     // Making cert/key/ca `#[serde(default)]` must not let a real mTLS set through
     // with missing paths.
-    let parsed: ConfSyncSecurityConfig = serde_json::from_str(r#"{"tls": {"cert": "c.crt"}}"#).unwrap();
+    let parsed: ConfSyncSecurityConfig = serde_json::from_str(r#"{"certs": [{"cert": "c.crt"}]}"#).unwrap();
     let err = parsed.validate().expect_err("missing key/ca must still be rejected");
     assert!(format!("{err:?}").contains("must not be empty"));
 }
@@ -448,4 +448,66 @@ fn rotation_numeric_validation_rejects_bad_combos() {
     let mut bad = ok.clone();
     bad.leaf_ttl = CertDuration::parse("11y").unwrap(); // > default ca_ttl (3650d)
     assert!(bad.validate_numeric().is_err());
+}
+
+#[test]
+fn retired_tls_material_cannot_satisfy_a_dangling_selector() {
+    // ARCH-074: this used to validate and silently select the unnamed legacy set.
+    let parsed: ConfSyncSecurityConfig = serde_json::from_str(
+        r#"{"active":"ghost","certs":[],"tls":{"cert":"old.crt","key":"old.key","ca":"old-ca.crt"}}"#,
+    )
+    .unwrap();
+    assert!(parsed.validate().unwrap_err().to_string().contains("no certs"));
+    assert!(parsed.resolve_active_tls().is_none());
+}
+
+#[test]
+fn retired_tls_only_is_not_a_transport_choice() {
+    for old in [
+        r#"{"tls":{"cert":"old.crt","key":"old.key","ca":"old-ca.crt"}}"#,
+        r#"{"tls":{"skip_tls":true}}"#,
+    ] {
+        let parsed: ConfSyncSecurityConfig = serde_json::from_str(old).unwrap();
+        assert!(parsed.validate().is_ok());
+        assert!(parsed.is_plaintext_omitted());
+        assert!(parsed.resolve_active_tls().is_none());
+        assert!(parsed.ensure_transport_configured().is_err());
+    }
+}
+
+#[test]
+fn canonical_selection_ignores_retired_material_and_serializes_only_certs() {
+    let parsed: ConfSyncSecurityConfig = serde_json::from_str(
+        r#"{"active":"primary","certs":[{"name":"primary","cert":"new.crt","key":"new.key","ca":"new-ca.crt"}],"tls":{"skip_tls":true}}"#,
+    )
+    .unwrap();
+    parsed.validate().unwrap();
+    parsed.ensure_transport_configured().unwrap();
+    let selected = parsed.resolve_mtls_or_refuse().unwrap();
+    assert_eq!(selected.cert, "new.crt");
+    assert!(!selected.skip_tls);
+    let wire = serde_json::to_value(parsed).unwrap();
+    assert!(wire.get("tls").is_none());
+    assert_eq!(wire["certs"][0]["cert"], "new.crt");
+}
+
+#[test]
+fn active_cert_rejects_each_empty_path_with_canonical_diagnostic() {
+    for field in ["cert", "key", "ca"] {
+        let mut cert = make_tls(Some("primary"), "primary.crt");
+        match field {
+            "cert" => cert.cert = " ".into(),
+            "key" => cert.key = " ".into(),
+            "ca" => cert.ca = " ".into(),
+            _ => unreachable!(),
+        }
+        let security = ConfSyncSecurityConfig {
+            certs: vec![cert],
+            ..Default::default()
+        };
+        assert_eq!(
+            security.validate().unwrap_err().to_string(),
+            format!("conf_sync_security.certs[].{field} must not be empty")
+        );
+    }
 }
