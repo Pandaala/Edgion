@@ -166,6 +166,7 @@ struct HeaderDemo {
 
 impl Context for HeaderDemo {
     fn on_http_call_response(&mut self, _token: u32, num_headers: usize, _body_size: usize, _num_trailers: usize) {
+        assert!(self.awaiting_callout, "callout must return to the originating HTTP object");
         self.awaiting_callout = false;
         // A failed callout arrives with 0 headers (proxy-wasm convention).
         if num_headers == 0 {

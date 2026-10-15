@@ -78,6 +78,12 @@ edgion-cli wasm convert-envoy \
 `inspect` 支持 `text`、`json`、`yaml`，最多读取 64 MiB。模块畸形或不兼容时，
 它仍会输出兼容性报告，但命令返回非零。
 
+报告版本 2 标明 `edgion-proxy-wasm-http-v1` 和 `static_load_compatibility`。
+`compatible: true` 不代表执行或实例化验证。请检查 import/hook 支持状态和警告：
+`accepted_noop` 返回 OK 但不执行语义，`known_unsupported_trap` 在调用时 trap。
+文本输出会转义模块名称和诊断中的控制字符，避免执行终端控制序列或插入报告行；
+JSON/YAML 结构化报告保留原值。
+
 `convert-envoy` 只接受一个 `envoy.filters.http.wasm` wrapper、其 v3
 `typed_config`，或一个裸 `envoy.extensions.wasm.v3.PluginConfig`。它不会遍历
 bootstrap、listener 或 filter chain。stdout 是可放入 EdgionPlugins 条目

@@ -10,7 +10,11 @@ use thiserror::Error;
 use wasmparser::{BinaryReader, Encoding, ExternalKind, FuncType, Parser, Payload, TypeRef, ValType, Validator};
 
 /// Compatibility report schema version.
-pub const REPORT_VERSION: u32 = 1;
+pub const REPORT_VERSION: u32 = 2;
+/// Named HTTP host contract; this is not an SDK certification.
+pub const PROFILE: &str = "edgion-proxy-wasm-http-v1";
+/// Static analysis never executes or instantiates the guest.
+pub const ASSESSMENT: &str = "static_load_compatibility";
 /// Proxy-Wasm ABI marker prefix.
 pub const ABI_MARKER_PREFIX: &str = "proxy_abi_version_";
 /// Supported Proxy-Wasm ABI 0.2.0 marker.
@@ -110,6 +114,13 @@ pub mod host {
         }
     }
 
+    const fn noop(name: &'static str, params: &'static [WasmValueType]) -> HostFunction {
+        HostFunction {
+            behavior: super::HostBehavior::AcceptedNoop,
+            ..function(name, params)
+        }
+    }
+
     /// Exact Edgion host import profile. Unknown imports are incompatible.
     pub const FUNCTIONS: &[HostFunction] = &[
         function(PROXY_LOG, &[I32, I32, I32]),
@@ -133,12 +144,12 @@ pub mod host {
         ),
         function(PROXY_GET_SHARED_DATA, &[I32, I32, I32, I32, I32]),
         function(PROXY_SET_SHARED_DATA, &[I32, I32, I32, I32, I32]),
-        function(PROXY_SET_EFFECTIVE_CONTEXT, &[I32]),
+        noop(PROXY_SET_EFFECTIVE_CONTEXT, &[I32]),
         function(PROXY_SET_TICK_PERIOD_MILLISECONDS, &[I32]),
-        function(PROXY_DONE, &[]),
+        noop(PROXY_DONE, &[]),
         function(PROXY_CONTINUE_STREAM, &[I32]),
         function(PROXY_CONTINUE_REQUEST, &[]),
-        function(PROXY_CONTINUE_RESPONSE, &[]),
+        noop(PROXY_CONTINUE_RESPONSE, &[]),
         // The official proxy-wasm Rust SDK declares these imports even when a
         // guest does not use them. They are recognized with exact signatures,
         // but deliberately trap if invoked because Edgion does not implement
@@ -197,6 +208,7 @@ pub struct HostFunction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostBehavior {
     Implemented,
+    AcceptedNoop,
     Trap,
 }
 
@@ -226,6 +238,8 @@ pub struct ImportInfo {
 pub enum ImportSupport {
     /// The host implements the function.
     Implemented,
+    /// Accepted with STATUS_OK but without the operation's semantics.
+    AcceptedNoop,
     /// The import is declared by supported SDKs but traps if invoked.
     KnownUnsupportedTrap,
     /// The import is outside the exact host profile and prevents loading.
@@ -303,20 +317,27 @@ pub enum CompatibilityCode {
     UnknownHook,
     #[error("known proxy-wasm hook is not invoked")]
     KnownNotInvokedHook,
+    #[error("host import is accepted as a no-op")]
+    AcceptedNoopImport,
+    #[error("hook requires explicit response companion selection")]
+    ConditionalHook,
     #[error("known unsupported host import traps if invoked")]
     KnownUnsupportedImport,
 }
 
 /// Stable report returned for every input, including malformed bytes.
 ///
-/// `compatible` means the module is safe to load against this exact host
-/// profile. It does not mean every imported feature is implemented: imports
+/// `compatible` means the module passes this static host-profile analysis.
+/// Instantiation limits, configuration and execution can still reject it.
+/// It does not mean every imported feature is implemented: imports
 /// marked `known_unsupported_trap` are load-compatible but trap if invoked,
 /// and hooks marked `known_not_invoked` are accepted but never called.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompatibilityReport {
     pub report_version: u32,
+    pub profile: String,
+    pub assessment: String,
     pub compatible: bool,
     pub sha256: String,
     pub abi_markers: Vec<String>,
@@ -331,6 +352,8 @@ impl CompatibilityReport {
     fn new(bytes: &[u8]) -> Self {
         Self {
             report_version: REPORT_VERSION,
+            profile: PROFILE.into(),
+            assessment: ASSESSMENT.into(),
             compatible: true,
             sha256: sha256_hex(bytes),
             abi_markers: Vec::new(),
@@ -1082,6 +1105,15 @@ fn analyze_valid_module(bytes: &[u8], report: &mut CompatibilityReport, limits: 
                         signature,
                     });
                     validate_import(import.module, import.name, import.ty, &types, report);
+                    if support == ImportSupport::AcceptedNoop {
+                        report.warnings.push(CompatibilityIssue {
+                            code: CompatibilityCode::AcceptedNoopImport,
+                            message: format!(
+                                "host import `{}::{}` returns OK without implementing the operation",
+                                import.module, import.name
+                            ),
+                        });
+                    }
                     if support == ImportSupport::KnownUnsupportedTrap {
                         report.warnings.push(CompatibilityIssue {
                             code: CompatibilityCode::KnownUnsupportedImport,
@@ -1191,6 +1223,12 @@ fn analyze_valid_module(bytes: &[u8], report: &mut CompatibilityReport, limits: 
                             support: profile.support,
                             signature: actual,
                         });
+                        if export.name == "proxy_on_response_trailers" {
+                            report.warnings.push(CompatibilityIssue {
+                                code: CompatibilityCode::ConditionalHook,
+                                message: "response trailers are invoked only for request entries with response.trailers enabled; observation is read-only".into(),
+                            });
+                        }
                         if profile.support == HookSupport::KnownNotInvoked {
                             report.warnings.push(CompatibilityIssue {
                                 code: CompatibilityCode::KnownNotInvokedHook,
@@ -1276,6 +1314,7 @@ fn import_support(module: &str, name: &str, ty: TypeRef, types: &[FuncType]) -> 
     match function.behavior {
         HostBehavior::Implemented => ImportSupport::Implemented,
         HostBehavior::Trap => ImportSupport::KnownUnsupportedTrap,
+        HostBehavior::AcceptedNoop => ImportSupport::AcceptedNoop,
     }
 }
 

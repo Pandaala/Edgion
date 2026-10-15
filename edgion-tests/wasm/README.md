@@ -9,7 +9,7 @@ not just a hand-assembled WAT fixture.
 
 ## Contract
 
-One guest covers every capability the host implements; behavior is selected by
+`header-demo` covers the behaviors listed below; behavior is selected by
 request headers so unrelated scenarios never interfere.
 
 | Phase / hook            | Condition                          | Behavior                                                                 |
@@ -54,12 +54,12 @@ The host records Pause and continues streaming the response.
 
 The compiled module is committed at `artifacts/header_demo.wasm` on purpose,
 so `edgion-tests` and the gateway's unit tests need no wasm toolchain to run.
-Only rebuild it after changing `header-demo/src/lib.rs`.
+Rebuild after guest source or pinned toolchain changes and update the fixture manifest.
 
 Prerequisite:
 
 ```bash
-rustup target add wasm32-unknown-unknown
+rustup target add --toolchain 1.96.1 wasm32-unknown-unknown
 ```
 
 Build:
@@ -68,8 +68,7 @@ Build:
 ./edgion-tests/wasm/build.sh
 ```
 
-This compiles `header-demo` in release mode for `wasm32-unknown-unknown` and
-copies the result to `artifacts/header_demo.wasm`.
+This compiles both Rust guests in release mode for `wasm32-unknown-unknown` and copies their artifacts. The verified compiler version and exact artifact hashes are recorded in the [compatibility inventory](compatibility-profile.md).
 
 ## Standalone crate
 
@@ -87,3 +86,11 @@ retains an incrementing field across ticks. The committed `lifecycle_demo.wasm`
 is used by gateway unit tests to catch context replacement, interleaved request
 contamination, duplicate EOS, and cancellation re-entry. Run `./build.sh` to
 rebuild both fixtures; this standalone workspace is outside normal host tests.
+
+## Compatibility evidence
+
+See [the named profile and fixture inventory](compatibility-profile.md) for SDK,
+compiler and target pins, reproduction commands, static acceptance, execution
+coverage and explicit unsupported toolchains. `build-compatibility.sh` builds
+TinyGo and upstream Go probes separately from the Rust reference guests.
+These are negative compatibility fixtures today, not runnable Edgion examples.

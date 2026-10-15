@@ -11,6 +11,9 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Terminal-safe inspection text](regression-guards/terminal-safe-inspection.md)
+- [Explicit Go SDK selection for fixture builds](regression-guards/sdk-build-toolchain-selection.md)
+
 - [Buffer ranges own their snapshot before guest allocation](regression-guards/buffer-range-snapshot-before-guest-allocation.md)
 
 - [Shared-data byte gauges aggregate live stores and balance destruction](regression-guards/shared-data-gauge-live-stores.md)

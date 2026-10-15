@@ -477,3 +477,89 @@ fn report_json_shape_is_stable() {
     let hook_value = serde_json::to_value(hook_report).expect("hook report serializes");
     assert_eq!(hook_value["hooks"][0]["support"], "known_not_invoked");
 }
+
+#[test]
+fn profile_separates_noops_traps_and_conditional_hooks() {
+    let report = analyze_wat(
+        r#"(module
+        (import "env" "proxy_done" (func (result i32)))
+        (import "env" "proxy_set_effective_context" (func (param i32) (result i32)))
+        (import "env" "proxy_continue_response" (func (result i32)))
+        (import "env" "proxy_get_log_level" (func (param i32) (result i32)))
+        (func (export "proxy_abi_version_0_2_1"))
+        (func (export "proxy_on_response_trailers") (param i32 i32) (result i32) i32.const 0)
+    )"#,
+    );
+    assert!(report.compatible);
+    assert_eq!(report.profile, PROFILE);
+    assert_eq!(report.assessment, "static_load_compatibility");
+    assert!(report.imports[..3]
+        .iter()
+        .all(|i| i.support == ImportSupport::AcceptedNoop));
+    assert_eq!(report.imports[3].support, ImportSupport::KnownUnsupportedTrap);
+    assert_eq!(
+        report
+            .warnings
+            .iter()
+            .filter(|w| w.code == CompatibilityCode::AcceptedNoopImport)
+            .count(),
+        3
+    );
+    assert!(report
+        .warnings
+        .iter()
+        .any(|w| w.code == CompatibilityCode::ConditionalHook));
+    assert_eq!(report.hooks[0].support, HookSupport::Implemented);
+}
+
+#[test]
+fn real_rust_sdk_fixtures_pass_static_profile() {
+    for bytes in [
+        include_bytes!("../../../edgion-tests/wasm/artifacts/header_demo.wasm").as_slice(),
+        include_bytes!("../../../edgion-tests/wasm/artifacts/lifecycle_demo.wasm").as_slice(),
+    ] {
+        let report = analyze(bytes);
+        assert!(report.compatible, "{:?}", report.errors);
+        assert_eq!(report.abi_markers, [ABI_0_2_1]);
+        assert!(report.imports.iter().any(|i| i.support == ImportSupport::AcceptedNoop));
+    }
+}
+
+#[test]
+fn pinned_go_toolchains_are_rejected_for_wasi_imports() {
+    for bytes in [
+        include_bytes!("../../../edgion-tests/wasm/artifacts/tinygo_policy.wasm").as_slice(),
+        include_bytes!("../../../edgion-tests/wasm/artifacts/go_reactor_probe.wasm").as_slice(),
+    ] {
+        let report = analyze(bytes);
+        assert!(!report.compatible);
+        assert_eq!(report.abi_markers, [ABI_0_2_0]);
+        assert!(report.imports.iter().any(|i| i.module == "wasi_snapshot_preview1"
+            && i.name == "fd_write"
+            && i.support == ImportSupport::Unknown));
+        assert!(report.errors.iter().all(|e| e.code == CompatibilityCode::UnknownImport));
+    }
+}
+
+#[test]
+fn fixture_manifest_identifies_exact_static_evidence() {
+    let manifest: serde_json::Value =
+        serde_json::from_str(include_str!("../../../edgion-tests/wasm/fixture-manifest.json")).unwrap();
+    assert_eq!(manifest["profile"], PROFILE);
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../edgion-tests/wasm");
+    for fixture in manifest["fixtures"].as_array().unwrap() {
+        let bytes = std::fs::read(root.join(fixture["artifact"].as_str().unwrap())).expect("required pinned fixture");
+        let report = analyze(&bytes);
+        assert_eq!(fixture["sha256"], report.sha256);
+        assert_eq!(fixture["bytes"], bytes.len());
+        assert_eq!(fixture["staticCompatible"], report.compatible);
+        assert_eq!(fixture["abiMarkers"], serde_json::to_value(report.abi_markers).unwrap());
+        let unknown: std::collections::BTreeSet<_> = report
+            .imports
+            .iter()
+            .filter(|i| i.support == ImportSupport::Unknown)
+            .map(|i| format!("{}::{}", i.module, i.name))
+            .collect();
+        assert_eq!(fixture["unsupportedImports"], serde_json::to_value(unknown).unwrap());
+    }
+}

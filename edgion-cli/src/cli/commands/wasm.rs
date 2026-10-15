@@ -105,11 +105,28 @@ fn inspect_text(report: &edgion_wasm::CompatibilityReport) -> String {
         report.warnings.len(),
         report.errors.len(),
     );
+    output.push_str(&format!(
+        "profile: {}\nassessment: {}\nexecutionVerified: false\n",
+        report.profile, report.assessment
+    ));
+    // Module-controlled strings must never become terminal commands or extra lines.
+    // Keep escaping at this presentation boundary; structured reports retain raw values.
+    for import in &report.imports {
+        output.push_str(&format!(
+            "import: {}::{} {:?}\n",
+            import.module.escape_debug(),
+            import.name.escape_debug(),
+            import.support
+        ));
+    }
+    for hook in &report.hooks {
+        output.push_str(&format!("hook: {} {:?}\n", hook.name.escape_debug(), hook.support));
+    }
     for issue in &report.warnings {
-        output.push_str(&format!("warning: {}: {}\n", issue.code, issue.message));
+        output.push_str(&format!("warning: {}: {}\n", issue.code, issue.message.escape_debug()));
     }
     for issue in &report.errors {
-        output.push_str(&format!("error: {}: {}\n", issue.code, issue.message));
+        output.push_str(&format!("error: {}: {}\n", issue.code, issue.message.escape_debug()));
     }
     output
 }

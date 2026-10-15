@@ -12,7 +12,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-proxy-wasm = "0.2"
+proxy-wasm = "=0.2.5"
 
 [profile.release]
 lto = true

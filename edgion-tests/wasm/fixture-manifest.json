@@ -1,0 +1,85 @@
+{
+  "profile": "edgion-proxy-wasm-http-v1",
+  "inspectionDate": "2026-10-15",
+  "fixtures": [
+    {
+      "artifact": "artifacts/header_demo.wasm",
+      "sdk": "Rust proxy-wasm 0.2.5",
+      "compiler": "rustc 1.96.1 (31fca3adb 2026-06-26)",
+      "target": "wasm32-unknown-unknown",
+      "sha256": "7143f4c35918763764de712bf940c9cbae2a7bd97de4c639fa76c0f1de2203a3",
+      "bytes": 102675,
+      "abiMarkers": [
+        "proxy_abi_version_0_2_1"
+      ],
+      "staticCompatible": true,
+      "unsupportedImports": [],
+      "executionEvidence": "Rust SDK runtime seam tests; see task verification record"
+    },
+    {
+      "artifact": "artifacts/lifecycle_demo.wasm",
+      "sdk": "Rust proxy-wasm 0.2.5",
+      "compiler": "rustc 1.96.1 (31fca3adb 2026-06-26)",
+      "target": "wasm32-unknown-unknown",
+      "sha256": "5cc4c06d5a1d3681afdc7fdf7159e5c58b97889abe2b990169b8c41dcbe39317",
+      "bytes": 98739,
+      "abiMarkers": [
+        "proxy_abi_version_0_2_1"
+      ],
+      "staticCompatible": true,
+      "unsupportedImports": [],
+      "executionEvidence": "Rust SDK runtime seam tests; see task verification record"
+    },
+    {
+      "artifact": "artifacts/tinygo_policy.wasm",
+      "sdk": "tetratelabs/proxy-wasm-go-sdk v0.24.0",
+      "compiler": "TinyGo 0.38.0; Go 1.24.0; LLVM 19.1.2; Binaryen 123",
+      "target": "wasi; scheduler=none",
+      "sha256": "53e674b8baf82bf330164412dd86720d10c0ab22d28853bae0c45d2cdc95a4b4",
+      "bytes": 238367,
+      "abiMarkers": [
+        "proxy_abi_version_0_2_0"
+      ],
+      "staticCompatible": false,
+      "unsupportedImports": [
+        "wasi_snapshot_preview1::args_get",
+        "wasi_snapshot_preview1::args_sizes_get",
+        "wasi_snapshot_preview1::clock_time_get",
+        "wasi_snapshot_preview1::fd_write",
+        "wasi_snapshot_preview1::proc_exit",
+        "wasi_snapshot_preview1::random_get"
+      ],
+      "executionEvidence": "Not executed: rejected by static profile"
+    },
+    {
+      "artifact": "artifacts/go_reactor_probe.wasm",
+      "sdk": "proxy-wasm/proxy-wasm-go-sdk v0.0.0-20260105142703-44c7d5847745",
+      "compiler": "Go 1.24.0",
+      "target": "GOOS=wasip1 GOARCH=wasm; buildmode=c-shared; trimpath",
+      "sha256": "fcc88aff7d335bf4c347b34d414099513064d708fb21d975aa2cb8e8137a9928",
+      "bytes": 2081760,
+      "abiMarkers": [
+        "proxy_abi_version_0_2_0"
+      ],
+      "staticCompatible": false,
+      "unsupportedImports": [
+        "wasi_snapshot_preview1::args_get",
+        "wasi_snapshot_preview1::args_sizes_get",
+        "wasi_snapshot_preview1::clock_time_get",
+        "wasi_snapshot_preview1::environ_get",
+        "wasi_snapshot_preview1::environ_sizes_get",
+        "wasi_snapshot_preview1::fd_close",
+        "wasi_snapshot_preview1::fd_fdstat_get",
+        "wasi_snapshot_preview1::fd_fdstat_set_flags",
+        "wasi_snapshot_preview1::fd_prestat_dir_name",
+        "wasi_snapshot_preview1::fd_prestat_get",
+        "wasi_snapshot_preview1::fd_write",
+        "wasi_snapshot_preview1::poll_oneoff",
+        "wasi_snapshot_preview1::proc_exit",
+        "wasi_snapshot_preview1::random_get",
+        "wasi_snapshot_preview1::sched_yield"
+      ],
+      "executionEvidence": "Not executed: rejected by static profile"
+    }
+  ]
+}

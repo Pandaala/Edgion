@@ -98,11 +98,11 @@ fn inspect_formats_compatible_incompatible_and_malformed_reports() {
     assert!(compatible.compatible);
     assert!(serde_json::to_string(&compatible)
         .expect("JSON")
-        .contains("\"reportVersion\":1"));
+        .contains("\"reportVersion\":2"));
     assert!(serde_yaml::to_string(&compatible)
         .expect("YAML")
-        .contains("reportVersion: 1"));
-    assert!(inspect_text(&compatible).starts_with("reportVersion: 1\ncompatible: true\n"));
+        .contains("reportVersion: 2"));
+    assert!(inspect_text(&compatible).starts_with("reportVersion: 2\ncompatible: true\n"));
 
     let incompatible = edgion_wasm::analyze(
         &wat::parse_str(
@@ -475,4 +475,56 @@ vm_config:
 fn indent(value: &str, spaces: usize) -> String {
     let prefix = " ".repeat(spaces);
     value.trim().lines().map(|line| format!("{prefix}{line}\n")).collect()
+}
+
+#[test]
+fn inspect_distinguishes_static_profile_from_execution_and_noops() {
+    let report = edgion_wasm::analyze(
+        &wat::parse_str(
+            r#"(module
+        (import "env" "proxy_done" (func (result i32)))
+        (func (export "proxy_abi_version_0_2_1")))"#,
+        )
+        .unwrap(),
+    );
+    let text = inspect_text(&report);
+    assert!(text.contains("profile: edgion-proxy-wasm-http-v1"));
+    assert!(text.contains("assessment: static_load_compatibility"));
+    assert!(text.contains("executionVerified: false"));
+    assert!(text.contains("env::proxy_done AcceptedNoop"));
+    let json = serde_json::to_value(&report).unwrap();
+    assert_eq!(json["imports"][0]["support"], "accepted_noop");
+    assert_eq!(json["assessment"], "static_load_compatibility");
+}
+
+#[test]
+fn inspect_text_escapes_module_controlled_names_and_diagnostics() {
+    let cases = [
+        // Known function + wrong module: the inventory is the only name echo.
+        r#"(module (import "\1b[2J\0d\0acompatible: true\09\c2\9b" "proxy_done" (func (result i32))))"#,
+        // Unknown import and export names also appear in error messages.
+        r#"(module (import "env" "unknown\1b]52;c;payload\07\0d\0a" (func)))"#,
+        r#"(module (func (export "proxy_on_unknown\1b[H\0d\0a")))"#,
+        r#"(module (func (export "proxy_abi_version_\1b[2J\0d\0a") (param i32)))"#,
+    ];
+    for source in cases {
+        let report = edgion_wasm::analyze(&wat::parse_str(source).unwrap());
+        assert!(!report.compatible);
+        let text = inspect_text(&report);
+        assert!(text.chars().all(|c| !c.is_control() || c == '\n'), "{text:?}");
+        let expected_lines =
+            12 + report.imports.len() + report.hooks.len() + report.warnings.len() + report.errors.len();
+        assert_eq!(text.lines().count(), expected_lines, "guest data added a report line");
+        assert!(
+            text.contains(r"\u{1b}"),
+            "ESC must remain visible as an escape: {source}: {text:?}"
+        );
+        let roundtrip: edgion_wasm::CompatibilityReport =
+            serde_json::from_str(&serde_json::to_string(&report).unwrap()).unwrap();
+        assert_eq!(roundtrip, report, "text escaping must not change structured data");
+    }
+    // Cover warning rendering even when future warnings include guest-controlled data.
+    let mut report = edgion_wasm::analyze(&wat::parse_str("(module)").unwrap());
+    report.warnings[0].message = "warning\r\n\x1b[2J".into();
+    assert!(inspect_text(&report).contains(r"warning\r\n\u{1b}[2J"));
 }

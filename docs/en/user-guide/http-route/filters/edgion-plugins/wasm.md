@@ -11,11 +11,11 @@
 
 > **🔌 Edgion extension**
 >
-> Wasm executes a [proxy-wasm](https://github.com/proxy-wasm/spec) ABI guest module — an ordinary WebAssembly binary compiled from Rust, C++, Go, TinyGo, or any other proxy-wasm SDK — directly inside the gateway process via [wasmtime](https://wasmtime.dev/). It is provided by the `EdgionPlugins` CRD and is not part of standard Gateway API.
+> Wasm executes a [proxy-wasm](https://github.com/proxy-wasm/spec) ABI guest module — a core WebAssembly binary satisfying the Edgion HTTP profile below — directly inside the gateway process via [wasmtime](https://wasmtime.dev/). It is provided by the `EdgionPlugins` CRD and is not part of standard Gateway API.
 
 ## What does Wasm solve?
 
-proxy-wasm is a portable ABI for writing proxy extensions once and running them on any compliant host (Envoy, this gateway, or others) without recompiling the host itself. Instead of writing a native Rust plugin against Edgion's internal APIs, you compile a small WebAssembly module against the [proxy-wasm SDK](https://crates.io/crates/proxy-wasm) for your language of choice and hand the compiled `.wasm` bytecode to this plugin. Each plugin runtime compiles its loaded generation once and pools initialized instances for reuse across requests. Rebuilding the plugin may repeat compilation.
+Proxy-Wasm defines a proxy extension ABI. Binary imports, SDK initialization and host behavior must all match; sharing an ABI marker with Envoy or Higress does not establish compatibility. Instead of writing a native Rust plugin against Edgion's internal APIs, you compile a small WebAssembly module against the [proxy-wasm SDK](https://crates.io/crates/proxy-wasm) for your language of choice and hand the compiled `.wasm` bytecode to this plugin. Each plugin runtime compiles its loaded generation once and pools initialized instances for reuse across requests. Rebuilding the plugin may repeat compilation.
 
 The implemented ABI is a deliberate subset (see below): header read/write, local responses, **HTTP callouts** (request phase with Pause/resume, and from `on_tick`), **request-body buffer mode** (whole-body, guest-declared, can deny or rewrite), **read-only response-body observation** (per-chunk), **shared data**, and **timers** (`on_tick`). Whole-response buffering and response-body modification are not supported: the main upstream response always remains streaming.
 
@@ -53,6 +53,30 @@ the execution without guest code from Drop. A healthy transport-error terminal
 that reaches logging still runs normal cleanup. A skipped request entry never runs its response companion.
 This bounded exclusive model intentionally trades instance occupancy for simple
 ownership; it is not a high-density multi-context runtime.
+
+## Named compatibility profile
+
+`edgion-proxy-wasm-http-v1` is the bounded HTTP subset described on this page.
+`edgion-cli wasm inspect` report version 2 identifies this profile and labels its
+assessment `static_load_compatibility`. A successful result proves only that the
+binary passes static analysis: it does not execute the guest, certify its SDK,
+or guarantee instantiation under the configured runtime limits.
+
+| Layer | Contract |
+|---|---|
+| Binary | Core Wasm, exact `env` function signatures; ABI markers 0.2.0/0.2.1. Missing marker warns; mixed/unknown markers reject. No WASI or components. |
+| SDK | The reference Rust guests pin `proxy-wasm` 0.2.5 and `wasm32-unknown-unknown`. Other SDK/compiler/target combinations need their own build and execution evidence. |
+| Host calls | `implemented` is subject to phase/argument restrictions below; `accepted_noop` returns OK without semantics; `known_unsupported_trap` traps if called. |
+| Hooks | `known_not_invoked` exports load but are never called. Response trailers require an attached request entry with `response.trailers: true`. |
+| Behavioral evidence | Fixture compilation, static acceptance and runtime assertions are separate results. See the [fixture inventory](../../../../../../edgion-tests/wasm/compatibility-profile.md). |
+
+TinyGo and upstream Go are separate toolchains. The upstream Go SDK requires
+Go 1.24+ WASI reactors; its WASI imports are outside this profile. C++ is not
+certified merely because its ABI marker matches. Envoy cluster names, arbitrary
+Envoy properties and Higress extensions are not emulated. A future narrowly
+scoped WASI adapter is a separate decision from WASI HTTP components and must
+specify initialization, clocks/randomness, environment, filesystem and scheduling
+capabilities explicitly.
 
 ## Supported ABI subset
 
@@ -94,7 +118,7 @@ such as DSL, but response-stage Wasm host phases do not expose that cache.
 | `proxy_log` | ✅ | Guest text is retained only within the current hook's bounded in-memory diagnostics and then discarded; the access log records only the bounded line count, never the guest-controlled text |
 | `proxy_get_current_time_nanoseconds` | ✅ | Wall-clock time |
 | `proxy_get_configuration` (legacy 0.1) | ✅ | Returns the same bytes as the `PluginConfiguration` buffer |
-| `proxy_set_effective_context` / `proxy_done` | Accepted no-ops | Return `STATUS_OK` without doing anything |
+| `proxy_set_effective_context` / `proxy_done` / `proxy_continue_response` | Accepted no-ops | Return `STATUS_OK` without doing anything |
 | Standard SDK-declared but unimplemented calls (gRPC callouts, shared queues, foreign function calls, guest metrics, and log-level lookup) | ⚠️ | Their exact standard signatures are accepted because SDKs may declare them even when unused. The compatibility report marks them `known_unsupported_trap` and warns; invoking one traps and follows [failure semantics](#failure-semantics) |
 | Everything else | ❌ | Rejected by the compatibility check at module load. Truly unknown imports are not accepted even when the guest never calls them |
 
@@ -111,7 +135,7 @@ After source integrity verification and before Wasmtime compilation, the host pa
 
 Compatibility failures intentionally use one bounded generic load error. The gateway does not copy attacker-controlled import/export names or parser detail into request-visible failure text.
 
-In compatibility reports, `compatible: true` means **load-compatible with this host profile**, not that every declared feature is implemented or every exported hook is invoked. Check the `support` field on imports and hooks, plus the warnings list. `known_unsupported_trap` imports are safe to leave unused but trap if called. Standard SDK hooks marked `known_not_invoked`—including request/response trailers, queue-ready, gRPC callbacks, foreign-function callbacks, and stream callbacks—are accepted because SDKs commonly export them by default, but Edgion never calls them. Hooks marked `implemented` do not produce that warning.
+In compatibility reports, `compatible: true` means **accepted by static analysis of this host profile**, not that every declared feature is implemented or every exported hook is invoked. Check the `support` field on imports and hooks, plus the warnings list. `known_unsupported_trap` imports are safe to leave unused but trap if called. Standard SDK hooks marked `known_not_invoked`—including request trailers, queue-ready, gRPC callbacks, foreign-function callbacks, and stream callbacks—are accepted because SDKs commonly export them by default, but Edgion never calls them. Response trailers are implemented only for explicitly selected attached callbacks and produce a conditional-hook warning. `accepted_noop` imports also warn; accepting their signatures does not implement context switching, deferred completion or response continuation.
 
 ## Configuration reference
 
@@ -354,7 +378,7 @@ impl HttpContext for BodyScanner {
 
 ### Response-body observation (read-only)
 
-Listing a Wasm entry under `upstreamResponseBodyFilterPlugins` invokes `proxy_on_response_body` once per upstream chunk. This is the **only** wasm body mode on the response side: the main upstream response remains streaming and has no whole-response buffer mode (see [Remaining limitations](#remaining-limitations)).
+Listing a Wasm entry under `upstreamResponseBodyFilterPlugins` invokes `proxy_on_response_body` once per upstream chunk. Request entries can also select `response.body: true` to observe chunks using their retained HTTP context. In both cases, the main upstream response remains streaming and has no whole-response buffer mode (see [Remaining limitations](#remaining-limitations)).
 
 > ### ⚠️ Per-chunk, not whole-body — read before porting a guest
 >
@@ -369,8 +393,8 @@ Listing a Wasm entry under `upstreamResponseBodyFilterPlugins` invokes `proxy_on
 
 Working within the per-chunk model:
 
-- Cross-chunk aggregation is the **guest's** job (its own memory, or [shared data](#shared-data-and-timers) — see the reference guest, which sums each chunk's byte count into a shared counter).
-- **Strictly read-only**: the body cannot be modified, and the response cannot be short-circuited from the body phase (headers are already sent). A detection verdict can only be logged (`proxy_log`) or aggregated via shared data.
+- Attached callbacks may retain bounded incremental state in the request guest object (for example a running digest or byte count), never an unbounded full response. Standalone body-filter entries use independent per-hook contexts and provide no request-state continuity. Shared counters are plugin-generation state, not a substitute for per-request isolation.
+- **Strictly read-only**: body callbacks cannot modify bytes or short-circuit an already-started response. Attached body/trailer frames also reject logging and Pause; use bounded state for observation, not response enforcement.
 - Each chunk runs under a reduced CPU budget (`timeoutMs / 10`, floor 10ms) so a slow guest cannot stall a long stream; a trap in the body hook **never interrupts the stream** (the instance is discarded and streaming continues, regardless of `failOpen`).
 - A guest that does not export `proxy_on_response_body` is a free no-op at this stage.
 
@@ -501,7 +525,7 @@ A trap storm shows up as `edgion_wasm_trap_total` and `edgion_wasm_instance_disc
 
 ## Building a guest
 
-Any language with a proxy-wasm SDK works, as long as the compiled module targets a linear-memory Wasm target (no WASI import required — `wasm32-unknown-unknown` is sufficient for the Rust SDK). The reference guest used by this repo's own tests is a good starting point:
+Start with the pinned Rust SDK reference guests. A language having a Proxy-Wasm SDK does not guarantee that its compiler output or runtime semantics match Edgion. Validate the exact SDK, compiler and target combination against the named profile:
 
 - Source: `edgion-tests/wasm/header-demo/src/lib.rs`
 - Built with the official [`proxy-wasm` Rust SDK](https://crates.io/crates/proxy-wasm) v0.2.

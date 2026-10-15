@@ -22,13 +22,34 @@
 
 > **🔌 Edgion 扩展**
 >
-> Wasm 插件在网关进程内通过 [wasmtime](https://wasmtime.dev/) 直接执行 [proxy-wasm](https://github.com/proxy-wasm/spec) ABI guest 模块——一个用 Rust、C++、Go、TinyGo 或任意 proxy-wasm SDK 编译出的普通 WebAssembly 二进制文件。它由 `EdgionPlugins` CRD 提供，不属于标准 Gateway API。
+> Wasm 插件在网关进程内通过 [wasmtime](https://wasmtime.dev/) 直接执行 [proxy-wasm](https://github.com/proxy-wasm/spec) ABI guest 模块——一个满足下述 Edgion HTTP profile 的 core WebAssembly 二进制文件。它由 `EdgionPlugins` CRD 提供，不属于标准 Gateway API。
 
 ## Wasm 解决什么问题？
 
-proxy-wasm 是一套可移植的代理扩展 ABI：编写一次扩展，即可运行在任意兼容 host（Envoy、本网关或其他实现）上，无需重新编译 host 本身。你不需要针对 Edgion 内部 API 编写原生 Rust 插件，而是用你偏好语言的 [proxy-wasm SDK](https://crates.io/crates/proxy-wasm) 编译出一个体积较小的 WebAssembly 模块，把编译产物 `.wasm` 字节码交给本插件。每个插件运行时对其加载代次编译一次，并池化初始化后的实例供请求复用；插件重建可能再次编译。
+Proxy-Wasm 定义代理扩展 ABI；二进制导入、SDK 初始化方式和宿主运行语义都必须匹配。与 Envoy 或 Higress 使用相同 ABI 标记，不代表兼容。你不需要针对 Edgion 内部 API 编写原生 Rust 插件，而是用你偏好语言的 [proxy-wasm SDK](https://crates.io/crates/proxy-wasm) 编译出一个体积较小的 WebAssembly 模块，把编译产物 `.wasm` 字节码交给本插件。每个插件运行时对其加载代次编译一次，并池化初始化后的实例供请求复用；插件重建可能再次编译。
 
 实现的 ABI 是一个刻意收敛的子集（见下文）：header 读写、本地响应、**HTTP callout**（请求阶段 Pause/恢复，以及 `on_tick` 内发起）、**请求 body 整体缓冲模式**（完整 body、由 guest 声明、可拒绝或改写请求）、**响应 body 只读观测**（按 chunk）、**shared data** 与**定时器**（`on_tick`）。不支持完整响应体缓冲和响应 body 改写；主上游响应始终保持流式传输。
+
+## 命名兼容档位
+
+`edgion-proxy-wasm-http-v1` 表示本页定义的有界 HTTP 子集。
+`edgion-cli wasm inspect` 的报告版本 2 包含档位名，检查类型为
+`static_load_compatibility`。通过只表示静态分析接受该产物，不代表执行过 guest、
+认证其 SDK，或保证在运行时配置限制下能够实例化。
+
+| 层次 | 契约 |
+|---|---|
+| 二进制 | core Wasm、精确的 `env` 函数签名，接受 ABI 0.2.0/0.2.1；缺标记警告，混合或未知标记拒绝。不支持 WASI 和 component。 |
+| SDK | Rust 参考 guest 固定 `proxy-wasm` 0.2.5 和 `wasm32-unknown-unknown`；其他 SDK、编译器、target 组合需要独立构建与执行证据。 |
+| 宿主调用 | `implemented` 仍受阶段和参数限制；`accepted_noop` 返回 OK 但不执行语义；`known_unsupported_trap` 在调用时 trap。 |
+| 回调 | `known_not_invoked` 可加载但不调用；响应 trailers 仅用于配置 `response.trailers: true` 的请求伴随回调。 |
+| 行为验证 | 编译、静态接受、运行断言分别记录，见[样例清单](../../../../../../edgion-tests/wasm/compatibility-profile.md)。 |
+
+TinyGo 与 upstream Go 是不同工具链。upstream Go SDK 使用 Go 1.24+ WASI reactor，
+其 WASI 导入不在本档位内。C++ 也不能仅凭 ABI 标记被视为已认证。
+不模拟 Envoy cluster 名、任意 Envoy property 或 Higress 扩展。
+将来的最小 WASI 适配必须另行确定初始化、时钟、随机数、环境、文件系统和调度权限；
+它与 WASI HTTP component 支持是两项不同决策。
 
 ## 支持的 ABI 子集
 
@@ -42,10 +63,11 @@ proxy-wasm 是一套可移植的代理扩展 ABI：编写一次扩展，即可�
 | `proxy_on_http_call_response` | —（callout 回调） | 每个完成的 callout 回调一次：请求阶段发起的在挂起的请求上下文上，`proxy_on_tick` 发起的在 root context 上 |
 | `proxy_on_response_headers` | `upstreamResponseFilterPlugins`（`UpstreamResponseFilter`） | 上游响应 header 到达 |
 | `proxy_on_response_body` | `upstreamResponseBodyFilterPlugins`（`UpstreamResponseBodyFilter`） | 每个上游 body chunk 一次，**只读**（见[响应 body 观测](#响应-body-观测只读)） |
+| `proxy_on_response_trailers` | 请求条目的 `response.trailers: true` | 同一 HTTP context，只读；真实 trailers 结束流 |
 | `proxy_on_tick` | —（后台） | guest 设定 tick 周期后周期性触发（见[定时器](#shared-data-与定时器)） |
 | `proxy_on_done` / `proxy_on_delete` | —（上下文清理） | 每个请求级上下文结束之后 |
 
-Wasm **不支持**（异步的）`upstreamResponsePlugins` 阶段。
+Wasm 不能作为独立条目配置在 `upstreamResponsePlugins`。请求条目的 `response.headers: true` 会安装内部异步响应伴随回调。
 如果模块需要完整请求 body，应将其放在 `requestPlugins`。`RequestBodyBuffer`
 可为 DSL 等受支持的后续消费者保留请求 body，但响应阶段的 Wasm 宿主阶段不会暴露该缓存。
 
@@ -53,7 +75,7 @@ Wasm **不支持**（异步的）`upstreamResponsePlugins` 阶段。
 
 | Host 函数 | 支持 | 说明 |
 |---|:---:|---|
-| `proxy_get_header_map_pairs` / `proxy_get_header_map_value` | ✅ | 请求头、响应头，以及（callout 回调内）`HttpCallResponseHeaders`——callout 响应头外加合成的 `:status` |
+| `proxy_get_header_map_pairs` / `proxy_get_header_map_value` | ✅ | 请求头、响应头、附属响应 trailers，以及（callout 回调内）`HttpCallResponseHeaders`——callout 响应头外加合成的 `:status` |
 | `proxy_replace_header_map_value` / `proxy_add_header_map_value` / `proxy_remove_header_map_value` / `proxy_set_header_map_pairs` | ✅ | 设置/追加/删除/整体替换；钩子返回后应用到真实请求/响应。对 callout 响应 map 的写入被拒绝 |
 | `proxy_send_local_response` | ✅ | 以最终 HTTP 状态码（`200`–`599`）、响应体和响应头短路请求；无效状态码会替换为 `500`。响应体按字节原样透传，二进制内容（图片、protobuf 等）不会被改写；空响应体产生无 body 的响应。也可在 `proxy_on_http_call_response` 内调用（鉴权 callout 后拒绝） |
 | `proxy_http_call` | ✅（请求头 + tick 阶段） | 见 [HTTP callout](#http-calloutpause恢复)。请求 body、响应头、响应 body 阶段均返回 `UNIMPLEMENTED`（12）；tick 外呼须由所属插件的 allowlist 授权（见[定时器](#shared-data-与定时器)） |
@@ -66,7 +88,7 @@ Wasm **不支持**（异步的）`upstreamResponsePlugins` 阶段。
 | `proxy_log` | ✅ | Guest 文本仅在当前 hook 的有界内存诊断中暂存，随后丢弃；访问日志只记录有界行数，绝不记录 guest 控制的原文 |
 | `proxy_get_current_time_nanoseconds` | ✅ | 系统时钟 |
 | `proxy_get_configuration`（0.1 遗留） | ✅ | 返回与 `PluginConfiguration` buffer 相同的字节 |
-| `proxy_set_effective_context` / `proxy_done` | 接受型 no-op | 返回 `STATUS_OK`，不做任何事 |
+| `proxy_set_effective_context` / `proxy_done` / `proxy_continue_response` | 接受型 no-op | 返回 `STATUS_OK`，不做任何事 |
 | SDK 标准声明但 Edgion 未实现的调用（gRPC callout、shared queue、foreign function、guest metrics、log-level 查询） | ⚠️ | SDK 即使不使用也可能声明，因此其精确标准签名可通过加载。兼容性报告会标为 `known_unsupported_trap` 并给出 warning；一旦调用就会 trap，并进入[失败语义](#失败语义) |
 | 其余全部 | ❌ | 模块加载时由兼容性检查拒绝；即使 guest 从不调用，真正未知的 import 也不会被接受 |
 
@@ -83,7 +105,7 @@ Wasm **不支持**（异步的）`upstreamResponsePlugins` 阶段。
 
 兼容性失败统一使用一条有界的通用加载错误；网关不会把攻击者可控的 import/export 名称或 parser 细节复制到请求可见的失败文本。
 
-兼容性报告中的 `compatible: true` 表示**可按当前 host profile 安全加载**，不表示每项已声明功能都已实现，也不表示每个导出的 hook 都会被调用。请同时检查 import 与 hook 的 `support` 字段和 warning 列表。`known_unsupported_trap` import 可以保持未调用，但调用时会 trap。SDK 经常默认导出的标准 hook 若标为 `known_not_invoked`（包括请求/响应 trailer、queue-ready、gRPC 回调、foreign-function 回调及 stream 回调），可以通过加载，但 Edgion 永远不会调用；标为 `implemented` 的 hook 不会产生此 warning。
+兼容性报告中的 `compatible: true` 表示**通过当前 host profile 的静态分析**，不表示每项已声明功能都已实现，也不表示每个导出的 hook 都会被调用。请同时检查 import 与 hook 的 `support` 字段和 warning 列表。`known_unsupported_trap` import 可以保持未调用，但调用时会 trap。SDK 经常默认导出的标准 hook 若标为 `known_not_invoked`（包括请求 trailer、queue-ready、gRPC 回调、foreign-function 回调及 stream 回调），可以通过加载，但 Edgion 永远不会调用；响应 trailer 仅在显式启用的伴随回调中实现，并产生条件支持 warning。`accepted_noop` 也会警告，不代表支持上下文切换、延迟完成或响应恢复。
 
 ## 配置参考
 
@@ -313,7 +335,7 @@ impl HttpContext for BodyScanner {
 
 ### 响应 body 观测（只读）
 
-把 Wasm 条目列在 `upstreamResponseBodyFilterPlugins` 下，`proxy_on_response_body` 会对每个上游 chunk 触发一次。这是响应侧**唯一**可用的 wasm body 模式：主上游响应始终保持流式传输，不提供完整响应体缓冲模式（见[剩余限制](#剩余限制)）。
+把 Wasm 条目列在 `upstreamResponseBodyFilterPlugins` 下，`proxy_on_response_body` 会对每个上游 chunk 触发一次。请求条目也可配置 `response.body: true`，在保留的 HTTP context 中观察 chunk。两种情况下，主上游响应始终保持流式传输，不提供完整响应体缓冲模式（见[剩余限制](#剩余限制)）。
 
 > ### ⚠️ 按 chunk 而非整体——移植 guest 前必读
 >
@@ -328,8 +350,8 @@ impl HttpContext for BodyScanner {
 
 在每 chunk 模型下正确的用法：
 
-- 跨 chunk 聚合是 **guest 自己的事**（用它自己的内存，或 [shared data](#shared-data-与定时器)——参考 guest 就是把每个 chunk 的字节数累加进一个 shared 计数器）。
-- **严格只读**：不能改写 body，也不能在 body 阶段短路响应（响应头已发出）。检测结论只能记日志（`proxy_log`）或写入 shared data。
+- 请求伴随回调可在同一 guest 对象中保留有界增量状态，例如摘要或字节计数，不能无界累积完整响应。独立 body-filter 条目按 hook 创建上下文，不保证请求状态连续；共享计数器属于插件代次，不能证明请求隔离。
+- **严格只读**：不能改写 body 或短路已开始的响应。附属 body/trailer frame 还拒绝日志和 Pause；有界状态仅用于观察，不能用于响应拦截。
 - 每个 chunk 在缩减的 CPU 预算（`timeoutMs / 10`，下限 10ms）下执行，慢 guest 拖不垮长流；body 钩子 trap **绝不断流**（实例被丢弃，流继续，与 `failOpen` 无关）。
 - 未导出 `proxy_on_response_body` 的 guest 在此阶段是零成本 no-op。
 
@@ -447,7 +469,7 @@ trap 风暴表现为 `edgion_wasm_trap_total` 与 `edgion_wasm_instance_discard_
 
 ## 编写 guest
 
-任何有 proxy-wasm SDK 的语言都可以，只要编译产物面向线性内存 Wasm 目标（无需 WASI 导入——Rust SDK 用 `wasm32-unknown-unknown` 即可）。本仓库测试用的参考 guest 是很好的起点：
+建议从固定版本的 Rust 参考 guest 开始。语言拥有 Proxy-Wasm SDK 不代表其编译产物或运行语义匹配 Edgion；须按命名档位验证具体 SDK、编译器与 target 组合：
 
 - 源码：`edgion-tests/wasm/header-demo/src/lib.rs`
 - 使用官方 [`proxy-wasm` Rust SDK](https://crates.io/crates/proxy-wasm) v0.2 构建。

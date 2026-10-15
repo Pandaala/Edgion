@@ -876,6 +876,10 @@ fn ref_artifact_temp() -> Option<tempfile::NamedTempFile> {
 }
 
 fn ref_mock(headers: Vec<(&str, &str)>) -> MockPluginSession {
+    ref_mock_body(headers, false)
+}
+
+fn ref_mock_body(headers: Vec<(&str, &str)>, body_available: bool) -> MockPluginSession {
     let mut s = MockPluginSession::new();
     install_mock_wasm_owner(&mut s);
     let owned: Vec<(String, String)> = headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
@@ -890,14 +894,17 @@ fn ref_mock(headers: Vec<(&str, &str)>) -> MockPluginSession {
     s.expect_set_response_header().returning(|_, _| Ok(()));
     // The proxy-wasm Rust SDK exports `proxy_on_request_body` on every
     // guest, so the request-body phase now runs for the reference module.
-    // These tests exercise the UNGATED plugin (no `body:` requirement),
-    // where `read_request_body` returns `Unimplemented`, which now routes
-    // through `fail_mode` (Task 7) rather than being skipped. Every test
-    // function here that actually reaches this arm sets `c.fail_open =
-    // true` (with its own comment) so the phase stays a no-op GoodNext.
+    // The default helper exercises an unavailable body reader and requires
+    // explicit fail-open in tests that reach this phase. Strict conformance
+    // tests select body_available to complete the empty-body callback.
     s.expect_ctx().return_const(crate::EdgionHttpContext::new());
-    s.expect_read_request_body()
-        .returning(|_| Err(crate::request_body::BodyReadError::Unimplemented));
+    s.expect_read_request_body().returning(move |_| {
+        if body_available {
+            Ok(Bytes::new())
+        } else {
+            Err(crate::request_body::BodyReadError::Unimplemented)
+        }
+    });
     s
 }
 
@@ -909,7 +916,7 @@ async fn reference_guest_callout_authorized_resumes() {
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    let Some(f) = ref_artifact_temp() else { return };
+    let f = ref_artifact_temp().expect("required pinned Rust SDK artifact");
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/verify"))
@@ -921,25 +928,24 @@ async fn reference_guest_callout_authorized_resumes() {
     let mut c = WasmConfig::default();
     c.source.file = Some(f.path().to_string_lossy().into_owned());
     c.callout_allowlist = vec![server.uri()];
-    // Not testing body-read policy here; the SDK guest also exports
-    // `proxy_on_request_body`, whose `Unimplemented` stub now runs through
-    // `fail_mode` (Task 7), so `fail_open` keeps that phase a no-op.
-    c.fail_open = true;
+    // Fail closed: the real SDK callback asserts its originating object state,
+    // and the body phase must complete without masking a read error.
+    assert!(!c.fail_open);
 
     let plugin = actual_request(&c).unwrap();
-    let mut session = ref_mock(vec![
-        ("host", "t.example.com"),
-        ("x-wasm-callout-url", &server.uri()),
-        ("authorization", "Bearer valid-token"),
-    ]);
+    let mut session = ref_mock_body(
+        vec![
+            ("host", "t.example.com"),
+            ("x-wasm-callout-url", &server.uri()),
+            ("authorization", "Bearer valid-token"),
+        ],
+        true,
+    );
     session
         .expect_set_request_header()
         .withf(|k, v| k == "x-wasm-added" && v == "yes")
         .times(1)
         .returning(|_, _| Ok(()));
-    session.expect_record_outcome().return_const(());
-    // See `reference_guest_module_loads_and_runs` for why this fires (R17).
-    session.expect_record_error().return_const(());
     let mut log = PluginLog::new("Wasm");
     let res = plugin.run_request(&mut session, &mut log).await;
     assert_eq!(res, PluginRunningResult::GoodNext, "authorized callout must resume");

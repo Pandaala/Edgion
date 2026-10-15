@@ -83,6 +83,14 @@ edgion-cli wasm convert-envoy \
 non-zero for a malformed or incompatible module while still printing its
 compatibility report.
 
+Report version 2 names `edgion-proxy-wasm-http-v1` and labels the assessment
+`static_load_compatibility`. `compatible: true` does not certify execution or
+instantiation. Inspect import/hook support and warnings: `accepted_noop` calls
+return OK without semantics; `known_unsupported_trap` calls trap if invoked.
+Text output escapes control characters in module-provided names and diagnostics
+to keep them from becoming terminal commands or extra report lines. Structured
+JSON/YAML reports retain the original values.
+
 `convert-envoy` accepts one `envoy.filters.http.wasm` wrapper, its v3
 `typed_config`, or one bare `envoy.extensions.wasm.v3.PluginConfig`. It does not
 walk a bootstrap, listener, or filter chain. Generated stdout is a `WasmConfig`
