@@ -211,6 +211,28 @@ Publication and teardown invariants:
   Secret mutation. A stale reconcile result cannot publish into a replacement
   source generation.
 
+### Local credential result ownership (ARCH-105)
+
+`CredentialSourceRegistry` stores at most one manager result per logical key,
+privately qualified by producing source UID, generation and the canonical frozen
+input revision. Insertion compares against the current desired source under the
+same write lock; reads validate under one read lock. A deleted source cannot gain
+a late result, and same-name replacement or changed inputs cannot inherit the
+previous observation. Identical re-registration preserves unchanged-result requeue
+suppression. Qualification is Controller-only metadata, not a schema/conf_sync
+field or another credential-material owner.
+
+The manager validates its SourceState identity/revision before constructing that
+observation, including cleanup completions which separately obtain current desired
+state. An accepted current failed acquisition can still report retained last-good
+publication; the qualification binds the observation rather than token issuance.
+Same-qualified expiry remains visible. Old-state expiry after a source/input change
+is not relabeled current, while memory clearing, historical Secret cleanup and
+consumer notifications continue. A replacement may have no lifecycle result until
+a qualifying current evaluation completes; no bounded convergence is promised.
+The queue, retry policy and external publication/authority fences are unchanged.
+See the [ownership regression guard](../../04-review/link-sys/regression-guards/credential-source-single-active-memory.md#local-manager-result-ownership-arch-105).
+
 ## Gateway-side processing
 
 ### When conf_sync delivers the spec

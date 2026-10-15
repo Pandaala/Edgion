@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 use crate::conf_mgr::conf_center::kubernetes::LeaderFence;
 use crate::conf_mgr::sync_runtime::resource_processor::credential_source_state::{
-    CredentialManagerResult, DesiredCredentialConsumer, DesiredCredentialSource,
+    source_input_revision, CredentialManagerResult, DesiredCredentialConsumer, DesiredCredentialSource,
 };
 use crate::conf_mgr::{ControllerRuntime, LeaderHandle};
 
@@ -497,61 +497,71 @@ async fn run_worker(backend: CredentialManagerBackend, runtime: Arc<ControllerRu
                             continue;
                         };
                         let state = states.entry(key).or_default();
-                        state.identity = identity;
-                        state.input_revision = input_revision;
-                        state.consumer_revision = consumer_revision;
-                        match *result {
-                            Ok(success) => {
-                                state.failure_count = 0;
-                                state.persist = current.persist;
-                                state.expired = false;
-                                state.next_attempt = Some(Instant::now() + success.next_delay);
-                                state.expires_at = success.expires_at;
-                                state.publications = success.publications;
-                                state.retained = Some(success.retained);
-                                if let Some(retained) = state.retained.as_ref() {
-                                    state.last_publication_generation =
-                                        Some(retained.publication_generation.clone());
-                                    state.last_issued_at = Some(retained.issued_at);
-                                    state.last_valid_until = Some(retained.valid_until);
-                                }
-                                state.publication_retry = false;
-                                state.conflicted_consumer_count = 0;
-                            }
-                            Err(mut failure) => {
-                                state.conflicted_consumer_count = u32::from(failure.consumer_conflict);
-                                if let Some(publications) = failure.publications.take() {
-                                    state.publications = publications;
-                                }
-                                if let Some(retained) = failure.retained.take() {
-                                    state.expired = false;
-                                    state.expires_at = Some(retained.expires_at);
-                                    state.retained = Some(*retained);
-                                    state.publication_retry = true;
-                                }
-                                state.failure_count = state.failure_count.saturating_add(1);
-                                let rotation = &current.config.rotation;
-                                let initial = parse_duration(&rotation.retry_initial_backoff).unwrap_or(Duration::from_secs(2));
-                                let maximum = parse_duration(&rotation.retry_max_backoff).unwrap_or(Duration::from_secs(120));
-                                let delay = match failure.schedule {
-                                    FailureSchedule::Transient => retry_delay(
-                                        &current.identity_key(),
-                                        state.failure_count,
-                                        initial,
-                                        maximum,
-                                        failure.retry_after,
-                                    ),
-                                    FailureSchedule::Rotation => parse_duration(&rotation.interval)
-                                        .unwrap_or(Duration::from_secs(900)),
-                                };
-                                state.next_attempt = Some(Instant::now() + delay);
-                            }
-                        }
+                        apply_reconciled_state(state, &current, identity, input_revision, consumer_revision, *result);
                         publish_manager_result(&runtime, &current, state).await;
                     }
                 }
             }
             else => break,
+        }
+    }
+}
+
+// Called only after the worker and current source/consumer completion fences pass.
+fn apply_reconciled_state(
+    state: &mut SourceState,
+    current: &DesiredCredentialSource,
+    identity: String,
+    input_revision: String,
+    consumer_revision: String,
+    result: Result<ReconcileSuccess, ReconcileFailure>,
+) {
+    state.identity = identity;
+    state.input_revision = input_revision;
+    state.consumer_revision = consumer_revision;
+    match result {
+        Ok(success) => {
+            state.failure_count = 0;
+            state.persist = current.persist;
+            state.expired = false;
+            state.next_attempt = Some(Instant::now() + success.next_delay);
+            state.expires_at = success.expires_at;
+            state.publications = success.publications;
+            state.retained = Some(success.retained);
+            if let Some(retained) = state.retained.as_ref() {
+                state.last_publication_generation = Some(retained.publication_generation.clone());
+                state.last_issued_at = Some(retained.issued_at);
+                state.last_valid_until = Some(retained.valid_until);
+            }
+            state.publication_retry = false;
+            state.conflicted_consumer_count = 0;
+        }
+        Err(mut failure) => {
+            state.conflicted_consumer_count = u32::from(failure.consumer_conflict);
+            if let Some(publications) = failure.publications.take() {
+                state.publications = publications;
+            }
+            if let Some(retained) = failure.retained.take() {
+                state.expired = false;
+                state.expires_at = Some(retained.expires_at);
+                state.retained = Some(*retained);
+                state.publication_retry = true;
+            }
+            state.failure_count = state.failure_count.saturating_add(1);
+            let rotation = &current.config.rotation;
+            let initial = parse_duration(&rotation.retry_initial_backoff).unwrap_or(Duration::from_secs(2));
+            let maximum = parse_duration(&rotation.retry_max_backoff).unwrap_or(Duration::from_secs(120));
+            let delay = match failure.schedule {
+                FailureSchedule::Transient => retry_delay(
+                    &current.identity_key(),
+                    state.failure_count,
+                    initial,
+                    maximum,
+                    failure.retry_after,
+                ),
+                FailureSchedule::Rotation => parse_duration(&rotation.interval).unwrap_or(Duration::from_secs(900)),
+            };
+            state.next_attempt = Some(Instant::now() + delay);
         }
     }
 }
@@ -1508,6 +1518,10 @@ async fn cleanup_removed_source(
 }
 
 async fn publish_manager_result(runtime: &ControllerRuntime, source: &DesiredCredentialSource, state: &SourceState) {
+    // Cleanup can complete after replacement; never stamp old state with the new source.
+    if state.identity != source.identity_key() || state.input_revision != source_input_revision(source) {
+        return;
+    }
     let consumers = runtime
         .credential_source_registry
         .consumers_for_source(&source.logical_key());
@@ -1569,7 +1583,7 @@ async fn publish_manager_result(runtime: &ControllerRuntime, source: &DesiredCre
     {
         maybe_clear_memory_after_fan_out(runtime, source, published_consumer_count, consumers.len() as u32);
     }
-    if runtime.credential_source_registry.replace_result(key.clone(), result) {
+    if runtime.credential_source_registry.replace_result(source, result) {
         if let Some(processor) = runtime.processor_registry.get("LinkSys") {
             processor.requeue(key).await;
         }
@@ -1691,30 +1705,6 @@ fn reconciled_consumers_current(runtime: &ControllerRuntime, source_key: &str, e
         && consumers
             .iter()
             .all(|consumer| consumer_is_current(runtime, consumer) && consumer.matches_source(&source))
-}
-
-fn source_input_revision(source: &DesiredCredentialSource) -> String {
-    let mut parts = source
-        .secret_inputs
-        .iter()
-        .map(|input| {
-            format!(
-                "{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}",
-                input.reference.owner_revision(),
-                input.reference.slot_revision(),
-                input.role,
-                input.namespace,
-                input.name,
-                input.uid.as_deref().unwrap_or_default(),
-                input.resource_version.as_deref().unwrap_or_default(),
-                input.authorization_revision
-            )
-        })
-        .collect::<Vec<_>>();
-    parts.push(format!("source-uid\0{}", source.uid));
-    parts.push(format!("source-generation\0{}", source.generation));
-    parts.sort();
-    digest(parts.iter().map(String::as_str))
 }
 
 fn consumer_revision(consumers: &[DesiredCredentialConsumer], reconcile_epoch: u64) -> String {

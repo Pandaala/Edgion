@@ -84,6 +84,35 @@ impl DesiredCredentialSource {
     }
 }
 
+pub(crate) fn source_input_revision(source: &DesiredCredentialSource) -> String {
+    let mut parts = source
+        .secret_inputs
+        .iter()
+        .map(|input| {
+            format!(
+                "{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}",
+                input.reference.owner_revision(),
+                input.reference.slot_revision(),
+                input.role,
+                input.namespace,
+                input.name,
+                input.uid.as_deref().unwrap_or_default(),
+                input.resource_version.as_deref().unwrap_or_default(),
+                input.authorization_revision
+            )
+        })
+        .collect::<Vec<_>>();
+    parts.push(format!("source-uid\0{}", source.uid));
+    parts.push(format!("source-generation\0{}", source.generation));
+    parts.sort();
+    let mut digest = Sha256::new();
+    for part in parts {
+        digest.update(part.as_bytes());
+        digest.update([0]);
+    }
+    hex::encode(digest.finalize())
+}
+
 /// Desired publication binding produced by an `EdgionPlugins` reconcile.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DesiredCredentialConsumer {
@@ -188,6 +217,22 @@ impl DesiredCredentialConsumer {
     }
 }
 
+#[derive(PartialEq, Eq)]
+struct QualifiedManagerResult {
+    source_uid: String,
+    source_generation: i64,
+    input_revision: String,
+    result: CredentialManagerResult,
+}
+
+impl QualifiedManagerResult {
+    fn matches_source(&self, source: &DesiredCredentialSource) -> bool {
+        self.source_uid == source.uid
+            && self.source_generation == source.generation
+            && self.input_revision == source_input_revision(source)
+    }
+}
+
 #[derive(Default)]
 struct RegistryState {
     sources: HashMap<String, DesiredCredentialSource>,
@@ -196,7 +241,7 @@ struct RegistryState {
     reconcile_observations: HashMap<String, String>,
     reconcile_epochs: HashMap<String, u64>,
     next_reconcile_epoch: u64,
-    results: HashMap<String, CredentialManagerResult>,
+    results: HashMap<String, QualifiedManagerResult>,
 }
 
 /// Typed, process-local desired state shared by handlers and the future
@@ -309,21 +354,44 @@ impl CredentialSourceRegistry {
             .unwrap_or(0)
     }
 
-    pub fn replace_result(&self, logical_key: String, result: CredentialManagerResult) -> bool {
-        let mut state = self.inner.write();
-        if state.results.get(&logical_key) == Some(&result) {
+    /// Reject stale asynchronous observations atomically with result insertion.
+    pub fn replace_result(&self, expected: &DesiredCredentialSource, result: CredentialManagerResult) -> bool {
+        if result.observed_generation != expected.generation {
             return false;
         }
-        state.results.insert(logical_key, result);
+        let logical_key = expected.logical_key();
+        let qualified = QualifiedManagerResult {
+            source_uid: expected.uid.clone(),
+            source_generation: expected.generation,
+            input_revision: source_input_revision(expected),
+            result,
+        };
+        let mut state = self.inner.write();
+        if !state
+            .sources
+            .get(&logical_key)
+            .is_some_and(|source| qualified.matches_source(source))
+            || state.results.get(&logical_key) == Some(&qualified)
+        {
+            return false;
+        }
+        state.results.insert(logical_key, qualified);
         true
     }
 
     pub fn result(&self, logical_key: &str) -> Option<CredentialManagerResult> {
-        self.inner.read().results.get(logical_key).cloned()
+        let state = self.inner.read();
+        let source = state.sources.get(logical_key)?;
+        let qualified = state.results.get(logical_key)?;
+        qualified.matches_source(source).then(|| qualified.result.clone())
     }
 
     pub fn remove_result(&self, logical_key: &str) -> Option<CredentialManagerResult> {
-        self.inner.write().results.remove(logical_key)
+        self.inner
+            .write()
+            .results
+            .remove(logical_key)
+            .map(|qualified| qualified.result)
     }
 
     pub fn stats(&self) -> CredentialSourceRegistryStats {

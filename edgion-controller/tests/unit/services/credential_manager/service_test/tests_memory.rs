@@ -371,6 +371,7 @@ async fn publish_manager_result_counts_every_consumer_when_persist_off() {
     let retained = retained_publication();
     let state = SourceState {
         identity: source.identity_key(),
+        input_revision: source_input_revision(&source),
         retained: Some(retained.clone()),
         last_publication_generation: Some(retained.publication_generation.clone()),
         last_issued_at: Some(retained.issued_at),
@@ -400,6 +401,7 @@ async fn expired_persist_off_state_clears_memory_reports_expired_and_notifies_co
     publish_to_memory(&runtime, &source, &retained);
     let mut state = SourceState {
         identity: source.identity_key(),
+        input_revision: source_input_revision(&source),
         expires_at: Some(Instant::now() - Duration::from_secs(1)),
         retained: Some(retained.clone()),
         last_publication_generation: Some(retained.publication_generation.clone()),
@@ -1043,8 +1045,16 @@ async fn actual_pair_gates_recovery_completion_counts_and_memory_clear() {
         1,
         "historical cleanup does not require current pair acceptance"
     );
-    let mut state = state;
-    state.retained = Some(retained_publication());
+    assert!(state.identity.is_empty());
+    assert!(state.input_revision.is_empty());
+    // Count projection is a separate, qualified observation, not recovered material.
+    let state = SourceState {
+        identity: source.identity_key(),
+        input_revision: source_input_revision(&source),
+        publications: state.publications,
+        retained: Some(retained_publication()),
+        ..SourceState::default()
+    };
     runtime.credential_memory.insert_oauth_publication(
         &source.identity_key(),
         crate::services::credential_manager::memory::GeneratedSecretEntry {
@@ -1085,4 +1095,197 @@ fn managed_api_identity_comes_from_actual_pair_and_canonical_default() {
     );
     let identity = ManagedSecretIdentity::from_current_pair(&default_consumer, &source).unwrap();
     assert_eq!(identity.consumer().namespace, "default");
+}
+
+#[tokio::test]
+async fn late_manager_result_after_forget_does_not_restore_registry_entries() {
+    let runtime = ControllerRuntime::new();
+    let source = persist_source(false);
+    runtime.credential_source_registry.replace_source(source.clone());
+    let state = SourceState {
+        identity: source.identity_key(),
+        input_revision: source_input_revision(&source),
+        ..SourceState::default()
+    };
+    publish_manager_result(&runtime, &source, &state).await;
+    assert!(runtime
+        .credential_source_registry
+        .result(&source.logical_key())
+        .is_some());
+    runtime.credential_source_registry.forget_source(&source.logical_key());
+    publish_manager_result(&runtime, &source, &state).await;
+    assert_eq!(runtime.credential_source_registry.stats().result_count, 0);
+    assert!(runtime.credential_source_registry.keys().is_empty());
+}
+
+#[tokio::test]
+async fn cleanup_completion_cannot_relabel_old_state_or_overwrite_current_result() {
+    for change in 0..2 {
+        let runtime = ControllerRuntime::new();
+        let old = persist_source(false);
+        let old_state = SourceState {
+            identity: old.identity_key(),
+            input_revision: source_input_revision(&old),
+            last_publication_generation: Some("old-publication".into()),
+            expired: true,
+            ..SourceState::default()
+        };
+        let mut current = old.clone();
+        if change == 0 {
+            current.uid = "replacement-uid".into();
+        } else {
+            current.secret_inputs[0].resource_version = Some("2".into());
+        }
+        runtime.credential_source_registry.replace_source(current.clone());
+        publish_manager_result(&runtime, &current, &old_state).await;
+        assert!(runtime
+            .credential_source_registry
+            .result(&current.logical_key())
+            .is_none());
+        let current_state = SourceState {
+            identity: current.identity_key(),
+            input_revision: source_input_revision(&current),
+            last_publication_generation: Some("current-publication".into()),
+            ..SourceState::default()
+        };
+        publish_manager_result(&runtime, &current, &current_state).await;
+        let expected = runtime
+            .credential_source_registry
+            .result(&current.logical_key())
+            .unwrap();
+        // Cleaned obtains the latest desired source independently of its old state.
+        publish_manager_result(&runtime, &current, &old_state).await;
+        assert_eq!(
+            runtime.credential_source_registry.result(&current.logical_key()),
+            Some(expected)
+        );
+    }
+}
+
+#[tokio::test]
+async fn changed_input_expiry_cleans_memory_and_notifies_without_misattributing_result() {
+    let runtime = ControllerRuntime::new();
+    let old = persist_source(false);
+    let consumer = memory_consumer("injector");
+    runtime.credential_source_registry.replace_consumer(consumer.clone());
+    let retained = retained_publication();
+    publish_to_memory(&runtime, &old, &retained);
+    let mut state = SourceState {
+        identity: old.identity_key(),
+        input_revision: source_input_revision(&old),
+        expires_at: Some(Instant::now() - Duration::from_secs(1)),
+        retained: Some(retained),
+        publications: HashMap::from([(consumer.logical_key(), leftover_delete_expectation())]),
+        ..SourceState::default()
+    };
+    let mut current = old.clone();
+    current.secret_inputs[0].resource_version = Some("2".into());
+    runtime.credential_source_registry.replace_source(current.clone());
+    assert!(clear_expired_credential(&runtime, &current, &mut state));
+    publish_manager_result(&runtime, &current, &state).await;
+    notify_consumers(&runtime, &[consumer], "expired:old".into()).await;
+    assert!(state.expired);
+    assert!(state.retained.is_none());
+    assert!(runtime.credential_memory.active(&old.identity_key()).is_none());
+    assert_eq!(
+        state.publications.len(),
+        1,
+        "historical cleanup obligations survive projection rejection"
+    );
+    assert!(runtime
+        .credential_source_registry
+        .result(&current.logical_key())
+        .is_none());
+    assert!(
+        runtime
+            .credential_source_registry
+            .reconcile_epoch_for_source(&current.logical_key())
+            > 0
+    );
+}
+
+#[tokio::test]
+async fn accepted_failed_refresh_reports_retained_publication_for_current_inputs() {
+    let runtime = ControllerRuntime::new();
+    let old = persist_source(false);
+    let mut current = old.clone();
+    current.secret_inputs[0].resource_version = Some("2".into());
+    runtime.credential_source_registry.replace_source(current.clone());
+    runtime
+        .credential_source_registry
+        .replace_consumer(memory_consumer("injector"));
+    let retained = retained_publication();
+    let mut state = SourceState {
+        identity: old.identity_key(),
+        input_revision: source_input_revision(&old),
+        retained: Some(retained.clone()),
+        expires_at: Some(retained.expires_at),
+        last_publication_generation: Some(retained.publication_generation.clone()),
+        last_issued_at: Some(retained.issued_at),
+        last_valid_until: Some(retained.valid_until),
+        ..SourceState::default()
+    };
+    let before = Instant::now();
+    apply_reconciled_state(
+        &mut state,
+        &current,
+        current.identity_key(),
+        source_input_revision(&current),
+        "current-consumers".into(),
+        Err(ReconcileFailure::transient(None)),
+    );
+    assert_eq!(state.input_revision, source_input_revision(&current));
+    assert_eq!(state.failure_count, 1);
+    assert!(state.next_attempt.unwrap() > before);
+    assert_eq!(state.expires_at, Some(retained.expires_at));
+    assert_eq!(
+        state.retained.as_ref().unwrap().publication_generation,
+        retained.publication_generation
+    );
+    publish_manager_result(&runtime, &current, &state).await;
+    let result = runtime
+        .credential_source_registry
+        .result(&current.logical_key())
+        .unwrap();
+    assert_eq!(result.state, CredentialSourceState::Valid);
+    assert_eq!(result.published_generation, Some(retained.publication_generation));
+    assert_eq!(result.published_consumer_count, 1);
+    assert!(result.next_refresh_time.is_some());
+}
+
+#[test]
+fn accepted_success_replaces_failure_state_and_retains_refresh_deadlines() {
+    let current = persist_source(true);
+    let retained = retained_publication();
+    let mut state = SourceState {
+        failure_count: 4,
+        expired: true,
+        publication_retry: true,
+        conflicted_consumer_count: 1,
+        ..SourceState::default()
+    };
+    let before = Instant::now();
+    apply_reconciled_state(
+        &mut state,
+        &current,
+        current.identity_key(),
+        source_input_revision(&current),
+        "current-consumers".into(),
+        Ok(ReconcileSuccess {
+            next_delay: Duration::from_secs(60),
+            expires_at: Some(retained.expires_at),
+            publications: HashMap::new(),
+            retained: retained.clone(),
+        }),
+    );
+    assert_eq!(state.identity, current.identity_key());
+    assert_eq!(state.consumer_revision, "current-consumers");
+    assert_eq!(state.failure_count, 0);
+    assert!(state.persist);
+    assert!(!state.expired);
+    assert!(!state.publication_retry);
+    assert_eq!(state.conflicted_consumer_count, 0);
+    assert!(state.next_attempt.unwrap() >= before + Duration::from_secs(60));
+    assert_eq!(state.expires_at, Some(retained.expires_at));
+    assert_eq!(state.last_publication_generation, Some(retained.publication_generation));
 }

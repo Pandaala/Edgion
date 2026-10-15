@@ -73,6 +73,7 @@ mod observer_tests {
     struct RecordingGauge {
         registrations: AtomicUsize,
         value: AtomicU64,
+        writes: Mutex<Vec<f64>>,
         pause: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
     }
 
@@ -91,6 +92,7 @@ mod observer_tests {
                     release.recv_timeout(Duration::from_secs(5)).unwrap();
                 }
             }
+            self.writes.lock().push(value);
             self.value.store(value.to_bits(), Ordering::SeqCst);
         }
     }
@@ -133,15 +135,29 @@ mod observer_tests {
         metrics::with_local_recorder(&Recorder(state.clone()), || {
             assert!(!confirm_dead_current(0));
             assert_eq!(state.registrations.load(Ordering::SeqCst), 0);
+            assert!(state.writes.lock().is_empty());
             let current = install_test_generation();
             assert!(!confirm_dead_current(current + 1));
             assert_eq!(state.registrations.load(Ordering::SeqCst), 0);
+            assert!(state.writes.lock().is_empty());
             crate::conf_mgr::sync_runtime::metrics::leader_job_gauge("credential_manager").set(1.0);
+            assert_eq!(*state.writes.lock(), [1.0]);
             assert!(confirm_dead_current(current));
-            assert_eq!(state.registrations.load(Ordering::SeqCst), 2);
+            assert_eq!(*state.writes.lock(), [1.0, 0.0]);
             assert_eq!(f64::from_bits(state.value.load(Ordering::SeqCst)), 0.0);
+            let registrations = state.registrations.load(Ordering::SeqCst);
+            assert!(!confirm_dead_current(current + 1));
+            assert_eq!(state.registrations.load(Ordering::SeqCst), registrations);
+            assert_eq!(*state.writes.lock(), [1.0, 0.0]);
         });
         stop_credential_manager_service();
+        let registrations = state.registrations.load(Ordering::SeqCst);
+        let writes = state.writes.lock().clone();
+        metrics::with_local_recorder(&Recorder(state.clone()), || {
+            assert!(!confirm_dead_current(0));
+            assert_eq!(state.registrations.load(Ordering::SeqCst), registrations);
+            assert_eq!(*state.writes.lock(), writes);
+        });
     }
 
     #[test]

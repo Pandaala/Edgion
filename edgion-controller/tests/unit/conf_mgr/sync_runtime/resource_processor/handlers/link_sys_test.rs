@@ -1852,10 +1852,10 @@ async fn unsupported_extension_clears_credential_source_state_and_recovers() {
     };
     assert!(runtime.credential_source_registry.source("ops/provider").is_some());
     assert!(!ctx.secret_ref_manager().get_refs("ops/bootstrap").is_empty());
-    runtime.credential_source_registry.replace_result(
-        "ops/provider".into(),
+    assert!(runtime.credential_source_registry.replace_result(
+        &runtime.credential_source_registry.source("ops/provider").unwrap(),
         CredentialManagerResult {
-            observed_generation: 1,
+            observed_generation: 4,
             state: CredentialSourceState::Valid,
             published_generation: Some("old".into()),
             issued_at: None,
@@ -1866,7 +1866,7 @@ async fn unsupported_extension_clears_credential_source_state_and_recovers() {
             published_consumer_count: 1,
             conflicted_consumer_count: 0,
         },
-    );
+    ));
     current.metadata.generation = Some(2);
     current.spec.config = SystemConfig::Unsupported;
     let ProcessResult::Continue(mut unknown) = handler.parse(current, &ctx).await else {
@@ -2078,4 +2078,62 @@ async fn kafka_scalar_errors_retain_order_in_controller_status() {
     let condition = find_cond(&parsed, condition_types::ACCEPTED).unwrap();
     assert_eq!(condition.status, "False");
     assert_eq!(condition.message, errors.join("; "));
+}
+
+#[tokio::test]
+async fn same_generation_source_uid_replacement_does_not_inherit_manager_status() {
+    use crate::conf_mgr::sync_runtime::resource_processor::credential_source_state::CredentialManagerResult;
+    use edgion_resources::resources::link_sys::CredentialSourceState;
+    let (key, secret) = make_secret(
+        "ops",
+        "bootstrap",
+        &[("clientId", b"client"), ("clientSecret", b"secret")],
+    );
+    let (ctx, runtime) = make_ctx(HashMap::from([(key, secret)]));
+    let handler = LinkSysHandler::new();
+    let original = make_credential_source("ops", "provider", "bootstrap");
+    let ProcessResult::Continue(mut parsed) = handler.parse(original, &ctx).await else {
+        panic!("must parse source")
+    };
+    let old = runtime.credential_source_registry.source("ops/provider").unwrap();
+    let mut result = CredentialManagerResult {
+        observed_generation: old.generation,
+        state: CredentialSourceState::Valid,
+        published_generation: Some("old-publication".into()),
+        issued_at: Some("2026-10-15T00:00:00Z".into()),
+        valid_until: Some("2026-10-15T01:00:00Z".into()),
+        last_successful_refresh_time: Some("2026-10-15T00:00:00Z".into()),
+        next_refresh_time: Some("2026-10-15T00:30:00Z".into()),
+        desired_consumer_count: 2,
+        published_consumer_count: 2,
+        conflicted_consumer_count: 0,
+    };
+    assert!(runtime.credential_source_registry.replace_result(&old, result.clone()));
+    handler.update_status(&mut parsed, &ctx, &[]);
+    assert_eq!(
+        parsed.status.as_ref().unwrap().as_local().unwrap().credential_state,
+        Some(CredentialSourceState::Valid)
+    );
+    parsed.metadata.uid = Some("replacement-uid".into());
+    let ProcessResult::Continue(mut replacement) = handler.parse(parsed, &ctx).await else {
+        panic!("must parse replacement")
+    };
+    handler.update_status(&mut replacement, &ctx, &[]);
+    let status = replacement.status.as_ref().unwrap().as_local().unwrap();
+    assert!(status.credential_state.is_none());
+    assert!(status.published_generation.is_none());
+    assert!(status.issued_at.is_none());
+    assert!(status.valid_until.is_none());
+    assert!(status.last_successful_refresh_time.is_none());
+    assert!(status.next_refresh_time.is_none());
+    assert!(status.desired_consumer_count.is_none());
+    assert!(status.published_consumer_count.is_none());
+    assert!(status.conflicted_consumer_count.is_none());
+    let current = runtime.credential_source_registry.source("ops/provider").unwrap();
+    result.published_generation = Some("replacement-publication".into());
+    assert!(runtime.credential_source_registry.replace_result(&current, result));
+    handler.update_status(&mut replacement, &ctx, &[]);
+    let status = replacement.status.as_ref().unwrap().as_local().unwrap();
+    assert_eq!(status.credential_state, Some(CredentialSourceState::Valid));
+    assert_eq!(status.published_generation.as_deref(), Some("replacement-publication"));
 }

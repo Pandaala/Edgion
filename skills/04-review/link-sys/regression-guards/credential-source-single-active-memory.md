@@ -126,3 +126,42 @@ and stable-field-manager adoption. These are in-process IO controls, not a live
 API-server or scheduler claim. Preserve the existing post-GET authorization test,
 all CAS operations, UID plus resourceVersion deletion, and each manager cleanup
 closure: historical cleanup must not require a vanished old owner.
+
+## Local manager result ownership (ARCH-105)
+
+The registry owns one private result slot per logical source key, qualified by
+source UID, generation and the canonical frozen-input revision. Result insertion
+checks the current desired source and updates the slot under the same registry
+write lock. Reads compare the qualification with the current source under one read
+lock. Deletion removes the slot; a captured older producer cannot recreate it.
+Same-name replacement or changed Secret/proof inputs make the previous slot
+unreadable until a matching result replaces it. A transient remove/register of
+an identical source preserves its unchanged result and requeue suppression.
+
+The manager also checks SourceState identity and input revision before constructing
+result metadata. This prevents cleanup completion from combining a replacement
+source with the old source's state. The canonical source revision lives in
+`credential_source_state.rs`; it hashes only existing metadata/proof revisions,
+not resolved TLS material, and remains private to Controller processing.
+
+Qualification describes an observation, not the issuance provenance of every
+retained token. An accepted current failed refresh may still report its retained
+last-good publication. Same-qualified monotonic expiry still reports Expired.
+Expiry discovered in old state after source/input replacement does not become
+expiry status for the replacement; memory expiry clearing, historical cleanup
+obligations and consumer notification still run independently of result rejection.
+The replacement may temporarily have no lifecycle result until a qualifying
+observation is accepted. No bounded convergence time is established.
+
+The existing single workqueue and key requeues remain responsible for status
+propagation. They do not own the asynchronous registry insertion boundary. Worker,
+source/consumer, Secret/Grant, Lease and publication fences remain independent;
+this local invariant provides neither atomic external revocation nor physical
+erasure, and establishes no Gateway-token defect.
+
+Regression controls cover late actual publication after deletion, equal-generation
+UID replacement through the handler, input revision changes, cleanup relabeling,
+unchanged suppression, expiry side effects and accepted failure with retained
+publication. Re-evaluate when source input revision semantics or result producers
+change; do not replace qualification with handler-only clearing or broaden it
+into a retained-token ownership rewrite.
