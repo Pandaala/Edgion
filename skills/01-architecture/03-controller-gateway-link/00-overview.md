@@ -316,7 +316,14 @@ center:
 | `skip_tls = true` | Plaintext + ERROR log + `skip_tls` metric | Plaintext + ERROR log + `skip_tls` metric |
 
 An explicitly active `skip_tls: true` set is the emergency override even when `auto_ca` is also
-true; `auto_ca` does not silently cancel that explicit choice.
+true; `auto_ca` does not silently cancel that explicit choice. Controller startup prepares
+one validated `ConfSyncTransport` before ConfMgr can start leadership work. That decision
+owns rotation initialization and identity assembly: explicit plaintext skips CA provisioning,
+rotation schedule validation, identity reconciliation and certificate watchers. Effective
+auto-CA still initializes rotation before leadership, and publishes its identity before
+per-replica reconciliation. File TLS retains its selected paths and hot reload. The leadership
+callback itself stays unconditional because it also records leadership state. This escape
+hatch belongs only to conf_sync; federation continues to require real mTLS.
 
 > **Fail-close since 2026-07-14 (breaking).** This channel carries resolved Secrets
 > (TLS private keys, backend credentials), so an omitted `conf_sync_security` no longer

@@ -1,11 +1,12 @@
 use crate::api::{create_admin_router, serve_with_shutdown as serve_admin_api_with_shutdown};
 use crate::conf_mgr::{ConfMgr, SchemaValidator, ShutdownHandle};
+use crate::conf_sync::conf_server::tls_identity::{global_handle, ServerIdentity, ServerIdentityHandle};
 use crate::conf_sync::{ConfigSyncGrpcServer, ConfigSyncServerProvider};
 use crate::config::EdgionControllerConfig;
 use crate::observe::init_logging;
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
-use edgion_common::conf_sync::config::ConfSyncSecurityConfig;
+use edgion_common::conf_sync::config::{ConfSyncRotationConfig, ConfSyncSecurityConfig, ConfSyncTlsConfig};
 use edgion_resources::{init_work_dir, work_dir, COMPONENT_EDGION_CONTROLLER, VERSION};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -162,7 +163,7 @@ impl EdgionControllerCli {
         probe_addr: SocketAddr,
         metrics_addr: SocketAddr,
         security: ConfSyncSecurityConfig,
-        auto_ca_ns_sans: Option<(String, Vec<String>)>,
+        transport: ConfSyncTransport,
         config_file: Option<String>,
         authorizer: std::sync::Arc<crate::authz::Authorizer>,
         center_reload_tx: tokio::sync::watch::Sender<crate::config::CenterClientConfig>,
@@ -223,116 +224,9 @@ impl EdgionControllerCli {
             grpc_server.set_term_token_slot(slot);
         }
 
-        // conf_sync auto-CA (K8s only): when enabled, the Controller's internal CA
-        // ensures the CA Secret, provisions the gateway-client leaf Secret, and mints
-        // the controller-server cert in memory (fed straight into tonic — no mount).
-        // Idempotent on every startup; a concurrent create is adopted on a 409.
-        // Phase 1 relies on this idempotent-adopt for split-brain safety; Phase 2 adds
-        // the leader gate + rotation.
-        //
-        // Build the hot-reloadable server identity (spec §6 T3):
-        //  - auto_ca (K8s): from the provisioned in-memory identity
-        //  - file mode: from the configured active TLS file paths
-        //  - plaintext/skip_tls: none
-        use crate::conf_sync::conf_server::cert_watch::{spawn_server_cert_watcher, CertPaths};
-        use crate::conf_sync::conf_server::tls_identity::{global_handle, ServerIdentity, ServerIdentityHandle};
-
-        // Controller-side rotation validation (spec §5.2): run BEFORE the auto-CA
-        // branch below, which calls `provision()` and persists Secrets minted from
-        // the configured TTLs. An invalid or suspect schedule/TTL combo must abort
-        // startup before that side effect, not be silently tolerated until the
-        // first rotation attempt.
-        if let Some(rotation) = &security.rotation {
-            if security.auto_ca {
-                match crate::services::conf_sync_ca::cert_util::validate_schedule_controller(rotation) {
-                    Ok(warnings) if warnings.is_empty() => {}
-                    Ok(warnings) => {
-                        for warning in &warnings {
-                            tracing::warn!(component = "conf_sync_ca", "{warning}");
-                        }
-                        edgion_common::observe::system_metrics::mark_system_error(
-                            edgion_common::observe::system_metrics::components::CONF_SYNC_SERVER,
-                            edgion_common::observe::system_metrics::reasons::CERT_ROTATION_CONFIG_SUSPECT,
-                        );
-                    }
-                    Err(e) => anyhow::bail!("invalid conf_sync_security.rotation: {e}"),
-                }
-            } else {
-                tracing::warn!(component = "conf_sync_ca", "rotation config ignored (auto_ca disabled)");
-            }
-        }
-
-        // Inputs for the per-replica server-identity reconciler, captured in the
-        // auto_ca branch below and consumed right after `global_handle().set(..)`.
-        let mut auto_ca_identity_sync: Option<(
-            kube::Client,
-            String,
-            Vec<String>,
-            edgion_common::conf_sync::config::ConfSyncRotationConfig,
-        )> = None;
-
-        let tls_handle: Option<Arc<ServerIdentityHandle>> = if security.auto_ca {
-            // ns/sans were already computed once by the caller (`run_after_logging`)
-            // so `rotation::init` could run before the ConfMgr leadership spawn
-            // (spec §6 T5 init-before-leadership fix); reuse them instead of
-            // recomputing.
-            let (ns, sans) = auto_ca_ns_sans
-                .clone()
-                .expect("auto_ca_ns_sans is Some whenever security.auto_ca is set (computed by the caller)");
-            let client = kube::Client::try_default().await?;
-            let rotation = security.rotation.clone().unwrap_or_default();
-            let id = crate::services::conf_sync_ca::provision(client.clone(), &ns, sans.clone(), &rotation).await?;
-            tracing::info!(
-                component = COMPONENT_EDGION_CONTROLLER,
-                "conf_sync mTLS enabled for gRPC server (auto-CA, in-memory server cert)"
-            );
-            let h = Arc::new(ServerIdentityHandle::new(ServerIdentity::from_pems(
-                &id.cert_pem,
-                id.key_pem.as_str(),
-                &id.ca_cert_pem,
-            )?));
-            auto_ca_identity_sync = Some((client, ns, sans, rotation));
-            Some(h)
-        } else if let Some(tls) = security.resolve_active_tls().filter(|t| !t.skip_tls) {
-            let cert = tokio::fs::read_to_string(tls.cert_path()).await?;
-            let key = tokio::fs::read_to_string(tls.key_path()).await?;
-            let ca = tokio::fs::read_to_string(tls.ca_path()).await?;
-            tracing::info!(
-                component = COMPONENT_EDGION_CONTROLLER,
-                "conf_sync mTLS enabled for gRPC server"
-            );
-            let h = Arc::new(ServerIdentityHandle::new(ServerIdentity::from_pems(&cert, &key, &ca)?));
-            // Hot-reload (spec §6 T3): watch the active TLS set's file paths for
-            // in-place replacement (e.g. cert-manager renewal, Secret update).
-            // Flipping `active` to a different set remains restart-bound.
-            spawn_server_cert_watcher(
-                CertPaths {
-                    cert: tls.cert_path(),
-                    key: tls.key_path(),
-                    ca: tls.ca_path(),
-                },
-                h.clone(),
-                grpc_shutdown_token.clone(),
-            );
-            Some(h)
-        } else {
-            None
-        };
-        if let Some(h) = &tls_handle {
-            let _ = global_handle().set(h.clone());
-        }
-
-        // Per-replica server-identity reconciler (auto_ca only). Started
-        // UNCONDITIONALLY — leadership is deliberately NOT involved. Under
-        // `ha_mode: all-serve` every replica serves the conf_sync API (which
-        // streams resolved Secrets), so every replica must keep its own served
-        // leaf AND its client-CA verifier in sync with the current root, or an
-        // emergency CA re-key never revokes anything on the non-leaders. Mirrors
-        // istiod's `watchRootCertAndGenKeyCert`. Read-only on Secrets; the only
-        // mutation is this process's own in-memory identity handle.
-        if let Some((client, ns, sans, rotation)) = auto_ca_identity_sync {
-            crate::services::conf_sync_ca::start_identity_sync(client, ns, sans, rotation, grpc_shutdown_token.clone());
-        }
+        // The prepared transport owns all identity side effects; plaintext returns
+        // no handle without touching Kubernetes, certificate files or watchers.
+        let tls_handle = transport.build_identity(grpc_shutdown_token.clone()).await?;
 
         let grpc_listener = tokio::net::TcpListener::bind(grpc_addr).await?;
 
@@ -533,6 +427,13 @@ impl EdgionControllerCli {
             );
         }
 
+        // Resolve transport after metrics installation but before any leadership
+        // task can initialize CA work. The same choice reaches service startup.
+        let transport = ConfSyncTransport::prepare(
+            &config.conf_sync_security,
+            crate::services::conf_sync_ca::rotation::init,
+        )?;
+
         // Start the resource-abnormal metrics snapshot loop.
         // Runs independently of the Prometheus recorder (renders its own
         // text block appended to /metrics). The loop body is panic-safe;
@@ -570,28 +471,6 @@ impl EdgionControllerCli {
         // 4. Create ConfMgr (ConfigSyncServer is None initially)
         let conf_center_config = config.conf_center.clone();
         let conf_mgr = Arc::new(ConfMgr::create(conf_center_config).await?);
-
-        // 4b. conf_sync auto-CA rotation (spec §6 T5): register the rotation
-        // parameters via `rotation::init` BEFORE the ConfMgr leadership spawn
-        // immediately below. That spawned task can win leadership and reach the
-        // caches-ready callback (center.rs), which calls `start_conf_sync_rotation`,
-        // well before this function's control flow reaches the auto-CA
-        // provisioning code inside `start_services` further down -- if `init()`
-        // hasn't run by then, `start_conf_sync_rotation` no-ops silently for the
-        // entire leadership term (rotation never starts). Only synchronously
-        // available inputs are needed here (POD_NAMESPACE, resolved SANs, rotation
-        // config), so there is no reason to wait for the async `provision()`
-        // round-trip. ns/sans are computed once here and reused by
-        // `start_services` for `provision()` (see `auto_ca_ns_sans`).
-        let auto_ca_ns_sans: Option<(String, Vec<String>)> = if config.conf_sync_security.auto_ca {
-            let ns = std::env::var("POD_NAMESPACE").unwrap_or_else(|_| "default".to_string());
-            let sans = crate::services::conf_sync_ca::server_sans_for(&ns);
-            let rotation = config.conf_sync_security.rotation.clone().unwrap_or_default();
-            crate::services::conf_sync_ca::rotation::init(ns.clone(), sans.clone(), rotation);
-            Some((ns, sans))
-        } else {
-            None
-        };
 
         // 5. Spawn ConfMgr.start_with_shutdown() in background, wrapped in an
         // inner task so a lifecycle PANIC is observed as a JoinError — a panic
@@ -805,15 +684,6 @@ impl EdgionControllerCli {
         let admin_addr = parse_listen_addr(Some(&config.admin_listen()), "127.0.0.1:12101")?;
         let probe_addr = parse_listen_addr(Some(&config.probe_listen()), "0.0.0.0:12100")?;
         let metrics_addr = parse_listen_addr(Some(&config.metrics_listen()), "0.0.0.0:12190")?;
-        let security = config.conf_sync_security.clone();
-        security.validate()?;
-        // Fail-close (2026-07-14): an omitted `conf_sync_security` aborts startup here,
-        // BEFORE any listener is bound. The gRPC server has the same guard
-        // (`accept_skip_tls_or_refuse`), but it runs inside a `tokio::join!` with the
-        // Admin API, so an error there would not promptly stop the process — this is the
-        // check that turns the misconfiguration into a non-zero exit (`run()` -> `main`).
-        security.ensure_transport_configured()?;
-
         Self::start_services(
             conf_mgr,
             schema_validator,
@@ -821,8 +691,8 @@ impl EdgionControllerCli {
             admin_addr,
             probe_addr,
             metrics_addr,
-            security,
-            auto_ca_ns_sans,
+            config.conf_sync_security,
+            transport,
             config_file,
             authorizer,
             center_reload_tx,
@@ -830,6 +700,127 @@ impl EdgionControllerCli {
             shutdown_handle,
         )
         .await
+    }
+}
+
+/// Validated, immutable conf_sync transport for this Controller startup.
+/// The shared selector owns authored precedence; this value owns lifecycle effects.
+enum ConfSyncTransport {
+    Plaintext,
+    FileTls(ConfSyncTlsConfig),
+    AutoCa {
+        namespace: String,
+        sans: Vec<String>,
+        rotation: ConfSyncRotationConfig,
+    },
+}
+
+impl ConfSyncTransport {
+    fn prepare(
+        security: &ConfSyncSecurityConfig,
+        init_rotation: impl FnOnce(String, Vec<String>, ConfSyncRotationConfig),
+    ) -> Result<Self> {
+        security.validate()?;
+        security.ensure_transport_configured()?;
+        let active_tls = security.resolve_active_tls();
+        let skip_tls = active_tls.is_some_and(|tls| tls.skip_tls);
+        if skip_tls && security.auto_ca {
+            tracing::warn!(
+                component = COMPONENT_EDGION_CONTROLLER,
+                "conf_sync skip_tls=true overrides auto_ca: CA provisioning and rotation are disabled; emergency plaintext use only"
+            );
+        }
+        if security.auto_ca && !skip_tls {
+            let rotation = security.rotation.clone().unwrap_or_default();
+            let warnings = crate::services::conf_sync_ca::cert_util::validate_schedule_controller(&rotation)
+                .map_err(|e| anyhow!("invalid conf_sync_security.rotation: {e}"))?;
+            if !warnings.is_empty() {
+                for warning in warnings {
+                    tracing::warn!(component = "conf_sync_ca", warning = %warning, "Suspect rotation configuration");
+                }
+                edgion_common::observe::system_metrics::mark_system_error(
+                    edgion_common::observe::system_metrics::components::CONF_SYNC_SERVER,
+                    edgion_common::observe::system_metrics::reasons::CERT_ROTATION_CONFIG_SUSPECT,
+                );
+            }
+            let namespace = std::env::var("POD_NAMESPACE").unwrap_or_else(|_| "default".to_string());
+            let sans = crate::services::conf_sync_ca::server_sans_for(&namespace);
+            // Must precede the ConfMgr leadership spawn: its caches-ready callback
+            // starts rotation only when these parameters have already been installed.
+            init_rotation(namespace.clone(), sans.clone(), rotation.clone());
+            return Ok(Self::AutoCa {
+                namespace,
+                sans,
+                rotation,
+            });
+        }
+        if security.rotation.is_some() {
+            tracing::warn!(
+                component = "conf_sync_ca",
+                "rotation config ignored (effective auto-CA disabled)"
+            );
+        }
+        if skip_tls {
+            Ok(Self::Plaintext)
+        } else {
+            let tls = active_tls.context("conf_sync has no selected TLS configuration")?;
+            Ok(Self::FileTls(tls.clone()))
+        }
+    }
+
+    async fn build_identity(self, shutdown: CancellationToken) -> Result<Option<Arc<ServerIdentityHandle>>> {
+        use crate::conf_sync::conf_server::cert_watch::{spawn_server_cert_watcher, CertPaths};
+
+        let handle = match self {
+            Self::Plaintext => return Ok(None),
+            Self::AutoCa {
+                namespace,
+                sans,
+                rotation,
+            } => {
+                let client = kube::Client::try_default().await?;
+                let identity =
+                    crate::services::conf_sync_ca::provision(client.clone(), &namespace, sans.clone(), &rotation)
+                        .await?;
+                let handle = Arc::new(ServerIdentityHandle::new(ServerIdentity::from_pems(
+                    &identity.cert_pem,
+                    identity.key_pem.as_str(),
+                    &identity.ca_cert_pem,
+                )?));
+                let _ = global_handle().set(handle.clone());
+                // Every serving replica reconciles its leaf and trust root, regardless
+                // of leadership. Publish the identity before starting reconciliation.
+                crate::services::conf_sync_ca::start_identity_sync(client, namespace, sans, rotation, shutdown);
+                tracing::info!(
+                    component = COMPONENT_EDGION_CONTROLLER,
+                    "conf_sync mTLS enabled for gRPC server (auto-CA, in-memory server cert)"
+                );
+                handle
+            }
+            Self::FileTls(tls) => {
+                let cert = tokio::fs::read_to_string(tls.cert_path()).await?;
+                let key = tokio::fs::read_to_string(tls.key_path()).await?;
+                let ca = tokio::fs::read_to_string(tls.ca_path()).await?;
+                let handle = Arc::new(ServerIdentityHandle::new(ServerIdentity::from_pems(&cert, &key, &ca)?));
+                let _ = global_handle().set(handle.clone());
+                // Watch only the frozen active paths; changing selection requires restart.
+                spawn_server_cert_watcher(
+                    CertPaths {
+                        cert: tls.cert_path(),
+                        key: tls.key_path(),
+                        ca: tls.ca_path(),
+                    },
+                    handle.clone(),
+                    shutdown,
+                );
+                tracing::info!(
+                    component = COMPONENT_EDGION_CONTROLLER,
+                    "conf_sync mTLS enabled for gRPC server"
+                );
+                handle
+            }
+        };
+        Ok(Some(handle))
     }
 }
 
@@ -842,3 +833,7 @@ fn parse_listen_addr(addr: Option<&String>, default: &str) -> Result<SocketAddr>
     let candidate = addr.map(String::as_str).unwrap_or(default);
     SocketAddr::from_str(candidate).with_context(|| format!("failed to parse listen address '{}'", candidate))
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/cli/mod_test.rs"]
+mod tests;

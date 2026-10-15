@@ -74,6 +74,29 @@ Implementation:
 - Gateway: `edgion-gateway/src/cli/mod.rs` (`create_config_sync_client`) and
   `ConfigSyncClient::new` (`edgion-gateway/src/conf_sync/conf_client/grpc_client.rs`).
 
+## Controller startup precedence (ARCH-080)
+
+The Controller CLI prepares one private effective transport after installing metrics and
+before constructing/spawning ConfMgr. Shared selection validation precedes all CA side
+effects. A selected `skip_tls` overrides `auto_ca`, including its rotation schedule;
+an inactive bypass never overrides the active set. Bare `auto_ca` still provisions mTLS.
+Invalid selectors and invalid active paths fail closed rather than becoming plaintext.
+
+The prepared mode controls rotation initialization and the identity builder used by
+`start_services`. Plaintext creates no Kubernetes client, reads no certificate files,
+publishes no identity and starts no certificate watchers. Effective auto-CA initializes
+before leadership and publishes before per-replica identity synchronization. The existing
+leadership callback remains unconditional: it records leadership even with no rotation
+parameters. The CLI owns the override WARN; the serving guard retains ERROR, the existing
+`skip_tls` metric and the non-loopback WARN. Federation is outside this override.
+
+Regression coverage lives in `edgion-controller/tests/unit/cli/mod_test.rs`: canonical
+`certs` fixtures exercise validation and the real initialization gate with a recording
+callback, and invoke the production identity builder for bypass and missing file material.
+These network-free tests do not claim live Kubernetes provisioning or transport coverage;
+existing identity/revocation tests retain those narrower identity invariants. Re-evaluate
+this boundary if startup wiring, selection priority, or CA lifecycle ownership changes.
+
 ## Retired: the `plaintext_default` metric reason
 
 `edgion_system_error_state{reason="plaintext_default"}` meant "a secret-carrying channel
