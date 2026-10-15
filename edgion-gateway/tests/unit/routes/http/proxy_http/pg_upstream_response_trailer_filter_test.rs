@@ -1,4 +1,5 @@
 use super::*;
+use crate::plugins::runtime::PingoraSessionAdapter;
 use crate::plugins::runtime::UpstreamResponseTrailer;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -20,12 +21,38 @@ async fn test_session() -> Session {
     let (mut client, server) = tokio::io::duplex(4096);
     let stream: pingora_core::protocols::Stream = Box::new(server);
     let mut session = Session::new_h1(stream);
+    // The fixture drops its peer after setup; preserve the callback under FIN.
+    session.set_abort_on_close(false);
     client
         .write_all(b"GET /trailers HTTP/1.1\r\nHost: test\r\n\r\n")
         .await
         .expect("write request");
     session.read_request().await.expect("read request");
     session
+}
+
+#[tokio::test]
+async fn context_trailer_adapter_preserves_committed_h1_framing_and_declarations() {
+    use crate::plugins::runtime::ResponseTrailerSession;
+    let (mut client, server) = tokio::io::duplex(4096);
+    client.write_all(b"GET / HTTP/1.1\r\nHost: test\r\n\r\n").await.unwrap();
+    let mut session = Session::new_h1(Box::new(server));
+    assert!(session.read_request().await.unwrap());
+    let mut response = pingora_http::ResponseHeader::build(200, None).unwrap();
+    response.insert_header("transfer-encoding", "chunked").unwrap();
+    response.append_header("trailer", "X-First, x-second").unwrap();
+    response.append_header("trailer", "x-third").unwrap();
+    session.write_response_header(Box::new(response), false).await.unwrap();
+    let policy = ResponseTrailerPolicy::capture(&session);
+    let mut ctx = EdgionHttpContext::default();
+    ctx.request_info.is_grpc_request = true;
+    let adapter = ResponseTrailerAdapter { ctx: &mut ctx, policy };
+    assert!(adapter.is_grpc_request());
+    assert!(adapter.downstream_response_trailers_representable());
+    for name in ["x-first", "x-second", "x-third"] {
+        assert!(adapter.downstream_response_trailer_name_allowed(&http::HeaderName::from_static(name)));
+    }
+    assert!(!adapter.downstream_response_trailer_name_allowed(&http::HeaderName::from_static("x-other")));
 }
 
 struct RecordingCompanion {
@@ -45,7 +72,7 @@ impl UpstreamResponseTrailer for RecordingCompanion {
     async fn run_upstream_response_trailer(
         &mut self,
         trailers: Option<&mut HeaderMap>,
-        _session: &mut dyn crate::plugins::runtime::PluginSession,
+        _session: &mut dyn crate::plugins::runtime::traits::ResponseTrailerSession,
         _log: &mut PluginLog,
     ) -> UpstreamTrailerResult {
         self.calls.fetch_add(1, Ordering::SeqCst);
@@ -209,7 +236,7 @@ impl UpstreamResponseTrailer for PendingCompanion {
     async fn run_upstream_response_trailer(
         &mut self,
         _trailers: Option<&mut HeaderMap>,
-        _session: &mut dyn crate::plugins::runtime::PluginSession,
+        _session: &mut dyn crate::plugins::runtime::traits::ResponseTrailerSession,
         _log: &mut PluginLog,
     ) -> UpstreamTrailerResult {
         std::future::pending().await

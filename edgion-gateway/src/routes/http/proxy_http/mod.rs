@@ -43,6 +43,7 @@ mod pg_upstream_request_filter;
 mod pg_upstream_response_body_filter;
 mod pg_upstream_response_filter;
 mod pg_upstream_response_trailer_filter;
+mod response_callback;
 
 #[cfg(test)]
 pub(crate) use pg_upstream_response_body_filter::run_stream_processors;

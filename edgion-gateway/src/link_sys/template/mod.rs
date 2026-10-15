@@ -8,6 +8,7 @@
 pub mod engine;
 
 pub use engine::{
-    evaluate_template, evaluate_template_bounded, render_template, EscapeMode, MissingValuePolicy, RenderPolicy,
-    RenderedTemplate, SecretCapability, TemplateEvaluationError,
+    evaluate_template, evaluate_template_bounded, render_template, render_template_in, EscapeMode, MissingValuePolicy,
+    RenderPolicy, RenderedTemplate, SecretCapability, TemplateContext, TemplateEvaluationError,
+    TrustedTemplateVariables,
 };

@@ -27,25 +27,18 @@ impl crate::plugins::runtime::traits::AiSessionCapability for PingoraSessionAdap
     }
 
     fn semantic_guard_active(&self) -> bool {
-        self.ctx.ai_state().is_some_and(|state| state.semantic_guard_claimed)
+        self.ctx.semantic_guard_active()
     }
 
     fn publish_canonical_records(
         &mut self,
         batch: crate::ai::protocols::openai::canonical_sse::CanonicalRecordBatch,
     ) -> Result<(), crate::ai::protocols::openai::canonical_sse::CanonicalRecordBatch> {
-        let state = self.ctx.ensure_ai_state();
-        if !state.semantic_guard_claimed || state.canonical_record_batch.is_some() {
-            return Err(batch);
-        }
-        state.canonical_record_batch = Some(batch);
-        Ok(())
+        self.ctx.publish_canonical_records(batch)
     }
 
     fn take_canonical_records(&mut self) -> Option<crate::ai::protocols::openai::canonical_sse::CanonicalRecordBatch> {
-        self.ctx
-            .ai_state_mut()
-            .and_then(|state| state.canonical_record_batch.take())
+        self.ctx.take_canonical_records()
     }
 
     fn ai_terminal_render_context(
@@ -54,8 +47,7 @@ impl crate::plugins::runtime::traits::AiSessionCapability for PingoraSessionAdap
         crate::ai::protocols::openai::terminal::AiClientStreamDialect,
         crate::response::terminal::FinalResponseEligibility,
     )> {
-        let state = self.ctx.ai_state()?;
-        Some((state.client_stream_dialect?, state.final_response_eligibility?))
+        self.ctx.ai_terminal_render_context()
     }
 
     fn disable_semantic_guard(&mut self) {

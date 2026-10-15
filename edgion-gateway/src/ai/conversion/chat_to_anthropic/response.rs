@@ -26,7 +26,7 @@ use crate::ai::protocols::openai::canonical_sse::{write_canonical_record, Canoni
 use crate::ai::quota::QuotaAccumulator;
 use crate::ctx::ResponseStreamKind;
 use crate::plugins::runtime::traits::streaming_response_processor::StreamingResponseProcessor;
-use crate::plugins::runtime::PluginSession;
+use crate::plugins::runtime::ResponseStreamSession;
 use crate::routes::http::proxy_http::content_type::response_is_identity_encoded;
 use crate::sse::{SseDecoder, SseEventRef};
 
@@ -323,7 +323,7 @@ impl AnthropicResponseProcessor {
         Ok(())
     }
 
-    fn process_fixed(&mut self, chunk: &mut Option<Bytes>, session: &mut dyn PluginSession, error: FixedError) {
+    fn process_fixed(&mut self, chunk: &mut Option<Bytes>, session: &mut dyn ResponseStreamSession, error: FixedError) {
         if !self.fixed_emitted {
             *chunk = Some(Bytes::from(render_fixed_error(error)));
             self.fixed_emitted = true;
@@ -340,7 +340,7 @@ impl AnthropicResponseProcessor {
         chunk: &mut Option<Bytes>,
         end_of_stream: bool,
         sink: &mut ResponseBodySink,
-        session: &mut dyn PluginSession,
+        session: &mut dyn ResponseStreamSession,
     ) {
         let Some(limits) = self.unary.as_ref().map(|owner| owner.limits) else {
             self.sealed = true;
@@ -400,7 +400,7 @@ impl AnthropicResponseProcessor {
         &mut self,
         chunk: &mut Option<Bytes>,
         sink: &mut ResponseBodySink,
-        session: &mut dyn PluginSession,
+        session: &mut dyn ResponseStreamSession,
         timeout: bool,
     ) {
         self.sealed = true;
@@ -417,14 +417,24 @@ impl AnthropicResponseProcessor {
         };
         let _ = sink.fail_response_head(error);
     }
-    fn fail_non_streaming(&mut self, chunk: &mut Option<Bytes>, session: &mut dyn PluginSession, error: FixedError) {
+    fn fail_non_streaming(
+        &mut self,
+        chunk: &mut Option<Bytes>,
+        session: &mut dyn ResponseStreamSession,
+        error: FixedError,
+    ) {
         self.sealed = true;
         self.non_streaming_input = Vec::new();
         self.record_translation_failure(session);
         *chunk = Some(Bytes::from(render_fixed_error(error)));
     }
 
-    fn process_streaming(&mut self, chunk: &mut Option<Bytes>, end_of_stream: bool, session: &mut dyn PluginSession) {
+    fn process_streaming(
+        &mut self,
+        chunk: &mut Option<Bytes>,
+        end_of_stream: bool,
+        session: &mut dyn ResponseStreamSession,
+    ) {
         let input = chunk.take().unwrap_or_default();
         if self.message_stopped && !input.is_empty() {
             self.fail_streaming(chunk, session);
@@ -720,7 +730,7 @@ impl AnthropicResponseProcessor {
         Ok(())
     }
 
-    fn fail_streaming(&mut self, chunk: &mut Option<Bytes>, session: &mut dyn PluginSession) {
+    fn fail_streaming(&mut self, chunk: &mut Option<Bytes>, session: &mut dyn ResponseStreamSession) {
         if !session.try_claim_response_terminal(crate::response::terminal::ResponseTerminalCause::TranslationFailure) {
             self.sealed = true;
             self.semantic_records = None;
@@ -737,7 +747,7 @@ impl AnthropicResponseProcessor {
         session.mark_response_terminal_emission(crate::response::terminal::TerminalEmission::Rendered);
     }
 
-    fn record_translation_failure(&mut self, session: &mut dyn PluginSession) {
+    fn record_translation_failure(&mut self, session: &mut dyn ResponseStreamSession) {
         if !self.error_recorded {
             session.record_error(EdgionErrorCode::AiResponseTranslationFailed);
             self.error_recorded = true;
@@ -780,7 +790,7 @@ impl StreamingResponseProcessor for AnthropicResponseProcessor {
         end_of_stream: bool,
         _stream_kind: ResponseStreamKind,
         sink: &mut ResponseBodySink,
-        session: &mut dyn PluginSession,
+        session: &mut dyn ResponseStreamSession,
     ) {
         if self.sealed {
             *chunk = None;
@@ -795,7 +805,7 @@ impl StreamingResponseProcessor for AnthropicResponseProcessor {
             return;
         }
         self.pending_output_chars = 0;
-        self.semantic_records = (session.ai().semantic_guard_active() && matches!(self.mode, BodyMode::Streaming))
+        self.semantic_records = (session.semantic_guard_active() && matches!(self.mode, BodyMode::Streaming))
             .then(CanonicalRecordBatch::new);
         match self.mode {
             BodyMode::AwaitingHeader => self.fail_non_streaming(chunk, session, RESPONSE_TRANSLATION_FAILED),
@@ -854,7 +864,7 @@ impl StreamingResponseProcessor for AnthropicResponseProcessor {
             // Publish an empty active batch at EOS as an explicit semantic
             // source boundary for a window retained by an earlier callback.
             if (!batch.is_empty() || end_of_stream)
-                && session.ai().publish_canonical_records(batch).is_err()
+                && session.publish_canonical_records(batch).is_err()
                 && session
                     .try_claim_response_terminal(crate::response::terminal::ResponseTerminalCause::ProcessorFailure)
             {

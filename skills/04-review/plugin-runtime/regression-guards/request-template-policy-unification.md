@@ -30,6 +30,15 @@ already safe for Secret-derived headers; this task did not establish a prior lea
 
 ## Alternatives and limits
 
+The Task 06 cancellation repair adds explicit `TemplateContext::Request` and
+`TemplateContext::Trusted` capabilities to the same canonical walker, request
+builder and outbound loop. Trusted response callbacks read only ctx, remote IP
+and matched-route metadata; incoming request fields and fallback reads fail with
+`UnavailableVariable`, which missing-as-empty cannot suppress. Resolved Secrets
+remain a separate capability. Guardrail still selects endpoints and reads current
+authority policies on every window exchange; no complete request is frozen at
+header time. See [the response cancellation contract](response-callback-downstream-cancellation.md).
+
 Missing-as-empty and missing-as-error are intentional consumer differences, not
 interchangeable defaults. Empty remoteIp means unavailable; named present-empty
 values remain present. ProxyRewrite valueTemplate becomes a JSON string via serde,

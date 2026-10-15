@@ -4,10 +4,10 @@ use crate::ai::quota::{QuotaAccumulator, QuotaFinalStatus};
 use crate::ai::{AiUsageShared, UsageExtractionProcessor};
 use crate::ctx::ResponseStreamKind;
 use crate::plugins::http::ext_proc::{test_response_processor, AttachedExtProc, TEST_RESPONSE_WINDOW_CAP};
-use crate::plugins::runtime::traits::session::PluginSession;
 use crate::plugins::runtime::traits::streaming_response_processor::{
     StreamingResponseEvent, StreamingResponseProcessor,
 };
+use crate::plugins::runtime::PingoraSessionAdapter;
 use crate::plugins::runtime::PluginRuntime;
 use crate::routes::grpc::{GrpcBackendHandle, GrpcRouteRuleUnit, SelectedGrpcBackend};
 use crate::routes::http::match_unit::{HttpRouteRuleUnit, MatchSpecificity};
@@ -31,7 +31,9 @@ async fn run_stream_processors(
     sink: &mut ResponseBodySink,
 ) {
     ctx.freeze_response_processor_driver();
-    super::run_stream_processors(session, ctx, body, end_of_stream, sink).await;
+    super::run_stream_processors(session, ctx, body, end_of_stream, sink)
+        .await
+        .expect("response callback");
 }
 
 async fn run_stream_processors_event(
@@ -42,7 +44,9 @@ async fn run_stream_processors_event(
     sink: &mut ResponseBodySink,
 ) {
     ctx.freeze_response_processor_driver();
-    super::run_stream_processors_event(session, ctx, body, event, sink).await;
+    super::run_stream_processors_event(session, ctx, body, event, sink)
+        .await
+        .expect("response callback");
 }
 
 fn ctx_with_upstream() -> crate::EdgionHttpContext {
@@ -68,6 +72,9 @@ async fn test_session() -> Session {
     let (mut client, server) = tokio::io::duplex(4096);
     let stream: pingora_core::protocols::Stream = Box::new(server);
     let mut session = Session::new_h1(stream);
+    // This synthetic fixture keeps only the server endpoint. Tolerate its FIN;
+    // real disconnect cancellation has dedicated live-peer coverage.
+    session.set_abort_on_close(false);
     client
         .write_all(b"GET /sse-test HTTP/1.1\r\nHost: test\r\n\r\n")
         .await
@@ -292,7 +299,7 @@ impl StreamingResponseProcessor for Uppercase {
         _end_of_stream: bool,
         _stream_kind: ResponseStreamKind,
         _sink: &mut ResponseBodySink,
-        _session: &mut dyn PluginSession,
+        _session: &mut dyn crate::plugins::runtime::traits::ResponseStreamSession,
     ) {
         if let Some(b) = chunk.take() {
             *chunk = Some(Bytes::from(b.to_ascii_uppercase()));
@@ -312,7 +319,7 @@ impl StreamingResponseProcessor for TypedTerminalRecorder {
         event: StreamingResponseEvent,
         _stream_kind: ResponseStreamKind,
         _sink: &mut ResponseBodySink,
-        _session: &mut dyn PluginSession,
+        _session: &mut dyn crate::plugins::runtime::traits::ResponseStreamSession,
     ) {
         self.observed.lock().push(event);
     }
@@ -323,7 +330,7 @@ impl StreamingResponseProcessor for TypedTerminalRecorder {
         _end_of_stream: bool,
         _stream_kind: ResponseStreamKind,
         _sink: &mut ResponseBodySink,
-        _session: &mut dyn PluginSession,
+        _session: &mut dyn crate::plugins::runtime::traits::ResponseStreamSession,
     ) {
         panic!("typed callback must not collapse into the legacy callback")
     }
@@ -367,7 +374,7 @@ impl StreamingResponseProcessor for PreTrailerOutput {
         event: StreamingResponseEvent,
         _stream_kind: ResponseStreamKind,
         _sink: &mut ResponseBodySink,
-        _session: &mut dyn PluginSession,
+        _session: &mut dyn crate::plugins::runtime::traits::ResponseStreamSession,
     ) {
         if event == StreamingResponseEvent::TerminalBeforeTrailers {
             *body = Some(Bytes::from(vec![b'x'; 1024]));
@@ -380,7 +387,7 @@ impl StreamingResponseProcessor for PreTrailerOutput {
         _end_of_stream: bool,
         _stream_kind: ResponseStreamKind,
         _sink: &mut ResponseBodySink,
-        _session: &mut dyn PluginSession,
+        _session: &mut dyn crate::plugins::runtime::traits::ResponseStreamSession,
     ) {
         panic!("the typed terminal callback must be preserved")
     }
@@ -437,7 +444,7 @@ impl StreamingResponseProcessor for DropChunk {
         _end_of_stream: bool,
         _stream_kind: ResponseStreamKind,
         _sink: &mut ResponseBodySink,
-        _session: &mut dyn PluginSession,
+        _session: &mut dyn crate::plugins::runtime::traits::ResponseStreamSession,
     ) {
         *chunk = None;
     }
@@ -452,7 +459,7 @@ impl StreamingResponseProcessor for DropSseChunk {
         _end_of_stream: bool,
         stream_kind: ResponseStreamKind,
         _sink: &mut ResponseBodySink,
-        _session: &mut dyn PluginSession,
+        _session: &mut dyn crate::plugins::runtime::traits::ResponseStreamSession,
     ) {
         if stream_kind == ResponseStreamKind::Sse {
             *chunk = None;
@@ -478,7 +485,7 @@ impl StreamingResponseProcessor for HeaderMutator {
         _end_of_stream: bool,
         _stream_kind: ResponseStreamKind,
         _sink: &mut ResponseBodySink,
-        _session: &mut dyn PluginSession,
+        _session: &mut dyn crate::plugins::runtime::traits::ResponseStreamSession,
     ) {
     }
 }
@@ -495,7 +502,7 @@ impl StreamingResponseProcessor for Injector {
         _end_of_stream: bool,
         _stream_kind: ResponseStreamKind,
         sink: &mut ResponseBodySink,
-        _session: &mut dyn PluginSession,
+        _session: &mut dyn crate::plugins::runtime::traits::ResponseStreamSession,
     ) {
         sink.push(Bytes::from_static(b"-injected")).unwrap();
     }
@@ -514,7 +521,7 @@ impl StreamingResponseProcessor for SeesOnlyBody {
         _end_of_stream: bool,
         _stream_kind: ResponseStreamKind,
         _sink: &mut ResponseBodySink,
-        _session: &mut dyn PluginSession,
+        _session: &mut dyn crate::plugins::runtime::traits::ResponseStreamSession,
     ) {
         if let Some(bytes) = chunk.as_deref() {
             self.saw.lock().extend_from_slice(bytes);
@@ -531,7 +538,7 @@ impl StreamingResponseProcessor for Terminator {
         _end_of_stream: bool,
         _stream_kind: ResponseStreamKind,
         sink: &mut ResponseBodySink,
-        _session: &mut dyn PluginSession,
+        _session: &mut dyn crate::plugins::runtime::traits::ResponseStreamSession,
     ) {
         sink.terminate();
     }
@@ -549,7 +556,7 @@ impl StreamingResponseProcessor for MarkRan {
         _end_of_stream: bool,
         _stream_kind: ResponseStreamKind,
         _sink: &mut ResponseBodySink,
-        _session: &mut dyn PluginSession,
+        _session: &mut dyn crate::plugins::runtime::traits::ResponseStreamSession,
     ) {
         *self.ran.lock() = true;
     }
@@ -582,7 +589,7 @@ impl StreamingResponseProcessor for ClaimWithoutTerminate {
         _end_of_stream: bool,
         _stream_kind: ResponseStreamKind,
         _sink: &mut ResponseBodySink,
-        session: &mut dyn PluginSession,
+        session: &mut dyn crate::plugins::runtime::traits::ResponseStreamSession,
     ) {
         assert!(session.try_claim_response_terminal(ResponseTerminalCause::GuardrailRejected));
         *chunk = None;
@@ -605,7 +612,7 @@ impl StreamingResponseProcessor for PendingLifecycle {
         _end_of_stream: bool,
         _stream_kind: ResponseStreamKind,
         _sink: &mut ResponseBodySink,
-        _session: &mut dyn PluginSession,
+        _session: &mut dyn crate::plugins::runtime::traits::ResponseStreamSession,
     ) {
         std::future::pending::<()>().await;
     }
@@ -627,7 +634,7 @@ impl StreamingResponseProcessor for LifecycleMarker {
         _end_of_stream: bool,
         _stream_kind: ResponseStreamKind,
         sink: &mut ResponseBodySink,
-        _session: &mut dyn PluginSession,
+        _session: &mut dyn crate::plugins::runtime::traits::ResponseStreamSession,
     ) {
         self.counts.lock().ran += 1;
         if self.terminate {
@@ -644,7 +651,7 @@ impl StreamingResponseProcessor for OrderMarker {
         _end_of_stream: bool,
         _stream_kind: ResponseStreamKind,
         _sink: &mut ResponseBodySink,
-        _session: &mut dyn PluginSession,
+        _session: &mut dyn crate::plugins::runtime::traits::ResponseStreamSession,
     ) {
         self.order.lock().push(self.label);
     }
@@ -729,7 +736,9 @@ async fn body_event_before_final_header_freeze_fails_closed() {
     let mut body = Some(Bytes::from_static(b"must-not-pass"));
     let mut sink = ResponseBodySink::new();
 
-    super::run_stream_processors(&mut session, &mut ctx, &mut body, false, &mut sink).await;
+    super::run_stream_processors(&mut session, &mut ctx, &mut body, false, &mut sink)
+        .await
+        .unwrap();
 
     assert!(body.is_none());
     assert!(sink.is_terminated());
@@ -1345,7 +1354,7 @@ impl crate::plugins::runtime::traits::UpstreamResponseTrailer for IpAbortTrailer
     async fn run_upstream_response_trailer(
         &mut self,
         _: Option<&mut http::HeaderMap>,
-        _: &mut dyn PluginSession,
+        _: &mut dyn crate::plugins::runtime::traits::ResponseTrailerSession,
         _: &mut crate::plugins::runtime::PluginLog,
     ) -> crate::plugins::runtime::traits::UpstreamTrailerResult {
         self.0.lock().ran += 1;

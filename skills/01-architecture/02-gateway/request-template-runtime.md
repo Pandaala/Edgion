@@ -22,6 +22,16 @@ and timeout deny Secrets and client-controlled variables. Existing restricted
 outbound credential surfaces can allow resolved Secrets. Trust in ctx depends
 on its producer; remoteIp retains the existing proxy trust boundary.
 
+Runtime reads use `TemplateContext::Request(&dyn PluginSession)` or
+`TemplateContext::Trusted(&dyn TrustedTemplateVariables)` through that same
+walker. Trusted response callbacks can read ctx, remote IP and matched-route
+metadata without borrowing transport. An incoming-request variable or builder
+fallback without Request capability returns `UnavailableVariable` before missing
+value policy; it cannot silently become empty. Resolved Secrets retain their
+independent capability. Guardrail's admitted POST/path configuration uses the
+Trusted entry, while each exchange still chooses current endpoints, reads current
+authority policy and renders current trusted values.
+
 ## Consumer contracts
 
 | Consumer | Missing value | Escaping | Rendered byte budget | Secret source |

@@ -1,7 +1,7 @@
 use http::HeaderMap;
 use pingora_proxy::Session;
 
-use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
+use crate::plugins::runtime::response_stream_session::{ResponseTrailerAdapter, ResponseTrailerPolicy};
 use crate::plugins::runtime::{PluginLog, UpstreamTrailerResult};
 use crate::EdgionHttpContext;
 
@@ -23,7 +23,7 @@ fn trailer_processing_error() -> Box<pingora_core::Error> {
 pub(crate) async fn dispatch_upstream_response_trailers(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
-    mut trailers: Option<&mut HeaderMap>,
+    trailers: Option<&mut HeaderMap>,
 ) -> pingora_core::Result<()> {
     if trailers.is_some() {
         crate::response_cache::lifecycle::abandon(ctx);
@@ -35,35 +35,45 @@ pub(crate) async fn dispatch_upstream_response_trailers(
     if !claimed {
         return Ok(());
     }
-    let grpc_evidence = ctx.grpc_transcoding.as_ref().and_then(|_| {
-        trailers
-            .as_deref()
-            .map(crate::plugins::http::grpc_json_transcoder::status_evidence)
-    });
-
     let Some(driver) = ctx.response_processor_driver() else {
         return Ok(());
     };
     let Some(mut lease) = driver.trailer_lease().await else {
         return Err(trailer_processing_error());
     };
-    if lease.companions().is_empty() {
+    if lease.companions().is_empty() && ctx.grpc_transcoding.is_none() {
         lease.complete();
-        if ctx.grpc_transcoding.is_some() {
-            driver
-                .finalize_grpc_transcoding(
-                    grpc_evidence.as_ref(),
-                    ctx.upstream_response_headers_end_stream == Some(true),
-                )
-                .await?;
-        }
         return Ok(());
     }
+    let policy = (!lease.companions().is_empty()).then(|| ResponseTrailerPolicy::capture(session));
+    super::response_callback::run(session, run_leased_trailers(ctx, trailers, &driver, lease, policy)).await
+}
 
+async fn run_leased_trailers(
+    ctx: &mut EdgionHttpContext,
+    mut trailers: Option<&mut HeaderMap>,
+    driver: &crate::response::driver::ResponseProcessorDriver,
+    mut lease: crate::response::driver::TrailerExecutionLease<'_>,
+    policy: Option<ResponseTrailerPolicy>,
+) -> pingora_core::Result<()> {
+    let grpc_evidence = ctx.grpc_transcoding.as_ref().and_then(|_| {
+        trailers
+            .as_deref()
+            .map(crate::plugins::http::grpc_json_transcoder::status_evidence)
+    });
+    let Some(policy) = policy else {
+        lease.complete();
+        return driver
+            .finalize_grpc_transcoding(
+                grpc_evidence.as_ref(),
+                ctx.upstream_response_headers_end_stream == Some(true),
+            )
+            .await;
+    };
     let mut logs = Vec::with_capacity(lease.companions().len());
     let mut fail_close_at = None;
     {
-        let mut adapter = PingoraSessionAdapter::new(session, ctx);
+        let mut adapter = ResponseTrailerAdapter { ctx, policy };
         for (index, companion) in lease.companions().iter_mut().enumerate() {
             let mut log = PluginLog::with_alias(companion.name(), companion.alias());
             let outcome = companion

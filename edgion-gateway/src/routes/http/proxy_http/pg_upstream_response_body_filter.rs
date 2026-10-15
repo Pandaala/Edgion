@@ -5,9 +5,9 @@ use super::EdgionHttpProxy;
 use crate::ai::protocols::openai::canonical_sse::MAX_CANONICAL_SOURCE_CHUNK_BYTES;
 use crate::response::terminal::{ResponseClose, ResponseProcessorSlot, ResponseTerminalCause};
 
-use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
+use crate::plugins::runtime::response_stream_session::ResponseStreamAdapter;
 use crate::plugins::runtime::traits::StreamingResponseEvent;
-use crate::plugins::runtime::PluginSession;
+use crate::plugins::runtime::ResponseStreamSession;
 use crate::EdgionHttpContext;
 use pingora_http::ResponseHeader;
 use pingora_proxy::{ResponseBodySink, Session, UpstreamResponseBodyEvent};
@@ -171,8 +171,8 @@ pub(crate) async fn run_stream_processors(
     body: &mut Option<bytes::Bytes>,
     end_of_stream: bool,
     sink: &mut ResponseBodySink,
-) {
-    run_stream_processors_event(session, ctx, body, StreamingResponseEvent::Data { end_of_stream }, sink).await;
+) -> pingora_core::Result<()> {
+    run_stream_processors_event(session, ctx, body, StreamingResponseEvent::Data { end_of_stream }, sink).await
 }
 
 /// Typed variant used by the fork response lifecycle. Unlike the legacy bool,
@@ -185,14 +185,14 @@ pub(crate) async fn run_stream_processors_event(
     body: &mut Option<bytes::Bytes>,
     event: StreamingResponseEvent,
     sink: &mut ResponseBodySink,
-) {
+) -> pingora_core::Result<()> {
     if !ctx.response_processors_frozen() {
         // The only legal freeze point is the successful final response-header
         // filter. Do not silently freeze an incomplete processor builder if a
         // body event arrives before that boundary.
         *body = None;
         sink.terminate();
-        return;
+        return Ok(());
     }
     if ctx.ai_state().is_some_and(|state| state.semantic_guard_claimed)
         && body
@@ -205,7 +205,7 @@ pub(crate) async fn run_stream_processors_event(
         settle_driver_terminal(ctx, ResponseProcessorSlot::Ai, ResponseTerminalCause::ProcessorFailure).await;
         *body = None;
         sink.terminate();
-        return;
+        return Ok(());
     }
     if ctx
         .ai_state_mut()
@@ -219,24 +219,39 @@ pub(crate) async fn run_stream_processors_event(
         .await;
         *body = None;
         sink.terminate();
-        return;
+        return Ok(());
     }
     let Some(driver) = ctx.response_processor_driver() else {
-        return;
+        return Ok(());
     };
     if !driver.has_body_processors() {
-        return;
+        return Ok(());
     }
     let stream_kind = ctx.response_stream_kind;
-    let Some(mut lease) = driver.body_lease().await else {
+    let Some(lease) = driver.body_lease().await else {
         *body = None;
         sink.terminate();
-        return;
+        return Ok(());
     };
+    super::response_callback::run(
+        session,
+        run_leased_stream_event(ctx, body, event, sink, stream_kind, lease),
+    )
+    .await
+}
+
+async fn run_leased_stream_event(
+    ctx: &mut EdgionHttpContext,
+    body: &mut Option<bytes::Bytes>,
+    event: StreamingResponseEvent,
+    sink: &mut ResponseBodySink,
+    stream_kind: crate::ctx::ResponseStreamKind,
+    mut lease: crate::response::driver::BodyExecutionLease<'_>,
+) -> pingora_core::Result<()> {
     let mut winner = None;
     {
         let processors = lease.processors();
-        let mut adapter = PingoraSessionAdapter::new(session, ctx);
+        let mut adapter = ResponseStreamAdapter::new(ctx);
         // Guarded like the plain chain below: a caller that re-enters this
         // function on an already-terminated sink (unreachable today -- the
         // fork returns `Terminate` before another `on_chunk` call can
@@ -262,7 +277,7 @@ pub(crate) async fn run_stream_processors_event(
                 winner = adapter.response_terminal_winner();
             }
         }
-        let semantic_is_withholding = adapter.ai().semantic_guard_active()
+        let semantic_is_withholding = adapter.semantic_guard_active()
             && body.is_none()
             && matches!(event, StreamingResponseEvent::Data { end_of_stream: false });
         if winner.is_none() && !sink.is_terminated() && !semantic_is_withholding {
@@ -310,6 +325,7 @@ pub(crate) async fn run_stream_processors_event(
         *body = None;
         sink.terminate();
     }
+    Ok(())
 }
 
 /// Process upstream response body chunks
@@ -342,7 +358,7 @@ async fn process_response_body(
     // Writable streaming-processor pipeline (installed per-request by
     // request-stage plugins). Runs before the read-only filter chains so
     // e.g. bandwidth limiting sees post-mutation bytes.
-    run_stream_processors(session, ctx, body, end_of_stream, sink).await;
+    run_stream_processors(session, ctx, body, end_of_stream, sink).await?;
 
     let delay = run_read_only_body_plugins(session, ctx, body, end_of_stream);
     abort_ip_body(ctx, body, sink).await?;
@@ -391,7 +407,7 @@ async fn process_response_body_event(
                 StreamingResponseEvent::TerminalWithoutTrailers,
                 sink,
             )
-            .await;
+            .await?;
             let delay = run_read_only_body_plugins(session, ctx, body, true);
             abort_ip_body(ctx, body, sink).await?;
             super::pg_upstream_response_trailer_filter::dispatch_upstream_response_trailers(session, ctx, None).await?;
@@ -402,7 +418,8 @@ async fn process_response_body_event(
         UpstreamResponseBodyEvent::TerminalBeforeTrailers => {
             crate::response_cache::lifecycle::abandon(ctx);
             record_first_body_time(ctx, body.as_ref());
-            run_stream_processors_event(session, ctx, body, StreamingResponseEvent::TerminalBeforeTrailers, sink).await;
+            run_stream_processors_event(session, ctx, body, StreamingResponseEvent::TerminalBeforeTrailers, sink)
+                .await?;
             // A processor may flush its final bytes here. They still pass through
             // the canonical readonly chain, while trailers retain ownership of EOS.
             let delay = if body.as_ref().is_some_and(|chunk| !chunk.is_empty()) {

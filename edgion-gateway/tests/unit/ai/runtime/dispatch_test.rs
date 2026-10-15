@@ -887,7 +887,7 @@ async fn composite_ai_processor_stops_its_inner_chain_on_terminate() {
             _end_of_stream: bool,
             _stream_kind: crate::ctx::ResponseStreamKind,
             sink: &mut ResponseBodySink,
-            _session: &mut dyn PluginSession,
+            _session: &mut dyn crate::plugins::runtime::traits::ResponseStreamSession,
         ) {
             sink.terminate();
         }
@@ -904,7 +904,7 @@ async fn composite_ai_processor_stops_its_inner_chain_on_terminate() {
             _end_of_stream: bool,
             _stream_kind: crate::ctx::ResponseStreamKind,
             _sink: &mut ResponseBodySink,
-            _session: &mut dyn PluginSession,
+            _session: &mut dyn crate::plugins::runtime::traits::ResponseStreamSession,
         ) {
             *self.ran.lock() = true;
         }

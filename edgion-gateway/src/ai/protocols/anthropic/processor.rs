@@ -5,7 +5,7 @@ use crate::ai::protocols::openai::json_usage::ResponseOutcome;
 use crate::ai::quota::QuotaAccumulator;
 use crate::ai::{AiProxyError, AiUsageShared};
 use crate::ctx::ResponseStreamKind;
-use crate::plugins::runtime::traits::{PluginSession, StreamingResponseProcessor};
+use crate::plugins::runtime::traits::{ResponseStreamSession, StreamingResponseProcessor};
 use crate::sse::{SseBlockStatus, SseDecoder, SseRecordRef};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -182,7 +182,7 @@ impl StreamingResponseProcessor for MessagesProcessor {
         eos: bool,
         kind: ResponseStreamKind,
         sink: &mut ResponseBodySink,
-        session: &mut dyn PluginSession,
+        session: &mut dyn ResponseStreamSession,
     ) {
         if !self.shared.encoding_unavailable() {
             if let Some(bytes) = chunk.as_ref() {

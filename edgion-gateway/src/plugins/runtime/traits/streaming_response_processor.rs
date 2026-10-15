@@ -14,6 +14,9 @@
 //! and still see the (now-terminating) chunk.
 //!
 //! Contract:
+//! - Callbacks receive only request-context capabilities, never a transport
+//!   session loan. The driver races awaited work against canonical downstream
+//!   closure and drops cancelled execution leases before terminal logging.
 //! - Async, per transport chunk, writable: a processor may replace, drop, or
 //!   extend the current chunk in place. It must NOT accumulate unbounded
 //!   state across chunks. `crate::sse::SseDecoder` owns bounded SSE framing;
@@ -38,7 +41,7 @@ use bytes::Bytes;
 use pingora_http::ResponseHeader;
 use pingora_proxy::ResponseBodySink;
 
-use super::session::PluginSession;
+use super::response_stream_session::ResponseStreamSession;
 use crate::ctx::ResponseStreamKind;
 
 /// Typed completion evidence for the canonical upstream response stream.
@@ -119,7 +122,7 @@ pub trait StreamingResponseProcessor: Send + Sync {
         event: StreamingResponseEvent,
         stream_kind: ResponseStreamKind,
         sink: &mut ResponseBodySink,
-        session: &mut dyn PluginSession,
+        session: &mut dyn ResponseStreamSession,
     ) {
         self.on_chunk(chunk, event.end_of_stream_for_legacy(), stream_kind, sink, session)
             .await;
@@ -152,13 +155,15 @@ pub trait StreamingResponseProcessor: Send + Sync {
     ///
     /// Any outbound call made here must be bounded by the processor itself with
     /// `tokio::time::timeout` (see `ai/quota/runtime.rs`). There is no
-    /// fork-level timeout wrapper.
+    /// fork-level timeout wrapper. Downstream cancellation does not replace a
+    /// deadline: H1 upload, tolerated FIN and pipelining retain their existing
+    /// transport-specific monitoring limits.
     async fn on_chunk(
         &mut self,
         chunk: &mut Option<Bytes>,
         end_of_stream: bool,
         stream_kind: ResponseStreamKind,
         sink: &mut ResponseBodySink,
-        session: &mut dyn PluginSession,
+        session: &mut dyn ResponseStreamSession,
     );
 }

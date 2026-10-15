@@ -11,6 +11,7 @@ pub mod log;
 mod plugin_runtime;
 pub mod policy_filter;
 mod reject_filter;
+pub(crate) mod response_stream_session;
 pub mod session_adapter;
 pub(crate) mod task_scope;
 pub mod traits;
@@ -29,8 +30,9 @@ pub use plugin_runtime::PluginRuntime;
 pub use session_adapter::PingoraSessionAdapter;
 pub use traits::{
     ChunkVerdict, DyeOutcome, PluginSession, PluginSessionError, PluginSessionHeaderExt, PluginSessionResult,
-    RequestBodyStreamHandler, RequestFilter, StreamingResponseEvent, UpstreamResponse, UpstreamResponseBodyFilter,
-    UpstreamResponseFilter, UpstreamResponseTrailer, UpstreamTrailerResult,
+    RequestBodyStreamHandler, RequestFilter, ResponseStreamSession, ResponseTrailerSession, StreamingResponseEvent,
+    UpstreamResponse, UpstreamResponseBodyFilter, UpstreamResponseFilter, UpstreamResponseTrailer,
+    UpstreamTrailerResult,
 };
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 use super::*;
 use crate::ai::protocols::openai::terminal::AiClientStreamDialect;
-use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
+use crate::plugins::runtime::response_stream_session::ResponseStreamAdapter;
 use crate::plugins::runtime::traits::session::MockPluginSession;
 use crate::response::terminal::{FinalResponseEligibility, ResponseProcessorSlot, ResponseTerminalState};
 use crate::sse::window::{LogicalBucketKey, LogicalField, SemanticFragment, SemanticSource, WindowRecord};
@@ -11,6 +11,8 @@ async fn live_session() -> pingora_proxy::Session {
     let (mut client, server) = tokio::io::duplex(4096);
     let stream: pingora_core::protocols::Stream = Box::new(server);
     let mut session = pingora_proxy::Session::new_h1(stream);
+    // This synthetic fixture drops its peer; dedicated transport tests cover close.
+    session.set_abort_on_close(false);
     client
         .write_all(b"GET /guardrail-cancel HTTP/1.1\r\nHost: test\r\n\r\n")
         .await
@@ -20,9 +22,28 @@ async fn live_session() -> pingora_proxy::Session {
     session
 }
 
+fn guardrail_client(url: &str) -> ManagedOutboundClient {
+    use crate::plugins::http::common::outbound::request::CompiledRequest;
+    use edgion_resources::resources::common::outbound_request::{MethodSpec, OutboundRequestSpec, PathSpec};
+    let mut client = ManagedOutboundClient::test_with_static_target(url);
+    // Match the managed Guardrail owner's mandatory POST and explicit path.
+    client.compiled_request = CompiledRequest::from_spec(&OutboundRequestSpec {
+        method: Some(MethodSpec {
+            template: "POST".into(),
+        }),
+        path: Some(PathSpec {
+            template: "/".into(),
+            allow_override: false,
+        }),
+        ..Default::default()
+    })
+    .unwrap();
+    client
+}
+
 fn processor(fail_open: bool) -> GuardrailResponseProcessor {
     GuardrailResponseProcessor::new(
-        Arc::new(ManagedOutboundClient::test_with_static_target("http://localhost:1")),
+        Arc::new(guardrail_client("http://localhost:1")),
         Arc::new(Semaphore::new(1)),
         Arc::new(AttachedGuardrail::new()),
         1,
@@ -389,7 +410,7 @@ async fn one_callback_can_make_multiple_serial_policy_calls() {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     let server = MockServer::start().await;
-    Mock::given(method("GET"))
+    Mock::given(method("POST"))
         .and(path("/"))
         .respond_with(
             ResponseTemplate::new(200)
@@ -400,9 +421,7 @@ async fn one_callback_can_make_multiple_serial_policy_calls() {
         .mount(&server)
         .await;
     let mut processor = processor(false);
-    processor.client = Arc::new(ManagedOutboundClient::test_with_static_target(&localhost_uri(
-        &server.uri(),
-    )));
+    processor.client = Arc::new(guardrail_client(&localhost_uri(&server.uri())));
     let first = semantic_record("one");
     let second = semantic_record("two");
     let expected: Vec<u8> = first
@@ -435,7 +454,7 @@ async fn later_reject_in_one_callback_preserves_the_already_accepted_window() {
     let server = MockServer::start().await;
     let calls = Arc::new(AtomicUsize::new(0));
     let responder_calls = Arc::clone(&calls);
-    Mock::given(method("GET"))
+    Mock::given(method("POST"))
         .and(path("/"))
         .respond_with(move |_request: &wiremock::Request| {
             let action = if responder_calls.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -459,9 +478,7 @@ async fn later_reject_in_one_callback_preserves_the_already_accepted_window() {
     batch.push(second).unwrap();
 
     let mut processor = processor(false);
-    processor.client = Arc::new(ManagedOutboundClient::test_with_static_target(&localhost_uri(
-        &server.uri(),
-    )));
+    processor.client = Arc::new(guardrail_client(&localhost_uri(&server.uri())));
     let mut chunk = None;
     let mut sink = ResponseBodySink::new();
     let mut session = mock_request_session();
@@ -487,7 +504,7 @@ async fn later_dependency_failure_preserves_accepted_replace_and_remaining_origi
     let server = MockServer::start().await;
     let calls = Arc::new(AtomicUsize::new(0));
     let responder_calls = Arc::clone(&calls);
-    Mock::given(method("GET"))
+    Mock::given(method("POST"))
         .and(path("/"))
         .respond_with(move |_request: &wiremock::Request| {
             if responder_calls.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -519,9 +536,7 @@ async fn later_dependency_failure_preserves_accepted_replace_and_remaining_origi
     batch.push(first).unwrap();
     batch.push(second).unwrap();
     let mut processor = processor(true);
-    processor.client = Arc::new(ManagedOutboundClient::test_with_static_target(&localhost_uri(
-        &server.uri(),
-    )));
+    processor.client = Arc::new(guardrail_client(&localhost_uri(&server.uri())));
     let mut chunk = None;
     let mut sink = ResponseBodySink::new();
     let mut session = mock_request_session();
@@ -546,7 +561,7 @@ async fn policy_reject_discards_before_terminate_even_when_fail_open() {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     let server = MockServer::start().await;
-    Mock::given(method("GET"))
+    Mock::given(method("POST"))
         .and(path("/"))
         .respond_with(
             ResponseTemplate::new(200)
@@ -557,9 +572,7 @@ async fn policy_reject_discards_before_terminate_even_when_fail_open() {
         .mount(&server)
         .await;
     let mut processor = processor(true);
-    processor.client = Arc::new(ManagedOutboundClient::test_with_static_target(&localhost_uri(
-        &server.uri(),
-    )));
+    processor.client = Arc::new(guardrail_client(&localhost_uri(&server.uri())));
     let mut batch = CanonicalRecordBatch::new();
     batch.push(semantic_record("blocked")).unwrap();
     let mut chunk = None;
@@ -597,10 +610,9 @@ async fn non_hold_policy_reject_claims_semantic_terminal_before_rendering() {
         status_allows_body: true,
         stream_kind: ResponseStreamKind::Sse,
     });
-    let mut live = live_session().await;
     let mut sink = ResponseBodySink::new();
     {
-        let mut session = PingoraSessionAdapter::new(&mut live, &mut ctx);
+        let mut session = ResponseStreamAdapter::new(&mut ctx);
         session.set_response_processor_slot(ResponseProcessorSlot::Semantic);
         processor.emit_policy_reject(&mut sink, &mut session);
     }
@@ -639,10 +651,9 @@ async fn non_hold_policy_reject_preserves_an_existing_terminal_owner() {
         .try_claim(ResponseProcessorSlot::Ai, ResponseTerminalCause::QuotaExceeded));
     ctx.response_terminal_state.mark_emission(TerminalEmission::Rendered);
     let expected_state = ctx.response_terminal_state;
-    let mut live = live_session().await;
     let mut sink = ResponseBodySink::new();
     {
-        let mut session = PingoraSessionAdapter::new(&mut live, &mut ctx);
+        let mut session = ResponseStreamAdapter::new(&mut ctx);
         session.set_response_processor_slot(ResponseProcessorSlot::Semantic);
         guardrail.emit_policy_reject(&mut sink, &mut session);
     }
@@ -665,10 +676,9 @@ async fn non_hold_policy_reject_preserves_an_existing_terminal_owner() {
     assert!(earlier_ctx
         .response_terminal_state
         .try_claim(ResponseProcessorSlot::Ai, ResponseTerminalCause::ProviderCompleted));
-    let mut earlier_live = live_session().await;
     let mut earlier_sink = ResponseBodySink::new();
     {
-        let mut session = PingoraSessionAdapter::new(&mut earlier_live, &mut earlier_ctx);
+        let mut session = ResponseStreamAdapter::new(&mut earlier_ctx);
         session.set_response_processor_slot(ResponseProcessorSlot::Semantic);
         earlier.emit_policy_reject(&mut earlier_sink, &mut session);
     }
@@ -681,7 +691,7 @@ async fn non_hold_policy_reject_preserves_an_existing_terminal_owner() {
 
 #[tokio::test]
 async fn permit_saturation_uses_the_same_absolute_call_deadline() {
-    let mut client = ManagedOutboundClient::test_with_static_target("http://localhost:1");
+    let mut client = guardrail_client("http://localhost:1");
     client.timeout = std::time::Duration::from_millis(10);
     let mut processor = GuardrailResponseProcessor::new(
         Arc::new(client),
@@ -709,7 +719,7 @@ async fn cancelling_an_inflight_decision_releases_the_snapshot_permit() {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     let server = MockServer::start().await;
-    Mock::given(method("GET"))
+    Mock::given(method("POST"))
         .and(path("/"))
         .respond_with(
             ResponseTemplate::new(200)
@@ -721,9 +731,7 @@ async fn cancelling_an_inflight_decision_releases_the_snapshot_permit() {
         .await;
     let permits = Arc::new(Semaphore::new(1));
     let mut processor = GuardrailResponseProcessor::new(
-        Arc::new(ManagedOutboundClient::test_with_static_target(&localhost_uri(
-            &server.uri(),
-        ))),
+        Arc::new(guardrail_client(&localhost_uri(&server.uri()))),
         Arc::clone(&permits),
         Arc::new(AttachedGuardrail::new()),
         1,
@@ -753,7 +761,7 @@ async fn cancelling_driver_await_releases_real_guardrail_window_permit_and_owner
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     let server = MockServer::start().await;
-    Mock::given(method("GET"))
+    Mock::given(method("POST"))
         .and(path("/"))
         .respond_with(
             ResponseTemplate::new(200)
@@ -766,9 +774,7 @@ async fn cancelling_driver_await_releases_real_guardrail_window_permit_and_owner
     let permits = Arc::new(Semaphore::new(1));
     let owner = Arc::new(AttachedGuardrail::new());
     let processor = GuardrailResponseProcessor::new(
-        Arc::new(ManagedOutboundClient::test_with_static_target(&localhost_uri(
-            &server.uri(),
-        ))),
+        Arc::new(guardrail_client(&localhost_uri(&server.uri()))),
         Arc::clone(&permits),
         Arc::clone(&owner),
         1,

@@ -50,11 +50,19 @@ No unavailable fallback instance or production overhead is added for mocks.
 
 ## Alternatives and verification limits
 
+The later Task 06 cancellation repair adds a transport-free response capability.
+Response processors call its four AI stream operations directly; production
+response and full-session adapters share the same context-owned implementation.
+The twelve-operation request integration trait remains unchanged. The original
+bounded decision below did not prohibit that separately reviewed response split.
+See [response cancellation ownership](../regression-guards/response-callback-downstream-cancellation.md).
+
 Keeping the old methods avoids migration cost but retains common-interface growth.
 Moving only canonical records leaves other AI operations on the same boundary.
 Multiple feature views or shared/mutable accessors add scaffolding without a
 current shared-only consumer or independently owned state. Context-only access
-bypasses transport checks; a generic runner redesign exceeds this scope. A future
+bypasses transport checks for transport-sensitive installation; the original
+request-capability task did not include a generic runner redesign. A future
 canonical observation or guard-bookkeeping operation changes the feature trait,
 adapter, consumers and feature mock, leaving the common operation list unchanged.
 Additional capability dispatch is unmeasured; no throughput/RSS improvement claim.

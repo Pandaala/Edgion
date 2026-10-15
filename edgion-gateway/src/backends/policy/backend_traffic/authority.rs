@@ -7,7 +7,7 @@
 
 use edgion_resources::resources::upstream_authority::{validate_label, CompiledUpstreamAuthority};
 
-use crate::link_sys::template::{render_template, RenderPolicy, SecretCapability};
+use crate::link_sys::template::{render_template_in, RenderPolicy, SecretCapability, TemplateContext};
 use crate::plugins::runtime::PluginSession;
 
 /// Why an authority could not be produced. Both are hard failures — never a
@@ -34,9 +34,17 @@ impl AuthorityError {
 /// Render the wildcard label from the session, validate it, and compose the
 /// authority. The suffix is never rendered.
 pub fn render_authority(c: &CompiledUpstreamAuthority, session: &dyn PluginSession) -> Result<String, AuthorityError> {
-    let label = render_template(
+    render_authority_in(c, TemplateContext::Request(session))
+}
+
+/// Render the same authority using explicit request or trusted capabilities.
+pub fn render_authority_in(
+    c: &CompiledUpstreamAuthority,
+    context: TemplateContext<'_>,
+) -> Result<String, AuthorityError> {
+    let label = render_template_in(
         &c.label_template,
-        session,
+        context,
         RenderPolicy {
             max_bytes: Some(63),
             ..RenderPolicy::EMPTY

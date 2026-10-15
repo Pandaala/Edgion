@@ -2,7 +2,7 @@
 
 use crate::ctx::ResponseStreamKind;
 use crate::plugins::runtime::traits::StreamingResponseProcessor;
-use crate::plugins::runtime::PluginSession;
+use crate::plugins::runtime::ResponseStreamSession;
 use crate::response::terminal::{ResponseTerminalCause, TerminalEmission};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -539,9 +539,9 @@ impl StreamingResponseProcessor for SemanticSseSource {
         end_of_stream: bool,
         stream_kind: ResponseStreamKind,
         sink: &mut ResponseBodySink,
-        session: &mut dyn PluginSession,
+        session: &mut dyn ResponseStreamSession,
     ) {
-        if stream_kind != ResponseStreamKind::Sse || !session.ai().semantic_guard_active() {
+        if stream_kind != ResponseStreamKind::Sse || !session.semantic_guard_active() {
             return;
         }
         let mut batch = CanonicalRecordBatch::new();
@@ -574,7 +574,7 @@ impl StreamingResponseProcessor for SemanticSseSource {
         if self.decoder.degraded() {
             batch.mark_unavailable();
         }
-        if (overflowed || session.ai().publish_canonical_records(batch).is_err())
+        if (overflowed || session.publish_canonical_records(batch).is_err())
             && session.try_claim_response_terminal(ResponseTerminalCause::ProcessorFailure)
         {
             session.mark_response_terminal_emission(TerminalEmission::NoEvent);

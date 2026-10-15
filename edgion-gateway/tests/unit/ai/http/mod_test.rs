@@ -15,7 +15,7 @@ impl StreamingResponseProcessor for TerminalMarker {
         _end_of_stream: bool,
         _stream_kind: crate::ctx::ResponseStreamKind,
         _sink: &mut pingora_proxy::ResponseBodySink,
-        _session: &mut dyn crate::plugins::runtime::PluginSession,
+        _session: &mut dyn crate::plugins::runtime::traits::ResponseStreamSession,
     ) {
     }
 

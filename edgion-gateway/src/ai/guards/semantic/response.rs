@@ -16,10 +16,11 @@ use crate::ai::protocols::openai::canonical_sse::{
 };
 use crate::ai::protocols::openai::terminal::emit_guardrail_rejection;
 use crate::ctx::ResponseStreamKind;
-use crate::plugins::http::common::outbound::call::outbound_call_with_body;
+use crate::link_sys::template::TemplateContext;
+use crate::plugins::http::common::outbound::call::outbound_call_with_template_context;
 use crate::plugins::http::common::outbound::client::ManagedOutboundClient;
 use crate::plugins::runtime::traits::StreamingResponseProcessor;
-use crate::plugins::runtime::PluginSession;
+use crate::plugins::runtime::ResponseStreamSession;
 use crate::response::terminal::{ResponseTerminalCause, TerminalEmission};
 use crate::sse::window::{
     RawWindow, RawWindowPolicy, SemanticReplacement, WindowDecision, WindowError, WindowOutput, MAX_RAW_BYTES,
@@ -108,7 +109,7 @@ impl GuardrailResponseProcessor {
     fn terminate_dependency(
         &mut self,
         sink: &mut ResponseBodySink,
-        session: &mut dyn PluginSession,
+        session: &mut dyn ResponseStreamSession,
         reason: &'static str,
     ) {
         if self.stage_head_failure(sink, session, reason) {
@@ -191,7 +192,7 @@ impl GuardrailResponseProcessor {
     fn stage_head_failure<S: HeldResponseHeadSink>(
         &mut self,
         sink: &mut S,
-        session: &mut dyn PluginSession,
+        session: &mut dyn ResponseStreamSession,
         reason: &'static str,
     ) -> bool {
         if !sink.response_head_is_held() {
@@ -217,7 +218,11 @@ impl GuardrailResponseProcessor {
         true
     }
 
-    fn release_first_head_window(&mut self, sink: &mut ResponseBodySink, session: &mut dyn PluginSession) -> bool {
+    fn release_first_head_window(
+        &mut self,
+        sink: &mut ResponseBodySink,
+        session: &mut dyn ResponseStreamSession,
+    ) -> bool {
         if !self.first_head_window_pending {
             return true;
         }
@@ -232,7 +237,7 @@ impl GuardrailResponseProcessor {
     fn stage_head_policy_reject<S: HeldResponseHeadSink>(
         &mut self,
         sink: &mut S,
-        session: &mut dyn PluginSession,
+        session: &mut dyn ResponseStreamSession,
     ) -> bool {
         if !sink.response_head_is_held() {
             return false;
@@ -257,7 +262,7 @@ impl GuardrailResponseProcessor {
 
     async fn decide<S: HeldResponseHeadSink>(
         &mut self,
-        session: &dyn PluginSession,
+        session: &dyn ResponseStreamSession,
         sink: &mut S,
     ) -> Result<ParsedDecision, &'static str> {
         if sink.response_head_is_held() {
@@ -286,9 +291,9 @@ impl GuardrailResponseProcessor {
                 .acquire_owned()
                 .await
                 .map_err(|_| "concurrency-closed")?;
-            outbound_call_with_body(
+            outbound_call_with_template_context(
                 &self.client,
-                session,
+                TemplateContext::Trusted(session),
                 None,
                 self.client.max_response_bytes.min(MAX_DECISION_RESPONSE_BYTES),
                 &[("content-type", "application/json")],
@@ -370,7 +375,7 @@ impl GuardrailResponseProcessor {
         output: &mut BytesMut,
         records: VecDeque<crate::sse::window::WindowRecord>,
         sink: &mut ResponseBodySink,
-        session: &mut dyn PluginSession,
+        session: &mut dyn ResponseStreamSession,
         reason: &'static str,
     ) {
         if self.stage_head_failure(sink, session, reason) {
@@ -420,7 +425,7 @@ impl GuardrailResponseProcessor {
         }
     }
 
-    fn emit_policy_reject(&mut self, sink: &mut ResponseBodySink, session: &mut dyn PluginSession) {
+    fn emit_policy_reject(&mut self, sink: &mut ResponseBodySink, session: &mut dyn ResponseStreamSession) {
         if self.stage_head_policy_reject(sink, session) {
             return;
         }
@@ -429,7 +434,6 @@ impl GuardrailResponseProcessor {
             return;
         }
         let emission = session
-            .ai()
             .ai_terminal_render_context()
             .map_or(TerminalEmission::NoEvent, |(dialect, eligibility)| {
                 emit_guardrail_rejection(Some(dialect), Some(eligibility), sink)
@@ -463,7 +467,7 @@ impl GuardrailResponseProcessor {
         end_of_stream: bool,
         chunk: &mut Option<Bytes>,
         sink: &mut ResponseBodySink,
-        session: &mut dyn PluginSession,
+        session: &mut dyn ResponseStreamSession,
     ) {
         if self.disabled {
             match batch.into_raw_bytes() {
@@ -773,7 +777,7 @@ impl StreamingResponseProcessor for GuardrailResponseProcessor {
         end_of_stream: bool,
         stream_kind: ResponseStreamKind,
         sink: &mut ResponseBodySink,
-        session: &mut dyn PluginSession,
+        session: &mut dyn ResponseStreamSession,
     ) {
         if stream_kind != ResponseStreamKind::Sse {
             let records = chunk
@@ -789,7 +793,7 @@ impl StreamingResponseProcessor for GuardrailResponseProcessor {
             *chunk = (!output.is_empty()).then(|| output.freeze());
             return;
         }
-        let Some(batch) = session.ai().take_canonical_records() else {
+        let Some(batch) = session.take_canonical_records() else {
             // A split event legitimately produces no record until a later
             // callback. The canonical source already owns and cleared bytes.
             if end_of_stream {

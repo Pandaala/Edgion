@@ -8,7 +8,9 @@ use crate::ctx::ResponseStreamKind;
 use crate::plugins::runtime::traits::{
     StreamingResponseEvent, StreamingResponseProcessor, UpstreamResponseTrailer, UpstreamTrailerResult,
 };
-use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter, UpstreamResponse};
+use crate::plugins::runtime::{
+    PluginLog, PluginSession, RequestFilter, ResponseStreamSession, ResponseTrailerSession, UpstreamResponse,
+};
 use async_trait::async_trait;
 use bytes::Bytes;
 use edgion_resources::plugin_configs::WasmResponseHooks;
@@ -98,7 +100,7 @@ struct WasmResponseObserver {
 }
 
 impl WasmResponseObserver {
-    fn observe(&self, body: &Option<Bytes>, event: StreamingResponseEvent, session: &mut dyn PluginSession) {
+    fn observe(&self, body: &Option<Bytes>, event: StreamingResponseEvent, session: &mut dyn ResponseStreamSession) {
         // A pre-trailer boundary does not end the response. Real trailers are
         // delivered by the companion; do not fabricate a terminal body callback.
         if matches!(event, StreamingResponseEvent::TerminalBeforeTrailers) && body.as_ref().is_none_or(Bytes::is_empty)
@@ -149,7 +151,7 @@ impl StreamingResponseProcessor for WasmResponseObserver {
         event: StreamingResponseEvent,
         _kind: ResponseStreamKind,
         _sink: &mut ResponseBodySink,
-        session: &mut dyn PluginSession,
+        session: &mut dyn ResponseStreamSession,
     ) {
         self.observe(chunk, event, session);
     }
@@ -159,7 +161,7 @@ impl StreamingResponseProcessor for WasmResponseObserver {
         eos: bool,
         _kind: ResponseStreamKind,
         _sink: &mut ResponseBodySink,
-        session: &mut dyn PluginSession,
+        session: &mut dyn ResponseStreamSession,
     ) {
         self.observe(chunk, StreamingResponseEvent::Data { end_of_stream: eos }, session);
     }
@@ -179,7 +181,7 @@ impl UpstreamResponseTrailer for WasmResponseObserver {
     async fn run_upstream_response_trailer(
         &mut self,
         trailers: Option<&mut http::HeaderMap>,
-        session: &mut dyn PluginSession,
+        session: &mut dyn ResponseTrailerSession,
         _log: &mut PluginLog,
     ) -> UpstreamTrailerResult {
         let Some(mut loan) = self.binding.take() else {

@@ -1,6 +1,6 @@
 use super::{normalize_final_response_headers, release_late_request_body_view};
 use crate::ctx::ResponseStreamKind;
-use crate::plugins::runtime::traits::{PluginSession, StreamingResponseProcessor};
+use crate::plugins::runtime::traits::StreamingResponseProcessor;
 use crate::request_body::BodyStorage;
 use crate::runtime::server::server_header::ServerHeaderOpts;
 use crate::EdgionHttpContext;
@@ -25,7 +25,7 @@ impl StreamingResponseProcessor for ProviderHeaderReset {
         _end_of_stream: bool,
         _stream_kind: ResponseStreamKind,
         _sink: &mut ResponseBodySink,
-        _session: &mut dyn PluginSession,
+        _session: &mut dyn crate::plugins::runtime::traits::ResponseStreamSession,
     ) {
     }
 }

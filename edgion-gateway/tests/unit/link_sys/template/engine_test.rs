@@ -314,7 +314,7 @@ fn test_resolve_missing_variable_returns_empty() {
     let value = resolve_var(
         &TemplateVarType::Header,
         Some("X-Absent"),
-        &session,
+        TemplateContext::Request(&session),
         SecretCapability::Denied,
     )
     .unwrap()
@@ -330,10 +330,15 @@ fn test_resolve_present_variable() {
         .expect_get_query_param()
         .withf(|n| n == "id")
         .return_const(Some("42".to_string()));
-    let value = resolve_var(&TemplateVarType::Query, Some("id"), &session, SecretCapability::Denied)
-        .unwrap()
-        .value
-        .unwrap();
+    let value = resolve_var(
+        &TemplateVarType::Query,
+        Some("id"),
+        TemplateContext::Request(&session),
+        SecretCapability::Denied,
+    )
+    .unwrap()
+    .value
+    .unwrap();
     assert_eq!(value, "42");
 }
 
@@ -365,7 +370,7 @@ fn test_resolve_matched_http_route() {
     let v = resolve_var(
         &TemplateVarType::MatchedHttpRoute,
         Some("name"),
-        &session,
+        TemplateContext::Request(&session),
         SecretCapability::Denied,
     )
     .unwrap()
@@ -426,4 +431,93 @@ fn bounded_template_checks_before_append() {
         evaluate_template_bounded(&compiled, &session, 12).unwrap(),
         "prefix-value"
     );
+}
+
+struct TrustedValues;
+
+impl TrustedTemplateVariables for TrustedValues {
+    fn trusted_ctx_var(&self, key: &str) -> Option<String> {
+        (key == "tenant").then(|| "tenant-a".to_string())
+    }
+
+    fn trusted_remote_ip(&self) -> &str {
+        "192.0.2.9"
+    }
+
+    fn trusted_matched_route_meta(&self, _proto: RouteProto, selector: &str) -> Option<String> {
+        (selector == "name").then(|| "route-a".to_string())
+    }
+}
+
+#[test]
+fn trusted_context_reads_trusted_values_without_request_capabilities() {
+    let template = compile("${ctx:tenant}/${remoteIp}/${matchedHttpRoute:name}/${matchedGrpcRoute:name}");
+    let rendered = render_template_in(
+        &template,
+        TemplateContext::Trusted(&TrustedValues),
+        RenderPolicy::EMPTY,
+        SecretCapability::Denied,
+    )
+    .unwrap();
+    assert_eq!(
+        rendered.into_parts(),
+        ("tenant-a/192.0.2.9/route-a/route-a".into(), false)
+    );
+}
+
+#[test]
+fn trusted_context_rejects_request_variables_even_with_empty_missing_policy() {
+    for variable in [
+        "header:x",
+        "query:x",
+        "cookie:x",
+        "path",
+        "uri",
+        "requestPath",
+        "requestUri",
+        "method",
+    ] {
+        for missing in [MissingValuePolicy::Empty, MissingValuePolicy::Error] {
+            let result = render_template_in(
+                &compile(&format!("${{{variable}}}")),
+                TemplateContext::Trusted(&TrustedValues),
+                RenderPolicy {
+                    missing,
+                    ..RenderPolicy::EMPTY
+                },
+                SecretCapability::Denied,
+            );
+            assert!(matches!(result, Err(TemplateEvaluationError::UnavailableVariable)));
+        }
+    }
+}
+
+#[test]
+fn trusted_context_retains_explicit_secret_capability_and_sensitivity() {
+    let template = compile("Bearer ${secretRef:ns/token:key}");
+    let secrets = ResolvedSecrets(std::collections::BTreeMap::from([(
+        "ns/token:key".into(),
+        "credential".into(),
+    )]));
+    let rendered = render_template_in(
+        &template,
+        TemplateContext::Trusted(&TrustedValues),
+        RenderPolicy::EMPTY,
+        SecretCapability::Resolved(Some(&secrets)),
+    )
+    .unwrap();
+    assert_eq!(
+        format!("{rendered:?}"),
+        "RenderedTemplate { value: \"[redacted]\", sensitive: true }"
+    );
+    assert_eq!(rendered.into_parts(), ("Bearer credential".into(), true));
+    assert!(matches!(
+        render_template_in(
+            &template,
+            TemplateContext::Trusted(&TrustedValues),
+            RenderPolicy::EMPTY,
+            SecretCapability::Denied,
+        ),
+        Err(TemplateEvaluationError::SecretNotAllowed)
+    ));
 }

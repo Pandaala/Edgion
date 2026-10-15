@@ -17,11 +17,12 @@ use crate::util::http_body::stream_body_chunks_capped;
 
 use edgion_resources::resources::common::success::SuccessOutcome;
 
-use crate::backends::policy::backend_traffic::authority::render_authority;
+use crate::backends::policy::backend_traffic::authority::render_authority_in;
 use crate::backends::policy::backend_traffic::store::get_backend_traffic_policy_store;
 
 use super::client::{HealthState, ManagedOutboundClient};
 use super::request::{sync_outbound_body_framing, OutboundRequestDiagnostics};
+use crate::link_sys::template::TemplateContext;
 use crate::plugins::runtime::PluginSession;
 
 // ============================================================
@@ -177,9 +178,31 @@ pub async fn outbound_call_with_body(
     body_override: Option<bytes::Bytes>,
     diagnostics: &mut OutboundRequestDiagnostics,
 ) -> Result<OutboundResponse, OutboundCallError> {
+    outbound_call_with_template_context(
+        client,
+        TemplateContext::Request(session),
+        path_override,
+        global_max_bytes,
+        extra_headers,
+        body_override,
+        diagnostics,
+    )
+    .await
+}
+
+/// Execute the canonical exchange without requiring downstream transport access.
+pub async fn outbound_call_with_template_context(
+    client: &ManagedOutboundClient,
+    context: TemplateContext<'_>,
+    path_override: Option<&str>,
+    global_max_bytes: usize,
+    extra_headers: &[(&str, &str)],
+    body_override: Option<Bytes>,
+    diagnostics: &mut OutboundRequestDiagnostics,
+) -> Result<OutboundResponse, OutboundCallError> {
     outbound_call_with_body_using(
         client,
-        session,
+        context,
         path_override,
         global_max_bytes,
         extra_headers,
@@ -256,7 +279,7 @@ impl OutboundTransport for reqwest::Client {
 )]
 async fn outbound_call_with_body_using<T: OutboundTransport>(
     client: &ManagedOutboundClient,
-    session: &dyn PluginSession,
+    context: TemplateContext<'_>,
     path_override: Option<&str>,
     global_max_bytes: usize,
     extra_headers: &[(&str, &str)],
@@ -296,7 +319,7 @@ async fn outbound_call_with_body_using<T: OutboundTransport>(
             .get_effective(&target)
             .and_then(|policy| policy.upstream_authority.clone())
     }) {
-        Some(compiled) => match render_authority(&compiled, session) {
+        Some(compiled) => match render_authority_in(&compiled, context) {
             Ok(authority) => replace_url_host(&base, &authority),
             Err(e) => {
                 crate::observe::metrics::record_authority_rejected(e.reason());
@@ -311,11 +334,11 @@ async fn outbound_call_with_body_using<T: OutboundTransport>(
     // across attempts of the same logical call, and re-evaluating it every retry
     // would only risk a spurious extra fallback-metric increment if a transient
     // session read failed on a later attempt.
-    let effective_timeout = resolve_timeout(client, session);
+    let effective_timeout = resolve_timeout(client, context);
 
     let mut template_req = Some(
-        match client.compiled_request.build_request(
-            session,
+        match client.compiled_request.build_request_in(
+            context,
             path_override,
             &base,
             client.resolved_secrets.as_ref(),
@@ -537,11 +560,11 @@ async fn outbound_call_with_body_using<T: OutboundTransport>(
 /// frozen incoming session, so the template would render identically on every
 /// attempt anyway, and computing it once avoids re-incrementing the fallback
 /// metric on every retried attempt of a call whose template already fell back.
-fn resolve_timeout(client: &ManagedOutboundClient, session: &dyn PluginSession) -> Duration {
+fn resolve_timeout(client: &ManagedOutboundClient, context: TemplateContext<'_>) -> Duration {
     use edgion_resources::resources::common::external_http::{MAX_OUTBOUND_TIMEOUT_MS, MIN_OUTBOUND_TIMEOUT_MS};
     if let Some(tpl) = client.timeout_template.as_ref() {
-        use crate::link_sys::template::{render_template, RenderPolicy, SecretCapability};
-        if let Ok(rendered) = render_template(tpl, session, RenderPolicy::EMPTY, SecretCapability::Denied) {
+        use crate::link_sys::template::{render_template_in, RenderPolicy, SecretCapability};
+        if let Ok(rendered) = render_template_in(tpl, context, RenderPolicy::EMPTY, SecretCapability::Denied) {
             let rendered = rendered.into_string();
             if let Ok(ms) = rendered.trim().parse::<u64>() {
                 if ms >= MIN_OUTBOUND_TIMEOUT_MS {

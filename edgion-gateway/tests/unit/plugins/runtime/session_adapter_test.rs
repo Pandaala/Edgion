@@ -1021,7 +1021,7 @@ impl crate::plugins::runtime::traits::StreamingResponseProcessor for AiCapabilit
         _eos: bool,
         _kind: crate::ctx::ResponseStreamKind,
         _sink: &mut pingora_proxy::ResponseBodySink,
-        _session: &mut dyn PluginSession,
+        _session: &mut dyn crate::plugins::runtime::traits::ResponseStreamSession,
     ) {
     }
 }

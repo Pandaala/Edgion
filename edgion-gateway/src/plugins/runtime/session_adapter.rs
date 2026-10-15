@@ -298,6 +298,14 @@ async fn consume_request_body_snapshot(
 /// Selectors: `name`, `namespace`, `label.<key>`, `annotation.<key>`.
 /// The split is on the FIRST `.` so keys containing `.`/`/`
 /// (e.g. `edgion.io/team`) round-trip. Absent/unknown -> None.
+pub(crate) fn matched_route_meta(ctx: &EdgionHttpContext, proto: RouteProto, selector: &str) -> Option<String> {
+    let meta = match proto {
+        RouteProto::Http => &ctx.route_unit.as_ref()?.route.as_ref()?.metadata,
+        RouteProto::Grpc => &ctx.grpc_route_unit.as_ref()?.route.as_ref()?.metadata,
+    };
+    route_meta_field(meta, selector)
+}
+
 pub(crate) fn route_meta_field(meta: &kube::api::ObjectMeta, selector: &str) -> Option<String> {
     match selector {
         "name" => meta.name.clone(),
@@ -414,8 +422,6 @@ pub struct PingoraSessionAdapter<'a> {
     inner: &'a mut Session,
     ctx: &'a mut EdgionHttpContext,
     response_header: Option<&'a mut ResponseHeader>,
-    /// Callback-local identity used for first-wins terminal arbitration.
-    response_processor_slot: Option<crate::response::terminal::ResponseProcessorSlot>,
     /// Set to true after a gRPC trailers-only error response has been sent.
     /// Subsequent write_response_body and shutdown calls become no-ops.
     grpc_response_terminated: bool,
@@ -481,14 +487,6 @@ impl<'a> PingoraSessionAdapter<'a> {
         crate::response_cache::nominate(self.ctx, policy, store)
     }
 
-    pub(crate) fn set_response_processor_slot(&mut self, slot: crate::response::terminal::ResponseProcessorSlot) {
-        self.response_processor_slot = Some(slot);
-    }
-
-    pub(crate) fn response_terminal_winner(&self) -> Option<crate::response::terminal::ResponseProcessorSlot> {
-        self.ctx.response_terminal_state.winner()
-    }
-
     #[inline]
     pub fn new(inner: &'a mut Session, ctx: &'a mut EdgionHttpContext) -> Self {
         Self {
@@ -496,7 +494,6 @@ impl<'a> PingoraSessionAdapter<'a> {
             inner,
             ctx,
             response_header: None,
-            response_processor_slot: None,
             grpc_response_terminated: false,
             delivery_failure_recorded: false,
             backend_mirror_allowed: false,
@@ -536,7 +533,6 @@ impl<'a> PingoraSessionAdapter<'a> {
             inner,
             ctx,
             response_header: Some(response_header),
-            response_processor_slot: None,
             grpc_response_terminated: false,
             delivery_failure_recorded: false,
             backend_mirror_allowed: false,
@@ -1146,11 +1142,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn matched_route_meta(&self, proto: RouteProto, selector: &str) -> Option<String> {
-        let meta = match proto {
-            RouteProto::Http => &self.ctx.route_unit.as_ref()?.route.as_ref()?.metadata,
-            RouteProto::Grpc => &self.ctx.grpc_route_unit.as_ref()?.route.as_ref()?.metadata,
-        };
-        route_meta_field(meta, selector)
+        matched_route_meta(self.ctx, proto, selector)
     }
 
     async fn write_response_header(
@@ -1724,9 +1716,9 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx.push_response_stream_processor(processor);
     }
 
-    fn try_claim_response_terminal(&mut self, cause: crate::response::terminal::ResponseTerminalCause) -> bool {
-        self.response_processor_slot
-            .is_some_and(|slot| self.ctx.response_terminal_state.try_claim(slot, cause))
+    fn try_claim_response_terminal(&mut self, _cause: crate::response::terminal::ResponseTerminalCause) -> bool {
+        // Only the transport-free response adapter owns a processor slot.
+        false
     }
 
     fn mark_response_terminal_emission(&mut self, emission: crate::response::terminal::TerminalEmission) {

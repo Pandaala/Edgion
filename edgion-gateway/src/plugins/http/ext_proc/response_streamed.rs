@@ -11,7 +11,7 @@ use super::attached::AttachedExtProc;
 use super::plugin::{exchange_failure_reason, has_unsupported_common_fields};
 use crate::ctx::ResponseStreamKind;
 use crate::plugins::runtime::traits::{StreamingResponseEvent, StreamingResponseProcessor};
-use crate::plugins::runtime::PluginSession;
+use crate::plugins::runtime::ResponseStreamSession;
 use edgion_common::ext_proc::proto::{
     body_mutation, common_response::ResponseStatus, processing_request, processing_response, HttpBody,
     ProcessingRequest, ProcessingResponse,
@@ -80,7 +80,7 @@ impl ExtProcResponseProcessor {
         &mut self,
         chunk: &mut Option<Bytes>,
         sink: &mut ResponseBodySink,
-        session: &mut dyn PluginSession,
+        session: &mut dyn ResponseStreamSession,
         reason: &'static str,
     ) {
         self.done = true;
@@ -122,7 +122,7 @@ impl StreamingResponseProcessor for ExtProcResponseProcessor {
         event: StreamingResponseEvent,
         _stream_kind: ResponseStreamKind,
         sink: &mut ResponseBodySink,
-        session: &mut dyn PluginSession,
+        session: &mut dyn ResponseStreamSession,
     ) {
         if self.done {
             return;
@@ -216,7 +216,7 @@ impl StreamingResponseProcessor for ExtProcResponseProcessor {
         end_of_stream: bool,
         stream_kind: ResponseStreamKind,
         sink: &mut ResponseBodySink,
-        session: &mut dyn PluginSession,
+        session: &mut dyn ResponseStreamSession,
     ) {
         self.on_event(
             chunk,

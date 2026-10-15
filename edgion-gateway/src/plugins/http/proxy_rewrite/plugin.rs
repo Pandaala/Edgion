@@ -572,7 +572,8 @@ impl ProxyRewrite {
                         match error {
                             TemplateEvaluationError::MissingVariable => JsonRewriteFailure::BadRequest,
                             TemplateEvaluationError::TooLarge => JsonRewriteFailure::TooLarge,
-                            TemplateEvaluationError::SecretNotAllowed => JsonRewriteFailure::Internal,
+                            TemplateEvaluationError::SecretNotAllowed
+                            | TemplateEvaluationError::UnavailableVariable => JsonRewriteFailure::Internal,
                         }
                     })?;
                 serde_json::Value::String(value)

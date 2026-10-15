@@ -227,3 +227,8 @@ harness = false
 name = "wasm_instance_reuse"
 path = "tests/benches/wasm_instance_reuse.rs"
 harness = false
+
+[[test]]
+name = "wasm_stream_transport"
+path = "tests/wasm_stream_transport.rs"
+required-features = ["test-util"]

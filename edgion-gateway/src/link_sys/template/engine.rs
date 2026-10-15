@@ -9,6 +9,64 @@ use edgion_resources::resources::common::{
     request_template::{CompiledTemplate, TemplateSegment, TemplateVarType},
 };
 
+/// Trusted values available without borrowing downstream transport state.
+pub trait TrustedTemplateVariables: Send + Sync {
+    fn trusted_ctx_var(&self, key: &str) -> Option<String>;
+    fn trusted_remote_ip(&self) -> &str;
+    fn trusted_matched_route_meta(&self, proto: RouteProto, selector: &str) -> Option<String>;
+}
+
+impl<T: PluginSession + ?Sized> TrustedTemplateVariables for T {
+    fn trusted_ctx_var(&self, key: &str) -> Option<String> {
+        self.get_ctx_var(key)
+    }
+
+    fn trusted_remote_ip(&self) -> &str {
+        self.remote_ip()
+    }
+
+    fn trusted_matched_route_meta(&self, proto: RouteProto, selector: &str) -> Option<String> {
+        self.matched_route_meta(proto, selector)
+    }
+}
+
+/// Explicit read capabilities for the canonical template renderer.
+#[derive(Clone, Copy)]
+pub enum TemplateContext<'a> {
+    Request(&'a dyn PluginSession),
+    Trusted(&'a dyn TrustedTemplateVariables),
+}
+
+impl<'a> TemplateContext<'a> {
+    pub(crate) fn request_session(self) -> Result<&'a dyn PluginSession, TemplateEvaluationError> {
+        match self {
+            Self::Request(session) => Ok(session),
+            Self::Trusted(_) => Err(TemplateEvaluationError::UnavailableVariable),
+        }
+    }
+
+    fn ctx_var(self, key: &str) -> Option<String> {
+        match self {
+            Self::Request(session) => session.get_ctx_var(key),
+            Self::Trusted(values) => values.trusted_ctx_var(key),
+        }
+    }
+
+    fn remote_ip(self) -> &'a str {
+        match self {
+            Self::Request(session) => session.remote_ip(),
+            Self::Trusted(values) => values.trusted_remote_ip(),
+        }
+    }
+
+    fn matched_route_meta(self, proto: RouteProto, selector: &str) -> Option<String> {
+        match self {
+            Self::Request(session) => session.matched_route_meta(proto, selector),
+            Self::Trusted(values) => values.trusted_matched_route_meta(proto, selector),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum MissingValuePolicy {
     Empty,
@@ -74,6 +132,7 @@ pub enum TemplateEvaluationError {
     MissingVariable,
     TooLarge,
     SecretNotAllowed,
+    UnavailableVariable,
 }
 
 impl std::fmt::Display for TemplateEvaluationError {
@@ -82,6 +141,7 @@ impl std::fmt::Display for TemplateEvaluationError {
             Self::MissingVariable => "template variable missing",
             Self::TooLarge => "template output too large",
             Self::SecretNotAllowed => "template Secret capability denied",
+            Self::UnavailableVariable => "template request capability unavailable",
         })
     }
 }
@@ -90,6 +150,16 @@ impl std::fmt::Display for TemplateEvaluationError {
 pub fn render_template(
     compiled: &CompiledTemplate,
     session: &dyn PluginSession,
+    policy: RenderPolicy,
+    secrets: SecretCapability<'_>,
+) -> Result<RenderedTemplate, TemplateEvaluationError> {
+    render_template_in(compiled, TemplateContext::Request(session), policy, secrets)
+}
+
+/// Render using only the explicitly supplied request or trusted capabilities.
+pub fn render_template_in(
+    compiled: &CompiledTemplate,
+    context: TemplateContext<'_>,
     policy: RenderPolicy,
     secrets: SecretCapability<'_>,
 ) -> Result<RenderedTemplate, TemplateEvaluationError> {
@@ -102,7 +172,7 @@ pub fn render_template(
         match segment {
             TemplateSegment::Literal(value) => out.append(value)?,
             TemplateSegment::Variable { var_type, var_name } => {
-                let resolved = resolve_var(var_type, var_name.as_deref(), session, secrets)?;
+                let resolved = resolve_var(var_type, var_name.as_deref(), context, secrets)?;
                 sensitive |= resolved.sensitive;
                 match resolved.value {
                     Some(value) => match policy.escape {
@@ -157,33 +227,40 @@ struct ResolvedVariable {
 fn resolve_var(
     var_type: &TemplateVarType,
     name: Option<&str>,
-    session: &dyn PluginSession,
+    context: TemplateContext<'_>,
     secrets: SecretCapability<'_>,
 ) -> Result<ResolvedVariable, TemplateEvaluationError> {
     // Cookie accessors do not expose per-cookie metadata. Preserve the same
     // conservative protection as reconstructed outbound Cookie headers.
     let mut sensitive = matches!(var_type, TemplateVarType::SecretRef | TemplateVarType::Cookie);
     let value = match var_type {
-        TemplateVarType::Header => name
-            .and_then(|name| session.request_header_map().get(name))
-            .and_then(|value| {
+        TemplateVarType::Header => {
+            let headers = context.request_session()?.request_header_map();
+            name.and_then(|name| headers.get(name)).and_then(|value| {
                 sensitive = value.is_sensitive();
                 value.to_str().ok().map(str::to_string)
-            }),
-        TemplateVarType::Query => name.and_then(|n| session.get_query_param(n)),
-        TemplateVarType::Cookie => name.and_then(|n| session.get_cookie(n)),
-        TemplateVarType::Ctx => name.and_then(|n| session.get_ctx_var(n)),
-        TemplateVarType::Path => Some(session.get_path().to_string()),
-        TemplateVarType::Uri => Some(session.get_uri()),
-        TemplateVarType::RequestPath => Some(session.get_request_path().to_string()),
-        TemplateVarType::RequestUri => Some(session.get_request_uri()),
-        TemplateVarType::Method => Some(session.get_method().to_string()),
+            })
+        }
+        TemplateVarType::Query => {
+            let session = context.request_session()?;
+            name.and_then(|name| session.get_query_param(name))
+        }
+        TemplateVarType::Cookie => {
+            let session = context.request_session()?;
+            name.and_then(|name| session.get_cookie(name))
+        }
+        TemplateVarType::Ctx => name.and_then(|n| context.ctx_var(n)),
+        TemplateVarType::Path => Some(context.request_session()?.get_path().to_string()),
+        TemplateVarType::Uri => Some(context.request_session()?.get_uri()),
+        TemplateVarType::RequestPath => Some(context.request_session()?.get_request_path().to_string()),
+        TemplateVarType::RequestUri => Some(context.request_session()?.get_request_uri()),
+        TemplateVarType::Method => Some(context.request_session()?.get_method().to_string()),
         TemplateVarType::RemoteIp => {
-            let ip = session.remote_ip();
+            let ip = context.remote_ip();
             (!ip.is_empty()).then(|| ip.to_string())
         }
-        TemplateVarType::MatchedHttpRoute => name.and_then(|n| session.matched_route_meta(RouteProto::Http, n)),
-        TemplateVarType::MatchedGrpcRoute => name.and_then(|n| session.matched_route_meta(RouteProto::Grpc, n)),
+        TemplateVarType::MatchedHttpRoute => name.and_then(|n| context.matched_route_meta(RouteProto::Http, n)),
+        TemplateVarType::MatchedGrpcRoute => name.and_then(|n| context.matched_route_meta(RouteProto::Grpc, n)),
         TemplateVarType::SecretRef => match secrets {
             SecretCapability::Denied => return Err(TemplateEvaluationError::SecretNotAllowed),
             SecretCapability::Resolved(resolved) => name.and_then(|n| resolved?.0.get(n).cloned()),

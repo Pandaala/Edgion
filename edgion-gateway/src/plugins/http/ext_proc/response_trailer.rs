@@ -8,7 +8,7 @@ use http::{HeaderMap, HeaderName, HeaderValue};
 
 use super::attached::AttachedExtProc;
 use super::plugin::exchange_failure_reason;
-use crate::plugins::runtime::{PluginLog, PluginSession, UpstreamResponseTrailer, UpstreamTrailerResult};
+use crate::plugins::runtime::{PluginLog, ResponseTrailerSession, UpstreamResponseTrailer, UpstreamTrailerResult};
 use edgion_common::ext_proc::proto::{
     processing_request, processing_response, HeaderAppendAction, HeaderMutation, HttpTrailers, ProcessingRequest,
     ProcessingResponse,
@@ -68,7 +68,7 @@ impl ExtProcResponseTrailer {
 
     fn finish_failure(
         &mut self,
-        _session: &mut dyn PluginSession,
+        _session: &mut dyn ResponseTrailerSession,
         log: &mut PluginLog,
         reason: &'static str,
     ) -> UpstreamTrailerResult {
@@ -86,7 +86,7 @@ impl ExtProcResponseTrailer {
 
     async fn finish_without_trailers(
         &mut self,
-        session: &mut dyn PluginSession,
+        session: &mut dyn ResponseTrailerSession,
         log: &mut PluginLog,
     ) -> UpstreamTrailerResult {
         match self.owner.finish_success("response-no-trailers").await {
@@ -111,7 +111,7 @@ impl UpstreamResponseTrailer for ExtProcResponseTrailer {
     async fn run_upstream_response_trailer(
         &mut self,
         trailers: Option<&mut HeaderMap>,
-        session: &mut dyn PluginSession,
+        session: &mut dyn ResponseTrailerSession,
         log: &mut PluginLog,
     ) -> UpstreamTrailerResult {
         if self.done {
@@ -270,7 +270,7 @@ fn apply_mutation(
     candidate: &mut HeaderMap,
     original: &HeaderMap,
     mutation: &HeaderMutation,
-    session: &dyn PluginSession,
+    session: &dyn ResponseTrailerSession,
 ) -> Result<(), ()> {
     for option in &mutation.set_headers {
         let header = option.header.as_ref().ok_or(())?;

@@ -4,6 +4,7 @@ pub mod ai_session;
 pub mod header_ext;
 pub mod request_body_stream;
 pub mod request_filter;
+pub mod response_stream_session;
 pub mod session;
 pub mod streaming_response_processor;
 #[cfg(test)]
@@ -19,6 +20,7 @@ pub use ai_session::AiSessionCapability;
 pub use header_ext::PluginSessionHeaderExt;
 pub use request_body_stream::{ChunkVerdict, RequestBodyStreamHandler};
 pub use request_filter::RequestFilter;
+pub use response_stream_session::{ResponseStreamSession, ResponseTrailerSession};
 pub use session::{DyeOutcome, PluginSession, PluginSessionError, PluginSessionResult};
 pub use streaming_response_processor::{StreamingResponseEvent, StreamingResponseProcessor};
 pub use upstream_response::UpstreamResponse;

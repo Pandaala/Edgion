@@ -65,6 +65,34 @@ pub(crate) struct AiHttpState {
 }
 
 impl EdgionHttpContext {
+    pub(crate) fn semantic_guard_active(&self) -> bool {
+        self.ai_state().is_some_and(|state| state.semantic_guard_claimed)
+    }
+
+    pub(crate) fn publish_canonical_records(
+        &mut self,
+        batch: crate::ai::protocols::openai::canonical_sse::CanonicalRecordBatch,
+    ) -> Result<(), crate::ai::protocols::openai::canonical_sse::CanonicalRecordBatch> {
+        let state = self.ensure_ai_state();
+        if !state.semantic_guard_claimed || state.canonical_record_batch.is_some() {
+            return Err(batch);
+        }
+        state.canonical_record_batch = Some(batch);
+        Ok(())
+    }
+
+    pub(crate) fn take_canonical_records(
+        &mut self,
+    ) -> Option<crate::ai::protocols::openai::canonical_sse::CanonicalRecordBatch> {
+        self.ai_state_mut()
+            .and_then(|state| state.canonical_record_batch.take())
+    }
+
+    pub(crate) fn ai_terminal_render_context(&self) -> Option<(AiClientStreamDialect, FinalResponseEligibility)> {
+        let state = self.ai_state()?;
+        Some((state.client_stream_dialect?, state.final_response_eligibility?))
+    }
+
     pub(crate) fn capture_ai_request_baseline(&mut self, request: &pingora_http::RequestHeader) {
         if self.ai_state().is_none_or(|state| state.request_baseline.is_none()) {
             let deferred = self.deferred_credential_mutations().cloned();

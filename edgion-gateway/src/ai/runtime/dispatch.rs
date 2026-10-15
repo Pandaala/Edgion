@@ -32,7 +32,7 @@ use crate::backends::SelectedHttpBackend;
 #[cfg(test)]
 use crate::backends::SelectedLogicalBackend;
 use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
-use crate::plugins::runtime::traits::{PluginSession, StreamingResponseProcessor};
+use crate::plugins::runtime::traits::{PluginSession, ResponseStreamSession, StreamingResponseProcessor};
 use crate::EdgionHttpContext;
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
@@ -911,7 +911,7 @@ impl StreamingResponseProcessor for AiAttemptResponseProcessor {
         event: crate::plugins::runtime::traits::streaming_response_processor::StreamingResponseEvent,
         stream_kind: crate::ctx::ResponseStreamKind,
         sink: &mut ResponseBodySink,
-        session: &mut dyn PluginSession,
+        session: &mut dyn ResponseStreamSession,
     ) {
         for processor in &mut self.processors {
             processor.on_event(chunk, event, stream_kind, sink, session).await;
@@ -931,7 +931,7 @@ impl StreamingResponseProcessor for AiAttemptResponseProcessor {
         end_of_stream: bool,
         stream_kind: crate::ctx::ResponseStreamKind,
         sink: &mut ResponseBodySink,
-        session: &mut dyn PluginSession,
+        session: &mut dyn ResponseStreamSession,
     ) {
         self.on_event(
             chunk,

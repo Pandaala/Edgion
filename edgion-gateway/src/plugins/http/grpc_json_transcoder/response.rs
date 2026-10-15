@@ -2,7 +2,7 @@ use super::transport::Outcome;
 use super::{failure, GrpcTranscodingPlan};
 use crate::{
     ctx::ResponseStreamKind,
-    plugins::runtime::traits::{PluginSession, StreamingResponseEvent, StreamingResponseProcessor},
+    plugins::runtime::traits::{ResponseStreamSession, StreamingResponseEvent, StreamingResponseProcessor},
     sse::window::{RawWindow, WindowDecision, WindowOutput, WindowRecord},
 };
 use async_trait::async_trait;
@@ -368,7 +368,7 @@ impl StreamingResponseProcessor for GrpcResponseProcessor {
         event: StreamingResponseEvent,
         _: ResponseStreamKind,
         sink: &mut ResponseBodySink,
-        _: &mut dyn PluginSession,
+        _: &mut dyn ResponseStreamSession,
     ) {
         if self.finished {
             *chunk = None;
@@ -421,7 +421,7 @@ impl StreamingResponseProcessor for GrpcResponseProcessor {
         eos: bool,
         kind: ResponseStreamKind,
         sink: &mut ResponseBodySink,
-        session: &mut dyn PluginSession,
+        session: &mut dyn ResponseStreamSession,
     ) {
         self.on_event(
             chunk,

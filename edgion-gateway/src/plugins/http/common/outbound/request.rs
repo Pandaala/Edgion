@@ -23,7 +23,9 @@ use edgion_resources::resources::common::outbound_request::{
 };
 use edgion_resources::resources::common::request_template::CompiledTemplate;
 
-use crate::link_sys::template::{render_template, EscapeMode, RenderPolicy, RenderedTemplate, SecretCapability};
+use crate::link_sys::template::{
+    render_template_in, EscapeMode, RenderPolicy, RenderedTemplate, SecretCapability, TemplateContext,
+};
 use crate::plugins::http::common::http_client::{connection_listed_hop_by_hop, is_hop_by_hop_or_listed};
 use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt};
 
@@ -268,6 +270,24 @@ impl CompiledRequest {
         resolved: Option<&ResolvedSecrets>,
         diagnostics: &mut OutboundRequestDiagnostics,
     ) -> Result<reqwest::Request, String> {
+        self.build_request_in(
+            TemplateContext::Request(session),
+            path_override,
+            base_url,
+            resolved,
+            diagnostics,
+        )
+    }
+
+    /// Build with explicit template and incoming-request read capabilities.
+    pub fn build_request_in(
+        &self,
+        context: TemplateContext<'_>,
+        path_override: Option<&str>,
+        base_url: &str,
+        resolved: Option<&ResolvedSecrets>,
+        diagnostics: &mut OutboundRequestDiagnostics,
+    ) -> Result<reqwest::Request, String> {
         // ── 1. Determine path ──────────────────────────────────────────────
         let final_path = match &self.path {
             Some(path_spec) => {
@@ -275,20 +295,26 @@ impl CompiledRequest {
                     if let Some(ov) = path_override {
                         ov.to_string()
                     } else {
-                        evaluate_template(&path_spec.template, session, resolved)?
+                        evaluate_template(&path_spec.template, context, resolved)?
                     }
                 } else {
-                    evaluate_template(&path_spec.template, session, resolved)?
+                    evaluate_template(&path_spec.template, context, resolved)?
                 }
             }
             // No path spec: use the frozen entry-time path.
-            None => session.get_request_path().to_string(),
+            None => context
+                .request_session()
+                .map_err(|error| error.to_string())?
+                .get_request_path()
+                .to_string(),
         };
 
         // ── 2. Determine method ───────────────────────────────────────────
         let final_method = match &self.method {
-            Some(method_tpl) => evaluate_template(method_tpl, session, resolved)?,
-            None => session
+            Some(method_tpl) => evaluate_template(method_tpl, context, resolved)?,
+            None => context
+                .request_session()
+                .map_err(|error| error.to_string())?
                 .get_request_method()
                 .ok_or_else(|| "missing incoming request method".to_string())?
                 .to_string(),
@@ -298,7 +324,7 @@ impl CompiledRequest {
         let mut query_pairs: Vec<CollectedField> = Vec::new();
         collect_list_fields(
             &self.args,
-            session,
+            context,
             FieldKind::Query,
             &mut query_pairs,
             resolved,
@@ -335,13 +361,13 @@ impl CompiledRequest {
         // request are forwarded, and explicit origin/custom entries are applied
         // on top (possibly overriding). When forward_all=false only the
         // explicit origin/custom entries are sent.
-        *req.headers_mut() = self.collect_headers(session, resolved, diagnostics)?;
+        *req.headers_mut() = self.collect_headers_in(context, resolved, diagnostics)?;
 
         // ── 8. Add cookies as a single Cookie header ──────────────────────
         let mut cookie_pairs: Vec<CollectedField> = Vec::new();
         collect_list_fields(
             &self.cookies,
-            session,
+            context,
             FieldKind::Cookie,
             &mut cookie_pairs,
             resolved,
@@ -367,7 +393,7 @@ impl CompiledRequest {
         if let Some(body) = &self.body {
             match body {
                 CompiledBody::Json(tpl) => {
-                    let rendered = render_outbound(tpl, session, resolved, EscapeMode::JsonString)?.into_string();
+                    let rendered = render_outbound(tpl, context, resolved, EscapeMode::JsonString)?.into_string();
                     *req.body_mut() = Some(rendered.into());
                     req.headers_mut().insert(
                         reqwest::header::CONTENT_TYPE,
@@ -379,7 +405,7 @@ impl CompiledRequest {
                     for f in fields {
                         let value = match &f.source {
                             CompiledCustomFieldSource::Literal(v) => v.clone(),
-                            CompiledCustomFieldSource::Template(tpl) => evaluate_template(tpl, session, resolved)?,
+                            CompiledCustomFieldSource::Template(tpl) => evaluate_template(tpl, context, resolved)?,
                         };
                         ser.append_pair(&f.name, &value);
                     }
@@ -390,7 +416,7 @@ impl CompiledRequest {
                     );
                 }
                 CompiledBody::Raw(tpl) => {
-                    let rendered = evaluate_template(tpl, session, resolved)?;
+                    let rendered = evaluate_template(tpl, context, resolved)?;
                     *req.body_mut() = Some(rendered.into());
                 }
             }
@@ -423,10 +449,21 @@ impl CompiledRequest {
         resolved: Option<&ResolvedSecrets>,
         diagnostics: &mut OutboundRequestDiagnostics,
     ) -> Result<reqwest::header::HeaderMap, String> {
+        self.collect_headers_in(TemplateContext::Request(session), resolved, diagnostics)
+    }
+
+    /// Collect headers using only the supplied request or trusted capability.
+    pub fn collect_headers_in(
+        &self,
+        context: TemplateContext<'_>,
+        resolved: Option<&ResolvedSecrets>,
+        diagnostics: &mut OutboundRequestDiagnostics,
+    ) -> Result<reqwest::header::HeaderMap, String> {
         let mut result = reqwest::header::HeaderMap::new();
 
         // forward_all: add all session headers minus hop-by-hop (RFC 9110 §7.6.1).
         if self.headers.forward_all {
+            let session = context.request_session().map_err(|error| error.to_string())?;
             let conn_val = session.header_str("connection").unwrap_or_default();
             let dynamic = connection_listed_hop_by_hop(conn_val);
             for (name, value) in session.request_header_map() {
@@ -450,7 +487,7 @@ impl CompiledRequest {
         let mut pairs: Vec<CollectedField> = Vec::new();
         collect_list_fields(
             &self.headers,
-            session,
+            context,
             FieldKind::Header,
             &mut pairs,
             resolved,
@@ -520,13 +557,13 @@ fn compile_list_fields(fields: &ListFields) -> Result<CompiledListFields, String
 /// Outbound surfaces borrow only the controller-carried resolved Secret map.
 fn render_outbound(
     tpl: &CompiledTemplate,
-    session: &dyn PluginSession,
+    context: TemplateContext<'_>,
     resolved: Option<&ResolvedSecrets>,
     escape: EscapeMode,
 ) -> Result<RenderedTemplate, String> {
-    render_template(
+    render_template_in(
         tpl,
-        session,
+        context,
         RenderPolicy {
             escape,
             ..RenderPolicy::EMPTY
@@ -539,10 +576,10 @@ fn render_outbound(
 /// Value-only sinks (path, query and body) consume provenance after rendering.
 fn evaluate_template(
     tpl: &CompiledTemplate,
-    session: &dyn PluginSession,
+    context: TemplateContext<'_>,
     resolved: Option<&ResolvedSecrets>,
 ) -> Result<String, String> {
-    render_outbound(tpl, session, resolved, EscapeMode::None).map(RenderedTemplate::into_string)
+    render_outbound(tpl, context, resolved, EscapeMode::None).map(RenderedTemplate::into_string)
 }
 
 /// No Debug implementation: values can contain credentials.
@@ -561,15 +598,22 @@ struct CollectedField {
 /// [`CompiledRequest::collect_headers`] before calling this helper.
 fn collect_list_fields(
     fields: &CompiledListFields,
-    session: &dyn PluginSession,
+    context: TemplateContext<'_>,
     kind: FieldKind,
     output: &mut Vec<CollectedField>,
     resolved: Option<&ResolvedSecrets>,
     diagnostics: &mut OutboundRequestDiagnostics,
 ) -> Result<(), String> {
+    if fields.forward_all {
+        context.request_session().map_err(|error| error.to_string())?;
+    }
     // Origin fields: forwarded from the incoming request.
     for origin in &fields.origin {
-        let value = get_session_field(session, &kind, &origin.name);
+        let value = get_session_field(
+            context.request_session().map_err(|error| error.to_string())?,
+            &kind,
+            &origin.name,
+        );
         match value {
             Some(value) => output.push(CollectedField {
                 name: origin.name.clone(),
@@ -597,7 +641,7 @@ fn collect_list_fields(
             // Preserve the existing conservative classification of static credentials.
             CompiledCustomFieldSource::Literal(v) => (v.clone(), true),
             CompiledCustomFieldSource::Template(tpl) => {
-                render_outbound(tpl, session, resolved, EscapeMode::None)?.into_parts()
+                render_outbound(tpl, context, resolved, EscapeMode::None)?.into_parts()
             }
         };
         output.push(CollectedField {

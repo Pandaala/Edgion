@@ -23,7 +23,7 @@ use crate::response::terminal::{ResponseTerminalCause, TerminalEmission};
 use crate::ai::AiProxyError;
 use crate::ctx::ResponseStreamKind;
 use crate::plugins::runtime::traits::streaming_response_processor::StreamingResponseProcessor;
-use crate::plugins::runtime::PluginSession;
+use crate::plugins::runtime::ResponseStreamSession;
 use crate::sse::window::WindowRecord;
 use crate::sse::{SseBlockStatus, SseDecoder, SseRecordRef};
 
@@ -121,7 +121,7 @@ const MAX_TOLERATED_MALFORMED_SSE_EVENTS: u64 = 1;
 pub(crate) fn terminate_over_quota(
     shared: &AiUsageShared,
     sink: &mut ResponseBodySink,
-    session: &mut dyn PluginSession,
+    session: &mut dyn ResponseStreamSession,
     inject: bool,
 ) {
     terminate_ai_stream(
@@ -146,7 +146,7 @@ pub(crate) fn terminate_over_quota(
 pub(crate) fn terminate_quota_unenforceable(
     shared: &AiUsageShared,
     sink: &mut ResponseBodySink,
-    session: &mut dyn PluginSession,
+    session: &mut dyn ResponseStreamSession,
     inject: bool,
 ) {
     terminate_ai_stream(
@@ -162,7 +162,7 @@ pub(crate) fn terminate_quota_unenforceable(
 fn terminate_malformed_quota_unenforceable(
     shared: &AiUsageShared,
     sink: &mut ResponseBodySink,
-    session: &mut dyn PluginSession,
+    session: &mut dyn ResponseStreamSession,
     inject: bool,
 ) {
     terminate_ai_stream(
@@ -186,7 +186,7 @@ fn terminate_malformed_quota_unenforceable(
 pub(crate) fn terminate_ai_stream(
     shared: &AiUsageShared,
     sink: &mut ResponseBodySink,
-    session: &mut dyn PluginSession,
+    session: &mut dyn ResponseStreamSession,
     inject: bool,
     event: Option<&Bytes>,
     terminal_status: EdgionErrorCode,
@@ -1019,7 +1019,7 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
         end_of_stream: bool,
         stream_kind: ResponseStreamKind,
         sink: &mut ResponseBodySink,
-        session: &mut dyn PluginSession,
+        session: &mut dyn ResponseStreamSession,
     ) {
         if self.shared.encoding_unavailable.load(Ordering::Acquire) {
             if !self.observation_failure_reported {
@@ -1030,7 +1030,7 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
             }
             return;
         }
-        let semantic_guard_active = session.ai().semantic_guard_active() && stream_kind == ResponseStreamKind::Sse;
+        let semantic_guard_active = session.semantic_guard_active() && stream_kind == ResponseStreamKind::Sse;
         let mut canonical_batch = None;
         if let Some(bytes) = chunk.take() {
             let original = bytes.clone();
@@ -1092,7 +1092,7 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
                 });
                 // An empty batch is the explicit EOS signal that makes the
                 // guard resolve a below-threshold window retained earlier.
-                if (finish_overflowed || session.ai().publish_canonical_records(batch).is_err())
+                if (finish_overflowed || session.publish_canonical_records(batch).is_err())
                     && session.try_claim_response_terminal(ResponseTerminalCause::ProcessorFailure)
                 {
                     session.mark_response_terminal_emission(TerminalEmission::NoEvent);
@@ -1110,7 +1110,7 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
             return;
         }
         if let Some(batch) = canonical_batch {
-            if session.ai().publish_canonical_records(batch).is_err()
+            if session.publish_canonical_records(batch).is_err()
                 && session.try_claim_response_terminal(ResponseTerminalCause::ProcessorFailure)
             {
                 session.mark_response_terminal_emission(TerminalEmission::NoEvent);
@@ -1208,7 +1208,6 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
         // established current-chunk-before-terminal-event wire contract.
         if sink.is_terminated() && semantic_guard_active && chunk.is_none() {
             *chunk = session
-                .ai()
                 .take_canonical_records()
                 .and_then(|batch| batch.into_raw_bytes().ok());
         }

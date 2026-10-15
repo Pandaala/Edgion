@@ -128,6 +128,7 @@ impl FakeStep {
 }
 
 struct RecordedRequest {
+    url: reqwest::Url,
     method: reqwest::Method,
     path: String,
     headers: reqwest::header::HeaderMap,
@@ -175,6 +176,7 @@ impl OutboundTransport for FakeTransport {
             assert_eq!(req.url().path(), path);
         }
         self.requests.lock().push(RecordedRequest {
+            url: req.url().clone(),
             method: req.method().clone(),
             path: req.url().path().to_string(),
             headers: req.headers().clone(),
@@ -213,7 +215,7 @@ async fn call(
 ) -> Result<OutboundResponse, OutboundCallError> {
     outbound_call_with_body_using(
         client,
-        session,
+        TemplateContext::Request(session),
         None,
         global_max_bytes,
         &[],
@@ -520,10 +522,18 @@ async fn status_retry_does_not_stream_oversized_error_body() {
         ],
     );
     let mut diagnostics = OutboundRequestDiagnostics::default();
-    let response =
-        outbound_call_with_body_using(&client, &session, None, 65536, &[], None, &mut diagnostics, &transport)
-            .await
-            .unwrap();
+    let response = outbound_call_with_body_using(
+        &client,
+        TemplateContext::Request(&session),
+        None,
+        65536,
+        &[],
+        None,
+        &mut diagnostics,
+        &transport,
+    )
+    .await
+    .unwrap();
     assert_eq!(response.status, 200);
     assert_eq!(transport.count(), 2);
     assert!(!first_body_stream_called.load(Ordering::SeqCst));
@@ -869,7 +879,7 @@ async fn body_override_rebuilds_framing_before_dispatch() {
     let body = Bytes::from_static(b"hello");
     let response = outbound_call_with_body_using(
         &client,
-        &session("POST", "/framing"),
+        TemplateContext::Request(&session("POST", "/framing")),
         None,
         4096,
         &[("transfer-encoding", "chunked"), ("content-length", "999")],
@@ -903,4 +913,212 @@ async fn cancellation_drops_inflight_transport_attempt() {
     assert_eq!(transport.count(), 1);
     drop(call);
     assert!(canceled.load(Ordering::SeqCst));
+}
+
+struct TrustedCallValues {
+    tenant: Mutex<String>,
+}
+
+impl crate::link_sys::template::TrustedTemplateVariables for TrustedCallValues {
+    fn trusted_ctx_var(&self, key: &str) -> Option<String> {
+        (key == "tenant").then(|| self.tenant.lock().clone())
+    }
+
+    fn trusted_remote_ip(&self) -> &str {
+        "192.0.2.9"
+    }
+
+    fn trusted_matched_route_meta(
+        &self,
+        _proto: crate::plugins::runtime::traits::session::RouteProto,
+        _selector: &str,
+    ) -> Option<String> {
+        None
+    }
+}
+
+#[tokio::test]
+async fn trusted_calls_read_current_endpoint_policy_and_context_for_every_exchange() {
+    use crate::backends::discovery::endpoint_slice::get_roundrobin_store;
+    use crate::backends::policy::backend_traffic::store::{get_backend_traffic_policy_store, GLOBAL_STORE_TEST_LOCK};
+    use crate::plugins::http::common::outbound::target::ResolvedTarget;
+    use edgion_resources::resources::common::policy_ancestor_admission::PreparedPolicyAncestorAdmission;
+    use edgion_resources::resources::common::policy_precedence::PreparedPolicyPrecedence;
+    use edgion_resources::resources::edgion_backend_traffic_policy::{
+        EdgionBackendTrafficPolicySpec, PolicyTargetRef, ResolvedPolicyTargetClass,
+    };
+    use edgion_resources::resources::upstream_authority::UpstreamAuthorityConfig;
+    use edgion_resources::resources::EdgionBackendTrafficPolicy;
+    use k8s_openapi::api::discovery::v1::{Endpoint, EndpointConditions, EndpointPort, EndpointSlice};
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+    use std::collections::{BTreeMap, HashMap, HashSet};
+    use std::sync::atomic::AtomicUsize;
+
+    let _store_guard = GLOBAL_STORE_TEST_LOCK.lock();
+    const NS: &str = "trusted-outbound-live-call";
+    const SERVICE: &str = "decision";
+    let slice_key = format!("{NS}/decision-1");
+    let policy_key = format!("{NS}/authority");
+    struct Cleanup {
+        slice_key: String,
+        policy_key: String,
+        service_key: String,
+    }
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            get_backend_traffic_policy_store().partial_update_policies(
+                HashMap::new(),
+                HashMap::new(),
+                HashSet::from([self.policy_key.clone()]),
+            );
+            get_roundrobin_store().update_data_only(
+                HashMap::new(),
+                HashMap::new(),
+                &HashSet::from([self.slice_key.clone()]),
+            );
+            crate::backends::discovery::get_service_discovery_coordinator().update_services(
+                HashMap::new(),
+                HashMap::new(),
+                HashSet::from([self.service_key.clone()]),
+            );
+        }
+    }
+    let _cleanup = Cleanup {
+        slice_key: slice_key.clone(),
+        policy_key: policy_key.clone(),
+        service_key: format!("{NS}/{SERVICE}"),
+    };
+    let publish_endpoint = |address: &str| {
+        let slice = EndpointSlice {
+            metadata: ObjectMeta {
+                name: Some("decision-1".into()),
+                namespace: Some(NS.into()),
+                labels: Some(BTreeMap::from([(
+                    edgion_resources::constants::labels::k8s::SERVICE_NAME.into(),
+                    SERVICE.into(),
+                )])),
+                ..Default::default()
+            },
+            address_type: "IPv4".into(),
+            ports: Some(vec![EndpointPort {
+                port: Some(8080),
+                ..Default::default()
+            }]),
+            endpoints: vec![Endpoint {
+                addresses: vec![address.into()],
+                conditions: Some(EndpointConditions {
+                    ready: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+        };
+        get_roundrobin_store().update_data_only(
+            HashMap::from([(slice_key.clone(), slice)]),
+            HashMap::new(),
+            &HashSet::new(),
+        );
+    };
+    let publish_authority = |suffix: &str| {
+        let policy = EdgionBackendTrafficPolicy {
+            metadata: ObjectMeta {
+                name: Some("authority".into()),
+                namespace: Some(NS.into()),
+                ..Default::default()
+            },
+            spec: EdgionBackendTrafficPolicySpec {
+                prepared_ancestor_admission: Some(PreparedPolicyAncestorAdmission::Unrestricted),
+                prepared_precedence: Some(PreparedPolicyPrecedence {
+                    creation_timestamp: None,
+                }),
+                current_status: None,
+                target_refs: vec![PolicyTargetRef {
+                    group: Some(String::new()),
+                    kind: "Service".into(),
+                    name: SERVICE.into(),
+                }],
+                resolved_target_class: Some(ResolvedPolicyTargetClass::Service),
+                upstream_authority: Some(UpstreamAuthorityConfig {
+                    pattern: format!("*.{suffix}"),
+                    template: format!("${{ctx:tenant}}.{suffix}"),
+                    health_check_host: None,
+                }),
+                retry_constraint: None,
+                load_balancer: None,
+                health_check: None,
+                outlier_detection: None,
+                circuit_breaker: None,
+                connection: None,
+            },
+            status: None,
+        };
+        get_backend_traffic_policy_store().partial_update_policies(
+            HashMap::from([(policy_key.clone(), Arc::new(policy))]),
+            HashMap::new(),
+            HashSet::new(),
+        );
+    };
+    let mut client = make_client();
+    client.resolved_target = ResolvedTarget::Service {
+        service_key: format!("{NS}/{SERVICE}"),
+        port: Some(8080),
+        scheme: "http",
+        cursor: AtomicUsize::new(0),
+    };
+    let spec: OutboundRequestSpec = serde_json::from_value(serde_json::json!({
+        "path": {"template": "/decision/${ctx:tenant}"}, "method": {"template": "POST"}
+    }))
+    .unwrap();
+    client.compiled_request = CompiledRequest::from_spec(&spec).unwrap();
+    let values = TrustedCallValues {
+        tenant: Mutex::new("tenant-a".into()),
+    };
+    let transport = FakeTransport::new((0..5).map(|_| FakeResponse::new(200, Bytes::new()).into()));
+    let run = || async {
+        outbound_call_with_body_using(
+            &client,
+            TemplateContext::Trusted(&values),
+            None,
+            4096,
+            &[("content-type", "application/json")],
+            Some(Bytes::from_static(b"{}")),
+            &mut Default::default(),
+            &transport,
+        )
+        .await
+    };
+    publish_endpoint("10.1.2.3");
+    run().await.unwrap();
+    publish_endpoint("10.1.2.4");
+    run().await.unwrap();
+    publish_authority("sandbox.internal");
+    run().await.unwrap();
+    publish_authority("changed.internal");
+    run().await.unwrap();
+    *values.tenant.lock() = "tenant-b".into();
+    run().await.unwrap();
+    {
+        let requests = transport.requests.lock();
+        let hosts: Vec<_> = requests.iter().map(|request| request.url.host_str().unwrap()).collect();
+        assert_eq!(
+            hosts,
+            [
+                "10.1.2.3",
+                "10.1.2.4",
+                "tenant-a.sandbox.internal",
+                "tenant-a.changed.internal",
+                "tenant-b.changed.internal"
+            ]
+        );
+        assert_eq!(requests.last().unwrap().path, "/decision/tenant-b");
+        assert!(requests.iter().all(|request| request.headers["content-length"] == "2"));
+    }
+    *values.tenant.lock() = "invalid.label".into();
+    assert!(matches!(run().await, Err(OutboundCallError::AuthorityRejected)));
+    assert_eq!(transport.count(), 5);
+    get_roundrobin_store().update_data_only(HashMap::new(), HashMap::new(), &HashSet::from([slice_key]));
+    *values.tenant.lock() = "tenant-b".into();
+    assert!(matches!(run().await, Err(OutboundCallError::Connect)));
+    assert_eq!(transport.count(), 5);
+    transport.assert_drained();
 }

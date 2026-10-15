@@ -202,6 +202,13 @@ See [the maintained regression contract](../../04-review/http-body/regression-gu
 
 ### Response body and trailer completion
 
+Awaited writable response work receives transport-free `ResponseStreamSession`
+or `ResponseTrailerSession` capabilities. The driver races the owned callback
+lease against canonical downstream close detection. H2 reset and H1 closure
+after request-body completion cancel the callback before later observers or
+terminal guest re-entry. H1 half-close, upload and pipelining keep their existing
+limits; see [the cancellation contract](../../04-review/plugin-runtime/regression-guards/response-callback-downstream-cancellation.md).
+
 The typed driver keeps these events distinct:
 
 | Driver event | Streaming processors | Ordinary `UpstreamResponseBodyFilter` plugins | Trailer dispatch |

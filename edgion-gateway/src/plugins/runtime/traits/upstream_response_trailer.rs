@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use http::HeaderMap;
 
-use super::session::PluginSession;
+use super::response_stream_session::ResponseTrailerSession;
 use crate::plugins::runtime::PluginLog;
 
 /// Outcome of one canonical response-trailer companion.
@@ -48,7 +48,7 @@ pub trait UpstreamResponseTrailer: Send + Sync {
     async fn run_upstream_response_trailer(
         &mut self,
         trailers: Option<&mut HeaderMap>,
-        session: &mut dyn PluginSession,
+        session: &mut dyn ResponseTrailerSession,
         log: &mut PluginLog,
     ) -> UpstreamTrailerResult;
 

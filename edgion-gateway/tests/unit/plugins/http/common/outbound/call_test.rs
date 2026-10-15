@@ -260,7 +260,7 @@ fn resolve_timeout_clamps_to_ceiling() {
             http::HeaderValue::from_static("999999999"),
         )]));
 
-    let resolved = resolve_timeout(&client, &session);
+    let resolved = resolve_timeout(&client, TemplateContext::Request(&session));
     assert_eq!(resolved, Duration::from_millis(MAX_OUTBOUND_TIMEOUT_MS));
 }
 
@@ -273,7 +273,10 @@ fn resolve_timeout_uses_static_when_no_template() {
     client.timeout_template = None;
 
     let session = MockPluginSession::new();
-    assert_eq!(resolve_timeout(&client, &session), Duration::from_secs(7));
+    assert_eq!(
+        resolve_timeout(&client, TemplateContext::Request(&session)),
+        Duration::from_secs(7)
+    );
 }
 
 /// CRITICAL 2 regression: a render below `MIN_OUTBOUND_TIMEOUT_MS` (e.g. "1")
@@ -292,7 +295,7 @@ fn resolve_timeout_floor_falls_back_to_static_timeout() {
         .withf(|n| n == "desired_timeout_ms")
         .return_const(Some("1".to_string()));
 
-    let resolved = resolve_timeout(&client, &session);
+    let resolved = resolve_timeout(&client, TemplateContext::Request(&session));
     assert_eq!(resolved, Duration::from_secs(5), "must fall back to the static timeout");
 }
 
@@ -312,7 +315,7 @@ fn resolve_timeout_accepts_render_at_floor() {
         .withf(|n| n == "desired_timeout_ms")
         .return_const(Some(MIN_OUTBOUND_TIMEOUT_MS.to_string()));
 
-    let resolved = resolve_timeout(&client, &session);
+    let resolved = resolve_timeout(&client, TemplateContext::Request(&session));
     assert_eq!(resolved, Duration::from_millis(MIN_OUTBOUND_TIMEOUT_MS));
 }
 

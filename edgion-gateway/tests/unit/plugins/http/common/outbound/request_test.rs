@@ -872,3 +872,84 @@ fn outbound_missing_entry_method_fails_without_live_fallback_but_explicit_method
         }
     }
 }
+
+struct TrustedRequestValues;
+
+impl crate::link_sys::template::TrustedTemplateVariables for TrustedRequestValues {
+    fn trusted_ctx_var(&self, key: &str) -> Option<String> {
+        (key == "tenant").then(|| "tenant-a".to_string())
+    }
+
+    fn trusted_remote_ip(&self) -> &str {
+        "192.0.2.9"
+    }
+
+    fn trusted_matched_route_meta(
+        &self,
+        _proto: crate::plugins::runtime::traits::session::RouteProto,
+        _selector: &str,
+    ) -> Option<String> {
+        None
+    }
+}
+
+#[test]
+fn trusted_request_build_retains_normalized_guardrail_metadata_and_secret_flags() {
+    let spec: OutboundRequestSpec = serde_json::from_value(serde_json::json!({
+        "path": {"template": "/decision/${ctx:tenant}"},
+        "method": {"template": "POST"},
+        "headers": {"custom": [{"name": "authorization", "template": "Bearer ${secretRef:ns/token:key}"}]}
+    }))
+    .unwrap();
+    let secrets = ResolvedSecrets(std::collections::BTreeMap::from([(
+        "ns/token:key".into(),
+        "credential".into(),
+    )]));
+    let request = CompiledRequest::from_spec(&spec)
+        .unwrap()
+        .build_request_in(
+            TemplateContext::Trusted(&TrustedRequestValues),
+            None,
+            "http://decision.test",
+            Some(&secrets),
+            &mut Default::default(),
+        )
+        .unwrap();
+    assert_eq!(request.method(), reqwest::Method::POST);
+    assert_eq!(request.url().path(), "/decision/tenant-a");
+    assert_eq!(request.headers()["authorization"], "Bearer credential");
+    assert!(request.headers()["authorization"].is_sensitive());
+    assert!(request.try_clone().unwrap().headers()["authorization"].is_sensitive());
+}
+
+#[test]
+fn trusted_request_build_rejects_every_requested_incoming_capability() {
+    let valid = serde_json::json!({"path": {"template": "/decision"}, "method": {"template": "POST"}});
+    let mut cases = Vec::new();
+    for field in ["path", "method"] {
+        let mut value = valid.clone();
+        value.as_object_mut().unwrap().remove(field);
+        cases.push(value);
+    }
+    for field in ["headers", "args", "cookies"] {
+        if field == "headers" {
+            let mut value = valid.clone();
+            value[field] = serde_json::json!({"forwardAll": true});
+            cases.push(value);
+        }
+        let mut value = valid.clone();
+        value[field] = serde_json::json!({"origin": [{"name": "x", "presence": "skipIfMissing"}]});
+        cases.push(value);
+    }
+    for value in cases {
+        let spec: OutboundRequestSpec = serde_json::from_value(value).unwrap();
+        let request = CompiledRequest::from_spec(&spec).unwrap().build_request_in(
+            TemplateContext::Trusted(&TrustedRequestValues),
+            None,
+            "http://decision.test",
+            None,
+            &mut Default::default(),
+        );
+        assert!(matches!(request, Err(error) if error == "template request capability unavailable"));
+    }
+}

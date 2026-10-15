@@ -12,7 +12,7 @@ impl StreamingResponseProcessor for BodyMarker {
         _end_of_stream: bool,
         _stream_kind: crate::ctx::ResponseStreamKind,
         _sink: &mut pingora_proxy::ResponseBodySink,
-        _session: &mut dyn crate::plugins::runtime::PluginSession,
+        _session: &mut dyn crate::plugins::runtime::traits::ResponseStreamSession,
     ) {
     }
 
@@ -32,7 +32,7 @@ impl UpstreamResponseTrailer for TrailerMarker {
     async fn run_upstream_response_trailer(
         &mut self,
         _trailers: Option<&mut http::HeaderMap>,
-        _session: &mut dyn crate::plugins::runtime::PluginSession,
+        _session: &mut dyn crate::plugins::runtime::traits::ResponseTrailerSession,
         _log: &mut crate::plugins::runtime::PluginLog,
     ) -> crate::plugins::runtime::UpstreamTrailerResult {
         crate::plugins::runtime::UpstreamTrailerResult::Continue
@@ -102,7 +102,7 @@ async fn cancelled_unary_callback_releases_its_branch_promptly() {
             eos: bool,
             kind: crate::ctx::ResponseStreamKind,
             sink: &mut pingora_proxy::ResponseBodySink,
-            session: &mut dyn crate::plugins::runtime::PluginSession,
+            session: &mut dyn crate::plugins::runtime::traits::ResponseStreamSession,
         ) {
             self.inner.on_chunk(chunk, eos, kind, sink, session).await;
             let _ = self.entered.take().unwrap().send(());
