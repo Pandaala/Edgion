@@ -2,8 +2,9 @@
 
 use super::ai_backend_cleanup::{cleanup_resources, run_with_cleanup};
 use crate::dynamic::scenario::{Scenario, ScenarioRunFuture};
-use crate::dynamic::ScenarioCtx;
+use crate::dynamic::{status as dynamic_status, ScenarioCtx};
 use anyhow::{Context, Result};
+use edgion_resources::resources::common::ParentReference;
 use futures::StreamExt;
 use serde_json::{json, Value};
 use std::future::Future;
@@ -222,17 +223,23 @@ fn resource_named(value: &Value, name: &str) -> bool {
         && value.pointer("/metadata/name").and_then(Value::as_str) == Some(name)
 }
 
-fn has_condition(value: &Value, type_: &str, status: &str, reason: Option<&str>) -> bool {
-    match value {
-        Value::Array(items) => items.iter().any(|item| has_condition(item, type_, status, reason)),
-        Value::Object(map) => {
-            let direct = map.get("type").and_then(Value::as_str) == Some(type_)
-                && map.get("status").and_then(Value::as_str) == Some(status)
-                && reason.is_none_or(|expected| map.get("reason").and_then(Value::as_str) == Some(expected));
-            direct || map.values().any(|item| has_condition(item, type_, status, reason))
-        }
-        _ => false,
-    }
+fn has_condition(
+    value: &Value,
+    kind: &str,
+    gateway_name: &str,
+    type_: &str,
+    status: &str,
+    reason: Option<&str>,
+) -> Result<bool> {
+    let gateway = ParentReference {
+        group: None,
+        kind: None,
+        namespace: Some(NS.to_string()),
+        name: gateway_name.to_string(),
+        section_name: None,
+        port: None,
+    };
+    dynamic_status::has_condition(value, kind, &gateway, type_, status, reason)
 }
 
 async fn wait_for<F, Fut>(label: &str, mut check: F) -> Result<()>
@@ -266,13 +273,16 @@ async fn wait_condition(
     status: &str,
     reason: Option<&str>,
 ) -> Result<()> {
+    let gateway = gateway_name();
     wait_for(&format!("{kind}/{NS}/{name} {type_}={status}/{reason:?}"), || async {
-        Ok(has_condition(
+        has_condition(
             &controller_resource(ctx, kind, name).await?,
+            kind,
+            &gateway,
             type_,
             status,
             reason,
-        ))
+        )
     })
     .await
 }
@@ -1149,6 +1159,45 @@ pub static SCENARIO: &Scenario = &Scenario {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn status_barriers_use_the_resolved_gateway_for_routes_and_both_policy_families() {
+        let mut route: Value = serde_yaml::from_str(&route_yaml(true)).unwrap();
+        let gateway = gateway_name();
+        route["status"] = json!({"parents": [{
+            "controllerName": "edgion.io/gateway-controller", "parentRef": route["spec"]["parentRefs"][0],
+            "conditions": [{"type": "ResolvedRefs", "status": "False", "reason": "BackendNotFound"}]
+        }]});
+        assert!(has_condition(
+            &route,
+            "HTTPRoute",
+            &gateway,
+            "ResolvedRefs",
+            "False",
+            Some("BackendNotFound")
+        )
+        .unwrap());
+
+        let overridden = "policy-integration-gateway";
+        for kind in ["HTTPRoute", "BackendTLSPolicy", "EdgionBackendTrafficPolicy"] {
+            let (list, reference) = if kind == "HTTPRoute" {
+                ("parents", "parentRef")
+            } else {
+                ("ancestors", "ancestorRef")
+            };
+            let mut resource = json!({"metadata": {"namespace": NS}, "status": {}});
+            let mut entry = json!({
+                "controllerName": "edgion.io/gateway-controller",
+                "conditions": [{"type": "Accepted", "status": "False", "reason": "Invalid"}]
+            });
+            entry[reference] = json!({"name": overridden, "namespace": NS});
+            resource["status"][list] = json!([entry]);
+            assert!(has_condition(&resource, kind, overridden, "Accepted", "False", Some("Invalid")).unwrap());
+            assert!(has_condition(&resource, kind, "ai-gateway", "Accepted", "False", Some("Invalid")).is_err());
+            resource["status"][list][0]["controllerName"] = json!("foreign/controller");
+            assert!(has_condition(&resource, kind, overridden, "Accepted", "False", Some("Invalid")).is_err());
+        }
+    }
 
     #[test]
     fn generated_manifests_are_valid_and_keep_typed_targets() {

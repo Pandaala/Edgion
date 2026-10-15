@@ -27,6 +27,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Dynamic status assertions select their observation](regression-guards/dynamic-status-assertions-select-observation.md)
+
 - [Condition target log correlation](regression-guards/condition-target-log-correlation.md)
 
 - [TestService schema regeneration](regression-guards/test-service-schema-regeneration.md)

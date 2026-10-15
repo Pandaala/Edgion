@@ -359,6 +359,13 @@ If you need to repeatedly hit traffic or control phases yourself, after preservi
 
 Hot-reload tests are orchestrated by the Rust-side scenario framework and **run automatically by default** as the final step of the full integration test. The slow `Dyn_WafDynamic` and `Dyn_EncryptedActiveHealthChecks` scenarios require `--full-test`. This also applies to the targeted `-r Gateway -i WafDynamic` runner path. A fast run reports these scenarios as skipped. Ordinary static WAF tests and `Dyn_WafExpensiveChecks` remain in the default sweep.
 
+Status barriers must select the scenario's Controller observation and exact
+Gateway parent or ancestor before matching conditions. Reuse the test-owned
+`dynamic::status` projection and canonical reference identity; do not recursively
+search complete diagnostic status. See the
+[status assertion ownership boundary](../04-review/testing/regression-guards/dynamic-status-assertions-select-observation.md)
+for native/Kubernetes selection, missing/duplicate observations and caller tests.
+
 ### How to trigger and inspect
 
 ```bash

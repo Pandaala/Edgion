@@ -2,8 +2,9 @@
 
 use super::ai_backend_cleanup::{cleanup_resources, run_with_cleanup};
 use crate::dynamic::scenario::{Scenario, ScenarioRunFuture};
-use crate::dynamic::ScenarioCtx;
+use crate::dynamic::{status as dynamic_status, ScenarioCtx};
 use anyhow::{Context, Result};
+use edgion_resources::resources::common::ParentReference;
 use serde_json::{json, Value};
 use std::future::Future;
 use std::time::Duration;
@@ -141,17 +142,16 @@ async fn controller_resource(ctx: &ScenarioCtx, kind: &str, namespace: &str, nam
     Ok(body["data"].clone())
 }
 
-fn has_condition(value: &Value, type_: &str, status: &str, reason: Option<&str>) -> bool {
-    match value {
-        Value::Array(items) => items.iter().any(|item| has_condition(item, type_, status, reason)),
-        Value::Object(map) => {
-            let direct = map.get("type").and_then(Value::as_str) == Some(type_)
-                && map.get("status").and_then(Value::as_str) == Some(status)
-                && reason.is_none_or(|expected| map.get("reason").and_then(Value::as_str) == Some(expected));
-            direct || map.values().any(|item| has_condition(item, type_, status, reason))
-        }
-        _ => false,
-    }
+fn has_condition(value: &Value, status: &str, reason: Option<&str>) -> Result<bool> {
+    let gateway = ParentReference {
+        group: None,
+        kind: None,
+        namespace: Some(ROUTE_NS.to_string()),
+        name: "ai-gateway".to_string(),
+        section_name: None,
+        port: None,
+    };
+    dynamic_status::has_condition(value, "HTTPRoute", &gateway, "ResolvedRefs", status, reason)
 }
 
 async fn wait_for<F, Fut>(label: &str, mut check: F) -> Result<()>
@@ -182,7 +182,7 @@ async fn wait_route_condition(ctx: &ScenarioCtx, status: &str, reason: Option<&s
         &format!("HTTPRoute {ROUTE} ResolvedRefs={status}/{reason:?}"),
         || async {
             let route = controller_resource(ctx, "HTTPRoute", ROUTE_NS, ROUTE).await?;
-            Ok(has_condition(&route, "ResolvedRefs", status, reason))
+            has_condition(&route, status, reason)
         },
     )
     .await
@@ -430,6 +430,27 @@ pub static SCENARIO: &Scenario = &Scenario {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn status_barrier_rejects_another_gateway_or_controllers_condition() {
+        let mut route: Value = serde_yaml::from_str(&route_yaml()).unwrap();
+        let parent = route["spec"]["parentRefs"][0].clone();
+        route["status"] = json!({"parents": [
+            {"controllerName": "foreign/controller", "parentRef": parent, "conditions": [
+                {"type": "ResolvedRefs", "status": "False", "reason": "BackendNotFound"}
+            ]},
+            {"controllerName": "edgion.io/gateway-controller", "parentRef": {"name": "other-gateway"}, "conditions": [
+                {"type": "ResolvedRefs", "status": "False", "reason": "BackendNotFound"}
+            ]},
+            {"controllerName": "edgion.io/gateway-controller", "parentRef": parent, "conditions": [
+                {"type": "ResolvedRefs", "status": "True", "reason": "ResolvedRefs"}
+            ]}
+        ]});
+        assert!(!has_condition(&route, "False", Some("BackendNotFound")).unwrap());
+        assert!(has_condition(&route, "True", Some("ResolvedRefs")).unwrap());
+        route["status"]["parents"].as_array_mut().unwrap().pop();
+        assert!(has_condition(&route, "False", Some("BackendNotFound")).is_err());
+    }
 
     #[test]
     fn provider_endpoint_uses_the_k8s_service_only_in_k8s_mode() {

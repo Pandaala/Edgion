@@ -2,8 +2,9 @@
 
 use super::ai_backend_cleanup::{cleanup_resources, run_with_cleanup};
 use crate::dynamic::scenario::{Scenario, ScenarioRunFuture};
-use crate::dynamic::ScenarioCtx;
+use crate::dynamic::{status as dynamic_status, ScenarioCtx};
 use anyhow::{Context, Result};
+use edgion_resources::resources::common::ParentReference;
 use serde_json::{json, Value};
 use std::future::Future;
 use std::time::Duration;
@@ -240,17 +241,16 @@ fn resource_named(value: &Value, namespace: &str, name: &str) -> bool {
         && value.pointer("/metadata/name").and_then(Value::as_str) == Some(name)
 }
 
-fn has_condition(value: &Value, type_: &str, status: &str, reason: Option<&str>) -> bool {
-    match value {
-        Value::Array(items) => items.iter().any(|item| has_condition(item, type_, status, reason)),
-        Value::Object(map) => {
-            let direct = map.get("type").and_then(Value::as_str) == Some(type_)
-                && map.get("status").and_then(Value::as_str) == Some(status)
-                && reason.is_none_or(|expected| map.get("reason").and_then(Value::as_str) == Some(expected));
-            direct || map.values().any(|item| has_condition(item, type_, status, reason))
-        }
-        _ => false,
-    }
+fn has_condition(value: &Value, kind: &str, type_: &str, status: &str, reason: Option<&str>) -> Result<bool> {
+    let gateway = ParentReference {
+        group: None,
+        kind: None,
+        namespace: Some(ROUTE_NS.to_string()),
+        name: "ai-gateway".to_string(),
+        section_name: None,
+        port: None,
+    };
+    dynamic_status::has_condition(value, kind, &gateway, type_, status, reason)
 }
 
 async fn wait_for<F, Fut>(label: &str, timeout: Duration, mut check: F) -> Result<()>
@@ -290,7 +290,7 @@ async fn wait_condition(
         Duration::from_secs(15),
         || async {
             let resource = controller_resource(ctx, kind, namespace, name).await?;
-            Ok(has_condition(&resource, type_, status, reason))
+            has_condition(&resource, kind, type_, status, reason)
         },
     )
     .await
@@ -1016,6 +1016,47 @@ pub static SCENARIO: &Scenario = &Scenario {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn status_barriers_select_the_route_gateway_even_for_cross_namespace_policies() {
+        let mut route: Value = serde_yaml::from_str(&route_yaml()).unwrap();
+        let parent = route["spec"]["parentRefs"][0].clone();
+        route["status"] = json!({"parents": [
+            {"controllerName": "foreign/controller", "parentRef": parent, "conditions": [
+                {"type": "ResolvedRefs", "status": "True"}
+            ]},
+            {"controllerName": "edgion.io/gateway-controller", "parentRef": parent, "conditions": [
+                {"type": "ResolvedRefs", "status": "False", "reason": "RefNotPermitted"}
+            ]}
+        ]});
+        assert!(has_condition(&route, "HTTPRoute", "ResolvedRefs", "False", Some("RefNotPermitted")).unwrap());
+        assert!(!has_condition(&route, "HTTPRoute", "ResolvedRefs", "True", None).unwrap());
+
+        let mut policy: Value = serde_yaml::from_str(&policy_yaml(WINNER_POLICY, BACKEND_B, 3)).unwrap();
+        policy["status"] = json!({"ancestors": [{
+            "controllerName": "edgion.io/gateway-controller",
+            "ancestorRef": {"name": parent["name"], "namespace": ROUTE_NS},
+            "conditions": [{"type": "Accepted", "status": "False", "reason": "Invalid"}]
+        }]});
+        assert_ne!(policy["metadata"]["namespace"], ROUTE_NS);
+        assert!(has_condition(
+            &policy,
+            "EdgionBackendTrafficPolicy",
+            "Accepted",
+            "False",
+            Some("Invalid")
+        )
+        .unwrap());
+        policy["status"]["ancestors"][0]["ancestorRef"]["namespace"] = json!(BACKEND_NS);
+        assert!(has_condition(
+            &policy,
+            "EdgionBackendTrafficPolicy",
+            "Accepted",
+            "False",
+            Some("Invalid")
+        )
+        .is_err());
+    }
 
     #[test]
     fn provider_endpoint_uses_the_k8s_service_only_in_k8s_mode() {
