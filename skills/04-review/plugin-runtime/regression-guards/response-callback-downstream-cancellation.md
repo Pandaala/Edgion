@@ -54,8 +54,8 @@ committed Trailer declaration values once per dispatch, never per body chunk.
   owns abort-on-close, half-close tolerance and pipelined-byte preservation.
 - With tolerated FIN, the response callback remains alive. With incomplete H1
   upload, or after a pipeline byte has been stashed, prompt close detection is
-  not guaranteed. Deadlines remain mandatory. The unresolved extension is
-  tracked in [the H1 transport task](../../../../tasks/todo/response-callback-h1-transport-cancellation.md).
+  not guaranteed. Deadlines remain mandatory. Prompt cancellation in these
+  cases remains outside the verified transport contract.
 - Custom/subrequest transports retain their existing semantics. Real transport
   acceptance uses an H1 upstream; it does not claim upstream-H2 wire coverage.
 
