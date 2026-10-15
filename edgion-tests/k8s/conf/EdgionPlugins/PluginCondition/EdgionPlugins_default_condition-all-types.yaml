@@ -8,7 +8,7 @@
 # 5. include - 
 # 6. exclude - 
 #
-#  Mock ， Access Log Store  cond_skip 
+# Mock outcomes are observed through Access Log Store cond_skip.
 
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
@@ -24,12 +24,13 @@ spec:
     # 1.1 KeyExist + Header source (skip when X-Skip-KeyExist-Header exists)
     - enable: true
       type: Mock
+      alias: key-exist-header
       config:
         statusCode: 200
         terminate: false
         headers:
           X-KeyExist-Header-Ran: "true"
-        #  body，
+        # No response body is required.
       conditions:
         skip:
           anyOf:
@@ -41,6 +42,7 @@ spec:
     # 1.2 KeyExist + Query source (skip when ?skip_query=1 exists)
     - enable: true
       type: Mock
+      alias: key-exist-query
       config:
         statusCode: 200
         terminate: false
@@ -57,6 +59,7 @@ spec:
     # 1.3 KeyExist + Cookie source (run when session_id cookie exists)
     - enable: true
       type: Mock
+      alias: key-exist-cookie
       config:
         statusCode: 200
         terminate: false
@@ -77,6 +80,7 @@ spec:
     # 2.1 KeyMatch exact value (run when X-Env: production)
     - enable: true
       type: Mock
+      alias: key-match-exact
       config:
         statusCode: 200
         terminate: false
@@ -95,6 +99,7 @@ spec:
     # 2.2 KeyMatch regex (run when User-Agent matches ^TestBot.*)
     - enable: true
       type: Mock
+      alias: key-match-regex
       config:
         statusCode: 200
         terminate: false
@@ -113,6 +118,7 @@ spec:
     # 2.3 KeyMatch query param (run when version=v2)
     - enable: true
       type: Mock
+      alias: key-match-query
       config:
         statusCode: 200
         terminate: false
@@ -131,6 +137,7 @@ spec:
     # 2.4 KeyMatch with multiple regex patterns (run when UA matches Mozilla OR Chrome OR Safari)
     - enable: true
       type: Mock
+      alias: key-match-multi-regex
       config:
         statusCode: 200
         terminate: false
@@ -151,6 +158,7 @@ spec:
     # 2.5 KeyMatch with multiple exact values (run when X-Region is us-east OR us-west OR eu-west)
     - enable: true
       type: Mock
+      alias: key-match-multi-values
       config:
         statusCode: 200
         terminate: false
@@ -176,6 +184,7 @@ spec:
     # 3.1 TimeRange valid (always runs - wide time range)
     - enable: true
       type: Mock
+      alias: time-range-valid
       config:
         statusCode: 200
         terminate: false
@@ -191,6 +200,7 @@ spec:
     # 3.2 TimeRange expired (never runs - time already passed)
     - enable: true
       type: Mock
+      alias: time-range-expired
       config:
         statusCode: 200
         terminate: false
@@ -210,6 +220,7 @@ spec:
     # 4.1 Probability 100% (always runs)
     - enable: true
       type: Mock
+      alias: probability-100
       config:
         statusCode: 200
         terminate: false
@@ -224,6 +235,7 @@ spec:
     # 4.2 Probability 0% (never runs)
     - enable: true
       type: Mock
+      alias: probability-0
       config:
         statusCode: 200
         terminate: false
@@ -238,6 +250,7 @@ spec:
     # 4.3 Probability deterministic (based on X-User-ID header)
     - enable: true
       type: Mock
+      alias: probability-deterministic
       config:
         statusCode: 200
         terminate: false
@@ -259,6 +272,7 @@ spec:
     # 5.1 Include path (run for /api/* paths)
     - enable: true
       type: Mock
+      alias: include-path
       config:
         statusCode: 200
         terminate: false
@@ -277,6 +291,7 @@ spec:
     # 5.2 Include method (run for POST, PUT methods)
     - enable: true
       type: Mock
+      alias: include-method
       config:
         statusCode: 200
         terminate: false
@@ -295,6 +310,7 @@ spec:
     # 5.3 Include with regex patterns (run for /api/v[0-9]+/* or /internal/*)
     - enable: true
       type: Mock
+      alias: include-regex
       config:
         statusCode: 200
         terminate: false
@@ -318,6 +334,7 @@ spec:
     # 6.1 Exclude path (skip for /health, /ready, /metrics)
     - enable: true
       type: Mock
+      alias: exclude-path
       config:
         statusCode: 200
         terminate: false
@@ -327,7 +344,6 @@ spec:
         skip:
           anyOf:
             - type: keyMatch
-              negate: true
               key:
                 type: path
               values:
@@ -338,6 +354,7 @@ spec:
     # 6.2 Exclude method (skip for OPTIONS requests)
     - enable: true
       type: Mock
+      alias: exclude-method
       config:
         statusCode: 200
         terminate: false
@@ -347,7 +364,6 @@ spec:
         skip:
           anyOf:
             - type: keyMatch
-              negate: true
               key:
                 type: method
               values:
@@ -356,6 +372,7 @@ spec:
     # 6.3 Exclude with regex patterns (skip for /debug/* or /admin/*)
     - enable: true
       type: Mock
+      alias: exclude-regex
       config:
         statusCode: 200
         terminate: false
@@ -365,7 +382,6 @@ spec:
         skip:
           anyOf:
             - type: keyMatch
-              negate: true
               key:
                 type: path
               values:

@@ -385,7 +385,9 @@ detailed path that produces a skip descriptor.
 
 Gateway API standard filters (added through the private `add_from_httproute_filters_inner`; the public entries are the scope-explicit `from_httproute_filters_for_rule` / `from_httproute_filters_for_backend` mentioned above) are not wrapped with conditions and always execute.
 
-Skip log format: `"skip:keyExist,hdr:X-Internal"` or `"!run:keyMatch,method"`.
+Skip log format: `<action>:<path>:<type>[:<accessor>]`, for example
+`skip:skip.anyOf[0]:keyExist:hdr:X-Internal` or
+`!run:run.allOf[0]:keyMatch:method`.
 
 mTLS conditions borrow `ClientCertInfo` from the live session for one synchronous
 predicate evaluation. Subject/CN and lazily filtered SAN candidates are borrowed

@@ -27,6 +27,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Condition target log correlation](regression-guards/condition-target-log-correlation.md)
+
 - [TestService schema regeneration](regression-guards/test-service-schema-regeneration.md)
 
 - [Custom connector request contracts](regression-guards/custom-connector-request-contracts.md)

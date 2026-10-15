@@ -361,7 +361,7 @@ Two independent signals. Do not collapse them.
 
 | Signal | Where | When | Meaning |
 |--------|--------|------|---------|
-| `cond_skip` | `PluginLog.cond_skip` (`set_cond_skip`) | Plugin skipped by `PluginConditions` | Why it was skipped: `skip:<type>,<detail>` or `!run:<type>,<detail>`. Format and producer are unchanged (D-23). |
+| `cond_skip` | `PluginLog.cond_skip` (`set_cond_skip`) | Plugin skipped by `PluginConditions` | Why it was skipped: `<action>:<path>:<type>[:<accessor>]`, e.g. `skip:skip.anyOf[0]:keyExist:hdr:X-Internal` or `!run:run.allOf[0]:probability`. |
 | Compiled descriptors | plugin `log` array (`PluginLog::push`) | A condition **matches** within a multi-leaf request/response decision scope | `<path>:<type>[:<accessor>]`. Value-free. Non-match logs nothing. Body/dye stay silent. |
 
 Within a `ConditionSet`, `anyOf` records only the first successful branch;

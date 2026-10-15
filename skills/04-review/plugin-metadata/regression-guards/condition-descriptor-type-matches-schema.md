@@ -1,6 +1,6 @@
 ---
 name: condition-descriptor-type-matches-schema
-description: Use when reviewing Condition descriptor or cond_skip type tokens. The token must exactly match the public YAML discriminator returned by the canonical Condition::cond_type mapping.
+description: Use when reviewing compiled Gateway descriptors or cond_skip type tokens. Runtime type tokens must match the public schema discriminator; runtime path descriptors and schema diagnostic summaries have separate owners.
 knowledge_type: regression-guards
 ---
 
@@ -14,15 +14,22 @@ YAML discriminator is `probability`. It now emits `probability` consistently.
 
 ## Invariant
 
-`Condition::cond_type` is the single mapping used by both the compiled
-`<ordinal>:<type>[:<accessor>]` descriptor and the outer condition-skip log.
-Every returned token must exactly match the corresponding serde/YAML `type`
-discriminator. Do not add log-only abbreviations or separately patch individual
-log formatting sites.
+The compiled Gateway descriptor uses `<path>:<type>[:<accessor>]`; the outer
+condition-skip log prefixes the action (`skip:` or `!run:`). Its type token must
+match the public serde/YAML discriminator. `condition_descriptor` in the Gateway
+compiled evaluator currently owns this formatting; do not add log-only
+abbreviations. For example, `!run:run.allOf[0]:probability` is the current skip
+cause for both plain and keyed probability conditions; no probability key value
+or accessor is included. `keyMatch` and `keyExist` use `KeyGet::as_log_str`,
+including `cookie:session_id` and `method`, not the old `cke`/`mtd` tokens.
 
-The resource test `descriptor_is_value_free_and_ordinal_bearing` locks both the
-plain and keyed probability descriptors. The Gateway test
-`test_condition_type_and_detail` locks the shared type token used by `cond_skip`.
+The resource test `diagnostic_descriptor_is_value_free_and_ordinal_bearing`
+covers schema diagnostic summaries; it does not establish the Gateway runtime
+path format. Gateway evaluator tests and the AllConditions exact-cause oracle
+cover the runtime side. ARCH-383 corrected stale flat-ordinal/comma-format
+guidance while retaining the cl-07 discriminator requirement. Successful
+single-leaf decisions do not require match-only log descriptors; see the
+[plugin architecture](../../../01-architecture/02-gateway/05-plugin-system.md).
 
 ## Resolution references
 

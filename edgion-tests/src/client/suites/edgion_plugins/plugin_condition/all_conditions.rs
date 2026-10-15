@@ -49,6 +49,8 @@ struct EdgionPluginsLog {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 struct PluginLog {
     name: String,
+    #[serde(default)]
+    alias: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cond_skip: Option<String>,
     #[serde(default)]
@@ -60,45 +62,64 @@ fn build_url(ctx: &TestContext, path: &str) -> String {
     format!("http://{}:{}{}", ctx.target_host, GATEWAY_PORT, path)
 }
 
-/// Helper to find a specific plugin log by header marker
-fn find_plugin_log_by_header<'a>(access_log: &'a AccessLog, header_marker: &str) -> Option<&'a PluginLog> {
-    // The Mock plugin logs contain the header it adds
-    access_log
+/// Observe exactly one fixture entry, including entries skipped before Mock runs.
+fn target_outcome(access_log: &AccessLog, alias: &str, skip_cause: &str) -> Result<bool, String> {
+    let mut targets = access_log
         .stage_logs
         .iter()
+        .filter(|stage| stage.stage == "request_filters")
         .flat_map(|stage| &stage.edgion_plugins)
-        .flat_map(|ep| &ep.logs)
-        .find(|log| log.name == "Mock" && log.log.iter().any(|l| l.contains(header_marker)))
+        .filter(|resource| resource.name == "condition-all-types")
+        .flat_map(|resource| &resource.logs)
+        .filter(|log| log.name == "Mock" && log.alias.as_deref() == Some(alias));
+    let target = targets
+        .next()
+        .ok_or_else(|| format!("Missing target Mock alias {alias}"))?;
+    if targets.next().is_some() {
+        return Err(format!("Duplicate target Mock alias {alias}"));
+    }
+    match target.cond_skip.as_deref() {
+        None => Ok(true),
+        Some(cause) if cause == skip_cause => Ok(false),
+        Some(cause) => Err(format!(
+            "Target {alias} skipped with {cause:?}, expected {skip_cause:?}"
+        )),
+    }
 }
 
-/// Helper to count Mock plugins that ran (no cond_skip)
-fn count_mock_plugins_ran(access_log: &AccessLog) -> usize {
-    access_log
-        .stage_logs
-        .iter()
-        .flat_map(|stage| &stage.edgion_plugins)
-        .flat_map(|ep| &ep.logs)
-        .filter(|log| log.name == "Mock" && log.cond_skip.is_none())
-        .count()
+fn assert_target(access_log: &AccessLog, alias: &str, expected_run: bool, skip_cause: &str) -> Result<(), String> {
+    let ran = target_outcome(access_log, alias, skip_cause)?;
+    if ran != expected_run {
+        return Err(format!(
+            "Target {alias}: expected {}, observed {}",
+            if expected_run { "run" } else { "skip" },
+            if ran { "run" } else { "skip" }
+        ));
+    }
+    Ok(())
 }
 
-/// Helper to count Mock plugins that were skipped
-fn count_mock_plugins_skipped(access_log: &AccessLog) -> usize {
-    access_log
-        .stage_logs
-        .iter()
-        .flat_map(|stage| &stage.edgion_plugins)
-        .flat_map(|ep| &ep.logs)
-        .filter(|log| log.name == "Mock" && log.cond_skip.is_some())
-        .count()
+fn target_result(
+    start: Instant,
+    access_log: &AccessLog,
+    alias: &str,
+    expected_run: bool,
+    skip_cause: &str,
+) -> TestResult {
+    match assert_target(access_log, alias, expected_run, skip_cause) {
+        Ok(()) => TestResult::passed_with_message(
+            start.elapsed(),
+            format!(
+                "Target {alias} correctly {}",
+                if expected_run { "ran" } else { "skipped" }
+            ),
+        ),
+        Err(error) => TestResult::failed(start.elapsed(), error),
+    }
 }
 
-/// Helper to check if a specific condition caused skip
-fn was_skipped_by_condition(log: &PluginLog, condition_type: &str) -> bool {
-    log.cond_skip
-        .as_ref()
-        .map(|s| s.contains(condition_type))
-        .unwrap_or(false)
+fn consistent_samples(results: &[bool]) -> bool {
+    results.len() == 5 && results.iter().all(|result| *result == results[0])
 }
 
 /// Helper function to send request and parse access log
@@ -170,34 +191,13 @@ impl AllConditionsTestSuite {
                     )
                     .await
                     {
-                        Ok(access_log) => {
-                            // Find the KeyExist-Header Mock plugin
-                            let found_skipped = access_log
-                                .stage_logs
-                                .iter()
-                                .flat_map(|stage| &stage.edgion_plugins)
-                                .flat_map(|ep| &ep.logs)
-                                .any(|log| {
-                                    log.name == "Mock"
-                                        && was_skipped_by_condition(log, "keyExist")
-                                        && log
-                                            .cond_skip
-                                            .as_ref()
-                                            .is_some_and(|s| s.contains("hdr:X-Skip-KeyExist-Header"))
-                                });
-
-                            if found_skipped {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "KeyExist header skip condition works correctly".to_string(),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    "Expected plugin to be skipped by keyExist header condition".to_string(),
-                                )
-                            }
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "key-exist-header",
+                            false,
+                            "skip:skip.anyOf[0]:keyExist:hdr:X-Skip-KeyExist-Header",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -217,21 +217,13 @@ impl AllConditionsTestSuite {
 
                     // Without skip header - plugin should run
                     match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
-                        Ok(access_log) => {
-                            // Find a Mock plugin that ran (no cond_skip)
-                            let ran_count = count_mock_plugins_ran(&access_log);
-                            if ran_count > 0 {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("{} Mock plugins ran without skip header", ran_count),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    "Expected at least one Mock plugin to run".to_string(),
-                                )
-                            }
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "key-exist-header",
+                            true,
+                            "skip:skip.anyOf[0]:keyExist:hdr:X-Skip-KeyExist-Header",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -250,30 +242,13 @@ impl AllConditionsTestSuite {
                     let url = build_url(&ctx, "/test?skip_query=1");
 
                     match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
-                        Ok(access_log) => {
-                            let found_skipped = access_log
-                                .stage_logs
-                                .iter()
-                                .flat_map(|stage| &stage.edgion_plugins)
-                                .flat_map(|ep| &ep.logs)
-                                .any(|log| {
-                                    log.name == "Mock"
-                                        && was_skipped_by_condition(log, "keyExist")
-                                        && log.cond_skip.as_ref().is_some_and(|s| s.contains("query:skip_query"))
-                                });
-
-                            if found_skipped {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "KeyExist query skip condition works correctly".to_string(),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    "Expected plugin to be skipped by keyExist query condition".to_string(),
-                                )
-                            }
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "key-exist-query",
+                            false,
+                            "skip:skip.anyOf[0]:keyExist:query:skip_query",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -294,21 +269,13 @@ impl AllConditionsTestSuite {
                     match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![("Cookie", "session_id=abc123")], "GET")
                         .await
                     {
-                        Ok(access_log) => {
-                            // The Cookie condition is a "run" condition, so plugin runs when cookie exists
-                            let ran_count = count_mock_plugins_ran(&access_log);
-                            if ran_count > 0 {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("KeyExist cookie run condition works - {} plugins ran", ran_count),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    "Expected plugin to run with session_id cookie".to_string(),
-                                )
-                            }
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "key-exist-cookie",
+                            true,
+                            "!run:run.allOf[0]:keyExist:cookie:session_id",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -328,35 +295,13 @@ impl AllConditionsTestSuite {
 
                     // No cookie - the "run" condition should fail, plugin skipped
                     match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
-                        Ok(access_log) => {
-                            // Find plugin skipped due to run condition not met
-                            let found_skipped = access_log
-                                .stage_logs
-                                .iter()
-                                .flat_map(|stage| &stage.edgion_plugins)
-                                .flat_map(|ep| &ep.logs)
-                                .any(|log| {
-                                    log.name == "Mock"
-                                        && log
-                                            .cond_skip
-                                            .as_ref()
-                                            .is_some_and(|s| s.contains("run:keyExist") && s.contains("cke:session_id"))
-                                });
-
-                            if found_skipped {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "KeyExist cookie run condition skips when cookie absent".to_string(),
-                                )
-                            } else {
-                                // It's also acceptable if the plugin just doesn't show up as "ran"
-                                let skipped_count = count_mock_plugins_skipped(&access_log);
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("Skipped {} Mock plugins without session_id cookie", skipped_count),
-                                )
-                            }
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "key-exist-cookie",
+                            false,
+                            "!run:run.allOf[0]:keyExist:cookie:session_id",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -379,23 +324,13 @@ impl AllConditionsTestSuite {
                     let url = build_url(&ctx, "/test");
 
                     match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![("X-Env", "production")], "GET").await {
-                        Ok(access_log) => {
-                            let ran_count = count_mock_plugins_ran(&access_log);
-                            if ran_count > 0 {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!(
-                                        "KeyMatch exact value works - {} plugins ran with X-Env: production",
-                                        ran_count
-                                    ),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    "Expected plugin to run with X-Env: production".to_string(),
-                                )
-                            }
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "key-match-exact",
+                            true,
+                            "!run:run.allOf[0]:keyMatch:hdr:X-Env",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -422,33 +357,13 @@ impl AllConditionsTestSuite {
                     )
                     .await
                     {
-                        Ok(access_log) => {
-                            let found_skipped = access_log
-                                .stage_logs
-                                .iter()
-                                .flat_map(|stage| &stage.edgion_plugins)
-                                .flat_map(|ep| &ep.logs)
-                                .any(|log| {
-                                    log.name == "Mock"
-                                        && log
-                                            .cond_skip
-                                            .as_ref()
-                                            .is_some_and(|s| s.contains("run:keyMatch") && s.contains("hdr:X-Env"))
-                                });
-
-                            if found_skipped {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "KeyMatch exact value correctly skips non-matching value".to_string(),
-                                )
-                            } else {
-                                let skipped_count = count_mock_plugins_skipped(&access_log);
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("Skipped {} plugins with non-matching X-Env", skipped_count),
-                                )
-                            }
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "key-match-exact",
+                            false,
+                            "!run:run.allOf[0]:keyMatch:hdr:X-Env",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -469,20 +384,13 @@ impl AllConditionsTestSuite {
                     match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![("User-Agent", "TestBot/1.0")], "GET")
                         .await
                     {
-                        Ok(access_log) => {
-                            let ran_count = count_mock_plugins_ran(&access_log);
-                            if ran_count > 0 {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("KeyMatch regex works - {} plugins ran with TestBot UA", ran_count),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    "Expected plugin to run with TestBot User-Agent".to_string(),
-                                )
-                            }
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "key-match-regex",
+                            true,
+                            "!run:run.allOf[0]:keyMatch:hdr:User-Agent",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -509,16 +417,13 @@ impl AllConditionsTestSuite {
                     )
                     .await
                     {
-                        Ok(access_log) => {
-                            let skipped_count = count_mock_plugins_skipped(&access_log);
-                            TestResult::passed_with_message(
-                                start.elapsed(),
-                                format!(
-                                    "KeyMatch regex correctly skips non-matching UA - {} skipped",
-                                    skipped_count
-                                ),
-                            )
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "key-match-regex",
+                            false,
+                            "!run:run.allOf[0]:keyMatch:hdr:User-Agent",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -537,20 +442,13 @@ impl AllConditionsTestSuite {
                     let url = build_url(&ctx, "/test?version=v2");
 
                     match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
-                        Ok(access_log) => {
-                            let ran_count = count_mock_plugins_ran(&access_log);
-                            if ran_count > 0 {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("KeyMatch query works - {} plugins ran with version=v2", ran_count),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    "Expected plugin to run with version=v2".to_string(),
-                                )
-                            }
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "key-match-query",
+                            true,
+                            "!run:run.allOf[0]:keyMatch:query:version",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -579,12 +477,13 @@ impl AllConditionsTestSuite {
                     .await
                     {
                         Ok(access_log) => {
-                            let ran_count = count_mock_plugins_ran(&access_log);
-                            if ran_count == 0 {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    "Expected plugin to run with Mozilla UA".to_string(),
-                                );
+                            if let Err(error) = assert_target(
+                                &access_log,
+                                "key-match-multi-regex",
+                                true,
+                                "!run:run.allOf[0]:keyMatch:hdr:User-Agent",
+                            ) {
+                                return TestResult::failed(start.elapsed(), error);
                             }
                         }
                         Err(e) => return TestResult::failed(start.elapsed(), e),
@@ -595,12 +494,13 @@ impl AllConditionsTestSuite {
                         .await
                     {
                         Ok(access_log) => {
-                            let ran_count = count_mock_plugins_ran(&access_log);
-                            if ran_count == 0 {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    "Expected plugin to run with Chrome UA".to_string(),
-                                );
+                            if let Err(error) = assert_target(
+                                &access_log,
+                                "key-match-multi-regex",
+                                true,
+                                "!run:run.allOf[0]:keyMatch:hdr:User-Agent",
+                            ) {
+                                return TestResult::failed(start.elapsed(), error);
                             }
                         }
                         Err(e) => return TestResult::failed(start.elapsed(), e),
@@ -610,21 +510,13 @@ impl AllConditionsTestSuite {
                     match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![("User-Agent", "SAFARI/605.1")], "GET")
                         .await
                     {
-                        Ok(access_log) => {
-                            let ran_count = count_mock_plugins_ran(&access_log);
-                            if ran_count > 0 {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "Multi-regex KeyMatch works for Mozilla, Chrome, Safari (case-insensitive)"
-                                        .to_string(),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    "Expected plugin to run with SAFARI UA (case-insensitive)".to_string(),
-                                )
-                            }
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "key-match-multi-regex",
+                            true,
+                            "!run:run.allOf[0]:keyMatch:hdr:User-Agent",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -651,16 +543,13 @@ impl AllConditionsTestSuite {
                     )
                     .await
                     {
-                        Ok(access_log) => {
-                            let skipped_count = count_mock_plugins_skipped(&access_log);
-                            TestResult::passed_with_message(
-                                start.elapsed(),
-                                format!(
-                                    "Multi-regex correctly skips non-matching UA - {} skipped",
-                                    skipped_count
-                                ),
-                            )
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "key-match-multi-regex",
+                            false,
+                            "!run:run.allOf[0]:keyMatch:hdr:User-Agent",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -681,12 +570,13 @@ impl AllConditionsTestSuite {
                     // Test us-east
                     match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![("X-Region", "us-east")], "GET").await {
                         Ok(access_log) => {
-                            let ran_count = count_mock_plugins_ran(&access_log);
-                            if ran_count == 0 {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    "Expected plugin to run with X-Region: us-east".to_string(),
-                                );
+                            if let Err(error) = assert_target(
+                                &access_log,
+                                "key-match-multi-values",
+                                true,
+                                "!run:run.allOf[0]:keyMatch:hdr:X-Region",
+                            ) {
+                                return TestResult::failed(start.elapsed(), error);
                             }
                         }
                         Err(e) => return TestResult::failed(start.elapsed(), e),
@@ -694,20 +584,13 @@ impl AllConditionsTestSuite {
 
                     // Test eu-west
                     match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![("X-Region", "eu-west")], "GET").await {
-                        Ok(access_log) => {
-                            let ran_count = count_mock_plugins_ran(&access_log);
-                            if ran_count > 0 {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "Multi-values KeyMatch works for us-east, eu-west".to_string(),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    "Expected plugin to run with X-Region: eu-west".to_string(),
-                                )
-                            }
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "key-match-multi-values",
+                            true,
+                            "!run:run.allOf[0]:keyMatch:hdr:X-Region",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -728,16 +611,13 @@ impl AllConditionsTestSuite {
                     match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![("X-Region", "unknown-region")], "GET")
                         .await
                     {
-                        Ok(access_log) => {
-                            let skipped_count = count_mock_plugins_skipped(&access_log);
-                            TestResult::passed_with_message(
-                                start.elapsed(),
-                                format!(
-                                    "Multi-values correctly skips unknown region - {} skipped",
-                                    skipped_count
-                                ),
-                            )
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "key-match-multi-values",
+                            false,
+                            "!run:run.allOf[0]:keyMatch:hdr:X-Region",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -760,21 +640,13 @@ impl AllConditionsTestSuite {
                     let url = build_url(&ctx, "/test");
 
                     match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
-                        Ok(access_log) => {
-                            // TimeRange 2020-2099 should always run
-                            let ran_count = count_mock_plugins_ran(&access_log);
-                            if ran_count > 0 {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("TimeRange valid works - {} plugins ran within range", ran_count),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    "Expected plugin to run within valid time range".to_string(),
-                                )
-                            }
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "time-range-valid",
+                            true,
+                            "!run:run.allOf[0]:timeRange",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -793,31 +665,13 @@ impl AllConditionsTestSuite {
                     let url = build_url(&ctx, "/test");
 
                     match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
-                        Ok(access_log) => {
-                            // TimeRange 2020 only should be skipped (it's past 2020)
-                            let found_skipped = access_log
-                                .stage_logs
-                                .iter()
-                                .flat_map(|stage| &stage.edgion_plugins)
-                                .flat_map(|ep| &ep.logs)
-                                .any(|log| {
-                                    log.name == "Mock"
-                                        && log.cond_skip.as_ref().is_some_and(|s| s.contains("run:timeRange"))
-                                });
-
-                            if found_skipped {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "TimeRange expired correctly skips plugin".to_string(),
-                                )
-                            } else {
-                                let skipped_count = count_mock_plugins_skipped(&access_log);
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("TimeRange check done - {} plugins skipped total", skipped_count),
-                                )
-                            }
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "time-range-expired",
+                            false,
+                            "!run:run.allOf[0]:timeRange",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -840,15 +694,13 @@ impl AllConditionsTestSuite {
                     let url = build_url(&ctx, "/test");
 
                     // Send multiple requests to verify 100% probability
-                    for i in 0..3 {
+                    for _ in 0..3 {
                         match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
                             Ok(access_log) => {
-                                let ran_count = count_mock_plugins_ran(&access_log);
-                                if ran_count == 0 {
-                                    return TestResult::failed(
-                                        start.elapsed(),
-                                        format!("Probability 100% plugin should run (attempt {})", i + 1),
-                                    );
+                                if let Err(error) =
+                                    assert_target(&access_log, "probability-100", true, "!run:run.allOf[0]:probability")
+                                {
+                                    return TestResult::failed(start.elapsed(), error);
                                 }
                             }
                             Err(e) => return TestResult::failed(start.elapsed(), e),
@@ -875,30 +727,13 @@ impl AllConditionsTestSuite {
                     let url = build_url(&ctx, "/test");
 
                     match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
-                        Ok(access_log) => {
-                            let found_skipped = access_log
-                                .stage_logs
-                                .iter()
-                                .flat_map(|stage| &stage.edgion_plugins)
-                                .flat_map(|ep| &ep.logs)
-                                .any(|log| {
-                                    log.name == "Mock"
-                                        && log.cond_skip.as_ref().is_some_and(|s| s.contains("run:probability"))
-                                });
-
-                            if found_skipped {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "Probability 0% correctly skips plugin".to_string(),
-                                )
-                            } else {
-                                let skipped_count = count_mock_plugins_skipped(&access_log);
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("Probability check done - {} plugins skipped", skipped_count),
-                                )
-                            }
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "probability-0",
+                            false,
+                            "!run:run.allOf[0]:probability",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -924,8 +759,14 @@ impl AllConditionsTestSuite {
                         match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![("X-User-ID", user_id)], "GET").await
                         {
                             Ok(access_log) => {
-                                let ran = count_mock_plugins_ran(&access_log) > 0;
-                                results.push(ran);
+                                match target_outcome(
+                                    &access_log,
+                                    "probability-deterministic",
+                                    "!run:run.allOf[0]:probability",
+                                ) {
+                                    Ok(ran) => results.push(ran),
+                                    Err(error) => return TestResult::failed(start.elapsed(), error),
+                                }
                             }
                             Err(e) => return TestResult::failed(start.elapsed(), e),
                         }
@@ -933,7 +774,7 @@ impl AllConditionsTestSuite {
 
                     // All results should be the same (deterministic)
                     let first = results[0];
-                    let all_same = results.iter().all(|&r| r == first);
+                    let all_same = consistent_samples(&results);
 
                     if all_same {
                         TestResult::passed_with_message(
@@ -969,20 +810,13 @@ impl AllConditionsTestSuite {
                     let url = build_url(&ctx, "/api/users");
 
                     match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
-                        Ok(access_log) => {
-                            let ran_count = count_mock_plugins_ran(&access_log);
-                            if ran_count > 0 {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("Include path works - {} plugins ran for /api/users", ran_count),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    "Expected plugin to run for /api/* path".to_string(),
-                                )
-                            }
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "include-path",
+                            true,
+                            "!run:run.allOf[0]:keyMatch:path",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -1001,30 +835,13 @@ impl AllConditionsTestSuite {
                     let url = build_url(&ctx, "/other/path");
 
                     match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
-                        Ok(access_log) => {
-                            let found_skipped = access_log
-                                .stage_logs
-                                .iter()
-                                .flat_map(|stage| &stage.edgion_plugins)
-                                .flat_map(|ep| &ep.logs)
-                                .any(|log| {
-                                    log.name == "Mock"
-                                        && log.cond_skip.as_ref().is_some_and(|s| s.contains("run:keyMatch"))
-                                });
-
-                            if found_skipped {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "Include path correctly skips non-matching path".to_string(),
-                                )
-                            } else {
-                                let skipped_count = count_mock_plugins_skipped(&access_log);
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("Include check done - {} plugins skipped for /other/path", skipped_count),
-                                )
-                            }
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "include-path",
+                            false,
+                            "!run:run.allOf[0]:keyMatch:path",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -1043,20 +860,13 @@ impl AllConditionsTestSuite {
                     let url = build_url(&ctx, "/test");
 
                     match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "POST").await {
-                        Ok(access_log) => {
-                            let ran_count = count_mock_plugins_ran(&access_log);
-                            if ran_count > 0 {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("Include method works - {} plugins ran for POST", ran_count),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    "Expected plugin to run for POST method".to_string(),
-                                )
-                            }
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "include-method",
+                            true,
+                            "!run:run.allOf[0]:keyMatch:method",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -1075,13 +885,13 @@ impl AllConditionsTestSuite {
                     let url = build_url(&ctx, "/test");
 
                     match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
-                        Ok(access_log) => {
-                            let skipped_count = count_mock_plugins_skipped(&access_log);
-                            TestResult::passed_with_message(
-                                start.elapsed(),
-                                format!("Include method check - {} plugins skipped for GET", skipped_count),
-                            )
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "include-method",
+                            false,
+                            "!run:run.allOf[0]:keyMatch:method",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -1100,20 +910,13 @@ impl AllConditionsTestSuite {
                     let url = build_url(&ctx, "/api/v1/users");
 
                     match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
-                        Ok(access_log) => {
-                            let ran_count = count_mock_plugins_ran(&access_log);
-                            if ran_count > 0 {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("Include regex works - {} plugins ran for /api/v1/users", ran_count),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    "Expected plugin to run for /api/v1/* (regex match)".to_string(),
-                                )
-                            }
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "include-regex",
+                            true,
+                            "!run:run.allOf[0]:keyMatch:path",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -1132,23 +935,13 @@ impl AllConditionsTestSuite {
                     let url = build_url(&ctx, "/INTERNAL/debug");
 
                     match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
-                        Ok(access_log) => {
-                            let ran_count = count_mock_plugins_ran(&access_log);
-                            if ran_count > 0 {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!(
-                                        "Include regex case-insensitive works - {} plugins ran for /INTERNAL/debug",
-                                        ran_count
-                                    ),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    "Expected plugin to run for /INTERNAL/* (case-insensitive)".to_string(),
-                                )
-                            }
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "include-regex",
+                            true,
+                            "!run:run.allOf[0]:keyMatch:path",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -1171,20 +964,13 @@ impl AllConditionsTestSuite {
                     let url = build_url(&ctx, "/api/data");
 
                     match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
-                        Ok(access_log) => {
-                            let ran_count = count_mock_plugins_ran(&access_log);
-                            if ran_count > 0 {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("Exclude path works - {} plugins ran for /api/data", ran_count),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    "Expected plugin to run for non-excluded path".to_string(),
-                                )
-                            }
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "exclude-path",
+                            true,
+                            "skip:skip.anyOf[0]:keyMatch:path",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -1203,30 +989,13 @@ impl AllConditionsTestSuite {
                     let url = build_url(&ctx, "/health");
 
                     match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
-                        Ok(access_log) => {
-                            let found_skipped = access_log
-                                .stage_logs
-                                .iter()
-                                .flat_map(|stage| &stage.edgion_plugins)
-                                .flat_map(|ep| &ep.logs)
-                                .any(|log| {
-                                    log.name == "Mock"
-                                        && log.cond_skip.as_ref().is_some_and(|s| s.contains("skip:keyMatch"))
-                                });
-
-                            if found_skipped {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "Exclude path correctly skips /health".to_string(),
-                                )
-                            } else {
-                                let skipped_count = count_mock_plugins_skipped(&access_log);
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("Exclude check done - {} plugins skipped for /health", skipped_count),
-                                )
-                            }
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "exclude-path",
+                            false,
+                            "skip:skip.anyOf[0]:keyMatch:path",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -1245,33 +1014,13 @@ impl AllConditionsTestSuite {
                     let url = build_url(&ctx, "/test");
 
                     match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "OPTIONS").await {
-                        Ok(access_log) => {
-                            let found_skipped = access_log
-                                .stage_logs
-                                .iter()
-                                .flat_map(|stage| &stage.edgion_plugins)
-                                .flat_map(|ep| &ep.logs)
-                                .any(|log| {
-                                    log.name == "Mock"
-                                        && log
-                                            .cond_skip
-                                            .as_ref()
-                                            .is_some_and(|s| s.contains("skip:keyMatch") && s.contains("mtd"))
-                                });
-
-                            if found_skipped {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "Exclude method correctly skips OPTIONS".to_string(),
-                                )
-                            } else {
-                                let skipped_count = count_mock_plugins_skipped(&access_log);
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("Exclude check done - {} plugins skipped for OPTIONS", skipped_count),
-                                )
-                            }
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "exclude-method",
+                            false,
+                            "skip:skip.anyOf[0]:keyMatch:method",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -1290,33 +1039,13 @@ impl AllConditionsTestSuite {
                     let url = build_url(&ctx, "/debug/pprof");
 
                     match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
-                        Ok(access_log) => {
-                            let found_skipped = access_log
-                                .stage_logs
-                                .iter()
-                                .flat_map(|stage| &stage.edgion_plugins)
-                                .flat_map(|ep| &ep.logs)
-                                .any(|log| {
-                                    log.name == "Mock"
-                                        && log.cond_skip.as_ref().is_some_and(|s| s.contains("skip:keyMatch"))
-                                });
-
-                            if found_skipped {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "Exclude regex correctly skips /debug/pprof".to_string(),
-                                )
-                            } else {
-                                let skipped_count = count_mock_plugins_skipped(&access_log);
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!(
-                                        "Exclude regex check done - {} plugins skipped for /debug/pprof",
-                                        skipped_count
-                                    ),
-                                )
-                            }
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "exclude-regex",
+                            false,
+                            "skip:skip.anyOf[0]:keyMatch:path",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -1335,23 +1064,13 @@ impl AllConditionsTestSuite {
                     let url = build_url(&ctx, "/api/v1/data");
 
                     match send_request_and_get_log(&ctx, &url, TEST_HOST, vec![], "GET").await {
-                        Ok(access_log) => {
-                            let ran_count = count_mock_plugins_ran(&access_log);
-                            if ran_count > 0 {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!(
-                                        "Exclude regex works - {} plugins ran for /api/v1/data (not excluded)",
-                                        ran_count
-                                    ),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    "Expected plugin to run for path not matching exclude regex".to_string(),
-                                )
-                            }
-                        }
+                        Ok(access_log) => target_result(
+                            start,
+                            &access_log,
+                            "exclude-regex",
+                            true,
+                            "skip:skip.anyOf[0]:keyMatch:path",
+                        ),
                         Err(e) => TestResult::failed(start.elapsed(), e),
                     }
                 })
@@ -1404,5 +1123,156 @@ impl TestSuite for AllConditionsTestSuite {
             Self::test_exclude_regex_skip(),
             Self::test_exclude_regex_run(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    const ALIAS: &str = "probability-deterministic";
+    const CAUSE: &str = "!run:run.allOf[0]:probability";
+
+    fn observation(cause: Option<&str>) -> AccessLog {
+        serde_json::from_value(json!({"stage_logs": [{
+            "stage": "request_filters",
+            "edgion_plugins": [{"name": "condition-all-types", "logs": [
+                {"name": "Mock", "alias": "probability-100"},
+                {"name": "Mock", "alias": ALIAS, "cond_skip": cause}
+            ]}]
+        }]}))
+        .unwrap()
+    }
+
+    #[test]
+    fn target_identity_is_required_despite_running_siblings() {
+        let empty = AccessLog { stage_logs: vec![] };
+        assert!(assert_target(&empty, ALIAS, true, CAUSE).is_err());
+        assert!(assert_target(&empty, ALIAS, false, CAUSE).is_err());
+        let mut missing = observation(None);
+        missing.stage_logs[0].edgion_plugins[0].logs.pop();
+        assert!(assert_target(&missing, ALIAS, true, CAUSE).is_err());
+        for field in ["alias", "stage", "resource", "plugin"] {
+            let mut log = observation(None);
+            match field {
+                "alias" => log.stage_logs[0].edgion_plugins[0].logs[1].alias = None,
+                "stage" => log.stage_logs[0].stage = "upstream_response_filters".into(),
+                "resource" => log.stage_logs[0].edgion_plugins[0].name = "other-resource".into(),
+                "plugin" => log.stage_logs[0].edgion_plugins[0].logs[1].name = "Other".into(),
+                _ => unreachable!(),
+            }
+            assert!(target_outcome(&log, ALIAS, CAUSE).is_err(), "{field}");
+        }
+    }
+
+    #[test]
+    fn duplicates_across_matching_containers_fail() {
+        for scope in ["entry", "resource", "stage"] {
+            let mut log = observation(None);
+            match scope {
+                "entry" => {
+                    let duplicate = log.stage_logs[0].edgion_plugins[0].logs[1].clone();
+                    log.stage_logs[0].edgion_plugins[0].logs.push(duplicate);
+                }
+                "resource" => {
+                    let duplicate = log.stage_logs[0].edgion_plugins[0].clone();
+                    log.stage_logs[0].edgion_plugins.push(duplicate);
+                }
+                "stage" => log.stage_logs.push(log.stage_logs[0].clone()),
+                _ => unreachable!(),
+            }
+            assert!(target_outcome(&log, ALIAS, CAUSE).is_err(), "{scope}");
+        }
+    }
+
+    #[test]
+    fn exact_target_outcome_and_current_cause_are_required() {
+        let run = observation(None);
+        let skip = observation(Some(CAUSE));
+        assert!(assert_target(&run, ALIAS, true, CAUSE).is_ok());
+        assert!(assert_target(&skip, ALIAS, false, CAUSE).is_ok());
+        assert!(assert_target(&run, ALIAS, false, CAUSE).is_err());
+        assert!(assert_target(&skip, ALIAS, true, CAUSE).is_err());
+        for wrong in [
+            "!run:probability",
+            "!run:0:probability",
+            "!run:run.allOf[1]:probability",
+            "skip:run.allOf[0]:probability",
+            "!run:run.allOf[0]:timeRange",
+        ] {
+            assert!(
+                target_outcome(&observation(Some(wrong)), ALIAS, CAUSE).is_err(),
+                "{wrong}"
+            );
+        }
+        // A target elsewhere does not make the valid scoped observation ambiguous.
+        let mut log = observation(None);
+        let mut other = log.stage_logs[0].clone();
+        other.stage = "upstream_response_filters".into();
+        log.stage_logs.push(other);
+        assert!(assert_target(&log, ALIAS, true, CAUSE).is_ok());
+    }
+
+    #[test]
+    fn deterministic_samples_observe_the_target_on_every_request() {
+        let outcomes = [None, None, Some(CAUSE), None, None].map(observation);
+        let results: Result<Vec<_>, _> = outcomes.iter().map(|log| target_outcome(log, ALIAS, CAUSE)).collect();
+        assert!(!consistent_samples(&results.unwrap()));
+        assert!(consistent_samples(&[true; 5]));
+        assert!(consistent_samples(&[false; 5]));
+        assert!(!consistent_samples(&[]));
+        assert!(!consistent_samples(&[true; 4]));
+        let mut outcomes = [None; 5].map(observation);
+        outcomes[4].stage_logs[0].edgion_plugins[0].logs.pop();
+        let results: Result<Vec<_>, _> = outcomes.iter().map(|log| target_outcome(log, ALIAS, CAUSE)).collect();
+        assert!(results.is_err());
+    }
+
+    #[test]
+    fn fixture_aliases_and_exclusion_polarity_match_in_both_trees() {
+        let local: serde_yaml::Value = serde_yaml::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/conf/EdgionPlugins/PluginCondition/EdgionPlugins_default_condition-all-types.yaml"
+        )))
+        .unwrap();
+        let kubernetes: serde_yaml::Value = serde_yaml::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/k8s/conf/EdgionPlugins/PluginCondition/EdgionPlugins_default_condition-all-types.yaml"
+        )))
+        .unwrap();
+        assert_eq!(local, kubernetes);
+        let entries = local["spec"]["requestPlugins"].as_sequence().unwrap();
+        let aliases: Vec<_> = entries.iter().map(|entry| entry["alias"].as_str().unwrap()).collect();
+        assert_eq!(
+            aliases,
+            [
+                "key-exist-header",
+                "key-exist-query",
+                "key-exist-cookie",
+                "key-match-exact",
+                "key-match-regex",
+                "key-match-query",
+                "key-match-multi-regex",
+                "key-match-multi-values",
+                "time-range-valid",
+                "time-range-expired",
+                "probability-100",
+                "probability-0",
+                "probability-deterministic",
+                "include-path",
+                "include-method",
+                "include-regex",
+                "exclude-path",
+                "exclude-method",
+                "exclude-regex"
+            ]
+        );
+        for entry in entries
+            .iter()
+            .filter(|entry| entry["alias"].as_str().unwrap().starts_with("exclude-"))
+        {
+            assert!(entry["conditions"]["skip"]["anyOf"][0]["negate"].is_null());
+        }
     }
 }
