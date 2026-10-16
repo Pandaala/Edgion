@@ -27,6 +27,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Dynamic scenario state restoration](regression-guards/dynamic-scenario-state-restoration.md)
+
 - [Dynamic status assertions select their observation](regression-guards/dynamic-status-assertions-select-observation.md)
 
 - [Condition target log correlation](regression-guards/condition-target-log-correlation.md)

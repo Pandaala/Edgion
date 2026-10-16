@@ -23,6 +23,10 @@ Dynamic scenarios share one Controller and Gateway and may run twice under
 restore it before returning, including after a failed transition assertion, so
 later suites and later sweeps do not inherit its final state.
 
+See [scenario-owned restoration](../regression-guards/dynamic-scenario-state-restoration.md)
+for partial setup, independent reset attempts, masked state, topology-specific
+fixture paths and the limits of network-free versus live recovery evidence.
+
 ## Resolution references
 
 - `test-02` — 2026-08-09.

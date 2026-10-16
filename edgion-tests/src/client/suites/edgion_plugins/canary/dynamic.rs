@@ -76,7 +76,41 @@ impl TestSuite for CanaryHotSwapInitialTestSuite {
         "Canary HotSwap (initial)"
     }
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![Self::hotswap_initial_stable()]
+        vec![
+            Self::hotswap_initial_stable(),
+            TestCase::new(
+                "hotswap_initial_dye",
+                "Original dye is restored without the release-track header",
+                |ctx: TestContext| {
+                    Box::pin(async move {
+                        let start = Instant::now();
+                        match ctx
+                            .http_client
+                            .get(format!("{}/echo", ctx.http_url()))
+                            .header("host", CANARY_HOST)
+                            .send()
+                            .await
+                        {
+                            Ok(response) => {
+                                let status = response.status().as_u16();
+                                match response.text().await {
+                                    Ok(body) if status == 200 && original_dye(&body) => {
+                                        TestResult::passed(start.elapsed())
+                                    }
+                                    _ => TestResult::failed(
+                                        start.elapsed(),
+                                        "Original stable dye missing or release-track dye remains".to_string(),
+                                    ),
+                                }
+                            }
+                            Err(error) => {
+                                TestResult::failed(start.elapsed(), format!("Original dye request failed: {error}"))
+                            }
+                        }
+                    })
+                },
+            ),
+        ]
     }
 }
 
@@ -137,5 +171,32 @@ impl TestSuite for CanaryHotSwapFinalTestSuite {
     }
     fn test_cases(&self) -> Vec<TestCase> {
         vec![Self::hotswap_final_canary(), Self::hotswap_final_dye_header()]
+    }
+}
+
+fn original_dye(body: &str) -> bool {
+    let mut stable = false;
+    for line in body.lines() {
+        if let Some((name, value)) = line.split_once(':') {
+            if name.trim().eq_ignore_ascii_case("x-release-track") {
+                return false;
+            }
+            if name.trim().eq_ignore_ascii_case("x-canary-active") {
+                stable |= value.trim() == "stable";
+            }
+        }
+    }
+    stable
+}
+
+#[cfg(test)]
+mod restoration_tests {
+    use super::original_dye;
+    #[test]
+    fn stable_routing_does_not_mask_stale_dye() {
+        assert!(original_dye("x-canary-active: stable\n"));
+        assert!(!original_dye("x-canary-active: stable\nx-release-track: stable\n"));
+        assert!(!original_dye("x-canary-active: canary\n"));
+        assert!(!original_dye("Server: 0.0.0.0:30001\n"));
     }
 }

@@ -42,13 +42,28 @@ static PHASES: &[PhaseSuite] = &[
 
 fn run(ctx: ScenarioCtx) -> Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> {
     Box::pin(async move {
-        let scenario = SCENARIO;
-        ctx.assert_phase(scenario, "initial").await?;
-        ctx.apply_dir("updates/to_invalid").await?;
-        ctx.wait_phase(scenario, "invalid", Duration::from_secs(15)).await?;
-        ctx.apply_dir("updates/to_valid").await?;
-        ctx.wait_phase(scenario, "valid", Duration::from_secs(15)).await?;
-        Ok(())
+        let result: Result<()> = async {
+            let scenario = SCENARIO;
+            ctx.apply_dir("initial/").await?;
+            ctx.wait_phase(scenario, "initial", Duration::from_secs(15)).await?;
+            ctx.apply_dir("updates/to_invalid").await?;
+            ctx.wait_phase(scenario, "invalid", Duration::from_secs(15)).await?;
+            ctx.apply_dir("updates/to_valid").await?;
+            ctx.wait_phase(scenario, "valid", Duration::from_secs(15)).await?;
+            Ok(())
+        }
+        .await;
+        let restored = async {
+            ctx.apply_dir("initial/BackendTLSPolicy_edgion-test_btlsp-flap.yaml")
+                .await?;
+            ctx.wait_phase(SCENARIO, "initial", Duration::from_secs(15)).await
+        }
+        .await;
+        match (result, restored) {
+            (Ok(()), restored) => restored,
+            (Err(error), Ok(())) => Err(error),
+            (Err(error), Err(restored)) => Err(anyhow::anyhow!("{error:#}; fixture restoration failed: {restored:#}")),
+        }
     })
 }
 

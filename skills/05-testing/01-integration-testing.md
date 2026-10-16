@@ -445,6 +445,25 @@ The final step of the full `run_integration.sh` flow enumerates the output of `-
 After all registration contracts agree, `--list-dynamic-scenarios` lists it, and `run_integration.sh`
 (default) includes it under the full run or the `-r Gateway` path. Any drift fails enumeration.
 
+### Scenario-owned restoration
+
+Each mutating scenario establishes its initial fixture state before polling the
+initial business assertions. Capture setup and transition results before entering
+restoration: a directory apply can partially succeed before returning an error.
+Attempt independent owned resets separately, then poll original behavior for each
+successfully restored prerequisite group. Preserve both transition and restoration
+errors, including a restoration error after successful transitions. Body policy
+and plugin are separate resets; Canary routing can mask stale dye, and trusted
+primary RealIP can mask a stale secondary list.
+
+Reuse existing phase polling and Kubernetes acknowledgements. Repeated initial
+phases are supported; when an endpoint inventory file exists, every emitted phase
+needs matching rows. Keep outer topology reset ownership. Ordinary returned errors
+are covered; cancellation, panic and process termination do not promise async
+cleanup. See [restoration regression boundaries](../04-review/testing/regression-guards/dynamic-scenario-state-restoration.md)
+for the six corrected scenario owners, local/Kubernetes filename differences and
+network-free versus live verification requirements.
+
 ### Manual phase-by-phase debugging
 
 A scenario internally schedules suites via `ctx.assert_phase(scenario, "initial"|"update")`. For low-level debugging, you can bypass orchestration and invoke the current phase flags directly after preserving the scene:

@@ -4,6 +4,7 @@ use std::cell::Cell;
 
 fn context(root: &std::path::Path) -> ScenarioCtx {
     ScenarioCtx {
+        operations: None,
         test_ctx: TestContext {
             target_host: "127.0.0.1".to_string(),
             http_port: 0,

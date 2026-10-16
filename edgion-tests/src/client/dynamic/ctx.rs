@@ -33,6 +33,8 @@ impl Error for K8sPhaseBarrierError {}
 /// - `gateway_url`: Gateway observation endpoint base URL (used for resource_diff)
 /// - `project_root`: repository root, used to invoke the resource_diff subprocess
 pub struct ScenarioCtx {
+    #[cfg(test)]
+    pub(crate) operations: Option<restoration_tests::Recorder>,
     pub test_ctx: TestContext,
     pub conf_root: PathBuf,
     pub conf_path: String,
@@ -123,6 +125,10 @@ impl ScenarioCtx {
 impl ScenarioCtx {
     /// Apply a sub-path (file or directory) relative to the scenario conf directory.
     pub async fn apply_dir(&self, rel_path: &str) -> Result<()> {
+        #[cfg(test)]
+        if let Some(recorder) = &self.operations {
+            return recorder.record(format!("apply:{rel_path}"));
+        }
         let path = self.resolve(rel_path);
         if !path.exists() {
             anyhow::bail!("apply target does not exist: {}", path.display());
@@ -133,6 +139,10 @@ impl ScenarioCtx {
 
     /// Delete resources according to the `delete/resources_to_delete.txt` list.
     pub async fn delete_resources(&self, list_rel_path: &str) -> Result<()> {
+        #[cfg(test)]
+        if let Some(recorder) = &self.operations {
+            return recorder.record(format!("delete:{list_rel_path}"));
+        }
         let path = self.resolve(list_rel_path);
         if !path.exists() {
             // A missing list file is treated as "nothing to delete"; return Ok (matches the old bash behavior).
@@ -147,6 +157,10 @@ impl ScenarioCtx {
     /// Dispatch to the corresponding TestSuite based on the current scenario + phase name and run it.
     /// All test cases must pass; otherwise returns Err.
     pub async fn assert_phase(&self, scenario: &crate::dynamic::scenario::Scenario, phase: &str) -> Result<()> {
+        #[cfg(test)]
+        if let Some(recorder) = &self.operations {
+            return recorder.record(format!("phase:{phase}"));
+        }
         use crate::framework::TestRunner;
 
         let ps = scenario
@@ -212,6 +226,10 @@ impl ScenarioCtx {
         phase: &str,
         timeout: Duration,
     ) -> Result<()> {
+        #[cfg(test)]
+        if let Some(recorder) = &self.operations {
+            return recorder.record(format!("phase:{phase}"));
+        }
         let deadline = Instant::now() + timeout;
         let mut attempts: usize = 0;
         loop {
@@ -236,3 +254,7 @@ impl ScenarioCtx {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/client/dynamic/restoration_test.rs"]
+pub(crate) mod restoration_tests;

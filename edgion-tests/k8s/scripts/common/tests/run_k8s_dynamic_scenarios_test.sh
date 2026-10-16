@@ -156,11 +156,12 @@ spec = importlib.util.spec_from_file_location("renderer", sys.argv[1])
 r = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(r)
 root, store, staged = map(Path, sys.argv[2:])
-for row in r.CATALOG:
+fixture_paths = [row[0] for row in r.CATALOG] + [row[0] for row in r.RAP_CONSUMERS] + [r.RAP_DOCUMENTATION]
+for relative in fixture_paths:
     if staged != root:
-        path = staged / "EdgionPlugins" / row[0]
+        path = staged / "EdgionPlugins" / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(root / "EdgionPlugins" / row[0], path)
+        shutil.copy(root / "EdgionPlugins" / relative, path)
 for doc in r.render(root, "peer-uid", "10.244.0.7"):
     if doc["kind"] == "EdgionConfigData":
         doc["spec"].setdefault("enable", True)

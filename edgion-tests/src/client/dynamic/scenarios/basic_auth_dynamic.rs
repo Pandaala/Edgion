@@ -28,11 +28,25 @@ static PHASES: &[PhaseSuite] = &[
 
 fn run(ctx: ScenarioCtx) -> Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> {
     Box::pin(async move {
-        let scenario = SCENARIO;
-        ctx.assert_phase(scenario, "initial").await?;
-        ctx.apply_dir("updates/").await?;
-        ctx.wait_phase(scenario, "update", Duration::from_secs(15)).await?;
-        Ok(())
+        let result: Result<()> = async {
+            let scenario = SCENARIO;
+            ctx.apply_dir("initial/").await?;
+            ctx.wait_phase(scenario, "initial", Duration::from_secs(15)).await?;
+            ctx.apply_dir("updates/").await?;
+            ctx.wait_phase(scenario, "update", Duration::from_secs(15)).await?;
+            Ok(())
+        }
+        .await;
+        let restored = async {
+            ctx.apply_dir("initial/EdgionPlugins_basic-auth-dynamic.yaml").await?;
+            ctx.wait_phase(SCENARIO, "initial", Duration::from_secs(15)).await
+        }
+        .await;
+        match (result, restored) {
+            (Ok(()), restored) => restored,
+            (Err(error), Ok(())) => Err(error),
+            (Err(error), Err(restored)) => Err(anyhow::anyhow!("{error:#}; fixture restoration failed: {restored:#}")),
+        }
     })
 }
 
@@ -67,18 +81,33 @@ static GROUPED_PHASES: &[PhaseSuite] = &[
 
 fn run_grouped(ctx: ScenarioCtx) -> Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> {
     Box::pin(async move {
-        let scenario = GROUPED_SCENARIO;
-        ctx.assert_phase(scenario, "initial").await?;
-        ctx.apply_dir("updates_grouped/").await?;
-        ctx.wait_phase(scenario, "update", Duration::from_secs(15)).await?;
-        Ok(())
+        let result: Result<()> = async {
+            let scenario = GROUPED_SCENARIO;
+            ctx.apply_dir("initial_grouped/").await?;
+            ctx.wait_phase(scenario, "initial", Duration::from_secs(15)).await?;
+            ctx.apply_dir("updates_grouped/").await?;
+            ctx.wait_phase(scenario, "update", Duration::from_secs(15)).await?;
+            Ok(())
+        }
+        .await;
+        let restored = async {
+            ctx.apply_dir("initial_grouped/EdgionPlugins_basic-auth-dynamic-grouped.yaml")
+                .await?;
+            ctx.wait_phase(GROUPED_SCENARIO, "initial", Duration::from_secs(15))
+                .await
+        }
+        .await;
+        match (result, restored) {
+            (Ok(()), restored) => restored,
+            (Err(error), Ok(())) => Err(error),
+            (Err(error), Err(restored)) => Err(anyhow::anyhow!("{error:#}; fixture restoration failed: {restored:#}")),
+        }
     })
 }
 
 pub static GROUPED_SCENARIO: &Scenario = &Scenario {
     id: "BasicAuthDynamicGrouped",
-    // Same root as BasicAuthDynamic; initial_grouped/ is applied by start_all_with_conf.sh,
-    // and updates_grouped/ is applied via ctx.apply_dir("updates_grouped/") below.
+    // Both variants own establishment and restoration within this shared fixture root.
     conf_path: "EdgionPlugins/BasicAuth/DynamicTest",
     run: run_grouped,
     phases: GROUPED_PHASES,
