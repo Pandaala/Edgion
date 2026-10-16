@@ -142,6 +142,14 @@ SAN-mirror logic), the ordering decision must be revisited.
   `invalid-ca-cert-gw` / `https-invalid-ca` listener. No ssl.log entry is required
   because these connection gates reject before TLS callbacks run.
 
+The same scoped probe requires per-attempt pinned-certificate and handshake-signature
+evidence for ordinary mTLS alerts, while these early configuration errors retain
+their distinct wire/publication/control/audit contract. A public certificate
+alone is not authentication; a closure after certificate validation cannot
+stand in for the pre-certificate listener gate. See the
+[negative TLS policy evidence contract](../../testing/regression-guards/mandatory-integration-gates-fail-closed.md#negative-tls-policy-evidence)
+for ownership and cancellation limits.
+
 ARCH-283's scoped probe/decision tests are network-free. Fresh local and
 Kubernetes wire runs are separate verification claims; this regression-boundary
 description does not assert either has run. See the owning

@@ -13,6 +13,7 @@ use std::fmt;
 use std::future::Future;
 use std::io;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
@@ -40,17 +41,35 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TlsOutcome {
     Complete,
-    Alert(AlertDescription),
+    Alert {
+        description: AlertDescription,
+        server_verified: bool,
+    },
     // Only a pre-TLS listener gate may use this, with exact invalid conditions.
     PeerClosed,
 }
 
 impl TlsOutcome {
     pub(crate) fn require_alert(self, expected: AlertDescription) -> Result<(), String> {
-        if self == Self::Alert(expected) {
+        if matches!(self, Self::Alert { description, .. } if description == expected) {
             Ok(())
         } else {
             Err(format!("Expected peer TLS alert {expected:?}, observed {self:?}"))
+        }
+    }
+
+    pub(crate) fn require_authenticated_alert(self, expected: AlertDescription) -> Result<(), String> {
+        self.require_alert(expected)?;
+        if matches!(
+            self,
+            Self::Alert {
+                server_verified: true,
+                ..
+            }
+        ) {
+            Ok(())
+        } else {
+            Err("Peer alert arrived before the expected server certificate was verified".into())
         }
     }
 
@@ -173,6 +192,8 @@ pub(crate) fn require_dns_san(cert_path: &str, expected: &str, present: bool) ->
 struct PinnedServer {
     certificate: CertificateDer<'static>,
     provider: Arc<CryptoProvider>,
+    verified: AtomicBool,
+    certificate_checked: AtomicBool,
 }
 
 impl fmt::Debug for PinnedServer {
@@ -191,6 +212,7 @@ impl ServerCertVerifier for PinnedServer {
         _now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
         if end_entity.as_ref() == self.certificate.as_ref() {
+            self.certificate_checked.store(true, Ordering::Relaxed);
             Ok(ServerCertVerified::assertion())
         } else {
             Err(rustls::Error::InvalidCertificate(
@@ -205,12 +227,16 @@ impl ServerCertVerifier for PinnedServer {
         certificate: &CertificateDer<'_>,
         signature: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        verify_tls12_signature(
+        let verified = verify_tls12_signature(
             message,
             certificate,
             signature,
             &self.provider.signature_verification_algorithms,
-        )
+        )?;
+        // Certificate bytes are public. Only a valid handshake signature after
+        // the pin check demonstrates possession of the expected server key.
+        self.verified.store(true, Ordering::Relaxed);
+        Ok(verified)
     }
 
     fn verify_tls13_signature(
@@ -219,12 +245,14 @@ impl ServerCertVerifier for PinnedServer {
         certificate: &CertificateDer<'_>,
         signature: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        verify_tls13_signature(
+        let verified = verify_tls13_signature(
             message,
             certificate,
             signature,
             &self.provider.signature_verification_algorithms,
-        )
+        )?;
+        self.verified.store(true, Ordering::Relaxed);
+        Ok(verified)
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
@@ -234,6 +262,7 @@ impl ServerCertVerifier for PinnedServer {
 
 pub(crate) struct TlsProbe {
     connector: TlsConnector,
+    verifier: Arc<PinnedServer>,
     server_name: ServerName<'static>,
 }
 
@@ -242,14 +271,17 @@ impl TlsProbe {
         let server_name = ServerName::try_from(hostname.to_owned()).map_err(|_| "Probe SNI is invalid".to_string())?;
         let pin = certificates(Path::new(server_cert))?.remove(0);
         let provider = Arc::new(rustls::crypto::ring::default_provider());
-        let builder = ClientConfig::builder_with_provider(provider.clone())
+        let verifier = Arc::new(PinnedServer {
+            certificate: pin,
+            provider: provider.clone(),
+            verified: AtomicBool::new(false),
+            certificate_checked: AtomicBool::new(false),
+        });
+        let builder = ClientConfig::builder_with_provider(provider)
             .with_protocol_versions(&[&rustls::version::TLS12])
             .map_err(|_| "Failed to configure TLS 1.2 probe".to_string())?
             .dangerous()
-            .with_custom_certificate_verifier(Arc::new(PinnedServer {
-                certificate: pin,
-                provider,
-            }));
+            .with_custom_certificate_verifier(verifier.clone());
         let mut config = match identity {
             Some((cert, key)) => {
                 let (chain, key) = load_identity(Path::new(cert), Path::new(key))?;
@@ -262,13 +294,15 @@ impl TlsProbe {
         config.resumption = rustls::client::Resumption::disabled();
         Ok(Self {
             connector: TlsConnector::from(Arc::new(config)),
+            verifier,
             server_name,
         })
     }
 
-    pub(crate) async fn run(&self, host: &str, port: u16) -> Result<TlsOutcome, String> {
+    pub(crate) async fn run(self, host: &str, port: u16) -> Result<TlsOutcome, String> {
         // The future owns TCP and TLS. Timeout/cancellation drops the socket;
-        // there is no subprocess or detached task left to terminate or reap.
+        // no probe-owned child/task survives. An already-running system DNS
+        // lookup may outlive the caller because Tokio uses spawn_blocking.
         bounded_operation(
             async {
                 let socket = TcpStream::connect((host, port))
@@ -279,7 +313,11 @@ impl TlsProbe {
                         drop(stream);
                         Ok(TlsOutcome::Complete)
                     }
-                    Err(error) => classify_tls_error(&error),
+                    Err(error) => classify_tls_error(
+                        &error,
+                        self.verifier.verified.load(Ordering::Relaxed),
+                        self.verifier.certificate_checked.load(Ordering::Relaxed),
+                    ),
                 }
             },
             PROBE_TIMEOUT,
@@ -297,14 +335,23 @@ async fn bounded_operation<F: Future<Output = Result<TlsOutcome, String>>>(
         .map_err(|_| "TLS probe operation deadline expired".to_string())?
 }
 
-fn classify_tls_error(error: &io::Error) -> Result<TlsOutcome, String> {
+fn classify_tls_error(
+    error: &io::Error,
+    server_verified: bool,
+    certificate_checked: bool,
+) -> Result<TlsOutcome, String> {
     if let Some(rustls::Error::AlertReceived(alert)) =
         error.get_ref().and_then(|inner| inner.downcast_ref::<rustls::Error>())
     {
-        return Ok(TlsOutcome::Alert(*alert));
+        return Ok(TlsOutcome::Alert {
+            description: *alert,
+            server_verified,
+        });
     }
     match error.kind() {
-        io::ErrorKind::UnexpectedEof | io::ErrorKind::ConnectionReset => Ok(TlsOutcome::PeerClosed),
+        io::ErrorKind::UnexpectedEof | io::ErrorKind::ConnectionReset if !certificate_checked => {
+            Ok(TlsOutcome::PeerClosed)
+        }
         _ => Err("TLS probe failed without a supported peer rejection witness".to_string()),
     }
 }
@@ -360,9 +407,18 @@ mod tests {
             AlertDescription::ProtocolVersion,
         ] {
             let error = io::Error::new(io::ErrorKind::InvalidData, rustls::Error::AlertReceived(observed));
-            let outcome = classify_tls_error(&error).unwrap();
+            let outcome = classify_tls_error(&error, true, true).unwrap();
             for expected in expected_alerts {
                 assert_eq!(outcome.require_alert(expected).is_ok(), observed == expected);
+                assert_eq!(
+                    outcome.require_authenticated_alert(expected).is_ok(),
+                    observed == expected
+                );
+                for certificate_checked in [false, true] {
+                    let early = classify_tls_error(&error, false, certificate_checked).unwrap();
+                    assert!(early.require_authenticated_alert(expected).is_err());
+                    assert_eq!(early.require_alert(expected).is_ok(), observed == expected);
+                }
             }
             assert!(outcome.require_complete().is_err());
             assert!(outcome.require_peer_close().is_err());
@@ -373,18 +429,19 @@ mod tests {
             io::ErrorKind::NotFound,
             io::ErrorKind::InvalidData,
         ] {
-            assert!(classify_tls_error(&io::Error::new(kind, "unrelated failure")).is_err());
+            assert!(classify_tls_error(&io::Error::new(kind, "unrelated failure"), false, false).is_err());
         }
         for kind in [io::ErrorKind::UnexpectedEof, io::ErrorKind::ConnectionReset] {
-            let outcome = classify_tls_error(&io::Error::new(kind, "peer close")).unwrap();
+            let outcome = classify_tls_error(&io::Error::new(kind, "peer close"), false, false).unwrap();
             assert!(outcome.require_peer_close().is_ok());
+            assert!(classify_tls_error(&io::Error::new(kind, "close after certificate"), false, true).is_err());
             assert!(outcome.require_alert(AlertDescription::HandshakeFailure).is_err());
         }
         let local = io::Error::new(
             io::ErrorKind::InvalidData,
             rustls::Error::InvalidCertificate(CertificateError::UnknownIssuer),
         );
-        assert!(classify_tls_error(&local).is_err());
+        assert!(classify_tls_error(&local, false, false).is_err());
         assert!(TlsOutcome::Complete
             .require_alert(AlertDescription::HandshakeFailure)
             .is_err());
@@ -402,6 +459,36 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn deadline_and_caller_cancellation_drop_owned_operation_state() {
+        struct DropWitness(Arc<AtomicBool>);
+        impl Drop for DropWitness {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Relaxed);
+            }
+        }
+        let dropped = Arc::new(AtomicBool::new(false));
+        let witness = DropWitness(dropped.clone());
+        let operation = async move {
+            let _witness = witness;
+            std::future::pending::<Result<TlsOutcome, String>>().await
+        };
+        assert!(bounded_operation(operation, Duration::from_millis(1)).await.is_err());
+        assert!(dropped.load(Ordering::Relaxed));
+
+        dropped.store(false, Ordering::Relaxed);
+        let witness = DropWitness(dropped.clone());
+        let operation = async move {
+            let _witness = witness;
+            std::future::pending::<Result<TlsOutcome, String>>().await
+        };
+        let mut bounded = Box::pin(bounded_operation(operation, PROBE_TIMEOUT));
+        assert!(futures::poll!(bounded.as_mut()).is_pending());
+        assert!(!dropped.load(Ordering::Relaxed));
+        drop(bounded);
+        assert!(dropped.load(Ordering::Relaxed));
     }
 
     #[test]
@@ -430,14 +517,20 @@ mod tests {
         let verifier = PinnedServer {
             certificate: chain[0].clone(),
             provider: Arc::new(rustls::crypto::ring::default_provider()),
+            verified: AtomicBool::new(false),
+            certificate_checked: AtomicBool::new(false),
         };
         let sni = ServerName::try_from("client.example.com").unwrap();
         assert!(verifier
-            .verify_server_cert(&chain[0], &[], &sni, &[], UnixTime::now())
-            .is_ok());
-        assert!(verifier
             .verify_server_cert(&different[0], &[], &sni, &[], UnixTime::now())
             .is_err());
+        assert!(!verifier.verified.load(Ordering::Relaxed));
+        assert!(verifier
+            .verify_server_cert(&chain[0], &[], &sni, &[], UnixTime::now())
+            .is_ok());
+        // A copied public certificate alone is not server authentication.
+        assert!(verifier.certificate_checked.load(Ordering::Relaxed));
+        assert!(!verifier.verified.load(Ordering::Relaxed));
         assert!(require_dns_san(cert.to_str().unwrap(), "client.example.com", true).is_ok());
         assert!(require_dns_san(cert.to_str().unwrap(), "client.example.com", false).is_err());
         assert!(require_dns_san(cert.to_str().unwrap(), "other.example.com", false).is_ok());

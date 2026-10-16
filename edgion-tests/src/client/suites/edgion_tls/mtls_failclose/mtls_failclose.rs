@@ -449,8 +449,19 @@ mod tests {
         let mut gateway = json!({"status": {"listeners": [{"name": "selected", "conditions": conditions}]}});
         assert!(invalid_listener_conditions(&gateway, "selected"));
         assert!(!invalid_listener_conditions(&gateway, "other"));
-        gateway["status"]["listeners"][0]["conditions"][1]["status"] = json!("True");
-        assert!(!invalid_listener_conditions(&gateway, "selected"));
+        for index in [0, 1] {
+            for (field, value) in [("type", "Other"), ("status", "True"), ("reason", "Other")] {
+                let mut wrong = gateway.clone();
+                wrong["status"]["listeners"][0]["conditions"][index][field] = json!(value);
+                assert!(!invalid_listener_conditions(&wrong, "selected"));
+            }
+            let mut missing = gateway.clone();
+            missing["status"]["listeners"][0]["conditions"]
+                .as_array_mut()
+                .unwrap()
+                .remove(index);
+            assert!(!invalid_listener_conditions(&missing, "selected"));
+        }
         gateway["status"]["listeners"][0]["conditions"] = json!([]);
         assert!(!invalid_listener_conditions(&gateway, "selected"));
         assert!(!invalid_listener_conditions(&json!({}), "selected"));

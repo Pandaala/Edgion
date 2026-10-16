@@ -137,6 +137,19 @@ controls: valid-client acceptance on the selected target, UnknownIssuer as the
 untrusted identity's independent preparation result, and trusted SAN-mismatch
 acceptance on ordinary Mutual before rejection on the SAN-restricted target.
 
+Normal mTLS/frontend alert assertions also require this exact attempt to have
+verified the pinned certificate and the server handshake signature. Matching
+public certificate bytes alone does not establish server key possession. The
+prepared probe is consumed by its run, so authentication evidence cannot leak
+between attempts. EOF/reset after certificate validation cannot be accepted as
+a frontend pre-certificate closure. The existing listener-status predicate
+remains the single owner of the required condition conjunction.
+
+The bounded operation drops its owned socket/state on deadline or caller
+cancellation, with a network-free drop regression. An already-running blocking
+system DNS lookup may outlive caller cancellation because Tokio delegates it to
+spawn_blocking; the deadline bounds the caller, not cancellation of that worker.
+
 For the current BoringSSL dependency, the isolated SAN rejection returns exactly
 `InternalError`: Edgion's leaf callback returns zero without setting X509 error;
 BoringSSL `X509_verify_cert` then changes the failed `X509_V_OK` result to
@@ -176,8 +189,9 @@ asset delivery, not live Kubernetes wire execution. The first local-only
 verification missed this introduced mount regression; the asset correction
 preserves the same exact pin policy in both topologies.
 
-Network-free regressions cover preparation, typed decisions, deadlines, exact
-listener-condition ownership, fixture isolation and audit freshness. These tests
+Network-free regressions cover preparation, typed decisions, per-attempt
+signature evidence, deadlines/cancellation, exact listener-condition ownership,
+fixture isolation and audit freshness. These tests
 do not establish live BoringSSL or Kubernetes behavior; the selected existing
 shared-topology suites remain the wire gates. ARCH-283 implementation verification
 is recorded separately; no live result is inferred from this design description.

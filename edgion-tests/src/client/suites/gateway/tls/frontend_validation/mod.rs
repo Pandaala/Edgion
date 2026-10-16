@@ -99,7 +99,10 @@ async fn require_frontend_rejection(
         .run(&ctx.target_host, PORT)
         .await?
         .require_complete()?;
-    negative.run(&ctx.target_host, PORT).await?.require_alert(expected)
+    negative
+        .run(&ctx.target_host, PORT)
+        .await?
+        .require_authenticated_alert(expected)
 }
 
 impl FrontendValidationTestSuite {

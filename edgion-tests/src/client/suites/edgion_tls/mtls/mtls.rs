@@ -121,7 +121,7 @@ async fn require_mutual_rejection(
     negative
         .run(&ctx.target_host, ctx.https_port)
         .await?
-        .require_alert(expected)
+        .require_authenticated_alert(expected)
 }
 
 impl MtlsTestSuite {
