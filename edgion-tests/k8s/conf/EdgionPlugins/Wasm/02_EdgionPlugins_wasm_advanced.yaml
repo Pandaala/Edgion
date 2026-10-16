@@ -17,11 +17,10 @@
 # at 127.0.0.1:30040 (start_all.sh --auth-port 30040); its /verify returns 200
 # for "Bearer valid-token" and 401 otherwise.
 #
-# pluginConfig is set identically on all three stages: they share one module
-# cache entry (same source file), whose vm/plugin config is taken from
-# whichever plugin loads first. Only the request stage carries the
-# calloutAllowlist — the other stages' empty lists carry no opinion for the
-# tick-callout decision (no conflict).
+# Each stage owns its runtime, shared data, and tick task even with identical
+# source. Only the request stage configures and authorizes tick callouts.
+# The response stage has no polling origin: the Rust SDK traps if it dispatches
+# a callout while the host reports that dispatch is unsupported in that runtime.
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -47,7 +46,5 @@ spec:
       config:
         source:
           file: /usr/local/edgion/test-assets/header_demo.wasm
-        pluginConfig:
-          string: "http://wasm-auth-server.edgion-test.svc.cluster.local:30040"
         failOpen: false
         timeoutMs: 1000

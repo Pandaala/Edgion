@@ -20,8 +20,6 @@ spec:
       config:
         source:
           file: /usr/local/edgion/test-assets/header_demo.wasm
-        pluginConfig:
-          json: {}
         failOpen: false
         timeoutMs: 500
   upstreamResponseFilterPlugins:

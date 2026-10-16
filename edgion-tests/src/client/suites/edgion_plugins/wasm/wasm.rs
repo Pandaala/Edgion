@@ -23,7 +23,7 @@
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use serde_json::Value;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const HOST: &str = "wasm.example.com";
 /// Advanced-scenario route (callout / body observation / tick+shared-data),
@@ -87,6 +87,73 @@ async fn wait_for_tick_progress(ctx: &TestContext, marker: &str, counter_header:
 pub struct WasmPluginTestSuite;
 
 impl WasmPluginTestSuite {
+    fn test_runtime_ready() -> TestCase {
+        TestCase::new(
+            "plugin_wasm_runtime_ready",
+            "Wait for both routes' independent request and response Wasm runtimes",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    // Configuration convergence does not await compilation. A
+                    // saturated preparation limit also caches a load failure
+                    // for 30s. Probe both stages without callout/panic markers;
+                    // response-only cold loads are triggered by these requests.
+                    let mut last_error = String::new();
+                    let ready = tokio::time::timeout(Duration::from_secs(45), async {
+                        for host in [HOST, ADV_HOST] {
+                            loop {
+                                let probe = async {
+                                    let response = ctx
+                                        .http_client
+                                        .get(format!("{}/headers", ctx.http_url()))
+                                        .header("host", host)
+                                        .timeout(Duration::from_secs(3))
+                                        .send()
+                                        .await
+                                        .map_err(|error| format!("{host}: request failed: {error}"))?;
+                                    if response.status() != 200 {
+                                        return Err(format!("{host}: expected HTTP 200, got {}", response.status()));
+                                    }
+                                    if response.headers().get("x-wasm-resp").and_then(|v| v.to_str().ok())
+                                        != Some("yes")
+                                    {
+                                        return Err(format!("{host}: response Wasm marker is missing"));
+                                    }
+                                    let body = response
+                                        .json::<Value>()
+                                        .await
+                                        .map_err(|error| format!("{host}: invalid echo response: {error}"))?;
+                                    if body["headers"]["x-wasm-added"].as_str() != Some("yes") {
+                                        return Err(format!("{host}: request Wasm marker is missing"));
+                                    }
+                                    Ok(())
+                                }
+                                .await;
+                                match probe {
+                                    Ok(()) => break,
+                                    Err(error) => last_error = error,
+                                }
+                                tokio::time::sleep(Duration::from_millis(200)).await;
+                            }
+                        }
+                    })
+                    .await;
+                    match ready {
+                        Ok(()) => TestResult::passed_with_message(
+                            start.elapsed(),
+                            "Both routes execute request and response Wasm plugins".to_string(),
+                        ),
+                        Err(_) => TestResult::failed(
+                            start.elapsed(),
+                            format!("Wasm runtimes did not become ready within 45s: {last_error}"),
+                        ),
+                    }
+                })
+            },
+        )
+        .with_timeout(Duration::from_secs(50))
+    }
+
     // ==================== 1. Request header injected upstream ====================
     fn test_request_header_added() -> TestCase {
         TestCase::new(
@@ -516,6 +583,7 @@ impl TestSuite for WasmPluginTestSuite {
 
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
+            Self::test_runtime_ready(),
             Self::test_request_header_added(),
             Self::test_local_response_deny(),
             Self::test_response_header(),

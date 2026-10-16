@@ -58,6 +58,39 @@ the plugin; a successful task still owns its inputs. This rule does not claim
 that the entire Wasm body callback allocates zero.
 There is no measured throughput improvement or allocation-count benchmark.
 
+## Integration readiness after preparation saturation
+
+Configuration convergence does not await all private Wasm module loads. The
+process preparation limit can reject a best-effort preload; that failure uses
+the existing 30-second negative cache. A synchronous response-header miss
+schedules a later preload but still applies its configured failure mode to the
+current response. This is observable even when the request-stage callout and
+upstream response both succeeded.
+
+The static Wasm suite first polls both ordinary and advanced routes under one
+45-second deadline. Each route must return HTTP 200, the guest-added request
+marker in the upstream echo, and the guest-added response marker. Only then do
+the existing callout, trap recovery, performance and fresh tick-delta cases run.
+Readiness failure fails the suite; it is not a skip or permission to accept 500
+in a business assertion. See `edgion-tests/src/client/suites/edgion_plugins/wasm/wasm.rs`.
+
+The ordinary fixture omits its unused JSON configuration (`{}` would be read as
+a polling origin by this guest). The advanced response-stage fixture also has no
+polling origin because its independent runtime has no callout grant.
+Rust SDK 0.2.5 panics on the host's unsupported
+dispatch status before returning a Result, so ignoring a rejected call's Result
+does not prevent a trap. The request stage retains its authorized polling origin
+and both fresh tick assertions. Local and Kubernetes fixtures follow this same
+ownership boundary; local execution does not establish Kubernetes acceptance.
+
+Fresh local verification on 2026-10-16 passed both rounds of
+`run_integration.sh --no-prepare -r EdgionPlugins -i Wasm --with-reload`, ten
+cases per round. Startup logged preparation-capacity rejection; the first
+round recovered through the readiness gate and took 28 seconds, while the
+post-reload round took two seconds. Final metrics, unknown-field, requeue-loop
+and cache-residue gates passed. This is scoped local verification, not a full
+integration sweep or live Kubernetes execution.
+
 ## Verification and re-evaluation
 
 Historical `borrowed_preload_inputs_survive_concurrent_misses_and_retry` retained the first
