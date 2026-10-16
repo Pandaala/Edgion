@@ -92,6 +92,36 @@ pub struct BackendTrafficPolicySnapshot {
     inner: Arc<EffectivePolicySnapshotData>,
 }
 
+pub(crate) const OBSERVATION_MAX_CANDIDATES: usize = 32;
+pub(crate) const OBSERVATION_MAX_KEY_BYTES: usize = 512;
+pub(crate) const OBSERVATION_MAX_TARGET_BYTES: usize = 253;
+
+/// Bounded metadata from one prepared generation, exclusively for Admin diagnostics.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TargetObservation {
+    generation: u64,
+    complete: bool,
+    target: ObservedTarget,
+    candidates: Vec<String>,
+    effective: Option<ObservedEffectivePolicy>,
+}
+
+#[derive(serde::Serialize)]
+struct ObservedTarget {
+    group: &'static str,
+    kind: &'static str,
+    namespace: String,
+    name: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ObservedEffectivePolicy {
+    policy_key: String,
+    load_balancer: Option<&'static str>,
+}
+
 impl BackendTrafficPolicySnapshot {
     #[inline]
     pub fn generation(&self) -> u64 {
@@ -110,6 +140,52 @@ impl BackendTrafficPolicySnapshot {
             .get(target)
             .map(|list| list.iter().map(|prepared| Arc::clone(&prepared.policy)).collect())
             .unwrap_or_default()
+    }
+
+    /// Project only bounded identities and the actual effective policy. These
+    /// diagnostic bounds do not restrict runtime policy fanout or admission.
+    pub(crate) fn observe_target(&self, target: &PolicyTargetKey) -> Result<TargetObservation, &'static str> {
+        if target.namespace.len() > OBSERVATION_MAX_TARGET_BYTES || target.name.len() > OBSERVATION_MAX_TARGET_BYTES {
+            return Err("Policy observation target exceeds metadata limit");
+        }
+        let candidates = self
+            .inner
+            .reverse_index
+            .get(target)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        if candidates.len() > OBSERVATION_MAX_CANDIDATES {
+            return Err("Policy observation candidate limit exceeded");
+        }
+        let effective = self.inner.effective.get(target);
+        // Preflight the existing borrowed slice before allocating a result Vec
+        // or copying any metadata. Never use the unbounded candidates() helper.
+        if candidates
+            .iter()
+            .any(|candidate| candidate.key.len() > OBSERVATION_MAX_KEY_BYTES)
+            || effective.is_some_and(|policy| policy.winning_policy_key.len() > OBSERVATION_MAX_KEY_BYTES)
+        {
+            return Err("Policy observation key exceeds metadata limit");
+        }
+        Ok(TargetObservation {
+            generation: self.inner.generation,
+            complete: true,
+            target: ObservedTarget {
+                group: target.group(),
+                kind: target.kind(),
+                namespace: target.namespace.clone(),
+                name: target.name.clone(),
+            },
+            candidates: candidates.iter().map(|candidate| candidate.key.clone()).collect(),
+            effective: effective.map(|policy| ObservedEffectivePolicy {
+                policy_key: policy.winning_policy_key.clone(),
+                load_balancer: policy.load_balancer.as_ref().map(|lb| match lb {
+                    ParsedLBPolicy::Ewma => "Ewma",
+                    ParsedLBPolicy::LeastConn => "LeastConn",
+                    ParsedLBPolicy::ConsistentHash(_) => "ConsistentHash",
+                }),
+            }),
+        })
     }
 }
 

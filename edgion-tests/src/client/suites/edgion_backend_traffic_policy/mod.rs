@@ -7,6 +7,7 @@
 // asserts the resulting state on the Gateway admin surface:
 //
 //   * GET /api/v1/debug/store-stats -> data.lb_policies (service_key -> algorithm)
+//   * GET /api/v1/debug/backend-traffic-policy (bounded prepared conflict evidence)
 //   * GET /configclient/edgionbackendtrafficpolicy/list  (synced policy list)
 //
 // Coverage map to the spec's seven integration items:

@@ -1,6 +1,8 @@
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
+use serde::Deserialize;
 use serde_json::Value;
+use std::future::Future;
 use std::time::{Duration, Instant};
 
 const NS: &str = "edgion-default";
@@ -81,6 +83,221 @@ where
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
     (false, last)
+}
+
+const OBSERVATION_BODY_LIMIT: usize = 128 * 1024;
+const OBSERVATION_CANDIDATE_LIMIT: usize = 32;
+const OBSERVATION_KEY_LIMIT: usize = 512;
+const OBSERVATION_TARGET_LIMIT: usize = 253;
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+struct ObservedTarget {
+    group: String,
+    kind: String,
+    namespace: String,
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ObservedEffective {
+    policy_key: String,
+    load_balancer: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PreparedObservation {
+    generation: u64,
+    complete: bool,
+    target: ObservedTarget,
+    candidates: Vec<String>,
+    effective: Option<ObservedEffective>,
+}
+
+fn append_observation_chunk(body: &mut Vec<u8>, chunk: &[u8]) -> Result<(), String> {
+    if body
+        .len()
+        .checked_add(chunk.len())
+        .is_none_or(|len| len > OBSERVATION_BODY_LIMIT)
+    {
+        return Err("prepared policy observation body exceeds limit".to_string());
+    }
+    body.extend_from_slice(chunk);
+    Ok(())
+}
+
+fn parse_prepared_observation(status: reqwest::StatusCode, body: &[u8]) -> Result<PreparedObservation, String> {
+    if !status.is_success() {
+        return Err(format!("prepared policy observation HTTP status {status}"));
+    }
+    if body.len() > OBSERVATION_BODY_LIMIT {
+        return Err("prepared policy observation body exceeds limit".to_string());
+    }
+    let envelope: Value = serde_json::from_slice(body).map_err(|e| format!("invalid policy observation JSON: {e}"))?;
+    if envelope.get("success").and_then(Value::as_bool) != Some(true)
+        || envelope.get("error").is_some_and(|error| !error.is_null())
+    {
+        return Err("prepared policy observation returned an error body".to_string());
+    }
+    let data = envelope
+        .get("data")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "policy observation missing data object".to_string())?;
+    // Serde permits missing Option fields; require their explicit wire presence.
+    if !data.contains_key("effective")
+        || data.get("effective").is_some_and(|effective| {
+            !effective.is_null()
+                && effective
+                    .as_object()
+                    .is_none_or(|fields| !fields.contains_key("loadBalancer"))
+        })
+    {
+        return Err("policy observation missing effective fields".to_string());
+    }
+    let observation: PreparedObservation = serde_json::from_value(Value::Object(data.clone()))
+        .map_err(|e| format!("invalid prepared policy observation: {e}"))?;
+    let target = &observation.target;
+    if !observation.complete
+        || observation.candidates.len() > OBSERVATION_CANDIDATE_LIMIT
+        || target.namespace.is_empty()
+        || target.name.is_empty()
+        || target.namespace.len() > OBSERVATION_TARGET_LIMIT
+        || target.name.len() > OBSERVATION_TARGET_LIMIT
+        || !matches!(
+            (target.group.as_str(), target.kind.as_str()),
+            ("", "Service") | ("edgion.io", "EdgionBackend")
+        )
+        || observation.candidates.iter().enumerate().any(|(i, key)| {
+            key.is_empty() || key.len() > OBSERVATION_KEY_LIMIT || observation.candidates[..i].contains(key)
+        })
+    {
+        return Err("incomplete or invalid prepared policy metadata".to_string());
+    }
+    match &observation.effective {
+        Some(effective)
+            if observation.candidates.contains(&effective.policy_key)
+                && effective
+                    .load_balancer
+                    .as_deref()
+                    .is_none_or(|algorithm| matches!(algorithm, "Ewma" | "LeastConn" | "ConsistentHash")) => {}
+        None if observation.candidates.is_empty() => {}
+        _ => return Err("incoherent prepared candidate/effective policy evidence".to_string()),
+    }
+    Ok(observation)
+}
+
+async fn read_prepared_observation(
+    client: &reqwest::Client,
+    target: &ObservedTarget,
+) -> Result<PreparedObservation, String> {
+    let mut request = client
+        .get(format!("{}/api/v1/debug/backend-traffic-policy", gw_admin_base()))
+        .query(&[
+            ("group", target.group.as_str()),
+            ("kind", target.kind.as_str()),
+            ("namespace", target.namespace.as_str()),
+            ("name", target.name.as_str()),
+        ]);
+    if let Some(token) = gw_admin_token() {
+        request = request.bearer_auth(token);
+    }
+    let mut response = request
+        .send()
+        .await
+        .map_err(|e| format!("policy observation request failed: {e}"))?;
+    let status = response.status();
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| format!("policy observation body failed: {e}"))?
+    {
+        append_observation_chunk(&mut body, &chunk)?;
+    }
+    parse_prepared_observation(status, &body)
+}
+
+struct ConflictExpectation {
+    target: ObservedTarget,
+    winner: String,
+    loser: String,
+}
+
+#[derive(Clone, Copy)]
+enum PreparedPhase {
+    Winner,
+    Conflict,
+    Promotion { after_generation: u64 },
+}
+
+impl ConflictExpectation {
+    fn phase_ready(&self, observation: &PreparedObservation, phase: PreparedPhase) -> Result<bool, String> {
+        if observation.target != self.target {
+            return Err("policy observation typed target mismatch".to_string());
+        }
+        let has_winner = observation.candidates.contains(&self.winner);
+        let has_loser = observation.candidates.contains(&self.loser);
+        let (expected_key, algorithm, members_ready) = match phase {
+            PreparedPhase::Winner => (&self.winner, "Ewma", has_winner && observation.candidates.len() == 1),
+            PreparedPhase::Conflict => (
+                &self.winner,
+                "Ewma",
+                has_winner && has_loser && observation.candidates.len() == 2,
+            ),
+            PreparedPhase::Promotion { after_generation } => (
+                &self.loser,
+                "LeastConn",
+                has_loser
+                    && !has_winner
+                    && observation.candidates.len() == 1
+                    && observation.generation > after_generation,
+            ),
+        };
+        if !members_ready {
+            return Ok(false);
+        }
+        if observation.effective.as_ref().is_some_and(|effective| {
+            effective.policy_key == *expected_key && effective.load_balancer.as_deref() == Some(algorithm)
+        }) {
+            Ok(true)
+        } else {
+            Err(format!(
+                "prepared policy arbitration mismatch: expected {expected_key} ({algorithm}), got {:?}",
+                observation.effective
+            ))
+        }
+    }
+}
+
+async fn poll_prepared_conflict<F, Fut>(
+    expected: &ConflictExpectation,
+    phase: PreparedPhase,
+    deadline: tokio::time::Instant,
+    mut observe: F,
+) -> Result<PreparedObservation, String>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<PreparedObservation, String>>,
+{
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            return Err("prepared policy observation deadline expired".to_string());
+        }
+        let observation = tokio::time::timeout_at(deadline, observe())
+            .await
+            .map_err(|_| "prepared policy observation reader timed out".to_string())??;
+        if tokio::time::Instant::now() >= deadline {
+            return Err("prepared policy observation deadline expired".to_string());
+        }
+        if expected.phase_ready(&observation, phase)? {
+            return Ok(observation);
+        }
+        tokio::time::sleep_until(deadline.min(tokio::time::Instant::now() + Duration::from_millis(100))).await;
+    }
+}
+
+fn prepared_phase_deadline(shared: tokio::time::Instant) -> tokio::time::Instant {
+    shared.min(tokio::time::Instant::now() + Duration::from_secs(6))
 }
 
 fn service_key(name: &str) -> String {
@@ -207,78 +424,69 @@ impl EdgionBackendTrafficPolicyTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     let client = admin_client();
-                    let svc = "ebtp-conflict-svc";
-                    // Winner sorts first lexically ("a-*" < "z-*") AND is applied
-                    // first (older creationTimestamp), so both precedence signals
-                    // agree regardless of same-second timestamp granularity.
-                    let winner = "ebtp-conflict-a-win";
-                    let loser = "ebtp-conflict-z-lose";
-                    cleanup_policies(&ctx, &[winner, loser]).await;
-                    if let Err(e) = prepare_services(&ctx, &[svc]).await {
-                        cleanup_services(&ctx, &[svc]).await;
-                        return TestResult::failed(start.elapsed(), e);
-                    }
-
-                    // Apply winner (Ewma) first.
-                    if let Err(e) = ctx
-                        .apply_yaml(&lb_policy_yaml(winner, svc, "  loadBalancer:\n    type: Ewma\n"))
-                        .await
-                    {
-                        cleanup_policies(&ctx, &[winner, loser]).await;
-                        cleanup_services(&ctx, &[svc]).await;
-                        return TestResult::failed(start.elapsed(), format!("apply winner failed: {}", e));
-                    }
-                    let (ok_w, _) = poll_lb(&client, &service_key(svc), |v| v == Some("Ewma"), 30).await;
-                    if !ok_w {
-                        cleanup_policies(&ctx, &[winner, loser]).await;
-                        cleanup_services(&ctx, &[svc]).await;
-                        return TestResult::failed(
-                            start.elapsed(),
-                            "winner policy did not resolve to Ewma".to_string(),
-                        );
-                    }
-
-                    // Apply the newer loser (LeastConn) — the store must keep Ewma.
-                    if let Err(e) = ctx
-                        .apply_yaml(&lb_policy_yaml(loser, svc, "  loadBalancer:\n    type: LeastConn\n"))
-                        .await
-                    {
-                        cleanup_policies(&ctx, &[winner, loser]).await;
-                        cleanup_services(&ctx, &[svc]).await;
-                        return TestResult::failed(start.elapsed(), format!("apply loser failed: {}", e));
-                    }
-                    // Give the conflict a chance to (wrongly) flip, then assert Ewma held.
-                    let (still_ewma, got) = poll_lb(&client, &service_key(svc), |v| v == Some("Ewma"), 10).await;
-                    if !still_ewma {
-                        cleanup_policies(&ctx, &[winner, loser]).await;
-                        cleanup_services(&ctx, &[svc]).await;
-                        return TestResult::failed(
-                            start.elapsed(),
-                            format!("oldest-wins violated: expected Ewma held, got {:?}", got),
-                        );
-                    }
-
-                    // Delete the winner -> the loser (LeastConn) is promoted.
-                    if let Err(e) = ctx.delete_resource(KIND, NS, winner).await {
-                        cleanup_policies(&ctx, &[winner, loser]).await;
-                        cleanup_services(&ctx, &[svc]).await;
-                        return TestResult::failed(start.elapsed(), format!("delete winner failed: {}", e));
-                    }
-                    let (promoted, got_p) = poll_lb(&client, &service_key(svc), |v| v == Some("LeastConn"), 30).await;
-
-                    cleanup_policies(&ctx, &[winner, loser]).await;
-                    cleanup_services(&ctx, &[svc]).await;
-
-                    if promoted {
-                        TestResult::passed_with_message(
-                            start.elapsed(),
-                            "oldest wins (Ewma); winner delete promoted loser to LeastConn".to_string(),
+                    let deadline = tokio::time::Instant::now() + Duration::from_secs(25);
+                    let nonce = uuid::Uuid::new_v4().simple().to_string();
+                    let svc = format!("ebtp-conflict-svc-{nonce}");
+                    // Both lexical roles and apply order agree on the older winner.
+                    let winner = format!("ebtp-conflict-a-win-{nonce}");
+                    let loser = format!("ebtp-conflict-z-lose-{nonce}");
+                    let expected = ConflictExpectation {
+                        target: ObservedTarget {
+                            group: String::new(),
+                            kind: "Service".to_string(),
+                            namespace: NS.to_string(),
+                            name: svc.clone(),
+                        },
+                        winner: service_key(&winner),
+                        loser: service_key(&loser),
+                    };
+                    let outcome: Result<(), String> = async {
+                        prepare_services(&ctx, &[&svc]).await?;
+                        ctx.apply_yaml(&lb_policy_yaml(&winner, &svc, "  loadBalancer:\n    type: Ewma\n"))
+                            .await
+                            .map_err(|e| format!("apply winner failed: {e}"))?;
+                        poll_prepared_conflict(
+                            &expected,
+                            PreparedPhase::Winner,
+                            prepared_phase_deadline(deadline),
+                            || read_prepared_observation(&client, &expected.target),
                         )
-                    } else {
-                        TestResult::failed(
-                            start.elapsed(),
-                            format!("loser not promoted after winner delete, got {:?}", got_p),
+                        .await?;
+
+                        ctx.apply_yaml(&lb_policy_yaml(&loser, &svc, "  loadBalancer:\n    type: LeastConn\n"))
+                            .await
+                            .map_err(|e| format!("apply loser failed: {e}"))?;
+                        // Winner deletion is reachable only after both current prepared
+                        // candidates and the actual older winner coexist in one snapshot.
+                        let conflict = poll_prepared_conflict(
+                            &expected,
+                            PreparedPhase::Conflict,
+                            prepared_phase_deadline(deadline),
+                            || read_prepared_observation(&client, &expected.target),
                         )
+                        .await?;
+                        ctx.delete_resource(KIND, NS, &winner)
+                            .await
+                            .map_err(|e| format!("delete winner failed: {e}"))?;
+                        poll_prepared_conflict(
+                            &expected,
+                            PreparedPhase::Promotion {
+                                after_generation: conflict.generation,
+                            },
+                            prepared_phase_deadline(deadline),
+                            || read_prepared_observation(&client, &expected.target),
+                        )
+                        .await?;
+                        Ok(())
+                    }
+                    .await;
+
+                    cleanup_policies(&ctx, &[&winner, &loser]).await;
+                    cleanup_services(&ctx, &[&svc]).await;
+                    match outcome {
+                        Ok(()) => TestResult::passed_with_message(start.elapsed(),
+                            "prepared coexistence preserved oldest Ewma; deletion promoted the intended LeastConn policy".to_string()),
+                        Err(error) => TestResult::failed(start.elapsed(), error),
                     }
                 })
             },
@@ -524,3 +732,7 @@ impl TestSuite for EdgionBackendTrafficPolicyTestSuite {
         ]
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/unit/client/suites/edgion_backend_traffic_policy/control_plane_test.rs"]
+mod tests;

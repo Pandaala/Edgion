@@ -50,6 +50,33 @@ operation but retain their independent intervals. See
 [retry-budget epochs](../../12-algorithms/retry-budget-epoch-buckets.md) for
 publication, saturation, delayed-operation, and lock-free platform boundaries.
 
+## Prepared conflict diagnostics (ARCH-336)
+
+Integration mode exposes authenticated
+`GET /api/v1/debug/backend-traffic-policy?group=&kind=Service&namespace=<namespace>&name=<name>`.
+The alternative typed pair is `group=edgion.io&kind=EdgionBackend`. This endpoint
+projects one captured `BackendTrafficPolicySnapshot`: generation, typed target,
+prepared candidate keys and the actual effective policy key/LB algorithm. It does
+not arbitrate again or read the generic configclient cache. Algorithm output uses
+fixed names and omits ConsistentHash settings; no resource specs or resolved
+material are serialized.
+
+The snapshot preflights at most 32 candidates, 512 bytes per policy key and 253
+bytes per target namespace/name before copying diagnostic metadata. Overflow is
+an error body with no partial successful data. These limits affect diagnostics
+only; runtime policy fanout and arbitration remain unchanged. The existing
+Admin bearer layer protects the route, which is absent outside integration mode
+and from the probe router.
+
+The existing `conflict_oldest_wins_and_promotion` integration case uses unique
+run-scoped Service and `a-win`/`z-lose` policy names. It waits for both intended
+prepared candidates and the actual older Ewma winner before deleting that winner.
+Promotion requires winner absence and the intended LeastConn successor in one
+later observation. Persistence success, generic cache membership, generation
+advance alone and an unchanged Ewma value cannot satisfy the conflict barrier.
+Strict bounded response consumption and phase deadlines reject invalid, incomplete
+or timed-out evidence. Existing synchronous arbitration coverage remains separate.
+
 ## Actual health TLS ownership
 
 `HealthTlsRefs` borrows the actual EBTP active HTTPS/GRPCS field. Custom Secret/CA

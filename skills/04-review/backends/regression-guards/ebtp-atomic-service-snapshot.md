@@ -256,3 +256,45 @@ A new Gateway rejects unprepared output from an old Controller until coordinated
 upgrade/reprocessing supplies current prepared policies. Re-evaluate if source
 metadata ingestion, status seeding, timestamp serialization, eligibility,
 resource equality or precedence ownership changes.
+
+## Prepared coexistence before conflict deletion (ARCH-336)
+
+The live conflict case previously waited for the already-effective Ewma value
+after persisting a new LeastConn candidate. Gateway conf_sync debounce and event
+compression can delay that candidate's handler dispatch. A winner-only snapshot
+could therefore permit winner deletion and subsequent promotion without ever
+testing arbitration while both policies were prepared. This was a test-validity
+defect; production oldest-wins arbitration was already correct.
+
+`BackendTrafficPolicySnapshot::observe_target` now provides bounded metadata from
+the same immutable owner as actual arbitration: typed target, generation,
+candidate identities and actual effective winner/fixed LB algorithm. It preflights
+existing candidate lengths and key sizes before copying output; overflow yields
+an error, without imposing new runtime fanout limits. The integration-only Admin
+route inherits the canonical bearer boundary and serializes no specs or resolved
+Secret material. See [the architecture contract](../../../01-architecture/05-resources/20-edgion-backend-traffic-policy.md#prepared-conflict-diagnostics-arch-336).
+
+The live consumer uses UUID-scoped target/policy identities, complete bounded
+responses and a shared parser/evaluator/poll loop. Deletion follows only the
+observation containing both intended candidates and the older Ewma winner;
+promotion requires the old winner absent and the intended LeastConn loser
+effective in a later generation. Missing fields, wrong typed target, duplicate
+identities, body/HTTP errors, contradictory candidate/effective evidence and
+timeouts cannot become successful observations.
+
+Gateway `prepared_conflict_observation_*` regressions cover real preparation,
+removal/promotion, retained-generation coherence, typed isolation, bounded
+diagnostics and metadata-only serialization. A fabricated private wrong-effective
+snapshot proves the projection reports the actual map rather than independently
+recomputing the expected winner. Client `prepared_conflict_*` tests run the live
+parser/evaluator/poller with controlled delayed and wrong-winner observations and
+gate a delete continuation on successful completion. These deterministic tests
+compose owner and consumer boundaries; they do not claim deterministic socket
+delivery. The live case retains real Admin writes on the shared topology, and
+`oldest_wins_then_promotes_on_delete` remains the synchronous arbitration guard.
+Fresh commands and results belong to the implementation verification record;
+historical checks elsewhere on this page do not validate ARCH-336.
+
+Re-evaluate when prepared/effective ownership, diagnostic bounds, route mounting,
+response contracts or the live conflict/delete ordering changes. Timestamp
+precision (ARCH-055) and cleanup error handling (ARCH-265) remain separate concerns.

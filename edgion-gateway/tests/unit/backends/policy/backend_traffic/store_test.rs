@@ -2108,3 +2108,291 @@ fn policy_ancestor_capacity_traffic_republishes_without_changing_winner() {
         .permits(Some("ns/new")));
     assert!(!pinned.ancestor_admission.as_ref().unwrap().permits(Some("ns/new")));
 }
+
+#[test]
+fn prepared_conflict_observation_tracks_dispatch_promotion_and_retained_generation() {
+    let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+    let store = BackendTrafficPolicyStore::new();
+    let target = service_target("observation", "svc");
+    let older = policy(
+        "observation",
+        "a-win",
+        "svc",
+        None,
+        Some(LoadBalancerType::Ewma),
+        None,
+        false,
+        false,
+    );
+    let queued_loser = policy(
+        "observation",
+        "z-lose",
+        "svc",
+        None,
+        Some(LoadBalancerType::LeastConn),
+        None,
+        false,
+        false,
+    );
+    store.full_set_policies(HashMap::from([("observation/a-win".into(), older)]));
+    // A resource held by ingress but not dispatched is absent from prepared state.
+    assert_eq!(queued_loser.metadata.name.as_deref(), Some("z-lose"));
+    let pending = serde_json::to_value(store.snapshot().observe_target(&target).unwrap()).unwrap();
+    assert_eq!(pending["candidates"], serde_json::json!(["observation/a-win"]));
+    store.partial_update_policies(
+        HashMap::from([("observation/z-lose".into(), queued_loser)]),
+        HashMap::new(),
+        HashSet::new(),
+    );
+    let retained = store.snapshot();
+    let conflict = serde_json::to_value(retained.observe_target(&target).unwrap()).unwrap();
+    assert_eq!(
+        conflict["candidates"],
+        serde_json::json!(["observation/a-win", "observation/z-lose"])
+    );
+    assert_eq!(conflict["effective"]["policyKey"], "observation/a-win");
+    assert_eq!(conflict["effective"]["loadBalancer"], "Ewma");
+    assert!(conflict["generation"].as_u64().unwrap() > pending["generation"].as_u64().unwrap());
+    store.partial_update_policies(
+        HashMap::new(),
+        HashMap::new(),
+        HashSet::from(["observation/a-win".into()]),
+    );
+    let promoted = serde_json::to_value(store.snapshot().observe_target(&target).unwrap()).unwrap();
+    assert_eq!(promoted["candidates"], serde_json::json!(["observation/z-lose"]));
+    assert_eq!(promoted["effective"]["policyKey"], "observation/z-lose");
+    assert_eq!(promoted["effective"]["loadBalancer"], "LeastConn");
+    assert!(promoted["generation"].as_u64().unwrap() > conflict["generation"].as_u64().unwrap());
+    assert_eq!(
+        serde_json::to_value(retained.observe_target(&target).unwrap()).unwrap(),
+        conflict
+    );
+    store.full_set_policies(HashMap::new());
+    let absent = serde_json::to_value(store.snapshot().observe_target(&target).unwrap()).unwrap();
+    assert_eq!(absent["candidates"], serde_json::json!([]));
+    assert!(absent["effective"].is_null());
+    assert_eq!(absent["complete"], true);
+}
+
+#[test]
+fn prepared_conflict_observation_reports_actual_effective_map_without_rearbitrating() {
+    let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+    let store = BackendTrafficPolicyStore::new();
+    let target = service_target("observation-wrong", "svc");
+    store.full_set_policies(HashMap::from([
+        (
+            "observation-wrong/a-win".into(),
+            policy(
+                "observation-wrong",
+                "a-win",
+                "svc",
+                None,
+                Some(LoadBalancerType::Ewma),
+                None,
+                false,
+                false,
+            ),
+        ),
+        (
+            "observation-wrong/z-lose".into(),
+            policy(
+                "observation-wrong",
+                "z-lose",
+                "svc",
+                None,
+                Some(LoadBalancerType::LeastConn),
+                None,
+                false,
+                false,
+            ),
+        ),
+    ]));
+    let correct = store.snapshot();
+    let mut effective = correct.inner.effective.clone();
+    effective.insert(
+        target.clone(),
+        Arc::new(EffectiveBackendTrafficPolicy {
+            winning_policy_key: "observation-wrong/z-lose".into(),
+            load_balancer: Some(ParsedLBPolicy::LeastConn),
+            ..(**effective.get(&target).unwrap()).clone()
+        }),
+    );
+    let mut wrong = BackendTrafficPolicySnapshot {
+        inner: Arc::new(EffectivePolicySnapshotData {
+            generation: correct.generation(),
+            policies: correct.inner.policies.clone(),
+            reverse_index: correct.inner.reverse_index.clone(),
+            effective,
+        }),
+    };
+    let observed = serde_json::to_value(wrong.observe_target(&target).unwrap()).unwrap();
+    assert_eq!(
+        observed["candidates"],
+        serde_json::json!(["observation-wrong/a-win", "observation-wrong/z-lose"])
+    );
+    assert_eq!(observed["effective"]["policyKey"], "observation-wrong/z-lose");
+    assert_eq!(observed["effective"]["loadBalancer"], "LeastConn");
+    let wrong_inner = Arc::get_mut(&mut wrong.inner).unwrap();
+    Arc::make_mut(wrong_inner.effective.get_mut(&target).unwrap()).winning_policy_key =
+        "x".repeat(OBSERVATION_MAX_KEY_BYTES + 1);
+    assert!(
+        wrong.observe_target(&target).is_err(),
+        "effective metadata has an independent bound"
+    );
+    store.full_set_policies(HashMap::new());
+}
+
+#[test]
+fn prepared_conflict_observation_bounds_diagnostics_without_limiting_runtime_candidates() {
+    let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+    let store = BackendTrafficPolicyStore::new();
+    let target = service_target("observation-bounds", "svc");
+    let mut policies = HashMap::new();
+    for i in 0..OBSERVATION_MAX_CANDIDATES {
+        let name = format!("p{i:02}");
+        policies.insert(
+            format!("observation-bounds/{name}"),
+            policy(
+                "observation-bounds",
+                &name,
+                "svc",
+                None,
+                Some(LoadBalancerType::Ewma),
+                None,
+                false,
+                false,
+            ),
+        );
+    }
+    store.full_set_policies(policies.clone());
+    assert_eq!(
+        store.snapshot().observe_target(&target).unwrap().candidates.len(),
+        OBSERVATION_MAX_CANDIDATES
+    );
+    policies.insert(
+        "observation-bounds/overflow".into(),
+        policy(
+            "observation-bounds",
+            "overflow",
+            "svc",
+            None,
+            Some(LoadBalancerType::Ewma),
+            None,
+            false,
+            false,
+        ),
+    );
+    store.full_set_policies(policies);
+    assert!(store.snapshot().observe_target(&target).is_err());
+    assert_eq!(
+        store.snapshot().candidates(&target).len(),
+        OBSERVATION_MAX_CANDIDATES + 1
+    );
+    assert!(store.snapshot().get_effective(&target).is_some());
+
+    let exact = "x".repeat(OBSERVATION_MAX_KEY_BYTES);
+    let source = policy(
+        "observation-bounds",
+        "one",
+        "svc",
+        None,
+        Some(LoadBalancerType::Ewma),
+        None,
+        false,
+        false,
+    );
+    store.full_set_policies(HashMap::from([(exact.clone(), source.clone())]));
+    assert_eq!(
+        store.snapshot().observe_target(&target).unwrap().candidates,
+        vec![exact]
+    );
+    store.full_set_policies(HashMap::from([("x".repeat(OBSERVATION_MAX_KEY_BYTES + 1), source)]));
+    assert!(store.snapshot().observe_target(&target).is_err());
+    assert!(store.snapshot().get_effective(&target).is_some());
+    let mut long_target = service_target("observation-bounds", &"x".repeat(OBSERVATION_MAX_TARGET_BYTES));
+    assert!(store.snapshot().observe_target(&long_target).is_ok());
+    long_target.name.push('x');
+    assert!(store.snapshot().observe_target(&long_target).is_err());
+    store.full_set_policies(HashMap::new());
+}
+
+#[test]
+fn prepared_conflict_observation_is_typed_and_serializes_only_fixed_metadata() {
+    let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+    let store = BackendTrafficPolicyStore::new();
+    let service = service_target("observation-safe", "same");
+    let ai = PolicyTargetKey {
+        target_kind: PolicyTargetKind::EdgionBackend,
+        ..service.clone()
+    };
+    let mut source = (*policy(
+        "observation-safe",
+        "service",
+        "same",
+        None,
+        Some(LoadBalancerType::Ewma),
+        None,
+        true,
+        false,
+    ))
+    .clone();
+    source.metadata.annotations = Some(std::collections::BTreeMap::from([(
+        "secret-note".into(),
+        "secret-annotation-marker".into(),
+    )]));
+    source.spec.load_balancer = Some(
+        serde_json::from_value(serde_json::json!({
+            "type":"ConsistentHash", "consistentHash":{"hashOn":"header","key":"private-hash-setting"}
+        }))
+        .unwrap(),
+    );
+    source
+        .spec
+        .health_check
+        .as_mut()
+        .unwrap()
+        .active
+        .as_mut()
+        .unwrap()
+        .resolved_client_certificate = Some(k8s_openapi::api::core::v1::Secret {
+        data: Some(std::collections::BTreeMap::from([(
+            "tls.key".into(),
+            k8s_openapi::ByteString(b"private-key-marker".to_vec()),
+        )])),
+        ..Default::default()
+    });
+    store.full_set_policies(HashMap::from([
+        ("observation-safe/service".into(), Arc::new(source)),
+        (
+            "observation-safe/ai".into(),
+            ai_policy("observation-safe", "ai", "same", 10, "1s"),
+        ),
+    ]));
+    let snapshot = store.snapshot();
+    let service_json = serde_json::to_value(snapshot.observe_target(&service).unwrap()).unwrap();
+    let ai_json = serde_json::to_value(snapshot.observe_target(&ai).unwrap()).unwrap();
+    assert_eq!(service_json["target"]["group"], "");
+    assert_eq!(service_json["target"]["kind"], "Service");
+    assert_eq!(
+        service_json["candidates"],
+        serde_json::json!(["observation-safe/service"])
+    );
+    assert_eq!(service_json["effective"]["loadBalancer"], "ConsistentHash");
+    assert_eq!(ai_json["target"]["group"], "edgion.io");
+    assert_eq!(ai_json["target"]["kind"], "EdgionBackend");
+    assert_eq!(ai_json["candidates"], serde_json::json!(["observation-safe/ai"]));
+    assert!(ai_json["effective"]["loadBalancer"].is_null());
+    let wire = serde_json::to_string(&service_json).unwrap();
+    for forbidden in [
+        "spec",
+        "annotations",
+        "secret-annotation-marker",
+        "private-hash-setting",
+        "private-key-marker",
+        "tls.key",
+        "resolvedClientCertificate",
+    ] {
+        assert!(!wire.contains(forbidden), "metadata projection leaked {forbidden}");
+    }
+    store.full_set_policies(HashMap::new());
+}

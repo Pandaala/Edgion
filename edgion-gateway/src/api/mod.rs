@@ -1,3 +1,5 @@
+use crate::backends::policy::backend_traffic::store::{TargetObservation, OBSERVATION_MAX_TARGET_BYTES};
+use crate::backends::policy::backend_traffic::BackendTrafficPolicySnapshot;
 use crate::conf_sync::ConfigClient;
 use crate::runtime::server::proxy_protocol_policy::get_global_proxy_protocol_policy_runtime;
 use axum::{
@@ -6,6 +8,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
 use edgion_resources::ResourceKind;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -281,6 +284,18 @@ async fn get_resource(
 /// router (including the integration-testing routes) so no admin route is left
 /// unauthenticated.
 pub fn create_admin_router(config_client: Arc<ConfigClient>, admin_token: Option<String>) -> Router {
+    create_admin_router_with_testing_mode(
+        config_client,
+        admin_token,
+        edgion_common::test_mode::is_integration_testing_mode(),
+    )
+}
+
+fn create_admin_router_with_testing_mode(
+    config_client: Arc<ConfigClient>,
+    admin_token: Option<String>,
+    integration_testing_mode: bool,
+) -> Router {
     let mut router = Router::new()
         // Dynamic endpoints for all resource types (secrets redacted via the
         // AdminRedactGuard inside list_client_resources).
@@ -290,7 +305,7 @@ pub fn create_admin_router(config_client: Arc<ConfigClient>, admin_token: Option
         .with_state(config_client.clone());
 
     // Add testing endpoints (incl. /api/v1/server-info) only in integration testing mode.
-    if edgion_common::test_mode::is_integration_testing_mode() {
+    if integration_testing_mode {
         router = router.merge(create_testing_router(config_client));
     }
 
@@ -313,6 +328,57 @@ pub fn create_probe_router(config_client: Arc<ConfigClient>) -> Router {
 }
 
 // ==================== Integration Testing Endpoints ====================
+
+#[derive(Deserialize)]
+struct BackendTrafficPolicyQuery {
+    group: String,
+    kind: String,
+    namespace: String,
+    name: String,
+}
+
+impl BackendTrafficPolicyQuery {
+    fn into_target(self) -> Result<PolicyTargetKey, &'static str> {
+        let target_kind = match (self.group.as_str(), self.kind.as_str()) {
+            ("", "Service") => PolicyTargetKind::Service,
+            ("edgion.io", "EdgionBackend") => PolicyTargetKind::EdgionBackend,
+            _ => return Err("Unsupported policy observation target group/kind"),
+        };
+        if self.namespace.is_empty()
+            || self.name.is_empty()
+            || self.namespace.len() > OBSERVATION_MAX_TARGET_BYTES
+            || self.name.len() > OBSERVATION_MAX_TARGET_BYTES
+        {
+            return Err("Invalid policy observation target namespace/name");
+        }
+        Ok(PolicyTargetKey {
+            target_kind,
+            namespace: self.namespace,
+            name: self.name,
+        })
+    }
+}
+
+fn backend_traffic_policy_response(
+    snapshot: &BackendTrafficPolicySnapshot,
+    target: &PolicyTargetKey,
+) -> ApiResponse<TargetObservation> {
+    match snapshot.observe_target(target) {
+        Ok(observation) => ApiResponse::ok_body(observation),
+        Err(error) => ApiResponse::err_body(error.to_string()),
+    }
+}
+
+async fn backend_traffic_policy_observation(
+    Query(query): Query<BackendTrafficPolicyQuery>,
+) -> Json<ApiResponse<TargetObservation>> {
+    let target = match query.into_target() {
+        Ok(target) => target,
+        Err(error) => return Json(ApiResponse::err_body(error.to_string())),
+    };
+    let snapshot = crate::backends::policy::get_backend_traffic_policy_store().snapshot();
+    Json(backend_traffic_policy_response(&snapshot, &target))
+}
 
 /// Testing status response
 #[derive(Serialize)]
@@ -659,6 +725,10 @@ fn create_testing_router(config_client: Arc<ConfigClient>) -> Router {
     Router::new()
         .route("/api/v1/testing/status", get(testing_status))
         .route("/api/v1/debug/store-stats", get(store_stats))
+        .route(
+            "/api/v1/debug/backend-traffic-policy",
+            get(backend_traffic_policy_observation),
+        )
         // server-info needs State<Arc<ConfigClient>>, so it must precede .with_state.
         .route("/api/v1/server-info", get(get_server_info))
         .with_state(config_client)
@@ -1734,3 +1804,7 @@ mod store_stats_tests;
 #[cfg(test)]
 #[path = "../../tests/unit/api/mod_test/router_shape_tests.rs"]
 mod router_shape_tests;
+
+#[cfg(test)]
+#[path = "../../tests/unit/api/mod_test/backend_traffic_policy_tests.rs"]
+mod backend_traffic_policy_tests;
