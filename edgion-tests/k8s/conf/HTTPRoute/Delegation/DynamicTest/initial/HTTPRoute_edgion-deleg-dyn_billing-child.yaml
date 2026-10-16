@@ -15,3 +15,10 @@ spec:
       backendRefs:
         - name: child-dyn-svc
           port: 30001
+    - matches:
+        - path:
+            type: RegularExpression
+            value: '^/api/v1/billing/?guard$'
+      backendRefs:
+        - name: child-dyn-svc
+          port: 30001

@@ -262,6 +262,9 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
 
     async fn parse(&self, mut route: HTTPRoute, _ctx: &HandlerContext) -> ProcessResult<HTTPRoute> {
         super::route_auth::scrub_route(&mut route);
+        for rule in route.spec.rules.iter_mut().flatten() {
+            rule.resolved_parent_match = None;
+        }
         let source_valid = HttpRouteBackendRefs::from_route(&route).is_ok();
         let grant_owner = Self::create_resource_ref(&route);
         _ctx.secret_ref_manager().clear_value_refs(&grant_owner);

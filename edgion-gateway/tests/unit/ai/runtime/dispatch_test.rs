@@ -208,6 +208,7 @@ fn denied_route_unit() -> Arc<HttpRouteRuleUnit> {
         Arc::new(PluginRuntime::new()),
     );
     Arc::new(HttpRouteRuleUnit {
+        parent_match: None,
         session_persistence_ttl_secs: None,
         resource_key: "tenant-a/route".to_string(),
         matched_info: MatchInfo {
@@ -225,6 +226,7 @@ fn denied_route_unit() -> Arc<HttpRouteRuleUnit> {
             annotations_meta: None,
         },
         rule: Arc::new(HTTPRouteRule {
+            resolved_parent_match: None,
             name: None,
             resolved_terminal_route_uid: None,
             resolved_ai_admission: None,

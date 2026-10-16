@@ -103,6 +103,7 @@ fn session_lifetime_context(grpc: bool, policy: serde_json::Value) -> EdgionHttp
         let runtime = HttpRouteRuleUnit::compile_http_rule(&route, 0).unwrap();
         let matched = serde_json::from_value(serde_json::json!({"path":{"type":"PathPrefix", "value":"/"}})).unwrap();
         ctx.route_unit = Some(Arc::new(HttpRouteRuleUnit {
+            parent_match: None,
             session_persistence_ttl_secs: runtime.session_persistence_ttl_secs,
             resource_key: "default/session-wire".into(),
             matched_info: crate::MatchInfo::new("default".into(), "session-wire".into(), 0, 0, matched, 0),

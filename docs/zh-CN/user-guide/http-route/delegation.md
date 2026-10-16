@@ -77,14 +77,21 @@ spec:
 ### 子路由
 
 - 子路由路径是**绝对路径**，必须按段边界落在被委派前缀之内（`/api/v1/billing`
-  接受 `/api/v1/billing/pay`，不接受 `/api/v1/billingX`）。越界规则被丢弃并在父
+  接受 `/api/v1/billing/pay`，不接受 `/api/v1/billingX`）。越界 Exact/PathPrefix 规则被丢弃并在父
   路由 status 上报。
 - 包含检查在**归一化**（点段、百分号编码）之后进行，因此 `/api/../admin` 无法逃出
   `/api` 委派前缀。
-- 允许 `Exact` 与 `RegularExpression`，只要落在前缀之内。正则必须以 `^` 加字面前
-  缀开头，且不能使用交替（`|`）——数据面的正则匹配是非锚定的，不带 `^` 的模式和
-  交替分支都会被拒绝。
-- 没有 path 的子 match 继承被委派前缀。
+- `Exact` / `PathPrefix` 保留静态包含检查。`RegularExpression` 支持普通正则语法，
+  包括交替与非锚定模式；请求必须同时满足子正则和所有祖先的 `PathPrefix`。
+  父子检查使用同一条规范化后的完整路径，不自动拼接或剥离父前缀。
+  例如父 `/api` 下的 `^/api/?secret$` 可以匹配 `/api/secret`，但不能匹配
+  `/apisecret`。父检查失败会继续尝试其他候选；与父范围完全不相交的正则合法，
+  但永远不会命中，也不会因此产生越界状态错误。
+- 父条件使用普通路径匹配器，支持 `/:param` 和 `/::` 字面冒号转义。
+  Exact/PathPrefix 静态包含检查仍然保守，不会推导 `/:tenant` 包含 `/acme`。
+- 终端子 match 没有 path 或为默认 `PathPrefix /` 时继承被委派前缀。
+  继续委派的中间规则仍须显式指定父范围内的前缀；非根父范围下省略中间路径或
+  使用默认根路径仍不支持。
 - 子路由**不能**设置 `spec.hostnames`（hostname 由根路由 / listener 决定）；违规
   的子路由整体跳过。
 - 子路由可以继续向下委派（多级）。循环引用会被拒绝，链条深度上限为 8。
@@ -101,7 +108,10 @@ spec:
 - 每个 `ExtensionRef` 仍属于声明它的 HTTPRoute：父 filter 在父路由 namespace 中解析
   EdgionPlugins，子 filter 摊平后仍在子路由 namespace 中解析。
 - 委派规则 match 里的 `headers` / `queryParams` / `method` 约束会合并进子 match；
-  发生矛盾时该子规则被丢弃。
+  对末级正则 match，只跳过条件不兼容的父 OR 分支，保留兼容分支；如果任一子
+  match 没有兼容的父分支，则丢弃该子规则。末级 Exact/PathPrefix match 遇到
+  冲突时仍丢弃整个规则。中间委派会跳过不兼容的父子配对；每个中间 match 都须
+  保留至少一个兼容的父范围，否则丢弃该中间规则。
 - `timeouts` / `retry` / `sessionPersistence`：子规则自己写了用子的，否则继承最近
   一级祖先的值。
 

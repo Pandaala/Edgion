@@ -19,6 +19,7 @@ fn create_test_route_unit(namespace: &str, name: &str, regex_pattern: &str, rule
     };
 
     let rule = Arc::new(HTTPRouteRule {
+        resolved_parent_match: None,
         name: None,
         resolved_terminal_route_uid: None,
         resolved_ai_admission: None,
@@ -46,6 +47,7 @@ fn create_test_route_unit(namespace: &str, name: &str, regex_pattern: &str, rule
     let backends = rule_rt.backends;
     let plugin_runtime = rule_rt.plugin_runtime;
     Arc::new(HttpRouteRuleUnit {
+        parent_match: None,
         session_persistence_ttl_secs: None,
         plugin_runtime,
         backends,
@@ -401,4 +403,84 @@ fn test_large_number_of_routes() {
     assert!(engine.routes.iter().any(|r| r.matches_path("/route0/test")));
     assert!(engine.routes.iter().any(|r| r.matches_path("/route50/test")));
     assert!(engine.routes.iter().any(|r| r.matches_path("/route99/test")));
+}
+
+#[tokio::test]
+async fn arch156_regex_candidates_check_parent_before_winner_in_both_engines() {
+    use crate::ctx::NormalizedHostname;
+    use crate::plugins::publication::{inputs::GatewayInput, PluginPublisher};
+    use crate::routes::common::resolve_parent_refs;
+    use edgion_resources::{HTTPRoute, ListenerKey};
+    use tokio::io::AsyncWriteExt;
+
+    let publisher = PluginPublisher::new();
+    let gateway: edgion_resources::Gateway = crate::test_current_status::from_value(serde_json::json!({
+        "metadata": {"namespace": "default", "name": "gw"},
+        "spec": {"gatewayClassName": "test", "listeners": [{"name": "http", "port": 8080, "protocol": "HTTP"}]}
+    }))
+    .unwrap();
+    publisher.replace_gateways(std::collections::HashMap::from([(
+        "default/gw".into(),
+        GatewayInput::from_gateway(&gateway),
+    )]));
+    let publication = publisher.snapshot();
+    let key = ListenerKey::new("0.0.0.0:8080".parse().unwrap(), "HTTP");
+    let index = publication.listener_index(&key).unwrap();
+    let refs =
+        serde_json::from_value::<Vec<edgion_resources::ParentReference>>(serde_json::json!([{"name": "gw"}])).unwrap();
+    let refs: Arc<[_]> = resolve_parent_refs(&refs, "default").into();
+    for (pattern, inside, outside) in [
+        ("^/api/?secret$", "/api/secret", "/apisecret"),
+        ("^/api", "/api", "/apix"),
+        ("^/api/x|/evil", "/api/x", "/evil"),
+        ("secret", "/api/secret", "/outside/secret"),
+        ("(?i)^/api", "/api/x", "/API/x"),
+        (r"^/api(?:/x)?\z", "/api/x", "/api"),
+    ] {
+        // The last case uses a narrower parent to prove exact-prefix regexes
+        // remain constrained by the actual effective scope.
+        let prefix = if pattern.contains("(?:") { "/api/x" } else { "/api" };
+        let source: HTTPRoute = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "parent", "namespace": "default"}, "spec": {"resolvedRules": [{
+                "matches": [{"path": {"type": "RegularExpression", "value": pattern}}],
+                "resolvedParentMatch": {"kind": "delegated", "matches": [{"pathPrefixes": [prefix]}]}
+            }]}
+        }))
+        .unwrap();
+        let compiled = HttpRouteRuleUnit::compile_http_rule(&source, 0).unwrap();
+        let mut child = create_test_route_unit("default", "child", pattern, 0);
+        let unit = Arc::make_mut(&mut child);
+        unit.parent_match = Some(compiled.parent_matches[0].clone());
+        unit.parent_refs = Some(refs.clone());
+        let mut fallback = create_test_route_unit("default", "fallback", ".*", 0);
+        Arc::make_mut(&mut fallback).parent_refs = Some(refs.clone());
+        for linear in [false, true] {
+            let mut engine = RegexRoutesEngine::build(vec![fallback.clone(), child.clone()]);
+            if linear {
+                engine.regex_set = None;
+            }
+            for (path, expected) in [(inside, "child"), (outside, "fallback")] {
+                let (mut client, server) = tokio::io::duplex(1024);
+                client
+                    .write_all(format!("GET {path} HTTP/1.1\r\nHost: example.com\r\n\r\n").as_bytes())
+                    .await
+                    .unwrap();
+                let mut session = Session::new_h1(Box::new(server));
+                assert!(session.read_request().await.unwrap());
+                let mut ctx = EdgionHttpContext::default();
+                ctx.request_info.normalized_current_path = path.into();
+                ctx.request_info.hostname = NormalizedHostname::new("example.com");
+                let result = engine.match_route(&mut session, &ctx, index).unwrap().unwrap();
+                assert_eq!(
+                    result.route_unit.matched_info.rsc.name, expected,
+                    "{pattern} {path}, linear={linear}"
+                );
+            }
+        }
+        // Removing delegation leaves the same ordinary regex free to match
+        // the outside witness; parent policy is not baked into regex syntax.
+        let mut ordinary = (*child).clone();
+        ordinary.parent_match = None;
+        assert!(ordinary.matches_path(outside));
+    }
 }

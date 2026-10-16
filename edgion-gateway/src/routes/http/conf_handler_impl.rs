@@ -3,7 +3,7 @@ use crate::plugins::PluginRuntime;
 use crate::routes::common::{filter_accepted_parent_refs, gateways_from_parent_refs, resolve_parent_refs};
 use crate::routes::http::match_engine::radix_route_match::RadixRouteMatchEngine;
 use crate::routes::http::match_engine::regex_routes_engine::RegexRoutesEngine;
-use crate::routes::http::match_unit::{CompiledBackend, HttpRuleRuntime, MatchSpecificity};
+use crate::routes::http::match_unit::{CompiledBackend, CompiledParentMatch, HttpRuleRuntime, MatchSpecificity};
 use crate::routes::http::routes_mgr::{
     resolved_listeners_for_route, DomainRouteRules, GlobalHttpRouteManagers, RouteRules,
 };
@@ -312,6 +312,7 @@ fn is_regex_path(match_item: &HTTPRouteMatch) -> bool {
 
 /// Shared context for building one `HttpRouteRuleUnit` (normal or regex).
 struct RouteUnitCtx<'a> {
+    parent_match: Option<Arc<CompiledParentMatch>>,
     session_persistence_ttl_secs: Option<u64>,
     namespace: &'a str,
     name: &'a str,
@@ -362,6 +363,7 @@ fn create_regex_route_unit(ctx: RouteUnitCtx<'_>) -> Result<HttpRouteRuleUnit, S
     let plugin_runtime = ctx.plugin_runtime.clone();
     let backend_finder = ctx.backend_finder.clone();
     Ok(HttpRouteRuleUnit {
+        parent_match: ctx.parent_match,
         session_persistence_ttl_secs: ctx.session_persistence_ttl_secs,
         plugin_runtime,
         backends: ctx.backends.clone(),
@@ -401,6 +403,7 @@ fn build_normal_route_unit(ctx: RouteUnitCtx<'_>) -> HttpRouteRuleUnit {
     let plugin_runtime = ctx.plugin_runtime.clone();
     let backend_finder = ctx.backend_finder.clone();
     HttpRouteRuleUnit {
+        parent_match: ctx.parent_match,
         session_persistence_ttl_secs: ctx.session_persistence_ttl_secs,
         plugin_runtime,
         backends: ctx.backends.clone(),
@@ -499,6 +502,7 @@ fn append_route_to_domains(
                 domain_rules,
                 hostnames,
                 RouteUnitCtx {
+                    parent_match: rule_rt.parent_matches.get(match_id).cloned(),
                     session_persistence_ttl_secs: rule_rt.session_persistence_ttl_secs,
                     namespace: &validated.namespace,
                     name: &validated.name,

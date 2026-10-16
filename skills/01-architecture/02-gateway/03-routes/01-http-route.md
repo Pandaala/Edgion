@@ -73,6 +73,27 @@ a bucketing aid, not authorization for another parent on a shared socket. See th
 - `RouteRules.match_route` tries the radix Exact/PathPrefix engine first and uses the regex engine
   only as a fallback, preserving `Exact > PathPrefix > RegularExpression`.
 
+## Delegated parent path constraints (ARCH-156)
+
+Rule compilation validates `resolvedParentMatch` before building plugins.
+Resolved rules require explicit `direct` or `delegated` provenance. Delegated
+scope counts must match effective match counts; each scope contains 1..8 absolute
+ancestor prefixes. Each candidate holds an immutable shared compiled radix tree
+from its own rule generation. These prefixes are already BASE-normalized by the
+Controller; Gateway must not BASE-normalize them again. Canonical `RadixPath`
+trailing-slash handling and the shared radix parser preserve segment boundaries,
+parameters, and escaped colons.
+
+`deep_match` checks every ancestor against `ctx.path()` before choosing a winner,
+for radix, RegexSet, and linear fallback alike. Failure continues selection.
+Inherited header/query/method predicates are already merged and are not duplicated.
+At most eight inserted IDs bound both inline match results (capacity eight) and
+DFS frontier (capacity sixteen); this guard adds no request heap allocation,
+locks, regex compilation, tracing, or global parent lookup. It introduces no
+new store or independently published state. Old candidates keep their own guards
+across reload. Typed-valid malformed scopes withdraw the affected effective rule;
+raw serde failures retain the existing transport error boundary.
+
 ## proxy_http implementation
 
 `EdgionHttpProxy` implements Pingora's `ProxyHttp` trait. Key callbacks during the request lifecycle:

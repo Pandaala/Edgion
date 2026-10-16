@@ -735,3 +735,29 @@ fn session_lifetime_projection_preserves_strictness_and_rounding() {
         "cookieConfig.lifetimeType 'Permanent' requires absoluteTimeout"
     );
 }
+
+#[test]
+fn parent_match_transport_is_required_inside_variant_and_schema_hidden() {
+    for value in [
+        serde_json::json!({"kind": "direct"}),
+        serde_json::json!({"kind": "delegated", "matches": [{"pathPrefixes": ["/api", "/api/v1"]}]}),
+    ] {
+        let rule: HTTPRouteRule = serde_json::from_value(serde_json::json!({"resolvedParentMatch": value})).unwrap();
+        assert_eq!(
+            serde_json::to_value(rule.clone()).unwrap()["resolvedParentMatch"],
+            value
+        );
+    }
+    for value in [
+        serde_json::json!({"kind": "delegated"}),
+        serde_json::json!({"kind": "delegated", "matches": [{}]}),
+        serde_json::json!({"kind": "unknown"}),
+        serde_json::json!({"kind": "direct", "matches": []}),
+    ] {
+        assert!(serde_json::from_value::<HTTPRouteRule>(serde_json::json!({"resolvedParentMatch": value})).is_err());
+    }
+    let schema = serde_json::to_value(schemars::schema_for!(HTTPRouteRule)).unwrap();
+    assert!(!schema.to_string().contains("resolvedParentMatch"));
+    let ordinary: HTTPRouteRule = serde_json::from_value(serde_json::json!({})).unwrap();
+    assert!(ordinary.resolved_parent_match.is_none());
+}

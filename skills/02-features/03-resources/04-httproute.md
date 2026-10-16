@@ -359,8 +359,16 @@ rules:
 
 Key semantics (canonical user doc: [`docs/en/user-guide/http-route/delegation.md`](../../../docs/en/user-guide/http-route/delegation.md); architecture: [`../../01-architecture/05-resources/04-http-route.md`](../../01-architecture/05-resources/04-http-route.md)):
 
-- Child paths are absolute and must fall inside the delegated prefix (segment
-  boundary); out-of-prefix child rules are dropped + reported (`PartiallyInvalid`).
+- Child paths are absolute. Out-of-prefix `Exact` / `PathPrefix` child rules
+  fail static segment-boundary containment, are dropped, and are reported
+  (`PartiallyInvalid`).
+- A `RegularExpression` child matches only when its regex and every ancestor's
+  `PathPrefix` match the same normalized request path. A failed parent check
+  skips that candidate and continues route selection. A regex disjoint from
+  its parent scope is valid but never matches; it does not produce an
+  out-of-prefix status error. Incompatible parent header/query/method OR branches
+  are skipped for terminal regex matches; compatible branches remain. A child
+  match with no compatible parent branch still causes its rule to be dropped.
 - Children must not set `hostnames`; children may delegate further (cycle
   detection, depth cap 8); children may reverse-lock parents via
   `parentRefs {kind: HTTPRoute}`.

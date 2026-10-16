@@ -204,7 +204,7 @@ impl TestSuite for DelegationDynamicInitialTestSuite {
         "HTTPRoute Delegation Dynamic - Initial Phase"
     }
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![Self::pay_routes_pay2_missing()]
+        vec![Self::pay_routes_pay2_missing(), delegated_regex_scope_case(false)]
     }
 }
 
@@ -239,6 +239,36 @@ impl TestSuite for DelegationDynamicUpdateTestSuite {
         "HTTPRoute Delegation Dynamic - Update Phase"
     }
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![Self::pay2_routes_pay_missing()]
+        vec![Self::pay2_routes_pay_missing(), delegated_regex_scope_case(true)]
     }
+}
+
+fn delegated_regex_scope_case(updated: bool) -> TestCase {
+    TestCase::new(
+        "delegated_regex_parent_boundary",
+        "Regex candidates stay inside the current parent prefix",
+        move |ctx: TestContext| {
+            Box::pin(async move {
+                let start = Instant::now();
+                let suffix = if updated { "2" } else { "" };
+                let old_suffix = if updated { "" } else { "2" };
+                for (path, expected) in [
+                    (format!("/api/v1/billing/guard{suffix}"), 200),
+                    (format!("/api/v1/billingguard{suffix}"), 404),
+                    (format!("/api/v1/billing/guard{old_suffix}"), 404),
+                ] {
+                    match dyn_status(&ctx, &path).await {
+                        Ok(actual) if actual == expected => {}
+                        result => {
+                            return TestResult::failed(
+                                Instant::now().saturating_duration_since(start),
+                                format!("{path}: expected {expected}, got {result:?}"),
+                            )
+                        }
+                    }
+                }
+                TestResult::passed(Instant::now().saturating_duration_since(start))
+            })
+        },
+    )
 }

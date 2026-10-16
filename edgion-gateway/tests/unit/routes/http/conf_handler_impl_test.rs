@@ -1361,6 +1361,9 @@ fn test_resolved_rules_compiled_instead_of_spec_rules() {
         ]))
         .unwrap(),
     );
+    for rule in route.spec.resolved_rules.iter_mut().flatten() {
+        rule.resolved_parent_match = Some(edgion_resources::resources::http_route::ResolvedParentMatch::Direct {});
+    }
     route.pre_parse();
 
     let mut data = HashMap::new();
@@ -1386,6 +1389,9 @@ fn test_invalid_rule_indices_ignored_when_resolved_rules_present() {
         ]))
         .unwrap(),
     );
+    for rule in route.spec.resolved_rules.iter_mut().flatten() {
+        rule.resolved_parent_match = Some(edgion_resources::resources::http_route::ResolvedParentMatch::Direct {});
+    }
     route.pre_parse();
 
     let mut data = HashMap::new();
@@ -1428,6 +1434,9 @@ fn invalid_request_mirror_is_skipped_even_in_resolved_rules() {
         ]))
         .unwrap(),
     );
+    for rule in route.spec.resolved_rules.iter_mut().flatten() {
+        rule.resolved_parent_match = Some(edgion_resources::resources::http_route::ResolvedParentMatch::Direct {});
+    }
     route.pre_parse();
 
     let data = HashMap::from([("test-mirror-validation/flat".to_string(), Arc::new(route))]);
@@ -1456,6 +1465,9 @@ fn credentialed_expose_headers_rejected_before_publication() {
         if resolved {
             route.spec.resolved_rules = route.spec.rules.take();
             route.spec.invalid_rule_indices = Some(vec![1]);
+        }
+        for rule in route.spec.resolved_rules.iter_mut().flatten() {
+            rule.resolved_parent_match = Some(edgion_resources::resources::http_route::ResolvedParentMatch::Direct {});
         }
         route.pre_parse();
         assert!(route.status.is_none());
@@ -1493,6 +1505,10 @@ fn invalid_native_cors_rejected_before_publication_without_controller_indices() 
             if resolved {
                 route.spec.resolved_rules = route.spec.rules.take();
             }
+            for rule in route.spec.resolved_rules.iter_mut().flatten() {
+                rule.resolved_parent_match =
+                    Some(edgion_resources::resources::http_route::ResolvedParentMatch::Direct {});
+            }
             route.pre_parse();
             assert!(route.spec.invalid_rule_indices.is_none());
             let domains =
@@ -1526,6 +1542,9 @@ fn invalid_request_transform_is_dropped_without_hiding_valid_siblings() {
         );
         if resolved {
             route.spec.resolved_rules = route.spec.rules.take();
+        }
+        for rule in route.spec.resolved_rules.iter_mut().flatten() {
+            rule.resolved_parent_match = Some(edgion_resources::resources::http_route::ResolvedParentMatch::Direct {});
         }
         route.pre_parse();
         let domains =
@@ -1566,6 +1585,9 @@ fn backend_cors_scope_rejected_without_controller_status_or_for_resolved_rules()
             route.spec.resolved_rules = route.spec.rules.take();
             // These indices address authored rules, never resolved rules.
             route.spec.invalid_rule_indices = Some(vec![1, 4]);
+        }
+        for rule in route.spec.resolved_rules.iter_mut().flatten() {
+            rule.resolved_parent_match = Some(edgion_resources::resources::http_route::ResolvedParentMatch::Direct {});
         }
         route.pre_parse();
         assert!(route.status.is_none());
@@ -1892,6 +1914,10 @@ fn session_lifetime_publication_retains_old_generation() {
             if resolved {
                 route.spec.resolved_rules = route.spec.rules.clone();
             }
+            for rule in route.spec.resolved_rules.iter_mut().flatten() {
+                rule.resolved_parent_match =
+                    Some(edgion_resources::resources::http_route::ResolvedParentMatch::Direct {});
+            }
             route.pre_parse();
             Arc::new(route)
         };
@@ -1950,5 +1976,113 @@ fn session_lifetime_publication_retains_old_generation() {
                 .session_persistence_ttl_secs,
             Some(7)
         );
+    }
+}
+
+#[test]
+fn arch156_malformed_parent_scope_withdraws_rule_and_clean_update_recovers() {
+    let mut route = build_route_with_two_rules("scope-validation", "parent");
+    route.spec.resolved_rules = Some(
+        serde_json::from_value(serde_json::json!([
+            {"matches": [{"path": {"type": "RegularExpression", "value": "^/api"}}]},
+            {"matches": [{"path": {"value": "/sibling"}}], "resolvedParentMatch": {"kind": "direct"}}
+        ]))
+        .unwrap(),
+    );
+    for metadata in [
+        serde_json::Value::Null,
+        serde_json::json!({"kind": "delegated", "matches": []}),
+        serde_json::json!({"kind": "delegated", "matches": [{"pathPrefixes": []}]}),
+        serde_json::json!({"kind": "delegated", "matches": [{"pathPrefixes": ["relative"]}]}),
+        serde_json::json!({"kind": "delegated", "matches": [{"pathPrefixes": vec!["/api"; 9]}]}),
+    ] {
+        route.spec.resolved_rules.as_mut().unwrap()[0].resolved_parent_match =
+            serde_json::from_value(metadata).unwrap();
+        route.pre_parse();
+        let data = HashMap::from([("scope-validation/parent".into(), Arc::new(route.clone()))]);
+        let domains = parse_http_routes_to_domain_rules(&data);
+        assert_eq!(domain_unit_paths(&domains, "test.example.com"), ["/sibling"]);
+        assert!(domains["test.example.com"].1.is_empty());
+    }
+    route.spec.resolved_rules.as_mut().unwrap()[0].resolved_parent_match = serde_json::from_value(serde_json::json!({
+        "kind": "delegated", "matches": [{"pathPrefixes": ["/api"]}]
+    }))
+    .unwrap();
+    route.pre_parse();
+    let domains =
+        parse_http_routes_to_domain_rules(&HashMap::from([("scope-validation/parent".into(), Arc::new(route))]));
+    assert_eq!(domains["test.example.com"].1.len(), 1);
+    assert!(domains["test.example.com"].1[0].parent_match.is_some());
+    assert_eq!(domains["test.example.com"].0.len(), 1);
+}
+
+#[tokio::test]
+async fn arch156_radix_candidates_preserve_parent_and_nonpath_branch_pairing() {
+    use crate::ctx::{EdgionHttpContext, NormalizedHostname};
+    use crate::plugins::publication::{inputs::GatewayInput, PluginPublisher};
+    use tokio::io::AsyncWriteExt;
+    let publisher = PluginPublisher::new();
+    let gateway: edgion_resources::Gateway = crate::test_current_status::from_value(serde_json::json!({
+        "metadata": {"namespace": "default", "name": "gw"},
+        "spec": {"gatewayClassName": "test", "listeners": [{"name": "http", "port": 8080, "protocol": "HTTP"}]}
+    }))
+    .unwrap();
+    publisher.replace_gateways(HashMap::from([(
+        "default/gw".into(),
+        GatewayInput::from_gateway(&gateway),
+    )]));
+    let publication = publisher.snapshot();
+    let key = ListenerKey::new("0.0.0.0:8080".parse().unwrap(), "HTTP");
+    let index = publication.listener_index(&key).unwrap();
+    let mut route = route_with_paths(
+        "default",
+        "parent",
+        vec!["example.com"],
+        "2026-09-20T00:00:00Z",
+        serde_json::json!([]),
+    );
+    route.spec.parent_refs = serde_json::from_value(serde_json::json!([{"name": "gw"}])).unwrap();
+    route.spec.resolved_rules = serde_json::from_value(serde_json::json!([
+        {"matches": [
+            {"path": {"value": "/api/:tenant"}, "method": "GET", "headers": [{"name": "x-tenant", "value": "a"}], "queryParams": [{"name": "v", "value": "1"}]},
+            {"path": {"value": "/api/:tenant"}, "method": "GET", "headers": [{"name": "x-tenant", "value": "b"}], "queryParams": [{"name": "v", "value": "1"}]}
+        ], "resolvedParentMatch": {"kind": "delegated", "matches": [
+            {"pathPrefixes": ["/api", "/api/a"]}, {"pathPrefixes": ["/api", "/api/b"]}
+        ]}},
+        {"matches": [{"path": {"value": "/api"}}], "resolvedParentMatch": {"kind": "direct"}}
+    ])).unwrap();
+    route.spec.current_status = None;
+    let mut route = crate::test_current_status::processed(route);
+    route.pre_parse();
+    let domains = parse_http_routes_to_domain_rules(&HashMap::from([("default/parent".into(), Arc::new(route))]));
+    let units = domains["example.com"].0.clone();
+    let engine = RadixRouteMatchEngine::build(units).unwrap();
+    for (path, tenant, query, expected_rule, expected_match) in [
+        ("/api/a", "a", "v=1", 0, 0),
+        ("/api/b", "b", "v=1", 0, 1),
+        ("/api/a", "b", "v=1", 1, 0),
+        ("/api/b", "a", "v=1", 1, 0),
+        ("/api/a", "a", "v=2", 1, 0),
+        ("/api/c", "a", "v=1", 1, 0),
+    ] {
+        let (mut client, server) = tokio::io::duplex(1024);
+        client
+            .write_all(
+                format!("GET {path}?{query} HTTP/1.1\r\nHost: example.com\r\nx-tenant: {tenant}\r\n\r\n").as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut session = pingora_proxy::Session::new_h1(Box::new(server));
+        assert!(session.read_request().await.unwrap());
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.normalized_current_path = path.into();
+        ctx.request_info.hostname = NormalizedHostname::new("example.com");
+        ctx.request_info.entry_raw_query = Some(query.into());
+        let selected = engine.match_route(&mut session, &ctx, index).unwrap();
+        assert_eq!(
+            selected.route_unit.matched_info.rule_id, expected_rule,
+            "{path} {tenant} {query}"
+        );
+        assert_eq!(selected.route_unit.matched_info.match_id, expected_match);
     }
 }

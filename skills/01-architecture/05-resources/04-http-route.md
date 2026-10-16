@@ -76,6 +76,25 @@ Apply replaces all prior dependencies and requeues dropped policy keys.
 4. **Resolve resolved_hostnames**: compute the intersection of the route's hostnames with the Gateway Listener's hostnames
 5. (ReferenceGrant `ref_denied` marking happens in step 0, before the flatten — see above)
 
+### Delegated parent match transport (ARCH-156)
+
+The Controller clears authored `resolvedParentMatch` and regenerates it on every
+flattened rule. A tagged `direct` entry identifies a copied root-owned sibling;
+`delegated.matches` aligns one-to-one with the effective rule's matches. Each
+entry carries the conjunction of 1..8 ancestor `pathPrefixes`, BASE-normalized
+once by the Controller. Gateway compiles these values directly; repeating BASE
+normalization can decode overlapping percent escapes a second time and widen scope.
+Headers, query parameters, and method remain in the existing merged match.
+OR branches retain their own pairing; no parent resource object or filter chain
+is re-executed during matching. Existing transitive dependency registration
+requeues the root for descendant changes, including missing-child recovery.
+
+Regex containment is enforced at request matching, not guessed from regex text.
+Exact/Prefix cold containment and the nested omitted-path limitation remain
+unchanged. The schema-hidden sidecar survives conf_sync; the Gateway rejects
+missing or invalid sidecars on resolved rules before runtime construction.
+See the [delegation boundary guard](../../04-review/routing/regression-guards/delegation-root-prefix-inherits-scope.md).
+
 ### on_change
 
 1. Register into `GatewayRouteIndex` (Gateway changes will requeue this route)

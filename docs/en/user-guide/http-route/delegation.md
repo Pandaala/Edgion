@@ -4,7 +4,7 @@ Route delegation lets a platform team hand ownership of a path prefix to an
 application team's namespace, without giving that team any access to the
 Gateway or the root route. A parent HTTPRoute rule points its `backendRef` at
 child HTTPRoutes instead of a Service; the controller expands the tree into a
-flat route table, so the data plane never sees the nesting.
+flat route table carrying the parent path constraints for each effective match.
 
 ## Why
 
@@ -80,17 +80,28 @@ A malformed delegating rule is dropped and reported via the route's
 
 ### Child routes
 
-- Child paths are **absolute** and must fall inside the delegated prefix at a
-  segment boundary (`/api/v1/billing` admits `/api/v1/billing/pay`, not
-  `/api/v1/billingX`). Out-of-prefix rules are dropped and reported on the
-  parent's status.
+- Child paths are **absolute**; delegation does not prepend or strip the parent
+  prefix. Exact/PathPrefix child values must fall inside the delegated prefix
+  at a segment boundary (`/api/v1/billing` admits `/api/v1/billing/pay`, not
+  `/api/v1/billingX`). Out-of-prefix Exact/PathPrefix rules are dropped and
+  reported on the parent's status.
 - Paths are normalized (dot-segments, percent-encoding) before the containment
   check, so `/api/../admin` cannot escape a `/api` delegation.
-- `Exact` and `RegularExpression` matches are allowed if they stay inside the
-  prefix. A regex must start with `^` followed by the literal prefix and must
-  not use alternation (`|`) — the data plane matches regexes unanchored, so
-  unanchored patterns and alternate branches are rejected.
-- A child match without a path inherits the delegated prefix.
+- `RegularExpression` uses the ordinary supported regex syntax, including
+  alternation and unanchored patterns. A request must match both the child
+  regex and **every ancestor's PathPrefix** against the same normalized request
+  path. For parent `/api`, `^/api/?secret$` can route `/api/secret` but cannot
+  route `/apisecret`. A failed parent check skips that candidate and continues
+  route selection. A regex disjoint from its parent scope is valid but never
+  matches; it does not produce an out-of-prefix status error.
+- Parent runtime constraints use the same PathPrefix matcher as ordinary routes,
+  including Edgion's `/:param` segments and `/::` literal-colon escapes. Static
+  Exact/PathPrefix containment remains conservative and does not prove symbolic
+  containment (for example, `/:tenant` does not statically admit `/acme`).
+- A terminal child match without a path, or with default `PathPrefix /`, inherits
+  the delegated prefix. An intermediate rule delegating further must still
+  specify a prefix contained in its parent; omitted/default-root intermediate
+  paths under a non-root parent remain unsupported.
 - Children must **not** set `spec.hostnames` (hostname is owned by the root
   route / listener); violating children are skipped.
 - Children may delegate further (multi-level). Cycles are rejected and the
@@ -112,7 +123,12 @@ A malformed delegating rule is dropped and reported via the route's
   filters resolve EdgionPlugins in the parent Namespace, while child filters
   resolve them in the child Namespace after flattening.
 - The delegating rule's `headers` / `queryParams` / `method` match constraints
-  are merged into child matches; a contradiction drops the child rule.
+  are merged into child matches. For a terminal regex match, an incompatible
+  parent OR branch is skipped; compatible branches remain. If any child match
+  has no compatible parent branch, the child rule is dropped. Terminal
+  Exact/PathPrefix matches retain whole-rule conflict rejection. For intermediate
+  delegation, incompatible parent/child pairs are skipped; each intermediate
+  match must retain at least one compatible parent scope, or its rule is dropped.
 - `timeouts` / `retry` / `sessionPersistence`: the child rule's own value
   wins; otherwise the nearest ancestor's value is inherited.
 

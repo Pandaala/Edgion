@@ -175,6 +175,12 @@ pub const EDGION_API_GROUP: &str = "edgion.io";
 #[derive(Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HTTPRouteRule {
+    /// Controller-derived parent path scope, aligned with effective matches.
+    /// Required on resolved rules; never operator-authored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub resolved_parent_match: Option<ResolvedParentMatch>,
+
     /// Controller-resolved source facts for scoped Gateway AI admission.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
@@ -368,6 +374,7 @@ impl HTTPRouteRule {
 impl Clone for HTTPRouteRule {
     fn clone(&self) -> Self {
         Self {
+            resolved_parent_match: self.resolved_parent_match.clone(),
             resolved_ai_admission: self.resolved_ai_admission.clone(),
             name: self.name.clone(),
             matches: self.matches.clone(),
@@ -390,6 +397,7 @@ impl Clone for HTTPRouteRule {
 impl fmt::Debug for HTTPRouteRule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HTTPRouteRule")
+            .field("resolved_parent_match", &self.resolved_parent_match)
             .field("name", &self.name)
             .field("matches", &self.matches)
             .field("plugins", &self.filters)
@@ -407,6 +415,26 @@ impl fmt::Debug for HTTPRouteRule {
             .finish()
     }
 }
+
+/// Internal delegation provenance. Absence on an effective resolved rule is invalid.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum ResolvedParentMatch {
+    Direct {},
+    Delegated { matches: Vec<ParentMatch> },
+}
+
+/// Conjunctive ancestor paths for one effective match, never an OR of parents.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ParentMatch {
+    /// Ancestor prefixes BASE-normalized once by the Controller. Gateway must
+    /// compile these directly: repeating percent decoding can widen the scope.
+    pub path_prefixes: Vec<String>,
+}
+
+/// Maximum number of parent scopes carried across HTTPRoute delegation.
+pub const MAX_HTTP_ROUTE_DELEGATION_DEPTH: usize = 8;
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]

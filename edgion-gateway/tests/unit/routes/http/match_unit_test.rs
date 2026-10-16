@@ -272,7 +272,7 @@ fn actual_owner_gates_factories_and_effective_backend_proofs() {
     .unwrap();
     assert_eq!(calls, 1);
     assert_eq!(authored.backends[0].permitted_service().unwrap().key(), "default/api");
-    route.spec.resolved_rules = Some(vec![serde_json::from_value(json!({"backendRefs":[
+    route.spec.resolved_rules = Some(vec![serde_json::from_value(json!({"resolvedParentMatch": {"kind": "direct"}, "backendRefs":[
         {"name":"api","namespace":"child","port":1,"weight":0},
         {"name":"api","namespace":"child","port":65535,"weight":3},
         {"name":"denied","namespace":"child","port":80,"weight":5,"refDenied":{"targetNamespace":"child","targetName":"denied"}}
@@ -330,6 +330,8 @@ fn session_lifetime_direct_compile_uses_effective_rule_without_preparse() {
             let rule = serde_json::from_value(serde_json::json!({"sessionPersistence": policy})).unwrap();
             if resolved {
                 route.spec.resolved_rules = Some(vec![rule]);
+                route.spec.resolved_rules.as_mut().unwrap()[0].resolved_parent_match =
+                    Some(ResolvedParentMatch::Direct {});
             } else {
                 route.spec.rules = Some(vec![rule]);
             }
@@ -362,4 +364,111 @@ fn session_lifetime_invalid_policy_rejects_before_plugin_factories() {
         |_, _, _| panic!("invalid session must reject before backend plugins"),
     );
     assert!(runtime.is_none());
+}
+
+#[test]
+fn arch156_parent_paths_use_canonical_radix_conjunction() {
+    for (prefixes, yes, no) in [
+        (vec!["/api"], vec!["/api", "/api/secret"], vec!["/apix", "/apisecret"]),
+        (vec!["/api/"], vec!["/api", "/api/secret"], vec!["/apix"]),
+        (vec!["/"], vec!["/", "/anything"], vec!["relative"]),
+        (
+            vec!["/api/:version", "/api/:version/users"],
+            vec!["/api/v1/users", "/api/v2/users/x"],
+            vec!["/api/v1/other", "/api//users"],
+        ),
+        (
+            vec!["/api/::literal"],
+            vec!["/api/:literal", "/api/:literal/x"],
+            vec!["/api/anything", "/api/::literal"],
+        ),
+        (vec!["/api"; 8], vec!["/api/x"], vec!["/apix"]),
+    ] {
+        let scope = ParentMatch {
+            path_prefixes: prefixes.iter().map(|p| p.to_string()).collect(),
+        };
+        let compiled = CompiledParentMatch::compile(&scope).unwrap();
+        for path in yes {
+            assert!(compiled.matches(path), "{prefixes:?} must match {path}");
+        }
+        for path in no {
+            assert!(!compiled.matches(path), "{prefixes:?} must reject {path}");
+        }
+    }
+}
+
+#[test]
+fn arch156_parent_match_provenance_fails_closed_before_factories() {
+    let base = serde_json::json!({
+        "metadata": {"name": "parent", "namespace": "default"},
+        "spec": {"resolvedRules": [{"matches": [{"path": {"type": "RegularExpression", "value": "^/api"}}]}]}
+    });
+    for metadata in [
+        serde_json::Value::Null,
+        serde_json::json!({"kind": "delegated", "matches": []}),
+        serde_json::json!({"kind": "delegated", "matches": [{"pathPrefixes": []}]}),
+        serde_json::json!({"kind": "delegated", "matches": [{"pathPrefixes": ["relative"]}]}),
+        serde_json::json!({"kind": "delegated", "matches": [{"pathPrefixes": ["/api"]}, {"pathPrefixes": ["/api"]}]}),
+        serde_json::json!({"kind": "delegated", "matches": [{"pathPrefixes": vec!["/api"; 9]}]}),
+    ] {
+        let mut value = base.clone();
+        value["spec"]["resolvedRules"][0]["resolvedParentMatch"] = metadata;
+        let route: HTTPRoute = serde_json::from_value(value).unwrap();
+        assert!(HttpRouteRuleUnit::compile_with_factories(
+            &route,
+            0,
+            |_, _| panic!("invalid scope must be rejected before rule plugins"),
+            |_, _, _| panic!("invalid scope must be rejected before backend plugins")
+        )
+        .is_none());
+    }
+    let mut value = base;
+    value["spec"]["resolvedRules"][0]["resolvedParentMatch"] =
+        serde_json::json!({"kind": "delegated", "matches": [{"pathPrefixes": ["/api"]}]});
+    let route: HTTPRoute = serde_json::from_value(value).unwrap();
+    let old = HttpRouteRuleUnit::compile_http_rule(&route, 0).unwrap();
+    assert!(old.parent_matches[0].matches("/api/x"));
+    let mut updated = route.clone();
+    updated.spec.resolved_rules.as_mut().unwrap()[0].resolved_parent_match = Some(ResolvedParentMatch::Delegated {
+        matches: vec![ParentMatch {
+            path_prefixes: vec!["/api/v1".into()],
+        }],
+    });
+    let new = HttpRouteRuleUnit::compile_http_rule(&updated, 0).unwrap();
+    assert!(!new.parent_matches[0].matches("/api/x"));
+    assert!(old.parent_matches[0].matches("/api/x"));
+    assert!(new.parent_matches[0].matches("/api/v1/x"));
+}
+
+#[test]
+fn arch156_transported_parent_prefix_is_not_decoded_again() {
+    use edgion_resources::path_normalization::{normalize_config_path, PathNormalizationConfig};
+    use edgion_resources::ResourceMeta;
+
+    for (authored, expected, escaped) in [
+        ("/%%32%66", "/%2f", "/evil"),
+        ("/%%34%31", "/%41", "/A/x"),
+        ("/api/./v1/../", "/api/", "/elsewhere"),
+    ] {
+        // Mirror the Controller's wire contract using the canonical normalizer.
+        // Controller tests separately assert actual flattening emits these values.
+        let prefix = normalize_config_path(authored, &PathNormalizationConfig::default());
+        assert_eq!(prefix, expected);
+        let outgoing: HTTPRoute = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "parent", "namespace": "default"},
+            "spec": {"resolvedRules": [{
+                "matches": [{"path": {"type": "RegularExpression", "value": "^/.*$"}}],
+                "resolvedParentMatch": {"kind": "delegated", "matches": [{"pathPrefixes": [prefix]}]}
+            }]}
+        }))
+        .unwrap();
+        let wire = serde_json::to_vec(&outgoing).unwrap();
+        let mut incoming: HTTPRoute = serde_json::from_slice(&wire).unwrap();
+        incoming.pre_parse();
+        let runtime = HttpRouteRuleUnit::compile_http_rule(&incoming, 0).unwrap();
+        let guard = &runtime.parent_matches[0];
+        assert!(!guard.matches(escaped), "{authored} must not widen to accept {escaped}");
+        assert!(guard.matches(expected), "{authored} must preserve {expected}");
+        assert!(guard.matches(&format!("{}/x", expected.trim_end_matches('/'))));
+    }
 }

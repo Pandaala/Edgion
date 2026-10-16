@@ -5,12 +5,12 @@
 //! gateway.networking.k8s.io, kind: HTTPRoute}`. During `parse`, the
 //! controller expands the delegation tree into a flat rule list stored in
 //! `spec.resolved_rules`; the gateway compiles that list and never sees the
-//! nesting.
+//! nesting, but retains each effective match's ancestor path constraints.
 //!
 //! Canonical semantics: `docs/en/user-guide/http-route/delegation.md`; controller
 //! architecture: `skills/01-architecture/05-resources/04-http-route.md`.
 //! Key locked decisions: child paths are absolute and must be contained in the
-//! delegated prefix; parent filters are mandatory and non-overridable (a child
+//! delegated prefix (regexes are intersected with it at runtime); parent filters are mandatory and non-overridable (a child
 //! standard filter of an inherited type invalidates the child rule; ExtensionRef
 //! chains concatenate and retain the declaring route's namespace); child hostnames are forbidden; rule-level attributes
 //! are child-first-else-inherited; wildcard (`name: "*"`) selects all routes in
@@ -31,11 +31,12 @@ use std::sync::Arc;
 use edgion_resources::resources::common::RefDenied;
 use edgion_resources::resources::http_route::{
     DelegationIssue, HTTPBackendRef, HTTPPathMatch, HTTPRoute, HTTPRouteFilter, HTTPRouteFilterType, HTTPRouteMatch,
-    HTTPRouteRetry, HTTPRouteRule, HTTPRouteTimeouts, SessionPersistence, GATEWAY_API_GROUP,
+    HTTPRouteRetry, HTTPRouteRule, HTTPRouteTimeouts, ParentMatch, ResolvedParentMatch, SessionPersistence,
+    GATEWAY_API_GROUP, MAX_HTTP_ROUTE_DELEGATION_DEPTH,
 };
 
 /// Maximum delegation chain depth (number of delegation edges from the root).
-pub const MAX_DELEGATION_DEPTH: usize = 8;
+pub const MAX_DELEGATION_DEPTH: usize = MAX_HTTP_ROUTE_DELEGATION_DEPTH;
 
 const HTTP_ROUTE_KIND: &str = "HTTPRoute";
 
@@ -140,6 +141,7 @@ impl FlattenOutcome {
 #[derive(Clone, Debug)]
 struct DelegatedScope {
     prefix: String,
+    parent_prefixes: Vec<String>,
     headers: Vec<edgion_resources::resources::http_route::HTTPHeaderMatch>,
     query_params: Vec<edgion_resources::resources::http_route::HTTPQueryParamMatch>,
     method: Option<String>,
@@ -273,6 +275,7 @@ pub fn flatten_route(parent: &HTTPRoute, lookup: &dyn DelegationLookup) -> Flatt
             .is_some_and(|brs| brs.iter().any(HTTPBackendRef::is_route_delegation_ref));
         if !is_delegating {
             let mut copied = rule.clone();
+            copied.resolved_parent_match = Some(ResolvedParentMatch::Direct {});
 
             // Non-delegating parent rule: keep operator-authored semantics
             // untouched (implicit backendRef namespace = parent ns is fine
@@ -368,6 +371,7 @@ fn validate_delegating_rule(
     match rule.matches.as_ref() {
         None => scopes.push(DelegatedScope {
             prefix: "/".to_string(),
+            parent_prefixes: vec!["/".to_string()],
             headers: Vec::new(),
             query_params: Vec::new(),
             method: None,
@@ -388,6 +392,7 @@ fn validate_delegating_rule(
                 }
                 scopes.push(DelegatedScope {
                     prefix: normalize_path_value(prefix),
+                    parent_prefixes: vec![normalize_path_value(prefix)],
                     headers: m.headers.clone().unwrap_or_default(),
                     query_params: m.query_params.clone().unwrap_or_default(),
                     method: m.method.clone(),
@@ -665,6 +670,12 @@ fn flatten_child_rules(
                                 Ok((headers, query_params, method)) => {
                                     merged_scopes.push(DelegatedScope {
                                         prefix: own.prefix.clone(),
+                                        parent_prefixes: scope
+                                            .parent_prefixes
+                                            .iter()
+                                            .cloned()
+                                            .chain(std::iter::once(own.prefix.clone()))
+                                            .collect(),
                                         headers,
                                         query_params,
                                         method,
@@ -750,27 +761,41 @@ fn flatten_child_rules(
         });
 
         let mut flattened_matches: Vec<HTTPRouteMatch> = Vec::new();
+        let mut parent_matches = Vec::new();
         let mut drop_reason: Option<String> = None;
         'matches: for cm in &child_matches {
             let mut fitted = false;
+            let mut branch_conflict = None;
+            let is_regex = cm.path.as_ref().and_then(|path| path.match_type.as_deref()) == Some("RegularExpression");
             for scope in scopes {
                 match merge_match(scope, cm) {
                     MergeResult::NotContained => continue,
                     MergeResult::Conflict(e) => {
+                        // Regex paths intersect each parent OR branch at runtime.
+                        // An incompatible conjunction must not discard another branch.
+                        if is_regex {
+                            branch_conflict.get_or_insert(e);
+                            continue;
+                        }
                         drop_reason = Some(e);
                         break 'matches;
                     }
                     MergeResult::Merged(m) => {
                         flattened_matches.push(m);
+                        parent_matches.push(ParentMatch {
+                            path_prefixes: scope.parent_prefixes.clone(),
+                        });
                         fitted = true;
                     }
                 }
             }
             if !fitted {
-                drop_reason = Some(format!(
-                    "match path {:?} is outside every delegated prefix",
-                    cm.path.as_ref().and_then(|p| p.value.as_deref())
-                ));
+                drop_reason = Some(branch_conflict.unwrap_or_else(|| {
+                    format!(
+                        "match path {:?} is outside every delegated prefix",
+                        cm.path.as_ref().and_then(|p| p.value.as_deref())
+                    )
+                }));
                 break;
             }
         }
@@ -785,6 +810,9 @@ fn flatten_child_rules(
         let child_route_identity = terminal_route_identity(child);
         set_terminal_rule_identity(&mut flattened, &child_route_identity, idx);
         flattened.matches = Some(flattened_matches);
+        flattened.resolved_parent_match = Some(ResolvedParentMatch::Delegated {
+            matches: parent_matches,
+        });
         flattened.name = Some(
             rule.name
                 .clone()
@@ -903,8 +931,9 @@ fn merge_match(scope: &DelegatedScope, child_match: &HTTPRouteMatch) -> MergeRes
             // values of resolved_rules at load time, so `/api/../admin` would
             // collapse to `/admin` AFTER a naive string containment check
             // accepted it as being under `/api` — a prefix escape. Normalize
-            // here (idempotent with the gateway's own pass) and persist the
-            // normalized value into the flattened rule.
+            // here and persist the normalized value into the flattened rule.
+            // Exact/Prefix effective paths retain their existing Gateway pass;
+            // ancestor sidecars are already BASE-normalized and are compiled as-is.
             let raw = p.value.as_deref().unwrap_or("/");
             let normalizable = is_normalizable_match_type(match_type);
             let value = if normalizable {
@@ -912,7 +941,7 @@ fn merge_match(scope: &DelegatedScope, child_match: &HTTPRouteMatch) -> MergeRes
             } else {
                 raw.to_string()
             };
-            if !prefix_contains(&scope.prefix, match_type, &value) {
+            if match_type != "RegularExpression" && !prefix_contains(&scope.prefix, match_type, &value) {
                 return MergeResult::NotContained;
             }
             let mut normalized = p.clone();
@@ -1005,28 +1034,6 @@ fn merge_scope_constraints(
     Ok((headers, query_params, method))
 }
 
-/// True if the pattern contains a `|` that is not escaped with a backslash.
-///
-/// Group nesting is deliberately NOT tracked: a delegated regex has no
-/// legitimate need for alternation that our conservative check would wrongly
-/// reject, and tracking groups would risk a parser mismatch with the regex
-/// crate's own precedence rules (the whole point of this guard).
-fn has_unescaped_alternation(pattern: &str) -> bool {
-    let mut escaped = false;
-    for c in pattern.chars() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match c {
-            '\\' => escaped = true,
-            '|' => return true,
-            _ => {}
-        }
-    }
-    false
-}
-
 /// Match types whose path values the gateway normalizes at load time
 /// (`normalize_path_matchers`). Regex patterns are never normalized.
 fn is_normalizable_match_type(match_type: &str) -> bool {
@@ -1050,9 +1057,9 @@ fn normalize_path_value(value: &str) -> String {
 ///
 /// - `PathPrefix v` / `Exact v`: `v == P`, or `P == "/"`, or `v` extends `P`
 ///   at a segment boundary.
-/// - `RegularExpression r`: conservative static check — after stripping a
-///   leading `^`, the pattern must start with the regex-escaped literal `P`
-///   (so a `P` containing regex metacharacters never false-passes).
+///
+/// Regex matches instead carry the scope for runtime conjunction; textual
+/// regular-expression containment cannot prove the required path boundary.
 fn prefix_contains(prefix: &str, match_type: &str, value: &str) -> bool {
     let p = if prefix == "/" {
         "/"
@@ -1065,29 +1072,6 @@ fn prefix_contains(prefix: &str, match_type: &str, value: &str) -> bool {
                 return value.starts_with('/');
             }
             value == p || value.starts_with(&format!("{p}/"))
-        }
-        "RegularExpression" => {
-            // The gateway matches path regexes UNANCHORED
-            // (`Regex::is_match`, see routes/http/match_unit.rs), so a pattern
-            // without a leading `^` can match anywhere in the path regardless
-            // of how it starts. Containment therefore REQUIRES an explicit
-            // anchor followed by the regex-escaped literal prefix.
-            let Some(pattern) = value.strip_prefix('^') else {
-                return false;
-            };
-            // Alternation has the LOWEST precedence, so `^/api/x|/evil` parses
-            // as `(^/api/x)|(/evil)` — the second branch is unanchored and
-            // escapes the prefix. Any unescaped `|` (at any nesting level; we
-            // do not track groups) is rejected conservatively.
-            if has_unescaped_alternation(pattern) {
-                return false;
-            }
-            if p == "/" {
-                return pattern.starts_with('/');
-            }
-            let escaped = regex::escape(p);
-            pattern.starts_with(&escaped)
-                && (pattern.len() == escaped.len() || pattern[escaped.len()..].starts_with('/'))
         }
         _ => false,
     }

@@ -113,6 +113,7 @@ fn http_route_unit(runtime: Arc<PluginRuntime>) -> Arc<HttpRouteRuleUnit> {
         method: None,
     };
     Arc::new(HttpRouteRuleUnit {
+        parent_match: None,
         session_persistence_ttl_secs: None,
         resource_key: "default/http".to_string(),
         matched_info: MatchInfo {
@@ -125,6 +126,7 @@ fn http_route_unit(runtime: Arc<PluginRuntime>) -> Arc<HttpRouteRuleUnit> {
             annotations_meta: None,
         },
         rule: Arc::new(HTTPRouteRule {
+            resolved_parent_match: None,
             name: None,
             resolved_terminal_route_uid: None,
             resolved_ai_admission: None,

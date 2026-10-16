@@ -2169,6 +2169,7 @@ fn direct_endpoint_app_protocol_is_pinned_across_retry_peer_builds() {
 /// weight semantics match what `pick_backend_ref` sees at runtime.
 fn jump_route_unit(backend_refs: Vec<HTTPBackendRef>) -> Arc<HttpRouteRuleUnit> {
     let rule = Arc::new(HTTPRouteRule {
+        resolved_parent_match: None,
         name: None,
         resolved_terminal_route_uid: None,
         resolved_ai_admission: None,
@@ -2189,6 +2190,7 @@ fn jump_route_unit(backend_refs: Vec<HTTPBackendRef>) -> Arc<HttpRouteRuleUnit> 
     let backend_finder = HttpRouteRuleUnit::build_backend_selector(&runtime.backends);
 
     Arc::new(HttpRouteRuleUnit {
+        parent_match: None,
         session_persistence_ttl_secs: None,
         resource_key: "test-ns/test-route".to_string(),
         matched_info: crate::MatchInfo {

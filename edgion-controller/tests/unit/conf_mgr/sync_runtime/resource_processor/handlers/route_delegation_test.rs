@@ -333,27 +333,44 @@ fn prefix_containment_matrix() {
     assert!(!prefix_contains("/api", "Exact", "/ap"));
     // Trailing slash on prefix is tolerated
     assert!(prefix_contains("/api/", "PathPrefix", "/api/v1"));
-    // Regex: must be explicitly anchored — the gateway matches path
-    // regexes UNANCHORED, so a pattern without `^` can match anywhere.
-    assert!(prefix_contains("/api", "RegularExpression", "^/api/[0-9]+"));
-    assert!(!prefix_contains("/api", "RegularExpression", "/api/[0-9]+"));
-    assert!(!prefix_contains("/api", "RegularExpression", ".*/api"));
-    // Regex boundary: /api followed by non-slash is rejected
-    assert!(!prefix_contains("/api", "RegularExpression", "^/apix/[0-9]+"));
+    // Regex containment is deliberately not decided by this helper.
+    assert!(!prefix_contains("/api", "RegularExpression", "^/api/[0-9]+"));
     // Unknown match type is never contained
     assert!(!prefix_contains("/api", "Bogus", "/api/x"));
 }
 
 #[test]
 fn regex_alternation_cannot_escape_prefix() {
-    // `|` has the lowest precedence: `^/api/x|/evil` is `(^/api/x)|(/evil)`,
-    // and the gateway matches path regexes unanchored — the second branch
-    // would route `/evil`. Any unescaped `|` must be rejected.
-    assert!(!prefix_contains("/api", "RegularExpression", "^/api/x|/evil"));
-    assert!(!prefix_contains("/api", "RegularExpression", "^/api/(x|y)"));
-    assert!(!prefix_contains("/", "RegularExpression", "^/a|/b"));
-    // An escaped literal pipe is not alternation and stays acceptable.
-    assert!(prefix_contains("/api", "RegularExpression", r"^/api/x\|y"));
+    for pattern in [
+        "^/api/x|/evil",
+        "^/api/(x|y)",
+        "^/a|/b",
+        r"^/api/x\|y",
+        "^/api/?secret$",
+        "^/api",
+        "secret",
+        "(?i)^/API",
+        "^/elsewhere$",
+    ] {
+        let parent = simple_parent("/api", "billing", "child");
+        let child = route(
+            "billing",
+            "child",
+            serde_json::json!({"rules": [{
+                "matches": [{"path": {"type": "RegularExpression", "value": pattern}}],
+                "resolvedParentMatch": {"kind": "direct"},
+                "backendRefs": [{"name": "svc", "port": 8080}]
+            }]}),
+        );
+        let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
+        assert!(outcome.issues.is_empty(), "{pattern}: {:?}", outcome.issues);
+        let rules = outcome.resolved_rules.unwrap();
+        assert_eq!(rule_paths(&rules), vec![pattern]);
+        let Some(ResolvedParentMatch::Delegated { matches }) = &rules[0].resolved_parent_match else {
+            panic!("regex must retain runtime parent scope");
+        };
+        assert_eq!(matches[0].path_prefixes, ["/api"]);
+    }
 }
 
 #[test]
@@ -1869,5 +1886,157 @@ fn session_lifetime_child_first_else_inherited_across_two_levels() {
         // Transitive dependency registration: root depends on both mid and leaf
         assert!(outcome.named_children.contains("billing/mid"));
         assert!(outcome.named_children.contains("billing/leaf"));
+    }
+}
+
+#[test]
+fn arch156_cascading_parent_scopes_preserve_or_branch_pairing() {
+    let parent = parent_with_rules(serde_json::json!([{
+        "matches": [
+            {"path": {"value": "/api"}, "headers": [{"name": "x-tenant", "value": "a"}]},
+            {"path": {"value": "/api/v1"}, "headers": [{"name": "x-tenant", "value": "b"}]}
+        ],
+        "backendRefs": [{"group": GATEWAY_API_GROUP, "kind": "HTTPRoute", "namespace": "billing", "name": "middle"}]
+    }]));
+    let middle = route(
+        "billing",
+        "middle",
+        serde_json::json!({"rules": [delegating_rule("/api/v1", "billing", "leaf")]}),
+    );
+    let leaf = route(
+        "billing",
+        "leaf",
+        serde_json::json!({"rules": [{
+            "matches": [{"path": {"type": "RegularExpression", "value": "^/api/v1/?secret$"},
+                         "method": "GET", "queryParams": [{"name": "version", "value": "1"}]}],
+            "backendRefs": [{"name": "svc", "port": 8080}]
+        }]}),
+    );
+    let outcome = flatten_route(&parent, &FakeLookup::new(vec![middle, leaf]));
+    assert!(outcome.issues.is_empty());
+    assert_eq!(outcome.named_children.len(), 2);
+    let rules = outcome.resolved_rules.unwrap();
+    let Some(ResolvedParentMatch::Delegated { matches }) = &rules[0].resolved_parent_match else {
+        panic!("delegated")
+    };
+    assert_eq!(matches.len(), 2);
+    assert_eq!(matches[0].path_prefixes, ["/api", "/api/v1"]);
+    assert_eq!(matches[1].path_prefixes, ["/api/v1", "/api/v1"]);
+    for (matched, tenant) in rules[0].matches.as_ref().unwrap().iter().zip(["a", "b"]) {
+        assert_eq!(matched.headers.as_ref().unwrap()[0].value, tenant);
+        assert_eq!(matched.method.as_deref(), Some("GET"));
+        assert_eq!(matched.query_params.as_ref().unwrap()[0].value, "1");
+    }
+}
+
+#[test]
+fn arch156_eight_delegation_edges_retain_all_ancestor_prefixes() {
+    let parent = simple_parent("/api", "billing", "node1");
+    let mut routes = Vec::new();
+    let mut prefix = "/api".to_string();
+    let mut expected = vec![prefix.clone()];
+    for depth in 1..8 {
+        prefix.push_str(&format!("/{depth}"));
+        expected.push(prefix.clone());
+        routes.push(route(
+            "billing",
+            &format!("node{depth}"),
+            serde_json::json!({
+                "rules": [delegating_rule(&prefix, "billing", &format!("node{}", depth + 1))]
+            }),
+        ));
+    }
+    routes.push(route(
+        "billing",
+        "node8",
+        serde_json::json!({"rules": [{
+            "matches": [{"path": {"type": "RegularExpression", "value": format!("^{prefix}/?secret$")}}],
+            "backendRefs": [{"name": "svc", "port": 80}]
+        }]}),
+    ));
+    let outcome = flatten_route(&parent, &FakeLookup::new(routes));
+    assert!(outcome.issues.is_empty(), "{:?}", outcome.issues);
+    assert_eq!(outcome.named_children.len(), 8);
+    let rules = outcome.resolved_rules.unwrap();
+    assert_eq!(rules.len(), 1);
+    let Some(ResolvedParentMatch::Delegated { matches }) = &rules[0].resolved_parent_match else {
+        panic!("terminal candidate must carry its full ancestry");
+    };
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].path_prefixes, expected);
+}
+
+#[test]
+fn arch156_regex_conflicts_skip_only_incompatible_parent_branches() {
+    for field in ["method", "headers", "queryParams"] {
+        for reverse in [false, true] {
+            for all_conflict in [false, true] {
+                let constraint = |value: &str| match field {
+                    "method" => serde_json::json!(value),
+                    _ => serde_json::json!([{"name": "tenant", "value": value}]),
+                };
+                let mut compatible = serde_json::json!({"path": {"value": "/api"}});
+                compatible[field] = constraint(if all_conflict { "POST" } else { "GET" });
+                let mut incompatible = serde_json::json!({"path": {"value": "/admin"}});
+                incompatible[field] = constraint("POST");
+                let mut alternatives = vec![compatible, incompatible];
+                if reverse {
+                    alternatives.reverse();
+                }
+                let mut delegation = delegating_rule("/", "infra", "child");
+                delegation["matches"] = serde_json::json!(alternatives);
+                let parent = parent_with_rules(serde_json::json!([delegation]));
+                let mut terminal = service_rule("^/api/x$", "svc");
+                terminal["matches"][0]["path"]["type"] = serde_json::json!("RegularExpression");
+                terminal["matches"][0][field] = constraint("GET");
+                let child = route("infra", "child", serde_json::json!({"rules": [terminal]}));
+                let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
+                let rules = outcome.resolved_rules.as_ref().unwrap();
+                if all_conflict {
+                    assert!(rules.is_empty(), "{field}, reverse={reverse}");
+                    assert_eq!(dropped_messages(&outcome).len(), 1);
+                    assert!(dropped_messages(&outcome)[0].contains("contradicts"));
+                    continue;
+                }
+                assert!(
+                    outcome.issues.is_empty(),
+                    "{field}, reverse={reverse}: {:?}",
+                    outcome.issues
+                );
+                assert_eq!(rules.len(), 1);
+                let matches = rules[0].matches.as_ref().unwrap();
+                assert_eq!(matches.len(), 1);
+                assert_eq!(serde_json::to_value(&matches[0]).unwrap()[field], constraint("GET"));
+                let Some(ResolvedParentMatch::Delegated { matches: parents }) = &rules[0].resolved_parent_match else {
+                    panic!("retained regex branch must carry its parent scope");
+                };
+                assert_eq!(parents.len(), matches.len());
+                assert_eq!(parents[0].path_prefixes, ["/api"]);
+            }
+        }
+    }
+}
+
+#[test]
+fn arch156_parent_prefix_transport_normalizes_overlapping_escapes_once() {
+    for (authored, expected) in [("/%%32%66", "/%2f"), ("/%%34%31", "/%41")] {
+        let parent = simple_parent(authored, "infra", "child");
+        let child = route(
+            "infra",
+            "child",
+            serde_json::json!({"rules": [{
+                "matches": [{"path": {"type": "RegularExpression", "value": "^/evil$"}}],
+                "backendRefs": [{"name": "svc", "port": 80}]
+            }]}),
+        );
+        let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
+        assert!(outcome.issues.is_empty());
+        let rules = outcome.resolved_rules.unwrap();
+        let wire = serde_json::to_vec(&rules).unwrap();
+        let received: Vec<HTTPRouteRule> = serde_json::from_slice(&wire).unwrap();
+        let Some(ResolvedParentMatch::Delegated { matches }) = &received[0].resolved_parent_match else {
+            panic!("serialized rule must preserve delegation scope");
+        };
+        assert_eq!(matches[0].path_prefixes, [expected]);
     }
 }

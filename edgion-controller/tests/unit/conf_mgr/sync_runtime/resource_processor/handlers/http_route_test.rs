@@ -566,6 +566,8 @@ async fn ai_admission_facts_replace_injected_metadata_after_flattening() {
     rule.resolved_ai_admission = Some(ResolvedAiAdmission {
         backends: vec![ResolvedForwardingTarget::Incompatible],
     });
+    rule.resolved_parent_match =
+        Some(edgion_resources::resources::http_route::ResolvedParentMatch::Delegated { matches: vec![] });
     // An empty wildcard delegation makes the original AI rule a flattened
     // sibling. Its intrinsic retry error must not erase the future gate.
     route.spec.rules.as_mut().unwrap().push(ai_rule(
@@ -579,6 +581,17 @@ async fn ai_admission_facts_replace_injected_metadata_after_flattening() {
     };
     let source = &parsed.spec.rules.as_ref().unwrap()[0];
     let resolved = parsed.spec.resolved_rules.as_ref().unwrap();
+    assert!(
+        source.resolved_parent_match.is_none(),
+        "authored scope metadata is cleared"
+    );
+    assert!(
+        matches!(
+            resolved[0].resolved_parent_match,
+            Some(edgion_resources::resources::http_route::ResolvedParentMatch::Direct {})
+        ),
+        "root-owned sibling receives fresh direct provenance"
+    );
     assert_eq!(resolved.len(), 1, "the invalid AI sibling must remain matchable");
     for rule in [source, &resolved[0]] {
         let facts = rule.resolved_ai_admission.as_ref().unwrap();
