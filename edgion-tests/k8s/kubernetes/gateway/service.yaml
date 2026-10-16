@@ -759,3 +759,7 @@ spec:
     port: 31993
     targetPort: 31993
     protocol: TCP
+  - name: p32005
+    port: 32005
+    targetPort: 32005
+    protocol: TCP

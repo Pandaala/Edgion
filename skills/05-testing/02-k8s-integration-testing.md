@@ -136,7 +136,7 @@ The following types of suites must be rewritten to be "environment-agnostic":
 - `AllEndpointStatus`: switch assertions to set/statistics-based to avoid depending on fixed instances.
 - `HTTPRoute/Backend/LBRoundRobin`, `LBConsistentHash`: distribution assertions based on the real-time endpoint set.
 - `Gateway/StreamPlugins`, `TCPRoute/StreamPlugins`: avoid host-loopback-specific assumptions.
-- `DynamicExternalUpstream`: split the `localhost` loopback-rejection scenario into a local-only case; do not treat it as a default K8s passing condition.
+- `DynamicExternalUpstream`: both fixture trees own a private deny-loopback EGC/class/Gateway on port 32005. Keep the shared K8s loopback allowance unchanged. The two rejection probes require 500/502 plus the exact current request's `BackendLocalhostNotAllowed` error diagnostic; a failed dial is not rejection evidence.
 
 ### 6.3 Recommended new suites (K8s-specific)
 
@@ -185,7 +185,6 @@ The following directories still contain `127.0.0.1/localhost/fixed admin port` a
 - `edgion-tests/src/client/suites/http_route/backend/*`
 - `edgion-tests/src/client/suites/edgion_plugins/direct_endpoint/*`
 - `edgion-tests/src/client/suites/edgion_plugins/all_endpoint_status/*`
-- `edgion-tests/src/client/suites/edgion_plugins/dynamic_external_upstream/*`
 - `edgion-tests/src/client/suites/gateway/allowed_routes/*`
 - `edgion-tests/src/client/suites/gateway/listener_hostname/*`
 - `edgion-tests/src/client/suites/gateway/combined/*`

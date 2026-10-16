@@ -1780,7 +1780,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/GuardrailEncoding" => "EdgionBackend/SingleProvider",
         "EdgionPlugins/DirectEndpoint" => "EdgionPlugins",
         "EdgionPlugins/DynamicInternalUpstream" => "EdgionPlugins",
-        "EdgionPlugins/DynamicExternalUpstream" => "EdgionPlugins",
+        "EdgionPlugins/DynamicExternalUpstream" => "EdgionPlugins/DynamicExternalUpstream",
         "EdgionPlugins/RegionRoute" => "EdgionPlugins",
         "EdgionPlugins/EdgionConfigDataManaged" => "EdgionPlugins",
         "EdgionPlugins/RequestAccessPolicy" => "EdgionPlugins",

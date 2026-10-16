@@ -1,0 +1,8 @@
+# Suite-owned policy: external localhost targets must fail address admission.
+apiVersion: edgion.io/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: deu-egc
+spec:
+  securityProtect:
+    allowLoopbackUpstream: false

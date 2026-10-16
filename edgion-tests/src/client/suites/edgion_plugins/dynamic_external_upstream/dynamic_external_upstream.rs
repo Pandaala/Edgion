@@ -1,6 +1,9 @@
 // DynamicExternalUpstream Integration Test Suite
 //
 // Required config files (in edgion-tests/integration/conf/EdgionPlugins/DynamicExternalUpstream/):
+// - 00_EdgionGatewayConfig_deu-egc.yaml          (explicit deny-loopback policy)
+// - 00_GatewayClass_deu-class.yaml
+// - 00_Gateway_edgion-test_deu-gateway.yaml       (dedicated listener on port 32005)
 // - 01_EdgionPlugins_default_deu-skip.yaml        (fallback mode: onMissing=fallback, onNoMatch=fallback)
 // - 01_EdgionPlugins_default_deu-reject.yaml      (reject mode: onMissing=reject, onNoMatch=reject)
 // - 01_EdgionPlugins_default_deu-regex.yaml       (regex extraction mode)
@@ -11,8 +14,9 @@
 // Test strategy:
 // DynamicExternalUpstream routes to external domains via DNS resolution.
 // In test env, domainMap targets "localhost" which resolves to 127.0.0.1.
-// The loopback security check rejects connections to 127.0.0.1, so
-// matched requests result in 502 (expected security behavior).
+// The suite-owned policy denies loopback in both local and Kubernetes fixtures.
+// The two denial probes require 500/502 plus the current request's canonical
+// BackendLocalhostNotAllowed error; an ordinary dial failure cannot pass.
 //
 // We verify:
 // 1. Plugin request_filter logic via access log (plugin_log entries)
@@ -21,8 +25,82 @@
 // 4. dye presence
 // 5. Loopback rejection (security)
 
+use crate::access_log_client::{trace_id_for_marker, traceparent_for_marker, AccessLogEntry};
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+fn verify_loopback_rejection(status: u16, entry: &AccessLogEntry, trace_id: &str) -> Result<(), String> {
+    if status != 500 && status != 502 {
+        return Err(format!("Expected 500 or 502 for loopback rejection, got {status}"));
+    }
+    if entry.get_nested_str("request_info.trace_id") != Some(trace_id)
+        || !entry.has_diagnostic("error", "BackendLocalhostNotAllowed")
+    {
+        return Err("Missing trace-correlated BackendLocalhostNotAllowed evidence".to_string());
+    }
+    Ok(())
+}
+
+async fn probe_loopback_rejection(ctx: TestContext, host: &str) -> TestResult {
+    let start = Instant::now();
+    let marker = format!("deu-loopback-denial-{}", uuid::Uuid::new_v4());
+    let trace_id = trace_id_for_marker(&marker);
+    let access_logs = ctx.access_log_client();
+    let request = ctx
+        .http_client
+        .get(format!("{}/echo", ctx.edgion_plugins_url()))
+        .header("host", host)
+        .header("X-Target-Region", "us")
+        .header("traceparent", traceparent_for_marker(&marker))
+        .header("access_log", "test_store");
+    let exchange = tokio::time::timeout(Duration::from_secs(10), async {
+        let response = request
+            .send()
+            .await
+            .map_err(|_| "Loopback probe request failed".to_string())?;
+        let status = response.status().as_u16();
+        response
+            .bytes()
+            .await
+            .map_err(|_| "Loopback probe response body read failed".to_string())?;
+        Ok::<_, String>(status)
+    })
+    .await;
+    let outcome = match exchange {
+        Ok(Ok(status)) => match tokio::time::timeout(
+            Duration::from_secs(5),
+            access_logs.get_access_log_with_retry(&marker, 20, 100),
+        )
+        .await
+        {
+            Ok(Ok(entry)) => verify_loopback_rejection(status, &entry, &trace_id),
+            _ => Err("Failed to observe loopback probe access log".to_string()),
+        },
+        Ok(Err(error)) => Err(error),
+        Err(_) => Err("Loopback probe exchange timed out".to_string()),
+    };
+    // Bounded cleanup cannot guarantee deletion after outer cancellation or
+    // terminal publication following an exchange timeout; the store TTL still applies.
+    let cleanup_ok = matches!(
+        tokio::time::timeout(Duration::from_secs(5), access_logs.delete_access_log(&marker)).await,
+        Ok(Ok(true))
+    );
+    match (outcome, cleanup_ok) {
+        (Ok(()), true) => TestResult::passed_with_message(
+            start.elapsed(),
+            "Loopback rejected with the canonical request diagnostic".to_string(),
+        ),
+        (Err(error), true) => TestResult::failed(start.elapsed(), error),
+        (Ok(()), false) => TestResult::failed(
+            start.elapsed(),
+            "Failed to clean up loopback probe access log".to_string(),
+        ),
+        (Err(error), false) => TestResult::failed(
+            start.elapsed(),
+            format!("{error}; failed to clean up loopback probe access log"),
+        ),
+    }
+}
 
 pub struct DynamicExternalUpstreamTestSuite;
 
@@ -117,35 +195,8 @@ impl DynamicExternalUpstreamTestSuite {
     fn skip_matched_localhost_rejected() -> TestCase {
         TestCase::new(
             "skip_matched_localhost_rejected",
-            "Skip mode: matched key with localhost domain → 5xx (loopback rejected)",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-                    let url = format!("{}/echo", ctx.edgion_plugins_url());
-                    match ctx
-                        .http_client
-                        .get(&url)
-                        .header("host", SKIP_HOST)
-                        .header("X-Target-Region", "us")
-                        .send()
-                        .await
-                    {
-                        Ok(resp) => {
-                            let status = resp.status().as_u16();
-                            // Pingora returns 502 or 500 for ConnectError
-                            if status == 502 || status == 500 {
-                                TestResult::passed(start.elapsed())
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 502 or 500 (loopback rejected), got {}", status),
-                                )
-                            }
-                        }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
-                    }
-                })
-            },
+            "Skip mode: matched localhost rejected with the current request diagnostic",
+            |ctx: TestContext| Box::pin(probe_loopback_rejection(ctx, SKIP_HOST)),
         )
     }
 
@@ -333,35 +384,8 @@ impl DynamicExternalUpstreamTestSuite {
     fn reject_matched_localhost_rejected() -> TestCase {
         TestCase::new(
             "reject_matched_localhost_rejected",
-            "Reject mode: matched key with localhost → 5xx (loopback rejected)",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-                    let url = format!("{}/echo", ctx.edgion_plugins_url());
-                    match ctx
-                        .http_client
-                        .get(&url)
-                        .header("host", REJECT_HOST)
-                        .header("X-Target-Region", "us")
-                        .send()
-                        .await
-                    {
-                        Ok(resp) => {
-                            let status = resp.status().as_u16();
-                            // Pingora returns 502 or 500 for ConnectError
-                            if status == 502 || status == 500 {
-                                TestResult::passed(start.elapsed())
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected 502 or 500 (loopback rejected), got {}", status),
-                                )
-                            }
-                        }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
-                    }
-                })
-            },
+            "Reject mode: matched localhost rejected with the current request diagnostic",
+            |ctx: TestContext| Box::pin(probe_loopback_rejection(ctx, REJECT_HOST)),
         )
     }
 
@@ -565,6 +589,10 @@ impl TestSuite for DynamicExternalUpstreamTestSuite {
         "DynamicExternalUpstream"
     }
 
+    fn port_key(&self) -> Option<&str> {
+        Some("EdgionPlugins/DynamicExternalUpstream")
+    }
+
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
             // Skip mode
@@ -584,5 +612,75 @@ impl TestSuite for DynamicExternalUpstreamTestSuite {
             // dye
             Self::dye_header_in_access_log(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn denial_entry(trace_id: &str) -> AccessLogEntry {
+        AccessLogEntry {
+            data: json!({
+                "request_info": {"trace_id": trace_id},
+                "diagnostics": [{"kind": "error", "code": "BackendLocalhostNotAllowed"}]
+            }),
+        }
+    }
+
+    #[test]
+    fn loopback_rejection_requires_expected_status_and_current_trace() {
+        let trace = trace_id_for_marker("loopback-verdict");
+        let entry = denial_entry(&trace);
+        for status in [500, 502] {
+            assert!(verify_loopback_rejection(status, &entry, &trace).is_ok());
+        }
+        for status in [200, 400, 403, 404, 501, 503, 504] {
+            assert!(verify_loopback_rejection(status, &entry, &trace).is_err());
+        }
+        assert!(verify_loopback_rejection(502, &entry, "stale-trace").is_err());
+        for request_info in [json!({}), json!({"trace_id": 42}), json!(null)] {
+            let mut entry = denial_entry(&trace);
+            entry.data["request_info"] = request_info;
+            assert!(verify_loopback_rejection(502, &entry, &trace).is_err());
+        }
+    }
+
+    #[test]
+    fn loopback_rejection_rejects_dial_failure_and_selection_only_evidence() {
+        let trace = trace_id_for_marker("allowed-loopback-dial-failure");
+        let entry = AccessLogEntry {
+            data: json!({
+                "request_info": {"trace_id": trace, "status": 502},
+                "stage_logs": [{"plugins": [{"name": "DynamicExternalUpstream", "log": "upstream selected"}]}],
+                "backend_context": {"upstreams": [{"err": "connection refused"}]}
+            }),
+        };
+        for status in [500, 502] {
+            assert!(verify_loopback_rejection(status, &entry, &trace).is_err());
+        }
+    }
+
+    #[test]
+    fn loopback_rejection_requires_exact_error_diagnostic() {
+        let trace = trace_id_for_marker("loopback-malformed-evidence");
+        for diagnostics in [
+            json!(null),
+            json!([]),
+            json!({"kind": "error", "code": "BackendLocalhostNotAllowed"}),
+            json!([null, "BackendLocalhostNotAllowed"]),
+            json!([{"kind": "info", "code": "BackendLocalhostNotAllowed"}]),
+            json!([{"kind": "error", "code": "BackendAddrLinkLocalNotAllowed"}]),
+            json!([{"kind": "error", "code": "BackendLocalhostNotAllowedExtra"}]),
+            json!([{"kind": "error", "code": 42}]),
+            json!([{"code": "BackendLocalhostNotAllowed"}]),
+            json!([{"kind": "error"}]),
+        ] {
+            let mut entry = denial_entry(&trace);
+            entry.data["diagnostics"] = diagnostics;
+            assert!(verify_loopback_rejection(502, &entry, &trace).is_err());
+        }
+        assert!(verify_loopback_rejection(502, &AccessLogEntry { data: json!({}) }, &trace).is_err());
     }
 }

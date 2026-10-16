@@ -6,9 +6,9 @@ metadata:
   namespace: default
 spec:
   parentRefs:
-    - name: edgion-plugins-gateway
+    - name: deu-gateway
       namespace: edgion-test
-      sectionName: http  # Port 31180
+      sectionName: http  # Port 32005
   hostnames:
     - "deu-reject-test.example.com"
   rules:

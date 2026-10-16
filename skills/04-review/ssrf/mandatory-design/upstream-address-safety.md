@@ -59,3 +59,27 @@ Edgion's local integration fixtures rely on `127.0.0.1` Endpoint/EndpointSlice, 
 [forward-auth-webhook-ssrf.md](../regression-guards/forward-auth-webhook-ssrf.md) closes findings of the form "static operator URI should ban internal access", because ForwardAuth/Webhook's legitimate use case is precisely to access internal services, and a blanket private-network block would break the feature.
 
 This rule is narrower: it does not ban internal networks, only loopback and link-local / metadata; and it focuses on the consistency of safety policies among Gateway upstream dial paths.
+
+## Integration evidence: external-loopback rejection (ARCH-354)
+
+The DynamicExternalUpstream suite owns `deu-egc` with explicit
+`allowLoopbackUpstream: false`, reached through its private GatewayClass and
+Gateway listener on port 32005 in both local and Kubernetes fixtures. Its three
+routes use that listener. The shared Kubernetes EGC legitimately permits loopback
+and must not be changed to satisfy this suite.
+
+The two matched-localhost rejection probes require both HTTP 500/502 and the
+exact fresh request's `BackendLocalhostNotAllowed` error diagnostic in the
+canonical access log. Plugin selection happens before address admission, so
+`upstream selected`, a generic 5xx, or a failed localhost dial does not establish
+rejection. Missing, malformed, wrong-request or unavailable evidence fails.
+The suite reuses canonical traceparent conversion and authenticated AccessLogClient
+retry; bounded marker-specific cleanup preserves unrelated request evidence.
+
+Source and focused regression coverage live in
+`edgion-tests/src/client/suites/edgion_plugins/dynamic_external_upstream/dynamic_external_upstream.rs`.
+Pure verdict tests distinguish genuine denial evidence from ordinary dial failure,
+selection-only logs, stale/missing trace IDs, and wrong/malformed diagnostics.
+They do not execute an admission bypass or prove live Kubernetes publication.
+Re-evaluate this boundary if the diagnostic schema, listener-policy ownership,
+fixture attachments, or terminal logging lifecycle changes.

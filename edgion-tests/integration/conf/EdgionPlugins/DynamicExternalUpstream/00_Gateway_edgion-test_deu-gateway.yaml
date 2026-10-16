@@ -1,0 +1,15 @@
+# Dedicated listener avoids inheriting another suite's loopback allowance.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: deu-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: deu-class
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 32005
+      allowedRoutes:
+        namespaces:
+          from: All
