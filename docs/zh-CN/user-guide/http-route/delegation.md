@@ -87,6 +87,9 @@ spec:
   例如父 `/api` 下的 `^/api/?secret$` 可以匹配 `/api/secret`，但不能匹配
   `/apisecret`。父检查失败会继续尝试其他候选；与父范围完全不相交的正则合法，
   但永远不会命中，也不会因此产生越界状态错误。
+- 普通字面量 Exact/PathPrefix 在配置编译阶段证明被所有祖先包含后，省略请求时的父条件检查；
+  正则、参数路径和无法证明的情况保留检查。父路由修改仍触发委派规则重建。
+- 父路径和普通路由使用 Gateway 的实际规范化策略（包括 `preserve_path_parameters`），只规范化一次。
 - 父条件使用普通路径匹配器，支持 `/:param` 和 `/::` 字面冒号转义。
   Exact/PathPrefix 静态包含检查仍然保守，不会推导 `/:tenant` 包含 `/acme`。
 - 终端子 match 没有 path 或为默认 `PathPrefix /` 时继承被委派前缀。

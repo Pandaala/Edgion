@@ -9,6 +9,9 @@ use crate::runtime::GatewayInfo;
 use crate::MatchInfo;
 use edgion_algo::matcher::radix_path::{PathMatchKind, PathRadixBuilder, PathRadixTree};
 use edgion_resources::err::EdError;
+use edgion_resources::path_normalization::{
+    get_path_normalization_config, normalize_config_path, PathNormalizationConfig,
+};
 use edgion_resources::resources::http_route::{ParentMatch, ResolvedParentMatch, MAX_HTTP_ROUTE_DELEGATION_DEPTH};
 use edgion_resources::resources::refs::route_fields::HttpRouteBackendRefs;
 use edgion_resources::{HTTPBackendRef, HTTPRoute, HTTPRouteRule};
@@ -175,24 +178,29 @@ pub struct CompiledParentMatch {
 }
 
 impl CompiledParentMatch {
-    fn compile(scope: &ParentMatch) -> Option<Self> {
-        if scope.path_prefixes.is_empty() || scope.path_prefixes.len() > MAX_HTTP_ROUTE_DELEGATION_DEPTH {
+    /// Returns the guard and whether every canonical ancestor is literal.
+    fn compile(scope: &ParentMatch, config: &PathNormalizationConfig) -> Option<(Self, bool)> {
+        if scope.raw_path_prefixes.is_empty() || scope.raw_path_prefixes.len() > MAX_HTTP_ROUTE_DELEGATION_DEPTH {
             return None;
         }
         let mut builder = PathRadixBuilder::new();
-        for (id, prefix) in scope.path_prefixes.iter().enumerate() {
+        let mut all_literal = true;
+        for (id, prefix) in scope.raw_path_prefixes.iter().enumerate() {
             if !prefix.starts_with('/') {
                 return None;
             }
-            // Controller already BASE-normalized this transported prefix.
-            // A second decode could turn a literal percent escape into a delimiter.
-            let path = RadixPath::new(prefix, 0, true);
+            let normalized = normalize_config_path(prefix, config);
+            let path = RadixPath::new(&normalized, 0, true);
+            all_literal &= !path.tree_key().contains("/:");
             builder.insert(path.tree_key(), id).ok()?;
         }
-        Some(Self {
-            tree: builder.freeze().ok()?,
-            required: scope.path_prefixes.len(),
-        })
+        Some((
+            Self {
+                tree: builder.freeze().ok()?,
+                required: scope.raw_path_prefixes.len(),
+            },
+            all_literal,
+        ))
     }
 
     fn matches(&self, path: &str) -> bool {
@@ -202,7 +210,11 @@ impl CompiledParentMatch {
 }
 
 /// Validate provenance before constructing any plugins or publishing any units.
-fn compile_parent_matches(route: &HTTPRoute, rule: &HTTPRouteRule) -> Option<Vec<Arc<CompiledParentMatch>>> {
+fn compile_parent_matches(
+    route: &HTTPRoute,
+    rule: &HTTPRouteRule,
+    config: &PathNormalizationConfig,
+) -> Option<Vec<Option<Arc<CompiledParentMatch>>>> {
     match (&rule.resolved_parent_match, route.spec.resolved_rules.is_some()) {
         (None, false) | (Some(ResolvedParentMatch::Direct {}), _) => Some(Vec::new()),
         (Some(ResolvedParentMatch::Delegated { matches }), true) => {
@@ -212,7 +224,26 @@ fn compile_parent_matches(route: &HTTPRoute, rule: &HTTPRouteRule) -> Option<Vec
             }
             matches
                 .iter()
-                .map(|scope| CompiledParentMatch::compile(scope).map(Arc::new))
+                .zip(effective)
+                .map(|(scope, child)| {
+                    let (guard, all_literal) = CompiledParentMatch::compile(scope, config)?;
+                    let redundant = all_literal
+                        && child.path.as_ref().is_some_and(|path| {
+                            let kind = path.match_type.as_deref().unwrap_or("PathPrefix");
+                            if !matches!(kind, "Exact" | "PathPrefix") {
+                                return false;
+                            }
+                            // Child paths already passed Gateway preparse. Reuse the
+                            // canonical matcher, without another BASE decode. For
+                            // literal prefixes, matching the child root proves every
+                            // slash-delimited extension stays inside all ancestors.
+                            let child = RadixPath::new(path.value.as_deref().unwrap_or("/"), 0, kind == "PathPrefix");
+                            child.tree_key().starts_with('/')
+                                && !child.tree_key().contains("/:")
+                                && guard.matches(child.tree_key())
+                        });
+                    Some(if redundant { None } else { Some(Arc::new(guard)) })
+                })
                 .collect()
         }
         _ => None,
@@ -275,8 +306,9 @@ pub struct HttpRouteRuleUnit {
 /// state, so a fresh runtime per match-item would split that state. See
 /// `compile_http_rule`.
 pub struct HttpRuleRuntime {
-    /// Empty for direct rules, otherwise aligned with the effective matches.
-    pub parent_matches: Vec<Arc<CompiledParentMatch>>,
+    /// Empty for direct rules; otherwise aligned with effective matches.
+    /// A None entry is a proven redundant guard, never an omitted scope.
+    pub parent_matches: Vec<Option<Arc<CompiledParentMatch>>>,
     /// Validated lifetime from this effective rule generation, resolved before publication.
     pub session_persistence_ttl_secs: Option<u64>,
     /// Rule-level compiled plugin chain (one per rule, shared across all units).
@@ -359,7 +391,7 @@ impl HttpRouteRuleUnit {
     ) -> Option<HttpRuleRuntime> {
         let references = HttpRouteBackendRefs::from_route(route).ok()?;
         let rule = route.effective_rules()?.get(rule_index)?;
-        let parent_matches = compile_parent_matches(route, rule)?;
+        let parent_matches = compile_parent_matches(route, rule, get_path_normalization_config())?;
         let session_persistence_ttl_secs = rule
             .session_persistence
             .as_ref()

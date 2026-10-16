@@ -502,7 +502,7 @@ fn append_route_to_domains(
                 domain_rules,
                 hostnames,
                 RouteUnitCtx {
-                    parent_match: rule_rt.parent_matches.get(match_id).cloned(),
+                    parent_match: rule_rt.parent_matches.get(match_id).cloned().flatten(),
                     session_persistence_ttl_secs: rule_rt.session_persistence_ttl_secs,
                     namespace: &validated.namespace,
                     name: &validated.name,

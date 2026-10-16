@@ -71,13 +71,24 @@ rule. Intermediate delegation skips incompatible parent/own pairs, but every own
 match must retain at least one compatible parent scope or the intermediate rule
 is dropped. Authored sidecars are cleared/replaced.
 
-Ancestor prefixes are BASE-normalized once by the Controller and compiled directly
-by Gateway. BASE normalization is not idempotent: `/%%32%66` becomes `/%2f`,
-then `/` if decoded again. Repeating it on the sidecar widens the parent boundary.
-Controller flattening/serialization and Gateway preparse/compilation regressions
-pin this contract, with `/%%34%31` as a second overlapping-escape case. Method,
-header and query conflict regressions cover both parent branch orders and the
-all-incompatible outcome. These corrections address the additional ARCH-156 review.
+Ancestor prefixes are transported as authored `rawPathPrefixes`; Gateway applies
+its actual normalization policy exactly once. Controller checks normalized copies
+but retains raw terminal paths and raw inherited nearest prefixes for Gateway.
+This preserves semicolon parameters when `preserve_path_parameters` is enabled.
+BASE normalization is not idempotent: `/%%32%66` becomes `/%2f`, then `/` if
+decoded again. Transport and compilation tests pin both policy settings and
+these overlapping escapes (also `/%%34%31`). Method/header/query conflict tests
+cover both parent branch orders and the all-incompatible outcome.
+
+Gateway may omit the runtime guard only for literal Exact/Prefix children and
+literal ancestors: the canonical radix conjunction must accept the final child
+path. Literal prefix languages are closed under slash-delimited extensions, so
+this proves containment without a second matcher implementation. Regex and
+`/:` syntax, including escaped colons, retain the complete guard, as does any
+unproven relationship. Optional guard entries preserve effective-match indices.
+Resource dependencies and requeue remain intact even when a guard is omitted.
+Controller admission still uses its default normalization policy conservatively;
+Gateway guard/proof is the final boundary under its actual policy.
 Gateway compilation rejects absent sidecars on resolved rules and invalid scope
 counts/content before plugin factories. It compiles canonical radix guards once,
 then shared `deep_match` applies them before selecting a winner. A failure tries

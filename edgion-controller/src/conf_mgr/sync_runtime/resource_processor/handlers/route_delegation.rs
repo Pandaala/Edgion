@@ -141,7 +141,7 @@ impl FlattenOutcome {
 #[derive(Clone, Debug)]
 struct DelegatedScope {
     prefix: String,
-    parent_prefixes: Vec<String>,
+    raw_parent_prefixes: Vec<String>,
     headers: Vec<edgion_resources::resources::http_route::HTTPHeaderMatch>,
     query_params: Vec<edgion_resources::resources::http_route::HTTPQueryParamMatch>,
     method: Option<String>,
@@ -371,7 +371,7 @@ fn validate_delegating_rule(
     match rule.matches.as_ref() {
         None => scopes.push(DelegatedScope {
             prefix: "/".to_string(),
-            parent_prefixes: vec!["/".to_string()],
+            raw_parent_prefixes: vec!["/".to_string()],
             headers: Vec::new(),
             query_params: Vec::new(),
             method: None,
@@ -392,7 +392,7 @@ fn validate_delegating_rule(
                 }
                 scopes.push(DelegatedScope {
                     prefix: normalize_path_value(prefix),
-                    parent_prefixes: vec![normalize_path_value(prefix)],
+                    raw_parent_prefixes: vec![prefix.to_string()],
                     headers: m.headers.clone().unwrap_or_default(),
                     query_params: m.query_params.clone().unwrap_or_default(),
                     method: m.method.clone(),
@@ -670,11 +670,11 @@ fn flatten_child_rules(
                                 Ok((headers, query_params, method)) => {
                                     merged_scopes.push(DelegatedScope {
                                         prefix: own.prefix.clone(),
-                                        parent_prefixes: scope
-                                            .parent_prefixes
+                                        raw_parent_prefixes: scope
+                                            .raw_parent_prefixes
                                             .iter()
                                             .cloned()
-                                            .chain(std::iter::once(own.prefix.clone()))
+                                            .chain(own.raw_parent_prefixes.iter().cloned())
                                             .collect(),
                                         headers,
                                         query_params,
@@ -783,7 +783,7 @@ fn flatten_child_rules(
                     MergeResult::Merged(m) => {
                         flattened_matches.push(m);
                         parent_matches.push(ParentMatch {
-                            path_prefixes: scope.parent_prefixes.clone(),
+                            raw_path_prefixes: scope.raw_parent_prefixes.clone(),
                         });
                         fitted = true;
                     }
@@ -918,22 +918,16 @@ fn merge_match(scope: &DelegatedScope, child_match: &HTTPRouteMatch) -> MergeRes
     let merged_path: HTTPPathMatch = match child_match.path.as_ref() {
         None => HTTPPathMatch {
             match_type: Some("PathPrefix".to_string()),
-            value: Some(scope.prefix.clone()),
+            value: scope.raw_parent_prefixes.last().cloned(),
         },
         Some(p) if is_root_prefix_match(p) => HTTPPathMatch {
             match_type: Some("PathPrefix".to_string()),
-            value: Some(scope.prefix.clone()),
+            value: scope.raw_parent_prefixes.last().cloned(),
         },
         Some(p) => {
             let match_type = p.match_type.as_deref().unwrap_or("PathPrefix");
-            // Containment MUST be decided on the value the gateway will
-            // ultimately compile: the gateway normalizes Exact/PathPrefix
-            // values of resolved_rules at load time, so `/api/../admin` would
-            // collapse to `/admin` AFTER a naive string containment check
-            // accepted it as being under `/api` — a prefix escape. Normalize
-            // here and persist the normalized value into the flattened rule.
-            // Exact/Prefix effective paths retain their existing Gateway pass;
-            // ancestor sidecars are already BASE-normalized and are compiled as-is.
+            // Check the normalized view conservatively, but transport the raw
+            // value so Gateway applies its actual policy exactly once.
             let raw = p.value.as_deref().unwrap_or("/");
             let normalizable = is_normalizable_match_type(match_type);
             let value = if normalizable {
@@ -944,11 +938,7 @@ fn merge_match(scope: &DelegatedScope, child_match: &HTTPRouteMatch) -> MergeRes
             if match_type != "RegularExpression" && !prefix_contains(&scope.prefix, match_type, &value) {
                 return MergeResult::NotContained;
             }
-            let mut normalized = p.clone();
-            if normalizable {
-                normalized.value = Some(value);
-            }
-            normalized
+            p.clone()
         }
     };
 

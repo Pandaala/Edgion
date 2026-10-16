@@ -369,7 +369,7 @@ fn regex_alternation_cannot_escape_prefix() {
         let Some(ResolvedParentMatch::Delegated { matches }) = &rules[0].resolved_parent_match else {
             panic!("regex must retain runtime parent scope");
         };
-        assert_eq!(matches[0].path_prefixes, ["/api"]);
+        assert_eq!(matches[0].raw_path_prefixes, ["/api"]);
     }
 }
 
@@ -390,8 +390,8 @@ fn dot_segment_child_path_cannot_escape_prefix() {
     let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
     let rules = outcome.resolved_rules.clone().unwrap();
     // The escape attempt is dropped; the benign dot-segment path survives
-    // and is stored NORMALIZED (so the gateway's own pass is idempotent).
-    assert_eq!(rule_paths(&rules), vec!["/api/ok"]);
+    // and is stored raw for one Gateway normalization pass.
+    assert_eq!(rule_paths(&rules), vec!["/api/./ok"]);
     let drops = dropped_messages(&outcome);
     assert_eq!(drops.len(), 1);
     assert!(drops[0].contains("rules[0]"), "drop message: {}", drops[0]);
@@ -1920,8 +1920,8 @@ fn arch156_cascading_parent_scopes_preserve_or_branch_pairing() {
         panic!("delegated")
     };
     assert_eq!(matches.len(), 2);
-    assert_eq!(matches[0].path_prefixes, ["/api", "/api/v1"]);
-    assert_eq!(matches[1].path_prefixes, ["/api/v1", "/api/v1"]);
+    assert_eq!(matches[0].raw_path_prefixes, ["/api", "/api/v1"]);
+    assert_eq!(matches[1].raw_path_prefixes, ["/api/v1", "/api/v1"]);
     for (matched, tenant) in rules[0].matches.as_ref().unwrap().iter().zip(["a", "b"]) {
         assert_eq!(matched.headers.as_ref().unwrap()[0].value, tenant);
         assert_eq!(matched.method.as_deref(), Some("GET"));
@@ -1963,7 +1963,7 @@ fn arch156_eight_delegation_edges_retain_all_ancestor_prefixes() {
         panic!("terminal candidate must carry its full ancestry");
     };
     assert_eq!(matches.len(), 1);
-    assert_eq!(matches[0].path_prefixes, expected);
+    assert_eq!(matches[0].raw_path_prefixes, expected);
 }
 
 #[test]
@@ -2011,15 +2011,15 @@ fn arch156_regex_conflicts_skip_only_incompatible_parent_branches() {
                     panic!("retained regex branch must carry its parent scope");
                 };
                 assert_eq!(parents.len(), matches.len());
-                assert_eq!(parents[0].path_prefixes, ["/api"]);
+                assert_eq!(parents[0].raw_path_prefixes, ["/api"]);
             }
         }
     }
 }
 
 #[test]
-fn arch156_parent_prefix_transport_normalizes_overlapping_escapes_once() {
-    for (authored, expected) in [("/%%32%66", "/%2f"), ("/%%34%31", "/%41")] {
+fn arch156_parent_prefix_transport_preserves_authored_values() {
+    for authored in ["/%%32%66", "/%%34%31", "/api;tenant=admin"] {
         let parent = simple_parent(authored, "infra", "child");
         let child = route(
             "infra",
@@ -2037,6 +2037,40 @@ fn arch156_parent_prefix_transport_normalizes_overlapping_escapes_once() {
         let Some(ResolvedParentMatch::Delegated { matches }) = &received[0].resolved_parent_match else {
             panic!("serialized rule must preserve delegation scope");
         };
-        assert_eq!(matches[0].path_prefixes, [expected]);
+        assert_eq!(matches[0].raw_path_prefixes, [authored]);
+    }
+}
+
+#[test]
+fn arch156_raw_paths_survive_cascade_and_terminal_inheritance() {
+    for raw in ["/%%32%66", "/%%34%31", "/api;tenant=admin"] {
+        let parent = simple_parent(raw, "billing", "middle");
+        let middle_raw = format!("{raw}/v1;scope=read");
+        let middle = route(
+            "billing",
+            "middle",
+            serde_json::json!({
+                "rules": [delegating_rule(&middle_raw, "billing", "leaf")]
+            }),
+        );
+        let child_raw = format!("{middle_raw}/item;id=1");
+        let leaf = route(
+            "billing",
+            "leaf",
+            serde_json::json!({
+                "rules": [service_rule("/", "svc"), service_rule(&child_raw, "svc")]
+            }),
+        );
+        let outcome = flatten_route(&parent, &FakeLookup::new(vec![middle, leaf]));
+        assert!(outcome.issues.is_empty(), "{:?}", outcome.issues);
+        let wire = serde_json::to_vec(&outcome.resolved_rules.unwrap()).unwrap();
+        let received: Vec<HTTPRouteRule> = serde_json::from_slice(&wire).unwrap();
+        assert_eq!(rule_paths(&received), [middle_raw.as_str(), child_raw.as_str()]);
+        for rule in received {
+            let Some(ResolvedParentMatch::Delegated { matches }) = rule.resolved_parent_match else {
+                panic!("delegated");
+            };
+            assert_eq!(matches[0].raw_path_prefixes, [raw, middle_raw.as_str()]);
+        }
     }
 }

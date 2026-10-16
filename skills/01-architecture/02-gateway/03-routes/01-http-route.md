@@ -78,13 +78,19 @@ a bucketing aid, not authorization for another parent on a shared socket. See th
 Rule compilation validates `resolvedParentMatch` before building plugins.
 Resolved rules require explicit `direct` or `delegated` provenance. Delegated
 scope counts must match effective match counts; each scope contains 1..8 absolute
-ancestor prefixes. Each candidate holds an immutable shared compiled radix tree
-from its own rule generation. These prefixes are already BASE-normalized by the
-Controller; Gateway must not BASE-normalize them again. Canonical `RadixPath`
+authored ancestor prefixes (`rawPathPrefixes`). Gateway BASE-normalizes these
+once under its actual startup policy. Each guarded candidate holds an immutable
+shared compiled radix tree from its own rule generation. Canonical `RadixPath`
 trailing-slash handling and the shared radix parser preserve segment boundaries,
 parameters, and escaped colons.
 
-`deep_match` checks every ancestor against `ctx.path()` before choosing a winner,
+For literal Exact/Prefix children with only literal ancestors, compilation tests
+the canonical child against the ancestor conjunction. Success proves containment
+and omits the runtime guard. Regex, `/:` syntax (including escaped colons), and
+unproven relationships retain the full guard. Optional guards remain aligned
+with effective match indices; all metadata is validated before publication.
+
+For guarded candidates, `deep_match` checks every ancestor against `ctx.path()` before choosing a winner,
 for radix, RegexSet, and linear fallback alike. Failure continues selection.
 Inherited header/query/method predicates are already merged and are not duplicated.
 At most eight inserted IDs bound both inline match results (capacity eight) and

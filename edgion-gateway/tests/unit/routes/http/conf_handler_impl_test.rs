@@ -1992,9 +1992,9 @@ fn arch156_malformed_parent_scope_withdraws_rule_and_clean_update_recovers() {
     for metadata in [
         serde_json::Value::Null,
         serde_json::json!({"kind": "delegated", "matches": []}),
-        serde_json::json!({"kind": "delegated", "matches": [{"pathPrefixes": []}]}),
-        serde_json::json!({"kind": "delegated", "matches": [{"pathPrefixes": ["relative"]}]}),
-        serde_json::json!({"kind": "delegated", "matches": [{"pathPrefixes": vec!["/api"; 9]}]}),
+        serde_json::json!({"kind": "delegated", "matches": [{"rawPathPrefixes": []}]}),
+        serde_json::json!({"kind": "delegated", "matches": [{"rawPathPrefixes": ["relative"]}]}),
+        serde_json::json!({"kind": "delegated", "matches": [{"rawPathPrefixes": vec!["/api"; 9]}]}),
     ] {
         route.spec.resolved_rules.as_mut().unwrap()[0].resolved_parent_match =
             serde_json::from_value(metadata).unwrap();
@@ -2005,7 +2005,7 @@ fn arch156_malformed_parent_scope_withdraws_rule_and_clean_update_recovers() {
         assert!(domains["test.example.com"].1.is_empty());
     }
     route.spec.resolved_rules.as_mut().unwrap()[0].resolved_parent_match = serde_json::from_value(serde_json::json!({
-        "kind": "delegated", "matches": [{"pathPrefixes": ["/api"]}]
+        "kind": "delegated", "matches": [{"rawPathPrefixes": ["/api"]}]
     }))
     .unwrap();
     route.pre_parse();
@@ -2047,7 +2047,7 @@ async fn arch156_radix_candidates_preserve_parent_and_nonpath_branch_pairing() {
             {"path": {"value": "/api/:tenant"}, "method": "GET", "headers": [{"name": "x-tenant", "value": "a"}], "queryParams": [{"name": "v", "value": "1"}]},
             {"path": {"value": "/api/:tenant"}, "method": "GET", "headers": [{"name": "x-tenant", "value": "b"}], "queryParams": [{"name": "v", "value": "1"}]}
         ], "resolvedParentMatch": {"kind": "delegated", "matches": [
-            {"pathPrefixes": ["/api", "/api/a"]}, {"pathPrefixes": ["/api", "/api/b"]}
+            {"rawPathPrefixes": ["/api", "/api/a"]}, {"rawPathPrefixes": ["/api", "/api/b"]}
         ]}},
         {"matches": [{"path": {"value": "/api"}}], "resolvedParentMatch": {"kind": "direct"}}
     ])).unwrap();
@@ -2084,5 +2084,38 @@ async fn arch156_radix_candidates_preserve_parent_and_nonpath_branch_pairing() {
             "{path} {tenant} {query}"
         );
         assert_eq!(selected.route_unit.matched_info.match_id, expected_match);
+    }
+}
+
+#[test]
+fn arch156_guard_elision_preserves_mixed_match_indices() {
+    let mut route = route_with_paths(
+        "default",
+        "parent",
+        vec!["example.com"],
+        "2026-09-20T00:00:00Z",
+        serde_json::json!([]),
+    );
+    route.spec.resolved_rules = serde_json::from_value(serde_json::json!([{
+        "matches": [
+            {"path": {"type": "Exact", "value": "/api/a"}},
+            {"path": {"type": "PathPrefix", "value": "/api/:tenant"}},
+            {"path": {"type": "PathPrefix", "value": "/api/c"}}
+        ],
+        "resolvedParentMatch": {"kind": "delegated", "matches": [
+            {"rawPathPrefixes": ["/api/a"]},
+            {"rawPathPrefixes": ["/api/b"]},
+            {"rawPathPrefixes": ["/api/c"]}
+        ]}
+    }]))
+    .unwrap();
+    route.spec.current_status = None;
+    let mut route = crate::test_current_status::processed(route);
+    route.pre_parse();
+    let domains = parse_http_routes_to_domain_rules(&HashMap::from([("default/parent".into(), Arc::new(route))]));
+    let units = &domains["example.com"].0;
+    assert_eq!(units.len(), 3);
+    for unit in units {
+        assert_eq!(unit.parent_match.is_some(), unit.matched_info.match_id == 1);
     }
 }

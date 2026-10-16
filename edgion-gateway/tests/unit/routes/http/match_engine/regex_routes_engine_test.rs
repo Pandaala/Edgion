@@ -443,14 +443,14 @@ async fn arch156_regex_candidates_check_parent_before_winner_in_both_engines() {
         let source: HTTPRoute = serde_json::from_value(serde_json::json!({
             "metadata": {"name": "parent", "namespace": "default"}, "spec": {"resolvedRules": [{
                 "matches": [{"path": {"type": "RegularExpression", "value": pattern}}],
-                "resolvedParentMatch": {"kind": "delegated", "matches": [{"pathPrefixes": [prefix]}]}
+                "resolvedParentMatch": {"kind": "delegated", "matches": [{"rawPathPrefixes": [prefix]}]}
             }]}
         }))
         .unwrap();
         let compiled = HttpRouteRuleUnit::compile_http_rule(&source, 0).unwrap();
         let mut child = create_test_route_unit("default", "child", pattern, 0);
         let unit = Arc::make_mut(&mut child);
-        unit.parent_match = Some(compiled.parent_matches[0].clone());
+        unit.parent_match = compiled.parent_matches[0].clone();
         unit.parent_refs = Some(refs.clone());
         let mut fallback = create_test_route_unit("default", "fallback", ".*", 0);
         Arc::make_mut(&mut fallback).parent_refs = Some(refs.clone());

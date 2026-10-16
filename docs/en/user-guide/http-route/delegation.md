@@ -94,6 +94,12 @@ A malformed delegating rule is dropped and reported via the route's
   route `/apisecret`. A failed parent check skips that candidate and continues
   route selection. A regex disjoint from its parent scope is valid but never
   matches; it does not produce an out-of-prefix status error.
+- Ordinary literal Exact/PathPrefix matches omit repeated parent checks when
+  configuration compilation proves containment in every ancestor. Regex, parameter
+  paths and unproven cases keep runtime checks. Parent updates still trigger
+  rebuilding the delegated rules.
+- Parent paths use the Gateway's actual normalization policy, including
+  `preserve_path_parameters`, and are normalized once like ordinary route paths.
 - Parent runtime constraints use the same PathPrefix matcher as ordinary routes,
   including Edgion's `/:param` segments and `/::` literal-colon escapes. Static
   Exact/PathPrefix containment remains conservative and does not prove symbolic

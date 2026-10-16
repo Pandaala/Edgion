@@ -428,9 +428,9 @@ pub enum ResolvedParentMatch {
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ParentMatch {
-    /// Ancestor prefixes BASE-normalized once by the Controller. Gateway must
-    /// compile these directly: repeating percent decoding can widen the scope.
-    pub path_prefixes: Vec<String>,
+    /// Authored ancestor prefixes. Gateway normalizes these exactly once using
+    /// its actual path policy, matching ordinary route compilation.
+    pub raw_path_prefixes: Vec<String>,
 }
 
 /// Maximum number of parent scopes carried across HTTPRoute delegation.

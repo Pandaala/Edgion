@@ -81,17 +81,22 @@ Apply replaces all prior dependencies and requeues dropped policy keys.
 The Controller clears authored `resolvedParentMatch` and regenerates it on every
 flattened rule. A tagged `direct` entry identifies a copied root-owned sibling;
 `delegated.matches` aligns one-to-one with the effective rule's matches. Each
-entry carries the conjunction of 1..8 ancestor `pathPrefixes`, BASE-normalized
-once by the Controller. Gateway compiles these values directly; repeating BASE
-normalization can decode overlapping percent escapes a second time and widen scope.
+entry carries the conjunction of 1..8 authored ancestor `rawPathPrefixes`.
+Gateway normalizes them exactly once using its actual path policy. Controller
+checks normalized copies but preserves raw effective child paths for the same
+Gateway pass; inherited default-root children retain the raw nearest prefix.
+Repeating BASE decoding can widen overlapping percent escapes.
 Headers, query parameters, and method remain in the existing merged match.
 OR branches retain their own pairing; no parent resource object or filter chain
 is re-executed during matching. Existing transitive dependency registration
 requeues the root for descendant changes, including missing-child recovery.
 
 Regex containment is enforced at request matching, not guessed from regex text.
-Exact/Prefix cold containment and the nested omitted-path limitation remain
-unchanged. The schema-hidden sidecar survives conf_sync; the Gateway rejects
+Controller Exact/Prefix admission and the nested omitted-path limitation remain
+conservative. Gateway omits a runtime guard only when its canonical matcher proves
+a literal Exact/Prefix child is contained by every literal ancestor. Regex,
+parameter syntax and unproven relationships retain the full ancestor guard.
+Elision never removes resource dependencies or requeue propagation. The schema-hidden sidecar survives conf_sync; the Gateway rejects
 missing or invalid sidecars on resolved rules before runtime construction.
 See the [delegation boundary guard](../../04-review/routing/regression-guards/delegation-root-prefix-inherits-scope.md).
 
