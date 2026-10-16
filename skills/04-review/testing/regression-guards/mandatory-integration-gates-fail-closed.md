@@ -117,6 +117,49 @@ producer format changes, or error-body policy changes. Avoid replacing failed
 observations with default data or requiring nonempty bodies for every status.
 No shared response framework or production response-body owner is implied.
 
+## Native gRPC kind-denial evidence
+
+ARCH-338 applies the prerequisite rule to the existing
+`Gateway/AllowedRoutes/Kinds` negative case. A failed connection or arbitrary RPC
+error does not establish that `allowedRoutes.kinds` denied GRPCRoute. The private
+owner in `edgion-tests/src/client/suites/gateway/allowed_routes/kinds.rs` uses the
+existing RawH2Conn to send the original SayHello request with `KindsTest` and
+authority `kinds-grpc.example.com:31213`. Every connection, request send and
+response-future error fails the case with a fixed operation diagnostic.
+
+The selected fixture admits only HTTPRoute and has an empty native gRPC table.
+Its native request falls through to HTTP lookup; the gRPC-aware HTTP lookup miss
+returns HTTP 200, exactly one `content-type: application/grpc`, and exactly one
+`grpc-status: 5`. Status12 describes a different populated-native-table miss and
+is not accepted here. Missing, duplicate, malformed or unrelated metadata fails.
+Successful backend responses and unavailable-backend errors are not alternate
+denial outcomes.
+
+The response's typed h2 receive state must also report completed EOS with no
+pending DATA or trailers. No body is collected or defaulted after a failed read.
+Pinned h2 0.4.19 preserves an already-received EOS across a later send-half reset
+(`ErrorAfterEndStream`); that later event does not invalidate the completed empty
+response. This assertion proves receive completion, not rejection of every event
+after completion or byte-level frame fragmentation. RawH2Conn remains alive
+through observation and its existing Drop aborts its driver on success, failure
+or cancellation by the unchanged thirty-second TestCase deadline.
+
+The private `outcome_tests` module exercises the actual typed predicate without
+network or servers: exact valid completion, incomplete receive state, wrong HTTP
+status, missing/wrong/binary/duplicate content-type, and missing/malformed/binary/
+duplicate/conflicting/unrelated gRPC status. It also preserves both original
+integration case identities. These regressions establish outcome discrimination;
+they do not execute connection refusal, timeouts, reset schedules, live publication
+or Kubernetes behavior. Fresh live and fault-run evidence belongs in the scoped
+implementation verification record. Fixtures, positive HTTP case, shared topology
+and existing suite registration remain unchanged.
+
+A genuine no-route envelope does not uniquely identify kind exclusion: missing
+publication or another routing defect can produce the same response. This bounded
+correction closes the generic-error false positives without claiming that stronger
+causal proof. Re-evaluate when the selected fixture's native-table membership,
+HTTP fallback mapping, response contract or h2 receive-EOS semantics change.
+
 ## Negative TLS policy evidence
 
 ARCH-283 applies the same prerequisite rule to EdgionTls/mTLS,
@@ -244,5 +287,7 @@ supported platform close behavior or Stage1 boundary changes.
 - `cache-residue-store-stats-envelope-fail-open` — strict Controller/Gateway
   envelope validation and malformed-envelope regression coverage.
 - `ARCH-348` — complete response observations before plugin absence/path assertions.
+- `ARCH-338` — native gRPC kind-denial outcomes require the fixture's completed
+  no-route envelope instead of generic connection or RPC failure.
 - `ARCH-283` — negative TLS probes separate preparation/operation failure from evidenced policy denial.
 - `ARCH-341` — raw-TCP policy probes require establishment and prompt accepted-connection closure.

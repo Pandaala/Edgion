@@ -6,10 +6,77 @@
 // - Gateway/AllowedRoutes/Kinds/GRPCRoute.yaml       # GRPCRoute (denied)
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
-use crate::suites::grpc_route::test::test_service_client::TestServiceClient;
 use crate::suites::grpc_route::test::HelloRequest;
+use crate::transport::RawH2Conn;
+use bytes::Bytes;
+use prost::Message;
 use std::time::Instant;
-use tonic::Code;
+
+#[cfg(test)]
+#[path = "kinds_outcome_tests.rs"]
+mod outcome_tests;
+
+fn validate_kind_denial(
+    status: http::StatusCode,
+    headers: &http::HeaderMap,
+    receive_end_stream: bool,
+) -> Result<(), &'static str> {
+    if status != http::StatusCode::OK {
+        return Err("Expected HTTP 200 for native gRPC kind denial");
+    }
+    let mut content_types = headers.get_all(http::header::CONTENT_TYPE).iter();
+    if content_types.next().map(|value| value.as_bytes()) != Some(b"application/grpc") || content_types.next().is_some()
+    {
+        return Err("Expected exactly one application/grpc content-type for kind denial");
+    }
+    // This fixture has no admitted native routes: its HTTP lookup miss maps to
+    // NOT_FOUND, not the UNIMPLEMENTED produced by a populated native table.
+    let mut grpc_statuses = headers.get_all("grpc-status").iter();
+    if grpc_statuses.next().map(|value| value.as_bytes()) != Some(b"5") || grpc_statuses.next().is_some() {
+        return Err("Expected exactly one grpc-status 5 for kind denial");
+    }
+    // h2 requires received EOS and an empty pending receive queue. No response
+    // DATA or trailers may remain; a later send-half reset preserves this EOS.
+    if !receive_end_stream {
+        return Err("Expected a completed empty native gRPC kind-denial response");
+    }
+    Ok(())
+}
+
+async fn probe_kind_denial(ctx: &TestContext) -> Result<(), &'static str> {
+    let mut connection = RawH2Conn::connect(&ctx.target_host, 31213)
+        .await
+        .map_err(|_| "Failed to connect to the kind-denial HTTP/2 listener")?;
+    let (response, mut request_body) = connection
+        .send_request(
+            "POST",
+            "http://kinds-grpc.example.com:31213/test.TestService/SayHello",
+            &[("content-type", "application/grpc"), ("te", "trailers")],
+            false,
+        )
+        .map_err(|_| "Failed to send kind-denial gRPC request headers")?;
+    let message = HelloRequest {
+        name: "KindsTest".to_string(),
+    }
+    .encode_to_vec();
+    let message_length = u32::try_from(message.len()).map_err(|_| "Kind-denial gRPC request is too large")?;
+    let mut frame = Vec::with_capacity(message.len() + 5);
+    frame.push(0);
+    frame.extend_from_slice(&message_length.to_be_bytes());
+    frame.extend_from_slice(&message);
+    request_body
+        .send_data(Bytes::from(frame), true)
+        .map_err(|_| "Failed to send kind-denial gRPC request message")?;
+    let response = response
+        .await
+        .map_err(|_| "Failed to receive kind-denial gRPC response")?;
+    let result = validate_kind_denial(response.status(), response.headers(), response.body().is_end_stream());
+    // RawH2Conn owns the driver through the observation and aborts it on every
+    // exit, including cancellation by the owning TestCase's 30-second timeout.
+    drop(response);
+    drop(connection);
+    result
+}
 
 pub struct AllowedRoutesKindsTestSuite;
 
@@ -64,57 +131,12 @@ impl AllowedRoutesKindsTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // Use tonic gRPC client so that grpc-status from HTTP/2 trailers
-                    // is properly read. reqwest cannot access trailers.
-                    let grpc_url = format!("http://{}:31213", ctx.target_host);
-                    let origin_uri: http::Uri = "http://kinds-grpc.example.com:31213".parse().unwrap();
-
-                    let endpoint = match tonic::transport::Endpoint::from_shared(grpc_url.clone()) {
-                        Ok(ep) => ep.origin(origin_uri),
-                        Err(e) => {
-                            return TestResult::failed(start.elapsed(), format!("Invalid endpoint: {}", e));
-                        }
-                    };
-
-                    let mut client = match TestServiceClient::connect(endpoint).await {
-                        Ok(c) => c,
-                        Err(e) => {
-                            // Connection error is acceptable (route rejected at connection level)
-                            return TestResult::passed_with_message(
-                                start.elapsed(),
-                                format!("✓ GRPCRoute correctly denied (connection error: {})", e),
-                            );
-                        }
-                    };
-
-                    let request = tonic::Request::new(HelloRequest {
-                        name: "KindsTest".to_string(),
-                    });
-
-                    match client.say_hello(request).await {
-                        Ok(_) => TestResult::failed(
+                    match probe_kind_denial(&ctx).await {
+                        Ok(()) => TestResult::passed_with_message(
                             start.elapsed(),
-                            "Expected gRPC error for GRPCRoute not in kinds, but RPC succeeded".to_string(),
+                            "GRPCRoute returned the completed native NOT_FOUND kind-denial response".to_string(),
                         ),
-                        Err(status) => {
-                            let code = status.code();
-                            if code == Code::Unimplemented || code == Code::NotFound || code == Code::Unavailable {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("✓ GRPCRoute correctly denied when not in kinds (gRPC {:?})", code),
-                                )
-                            } else {
-                                // Any non-OK gRPC status means the route was not served
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!(
-                                        "✓ GRPCRoute denied (unexpected code {:?}: {}, but route was not served)",
-                                        code,
-                                        status.message()
-                                    ),
-                                )
-                            }
-                        }
+                        Err(message) => TestResult::failed(start.elapsed(), message.to_string()),
                     }
                 })
             },
