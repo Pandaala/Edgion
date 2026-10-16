@@ -16,15 +16,19 @@
 // - invalid-client.crt + .key (signed by untrusted CA)
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use crate::suites::edgion_tls::mtls_failclose::{
+    require_client_trust, require_invalid_listener_closed, TlsProbe, FRONTEND_SERVER, INVALID_CLIENT, VALID_CLIENT,
+};
 use async_trait::async_trait;
+use rustls::AlertDescription;
 use std::fs;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Instant;
 
 const PORT: u16 = 31312;
 const PORT_INSECURE: u16 = 31336;
-/// Port for the invalid-ca-cert-gw: nonexistent CA ref causes Programmed=False on the listener,
-/// so no TLS entry is registered for this port and all TLS connections must fail.
+/// A missing frontend CA leaves this listener unprogrammed. Its connection
+/// gate must close an accepted TCP connection before TLS begins.
 const PORT_INVALID_CA: u16 = 31338;
 const HOSTNAME: &str = "fv-mtls.example.com";
 
@@ -81,6 +85,23 @@ fn create_mtls_client(
         .map_err(|e| format!("Failed to build client: {}", e))
 }
 
+async fn require_frontend_rejection(
+    ctx: &TestContext,
+    identity: Option<(&str, &str)>,
+    expected: AlertDescription,
+) -> Result<(), String> {
+    let negative = TlsProbe::new(HOSTNAME, FRONTEND_SERVER, identity)?;
+    require_client_trust(VALID_CLIENT.0, true)?;
+    if let Some((cert, _)) = identity {
+        require_client_trust(cert, false)?;
+    }
+    TlsProbe::new(HOSTNAME, FRONTEND_SERVER, Some(VALID_CLIENT))?
+        .run(&ctx.target_host, PORT)
+        .await?
+        .require_complete()?;
+    negative.run(&ctx.target_host, PORT).await?.require_alert(expected)
+}
+
 impl FrontendValidationTestSuite {
     fn test_valid_cert() -> TestCase {
         TestCase::new(
@@ -129,36 +150,13 @@ impl FrontendValidationTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-
-                    let client = match create_client_with_sni(HOSTNAME, &ctx.target_host, PORT) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e))
-                        }
-                    };
-
-                    let url = format!("https://{}:{}/health", HOSTNAME, PORT);
-                    let request = client.get(&url);
-
-                    match request.send().await {
-                        Ok(response) => TestResult::failed(
+                    match require_frontend_rejection(&ctx, None, AlertDescription::HandshakeFailure).await {
+                        Ok(()) => TestResult::passed_with_message(
                             start.elapsed(),
-                            format!("Expected TLS handshake failure, but got status: {}", response.status()),
+                            "Peer rejected the missing certificate after the valid-client control completed"
+                                .to_string(),
                         ),
-                        Err(e) => {
-                            let error_msg = e.to_string();
-                            if error_msg.contains("tls")
-                                || error_msg.contains("handshake")
-                                || error_msg.contains("certificate")
-                            {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "TLS handshake failed as expected (no client cert)".to_string(),
-                                )
-                            } else {
-                                TestResult::failed(start.elapsed(), format!("Unexpected error: {}", error_msg))
-                            }
-                        }
+                        Err(error) => TestResult::failed(start.elapsed(), error),
                     }
                 })
             },
@@ -168,40 +166,14 @@ impl FrontendValidationTestSuite {
     fn test_invalid_cert() -> TestCase {
         TestCase::new(
             "fv_mtls_invalid_cert",
-            "frontendValidation mTLS: with invalid certificate (should fail)",
+            "frontendValidation mTLS: with valid untrusted certificate (should fail)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-
-                    let cert_path = "edgion-tests/certs/mtls/invalid-client.crt";
-                    let key_path = "edgion-tests/certs/mtls/invalid-client.key";
-
-                    let client = match create_mtls_client(cert_path, key_path, HOSTNAME, &ctx.target_host, PORT) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            return TestResult::passed_with_message(
-                                start.elapsed(),
-                                format!("Invalid cert rejected during client build: {}", e),
-                            );
-                        }
-                    };
-
-                    let url = format!("https://{}:{}/health", HOSTNAME, PORT);
-                    let request = client.get(&url);
-
-                    match request.send().await {
-                        Ok(response) => TestResult::failed(
-                            start.elapsed(),
-                            format!(
-                                "Expected certificate verification failure, but got status: {}",
-                                response.status()
-                            ),
-                        ),
-                        Err(e) => TestResult::passed_with_message(
-                            start.elapsed(),
-                            format!("Certificate verification failed as expected: {}", e),
-                        ),
-                    }
+                    match require_frontend_rejection(&ctx, Some(INVALID_CLIENT), AlertDescription::UnknownCA).await {
+                    Ok(()) => TestResult::passed_with_message(start.elapsed(), "Peer returned UnknownCA for the prepared untrusted identity; valid-client control completed".to_string()),
+                    Err(error) => TestResult::failed(start.elapsed(), error),
+                }
                 })
             },
         )
@@ -288,12 +260,8 @@ impl FrontendValidationTestSuite {
         )
     }
 
-    // Listener with Programmed=False (nonexistent CA cert ref) must not serve TLS.
-    //
-    // Gateway `invalid-ca-cert-gw` has `frontendValidation.caCertificateRefs` pointing to
-    // a nonexistent Secret (`does-not-exist`). The Controller sets Programmed=False on its
-    // HTTPS listener, which must not be registered in the TLS matcher. Any TLS connection
-    // to PORT_INVALID_CA must therefore fail.
+    // The missing CA belongs to this exact listener. Its invalid conditions
+    // plus prompt pre-TLS peer closure establish rejection; refusal does not.
     fn test_invalid_ca_ref_listener_not_served() -> TestCase {
         TestCase::new(
             "fv_invalid_ca_ref_not_served",
@@ -301,31 +269,12 @@ impl FrontendValidationTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-
-                    let client = match create_client_with_sni(HOSTNAME, &ctx.target_host, PORT_INVALID_CA) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e))
-                        }
-                    };
-
-                    let url = format!("https://{}:{}/health", HOSTNAME, PORT_INVALID_CA);
-
-                    match client.get(&url).send().await {
-                        Ok(response) => TestResult::failed(
-                            start.elapsed(),
-                            format!(
-                                "Expected TLS failure (listener Programmed=False should not be registered), \
-                                 but request succeeded with status {}",
-                                response.status()
-                            ),
-                        ),
-                        Err(_) => TestResult::passed_with_message(
-                            start.elapsed(),
-                            "TLS connection failed as expected — Programmed=False listener is not registered"
-                                .to_string(),
-                        ),
-                    }
+                    match require_invalid_listener_closed(
+                    &ctx, "invalid-ca-cert-gw", "https-invalid-ca", HOSTNAME, PORT_INVALID_CA,
+                ).await {
+                    Ok(()) => TestResult::passed_with_message(start.elapsed(), "Reached the invalid-CA listener and observed prompt peer closure with its exact rejection conditions".to_string()),
+                    Err(error) => TestResult::failed(start.elapsed(), error),
+                }
                 })
             },
         )

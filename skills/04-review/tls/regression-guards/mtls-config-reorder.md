@@ -115,22 +115,37 @@ SAN-mirror logic), the ordering decision must be revisited.
 ## Tests guarding this
 
 - `edgion-tests/src/client/suites/edgion_tls/mtls_failclose/mtls_failclose.rs::test_mtls_ca_missing_failclosed`
-  drives the EdgionTls path with `caSecretRef` to a Secret that does not
-  exist, asserts openssl s_client handshake aborts (`Cipher=(NONE)`), and
-  cross-checks `ssl.log` for an `err_log` entry with prefix `mtls config:`
-  and no `handshake_complete_time` field.
-- `..::test_mtls_ca_garbage_pem_failclosed` drives the EdgionTls path with
-  `ca.crt = 'not a pem'`, asserting the same shape via the
-  `add_ca_bundle_to_store` Err leg. Since D0014 that Err is produced at
-  publication and replayed at handshake with identical text; the resource still
-  keeps its matcher position rather than yielding the hostname to another
-  candidate.
-- `..::test_frontend_mtls_garbage_ca_pem_failclosed` drives the standard Gateway
-  `spec.tls.frontend.perPort` path with a garbage `ca.crt`, asserting the
-  connection reaches the bound listener but the handshake aborts, while the
-  listener reports `ResolvedRefs=False/InvalidCACertificateRef` and
-  `Programmed=False/Invalid`. No `ssl.log` entry is expected because the
-  connection gate rejects an unprogrammed listener before TLS callbacks run.
+  and `test_mtls_ca_garbage_pem_failclosed` retain their original policy cases.
+  ARCH-283 replaces their OpenSSL incomplete-field/watchdog acceptance with a
+  bounded direct TLS 1.2 client and exact typed `HandshakeFailure`. Setup,
+  connection refusal, deadline, arbitrary peer close and unrelated alerts fail.
+  Both targets and a same-listener, same-serving-Secret Terminate control must
+  have resolved attachment publication at Controller and Gateway; the control
+  must complete with the pinned serving certificate. Local cases additionally
+  require fresh `mtls config:` evidence without `handshake_complete_time`, matching
+  exact SNI, listener port and selected EdgionTls namespace/name. A retained file
+  offset and epoch-millisecond connection timestamp fence exclude stored history
+  and delayed pre-probe logger records; rotation/truncation and missing evidence
+  fail. No OpenSSL child remains on this scoped path.
+- Kubernetes runs use typed wire rejection plus exact attachment publication,
+  positive serving control and local/Kubernetes fixture-policy guards. They do
+  not read an unavailable host ssl.log and do not claim direct callback-cause
+  audit. Projection proves published attachment, not that a particular callback
+  emitted the alert. Missing-SNI rejection can share `HandshakeFailure`, so a
+  bare alert or a sibling positive alone is insufficient.
+- `test_frontend_mtls_garbage_ca_pem_failclosed` retains authenticated polling of
+  `mtls-failclose-gateway` / `https-frontend-mtls-failclose` for
+  `ResolvedRefs=False/InvalidCACertificateRef` and `Programmed=False/Invalid`.
+  Its connection must reach TCP and close promptly before TLS; refusal,
+  deadline, unrelated alert or completed handshake fails. Supporting
+  `fv_invalid_ca_ref_not_served` uses the same evidence contract for its own
+  `invalid-ca-cert-gw` / `https-invalid-ca` listener. No ssl.log entry is required
+  because these connection gates reject before TLS callbacks run.
+
+ARCH-283's scoped probe/decision tests are network-free. Fresh local and
+Kubernetes wire runs are separate verification claims; this regression-boundary
+description does not assert either has run. See the owning
+[negative-evidence contract](../../testing/regression-guards/mandatory-integration-gates-fail-closed.md#negative-tls-policy-evidence).
 
 Before the runtime reorder, a malformed EdgionTls CA could complete a handshake
 with a real cipher. The standard Gateway path now has the additional Controller

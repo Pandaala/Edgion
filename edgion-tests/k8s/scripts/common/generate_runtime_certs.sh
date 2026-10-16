@@ -467,6 +467,8 @@ cp "${TMP_DIR}/chain-client.key" "${MTLS_CERTS_DIR}/chain-client.key"
 cp "${TMP_DIR}/client-ca.crt" "${MTLS_CERTS_DIR}/client-ca.crt"
 cp "${TMP_DIR}/intermediate-ca.crt" "${MTLS_CERTS_DIR}/intermediate-ca.crt"
 cp "${TMP_DIR}/mtls-server.crt" "${MTLS_CERTS_DIR}/mtls-server.crt"
+# Public serving pin for the shared FrontendValidation negative probes.
+cp "${TMP_DIR}/fv-server.crt" "${MTLS_CERTS_DIR}/fv-server.crt"
 cp "${TMP_DIR}/mtls-server.key" "${MTLS_CERTS_DIR}/mtls-server.key"
 
 write_configmap_from_files \

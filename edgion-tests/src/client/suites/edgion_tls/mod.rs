@@ -5,7 +5,7 @@ mod grpctls;
 mod https;
 mod last_known_good;
 mod mtls;
-mod mtls_failclose;
+pub(crate) mod mtls_failclose;
 mod port_only;
 mod sni_collision;
 mod wildcard_single_label;

@@ -10,6 +10,8 @@ use std::time::{Duration, Instant};
 
 use crate::port_config::{PortKind, SuitePorts};
 
+type ContextResolver = dyn Fn(&TestContext, &str, PortKind) -> Result<TestContext, String> + Send + Sync;
+
 type PortResolver = dyn Fn(&str, PortKind) -> Result<SuitePorts, String> + Send + Sync;
 
 fn configured_host_or(value: Option<String>, fallback: &str) -> String {
@@ -119,27 +121,13 @@ impl TestContext {
         verbose: bool,
         access_log_path: PathBuf,
     ) -> Self {
-        // Configure HTTP client to accept self-signed certificates for HTTPS testing
-        // IMPORTANT: Disable system proxy to ensure direct connections to localhost
-        let mut client_builder = reqwest::Client::builder()
-            .timeout(Duration::from_secs(5))
-            .danger_accept_invalid_certs(true)
-            .no_proxy(); // Disable proxy to connect directly to Gateway
-
-        // Add DNS overrides for host-based TLS tests (SNI / Host header suites).
-        // Local mode resolves to 127.0.0.1; k8s mode resolves to target service IP.
-        if let Some(target_ip) = Self::resolve_target_ip(&target_host) {
-            if let Some(ref host) = http_host {
-                let addr = SocketAddr::new(target_ip, https_port);
-                client_builder = client_builder.resolve(host, addr);
-            }
-            if let Some(ref host) = grpc_host {
-                let addr = SocketAddr::new(target_ip, grpc_https_port);
-                client_builder = client_builder.resolve(host, addr);
-            }
-        }
-
-        let http_client = client_builder.build().expect("Failed to create HTTP client");
+        let http_client = Self::build_http_client(
+            &target_host,
+            https_port,
+            grpc_https_port,
+            http_host.as_deref(),
+            grpc_host.as_deref(),
+        );
 
         // Load admin token for Controller Admin API calls (token-only model).
         // Priority: EDGION_TEST_ADMIN_TOKEN env var > EDGION_ADMIN_TOKEN env var
@@ -176,6 +164,56 @@ impl TestContext {
             access_log_path,
             admin_token,
         }
+    }
+
+    fn tls_dns_overrides<'a>(
+        target_host: &str,
+        https_port: u16,
+        grpc_https_port: u16,
+        http_host: Option<&'a str>,
+        grpc_host: Option<&'a str>,
+    ) -> Vec<(&'a str, SocketAddr)> {
+        let Some(ip) = Self::resolve_target_ip(target_host) else {
+            return Vec::new();
+        };
+        http_host
+            .map(|host| (host, SocketAddr::new(ip, https_port)))
+            .into_iter()
+            .chain(grpc_host.map(|host| (host, SocketAddr::new(ip, grpc_https_port))))
+            .collect()
+    }
+
+    fn build_http_client(
+        target_host: &str,
+        https_port: u16,
+        grpc_https_port: u16,
+        http_host: Option<&str>,
+        grpc_host: Option<&str>,
+    ) -> reqwest::Client {
+        let mut builder = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .danger_accept_invalid_certs(true)
+            .no_proxy();
+        for (host, address) in Self::tls_dns_overrides(target_host, https_port, grpc_https_port, http_host, grpc_host) {
+            builder = builder.resolve(host, address);
+        }
+        builder.build().expect("Failed to create HTTP client")
+    }
+
+    /// Rebind TLS authorities and their client DNS overrides after selecting ports.
+    /// Retain the context's captured credentials and all unrelated run settings.
+    pub fn with_tls_hosts(&self, http_host: String, grpc_host: String) -> Self {
+        let mut ctx = self.clone();
+        ctx.http_host = Some(http_host);
+        ctx.grpc_host = Some(grpc_host);
+        ctx.http_client = Self::build_http_client(
+            &ctx.target_host,
+            ctx.https_port,
+            ctx.grpc_https_port,
+            ctx.http_host.as_deref(),
+            ctx.grpc_host.as_deref(),
+        );
+        ctx
     }
 
     /// Create a copy with an overridden HTTP port.
@@ -749,8 +787,8 @@ pub fn with_listener(suite: Box<dyn TestSuite>, key: &'static str, kind: PortKin
 pub struct TestRunner {
     context: TestContext,
     suites: Vec<Box<dyn TestSuite>>,
-    /// Resolves a suite listener contract to its complete port set.
-    port_resolver: Option<Box<PortResolver>>,
+    /// Resolves a suite listener contract before invoking the suite.
+    context_resolver: Option<Box<ContextResolver>>,
     allow_empty_selection: bool,
 }
 
@@ -759,7 +797,7 @@ impl TestRunner {
         Self {
             context,
             suites: Vec::new(),
-            port_resolver: None,
+            context_resolver: None,
             allow_empty_selection: false,
         }
     }
@@ -769,7 +807,14 @@ impl TestRunner {
     }
 
     pub fn set_port_resolver(&mut self, resolver: Box<PortResolver>) {
-        self.port_resolver = Some(resolver);
+        self.set_context_resolver(Box::new(move |ctx, key, kind| {
+            resolver(key, kind).map(|ports| ctx.with_ports(&ports))
+        }));
+    }
+
+    /// Resolve a complete child context before any suite hooks or traffic.
+    pub fn set_context_resolver(&mut self, resolver: Box<ContextResolver>) {
+        self.context_resolver = Some(resolver);
     }
 
     /// Explicitly allow a run that executes no test cases.
@@ -782,9 +827,9 @@ impl TestRunner {
         let mut run_errors = Vec::new();
 
         for suite in &self.suites {
-            let ctx = match (suite.port_key(), &self.port_resolver) {
-                (Some(key), Some(resolver)) => match resolver(key, suite.port_kind()) {
-                    Ok(ports) => self.context.with_ports(&ports),
+            let ctx = match (suite.port_key(), &self.context_resolver) {
+                (Some(key), Some(resolver)) => match resolver(&self.context, key, suite.port_kind()) {
+                    Ok(ctx) => ctx,
                     Err(error) => {
                         run_errors.push(format!("suite `{}` port resolution failed: {error}", suite.name()));
                         continue;
@@ -1116,5 +1161,98 @@ mod tests {
         );
         assert_eq!(configured_host_or(Some("  ".to_string()), "127.0.0.1"), "127.0.0.1");
         assert_eq!(configured_host_or(None, "127.0.0.1"), "127.0.0.1");
+    }
+    #[test]
+    fn tls_rebinding_uses_effective_dns_ports_and_retains_run_state() {
+        for target in ["192.0.2.20", "2001:db8::20"] {
+            let mut base = context();
+            base.target_host = target.to_string();
+            base.admin_token = Some("captured-test-token".to_string());
+            let selected = base
+                .with_ports(&SuitePorts {
+                    https: Some(31285),
+                    grpc_tls: Some(31200),
+                    ..SuitePorts::default()
+                })
+                .with_tls_hosts("port-only.example.com".to_string(), "grpc.example.com".to_string());
+            assert_eq!(selected.admin_token, base.admin_token);
+            assert_eq!(selected.access_log_path, base.access_log_path);
+            assert_eq!(selected.http_port, base.http_port);
+            assert_eq!(selected.target_host, base.target_host);
+            let dns = TestContext::tls_dns_overrides(
+                &selected.target_host,
+                selected.https_port,
+                selected.grpc_https_port,
+                selected.http_host.as_deref(),
+                selected.grpc_host.as_deref(),
+            );
+            let ip = target.parse::<IpAddr>().unwrap();
+            assert_eq!(
+                dns,
+                vec![
+                    ("port-only.example.com", SocketAddr::new(ip, 31285)),
+                    ("grpc.example.com", SocketAddr::new(ip, 31200))
+                ]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn context_resolution_precedes_hooks_and_preserves_lifecycle_and_names() {
+        use std::sync::Mutex;
+        struct Probe(Arc<Mutex<Vec<&'static str>>>);
+        #[async_trait]
+        impl TestSuite for Probe {
+            fn name(&self) -> &str {
+                "context probe"
+            }
+            fn test_cases(&self) -> Vec<TestCase> {
+                let events = self.0.clone();
+                vec![TestCase::new("selected context", "", move |ctx| {
+                    let events = events.clone();
+                    Box::pin(async move {
+                        events.lock().unwrap().push("case");
+                        assert_eq!(ctx.http_host.as_deref(), Some("port-only.example.com"));
+                        assert_eq!(ctx.https_port, 31285);
+                        TestResult::passed(Duration::ZERO)
+                    })
+                })]
+            }
+            async fn setup(&self) -> anyhow::Result<()> {
+                self.0.lock().unwrap().push("setup");
+                Ok(())
+            }
+            async fn teardown(&self) -> anyhow::Result<()> {
+                self.0.lock().unwrap().push("teardown");
+                Ok(())
+            }
+        }
+        for fail in [true, false] {
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let mut runner = TestRunner::new(context());
+            runner.add_suite(with_listener(Box::new(Probe(events.clone())), "probe", PortKind::Https));
+            runner.set_context_resolver(Box::new(move |base, _, _| {
+                if fail {
+                    Err("missing required listener".to_string())
+                } else {
+                    Ok(base
+                        .with_ports(&SuitePorts {
+                            https: Some(31285),
+                            ..SuitePorts::default()
+                        })
+                        .with_tls_hosts("port-only.example.com".to_string(), "grpc.example.com".to_string()))
+                }
+            }));
+            let result = runner.run().await;
+            assert_eq!(result.has_failures(), fail);
+            if fail {
+                assert!(events.lock().unwrap().is_empty());
+                assert!(result.suite_results.is_empty());
+            } else {
+                assert_eq!(*events.lock().unwrap(), vec!["setup", "case", "teardown"]);
+                assert_eq!(result.suite_results[0].name, "context probe");
+                assert_eq!(result.suite_results[0].test_results[0].0, "selected context");
+            }
+        }
     }
 }

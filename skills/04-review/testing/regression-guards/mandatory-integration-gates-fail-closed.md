@@ -117,6 +117,73 @@ producer format changes, or error-body policy changes. Avoid replacing failed
 observations with default data or requiring nonempty bodies for every status.
 No shared response framework or production response-body owner is implied.
 
+## Negative TLS policy evidence
+
+ARCH-283 applies the same prerequisite rule to EdgionTls/mTLS,
+EdgionTls/mtls_failclose and Gateway/FrontendValidation. Missing certificate/key
+files, malformed or expired identities, mismatched keys, DNS/connect failure,
+operation deadline, unrelated TLS errors and an unexpectedly completed handshake
+fail the case. A client build error or arbitrary request error never establishes
+Gateway rejection.
+
+The scoped test owner is
+`edgion-tests/src/client/suites/edgion_tls/mtls_failclose/probe.rs`. It uses the
+existing rustls client dependencies, pins the expected serving certificate and
+verifies handshake signatures, disables resumption, and forces TLS 1.2 so the
+client-authentication decision is terminal when connect returns. Ordinary positive
+HTTP cases keep normal TLS negotiation and complete status assertions. The
+negative cases require exact typed peer alerts plus successful policy-isolation
+controls: valid-client acceptance on the selected target, UnknownIssuer as the
+untrusted identity's independent preparation result, and trusted SAN-mismatch
+acceptance on ordinary Mutual before rejection on the SAN-restricted target.
+
+For the current BoringSSL dependency, the isolated SAN rejection returns exactly
+`InternalError`: Edgion's leaf callback returns zero without setting X509 error;
+BoringSSL `X509_verify_cert` then changes the failed `X509_V_OK` result to
+`X509_V_ERR_UNSPECIFIED`, which `SSL_alert_from_verify_result` maps to
+`SSL_AD_INTERNAL_ERROR`. `CertificateUnknown` is not accepted for this case.
+The same-identity ordinary-Mutual control, valid-client restricted-SNI control,
+independent trust/SAN checks and serving-certificate pin remain required; a bare
+InternalError never establishes SAN denial. Missing-certificate and untrusted
+cases still accept only HandshakeFailure and UnknownCA respectively. The first
+local ARCH-283 run correctly failed an incorrect CertificateUnknown expectation
+(10/11); its target-specific audit showed the SAN-rejection prefix without
+handshake completion. The corrected source trace accounts for BoringSSL's outer
+verification safety net, rather than treating the alert as a generic exception.
+
+Fail-close probes additionally require exact target/control resolved attachment
+publication at both Controller and Gateway, and a Terminate control on the same
+listener with the same serving Secret. Local runs require appended target-specific
+`mtls config:` audit evidence with a connection-time fence; the timestamp excludes
+old events still queued by the asynchronous logger. Kubernetes uses wire,
+publication and fixture isolation, without assuming a mounted host ssl.log or
+claiming direct callback-cause audit. The frontend connection gate runs before
+TLS: prompt peer closure after a successful TCP connect is meaningful only with
+the exact selected listener's invalid-CA conditions. Refusal and timeout fail.
+
+Probe pins must follow the actual test-client asset projection. Local fail-close
+probes use `edgion-tests/certs/server.crt`; Kubernetes explicitly selects
+`edgion-tests/certs/ca.pem`, the existing edge-tls Secret's mounted serving leaf.
+Do not choose an alternate file after a preparation or pin-verification failure.
+The existing Kubernetes mtls ConfigMap must include the public fv-server.crt used
+by fv-server-cert as well as mtls-server.crt; no new frontend private key belongs
+in that client projection. The isolated
+`k8s/scripts/common/tests/negative_tls_probe_assets_test.sh` regression runs the
+real generator, reconstructs the actual Deployment's Secret/ConfigMap mount map,
+and compares all three pin assets to the corresponding serving Secret bytes.
+It also rejects an intentionally missing frontend pin. This establishes generated
+asset delivery, not live Kubernetes wire execution. The first local-only
+verification missed this introduced mount regression; the asset correction
+preserves the same exact pin policy in both topologies.
+
+Network-free regressions cover preparation, typed decisions, deadlines, exact
+listener-condition ownership, fixture isolation and audit freshness. These tests
+do not establish live BoringSSL or Kubernetes behavior; the selected existing
+shared-topology suites remain the wire gates. ARCH-283 implementation verification
+is recorded separately; no live result is inferred from this design description.
+Re-evaluate when supported client/Gateway TLS dependencies, alert mapping, fixture
+policies, attachment publication, audit timestamps or listener gates change.
+
 ## Resolution references
 
 - `ITEST-005` — 2026-08-26.
@@ -124,3 +191,4 @@ No shared response framework or production response-body owner is implied.
 - `cache-residue-store-stats-envelope-fail-open` — strict Controller/Gateway
   envelope validation and malformed-envelope regression coverage.
 - `ARCH-348` — complete response observations before plugin absence/path assertions.
+- `ARCH-283` — negative TLS probes separate preparation/operation failure from evidenced policy denial.

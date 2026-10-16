@@ -270,6 +270,14 @@ mixed HTTP, gRPC, TLS, TCP, and UDP children do not inherit one listener. K8s cr
 `edgion-test-ports` ConfigMap from this canonical file and mounts it as `conf/ports.json`; do not
 embed a second registry in Kubernetes YAML.
 
+The direct `EdgionTls` aggregate also selects each child's complete context through the same
+private `test_client.rs::select_context` policy as targeted invocations. When adding a TLS child,
+bind its static registration to the exact listener key/protocol and put any special host choice
+in that shared selector; derive fallbacks from CLI defaults and rebuild client DNS overrides with
+the selected hosts and TLS ports. Other aggregates and dynamic phases retain their existing scalar
+projection contract. See the [port-selection regression guard](../04-review/testing/regression-guards/integration-port-selection-must-fail-closed.md#edgiontls-aggregate-contexts)
+for scope and network-free regression coverage.
+
 ### 1. Pick the closest existing suite
 
 Look for the closest template:

@@ -27,8 +27,12 @@
 // - edgion-tests/certs/mtls/chain-client.crt          # leaf-only client certificate (intermediate-signed)
 // - edgion-tests/certs/mtls/chain-client.key          # certificate chain client private key
 
+use super::super::mtls_failclose::{
+    require_client_trust, require_dns_san, TlsProbe, INVALID_CLIENT, MTLS_SERVER, NONMATCHING_CLIENT, VALID_CLIENT,
+};
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
+use rustls::AlertDescription;
 use std::fs;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Instant;
@@ -89,6 +93,37 @@ fn create_mtls_client(
         .map_err(|e| format!("Failed to build client: {}", e))
 }
 
+// All preparation and control failures remain failed preconditions. A peer
+// alert becomes policy evidence only after these independent controls succeed.
+async fn require_mutual_rejection(
+    ctx: &TestContext,
+    hostname: &str,
+    identity: Option<(&str, &str)>,
+    expected: AlertDescription,
+) -> Result<(), String> {
+    let negative = TlsProbe::new(hostname, MTLS_SERVER, identity)?;
+    require_client_trust(VALID_CLIENT.0, true)?;
+    if let Some((cert, _)) = identity {
+        require_client_trust(cert, expected != AlertDescription::UnknownCA)?;
+    }
+    if expected == AlertDescription::InternalError {
+        require_dns_san(VALID_CLIENT.0, "client1.example.com", true)?;
+        require_dns_san(NONMATCHING_CLIENT.0, "client1.example.com", false)?;
+        TlsProbe::new("mtls.example.com", MTLS_SERVER, Some(NONMATCHING_CLIENT))?
+            .run(&ctx.target_host, ctx.https_port)
+            .await?
+            .require_complete()?;
+    }
+    TlsProbe::new(hostname, MTLS_SERVER, Some(VALID_CLIENT))?
+        .run(&ctx.target_host, ctx.https_port)
+        .await?
+        .require_complete()?;
+    negative
+        .run(&ctx.target_host, ctx.https_port)
+        .await?
+        .require_alert(expected)
+}
+
 impl MtlsTestSuite {
     fn test_mutual_with_valid_cert() -> TestCase {
         TestCase::new(
@@ -138,43 +173,19 @@ impl MtlsTestSuite {
     fn test_mutual_without_cert() -> TestCase {
         TestCase::new(
             "mtls_mutual_no_cert",
-            "Mutual TLS：without client certificate (should fail)",
+            "Mutual TLS: without client certificate (should fail)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let hostname = "mtls.example.com";
-
-                    // Use regular client without cert but with correct SNI
-                    let client = match create_client_with_sni(hostname, &ctx.target_host, ctx.https_port) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e))
-                        }
-                    };
-
-                    let url = format!("https://{}:{}/health", hostname, ctx.https_port);
-                    let request = client.get(&url);
-
-                    match request.send().await {
-                        Ok(response) => TestResult::failed(
+                    match require_mutual_rejection(&ctx, "mtls.example.com", None, AlertDescription::HandshakeFailure)
+                        .await
+                    {
+                        Ok(()) => TestResult::passed_with_message(
                             start.elapsed(),
-                            format!("Expected TLS handshake failure, but got status: {}", response.status()),
+                            "Peer rejected the missing certificate after the valid-client control completed"
+                                .to_string(),
                         ),
-                        Err(e) => {
-                            // Expected error - TLS handshake should fail
-                            let error_msg = e.to_string();
-                            if error_msg.contains("tls")
-                                || error_msg.contains("handshake")
-                                || error_msg.contains("certificate")
-                            {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "TLS handshake failed as expected (no client cert)".to_string(),
-                                )
-                            } else {
-                                TestResult::failed(start.elapsed(), format!("Unexpected error: {}", error_msg))
-                            }
-                        }
+                        Err(error) => TestResult::failed(start.elapsed(), error),
                     }
                 })
             },
@@ -184,47 +195,14 @@ impl MtlsTestSuite {
     fn test_mutual_with_invalid_cert() -> TestCase {
         TestCase::new(
             "mtls_mutual_invalid_cert",
-            "Mutual TLS：with invalid certificate (should fail)",
+            "Mutual TLS: with valid untrusted certificate (should fail)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-
-                    let cert_path = "edgion-tests/certs/mtls/invalid-client.crt";
-                    let key_path = "edgion-tests/certs/mtls/invalid-client.key";
-                    let hostname = "mtls.example.com";
-
-                    // If client creation fails due to invalid cert, that's also a valid rejection
-                    let client =
-                        match create_mtls_client(cert_path, key_path, hostname, &ctx.target_host, ctx.https_port) {
-                            Ok(c) => c,
-                            Err(e) => {
-                                // Client builder rejection of invalid cert is acceptable
-                                return TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("Invalid cert rejected during client build: {}", e),
-                                );
-                            }
-                        };
-
-                    let url = format!("https://{}:{}/health", hostname, ctx.https_port);
-                    let request = client.get(&url);
-
-                    match request.send().await {
-                        Ok(response) => TestResult::failed(
-                            start.elapsed(),
-                            format!(
-                                "Expected certificate verification failure, but got status: {}",
-                                response.status()
-                            ),
-                        ),
-                        Err(e) => {
-                            // Expected error - certificate should be rejected
-                            TestResult::passed_with_message(
-                                start.elapsed(),
-                                format!("Certificate verification failed as expected: {}", e),
-                            )
-                        }
-                    }
+                    match require_mutual_rejection(&ctx, "mtls.example.com", Some(INVALID_CLIENT), AlertDescription::UnknownCA).await {
+                    Ok(()) => TestResult::passed_with_message(start.elapsed(), "Peer returned UnknownCA for the prepared untrusted identity; valid-client control completed".to_string()),
+                    Err(error) => TestResult::failed(start.elapsed(), error),
+                }
                 })
             },
         )
@@ -363,42 +341,27 @@ impl MtlsTestSuite {
     fn test_san_whitelist_non_matching() -> TestCase {
         TestCase::new(
             "mtls_san_whitelist_no_match",
-            "SAN ：match SAN（should fail）",
+            "SAN whitelist: trusted client with nonmatching DNS SAN (should fail)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-
-                    // nonmatching-client has SAN=notinwhitelist.example.com which doesn't match
-                    let cert_path = "edgion-tests/certs/mtls/nonmatching-client.crt";
-                    let key_path = "edgion-tests/certs/mtls/nonmatching-client.key";
-                    let hostname = "mtls-san.example.com";
-
-                    let client =
-                        match create_mtls_client(cert_path, key_path, hostname, &ctx.target_host, ctx.https_port) {
-                            Ok(c) => c,
-                            Err(e) => {
-                                return TestResult::failed(start.elapsed(), format!("Failed to create client: {}", e))
-                            }
-                        };
-
-                    let url = format!("https://{}:{}/health", hostname, ctx.https_port);
-                    let request = client.get(&url);
-
-                    match request.send().await {
-                        Ok(response) => TestResult::failed(
+                    match require_mutual_rejection(
+                        &ctx,
+                        "mtls-san.example.com",
+                        Some(NONMATCHING_CLIENT),
+                        // BoringSSL changes a callback rejection with X509_V_OK
+                        // to UNSPECIFIED, which yields InternalError. The trust,
+                        // SAN and two-sided acceptance controls isolate this path.
+                        AlertDescription::InternalError,
+                    )
+                    .await
+                    {
+                        Ok(()) => TestResult::passed_with_message(
                             start.elapsed(),
-                            format!(
-                                "Expected SAN verification failure, but got status: {}",
-                                response.status()
-                            ),
+                            "Peer rejected the trusted SAN-mismatch identity after both isolation controls completed"
+                                .to_string(),
                         ),
-                        Err(e) => {
-                            // Expected error - SAN should not match whitelist
-                            TestResult::passed_with_message(
-                                start.elapsed(),
-                                format!("SAN verification failed as expected: {}", e),
-                            )
-                        }
+                        Err(error) => TestResult::failed(start.elapsed(), error),
                     }
                 })
             },

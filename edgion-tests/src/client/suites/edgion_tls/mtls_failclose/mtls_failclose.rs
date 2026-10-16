@@ -1,118 +1,28 @@
-// tls-F011 mTLS fail-close integration tests
-//
-// Required fixtures (in edgion-tests/integration/conf/EdgionTls/mtls_failclose/):
-// - Gateway.yaml                            # 31199 (EdgionTls SNI listener) + 31340 (frontendValidation listener)
-// - HTTPRoute.yaml                          # routes for the 3 hostnames
-// - EdgionTls_mtls-ca-missing.yaml          # caSecretRef -> nonexistent-ca
-// - EdgionTls_mtls-ca-garbage.yaml          # caSecretRef -> garbage-ca
-// - Secret_garbage-ca.yaml                  # ca.crt = `not a pem`
-// - Secret_garbage-frontend-ca.yaml         # ca.crt = `not a pem`
-//
-// Required generated secrets (by generate_mtls_certs.sh, written to
-// tmp/integration_testing/generated_secrets_manual/):
-// - mtls-server (namespace edgion-test)     # reused server cert
-// - fv-server-cert (namespace edgion-test)  # reused server cert for frontendValidation listener
-//
-// Helpers (extract_field, get_tls_info, handshake_truly_completed) are
-// intentionally duplicated from `cipher/cipher.rs`: the three call sites do not
-// justify a shared abstraction, and keeping the security-critical
-// handshake-completion check inline makes the audit site self-contained.
+//! mTLS fail-close integration evidence (tls-F011, ARCH-283).
+//!
+//! Wire rejection is distinct from setup/transport failure. Local runs also
+//! require a fresh policy audit; Kubernetes uses wire, exact publication and
+//! fixture isolation because the test-client pod has no host ssl.log mount.
 
+use super::probe::{TlsProbe, EDGE_SERVER, FRONTEND_SERVER};
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use crate::suites::status::helpers;
 use async_trait::async_trait;
+use rustls::AlertDescription;
 use serde_json::Value;
+use std::fs::{File, Metadata};
+use std::io::{Read, Seek, SeekFrom};
+use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub struct MtlsFailcloseTestSuite;
 
-/// TLS connection information parsed from openssl s_client output.
-#[derive(Debug)]
-struct TlsConnectionInfo {
-    protocol: String,
-    cipher: String,
-    connected: bool,
-}
-
-/// Extract a field value from openssl s_client output (one of "Protocol  :" / "Cipher    :" / ...).
-fn extract_field(output: &str, field_name: &str) -> Option<String> {
-    for line in output.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with(field_name) {
-            let value = trimmed.trim_start_matches(field_name).trim();
-            if !value.is_empty() {
-                return Some(value.to_string());
-            }
-        }
-    }
-    None
-}
-
-/// Drive openssl s_client and return what was negotiated.
-fn get_tls_info(host: &str, port: u16, servername: &str) -> Result<TlsConnectionInfo, String> {
-    let mut child = Command::new("openssl")
-        .args([
-            "s_client",
-            "-connect",
-            &format!("{}:{}", host, port),
-            "-servername",
-            servername,
-            "-tls1_2",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to run openssl: {}", e))?;
-
-    let start = Instant::now();
-    loop {
-        if child
-            .try_wait()
-            .map_err(|e| format!("Failed to wait for openssl: {}", e))?
-            .is_some()
-        {
-            break;
-        }
-        if start.elapsed() >= Duration::from_secs(10) {
-            let _ = child.kill();
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("Failed to collect openssl output: {}", e))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let combined = format!("{}{}", stdout, stderr);
-
-    let protocol = extract_field(&combined, "Protocol  :")
-        .or_else(|| extract_field(&combined, "Protocol:"))
-        .unwrap_or_default();
-    let cipher = extract_field(&combined, "Cipher    :")
-        .or_else(|| extract_field(&combined, "Cipher:"))
-        .unwrap_or_default();
-
-    let connected = combined.contains("CONNECTED");
-
-    Ok(TlsConnectionInfo {
-        connected,
-        protocol,
-        cipher,
-    })
-}
-
-/// Strict handshake-completion check: rejects the "Cipher=0000" / "(NONE)"
-/// placeholders openssl s_client emits when handshake aborts. Mirror of the
-/// cipher/cipher.rs helper.
-fn handshake_truly_completed(info: &TlsConnectionInfo) -> bool {
-    info.connected && info.cipher != "0000" && info.cipher != "(NONE)" && !info.cipher.is_empty()
-}
+const NAMESPACE: &str = "edgion-test";
+const CONTROL_NAME: &str = "mtls-ca-control";
+const CONTROL_HOST: &str = "mtls-ca-control.example.com";
+const LISTENER: &str = "https-mtls-failclose";
+const PORT: u16 = 31199;
 
 fn listener_has_condition(
     gateway: &Value,
@@ -134,272 +44,298 @@ fn listener_has_condition(
         })
 }
 
+fn invalid_listener_conditions(gateway: &Value, listener_name: &str) -> bool {
+    listener_has_condition(
+        gateway,
+        listener_name,
+        "ResolvedRefs",
+        "False",
+        "InvalidCACertificateRef",
+    ) && listener_has_condition(gateway, listener_name, "Programmed", "False", "Invalid")
+}
+
+/// The listener connection gate runs before TLS, so an alert is not required.
+/// TCP refusal, DNS, a stalled peer, and arbitrary request errors never pass.
+pub(crate) async fn require_invalid_listener_closed(
+    ctx: &TestContext,
+    gateway: &str,
+    listener: &str,
+    hostname: &str,
+    port: u16,
+) -> Result<(), String> {
+    let probe = TlsProbe::new(hostname, FRONTEND_SERVER, None)?;
+    helpers::wait_resource_status(ctx, "Gateway", NAMESPACE, gateway, Duration::from_secs(5), |resource| {
+        invalid_listener_conditions(resource, listener)
+    })
+    .await?;
+    probe.run(&ctx.target_host, port).await?.require_peer_close()
+}
+
 fn is_k8s_mode() -> bool {
     std::env::var("EDGION_TEST_K8S_MODE")
-        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
         .unwrap_or(false)
 }
 
-/// Derive the ssl.log path from TestContext.access_log_path (same directory).
+// The Kubernetes test-client Secret projects the exact edge-tls leaf as
+// ca.pem. Select by topology, never by trying another file after a failure.
+fn edge_server_fixture(k8s: bool) -> &'static str {
+    if k8s {
+        "edgion-tests/certs/ca.pem"
+    } else {
+        EDGE_SERVER
+    }
+}
+
 fn ssl_log_path(ctx: &TestContext) -> PathBuf {
     ctx.access_log_path
         .parent()
-        .map(|p| p.join("ssl.log"))
+        .map(|parent| parent.join("ssl.log"))
         .unwrap_or_else(|| PathBuf::from("logs/ssl.log"))
 }
 
-/// Scan ssl.log for an entry matching the given SNI whose err_log starts with
-/// `expected_prefix` and which carries no handshake_complete_time field.
-/// Returns Ok on first match. Returns Err with all entries for the SNI if none
-/// matched (caller emits the diagnostic via TestResult::failed).
-fn assert_ssl_log_err_log(ctx: &TestContext, servername: &str, expected_prefix: &str) -> Result<String, String> {
-    let path = ssl_log_path(ctx);
-    let content =
-        std::fs::read_to_string(&path).map_err(|e| format!("Failed to read ssl.log at {}: {}", path.display(), e))?;
+fn epoch_millis() -> Result<i64, String> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|elapsed| i64::try_from(elapsed.as_millis()).ok())
+        .ok_or_else(|| "Cannot establish the local TLS-audit clock fence".to_string())
+}
 
-    let mut matching_entries: Vec<String> = Vec::new();
-    for line in content.lines() {
-        if line.trim().is_empty() {
-            continue;
+async fn advance_audit_clock(fence: i64) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        let now = epoch_millis()?;
+        if now < fence {
+            return Err("Local wall clock moved backwards before the TLS probe".to_string());
         }
-        // Cheap structural match: the entry is single-line JSON. The sni field
-        // is what we filter on; a substring check is enough (the value is
-        // wrapped in quotes and the hostname strings used by these tests do
-        // not collide as substrings of each other).
-        let sni_needle = format!("\"sni\":\"{}\"", servername);
-        if !line.contains(&sni_needle) {
-            continue;
+        if now > fence {
+            return Ok(());
         }
-        matching_entries.push(line.to_string());
-
-        let err_needle = format!("\"err_log\":\"{}", expected_prefix);
-        let no_handshake_field = !line.contains("\"handshake_complete_time\"");
-        if line.contains(&err_needle) && no_handshake_field {
-            return Ok(line.to_string());
+        if Instant::now() >= deadline {
+            return Err("Local TLS-audit clock did not advance before its deadline".to_string());
         }
-    }
-
-    if matching_entries.is_empty() {
-        Err(format!(
-            "ssl.log at {} has no entry for sni={}",
-            path.display(),
-            servername
-        ))
-    } else {
-        Err(format!(
-            "ssl.log at {} had {} entry/entries for sni={}, none matching err_log prefix '{}' \
-             with no handshake_complete_time. Entries: {}",
-            path.display(),
-            matching_entries.len(),
-            servername,
-            expected_prefix,
-            matching_entries.join(" | ")
-        ))
+        tokio::time::sleep(Duration::from_millis(1)).await;
     }
 }
 
-async fn wait_for_ssl_log_err_log(
-    ctx: &TestContext,
-    servername: &str,
-    expected_prefixes: &[&str],
-) -> Result<String, String> {
-    let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        let mut last_error = String::new();
-        for expected_prefix in expected_prefixes {
-            match assert_ssl_log_err_log(ctx, servername, expected_prefix) {
-                Ok(entry) => return Ok(entry),
-                Err(error) => last_error = error,
+fn same_file(left: &Metadata, right: &Metadata) -> bool {
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+/// The offset excludes stored history; the connection timestamp additionally
+/// excludes old records still queued in the asynchronous SSL logger.
+struct AuditCursor {
+    file: File,
+    path: PathBuf,
+    identity: Metadata,
+    position: u64,
+    fence: i64,
+    pending: String,
+}
+
+impl AuditCursor {
+    fn open(path: PathBuf, fence: i64) -> Result<Self, String> {
+        let mut file =
+            File::open(&path).map_err(|_| "Required local ssl.log is unreadable before the probe".to_string())?;
+        let identity = file
+            .metadata()
+            .map_err(|_| "Cannot inspect local ssl.log".to_string())?;
+        let position = identity.len();
+        if position > 0 {
+            file.seek(SeekFrom::End(-1))
+                .map_err(|_| "Cannot inspect the ssl.log boundary".to_string())?;
+            let mut tail = [0];
+            file.read_exact(&mut tail)
+                .map_err(|_| "Cannot read the ssl.log boundary".to_string())?;
+            if tail != [b'\n'] {
+                return Err("Local ssl.log has an incomplete pre-probe record".to_string());
             }
         }
-        if Instant::now() >= deadline {
-            return Err(last_error);
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        file.seek(SeekFrom::Start(position))
+            .map_err(|_| "Cannot set the ssl.log evidence boundary".to_string())?;
+        Ok(Self {
+            file,
+            path,
+            identity,
+            position,
+            fence,
+            pending: String::new(),
+        })
     }
+
+    fn observe(&mut self, hostname: &str, resource_name: &str, completed: i64) -> Result<bool, String> {
+        let current = std::fs::metadata(&self.path)
+            .map_err(|_| "Required local ssl.log disappeared during the probe".to_string())?;
+        if !same_file(&self.identity, &current) || current.len() < self.position {
+            return Err("Local ssl.log rotated or truncated across the probe".to_string());
+        }
+        let mut appended = String::new();
+        // Read a bounded segment per poll. An oversized record cannot establish
+        // evidence and must not turn this test reader into a whole-log cache.
+        (&mut self.file)
+            .take(64 * 1024)
+            .read_to_string(&mut appended)
+            .map_err(|_| "Cannot read appended TLS-audit evidence".to_string())?;
+        self.position = self
+            .file
+            .stream_position()
+            .map_err(|_| "Cannot inspect TLS-audit read position".to_string())?;
+        self.pending.push_str(&appended);
+        let complete_end = self.pending.rfind('\n').map(|index| index + 1).unwrap_or(0);
+        let mut matched = false;
+        for line in self.pending[..complete_end]
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+        {
+            let entry: Value =
+                serde_json::from_str(line).map_err(|_| "Appended ssl.log contains malformed JSON".to_string())?;
+            matched |= audit_entry_matches(&entry, hostname, resource_name, self.fence, completed);
+        }
+        self.pending.drain(..complete_end);
+        if self.pending.len() > 64 * 1024 {
+            return Err("Appended TLS-audit record exceeds the evidence reader bound".to_string());
+        }
+        Ok(matched)
+    }
+
+    async fn require(mut self, hostname: &str, resource_name: &str, completed: i64) -> Result<(), String> {
+        if completed <= self.fence || epoch_millis()? < completed {
+            return Err("Local wall clock cannot bound this TLS-audit observation".to_string());
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if self.observe(hostname, resource_name, completed)? {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err("No fresh target-specific mTLS config rejection audit was observed".to_string());
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+}
+
+fn audit_entry_matches(entry: &Value, hostname: &str, resource_name: &str, fence: i64, completed: i64) -> bool {
+    entry["ts"]
+        .as_i64()
+        .is_some_and(|timestamp| timestamp > fence && timestamp <= completed)
+        && entry["sni"] == hostname
+        && entry["port"] == PORT
+        && entry["matched"]["rsc"]["kind"] == "EdgionTls"
+        && entry["matched"]["rsc"]["ns"] == NAMESPACE
+        && entry["matched"]["rsc"]["name"] == resource_name
+        && entry["err_log"]
+            .as_str()
+            .is_some_and(|error| error.starts_with("mtls config:"))
+        && entry.get("handshake_complete_time").is_none()
+}
+
+async fn require_edgiontls_failclosed(ctx: &TestContext, resource: &str, hostname: &str) -> Result<(), String> {
+    let server_fixture = edge_server_fixture(is_k8s_mode());
+    let negative = TlsProbe::new(hostname, server_fixture, None)?;
+    let control = TlsProbe::new(CONTROL_HOST, server_fixture, None)?;
+    for name in [resource, CONTROL_NAME] {
+        ctx.wait_for_listener_projection(
+            "EdgionTls",
+            NAMESPACE,
+            name,
+            "resolvedListenerAttachments",
+            LISTENER,
+            Duration::from_secs(5),
+        )
+        .await?;
+    }
+    control.run(&ctx.target_host, PORT).await?.require_complete()?;
+    let audit = if is_k8s_mode() {
+        None
+    } else {
+        // Capture the fence after opening the file. Dial only after the next
+        // millisecond, so old same-millisecond queued records cannot qualify.
+        let mut cursor = AuditCursor::open(ssl_log_path(ctx), 0)?;
+        cursor.fence = epoch_millis()?;
+        advance_audit_clock(cursor.fence).await?;
+        Some(cursor)
+    };
+    negative
+        .run(&ctx.target_host, PORT)
+        .await?
+        .require_alert(AlertDescription::HandshakeFailure)?;
+    if let Some(cursor) = audit {
+        cursor.require(hostname, resource, epoch_millis()?).await?;
+    }
+    Ok(())
 }
 
 impl MtlsFailcloseTestSuite {
-    // Case 1: EdgionTls caSecretRef points to a Secret that doesn't exist.
-    // ca_cert_pem() returns "CA secret not loaded by controller", configure_mtls
-    // returns Err, apply_edgion_tls_cert stamps err_log = "mtls config: ..." and
-    // returns BEFORE cert/key bind, so BoringSSL aborts the handshake.
     fn test_mtls_ca_missing_failclosed() -> TestCase {
         TestCase::new(
             "mtls_ca_missing_failclosed",
-            "EdgionTls caSecretRef -> nonexistent Secret aborts handshake (tls-F011)",
+            "EdgionTls missing client CA fails closed (tls-F011)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let hostname = "mtls-ca-missing.example.com";
-                    let port: u16 = 31199;
-
-                    match get_tls_info(&ctx.target_host, port, hostname) {
-                        Ok(info) => {
-                            if handshake_truly_completed(&info) {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!(
-                                        "Mutual mTLS with missing CA Secret should abort the handshake, \
-                                         but it completed. Protocol={}, Cipher={}",
-                                        info.protocol, info.cipher
-                                    ),
-                                );
-                            }
-                            if is_k8s_mode() {
-                                return TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!(
-                                        "Handshake aborted in K8s mode (Protocol={}, Cipher={}); gateway ssl.log is not mounted in the test-client pod",
-                                        info.protocol, info.cipher
-                                    ),
-                                );
-                            }
-                            match wait_for_ssl_log_err_log(&ctx, hostname, &["mtls config:"]).await {
-                                Ok(_) => TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!(
-                                        "Handshake aborted (Protocol={}, Cipher={}) and ssl.log recorded \
-                                         err_log starting with 'mtls config:'",
-                                        info.protocol, info.cipher
-                                    ),
-                                ),
-                                Err(e) => TestResult::failed(start.elapsed(), e),
-                            }
-                        }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("OpenSSL test failed: {}", e)),
+                    match require_edgiontls_failclosed(&ctx, "mtls-ca-missing", "mtls-ca-missing.example.com").await {
+                        Ok(()) => failclose_pass(start),
+                        Err(error) => TestResult::failed(start.elapsed(), error),
                     }
                 })
             },
         )
     }
 
-    // Case 2: EdgionTls caSecretRef resolves to a Secret whose ca.crt is garbage.
-    // add_ca_bundle_to_store returns `Invalid CA certificate PEM` Err; same
-    // err_log prefix `mtls config:` as case 1 (caller wraps both Err sources).
     fn test_mtls_ca_garbage_pem_failclosed() -> TestCase {
         TestCase::new(
             "mtls_ca_garbage_pem_failclosed",
-            "EdgionTls caSecretRef -> garbage ca.crt aborts handshake (tls-F011)",
+            "EdgionTls malformed client CA fails closed (tls-F011)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let hostname = "mtls-ca-garbage.example.com";
-                    let port: u16 = 31199;
-
-                    match get_tls_info(&ctx.target_host, port, hostname) {
-                        Ok(info) => {
-                            if handshake_truly_completed(&info) {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!(
-                                        "Mutual mTLS with garbage CA PEM should abort the handshake, \
-                                         but it completed. Protocol={}, Cipher={}",
-                                        info.protocol, info.cipher
-                                    ),
-                                );
-                            }
-                            if is_k8s_mode() {
-                                return TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!(
-                                        "Handshake aborted in K8s mode (Protocol={}, Cipher={}); gateway ssl.log is not mounted in the test-client pod",
-                                        info.protocol, info.cipher
-                                    ),
-                                );
-                            }
-                            match wait_for_ssl_log_err_log(&ctx, hostname, &["mtls config:"]).await {
-                                Ok(_) => TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!(
-                                        "Handshake aborted (Protocol={}, Cipher={}) and ssl.log recorded \
-                                         err_log starting with 'mtls config:'",
-                                        info.protocol, info.cipher
-                                    ),
-                                ),
-                                Err(e) => TestResult::failed(start.elapsed(), e),
-                            }
-                        }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("OpenSSL test failed: {}", e)),
+                    match require_edgiontls_failclosed(&ctx, "mtls-ca-garbage", "mtls-ca-garbage.example.com").await {
+                        Ok(()) => failclose_pass(start),
+                        Err(error) => TestResult::failed(start.elapsed(), error),
                     }
                 })
             },
         )
     }
 
-    // Case 3: Gateway listener frontendValidation references a Secret whose
-    // ca.crt is garbage. The Controller marks that listener unprogrammed, and
-    // the listener connection gate rejects it before TLS callbacks run.
     fn test_frontend_mtls_garbage_ca_pem_failclosed() -> TestCase {
         TestCase::new(
             "frontend_mtls_garbage_ca_pem_failclosed",
-            "Gateway frontendValidation -> garbage ca.crt aborts handshake (tls-F011)",
+            "Invalid frontend CA closes the listener before TLS (tls-F011)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let hostname = "frontend-mtls-garbage.example.com";
-                    let port: u16 = 31340;
-
-                    match get_tls_info(&ctx.target_host, port, hostname) {
-                        Ok(info) => {
-                            if handshake_truly_completed(&info) {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!(
-                                        "frontendValidation with garbage CA PEM should abort the handshake, \
-                                         but it completed. Protocol={}, Cipher={}",
-                                        info.protocol, info.cipher
-                                    ),
-                                );
-                            }
-                            if !info.connected {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    "frontendValidation test did not reach the Gateway listener".to_string(),
-                                );
-                            }
-
-                            match helpers::wait_resource_status(
-                                &ctx,
-                                "Gateway",
-                                "edgion-test",
-                                "mtls-failclose-gateway",
-                                Duration::from_secs(5),
-                                |gateway| {
-                                    listener_has_condition(
-                                        gateway,
-                                        "https-frontend-mtls-failclose",
-                                        "ResolvedRefs",
-                                        "False",
-                                        "InvalidCACertificateRef",
-                                    ) && listener_has_condition(
-                                        gateway,
-                                        "https-frontend-mtls-failclose",
-                                        "Programmed",
-                                        "False",
-                                        "Invalid",
-                                    )
-                                },
-                            )
-                            .await
-                            {
-                                Ok(_) => TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!(
-                                        "Handshake aborted (Protocol={}, Cipher={}) and listener status recorded \
-                                         the invalid frontend CA rejection",
-                                        info.protocol, info.cipher
-                                    ),
-                                ),
-                                Err(e) => TestResult::failed(start.elapsed(), e),
-                            }
-                        }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("OpenSSL test failed: {}", e)),
+                    match require_invalid_listener_closed(
+                        &ctx,
+                        "mtls-failclose-gateway",
+                        "https-frontend-mtls-failclose",
+                        "frontend-mtls-garbage.example.com",
+                        31340,
+                    )
+                    .await
+                    {
+                        Ok(()) => TestResult::passed_with_message(
+                            start.elapsed(),
+                            "Reached the listener and observed peer closure with its exact invalid-CA conditions"
+                                .to_string(),
+                        ),
+                        Err(error) => TestResult::failed(start.elapsed(), error),
                     }
                 })
             },
         )
     }
+}
+
+fn failclose_pass(start: Instant) -> TestResult {
+    let evidence = if is_k8s_mode() {
+        "Observed HandshakeFailure with target/control publication and same-listener serving identity control; K8s uses wire/projection/fixture isolation, not host ssl.log"
+    } else {
+        "Observed HandshakeFailure with target/control publication, same-listener serving identity control and fresh target-specific mTLS config audit"
+    };
+    TestResult::passed_with_message(start.elapsed(), evidence.to_string())
 }
 
 #[async_trait]
@@ -414,5 +350,159 @@ impl TestSuite for MtlsFailcloseTestSuite {
             Self::test_mtls_ca_garbage_pem_failclosed(),
             Self::test_frontend_mtls_garbage_ca_pem_failclosed(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::io::Write;
+
+    #[test]
+    fn edge_serving_pin_uses_the_exact_asset_for_each_topology() {
+        assert_eq!(edge_server_fixture(false), "edgion-tests/certs/server.crt");
+        assert_eq!(edge_server_fixture(true), "edgion-tests/certs/ca.pem");
+    }
+
+    fn rejection(timestamp: i64) -> Value {
+        json!({"ts": timestamp, "sni": "mtls-ca-missing.example.com", "port": 31199,
+            "matched": {"rsc": {"kind": "EdgionTls", "ns": "edgion-test", "name": "mtls-ca-missing"}},
+            "err_log": "mtls config: test rejection"})
+    }
+
+    #[test]
+    fn audit_requires_current_connection_time_exact_target_and_incomplete_handshake() {
+        let matches =
+            |entry: &Value| audit_entry_matches(entry, "mtls-ca-missing.example.com", "mtls-ca-missing", 100, 200);
+        assert!(matches(&rejection(101)));
+        for timestamp in [99, 100, 201] {
+            assert!(!matches(&rejection(timestamp)));
+        }
+        for (pointer, value) in [
+            ("/sni", json!("other.example.com")),
+            ("/port", json!(31340)),
+            ("/matched/rsc/kind", json!("Gateway")),
+            ("/matched/rsc/ns", json!("other")),
+            ("/matched/rsc/name", json!("mtls-ca-garbage")),
+            ("/err_log", json!("unrelated failure")),
+            ("/ts", Value::Null),
+        ] {
+            let mut entry = rejection(101);
+            *entry.pointer_mut(pointer).unwrap() = value;
+            assert!(!matches(&entry));
+        }
+        let mut complete = rejection(101);
+        complete["handshake_complete_time"] = json!(1);
+        assert!(!matches(&complete));
+        assert!(!matches(&json!({})));
+    }
+
+    #[test]
+    fn audit_offset_and_timestamp_reject_stored_and_delayed_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ssl.log");
+        std::fs::write(&path, format!("{}\n", rejection(101))).unwrap();
+        let mut cursor = AuditCursor::open(path.clone(), 100).unwrap();
+        assert!(!cursor
+            .observe("mtls-ca-missing.example.com", "mtls-ca-missing", 200)
+            .unwrap());
+        let mut writer = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(writer, "{}", rejection(99)).unwrap();
+        assert!(!cursor
+            .observe("mtls-ca-missing.example.com", "mtls-ca-missing", 200)
+            .unwrap());
+        write!(writer, "{}", rejection(102)).unwrap();
+        assert!(!cursor
+            .observe("mtls-ca-missing.example.com", "mtls-ca-missing", 200)
+            .unwrap());
+        writeln!(writer).unwrap();
+        assert!(cursor
+            .observe("mtls-ca-missing.example.com", "mtls-ca-missing", 200)
+            .unwrap());
+        std::fs::write(&path, "").unwrap();
+        assert!(cursor
+            .observe("mtls-ca-missing.example.com", "mtls-ca-missing", 200)
+            .is_err());
+    }
+
+    #[test]
+    fn audit_rejects_rotation_and_incomplete_initial_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ssl.log");
+        std::fs::write(&path, "unfinished").unwrap();
+        assert!(AuditCursor::open(path.clone(), 100).is_err());
+        std::fs::write(&path, "").unwrap();
+        let mut cursor = AuditCursor::open(path.clone(), 100).unwrap();
+        std::fs::rename(&path, dir.path().join("old.log")).unwrap();
+        std::fs::write(&path, format!("{}\n", rejection(101))).unwrap();
+        assert!(cursor
+            .observe("mtls-ca-missing.example.com", "mtls-ca-missing", 200)
+            .is_err());
+    }
+
+    #[test]
+    fn invalid_conditions_belong_to_one_selected_listener() {
+        let conditions = json!([
+            {"type": "ResolvedRefs", "status": "False", "reason": "InvalidCACertificateRef"},
+            {"type": "Programmed", "status": "False", "reason": "Invalid"}]);
+        let mut gateway = json!({"status": {"listeners": [{"name": "selected", "conditions": conditions}]}});
+        assert!(invalid_listener_conditions(&gateway, "selected"));
+        assert!(!invalid_listener_conditions(&gateway, "other"));
+        gateway["status"]["listeners"][0]["conditions"][1]["status"] = json!("True");
+        assert!(!invalid_listener_conditions(&gateway, "selected"));
+        gateway["status"]["listeners"][0]["conditions"] = json!([]);
+        assert!(!invalid_listener_conditions(&gateway, "selected"));
+        assert!(!invalid_listener_conditions(&json!({}), "selected"));
+    }
+
+    fn fixture(tree: &str, name: &str) -> serde_yaml::Value {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(tree)
+            .join("conf/EdgionTls/mtls_failclose")
+            .join(name);
+        serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn local_and_kubernetes_fixtures_isolate_only_client_ca_from_the_control() {
+        for tree in ["integration", "k8s"] {
+            let control = fixture(tree, "EdgionTls_mtls-ca-control.yaml");
+            assert_eq!(control["metadata"]["name"].as_str(), Some(CONTROL_NAME));
+            assert_eq!(control["spec"]["hosts"][0].as_str(), Some(CONTROL_HOST));
+            assert_eq!(control["spec"]["clientAuth"]["mode"].as_str(), Some("Terminate"));
+            assert!(control["spec"]["clientAuth"].get("caSecretRef").is_none());
+            for (name, ca) in [("missing", "nonexistent-ca"), ("garbage", "garbage-ca")] {
+                let target = fixture(tree, &format!("EdgionTls_mtls-ca-{name}.yaml"));
+                assert_eq!(target["metadata"]["namespace"].as_str(), Some(NAMESPACE));
+                assert_eq!(
+                    target["metadata"]["name"].as_str(),
+                    Some(format!("mtls-ca-{name}").as_str())
+                );
+                assert_eq!(
+                    target["spec"]["hosts"][0].as_str(),
+                    Some(format!("mtls-ca-{name}.example.com").as_str())
+                );
+                assert_eq!(target["spec"]["clientAuth"]["mode"].as_str(), Some("Mutual"));
+                assert_eq!(target["spec"]["clientAuth"]["caSecretRef"]["name"].as_str(), Some(ca));
+                assert_eq!(target["spec"]["secretRef"], control["spec"]["secretRef"]);
+                assert_eq!(target["spec"]["parentRefs"], control["spec"]["parentRefs"]);
+                assert_eq!(target["spec"]["secretRef"]["name"].as_str(), Some("edge-tls"));
+                assert_eq!(
+                    target["spec"]["parentRefs"][0]["name"].as_str(),
+                    Some("mtls-failclose-gateway")
+                );
+                assert_eq!(target["spec"]["parentRefs"][0]["sectionName"].as_str(), Some(LISTENER));
+            }
+            let gateway = fixture(tree, "Gateway.yaml");
+            let listener = gateway["spec"]["listeners"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .find(|listener| listener["name"].as_str() == Some(LISTENER))
+                .unwrap();
+            assert_eq!(listener["port"].as_u64(), Some(u64::from(PORT)));
+            assert_eq!(listener["protocol"].as_str(), Some("HTTPS"));
+        }
     }
 }

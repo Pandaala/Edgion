@@ -3489,14 +3489,46 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 eprintln!("Error: EdgionTls tests require --gateway flag");
                 std::process::exit(1);
             }
-            runner.add_suite(Box::new(suites::HttpsTestSuite));
-            runner.add_suite(Box::new(suites::GrpcTlsTestSuite));
-            runner.add_suite(Box::new(suites::MtlsTestSuite));
-            runner.add_suite(Box::new(suites::MtlsFailcloseTestSuite));
-            runner.add_suite(Box::new(suites::PortOnlyEdgionTlsTestSuite));
-            runner.add_suite(Box::new(suites::FallbackSniTestSuite));
-            runner.add_suite(Box::new(suites::WildcardSingleLabelTestSuite));
-            runner.add_suite(Box::new(suites::SniCollisionTestSuite));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::HttpsTestSuite),
+                "EdgionTls/https",
+                port_config::PortKind::Https,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::GrpcTlsTestSuite),
+                "EdgionTls/grpctls",
+                port_config::PortKind::GrpcTls,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::MtlsTestSuite),
+                "EdgionTls/mTLS",
+                port_config::PortKind::Https,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::MtlsFailcloseTestSuite),
+                "EdgionTls/mtls_failclose",
+                port_config::PortKind::Https,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::PortOnlyEdgionTlsTestSuite),
+                "EdgionTls/port_only",
+                port_config::PortKind::Https,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::FallbackSniTestSuite),
+                "EdgionTls/fallback_sni",
+                port_config::PortKind::Https,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::WildcardSingleLabelTestSuite),
+                "EdgionTls/wildcard_single_label",
+                port_config::PortKind::Https,
+            ));
+            runner.add_suite(framework::with_listener(
+                Box::new(suites::SniCollisionTestSuite),
+                "EdgionTls/sni_collision",
+                port_config::PortKind::Https,
+            ));
         }
         "EdgionTls/https" => {
             if !gateway {
@@ -3977,6 +4009,72 @@ async fn run_dynamic_scenario(cli: &Cli, sid: &str) -> Result<()> {
     Ok(())
 }
 
+fn cli_context(cli: &Cli, access_log_path: PathBuf) -> TestContext {
+    TestContext::new(
+        cli.target_host.clone(),
+        cli.http_port,
+        cli.grpc_port,
+        cli.websocket_port,
+        cli.tcp_port,
+        cli.tcp_port + 1,
+        cli.udp_port,
+        cli.https_port,
+        cli.grpc_https_port,
+        cli.admin_port,
+        None,
+        None,
+        cli.gateway,
+        cli.verbose,
+        access_log_path,
+    )
+}
+
+/// Select from CLI defaults, never from an already selected aggregate context.
+fn select_context(
+    base: &TestContext,
+    suite: &str,
+    config: Option<&port_config::PortConfig>,
+) -> Result<TestContext, String> {
+    let Some(config) = config else {
+        return Ok(base.clone());
+    };
+    let key = suite_to_port_key(suite);
+    let ports = if let Some(kind) = required_port_kind(key) {
+        config.require_port(key, kind)?;
+        config.get_ports(key)?.clone()
+    } else {
+        port_config::SuitePorts::default()
+    };
+    let mut context = base.with_ports(&ports);
+    context.websocket_port = context.http_port;
+    let http_host = match suite {
+        "Gateway/TLS/GatewayTLS" => "gateway-tls.test.com",
+        "Gateway/TLS/NoHostnameListener" => "no-hostname-gateway-tls.test.com",
+        "Gateway/TLS/MisdirectedRequest" => "sni421-exact.test.com",
+        "EdgionTls/port_only" => "port-only.example.com",
+        "EdgionTls/BothAbsentParentRef" => "both-absent-tls.example.com",
+        _ => "test.example.com",
+    };
+    Ok(context.with_tls_hosts(http_host.to_string(), "grpc.example.com".to_string()))
+}
+
+fn suite_context_resolver(
+    base: TestContext,
+    selection: &str,
+    config: port_config::PortConfig,
+) -> impl Fn(&TestContext, &str, port_config::PortKind) -> Result<TestContext, String> + Send + Sync {
+    let complete_children = selection == "EdgionTls";
+    move |context, key, kind| {
+        config.require_port(key, kind)?;
+        if complete_children {
+            select_context(&base, key, Some(&config))
+        } else {
+            // Other aggregates and dynamic phases keep their scalar projection contract.
+            Ok(context.with_ports(config.get_ports(key)?))
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Install the default rustls crypto provider (once).
@@ -4046,113 +4144,28 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    // Port config key
-    let port_key = suite_to_port_key(&suite);
-
-    // Determine ports and host based on gateway flag
-    let (
-        http_port,
-        grpc_port,
-        tcp_port,
-        tcp_filtered_port,
-        udp_port,
-        websocket_port,
-        https_port,
-        grpc_https_port,
-        http_host,
-        grpc_host,
-    ) = if cli.gateway {
-        // Gateway mode requires the exact local listener mapping. K8s test
-        // services expose the same declared listener ports, so they consume the
-        // same fail-closed registry.
-        {
-            let config = port_config::PortConfig::load().map_err(anyhow::Error::msg)?;
-            let ports = if let Some(kind) = required_port_kind(port_key) {
-                config.require_port(port_key, kind).map_err(anyhow::Error::msg)?;
-                config.get_ports(port_key).map_err(anyhow::Error::msg)?.clone()
-            } else {
-                port_config::SuitePorts::default()
-            };
-            // Select http_host based on suite
-            let http_host = match suite.as_str() {
-                "Gateway/TLS/GatewayTLS" => "gateway-tls.test.com",
-                "Gateway/TLS/NoHostnameListener" => "no-hostname-gateway-tls.test.com",
-                "Gateway/TLS/MisdirectedRequest" => "sni421-exact.test.com",
-                "EdgionTls/port_only" => "port-only.example.com",
-                "EdgionTls/BothAbsentParentRef" => "both-absent-tls.example.com",
-                _ => "test.example.com",
-            };
-            let http_port = ports.http.unwrap_or(cli.http_port);
-            (
-                http_port,
-                ports.grpc.unwrap_or(cli.grpc_port),
-                ports.tcp.or(ports.tls).unwrap_or(cli.tcp_port),
-                ports.tcp_filtered.unwrap_or(cli.tcp_port + 1),
-                ports.udp.unwrap_or(cli.udp_port),
-                http_port,
-                ports.https.unwrap_or(cli.https_port),
-                ports.grpc_tls.unwrap_or(cli.grpc_https_port),
-                Some(http_host.to_string()),
-                Some("grpc.example.com".to_string()),
-            )
-        }
-    } else {
-        // Direct mode: use CLI provided ports
-        (
-            cli.http_port,
-            cli.grpc_port,
-            cli.tcp_port,
-            cli.tcp_port + 1,
-            cli.udp_port,
-            cli.websocket_port,
-            cli.https_port,
-            cli.grpc_https_port,
-            None,
-            None,
-        )
-    };
+    let access_log_path =
+        std::env::var("EDGION_TEST_ACCESS_LOG_PATH").unwrap_or_else(|_| "logs/edgion_access.log".to_string());
+    let base = cli_context(&cli, PathBuf::from(access_log_path));
+    let config = cli
+        .gateway
+        .then(port_config::PortConfig::load)
+        .transpose()
+        .map_err(anyhow::Error::msg)?;
+    let context = select_context(&base, &suite, config.as_ref()).map_err(anyhow::Error::msg)?;
 
     let mode_name = if cli.gateway { "Gateway" } else { "Direct" };
-
     println!("\n========================================");
     println!("Edgion ");
     println!("========================================");
     println!("Mode: {}", mode_name);
     println!("Suite: {}", suite);
-    println!("Target: {}:{}", cli.target_host, http_port);
+    println!("Target: {}:{}", cli.target_host, context.http_port);
     println!("========================================\n");
 
-    // Get access log path from environment variable
-    let access_log_path =
-        std::env::var("EDGION_TEST_ACCESS_LOG_PATH").unwrap_or_else(|_| "logs/edgion_access.log".to_string());
-
-    let context = TestContext::new(
-        cli.target_host.clone(),
-        http_port,
-        grpc_port,
-        websocket_port,
-        tcp_port,
-        tcp_filtered_port,
-        udp_port,
-        https_port,
-        grpc_https_port,
-        cli.admin_port,
-        http_host.clone(),
-        grpc_host,
-        cli.gateway,
-        cli.verbose,
-        PathBuf::from(access_log_path),
-    );
-
     let mut runner = TestRunner::new(context);
-
-    // Enable per-suite port resolution from ports.json
-    if cli.gateway {
-        let port_config = port_config::PortConfig::load().map_err(anyhow::Error::msg)?;
-        runner.set_port_resolver(Box::new(move |key: &str, kind| {
-            port_config.require_port(key, kind)?;
-            port_config.get_ports(key).cloned()
-        }));
+    if let Some(config) = config {
+        runner.set_context_resolver(Box::new(suite_context_resolver(base, &suite, config)));
     }
 
     add_suites_for_suite(&mut runner, &suite, cli.gateway, cli.phase.as_deref(), cli.full_test);
@@ -4175,4 +4188,240 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod context_selection_tests {
+    use super::*;
+    use port_config::{PortConfig, PortKind};
+    use std::sync::{Arc, Mutex};
+
+    const CHILDREN: [(&str, PortKind, u16, &str); 8] = [
+        ("EdgionTls/https", PortKind::Https, 31190, "HTTPS"),
+        ("EdgionTls/grpctls", PortKind::GrpcTls, 31200, "gRPC-TLS"),
+        ("EdgionTls/mTLS", PortKind::Https, 31110, "mTLS Tests"),
+        (
+            "EdgionTls/mtls_failclose",
+            PortKind::Https,
+            31199,
+            "TLS mTLS Fail-Close Tests (tls-F011)",
+        ),
+        ("EdgionTls/port_only", PortKind::Https, 31285, "EdgionTls PortOnly"),
+        ("EdgionTls/fallback_sni", PortKind::Https, 31198, "fallback_sni Tests"),
+        (
+            "EdgionTls/wildcard_single_label",
+            PortKind::Https,
+            31387,
+            "WildcardSingleLabel TLS Tests",
+        ),
+        (
+            "EdgionTls/sni_collision",
+            PortKind::Https,
+            31390,
+            "EdgionTlsSniCollision",
+        ),
+    ];
+
+    fn registry() -> PortConfig {
+        serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/conf/ports.json"
+        )))
+        .unwrap()
+    }
+
+    fn base(nondefault: bool) -> TestContext {
+        let args = if nondefault {
+            vec![
+                "test_client",
+                "-g",
+                "--target-host",
+                "192.0.2.20",
+                "--http-port",
+                "21001",
+                "--grpc-port",
+                "21002",
+                "--websocket-port",
+                "21003",
+                "--tcp-port",
+                "21004",
+                "--udp-port",
+                "21006",
+                "--https-port",
+                "21007",
+                "--grpc-https-port",
+                "21008",
+                "--admin-port",
+                "21009",
+                "--verbose",
+            ]
+        } else {
+            vec!["test_client", "-g"]
+        };
+        let mut ctx = cli_context(&Cli::parse_from(args), PathBuf::from("selection.log"));
+        ctx.admin_token = Some("selection-test-token".to_string());
+        ctx
+    }
+
+    fn ports(ctx: &TestContext) -> [u16; 9] {
+        [
+            ctx.http_port,
+            ctx.grpc_port,
+            ctx.websocket_port,
+            ctx.tcp_port,
+            ctx.tcp_filtered_port,
+            ctx.udp_port,
+            ctx.https_port,
+            ctx.grpc_https_port,
+            ctx.admin_port,
+        ]
+    }
+
+    fn assert_same(actual: &TestContext, expected: &TestContext) {
+        assert_eq!(ports(actual), ports(expected));
+        assert_eq!(actual.target_host, expected.target_host);
+        assert_eq!(actual.http_host, expected.http_host);
+        assert_eq!(actual.grpc_host, expected.grpc_host);
+        assert_eq!(actual.gateway, expected.gateway);
+        assert_eq!(actual.verbose, expected.verbose);
+        assert_eq!(actual.access_log_path, expected.access_log_path);
+        assert_eq!(actual.admin_token, expected.admin_token);
+    }
+
+    // Run real registrations through the production resolver. Returning the
+    // sentinel after observation prevents all registered suite hooks/traffic.
+    async fn observe(
+        base: &TestContext,
+        selection: &str,
+        config: PortConfig,
+    ) -> (
+        Vec<(String, PortKind, Result<TestContext, String>)>,
+        framework::TestResults,
+    ) {
+        let context = select_context(base, selection, Some(&config)).unwrap();
+        let resolver = suite_context_resolver(base.clone(), selection, config);
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let output = observed.clone();
+        let mut runner = TestRunner::new(context);
+        runner.set_context_resolver(Box::new(move |ctx, key, kind| {
+            let result = resolver(ctx, key, kind);
+            let error = result
+                .as_ref()
+                .err()
+                .cloned()
+                .unwrap_or_else(|| "observation complete".to_string());
+            output.lock().unwrap().push((key.to_string(), kind, result));
+            Err(error)
+        }));
+        add_suites_for_suite(&mut runner, selection, true, None, false);
+        let results = runner.run().await;
+        let recorded = std::mem::take(&mut *observed.lock().unwrap());
+        (recorded, results)
+    }
+
+    #[tokio::test]
+    async fn edgion_tls_aggregate_uses_each_targeted_context_and_cli_fallbacks() {
+        for nondefault in [false, true] {
+            let base = base(nondefault);
+            let config = registry();
+            let (observed, results) = observe(&base, "EdgionTls", config.clone()).await;
+            assert_eq!(observed.len(), CHILDREN.len());
+            assert!(results.suite_results.is_empty());
+            assert_eq!(results.run_errors.len(), 9); // Eight sentinels and zero cases.
+            for ((key, kind, result), (expected_key, expected_kind, port, name)) in observed.iter().zip(CHILDREN) {
+                assert_eq!(key, expected_key);
+                assert_eq!(*kind, expected_kind);
+                assert!(results
+                    .run_errors
+                    .iter()
+                    .any(|e| e == &format!("suite `{name}` port resolution failed: observation complete")));
+                let ctx = result.as_ref().unwrap();
+                assert_same(ctx, &select_context(&base, key, Some(&config)).unwrap());
+                let mut expected_ports = ports(&base);
+                expected_ports[2] = base.http_port;
+                expected_ports[if kind == &PortKind::GrpcTls { 7 } else { 6 }] = port;
+                assert_eq!(ports(ctx), expected_ports, "{key}");
+                assert_eq!(
+                    ctx.http_host.as_deref(),
+                    Some(if key == "EdgionTls/port_only" {
+                        "port-only.example.com"
+                    } else {
+                        "test.example.com"
+                    })
+                );
+                assert_eq!(ctx.grpc_host.as_deref(), Some("grpc.example.com"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn aggregate_missing_child_key_or_protocol_reports_infrastructure_failure() {
+        for missing_key in [true, false] {
+            let mut config = registry();
+            if missing_key {
+                config.suites.remove("EdgionTls/grpctls");
+            } else {
+                config.suites.get_mut("EdgionTls/grpctls").unwrap().grpc_tls = None;
+            }
+            let (observed, results) = observe(&base(true), "EdgionTls", config).await;
+            assert_eq!(observed.len(), 8);
+            assert!(observed[1].2.is_err());
+            assert!(observed.iter().enumerate().all(|(i, (_, _, r))| i == 1 || r.is_ok()));
+            assert!(results.has_failures());
+            assert!(results.suite_results.is_empty());
+            assert!(results.run_errors.iter().any(|e| e.contains("gRPC-TLS")
+                && e.contains(if missing_key {
+                    "no entry"
+                } else {
+                    "missing required `grpc_tls`"
+                })));
+        }
+    }
+
+    #[tokio::test]
+    async fn overlapping_tls_keys_in_other_aggregates_keep_scalar_projection() {
+        for selection in ["HTTPRoute/Protocol", "all"] {
+            let base = base(true);
+            let config = registry();
+            let selected = select_context(&base, selection, Some(&config)).unwrap();
+            assert_ne!(selected.http_port, base.http_port);
+            let (observed, results) = observe(&base, selection, config.clone()).await;
+            assert!(results.suite_results.is_empty());
+            let tls: Vec<_> = observed
+                .iter()
+                .filter(|(key, _, _)| key.starts_with("EdgionTls/"))
+                .collect();
+            assert_eq!(tls.len(), if selection == "all" { 2 } else { 1 });
+            for (key, _, actual) in tls {
+                assert_same(
+                    actual.as_ref().unwrap(),
+                    &selected.with_ports(config.get_ports(key).unwrap()),
+                );
+                assert_eq!(actual.as_ref().unwrap().http_port, selected.http_port);
+            }
+        }
+    }
+
+    #[test]
+    fn direct_and_unrelated_gateway_selection_preserve_existing_inputs() {
+        let cli = Cli::parse_from(["test_client", "--http-port", "20001", "--websocket-port", "20002"]);
+        let direct = cli_context(&cli, PathBuf::from("direct.log"));
+        assert_same(&select_context(&direct, "HTTPRoute/Basic", None).unwrap(), &direct);
+        assert_eq!(direct.websocket_port, 20002);
+        assert!(direct.http_host.is_none());
+        assert!(direct.grpc_host.is_none());
+        for (suite, host) in [
+            ("Gateway/TLS/GatewayTLS", "gateway-tls.test.com"),
+            ("Gateway/TLS/NoHostnameListener", "no-hostname-gateway-tls.test.com"),
+            ("Gateway/TLS/MisdirectedRequest", "sni421-exact.test.com"),
+        ] {
+            assert_eq!(
+                select_context(&base(true), suite, Some(&registry()))
+                    .unwrap()
+                    .http_host
+                    .as_deref(),
+                Some(host)
+            );
+        }
+    }
 }
