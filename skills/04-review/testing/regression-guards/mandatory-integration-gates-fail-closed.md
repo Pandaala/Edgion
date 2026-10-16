@@ -198,6 +198,45 @@ is recorded separately; no live result is inferred from this design description.
 Re-evaluate when supported client/Gateway TLS dependencies, alert mapping, fixture
 policies, attachment publication, audit timestamps or listener gates change.
 
+## Negative raw-TCP policy evidence
+
+ARCH-341 applies the prerequisite rule to Gateway/StreamPlugins. Its three
+negative cases share the private `observe_rejections` owner in
+`edgion-tests/src/client/suites/gateway/stream_plugins/stream_plugins.rs`.
+Each attempt must establish the selected TCP connection, then observe prompt
+EOF or read-side `ConnectionReset` without application data. Every establishment
+error (including reset), connect deadline, other read error, application byte or
+established idle deadline fails. Data followed by EOF/reset still fails; timeout
+and arbitrary IO failure cannot stand in for policy evidence. All five repeated
+attempts run even after a failed attempt, and all five must pass.
+
+The two former negative-probe writes were removed: Stage1 denies after accept
+and before application processing, so no payload is required to elicit closure.
+Reading directly also avoids ignored/unbounded write errors and write-induced
+reset ambiguity hiding already queued application bytes. The allowed bare-name
+control retains its existing write and application byte-flow assertion.
+
+The HTTP control (31270), bare-name allow (31269), deny-all (31271) and invalid
+qualified-reference (31272) targets remain distinct. A healthy positive target
+cannot establish a negative target's availability. Single probes retain 3s
+connect/2s close deadlines, repeated probes 2s/1s per attempt, and the existing
+30s case owner remains authoritative. Successful messages describe accepted
+connection closure, not unique attribution to a plugin: later routing/backend
+closure remains a limitation. No production filter, reference contract,
+publication, fixture topology, transport framework or telemetry change is implied.
+
+The network-free `rejection_observation_tests` exercise the actual shared async
+observer with scripted reads and ready/pending connection futures, including
+data before EOF/reset, phase-specific IO errors, separate timeout branches and
+all five repeated attempts after failures. These tests establish observer
+classification, not OS FIN/RST timing or live Gateway execution. Fresh shared
+topology acceptance must separately show real deny-all and qualified-reference
+closure, healthy HTTP/bare controls while each negative target is unavailable,
+and failures for data/idle targets. Runtime results and platform limits belong
+in the scoped implementation record; this page does not infer an executed pass.
+Re-evaluate when the probe owner, case registration, deadlines, selected sockets,
+supported platform close behavior or Stage1 boundary changes.
+
 ## Resolution references
 
 - `ITEST-005` — 2026-08-26.
@@ -206,3 +245,4 @@ policies, attachment publication, audit timestamps or listener gates change.
   envelope validation and malformed-envelope regression coverage.
 - `ARCH-348` — complete response observations before plugin absence/path assertions.
 - `ARCH-283` — negative TLS probes separate preparation/operation failure from evidenced policy denial.
+- `ARCH-341` — raw-TCP policy probes require establishment and prompt accepted-connection closure.
