@@ -520,16 +520,15 @@ impl AllEndpointStatus {
             .iter()
             .enumerate()
             .map(|(ordinal, ep)| {
-                let sem = semaphore.clone();
+                let sem = &semaphore;
                 let addr = ep.address.clone();
-                let backend_name = ep.backend_name.clone();
-                let transport = Arc::clone(&ep.transport);
+                let backend_name = ep.backend_name.as_str();
+                let transport = &ep.transport;
                 let allow_loopback = ep.allow_loopback;
                 let method = method.clone();
-                let path = path.to_string();
-                let query = original_query.map(|q| q.to_string());
-                let headers: Vec<(String, String)> = original_headers.to_vec();
-                let dynamic_listed = dynamic_listed.clone();
+                let query = original_query;
+                let headers = original_headers;
+                let dynamic_listed = &dynamic_listed;
 
                 async move {
                     let _permit = sem
@@ -541,7 +540,7 @@ impl AllEndpointStatus {
                     let prepared = addr
                         .parse()
                         .map_err(|_| "invalid probe address")
-                        .and_then(|address| transport.client_and_url(address, &path, query.as_deref(), allow_loopback));
+                        .and_then(|address| transport.client_and_url(address, path, query, allow_loopback));
                     let (client, url) = match prepared {
                         Ok(prepared) => prepared,
                         Err(error) => return failed_endpoint(ordinal, addr, start, error),
@@ -552,8 +551,8 @@ impl AllEndpointStatus {
                     // Forward original headers. Skip hop-by-hop (RFC 9110 §7.6.1),
                     // Host (rewritten below to the backend service), and headers
                     // that describe the inbound body — this probe sends none.
-                    for (name, value) in &headers {
-                        if is_hop_by_hop_or_listed(name, &dynamic_listed)
+                    for (name, value) in headers {
+                        if is_hop_by_hop_or_listed(name, dynamic_listed)
                             || name.eq_ignore_ascii_case("host")
                             || is_inbound_body_header(name)
                         {
@@ -561,7 +560,7 @@ impl AllEndpointStatus {
                         }
                         req = req.header(name.as_str(), value.as_str());
                     }
-                    req = req.header("Host", backend_name.as_str());
+                    req = req.header("Host", backend_name);
 
                     match req.send().await {
                         Ok(resp) => {

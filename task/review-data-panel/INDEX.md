@@ -1913,3 +1913,19 @@ Fresh final-source verification passed 23 AllEndpointStatus tests and 33
 PluginLog tests after correcting the new mock import. Formatting, workspace
 check/Clippy and seven repository guards passed; warnings are outside the
 changed source. Independent final code review passed.
+
+## AllEndpointStatus borrowed fan-out inputs
+
+Locally awaited endpoint futures borrow the selected path, query, original
+headers, dynamic hop-by-hop list, backend name, transport and semaphore owner.
+This removes per-endpoint input String/Vec copies and two Arc increments. The
+result address remains owned and reqwest still receives its own Method. The
+FuturesUnordered owner is dropped before return, including wall timeout; no
+spawned work or new lifetime owner is introduced. Header filtering, endpoint
+client isolation, generation checks, permits, timeout and aggregation semantics
+are unchanged. Independent plan review passed. Existing helper and transport
+tests are scoped evidence, not live forwarding or whole-path allocation proof.
+Fresh verification passed 23 AllEndpointStatus tests and 5 hop-by-hop
+selections. Formatting, workspace check/Clippy and seven repository guards
+passed, with existing warnings outside the changed source. Independent final
+review passed. No full suite, live probe or throughput benchmark ran.

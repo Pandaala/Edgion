@@ -69,7 +69,7 @@ removing the nominated fields before forwarding.
   - `forward_auth/plugin.rs::forward_all_headers` (Mode 1 — forward all).
   - `request_mirror/plugin.rs::build_headers`.
   - `all_endpoint_status/plugin.rs::fan_out_requests` (derived once before
-    fan-out, cloned into each endpoint future). Also skips `Host` and inbound
+    fan-out, borrowed by each locally awaited endpoint future). Also skips `Host` and inbound
     body headers (`Content-Length`, `Expect`) via `is_inbound_body_header`;
     `Transfer-Encoding` is already hop-by-hop.
   - `link_sys/providers/webhook/resolver.rs::resolve_webhook_key`
