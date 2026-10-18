@@ -2312,3 +2312,17 @@ Fresh verification passed 23 session-persistence, 4 cookie-parser, 103 upstream
 peer and 1 gRPC integration-module tests, formatting, workspace check/Clippy and
 seven repository guards. Remaining warnings are outside changed code. Independent
 final review passed. These are in-process tests, not new live integration runs.
+
+## Session persistence bare wire-token ownership
+
+The response injection path transfers its generated hash into build_wire_token.
+Without a lifetime, the helper returns that same String rather than copying it;
+with a lifetime, the existing formatting and saturating expiry addition remain
+unchanged. Clock reads, captured policy and response injection ordering remain
+unchanged. Independent plan review passed. A scoped test verifies pointer
+identity and zero allocation calls/bytes for the bare-token step; exact expiry,
+zero TTL and saturation checks cover the formatted branch. Hash generation and
+final header/Cookie construction still allocate; no throughput claim is made.
+Fresh verification passed 24 session-persistence and 11 upstream-response-filter
+tests, formatting, workspace check/Clippy and seven repository guards. Remaining
+warnings are outside changed code. Independent final review passed.

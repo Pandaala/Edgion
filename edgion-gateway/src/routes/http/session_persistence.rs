@@ -226,10 +226,10 @@ include!("../../../tests/support/routes/http/session_persistence_test/230_functi
 /// Build the wire token. `<addrhash>` alone when no lifetime is configured;
 /// `<addrhash>.<now+ttl_secs>` (absolute expiry epoch, frozen at issuance) when
 /// it is. `<addrhash>` remains the affinity-map key.
-pub fn build_wire_token(addrhash: &str, now: u64, ttl_secs: Option<u64>) -> String {
+pub fn build_wire_token(addrhash: String, now: u64, ttl_secs: Option<u64>) -> String {
     match ttl_secs {
         Some(ttl) => format!("{addrhash}.{}", now.saturating_add(ttl)),
-        None => addrhash.to_string(),
+        None => addrhash,
     }
 }
 

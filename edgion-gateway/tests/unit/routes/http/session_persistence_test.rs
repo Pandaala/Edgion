@@ -222,12 +222,32 @@ fn test_sp_lookup_rule_scoped_across_services() {
 #[test]
 fn test_build_wire_token_optional_expiry() {
     // No ttl -> bare addrhash (unchanged behavior).
-    assert_eq!(build_wire_token("1a2b3c4d5e6f7a8b", 1000, None), "1a2b3c4d5e6f7a8b");
+    assert_eq!(
+        build_wire_token("1a2b3c4d5e6f7a8b".into(), 1000, None),
+        "1a2b3c4d5e6f7a8b"
+    );
     // ttl -> addrhash.<now+ttl>
     assert_eq!(
-        build_wire_token("1a2b3c4d5e6f7a8b", 1000, Some(60)),
+        build_wire_token("1a2b3c4d5e6f7a8b".into(), 1000, Some(60)),
         "1a2b3c4d5e6f7a8b.1060"
     );
+    assert_eq!(build_wire_token("hash".into(), 1000, Some(0)), "hash.1000");
+    assert_eq!(
+        build_wire_token("hash".into(), u64::MAX - 1, Some(60)),
+        "hash.18446744073709551615"
+    );
+}
+
+#[test]
+fn bare_wire_token_reuses_generated_hash_without_allocating() {
+    let hash = generate_session_token("10.0.0.1:8080");
+    let original = hash.as_ptr();
+    let expected = hash.clone();
+    let (token, stats) = crate::test_allocation_counter::count_allocation_stats(|| build_wire_token(hash, 1000, None));
+    assert_eq!(token, expected);
+    assert_eq!(token.as_ptr(), original);
+    assert_eq!(stats.calls, 0);
+    assert_eq!(stats.requested_bytes, 0);
 }
 
 #[test]

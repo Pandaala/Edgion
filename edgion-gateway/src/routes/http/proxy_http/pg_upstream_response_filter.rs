@@ -308,7 +308,7 @@ pub fn upstream_response_filter(
                         // Freeze expiry at issuance using the captured rule's compiled
                         // lifetime for both the token and Permanent Cookie Max-Age.
                         let now = session_persistence::now_unix_secs();
-                        let token = session_persistence::build_wire_token(&addrhash, now, ttl_secs);
+                        let token = session_persistence::build_wire_token(addrhash, now, ttl_secs);
 
                         match session_persistence::get_persistence_type(sp) {
                             SessionPersistenceType::Cookie => {
