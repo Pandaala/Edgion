@@ -1,5 +1,6 @@
 //! Strict, bounded Guardrail unary decision wire format.
 
+use std::borrow::Cow;
 use std::io;
 
 use bytes::Bytes;
@@ -62,9 +63,11 @@ impl WireField {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct DecisionEnvelope {
-    version: String,
-    action: String,
+struct DecisionEnvelope<'a> {
+    #[serde(borrow)]
+    version: Cow<'a, str>,
+    #[serde(borrow)]
+    action: Cow<'a, str>,
     #[serde(default)]
     replacements: Option<Vec<Replacement>>,
     #[serde(default)]
@@ -95,7 +98,7 @@ pub(super) fn parse_decision(body: &[u8], max_replacement_bytes: usize) -> Resul
     if envelope.version != "v1" {
         return Err("unsupported-version");
     }
-    match envelope.action.as_str() {
+    match envelope.action.as_ref() {
         "pass" if envelope.replacements.is_none() && envelope.code.is_none() && envelope.reason.is_none() => {
             Ok(ParsedDecision::Pass)
         }

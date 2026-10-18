@@ -2401,3 +2401,16 @@ code reviews passed. Four network-free tests cover waiting cancellation without
 an extra owner, semaphore closure, acquired-permit release after health rejection,
 and the existing saturated-queue deadline. Formatting, workspace check/Clippy
 and seven repository guards passed; remaining warnings are outside changed code.
+
+## Guardrail decision token borrowing
+
+The bounded unary decision parser borrows unescaped version/action strings from
+its input through serde Cow fields. Escaped strings retain owned decoding, and
+all strict envelope checks, error ordering and owned replacement output remain
+unchanged. Independent plan and code reviews passed. Tests verify zero allocation
+for prepared plain pass/reject documents without optional fields, escaped token
+equivalence and malformed/duplicate/missing/type/trailing error categories. This
+removes temporary token Strings; optional payloads and escaped decoding may still
+allocate, and no end-to-end throughput improvement is claimed.
+Fresh verification passed all 6 protocol tests, formatting, workspace check/Clippy
+and seven repository guards. Remaining warnings are outside changed code.
