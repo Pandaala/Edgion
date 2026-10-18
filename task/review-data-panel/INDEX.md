@@ -3341,3 +3341,29 @@ Independent plan and source reviews passed. Eight WAF context and 50 WAF plugin
 tests passed, together with formatting, workspace check/Clippy and seven guards.
 Warnings remain outside changed code. This removes one traversal; no allocation
 or measured throughput reduction is claimed.
+
+## WAF raw-stream reachability and prefix preparation
+
+Traced the direct raw-body callback through WafRequestContext into the leaf
+transaction's stream preparation/chunk APIs. In the current tree, production
+WafPlugin does not call start_request_body_stream or the capability's streaming
+enabler. The enabler/adapter/context bridge exists, but actual activation calls
+are in tests. This is not a missing-activation fix: prefix admission deliberately
+replaced the old post-dispatch raw handler so its verdict precedes upstream
+exposure, as recorded in the WAF prefix-before-dispatch regression guard.
+No optimization or activation of this dormant lane was selected.
+
+Followed the active execute_request_body_prefix path instead. Its apparent
+validation call already reads CompiledGeneration.prefix_validation, populated by
+check_request_body_prefix during final compilation. Complete-body dependency is
+also cached then. Per-request phase, health, completion, window and physical-cap
+checks remain runtime invariants. Prefix bytes are borrowed for ordered phase-two
+evaluation; transforming or scanning them still has request-dependent work and
+limits. This audit does not establish complete operator/parser coverage.
+
+Fresh verification passed 50 Gateway WAF plugin tests, three canonical prefix
+adapter tests and 24 leaf-crate tests matching prefix_. The leaf filter retained
+one existing ignored release timing witness; it was not run and supplies no
+performance evidence. Formatting and workspace check/Clippy passed. Agent-doc
+validation and diff hygiene passed after this documentation update. No runtime
+code, protocol policy, benchmark or deferred-decision scope changed.
