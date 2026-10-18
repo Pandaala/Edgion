@@ -52,3 +52,23 @@ Re-open this decision only if:
 ## Resolution references
 
 - `D0047` — 2026-09-05.
+
+## Borrowed quoted-parameter decoding
+
+`parse_quoted_value` borrows the trimmed quoted interior when it contains no
+backslash. Values requiring unescaping retain the original character decoder and
+owned output. The local parameter map holds those borrows only during synchronous
+parsing; the returned username, signed-header names and decoded signature remain
+owned before verification or asynchronous body capture begins.
+
+This changes temporary ownership only. Outer quote checks, permissive inner quote
+handling, arbitrary escaped characters, trailing-backslash rejection, lowercase
+parameter keys and signed-header duplicate rejection retain their current behavior.
+Unknown parameters are still accepted after validating their quoted values;
+duplicate keys still fail before parsing the duplicate value. This is not a new
+wire format or a relaxation of authentication, timestamp or body-order checks.
+
+Unit regressions verify zero allocations and source-pointer identity for unescaped
+quoted interiors, escaped and malformed cases, owned results after source release,
+and duplicate/unknown-parameter error precedence. Other parser structures and final
+results still allocate; no whole-parser allocation or throughput claim follows.

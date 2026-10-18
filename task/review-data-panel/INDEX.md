@@ -1005,3 +1005,21 @@ check/Clippy and seven repository guards passed; warnings are outside changed
 code. Independent plan and final source reviews passed. No full integration suite
 or throughput benchmark ran. Composite values still require one owned allocation;
 this does not establish allocation-free conditions in general.
+
+## Borrowed HMAC quoted parameters
+
+The request plugin and compiled HMAC conditions share the same synchronous
+Authorization parser. Its unescaped quoted values now borrow the input until
+conversion, while escaped values retain the existing owned decoder. Final
+username, signed-header names and signature bytes remain owned. Duplicate keys,
+unknown-value validation, arbitrary escapes and error ordering remain unchanged;
+no borrow crosses body capture, header mutation or authentication result handling.
+
+Independent plan and final source reviews passed. HMAC tests passed 29, shared
+conditions passed 67 and the wider hmac filter passed 50 (filters overlap).
+Unescaped decoder cases assert source-pointer identity and zero allocations;
+escaped/malformed values and final ownership have semantic regression coverage.
+Formatting, workspace check/Clippy and seven repository guards passed; existing
+warnings are outside changed code. No full integration suite or throughput
+benchmark ran. Parameter keys, parser containers and final outputs still allocate;
+this removes only unescaped intermediate value copies, not whole-parser costs.

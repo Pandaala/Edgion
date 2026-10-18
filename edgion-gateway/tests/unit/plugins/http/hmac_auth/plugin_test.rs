@@ -744,3 +744,71 @@ fn rebuilt_hmac_verifier_resolves_the_new_generation_limit() {
     assert_eq!(original.verifier.logical_limit_bytes, Some(1024));
     assert_eq!(replacement.verifier.logical_limit_bytes, Some(2048));
 }
+
+#[test]
+fn quoted_values_borrow_unescaped_input_and_preserve_escape_rules() {
+    for raw in [r#""""#, r#" "hmac-sha256" "#, r#""café""#, r#""inner"quote""#] {
+        let trimmed = raw.trim();
+        let expected = &trimmed[1..trimmed.len() - 1];
+        let (value, stats) =
+            crate::test_allocation_counter::count_allocation_stats(|| HmacAuth::parse_quoted_value(raw).unwrap());
+        assert!(matches!(value, Cow::Borrowed(_)));
+        assert_eq!(value.as_ref(), expected);
+        assert_eq!(value.as_ptr(), expected.as_ptr());
+        assert_eq!(stats.calls, 0);
+        assert_eq!(stats.requested_bytes, 0);
+    }
+    for (raw, expected) in [
+        (r#""a\"b""#, "a\"b"),
+        (r#""a\\b""#, "a\\b"),
+        (r#""a\qb""#, "aqb"),
+        (r#""\é""#, "é"),
+    ] {
+        let value = HmacAuth::parse_quoted_value(raw).unwrap();
+        assert!(matches!(value, Cow::Owned(_)));
+        assert_eq!(value, expected);
+    }
+    assert_eq!(
+        HmacAuth::parse_quoted_value(r#""tail\""#),
+        Err("Invalid escape in quoted value")
+    );
+    for raw in ["", "plain", "\"", "\"open", "close\""] {
+        assert_eq!(
+            HmacAuth::parse_quoted_value(raw),
+            Err("HMAC parameter value must be quoted")
+        );
+    }
+}
+
+#[test]
+fn authorization_parser_keeps_owned_results_and_validation_order() {
+    let params = {
+        let header = String::from(
+            r#" HMAC USERNAME="ali\ce", algorithm="hmac-sha256", headers="Date X-Mode", signature="YQ==", extra="a,b\"c" "#,
+        );
+        HmacAuth::parse_authorization(&header).unwrap()
+    };
+    assert_eq!(params.username, "alice");
+    assert_eq!(params.algorithm, HmacAlgorithm::HmacSha256);
+    assert_eq!(params.headers, ["date", "x-mode"]);
+    assert_eq!(params.signature, b"a");
+    let plain = String::from(r#"hmac username="alice", algorithm="hmac-sha256", headers="date", signature="YQ==""#);
+    let owned = HmacAuth::parse_authorization(&plain).unwrap();
+    drop(plain);
+    assert_eq!(owned.username, "alice");
+    for (suffix, expected) in [
+        (", extra=unquoted", "HMAC parameter value must be quoted"),
+        (", USERNAME=unquoted", "Invalid HMAC authorization format"),
+        (r#", extra="tail\""#, "Invalid escape in quoted value"),
+        (r#", extra="ok", EXTRA="ok""#, "Invalid HMAC authorization format"),
+    ] {
+        let header =
+            format!(r#"hmac username="alice", algorithm="hmac-sha256", headers="date", signature="YQ=="{suffix}"#);
+        assert_eq!(HmacAuth::parse_authorization(&header).unwrap_err(), expected);
+    }
+    let duplicate_headers = r#"hmac username="alice", algorithm="hmac-sha256", headers="Date date", signature="YQ==""#;
+    assert_eq!(
+        HmacAuth::parse_authorization(duplicate_headers).unwrap_err(),
+        "Invalid HMAC authorization format"
+    );
+}

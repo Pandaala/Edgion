@@ -7,6 +7,7 @@
 //! - enforceHeaders validation
 
 use crate::plugins::http::common::auth_common::set_sensitive_request_header;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -332,13 +333,16 @@ impl HmacAuth {
         parts
     }
 
-    fn parse_quoted_value(raw: &str) -> Result<String, &'static str> {
+    fn parse_quoted_value(raw: &str) -> Result<Cow<'_, str>, &'static str> {
         let trimmed = raw.trim();
         if trimmed.len() < 2 || !trimmed.starts_with('"') || !trimmed.ends_with('"') {
             return Err("HMAC parameter value must be quoted");
         }
 
         let inner = &trimmed[1..trimmed.len() - 1];
+        if !inner.contains('\\') {
+            return Ok(Cow::Borrowed(inner));
+        }
         let mut out = String::with_capacity(inner.len());
         let mut escaped = false;
 
@@ -357,7 +361,7 @@ impl HmacAuth {
         if escaped {
             return Err("Invalid escape in quoted value");
         }
-        Ok(out)
+        Ok(Cow::Owned(out))
     }
 
     /// Parse Authorization header into HMAC parameters.
@@ -372,7 +376,7 @@ impl HmacAuth {
             return Err("Invalid HMAC authorization format");
         }
 
-        let mut params: HashMap<String, String> = HashMap::new();
+        let mut params: HashMap<String, Cow<'_, str>> = HashMap::new();
         for part in Self::split_auth_params(params_str) {
             if part.is_empty() {
                 continue;
@@ -410,11 +414,11 @@ impl HmacAuth {
         }
 
         let signature = STANDARD
-            .decode(signature_raw)
+            .decode(signature_raw.as_bytes())
             .map_err(|_| "Invalid HMAC authorization format")?;
 
         Ok(HmacAuthParams {
-            username,
+            username: username.into_owned(),
             algorithm,
             headers,
             signature,
