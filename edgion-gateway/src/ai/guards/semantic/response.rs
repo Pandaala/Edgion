@@ -287,10 +287,7 @@ impl GuardrailResponseProcessor {
         let request = encode_request(&windows, self.max_request_bytes)?;
         let timeout = self.client.timeout;
         let call = async {
-            let _permit = Arc::clone(&self.permits)
-                .acquire_owned()
-                .await
-                .map_err(|_| "concurrency-closed")?;
+            let _permit = self.permits.acquire().await.map_err(|_| "concurrency-closed")?;
             outbound_call_with_template_context(
                 &self.client,
                 TemplateContext::Trusted(session),

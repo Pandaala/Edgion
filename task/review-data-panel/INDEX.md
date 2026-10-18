@@ -2389,3 +2389,15 @@ conversion allocations; no throughput claim is made.
 Fresh verification passed 80 SSE/window and 26 gRPC JSON transcoder tests,
 formatting, workspace check/Clippy and seven repository guards. Remaining
 warnings are outside changed code. Independent final review passed.
+
+## Guardrail decision semaphore borrowing
+
+Semantic Guardrail decisions now borrow their processor-owned semaphore for the
+locally awaited outbound call instead of cloning an Arc into an owned permit.
+The permit scope, queue-inclusive timeout, closed-semaphore error and dependency
+failure mapping are unchanged. This removes one Arc increment/decrement pair;
+no allocation or throughput improvement is claimed. Independent plan and final
+code reviews passed. Four network-free tests cover waiting cancellation without
+an extra owner, semaphore closure, acquired-permit release after health rejection,
+and the existing saturated-queue deadline. Formatting, workspace check/Clippy
+and seven repository guards passed; remaining warnings are outside changed code.

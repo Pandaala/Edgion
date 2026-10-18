@@ -714,6 +714,53 @@ async fn permit_saturation_uses_the_same_absolute_call_deadline() {
 }
 
 #[tokio::test]
+async fn permit_wait_cancellation_borrows_the_snapshot_semaphore() {
+    let mut processor = processor(false);
+    processor.permits = Arc::new(Semaphore::new(0));
+    processor.window.retain(semantic_record("wait")).unwrap();
+    let permits = Arc::clone(&processor.permits);
+    let owners = Arc::strong_count(&permits);
+    let session = MockPluginSession::new();
+    let mut sink = ResponseBodySink::new();
+    let mut decision = Box::pin(processor.decide(&session, &mut sink));
+    assert!(futures::poll!(&mut decision).is_pending());
+    assert_eq!(Arc::strong_count(&permits), owners);
+    drop(decision);
+    permits.add_permits(1);
+    let permit = permits.try_acquire().unwrap();
+    drop(permit);
+    assert_eq!(permits.available_permits(), 1);
+}
+
+#[tokio::test]
+async fn permit_closed_preserves_the_decision_error() {
+    let mut processor = processor(false);
+    processor.permits.close();
+    processor.window.retain(semantic_record("closed")).unwrap();
+    let mut sink = ResponseBodySink::new();
+    assert_eq!(
+        processor.decide(&MockPluginSession::new(), &mut sink).await,
+        Err("concurrency-closed")
+    );
+}
+
+#[tokio::test]
+async fn permit_is_returned_after_health_gate_rejection() {
+    let mut client = guardrail_client("http://localhost:1");
+    client.health.healthy.store(false, std::sync::atomic::Ordering::Relaxed);
+    client.passive_health_check = None;
+    let mut processor = processor(false);
+    processor.client = Arc::new(client);
+    processor.window.retain(semantic_record("unhealthy")).unwrap();
+    let mut sink = ResponseBodySink::new();
+    assert_eq!(
+        processor.decide(&MockPluginSession::new(), &mut sink).await,
+        Err("dependency")
+    );
+    assert_eq!(processor.permits.available_permits(), 1);
+}
+
+#[tokio::test]
 async fn cancelling_an_inflight_decision_releases_the_snapshot_permit() {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
