@@ -418,9 +418,9 @@ fn original_form_to_json(input: &[u8], output_limit: usize) -> Result<Vec<u8>, T
             return Err(TransformFailure::TooLarge);
         }
         let split = segment.iter().position(|byte| *byte == b'=').unwrap_or(segment.len());
-        let key = decode_component(&segment[..split], MAX_KEY_BYTES)?;
+        let key = original_decode_component(&segment[..split], MAX_KEY_BYTES)?;
         let value_start = split.saturating_add(1).min(segment.len());
-        let value = decode_component(&segment[value_start..], MAX_VALUE_BYTES)?;
+        let value = original_decode_component(&segment[value_start..], MAX_VALUE_BYTES)?;
         values.entry(key).or_default().push(value);
     }
     let object = values
@@ -494,4 +494,86 @@ fn distinct_form_keys_avoid_singleton_vectors_and_second_object() {
         new_stats.requested_bytes < old_stats.requested_bytes,
         "old={old_stats:?}, new={new_stats:?}"
     );
+}
+
+fn original_decode_component(input: &[u8], limit: usize) -> Result<String, TransformFailure> {
+    let mut output = Vec::with_capacity(input.len().min(limit));
+    let mut index = 0usize;
+    while index < input.len() {
+        let byte = match input[index] {
+            b'+' => {
+                index += 1;
+                b' '
+            }
+            b'%' => {
+                let high = input.get(index + 1).and_then(|byte| hex_value(*byte));
+                let low = input.get(index + 2).and_then(|byte| hex_value(*byte));
+                let (Some(high), Some(low)) = (high, low) else {
+                    return Err(TransformFailure::BadRequest);
+                };
+                index += 3;
+                (high << 4) | low
+            }
+            byte => {
+                index += 1;
+                byte
+            }
+        };
+        if output.len() >= limit {
+            return Err(TransformFailure::TooLarge);
+        }
+        output.push(byte);
+    }
+    String::from_utf8(output).map_err(|_| TransformFailure::BadRequest)
+}
+
+#[test]
+fn borrowed_form_decoder_preserves_original_error_precedence() {
+    let mut inputs: Vec<Vec<u8>> = (0_u8..=255).map(|byte| vec![byte]).collect();
+    inputs.extend([
+        b"".to_vec(),
+        b"plain".to_vec(),
+        "café".as_bytes().to_vec(),
+        b"a+b".to_vec(),
+        b"%61%62".to_vec(),
+        b"%c3%a9".to_vec(),
+        b"%".to_vec(),
+        b"%0".to_vec(),
+        b"%GG".to_vec(),
+        b"%ff".to_vec(),
+        b"a%".to_vec(),
+        b"ab%".to_vec(),
+        b"abc%".to_vec(),
+        b"a%61".to_vec(),
+        b"ab%61".to_vec(),
+        b"abc%61".to_vec(),
+        b"\xff%".to_vec(),
+        b"\xff+".to_vec(),
+        b"abc+".to_vec(),
+    ]);
+    for input in inputs {
+        for limit in [0, 1, 2, 3, 4, 8, usize::MAX] {
+            let expected = original_decode_component(&input, limit);
+            let actual = decode_component(&input, limit);
+            assert_eq!(actual.as_deref(), expected.as_deref(), "input={input:?}, limit={limit}");
+        }
+    }
+}
+
+#[test]
+fn plain_form_components_borrow_input_without_allocation() {
+    for input in [b"".as_slice(), b"plain", "café".as_bytes()] {
+        let (value, stats) =
+            crate::test_allocation_counter::count_allocation_stats(|| decode_component(input, input.len()).unwrap());
+        assert!(matches!(value, Cow::Borrowed(_)));
+        assert_eq!(value.as_bytes(), input);
+        assert_eq!(value.as_ptr(), input.as_ptr());
+        assert_eq!(stats.calls, 0);
+        assert_eq!(stats.requested_bytes, 0);
+    }
+    for (input, expected) in [(b"a+b".as_slice(), "a b"), (b"%61", "a")] {
+        let value = decode_component(input, 3).unwrap();
+        assert!(matches!(value, Cow::Owned(_)));
+        assert_eq!(value, expected);
+    }
 }

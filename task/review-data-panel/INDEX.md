@@ -2734,3 +2734,23 @@ output. Fresh verification passed 18 transformer tests, 1 CappedWriter test,
 formatting, workspace check/Clippy and seven repository guards. Remaining warnings
 are outside changed code. No peak-memory, all-input allocation or throughput
 improvement is claimed.
+
+## FormJsonTransform borrowed plain components
+
+Form-to-JSON grouping now retains Cow text: components without plus or percent
+escapes borrow the original input, while decoded components keep owned Strings.
+The escape precheck examines at most limit+1 bytes. Including the first over-limit
+byte preserves malformed-percent precedence; if that prefix is plain and input
+is longer, TooLarge precedes UTF-8 validation as before. Escaped inputs retain the
+original decoding loop and limits. Grouping/ordering and serialization compare
+text identically, and all borrows end inside synchronous conversion. The original
+body was already retained for header-failure rollback; its lifetime is unchanged.
+
+Independent plan and code reviews passed. The previous full-conversion reference
+now uses an independent original decoder. New differential cases cover every
+single byte, UTF-8, valid/invalid escapes around the limit and saturated limits;
+plain inputs assert source-pointer identity and zero allocation, escaped values
+remain owned. Fresh verification passed 20 transformer tests, 1 CappedWriter test,
+formatting, workspace check/Clippy and seven repository guards; remaining warnings
+are outside changed code. Group/output allocations remain, and the additional
+bounded escape scan is not claimed to improve CPU time for every input.

@@ -194,13 +194,13 @@ impl RequestFilter for FormJsonTransform {
 
 #[derive(Serialize)]
 #[serde(untagged)]
-enum FormValues {
-    Single(String),
-    Multiple(Vec<String>),
+enum FormValues<'a> {
+    Single(Cow<'a, str>),
+    Multiple(Vec<Cow<'a, str>>),
 }
 
 fn form_to_json(input: &[u8], output_limit: usize) -> Result<Vec<u8>, TransformFailure> {
-    let mut values = BTreeMap::<String, FormValues>::new();
+    let mut values = BTreeMap::<Cow<'_, str>, FormValues<'_>>::new();
     let mut pair_count = 0usize;
     for segment in input.split(|byte| *byte == b'&').filter(|segment| !segment.is_empty()) {
         pair_count = pair_count.checked_add(1).ok_or(TransformFailure::TooLarge)?;
@@ -230,7 +230,21 @@ fn form_to_json(input: &[u8], output_limit: usize) -> Result<Vec<u8>, TransformF
     serialize_json(&values, output_limit)
 }
 
-fn decode_component(input: &[u8], limit: usize) -> Result<String, TransformFailure> {
+fn decode_component(input: &[u8], limit: usize) -> Result<Cow<'_, str>, TransformFailure> {
+    // Include the first over-limit byte: a malformed escape there takes
+    // precedence over the decoded-length failure in the original loop.
+    if !input
+        .iter()
+        .take(limit.saturating_add(1))
+        .any(|byte| matches!(*byte, b'+' | b'%'))
+    {
+        if input.len() > limit {
+            return Err(TransformFailure::TooLarge);
+        }
+        return std::str::from_utf8(input)
+            .map(Cow::Borrowed)
+            .map_err(|_| TransformFailure::BadRequest);
+    }
     let mut output = Vec::with_capacity(input.len().min(limit));
     let mut index = 0usize;
     while index < input.len() {
@@ -258,7 +272,9 @@ fn decode_component(input: &[u8], limit: usize) -> Result<String, TransformFailu
         }
         output.push(byte);
     }
-    String::from_utf8(output).map_err(|_| TransformFailure::BadRequest)
+    String::from_utf8(output)
+        .map(Cow::Owned)
+        .map_err(|_| TransformFailure::BadRequest)
 }
 
 fn hex_value(byte: u8) -> Option<u8> {
