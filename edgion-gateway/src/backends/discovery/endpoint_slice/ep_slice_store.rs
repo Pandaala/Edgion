@@ -11,7 +11,7 @@ use crate::backends::discovery::{get_service_discovery_coordinator, ServiceDisco
 use crate::lb::LbBackend;
 
 static ROUNDROBIN_STORE: LazyLock<Arc<EpSliceStore<RoundRobin>>> =
-    LazyLock::new(|| Arc::new(EpSliceStore::new(get_service_discovery_coordinator())));
+    LazyLock::new(|| Arc::new(EpSliceStore::new(Arc::clone(get_service_discovery_coordinator()))));
 
 pub fn get_roundrobin_store() -> Arc<EpSliceStore<RoundRobin>> {
     ROUNDROBIN_STORE.clone()
@@ -180,7 +180,7 @@ where
     S::Iter: pingora_load_balancing::selection::BackendIter,
 {
     fn default() -> Self {
-        Self::new(get_service_discovery_coordinator())
+        Self::new(Arc::clone(get_service_discovery_coordinator()))
     }
 }
 

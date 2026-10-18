@@ -126,7 +126,7 @@ pub(crate) async fn try_get_peer(
     selected_http: Option<&SelectedLogicalBackend>,
 ) -> Result<Box<HttpPeer>, EdgionErrorCode> {
     try_get_peer_with_capture(ctx, session, is_grpc, selected_http, |target| {
-        CapturedServiceSelection::capture(&get_service_discovery_coordinator(), target)
+        CapturedServiceSelection::capture(get_service_discovery_coordinator(), target)
     })
     .await
 }

@@ -6,7 +6,7 @@ use crate::backends::discovery::{
 };
 
 static GLOBAL_SERVICE_STORE: LazyLock<Arc<ServiceStore>> =
-    LazyLock::new(|| Arc::new(ServiceStore::new(get_service_discovery_coordinator())));
+    LazyLock::new(|| Arc::new(ServiceStore::new(Arc::clone(get_service_discovery_coordinator()))));
 
 pub fn get_global_service_store() -> Arc<ServiceStore> {
     GLOBAL_SERVICE_STORE.clone()

@@ -63,7 +63,7 @@ pub(crate) fn sp_affinity_get_or_build_key(
     _backends_fn: impl FnOnce() -> Arc<[Arc<LbBackend>]>,
 ) -> Arc<std::collections::HashMap<String, std::net::SocketAddr>> {
     let coordinator = crate::backends::discovery::get_service_discovery_coordinator();
-    sp_affinity_get_or_build_from(&coordinator, service_key, section)
+    sp_affinity_get_or_build_from(coordinator, service_key, section)
 }
 
 fn sp_affinity_get_or_build_from(

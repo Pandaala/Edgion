@@ -466,7 +466,7 @@ fn degrade_selections_outlier_removal_empty_membership_and_delete_preserve_histo
             max_ejection_seconds: 3600,
             max_ejection_percent: 0,
         };
-        outliers.set_service_config_in(&coordinator, key, Some(config.clone()));
+        outliers.set_service_config_in(coordinator, key, Some(config.clone()));
         let endpoint = select_service_endpoint(
             key,
             section_number(80),
@@ -478,7 +478,7 @@ fn degrade_selections_outlier_removal_empty_membership_and_delete_preserve_histo
         )
         .unwrap();
         let token = outliers.capture_completion_token(&endpoint.backend).unwrap();
-        outliers.record_failure_for_backend_in(&coordinator, &endpoint.backend, &token, FailureClass::Gateway);
+        outliers.record_failure_for_backend_in(coordinator, &endpoint.backend, &token, FailureClass::Gateway);
         select_service_endpoint(
             key,
             section_number(80),
@@ -490,7 +490,7 @@ fn degrade_selections_outlier_removal_empty_membership_and_delete_preserve_histo
         )
         .unwrap();
         assert_degrade_count(handle, key, 1);
-        outliers.set_service_config_in(&coordinator, key, None);
+        outliers.set_service_config_in(coordinator, key, None);
         select_service_endpoint(
             key,
             section_number(80),
@@ -503,9 +503,9 @@ fn degrade_selections_outlier_removal_empty_membership_and_delete_preserve_histo
         .unwrap();
         assert_degrade_count(handle, key, 1);
 
-        outliers.set_service_config_in(&coordinator, key, Some(config));
+        outliers.set_service_config_in(coordinator, key, Some(config));
         let token = outliers.capture_completion_token(&endpoint.backend).unwrap();
-        outliers.record_failure_for_backend_in(&coordinator, &endpoint.backend, &token, FailureClass::Gateway);
+        outliers.record_failure_for_backend_in(coordinator, &endpoint.backend, &token, FailureClass::Gateway);
         select_service_endpoint(
             key,
             section_number(80),
@@ -831,7 +831,7 @@ fn capture_fixture(service_key: &str, port: u16) -> Result<CapturedServiceSelect
         Arc::new(crate::plugins::PluginRuntime::new()),
     );
     CapturedServiceSelection::capture(
-        &get_service_discovery_coordinator(),
+        get_service_discovery_coordinator(),
         compiled.permitted_service().unwrap(),
     )
 }
@@ -854,7 +854,7 @@ fn response_cache_actual_retained_discovery_stamp_survives_reload_and_recreation
         Arc::new(crate::plugins::PluginRuntime::new()),
     );
     let target = compiled.permitted_service().unwrap();
-    let captured = CapturedServiceSelection::capture(&get_service_discovery_coordinator(), target).unwrap();
+    let captured = CapturedServiceSelection::capture(get_service_discovery_coordinator(), target).unwrap();
     let old = captured.response_cache_stamp(target).unwrap();
     drop(source);
     let replacement = publish_service(
@@ -864,7 +864,7 @@ fn response_cache_actual_retained_discovery_stamp_survives_reload_and_recreation
         vec![("http", 8080)],
         "10.9.0.7",
     );
-    let later = CapturedServiceSelection::capture(&get_service_discovery_coordinator(), target).unwrap();
+    let later = CapturedServiceSelection::capture(get_service_discovery_coordinator(), target).unwrap();
     let fresh = later.response_cache_stamp(target).unwrap();
     assert!(
         old.fingerprint != fresh.fingerprint,

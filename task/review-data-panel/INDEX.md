@@ -4216,3 +4216,26 @@ Fresh verification passed 208 network-free tests: 64 backend-traffic policy,
 peer filters ran serially. Formatting, workspace check/Clippy, seven repository
 guards and diff hygiene passed. Existing warnings remain outside changed code.
 No live transport or throughput benchmark ran.
+
+
+## Borrowed discovery coordinator accessor
+
+The Service discovery getter now borrows the process-global Arc. ServiceStore,
+EpSliceStore and ConfigClient handler construction explicitly clone it at their
+existing ownership boundaries. The singleton Arc remains because these owners
+also support independently constructed coordinators. Ordinary selection, policy
+lookup, affinity and completion callers no longer create a temporary coordinator
+Arc solely to call a borrowed method.
+
+Generation loads, runtime-cell and endpoint ownership, completion locking and
+retirement remain unchanged. This does not remove snapshot ownership or the
+accepted recovery/rejection costs documented in the Service runtime selection
+guard. Unit-test edits only remove redundant references after the getter type
+change; no fixture, assertion or integration test changed. No throughput claim
+is made.
+
+Fresh verification passed 315 network-free tests: 71 discovery, 12 Service
+selector, 127 LB, 103 HTTP upstream-peer and 2 ConfigClient tests. Discovery
+and peer filters ran serially. Formatting, workspace check/Clippy, seven
+repository guards and diff hygiene passed. Existing warnings remain outside
+changed code. No live transport or throughput benchmark ran.

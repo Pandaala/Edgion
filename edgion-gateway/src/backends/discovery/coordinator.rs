@@ -526,8 +526,8 @@ pub struct ServiceDiscoveryCoordinator {
 static GLOBAL_COORDINATOR: LazyLock<Arc<ServiceDiscoveryCoordinator>> =
     LazyLock::new(|| Arc::new(ServiceDiscoveryCoordinator::new()));
 
-pub fn get_service_discovery_coordinator() -> Arc<ServiceDiscoveryCoordinator> {
-    GLOBAL_COORDINATOR.clone()
+pub fn get_service_discovery_coordinator() -> &'static Arc<ServiceDiscoveryCoordinator> {
+    &GLOBAL_COORDINATOR
 }
 
 impl ServiceDiscoveryCoordinator {

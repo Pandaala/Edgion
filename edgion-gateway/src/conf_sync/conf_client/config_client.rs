@@ -76,7 +76,7 @@ impl ConfigClient {
             Arc::clone(&shared_scope),
         ));
 
-        let service_discovery = get_service_discovery_coordinator();
+        let service_discovery = Arc::clone(get_service_discovery_coordinator());
         let services_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let service_handler = create_service_handler(Arc::clone(&service_discovery));
         services_cache.set_conf_processor(service_handler);
