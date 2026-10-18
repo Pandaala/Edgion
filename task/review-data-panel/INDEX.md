@@ -46,6 +46,7 @@ destination.
 - [Raw URI fragment serialization](log-01-raw-uri-fragment-serialization.md)
 - [Wasm header snapshot and replay ownership](wasm-01-header-snapshot-ownership.md)
 - [DSL string consumer ownership](dsl-01-string-consumer-ownership.md)
+- [ProxyRewrite staged template compilation](rewrite-01-staged-template-compilation.md)
 
 ## Completed implementation batch
 
