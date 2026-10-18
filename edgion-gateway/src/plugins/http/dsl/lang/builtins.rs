@@ -1547,7 +1547,7 @@ impl Vm {
         if let Some(hv) = headers_val {
             match hv {
                 Value::Map(m) => {
-                    for (name, value) in m.iter() {
+                    for (name, value) in *m {
                         if opaque_reader.is_some()
                             && (name.eq_ignore_ascii_case("content-length")
                                 || name.eq_ignore_ascii_case("transfer-encoding"))
@@ -1564,7 +1564,7 @@ impl Vm {
                             got: error.got(),
                             operation: "http.call headers_map",
                         })?;
-                        request_headers.push((name.clone(), value.to_string()));
+                        request_headers.push((name, value.to_string()));
                     }
                 }
                 Value::Nil => {}
@@ -1582,7 +1582,7 @@ impl Vm {
         // Opaque Body streams are intentionally not replayed across redirects.
         let client = dsl_http_client(runtime.block_private_ips, !is_opaque_body);
         let mut builder = client
-            .request(method, &url_str)
+            .request(method, parsed_url)
             .timeout(std::time::Duration::from_millis(timeout_ms));
 
         for (name, value) in request_headers {

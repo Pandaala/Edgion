@@ -2016,3 +2016,17 @@ change is introduced, and no throughput benchmark is claimed.
 Fresh verification passed all 500 Gateway DSL tests, formatting, workspace
 check/Clippy and seven repository guards. Remaining warnings are outside the
 changed source. Independent final review passed.
+
+## DSL outbound prepared input ownership
+
+Http.call consumes its popped header map in insertion order and moves names into
+the existing request-header list instead of cloning them. Value coercion/copying
+and opaque-Body framing rejection remain in their original order. The reqwest
+builder receives the same parsed URL already used for scheme/SSRF validation;
+the locked reqwest Url conversion retains host validation without parsing the
+original string again. Client selection, redirect policy, snapshot handling,
+limits, error categories and header conversions are unchanged. Independent plan
+review passed. No network-policy expansion or throughput benchmark is claimed.
+Fresh verification passed all 500 Gateway DSL tests, formatting, workspace
+check/Clippy and seven repository guards. Remaining warnings are outside the
+changed source. Independent final review passed.
