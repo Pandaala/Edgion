@@ -99,6 +99,7 @@ fn parse_role(value: &str) -> Option<AiGuardRole> {
 }
 
 /// Select every guardable text span from a canonical request body.
+/// Successful output is strictly ordered by message index, then text-part index.
 pub fn select_spans(body: &[u8], limits: SpanLimits) -> Result<Vec<GuardSpan>, SpanError> {
     let root = Parser::new_without_decoding(body)
         .parse()
@@ -214,7 +215,8 @@ pub fn select_spans(body: &[u8], limits: SpanLimits) -> Result<Vec<GuardSpan>, S
         }
     }
 
-    spans.sort_by_key(|span| span.key);
+    // Traversal already follows key order: one content variant per message,
+    // with text parts visited by increasing index. Skips only leave gaps.
     Ok(spans)
 }
 

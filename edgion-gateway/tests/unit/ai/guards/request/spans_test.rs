@@ -256,3 +256,69 @@ fn fixed_values_borrow_plain_text_and_preserve_encoded_admission() {
     assert!(matches!(decoded, Cow::Owned(_)));
     assert_eq!(parse_role(&decoded), Some(AiGuardRole::User));
 }
+
+#[test]
+fn traversal_preserves_key_and_token_order_across_skipped_candidates() {
+    for count in [0_u32, 1, 4, 128] {
+        let mut messages = Vec::new();
+        let mut expected = Vec::new();
+        for message_index in 0..count {
+            let message = match message_index % 4 {
+                0 => {
+                    let text = format!("message {message_index}");
+                    expected.push((
+                        GuardSpanKey {
+                            message_index,
+                            part: GuardPart::Content,
+                        },
+                        text.clone(),
+                    ));
+                    serde_json::json!({"role": "user", "content": text})
+                }
+                1 => serde_json::json!({"role": "user"}),
+                2 => serde_json::json!({"role": "assistant", "content": null}),
+                _ => {
+                    let first = format!("first {message_index}: \"é\"");
+                    let second = format!("second {message_index}\n");
+                    expected.push((
+                        GuardSpanKey {
+                            message_index,
+                            part: GuardPart::TextPart(2),
+                        },
+                        first.clone(),
+                    ));
+                    expected.push((
+                        GuardSpanKey {
+                            message_index,
+                            part: GuardPart::TextPart(5),
+                        },
+                        second.clone(),
+                    ));
+                    serde_json::json!({"role": "user", "content": [
+                        false, {"type": "image_url"}, {"type": "text", "text": first},
+                        {"type": "text"}, {"type": "text", "text": 4}, {"type": "text", "text": second}
+                    ]})
+                }
+            };
+            messages.push(message);
+        }
+        let body = serde_json::to_vec(&serde_json::json!({"messages": messages})).unwrap();
+        let spans = select_spans(
+            &body,
+            SpanLimits {
+                max_spans: 512,
+                ..limits()
+            },
+        )
+        .unwrap();
+        assert_eq!(spans.len(), expected.len());
+        for (span, (key, text)) in spans.iter().zip(&expected) {
+            assert_eq!(&span.key, key);
+            assert_eq!(&span.current, text);
+            let token = &body[span.token.start as usize..span.token.end as usize];
+            assert_eq!(decode_json_string(token).as_deref(), Some(text.as_str()));
+        }
+        assert!(spans.windows(2).all(|pair| pair[0].key < pair[1].key));
+        assert!(spans.windows(2).all(|pair| pair[0].token.end <= pair[1].token.start));
+    }
+}

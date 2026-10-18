@@ -34,6 +34,11 @@ request bytes; escaped values own their decoded text. Both paths retain serde's
 complete-token validation. Selected content remains owned, and the parser's
 existing owned decoder and SSE consumers are unchanged.
 
+Successful selection emits strictly increasing span keys directly: messages are
+visited by index, each message contributes either one Content span or increasing
+TextPart indices, and skipped candidates only leave gaps. No final sort is needed.
+This producer invariant does not relax validation of arbitrary replacement inputs.
+
 - `edgion-gateway/src/ai/guards/request/spans.rs` — `select_spans`: `role`
   uses `string_token().ok_or(SpanError::Unparseable)` and returns `Unparseable`
   on `Field::Missing | Field::Ambiguous`; `content` returns `Unparseable` only on

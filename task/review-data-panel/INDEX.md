@@ -2649,3 +2649,20 @@ Fresh verification passed 78 AiGuard request tests, formatting, workspace
 check/Clippy and seven repository guards; remaining warnings are outside changed
 code. Regex cache initialization can still allocate, and applicable Mask paths
 retain their slot allocation. No full-request throughput result is claimed.
+
+## AiGuard selection traversal order
+
+Removed the final sort from select_spans: successful traversal already emits
+strictly increasing GuardSpanKey values. Message indices increase, each message
+chooses either one Content span or increasing TextPart indices, and skips only
+leave gaps. The producer contract and owning span-bounds knowledge document this
+proof. All consumer ordering checks and generic replacement sorting remain intact.
+
+Independent plan and code/knowledge reviews passed. A regression checks exact
+key/text sequences and original quoted-token ranges across 0, 1, 4 and 128 messages
+with mixed content variants, skipped messages/parts, index gaps and escaped text.
+Existing ambiguity and bounds tests remain unchanged. Fresh verification passed
+79 AiGuard request tests, formatting, workspace check/Clippy and seven repository
+guards; remaining warnings are outside changed code. The benefit is removal of
+redundant sorting work on an already ordered list, not an asserted allocation or
+O(n log n) improvement; no throughput benchmark ran.
