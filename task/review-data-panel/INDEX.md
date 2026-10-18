@@ -1754,3 +1754,16 @@ The prepared two-standard-name sanitizer fixture measured zero allocations;
 custom-name and larger-list behavior carries no such promise. Formatting,
 workspace check/Clippy and seven repository guards passed, with existing warnings
 outside changed files. Independent final review passed.
+
+## Session persistence Max-Age formatting
+
+The upstream-response cookie builder writes the permanent-cookie Max-Age
+integer directly into the final String instead of formatting a temporary String
+and copying it. Conditions, decimal bytes, attribute order and Secure handling
+remain unchanged. Final-buffer growth remains possible; this is not a throughput
+claim. Independent plan review passed. Exact-output tests cover zero, maximum
+u64 and absent TTL, alongside existing Session and default cookie coverage.
+No full suite, live integration or throughput benchmark ran for this batch.
+Fresh session-persistence tests passed 22 cases. Formatting, workspace
+check/Clippy and seven repository guards passed, with existing warnings outside
+changed files. Independent final review passed.

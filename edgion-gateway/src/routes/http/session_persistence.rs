@@ -3,6 +3,8 @@
 //! Provides token generation, cookie/header extraction, and Set-Cookie building
 //! for Gateway API SessionPersistence support.
 
+use std::fmt::Write as _;
+
 use edgion_resources::resources::http_route::{CookieLifetimeType, SessionPersistence, SessionPersistenceType};
 use pingora_proxy::Session;
 use sha2::{Digest, Sha256};
@@ -265,7 +267,7 @@ pub fn build_set_cookie_value(sp: &SessionPersistence, token: &str, is_tls: bool
 
     if is_permanent {
         if let Some(secs) = ttl_secs {
-            cookie.push_str(&format!("; Max-Age={secs}"));
+            let _ = write!(cookie, "; Max-Age={secs}");
         }
     }
 

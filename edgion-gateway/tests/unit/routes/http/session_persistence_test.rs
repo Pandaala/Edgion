@@ -346,6 +346,19 @@ fn test_build_set_cookie_permanent_lifetime() {
         cookie,
         "my-sess=abcd1234; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax"
     );
+    for (ttl, expected) in [
+        (
+            Some(0),
+            "my-sess=abcd1234; Path=/; Max-Age=0; HttpOnly; SameSite=Lax; Secure",
+        ),
+        (
+            Some(u64::MAX),
+            "my-sess=abcd1234; Path=/; Max-Age=18446744073709551615; HttpOnly; SameSite=Lax; Secure",
+        ),
+        (None, "my-sess=abcd1234; Path=/; HttpOnly; SameSite=Lax; Secure"),
+    ] {
+        assert_eq!(build_set_cookie_value(&sp, "abcd1234", true, ttl), expected);
+    }
 }
 
 #[test]
