@@ -3367,3 +3367,30 @@ one existing ignored release timing witness; it was not run and supplies no
 performance evidence. Formatting and workspace check/Clippy passed. Agent-doc
 validation and diff hygiene passed after this documentation update. No runtime
 code, protocol policy, benchmark or deferred-decision scope changed.
+
+## ExtProc streamed exchange ownership inspection
+
+Followed ExtProcStreamedBodyHandler through AttachedExtProc and the client stream
+exchange. The request-scoped owner moves its non-cloneable stream out under a
+short state lock before awaiting, leaving Failed as the cancellation sentinel.
+The live stream owns its target permit and outbound channel; the client clone
+enters the lazy opening future. Borrowing these across their owner boundary or
+holding a synchronous guard through exchange would change cancellation or
+lifetime semantics. Last-phase half-close and matching-verdict/clean-EOF checks
+remain separate required protocol steps, not redundant waits.
+
+ProcessingMode clones copy five enum fields, with no heap-backed payload. The
+allowed override list is already shared from construction. Per-request override
+parsing and reduction/membership checks preserve dynamic processor decisions;
+they cannot be replaced by one immutable effective mode. Fail-open deactivation
+releases the stream, abandonment preserves terminal ownership rules, and valid
+body mutation moves its returned Vec into Bytes. The outgoing body copy remains
+covered by the existing protobuf representation decision.
+
+No runtime optimization was selected in this audit. Fresh network-free tests
+passed 18 scripted streamed-handler cases and 10 attached-owner/mode cases;
+the latter construct lazy clients but do not exchange with a server. Formatting,
+workspace check/Clippy, agent-doc validation and diff hygiene passed. Existing
+warnings remain outside changed files. This is scoped ownership/protocol source
+inspection and unit evidence, not fresh gRPC interoperability or complete
+transport dependency coverage.
