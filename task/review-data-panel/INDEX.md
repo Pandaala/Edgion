@@ -28,6 +28,7 @@ destination.
 
 ## Deferred decisions
 
+- [Quota worker future representation](quota-01-worker-future-representation.md)
 - [Publication-time global/Gateway plugin lists](early-01-precompute-plugin-lists.md)
 - [Cache policy fixture verification failure](verification-01-cache-policy-fixture.md)
 - [Stream-suite parallel verification failure](verification-02-stream-parallel-failure.md)
@@ -3773,3 +3774,26 @@ and 24 attempt runtime tests. Formatting, workspace check/Clippy, seven reposito
 guards and diff hygiene passed. Existing warnings remain outside changed code.
 No live Redis, Cluster/failover or throughput test was run for this batch;
 historical live-test results above are not fresh verification of this change.
+
+
+## Quota worker ownership and future-layout audit
+
+Inspected the complete quota accumulator/worker lifecycle and its Redis sink.
+Context, worker and response processor retain separate accumulator owners;
+notifications carry no accounting payload, so monotonic atomic watermarks remain
+the source of truth. Attempted high-water is recorded before await to avoid
+refunding uncertain applies. Final retry deadlines, lease refresh, request-drop
+abort, timeout abort and completed-worker joining retain independent purposes.
+No clone was removed from these cross-task owners.
+
+The per-flush boxed future is a candidate, but generic direct dispatch changes
+the persistent worker layout. Allocation and idle-residency consequences need
+measurement before it qualifies as impact-free. The decision and acceptance
+criteria are in [quota-01](quota-01-worker-future-representation.md). No runtime,
+trait, test or parallel-target behavior changed in this audit.
+
+Fresh verification passed 77 network-free tests: 27 quota and 50 usage tests.
+Formatting, workspace check/Clippy, agent-document validation and diff hygiene
+passed. Existing warnings remain outside this documentation-only change.
+No production future-size, allocation, CPU or live Redis measurement was run;
+the representation tradeoff remains open.
