@@ -44,6 +44,7 @@ destination.
 - [HMAC signed-header membership ownership](hmac-01-signed-header-membership.md)
 - [Preinitialized HMAC key state](hmac-02-preinitialized-mac-state.md)
 - [Raw URI fragment serialization](log-01-raw-uri-fragment-serialization.md)
+- [Wasm header snapshot and replay ownership](wasm-01-header-snapshot-ownership.md)
 
 ## Completed implementation batch
 
@@ -1337,3 +1338,15 @@ capacity exhaustion, load-path mock failures and a tick-callout timeout. The sam
 Formatting, workspace check/Clippy and seven repository guards passed. Existing
 Clippy warnings remain outside the changed file. No full suite or benchmark ran.
 Independent final review passed.
+
+## Wasm header snapshot ownership audit
+
+Guest header mutations retain separate readable snapshots and ordered replay
+operations, with duplicated String payloads covered by explicit allocation
+profiles. Immutable sharing is a candidate, but owner overhead, detached replay
+lifetime and admission rejection boundaries require a reviewed representation.
+The deferred task preserves both logical views and records those decisions.
+Initial text-only session snapshots and body storage are outside its scope.
+Independent documentation plan review passed; this batch changes no runtime code
+and makes no benchmark or complete host-memory-bound claim.
+Independent final review, agent-doc validation and diff checks passed.
