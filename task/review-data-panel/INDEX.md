@@ -23,7 +23,8 @@ destination.
 | Redirect HTTP | Direct callbacks and shared client-policy application inspected. Missing-host and listener-admission checks now share one normalized hostname. Raw Location authority, query-free log URL and session-owned keepalive remain unchanged. |
 | Connection filters and Stream plugins | Connection bridge, ordered runtime dispatch, connection-rate-limit callback, global IP profile selection, GeoIP callback and shared denial translation inspected. Static denial reasons now borrow literals. Deeper ACL/GeoIP matchers, local-gate/Redis implementations and publication construction remain open. |
 | TCP/TLS connection handling and relay | TCP, terminated TLS and passthrough TLS direct process/route/connect/log orchestration inspected, plus shared L4 relay. Existing snapshot/inspection-buffer release boundaries retained. Listener-log direct serialization deferred below. Deeper route selection, backend resolution and transport dependencies remain open. |
-| TLS handshake callbacks and UDP paths | Stream-result consumers inspected: Stage 1 returns bool; TCP/UDP keep their bounded generic reason; TLS formats the existing detail. TLS handshake callbacks and UDP packet/session lifecycle remain pending. |
+| TLS handshake callbacks | Stream-result consumers inspected: Stage 1 returns bool; TLS formats the existing detail. Deeper handshake callbacks remain pending. |
+| UDP packet/session lifecycle | Direct packet, session admission, receiver, retirement, shutdown and log projection inspected. Selected route ownership and socket Arc transfer tightened below. Deeper backend selection, route publication and socket dependencies remain open. |
 
 ## Deferred decisions
 
@@ -179,3 +180,26 @@ workspace check/Clippy and agent-doc validation passed; Clippy warnings are
 outside this documentation-only change. No real-network or throughput validation
 is claimed. Independent plan review approved recording the listener-log candidate
 for user decision; independent final record review also passed.
+
+## UDP selection and session ownership
+
+New-session route selection now returns the selected Arc from a synchronous
+helper, releasing the whole table snapshot before admission and other I/O.
+Selection stays after the established-session fast path and retains the same
+selected generation. Session construction moves its newly created upstream
+socket Arc instead of cloning it; the receiver still owns its independent Arc.
+
+Established sessions retain their fixed upstream. Session handles across awaits,
+retirement identity checks, lifecycle locks, permits, cancellation and shutdown
+ordering remain unchanged. Packet buffers remain bounded; upstream source checks
+still precede forwarding and activity updates. No new observability was added.
+
+The ownership regression covers empty selection, old-table and unselected-unit
+release, selected-generation survival, and subsequent selection after reload.
+This removes one socket Arc increment/decrement and shortens table retention;
+no throughput or RSS improvement is claimed without measurement.
+
+Independent plan and final source reviews passed. All 58 UDP route/session tests
+and four UDP log tests passed. Formatting, workspace check/Clippy and seven
+repository guards passed; Clippy warnings are outside the changed files.
+No full integration suite or throughput benchmark was run.

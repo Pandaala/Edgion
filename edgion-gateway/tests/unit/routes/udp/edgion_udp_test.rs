@@ -1,7 +1,66 @@
 use super::*;
 use crate::routes::udp::UdpPortRouteManager;
+use edgion_resources::resources::udp_route::{UDPRoute, UDPRouteSpec};
+use kube::api::ObjectMeta;
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV6};
 use tokio::sync::oneshot;
+
+fn route_unit(name: &str) -> Arc<UdpRouteUnit> {
+    Arc::new(
+        UdpRouteUnit::from_route(Arc::new(crate::test_current_status::processed(UDPRoute {
+            metadata: ObjectMeta {
+                namespace: Some("default".to_string()),
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            spec: UDPRouteSpec {
+                current_status: None,
+                resolved_status_controller: Some("edgion.io/gateway-controller".into()),
+                parent_refs: None,
+                rules: None,
+                resolved_listeners: None,
+                resolved_listener_attachments: None,
+            },
+            status: None,
+        })))
+        .unwrap(),
+    )
+}
+
+#[test]
+fn selected_unit_survives_reload_without_retaining_old_table() {
+    let manager = UdpPortRouteManager::new();
+    assert!(select_route_unit(&manager).is_none());
+
+    let old_unit = route_unit("a");
+    let sibling = route_unit("b");
+    let old_unit_weak = Arc::downgrade(&old_unit);
+    let sibling_weak = Arc::downgrade(&sibling);
+    manager.rebuild(&HashMap::from([
+        ("default/a".to_string(), old_unit),
+        ("default/b".to_string(), sibling),
+    ]));
+    let old_table = Arc::downgrade(&manager.load_route_table());
+    let selected = select_route_unit(&manager).unwrap();
+    assert!(Arc::ptr_eq(&selected, &old_unit_weak.upgrade().unwrap()));
+
+    let new_unit = route_unit("a");
+    manager.rebuild(&HashMap::from([("default/a".to_string(), new_unit.clone())]));
+    assert!(old_table.upgrade().is_none(), "selection must release the table guard");
+    assert!(
+        sibling_weak.upgrade().is_none(),
+        "unselected units must not be retained"
+    );
+    assert!(
+        old_unit_weak.upgrade().is_some(),
+        "the new session keeps its selected generation"
+    );
+    assert!(Arc::ptr_eq(&select_route_unit(&manager).unwrap(), &new_unit));
+    assert!(!Arc::ptr_eq(&selected, &new_unit));
+    drop(selected);
+    assert!(old_unit_weak.upgrade().is_none());
+}
 
 type ReceiveResult = std::io::Result<(usize, SocketAddr)>;
 

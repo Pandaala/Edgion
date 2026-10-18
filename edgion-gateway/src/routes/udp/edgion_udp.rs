@@ -21,7 +21,7 @@ use crate::routes::common::{
     L4_BACKEND_REF_DENIED_STATUS, L4_BACKEND_UNSUPPORTED_KIND_STATUS, UNSAFE_UPSTREAM_ADDRESS_LOG,
 };
 use crate::routes::tcp::edgion_tcp::{check_stream_plugins, StreamPluginCheck};
-use crate::routes::udp::UdpPortRouteManager;
+use crate::routes::udp::{UdpPortRouteManager, UdpRouteUnit};
 use edgion_resources::ListenerKey;
 
 /// UDP session idle timeout: a session is reclaimed after 60 seconds without
@@ -277,8 +277,7 @@ impl EdgionUdpProxy {
         let gateway_config = self.egc.load();
         let direct_peer_ip = crate::ctx::canonicalize_ip(direct_peer_addr.ip());
         let direct_peer_port = direct_peer_addr.port();
-        let route_table = self.udp_route_manager.load_route_table();
-        let Some(unit) = route_table.match_route() else {
+        let Some(unit) = select_route_unit(&self.udp_route_manager) else {
             log_udp(&UdpLogEntry::failure(
                 self.listener_port,
                 direct_peer_ip,
@@ -460,7 +459,7 @@ impl EdgionUdpProxy {
 
         let session = Arc::new(ClientSession {
             _session_permit: session_permit,
-            upstream_socket: upstream_socket.clone(),
+            upstream_socket,
             upstream_addr,
             lifecycle: Mutex::new(SessionLifecycle {
                 last_activity: Instant::now(),
@@ -707,6 +706,11 @@ impl EdgionUdpProxy {
     pub(crate) fn session_count(&self) -> usize {
         self.client_sessions.len()
     }
+}
+
+// Retain only the selected unit across admission I/O, not the full route table.
+fn select_route_unit(manager: &UdpPortRouteManager) -> Option<Arc<UdpRouteUnit>> {
+    manager.load_route_table().match_route()
 }
 
 #[cfg(test)]
