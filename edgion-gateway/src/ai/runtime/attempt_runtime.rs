@@ -191,7 +191,7 @@ impl AiAttemptRuntime {
     }
 
     fn ledger_entry(
-        &self,
+        &mut self,
         number: u8,
         failure: Option<GenAiAttemptFailure>,
         ttft_ms: Option<u64>,
@@ -202,9 +202,9 @@ impl AiAttemptRuntime {
             .accounting_snapshot(self.estimated_input_tokens, include_estimated_output);
         Some(GenAiAttempt {
             number,
-            backend: bounded_string(&self.backend_name, MAX_BACKEND_KEY_BYTES),
+            backend: into_bounded_string(std::mem::take(&mut self.backend_name), MAX_BACKEND_KEY_BYTES),
             provider: self.provider.as_str(),
-            credential: bounded_string(&self.credential_alias, MAX_CREDENTIAL_ALIAS_BYTES),
+            credential: into_bounded_string(std::mem::take(&mut self.credential_alias), MAX_CREDENTIAL_ALIAS_BYTES),
             status: self.status,
             failure,
             retry_after_seconds: self.retry_after_seconds,
@@ -311,9 +311,9 @@ impl AiAttemptRuntimeState {
             usage: input.usage,
             eos: input.eos,
             estimated_input_tokens: input.estimated_input_tokens,
-            backend_name: bounded_string(&input.backend_name, MAX_BACKEND_KEY_BYTES),
+            backend_name: into_bounded_string(input.backend_name, MAX_BACKEND_KEY_BYTES),
             provider: input.provider,
-            credential_alias: bounded_string(&input.credential_alias, MAX_CREDENTIAL_ALIAS_BYTES),
+            credential_alias: into_bounded_string(input.credential_alias, MAX_CREDENTIAL_ALIAS_BYTES),
             pricing: input.pricing,
             adaptive: input.adaptive,
             status: None,
@@ -647,6 +647,14 @@ impl AiAttemptRuntimeState {
         // Overflow can only follow an invariant violation. Dropping the lease
         // retains the conservative Redis charge until its bounded TTL.
     }
+}
+
+fn into_bounded_string(value: String, max_bytes: usize) -> String {
+    // Preserve the compact capacity of the copied representation.
+    if value.len() <= max_bytes && value.capacity() == value.len() {
+        return value;
+    }
+    bounded_string(&value, max_bytes)
 }
 
 fn bounded_string(value: &str, max_bytes: usize) -> String {

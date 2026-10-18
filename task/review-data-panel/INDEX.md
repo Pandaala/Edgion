@@ -4088,3 +4088,30 @@ Fresh verification passed 143 network-free tests: 24 attempt runtime, 16 credent
 outlier and 103 HTTP upstream-peer tests. Formatting, workspace check/Clippy,
 seven repository guards and diff hygiene passed. Existing warnings remain outside
 changed code. No live Redis cancellation experiment or benchmark was run.
+
+
+## Bounded attempt identity ownership
+
+Admission and terminal ledger construction now consume backend and credential
+identity strings. The shared local helper transfers a String only when its length
+is within the existing field bound and its capacity equals its length; otherwise
+it uses the existing UTF-8-safe bounded copy. This avoids retaining spare capacity
+or truncating a larger allocation in place. Reservation still sees the full alias
+before any log-field bounding.
+
+All four ledger callers own a removed mutable active attempt. Only the two identity
+fields are taken; snapshot evaluation stays first, and later accounting, reservation
+and adaptive operations do not read these fields. The independent plan review
+identified this narrow transfer as safe without a borrowed admission API or a
+change to the captured-generation lifetime.
+
+Differential tests cover empty strings, spare-capacity empty strings, short/exact/
+over-limit values and multibyte boundaries. Accepted transfer cases preserve the
+buffer pointer and perform zero allocations; all cases match the previous output
+and requested String capacity. This does not claim physical allocator size or
+measured throughput improvements.
+
+Fresh verification passed 73 network-free tests: 25 attempt runtime, 35 dispatch
+and 13 usage-finalization tests. Formatting, workspace check/Clippy, seven
+repository guards and diff hygiene passed. Existing warnings remain outside
+changed code. No live provider/Redis experiment or throughput benchmark ran.

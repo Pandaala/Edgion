@@ -1,5 +1,33 @@
 use super::*;
 
+#[test]
+fn owned_identity_transfer_preserves_bytes_and_capacity_bounds() {
+    for (value, limit) in [
+        ("", 0),
+        ("short", 64),
+        ("exact", 5),
+        ("overlong", 3),
+        ("aéz", 2),
+        ("aéz", 3),
+    ] {
+        for spare_capacity in [0, 128] {
+            let mut input = String::with_capacity(value.len() + spare_capacity);
+            input.push_str(value);
+            let pointer = input.as_ptr();
+            let reusable = input.len() <= limit && input.capacity() == input.len();
+            let expected = bounded_string(value, limit);
+            let (actual, allocations) =
+                crate::test_allocation_counter::count_allocations(|| into_bounded_string(input, limit));
+            assert_eq!(actual, expected);
+            assert_eq!(actual.capacity(), expected.capacity());
+            if reusable {
+                assert_eq!(actual.as_ptr(), pointer);
+                assert_eq!(allocations, 0);
+            }
+        }
+    }
+}
+
 fn closed_outlier_handle() -> AiCredentialOutlierHandle {
     outlier_handle_with_config(None)
 }
