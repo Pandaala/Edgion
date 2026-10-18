@@ -34,6 +34,7 @@ destination.
 - [Backend TLS verification failures](verification-03-backend-tls-tests.md)
 - [Prebuilt read-only response-body dispatch](body-01-prebuild-readonly-dispatch.md)
 - [ExtProc protobuf body representation](body-02-extproc-protobuf-body-storage.md)
+- [Request-body mutation snapshot retirement](body-03-mutation-snapshot-retirement.md)
 - [Direct TLS listener log serialization](tls-01-direct-listener-log-serialization.md)
 - [Pending response-header execution ownership](response-01-pending-header-ownership.md)
 - [ResponseRewrite rename value fidelity](response-02-rename-value-fidelity.md)
@@ -3221,3 +3222,16 @@ Independent plan and source reviews passed. All 69 storage tests passed,
 including snapshot isolation across later mutations, retry cursor resets and
 disk cancellation/failure coverage. Formatting, workspace check/Clippy and seven
 repository guards passed; warnings remain outside changed code.
+
+## Request-body clear retirement inspection
+
+A metadata-only clear candidate was rejected during independent plan review:
+its named snapshot local currently pins a prior mutated generation through
+publication. Removing it can move last-owner segment/Bytes destruction into the
+mutation write lock. The new retirement decision records this distinction and
+a possible separately reviewed publisher-level design. Runtime code is unchanged;
+byte-content tests alone would not prove equivalent retirement timing.
+
+This documentation-only batch passed formatting, workspace check/Clippy,
+agent-doc validation and diff hygiene. Independent evidence review passed.
+No runtime tests or benchmarks were run; warnings remain outside changed files.
