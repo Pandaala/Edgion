@@ -37,6 +37,7 @@ destination.
 - [Direct TLS listener log serialization](tls-01-direct-listener-log-serialization.md)
 - [Pending response-header execution ownership](response-01-pending-header-ownership.md)
 - [Service selected-slot lookup cost](backend-01-selected-slot-lookup.md)
+- [JWT claim condition evaluation ownership](condition-01-jwt-claim-evaluation.md)
 
 ## Completed implementation batch
 
@@ -645,3 +646,19 @@ Trace-ID (29), request-ID (15) and early-request-filter (17) filtered tests pass
 repository guards passed; existing Clippy warnings are outside changed lines.
 No full integration suite or throughput benchmark was run.
 Independent plan and final source reviews passed.
+
+
+## Shared condition evaluation audit
+
+Inspected compiled condition construction and synchronous/async dispatch,
+log-less per-chunk response wrapping, borrowed key/mTLS reads and JWT extraction.
+Regex initialization, time bounds, descriptors and dependency binding already
+occur during compilation; test-only schema evaluation helpers do not describe
+production dispatch. Live input semantics and skip/run ordering remain unchanged.
+JWT context copying/parsing and eager candidates remain open under the deferred
+ownership task, including their unresolved conflict with the no-per-chunk-allocation
+constraint. This is not an accepted exception or complete condition/auth audit.
+
+Independent plan and final source reviews passed. Agent-doc validation and diff
+whitespace checks passed. This documentation-only batch ran no Rust tests or
+benchmarks.
