@@ -40,12 +40,9 @@ impl HmacAlgorithm {
     }
 
     pub fn parse(value: &str) -> Option<Self> {
-        match value.to_ascii_lowercase().as_str() {
-            "hmac-sha256" => Some(Self::HmacSha256),
-            "hmac-sha384" => Some(Self::HmacSha384),
-            "hmac-sha512" => Some(Self::HmacSha512),
-            _ => None,
-        }
+        [Self::HmacSha256, Self::HmacSha384, Self::HmacSha512]
+            .into_iter()
+            .find(|algorithm| value.eq_ignore_ascii_case(algorithm.as_str()))
     }
 }
 
@@ -274,3 +271,7 @@ impl HmacMatchConfig {
                 .is_some_and(|credentials| !credentials.is_empty())
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/resources/edgion_plugins/hmac_match_test.rs"]
+mod tests;

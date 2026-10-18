@@ -831,3 +831,20 @@ fn signing_target_borrows_raw_query_without_changing_empty_or_encoded_values() {
         }
     }
 }
+
+#[test]
+fn algorithm_selection_does_not_allocate_lowercase_storage() {
+    for (value, expected) in [
+        ("HmAc-ShA256", Some(HmacAlgorithm::HmacSha256)),
+        ("HMAC-SHA384", Some(HmacAlgorithm::HmacSha384)),
+        ("hmac-sha512", Some(HmacAlgorithm::HmacSha512)),
+        ("hmac-sha256-extra", None),
+    ] {
+        let (parsed, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+            HmacAlgorithm::parse(std::hint::black_box(value))
+        });
+        assert_eq!(parsed, expected);
+        assert_eq!(stats.calls, 0);
+        assert_eq!(stats.requested_bytes, 0);
+    }
+}

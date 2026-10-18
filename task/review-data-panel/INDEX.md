@@ -1057,3 +1057,20 @@ and the removed verify_headers_config is not a fallback. Independent plan and
 final record reviews passed; agent-doc validation and diff checks passed. This
 documentation-only batch ran no Rust tests or performance benchmark and establishes
 no whole-authentication or allocation-free body-condition coverage.
+
+## HMAC algorithm selection without lowercase allocation
+
+The Gateway Authorization parser now reaches a canonical resources helper that
+compares its three fixed algorithm names without building a lowercase String.
+ASCII case variants, unknown/non-ASCII rejection and non-trimming behavior are
+unchanged. The supporting resources scope is limited to hmac_match.rs and its
+new mounted unit test; schema, serde and credential transport are untouched.
+
+Independent plan and final source reviews passed. Resources HMAC-filtered tests
+passed 28, Gateway HMAC-filtered tests passed 52 and shared conditions passed 67
+(filters may overlap). Tests cover all 384 ASCII case variants and malformed
+boundaries; selected valid/invalid names allocate zero times in the Gateway
+measurement. Formatting, workspace check/Clippy and seven repository guards
+passed; existing warnings are outside changed code. No full integration suite or
+throughput benchmark ran. This removes algorithm-name normalization storage,
+not other Authorization parser allocations or authentication costs.

@@ -89,3 +89,17 @@ wire-byte coverage. A real-adapter regression changes the URI repeatedly and
 checks pointer identity, owned-accessor parity and zero query-read allocations,
 while separately confirming the frozen decoded entry cache. This removes a query
 copy per target component; constructing the signing string still allocates.
+
+## Allocation-free algorithm-name selection
+
+The canonical resources-layer `HmacAlgorithm::parse` compares the input with the
+three fixed `as_str` names using ASCII-insensitive comparison. It no longer builds
+an intermediate lowercase String. The supported set, ASCII case behavior, lack
+of whitespace trimming and rejection of unknown/non-ASCII names remain unchanged.
+Serde enum decoding and the wire schema are unaffected; this helper is called by
+the Gateway Authorization parser, which retains its existing error order.
+
+Resources unit tests exercise every ASCII case permutation of the three names
+and malformed boundaries. The Gateway allocation regression checks zero allocated
+calls/bytes for selected valid and invalid names. These checks cover algorithm
+selection only; the complete Authorization parser still owns its other outputs.
