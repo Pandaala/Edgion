@@ -2823,3 +2823,21 @@ IntoCaseHeaderName supports owned names or static str and retains original case.
 Directly borrowing those dynamic str values is not an available equivalent API;
 no mutation was selected there. Integer HeaderValue substitution also retains the
 storage tradeoff already recorded in the outbound Content-Length decision.
+
+## BasicAuth fixed SHA-1 verification scratch
+
+The htpasswd SHA-1 verifier decodes its expected digest into a 20-byte stack
+buffer through checked decode_slice. The returned decoded length gates the same
+full XOR fold; short, oversized or malformed expected hashes still fail. Oversized
+stored hashes can fail before password hashing, without changing the boolean
+result or caller failure handling. Generation ownership, blocking dispatch,
+authentication delay, log policy and supported hash formats are untouched.
+
+Independent plan and code reviews passed. Differential tests retain the original
+verifier and cover decoded lengths 0..40, empty/ASCII/UTF-8 passwords, padding,
+every ASCII replacement in the last two encoded positions and a mismatch at each
+digest byte. Correct and incorrect password fixtures verify zero heap allocations
+inside the SHA-1 helper. Fresh verification passed 19 BasicAuth tests, formatting,
+workspace check/Clippy and seven repository guards; existing warnings are outside
+the changed files. This does not claim zero-allocation complete authentication,
+new timing guarantees, credential erasure or throughput improvement.

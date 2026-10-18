@@ -29,3 +29,65 @@ fn md5_crypt_roundtrip() {
 fn unknown_format_rejects() {
     assert!(!verify("password", "plaintext_is_not_supported"));
 }
+
+fn original_verify_sha1(password: &str, encoded_hash: &str) -> bool {
+    use sha1::Digest;
+    let Ok(expected) = general_purpose::STANDARD.decode(encoded_hash) else {
+        return false;
+    };
+    let actual = sha1::Sha1::digest(password.as_bytes());
+    let a = actual.as_slice();
+    let b = expected.as_slice();
+    a.len() == b.len() && a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+#[test]
+fn fixed_sha1_decode_matches_original_lengths_and_base64_validation() {
+    use sha1::Digest;
+    for password in ["", "password", "café"] {
+        let digest = sha1::Sha1::digest(password.as_bytes());
+        let encoded = general_purpose::STANDARD.encode(digest);
+        let mut candidates = vec![
+            encoded.clone(),
+            encoded.trim_end_matches('=').to_owned(),
+            format!("{encoded}="),
+        ];
+        for len in 0..=40 {
+            candidates.push(general_purpose::STANDARD.encode(vec![0u8; len]));
+        }
+        for position in 0..digest.len() {
+            let mut changed = digest;
+            changed[position] ^= 1;
+            let changed = general_purpose::STANDARD.encode(changed);
+            assert!(!verify_sha1(password, &changed));
+            candidates.push(changed);
+        }
+        for byte in 0u8..=127 {
+            for position in [encoded.len() - 2, encoded.len() - 1] {
+                let mut changed = encoded.as_bytes().to_vec();
+                changed[position] = byte;
+                candidates.push(String::from_utf8(changed).unwrap());
+            }
+        }
+        assert!(verify_sha1(password, &encoded));
+        for candidate in candidates {
+            for presented in [password, "wrong password"] {
+                assert_eq!(
+                    verify_sha1(presented, &candidate),
+                    original_verify_sha1(presented, &candidate),
+                    "candidate={candidate:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn sha1_verification_uses_no_heap_scratch() {
+    let encoded = "W6ph5Mm5Pz8GgiULbPgzG37mj9g=";
+    for (password, expected) in [("password", true), ("wrong", false)] {
+        let (actual, stats) = crate::test_allocation_counter::count_allocation_stats(|| verify_sha1(password, encoded));
+        assert_eq!(actual, expected);
+        assert_eq!(stats.calls, 0, "{stats:?}");
+    }
+}

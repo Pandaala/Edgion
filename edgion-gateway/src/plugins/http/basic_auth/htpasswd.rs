@@ -34,14 +34,15 @@ pub fn verify(password: &str, hash: &str) -> bool {
 
 fn verify_sha1(password: &str, encoded_hash: &str) -> bool {
     use sha1::Digest;
-    let Ok(expected) = general_purpose::STANDARD.decode(encoded_hash) else {
+    let mut expected = [0u8; 20];
+    let Ok(expected_len) = general_purpose::STANDARD.decode_slice(encoded_hash, &mut expected) else {
         return false;
     };
     let actual = sha1::Sha1::digest(password.as_bytes());
     // Constant-time comparison to prevent timing attacks
     let a = actual.as_slice();
     let b = expected.as_slice();
-    a.len() == b.len() && a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    a.len() == expected_len && a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 // ──────────────────── MD5-crypt / APR1 ($1$ / $apr1$) ──────────────────
