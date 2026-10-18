@@ -37,7 +37,7 @@ fn status(headers: &HeaderMap) -> Result<Option<u8>, ()> {
         return Err(());
     }
     let value = text.parse::<u8>().map_err(|_| ())?;
-    if value > 16 || text != value.to_string() {
+    if value > 16 || (text.len() == 2 && text.starts_with('0')) {
         return Err(());
     }
     Ok(Some(value))

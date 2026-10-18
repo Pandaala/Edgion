@@ -35,6 +35,37 @@ fn trailers(code: &str) -> HeaderMap {
     trailers.insert("grpc-status", code.parse().unwrap());
     trailers
 }
+
+#[test]
+fn status_accepts_only_canonical_codes_without_allocating() {
+    for code in 0u8..=16 {
+        let headers = trailers(&code.to_string());
+        let (result, stats) = crate::test_allocation_counter::count_allocation_stats(|| status(&headers));
+        assert_eq!(result, Ok(Some(code)));
+        assert_eq!(stats.calls, 0);
+        assert_eq!(stats.requested_bytes, 0);
+    }
+    for code in 0u8..=99 {
+        let headers = trailers(&format!("{code:02}"));
+        let expected = if (10..=16).contains(&code) {
+            Ok(Some(code))
+        } else {
+            Err(())
+        };
+        assert_eq!(status(&headers), expected);
+    }
+    for text in ["", "+0", "-0", " 0", "0 ", "0a", "000", "100", "256"] {
+        assert_eq!(status(&trailers(text)), Err(()));
+    }
+    assert_eq!(status(&HeaderMap::new()), Ok(None));
+    let mut opaque = HeaderMap::new();
+    opaque.insert("grpc-status", http::HeaderValue::from_bytes(&[0xff]).unwrap());
+    assert_eq!(status(&opaque), Err(()));
+    let mut duplicate = trailers("0");
+    duplicate.append("grpc-status", http::HeaderValue::from_static("0"));
+    assert_eq!(status(&duplicate), Err(()));
+}
+
 #[tokio::test]
 async fn streaming_fragmented_frames_and_real_status_emit_one_terminal() {
     let mut p = processor(true, GrpcJsonStreamFormat::Ndjson);

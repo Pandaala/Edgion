@@ -2357,3 +2357,18 @@ No generated-code or throughput benchmark is claimed.
 Fresh verification passed 4 BandwidthLimit and 26 response-filter tests,
 formatting, workspace check/Clippy and seven repository guards. Remaining
 warnings are outside changed code. Independent final review passed.
+
+## gRPC transcoder canonical status check
+
+The converter's status parser retains its nonempty, at-most-two-byte ASCII-digit
+check, integer parse and 0..16 range. It now rejects two-digit leading-zero text
+directly instead of formatting the parsed code into a temporary String for a
+round-trip comparison. Missing/duplicate fields, original status evidence and
+terminal outcome ownership are unchanged. Independent plan review passed. Tests
+cover all canonical codes, all two-digit forms, malformed text, opaque bytes,
+missing and duplicate values. Prepared valid HeaderMaps verify zero allocation
+calls/bytes within status parsing alone; converter-wide allocation and throughput
+are not claimed.
+Fresh verification passed all 26 gRPC JSON transcoder tests, formatting,
+workspace check/Clippy and seven repository guards. Remaining warnings are
+outside changed code. Independent final review passed.
