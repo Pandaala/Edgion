@@ -2173,3 +2173,18 @@ claiming measured CPU or throughput gains or duplicating status logic.
 Fresh verification passed all 115 shared outbound tests, formatting, workspace
 check/Clippy and seven repository guards. Remaining warnings are outside changed
 source. Independent final review passed.
+
+## Outbound URL assembly without intermediate path storage
+
+CompiledRequest formats the trimmed base, borrowed optional slash and rendered
+path directly into the final URL text. This removes the separate cloned or
+slash-prefixed path String while retaining exact concatenation bytes, rendering,
+override evaluation, parsing and error order. It does not replace concatenation
+with URL joining or path setters. Actual request-builder tests cover empty,
+relative, leading/double-slash paths, base path/trailing slashes, query, percent
+encoding and fragments, through templates and explicit overrides. Independent
+plan review passed. Final URL and template allocations remain; no throughput
+benchmark is claimed.
+Fresh verification passed all 116 shared outbound tests, formatting, workspace
+check/Clippy and seven repository guards. Remaining warnings are outside changed
+source. Independent final review passed.

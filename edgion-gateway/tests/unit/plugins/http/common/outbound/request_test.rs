@@ -953,3 +953,47 @@ fn trusted_request_build_rejects_every_requested_incoming_capability() {
         assert!(matches!(request, Err(error) if error == "template request capability unavailable"));
     }
 }
+
+#[test]
+fn build_request_preserves_url_concatenation_boundaries() {
+    use edgion_resources::resources::common::outbound_request::{MethodSpec, PathSpec};
+
+    for (base, path, expected) in [
+        ("http://example.test///", "", "http://example.test/"),
+        ("http://example.test/base/", "next", "http://example.test/base/next"),
+        ("http://example.test/base/", "/next", "http://example.test/base/next"),
+        (
+            "http://example.test",
+            "//other.test/x",
+            "http://example.test//other.test/x",
+        ),
+        (
+            "http://example.test",
+            "/a%20b?x=1#part",
+            "http://example.test/a%20b?x=1#part",
+        ),
+    ] {
+        for use_override in [false, true] {
+            let spec = OutboundRequestSpec {
+                method: Some(MethodSpec { template: "GET".into() }),
+                path: Some(PathSpec {
+                    template: if use_override { "/unused" } else { path }.into(),
+                    allow_override: true,
+                }),
+                ..Default::default()
+            };
+            let compiled = CompiledRequest::from_spec(&spec).unwrap();
+            let session = MockPluginSession::new();
+            let request = compiled
+                .build_request(
+                    &session,
+                    use_override.then_some(path),
+                    base,
+                    None,
+                    &mut Default::default(),
+                )
+                .unwrap();
+            assert_eq!(request.url().as_str(), expected, "{base:?} {path:?} {use_override}");
+        }
+    }
+}

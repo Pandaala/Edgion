@@ -333,12 +333,8 @@ impl CompiledRequest {
 
         // ── 4. Build URL ──────────────────────────────────────────────────
         let url_base = base_url.trim_end_matches('/');
-        let path_part = if final_path.starts_with('/') {
-            final_path.clone()
-        } else {
-            format!("/{}", final_path)
-        };
-        let url_str = format!("{}{}", url_base, path_part);
+        let slash = if final_path.starts_with('/') { "" } else { "/" };
+        let url_str = format!("{}{}{}", url_base, slash, final_path);
         let mut url = reqwest::Url::parse(&url_str).map_err(|_| "invalid outbound URL".to_string())?;
 
         if !query_pairs.is_empty() {
