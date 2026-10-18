@@ -33,6 +33,7 @@ destination.
 - [Stream-suite parallel verification failure](verification-02-stream-parallel-failure.md)
 - [Backend TLS verification failures](verification-03-backend-tls-tests.md)
 - [Prebuilt read-only response-body dispatch](body-01-prebuild-readonly-dispatch.md)
+- [ExtProc protobuf body representation](body-02-extproc-protobuf-body-storage.md)
 - [Direct TLS listener log serialization](tls-01-direct-listener-log-serialization.md)
 - [Pending response-header execution ownership](response-01-pending-header-ownership.md)
 - [Service selected-slot lookup cost](backend-01-selected-slot-lookup.md)
@@ -577,3 +578,22 @@ session-persistence tests (22) and discovery-coordinator tests (41) passed.
 Formatting, workspace check/Clippy and seven repository guards passed; existing
 Clippy warnings are outside the changed lines. No full integration suite or
 throughput benchmark was run.
+
+
+## Concrete request-body consumer audit
+
+Inspected ExtProc streamed request handler and its response-window counterpart,
+plus buffered request phase admission and the owned message send/await boundary.
+Their protobuf body copies are tracked as a separate representation decision;
+no transport or mutation behavior changed. Digest scanners (MD5/HMAC/SHA-256)
+already consume borrowed slices. WAF structured capture borrows the current
+window and accounts bounded inspection state; its deeper engine remains open.
+BodyStorage's scan dispatch retains an owned snapshot/scanner/permit when entering
+the blocking pool, while small memory scans can execute synchronously. Those
+cross-task owners remain necessary. Observer dispatch preserves per-request
+budgets, terminal bytes and panic-protected finalization; no change was selected.
+This source audit does not claim complete storage, parser or ExtProc transport
+coverage, and historical test results are not fresh verification.
+Independent plan and final source reviews passed. Agent-doc validation and diff
+whitespace checks passed. No Rust tests or benchmarks ran for this documentation
+batch.
