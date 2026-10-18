@@ -16,7 +16,7 @@ destination.
 | `new_ctx`, `init_downstream_modules` | Direct bodies inspected: pinned config and parsed policy; no change selected. Context construction and module internals remain open. |
 | `early_request_filter` | Direct body and request-ID resolution inspected. Arc handles support mutable context dispatch; do not blindly replace with references. Publication-time list resolution deferred below. Trace-ID and preflight runtime internals remain open. |
 | `request_filter` | Temporary metadata path copy removed in `4a976e022`. XFF snapshot preserves bounded aggregate size and owned log state; RealIp extractor borrows tokens and traverses in reverse. TLS metadata copies feed request-owned state. Routing, plugin dispatch and deeper RealIp policy dependencies remain open. |
-| Upstream selection, connect, upstream request | `connected_to_upstream` direct body inspected: borrowed SAN digest, one timestamp, owned connection-establishment log. `upstream_request_filter` direct body and deferred credential nomination guard traced to shared Connection parser. Upstream selection and deeper framing/transcoder/credential consumers remain open. |
+| Upstream selection, connect, upstream request | `connected_to_upstream` direct body inspected: borrowed SAN digest, one timestamp, owned connection-establishment log. `upstream_request_filter` direct body and deferred credential nomination guard traced to shared Connection parser. Direct upstream deadline/backoff, concurrency admission and authority orchestration inspected; admission borrows its Service key below. Deeper backend selection and framing/transcoder/credential consumers remain open. |
 | Request body, trailers and relay | Direct action/tee/trailer orchestration, mirror payload budget and observer dispatch inspected. Nullable-state fast path, moved handler vector, bounded independent mirror copy and terminal-only log drain retained. Concrete streamed-handler/WAF implementations and deeper storage/relay integration remain open. |
 | Response headers, hold/commit, body and trailers | Connection sanitizer inspected. Body/trailer orchestration, runtime dependency checks, processor driver and downstream cancellation wrapper inspected; prebuilt read-only runtime-chain candidate deferred. Concrete processors, conditions, hold/commit and remaining header chains remain open. |
 | Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering direct body inspected: exact gRPC denial is consumed, protocol-specific replies and final-status ownership retained. Deeper finalizers and retry consumers remain open. |
@@ -288,3 +288,24 @@ Focused tests passed: mTLS callback 14, mTLS validators 6, certificate extractio
 guards passed; Clippy warnings are outside the changed files. Independent plan
 and final source reviews passed. No full integration suite or throughput
 benchmark was run.
+
+## Upstream concurrency-admission Service key
+
+`upstream_peer` now borrows the backend context's Service key through synchronous
+circuit-breaker admission instead of cloning it before checking whether a cap or
+endpoint exists. The only use is the shed metric call; its borrow ends before the
+503 response await. The metrics facade still owns its label on the shed branch.
+This removes the caller's temporary String copy, not all metric allocations.
+
+The captured effective policy, prior-permit release, endpoint Arc ownership,
+permit acquisition and HTTP/gRPC shed response branches are unchanged. Authority
+rendering retains its compiled Arc because the session adapter mutably borrows
+context; peer, log and request authority strings keep their distinct owners.
+Deadline/backoff order and post-sleep checks remain unchanged. No new helper or
+mirror test was introduced for the local borrow adjustment, and no throughput
+claim is made.
+
+Independent plan and final source reviews passed. All 103 upstream-peer tests
+and five circuit-breaker permit tests passed. Formatting, workspace check/Clippy
+and seven repository guards passed; Clippy warnings remain outside the changed
+files. No full integration suite or performance benchmark was run.

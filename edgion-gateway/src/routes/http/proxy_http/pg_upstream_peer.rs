@@ -211,7 +211,7 @@ pub async fn upstream_peer(
     // effective policy, but has no selected `lb_backend`; ExternalJump has
     // neither Service identity nor `lb_backend`. This is therefore a no-op for
     // both bypass paths.
-    if let Some(service_key) = ctx.backend_context.as_ref().and_then(|bc| bc.service_key.clone()) {
+    if let Some(service_key) = ctx.backend_context.as_ref().and_then(|bc| bc.service_key.as_deref()) {
         if let Some(max) = selected_effective_policy(ctx).and_then(|policy| policy.circuit_breaker_limit) {
             if let Some(chosen_backend) = ctx.get_current_upstream().and_then(|u| u.lb_backend.clone()) {
                 // Release any permit this request acquired on a PRIOR attempt
@@ -226,7 +226,7 @@ pub async fn upstream_peer(
                         ctx.cb_permit = Some(permit);
                     }
                     None => {
-                        crate::backends::circuit_breaker::inc_shed_total(&service_key);
+                        crate::backends::circuit_breaker::inc_shed_total(service_key);
                         // 503 body carries no internal detail (helper enforces
                         // this); for gRPC it commits a trailers-only grpc-status
                         // 14 frame. The returned error type mirrors the sibling
