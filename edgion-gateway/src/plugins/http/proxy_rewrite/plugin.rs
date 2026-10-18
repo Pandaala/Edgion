@@ -97,11 +97,11 @@ impl ProxyRewrite {
     /// in well-formed HTTP paths or query parameters.  All escaped `\x00$` sequences
     /// are restored to `$` in the final step of `resolve_variables`.
     #[inline]
-    fn escape_dollar(value: &str) -> String {
+    fn escape_dollar(value: Cow<'_, str>) -> Cow<'_, str> {
         if !value.contains('$') {
-            return value.to_string();
+            return value;
         }
-        value.replace('$', "\x00$")
+        Cow::Owned(value.replace('$', "\x00$"))
     }
 
     /// Restore sentinel sequences produced by `escape_dollar`.
@@ -145,7 +145,7 @@ impl ProxyRewrite {
 
         // 1. Replace $uri (not encoded - it's already a valid path).
         //    Escape $ in the injected path so later steps cannot treat it as a variable.
-        result = result.replace("$uri", &Self::escape_dollar(original_path));
+        result = result.replace("$uri", &Self::escape_dollar(Cow::Borrowed(original_path)));
 
         // 2. Replace $arg_<name> — always URL-encoded.
         //    `get_query_param_ref` returns the percent-decoded value, but `$arg_<name>`
@@ -164,7 +164,7 @@ impl ProxyRewrite {
                 let param_name = &caps[1];
                 let value = session.get_query_param_ref(param_name).unwrap_or_default();
                 let encoded = Self::url_encode(value);
-                Self::escape_dollar(&encoded)
+                Self::escape_dollar(Cow::Owned(encoded)).into_owned()
             })
             .into_owned();
 
@@ -180,7 +180,7 @@ impl ProxyRewrite {
                         // context-specific divergence touch exactly this site.
                         TemplateContext::Uri | TemplateContext::Header => Self::url_encode(value),
                     };
-                    Self::escape_dollar(&encoded)
+                    Self::escape_dollar(Cow::Owned(encoded)).into_owned()
                 })
                 .into_owned();
         }
@@ -255,7 +255,7 @@ impl ProxyRewrite {
                 let mut result = regex_uri.replacement.clone();
                 for (i, cap) in caps.iter().enumerate().skip(1) {
                     if let Some(m) = cap {
-                        result = result.replace(&format!("${}", i), &Self::escape_dollar(m.as_str()));
+                        result = result.replace(&format!("${}", i), &Self::escape_dollar(Cow::Borrowed(m.as_str())));
                     }
                 }
                 let result = self.resolve_variables(&result, original_path, session, None, TemplateContext::Uri);

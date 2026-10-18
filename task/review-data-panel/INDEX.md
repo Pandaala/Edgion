@@ -1807,3 +1807,15 @@ Fresh ProxyRewrite tests passed 20 cases; the real-adapter frozen-query and
 path-capture cache tests each passed. Formatting, workspace check/Clippy and
 seven repository guards passed, with existing warnings outside changed files.
 Independent final review passed.
+
+## ProxyRewrite dollar-escape ownership
+
+The existing escape helper preserves borrowed raw paths/captures or owned
+encoded values when no dollar occurs. Actual dollar escaping retains the same
+sentinel replacement. No stage is skipped and known substitution limitations
+remain unchanged. Independent plan review passed. Direct tests cover ownership
+identity, repeated dollars, existing NUL, UTF-8 and exact restoration.
+No full suite, live integration or throughput benchmark ran for this batch.
+Fresh ProxyRewrite tests passed 21 cases. Formatting, workspace check/Clippy and
+seven repository guards passed, with existing warnings outside changed files.
+Independent final review passed.

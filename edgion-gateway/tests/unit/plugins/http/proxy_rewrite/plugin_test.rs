@@ -357,6 +357,36 @@ fn dollar_restoration_transfers_plain_output_and_preserves_sentinels() {
     }
 }
 
+#[test]
+fn dollar_escaping_reuses_unchanged_inputs_and_preserves_exact_output() {
+    let plain = "/plain/café";
+    let borrowed = ProxyRewrite::escape_dollar(Cow::Borrowed(plain));
+    assert!(matches!(borrowed, Cow::Borrowed(_)));
+    assert_eq!(borrowed.as_ptr(), plain.as_ptr());
+
+    let mut owned = String::with_capacity(128);
+    owned.push_str(plain);
+    let pointer = owned.as_ptr();
+    let capacity = owned.capacity();
+    let output = ProxyRewrite::escape_dollar(Cow::Owned(owned)).into_owned();
+    assert_eq!(output, plain);
+    assert_eq!(output.as_ptr(), pointer);
+    assert_eq!(output.capacity(), capacity);
+
+    for (input, expected) in [
+        ("", ""),
+        ("$uid/$$/café", "\x00$uid/\x00$\x00$/café"),
+        ("a\x00b", "a\x00b"),
+        ("\x00$arg_x", "\x00\x00$arg_x"),
+    ] {
+        for value in [Cow::Borrowed(input), Cow::Owned(input.to_owned())] {
+            let escaped = ProxyRewrite::escape_dollar(value);
+            assert_eq!(escaped, expected);
+            assert_eq!(ProxyRewrite::unescape_dollar(escaped.into_owned()), input);
+        }
+    }
+}
+
 /// `$arg_<name>` must always url-encode the (decoded) query value, in both
 /// URI and header contexts. This protects header rewrite from
 /// `HeaderValue::try_from` rejecting control bytes and shields downstream

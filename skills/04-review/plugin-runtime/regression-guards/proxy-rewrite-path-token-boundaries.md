@@ -92,6 +92,13 @@ become empty, while missing path names stay literal and present empty captures
 become empty. The combined both-context regression forbids owned getter calls.
 Initial cache population and encoded output can still allocate.
 
+Dollar escaping preserves its input ownership with `Cow<str>` when no dollar
+occurs: raw path/capture inputs stay borrowed, and encoded Strings transfer
+without another copy. Inputs containing dollars retain the same NUL insertion.
+Direct tests assert borrowed/owned identity and exact escaped/restored bytes,
+including existing NUL and repeated dollars. This does not alter stage ordering
+or the earlier-stage limitations described above.
+
 ## Resolution references
 
 - `ARCH-037` — final-stage original-span replacement and escaped-dollar boundary.
