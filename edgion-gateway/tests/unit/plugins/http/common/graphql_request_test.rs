@@ -183,18 +183,26 @@ async fn response_cache_graphql_proof_records_actual_kind_and_selected_name_with
     use pingora_core::protocols::http::RequestBodyBuffer;
     let _lock = EVALUATION_TEST_LOCK.lock().await;
     let mut digests = Vec::new();
-    for (body, expected) in [
+    for (body, expected, name) in [
         (
             br#"{"query":"query First { ping }","operationName":"First"}"#.as_slice(),
             edgion_resources::graphql_request::GraphqlOperationType::Query,
+            Some("First"),
         ),
         (
             br#"{"query":"query Other { ping }","operationName":"Other"}"#.as_slice(),
             edgion_resources::graphql_request::GraphqlOperationType::Query,
+            Some("Other"),
         ),
         (
             br#"{"query":"mutation Change { ping }","operationName":"Change"}"#.as_slice(),
             edgion_resources::graphql_request::GraphqlOperationType::Mutation,
+            Some("Change"),
+        ),
+        (
+            br#"{"query":"{ping}"}"#.as_slice(),
+            edgion_resources::graphql_request::GraphqlOperationType::Query,
+            None,
         ),
     ] {
         let (mut storage, view) = BodyStorage::new(65536, 65536);
@@ -209,7 +217,66 @@ async fn response_cache_graphql_proof_records_actual_kind_and_selected_name_with
         let proof = session.ctx().response_cache_graphql_proof.get().unwrap();
         assert_eq!(proof.operation, expected);
         assert_eq!(Some(proof.generation), session.ctx().request_body.generation());
+        use sha2::{Digest, Sha256};
+        let mut material = b"edgion response cache selected operation\0".to_vec();
+        material.push(u8::from(name.is_some()));
+        material.extend_from_slice(name.unwrap_or("").as_bytes());
+        let expected_digest: [u8; 32] = Sha256::digest(material).into();
+        assert_eq!(proof.name_digest, expected_digest);
         digests.push(proof.name_digest);
     }
     assert!(digests[0] != digests[1] && digests[1] != digests[2]);
+}
+
+#[tokio::test]
+async fn get_evaluation_preserves_selection_freeze_and_absence_of_post_proof() {
+    use crate::request_body::BodyStorage;
+    use pingora_core::protocols::http::RequestBodyBuffer;
+    let _lock = EVALUATION_TEST_LOCK.lock().await;
+    for (query, name, allowed) in [
+        ("query=query%20Named%7Bping%7D", Some("Named"), true),
+        ("query=%7Bping%7D", None, true),
+        ("query=mutation%20Change%7Bping%7D", Some("Change"), false),
+    ] {
+        let (mut storage, view) = BodyStorage::new(65536, 65536);
+        storage.finish().await.unwrap();
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.in_request_body_stage = true;
+        ctx.request_body.install(view.clone());
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(ctx);
+        session.expect_get_method().return_const("GET".to_owned());
+        session.expect_declares_body().return_const(Some(false));
+        session.expect_request_query().return_const(Some(query));
+        session.expect_request_body_available_len().returning(|known_bodyless| {
+            assert!(known_bodyless);
+            Ok(0)
+        });
+        session.expect_request_header_map().return_const(HeaderMap::new());
+        session.expect_read_request_body().never();
+        session.expect_set_response_header().returning(|_, _| Ok(()));
+        let mut called = false;
+        let result = evaluate(&mut session, &mut PluginLog::new("GraphqlGuard"), 65536, |parsed| {
+            called = true;
+            assert_eq!(parsed.operation_name(), name);
+            assert_eq!(
+                parsed.operation_type(),
+                edgion_resources::graphql_request::GraphqlOperationType::Query
+            );
+            Ok(7)
+        })
+        .await;
+        if allowed {
+            assert_eq!(result, Ok(7));
+        } else {
+            assert!(matches!(
+                result,
+                Err(PluginRunningResult::ErrResponse { status: 405, .. })
+            ));
+        }
+        assert_eq!(called, allowed);
+        assert!(session.ctx().response_cache_graphql_proof.get().is_none());
+        assert_eq!(view.overwrite_body(Bytes::from_static(b"changed")).is_err(), allowed);
+        assert_eq!(EVALUATIONS.available_permits(), MAX_EVALUATIONS);
+    }
 }

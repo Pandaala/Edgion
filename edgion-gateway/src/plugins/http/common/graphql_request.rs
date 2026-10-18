@@ -153,16 +153,19 @@ where
         return Err(reject(session, 503));
     };
     let evaluate = |parsed: ParsedGraphqlRequest| {
-        use sha2::{Digest, Sha256};
-        let mut digest = Sha256::new();
-        digest.update(b"edgion response cache selected operation\0");
-        digest.update([u8::from(parsed.operation_name().is_some())]);
-        if let Some(name) = parsed.operation_name() {
-            digest.update(name.as_bytes());
-        }
-        let operation = parsed.operation_type();
-        let name_digest: [u8; 32] = digest.finalize().into();
-        compute(parsed).map(|value| (value, operation, name_digest))
+        let proof = is_post.then(|| {
+            use sha2::{Digest, Sha256};
+            let mut digest = Sha256::new();
+            digest.update(b"edgion response cache selected operation\0");
+            digest.update([u8::from(parsed.operation_name().is_some())]);
+            if let Some(name) = parsed.operation_name() {
+                digest.update(name.as_bytes());
+            }
+            let operation = parsed.operation_type();
+            let name_digest: [u8; 32] = digest.finalize().into();
+            (operation, name_digest)
+        });
+        compute(parsed).map(|value| (value, proof))
     };
     let result = if is_post {
         let body = match session.read_request_body(None).await {
@@ -181,8 +184,8 @@ where
         })
     };
     match result {
-        Ok(Ok((value, operation, name_digest))) => {
-            if is_post {
+        Ok(Ok((value, proof))) => {
+            if let Some((operation, name_digest)) = proof {
                 if let Some(generation) = session.ctx().request_body.generation() {
                     // Fixed inline evidence only; parser/DOM remains inside the
                     // existing evaluation admission and is never retained.

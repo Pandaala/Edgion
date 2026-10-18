@@ -2679,3 +2679,22 @@ per-evaluation Work accounting. The deferred task records these decisions,
 mutation/proof boundaries and future acceptance; no runtime cache was added.
 This is source evidence, not fresh runtime or throughput verification. Deeper
 condition evaluation, GraphQL visitors and routing dependencies remain open.
+
+## GraphQL GET skips POST-only operation digest
+
+Shared GraphQL evaluation now computes selected-operation cache-proof metadata
+only for POST. GET previously computed and discarded the same SHA-256 digest;
+its response-cache key uses the bodyless branch and never consumes this proof.
+POST retains the exact domain, name-presence byte and name bytes, calculated
+before computation, with proof publication still gated by successful evaluation
+and a current body generation. Parsing, Work, permits, failures and body freezing
+are unchanged. This does not implement the deferred frontend-reuse proposal.
+
+Independent plan and corrected code reviews passed. New GET coverage verifies
+named/anonymous selection, mutation refusal, no POST proof even with an installed
+body owner, successful freeze and permit release. POST coverage asserts exact
+digest bytes for named and anonymous operations. Fresh final-source verification
+passed 7 shared GraphQL tests, 38 response-cache tests, formatting, workspace
+check/Clippy and seven repository guards. An initial test mock type error was
+corrected before these successful runs; remaining warnings are outside changed
+code. No whole-request allocation or throughput improvement is claimed.
