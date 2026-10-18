@@ -1369,3 +1369,19 @@ Independent plan review passed; 492 DSL tests passed serially. No full suite or
 throughput benchmark ran; argument conversions and final DSL ownership remain.
 Formatting, workspace check/Clippy and seven repository guards passed, with
 existing warnings outside changed files. Independent final review passed.
+
+## Borrowed DSL response-header names
+
+`resp.header_names()` traverses live HeaderMap keys directly instead of copying
+every name into a temporary Vec before truncation. The first 256 unique names
+retain map order and per-name byte checks, independently of `max_list_len`.
+Opaque values remain named; duplicate values do not duplicate names. The output
+Vec and independent Arc strings remain owned by the VM.
+
+Four mocks now provide real HeaderMaps. Ordered writer expectations check the
+map's name order with duplicate and opaque values; exact/over-limit and empty
+cases remain. The prefix fixture confirms the oversized name is actually 257th,
+so it is ignored beyond the cap. Independent plan review passed and 492 DSL
+tests passed serially. No full suite or throughput benchmark ran.
+Formatting, workspace check/Clippy and seven repository guards passed, with
+existing warnings outside changed files. Independent final review passed.

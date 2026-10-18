@@ -794,11 +794,10 @@ impl Vm {
 
             // ===== resp.* read (additional) =====
             BuiltinId::RespHeaderNames => {
-                let names = session.response_header_names();
                 const MAX_HEADER_NAMES: usize = 256;
                 let mut result: Vec<Arc<str>> = Vec::new();
-                for name in names.into_iter().take(MAX_HEADER_NAMES) {
-                    check_string_len(&name, self.limits.max_string_len)?;
+                for name in session.response_header_map().keys().take(MAX_HEADER_NAMES) {
+                    check_string_len(name.as_str(), self.limits.max_string_len)?;
                     result.push(Arc::from(name.as_str()));
                 }
                 Ok(Value::List(result))

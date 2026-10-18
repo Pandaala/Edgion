@@ -56,19 +56,25 @@ fn test_resp_header_names() {
         }
     "#;
     let mut session = MockPluginSession::new();
-    session
-        .expect_response_header_names()
-        .returning(|| vec!["content-type".to_string(), "x-custom".to_string()]);
+    let mut headers = http::HeaderMap::new();
+    headers.append("content-type", http::HeaderValue::from_static("application/json"));
+    headers.append("content-type", http::HeaderValue::from_static("text/plain"));
+    headers.append("x-custom", http::HeaderValue::from_bytes(b"\xff").unwrap());
+    let expected_names: Vec<_> = headers.keys().map(|name| name.as_str().to_owned()).collect();
+    session.expect_response_header_names().times(0);
+    session.expect_response_header_map().times(1).return_const(headers);
+    let mut sequence = mockall::Sequence::new();
     session
         .expect_set_request_header()
         .withf(|n, v| n == "X-Count" && v == "2")
         .times(1)
         .returning(|_, _| Ok(()));
-    for name in ["content-type", "x-custom"] {
+    for name in expected_names {
         session
             .expect_set_request_header()
             .withf(move |n, v| n == "X-Name" && v == name)
             .times(1)
+            .in_sequence(&mut sequence)
             .returning(|_, _| Ok(()));
     }
     let result = run(source, session);
@@ -78,11 +84,17 @@ fn test_resp_header_names() {
 #[test]
 fn test_resp_header_names_retains_fixed_prefix_at_exact_name_byte_limit() {
     let mut session = MockPluginSession::new();
-    session.expect_response_header_names().times(1).returning(|| {
-        let mut names: Vec<_> = (0..256).map(|i| format!("x{i:03}")).collect();
-        names.push("x-oversized-tail".to_string());
-        names
-    });
+    let mut headers = http::HeaderMap::new();
+    for i in 0..256 {
+        headers.insert(
+            http::header::HeaderName::from_bytes(format!("x{i:03}").as_bytes()).unwrap(),
+            http::HeaderValue::from_static("v"),
+        );
+    }
+    headers.insert("x-oversized-tail", http::HeaderValue::from_static("v"));
+    assert_eq!(headers.keys().nth(256).unwrap().as_str(), "x-oversized-tail");
+    session.expect_response_header_names().times(0);
+    session.expect_response_header_map().times(1).return_const(headers);
     session
         .expect_set_request_header()
         .withf(|n, v| n == "X-Count" && v == "256")
@@ -103,10 +115,14 @@ fn test_resp_header_names_retains_fixed_prefix_at_exact_name_byte_limit() {
 #[test]
 fn test_resp_header_names_rejects_retained_name_over_byte_limit() {
     let mut session = MockPluginSession::new();
+    session.expect_response_header_names().times(0);
     session
-        .expect_response_header_names()
+        .expect_response_header_map()
         .times(1)
-        .returning(|| vec!["x000".to_string()]);
+        .return_const(http::HeaderMap::from_iter([(
+            http::header::HeaderName::from_static("x000"),
+            http::HeaderValue::from_static("v"),
+        )]));
     let err = run_expect_runtime_err_with_limits(
         "let names = resp.header_names()",
         session,
@@ -127,7 +143,11 @@ fn test_resp_header_names_empty() {
         }
     "#;
     let mut session = MockPluginSession::new();
-    session.expect_response_header_names().returning(Vec::new);
+    session.expect_response_header_names().times(0);
+    session
+        .expect_response_header_map()
+        .times(1)
+        .return_const(http::HeaderMap::new());
     session
         .expect_set_request_header()
         .withf(|n, v| n == "X-Empty" && v == "true")

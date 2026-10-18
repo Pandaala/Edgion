@@ -60,6 +60,17 @@ in `ctx_value_tests::utf8_limit_is_checked_in_bytes_before_allocating`.
 This removes a temporary host String, not the final DSL string or argument
 conversion; it makes no throughput or allocation-free execution claim.
 
+`resp.header_names()` traverses the same live map's keys directly, taking at
+most 256 unique names in map order before creating the independent Arc list.
+Each retained name is length-checked; names beyond that prefix are neither copied
+nor checked. The fixed count remains independent of `max_list_len`. Duplicate
+values do not duplicate names, and opaque values do not hide names. These rules
+differ from request-header enumeration and must not be unified mechanically.
+Real-map tests preserve order, duplicate/opaque-value behavior, empty input,
+exact/over-limit names and an oversized 257th name outside the retained prefix.
+This removes the intermediate full `Vec<String>` and its name copies; output
+list/Arc allocation remains.
+
 ## Alternatives and limits
 
 Checking string constants when they are loaded is not equivalent: constants are
