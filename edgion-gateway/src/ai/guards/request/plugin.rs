@@ -271,7 +271,10 @@ impl RequestFilter for AiGuard {
                     Ok(GuardDecision::Pass) => {}
                     Ok(GuardDecision::Reject) => decision = GuardDecision::Reject,
                     Ok(GuardDecision::Replace(items)) => {
-                        decision = merge(decision, items);
+                        decision = match merge_evaluator_replacements(decision, items, spans.len()) {
+                            Ok(decision) => decision,
+                            Err(kind) => return self.dependency_failure(session, log, kind, &body),
+                        };
                     }
                     Err(kind) => {
                         return self.dependency_failure(session, log, kind, &body);
@@ -446,6 +449,20 @@ fn apply_local<'a>(spans: &'a [GuardSpan], decision: &'a GuardDecision<GuardSpan
             (span.key, text)
         })
         .collect()
+}
+
+/// Admit evaluator cardinality before merging. The evaluator parser has already
+/// rejected duplicate external keys, and merging retains every distinct external
+/// key, so an oversized external set cannot pass final selected-span validation.
+fn merge_evaluator_replacements(
+    local: GuardDecision<GuardSpanKey>,
+    external: Vec<(GuardSpanKey, String)>,
+    selected_span_count: usize,
+) -> Result<GuardDecision<GuardSpanKey>, &'static str> {
+    if external.len() > selected_span_count {
+        return Err("evaluator bad key");
+    }
+    Ok(merge(local, external))
 }
 
 /// Evaluator replacements override local ones for the same span key, so each

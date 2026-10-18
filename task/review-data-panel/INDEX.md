@@ -2534,3 +2534,22 @@ optimize the general nonempty-local merge or claim throughput gains.
 Fresh verification passed all 68 AiGuard request tests, formatting, workspace
 check/Clippy and seven repository guards. Remaining warnings are outside changed
 code.
+
+## AiGuard evaluator cardinality before merge
+
+A small evaluator-specific boundary now rejects external replacement counts above
+the selected-span count before calling merge. The parser already rejects duplicate
+external keys, and merge retains each distinct external key, so this case always
+failed final admission with the same evaluator bad key classification. The caller
+uses the existing dependency failure policy; general merge behavior and final
+membership, uniqueness, byte budget and atomic publication checks remain intact.
+One source-derived example with 1,000 distinct empty external replacements fits
+in 59,945 compact JSON bytes yet previously required 500,500 key comparisons when
+merged with one disjoint local item before count rejection. This is a constructed
+comparison count, not a runtime benchmark or a throughput claim.
+Independent plan and code/knowledge reviews passed. Tests verify oversized input
+rejection without merge allocation, inclusive count and overrides, and retained
+final union-count/byte checks. Fresh verification passed all 70 AiGuard request
+tests, formatting, workspace check/Clippy and seven repository guards. Remaining
+warnings are outside changed code. The owning budget knowledge page records this
+early necessary bound separately from final admission.

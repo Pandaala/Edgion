@@ -847,3 +847,65 @@ fn empty_local_merge_fallback_keeps_last_external_value() {
         );
     }
 }
+
+#[test]
+fn evaluator_count_rejects_oversized_unique_keys_before_merge_allocation() {
+    let local = GuardDecision::Replace(vec![(
+        GuardSpanKey {
+            message_index: 0,
+            part: GuardPart::Content,
+        },
+        "local".into(),
+    )]);
+    let external = (1..=1000)
+        .map(|message_index| {
+            (
+                GuardSpanKey {
+                    message_index,
+                    part: GuardPart::Content,
+                },
+                String::new(),
+            )
+        })
+        .collect();
+    let (result, stats) =
+        crate::test_allocation_counter::count_allocation_stats(|| merge_evaluator_replacements(local, external, 512));
+    assert_eq!(result, Err("evaluator bad key"));
+    assert_eq!(stats.calls, 0);
+    assert_eq!(stats.requested_bytes, 0);
+    assert_eq!(
+        merge_evaluator_replacements(GuardDecision::Pass, vec![], 0),
+        Ok(GuardDecision::Pass)
+    );
+}
+
+#[test]
+fn evaluator_count_is_inclusive_and_retains_final_union_validation() {
+    let spans = selected_prompts();
+    let merged = merge_evaluator_replacements(
+        GuardDecision::Replace(vec![(spans[0].key, "old".into())]),
+        vec![(spans[0].key, "a".into()), (spans[1].key, "b".into())],
+        spans.len(),
+    )
+    .unwrap();
+    assert_eq!(
+        replacement_items(&merged),
+        &[(spans[0].key, "a".into()), (spans[1].key, "b".into())]
+    );
+    assert_eq!(validate_replacements(&spans, replacement_items(&merged), 2), Ok(()));
+    assert_eq!(
+        validate_replacements(&spans, replacement_items(&merged), 1),
+        Err("replacement bounds")
+    );
+
+    let disjoint = merge_evaluator_replacements(
+        GuardDecision::Replace(vec![(spans[0].key, "a".into())]),
+        vec![(spans[1].key, "b".into())],
+        1,
+    )
+    .unwrap();
+    assert_eq!(
+        validate_replacements(&spans[..1], replacement_items(&disjoint), 0),
+        Err("evaluator bad key")
+    );
+}

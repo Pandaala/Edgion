@@ -76,6 +76,13 @@ local A="aaa" and external B="bbb" independently fit while their union totals 6.
 ARCH-011 corrects this logical-limit gap in request `plugin.rs`; the physical
 request-body cap is a separate boundary, not the proof of this limit.
 
+The evaluator parser rejects duplicate external keys before returning a decision.
+Before merging, `merge_evaluator_replacements` rejects an external item count
+above the selected-span count with the existing `evaluator bad key` failure.
+Merging retains every distinct external key, so this bound rejects only a set
+that final admission would already reject, without doing quadratic merge work.
+This early bound does not prove final union membership, uniqueness or byte cost.
+
 `AiGuard::finish_decision` validates every final Replace decision before edit
 encoding/publication. `validate_replacements` first establishes selected-key
 membership and uniqueness, with a selected-count check before quadratic scans,
