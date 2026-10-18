@@ -921,3 +921,25 @@ allocation versus zero for each repeated compiled match after cache initializati
 Formatting, workspace check/Clippy and seven repository guards passed; existing
 warnings remain outside changed code. No live Redis, full integration suite or
 throughput benchmark ran for this batch.
+
+
+## Borrowed live context condition inputs
+
+The adapter now exposes a short borrow from the existing context map. Ctx
+conditions read it synchronously, while the owned getter still copies for callers
+that need ownership. JWT claim extraction parses the same borrowed source text;
+only the whole-source copy is removed. Parsed JSON and candidate allocations
+remain, and the linked JWT design task stays open with updated evidence.
+
+No source or result is frozen across evaluations. Context replacement/removal,
+empty-versus-missing values and missing-only JWT-to-OIDC fallback remain intact.
+The required ResultSession method is the sole supporting test-crate change and
+retains its unexpected-operation panic; no integration scenario is modified.
+
+Independent plan and final source reviews passed. Both real-adapter tests passed;
+shared conditions passed 67, RequestRestriction passed 18, RequestAccessPolicy
+passed 18 and the source allocation inventory passed 1. The Ctx test compares one
+owned-value allocation with zero per compiled match across live mutations; JWT
+parsing/candidate allocation remains outside that zero-allocation claim. Formatting,
+workspace check/Clippy and seven repository guards passed; existing warnings are
+outside changed code. No full integration suite or throughput benchmark ran.

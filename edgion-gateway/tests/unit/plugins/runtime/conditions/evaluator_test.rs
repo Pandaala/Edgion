@@ -1023,13 +1023,9 @@ fn direct_peer_ip_match_in_run_is_reachable() {
 
 fn jwt_session(claims: Option<&'static str>) -> MockPluginSession {
     let mut s = MockPluginSession::new();
-    s.expect_get_ctx_var().returning(move |k| {
-        if k == "jwt_claims" {
-            claims.map(str::to_string)
-        } else {
-            None
-        }
-    });
+    s.expect_get_ctx_var().never();
+    s.expect_get_ctx_var_ref()
+        .returning(move |k| if k == "jwt_claims" { claims } else { None });
     s
 }
 

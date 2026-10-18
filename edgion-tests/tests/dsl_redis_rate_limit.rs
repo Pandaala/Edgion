@@ -109,6 +109,9 @@ impl PluginSession for ResultSession {
     fn get_method(&self) -> &str {
         panic!("unexpected session operation")
     }
+    fn get_ctx_var_ref<'s>(&'s self, _key: &str) -> Option<&'s str> {
+        panic!("unexpected session operation")
+    }
     fn get_ctx_var(&self, _key: &str) -> Option<String> {
         panic!("unexpected session operation")
     }

@@ -21,9 +21,9 @@ fn cert() -> &'static ClientCertInfo {
 #[test]
 fn jwt_claim_nested_array_any_match() {
     let mut s = MockPluginSession::new();
-    s.expect_get_ctx_var().returning(|k| {
+    s.expect_get_ctx_var_ref().returning(|k| {
         if k == "jwt_claims" {
-            Some(r#"{"sub":"u1","realm_access":{"roles":["admin","dev"]}}"#.to_string())
+            Some(r#"{"sub":"u1","realm_access":{"roles":["admin","dev"]}}"#)
         } else {
             None
         }
@@ -35,9 +35,9 @@ fn jwt_claim_nested_array_any_match() {
 #[test]
 fn jwt_claim_scalar_and_number_and_bool() {
     let mut s = MockPluginSession::new();
-    s.expect_get_ctx_var().returning(|k| {
+    s.expect_get_ctx_var_ref().returning(|k| {
         if k == "jwt_claims" {
-            Some(r#"{"sub":"u1","age":42,"active":true}"#.to_string())
+            Some(r#"{"sub":"u1","age":42,"active":true}"#)
         } else {
             None
         }
@@ -50,9 +50,9 @@ fn jwt_claim_scalar_and_number_and_bool() {
 #[test]
 fn jwt_claim_falls_back_to_oidc_claims() {
     let mut s = MockPluginSession::new();
-    s.expect_get_ctx_var().returning(|k| match k {
+    s.expect_get_ctx_var_ref().returning(|k| match k {
         "jwt_claims" => None,
-        "oidc_claims" => Some(r#"{"groups":["g1"]}"#.to_string()),
+        "oidc_claims" => Some(r#"{"groups":["g1"]}"#),
         _ => None,
     });
     assert_eq!(extract_jwt_claim_values(&s, "groups"), vec!["g1".to_string()]);
@@ -61,13 +61,13 @@ fn jwt_claim_falls_back_to_oidc_claims() {
 #[test]
 fn jwt_claim_missing_branches() {
     let mut s = MockPluginSession::new();
-    s.expect_get_ctx_var().returning(|_| None);
+    s.expect_get_ctx_var_ref().returning(|_| None);
     assert!(extract_jwt_claim_values(&s, "sub").is_empty());
 
     let mut s2 = MockPluginSession::new();
-    s2.expect_get_ctx_var().returning(|k| {
+    s2.expect_get_ctx_var_ref().returning(|k| {
         if k == "jwt_claims" {
-            Some(r#"{"realm_access":{"roles":["x"]}}"#.to_string())
+            Some(r#"{"realm_access":{"roles":["x"]}}"#)
         } else {
             None
         }

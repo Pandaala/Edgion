@@ -13,12 +13,12 @@ use edgion_resources::resources::edgion_plugins::conditions::{MtlsField, SanType
 /// earlier in the chain with `store_claims_in_ctx: true`; otherwise missing.
 pub fn extract_jwt_claim_values(session: &dyn PluginSession, claim: &str) -> Vec<String> {
     let Some(raw) = session
-        .get_ctx_var("jwt_claims")
-        .or_else(|| session.get_ctx_var("oidc_claims"))
+        .get_ctx_var_ref("jwt_claims")
+        .or_else(|| session.get_ctx_var_ref("oidc_claims"))
     else {
         return Vec::new();
     };
-    let Ok(claims) = serde_json::from_str::<serde_json::Value>(&raw) else {
+    let Ok(claims) = serde_json::from_str::<serde_json::Value>(raw) else {
         return Vec::new();
     };
     match resolve_claim_path(&claims, claim) {

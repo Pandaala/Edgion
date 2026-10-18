@@ -253,7 +253,11 @@ pub trait PluginSession: Send + Sync {
         false
     }
 
-    /// Get a context variable by key (set by plugins like KeySet)
+    /// Borrow the current context value for this session read.
+    /// Later plugin writes remain visible on subsequent reads.
+    fn get_ctx_var_ref<'s>(&'s self, key: &str) -> Option<&'s str>;
+
+    /// Get an owned context variable by key (set by plugins like KeySet).
     fn get_ctx_var(&self, key: &str) -> Option<String>;
 
     /// Set a context variable (for plugins to pass data downstream)

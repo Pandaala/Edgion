@@ -1123,8 +1123,12 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             .to_owned()
     }
 
+    fn get_ctx_var_ref<'s>(&'s self, key: &str) -> Option<&'s str> {
+        self.ctx.get_ctx_var(key)
+    }
+
     fn get_ctx_var(&self, key: &str) -> Option<String> {
-        self.ctx.get_ctx_var(key).map(|s| s.to_string())
+        self.get_ctx_var_ref(key).map(str::to_owned)
     }
 
     fn set_ctx_var(&mut self, key: &str, value: &str) -> PluginSessionResult<()> {

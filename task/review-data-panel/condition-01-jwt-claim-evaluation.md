@@ -1,11 +1,12 @@
 # JWT claim condition evaluation ownership
 
 Status: deferred design decision; existing per-chunk allocation tension remains
-unresolved. Source baseline: `532e61884`.
+unresolved. Initial source baseline: `532e61884`; partial source-borrowing
+implementation is described below.
 
 ## Evidence
 
-`plugins/runtime/conditions/extract.rs::extract_jwt_claim_values` obtains an owned
+`plugins/runtime/conditions/extract.rs::extract_jwt_claim_values` borrows the current
 context string, parses a fresh serde_json Value, resolves the claim, then eagerly
 creates Vec<String> candidates. Strings are cloned; numbers and booleans are
 formatted. Arrays contribute scalar elements only. Objects/null/nested non-scalars
@@ -20,8 +21,9 @@ and candidate construction costs. Condition descriptors, regex initialization,
 time bounds and dependency bindings are already cold-compiled; they are not the
 per-evaluation JSON parsing problem.
 
-Context strings are live plugin state. The production adapter clones get_ctx_var
-values; ctx.rs set_ctx_var/remove_ctx_var can change them between evaluations.
+Context strings are live plugin state. The production adapter now exposes
+get_ctx_var_ref for short reads; ctx.rs set_ctx_var/remove_ctx_var can change them
+between evaluations.
 The canonical claim resolver splits on dots and performs string-key Value::get
 for every segment; it does not interpret numeric segments as array indexes or
 prefer an exact literal dotted key.
@@ -37,7 +39,7 @@ knowledge are not fresh verification or workload performance estimates.
 - A per-evaluation parsed owner with lazy borrowed scalar candidates can avoid
   String clones for string values and avoid the complete candidate vector. Only
   visited numeric/boolean candidates would need formatting. This requires a clear
-  owner/iterator or callback API; it retains context copying and JSON parsing and
+  owner/iterator or callback API; it retains JSON parsing and
   therefore does not by itself resolve the per-chunk allocation requirement.
 - Reusing parsed request-owned claims can remove repeated parsing, but every write,
   removal and precedence change must invalidate or replace the right derived state.
@@ -72,5 +74,8 @@ Original knowledge: `skills/04-review/cpu-memory/regression-guards/response-cond
 `skills/04-review/cpu-memory/review-evidence/oidc-jwt-claims-json-serialization-opt-in.md`,
 `skills/04-review/plugin-metadata/mandatory-design/jwt-claim-accessor-validation-belongs-to-condition.md`,
 and `skills/04-review/ctx-set/regression-guards/claims-access-log-filter.md`.
-This task records current source inspection only; no runtime change or fresh
-benchmark was performed.
+The initial task was source-only. The subsequent bounded context-borrowing batch
+removed the whole-source copy and tested live replacement/removal and missing-only
+OIDC fallback with a real session adapter. It did not implement parsed-owner or
+candidate changes, run a throughput benchmark, or resolve the per-chunk allocation
+constraint. The remaining design decision stays deferred.

@@ -11,7 +11,7 @@ knowledge_type: regression-guards
 `ConditionalUpstreamResponseBodyFilter` evaluates its compiled `skip` and `run`
 conditions for every response chunk. The shared condition evaluator borrows live
 `Header`, `Cookie`, `Path`, `RequestPath`, `Method`, `RemoteIp`, and `DirectPeerIp` values
-and mTLS certificate candidates for the duration of each predicate evaluation.
+and `Ctx` values and mTLS certificate candidates for the duration of each predicate evaluation.
 Query conditions borrow the decoded frozen entry-query cache for the same short
 evaluation; they do not read the live rewritten URI. `KeyExist`, `KeyMatch`,
 `SecretMatch`, and keyed `Probability` use that same accessor. It does not cache
@@ -61,9 +61,10 @@ throughput targets:
 | `JwtClaimMatch` with two role candidates | 9 | 902 |
 | typed URI `MtlsMatch` with two stored SANs | 7 | 139 |
 
-The first seven borrowed condition sources now bypass their listed owned
-`key_get` allocation. JWT extraction clones context JSON, parses it with
-`serde_json`, and creates candidate strings. The historical mTLS extraction cloned the
+The selected borrowed condition sources bypass their corresponding owned
+`key_get` allocation; Query and Ctx were added in subsequent bounded batches. JWT extraction now borrows context JSON, parses it with
+`serde_json`, and creates candidate strings. The historical table includes the
+source copy that the borrowed context boundary removes. The historical mTLS extraction cloned the
 certificate record and created candidate strings; ARCH-007 replaced that path
 with a borrowed certificate getter and lazy borrowed candidates. The test asserts source
 values, not these remaining allocation counts, so future improvements are
@@ -75,9 +76,9 @@ The other sources have different costs or lifetimes:
 |---|---|---|
 | `TraceId`, `Host` | Copies a string | No equivalent borrowed condition accessor; request ID rules can mutate the trace ID. |
 | `Query` | Borrows one decoded value from the lazily initialized entry-query cache | `get_query_param_ref` ties the value to the session read; the owned getter still copies for consumers requiring ownership. |
-| `Ctx` | Clones a context value | Plugins may set or remove context variables. |
+| `Ctx` | Borrows the current context value | The short session borrow ends before later plugins set or remove variables. |
 | `RemoteIpAndPath` | Formats a combined string | The resolved IP can change; the composite needs an owned representation today. |
-| `JwtClaimMatch` | Clones context JSON, parses it, and creates scalar candidate strings | JWT/OIDC claim context may be changed by plugins; a cross-chunk parsed snapshot would need invalidation. |
+| `JwtClaimMatch` | Borrows context JSON, parses it, and creates scalar candidate strings | JWT/OIDC claim context may be changed by plugins; a cross-chunk parsed snapshot would need invalidation. |
 | `MtlsMatch` | Borrows `ClientCertInfo` and lazily selects string slices | The getter retains the existing certificate exposure gate; each synchronous evaluation owns only its short borrow. |
 | `TimeRange`, `Probability` | Reads current time or draws probability per evaluation; keyed probability reads its current key | Freezing the decision would change timing or sampling semantics. |
 | `DirectPeerIpMatch`, `RemoteIpMatch`, `RateLimitExceeded`, `HmacAuth` | Reads current session state or verifies current headers | These predicates do not use the changed `KeyGet` extraction path unless a nested verifier does so independently. |
@@ -188,3 +189,20 @@ one owned key_get allocation with zero allocations for repeated compiled query
 matching. This is a fixed-fixture allocation result, not a cold-parse or throughput
 claim. The unresolved entry-capture lifecycle boundary described in URI
 normalization knowledge remains unchanged.
+
+
+## Borrowed live context boundary
+
+`get_ctx_var_ref` borrows the existing request context map for one session read;
+the owned getter explicitly copies only for consumers requiring ownership.
+Ctx conditions use the borrow, and JWT extraction parses the borrowed jwt_claims
+or oidc_claims text. Missing-only fallback, dot-key resolution and owned parsed
+JSON/candidates are unchanged. No mutation invalidation cache or new logging is
+introduced; the claim-key redaction policy remains independently required.
+
+Real-adapter tests replace, empty, remove and restore a Ctx value between compiled
+predicate evaluations. Matching reads allocate zero times, compared with one
+owned key_get copy for a present nonempty value. JWT source tests cover malformed,
+empty and claim-missing JWT preventing OIDC fallback, valid JWT precedence and
+removal revealing OIDC. Only the source text copy is removed: JWT parsing and
+candidate allocations still leave the recorded per-chunk allocation tension open.

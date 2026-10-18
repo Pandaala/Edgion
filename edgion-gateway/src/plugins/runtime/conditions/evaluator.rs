@@ -883,6 +883,7 @@ fn condition_key_value<'a>(session: &'a dyn PluginSession, key: &KeyGet) -> Opti
         KeyGet::Header { name } => session.header_str(name).map(Cow::Borrowed),
         KeyGet::Cookie { name } => cookie_value_ref(session.request_header_map(), name).map(Cow::Borrowed),
         KeyGet::Query { name } => session.get_query_param_ref(name).map(Cow::Borrowed),
+        KeyGet::Ctx { name } => session.get_ctx_var_ref(name).map(Cow::Borrowed),
         KeyGet::Path => Some(Cow::Borrowed(session.get_path())),
         KeyGet::RequestPath => Some(Cow::Borrowed(session.get_request_path())),
         KeyGet::Method => Some(Cow::Borrowed(session.get_method())),

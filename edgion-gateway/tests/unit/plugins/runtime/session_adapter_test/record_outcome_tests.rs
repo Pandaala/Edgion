@@ -2809,3 +2809,80 @@ async fn borrowed_query_conditions_use_frozen_decoded_cache_without_value_copies
         assert_eq!(calls, 0, "cached query conditions must borrow the stored value");
     }
 }
+
+#[tokio::test]
+async fn borrowed_context_conditions_observe_replacement_and_removal_without_copies() {
+    use crate::plugins::runtime::conditions::{CompiledPluginConditions, EvaluationResult};
+    use edgion_resources::resources::edgion_plugins::conditions::{
+        Condition, ConditionSet, KeyMatchCondition, MatchCore, PluginConditions,
+    };
+    let mut session = test_session().await;
+    let mut ctx = EdgionHttpContext::default();
+    ctx.set_ctx_var("mode".to_string(), "enabled".to_string());
+    let stored = ctx.get_ctx_var("mode").unwrap().as_ptr();
+    let key = KeyGet::Ctx {
+        name: "mode".to_string(),
+    };
+    let mut condition = KeyMatchCondition {
+        key: key.clone(),
+        core: MatchCore {
+            values: Some(vec!["enabled".to_string()]),
+            ..Default::default()
+        },
+        negate: false,
+        descriptor: Box::from(""),
+    };
+    condition.compile().unwrap();
+    let conditions = CompiledPluginConditions::new(PluginConditions {
+        skip: None,
+        run: Some(ConditionSet::all_of(vec![Condition::KeyMatch(condition)])),
+    });
+    let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+    assert_eq!(adapter.get_ctx_var_ref("mode").unwrap().as_ptr(), stored);
+    let (owned, calls) = crate::test_allocation_counter::count_allocations(|| adapter.key_get(&key));
+    assert_eq!(owned.as_deref(), Some("enabled"));
+    assert_eq!(calls, 1);
+    for (value, expected) in [
+        (Some("enabled"), EvaluationResult::Run),
+        (Some("disabled"), EvaluationResult::Skip),
+        (Some(""), EvaluationResult::Skip),
+        (None, EvaluationResult::Skip),
+        (Some("enabled"), EvaluationResult::Run),
+    ] {
+        if let Some(value) = value {
+            adapter.set_ctx_var("mode", value).unwrap();
+        } else {
+            adapter.remove_ctx_var("mode").unwrap();
+        }
+        assert_eq!(adapter.get_ctx_var_ref("mode"), value);
+        let (result, calls) = crate::test_allocation_counter::count_allocations(|| conditions.evaluate(&adapter));
+        assert_eq!(result, expected);
+        assert_eq!(calls, 0);
+    }
+}
+
+#[tokio::test]
+async fn borrowed_jwt_source_keeps_live_missing_only_oidc_fallback() {
+    use crate::plugins::runtime::conditions::extract_jwt_claim_values;
+    let mut session = test_session().await;
+    let mut ctx = EdgionHttpContext::default();
+    let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+    adapter.set_ctx_var("oidc_claims", r#"{"sub":"oidc"}"#).unwrap();
+    for (jwt, expected) in [
+        (None, vec!["oidc"]),
+        (Some("invalid"), vec![]),
+        (Some(""), vec![]),
+        (Some(r#"{"other":"value"}"#), vec![]),
+        (Some(r#"{"sub":"jwt"}"#), vec!["jwt"]),
+        (None, vec!["oidc"]),
+    ] {
+        if let Some(jwt) = jwt {
+            adapter.set_ctx_var("jwt_claims", jwt).unwrap();
+        } else {
+            adapter.remove_ctx_var("jwt_claims").unwrap();
+        }
+        assert_eq!(extract_jwt_claim_values(&adapter, "sub"), expected);
+    }
+    adapter.remove_ctx_var("oidc_claims").unwrap();
+    assert!(extract_jwt_claim_values(&adapter, "sub").is_empty());
+}
