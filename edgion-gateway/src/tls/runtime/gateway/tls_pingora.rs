@@ -306,10 +306,10 @@ impl TlsAccept for TlsCallback {
         // and not double-emit. On success we finalize and let
         // handshake_complete_callback emit the single ssl.log entry.
         if let (Some(gateway_tls), Some(edgion_tls)) = (
-            ssl_ctx.matched_gateway_tls.clone(),
-            ssl_ctx.gateway_edgion_tls_overlay.clone(),
+            ssl_ctx.matched_gateway_tls.as_ref(),
+            ssl_ctx.gateway_edgion_tls_overlay.as_ref(),
         ) {
-            match self.configure_gateway_frontend_mtls(ssl, &gateway_tls) {
+            match self.configure_gateway_frontend_mtls(ssl, gateway_tls) {
                 Err(e) => {
                     ssl_ctx.meta.err_log = Some(format!("frontend mTLS error: {e}"));
                     log_ssl(&ssl_ctx.meta);
@@ -317,6 +317,7 @@ impl TlsAccept for TlsCallback {
                 }
                 Ok(verify_installed) => ssl_ctx.meta.is_mtls = verify_installed,
             }
+            let edgion_tls = Arc::clone(edgion_tls);
             self.apply_edgion_tls_cert(ssl, &edgion_tls, &mut ssl_ctx);
             if ssl_ctx.meta.err_log.is_some() {
                 log_ssl(&ssl_ctx.meta);

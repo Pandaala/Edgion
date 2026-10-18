@@ -2939,3 +2939,21 @@ formatting, workspace check/Clippy and seven repository guards. Existing warning
 are outside changed code. Source control flow establishes the skipped work; no
 new test duplicating that control flow was added. No live-handshake suite or
 throughput benchmark was run, and callback-wide coverage remains incomplete.
+
+## Borrow certificate callback overlay candidates before application
+
+The certificate callback borrows the Gateway and EdgionTls overlay options for
+its initial tuple match and frontend mTLS setup. It clones the overlay Arc only
+after setup succeeds, immediately before certificate application needs mutable
+access to the whole context. This removes the tuple's Gateway Arc clone on both
+overlay and ordinary Gateway paths, and avoids unused overlay clones when setup
+fails or the tuple does not match. The context retains both owners throughout;
+native trust-store installation retains its own reference. Branch precedence,
+verification/identity ordering, logging and accepted ex-data clone handoff are
+unchanged. No Arc-count-dependent consumers were found in the affected chain.
+
+Independent plan and code reviews passed. Fresh verification passed 30 TLS store,
+two targeted overlay and 14 mTLS callback tests, formatting, workspace check/Clippy
+and seven repository guards. Existing warnings remain outside changed code.
+The benefit is fewer Arc reference-count operations, not removed certificate
+copies or measured heap/latency savings. No live-handshake suite was run.
