@@ -16,9 +16,11 @@
 //!
 use async_trait::async_trait;
 use regex::Regex;
+use std::borrow::Cow;
 
 use crate::link_sys::template::evaluate_template;
 use crate::plugins::runtime::log::la;
+use crate::plugins::runtime::session_adapter::key_value;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{CaseType, CtxSetConfig, CtxVarRule, TransformConfig};
@@ -61,12 +63,12 @@ impl CtxSet {
     ) -> Option<String> {
         // Priority: value > template > from
         let mut value = if let Some(ref static_value) = rule.value {
-            static_value.clone()
+            Cow::Borrowed(static_value.as_str())
         } else if let Some(compiled) = self.config.get_compiled_template(rule_idx) {
-            evaluate_template(compiled, session)
+            Cow::Owned(evaluate_template(compiled, session))
         } else if let Some(ref from) = rule.from {
             // Get from KeyGet source
-            session.key_get(from).or_else(|| rule.default.clone())?
+            key_value(session, from).or_else(|| rule.default.as_deref().map(Cow::Borrowed))?
         } else {
             // No source specified (should be caught by validation)
             return rule.default.clone();
@@ -76,7 +78,7 @@ impl CtxSet {
         if let Some(ref _extract) = rule.extract {
             if let Some(regex) = self.config.get_compiled_regex(rule_idx) {
                 value = match self.apply_extract(&value, regex, _extract.group) {
-                    Some(extracted) => extracted,
+                    Some(extracted) => Cow::Owned(extracted),
                     None => {
                         return rule.default.clone();
                     }
@@ -88,7 +90,7 @@ impl CtxSet {
         if let Some(ref transform) = rule.transform {
             let compiled_replace = self.config.get_compiled_transform_regex(rule_idx);
             value = match self.apply_transform(&value, transform, compiled_replace, plugin_log) {
-                Some(transformed) => transformed,
+                Some(transformed) => Cow::Owned(transformed),
                 None => {
                     return rule.default.clone();
                 }
@@ -97,17 +99,17 @@ impl CtxSet {
 
         // Apply mapping
         if let Some(ref mapping) = rule.mapping {
-            value = if let Some(mapped) = mapping.values.get(&value) {
-                mapped.clone()
+            value = if let Some(mapped) = mapping.values.get(value.as_ref()) {
+                Cow::Borrowed(mapped.as_str())
             } else if let Some(ref default) = mapping.default {
-                default.clone()
+                Cow::Borrowed(default.as_str())
             } else {
                 // No mapping match and no mapping default, use rule default
                 return rule.default.clone();
             };
         }
 
-        Some(value)
+        Some(value.into_owned())
     }
 
     /// Apply regex extraction

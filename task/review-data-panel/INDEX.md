@@ -1687,3 +1687,20 @@ overlap and are not a unique-test count. Warmed empty/nonempty two-header helper
 fixtures each measured one output allocation. Formatting, workspace check/Clippy
 and seven repository guards passed, with existing warnings outside changed files.
 Independent final review passed.
+
+## Borrowed CtxSet processing inputs
+
+CtxSet starts with borrowed static/source values and borrows mapping outputs;
+template rendering, regex extraction and transformations retain their existing
+owned outputs. The final rule result remains an owned String before context
+mutation. Priority, early defaults, whitespace/empty handling, one-operation
+validation and sequential context updates remain unchanged.
+Independent plan review passed. Tests cover combined extract/transform/map paths,
+mapping/rule defaults, plain values, warmed mapping allocation and ordered
+cross-rule context reads. No full suite, live integration or throughput benchmark
+ran for this batch.
+Fresh serial selections passed 15 CtxSet-related tests, 22 template tests and
+67 condition tests. The warmed source-to-mapping rule fixture measured one final
+String allocation. Formatting, workspace check/Clippy and seven repository guards
+passed, with existing warnings outside changed files. Independent final review
+passed.

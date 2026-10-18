@@ -47,7 +47,7 @@ vars:
     let rule = &plugin.config.vars[0];
 
     let mut source_session = MockPluginSession::new();
-    source_session.expect_key_get().return_const(Some("source".to_string()));
+    set_source_header(&mut source_session, Some("source"));
     let mut source_log = PluginLog::new("CtxSet");
     assert_eq!(
         plugin.process_rule(rule, 0, &source_session, &mut source_log),
@@ -55,7 +55,7 @@ vars:
     );
 
     let mut missing_session = MockPluginSession::new();
-    missing_session.expect_key_get().return_const(None::<String>);
+    set_source_header(&mut missing_session, None);
     let mut missing_log = PluginLog::new("CtxSet");
     assert_eq!(
         plugin.process_rule(rule, 0, &missing_session, &mut missing_log),
@@ -181,7 +181,7 @@ vars:
     };
     let rule = &plugin.config.vars[0];
     let mut session = MockPluginSession::new();
-    session.expect_key_get().return_const(Some("source".to_string()));
+    set_source_header(&mut session, Some("source"));
     let mut plugin_log = PluginLog::new("CtxSet");
 
     assert_eq!(
@@ -279,4 +279,121 @@ vars:
     assert!(compiled.preparse_errors.is_empty());
     assert!(resource.validate_plugins().is_empty());
     assert!(compiled.is_activatable);
+}
+
+fn set_source_header(session: &mut MockPluginSession, value: Option<&str>) {
+    let mut headers = http::HeaderMap::new();
+    if let Some(value) = value {
+        headers.insert("x-source", http::HeaderValue::from_str(value).unwrap());
+    }
+    session.expect_request_header_map().return_const(headers);
+    session.expect_key_get().times(0);
+}
+
+#[test]
+fn borrowed_inputs_preserve_extract_transform_and_mapping_defaults() {
+    for static_source in [false, true] {
+        for (input, expected) in [
+            ("id=alice", "selected"),
+            ("id=bob", "mapping-default"),
+            ("invalid", "rule-default"),
+        ] {
+            let mut rule = serde_json::json!({
+                "name": "result", "extract": {"regex": "^id=(.+)$", "group": 1},
+                "transform": {"case": "upper"},
+                "mapping": {"values": {"ALICE": "selected"}, "default": "mapping-default"},
+                "default": "rule-default"
+            });
+            if static_source {
+                rule["value"] = input.into();
+            } else {
+                rule["from"] = serde_json::json!({"type": "header", "name": "X-Source"});
+            }
+            let mut config: CtxSetConfig = serde_json::from_value(serde_json::json!({"vars": [rule]})).unwrap();
+            config.validate().unwrap();
+            let plugin = CtxSet { config };
+            let mut session = MockPluginSession::new();
+            set_source_header(&mut session, Some(input));
+            let mut log = PluginLog::new("CtxSet");
+            assert_eq!(
+                plugin
+                    .process_rule(&plugin.config.vars[0], 0, &session, &mut log)
+                    .as_deref(),
+                Some(expected)
+            );
+            // Without mapping default, a mapping miss returns the rule default.
+            if input == "id=bob" {
+                let mut rule = plugin.config.vars[0].clone();
+                rule.mapping.as_mut().unwrap().default = None;
+                assert_eq!(
+                    plugin.process_rule(&rule, 0, &session, &mut log).as_deref(),
+                    Some("rule-default")
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn borrowed_plain_source_preserves_empty_and_whitespace() {
+    let mut config =
+        parse_config("vars:\n  - name: result\n    from: {type: header, name: X-Source}\n    default: fallback\n");
+    config.validate().unwrap();
+    let plugin = CtxSet { config };
+    for input in ["", "  source  "] {
+        let mut session = MockPluginSession::new();
+        set_source_header(&mut session, Some(input));
+        assert_eq!(
+            plugin
+                .process_rule(&plugin.config.vars[0], 0, &session, &mut PluginLog::new("CtxSet"))
+                .as_deref(),
+            Some(input)
+        );
+    }
+}
+
+#[test]
+fn borrowed_source_mapping_allocates_only_final_result() {
+    let mut config = parse_config("vars:\n  - name: result\n    from: {type: header, name: X-Source}\n    mapping:\n      values: {source: mapped}\n");
+    config.validate().unwrap();
+    let plugin = CtxSet { config };
+    let mut session = MockPluginSession::new();
+    set_source_header(&mut session, Some("source"));
+    let _ = session.request_header_map();
+    let mut log = PluginLog::new("CtxSet");
+    let (value, calls) = crate::test_allocation_counter::count_allocations(|| {
+        plugin.process_rule(&plugin.config.vars[0], 0, &session, &mut log)
+    });
+    assert_eq!(value.as_deref(), Some("mapped"));
+    assert_eq!(calls, 1);
+}
+
+#[tokio::test]
+async fn borrowed_context_read_follows_previous_rule_write() {
+    let plugin = CtxSet::create(&parse_config("vars:\n  - name: user\n    value: ALICE\n    transform: {case: lower}\n  - name: user\n    from: {type: ctx, name: user}\n    transform: {prefix: user_}\n"));
+    let mut session = MockPluginSession::new();
+    session.expect_key_get().times(0);
+    let mut sequence = mockall::Sequence::new();
+    session
+        .expect_set_ctx_var()
+        .withf(|key, value| key == "user" && value == "alice")
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _| Ok(()));
+    session
+        .expect_get_ctx_var_ref()
+        .withf(|key| key == "user")
+        .times(1)
+        .in_sequence(&mut sequence)
+        .return_const(Some("alice"));
+    session
+        .expect_set_ctx_var()
+        .withf(|key, value| key == "user" && value == "user_alice")
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _| Ok(()));
+    assert_eq!(
+        plugin.run_request(&mut session, &mut PluginLog::new("CtxSet")).await,
+        PluginRunningResult::GoodNext
+    );
 }

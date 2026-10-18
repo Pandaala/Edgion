@@ -75,3 +75,18 @@ operation.
 
 - `enforce-one-ctx-set-transform-operation`: original todo for this validation
   contract; closed after the 2026-09-19 fix.
+
+## Runtime input ownership
+
+`process_rule` borrows static values and canonical session `key_value` results
+through a `Cow<str>` until extraction/transformation needs owned output. Templates
+still render an owned value. Mapping values/defaults may borrow configuration;
+the rule returns an owned String before `run_request` mutates session context.
+Early rule-default returns and failure short circuits retain their semantics.
+Present empty and whitespace-only source values do not become missing values.
+Sequential rule writes remain visible to later context reads.
+
+Focused tests cover source/static extraction, transform and mapping/default paths,
+empty/whitespace preservation, and ordered context write/read/write. A warmed
+source-to-mapping fixture checks the final result allocation only; this is not a
+whole-callback allocation or throughput claim.
