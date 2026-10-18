@@ -1110,3 +1110,22 @@ checks passed; this documentation-only batch ran no Rust tests or benchmark.
 Current-time timestamp checks and owned expected body-digest text across await
 remain intentional request work; this audit does not establish full HMAC or
 whole-callback optimization coverage.
+
+## Borrowed CORS decision inputs
+
+EdgionPlugins CORS now borrows Origin for validation and Timing-Allow-Origin
+selection, and borrows the private-network flag for its exact true comparison.
+It copies only accepted selected ACAO output and timing echoes that must survive
+session mutation. Missing/non-text values, first-header selection, star/echo
+semantics, matcher construction, header order, preflight/reflection and Max-Age
+behavior are unchanged. Native Gateway API CORS is outside this implementation.
+
+Independent plan and final source reviews passed. Gateway CORS-filtered tests
+passed 41 and resources CORS tests passed 34. Warmed allocation cases measure zero
+for denied origins and disabled/denied/star timing decisions, and one for nonempty
+accepted output or timing echo. Existing eight-header order/no-spill coverage
+remains intact. A new test type-complexity warning was corrected without lint
+suppression; the focused plugin rerun passed 15 tests and formatting/workspace
+check/Clippy passed again. Seven repository guards and final document/diff checks
+passed. Remaining warnings are outside changed code. No full integration suite or
+throughput benchmark ran; header insertion and other CORS allocations remain.

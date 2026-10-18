@@ -95,7 +95,7 @@ fn test_select_acao_value_standard_wildcard_returns_star() {
     config.allow_origins = "*".to_string();
     let cors = Cors::new(&config);
 
-    assert_eq!(cors.select_acao_value("https://any.example.com".to_string()), "*");
+    assert_eq!(cors.select_acao_value("https://any.example.com"), "*");
 }
 
 #[test]
@@ -105,7 +105,7 @@ fn test_select_acao_value_force_wildcard_echoes_origin() {
     let cors = Cors::new(&config);
 
     assert_eq!(
-        cors.select_acao_value("https://any.example.com".to_string()),
+        cors.select_acao_value("https://any.example.com"),
         "https://any.example.com"
     );
 }
@@ -115,10 +115,7 @@ fn test_select_acao_value_specific_origin_echoes_origin() {
     let config = create_cors_config();
     let cors = Cors::new(&config);
 
-    assert_eq!(
-        cors.select_acao_value("https://example.com".to_string()),
-        "https://example.com"
-    );
+    assert_eq!(cors.select_acao_value("https://example.com"), "https://example.com");
 }
 
 /// Run a simple (non-preflight) GET through `Cors` with the given origin and
@@ -321,4 +318,84 @@ async fn test_no_origin_header_skip() {
 
     assert_eq!(result, PluginRunningResult::GoodNext);
     // No origin header, should skip CORS processing (no logs)
+}
+
+#[test]
+fn origin_selection_copies_only_the_selected_accepted_value() {
+    let cases = &[
+        ("https://example.com", Some(b"https://denied.example".as_slice()), None),
+        (
+            "https://example.com",
+            Some(b"https://example.com"),
+            Some("https://example.com"),
+        ),
+        ("*", Some(b"https://example.com"), Some("*")),
+        ("**", Some(b"https://example.com"), Some("https://example.com")),
+        ("*", Some(b"null"), None),
+        ("*", Some(b"\xff"), None),
+        ("*", None, None),
+    ];
+    for &(policy, origin, expected) in cases {
+        let mut config = create_cors_config();
+        config.allow_origins = policy.to_string();
+        config.allow_credentials = false;
+        let cors = Cors::new(&config);
+        let mut map = http::HeaderMap::new();
+        if let Some(origin) = origin {
+            map.insert("origin", http::HeaderValue::from_bytes(origin).unwrap());
+        }
+        let mut session = MockPluginSession::new();
+        session.expect_request_header_map().return_const(map);
+        session.expect_header_value().never();
+        // Keep mock initialization outside the allocation measurement.
+        assert_eq!(cors.get_validated_origin(&mut session).as_deref(), expected);
+        let (actual, calls) =
+            crate::test_allocation_counter::count_allocations(|| cors.get_validated_origin(&mut session));
+        assert_eq!(actual.as_deref(), expected);
+        assert_eq!(calls, usize::from(expected.is_some()));
+    }
+}
+
+#[test]
+fn timing_and_private_network_decisions_borrow_header_inputs() {
+    for (policy, expected_timing, allocations) in [
+        (None, None, 0),
+        (Some("https://denied.example"), None, 0),
+        (Some("*"), Some("*"), 0),
+        (Some("**"), Some("https://example.com"), 1),
+        (Some("https://example.com"), Some("https://example.com"), 1),
+    ] {
+        for private_network in ["true", "false", "TRUE"] {
+            let mut config = create_cors_config();
+            config.timing_allow_origins = policy.map(str::to_owned);
+            config.allow_private_network = true;
+            let cors = Cors::new(&config);
+            let mut map = http::HeaderMap::new();
+            map.insert("origin", http::HeaderValue::from_static("https://example.com"));
+            map.insert(
+                "access-control-request-private-network",
+                private_network.parse().unwrap(),
+            );
+            let mut session = MockPluginSession::new();
+            session.expect_request_header_map().return_const(map);
+            session.expect_header_value().never();
+            drop(cors.build_cors_header_pairs(&mut session, "https://example.com", false));
+            let (headers, calls) = crate::test_allocation_counter::count_allocations(|| {
+                cors.build_cors_header_pairs(&mut session, "https://example.com", false)
+            });
+            assert_eq!(calls, allocations);
+            assert!(!headers.spilled());
+            let value = |name| {
+                headers
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| value.as_ref())
+            };
+            assert_eq!(value("Timing-Allow-Origin"), expected_timing);
+            assert_eq!(
+                value("Access-Control-Allow-Private-Network"),
+                (private_network == "true").then_some("true")
+            );
+        }
+    }
 }

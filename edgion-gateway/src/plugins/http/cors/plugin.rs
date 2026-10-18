@@ -70,11 +70,11 @@ impl Cors {
     /// (force-wildcard `"**"`, single origin, list, or regex match) the request
     /// origin is echoed back. Separated from the allow/deny decision so the value
     /// choice can be unit-tested on its own.
-    fn select_acao_value(&self, origin: String) -> String {
+    fn select_acao_value(&self, origin: &str) -> String {
         if self.config.allow_origins == "*" {
             "*".to_string()
         } else {
-            origin
+            origin.to_owned()
         }
     }
 
@@ -82,9 +82,9 @@ impl Cors {
     /// Orchestrates the allow/deny check (`CorsConfig::is_origin_allowed`) and the
     /// ACAO value selection ([`Cors::select_acao_value`]).
     fn get_validated_origin(&self, session: &mut dyn PluginSession) -> Option<String> {
-        let origin = session.header_value("origin")?;
+        let origin = session.header_str("origin")?;
 
-        if !self.config.is_origin_allowed(&origin) {
+        if !self.config.is_origin_allowed(origin) {
             return None;
         }
 
@@ -140,18 +140,18 @@ impl Cors {
             }
         }
 
-        if let Some(origin) = session.header_value("origin") {
-            if self.config.is_timing_origin_allowed(&origin) {
+        if let Some(origin) = session.header_str("origin") {
+            if self.config.is_timing_origin_allowed(origin) {
                 let timing_value = if let Some(ref timing_origins) = self.config.timing_allow_origins {
                     if timing_origins == "**" {
-                        Cow::Owned(origin)
+                        Cow::Owned(origin.to_owned())
                     } else if timing_origins == "*" {
                         Cow::Borrowed("*")
                     } else {
-                        Cow::Owned(origin)
+                        Cow::Owned(origin.to_owned())
                     }
                 } else {
-                    Cow::Owned(origin)
+                    Cow::Owned(origin.to_owned())
                 };
                 headers.push(("Timing-Allow-Origin", timing_value));
             }
@@ -159,7 +159,7 @@ impl Cors {
 
         // Private Network Access
         if self.config.allow_private_network {
-            if let Some(req_pn) = session.header_value("access-control-request-private-network") {
+            if let Some(req_pn) = session.header_str("access-control-request-private-network") {
                 if req_pn == "true" {
                     headers.push(("Access-Control-Allow-Private-Network", Cow::Borrowed("true")));
                 }

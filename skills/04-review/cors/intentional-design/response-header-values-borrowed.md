@@ -13,7 +13,8 @@ knowledge_type: intentional-design
 configuration is published borrows: `Access-Control-Allow-Methods`,
 `Access-Control-Allow-Headers` (except the `**` reflection), `Access-Control-Expose-Headers`,
 and the literal `true` flags. Request-dependent values own their bytes: the echoed origin, the
-`**` reflection of `Access-Control-Request-Headers`, and `Timing-Allow-Origin`.
+`**` reflection of `Access-Control-Request-Headers`, and echoed
+`Timing-Allow-Origin`. The timing wildcard value borrows the static star.
 `Access-Control-Max-Age` is the one knowingly excluded case — see below.
 
 `CorsConfig::get_allow_methods` returns `&str`, `CorsConfig::get_allow_headers` returns
@@ -110,3 +111,20 @@ APIs gain a zero-copy header-value path.
   separately; see [constructor and matcher compilation](../regression-guards/new-must-call-validate-and-init.md).
 - Supersedes the "no request-path optimization is claimed" caveat previously carried in
   [token-list-validation](../regression-guards/token-list-validation.md).
+
+
+## Borrowed request-header decisions
+
+Origin validation, timing-origin selection and private-network flag comparison
+read `header_str`, preserving the owned accessor's live first-header/text-filtering
+semantics. Validation copies only the accepted selected ACAO value. Timing copies
+only an allowed echoed origin; disabled, denied and star results need no source
+copy. The exact lowercase private-network value true is still required.
+
+Accepted ACAO output and echoed Timing output remain owned before mutating or
+awaiting the session. This changes no matcher initialization, native Gateway API
+CORS path, preflight-only emission, reflection or Max-Age behavior. A warmed mock
+regression measures zero allocation for selected denied-origin and timing/flag
+decisions, and one for nonempty accepted or timing echoes. The full eight-header
+order/no-spill and existing plugin tests remain relevant; this is not a claim
+that all CORS requests or header insertion are allocation-free.
