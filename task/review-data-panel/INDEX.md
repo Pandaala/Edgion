@@ -17,7 +17,7 @@ destination.
 | `early_request_filter` | Direct body and request-ID resolution inspected. Arc handles support mutable context dispatch; do not blindly replace with references. Publication-time list resolution deferred below. Trace-ID parsing/generation/reconciliation and direct preflight runtime inspected below; deeper source adapters remain open. |
 | `request_filter` | Temporary metadata path copy removed in `4a976e022`. XFF snapshot preserves bounded aggregate size and owned log state; RealIp extractor borrows tokens and traverses in reverse. TLS metadata copies feed request-owned state. Routing, plugin dispatch and deeper RealIp policy dependencies remain open. |
 | Upstream selection, connect, upstream request | `connected_to_upstream` direct body inspected: borrowed SAN digest, one timestamp, owned connection-establishment log. `upstream_request_filter` direct body and deferred credential nomination guard traced to shared Connection parser. Direct upstream deadline/backoff, concurrency admission and authority orchestration inspected; admission borrows its Service key below. Direct HTTP selection, sticky retry/fallback, timeout folding, policy capture, DirectEndpoint/ExternalJump and URI finalization inspected. ExternalJump borrows its domain below. Service peer dispatch and shared TLS metadata projection inspected below. Upstream request credential guards, deferred mutation ownership, request-ID reconciliation and transcoder attempt header validation inspected below; deeper endpoint algorithms, body conversion and credential publication remain open. |
-| Request body, trailers and relay | Direct action/tee/trailer orchestration, mirror payload budget and observer dispatch inspected. Storage scalar queries, memory scan ownership, digest caching and text predicate updates inspected below. Literal pattern preparation extends the existing DSL ownership decision. Nullable-state fast path, moved handler vector, bounded independent mirror copy and terminal-only log drain retained. Concrete streamed-handler/WAF implementations and remaining storage/relay integration remain open. |
+| Request body, trailers and relay | Direct action/tee/trailer orchestration, mirror payload budget and observer dispatch inspected. Storage scalar queries, memory scan ownership, digest caching and text predicate updates inspected below. Literal pattern preparation extends the existing DSL ownership decision. Nullable-state fast path, moved handler vector, bounded independent mirror copy and terminal-only log drain retained. WAF structured capture adapter and its usage-accounting accessors inspected below; deeper WAF rule/parser execution, other concrete streamed handlers and remaining storage/relay integration remain open. |
 | Response headers, hold/commit, body and trailers | Connection sanitizer inspected. Body/trailer orchestration, runtime dependency checks, processor driver and downstream cancellation wrapper inspected; prebuilt read-only runtime-chain candidate deferred. Concrete processors, conditions, hold/commit and remaining header chains remain open. |
 | Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering direct body inspected: exact gRPC denial is consumed, protocol-specific replies and final-status ownership retained. Deeper finalizers and retry consumers remain open. |
 | Redirect HTTP | Direct callbacks and shared client-policy application inspected. Missing-host and listener-admission checks now share one normalized hostname. Raw Location authority, query-free log URL and session-owned keepalive remain unchanged. |
@@ -3255,3 +3255,34 @@ not resident memory or measured throughput.
 Independent plan and source reviews passed. All 70 storage tests, formatting,
 workspace check/Clippy and seven repository guards passed; warnings remain
 outside changed code.
+
+## WAF structured capture adapter inspection
+
+Inspected WafPlugin request admission through json_capture::inspect_structured,
+including fresh capture, cached snapshots, native policy windows, completion,
+raw-source demand and transaction restoration. Plugin construction compiles the
+generation and resolves configured limits once. Per-request processor preflight
+follows phase-one controls and cannot be frozen to the initial configuration
+without changing request-scoped control semantics.
+
+The adapter feeds borrowed current slices into inline JSON/XML sessions. It
+bounds supplied bytes before feed and keeps canonical body capture after a
+latched parser failure so transport errors retain priority. Cached length
+admission precedes reader I/O; captured/available parity and actual completion
+precede publication. Raw source materialization remains conditional on demand,
+with its existing storage-error priority. No second body owner was introduced.
+
+Usage refresh reads maintained parser/collector counters and the transaction's
+scalar retained-byte accounting; it does not traverse the captured body or
+recompute retained allocations. Delta metrics and the scoped charge preserve
+release on cancellation and errors. This audit selected no runtime change.
+Broader raw/structured scan sharing already has a conditional design in
+`tasks/todo/waf-shared-request-body-inspection.md`; it requires workload evidence
+and ordered-effect proofs, so no duplicate task was created.
+
+Fresh verification passed all 15 json_capture adapter tests using in-process
+duplex streams and temporary storage: fresh/cached JSON/XML, contiguous fallback,
+limits, cancellation, error priority, raw visibility and actual-EOF windows.
+Formatting, workspace check/Clippy and agent-doc validation also passed. Existing
+warnings remain outside this documentation-only change. This establishes adapter
+coverage, not complete WAF engine review, integration or throughput results.
