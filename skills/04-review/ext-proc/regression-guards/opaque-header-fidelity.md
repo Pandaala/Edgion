@@ -32,8 +32,10 @@ The correction follows the existing raw-byte trailer pattern in
   setters/appenders and live response-header presence.
 - `edgion-gateway/src/ctx.rs`: typed pending values, replay, and drain.
 
-Request projection borrows the existing HeaderMap. Response projection consumes
-the byte accessor's owned values. Presence checks must not copy the response
+Request and response projection borrow their live HeaderMaps and copy raw fields
+directly into owned protobuf messages. Response projection avoids an intermediate
+owned pair vector; its optional status and duplicate field lines determine the
+reserved destination capacity. Presence checks must not copy the response
 map. Typed writes preserve sensitivity metadata and successful request writes
 retain the adapter's deferred-credential invalidation semantics. See
 [borrowed header access](../../plugin-runtime/regression-guards/borrowed-plugin-header-access.md)
@@ -121,6 +123,16 @@ and preserves its storage; a verdict with mutations still clones a candidate
 and commits it only after validation and transport representability checks.
 This is not an allocation-free trailer callback claim.
 Existing asynchronous tests retain atomic rejection and failure-policy coverage.
+
+## Direct response projection verification
+
+The borrowed-map response projection passed 18 mutation tests and nine scripted
+buffered-exchange tests. The canonical-adapter round trip removes source fields
+before serializing the message, preserving duplicate opaque and empty values;
+it also checks projection before a response is bound. These checks use mocks,
+duplex streams and channels, not a live server. Workspace check/Clippy and the
+repository guards passed. This is scoped ownership and fidelity evidence, not
+a new wire interoperability run or a throughput benchmark.
 
 ## Resolution references
 

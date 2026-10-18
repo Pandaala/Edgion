@@ -3431,3 +3431,27 @@ Fresh verification passed all 18 ExtProc mutation tests, formatting, workspace
 check/Clippy and seven repository guards. Tests use mocks or in-process duplex
 sessions, with no live network exchange. Post-update agent-doc validation and
 diff hygiene passed; existing warnings remain outside changed code.
+
+## ExtProc response-header projection bridge
+
+Response projection now borrows the canonical live response HeaderMap and builds
+owned protobuf fields directly. This removes the intermediate vector of owned
+byte pairs and reserves the destination for all field lines plus optional status.
+It retains the same per-field name/value copies, status-first projection, raw
+opaque bytes and per-name duplicate ordering. The only production adapter serves
+the same bound map through both accessors; both are empty before response binding.
+Typed HeaderNames make the former byte-name UTF-8 rejection branch unnecessary.
+
+The protobuf message still owns its fields before the response-header exchange
+await. The existing opaque round-trip test now removes the source fields before
+serialization and verifies the projected duplicate/empty/opaque values survive;
+it also checks the unbound stage. Set-Cookie projection and the channel-based
+buffered exchange fixtures use the borrowed map seam. One existing live-server
+test has the same mock migration but is compiled only, not executed in this batch.
+The two relevant knowledge pages now distinguish message ownership from the
+obsolete intermediate-vector choice. No throughput improvement is claimed.
+
+Fresh verification passed 18 mutation tests and nine scripted buffered-exchange
+tests, formatting, workspace check/Clippy and all seven repository guards.
+Post-update agent-doc validation and diff hygiene passed. Existing warnings
+remain outside changed code.

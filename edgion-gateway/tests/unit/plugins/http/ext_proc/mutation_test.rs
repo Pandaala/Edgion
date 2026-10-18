@@ -73,6 +73,10 @@ async fn response_policy_covers_conditional_and_local_reply_ops_without_changing
 async fn opaque_projection_round_trips_request_and_response_field_lines() {
     let mut session = test_session().await;
     let mut ctx = EdgionHttpContext::new();
+    {
+        let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        assert!(collect_response_headers(&adapter).headers.is_empty());
+    }
     let mut response = pingora_http::ResponseHeader::build(200, None).unwrap();
     for bytes in [b"\xfffirst".as_slice(), b"second", b""] {
         let value = http::HeaderValue::from_bytes(bytes).unwrap();
@@ -82,8 +86,13 @@ async fn opaque_projection_round_trips_request_and_response_field_lines() {
             .unwrap();
         response.append_header("x-opaque", value).unwrap();
     }
-    let adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response);
-    for map in [collect_request_headers(&adapter), collect_response_headers(&adapter)] {
+    let maps = {
+        let adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response);
+        [collect_request_headers(&adapter), collect_response_headers(&adapter)]
+    };
+    response.remove_header("x-opaque");
+    session.req_header_mut().remove_header("x-opaque");
+    for map in maps {
         let map = wire_round_trip(&map);
         assert!(map.headers.iter().all(|header| header.value.is_empty()));
         let actual: Vec<_> = map
@@ -446,12 +455,10 @@ fn collect_request_headers_preserves_current_uri_and_raw_query() {
 fn collect_response_headers_includes_status_and_preserves_set_cookie() {
     let mut session = MockPluginSession::new();
     session.expect_get_response_status().return_const(Some(200u16));
-    session.expect_response_headers_bytes().returning(|| {
-        vec![
-            (b"set-cookie".to_vec(), b"a=1".to_vec()),
-            (b"set-cookie".to_vec(), b"b=2".to_vec()),
-        ]
-    });
+    let mut response = http::HeaderMap::new();
+    response.append("set-cookie", http::HeaderValue::from_static("a=1"));
+    response.append("set-cookie", http::HeaderValue::from_static("b=2"));
+    session.expect_response_header_map().return_const(response);
 
     let map = collect_response_headers(&session);
     assert_eq!(values_for(&map, ":status"), vec!["200"]);

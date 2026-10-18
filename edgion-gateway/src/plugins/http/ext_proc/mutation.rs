@@ -86,19 +86,17 @@ pub fn collect_request_headers(session: &dyn PluginSession) -> HeaderMap {
 }
 
 /// Build a proto `HeaderMap` from the response headers plus the read-only
-/// `:status` pseudo header. Uses the all-pairs accessor so multi-valued headers
+/// `:status` pseudo header. Iterates the live map so multi-valued headers
 /// (e.g. `Set-Cookie`) are preserved rather than collapsed to the first value.
 pub fn collect_response_headers(session: &dyn PluginSession) -> HeaderMap {
-    let mut headers = Vec::new();
-    if let Some(status) = session.get_response_status() {
+    let status = session.get_response_status();
+    let response = session.response_header_map();
+    let mut headers = Vec::with_capacity(response.len() + usize::from(status.is_some()));
+    if let Some(status) = status {
         push_pseudo(&mut headers, ":status", status.to_string());
     }
-    for (name, value) in session.response_headers_bytes() {
-        // Canonical adapters expose ASCII HeaderNames; do not repair bytes from
-        // another adapter using a lossy conversion.
-        if let Ok(name) = String::from_utf8(name) {
-            headers.push(raw_header(name, value));
-        }
+    for (name, value) in response {
+        headers.push(raw_header(name.as_str().to_string(), value.as_bytes().to_vec()));
     }
     HeaderMap { headers }
 }

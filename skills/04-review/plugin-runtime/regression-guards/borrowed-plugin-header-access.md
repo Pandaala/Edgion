@@ -60,11 +60,13 @@ the header bridge emits no tracing or header contents.
 
 ## Alternatives and limits
 
-Owned accessors remain available when data must cross an await, enter a protobuf
-message, or outlive the synchronous plugin callback. In particular, ExtProc
-response projection still consumes `response_headers_bytes()` because its gRPC
-message needs independent ownership. The borrowed WAF path does not change that
-consumer.
+Owned accessors remain available when data must outlive the synchronous plugin
+callback. ExtProc response projection now borrows the live map and copies fields
+directly into its independently owned protobuf message before the transport await.
+It avoids the intermediate owned pair vector and reserves the destination vector
+for all field lines plus the optional status. Per-field name and byte ownership
+remain necessary. The earlier WAF change left this consumer unchanged; its old
+use of `response_headers_bytes()` was not a requirement of protobuf ownership.
 
 The response map is empty before `PingoraSessionAdapter::with_response_header`
 binds a live response. Consumers that must distinguish "not bound" from "bound

@@ -482,7 +482,9 @@ async fn dynamic_response_header_reduction_cleanly_half_closes_live_stream() {
         .expect_attached_ext_proc()
         .return_const(Some(Arc::clone(&owner)));
     session.expect_get_response_status().return_const(Some(200));
-    session.expect_response_headers_bytes().return_const(Vec::new());
+    session
+        .expect_response_header_map()
+        .return_const(http::HeaderMap::new());
     session
         .expect_upstream_response_headers_end_stream()
         .return_const(Some(false));
@@ -1423,7 +1425,9 @@ mod buffered_request {
             .expect_upstream_response_headers_end_stream()
             .return_const(Some(true));
         session.expect_get_response_status().return_const(Some(200));
-        session.expect_response_headers_bytes().return_const(Vec::new());
+        session
+            .expect_response_header_map()
+            .return_const(http::HeaderMap::new());
     }
 
     async fn response_headers(
