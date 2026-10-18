@@ -19,8 +19,9 @@ destination.
 | Upstream selection, connect, upstream request | `connected_to_upstream` direct body inspected: borrowed SAN digest, one timestamp, owned connection-establishment log. `upstream_request_filter` direct body and deferred credential nomination guard traced to shared Connection parser. Upstream selection and deeper framing/transcoder/credential consumers remain open. |
 | Request body, trailers and relay | Direct action/tee/trailer orchestration, mirror payload budget and observer dispatch inspected. Nullable-state fast path, moved handler vector, bounded independent mirror copy and terminal-only log drain retained. Concrete streamed-handler/WAF implementations and deeper storage/relay integration remain open. |
 | Response headers, hold/commit, body and trailers | Connection sanitizer inspected. Body/trailer orchestration, runtime dependency checks, processor driver and downstream cancellation wrapper inspected; prebuilt read-only runtime-chain candidate deferred. Concrete processors, conditions, hold/commit and remaining header chains remain open. |
-| Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering, deeper finalizers and retry consumers remain open. |
-| Redirect HTTP, connection filters, TLS callbacks, TCP/TLS/UDP paths | Pending. |
+| Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering direct body inspected: exact gRPC denial is consumed, protocol-specific replies and final-status ownership retained. Deeper finalizers and retry consumers remain open. |
+| Redirect HTTP | Direct callbacks and shared client-policy application inspected. Missing-host and listener-admission checks now share one normalized hostname. Raw Location authority, query-free log URL and session-owned keepalive remain unchanged. |
+| Connection filters, TLS callbacks, TCP/TLS/UDP paths | Pending. |
 
 ## Deferred decisions
 
@@ -105,3 +106,23 @@ check, workspace Clippy and seven repository guards passed. Clippy warnings are
 outside the changed files. No full integration suite was run for this batch.
 The optimization removes temporary full-source copies; no throughput measurement
 or change to the logger channel/serialization policy is claimed.
+
+## Redirect hostname normalization
+
+The redirect request callback previously constructed the same normalized hostname
+for both its missing-host guard and listener-admission check. Both private
+predicates now borrow one typed normalized value. The raw authority still owns
+Location construction and log fields; reusing normalized text there would lose
+IPv6 brackets, case and trailing dots. Full query-bearing Location and query-free
+log URL remain separate projections. Connection persistence uses a zero-sized
+marker and the shared parsed client policy; no additional configuration cache or
+keepalive change is needed.
+
+Independent plan and final code reviews passed. All 13 redirect tests passed on
+the final source, including in-memory wire checks for IPv6, mixed-case/FQDN
+admission, query separation, missing/unowned hosts and connection reuse.
+Formatting, workspace check/Clippy and seven repository guards passed; Clippy
+warnings remain outside the changed files. The normalized value is explicitly
+released before any response-write await. No full integration suite was run.
+This removes one temporary hostname normalization for nonempty hosts; no
+throughput improvement is claimed without measurement.

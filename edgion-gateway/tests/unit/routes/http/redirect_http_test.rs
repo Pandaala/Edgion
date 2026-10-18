@@ -212,19 +212,33 @@ fn test_build_redirect_url_special_cases() {
 #[test]
 fn test_host_is_missing() {
     // Missing / empty / whitespace-only Host must be treated as absent (→ 400).
-    assert!(EdgionHttpRedirectProxy::host_is_missing(""));
-    assert!(EdgionHttpRedirectProxy::host_is_missing("   "));
-    assert!(EdgionHttpRedirectProxy::host_is_missing("\t"));
+    assert!(EdgionHttpRedirectProxy::host_is_missing(&NormalizedHostname::new("")));
+    assert!(EdgionHttpRedirectProxy::host_is_missing(&NormalizedHostname::new(
+        "   "
+    )));
+    assert!(EdgionHttpRedirectProxy::host_is_missing(&NormalizedHostname::new("\t")));
     // A bare `:port` with no authority collapses to empty after port strip.
-    assert!(EdgionHttpRedirectProxy::host_is_missing(":8080"));
+    assert!(EdgionHttpRedirectProxy::host_is_missing(&NormalizedHostname::new(
+        ":8080"
+    )));
 
     // Valid authorities are accepted (→ 301).
-    assert!(!EdgionHttpRedirectProxy::host_is_missing("example.com"));
-    assert!(!EdgionHttpRedirectProxy::host_is_missing("example.com:80"));
-    assert!(!EdgionHttpRedirectProxy::host_is_missing("192.168.1.1"));
+    assert!(!EdgionHttpRedirectProxy::host_is_missing(&NormalizedHostname::new(
+        "example.com"
+    )));
+    assert!(!EdgionHttpRedirectProxy::host_is_missing(&NormalizedHostname::new(
+        "example.com:80"
+    )));
+    assert!(!EdgionHttpRedirectProxy::host_is_missing(&NormalizedHostname::new(
+        "192.168.1.1"
+    )));
     // IPv6 literal (bracketed) with and without port.
-    assert!(!EdgionHttpRedirectProxy::host_is_missing("[::1]"));
-    assert!(!EdgionHttpRedirectProxy::host_is_missing("[2001:db8::1]:8443"));
+    assert!(!EdgionHttpRedirectProxy::host_is_missing(&NormalizedHostname::new(
+        "[::1]"
+    )));
+    assert!(!EdgionHttpRedirectProxy::host_is_missing(&NormalizedHostname::new(
+        "[2001:db8::1]:8443"
+    )));
 }
 
 #[test]
@@ -477,7 +491,25 @@ async fn redirect_rejected_or_unowned_hostname_returns_wire_404() {
         crate::config::bind_gateway_config(None),
         edgion_resources::ListenerKey("0.0.0.0:8080/HTTP".into()),
     );
-    assert!(redirect.hostname_is_admitted("ALLOWED.EXAMPLE.COM:8080"));
+    assert!(redirect.hostname_is_admitted(&NormalizedHostname::new("ALLOWED.EXAMPLE.COM:8080")));
+    let (mut client, server) = tokio::io::duplex(4096);
+    client
+        .write_all(b"GET /path?query=1 HTTP/1.1\r\nHost: ALLOWED.EXAMPLE.COM.:8080\r\nConnection: close\r\n\r\n")
+        .await
+        .unwrap();
+    let mut session = Session::new_h1(Box::new(server));
+    assert!(session.read_request().await.unwrap());
+    let mut ctx = redirect.new_ctx();
+    assert!(redirect.request_filter(&mut session, &mut ctx).await.unwrap());
+    assert_eq!(ctx.status, 301);
+    assert_eq!(ctx.host, "ALLOWED.EXAMPLE.COM.:8080");
+    assert_eq!(ctx.redirect_url, "https://ALLOWED.EXAMPLE.COM./path");
+    drop(session);
+    let mut wire = String::new();
+    client.read_to_string(&mut wire).await.unwrap();
+    assert!(wire.starts_with("HTTP/1.1 301"));
+    assert!(wire.contains("https://ALLOWED.EXAMPLE.COM./path?query=1"));
+
     for clear_owner in [false, true] {
         if clear_owner {
             crate::runtime::store::listener_gateway_info::rebuild_listener_gateway_infos(&[]);

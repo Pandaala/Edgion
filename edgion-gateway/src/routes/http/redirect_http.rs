@@ -88,28 +88,25 @@ impl EdgionHttpRedirectProxy {
         }
     }
 
-    fn hostname_is_admitted(&self, host: &str) -> bool {
+    fn hostname_is_admitted(&self, host: &NormalizedHostname) -> bool {
         let index = crate::runtime::store::get_listener_gateway_info_store().get_index(&self.listener_key);
-        let normalized = NormalizedHostname::new(host);
         let admitted = index.iter_gateways().any(|(_, listeners)| {
             listeners.iter().any(|entry| {
                 entry.hostname.as_deref().is_none_or(|hostname| {
-                    crate::runtime::matching::route::hostname_matches_listener(normalized.as_str(), hostname)
+                    crate::runtime::matching::route::hostname_matches_listener(host.as_str(), hostname)
                 })
             })
         });
         admitted
     }
 
-    /// Whether the request authority is absent for redirect purposes.
+    /// Whether the normalized request authority is absent for redirect purposes.
     ///
-    /// Returns `true` when the raw host is missing, whitespace-only, or collapses
-    /// to empty after port stripping (e.g. a bare `:8080`). Uses the same
-    /// normalization as the main proxy path so the redirect listener and the
-    /// proxy agree on what counts as a valid Host (RFC 9112 §3.2 / Envoy parity).
+    /// The shared normalization makes missing, whitespace-only and bare-port
+    /// authorities empty, matching the main proxy's Host validation.
     #[inline]
-    fn host_is_missing(raw_host: &str) -> bool {
-        NormalizedHostname::new(raw_host).is_empty()
+    fn host_is_missing(host: &NormalizedHostname) -> bool {
+        host.is_empty()
     }
 
     /// Build the HTTPS redirect URL from host and URI components
@@ -211,7 +208,9 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
             .host()
             .or_else(|| req_header.headers.get("host").and_then(|h| h.to_str().ok()))
             .unwrap_or("");
-        if Self::host_is_missing(raw_host) {
+        let normalized_host = NormalizedHostname::new(raw_host);
+        if Self::host_is_missing(&normalized_host) {
+            drop(normalized_host);
             ctx.status = 400;
             let mut resp = ResponseHeader::build(StatusCode::BAD_REQUEST, Some(2))?;
             resp.insert_header("Content-Length", "0")?;
@@ -219,7 +218,9 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
             return Ok(true);
         }
 
-        if !self.hostname_is_admitted(raw_host) {
+        let admitted = self.hostname_is_admitted(&normalized_host);
+        drop(normalized_host);
+        if !admitted {
             ctx.status = 404;
             let mut response = ResponseHeader::build(StatusCode::NOT_FOUND, Some(1))?;
             response.insert_header("Content-Length", "0")?;
