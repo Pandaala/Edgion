@@ -3040,3 +3040,19 @@ retirement barriers, gauge settlement and percent-cap arbitration. Existing
 warnings are outside changed code. The benefit is one fewer Arc clone/drop after
 a successful endpoint lookup, not removed synchronization, heap allocation or
 measured throughput. No live traffic or benchmark was run.
+
+## Borrow the completion runtime cell from its captured generation
+
+The same completion helper now borrows runtime_cell from its already-owned
+ServiceSelectorGeneration instead of cloning the cell Arc. The generation pins
+the projection and cell through both active snapshot reads, endpoint locking,
+identity revalidation and synchronous application. Neither snapshot read moves;
+no ArcSwap guard, publication change or new lock crosses the callback. Returned
+cell owners elsewhere and cold policy publication are unchanged.
+
+Independent plan and final source reviews passed. Fresh verification again passed
+41 coordinator and 36 outlier-detection tests, formatting, workspace check/Clippy
+and seven repository guards. Warnings remain outside changed code. This batch
+removes one cell Arc increment/decrement after a successful Service lookup;
+the earlier endpoint Arc reduction is separate. No heap, throughput or lock
+removal claim is made.

@@ -819,7 +819,7 @@ impl ServiceDiscoveryCoordinator {
         apply: impl FnOnce(&EndpointRuntimeState, &mut EndpointCompletionState, usize) -> R,
     ) -> Option<R> {
         let generation = self.load_generation();
-        let cell = Arc::clone(&generation.available(service_key)?.runtime_cell);
+        let cell = &generation.available(service_key)?.runtime_cell;
         let active = cell.active.load_full();
         if active.membership_identity != Some(membership_identity) {
             return None;
