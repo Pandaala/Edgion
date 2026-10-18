@@ -3500,3 +3500,27 @@ Fresh verification passed 11 canonical SSE tests and 26 Anthropic response tests
 formatting, workspace check/Clippy and seven repository guards. Post-update
 agent-doc validation and diff hygiene passed. Existing warnings remain outside
 changed code. These are network-free unit checks, not a live provider benchmark.
+
+## Canonical batch raw fallback materialization
+
+CanonicalRecordBatch.into_raw_bytes now copies fallback bytes through SliceChain's
+existing borrowed full-range visitor. Sliced fallback no longer constructs a
+temporary handle vector or clones Bytes; coalesced fallback no longer copies its
+arena into an intermediate Bytes before copying into the final output. Annotated
+record consumption and the initial final-output allocation/capacity check remain
+unchanged. The synchronous full range is valid by construction and no borrow
+escapes. The final owned copy remains, avoiding retention of coalescing spare
+capacity in the returned output.
+
+The three consumers retain their policies: disabled semantic guard forwarding,
+quota-terminal current-chunk reclamation, and Anthropic terminal output reclamation.
+Tests build valid empty, annotated, sliced-fallback and coalesced-fallback batches,
+compare ordered bytes, and isolate final materialization allocations from fixture
+construction. Empty output allocates zero times; each tested nonempty shape
+allocates only its final buffer. No whole-callback allocation or throughput claim
+is made; fallback admission, coalescing and into_records behavior are unchanged.
+
+Fresh verification passed 112 tests: 12 canonical SSE, 24 semantic response,
+50 usage and 26 Anthropic response tests. Formatting, workspace check/Clippy,
+seven repository guards, post-update agent-doc validation and diff hygiene passed.
+Existing warnings remain outside changed code. No live transport benchmark ran.

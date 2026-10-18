@@ -161,9 +161,11 @@ impl CanonicalRecordBatch {
                 output.extend_from_slice(&slice);
             }
         }
-        for slice in self.fallback.raw_slices() {
-            output.extend_from_slice(&slice);
-        }
+        self.fallback
+            .for_each_range(ByteRange::new(0, self.fallback.len()), |slice| {
+                output.extend_from_slice(slice)
+            })
+            .ok_or(())?;
         Ok(Bytes::from(output))
     }
 }

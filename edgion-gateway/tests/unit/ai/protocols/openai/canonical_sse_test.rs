@@ -254,3 +254,43 @@ fn canonical_scalar_serialization_needs_no_temporary_buffer() {
     assert_eq!(writer.bytes, expected);
     assert_eq!(allocations, 0);
 }
+
+#[test]
+fn batch_raw_materialization_allocates_only_its_final_output() {
+    let (empty, allocations) =
+        crate::test_allocation_counter::count_allocations(|| CanonicalRecordBatch::new().into_raw_bytes());
+    assert!(empty.unwrap().is_empty());
+    assert_eq!(allocations, 0);
+
+    // Zero selects annotated records; two selects sliced fallback. A count
+    // above the batch record limit also exceeds the chain's handle threshold.
+    for fallback_pieces in [0, 2, MAX_CANONICAL_BATCH_RECORDS + 1] {
+        let mut batch = CanonicalRecordBatch::new();
+        if fallback_pieces != 0 {
+            for _ in 0..MAX_CANONICAL_BATCH_RECORDS {
+                batch.push(WindowRecord::raw(Vec::new())).unwrap();
+            }
+        }
+        let mut expected = Vec::new();
+        for index in 0..fallback_pieces.max(2) {
+            let piece = if index % 2 == 0 {
+                b"a".as_slice()
+            } else {
+                b"bc".as_slice()
+            };
+            batch.push(WindowRecord::raw(vec![Bytes::from_static(piece)])).unwrap();
+            expected.extend_from_slice(piece);
+        }
+        assert_eq!(
+            batch.status(),
+            if fallback_pieces == 0 {
+                CanonicalSourceStatus::Available
+            } else {
+                CanonicalSourceStatus::Unavailable
+            }
+        );
+        let (raw, allocations) = crate::test_allocation_counter::count_allocations(|| batch.into_raw_bytes());
+        assert_eq!(raw.unwrap().as_ref(), expected);
+        assert_eq!(allocations, 1, "fallback pieces: {fallback_pieces}");
+    }
+}
