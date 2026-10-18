@@ -4,7 +4,8 @@ use super::pg_upstream_response_body_filter::enforce_stream_processor_framing;
 use super::pg_upstream_response_filter::{is_interim_informational, response_denial_error, response_stage_settled};
 use super::EdgionHttpProxy;
 use crate::ctx::ResponseStreamKind;
-use crate::plugins::http::common::{connection_listed_hop_by_hop, HOP_BY_HOP_HEADERS};
+use crate::plugins::http::common::http_client::connection_option_tokens;
+use crate::plugins::http::common::HOP_BY_HOP_HEADERS;
 use crate::EdgionHttpContext;
 use edgion_resources::{EdgionErrorCode, EdgionInfoCode};
 use http::HeaderName;
@@ -25,7 +26,7 @@ fn is_connection_option_tchar(byte: u8) -> bool {
 ///
 /// Every repeated `Connection` field is inspected before the header map is
 /// mutated. This keeps an invalid field fail-closed and atomic while the
-/// shared parser remains the sole owner of comma splitting and case folding.
+/// shared parser owns token splitting and HeaderName owns case normalization.
 /// A 101 response is an upgrade handshake and deliberately retains its
 /// connection metadata.
 #[inline]
@@ -43,16 +44,20 @@ fn sanitize_forwarded_response_headers(response: &mut ResponseHeader) -> pingora
             invalid_connection_value = true;
             continue;
         };
-        for option in connection_listed_hop_by_hop(value) {
+        for option in connection_option_tokens(value) {
             if !option.bytes().all(is_connection_option_tchar) {
+                continue;
+            }
+            if dynamic_names
+                .iter()
+                .any(|name| name.as_str().eq_ignore_ascii_case(option))
+            {
                 continue;
             }
             let Ok(name) = HeaderName::from_bytes(option.as_bytes()) else {
                 continue;
             };
-            if !dynamic_names.contains(&name) {
-                dynamic_names.push(name);
-            }
+            dynamic_names.push(name);
         }
     }
 

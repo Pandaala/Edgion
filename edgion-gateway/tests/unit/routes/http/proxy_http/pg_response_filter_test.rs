@@ -243,6 +243,31 @@ fn response_sanitizer_removes_static_and_repeated_dynamic_fields() {
 }
 
 #[test]
+fn response_sanitizer_repeated_options_do_not_add_allocations() {
+    let mut unique = response(Some("128"));
+    unique.append_header("connection", "X-First, X-Second").unwrap();
+    unique.insert_header("x-first", "removed").unwrap();
+    unique.insert_header("x-second", "removed").unwrap();
+    let mut repeated = unique.clone();
+    repeated
+        .append_header("connection", " , x-first, X-FIRST, x-second, X-Second, , ")
+        .unwrap();
+
+    let (unique_result, unique_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+        sanitize_forwarded_response_headers(std::hint::black_box(&mut unique))
+    });
+    let (repeated_result, repeated_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+        sanitize_forwarded_response_headers(std::hint::black_box(&mut repeated))
+    });
+    assert!(!unique_result.unwrap());
+    assert!(!repeated_result.unwrap());
+    assert_eq!(unique.headers, repeated.headers);
+    assert!(!repeated.headers.contains_key("x-first"));
+    assert!(!repeated.headers.contains_key("x-second"));
+    assert_eq!(repeated_stats, unique_stats);
+}
+
+#[test]
 fn response_sanitizer_ignores_invalid_ascii_option_and_keeps_valid_siblings() {
     let mut response = response(None);
     response

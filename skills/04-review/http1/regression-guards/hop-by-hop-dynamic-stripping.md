@@ -55,6 +55,9 @@ removing the nominated fields before forwarding.
   - `connection_listed_hop_by_hop(connection_value: &str) -> Vec<String>` —
     parses the request's `Connection:` value into a deduplicated lowercase
     token list. Empty tokens skipped; case-folded.
+  - `connection_option_tokens` — canonical borrowed split/trim/nonempty
+    iterator used by the owned-list helper and consumers that do not need an
+    intermediate owned list. It preserves original case and repeated options.
   - `is_hop_by_hop_or_listed(name, dynamic_listed)` — combined check used at
     every sub-request forwarding site.
   - Unit tests `test_connection_listed_hop_by_hop_parses_tokens` and
@@ -73,10 +76,12 @@ removing the nominated fields before forwarding.
     (operator-named `forward_headers` whitelist).
 
 - `edgion-gateway/src/routes/http/proxy_http/pg_response_filter.rs`
-  - `sanitize_forwarded_response_headers` snapshots every repeated response
-    `Connection` line before mutation, uses
-    `connection_listed_hop_by_hop` for tokenization, then validates each
-    nomination as an RFC `tchar` header name before removing it.
+  - `sanitize_forwarded_response_headers` inspects every repeated response
+    `Connection` line before mutation, uses `connection_option_tokens`, then
+    validates each nomination as an RFC `tchar` header name. It deduplicates
+    borrowed options case-insensitively before allocating retained `HeaderName`
+    values; `HeaderName` normalizes their case. The retained list is removed
+    only after all fields have been inspected.
   - A non-text `Connection` value fails closed only after every repeated value
     has been inspected, so the operation never leaves a partially sanitized
     header map. Invalid ASCII nomination tokens are ignored while valid sibling

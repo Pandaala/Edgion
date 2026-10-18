@@ -393,3 +393,26 @@ Independent plan and source reviews passed. All 15 upstream-request hook tests,
 including the zero-allocation regression. Formatting, workspace check/Clippy
 and all seven repository guards passed. Clippy warnings are outside the changed
 lines. No integration suite or throughput benchmark was run.
+
+## Borrowed response Connection nominations
+
+The response sanitizer consumes the canonical borrowed Connection tokenizer
+and checks retained names case-insensitively before constructing a HeaderName.
+It no longer builds a temporary String list for each field line or allocates a
+second HeaderName for repeated nominations. The retained owned name list still
+supports atomic validation before response mutation. All field lines, invalid
+ASCII token skipping, non-text rejection, 101 preservation, Transfer-Encoding
+tracking and static hop-header removal keep their existing behavior.
+
+A regression compares allocation counts and final headers for identical unique
+nominations with and without mixed-case duplicates in an additional field line.
+This establishes duplicate-allocation stability, not overall throughput.
+Repeated options scan the retained name list; removing the per-field temporary
+deduplication changes comparison work for duplicate-heavy inputs.
+Response plugin Arc owners, the two sanitizer/framing boundaries, local-reply
+write/abort ordering and final processor-driver freeze remain unchanged.
+
+Independent plan and source reviews passed. All 23 response-filter tests and
+7 common parser tests passed. Formatting, workspace check/Clippy and seven
+repository guards passed; existing Clippy warnings are outside the changed
+lines. No full integration suite or throughput benchmark was run.
