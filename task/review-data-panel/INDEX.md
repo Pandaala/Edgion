@@ -23,7 +23,7 @@ destination.
 | Redirect HTTP | Direct callbacks and shared client-policy application inspected. Missing-host and listener-admission checks now share one normalized hostname. Raw Location authority, query-free log URL and session-owned keepalive remain unchanged. |
 | Connection filters and Stream plugins | Connection bridge, ordered runtime dispatch, connection-rate-limit callback, global IP profile selection, GeoIP callback and shared denial translation inspected. Static denial reasons now borrow literals. Deeper ACL/GeoIP matchers, local-gate/Redis implementations and publication construction remain open. |
 | TCP/TLS connection handling and relay | TCP, terminated TLS and passthrough TLS direct process/route/connect/log orchestration inspected, plus shared L4 relay. Existing snapshot/inspection-buffer release boundaries retained. Listener-log direct serialization deferred below. Deeper route selection, backend resolution and transport dependencies remain open. |
-| TLS handshake callbacks | Stream-result consumers inspected: Stage 1 returns bool; TLS formats the existing detail. Deeper handshake callbacks remain pending. |
+| TLS handshake callbacks | Direct select/certificate/completion/free callbacks and certificate/mTLS/cipher application helpers inspected. Temporary SNI and early-abort metadata copies removed below. Compiled certificate ownership, expiry checks and ex-data handoff retained. Deeper matcher, verification callback and client-certificate extraction dependencies remain open. |
 | UDP packet/session lifecycle | Direct packet, session admission, receiver, retirement, shutdown and log projection inspected. Selected route ownership and socket Arc transfer tightened below. Deeper backend selection, route publication and socket dependencies remain open. |
 
 ## Deferred decisions
@@ -203,3 +203,29 @@ Independent plan and final source reviews passed. All 58 UDP route/session tests
 and four UDP log tests passed. Formatting, workspace check/Clippy and seven
 repository guards passed; Clippy warnings are outside the changed files.
 No full integration suite or throughput benchmark was run.
+
+## TLS callback temporary copies
+
+The select-certificate callback moves its resolved SNI into connection metadata
+and borrows that string for matching, avoiding a second temporary String. Client
+SNI lowercasing, the exact configured fallback value, matching order and error
+logs remain unchanged. The SSL free callback owns its recovered Box and now fills
+a missing early-abort error directly in its metadata before synchronous logging,
+instead of cloning that metadata. Its null/tls_id gates and redacted panic
+boundary remain unchanged; the logger queues an owned serialized String.
+
+The accepted borrow-and-clone ex-data store and verify-time metadata peek remain
+unchanged. Certificate-callback Arc handles still support mutable context use;
+completion moves metadata into the digest. Certificates, keys, CA stores and
+cipher text are already compiled at publication. Runtime expiry checks and
+security-policy-before-identity installation remain necessary. No additional
+precompilation or callback-order change was selected.
+
+These are source-level copy reductions, not measured throughput improvements.
+Existing focused tests and compiler checks validate surrounding consumers;
+this batch does not establish complete handshake-log lifecycle coverage.
+
+Independent plan and final source reviews passed. All 15 gateway TLS runtime
+tests passed. Formatting, workspace check/Clippy and seven repository guards
+passed; Clippy warnings are outside the changed files. No full integration suite
+or throughput benchmark was run.

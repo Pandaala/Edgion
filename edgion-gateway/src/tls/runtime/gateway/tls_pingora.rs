@@ -145,15 +145,14 @@ mod ssl_ctx_ex_data {
         // Keep both the panic hook and a potentially panicking payload
         // destructor inside the shared redacted FFI boundary.
         let _ = catch_redacted_panic(|| unsafe {
-            let ssl_ctx = Box::from_raw(ptr as *mut SslCtx);
+            let mut ssl_ctx = Box::from_raw(ptr as *mut SslCtx);
             if ssl_ctx.meta.tls_id.is_none() {
-                let mut meta = ssl_ctx.meta.clone();
                 // Preserve a more specific upstream err_log (e.g. "min ver: …")
                 // if select_cb already set one.
-                if meta.err_log.is_none() {
-                    meta.err_log = Some("early abort".to_string());
+                if ssl_ctx.meta.err_log.is_none() {
+                    ssl_ctx.meta.err_log = Some("early abort".to_string());
                 }
-                crate::observe::logs::ssl_log::log_ssl(&meta);
+                crate::observe::logs::ssl_log::log_ssl(&ssl_ctx.meta);
             }
         });
     }
@@ -509,7 +508,7 @@ impl TlsCallback {
                     log_ssl(&ssl_ctx.meta);
                     return Err(SelectCertError::ERROR);
                 };
-                ssl_ctx.meta.sni = Some(sni.clone());
+                let sni = ssl_ctx.meta.sni.insert(sni).as_str();
 
                 // Capture both matcher generations once. A Gateway frontend
                 // client-auth decision owns the connection when present; an
@@ -517,10 +516,9 @@ impl TlsCallback {
                 // logical attachment identifies that exact winning listener.
                 let et_matcher_snapshot = get_tls_cert_matcher().snapshot();
                 let gateway_snapshot = crate::runtime::matching::tls::get_gateway_tls_matcher().snapshot();
-                let et = et_matcher_snapshot.match_eligible_sni(&lk, &sni, |attachment| {
-                    gateway_snapshot.listener_is_eligible(attachment)
-                });
-                let gw = gateway_snapshot.match_sni(&lk, &sni);
+                let et = et_matcher_snapshot
+                    .match_eligible_sni(&lk, sni, |attachment| gateway_snapshot.listener_is_eligible(attachment));
+                let gw = gateway_snapshot.match_sni(&lk, sni);
                 if let Some(gw) = gw
                     .as_ref()
                     .filter(|entry| entry.frontend_mtls != FrontendMtlsOutcome::NotConfigured)
@@ -532,7 +530,7 @@ impl TlsCallback {
                         return Err(SelectCertError::ERROR);
                     }
                     let Ok(exact_overlay) = select_gateway_edgion_tls_overlay(
-                        et_matcher_snapshot.match_attachment_sni(&gw.attachment, &sni),
+                        et_matcher_snapshot.match_attachment_sni(&gw.attachment, sni),
                         &gw,
                     ) else {
                         ssl_ctx.meta.err_log = Some("frontend mTLS conflict".to_string());
