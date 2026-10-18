@@ -303,15 +303,14 @@ fn json_to_form(input: &[u8], output_limit: usize) -> Result<Vec<u8>, TransformF
         | StrictJsonError::DepthLimit
         | StrictJsonError::NodeLimit => TransformFailure::BadRequest,
     })?;
-    let Value::Object(object) = parsed.into_value() else {
+    let Value::Object(mut object) = parsed.into_value() else {
         return Err(TransformFailure::BadRequest);
     };
 
-    let mut members = object.into_iter().collect::<Vec<_>>();
-    members.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+    object.sort_keys();
     let mut writer = CappedWriter::new(output_limit);
     let mut pair_count = 0usize;
-    for (key, value) in members {
+    for (key, value) in object {
         if key.len() > MAX_KEY_BYTES {
             return Err(TransformFailure::TooLarge);
         }

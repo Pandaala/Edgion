@@ -2754,3 +2754,22 @@ remain owned. Fresh verification passed 20 transformer tests, 1 CappedWriter tes
 formatting, workspace check/Clippy and seven repository guards; remaining warnings
 are outside changed code. Group/output allocations remain, and the additional
 bounded escape scan is not claimed to improve CPU time for every input.
+
+## FormJsonTransform direct JSON object iteration
+
+JSON-to-form now calls serde_json Map::sort_keys and consumes the object directly,
+removing the intermediate member Vec and its separate sort. The locked 1.0.151
+implementation is a no-op for the current ordered BTreeMap backend; its
+preserve_order implementation sorts in place by the same string ordering.
+Strict parsing, sorted first-error precedence, array order, output caps and
+body publication/rollback remain unchanged.
+
+Independent plan and code reviews passed. An original-implementation reference
+checks exact bytes/errors for mixed scalar/array and UTF-8 fields, invalid shapes,
+duplicate keys, both orders of competing BadRequest/TooLarge failures, 256/257
+pairs and exact/insufficient output caps. A 64-key fixture verifies fewer
+allocation calls and cumulative requested bytes with identical output. Fresh
+verification passed 22 transformer tests, 1 CappedWriter test, formatting,
+workspace check/Clippy and seven repository guards. Remaining warnings are
+outside changed code. No alternate-feature build, peak-memory or throughput
+improvement is claimed.

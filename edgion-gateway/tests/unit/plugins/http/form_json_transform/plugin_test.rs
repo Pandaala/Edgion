@@ -577,3 +577,108 @@ fn plain_form_components_borrow_input_without_allocation() {
         assert_eq!(value, expected);
     }
 }
+
+fn original_json_to_form(input: &[u8], output_limit: usize) -> Result<Vec<u8>, TransformFailure> {
+    let parsed = parse_json_instance(input).map_err(|error| match error {
+        StrictJsonError::TooLarge => TransformFailure::TooLarge,
+        StrictJsonError::Malformed
+        | StrictJsonError::DuplicateKey
+        | StrictJsonError::DepthLimit
+        | StrictJsonError::NodeLimit => TransformFailure::BadRequest,
+    })?;
+    let Value::Object(object) = parsed.into_value() else {
+        return Err(TransformFailure::BadRequest);
+    };
+
+    let mut members = object.into_iter().collect::<Vec<_>>();
+    members.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+    let mut writer = CappedWriter::new(output_limit);
+    let mut pair_count = 0usize;
+    for (key, value) in members {
+        if key.len() > MAX_KEY_BYTES {
+            return Err(TransformFailure::TooLarge);
+        }
+        match value {
+            Value::Array(values) if values.is_empty() => return Err(TransformFailure::BadRequest),
+            Value::Array(values) => {
+                for value in values {
+                    write_json_pair(&mut writer, &key, value, &mut pair_count)?;
+                }
+            }
+            value => write_json_pair(&mut writer, &key, value, &mut pair_count)?,
+        }
+    }
+    Ok(writer.into_inner())
+}
+
+#[test]
+fn direct_json_object_iteration_preserves_bytes_and_first_error() {
+    let mut inputs = vec![
+        "{}".to_owned(),
+        r#"{"z":[false,"last",2],"é":"café","a":"+ &","":"empty"}"#.to_owned(),
+        r#"{"z":null,"a":[]}"#.to_owned(),
+        r#"{"z":{},"a":[[1]]}"#.to_owned(),
+        r#"{"a":1,"a":2}"#.to_owned(),
+        "[]".to_owned(),
+        "{".to_owned(),
+    ];
+    for (oversized, invalid) in [("a", "z"), ("z", "a")] {
+        inputs.push(format!(
+            r#"{{"{invalid}":null,"{oversized}":"{}"}}"#,
+            "v".repeat(MAX_VALUE_BYTES + 1)
+        ));
+        inputs.push(format!(
+            r#"{{"{invalid}":[],"{}":"v"}}"#,
+            oversized.repeat(MAX_KEY_BYTES + 1)
+        ));
+    }
+    for count in [MAX_PAIRS, MAX_PAIRS + 1] {
+        inputs.push(format!(
+            "{{{}}}",
+            (0..count)
+                .rev()
+                .map(|index| format!(r#""k{index:03}":true"#))
+                .collect::<Vec<_>>()
+                .join(",")
+        ));
+    }
+    for input in inputs {
+        let mut caps = vec![0, 1, 2, 16, 8192, 20000];
+        if let Ok(output) = original_json_to_form(input.as_bytes(), 20000) {
+            caps.extend([output.len(), output.len().saturating_sub(1)]);
+        }
+        for cap in caps {
+            assert_eq!(
+                json_to_form(input.as_bytes(), cap),
+                original_json_to_form(input.as_bytes(), cap),
+                "input={input:?}, cap={cap}"
+            );
+        }
+    }
+}
+
+#[test]
+fn json_object_iteration_avoids_temporary_member_vector() {
+    let input = format!(
+        "{{{}}}",
+        (0..64)
+            .rev()
+            .map(|index| format!(r#""key{index}":true"#))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let (old, old_stats) =
+        crate::test_allocation_counter::count_allocation_stats(|| original_json_to_form(input.as_bytes(), 8192));
+    let (new, new_stats) =
+        crate::test_allocation_counter::count_allocation_stats(|| json_to_form(input.as_bytes(), 8192));
+    assert!(old.is_ok());
+    assert_eq!(new, old);
+    assert!(
+        new_stats.calls < old_stats.calls,
+        "old={old_stats:?}, new={new_stats:?}"
+    );
+    assert!(
+        new_stats.requested_bytes < old_stats.requested_bytes,
+        "old={old_stats:?}, new={new_stats:?}"
+    );
+}
