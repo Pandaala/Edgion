@@ -812,11 +812,11 @@ impl BodyStorageView {
 
     pub async fn sha256_scan(&self, max_scan_bytes: u64) -> Result<BodyScanResult<[u8; 32]>, BodyOperationError> {
         let (snapshot, _) = self.snapshot().map_err(BodyOperationError::Body)?;
-        let scan_snapshot = Arc::clone(&snapshot);
         let mut bytes_scanned = 0;
         let value = snapshot
             .sha256
             .get_or_try_init(|| async {
+                let scan_snapshot = Arc::clone(&snapshot);
                 let scan = self
                     .scan_snapshot(scan_snapshot, Sha256Scanner(Sha256::new()), max_scan_bytes)
                     .await?;

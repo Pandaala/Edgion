@@ -3079,6 +3079,22 @@ fail-closed admission chain; no baseline binary was rerun. Formatting, workspace
 check/Clippy and seven repository guards passed. Clippy warnings remain outside
 changed code. The known fixture failure is retained, not skipped or repaired here.
 
+## Lazy scan ownership for cached request-body SHA-256
+
+BodyStorageView::sha256_scan now clones the scan snapshot only inside the
+once-cell initializer. The outer owned snapshot already pins the cell throughout
+waiting; the elected initializer still transfers an owned snapshot into scanning
+before any scan await or blocking work. Ready cache hits and successful waiters
+avoid one Arc increment/decrement. Failed initialization, cancellation, generation
+isolation and zero-byte accounting for cached results keep their existing behavior.
+No digest, body, lock, permit or memory-budget ownership changes.
+
+Independent plan and source reviews passed. Fresh verification passed 66 storage
+tests covering memory/disk scans, concurrent digest initialization, mutation,
+failure and cancellation, plus formatting, workspace check/Clippy and seven
+repository guards. Warnings remain outside changed code. No heap-allocation or
+throughput reduction is claimed; actual scan work is unchanged.
+
 ## Response-cache storage and freshness inspection
 
 Inspected capture admission, fixed-capacity body writes, entry decode, header
