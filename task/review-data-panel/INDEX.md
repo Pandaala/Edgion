@@ -38,6 +38,7 @@ destination.
 - [Direct TLS listener log serialization](tls-01-direct-listener-log-serialization.md)
 - [Pending response-header execution ownership](response-01-pending-header-ownership.md)
 - [ResponseRewrite rename value fidelity](response-02-rename-value-fidelity.md)
+- [ExtProc local-reply value ownership](response-03-extproc-local-reply-value-ownership.md)
 - [Service selected-slot lookup cost](backend-01-selected-slot-lookup.md)
 - [JWT claim condition evaluation ownership](condition-01-jwt-claim-evaluation.md)
 - [GeoIP record decoding and projection](geoip-01-record-decoding.md)
@@ -3455,3 +3456,18 @@ Fresh verification passed 18 mutation tests and nine scripted buffered-exchange
 tests, formatting, workspace check/Clippy and all seven repository guards.
 Post-update agent-doc validation and diff hygiene passed. Existing warnings
 remain outside changed code.
+
+## ExtProc local-reply value transfer assessment
+
+Traced owned local-reply mutations through typed decoding, pending operations and
+response-header delivery. Direct owned HeaderValue conversion can avoid copying,
+but a locked-dependency probe demonstrated a one-byte decoded raw value retaining
+65,536 bytes of Vec capacity after repeated singular protobuf fields. The owned
+conversion retains that storage; current borrowed conversion copies final bytes.
+The new response-03 decision records this lifetime tradeoff and a selective
+exact-capacity transfer alternative. No runtime code or protocol policy changed;
+this synthetic dependency witness is not fresh gateway interoperability evidence.
+
+Fresh verification passed the dependency probe, 18 existing mutation tests,
+formatting, workspace check/Clippy, agent-doc validation and diff hygiene.
+Existing Clippy warnings remain outside this documentation-only change.
