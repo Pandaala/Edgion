@@ -35,6 +35,7 @@ destination.
 - [Prebuilt read-only response-body dispatch](body-01-prebuild-readonly-dispatch.md)
 - [Direct TLS listener log serialization](tls-01-direct-listener-log-serialization.md)
 - [Pending response-header execution ownership](response-01-pending-header-ownership.md)
+- [Service selected-slot lookup cost](backend-01-selected-slot-lookup.md)
 
 ## Completed implementation batch
 
@@ -513,3 +514,18 @@ Independent plan and final source reviews passed. Matcher (23), HTTP (19), gRPC 
 stream bridge (6), regex (17) and radix (23) filtered tests passed. Formatting,
 workspace check/Clippy and seven repository guards passed; Clippy warnings are
 outside the changed lines. No full integration suite or throughput benchmark ran.
+
+
+## Service selector and selected-slot projection audit
+
+Inspected captured Service selection, post-selection slot projection, sticky
+address recovery, compiled RR/CH ownership and P2C dispatch. Selector construction
+and address maps are already cold; P2C clones only its winning backend handle.
+The ordinary slot-identity scan and sticky socket scan remain candidates with
+representation, memory and invariant tradeoffs, recorded in the deferred task.
+Current normalization's sorted unique sockets are an alternative worth evaluating
+before adding a map. No algorithm, health/recovery or ownership change was made.
+This evidence does not complete deeper discovery or endpoint runtime review.
+Independent plan and final source reviews passed. Agent-doc validation and diff
+whitespace checks passed. This documentation-only batch ran no Rust tests or
+benchmarks; earlier test results are not fresh verification of this proposal.
