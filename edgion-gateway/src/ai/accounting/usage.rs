@@ -795,7 +795,7 @@ impl UsageExtractionProcessor {
 
     fn observe_chunk(
         &mut self,
-        chunk: Bytes,
+        chunk: &Bytes,
         stream_kind: ResponseStreamKind,
         semantic_guard_active: bool,
     ) -> Option<CanonicalRecordBatch> {
@@ -808,7 +808,7 @@ impl UsageExtractionProcessor {
                 let responses = self.responses;
                 let terminal_seen = &mut self.response_terminal_seen;
                 let sequence = &mut self.response_sequence;
-                self.sse.feed_records(chunk, |record| match record {
+                self.sse.feed_records(chunk.clone(), |record| match record {
                     SseRecordRef::Block { status, event } => {
                         if responses {
                             match status {
@@ -897,9 +897,9 @@ impl UsageExtractionProcessor {
             }
             ResponseStreamKind::None => {
                 if !self.responses {
-                    self.shared.add_output_chars(self.non_streaming_chars.feed(&chunk));
+                    self.shared.add_output_chars(self.non_streaming_chars.feed(chunk));
                 }
-                self.observe_non_streaming(&chunk);
+                self.observe_non_streaming(chunk);
                 None
             }
         }
@@ -1033,8 +1033,7 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
         let semantic_guard_active = session.semantic_guard_active() && stream_kind == ResponseStreamKind::Sse;
         let mut canonical_batch = None;
         if let Some(bytes) = chunk.take() {
-            let original = bytes.clone();
-            let batch = self.observe_chunk(bytes, stream_kind, semantic_guard_active);
+            let batch = self.observe_chunk(&bytes, stream_kind, semantic_guard_active);
             if let Some(batch) = batch {
                 canonical_batch = Some(batch);
             } else if semantic_guard_active && self.semantic_source_overflowed {
@@ -1044,7 +1043,7 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
                     sink.terminate();
                 }
             } else {
-                *chunk = Some(original);
+                *chunk = Some(bytes);
             }
         }
         if self.shared.observation_unavailable() && !self.observation_failure_reported {

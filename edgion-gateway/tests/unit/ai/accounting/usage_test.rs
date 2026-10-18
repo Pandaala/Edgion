@@ -53,6 +53,38 @@ async fn extracts_non_streaming_usage_at_eos() {
     assert_eq!(shared.reported_tokens(), Some((12, 7)));
 }
 
+#[test]
+fn non_streaming_callback_adds_no_allocations_for_promotable_backing() {
+    let control = Bytes::from(vec![b' '; 64].into_boxed_slice());
+    let (control_clone, control_stats) = crate::test_allocation_counter::count_allocation_stats(|| control.clone());
+    assert!(control_stats.calls > 0, "fixture must detect first-clone promotion");
+    drop(control_clone);
+
+    let measure = |bytes: Bytes| {
+        let shared = Arc::new(AiUsageShared::default());
+        let mut processor = UsageExtractionProcessor::new(shared);
+        processor.observe_chunk(&Bytes::from_static(b"{"), ResponseStreamKind::None, false);
+        let mut session = mock_session();
+        let mut sink = ResponseBodySink::new();
+        let original_ptr = bytes.as_ptr();
+        let mut body = Some(bytes);
+        let mut callback = processor.on_chunk(&mut body, false, ResponseStreamKind::None, &mut sink, &mut session);
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        let (result, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+            std::future::Future::poll(callback.as_mut(), &mut context)
+        });
+        assert!(result.is_ready());
+        drop(callback);
+        assert_eq!(body.as_ref().unwrap().as_ptr(), original_ptr);
+        assert_eq!(body.as_ref().unwrap().as_ref(), &[b' '; 64]);
+        assert!(!sink.is_terminated());
+        stats
+    };
+    let baseline = measure(Bytes::from_static(&[b' '; 64]));
+    let promotable = measure(Bytes::from(vec![b' '; 64].into_boxed_slice()));
+    assert_eq!(promotable, baseline);
+}
+
 #[tokio::test]
 async fn extracts_final_split_sse_usage_and_ignores_done() {
     let shared = Arc::new(AiUsageShared::default());

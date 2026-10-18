@@ -435,3 +435,36 @@ Pending-header replay unconditionally clones before discovering protected,
 Remove or false-condition operations. Shared borrowed/owned execution and any
 name-preparation extension require the explicit design choice recorded above.
 This documentation-only batch does not change production behavior or tests.
+
+## Borrowed non-SSE usage chunks
+
+UsageExtractionProcessor now borrows its input for synchronous observation and
+clones Bytes only when handing an SSE chunk to the retaining decoder. The
+non-SSE JSON/character observers borrow bytes directly, and ordinary forwarding
+restores the original owner. SSE raw fallback, semantic batches, overflow,
+encoding diagnostics, quota gates and terminal precedence are unchanged.
+
+The regression warms JSON parser state, proves a fresh boxed-slice Bytes clone
+allocates, then measures one ready poll of the actual non-SSE callback with
+setup outside the counter. It compares complete allocation statistics against
+an otherwise identical static-backed callback and checks original pointer/byte
+preservation. The first absolute-zero assertion observed three callback-path
+allocations; their source was not established. The differential measurement
+isolates first-clone allocation; reduced reference-count work follows from
+source inspection. This is not a throughput measurement or an allocation-free
+claim for JSON parsing.
+
+Concrete processor entry points inspected: Wasm observer, ExtProc streamed
+response, native Anthropic Messages, generic usage and AI attempt composite.
+Wasm retains a Bytes handle for host callback state; ExtProc needs its bounded
+protobuf Vec copy across the awaited exchange; native Messages and SSE usage
+retain decoder-owned raw slices. Composite dispatch iterates existing owners
+and stops after terminal sink state. Their deeper host ABI, remote exchange,
+provider JSON and terminal consumers remain open. No response aggregation or
+new processor mechanism was introduced.
+
+Independent plan and source reviews passed. After correcting the allocation
+fixture and its comparison scope, all 50 usage and 77 SSE-filtered tests passed.
+Formatting, workspace check/Clippy and seven repository guards passed; existing
+Clippy warnings are outside the changed lines. No full integration suite or
+throughput benchmark was run.
