@@ -28,6 +28,7 @@ destination.
 
 ## Deferred decisions
 
+- [Incremental attempt-log size accounting](log-02-incremental-attempt-size.md)
 - [SSE dispatch metadata representation](body-05-sse-dispatch-metadata.md)
 - [Selective SSE observer input representation](body-04-selective-observer-input.md)
 - [Quota admission concurrency](quota-02-admission-concurrency.md)
@@ -4115,3 +4116,19 @@ Fresh verification passed 73 network-free tests: 25 attempt runtime, 35 dispatch
 and 13 usage-finalization tests. Formatting, workspace check/Clippy, seven
 repository guards and diff hygiene passed. Existing warnings remain outside
 changed code. No live provider/Redis experiment or throughput benchmark ran.
+
+
+## Attempt-log repeated size scan audit
+
+commit_ledger still serializes the retained list at each admission through the
+existing zero-allocation counting writer. Eight accepted entries cause 36 entry
+visits across those checks; ordinary one-attempt requests do not incur that cost.
+Incremental size accounting would reduce scans but add persistent state and a
+consistency invariant. The benchmark-led decision and exact wire-size, rollback
+and accounting requirements are recorded in [log-02](log-02-incremental-attempt-size.md).
+No runtime, schema or test code changed.
+
+Fresh verification passed 38 network-free tests: 25 attempt runtime and 13 usage
+finalization tests. Formatting, workspace check/Clippy, agent-document validation
+and diff hygiene passed. Existing warnings remain outside this documentation-only
+batch. No incremental-counter prototype or benchmark ran.
