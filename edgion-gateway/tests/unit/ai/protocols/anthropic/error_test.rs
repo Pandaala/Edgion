@@ -30,3 +30,38 @@ fn native_local_503_distinguishes_backend_and_quota_dependencies() {
         assert_eq!(value["error"]["type"], expected);
     }
 }
+
+#[test]
+fn fixed_errors_preserve_wire_bytes_without_building_value_trees() {
+    for (error, kind) in [
+        (AiProxyError::ModelNotFound, "not_found_error"),
+        (AiProxyError::UpstreamResponseInvalid, "api_error"),
+        (AiProxyError::UpstreamTimeout, "api_error"),
+        (AiProxyError::StreamingDisabled, "invalid_request_error"),
+        (AiProxyError::BackendUnavailable, "overloaded_error"),
+        (AiProxyError::MalformedBody, "invalid_request_error"),
+        (AiProxyError::UnsupportedParameter, "invalid_request_error"),
+        (AiProxyError::MissingRequiredParameter, "invalid_request_error"),
+        (AiProxyError::UnsupportedEndpoint, "not_found_error"),
+        (AiProxyError::RequestTooLarge, "request_too_large"),
+        (AiProxyError::QuotaExceeded, "rate_limit_error"),
+        (AiProxyError::QuotaUnavailable, "api_error"),
+        (AiProxyError::ContentFiltered, "permission_error"),
+    ] {
+        let (expected_status, message, _, _) = error.fields();
+        let (expected, tree_allocations) = crate::test_allocation_counter::count_allocations(|| {
+            serde_json::json!({"type":"error","error":{"type":kind,"message":message}}).to_string()
+        });
+        let ((status, body), allocations) = crate::test_allocation_counter::count_allocations(|| render(error));
+        assert_eq!(status, expected_status);
+        assert_eq!(body, expected);
+        assert!(
+            allocations < tree_allocations,
+            "{error:?}: {allocations} versus {tree_allocations}"
+        );
+        assert_eq!(
+            event(error).as_ref(),
+            format!("\n\nevent: error\ndata: {expected}\n\n").as_bytes()
+        );
+    }
+}

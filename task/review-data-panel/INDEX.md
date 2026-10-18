@@ -3878,3 +3878,23 @@ Fresh verification passed 44 network-free tests: 4 AI response, 24 attempt runti
 and 16 credential outlier tests. Formatting, workspace check/Clippy, seven
 repository guards and diff hygiene passed. Existing warnings remain outside
 changed code. No end-to-end provider or throughput benchmark was run.
+
+
+## Native Anthropic error serialization
+
+Native Messages local errors now serialize private borrowed envelope fields
+directly, following the typed OpenAI renderer pattern, instead of building an
+owned JSON Value tree on the normal path. Field declaration order preserves
+the existing wire order. Status and kind mapping, String return ownership and
+named SSE framing are unchanged. The lazy serialization-error fallback retains
+the original Value expression rather than introducing a different error reply.
+
+A regression covers all 13 error variants against the original Value renderer:
+exact JSON bytes, status, full SSE bytes including leading/trailing boundaries,
+and fewer measured render allocations. Final String/event storage still allocates;
+this does not claim allocation-free replies or measured throughput improvement.
+
+Fresh verification passed 42 network-free tests: 32 native Anthropic, 1 OpenAI
+error and 9 AI context tests. Formatting, workspace check/Clippy, seven repository
+guards and diff hygiene passed. Existing warnings remain outside changed code.
+No live provider or throughput benchmark was run.
