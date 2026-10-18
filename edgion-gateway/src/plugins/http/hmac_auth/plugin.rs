@@ -441,7 +441,7 @@ impl HmacAuth {
             }
             if header_name == "@request-target" || header_name == "(request-target)" {
                 let path = session.get_path();
-                let query = session.get_query();
+                let query = session.request_query();
                 let method = session.get_method();
 
                 signing.push_str(header_name);
@@ -453,7 +453,7 @@ impl HmacAuth {
                 signing.push_str(path);
                 if let Some(query) = query.filter(|query| !query.is_empty()) {
                     signing.push('?');
-                    signing.push_str(&query);
+                    signing.push_str(query);
                 }
                 continue;
             }

@@ -1023,3 +1023,20 @@ Formatting, workspace check/Clippy and seven repository guards passed; existing
 warnings are outside changed code. No full integration suite or throughput
 benchmark ran. Parameter keys, parser containers and final outputs still allocate;
 this removes only unescaped intermediate value copies, not whole-parser costs.
+
+## Borrowed HMAC signing query
+
+HMAC request-target signing now uses the existing live raw `request_query`
+accessor instead of cloning through `get_query`. Both read the current URI;
+encoded bytes and URI rewrites remain visible, independently of the frozen
+entry-query cache. Both target spellings preserve omission of the question mark
+for absent/empty queries. The final signing string still owns its output.
+
+Independent plan and final source reviews passed. The real-adapter regression
+passed (1), HMAC-filtered tests passed 51 and shared conditions passed 67 (filters
+may overlap). Borrowed query reads allocate zero times; nonempty owned reads
+allocate once. Existing fixed signature vectors and new query cases retain byte
+coverage. Formatting, workspace check/Clippy and seven repository guards passed;
+existing warnings remain outside changed code. No full integration suite or
+throughput benchmark ran. This removes the intermediate query copy per target
+component, not signing-string allocation or all HMAC runtime costs.

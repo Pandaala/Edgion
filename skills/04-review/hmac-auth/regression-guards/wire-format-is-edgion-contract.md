@@ -72,3 +72,20 @@ Unit regressions verify zero allocations and source-pointer identity for unescap
 quoted interiors, escaped and malformed cases, owned results after source release,
 and duplicate/unknown-parameter error precedence. Other parser structures and final
 results still allocate; no whole-parser allocation or throughput claim follows.
+
+## Borrowed current query in signing targets
+
+Signing-string construction uses the existing `request_query` borrow instead of
+copying `get_query`. Both accessors read the current request URI query. This is
+not the decoded, frozen entry-query cache: trusted URI rewrites remain visible,
+and percent encodings, plus signs, duplicate keys and empty values stay raw.
+Both request-target spellings omit the question mark for absent or empty queries.
+Path, method and header ordering, final signing-string ownership and digest bytes
+remain unchanged.
+
+The signing-target matrix forbids the owned accessor and checks absent, empty and
+encoded queries for both spellings. Existing fixed signing/HMAC vectors retain
+wire-byte coverage. A real-adapter regression changes the URI repeatedly and
+checks pointer identity, owned-accessor parity and zero query-read allocations,
+while separately confirming the frozen decoded entry cache. This removes a query
+copy per target component; constructing the signing string still allocates.

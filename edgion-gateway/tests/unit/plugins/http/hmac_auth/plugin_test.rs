@@ -97,7 +97,7 @@ fn rfc2822_now() -> String {
 fn test_build_signing_string_request_target() {
     let mut session = MockPluginSession::new();
     session.expect_get_path().return_const("/v1/items".to_string());
-    session.expect_get_query().returning(|| Some("page=1".to_string()));
+    session.expect_request_query().return_const(Some("page=1"));
     session.expect_get_method().return_const("GET".to_string());
 
     let signing = HmacAuth::build_signing_string(&session, &[String::from("@request-target")]).unwrap();
@@ -109,9 +109,9 @@ fn canonical_signing_and_hmac_vectors_are_wire_stable() {
     let mut session = MockPluginSession::new();
     session.expect_get_path().times(2).return_const("/v1/items".to_string());
     session
-        .expect_get_query()
+        .expect_request_query()
         .times(2)
-        .returning(|| Some("page=1&tag=a%20b".to_string()));
+        .return_const(Some("page=1&tag=a%20b"));
     session.expect_get_method().times(2).return_const("PoSt".to_string());
     setup_header_mocks(
         &mut session,
@@ -452,7 +452,7 @@ fn signed_session_without_digest_read(signed_headers: &[&str], digest: Option<&s
     }
     setup_header_mocks(&mut session, &header_pairs);
     session.expect_get_path().return_const(path.to_string());
-    session.expect_get_query().returning(|| None);
+    session.expect_request_query().return_const(None);
     session.expect_get_method().return_const("POST".to_string());
     session.expect_set_request_header_value().returning(|_, value| {
         assert!(value.is_sensitive());
@@ -811,4 +811,23 @@ fn authorization_parser_keeps_owned_results_and_validation_order() {
         HmacAuth::parse_authorization(duplicate_headers).unwrap_err(),
         "Invalid HMAC authorization format"
     );
+}
+
+#[test]
+fn signing_target_borrows_raw_query_without_changing_empty_or_encoded_values() {
+    for (query, suffix) in [
+        (None, ""),
+        (Some(""), ""),
+        (Some("q=hello+world&x=a%26b&x=&flag"), "?q=hello+world&x=a%26b&x=&flag"),
+    ] {
+        for target in ["@request-target", "(request-target)"] {
+            let mut session = MockPluginSession::new();
+            session.expect_get_path().return_const("/rewritten".to_string());
+            session.expect_request_query().times(1).return_const(query);
+            session.expect_get_query().never();
+            session.expect_get_method().return_const("PoSt".to_string());
+            let signing = HmacAuth::build_signing_string(&session, &[target.to_string()]).unwrap();
+            assert_eq!(signing, format!("{target}: post /rewritten{suffix}"));
+        }
+    }
 }

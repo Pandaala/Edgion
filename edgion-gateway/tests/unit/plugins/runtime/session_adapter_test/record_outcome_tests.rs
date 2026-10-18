@@ -3020,3 +3020,31 @@ async fn composite_key_value_allocates_exact_output_once() {
         }
     }
 }
+
+#[tokio::test]
+async fn current_raw_query_borrows_live_uri_without_copying() {
+    let mut session = test_session_raw("GET /entry?frozen=yes HTTP/1.1\r\nHost: example.com\r\n\r\n").await;
+    let mut ctx = EdgionHttpContext::default();
+    ctx.request_info.entry_raw_query = Some("frozen=yes".to_string());
+    for (uri, expected) in [
+        (
+            "/first?q=hello+world&x=a%26b&x=&flag",
+            Some("q=hello+world&x=a%26b&x=&flag"),
+        ),
+        ("/empty?", Some("")),
+        ("/absent", None),
+        ("/last?changed=yes", Some("changed=yes")),
+    ] {
+        session.req_header_mut().set_uri(uri.parse().unwrap());
+        let source_ptr = session.req_header().uri.query().map(str::as_ptr);
+        let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        let (borrowed, calls) = crate::test_allocation_counter::count_allocations(|| adapter.request_query());
+        assert_eq!(borrowed, expected);
+        assert_eq!(borrowed.map(str::as_ptr), source_ptr);
+        assert_eq!(calls, 0);
+        let (owned, calls) = crate::test_allocation_counter::count_allocations(|| adapter.get_query());
+        assert_eq!(owned.as_deref(), borrowed);
+        assert_eq!(calls, usize::from(expected.is_some_and(|value| !value.is_empty())));
+        assert_eq!(adapter.get_query_param_ref("frozen"), Some("yes"));
+    }
+}
