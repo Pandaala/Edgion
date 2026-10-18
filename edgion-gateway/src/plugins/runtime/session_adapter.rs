@@ -1595,7 +1595,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                     single_header(&self.inner.req_header().headers, name.as_str())
                 } else {
                     self.key_get(key)
-                        .and_then(|value| http::HeaderValue::from_str(&value).ok())
+                        .and_then(|value| http::HeaderValue::try_from(value).ok())
                 }
             });
             let outcome = self.ctx.request_info.trace_id.apply_rule(rule, target, source);

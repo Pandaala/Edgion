@@ -369,7 +369,7 @@ fn generate(config: &RequestIdGenerator) -> Option<HeaderValue> {
             lower_hex(&Md5::digest(seed))
         }
     };
-    let value = HeaderValue::from_str(&format!("{}{}", config.prefix, suffix)).ok()?;
+    let value = HeaderValue::try_from(format!("{}{}", config.prefix, suffix)).ok()?;
     valid_value(&value).then_some(value)
 }
 
@@ -428,7 +428,7 @@ fn validated_tracestate(headers: &HeaderMap) -> Option<HeaderValue> {
         }
         keys.push(key);
     }
-    HeaderValue::from_str(&combined).ok()
+    HeaderValue::try_from(combined).ok()
 }
 
 fn valid_state_key(key: &str) -> bool {

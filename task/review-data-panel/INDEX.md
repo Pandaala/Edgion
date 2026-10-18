@@ -621,3 +621,27 @@ request-ID-filtered tests (15) passed. Formatting,
 workspace check/Clippy and seven repository guards passed; existing Clippy
 warnings are outside changed lines. No full integration suite or throughput
 benchmark was run.
+
+
+## Owned correlation strings become header values
+
+Three RequestId conversions now move their already-owned String into HeaderValue:
+the generated prefix/suffix value, validated combined tracestate, and a non-header
+KeyGet source in the session adapter. The locked http 1.5.0 implementation applies
+the same byte validation and initializes the same sensitivity flag for both APIs.
+All rule ordering, eager source extraction, limits, masking and reconciliation
+remain unchanged. The source strings are local construction or clones, not buffers
+removed from request caches.
+
+This avoids copying string contents into a second byte buffer. The Bytes owner
+may retain spare String capacity and allocate a control block; TryFrom<String>
+constructs that owner before validation, so even rejected input may incur that
+metadata cost. This is not an unconditional allocation-count, memory or throughput
+improvement claim. Existing generator, tracestate, source and lifecycle tests are
+used instead of duplicating the dependency's conversion tests.
+
+Trace-ID (29), request-ID (15) and early-request-filter (17) filtered tests passed
+(the latter filters may overlap). Formatting, workspace check/Clippy and seven
+repository guards passed; existing Clippy warnings are outside changed lines.
+No full integration suite or throughput benchmark was run.
+Independent plan and final source reviews passed.
