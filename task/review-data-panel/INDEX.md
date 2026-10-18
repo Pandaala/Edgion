@@ -3188,3 +3188,22 @@ algorithm coverage.
 
 This documentation-only batch passed formatting, workspace check/Clippy,
 agent-doc validation and diff whitespace checks. No tests or benchmarks were run.
+
+## Completed request-body capture ownership
+
+CaptureStorage now records completion with a payload-free Finished variant.
+Successful publication moves the memory bytes or file handle into InitialBody,
+which permanently retains the initial source through BodyStorageView. Storage,
+retained views and snapshots therefore keep their existing source lifetimes
+without a second completed-capture handle. Publication still precedes completion;
+failed publication leaves the capture poisoned. Spill jobs, replay, mutations,
+limits and cancellation ownership are unchanged.
+
+The regression covers empty and nonempty capture with memory and spill limits,
+repeated finish, rejection of empty and nonempty late writes, replay and reading
+through a retained view after storage is dropped. The disk-test helper accesses
+the same backing file through the published source. All 69 storage tests,
+formatting, workspace check/Clippy and seven repository guards passed. Warnings
+remain outside changed code. This removes a duplicate Bytes clone or File Arc
+clone at successful completion; no payload-copy, byte-budget or measured
+throughput reduction is claimed.

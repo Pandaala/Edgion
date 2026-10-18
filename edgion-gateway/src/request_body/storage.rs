@@ -1470,8 +1470,7 @@ impl RawBodyScanner for LiteralMatchScanner {
 enum CaptureStorage {
     Memory(BytesMut),
     Disk { file: Arc<File> },
-    FinishedMemory(Bytes),
-    FinishedDisk { file: Arc<File> },
+    Finished,
     Poisoned,
 }
 
@@ -1639,12 +1638,8 @@ impl RequestBodyBuffer for BodyStorage {
                 }
                 self.storage = CaptureStorage::Disk { file };
             }
-            CaptureStorage::FinishedMemory(body) => {
-                self.storage = CaptureStorage::FinishedMemory(body);
-                return Err(Self::replay_error("request body capture continued after finalization"));
-            }
-            CaptureStorage::FinishedDisk { file } => {
-                self.storage = CaptureStorage::FinishedDisk { file };
+            CaptureStorage::Finished => {
+                self.storage = CaptureStorage::Finished;
                 return Err(Self::replay_error("request body capture continued after finalization"));
             }
             CaptureStorage::Poisoned => {
@@ -1664,21 +1659,17 @@ impl RequestBodyBuffer for BodyStorage {
         let storage = std::mem::replace(&mut self.storage, CaptureStorage::Poisoned);
         match storage {
             CaptureStorage::Memory(buf) => {
-                let body = buf.freeze();
-                self.publish(BodySource::Memory(body.clone()))?;
-                self.storage = CaptureStorage::FinishedMemory(body);
+                self.publish(BodySource::Memory(buf.freeze()))?;
+                self.storage = CaptureStorage::Finished;
             }
             CaptureStorage::Disk { file } => {
                 self.publish(BodySource::Disk {
-                    file: Arc::clone(&file),
+                    file,
                     len: self.captured_len,
                 })?;
-                self.storage = CaptureStorage::FinishedDisk { file };
+                self.storage = CaptureStorage::Finished;
             }
-            CaptureStorage::FinishedMemory(body) => self.storage = CaptureStorage::FinishedMemory(body),
-            CaptureStorage::FinishedDisk { file } => {
-                self.storage = CaptureStorage::FinishedDisk { file };
-            }
+            CaptureStorage::Finished => self.storage = CaptureStorage::Finished,
             CaptureStorage::Poisoned => {
                 return Err(Self::replay_error(
                     "request body storage cannot be finalized after a failed spill",

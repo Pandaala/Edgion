@@ -419,9 +419,25 @@ async fn read_snapshot(mut reader: Box<dyn RequestBodySnapshotReader>) -> (Vec<u
 }
 
 fn disk_file(storage: &BodyStorage) -> &Arc<File> {
-    match &storage.storage {
-        CaptureStorage::FinishedDisk { file } => file,
+    match storage.view.initial.get().unwrap().source.as_ref() {
+        BodySource::Disk { file, .. } => file,
         _ => panic!("test requires a finished disk-backed body"),
+    }
+}
+
+#[tokio::test]
+async fn completed_capture_retains_published_body_without_accepting_more_writes() {
+    for memory_limit in [1, 64] {
+        for body in [b"".as_slice(), b"complete"] {
+            let (mut storage, view) = BodyStorage::with_limits(memory_limit, 64);
+            capture(&mut storage, &[body]).await;
+            storage.finish().await.unwrap();
+            assert!(storage.write(&Bytes::new()).await.is_err());
+            assert!(storage.write(&Bytes::from_static(b"late")).await.is_err());
+            assert_eq!(replay_all(&mut storage, 2).await.as_ref(), body);
+            drop(storage);
+            assert_eq!(view.read_all().await.unwrap().as_ref(), body);
+        }
     }
 }
 
