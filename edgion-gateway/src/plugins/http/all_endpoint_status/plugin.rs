@@ -805,9 +805,9 @@ impl RequestFilter for AllEndpointStatus {
             }
         };
 
-        // Collect original request info (before mutable borrow)
-        let original_path = session.get_path().to_string();
-        let original_query = session.get_query();
+        // Collect original request info for endpoint probes.
+        let original_path = session.get_path();
+        let original_query = session.request_query();
         let original_headers = session.request_headers();
         let route_namespace = route_unit.matched_info.rsc.ns.as_str();
 
@@ -889,8 +889,8 @@ impl RequestFilter for AllEndpointStatus {
             .fan_out_requests(
                 &all_endpoints,
                 &method,
-                &original_path,
-                original_query.as_deref(),
+                original_path,
+                original_query,
                 &original_headers,
             )
             .await;

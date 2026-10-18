@@ -2068,3 +2068,18 @@ Independent plan review passed. No live protocol or throughput claim is made.
 Fresh verification passed all 23 AllEndpointStatus tests, formatting, workspace
 check/Clippy and seven repository guards. Remaining warnings are outside changed
 source. Independent final review passed.
+
+## Endpoint probe path and query borrowing
+
+AllEndpointStatus borrows get_path() and the canonical request_query() through
+its locally awaited fan-out instead of copying path and query strings. The path
+still comes from ctx.path(); the query still comes from the current upstream URI,
+including trusted rewrites. Query absence, empty text and raw encoding remain
+unchanged. No session mutation occurs before these borrows end, and no endpoint
+future escapes the call. Owned request headers and URL construction remain.
+Independent plan review passed. The existing real-adapter query test checks the
+accessor's source, raw/empty/missing cases and allocation behavior; endpoint tests
+cover scoped orchestration, not live fan-out interoperability or throughput.
+Fresh verification passed 23 AllEndpointStatus tests and the real-adapter query
+test, formatting, workspace check/Clippy and seven repository guards. Remaining
+warnings are outside changed source. Independent final review passed.
