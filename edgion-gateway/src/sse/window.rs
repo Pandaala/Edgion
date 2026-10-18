@@ -160,8 +160,8 @@ impl WindowRecord {
         self.slices
     }
 
-    pub(crate) fn raw_slices_cloned(&self) -> Vec<Bytes> {
-        self.slices.clone()
+    pub(crate) fn raw_slices_cloned(&self) -> impl IntoIterator<Item = Bytes> + '_ {
+        self.slices.iter().cloned()
     }
 
     pub(crate) fn metadata_bytes(&self) -> usize {

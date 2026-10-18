@@ -31,6 +31,25 @@ fn released(output: WindowOutput) -> Vec<u8> {
 }
 
 #[test]
+fn raw_slice_iteration_preserves_handles_without_a_temporary_vector() {
+    let source = [Bytes::from_static(b"first"), Bytes::new(), Bytes::from_static(b"last")];
+    let pointers = source.each_ref().map(|bytes| bytes.as_ptr());
+    let record = WindowRecord::raw(source.to_vec());
+    let ((output, exhausted), stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+        let mut slices = record.raw_slices_cloned().into_iter();
+        let output: [Bytes; 3] = std::array::from_fn(|_| slices.next().unwrap());
+        (output, slices.next().is_none())
+    });
+    assert!(exhausted);
+    assert_eq!(stats.calls, 0);
+    assert_eq!(stats.requested_bytes, 0);
+    assert_eq!(record.slices, source);
+    assert_eq!(output.each_ref().map(|bytes| bytes.as_ptr()), pointers);
+    drop(record);
+    assert_eq!(output, source);
+}
+
+#[test]
 fn decoder_adapter_releases_every_record_byte_identically() {
     let source = Bytes::from_static(b"\xef\xbb\xbf: c\r\ndata: one\r\n\r\ndata: two\n\n");
     for split in 0..=source.len() {

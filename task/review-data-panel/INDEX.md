@@ -468,3 +468,26 @@ fixture and its comparison scope, all 50 usage and 77 SSE-filtered tests passed.
 Formatting, workspace check/Clippy and seven repository guards passed; existing
 Clippy warnings are outside the changed lines. No full integration suite or
 throughput benchmark was run.
+
+## Lazy SSE raw-handle iteration
+
+WindowRecord::raw_slices_cloned now yields cloned Bytes handles lazily instead
+of first cloning the whole handle Vec. CanonicalRecordBatch's two fallback
+loops consume the same ordered slices while retaining each original record.
+Failure returns still clone the original record as before; raw/metadata caps,
+fallback classification, coalescing and admission are unchanged.
+
+A static-slice regression measures zero iterator/output-array allocations,
+preserves empty slices and byte order, checks unchanged source and pointer
+identity, and keeps yielded owners after the source record is dropped. Owned
+Bytes can still allocate on first-clone promotion; the removed cost is the
+intermediate handle vector, not every possible backing-owner operation.
+The audit also inspected batch record/metadata fallback and SliceChain's append,
+coalescing, normalization and range-projection ownership. No normalization,
+resident-budget or consuming fallback-output redesign was selected.
+
+Independent plan and source reviews passed. SSE-filtered tests (78), canonical
+SSE tests (9, also included in the SSE filter), and semantic response tests (21)
+passed. Formatting, workspace check/Clippy and seven repository guards passed;
+existing Clippy warnings are outside the changed lines. No full integration
+suite or throughput benchmark was run.
