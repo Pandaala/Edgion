@@ -91,6 +91,21 @@ fn waf_selection_uses_priority_scope_and_declaration_order() {
     assert!(select_waf_owner(&[], &[], &[]).is_none());
 }
 
+#[test]
+fn waf_selection_retains_only_the_final_winner_after_inputs_are_dropped() {
+    let winner = waf_runtime(20);
+    let owner = Arc::downgrade(&winner.waf_candidate().unwrap().owner());
+    let route = [Some(waf_runtime(1)), None, Some(winner), Some(waf_runtime(20))];
+    let selected = select_waf_owner(&[], &[], &route).expect("route WAF is selected");
+    drop(route);
+    assert!(Arc::ptr_eq(
+        selected.owner(),
+        &owner.upgrade().expect("selection retains the winning owner")
+    ));
+    drop(selected);
+    assert!(owner.upgrade().is_none());
+}
+
 fn install_global_refs(store: &PluginStore, refs: Vec<PluginReference>) -> Arc<PluginScope> {
     let mut config = (**store.scope().config.as_ref().unwrap()).clone();
     config.spec.global_plugins_ref = Some(refs);

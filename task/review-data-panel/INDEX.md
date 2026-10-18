@@ -3306,3 +3306,20 @@ Independent plan and source reviews passed. Fresh tests passed 50 WAF plugin
 cases, one capability borrow case, one real-adapter resident-preservation case
 and two native stream cases. Formatting, workspace check/Clippy and seven guards
 passed; warnings remain outside changed code. No throughput claim is made.
+
+## Borrow WAF candidates until election completes
+
+select_waf_owner now retains a borrowed candidate while traversing the captured
+runtime lists, then clones only the final winner's owner. Immutable input runtime
+Arcs pin every candidate throughout this synchronous call. Scope precedence,
+higher-priority replacement, first-declaration ties and dangling-reference skips
+retain their original comparisons and order. Final WafSelection remains owned.
+This avoids intermediate owner Arc increments/decrements when winners are
+replaced; a single winning candidate still requires one final clone.
+
+A new regression combines priority replacement, a dangling slot and an equal
+priority successor, then drops all input runtimes and verifies the winning owner
+survives until selection is dropped. Existing scope and empty-list cases remain.
+Independent plan and source reviews passed. All 11 resolver tests, formatting,
+workspace check/Clippy and seven guards passed; warnings remain outside changed
+code. No allocation or measured throughput reduction is claimed.

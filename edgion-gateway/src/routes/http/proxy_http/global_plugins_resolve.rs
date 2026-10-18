@@ -95,16 +95,16 @@ pub(crate) fn select_waf_owner(
                 || (scope as u8 == *selected_scope as u8 && candidate.priority() > *priority)
         });
         if replace {
-            winner = Some((candidate.priority(), scope, candidate.mode(), candidate.owner()));
+            winner = Some((candidate.priority(), scope, candidate.mode(), candidate));
         }
     }
-    winner.map(|(priority, scope, mode, owner)| {
+    winner.map(|(priority, scope, mode, candidate)| {
         let source = match scope {
             WafScope::Global => WafLogSource::Global,
             WafScope::Gateway => WafLogSource::Gateway,
             WafScope::Route => WafLogSource::Route,
         };
-        WafSelection::new(owner, source, priority, mode)
+        WafSelection::new(candidate.owner(), source, priority, mode)
     })
 }
 
