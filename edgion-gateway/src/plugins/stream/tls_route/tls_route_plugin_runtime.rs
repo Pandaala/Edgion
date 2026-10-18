@@ -156,7 +156,7 @@ struct FailClosedTlsRoutePlugin {
 #[async_trait::async_trait]
 impl TlsRoutePlugin for FailClosedTlsRoutePlugin {
     async fn on_tls_route(&self, _ctx: &TlsRouteContext<'_>) -> StreamPluginResult {
-        StreamPluginResult::Deny(self.reason.clone())
+        StreamPluginResult::Deny(self.reason.clone().into())
     }
 }
 

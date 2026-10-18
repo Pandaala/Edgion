@@ -261,7 +261,7 @@ impl StreamPlugin for FailClosedStreamPlugin {
     }
 
     async fn on_connection(&self, _ctx: &StreamContext) -> StreamPluginResult {
-        StreamPluginResult::Deny(self.reason.clone())
+        StreamPluginResult::Deny(self.reason.clone().into())
     }
 }
 

@@ -366,7 +366,7 @@ impl TlsRoutePlugin for SpyDenyTlsRoutePlugin {
             rsc_name: ctx.rsc.name.clone(),
             is_mtls: ctx.is_mtls,
         });
-        StreamPluginResult::Deny("test denial".to_string())
+        StreamPluginResult::Deny("test denial".into())
     }
 }
 

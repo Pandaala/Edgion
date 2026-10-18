@@ -67,7 +67,7 @@ edgion-gateway/src/plugins/stream/
 - The context is `StreamContext`.
 - Return value:
   - `StreamPluginResult::Allow`
-  - `StreamPluginResult::Deny(String)`
+  - `StreamPluginResult::Deny(Cow<'static, str>)`: fixed reasons borrow string literals; dynamically formatted reasons remain owned.
 - Typical binding sites:
   - Gateway listener level for Pingora `Service` listeners: `listener_builder.rs`. UDP listeners are separate Tokio tasks and do not use this `ConnectionFilter`.
   - `TCPRoute` level: `routes/tcp/conf_handler_impl.rs`.

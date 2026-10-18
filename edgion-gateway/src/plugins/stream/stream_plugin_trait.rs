@@ -1,6 +1,7 @@
 //! Stream plugin trait definition
 
 use async_trait::async_trait;
+use std::borrow::Cow;
 use std::net::IpAddr;
 
 use edgion_resources::resources::edgion_plugins::{AccessDecision, DefaultAction};
@@ -10,8 +11,8 @@ use edgion_resources::resources::edgion_plugins::{AccessDecision, DefaultAction}
 pub enum StreamPluginResult {
     /// Allow the connection to proceed
     Allow,
-    /// Deny the connection with a reason
-    Deny(String),
+    /// Deny with a borrowed fixed reason or an owned dynamic reason.
+    Deny(Cow<'static, str>),
 }
 
 /// Execution layer for a stream plugin chain.
@@ -50,16 +51,16 @@ pub(crate) fn access_decision_to_stream_result(decision: AccessDecision, on_deny
         AccessDecision::AllowByGroup(_) => StreamPluginResult::Allow,
         AccessDecision::DenyByGroup(g) => {
             on_deny();
-            StreamPluginResult::Deny(format!("ip:deny:group={}", g))
+            StreamPluginResult::Deny(format!("ip:deny:group={}", g).into())
         }
         AccessDecision::DenyByWhitelistMiss => {
             on_deny();
-            StreamPluginResult::Deny("ip:deny:not-in-allow".to_string())
+            StreamPluginResult::Deny("ip:deny:not-in-allow".into())
         }
         AccessDecision::Default(DefaultAction::Allow) => StreamPluginResult::Allow,
         AccessDecision::Default(DefaultAction::Deny) => {
             on_deny();
-            StreamPluginResult::Deny("ip:deny:default".to_string())
+            StreamPluginResult::Deny("ip:deny:default".into())
         }
     }
 }

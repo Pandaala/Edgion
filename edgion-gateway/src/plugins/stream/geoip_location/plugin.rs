@@ -110,10 +110,14 @@ impl StreamPlugin for GeoIpLocationStreamPlugin {
             }
             let reason = if failed { "lookup_failed" } else { "db_unavailable" };
             record_geoip_denied(ctx.layer, reason);
-            return StreamPluginResult::Deny(format!(
-                "geo:deny:{}",
-                if failed { "lookup-failed" } else { "db-unavailable" }
-            ));
+            return StreamPluginResult::Deny(
+                if failed {
+                    "geo:deny:lookup-failed"
+                } else {
+                    "geo:deny:db-unavailable"
+                }
+                .into(),
+            );
         }
 
         let rule_ctx = GeoRuleContext {
@@ -133,18 +137,18 @@ impl StreamPlugin for GeoIpLocationStreamPlugin {
                 // "defaultAction: Deny with nothing configured to explain why" —
                 // fold that (rare, degenerate) case into `deny_country` too
                 // rather than adding an undeclared fourth reason value.
-                let reason = if self.config.denies(&rule_ctx, |side, group, rule, ip| {
+                let (reason, denial) = if self.config.denies(&rule_ctx, |side, group, rule, ip| {
                     view.as_ref()
                         .is_some_and(|view| self.refs.contains_in(view, side, group, rule, ip))
                 }) {
-                    "deny_country"
+                    ("deny_country", "geo:deny:deny_country")
                 } else if !self.config.allow_rule_groups.is_empty() {
-                    "allow_miss"
+                    ("allow_miss", "geo:deny:allow_miss")
                 } else {
-                    "deny_country"
+                    ("deny_country", "geo:deny:deny_country")
                 };
                 record_geoip_denied(ctx.layer, reason);
-                StreamPluginResult::Deny(format!("geo:deny:{reason}"))
+                StreamPluginResult::Deny(denial.into())
             }
         }
     }

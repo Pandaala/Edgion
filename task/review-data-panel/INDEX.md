@@ -21,12 +21,14 @@ destination.
 | Response headers, hold/commit, body and trailers | Connection sanitizer inspected. Body/trailer orchestration, runtime dependency checks, processor driver and downstream cancellation wrapper inspected; prebuilt read-only runtime-chain candidate deferred. Concrete processors, conditions, hold/commit and remaining header chains remain open. |
 | Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering direct body inspected: exact gRPC denial is consumed, protocol-specific replies and final-status ownership retained. Deeper finalizers and retry consumers remain open. |
 | Redirect HTTP | Direct callbacks and shared client-policy application inspected. Missing-host and listener-admission checks now share one normalized hostname. Raw Location authority, query-free log URL and session-owned keepalive remain unchanged. |
-| Connection filters, TLS callbacks, TCP/TLS/UDP paths | Pending. |
+| Connection filters and Stream plugins | Connection bridge, ordered runtime dispatch, connection-rate-limit callback, global IP profile selection, GeoIP callback and shared denial translation inspected. Static denial reasons now borrow literals. Deeper ACL/GeoIP matchers, local-gate/Redis implementations and publication construction remain open. |
+| TLS callbacks, TCP/TLS/UDP paths | Stream-result consumers inspected: Stage 1 returns bool; TCP/UDP keep their bounded generic reason; TLS formats the existing detail. Remaining transport callbacks and protocol lifecycles are pending. |
 
 ## Deferred decisions
 
 - [Publication-time global/Gateway plugin lists](early-01-precompute-plugin-lists.md)
 - [Cache policy fixture verification failure](verification-01-cache-policy-fixture.md)
+- [Stream-suite parallel verification failure](verification-02-stream-parallel-failure.md)
 - [Prebuilt read-only response-body dispatch](body-01-prebuild-readonly-dispatch.md)
 
 ## Completed implementation batch
@@ -126,3 +128,29 @@ warnings remain outside the changed files. The normalized value is explicitly
 released before any response-write await. No full integration suite was run.
 This removes one temporary hostname normalization for nonempty hosts; no
 throughput improvement is claimed without measurement.
+
+## Stream rejection reason ownership
+
+`StreamPluginResult::Deny` now holds `Cow<'static, str>`: fixed IP, connection
+rate-limit and GeoIP reasons borrow literals, while group-specific and compiled
+fail-closed reasons remain owned. The canonical AccessDecision mapper retains
+exact text and invokes its denial callback once. GeoIP metric labels retain
+underscores independently of the existing hyphenated lookup-failure text.
+Stage-1 silence, TCP/UDP bounded reasons and TLS masked detail are unchanged.
+
+The connection bridge pins one ready resource and drops its publication before
+awaiting; runtimes borrow plugin vectors. Global profile selection borrows the
+selected name from one captured snapshot. Rate-limit durations and entry scope
+are already resolved at construction; its small per-call policy uses an empty
+String without heap allocation. No configuration cache, limiter semantics or
+logging behavior was changed.
+
+Independent plan and source reviews passed. The Stream suite passed serially
+(112 passed, one existing ignored test), and all 14 TLS consumer tests passed.
+The first parallel Stream run had one failure; that case passed in isolation.
+Its cause is not established and no baseline binary comparison was run; see the
+deferred verification task above. Formatting, workspace check/Clippy and seven
+repository guards passed, with Clippy warnings outside the changed files.
+No full integration suite was run.
+The allocation claim concerns fixed reason strings only, not whole asynchronous
+plugin execution or dynamic policy/group reasons. No throughput claim is made.

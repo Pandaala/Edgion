@@ -196,7 +196,7 @@ impl StreamPlugin for ConnectionRateLimitPlugin {
 
     async fn on_connection(&self, ctx: &StreamContext) -> StreamPluginResult {
         if self.init_failed {
-            return StreamPluginResult::Deny("connrate:deny:invalid-config".to_string());
+            return StreamPluginResult::Deny("connrate:deny:invalid-config".into());
         }
         let port = ctx.listener_port;
 
@@ -204,7 +204,7 @@ impl StreamPlugin for ConnectionRateLimitPlugin {
         if let Some(rate) = self.pl_rate {
             if !self.local_gate.as_ref().is_some_and(|gate| gate.try_acquire(port)) {
                 record_connection_rate_limit_reject("listener", "local");
-                return StreamPluginResult::Deny("connrate:deny:listener:local".to_string());
+                return StreamPluginResult::Deny("connrate:deny:listener:local".into());
             }
             if self.pl_redis_distributed {
                 let key = format!("lst:{port}");
@@ -213,7 +213,7 @@ impl StreamPlugin for ConnectionRateLimitPlugin {
                     .await;
                 if !allowed {
                     record_connection_rate_limit_reject("listener", "redis");
-                    return StreamPluginResult::Deny("connrate:deny:listener:redis".to_string());
+                    return StreamPluginResult::Deny("connrate:deny:listener:redis".into());
                 }
             }
         }
@@ -226,7 +226,7 @@ impl StreamPlugin for ConnectionRateLimitPlugin {
                 .await;
             if !allowed {
                 record_connection_rate_limit_reject("source_ip", "redis");
-                return StreamPluginResult::Deny("connrate:deny:source_ip:redis".to_string());
+                return StreamPluginResult::Deny("connrate:deny:source_ip:redis".into());
             }
         }
 

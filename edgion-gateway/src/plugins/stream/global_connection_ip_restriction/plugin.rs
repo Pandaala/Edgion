@@ -114,7 +114,7 @@ impl StreamPlugin for GlobalConnectionIpRestrictionPlugin {
             .unwrap_or(self.active_profile.as_str());
         let Some(plan) = self.profiles.get(active) else {
             record_conn_ip_restriction_event("fail_closed_profile_missing");
-            return StreamPluginResult::Deny("ip:deny:profile-missing".to_string());
+            return StreamPluginResult::Deny("ip:deny:profile-missing".into());
         };
         access_decision_to_stream_result(plan.evaluate_in(Some(&view), Some(ctx.direct_peer_ip)), || {
             record_conn_ip_restriction_event("denied")
