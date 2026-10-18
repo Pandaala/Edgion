@@ -2841,3 +2841,21 @@ inside the SHA-1 helper. Fresh verification passed 19 BasicAuth tests, formattin
 workspace check/Clippy and seven repository guards; existing warnings are outside
 the changed files. This does not claim zero-allocation complete authentication,
 new timing guarantees, credential erasure or throughput improvement.
+
+## FaultInjection typed abort status logging
+
+FaultInjection passes its u16 abort status directly to the existing PluginLog
+integer formatter, removing the temporary decimal String. The lossless u64
+argument uses the shared stack formatter and preserves the exact log bytes,
+masking and bounded-entry behavior. Random selection, delay, header ordering,
+status and clone-cheap response body are unchanged. The u128 delay-millisecond
+formatting remains outside this change; no numeric narrowing or shared argument
+layout expansion was introduced.
+
+Independent plan and code reviews passed. Existing response wiring tests assert
+the exact abort log, body and ordered duplicate headers; shared formatter tests
+cover integer boundaries, masking, entry limits and scratch allocation. Fresh
+verification passed seven FaultInjection tests and 29 selected PluginLog tests,
+formatting, workspace check/Clippy and seven repository guards. Warnings are
+outside changed code. No new test duplicating the existing coverage was added;
+the performance claim is limited to the removed temporary status String.

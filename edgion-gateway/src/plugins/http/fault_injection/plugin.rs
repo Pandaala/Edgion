@@ -129,8 +129,7 @@ impl RequestFilter for FaultInjection {
         }
 
         if let Some(a) = abort_hit {
-            let status = a.status_code.to_string();
-            plugin_log.push_fmt("fault abort={}", la![status.as_str()]);
+            plugin_log.push_fmt("fault abort={}", la![a.status_code]);
             let _ = session.set_response_header("content-type", &a.content_type);
             for (name, value) in &a.headers {
                 let _ = session.append_response_header(name, value);
