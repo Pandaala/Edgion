@@ -2629,3 +2629,23 @@ meaning. Fresh verification passed 76 AiGuard request tests, 5 JSON span tests,
 formatting, workspace check/Clippy and seven repository guards. Remaining warnings
 are outside changed code. This removes temporary plain role/type strings, not
 whole-parser allocations; no end-to-end throughput benchmark is claimed.
+
+## AiGuard lazy local mask slots
+
+Local rule evaluation now allocates its per-span mask slots at the first Mask
+action that passes role filtering. Until then, Allow and Reject borrow original
+span text through an empty slot lookup. The first Mask retains the original
+exact span-count allocation; subsequent mask updates, budget checks, rule order,
+flagged counts and replacement extraction remain unchanged. No extra text copy,
+compiled flag or parallel rule evaluator is introduced. The owning budget
+knowledge page documents the initialization boundary.
+
+Independent plan and code/knowledge reviews passed. Six warmed allocation cases
+cover allow-only, reject match/no-match, allow-before-reject, role-excluded Mask
+and rejection before a later Mask; all report zero allocation. A separate ordered
+Allow/Mask/Allow/Reject test verifies accumulated text visibility and flagged
+counts. Existing shrink, revert and aggregate-budget cases remain intact.
+Fresh verification passed 78 AiGuard request tests, formatting, workspace
+check/Clippy and seven repository guards; remaining warnings are outside changed
+code. Regex cache initialization can still allocate, and applicable Mask paths
+retain their slot allocation. No full-request throughput result is claimed.

@@ -211,3 +211,95 @@ fn builtin_detector_matches_its_category() {
         Ok(GuardDecision::Pass)
     );
 }
+
+#[test]
+fn rules_without_an_applicable_mask_need_no_slot_allocation() {
+    let mut excluded_mask = rule("secret", AiGuardAction::Mask, Some("hidden"));
+    excluded_mask.roles = Some(vec![AiGuardRole::System]);
+    let cases = [
+        (vec![rule("secret", AiGuardAction::Allow, None)], GuardDecision::Pass, 2),
+        (
+            vec![rule("secret", AiGuardAction::Reject, None)],
+            GuardDecision::Reject,
+            0,
+        ),
+        (
+            vec![rule("absent", AiGuardAction::Reject, None)],
+            GuardDecision::Pass,
+            0,
+        ),
+        (
+            vec![
+                rule("secret", AiGuardAction::Allow, None),
+                rule("secret", AiGuardAction::Reject, None),
+            ],
+            GuardDecision::Reject,
+            2,
+        ),
+        (
+            vec![excluded_mask, rule("secret", AiGuardAction::Allow, None)],
+            GuardDecision::Pass,
+            2,
+        ),
+        (
+            vec![
+                rule("secret", AiGuardAction::Reject, None),
+                rule("secret", AiGuardAction::Mask, Some("hidden")),
+            ],
+            GuardDecision::Reject,
+            0,
+        ),
+    ];
+    let input = [
+        RuleSpan {
+            key: 0_u32,
+            role: Some(AiGuardRole::User),
+            current: "secret",
+        },
+        RuleSpan {
+            key: 1,
+            role: None,
+            current: "another secret",
+        },
+        RuleSpan {
+            key: 2,
+            role: Some(AiGuardRole::User),
+            current: "clean",
+        },
+    ];
+    for (source, decision, flagged) in cases {
+        let rules = CompiledRules::compile(&source).unwrap();
+        let expected = RuleOutcome { decision, flagged };
+        // Regex caches may initialize independently of the mask slot storage.
+        assert_eq!(rules.evaluate(&input, 0), Ok(expected.clone()));
+        let (actual, stats) = crate::test_allocation_counter::count_allocation_stats(|| rules.evaluate(&input, 0));
+        assert_eq!(actual, Ok(expected));
+        assert_eq!(stats.calls, 0);
+        assert_eq!(stats.requested_bytes, 0);
+    }
+}
+
+#[test]
+fn allow_and_reject_observe_masks_after_lazy_slot_initialization() {
+    for reject in [false, true] {
+        let mut source = vec![
+            rule("alpha", AiGuardAction::Allow, None),
+            rule("alpha", AiGuardAction::Mask, Some("beta")),
+            rule("beta", AiGuardAction::Allow, None),
+        ];
+        if reject {
+            source.push(rule("beta", AiGuardAction::Reject, None));
+        }
+        let rules = CompiledRules::compile(&source).unwrap();
+        let outcome = rules.evaluate(&spans(&["alpha", "clean"]), 4).unwrap();
+        assert_eq!(outcome.flagged, 2);
+        assert_eq!(
+            outcome.decision,
+            if reject {
+                GuardDecision::Reject
+            } else {
+                GuardDecision::Replace(vec![(0, "beta".to_string())])
+            }
+        );
+    }
+}

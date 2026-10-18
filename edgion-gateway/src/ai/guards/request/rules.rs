@@ -101,7 +101,7 @@ impl CompiledRules {
             });
         }
 
-        let mut masked: Vec<Option<String>> = vec![None; spans.len()];
+        let mut masked: Vec<Option<String>> = Vec::new();
         let mut live_replacement_bytes = 0_usize;
         let mut flagged = 0_usize;
 
@@ -117,7 +117,7 @@ impl CompiledRules {
                 }
                 match rule.action {
                     AiGuardAction::Reject => {
-                        let current = masked[index].as_deref().unwrap_or(span.current);
+                        let current = masked.get(index).and_then(Option::as_deref).unwrap_or(span.current);
                         if rule.regex.is_match(current) {
                             return Ok(RuleOutcome {
                                 decision: GuardDecision::Reject,
@@ -126,12 +126,15 @@ impl CompiledRules {
                         }
                     }
                     AiGuardAction::Allow => {
-                        let current = masked[index].as_deref().unwrap_or(span.current);
+                        let current = masked.get(index).and_then(Option::as_deref).unwrap_or(span.current);
                         if rule.regex.is_match(current) {
                             flagged = flagged.saturating_add(1);
                         }
                     }
                     AiGuardAction::Mask => {
+                        if masked.is_empty() {
+                            masked = vec![None; spans.len()];
+                        }
                         let old_len = masked[index].as_ref().map_or(0, String::len);
                         let other_live = live_replacement_bytes.checked_sub(old_len).ok_or(())?;
                         let candidate_limit = max_replacement_bytes.checked_sub(other_live).ok_or(())?;

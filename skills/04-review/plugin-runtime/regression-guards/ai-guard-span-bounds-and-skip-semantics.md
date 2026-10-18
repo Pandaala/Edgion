@@ -82,6 +82,13 @@ local A="aaa" and external B="bbb" independently fit while their union totals 6.
 ARCH-011 corrects this logical-limit gap in request `plugin.rs`; the physical
 request-body cap is a separate boundary, not the proof of this limit.
 
+Local rule evaluation allocates its per-span mask slots only at the first Mask
+action that passes role filtering. Before then, Allow and Reject read the original
+text; afterward they read accumulated masks as before. The initial mask allocation
+retains the original span count, and rule ordering, flagged counts and incremental
+replacement-budget checks are unchanged. Regex caches may allocate independently;
+the no-slot allocation tests warm them before measuring.
+
 The evaluator parser rejects duplicate external keys before returning a decision.
 Before merging, `merge_evaluator_replacements` rejects an external item count
 above the selected-span count with the existing `evaluator bad key` failure.
