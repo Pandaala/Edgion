@@ -168,7 +168,7 @@ fn throttle_action_uses_one_absolute_policy_and_route_budget() {
 fn quota_keys_hash_identity_and_share_one_cluster_slot() {
     let limits = vec![CompiledLimit {
         tokens: 100,
-        window: Duration::from_secs(60),
+        window_ms: 60_000,
         scope: AiTokenQuotaScope::IdentityModel,
     }];
     let targets = build_targets(
@@ -192,7 +192,7 @@ fn quota_keys_hash_identity_and_share_one_cluster_slot() {
 fn identity_model_scope_separates_requested_names_but_identity_scope_does_not() {
     let identity_limits = vec![CompiledLimit {
         tokens: 100,
-        window: Duration::from_secs(60),
+        window_ms: 60_000,
         scope: AiTokenQuotaScope::Identity,
     }];
     let model_limits = vec![CompiledLimit {
@@ -259,12 +259,12 @@ fn quota_ttl_counts_down_from_one_absolute_deadline() {
 fn quota_policy_identity_is_stable_across_reorder_and_limit_changes() {
     let first = CompiledLimit {
         tokens: 100,
-        window: Duration::from_secs(60),
+        window_ms: 60_000,
         scope: AiTokenQuotaScope::Identity,
     };
     let second = CompiledLimit {
         tokens: 200,
-        window: Duration::from_secs(3_600),
+        window_ms: 3_600_000,
         scope: AiTokenQuotaScope::IdentityModel,
     };
     let original = build_targets(
@@ -298,18 +298,17 @@ fn quota_policy_identity_is_stable_across_reorder_and_limit_changes() {
 
 #[test]
 fn quota_window_boundary_rotates_bucket_and_retry_after() {
-    let limits = [CompiledLimit {
-        tokens: 100,
-        window: Duration::from_secs(60),
-        scope: AiTokenQuotaScope::Identity,
-    }];
+    let mut config = quota_config(json!({"type": "Reject"}));
+    config.limits[0].scope = AiTokenQuotaScope::Identity;
+    let plan = CompiledAiQuotaPlan::compile(&config, "scope").unwrap();
+    let limits = &plan.limits;
     let build_at = |now_ms| {
         build_targets(
             "scope",
             "consumer",
             "model-a",
             "r1",
-            &limits,
+            limits,
             Duration::ZERO,
             Duration::from_secs(1),
             now_ms,

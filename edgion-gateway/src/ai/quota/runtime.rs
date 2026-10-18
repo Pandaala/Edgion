@@ -19,7 +19,7 @@ const RECONCILIATION_GRACE: Duration = Duration::from_secs(60);
 #[derive(Clone)]
 struct CompiledLimit {
     tokens: u64,
-    window: Duration,
+    window_ms: u128,
     scope: AiTokenQuotaScope,
 }
 
@@ -87,7 +87,7 @@ impl CompiledAiQuotaPlan {
                 .zip(windows)
                 .map(|(limit, window)| CompiledLimit {
                     tokens: limit.tokens,
-                    window,
+                    window_ms: window.as_millis().max(1),
                     scope: limit.scope,
                 })
                 .collect(),
@@ -372,7 +372,7 @@ fn build_targets(
     limits
         .iter()
         .map(|limit| {
-            let window_ms = limit.window.as_millis().max(1);
+            let window_ms = limit.window_ms;
             let window_id = now_ms / window_ms;
             let remaining_ms = window_ms - now_ms % window_ms;
             let bucket_retention_deadline = now_instant

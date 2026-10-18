@@ -3728,3 +3728,23 @@ Fresh verification passed 80 network-free tests: 24 attempt runtime, 27 quota
 and 29 shared Redis rate-limiter tests. Formatting, workspace check/Clippy,
 seven repository guards and diff hygiene passed. Existing warnings remain
 outside changed code. No live Redis run or throughput benchmark was performed.
+
+## Quota window millisecond precomputation
+
+CompiledLimit now stores the private u128 window_ms value computed once from
+parsed Duration with the same as_millis().max(1) normalization. Target building
+reads that value instead of repeating conversion and normalization for every
+limit on every admission. Clock capture, division/remainder, u128 identity bytes,
+window ID conversion and retention/retry durations are unchanged.
+
+The existing bucket-boundary regression now obtains its limits through the real
+quota compiler, verifying that 1m still rotates at 60,000 milliseconds and keeps
+the one-millisecond remainder before the boundary. Other scope, identity and
+reorder tests keep their original inputs with explicit millisecond fields.
+This is configuration-only precomputation, not a new runtime policy, storage-size
+claim or measured throughput improvement.
+
+Fresh verification passed 56 network-free tests: 27 quota and 29 shared Redis
+rate-limiter tests. Formatting, workspace check/Clippy, seven repository guards
+and diff hygiene passed. Existing warnings remain outside changed code.
+No live Redis test or throughput benchmark was run.
