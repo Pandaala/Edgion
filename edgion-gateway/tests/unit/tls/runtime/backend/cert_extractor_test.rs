@@ -364,3 +364,115 @@ fn ip_display_projection_avoids_intermediate_address_string() {
         );
     }
 }
+
+fn original_signed_be_integer_to_decimal(bytes: &[u8]) -> String {
+    if bytes.iter().all(|&b| b == 0) {
+        return "0".to_string();
+    }
+    if bytes[0] & 0x80 == 0 {
+        return original_unsigned_be_to_decimal(bytes);
+    }
+    let mut magnitude = bytes.to_vec();
+    for byte in &mut magnitude {
+        *byte = !*byte;
+    }
+    let mut carry = 1u8;
+    for byte in magnitude.iter_mut().rev() {
+        let (sum, overflow) = byte.overflowing_add(carry);
+        *byte = sum;
+        carry = u8::from(overflow);
+        if carry == 0 {
+            break;
+        }
+    }
+    format!("-{}", original_unsigned_be_to_decimal(&magnitude))
+}
+
+fn original_unsigned_be_to_decimal(bytes: &[u8]) -> String {
+    let mut current = bytes.to_vec();
+    let mut digits = Vec::new();
+    while current.iter().any(|&b| b != 0) {
+        let mut remainder = 0u16;
+        for byte in &mut current {
+            let value = remainder * 256 + u16::from(*byte);
+            *byte = (value / 10) as u8;
+            remainder = value % 10;
+        }
+        digits.push(b'0' + remainder as u8);
+    }
+    if digits.is_empty() {
+        return "0".to_string();
+    }
+    digits.reverse();
+    String::from_utf8(digits).expect("decimal digits are ASCII")
+}
+
+#[test]
+fn integer_stack_scratch_preserves_signed_decimal_conversion() {
+    let mut inputs = Vec::new();
+    for byte in 0u8..=255 {
+        inputs.push(vec![byte]);
+        for second in [0, 1, 127, 128, 255] {
+            inputs.push(vec![byte, second]);
+        }
+    }
+    for len in 1..=64 {
+        for byte in [0, 1, 127, 128, 255] {
+            inputs.push(vec![byte; len]);
+        }
+        for first in [0, 127, 128, 255] {
+            let mut bytes = vec![0; len];
+            bytes[0] = first;
+            inputs.push(bytes);
+        }
+    }
+    for input in inputs {
+        let original = input.clone();
+        assert_eq!(
+            super::integer_to_decimal(&input),
+            Some(original_signed_be_integer_to_decimal(&input))
+        );
+        assert_eq!(input, original);
+    }
+    for value in [i64::MIN, -65536, -256, -129, -128, -1, 0, 1, 127, 128, 65536, i64::MAX] {
+        assert_eq!(super::integer_to_decimal(&value.to_be_bytes()), Some(value.to_string()));
+    }
+    assert_eq!(super::integer_to_decimal(&[]), None);
+    assert_eq!(super::integer_to_decimal(&[0; 65]), None);
+}
+
+#[test]
+fn integer_stack_scratch_removes_only_working_buffer_allocations() {
+    for (input, removed) in [([1u8; 64], 1), ([128u8; 64], 2)] {
+        let (old, old_stats) =
+            crate::test_allocation_counter::count_allocation_stats(|| original_signed_be_integer_to_decimal(&input));
+        let (new, new_stats) =
+            crate::test_allocation_counter::count_allocation_stats(|| super::integer_to_decimal(&input).unwrap());
+        assert_eq!(new, old);
+        assert_eq!(
+            new_stats.calls + removed,
+            old_stats.calls,
+            "old={old_stats:?}, new={new_stats:?}"
+        );
+        assert_eq!(
+            new_stats.requested_bytes + removed * input.len(),
+            old_stats.requested_bytes
+        );
+    }
+}
+
+#[test]
+fn negative_integer_other_names_preserve_display_and_typed_values() {
+    let cert = cert_with_raw_sans(&[
+        other_name_der(&[0x2a, 0x03, 0x04], &[0x02, 0x01, 0x80]),
+        other_name_der(&[0x2a, 0x03, 0x05], &[0x02, 0x01, 0xff]),
+    ]);
+    assert_eq!(extract_sans(&cert), ["otherName:1.2.3.4=-128", "otherName:1.2.3.5=-1"]);
+    assert_eq!(
+        extract_presented_sans(&cert),
+        [
+            PresentedSan::other_name("1.2.3.4", "-128"),
+            PresentedSan::other_name("1.2.3.5", "-1")
+        ]
+    );
+}

@@ -2878,3 +2878,24 @@ display output. This is not a universal allocation count or throughput claim.
 Fresh verification passed 13 extractor, 20 HeaderCertAuth and 14 mTLS callback
 tests, formatting, workspace check/Clippy and seven repository guards. Remaining
 warnings are outside changed code; no live TLS handshake suite was run.
+
+## OtherName integer conversion working storage
+
+After the existing nonempty/64-byte INTEGER gate, certificate extraction copies
+the admitted bytes into one fixed stack scratch prefix. Signed complement/carry
+and decimal division mutate that same prefix instead of allocating separate
+magnitude and division Vecs. Original BER bytes, the conversion algorithm, sign
+formatting, digit/output storage and accepted scalar bounds remain unchanged.
+The zero case retains its existing output allocation and now has a bounded copy;
+no all-input CPU improvement is claimed.
+
+Independent plan and code reviews passed. Tests compare the original algorithm
+across single-byte values, representative two-byte and 1..64-byte patterns,
+independent i64 limits and 0/65-byte rejection, and verify source immutability.
+Signed certificates confirm negative OtherName values in display and typed
+projections. The 64-byte nonzero positive and negative fixtures respectively
+remove exactly one and two working allocations (64 and 128 requested bytes).
+Fresh verification passed 16 extractor, 20 HeaderCertAuth and 14 mTLS callback
+tests, formatting, workspace check/Clippy and seven repository guards. Remaining
+warnings are outside changed code. Output still allocates; no live-handshake,
+peak-memory or throughput result is claimed.

@@ -242,22 +242,24 @@ fn integer_to_decimal(bytes: &[u8]) -> Option<String> {
     if bytes.is_empty() || bytes.len() > OTHER_NAME_INTEGER_MAX_BYTES {
         return None;
     }
-    Some(signed_be_integer_to_decimal(bytes))
+    let mut scratch = [0u8; OTHER_NAME_INTEGER_MAX_BYTES];
+    let current = &mut scratch[..bytes.len()];
+    current.copy_from_slice(bytes);
+    Some(signed_be_integer_to_decimal(current))
 }
 
-fn signed_be_integer_to_decimal(bytes: &[u8]) -> String {
+fn signed_be_integer_to_decimal(bytes: &mut [u8]) -> String {
     if bytes.iter().all(|&b| b == 0) {
         return "0".to_string();
     }
     if bytes[0] & 0x80 == 0 {
         return unsigned_be_to_decimal(bytes);
     }
-    let mut magnitude = bytes.to_vec();
-    for byte in &mut magnitude {
+    for byte in bytes.iter_mut() {
         *byte = !*byte;
     }
     let mut carry = 1u8;
-    for byte in magnitude.iter_mut().rev() {
+    for byte in bytes.iter_mut().rev() {
         let (sum, overflow) = byte.overflowing_add(carry);
         *byte = sum;
         carry = u8::from(overflow);
@@ -265,15 +267,14 @@ fn signed_be_integer_to_decimal(bytes: &[u8]) -> String {
             break;
         }
     }
-    format!("-{}", unsigned_be_to_decimal(&magnitude))
+    format!("-{}", unsigned_be_to_decimal(bytes))
 }
 
-fn unsigned_be_to_decimal(bytes: &[u8]) -> String {
-    let mut current = bytes.to_vec();
+fn unsigned_be_to_decimal(current: &mut [u8]) -> String {
     let mut digits = Vec::new();
     while current.iter().any(|&b| b != 0) {
         let mut remainder = 0u16;
-        for byte in &mut current {
+        for byte in current.iter_mut() {
             let value = remainder * 256 + u16::from(*byte);
             *byte = (value / 10) as u8;
             remainder = value % 10;
