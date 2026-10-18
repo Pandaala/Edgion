@@ -11,7 +11,7 @@ use edgion_resources::resources::{
     HTTPURLRewriteFilter, PreparedPathModifier, PreparedUrlRewrite, RequestTransformViolation,
 };
 
-use super::path_modifier::replace_prefix_match;
+use super::path_modifier::prefix_replacement_parts;
 
 pub struct URLRewriteFilter {
     config: PreparedUrlRewrite,
@@ -28,7 +28,7 @@ impl URLRewriteFilter {
         let path_modifier = self.config.path()?;
 
         let rewritten_path = match path_modifier {
-            PreparedPathModifier::ReplaceFullPath(replacement) => replacement.clone(),
+            PreparedPathModifier::ReplaceFullPath(replacement) => [replacement.as_str(), "", ""],
             PreparedPathModifier::ReplacePrefixMatch(replacement) => {
                 let original_path = session.get_path();
                 let matched_prefix = session
@@ -46,14 +46,18 @@ impl URLRewriteFilter {
                 let Some(matched_prefix) = matched_prefix else {
                     return Some(Err(()));
                 };
-                replace_prefix_match(original_path, matched_prefix, replacement)
+                prefix_replacement_parts(original_path, matched_prefix, replacement)
             }
         };
 
-        let query = session.request_query();
-        let mut final_uri = rewritten_path;
-        if let Some(query) = query.filter(|query| !query.is_empty()) {
-            final_uri.reserve(query.len() + 1);
+        let query = session.request_query().filter(|query| !query.is_empty());
+        let capacity =
+            rewritten_path.iter().map(|part| part.len()).sum::<usize>() + query.map_or(0, |query| query.len() + 1);
+        let mut final_uri = String::with_capacity(capacity);
+        for part in rewritten_path {
+            final_uri.push_str(part);
+        }
+        if let Some(query) = query {
             final_uri.push('?');
             final_uri.push_str(query);
         }

@@ -1,30 +1,22 @@
-/// Replace the matched number of complete path elements with a literal prefix.
+/// Borrow the output parts that replace the matched number of complete path elements with a literal prefix.
 ///
 /// Gateway API prefix replacement ignores a trailing slash in the configured
 /// match. The route pattern may also contain parameters whose byte length does
 /// not match the request value, so the suffix must be found by element count
 /// rather than by slicing at the pattern's byte length.
-pub(super) fn replace_prefix_match(request_path: &str, matched_prefix: &str, replacement: &str) -> String {
+pub(super) fn prefix_replacement_parts<'a>(
+    request_path: &'a str,
+    matched_prefix: &str,
+    replacement: &'a str,
+) -> [&'a str; 3] {
     let matched_elements = matched_prefix.split('/').filter(|element| !element.is_empty()).count();
     let suffix = suffix_after_elements(request_path, matched_elements).unwrap_or("");
 
     if suffix.is_empty() {
-        let mut result = String::with_capacity(replacement.len().max(1));
-        if replacement.is_empty() {
-            result.push('/');
-        } else {
-            result.push_str(replacement);
-        }
-        return result;
+        return [if replacement.is_empty() { "/" } else { replacement }, "", ""];
     }
 
-    let replacement = replacement.trim_end_matches('/');
-    let suffix = suffix.trim_start_matches('/');
-    let mut result = String::with_capacity(replacement.len() + suffix.len() + 1);
-    result.push_str(replacement);
-    result.push('/');
-    result.push_str(suffix);
-    result
+    [replacement.trim_end_matches('/'), "/", suffix.trim_start_matches('/')]
 }
 
 fn suffix_after_elements(path: &str, element_count: usize) -> Option<&str> {

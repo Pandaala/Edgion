@@ -268,7 +268,7 @@ async fn redirect_borrows_raw_query_before_writing_owned_location() {
 }
 
 #[test]
-fn location_builder_uses_one_output_allocation_plus_prefix_result() {
+fn location_builder_uses_one_output_allocation_for_all_path_modes() {
     let paths = [
         (None, "/users/alice/orders", 1),
         (
@@ -287,7 +287,7 @@ fn location_builder_uses_one_output_allocation_plus_prefix_result() {
                 replace_prefix_match: Some("/v2/".into()),
             }),
             "/v2/orders",
-            2,
+            1,
         ),
         (
             Some(HTTPPathModifier {
@@ -296,7 +296,7 @@ fn location_builder_uses_one_output_allocation_plus_prefix_result() {
                 replace_prefix_match: Some("".into()),
             }),
             "/orders",
-            2,
+            1,
         ),
     ];
     for (path, expected_path, expected_allocations) in paths {

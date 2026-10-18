@@ -1226,3 +1226,24 @@ filter tests passed, along with formatting, workspace check/Clippy and seven
 repository guards. Existing Clippy warnings remain outside changed files.
 Independent final source and record reviews passed.
 No full integration suite or throughput benchmark ran.
+
+## Borrowed prefix-replacement parts
+
+The canonical native path helper now returns three borrowed output slices.
+Element-count matching, empty/unmatched suffix fallback and conditional slash
+trimming are unchanged. RequestRedirect and URLRewrite consume these slices
+directly, reserving the final Location or path-plus-query once. No intermediate
+prefix-path String remains and there is no duplicate prefix implementation.
+This supersedes the preceding redirect batch's two-allocation prefix case.
+
+Independent plan review passed. Helper goldens cover parameterized and UTF-8
+paths, repeated slashes and empty/slash-only/unmatched suffixes, measuring zero
+allocations before test-only joining. Redirect's existing output matrix now
+expects one allocation in every path mode. Rewrite's full-path query matrix
+measures one allocation with absent, empty or nonempty query. Existing callback
+and missing-context failure checks remain. All 63 native Gateway API filter
+tests passed. Formatting, workspace check/Clippy and seven repository guards
+passed; existing warnings are outside changed files. Independent source and final record
+reviews passed. These builder claims exclude response
+construction/logging and do not establish throughput gains or whole-callback
+allocation counts. No full integration suite ran.

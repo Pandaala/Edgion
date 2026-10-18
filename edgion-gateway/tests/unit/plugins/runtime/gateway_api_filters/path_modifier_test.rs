@@ -1,4 +1,4 @@
-use super::replace_prefix_match;
+use super::prefix_replacement_parts;
 
 #[test]
 fn replaces_prefix_on_element_boundaries() {
@@ -15,12 +15,18 @@ fn replaces_prefix_on_element_boundaries() {
         (("/users/alice/orders", "/users/:id", "/v2"), "/v2/orders"),
         (("/users/aé/orders", "/users/:id", "/v2"), "/v2/orders"),
         (("/café/menu", "/café", "/shop"), "/shop/menu"),
+        (("/foo///bar", "//foo//", "/xyz///"), "/xyz/bar"),
+        (("/foo///", "/foo", "/xyz///"), "/xyz/"),
+        (("/foo", "/foo", "/xyz///"), "/xyz///"),
+        (("/foo", "/foo/bar", "/xyz///"), "/xyz///"),
+        (("", "/", ""), "/"),
     ];
 
     for ((request_path, matched_prefix, replacement), expected) in cases {
-        assert_eq!(
-            replace_prefix_match(request_path, matched_prefix, replacement),
-            expected
-        );
+        let (parts, allocations) = crate::test_allocation_counter::count_allocations(|| {
+            prefix_replacement_parts(request_path, matched_prefix, replacement)
+        });
+        assert_eq!(allocations, 0);
+        assert_eq!(parts.concat(), expected);
     }
 }

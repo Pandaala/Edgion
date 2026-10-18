@@ -116,3 +116,29 @@ async fn rewrite_borrows_raw_query_before_setting_owned_uri() {
         );
     }
 }
+
+#[test]
+fn full_rewrite_reserves_path_and_query_in_one_allocation() {
+    let filter = URLRewriteFilter::try_new(&HTTPURLRewriteFilter {
+        hostname: None,
+        path: Some(HTTPPathModifier {
+            modifier_type: HTTPPathModifierType::ReplaceFullPath,
+            replace_full_path: Some("/new".into()),
+            replace_prefix_match: None,
+        }),
+    })
+    .unwrap();
+    for (query, expected) in [
+        (None, "/new"),
+        (Some(""), "/new"),
+        (Some("q=a+b&x=%26&flag"), "/new?q=a+b&x=%26&flag"),
+    ] {
+        let mut session = MockPluginSession::new();
+        session.expect_request_query().return_const(query);
+        drop(filter.rewritten_uri(&mut session));
+        let (uri, allocations) =
+            crate::test_allocation_counter::count_allocations(|| filter.rewritten_uri(&mut session));
+        assert_eq!(uri, Some(Ok(expected.to_owned())));
+        assert_eq!(allocations, 1);
+    }
+}

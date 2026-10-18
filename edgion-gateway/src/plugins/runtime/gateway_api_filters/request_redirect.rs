@@ -2,7 +2,6 @@
 //!
 //! This filter redirects requests to another location.
 
-use std::borrow::Cow;
 use std::fmt::Write;
 
 use async_trait::async_trait;
@@ -17,7 +16,7 @@ use edgion_resources::resources::{
     RequestTransformViolation,
 };
 
-use super::path_modifier::replace_prefix_match;
+use super::path_modifier::prefix_replacement_parts;
 
 fn default_port_for_scheme(scheme: &str) -> u16 {
     match scheme {
@@ -80,18 +79,18 @@ impl RequestRedirectFilter {
 
         let include_port = final_port != default_port_for_scheme(scheme);
         let path = match self.config.path() {
-            Some(PreparedPathModifier::ReplaceFullPath(replacement)) => Cow::Borrowed(replacement.as_str()),
+            Some(PreparedPathModifier::ReplaceFullPath(replacement)) => [replacement.as_str(), "", ""],
             Some(PreparedPathModifier::ReplacePrefixMatch(replacement)) => {
-                Cow::Owned(replace_prefix_match(original_path, matched_path?, replacement))
+                prefix_replacement_parts(original_path, matched_path?, replacement)
             }
-            None => Cow::Borrowed(original_path),
+            None => [original_path, "", ""],
         };
         let query = original_query.filter(|query| !query.is_empty());
         // A colon and at most five decimal digits cover every u16 port.
         let capacity = scheme.len()
             + 3
             + hostname.len()
-            + path.len()
+            + path.iter().map(|part| part.len()).sum::<usize>()
             + if include_port { 6 } else { 0 }
             + query.map_or(0, |query| query.len() + 1);
         let mut location = String::with_capacity(capacity);
@@ -102,7 +101,9 @@ impl RequestRedirectFilter {
             // Writing a u16 into a String is infallible.
             let _ = write!(location, ":{final_port}");
         }
-        location.push_str(&path);
+        for part in path {
+            location.push_str(part);
+        }
         if let Some(query) = query {
             location.push('?');
             location.push_str(query);
