@@ -70,6 +70,14 @@ No network, live hot reload, full workspace test suite or benchmark is implied.
 Re-evaluate when token grammar, stage order, escaping, encoding, session missing-value
 semantics, or match-time capture ownership changes.
 
+The argument and numeric-capture stages transfer owned regex replacement results
+through `Cow::into_owned`. Final dollar restoration consumes its String and
+returns that allocation unchanged when no NUL sentinel is present. Sentinel
+replacement still removes only NUL immediately followed by `$`; stray NUL bytes
+retain their existing behavior. The direct restoration test checks output and
+allocation identity, while the existing both-context and sink tests guard stage
+semantics. This does not remove all intermediate substitution allocations.
+
 ## Resolution references
 
 - `ARCH-037` — final-stage original-span replacement and escaped-dollar boundary.

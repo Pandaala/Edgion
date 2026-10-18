@@ -106,9 +106,9 @@ impl ProxyRewrite {
 
     /// Restore sentinel sequences produced by `escape_dollar`.
     #[inline]
-    fn unescape_dollar(value: &str) -> String {
+    fn unescape_dollar(value: String) -> String {
         if !value.contains('\x00') {
-            return value.to_string();
+            return value;
         }
         value.replace("\x00$", "$")
     }
@@ -166,7 +166,7 @@ impl ProxyRewrite {
                 let encoded = Self::url_encode(&value);
                 Self::escape_dollar(&encoded)
             })
-            .to_string();
+            .into_owned();
 
         // 3. Replace capture groups $1-$9.
         //    Escape $ in each capture value so step 4 cannot treat it as $<name>.
@@ -182,7 +182,7 @@ impl ProxyRewrite {
                     };
                     Self::escape_dollar(&encoded)
                 })
-                .to_string();
+                .into_owned();
         }
 
         // 4. Replace path parameters $<name> captured at route match.
@@ -215,7 +215,7 @@ impl ProxyRewrite {
         }
 
         // Restore any escaped $ signs that were produced by earlier substitution steps.
-        Self::unescape_dollar(&result)
+        Self::unescape_dollar(result)
     }
 
     /// Build final URI with original query string preserved

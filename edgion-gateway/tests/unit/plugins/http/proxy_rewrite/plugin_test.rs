@@ -313,6 +313,27 @@ fn test_url_encode() {
     assert_eq!(ProxyRewrite::url_encode("normal"), "normal");
 }
 
+#[test]
+fn dollar_restoration_transfers_plain_output_and_preserves_sentinels() {
+    let mut plain = String::with_capacity(128);
+    plain.push_str("/plain/$unknown/caf%C3%A9");
+    let pointer = plain.as_ptr();
+    let capacity = plain.capacity();
+    let restored = ProxyRewrite::unescape_dollar(plain);
+    assert_eq!(restored, "/plain/$unknown/caf%C3%A9");
+    assert_eq!(restored.as_ptr(), pointer);
+    assert_eq!(restored.capacity(), capacity);
+
+    for (input, expected) in [
+        ("", ""),
+        ("\x00$uid/\x00$arg_x", "$uid/$arg_x"),
+        ("a\x00b", "a\x00b"),
+        ("\x00\x00$1/$plain", "\x00$1/$plain"),
+    ] {
+        assert_eq!(ProxyRewrite::unescape_dollar(input.to_owned()), expected);
+    }
+}
+
 /// `$arg_<name>` must always url-encode the (decoded) query value, in both
 /// URI and header contexts. This protects header rewrite from
 /// `HeaderValue::try_from` rejecting control bytes and shields downstream

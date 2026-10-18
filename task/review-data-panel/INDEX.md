@@ -1767,3 +1767,16 @@ No full suite, live integration or throughput benchmark ran for this batch.
 Fresh session-persistence tests passed 22 cases. Formatting, workspace
 check/Clippy and seven repository guards passed, with existing warnings outside
 changed files. Independent final review passed.
+
+## ProxyRewrite owned substitution results
+
+Argument and numeric-capture regex replacements now transfer owned results;
+final dollar restoration reuses the owned result when no NUL is present.
+Substitution order, encoding, missing-value behavior and sentinel semantics are
+unchanged. Independent plan review passed. Direct restoration coverage asserts
+allocation identity and exact sentinel behavior; existing resolver and sink
+tests cover both URI/header contexts. Other substitution allocations remain.
+No full suite, live integration or throughput benchmark ran for this batch.
+Fresh ProxyRewrite tests passed 18 cases. Formatting, workspace check/Clippy and
+seven repository guards passed, with existing warnings outside changed files.
+Independent final review passed.
