@@ -42,6 +42,24 @@ the owned input or allocate the trimmed `Arc<str>`.
 The digest builtins previously had the same missing-output-check shape. They now
 route their fixed-size hexadecimal outputs through `checked_value_str`.
 
+## Borrowed response-header reads
+
+`resp.header` and `resp.content_type` borrow the first live response HeaderValue,
+retain its `to_str` eligibility check, and use `checked_value_opt_str_ref` before
+allocating the VM's independent Arc string. `resp.has_header` uses the same
+first-value text gate without constructing a result string or applying the
+string-output limit. An opaque first value is absent for these builtins even if
+a later duplicate is textual; empty text is present. No bound response exposes
+an empty map, matching the owned session getter, and pending writes are not read.
+
+The response builtin tests use real HeaderMaps for these boundaries. Their
+exact/over-limit fixtures use four ASCII bytes: the former multibyte mock values
+could not pass the real adapter's HeaderValue text gate. The shared borrowed
+helper's multibyte byte-count and rejection-before-allocation coverage remains
+in `ctx_value_tests::utf8_limit_is_checked_in_bytes_before_allocating`.
+This removes a temporary host String, not the final DSL string or argument
+conversion; it makes no throughput or allocation-free execution claim.
+
 ## Alternatives and limits
 
 Checking string constants when they are loaded is not equivalent: constants are

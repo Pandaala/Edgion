@@ -753,11 +753,23 @@ impl Vm {
             },
             BuiltinId::RespHeader => {
                 let name = state.pop()?.runtime_string()?;
-                checked_value_opt_str(session.get_response_header(&name), self.limits.max_string_len)
+                checked_value_opt_str_ref(
+                    session
+                        .response_header_map()
+                        .get(name.as_str())
+                        .and_then(|value| value.to_str().ok()),
+                    self.limits.max_string_len,
+                )
             }
             BuiltinId::RespHasHeader => {
                 let name = state.pop()?.runtime_string()?;
-                Ok(Value::Bool(session.get_response_header(&name).is_some()))
+                Ok(Value::Bool(
+                    session
+                        .response_header_map()
+                        .get(name.as_str())
+                        .and_then(|value| value.to_str().ok())
+                        .is_some(),
+                ))
             }
 
             // ===== req.* metadata =====
@@ -791,9 +803,13 @@ impl Vm {
                 }
                 Ok(Value::List(result))
             }
-            BuiltinId::RespContentType => {
-                checked_value_opt_str(session.get_response_header("Content-Type"), self.limits.max_string_len)
-            }
+            BuiltinId::RespContentType => checked_value_opt_str_ref(
+                session
+                    .response_header_map()
+                    .get("Content-Type")
+                    .and_then(|value| value.to_str().ok()),
+                self.limits.max_string_len,
+            ),
 
             // ===== resp.* set status =====
             BuiltinId::RespSetStatus => {

@@ -1350,3 +1350,22 @@ Initial text-only session snapshots and body storage are outside its scope.
 Independent documentation plan review passed; this batch changes no runtime code
 and makes no benchmark or complete host-memory-bound claim.
 Independent final review, agent-doc validation and diff checks passed.
+
+## Borrowed DSL response-header reads
+
+`resp.header`, `resp.content_type` and `resp.has_header` read the live response
+map without the intermediate owned session-getter String. The first-value
+`HeaderValue::to_str` gate, absent/unbound behavior and name conversion remain.
+Value-producing reads check exact byte length before creating an independent
+DSL Arc string; presence checks remain unrestricted by the output string limit.
+The existing borrowed helper is reused, with no session API or policy change.
+
+Eight mock sites now supply real HeaderMaps. Exact/over-limit header fixtures
+use legal four-byte ASCII instead of non-ASCII text that the real adapter would
+reject; existing borrowed-helper multibyte/zero-allocation rejection coverage
+remains. New cases cover absent/empty/sensitive values, duplicate order,
+opaque-first eligibility, mixed-case names and unrestricted presence length.
+Independent plan review passed; 492 DSL tests passed serially. No full suite or
+throughput benchmark ran; argument conversions and final DSL ownership remain.
+Formatting, workspace check/Clippy and seven repository guards passed, with
+existing warnings outside changed files. Independent final review passed.

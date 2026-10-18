@@ -11,10 +11,13 @@ fn test_resp_content_type() {
         }
     "#;
     let mut session = MockPluginSession::new();
+    session.expect_get_response_header().times(0);
     session
-        .expect_get_response_header()
-        .withf(|n| n == "Content-Type")
-        .returning(|_| Some("application/json".to_string()));
+        .expect_response_header_map()
+        .return_const(http::HeaderMap::from_iter([(
+            http::header::HeaderName::from_bytes(b"Content-Type").unwrap(),
+            http::HeaderValue::from_static("application/json"),
+        )]));
     session
         .expect_set_request_header()
         .withf(|n, v| n == "X-CT" && v == "application/json")
@@ -27,11 +30,10 @@ fn test_resp_content_type() {
 #[test]
 fn test_resp_content_type_missing_returns_nil() {
     let mut session = MockPluginSession::new();
+    session.expect_get_response_header().times(0);
     session
-        .expect_get_response_header()
-        .withf(|n| n == "Content-Type")
-        .times(1)
-        .returning(|_| None);
+        .expect_response_header_map()
+        .return_const(http::HeaderMap::from_iter([]));
     session
         .expect_set_request_header()
         .withf(|n, v| n == "X-Missing" && v == "true")

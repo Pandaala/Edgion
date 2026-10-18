@@ -3,6 +3,74 @@
 use super::*;
 
 #[test]
+fn borrowed_response_reads_preserve_first_text_value() {
+    for (values, expected) in [
+        (vec![], None),
+        (vec![b"".as_slice()], Some("")),
+        (vec![b"first".as_slice(), b"second".as_slice()], Some("first")),
+        (vec![b"\xff".as_slice(), b"second".as_slice()], None),
+        (vec![b"first".as_slice(), b"\xff".as_slice()], Some("first")),
+    ] {
+        for expression in [
+            "resp.header(\"CoNtEnT-TyPe\")",
+            "resp.content_type",
+            "resp.has_header(\"content-type\")",
+        ] {
+            let mut headers = http::HeaderMap::new();
+            for bytes in &values {
+                let mut value = http::HeaderValue::from_bytes(bytes).unwrap();
+                value.set_sensitive(true);
+                headers.append("content-type", value);
+            }
+            let mut session = MockPluginSession::new();
+            session.expect_get_response_header().times(0);
+            session.expect_response_header_map().times(1).return_const(headers);
+            let output = if expression.contains("has_header") {
+                expected.is_some().to_string()
+            } else {
+                expected.unwrap_or("missing").to_string()
+            };
+            session
+                .expect_set_request_header()
+                .times(1)
+                .withf(move |name, value| name == "X-Result" && value == output)
+                .returning(|_, _| Ok(()));
+            let source = format!("let v = {expression}\nif v == nil {{ req.set_header(\"X-Result\", \"missing\") }} else {{ req.set_header(\"X-Result\", to_str(v)) }}");
+            assert_eq!(run(&source, session), good_next());
+        }
+    }
+}
+
+#[test]
+fn borrowed_response_presence_does_not_apply_string_limit() {
+    let mut session = MockPluginSession::new();
+    session.expect_get_response_header().times(0);
+    session
+        .expect_response_header_map()
+        .times(1)
+        .return_const(http::HeaderMap::from_iter([(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("long"),
+        )]));
+    session
+        .expect_set_request_header()
+        .times(1)
+        .withf(|name, value| name == "X-Result" && value == "yes")
+        .returning(|_, _| Ok(()));
+    assert_eq!(
+        run_with_limits(
+            "if resp.has_header(\"content-type\") { req.set_header(\"X-Result\", \"yes\") }",
+            session,
+            VmLimits {
+                max_string_len: 0,
+                ..Default::default()
+            },
+        ),
+        good_next()
+    );
+}
+
+#[test]
 fn test_resp_status_read() {
     let mut session = MockPluginSession::new();
     session.expect_get_response_status().returning(|| Some(404));
@@ -37,10 +105,13 @@ fn test_resp_status_nil() {
 #[test]
 fn test_resp_header_read() {
     let mut session = MockPluginSession::new();
+    session.expect_get_response_header().times(0);
     session
-        .expect_get_response_header()
-        .withf(|h| h == "X-B")
-        .returning(|_| Some("hello".to_string()));
+        .expect_response_header_map()
+        .return_const(http::HeaderMap::from_iter([(
+            http::header::HeaderName::from_bytes(b"X-B").unwrap(),
+            http::HeaderValue::from_static("hello"),
+        )]));
     session
         .expect_set_response_header()
         .withf(|h, v| h == "X-Copy" && v == "hello")
@@ -56,10 +127,10 @@ fn test_resp_header_read() {
 #[test]
 fn test_resp_header_nil() {
     let mut session = MockPluginSession::new();
+    session.expect_get_response_header().times(0);
     session
-        .expect_get_response_header()
-        .withf(|h| h == "X-B")
-        .returning(|_| None);
+        .expect_response_header_map()
+        .return_const(http::HeaderMap::from_iter([]));
     session
         .expect_set_response_header()
         .withf(|h, v| h == "X-Copy" && v == "none")
@@ -75,14 +146,16 @@ fn test_resp_header_nil() {
 #[test]
 fn test_resp_header_exact_byte_limit() {
     let mut session = MockPluginSession::new();
+    session.expect_get_response_header().times(0);
     session
-        .expect_get_response_header()
-        .withf(|h| h == "X-B")
-        .times(1)
-        .returning(|_| Some("éñ".to_string()));
+        .expect_response_header_map()
+        .return_const(http::HeaderMap::from_iter([(
+            http::header::HeaderName::from_bytes(b"X-B").unwrap(),
+            http::HeaderValue::from_static("abcd"),
+        )]));
     session
         .expect_set_response_header()
-        .withf(|h, v| h == "X-Copy" && v == "éñ")
+        .withf(|h, v| h == "X-Copy" && v == "abcd")
         .times(1)
         .returning(|_, _| Ok(()));
     let result = run_with_limits(
@@ -100,11 +173,13 @@ if v != nil { resp.set_header("X-Copy", v) }"#,
 #[test]
 fn test_resp_header_over_byte_limit() {
     let mut session = MockPluginSession::new();
+    session.expect_get_response_header().times(0);
     session
-        .expect_get_response_header()
-        .withf(|h| h == "X-B")
-        .times(1)
-        .returning(|_| Some("éñ".to_string()));
+        .expect_response_header_map()
+        .return_const(http::HeaderMap::from_iter([(
+            http::header::HeaderName::from_bytes(b"X-B").unwrap(),
+            http::HeaderValue::from_static("abcd"),
+        )]));
     session.expect_set_response_header().times(0);
     let err = run_expect_runtime_err_with_limits(
         r#"let v = resp.header("X-B")
@@ -121,10 +196,13 @@ if v != nil { resp.set_header("X-Copy", v) }"#,
 #[test]
 fn test_resp_has_header_true() {
     let mut session = MockPluginSession::new();
+    session.expect_get_response_header().times(0);
     session
-        .expect_get_response_header()
-        .withf(|h| h == "X-B")
-        .returning(|_| Some("val".to_string()));
+        .expect_response_header_map()
+        .return_const(http::HeaderMap::from_iter([(
+            http::header::HeaderName::from_bytes(b"X-B").unwrap(),
+            http::HeaderValue::from_static("val"),
+        )]));
     session
         .expect_set_response_header()
         .withf(|h, v| h == "X-R" && v == "yes")
@@ -140,11 +218,10 @@ fn test_resp_has_header_true() {
 #[test]
 fn test_resp_has_header_false() {
     let mut session = MockPluginSession::new();
+    session.expect_get_response_header().times(0);
     session
-        .expect_get_response_header()
-        .withf(|h| h == "X-B")
-        .times(1)
-        .returning(|_| None);
+        .expect_response_header_map()
+        .return_const(http::HeaderMap::from_iter([]));
     session
         .expect_set_response_header()
         .withf(|h, v| h == "X-R" && v == "no")
