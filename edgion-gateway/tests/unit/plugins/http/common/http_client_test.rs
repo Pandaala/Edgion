@@ -51,6 +51,8 @@ fn test_connection_listed_hop_by_hop_parses_tokens() {
     );
     // Empty input
     assert!(connection_listed_hop_by_hop("").is_empty());
+    // ASCII folding leaves non-ASCII bytes intact, including in duplicates.
+    assert_eq!(connection_listed_hop_by_hop("X-é, x-é, X-ñ"), vec!["x-é", "x-ñ"]);
 }
 
 #[test]
@@ -67,6 +69,36 @@ fn test_is_hop_by_hop_or_listed_combines_static_and_dynamic() {
     // Unrelated headers do not match
     assert!(!is_hop_by_hop_or_listed("Authorization", &listed));
     assert!(!is_hop_by_hop_or_listed("Cookie", &listed));
+    // The dynamic list contract is lowercase; preserve exact comparison for
+    // manually supplied noncanonical lists.
+    assert!(!is_hop_by_hop_or_listed("X-Token", &["X-Token".to_string()]));
+}
+
+#[test]
+fn hop_by_hop_static_and_empty_dynamic_checks_do_not_allocate() {
+    let listed = vec!["x-token".to_string()];
+    let (results, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+        (
+            is_hop_by_hop_or_listed(std::hint::black_box("Connection"), &listed),
+            is_hop_by_hop_or_listed(std::hint::black_box("X-Token"), &[]),
+        )
+    });
+    assert_eq!(results, (true, false));
+    assert_eq!(stats.calls, 0);
+    assert_eq!(stats.requested_bytes, 0);
+}
+
+#[test]
+fn repeated_connection_options_do_not_add_allocations() {
+    let (unique, unique_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+        connection_listed_hop_by_hop(std::hint::black_box("X-A, X-B"))
+    });
+    let (repeated, repeated_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+        connection_listed_hop_by_hop(std::hint::black_box("X-A, x-a, X-B, x-b, X-A"))
+    });
+    assert_eq!(unique, vec!["x-a", "x-b"]);
+    assert_eq!(repeated, unique);
+    assert_eq!(repeated_stats, unique_stats);
 }
 
 #[test]

@@ -173,9 +173,8 @@ pub fn connection_listed_hop_by_hop(connection_value: &str) -> Vec<String> {
         if t.is_empty() {
             continue;
         }
-        let lower = t.to_ascii_lowercase();
-        if !out.iter().any(|s| s == &lower) {
-            out.push(lower);
+        if !out.iter().any(|s| s.eq_ignore_ascii_case(t)) {
+            out.push(t.to_ascii_lowercase());
         }
     }
     out
@@ -188,8 +187,14 @@ pub fn connection_listed_hop_by_hop(connection_value: &str) -> Vec<String> {
 /// `dynamic_listed` should be the value returned by
 /// [`connection_listed_hop_by_hop`] for the originating request.
 pub fn is_hop_by_hop_or_listed(name: &str, dynamic_listed: &[String]) -> bool {
+    if is_hop_by_hop(name) {
+        return true;
+    }
+    if dynamic_listed.is_empty() {
+        return false;
+    }
     let lower = name.to_ascii_lowercase();
-    is_hop_by_hop(name) || dynamic_listed.iter().any(|s| s == &lower)
+    dynamic_listed.iter().any(|s| s == &lower)
 }
 
 #[cfg(test)]
