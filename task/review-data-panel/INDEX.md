@@ -4281,3 +4281,25 @@ Fresh verification passed 244 network-free tests: 36 outlier-detection,
 tests, all with serial test execution. Formatting, workspace check/Clippy,
 seven repository guards and diff hygiene passed. Existing warnings remain
 outside changed code. No live transport or throughput benchmark ran.
+
+## Borrowed ExternalName DNS cache singleton
+
+The process-global DnsCache now lives directly in LazyLock and its getter
+returns a static reference. ExternalName self-resolution passes that reference
+through the existing async resolution owner; Service removal still invalidates
+the same shared cache. Local independently constructed caches and their test
+Arc owners are unchanged.
+
+This removes the outer singleton allocation and temporary getter Arc operations.
+Cache identity, capacity, shard floor, recency, TTL, owned address results and
+best-effort removal invalidation remain unchanged. Concurrent misses and failure
+handling retain their existing semantics; no coalescing or negative cache was
+added. No allocation-free lookup or throughput claim is made.
+
+Fresh verification passed 176 network-free tests: 71 discovery, 103 HTTP
+upstream-peer, and the two native DNS tests for captured Service geometry across
+await and cache identity/modes/TTL/failure boundaries. All ran serially.
+Formatting, workspace check/Clippy, seven repository guards and diff hygiene
+passed. Existing warnings remain outside changed code. The separately recorded
+TLS admission fixture failure remains outside this batch; no full backend suite,
+live transport or throughput benchmark ran.

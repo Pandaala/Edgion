@@ -223,12 +223,11 @@ where
                 ctx,
                 egc_default.as_ref().and_then(|resolved| resolved.candidate()),
             );
-            let dns_cache = get_global_dns_cache();
             let dns = ExternalNameResolution {
                 spec: &spec,
                 cache,
                 ttl: cache_ttl,
-                dns_cache: &dns_cache,
+                dns_cache: get_global_dns_cache(),
             };
             // Self-resolution has no EndpointSlice affinity contract: a sticky
             // target cannot replace the captured hostname's admitted DNS result.

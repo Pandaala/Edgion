@@ -10,7 +10,7 @@
 
 use std::collections::HashSet;
 use std::net::IpAddr;
-use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use crate::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
@@ -284,9 +284,9 @@ impl DnsCache {
 }
 
 /// Global data-plane DNS cache (mirrors the other backend stores' global-handle idiom).
-pub fn get_global_dns_cache() -> Arc<DnsCache> {
-    static STORE: std::sync::LazyLock<Arc<DnsCache>> = std::sync::LazyLock::new(|| Arc::new(DnsCache::new()));
-    STORE.clone()
+pub fn get_global_dns_cache() -> &'static DnsCache {
+    static STORE: LazyLock<DnsCache> = LazyLock::new(DnsCache::new);
+    &STORE
 }
 
 #[cfg(test)]
