@@ -3003,3 +3003,20 @@ workspace check/Clippy and seven repository guards. Existing warnings are outsid
 changed code. The skipped clock read is established by source control flow;
 tests cover selection and estimator behavior, not a measured latency saving.
 No selector API, estimator arithmetic, cache or benchmark was added.
+
+## Borrow the connected backend until load accounting is required
+
+The successful-connect callback's commit_attempt now borrows lb_backend while
+checking its policy. Only LeastConn/EWMA clone the Arc, still before inc_conn,
+and transfer it into the same owning LbCommitGuard. RoundRobin/ConsistentHash
+avoid an unused Arc increment/decrement. UpstreamInfo keeps its backend owner;
+missing-backend and already-committed returns, finalize/Drop balancing and
+header-time latency sampling remain unchanged.
+
+Independent plan and code reviews passed. Fresh verification passed seven attempt,
+three backend-counter and eight response-sample tests, formatting, workspace
+check/Clippy and seven repository guards. Existing warnings are outside changed
+code. The tests retain scoring/non-scoring, idempotence, cancellation, generation
+counter isolation and sampling coverage. No syntax-mirroring test was added;
+the removed reference-count work is evident in the branch, not an allocation or
+measured throughput improvement.

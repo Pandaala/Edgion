@@ -52,7 +52,7 @@ pub fn commit_attempt(upstream: &mut crate::UpstreamInfo) {
     if upstream.lb_committed.is_some() {
         return;
     }
-    let Some(backend) = upstream.lb_backend.as_ref().cloned() else {
+    let Some(backend) = upstream.lb_backend.as_ref() else {
         return;
     };
     // Both scoring policies maintain the count; the non-scoring ones do not
@@ -63,6 +63,7 @@ pub fn commit_attempt(upstream: &mut crate::UpstreamInfo) {
             | Some(edgion_resources::resources::lb_policy::ParsedLBPolicy::Ewma)
     );
     if scoring {
+        let backend = Arc::clone(backend);
         backend.inc_conn();
         upstream.lb_committed = Some(LbCommitGuard::new(backend));
     }
