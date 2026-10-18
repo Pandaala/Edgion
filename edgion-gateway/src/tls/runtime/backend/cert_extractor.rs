@@ -7,7 +7,7 @@ use crate::ctx::ClientCertInfo;
 use edgion_common::allowed_san::PresentedSan;
 use pingora_core::tls::ssl::SslRef;
 use pingora_core::tls::x509::X509Ref;
-use std::net::Ipv6Addr;
+use std::net::{IpAddr, Ipv6Addr};
 
 /// Extract client certificate information from SSL connection
 /// Returns None if no client certificate is present
@@ -87,7 +87,7 @@ pub(crate) fn extract_presented_sans(cert: &X509Ref) -> Vec<PresentedSan> {
 /// Borrow ordinary text until projection; move shared decoding temporaries.
 enum ClassifiedSan<'a> {
     Dns(&'a str),
-    Ip(String),
+    Ip(IpAddr),
     Email(&'a str),
     Uri(&'a str),
     OtherName { oid: String, value: String },
@@ -107,7 +107,7 @@ impl ClassifiedSan<'_> {
     fn into_presented(self) -> PresentedSan {
         match self {
             Self::Dns(value) => PresentedSan::dns(value),
-            Self::Ip(value) => PresentedSan::ip(value),
+            Self::Ip(value) => PresentedSan::ip(value.to_string()),
             Self::Email(value) => PresentedSan::email(value),
             Self::Uri(value) => PresentedSan::uri(value),
             Self::OtherName { oid, value } => PresentedSan::other_name(oid, value),
@@ -124,20 +124,18 @@ fn extract_san_projection<T>(cert: &X509Ref, mut project: impl FnMut(ClassifiedS
                 output.push(project(ClassifiedSan::Dns(dns_name)));
             }
             if let Some(ip_bytes) = san.ipaddress() {
-                let ip_str = match ip_bytes.len() {
-                    4 => {
-                        format!("{}.{}.{}.{}", ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3])
-                    }
+                let ip = match ip_bytes.len() {
+                    4 => IpAddr::from([ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]]),
                     16 => {
                         let octets: [u8; 16] = match ip_bytes.try_into() {
                             Ok(arr) => arr,
                             Err(_) => continue,
                         };
-                        Ipv6Addr::from(octets).to_string()
+                        IpAddr::V6(Ipv6Addr::from(octets))
                     }
                     _ => continue,
                 };
-                output.push(project(ClassifiedSan::Ip(ip_str)));
+                output.push(project(ClassifiedSan::Ip(ip)));
             }
             if let Some(email) = san.email() {
                 output.push(project(ClassifiedSan::Email(email)));

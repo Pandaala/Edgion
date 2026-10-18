@@ -2859,3 +2859,22 @@ verification passed seven FaultInjection tests and 29 selected PluginLog tests,
 formatting, workspace check/Clippy and seven repository guards. Warnings are
 outside changed code. No new test duplicating the existing coverage was added;
 the performance claim is limited to the removed temporary status String.
+
+## Certificate IP SAN projection formatting
+
+The canonical certificate extractor keeps IP SANs as private IpAddr values until
+the selected projection. Display formatting now emits the IP prefix and address
+together without first owning a bare address String; typed matching still owns
+its canonical address text. IPv4 decimal and IPv6 std formatting, invalid-length
+skips, type prefixes, duplicate order and separate OtherName traversal remain
+unchanged. The owning review knowledge now describes this intermediate accurately.
+
+Independent plan and code reviews passed. A signed raw-SAN certificate checks
+independent literal expectations for zero/max IPv4, zero/loopback/compressed,
+IPv4-mapped and max IPv6 addresses in both projections. Allocation comparisons
+reproduce the old IPv4 four-octet formatting and IPv6 to_string path; maximum
+IPv4/IPv6 fixtures show fewer calls and cumulative requested bytes with identical
+display output. This is not a universal allocation count or throughput claim.
+Fresh verification passed 13 extractor, 20 HeaderCertAuth and 14 mTLS callback
+tests, formatting, workspace check/Clippy and seven repository guards. Remaining
+warnings are outside changed code; no live TLS handshake suite was run.

@@ -307,3 +307,60 @@ fn other_name_utf8_string_decodes_for_matching() {
     assert_eq!(decoded, "a\u{0}b");
     assert_ne!(decoded, "a");
 }
+
+#[test]
+fn ip_san_projections_preserve_canonical_address_text() {
+    let addresses = [
+        ("0.0.0.0", "IP:0.0.0.0"),
+        ("255.255.255.255", "IP:255.255.255.255"),
+        ("::", "IP:::"),
+        ("::1", "IP:::1"),
+        ("2001:db8::1", "IP:2001:db8::1"),
+        ("::ffff:192.0.2.1", "IP:::ffff:192.0.2.1"),
+        (
+            "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "IP:ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+        ),
+    ];
+    let names: Vec<_> = addresses
+        .iter()
+        .map(|(text, _)| match text.parse::<std::net::IpAddr>().unwrap() {
+            std::net::IpAddr::V4(ip) => san_der(0x87, &ip.octets()),
+            std::net::IpAddr::V6(ip) => san_der(0x87, &ip.octets()),
+        })
+        .collect();
+    let cert = cert_with_raw_sans(&names);
+    assert_eq!(extract_sans(&cert), addresses.map(|(_, display)| display));
+    assert_eq!(
+        extract_presented_sans(&cert),
+        addresses.map(|(text, _)| PresentedSan::ip(text))
+    );
+}
+
+#[test]
+fn ip_display_projection_avoids_intermediate_address_string() {
+    for text in ["255.255.255.255", "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"] {
+        let address = text.parse::<std::net::IpAddr>().unwrap();
+        let (old, old_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+            let value = match address {
+                std::net::IpAddr::V4(ip) => {
+                    let bytes = ip.octets();
+                    format!("{}.{}.{}.{}", bytes[0], bytes[1], bytes[2], bytes[3])
+                }
+                std::net::IpAddr::V6(ip) => ip.to_string(),
+            };
+            format!("IP:{value}")
+        });
+        let (new, new_stats) =
+            crate::test_allocation_counter::count_allocation_stats(|| super::ClassifiedSan::Ip(address).into_display());
+        assert_eq!(new, old);
+        assert!(
+            new_stats.calls < old_stats.calls,
+            "old={old_stats:?}, new={new_stats:?}"
+        );
+        assert!(
+            new_stats.requested_bytes < old_stats.requested_bytes,
+            "old={old_stats:?}, new={new_stats:?}"
+        );
+    }
+}

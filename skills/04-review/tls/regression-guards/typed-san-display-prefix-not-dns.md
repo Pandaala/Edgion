@@ -47,8 +47,10 @@ RELATIVE-OID, nested extra tags, incomplete BER, and raw UTF-8 are skipped.
 separate display and typed projections. Select the projection before materializing
 owned results: display extraction must not populate a discarded `PresentedSan`
 vector, and typed extraction must not populate discarded prefixed strings.
-Borrowed DNS/email/URI values are consumed synchronously; canonical IP strings
-and decoded OtherName OID/value temporaries move into typed output. The BER
+Borrowed DNS/email/URI values are consumed synchronously. IP addresses remain
+typed until projection: display formats the prefixed address directly, while
+typed output owns its canonical address String. Decoded OtherName OID/value
+temporaries move into typed output. The BER
 decoder remains shared. This changes ownership cost without changing trust policy
 or merging the ordinary BoringSSL and OtherName DER passes.
 
