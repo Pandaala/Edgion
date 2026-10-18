@@ -1273,3 +1273,32 @@ validation and diff checks passed. This audit covers direct filter orchestration
 identified projection chain, not complete nested plugin runtime, session
 mutation, serialization or logging coverage. No runtime changes, Rust tests or
 throughput measurements were made in this documentation batch.
+
+## ResponseRewrite fixed header preparation
+
+ResponseRewrite prepares fixed add/set HeaderValues at construction and clones
+their shared values into typed session writers. The existing native
+PreparedHeader owner moved to the common plugin runtime so both consumers use
+one cold parsing/byte-promotion implementation. Native first-equivalent
+deduplication remains separate from ResponseRewrite's duplicate-preserving
+execution. No duplicate raw fixed-value configuration is retained.
+
+Schema validation still precedes preparation; direct invalid construction
+retains its logged no-op and publication still rejects invalid configuration.
+Rename remains dynamic, with the original protected checks, first-value read,
+set/remove behavior and failure policy. Status then rename/add/set/remove
+ordering, static error logs and continued processing are unchanged. Typed
+writers retain response protection and queued/direct ownership.
+
+Independent plan review passed. Existing generation-independence, action order,
+duplicate-add, writer failure and invalid-publication tests remain, with fixed
+writes using typed mock expectations. New tests check first-clone zero allocation,
+shared byte pointers and repeated add/set execution. Existing native prepared
+value tests exercise the shared implementation. Initial test compilation caught
+a stale manually constructed private fixture; it now uses the prepared type
+while retaining the intended validation bypass for runtime rename protection.
+Fresh ResponseRewrite tests passed 10, native Gateway API filter tests passed 63,
+and the real-adapter typed-value/pending-replay test passed. Formatting,
+workspace check/Clippy and seven repository guards passed, with existing warnings
+outside changed files. Independent source and final record reviews passed. Allocation claims concern value clones only, excluding names, response
+maps, queues and logs; no full integration suite or throughput benchmark ran.

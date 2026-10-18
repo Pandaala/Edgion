@@ -10,6 +10,7 @@ pub mod gateway_api_filters;
 pub mod log;
 mod plugin_runtime;
 pub mod policy_filter;
+mod prepared_header;
 mod reject_filter;
 pub(crate) mod response_stream_session;
 pub mod session_adapter;
@@ -27,6 +28,7 @@ pub use gateway_api_filters::RequestHeaderModifierFilter;
 pub use log::{EdgionPluginsLog, PluginLog, StageLogs};
 pub(crate) use plugin_runtime::InvalidUpdatePolicy;
 pub use plugin_runtime::PluginRuntime;
+pub(crate) use prepared_header::PreparedHeader;
 pub use session_adapter::PingoraSessionAdapter;
 pub use traits::{
     ChunkVerdict, DyeOutcome, PluginSession, PluginSessionError, PluginSessionHeaderExt, PluginSessionResult,

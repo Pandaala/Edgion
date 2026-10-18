@@ -108,3 +108,20 @@ the exact ordinary-mutation policy was approved for this task.
 ## Resolution references
 
 - `unify-response-header-mutation-policy` — fixed and verified; unified response policy with preserved body-owner framing.
+
+## Prepared fixed values
+
+Native header modifiers and ResponseRewrite share the runtime PreparedHeader
+owner for fixed values. It parses HeaderValue and promotes shared byte storage
+during construction, so the first request clone does not allocate value bytes.
+Schema validation remains authoritative and still runs before preparation.
+Session typed writers retain protected-header checks, queued/direct behavior
+and header-name ownership.
+
+Native modifiers keep their first-equivalent deduplication. ResponseRewrite
+instead retains every configured duplicate and its rename/add/set/remove order.
+Its rename values remain dynamic owned strings; only fixed add/set values use
+the prepared owner. Invalid direct construction remains a logged no-op, and
+publication continues to reject invalid configuration through existing gates.
+Do not infer that header names, queues, response maps or plugin logs allocate
+nothing from the zero-allocation prepared-value clone tests.

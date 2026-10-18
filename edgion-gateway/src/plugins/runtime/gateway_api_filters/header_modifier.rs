@@ -1,30 +1,13 @@
 //! Immutable preparation shared by Gateway API request and response header modifiers.
 
+use crate::plugins::runtime::PreparedHeader;
 use edgion_resources::resources::{GRPCHeaderFilter, HTTPHeader, HTTPHeaderFilter};
-use http::HeaderValue;
 use std::collections::HashSet;
 
 pub(crate) struct HeaderModifierPlan {
     set: Vec<PreparedHeader>,
     add: Vec<PreparedHeader>,
     remove: Vec<String>,
-}
-
-pub(crate) struct PreparedHeader {
-    name: String,
-    value: HeaderValue,
-}
-
-impl PreparedHeader {
-    #[inline]
-    pub(crate) fn name(&self) -> &str {
-        &self.name
-    }
-
-    #[inline]
-    pub(crate) fn value(&self) -> &HeaderValue {
-        &self.value
-    }
 }
 
 impl HeaderModifierPlan {
@@ -74,17 +57,10 @@ fn prepare_headers(headers: Option<Vec<HTTPHeader>>) -> Result<Vec<PreparedHeade
     let mut prepared = Vec::with_capacity(headers.len());
     for header in headers {
         if seen.insert(header.name.to_ascii_lowercase()) {
-            let value = HeaderValue::from_bytes(header.value.as_bytes())
-                .map_err(|_| "header modifier values must be valid HTTP header values")?;
-            // A freshly allocated HeaderValue promotes its Bytes storage on the
-            // first clone. Perform that one-time allocation during publication
-            // so every request-path clone only increments the shared reference.
-            let shared_value = value.clone();
-            drop(value);
-            prepared.push(PreparedHeader {
-                name: header.name,
-                value: shared_value,
-            });
+            prepared.push(
+                PreparedHeader::new(header.name, &header.value)
+                    .map_err(|_| "header modifier values must be valid HTTP header values")?,
+            );
         }
     }
     Ok(prepared)

@@ -51,9 +51,9 @@ fn prepared_generation_is_independent_from_caller_config() {
     };
     assert_eq!(prepared.status_code, Some(201));
     assert_eq!(prepared.status_log.as_deref(), Some("status rewrite 201"));
-    let prepared_entry = &prepared.headers.as_ref().unwrap().set.as_ref().unwrap()[0];
-    assert_eq!(prepared_entry.name, "X-Prepared");
-    assert_eq!(prepared_entry.value, "original");
+    let prepared_entry = &prepared.headers.as_ref().unwrap().set[0];
+    assert_eq!(prepared_entry.name(), "X-Prepared");
+    assert_eq!(prepared_entry.value(), "original");
 }
 
 #[test]
@@ -98,19 +98,19 @@ fn status_and_header_actions_preserve_order_and_duplicates() {
         .in_sequence(&mut sequence)
         .returning(|_| Ok(()));
     session
-        .expect_append_response_header()
+        .expect_append_response_header_value()
         .withf(|name, value| name == "X-Duplicate" && value == "one")
         .times(1)
         .in_sequence(&mut sequence)
         .returning(|_, _| Ok(()));
     session
-        .expect_append_response_header()
+        .expect_append_response_header_value()
         .withf(|name, value| name == "X-Duplicate" && value == "two")
         .times(1)
         .in_sequence(&mut sequence)
         .returning(|_, _| Ok(()));
     session
-        .expect_set_response_header()
+        .expect_set_response_header_value()
         .withf(|name, value| name == "X-Set" && value == "set")
         .times(1)
         .in_sequence(&mut sequence)
@@ -165,9 +165,9 @@ fn response_policy_rejects_either_rename_side_before_any_mutation() {
         let prepared = PreparedResponseRewrite {
             status_code: None,
             status_log: None,
-            headers: Some(ResponseHeaderActions {
-                set: None,
-                add: None,
+            headers: Some(PreparedResponseHeaders {
+                set: Vec::new(),
+                add: Vec::new(),
                 remove: None,
                 rename: Some(vec![HeaderRename {
                     from: from.into(),
@@ -216,12 +216,12 @@ fn writer_failures_use_static_logs_and_processing_continues() {
         .in_sequence(&mut sequence)
         .returning(|_, _| Err(io_error()));
     session
-        .expect_append_response_header()
+        .expect_append_response_header_value()
         .times(1)
         .in_sequence(&mut sequence)
         .returning(|_, _| Err(io_error()));
     session
-        .expect_set_response_header()
+        .expect_set_response_header_value()
         .withf(|name, _| name == "X-Set")
         .times(1)
         .in_sequence(&mut sequence)
@@ -277,7 +277,7 @@ fn failed_rename_source_removal_is_logged_without_rollback() {
         .in_sequence(&mut sequence)
         .returning(|_| Err(io_error()));
     session
-        .expect_append_response_header()
+        .expect_append_response_header_value()
         .withf(|name, value| name == "X-After" && value == "continued")
         .times(1)
         .in_sequence(&mut sequence)
@@ -352,4 +352,72 @@ async fn compile_plugins_matches_schema_validation_and_seals_invalid_config() {
         log.render_for_test(),
         "err: invalid plugin config\nerr: ResponseRewrite"
     );
+}
+
+#[test]
+fn prepared_values_share_first_clone_and_preserve_repeated_set_and_add() {
+    let first = "first-value-".repeat(64);
+    let second = "second-value-".repeat(64);
+    let config = ResponseRewriteConfig {
+        status_code: None,
+        headers: Some(ResponseHeaderActions {
+            add: Some(vec![header("X-Duplicate", &first), header("x-duplicate", &second)]),
+            set: Some(vec![header("X-Duplicate", &first), header("x-duplicate", &second)]),
+            rename: None,
+            remove: None,
+        }),
+    };
+    let plugin = ResponseRewrite::new(&config);
+    let ResponseRewriteState::Valid(prepared) = &plugin.state else {
+        panic!("valid duplicate entries must remain executable");
+    };
+    let headers = prepared.headers.as_ref().unwrap();
+    for entries in [&headers.add, &headers.set] {
+        assert_eq!(entries.len(), 2);
+        for (entry, expected) in entries.iter().zip([first.as_str(), second.as_str()]) {
+            let (value, allocations) = crate::test_allocation_counter::count_allocations(|| entry.value().clone());
+            assert_eq!(allocations, 0);
+            assert_eq!(value.as_bytes().as_ptr(), entry.value().as_bytes().as_ptr());
+            assert_eq!(value, expected);
+        }
+    }
+
+    let mut session = MockPluginSession::new();
+    session.expect_append_response_header().never();
+    session.expect_set_response_header().never();
+    let mut sequence = Sequence::new();
+    for entry in &headers.add {
+        let name = entry.name().to_owned();
+        let value = entry.value().clone();
+        session
+            .expect_append_response_header_value()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(move |actual_name, actual_value| {
+                assert_eq!(actual_name, name);
+                assert_eq!(actual_value, value);
+                assert_eq!(actual_value.as_bytes().as_ptr(), value.as_bytes().as_ptr());
+                Ok(())
+            });
+    }
+    for entry in &headers.set {
+        let name = entry.name().to_owned();
+        let value = entry.value().clone();
+        session
+            .expect_set_response_header_value()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(move |actual_name, actual_value| {
+                assert_eq!(actual_name, name);
+                assert_eq!(actual_value, value);
+                assert_eq!(actual_value.as_bytes().as_ptr(), value.as_bytes().as_ptr());
+                Ok(())
+            });
+    }
+    let mut log = PluginLog::new(PLUGIN_NAME);
+    assert_eq!(
+        plugin.run_upstream_response_filter(&mut session, &mut log),
+        PluginRunningResult::GoodNext
+    );
+    assert_eq!(log.render_for_test(), "header rewrite");
 }

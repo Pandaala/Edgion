@@ -3,9 +3,11 @@
 //! Rewrites responses before returning to client.
 //! Supports status code and headers modification.
 
-use crate::plugins::runtime::{PluginLog, PluginSession, UpstreamResponseFilter};
+use crate::plugins::runtime::{PluginLog, PluginSession, PreparedHeader, UpstreamResponseFilter};
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::edgion_plugins::{PluginValidation, ResponseHeaderActions, ResponseRewriteConfig};
+use edgion_resources::resources::edgion_plugins::{
+    HeaderRename, PluginValidation, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig,
+};
 use edgion_resources::response_header_policy::is_protected_response_header;
 
 const PLUGIN_NAME: &str = "ResponseRewrite";
@@ -13,7 +15,49 @@ const PLUGIN_NAME: &str = "ResponseRewrite";
 struct PreparedResponseRewrite {
     status_code: Option<u16>,
     status_log: Option<String>,
-    headers: Option<ResponseHeaderActions>,
+    headers: Option<PreparedResponseHeaders>,
+}
+
+struct PreparedResponseHeaders {
+    rename: Option<Vec<HeaderRename>>,
+    add: Vec<PreparedHeader>,
+    set: Vec<PreparedHeader>,
+    remove: Option<Vec<String>>,
+}
+
+impl PreparedResponseHeaders {
+    fn new(headers: &ResponseHeaderActions) -> Result<Self, http::header::InvalidHeaderValue> {
+        fn prepare(entries: &[ResponseHeaderEntry]) -> Result<Vec<PreparedHeader>, http::header::InvalidHeaderValue> {
+            entries
+                .iter()
+                .map(|entry| PreparedHeader::new(entry.name.clone(), &entry.value))
+                .collect()
+        }
+        Ok(Self {
+            rename: headers.rename.clone(),
+            add: prepare(headers.add.as_deref().unwrap_or_default())?,
+            set: prepare(headers.set.as_deref().unwrap_or_default())?,
+            remove: headers.remove.clone(),
+        })
+    }
+}
+
+impl PreparedResponseRewrite {
+    fn new(config: &ResponseRewriteConfig) -> Option<Self> {
+        if config.validation_error().is_some() {
+            return None;
+        }
+        Some(Self {
+            status_code: config.status_code,
+            status_log: config.status_code.map(|status| format!("status rewrite {status}")),
+            headers: config
+                .headers
+                .as_ref()
+                .map(PreparedResponseHeaders::new)
+                .transpose()
+                .ok()?,
+        })
+    }
 }
 
 enum ResponseRewriteState {
@@ -29,15 +73,9 @@ pub struct ResponseRewrite {
 impl ResponseRewrite {
     /// Create a new ResponseRewrite plugin from configuration
     pub fn new(config: &ResponseRewriteConfig) -> Self {
-        let state = if config.validation_error().is_some() {
-            ResponseRewriteState::Invalid
-        } else {
-            ResponseRewriteState::Valid(PreparedResponseRewrite {
-                status_code: config.status_code,
-                status_log: config.status_code.map(|status| format!("status rewrite {status}")),
-                headers: config.headers.clone(),
-            })
-        };
+        let state = PreparedResponseRewrite::new(config)
+            .map(ResponseRewriteState::Valid)
+            .unwrap_or(ResponseRewriteState::Invalid);
         Self { state }
     }
 
@@ -85,25 +123,27 @@ impl ResponseRewrite {
                 }
             }
 
-            // 2. Add headers (append)
-            if let Some(ref add_headers) = headers.add {
-                for entry in add_headers {
-                    if let Err(_e) = session.append_response_header(&entry.name, &entry.value) {
-                        plugin_log.push_err("header add fail");
-                    } else {
-                        modified = true;
-                    }
+            // 2. Add headers (append), preserving duplicate configured entries.
+            for entry in &headers.add {
+                if session
+                    .append_response_header_value(entry.name(), entry.value().clone())
+                    .is_err()
+                {
+                    plugin_log.push_err("header add fail");
+                } else {
+                    modified = true;
                 }
             }
 
             // 3. Set headers (overwrite)
-            if let Some(ref set_headers) = headers.set {
-                for entry in set_headers {
-                    if let Err(_e) = session.set_response_header(&entry.name, &entry.value) {
-                        plugin_log.push_err("header set fail");
-                    } else {
-                        modified = true;
-                    }
+            for entry in &headers.set {
+                if session
+                    .set_response_header_value(entry.name(), entry.value().clone())
+                    .is_err()
+                {
+                    plugin_log.push_err("header set fail");
+                } else {
+                    modified = true;
                 }
             }
 
