@@ -414,7 +414,7 @@ impl AiAttemptRuntimeState {
                 let number = self.next_attempt_number();
                 let entry = active.ledger_entry(number, Some(GenAiAttemptFailure::RetryableStatus), None, false);
                 let provider = active.provider;
-                let adaptive = active.adaptive.clone();
+                let adaptive = active.adaptive.as_deref();
                 match active.charged_tokens() {
                     Some(charged) => self.push(active.reservation, SettlementOperation::Reconcile(charged)),
                     None => {
@@ -436,7 +436,7 @@ impl AiAttemptRuntimeState {
                 let number = self.next_attempt_number();
                 let entry = active.ledger_entry(number, Some(GenAiAttemptFailure::AmbiguousTransport), None, false);
                 let provider = active.provider;
-                let adaptive = active.adaptive.clone();
+                let adaptive = active.adaptive.as_deref();
                 // Redis retains the full input + max-output reservation because
                 // the transport outcome is unknown. The access/identity ledger
                 // intentionally records only usage that can be observed or
@@ -449,7 +449,7 @@ impl AiAttemptRuntimeState {
                 let number = self.next_attempt_number();
                 let entry = active.ledger_entry(number, Some(GenAiAttemptFailure::BackendRequestTimeout), None, false);
                 let provider = active.provider;
-                let adaptive = active.adaptive.clone();
+                let adaptive = active.adaptive.as_deref();
                 self.push(active.reservation, SettlementOperation::Retain);
                 self.commit_ledger(entry, provider, adaptive, None);
             }
@@ -500,7 +500,7 @@ impl AiAttemptRuntimeState {
                 None
             };
             let provider = active.provider;
-            let adaptive = active.adaptive.clone();
+            let adaptive = active.adaptive.as_deref();
             self.push(active.reservation, operation);
             if dispatched {
                 self.commit_ledger(entry, provider, adaptive, successful_ttft_ms);
@@ -569,7 +569,7 @@ impl AiAttemptRuntimeState {
         &mut self,
         entry: Option<GenAiAttempt>,
         provider: AiProviderLabel,
-        adaptive: Option<Arc<AdaptiveTelemetryState>>,
+        adaptive: Option<&AdaptiveTelemetryState>,
         successful_ttft_ms: Option<u64>,
     ) {
         let Some(entry) = entry else {
@@ -610,7 +610,7 @@ impl AiAttemptRuntimeState {
                 } else {
                     self.accounting_overflow = true;
                 }
-                if let Some(adaptive) = &adaptive {
+                if let Some(adaptive) = adaptive {
                     let second = current_unix_second();
                     adaptive.record_charged_tokens(second, charged);
                 }

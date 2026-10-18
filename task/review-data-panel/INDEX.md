@@ -3685,3 +3685,25 @@ Fresh verification passed 87 tests: 50 usage, 13 accounting finalizer and
 24 attempt runtime tests. Formatting, workspace check/Clippy, seven repository
 guards and diff hygiene passed. Existing warnings remain outside changed code.
 No concurrency stress benchmark or throughput measurement was run.
+
+## Borrowed adaptive telemetry during attempt ledger commit
+
+Known failure, ambiguous failure, backend timeout and final completion now pass
+a borrowed adaptive telemetry state into synchronous commit_ledger instead of
+cloning its Arc. The consumed active attempt remains the owner throughout the
+call, including after its separate reservation field moves. Original ownership
+and field drop timing remain; the borrow ends before asynchronous pending
+settlement. No telemetry lookup or publication behavior changes.
+
+Charged-token and successful-TTFT recording keep their original positions before
+log byte admission. Neither recorder retains the reference or depends on Arc
+counts. Missing telemetry, undispatched completion, accounting overflow and
+success eligibility retain their branches. Existing settlement/adaptive and
+finalizer tests are used for this mechanical ownership adjustment. This removes
+four possible temporary Arc acquisitions, not the request-owned telemetry handle;
+no throughput or whole-request allocation claim is made.
+
+Fresh verification passed 59 tests: 24 attempt runtime, 13 accounting finalizer
+and 22 adaptive routing tests. Formatting, workspace check/Clippy, seven
+repository guards and diff hygiene passed. Existing warnings remain outside
+changed code. No live provider/Redis test or throughput benchmark was run.
