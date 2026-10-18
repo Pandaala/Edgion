@@ -1879,3 +1879,21 @@ or deployed integration suite is claimed.
 Fresh verification passed 33 PluginLog tests and 140 ExtProc tests. Formatting,
 workspace check/Clippy and seven repository guards passed; Clippy warnings
 remain outside the changed source. Independent final review passed.
+
+## Wasm typed integer log arguments
+
+Four existing callout/completion/local-response log sites pass counts and status
+directly to canonical PluginLog integer formatting, avoiding temporary numeric
+Strings. Templates, count extraction, payload release, local response selection
+and callback ordering remain unchanged. Guest messages remain unlogged; no
+body-phase logs are added. Independent plan review passed. Existing formatter
+parity/allocation tests and Wasm tests provide scoped validation, not a new
+lifecycle-wide audit or throughput benchmark.
+Fresh formatter verification passed 33 tests. The default-parallel Wasm run
+passed 207 and failed 56, including preparation-capacity exhaustion and downstream
+mock/timer failures. Re-running the same complete Wasm selection with
+`--test-threads=1` passed all 263 without source changes; parallel isolation is
+not established by that serial pass. No production admission limits were changed.
+Formatting, workspace check/Clippy and seven repository guards passed, with
+existing Clippy warnings outside the changed source. Independent final review
+passed, including the recorded parallel/serial verification limits.

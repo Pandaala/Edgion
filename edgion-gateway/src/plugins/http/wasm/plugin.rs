@@ -449,13 +449,7 @@ impl WasmPlugin {
             deadline,
         )
         .await?;
-        log.push_fmt(
-            "wasm callouts={} leftover={}",
-            la![
-                outcome.delivered.to_string().as_str(),
-                outcome.leftover.to_string().as_str()
-            ],
-        );
+        log.push_fmt("wasm callouts={} leftover={}", la![outcome.delivered, outcome.leftover]);
         Ok(outcome.leftover == 0)
     }
 
@@ -495,12 +489,9 @@ impl WasmPlugin {
         }
         if action != 0 && !had_callouts {
             // Pause without a callout cannot be honored (nothing to wait for).
-            log.push_fmt("wasm ok ops={} pause-ignored", la![op_count.to_string().as_str()]);
+            log.push_fmt("wasm ok ops={} pause-ignored", la![op_count]);
         } else {
-            log.push_fmt(
-                "wasm ok ops={} logs={}",
-                la![op_count.to_string().as_str(), guest_logs.to_string().as_str()],
-            );
+            log.push_fmt("wasm ok ops={} logs={}", la![op_count, guest_logs]);
         }
         PluginRunningResult::GoodNext
     }
@@ -736,7 +727,7 @@ fn finish_local_response(
             session.append_response_header(name, value)
         };
     }
-    log.push_fmt("wasm local {}", la![local.status.to_string().as_str()]);
+    log.push_fmt("wasm local {}", la![local.status]);
     let body = (!local.body.is_empty()).then(|| Bytes::from(local.body));
     PluginRunningResult::ErrResponse {
         status: local.status,
