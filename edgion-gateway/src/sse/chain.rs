@@ -381,6 +381,20 @@ impl SliceChain {
         }
     }
 
+    pub(super) fn range_eq(&self, range: ByteRange, literal: &[u8]) -> bool {
+        if range.start > range.end || range.end > self.len || range.len() != literal.len() {
+            return false;
+        }
+        let mut offset = 0;
+        let mut equal = true;
+        self.for_each_range(range, |part| {
+            equal &= part == &literal[offset..offset + part.len()];
+            offset += part.len();
+        })
+        .is_some()
+            && equal
+    }
+
     pub fn for_each_range(&self, range: ByteRange, mut visitor: impl FnMut(&[u8])) -> Option<()> {
         if range.end > self.len {
             return None;

@@ -202,16 +202,17 @@ impl<'a> SseEventRef<'a> {
         self.event.and_then(|range| range_str(self.raw, range).ok())
     }
 
+    pub fn event_is(&self, literal: &str) -> bool {
+        self.event
+            .is_some_and(|range| self.raw.range_eq(range, literal.as_bytes()))
+    }
+
     pub fn id(&self) -> Option<Cow<'a, str>> {
         self.id.and_then(|range| range_str(self.raw, range).ok())
     }
 
     pub fn data_is_literal(&self, literal: &[u8]) -> bool {
-        self.data.len() == 1
-            && self
-                .raw
-                .range(self.data[0])
-                .is_some_and(|value| value.as_ref() == literal)
+        self.data.len() == 1 && self.raw.range_eq(self.data[0], literal)
     }
 
     #[allow(clippy::result_unit_err)]

@@ -411,3 +411,58 @@ fn metadata_accounts_for_handles_lines_and_parsed_data_ranges() {
         "combined metadata/range pressure must degrade before it can exceed a cap"
     );
 }
+
+#[test]
+fn literal_checks_preserve_event_and_data_semantics_across_every_split() {
+    let fixtures: &[&[u8]] = &[
+        b"event: message_start\ndata: [DONE]\n\n",
+        b"event: message_start\nevent: message_delta\ndata: [DONE]\n\n",
+        b"event: message_stop\ndata: [DONE]\n\n",
+        b"event: error\ndata: [DONE]\n\n",
+        b"event: Message_Start\ndata: [DONE]\n\n",
+        b"event:\ndata: [DONE]\n\n",
+        b"data: [DONE]\n\n",
+        "event: é\ndata: [DONE]\n\n".as_bytes(),
+        b"event: \xff\ndata: [DONE]\n\n",
+        b"event: error\ndata: [DONE]\ndata:\n\n",
+    ];
+    for input in fixtures {
+        for split in 0..=input.len() {
+            let mut decoder = SseDecoder::with_default_limit();
+            let mut blocks = 0;
+            for part in [&input[..split], &input[split..]] {
+                decoder.feed_records(Bytes::copy_from_slice(part), |record| {
+                    let SseRecordRef::Block { event, .. } = record else {
+                        return;
+                    };
+                    blocks += 1;
+                    for literal in [
+                        "message_start",
+                        "message_delta",
+                        "message_stop",
+                        "error",
+                        "Message_Start",
+                        "",
+                        "é",
+                    ] {
+                        let expected = event.event().as_deref() == Some(literal);
+                        let (matched, allocations) =
+                            crate::test_allocation_counter::count_allocations(|| event.event_is(literal));
+                        assert_eq!(matched, expected);
+                        assert_eq!(allocations, 0);
+                    }
+                    let expected = event.data.len() == 1
+                        && event
+                            .raw
+                            .range(event.data[0])
+                            .is_some_and(|value| value.as_ref() == b"[DONE]");
+                    let (matched, allocations) =
+                        crate::test_allocation_counter::count_allocations(|| event.data_is_literal(b"[DONE]"));
+                    assert_eq!(matched, expected);
+                    assert_eq!(allocations, 0);
+                });
+            }
+            assert_eq!(blocks, 1);
+        }
+    }
+}

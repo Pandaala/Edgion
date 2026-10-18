@@ -66,3 +66,42 @@ fn empty_and_already_normalized_chains_are_noops() {
     assert!(chain.normalize_retained(resident - 1).is_err());
     assert_eq!(chain.raw_slices()[0].as_ptr(), pointer);
 }
+
+#[test]
+fn range_literal_comparison_borrows_sliced_and_coalesced_storage() {
+    let input = b"message_delta";
+    let mut chains = Vec::new();
+    for split in 0..=input.len() {
+        let mut chain = SliceChain::default();
+        chain.push(Bytes::copy_from_slice(&input[..split]), 1024).unwrap();
+        chain.push(Bytes::copy_from_slice(&input[split..]), 1024).unwrap();
+        chains.push(chain);
+    }
+    let mut coalesced = SliceChain::default();
+    for _ in 0..=MAX_SLICE_HANDLES {
+        coalesced.push(Bytes::from_static(b"x"), 1024).unwrap();
+    }
+    assert_eq!(coalesced.coalesce_count(), 1);
+    chains.push(coalesced);
+    for chain in chains {
+        for range in [
+            ByteRange::new(0, chain.len()),
+            ByteRange::new(1, chain.len() - 1),
+            ByteRange::new(chain.len(), chain.len()),
+        ] {
+            let expected = chain.range(range).unwrap();
+            let (matched, allocations) =
+                crate::test_allocation_counter::count_allocations(|| chain.range_eq(range, expected.as_ref()));
+            assert!(matched);
+            assert_eq!(allocations, 0);
+            if !expected.is_empty() {
+                let mut different = expected.to_vec();
+                *different.last_mut().unwrap() ^= 1;
+                assert!(!chain.range_eq(range, &different));
+            }
+            assert!(!chain.range_eq(range, b"different length"));
+        }
+        assert!(!chain.range_eq(ByteRange::new(2, 1), b""));
+        assert!(!chain.range_eq(ByteRange::new(chain.len() + 1, chain.len() + 1), b""));
+    }
+}

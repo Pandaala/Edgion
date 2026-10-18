@@ -3942,3 +3942,31 @@ Fresh verification passed 140 network-free tests: 51 usage, 33 native Anthropic
 and 56 Chat-to-Anthropic conversion tests. Formatting, workspace check/Clippy,
 seven repository guards and diff hygiene passed. Existing warnings remain
 outside changed code. No live provider or throughput benchmark was run.
+
+
+## SSE literal comparison without materialization
+
+SliceChain now compares a validated range with a literal through its canonical
+borrowed fragment walker. SseEventRef uses it for event_is and its existing
+single-data-line literal check. Native Messages classifies its four recognized
+event names through event_is, avoiding temporary strings when names span slices;
+canonical Chat DONE checks similarly avoid materializing fragmented data.
+
+Matching a valid string literal also guarantees valid UTF-8 for that match.
+Case sensitivity, missing versus empty names, duplicate-name selection, the
+single-data-line requirement and poisoned-block policies remain unchanged.
+The helper rejects reversed/out-of-bounds ranges before visiting storage.
+No decoding, coalescing, retained-byte bounds or event ownership was changed.
+
+Regressions compare decoder checks with the prior materializing expressions at
+every two-way split, including empty/missing, repeated, mixed-case and invalid
+UTF-8 names and multiline data. Chain tests cover sliced/coalesced storage,
+empty/invalid ranges and late mismatches. Comparisons allocate zero bytes in
+these tests; classification may traverse fragments more than once, so no general
+CPU or throughput improvement is claimed.
+
+Fresh verification passed 118 distinct network-free tests: the SSE filter ran
+85 and native Anthropic ran 33. The separate 12-test canonical SSE run overlaps
+the first filter and is not counted twice. Formatting, workspace check/Clippy,
+seven repository guards and diff hygiene passed. Existing warnings remain
+outside changed code. No live provider or throughput benchmark was run.

@@ -205,12 +205,16 @@ impl StreamingResponseProcessor for MessagesProcessor {
                                 }
                                 SseBlockStatus::Data => {}
                             }
-                            let envelope = match event.event().as_deref() {
-                                Some("message_start") => Kind::Start,
-                                Some("message_delta") => Kind::Delta,
-                                Some("message_stop") => Kind::Stop,
-                                Some("error") => Kind::Error,
-                                _ => Kind::Other,
+                            let envelope = if event.event_is("message_start") {
+                                Kind::Start
+                            } else if event.event_is("message_delta") {
+                                Kind::Delta
+                            } else if event.event_is("message_stop") {
+                                Kind::Stop
+                            } else if event.event_is("error") {
+                                Kind::Error
+                            } else {
+                                Kind::Other
                             };
                             // Unknown events remain transparent and cannot contribute lifecycle metadata.
                             if envelope == Kind::Other {
