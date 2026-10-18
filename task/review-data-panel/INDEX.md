@@ -2414,3 +2414,16 @@ removes temporary token Strings; optional payloads and escaped decoding may stil
 allocate, and no end-to-end throughput improvement is claimed.
 Fresh verification passed all 6 protocol tests, formatting, workspace check/Clippy
 and seven repository guards. Remaining warnings are outside changed code.
+
+## Guardrail replacement ordering without sort scratch
+
+Decision parsing now uses in-place unstable sorting for replacement keys. Every
+accepted key is unique, so successful output order and key/text association stay
+identical; duplicate keys still return the same fixed error. Byte accounting and
+cap rejection retain their precedence before sorting. This avoids the stable
+sort's auxiliary heap storage on larger lists, without claiming throughput gains
+or eliminating parsing allocations. Independent plan and code reviews passed.
+Fresh verification passed all 8 protocol tests, including 256 scrambled keys,
+field/tool ordering, exact-cap acceptance and duplicate/error precedence,
+formatting, workspace check/Clippy and seven repository guards. Remaining warnings
+are outside changed code.

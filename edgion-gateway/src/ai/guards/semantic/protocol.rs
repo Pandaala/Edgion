@@ -135,7 +135,7 @@ pub(super) fn parse_decision(body: &[u8], max_replacement_bytes: usize) -> Resul
                 }
                 parsed.push((replacement.field.key(replacement.choice_index), replacement.current));
             }
-            parsed.sort_by_key(|(key, _)| *key);
+            parsed.sort_unstable_by_key(|(key, _)| *key);
             if parsed.windows(2).any(|pair| pair[0].0 == pair[1].0) {
                 return Err("duplicate-replacement");
             }

@@ -113,3 +113,53 @@ fn decision_token_errors_keep_their_categories_and_precedence() {
         Err("invalid-action-fields")
     );
 }
+
+#[test]
+fn replacement_order_preserves_keys_text_and_exact_byte_cap() {
+    let mut expected = Vec::new();
+    let mut replacements = Vec::new();
+    let mut total = 0;
+    for index in 0..256u32 {
+        let field = match index % 4 {
+            0 => WireField::Content,
+            1 => WireField::ReasoningContent,
+            value => WireField::ToolArguments {
+                tool_call_index: value - 2,
+            },
+        };
+        let current = format!("text-{index}");
+        total += current.len();
+        expected.push((field.key(index / 4), current.clone()));
+        replacements.push(serde_json::json!({
+            "choiceIndex": index / 4,
+            "field": field,
+            "current": current,
+        }));
+    }
+    let scrambled: Vec<_> = (0..256).map(|index| &replacements[(index * 73) % 256]).collect();
+    let body = serde_json::to_vec(&serde_json::json!({
+        "version": "v1", "action": "replace", "replacements": scrambled,
+    }))
+    .unwrap();
+    assert_eq!(parse_decision(&body, total), Ok(ParsedDecision::Replace(expected)));
+    assert_eq!(parse_decision(&body, total - 1), Err("replacement-too-large"));
+}
+
+#[test]
+fn duplicate_replacement_keys_reject_distinct_text_for_every_field() {
+    for field in [
+        WireField::Content,
+        WireField::ReasoningContent,
+        WireField::ToolArguments { tool_call_index: 7 },
+    ] {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "version": "v1", "action": "replace", "replacements": [
+                {"choiceIndex": 2, "field": field, "current": "first"},
+                {"choiceIndex": 2, "field": field, "current": "second"},
+            ],
+        }))
+        .unwrap();
+        assert_eq!(parse_decision(&body, 11), Err("duplicate-replacement"));
+        assert_eq!(parse_decision(&body, 10), Err("replacement-too-large"));
+    }
+}
