@@ -775,3 +775,25 @@ rule evaluation and malformed-record equivalence remain outside this audit.
 Independent plan and final source reviews passed. Agent-doc validation and diff
 whitespace checks passed. No Rust tests or benchmarks ran for this documentation
 batch; no runtime or dependency code changed.
+
+## Stream GeoIP denial-reason traversal
+
+Shared geographic rules normalize ISO-coded values during construction, borrow
+facts for linear membership, and short-circuit group matching. Stream denial
+reason selection formerly repeated deny matching even when there were no allow
+groups. In that case a deny hit and the deny default share deny_country, so the
+runtime now selects that reason without traversing the rules a second time.
+The canonical first decision, reference availability, MMDB demand/failOpen and
+metric/reason strings remain unchanged. Configurations with allow groups retain
+their existing reason disambiguation; no shared result API or rule reordering is
+introduced. The skipped readers have no mutation or diagnostic side effects.
+
+The existing reason/metric regression now also covers no-allow deny-hit and
+default-deny outcomes. This removes redundant work on that rejection path only;
+no throughput benefit or complete GeoIP subsystem coverage is claimed.
+
+Independent plan and final source reviews passed. Stream GeoIP tests (11),
+shared Geo IP-reference tests (5), resource GeoRule tests (14) and GeoIpLocation
+tests (15) passed. Formatting, workspace check/Clippy and seven repository guards
+passed; existing warnings are outside the changed code. No full integration suite
+or throughput benchmark ran.

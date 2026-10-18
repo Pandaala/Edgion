@@ -137,15 +137,16 @@ impl StreamPlugin for GeoIpLocationStreamPlugin {
                 // "defaultAction: Deny with nothing configured to explain why" —
                 // fold that (rare, degenerate) case into `deny_country` too
                 // rather than adding an undeclared fourth reason value.
-                let (reason, denial) = if self.config.denies(&rule_ctx, |side, group, rule, ip| {
-                    view.as_ref()
-                        .is_some_and(|view| self.refs.contains_in(view, side, group, rule, ip))
-                }) {
+                // Without an allow group, both a deny hit and the deny default
+                // have the same reason; no second rule traversal is needed.
+                let (reason, denial) = if self.config.allow_rule_groups.is_empty()
+                    || self.config.denies(&rule_ctx, |side, group, rule, ip| {
+                        view.as_ref()
+                            .is_some_and(|view| self.refs.contains_in(view, side, group, rule, ip))
+                    }) {
                     ("deny_country", "geo:deny:deny_country")
-                } else if !self.config.allow_rule_groups.is_empty() {
-                    ("allow_miss", "geo:deny:allow_miss")
                 } else {
-                    ("deny_country", "geo:deny:deny_country")
+                    ("allow_miss", "geo:deny:allow_miss")
                 };
                 record_geoip_denied(ctx.layer, reason);
                 StreamPluginResult::Deny(denial.into())

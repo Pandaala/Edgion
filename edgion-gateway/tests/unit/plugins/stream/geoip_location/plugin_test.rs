@@ -199,6 +199,21 @@ async fn cidr_deny_hit_and_allow_miss_have_exact_reasons_and_metrics() {
         StreamPluginResult::Deny(reason) if reason == "geo:deny:allow_miss"
     ));
 
+    let mut deny_only = cfg.clone();
+    deny_only.allow_rule_groups.clear();
+    deny_only.default_action = DefaultAction::Deny;
+    let deny_only = create_plugin(&deny_only).unwrap();
+    for ip in ["10.1.2.3", "8.8.8.8"] {
+        let result = metrics::with_local_recorder(&recorder, || {
+            futures::FutureExt::now_or_never(deny_only.on_connection(&stream_ctx(ip)))
+                .expect("CIDR-only GeoIpLocation stream path must not yield")
+        });
+        assert!(matches!(
+            result,
+            StreamPluginResult::Deny(reason) if reason == "geo:deny:deny_country"
+        ));
+    }
+
     let rendered = handle.render();
     assert!(
         rendered.contains("reason=\"deny_country\"") && rendered.contains("reason=\"allow_miss\""),
