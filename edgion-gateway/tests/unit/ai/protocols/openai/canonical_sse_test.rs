@@ -203,11 +203,25 @@ fn canonical_writer_preserves_json_bytes_limits_and_semantic_ranges() {
     });
     let expected = format!("data: {}\n\n", serde_json::to_string(&value).unwrap());
     for limit in 0..expected.len() {
-        assert!(write_canonical_record(&value, limit).is_err(), "limit {limit}");
+        for capture_semantics in [false, true] {
+            assert!(
+                write_canonical_record(&value, limit, capture_semantics).is_err(),
+                "limit {limit}, capture_semantics {capture_semantics}"
+            );
+        }
     }
-    let (bytes, record) = write_canonical_record(&value, expected.len()).unwrap();
+    let (captured, captured_allocations) = crate::test_allocation_counter::count_allocations(|| {
+        write_canonical_record(&value, expected.len(), true).unwrap()
+    });
+    let (plain, plain_allocations) = crate::test_allocation_counter::count_allocations(|| {
+        write_canonical_record(&value, expected.len(), false).unwrap()
+    });
+    let (bytes, record) = captured;
     assert_eq!(bytes.as_ref(), expected.as_bytes());
-    assert_eq!(record.into_raw_slices().concat(), expected.as_bytes());
+    assert_eq!(record.unwrap().into_raw_slices().concat(), expected.as_bytes());
+    assert_eq!(plain.0, bytes);
+    assert!(plain.1.is_none());
+    assert!(plain_allocations < captured_allocations);
 
     let mut writer = ValueWriter {
         bytes: Vec::new(),

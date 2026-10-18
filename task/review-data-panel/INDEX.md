@@ -3593,3 +3593,30 @@ Fresh verification passed all 56 chat-to-Anthropic unit tests, including respons
 normalization and final-head revalidation. Formatting, workspace check/Clippy,
 seven repository guards and diff hygiene passed. Existing warnings remain outside
 changed code. No network test or live provider benchmark was run.
+
+## Optional canonical event metadata for Anthropic streaming
+
+Anthropic push_json_event now requests semantic metadata only when its current
+callback owns an active canonical batch. The existing canonical writer uses
+WriteContext::Root for capture and Other otherwise; Other stays Other throughout
+the recursive walk. Both paths retain identical JSON serialization, framing and
+byte-limit checks. Disabled capture allocates neither semantic fragments/ranges
+nor the discarded WindowRecord/raw-slice table. Record construction is lazy.
+The active path retains the existing records and canonical batch admission.
+
+The writer regression compares both modes against exact serde JSON bytes,
+rejects every below-output byte limit in both modes, and verifies lower allocation
+count with capture disabled for content, reasoning and tool-argument fields.
+Fixture construction is excluded. Existing semantic range assertions remain.
+Usage character counting, quota, terminal ownership and body storage are unchanged;
+this establishes a local allocation reduction, not live throughput improvement.
+
+The adjacent decoder replacement was also inspected: its temporary default
+contains empty Vec-backed state and scalar fields, not preallocated event storage.
+The original decoder is restored after synchronous feed. No decoder change is
+justified by an assumed per-callback constructor allocation.
+
+Fresh verification passed 92 tests: 12 canonical SSE, 56 chat-to-Anthropic and
+24 semantic response tests. Formatting, workspace check/Clippy, seven repository
+guards and diff hygiene passed. Existing warnings remain outside changed code.
+No live provider or transport benchmark was run.

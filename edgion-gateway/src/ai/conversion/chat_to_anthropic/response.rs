@@ -701,7 +701,7 @@ impl AnthropicResponseProcessor {
     }
 
     fn push_json_event(&mut self, output: &mut Vec<u8>, value: &Value) -> Result<(), ()> {
-        let (encoded_record, record) = write_canonical_record(value, MAX_BODY_BYTES)?;
+        let (encoded_record, record) = write_canonical_record(value, MAX_BODY_BYTES, self.semantic_records.is_some())?;
         append_capped(output, &encoded_record, MAX_BODY_BYTES)?;
         self.pending_output_chars = self.pending_output_chars.saturating_add(
             u64::try_from(
@@ -711,7 +711,7 @@ impl AnthropicResponseProcessor {
             )
             .unwrap_or(u64::MAX),
         );
-        if let Some(batch) = &mut self.semantic_records {
+        if let (Some(batch), Some(record)) = (&mut self.semantic_records, record) {
             batch.push(record).map_err(|_| ())?;
         }
         Ok(())
