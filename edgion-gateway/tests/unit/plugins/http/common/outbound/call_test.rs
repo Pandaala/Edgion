@@ -367,3 +367,25 @@ fn backoff_jitter_stays_in_band_and_under_cap() {
     }
     assert!(!all_equal, "jitter must vary");
 }
+
+#[tokio::test]
+async fn reqwest_header_transfer_preserves_body_stream() {
+    let mut source = http::Response::new(reqwest::Body::from("payload"));
+    let mut value = reqwest::header::HeaderValue::from_str(&"private-value".repeat(8)).unwrap();
+    value.set_sensitive(true);
+    let original_ptr = value.as_bytes().as_ptr();
+    source.headers_mut().insert("x-private", value);
+    let mut response: reqwest::Response = source.into();
+    let (headers, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+        std::mem::take(OutboundHttpResponse::headers_mut(&mut response))
+    });
+    assert_eq!(stats.calls, 0);
+    assert_eq!(headers["x-private"].as_bytes().as_ptr(), original_ptr);
+    assert!(headers["x-private"].is_sensitive());
+    assert!(response.headers().is_empty());
+    let (body, truncated) = stream_body_chunks_capped(OutboundHttpResponse::bytes_stream(response), 64)
+        .await
+        .unwrap();
+    assert_eq!(body, Bytes::from_static(b"payload"));
+    assert!(!truncated);
+}

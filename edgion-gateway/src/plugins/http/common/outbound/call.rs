@@ -233,6 +233,7 @@ trait OutboundHttpResponse {
 
     fn status(&self) -> u16;
     fn headers(&self) -> &reqwest::header::HeaderMap;
+    fn headers_mut(&mut self) -> &mut reqwest::header::HeaderMap;
     fn content_length(&self) -> Option<u64>;
     fn bytes_stream(self) -> impl Stream<Item = Result<Bytes, Self::BodyError>>;
 }
@@ -246,6 +247,10 @@ impl OutboundHttpResponse for reqwest::Response {
 
     fn headers(&self) -> &reqwest::header::HeaderMap {
         self.headers()
+    }
+
+    fn headers_mut(&mut self) -> &mut reqwest::header::HeaderMap {
+        self.headers_mut()
     }
 
     fn content_length(&self) -> Option<u64> {
@@ -416,7 +421,7 @@ async fn outbound_call_with_body_using<T: OutboundTransport>(
                     return Err(err);
                 }
             }
-            Ok(Ok(resp)) => {
+            Ok(Ok(mut resp)) => {
                 let status = resp.status();
 
                 // Status-based retry eligibility.
@@ -475,7 +480,7 @@ async fn outbound_call_with_body_using<T: OutboundTransport>(
                         return Err(OutboundCallError::ResponseTooLarge);
                     }
                 }
-                let resp_headers = resp.headers().clone();
+                let resp_headers = std::mem::take(resp.headers_mut());
                 let Ok((body, truncated)) = stream_body_chunks_capped(resp.bytes_stream(), max_bytes).await else {
                     record_passive_result(&client.health, &client.passive_health_check, false);
                     return Err(OutboundCallError::Connect);

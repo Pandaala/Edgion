@@ -81,6 +81,10 @@ impl OutboundHttpResponse for FakeResponse {
         &self.headers
     }
 
+    fn headers_mut(&mut self) -> &mut reqwest::header::HeaderMap {
+        &mut self.headers
+    }
+
     fn content_length(&self) -> Option<u64> {
         self.content_length
     }
@@ -228,18 +232,23 @@ async fn call(
 
 #[tokio::test]
 async fn non_success_returns_response_with_headers() {
-    let transport = FakeTransport::for_route(
-        reqwest::Method::GET,
-        "/check",
-        [FakeResponse::new(403, Bytes::from_static(b"denied"))
-            .header("www-authenticate", "Bearer")
-            .into()],
-    );
+    let mut source = FakeResponse::new(403, Bytes::from_static(b"denied")).header("www-authenticate", "Bearer");
+    let mut first_cookie = reqwest::header::HeaderValue::from_static("first=private");
+    first_cookie.set_sensitive(true);
+    source.headers.append("set-cookie", first_cookie);
+    source.headers.append("set-cookie", "second=value".parse().unwrap());
+    let transport = FakeTransport::for_route(reqwest::Method::GET, "/check", [source.into()]);
     let response = call(&make_client(), &session("GET", "/check"), &transport, 4096)
         .await
         .unwrap();
     assert_eq!(response.status, 403);
     assert_eq!(response.headers["www-authenticate"], "Bearer");
+    let cookies: Vec<_> = response.headers.get_all("set-cookie").iter().collect();
+    assert_eq!(cookies.len(), 2);
+    assert_eq!(cookies[0], "first=private");
+    assert!(cookies[0].is_sensitive());
+    assert_eq!(cookies[1], "second=value");
+    assert!(!cookies[1].is_sensitive());
     assert_eq!(response.body, Bytes::from_static(b"denied"));
     assert_eq!(transport.requests.lock()[0].path, "/check");
 }

@@ -2249,3 +2249,19 @@ throughput benchmark is claimed.
 Fresh verification on final source passed all 118 shared outbound tests,
 formatting, workspace check/Clippy and seven repository guards. Remaining
 warnings are outside changed source. Independent final review passed.
+
+## Outbound completed-response header ownership transfer
+
+After status retry, Retry-After and declared-length checks, the shared call loop
+moves the response HeaderMap into completed-response ownership instead of cloning
+it. The private response seam exposes headers_mut for real and scripted responses.
+Locked reqwest bytes_stream consumes only the body, so moving headers at this
+point leaves streaming caps, errors and health/retry decisions unchanged. Existing
+transport coverage now verifies repeated Set-Cookie order and sensitivity; a
+synthetic real reqwest response test checks zero-allocation header transfer,
+value storage identity and subsequent capped body consumption. Independent plan
+review passed. The test knowledge page's stale source path is corrected. This is
+not a live network or whole-exchange allocation/throughput claim.
+Fresh verification passed all 119 shared outbound tests, formatting, workspace
+check/Clippy and seven repository guards. Remaining warnings are outside changed
+lines. Independent final review passed.

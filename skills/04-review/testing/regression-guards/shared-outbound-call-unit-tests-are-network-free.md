@@ -31,7 +31,7 @@ library unit-test binary, contrary to `skills/05-testing/00-unit-testing.md`.
 
 The production call path passes `client.http_client.as_ref()` to the private
 generic loop. Its `OutboundTransport` implementation invokes the same
-`reqwest::Client::execute` operation. `call_transport_tests.rs` supplies a
+`reqwest::Client::execute` operation. `edgion-gateway/tests/unit/plugins/http/common/outbound/call_test/transport_tests.rs` supplies a
 test-only implementation that records each request and returns scripted
 headers, status, body chunks, delays, or transport errors. The response-body
 collector is shared with the existing `stream_body_capped` consumers; the
