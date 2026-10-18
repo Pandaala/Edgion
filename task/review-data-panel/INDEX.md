@@ -3620,3 +3620,22 @@ Fresh verification passed 92 tests: 12 canonical SSE, 56 chat-to-Anthropic and
 24 semantic response tests. Formatting, workspace check/Clippy, seven repository
 guards and diff hygiene passed. Existing warnings remain outside changed code.
 No live provider or transport benchmark was run.
+
+## Terminal quota computation eligibility
+
+The terminal AI quota finalizer now borrows the request and its quota owner
+before computing authoritative totals and the overflow snapshot. Requests without
+a quota return before these discarded field/atomic reads and checked arithmetic.
+The skipped helpers are observational; diagnostic claiming remains in usage
+finalization. The quota-present path retains its computation, await, result and
+error handling order. Top-level attempt, usage and quota finalization order is
+unchanged, including unknown usage and overflow policy.
+
+The existing admission-bypass status regression now runs quota finalization too
+and verifies that an absent quota preserves the summary's fail_open status.
+No allocation or throughput improvement is claimed for this small read reduction.
+
+Fresh verification passed 63 network-free tests: 13 accounting finalizer,
+23 attempt runtime and 27 quota tests. Formatting, workspace check/Clippy,
+seven repository guards and diff hygiene passed. Existing warnings remain
+outside changed code. No live Redis or provider benchmark was run.

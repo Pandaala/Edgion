@@ -116,14 +116,15 @@ async fn finalize_prices_ordinary_cached_and_output_tokens_without_float() {
     assert!(json.contains(r#""estimated_cost_usd":"0.00084""#));
 }
 
-#[test]
-fn finalize_preserves_quota_admission_bypass_status() {
+#[tokio::test]
+async fn finalize_preserves_quota_admission_bypass_status() {
     let mut ctx = ai_context(AiProviderLabel::OpenAi, "model-a", false);
     let ai = ctx.ensure_ai_state().request.as_mut().unwrap();
     ai.quota_status = Some("fail_open");
     ai.usage.observe_reported_usage(2, 3, 0, 0);
 
     finalize_ai_usage_with_metrics_enabled(&mut ctx, false);
+    finalize_ai_quota(&mut ctx).await;
 
     assert_eq!(
         ctx.ai_state().unwrap().summary.as_ref().unwrap().quota_status,

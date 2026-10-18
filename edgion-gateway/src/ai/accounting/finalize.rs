@@ -119,6 +119,12 @@ async fn finalize_ai_quota(ctx: &mut EdgionHttpContext) {
     let Some(summary) = state.summary.as_ref() else {
         return;
     };
+    let Some(ai) = state.request.as_mut() else {
+        return;
+    };
+    let Some(quota) = ai.quota.as_mut() else {
+        return;
+    };
     let authoritative_total = if state.attempt_runtime.ever_dispatched() {
         state.attempt_runtime.charged_request_tokens().ok()
     } else {
@@ -127,15 +133,11 @@ async fn finalize_ai_quota(ctx: &mut EdgionHttpContext) {
             .and_then(|input| summary.output_tokens.and_then(|output| input.checked_add(output)))
     };
     let overflow = state.attempt_runtime.accounting_overflow()
-        || state.request.as_ref().is_some_and(|ai| {
-            ai.usage
-                .accounting_snapshot(ceil_chars_div_four(ai.usage.input_chars()), true)
-                .unavailable
-                == Some(super::usage::AiUsageUnavailableReason::ArithmeticOverflow)
-        });
-    let Some(quota) = state.request.as_mut().and_then(|ai| ai.quota.as_mut()) else {
-        return;
-    };
+        || ai
+            .usage
+            .accounting_snapshot(ceil_chars_div_four(ai.usage.input_chars()), true)
+            .unavailable
+            == Some(super::usage::AiUsageUnavailableReason::ArithmeticOverflow);
     let status = match authoritative_total {
         Some(total) => quota.finalize(total).await,
         None => quota.finalize_unknown().await,
