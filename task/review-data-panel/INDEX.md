@@ -1988,3 +1988,17 @@ overflow with empty results; both now distinguish end clamping from start
 overflow after independent scope review. Fresh verification passed all 500
 Gateway DSL tests, workspace check/Clippy and seven repository guards. Remaining
 warnings are outside changed source. Independent final review passed.
+
+## DSL split result capacity
+
+Split reserves its result vector using the already computed and admitted item
+count, then extends it with the unchanged split/Arc iterator. Empty delimiters
+still count Unicode characters plus two boundary elements; nonempty delimiters
+still count non-overlapping matches plus one. This avoids vector growth without
+changing scans, limits, item order, empty values or independent string ownership.
+Independent plan review passed. Existing split boundary and multibyte cases
+provide regression coverage; final Vec/Arc allocations remain, and no throughput
+benchmark is claimed.
+Fresh verification passed all 500 Gateway DSL tests, formatting, workspace
+check/Clippy and seven repository guards. Remaining warnings are outside the
+changed source. Independent final review passed.

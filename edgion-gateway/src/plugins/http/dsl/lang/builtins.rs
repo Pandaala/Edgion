@@ -1130,7 +1130,8 @@ impl Vm {
                         limit: self.limits.max_list_len,
                     });
                 }
-                let parts: Vec<Arc<str>> = s.split(&*delim).map(Arc::from).collect();
+                let mut parts = Vec::with_capacity(estimated);
+                parts.extend(s.split(&*delim).map(Arc::from));
                 Ok(Value::List(parts))
             }
             BuiltinId::Range => {
