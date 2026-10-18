@@ -471,7 +471,7 @@ impl AiUsageShared {
     }
 
     pub fn reported_usage(&self) -> Option<ReportedAiUsage> {
-        self.reported_usage.load_full().map(|usage| *usage)
+        self.reported_usage.load().as_deref().copied()
     }
 
     pub fn sse_degraded(&self) -> bool {

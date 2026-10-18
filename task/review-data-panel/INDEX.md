@@ -3664,3 +3664,24 @@ Fresh verification passed 37 tests: 24 attempt runtime and 13 accounting finaliz
 tests. Formatting, workspace check/Clippy, seven repository guards and diff
 hygiene passed. Existing warnings remain outside changed code. No live transport,
 Redis or throughput benchmark was run.
+
+## Borrowed reported-usage snapshot projection
+
+AiUsageShared::reported_usage now copies its four-u64 value under a temporary
+ArcSwap guard instead of acquiring an owned Arc with load_full and immediately
+dropping it. The locked arc-swap 1.9.2 implementation promotes load to an owned
+pointer in load_full; the borrowed form avoids that promotion on the fast path,
+while retaining the dependency's safe fallback when cheap guard slots are busy.
+This is not a guarantee of zero atomic operations under all concurrent schedules.
+
+The guard protects one immutable published generation for the complete Copy
+projection and does not escape or cross an await. None, publication high-water
+marks, accounting precedence and separate accounting_snapshot reads are unchanged.
+Existing usage, finalizer and attempt tests cover missing/reported values,
+observation-off, overflow, pricing and settlement; no implementation-mirroring
+test or dependency-specific refcount instrumentation was added.
+
+Fresh verification passed 87 tests: 50 usage, 13 accounting finalizer and
+24 attempt runtime tests. Formatting, workspace check/Clippy, seven repository
+guards and diff hygiene passed. Existing warnings remain outside changed code.
+No concurrency stress benchmark or throughput measurement was run.
