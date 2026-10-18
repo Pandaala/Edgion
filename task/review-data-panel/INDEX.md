@@ -4007,3 +4007,28 @@ Fresh verification passed 86 network-free tests: 33 native Anthropic, 2 Response
 and 51 usage tests. Formatting, workspace check/Clippy, agent-document validation
 and diff hygiene passed. Existing warnings remain outside this documentation-only
 batch. No fragment-feeding prototype, allocation or CPU benchmark was run.
+
+
+## SSE line classification and UTF-8 result reuse
+
+finish_line now obtains both field kind and malformed status from one local
+classification. It no longer materializes and validates the same line again
+after metadata admission. Fragmented lines therefore lose one temporary copy;
+contiguous lines avoid the repeated validation scan. Comments retain their
+UTF-8 exemption and invalid ranges retain their prior classification behavior.
+
+The malformed/poisoned mutation remains after all line/range/metadata admission
+gates. Rejected invalid lines cannot publish that state early. parse_block still
+performs its independent dispatch-time parsing and completed malformed-event
+accounting; no ranges, limits, dispatch order or downstream policy changed.
+
+Regression tests drive actual finish_line with preallocated line metadata and
+two-slice valid, invalid and comment lines, verifying one materialization and
+immediate flags. A separate invalid line rejected by the line-count gate checks
+that flags, line start and data count stay unchanged.
+
+Fresh verification passed 130 network-free tests: 46 SSE module, 33 native
+Anthropic and 51 usage tests. Formatting, workspace check/Clippy, seven repository
+guards and diff hygiene passed. Existing warnings remain outside changed code.
+No throughput benchmark was run; the allocation regression measures this local
+line-completion path only.

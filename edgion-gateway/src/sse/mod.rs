@@ -556,7 +556,7 @@ impl SseDecoder {
         }
         let range = ByteRange::new(self.block.line_start, line_end);
         let next_lines = self.block.lines.len().saturating_add(1);
-        let field = parsed_field_kind(&self.block.raw, range);
+        let (field, malformed) = classify_line(&self.block.raw, range);
         let next_data_lines = self
             .block
             .data_lines
@@ -593,12 +593,7 @@ impl SseDecoder {
         self.block.data_lines = next_data_lines;
         self.block.has_event = next_has_event;
         self.block.has_id = next_has_id;
-        if self
-            .block
-            .raw
-            .range(range)
-            .is_some_and(|line| line.first() != Some(&b':') && std::str::from_utf8(line.as_ref()).is_err())
-        {
+        if malformed {
             self.block.poisoned = true;
             self.malformed = true;
         }
@@ -917,27 +912,28 @@ fn decoder_metadata_charge(slice_bytes: usize, line_capacity: usize, data_capaci
         .saturating_add(data_capacity.saturating_mul(std::mem::size_of::<ByteRange>()))
 }
 
-fn parsed_field_kind(raw: &SliceChain, range: ByteRange) -> ParsedFieldKind {
+fn classify_line(raw: &SliceChain, range: ByteRange) -> (ParsedFieldKind, bool) {
     let Some(line) = raw.range(range) else {
-        return ParsedFieldKind::Other;
+        return (ParsedFieldKind::Other, false);
     };
     if line.first() == Some(&b':') {
-        return ParsedFieldKind::Other;
+        return (ParsedFieldKind::Other, false);
     }
     let Ok(line) = std::str::from_utf8(line.as_ref()) else {
-        return ParsedFieldKind::Other;
+        return (ParsedFieldKind::Other, true);
     };
     let field_end = line
         .as_bytes()
         .iter()
         .position(|byte| *byte == b':')
         .unwrap_or(line.len());
-    match &line[..field_end] {
+    let field = match &line[..field_end] {
         "data" => ParsedFieldKind::Data,
         "event" => ParsedFieldKind::Event,
         "id" => ParsedFieldKind::Id,
         _ => ParsedFieldKind::Other,
-    }
+    };
+    (field, false)
 }
 
 #[cfg(test)]

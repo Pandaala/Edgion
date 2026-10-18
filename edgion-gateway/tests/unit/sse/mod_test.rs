@@ -466,3 +466,63 @@ fn literal_checks_preserve_event_and_data_semantics_across_every_split() {
         }
     }
 }
+
+#[test]
+fn fragmented_line_classification_materializes_once_and_preserves_utf8_policy() {
+    for (first, second, data_lines, malformed) in [
+        (&b"data: hel"[..], &b"lo\n"[..], 1, false),
+        (&b"data: \xc3"[..], &b"(\n"[..], 0, true),
+        (&b": \xff"[..], &b"comment\n"[..], 0, false),
+    ] {
+        let mut decoder = SseDecoder::with_default_limit();
+        decoder.block.lines = Vec::with_capacity(4);
+        decoder
+            .block
+            .raw
+            .push(Bytes::copy_from_slice(first), decoder.max_pending_bytes)
+            .unwrap();
+        decoder
+            .block
+            .raw
+            .push(Bytes::copy_from_slice(second), decoder.max_pending_bytes)
+            .unwrap();
+        let (result, allocations) = crate::test_allocation_counter::count_allocations(|| {
+            decoder.finish_line(&mut |_| panic!("a nonempty line must not dispatch"))
+        });
+        assert!(result.is_ok());
+        assert_eq!(
+            allocations, 1,
+            "only the classification should materialize this fragmented line"
+        );
+        assert_eq!(decoder.block.data_lines, data_lines);
+        assert_eq!(decoder.malformed(), malformed);
+        assert_eq!(decoder.block.poisoned, malformed);
+        assert_eq!(decoder.malformed_events(), 0);
+        assert_eq!(decoder.block.line_start, first.len() + second.len());
+    }
+}
+
+#[test]
+fn rejected_invalid_line_does_not_publish_malformed_state() {
+    let mut decoder = SseDecoder::with_default_limit();
+    decoder.block.lines.resize(MAX_EVENT_LINES, ByteRange::new(0, 0));
+    decoder
+        .block
+        .raw
+        .push(Bytes::from_static(b"data: \xc3"), decoder.max_pending_bytes)
+        .unwrap();
+    decoder
+        .block
+        .raw
+        .push(Bytes::from_static(b"(\n"), decoder.max_pending_bytes)
+        .unwrap();
+    assert!(decoder
+        .finish_line(&mut |_| panic!("a rejected line must not dispatch"))
+        .is_err());
+    assert!(!decoder.malformed());
+    assert!(!decoder.block.poisoned);
+    assert_eq!(decoder.malformed_events(), 0);
+    assert_eq!(decoder.block.data_lines, 0);
+    assert_eq!(decoder.block.line_start, 0);
+    assert_eq!(decoder.block.lines.len(), MAX_EVENT_LINES);
+}
