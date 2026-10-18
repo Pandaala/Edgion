@@ -368,11 +368,11 @@ fn test_arg_substitution_always_url_encodes() {
 
     // Mock returns decoded values.
     let mut mock_session = MockPluginSession::new();
-    mock_session.expect_get_query_param().returning(|name| match name {
-        "user" => Some("user-123".to_string()),      // ordinary ASCII
-        "token" => Some("hello\nworld".to_string()), // decoded control byte
-        "id" => Some("café".to_string()),            // decoded non-ASCII byte (é = C3 A9) — must be url-encoded
-        "raw" => Some("foo+bar=baz".to_string()),    // decoded reserved chars
+    mock_session.expect_get_query_param_ref().returning(|name| match name {
+        "user" => Some("user-123"),      // ordinary ASCII
+        "token" => Some("hello\nworld"), // decoded control byte
+        "id" => Some("café"),            // decoded non-ASCII byte (é = C3 A9) — must be url-encoded
+        "raw" => Some("foo+bar=baz"),    // decoded reserved chars
         _ => None,
     });
 
@@ -405,6 +405,36 @@ fn test_arg_substitution_always_url_encodes() {
     );
 }
 
+#[test]
+fn substitution_borrows_inputs_and_preserves_missing_and_empty_values() {
+    let plugin = plugin(&ProxyRewriteConfig::default());
+    for context in [TemplateContext::Uri, TemplateContext::Header] {
+        let mut session = MockPluginSession::new();
+        session.expect_get_query_param().times(0);
+        session.expect_get_path_param().times(0);
+        session.expect_get_query_param_ref().returning(|name| match name {
+            "empty" => Some(""),
+            "value" => Some("café &"),
+            _ => None,
+        });
+        session.expect_get_path_param_ref().returning(|name| match name {
+            "empty" => Some(""),
+            "value" => Some("café &"),
+            _ => None,
+        });
+        assert_eq!(
+            plugin.resolve_variables(
+                "$arg_missing/$arg_empty/$arg_value/$missing/$empty/$value/$arg_value/$value",
+                "/original",
+                &mut session,
+                None,
+                context,
+            ),
+            "//caf%C3%A9%20%26/$missing//caf%C3%A9%20%26/caf%C3%A9%20%26/caf%C3%A9%20%26"
+        );
+    }
+}
+
 /// `$1..$9` (regex captures) must url-encode in Header context, mirroring
 /// the `$arg_<name>` rule. Without encoding, control bytes and non-ASCII
 /// values cause `HeaderValue::try_from` to silently drop the header.
@@ -413,10 +443,10 @@ fn test_capture_substitution_url_encodes_in_header_context() {
     let plugin = plugin(&ProxyRewriteConfig::default());
     let mut mock_session = MockPluginSession::new();
     // Captures don't need session lookups, but resolve_variables takes one.
-    mock_session.expect_get_query_param().returning(|_| None);
+    mock_session.expect_get_query_param_ref().returning(|_| None);
     // Inert: result contains no `$` after capture substitution, so path-param
     // branch is short-circuited by `if result.contains('$')`.
-    mock_session.expect_get_path_param().returning(|_| None);
+    mock_session.expect_get_path_param_ref().returning(|_| None);
 
     // Build a fake regex::Captures by matching against a constructed string.
     // The captured text contains: a control byte, a non-ASCII (Latin-1)
@@ -449,10 +479,10 @@ fn test_capture_substitution_url_encodes_in_header_context() {
 fn test_path_param_substitution_url_encodes_in_header_context() {
     let plugin = plugin(&ProxyRewriteConfig::default());
     let mut mock_session = MockPluginSession::new();
-    mock_session.expect_get_query_param().returning(|_| None);
+    mock_session.expect_get_query_param_ref().returning(|_| None);
     // Decoded path-param value: contains non-ASCII, control byte, reserved char.
-    mock_session.expect_get_path_param().returning(|name| match name {
-        "uid" => Some("café-foo&bar\nbaz".to_string()),
+    mock_session.expect_get_path_param_ref().returning(|name| match name {
+        "uid" => Some("café-foo&bar\nbaz"),
         _ => None,
     });
 
@@ -470,9 +500,9 @@ fn test_path_param_substitution_url_encodes_in_header_context() {
 fn test_capture_and_path_param_url_encode_in_uri_context() {
     let plugin = plugin(&ProxyRewriteConfig::default());
     let mut mock_session = MockPluginSession::new();
-    mock_session.expect_get_query_param().returning(|_| None);
-    mock_session.expect_get_path_param().returning(|name| match name {
-        "uid" => Some("café".to_string()),
+    mock_session.expect_get_query_param_ref().returning(|_| None);
+    mock_session.expect_get_path_param_ref().returning(|name| match name {
+        "uid" => Some("café"),
         _ => None,
     });
 
@@ -491,12 +521,12 @@ fn test_capture_and_path_param_url_encode_in_uri_context() {
 
 fn path_token_session() -> MockPluginSession {
     let mut session = MockPluginSession::new();
-    session.expect_get_path_param().returning(|name| match name {
-        "id" => Some("first".to_string()),
-        "id2" => Some("second".to_string()),
-        "id_tail" => Some("tail".to_string()),
-        "empty" => Some(String::new()),
-        "encoded" => Some("café &\n$id2".to_string()),
+    session.expect_get_path_param_ref().returning(|name| match name {
+        "id" => Some("first"),
+        "id2" => Some("second"),
+        "id_tail" => Some("tail"),
+        "empty" => Some(""),
+        "encoded" => Some("café &\n$id2"),
         _ => None,
     });
     session

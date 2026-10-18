@@ -1793,3 +1793,17 @@ No full suite, live integration or throughput benchmark ran for this batch.
 Fresh ProxyRewrite tests passed 19 cases. Formatting, workspace check/Clippy and
 seven repository guards passed, with existing warnings outside changed files.
 Independent final review passed.
+
+## ProxyRewrite borrowed variable inputs
+
+Argument and path substitutions borrow the existing canonical frozen query and
+path-capture getters until encoding completes, avoiding owned input copies.
+Missing/empty behavior, encoding, stage order and final output ownership remain
+unchanged. Independent plan review passed. Existing fixtures now supply borrowed
+values; a combined both-context test forbids owned getters and covers repeated,
+encoded, missing and empty inputs. Cache initialization and output allocations
+remain. No full suite, live integration or throughput benchmark ran for this batch.
+Fresh ProxyRewrite tests passed 20 cases; the real-adapter frozen-query and
+path-capture cache tests each passed. Formatting, workspace check/Clippy and
+seven repository guards passed, with existing warnings outside changed files.
+Independent final review passed.

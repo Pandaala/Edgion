@@ -85,6 +85,13 @@ the buffer may grow. Direct tests cover duplicate/encoded query fields, an
 existing query, a trailing question mark and empty paths without normalizing
 these inputs; both template and regex URI sinks retain their existing tests.
 
+Argument and path substitutions borrow the canonical session getters until
+percent encoding produces owned output. These read the same frozen query and
+init-once path-capture caches as the owned getters; missing arguments still
+become empty, while missing path names stay literal and present empty captures
+become empty. The combined both-context regression forbids owned getter calls.
+Initial cache population and encoded output can still allocate.
+
 ## Resolution references
 
 - `ARCH-037` — final-stage original-span replacement and escaped-dollar boundary.

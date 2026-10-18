@@ -148,7 +148,7 @@ impl ProxyRewrite {
         result = result.replace("$uri", &Self::escape_dollar(original_path));
 
         // 2. Replace $arg_<name> — always URL-encoded.
-        //    `get_query_param` returns the percent-decoded value, but `$arg_<name>`
+        //    `get_query_param_ref` returns the percent-decoded value, but `$arg_<name>`
         //    must always be safe to embed in either a URI or an HTTP header value.
         //    Always re-encoding produces:
         //      - URI context (TemplateContext::Uri): correct percent-encoding without
@@ -162,8 +162,8 @@ impl ProxyRewrite {
         result = ARG_PATTERN
             .replace_all(&result, |caps: &regex::Captures| {
                 let param_name = &caps[1];
-                let value = session.get_query_param(param_name).unwrap_or_default();
-                let encoded = Self::url_encode(&value);
+                let value = session.get_query_param_ref(param_name).unwrap_or_default();
+                let encoded = Self::url_encode(value);
                 Self::escape_dollar(&encoded)
             })
             .into_owned();
@@ -204,9 +204,9 @@ impl ProxyRewrite {
                     {
                         return Cow::Borrowed(original);
                     }
-                    match session.get_path_param(param_name) {
+                    match session.get_path_param_ref(param_name) {
                         Some(value) => Cow::Owned(match context {
-                            TemplateContext::Uri | TemplateContext::Header => Self::url_encode(&value),
+                            TemplateContext::Uri | TemplateContext::Header => Self::url_encode(value),
                         }),
                         None => Cow::Borrowed(original),
                     }
