@@ -50,6 +50,7 @@ destination.
 - [Endpoint probe result address ownership](endpoint-01-result-address-ownership.md)
 - [Outbound Content-Length integer storage](outbound-01-content-length-integer-storage.md)
 - [ProxyRewrite staged template compilation](rewrite-01-staged-template-compilation.md)
+- [Repeated GraphQL frontend parsing](graphql-01-repeated-frontend-parsing.md)
 
 ## Completed implementation batch
 
@@ -2666,3 +2667,15 @@ Existing ambiguity and bounds tests remain unchanged. Fresh verification passed
 guards; remaining warnings are outside changed code. The benefit is removal of
 redundant sorting work on an already ordered list, not an asserted allocation or
 O(n log n) improvement; no throughput benchmark ran.
+
+## Request restriction and GraphQL frontend inspection
+
+RequestRestriction's direct runtime uses a prepared status/body and compiled
+conditions; its Bytes clone transfers shared response ownership. No change was
+selected there. Inspected GraphQL shared transport/evaluation admission and its
+Safelist, Guard, RateLimit and OperationRouter callers: sequential executions can
+repeat parsing, but parsed-owner reuse changes admission/memory lifetimes and
+per-evaluation Work accounting. The deferred task records these decisions,
+mutation/proof boundaries and future acceptance; no runtime cache was added.
+This is source evidence, not fresh runtime or throughput verification. Deeper
+condition evaluation, GraphQL visitors and routing dependencies remain open.
