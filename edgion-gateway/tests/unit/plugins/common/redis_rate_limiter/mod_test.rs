@@ -336,8 +336,17 @@ fn cumulative_quota_key_builder_hides_raw_identities_and_shares_slot() {
 fn cumulative_quota_ttls_are_independently_bounded() {
     assert_eq!(validate_quota_ttl("bucket", Duration::from_millis(1)).unwrap(), 1);
     assert!(validate_quota_ttl("marker", Duration::ZERO).is_err());
-    assert!(validate_quota_ttl("marker", Duration::from_millis(MAX_SAFE_LUA_INTEGER + 1),).is_err());
-    assert!(validate_quota_ttls(Duration::from_secs(10), Duration::from_secs(5)).is_ok());
+    assert_eq!(
+        validate_quota_ttl("marker", Duration::from_millis(MAX_SAFE_LUA_INTEGER + 1))
+            .unwrap_err()
+            .to_string(),
+        "marker TTL milliseconds exceeds the Redis Lua exact-integer limit"
+    );
+    let (result, calls) = crate::test_allocation_counter::count_allocations(|| {
+        validate_quota_ttls(Duration::from_secs(10), Duration::from_secs(5))
+    });
+    assert_eq!(result.unwrap(), (10_000, 5_000));
+    assert_eq!(calls, 0, "valid TTLs must not allocate diagnostic labels");
     assert!(validate_quota_ttls(Duration::from_secs(5), Duration::from_secs(10)).is_err());
 }
 

@@ -797,3 +797,28 @@ shared Geo IP-reference tests (5), resource GeoRule tests (14) and GeoIpLocation
 tests (15) passed. Formatting, workspace check/Clippy and seven repository guards
 passed; existing warnings are outside the changed code. No full integration suite
 or throughput benchmark ran.
+
+## Redis quota TTL diagnostic construction
+
+ConnectionRateLimit inspection retained cold entry binding and per-port coherent
+budget transitions. The bucket Arc releases the port-map lock before state locking;
+changing this ownership mechanically would alter contention boundaries. Scoped
+Redis keys, bounded timeouts, listener-before-source order and failure policies
+remain unchanged. Shared script descriptors and exact NOSCRIPT-only fallback
+already avoid per-runtime remote preloading.
+
+In the shared executor, cumulative quota TTL validation eagerly formatted its
+diagnostic field label even on success. The private integer validator now accepts
+a Display value, so TTL callers pass format_args and format only on failure.
+The synchronous argument never crosses an await. Integer conversion, zero and
+Lua exactness bounds, bucket/marker ordering and error text remain unchanged.
+A successful pair now avoids two temporary label allocations; this is not an
+allocation-free Redis operation or throughput claim. Other numeric argument/key
+construction and deeper Redis client behavior remain open.
+
+Independent plan and final source reviews passed. Shared Redis-core tests passed
+29 cases; connection-rate-limit tests passed 30 with one existing measurement
+case ignored. The valid TTL pair allocation assertion reports zero calls and the
+unsafe-TTL message matches exactly. Formatting, workspace check/Clippy and seven
+repository guards passed; existing warnings are outside changed lines. No live
+Redis integration, full integration suite or throughput benchmark ran.

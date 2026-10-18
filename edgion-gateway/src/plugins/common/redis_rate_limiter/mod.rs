@@ -24,6 +24,7 @@ use scripts::{
 };
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
+use std::fmt::Display;
 use std::sync::LazyLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -787,7 +788,7 @@ impl RedisRateLimiter {
     }
 }
 
-fn validate_safe_lua_integer(name: &str, value: u64) -> anyhow::Result<()> {
+fn validate_safe_lua_integer(name: impl Display, value: u64) -> anyhow::Result<()> {
     if value > MAX_SAFE_LUA_INTEGER {
         anyhow::bail!("{name} exceeds the Redis Lua exact-integer limit");
     }
@@ -800,7 +801,7 @@ fn validate_quota_ttl(name: &str, ttl: Duration) -> anyhow::Result<u64> {
     if ttl_ms == 0 {
         anyhow::bail!("cumulative quota {name} TTL must be at least 1 millisecond");
     }
-    validate_safe_lua_integer(&format!("{name} TTL milliseconds"), ttl_ms)?;
+    validate_safe_lua_integer(format_args!("{name} TTL milliseconds"), ttl_ms)?;
     Ok(ttl_ms)
 }
 
