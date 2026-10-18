@@ -1,7 +1,0 @@
-{
-  "complete": true,
-  "kind": "coverage-receipt-audit",
-  "reviewed_files": 555,
-  "failures": [],
-  "scope": "Fresh current primary hashes and persisted receipt existence, accepting historical scalar and current list evidence fields. Full-read terminal reports supply coverage; this audit does not infer reads. Supporting inventory auditC unchanged. No execution."
-}
