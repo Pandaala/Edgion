@@ -502,7 +502,7 @@ impl AllEndpointStatus {
             return (Vec::new(), false);
         };
 
-        let semaphore = std::sync::Arc::new(Semaphore::new(permit_count));
+        let semaphore = Semaphore::new(permit_count);
         let timeout = Duration::from_millis(self.config.effective_timeout_ms());
         let wall_timeout = Duration::from_millis(self.config.effective_wall_timeout_ms());
         let max_body = self.config.effective_max_body_size();

@@ -2083,3 +2083,18 @@ cover scoped orchestration, not live fan-out interoperability or throughput.
 Fresh verification passed 23 AllEndpointStatus tests and the real-adapter query
 test, formatting, workspace check/Clippy and seven repository guards. Remaining
 warnings are outside changed source. Independent final review passed.
+
+## Endpoint fan-out semaphore ownership
+
+The per-invocation semaphore lives directly in the async frame instead of an Arc.
+Endpoint futures already borrow it and use borrowed permits; the locally awaited
+FuturesUnordered cannot escape, and completion, timeout or cancellation releases
+its futures before the owner. Permit counts and per-probe holding scope remain
+unchanged. This removes one Arc allocation for nonempty fan-out while enlarging
+the inline async frame; no total-memory or throughput reduction is claimed.
+Independent plan review passed. Existing tests cover permit-count calculation and
+wall-timeout helpers; borrow checking establishes owner lifetime, not real network
+admission/cancellation test coverage.
+Fresh verification passed 23 AllEndpointStatus tests, formatting, workspace
+check/Clippy and seven repository guards. Remaining warnings are outside changed
+source. Independent final review passed.
