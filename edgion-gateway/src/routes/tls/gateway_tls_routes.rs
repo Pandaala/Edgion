@@ -137,6 +137,7 @@ impl TlsRouteTable {
                 "TLSRoute",
             )
         })
+        .map(|(unit, info)| (unit, Arc::clone(info)))
     }
 
     fn select_by<T>(

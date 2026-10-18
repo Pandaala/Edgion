@@ -488,7 +488,7 @@ impl GrpcRouteRuleUnit {
             }
         }
 
-        Ok(Some(matched_gi))
+        Ok(Some(Arc::clone(matched_gi)))
     }
 
     /// Match gRPC header.

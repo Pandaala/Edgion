@@ -117,15 +117,15 @@ pub fn check_allowed_routes(
 /// 3. **Enforce HTTP Listener Isolation** — hostname matching + more-specific check
 /// 4. **AllowedRoutes** — namespace and kind filtering
 ///
-/// Returns the shared `Arc<GatewayInfo>` for the first matching gateway/listener,
+/// Returns a borrowed `Arc<GatewayInfo>` from the supplied index for the first matching gateway/listener,
 /// or `None` if no match is found.
-pub fn check_gateway_listener_match(
+pub fn check_gateway_listener_match<'a>(
     parent_refs: &[ResolvedParentRef],
-    index: &GatewayInfoIndex,
+    index: &'a GatewayInfoIndex,
     request_hostname: &str,
     route_ns: &str,
     route_kind: &str,
-) -> Option<Arc<GatewayInfo>> {
+) -> Option<&'a Arc<GatewayInfo>> {
     for pr in parent_refs {
         // `route_ns` is the ROUTE's namespace and `parent_ns` is the GATEWAY's.
         // `check_allowed_routes` compares them, so they must stay distinct: they
@@ -157,7 +157,7 @@ pub fn check_gateway_listener_match(
                 if !check_allowed_routes(&entry.allowed_routes, route_ns, route_kind, parent_ns) {
                     continue;
                 }
-                return Some(Arc::clone(&entry.info));
+                return Some(&entry.info);
             }
             continue;
         }
@@ -181,7 +181,7 @@ pub fn check_gateway_listener_match(
                 continue;
             }
 
-            return Some(Arc::clone(&entry.info));
+            return Some(&entry.info);
         }
     }
 

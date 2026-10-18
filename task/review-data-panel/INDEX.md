@@ -491,3 +491,25 @@ SSE tests (9, also included in the SSE filter), and semantic response tests (21)
 passed. Formatting, workspace check/Clippy and seven repository guards passed;
 existing Clippy warnings are outside the changed lines. No full integration
 suite or throughput benchmark was run.
+
+
+## Borrowed listener owner during route eligibility
+
+The canonical listener matcher returns a borrowed Arc tied only to the supplied
+GatewayInfoIndex. HTTP and gRPC obtain the final owned handle after remaining
+method/header/query predicates succeed. TLS clones its selected winner; the
+stream bridge clones only after the same publication's gateway scope is available.
+Parent order, listener isolation, namespace/kind checks, predicate ordering and
+snapshot boundaries are unchanged. No index slot or owner is cached across updates.
+
+Named and unnamed listener tests compare reference counts, preserve pointer
+identity and retain the explicitly selected owner after dropping the index.
+The route compiler, regex/radix candidate order and preflight dispatch were also
+inspected. Existing cold compilation and ordered candidates remain; the existing
+predicate-prefilter decision still lacks measured fanout evidence for an index.
+This removes premature reference-count work, without a throughput claim.
+
+Independent plan and final source reviews passed. Matcher (23), HTTP (19), gRPC (11), TLS (16),
+stream bridge (6), regex (17) and radix (23) filtered tests passed. Formatting,
+workspace check/Clippy and seven repository guards passed; Clippy warnings are
+outside the changed lines. No full integration suite or throughput benchmark ran.

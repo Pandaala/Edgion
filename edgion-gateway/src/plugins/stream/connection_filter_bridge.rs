@@ -43,7 +43,10 @@ pub(crate) fn resolve_route_owner_scope(
     let index = publication.listener_index(listener)?;
     let owner = check_gateway_listener_match(parents, index, hostname, namespace, kind)?;
     let gateway = publication.gateway(owner.gateway_key())?;
-    gateway.scope.available.then(|| (owner, Arc::clone(&gateway.scope)))
+    gateway
+        .scope
+        .available
+        .then(|| (Arc::clone(owner), Arc::clone(&gateway.scope)))
 }
 
 /// Dynamic listener admission. Every call pins the latest common connection

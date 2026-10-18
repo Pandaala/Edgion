@@ -657,7 +657,7 @@ impl HttpRouteRuleUnit {
             }
         }
 
-        Ok(Some(matched_gi))
+        Ok(Some(Arc::clone(matched_gi)))
     }
 
     /// Extract the optional path pattern from this route with its match type.

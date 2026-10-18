@@ -161,7 +161,7 @@ fn missing_gateway_or_listener_continues_to_later_parent_refs() {
 
     let matched = check_gateway_listener_match(&parent_refs, &index, "example.com", "gw-ns", "HTTPRoute")
         .expect("the final parent reference names an eligible listener");
-    assert!(Arc::ptr_eq(&matched, &index.get("gw-ns/gw", "http").unwrap().info));
+    assert!(Arc::ptr_eq(matched, &index.get("gw-ns/gw", "http").unwrap().info));
 }
 
 #[test]
@@ -222,7 +222,7 @@ fn named_and_unnamed_matches_share_the_index_gateway_info() {
         let parent_refs = vec![resolved("gw-ns/gw", "gw-ns", section_name)];
         let matched = check_gateway_listener_match(&parent_refs, &index, "example.com", "gw-ns", "HTTPRoute")
             .expect("the sole listener allows this same-namespace route");
-        assert!(Arc::ptr_eq(&matched, expected));
+        assert!(Arc::ptr_eq(matched, expected));
     }
 }
 
@@ -472,4 +472,30 @@ fn test_allowed_routes_empty_kinds_allows_all() {
         "default"
     ));
     assert!(check_allowed_routes(&Some(allowed), "default", "GRPCRoute", "default"));
+}
+
+#[test]
+fn listener_match_borrows_owner_until_final_selection() {
+    for section in [Some("http"), None] {
+        let index = GatewayInfoIndex::from_entries_for_test(vec![(
+            "gw-ns/gw".into(),
+            listener_entry("gw-ns", "gw", Some("http"), None, None),
+        )]);
+        let expected = &index.get("gw-ns/gw", "http").unwrap().info;
+        let original_count = Arc::strong_count(expected);
+        let matched = check_gateway_listener_match(
+            &[resolved("gw-ns/gw", "gw-ns", section)],
+            &index,
+            "example.com",
+            "gw-ns",
+            "HTTPRoute",
+        )
+        .unwrap();
+        assert!(Arc::ptr_eq(matched, expected));
+        assert_eq!(Arc::strong_count(expected), original_count);
+        let selected = Arc::clone(matched);
+        assert_eq!(Arc::strong_count(expected), original_count + 1);
+        drop(index);
+        assert_eq!(selected.gateway_name(), "gw");
+    }
 }
