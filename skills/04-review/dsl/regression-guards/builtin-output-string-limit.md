@@ -117,6 +117,14 @@ identity provenance, case and raw spelling. The metadata byte-limit table covers
 exact/rejected lengths and returned bytes for these properties, including
 multibyte CN, without claiming to eliminate final Arc allocation.
 
+Protocol and gRPC service/method metadata use borrowed session getters and the
+same checked result helper. The protocol's explicit value wins even when empty;
+only absent metadata falls back to `grpc` or `http` according to the existing
+request flag. gRPC getters read existing metadata without adding a protocol gate.
+Tests cover nil/empty results, exact and rejected UTF-8 byte lengths, explicit
+protocol precedence, and allocation-free adapter getters. The latter assertion
+does not cover final DSL Arc creation or metadata initialization.
+
 ## Alternatives and limits
 
 Checking string constants when they are loaded is not equivalent: constants are

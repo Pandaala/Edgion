@@ -596,13 +596,6 @@ fn truncate_to_max_string_len(mut s: String, limit: usize) -> String {
     s
 }
 
-fn checked_value_opt_str(s: Option<String>, limit: usize) -> Result<Value, RuntimeError> {
-    match s {
-        Some(v) => checked_value_str(v, limit),
-        None => Ok(Value::Nil),
-    }
-}
-
 /// Validate borrowed host data before allocating the VM's independent string.
 fn checked_value_opt_str_ref(s: Option<&str>, limit: usize) -> Result<Value, RuntimeError> {
     match s {
@@ -777,9 +770,11 @@ impl Vm {
             }
 
             // ===== req.* metadata =====
-            BuiltinId::ReqProtocol => checked_value_str(session.discover_protocol(), self.limits.max_string_len),
-            BuiltinId::ReqGrpcService => checked_value_opt_str(session.grpc_service(), self.limits.max_string_len),
-            BuiltinId::ReqGrpcMethod => checked_value_opt_str(session.grpc_method(), self.limits.max_string_len),
+            BuiltinId::ReqProtocol => {
+                checked_value_opt_str_ref(Some(session.discover_protocol()), self.limits.max_string_len)
+            }
+            BuiltinId::ReqGrpcService => checked_value_opt_str_ref(session.grpc_service(), self.limits.max_string_len),
+            BuiltinId::ReqGrpcMethod => checked_value_opt_str_ref(session.grpc_method(), self.limits.max_string_len),
             BuiltinId::ReqContentLength => match session.header_str("Content-Length") {
                 Some(v) => match v.parse::<i64>() {
                     Ok(n) => Ok(Value::Int(n)),

@@ -35,7 +35,7 @@ use crate::ctx::ClientCertInfo;
 fn test_req_protocol_default() {
     let source = r#"req.set_header("X-Proto", req.protocol)"#;
     let mut session = MockPluginSession::new();
-    session.expect_discover_protocol().returning(|| "http".to_string());
+    session.expect_discover_protocol().return_const("http".to_string());
     session
         .expect_set_request_header()
         .withf(|n, v| n == "X-Proto" && v == "http")
@@ -53,7 +53,7 @@ fn test_req_protocol_grpc() {
         }
     "#;
     let mut session = MockPluginSession::new();
-    session.expect_discover_protocol().returning(|| "grpc".to_string());
+    session.expect_discover_protocol().return_const("grpc".to_string());
     session
         .expect_set_request_header()
         .withf(|n, v| n == "X-Type" && v == "grpc")
@@ -72,9 +72,7 @@ fn test_req_grpc_service() {
         }
     "#;
     let mut session = MockPluginSession::new();
-    session
-        .expect_grpc_service()
-        .returning(|| Some("mypackage.MyService".to_string()));
+    session.expect_grpc_service().returning(|| Some("mypackage.MyService"));
     session
         .expect_set_request_header()
         .withf(|n, v| n == "X-Service" && v == "mypackage.MyService")
@@ -216,6 +214,9 @@ fn test_req_metadata_string_byte_limits() {
         ("protocol", "grpc-web"),
         ("grpc_service", "example.Service"),
         ("grpc_method", "SayHello"),
+        ("protocol", "é€"),
+        ("grpc_service", "é€"),
+        ("grpc_method", "é€"),
         ("client_cert_cn", "éñ"),
         ("client_cert_fingerprint", "sha256:deadbeef"),
     ] {
@@ -244,19 +245,13 @@ fn test_req_metadata_string_byte_limits() {
                     session
                         .expect_discover_protocol()
                         .times(1)
-                        .returning(move || value.to_string());
+                        .return_const(value.to_string());
                 }
                 "grpc_service" => {
-                    session
-                        .expect_grpc_service()
-                        .times(1)
-                        .returning(move || Some(value.to_string()));
+                    session.expect_grpc_service().times(1).returning(move || Some(value));
                 }
                 "grpc_method" => {
-                    session
-                        .expect_grpc_method()
-                        .times(1)
-                        .returning(move || Some(value.to_string()));
+                    session.expect_grpc_method().times(1).returning(move || Some(value));
                 }
                 "client_cert_cn" => {
                     session.expect_client_cert_info().times(1).returning(move || {
@@ -316,10 +311,7 @@ fn test_req_grpc_method_present_service_missing() {
         }
     "#;
     let mut session = MockPluginSession::new();
-    session
-        .expect_grpc_method()
-        .times(1)
-        .returning(|| Some("SayHello".to_string()));
+    session.expect_grpc_method().times(1).returning(|| Some("SayHello"));
     session.expect_grpc_service().times(1).returning(|| None);
     session
         .expect_set_request_header()
@@ -417,4 +409,55 @@ fn test_req_content_length_zero_returns_integer() {
         .times(1)
         .returning(|_, _| Ok(()));
     assert_eq!(run(source, session), good_next());
+}
+
+#[test]
+fn borrowed_protocol_metadata_preserves_empty_and_nil() {
+    for property in ["protocol", "grpc_service", "grpc_method"] {
+        let mut session = MockPluginSession::new();
+        match property {
+            "protocol" => {
+                session.expect_discover_protocol().times(1).return_const(String::new());
+            }
+            "grpc_service" => {
+                session.expect_grpc_service().times(1).returning(|| Some(""));
+            }
+            "grpc_method" => {
+                session.expect_grpc_method().times(1).returning(|| Some(""));
+            }
+            _ => unreachable!(),
+        }
+        let source = format!("if req.{property} != \"\" {{ return deny(403, \"\") }}");
+        assert_eq!(
+            run_with_limits(
+                &source,
+                session,
+                VmLimits {
+                    max_string_len: 0,
+                    ..VmLimits::default()
+                }
+            ),
+            good_next()
+        );
+    }
+    for property in ["grpc_service", "grpc_method"] {
+        let mut session = MockPluginSession::new();
+        if property == "grpc_service" {
+            session.expect_grpc_service().times(1).returning(|| None);
+        } else {
+            session.expect_grpc_method().times(1).returning(|| None);
+        }
+        let source = format!("if req.{property} != nil {{ return deny(403, \"\") }}");
+        assert_eq!(
+            run_with_limits(
+                &source,
+                session,
+                VmLimits {
+                    max_string_len: 0,
+                    ..VmLimits::default()
+                }
+            ),
+            good_next()
+        );
+    }
 }

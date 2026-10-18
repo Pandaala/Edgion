@@ -1481,3 +1481,23 @@ All seven selected context-cache tests passed after that correction.
 Formatting, workspace check/Clippy and seven repository guards passed after the
 support stub was added, with existing warnings outside changed files.
 Independent final review passed.
+
+## Borrowed DSL protocol and gRPC metadata
+
+The three session metadata getters now borrow their existing storage or protocol
+fallback literals. DSL validates byte lengths before creating independent Arc
+strings. Explicit protocol values, including empty strings, retain priority;
+missing protocol metadata alone uses the existing gRPC flag fallback. gRPC
+metadata reads add no protocol gate. The unused owned optional-result helper
+was removed after its last callers migrated.
+
+Independent plan review passed. Boundary tests cover nil/empty and UTF-8 byte
+limits; real-adapter tests cover protocol precedence, existing metadata identity
+and allocation-free getters only. The first DSL selection passed 402 tests and
+failed one new fixture because its deny call omitted the required body argument;
+the fixture was corrected and the rerun selects the full DSL module. No runtime
+change was needed for that failure. No full suite or throughput benchmark ran.
+
+The corrected full DSL selection passed 500 tests; the real-adapter test passed.
+Formatting, workspace check/Clippy and seven repository guards passed, with
+existing warnings outside changed files. Independent final review passed.

@@ -476,8 +476,8 @@ pub trait PluginSession: Send + Sync {
 
     /// Get the discovered protocol type (e.g., "grpc", "grpc-web", "websocket", "http").
     /// Used by DSL `req.protocol`.
-    fn discover_protocol(&self) -> String {
-        "http".to_string()
+    fn discover_protocol(&self) -> &str {
+        "http"
     }
 
     /// Whether the client declared a request body, read from the pre-plugin
@@ -490,13 +490,15 @@ pub trait PluginSession: Send + Sync {
 
     /// Get the gRPC service name parsed from the request path.
     /// Returns None for non-gRPC requests.
-    fn grpc_service(&self) -> Option<String> {
+    #[allow(clippy::needless_lifetimes)]
+    fn grpc_service<'a>(&'a self) -> Option<&'a str> {
         None
     }
 
     /// Get the gRPC method name parsed from the request path.
     /// Returns None for non-gRPC requests.
-    fn grpc_method(&self) -> Option<String> {
+    #[allow(clippy::needless_lifetimes)]
+    fn grpc_method<'a>(&'a self) -> Option<&'a str> {
         None
     }
 

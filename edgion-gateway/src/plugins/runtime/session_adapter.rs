@@ -1803,14 +1803,16 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx.claim_json_schema_validation()
     }
 
-    fn discover_protocol(&self) -> String {
-        self.ctx.request_info.discover_protocol.clone().unwrap_or_else(|| {
-            if self.ctx.request_info.is_grpc_request {
-                "grpc".to_string()
+    fn discover_protocol(&self) -> &str {
+        self.ctx
+            .request_info
+            .discover_protocol
+            .as_deref()
+            .unwrap_or(if self.ctx.request_info.is_grpc_request {
+                "grpc"
             } else {
-                "http".to_string()
-            }
-        })
+                "http"
+            })
     }
 
     fn declares_body(&self) -> Option<bool> {
@@ -2159,12 +2161,12 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx.request_body.replace_literal(from, to, max_scan_bytes).await
     }
 
-    fn grpc_service(&self) -> Option<String> {
-        self.ctx.request_info.grpc_service().map(str::to_string)
+    fn grpc_service(&self) -> Option<&str> {
+        self.ctx.request_info.grpc_service()
     }
 
-    fn grpc_method(&self) -> Option<String> {
-        self.ctx.request_info.grpc_method().map(str::to_string)
+    fn grpc_method(&self) -> Option<&str> {
+        self.ctx.request_info.grpc_method()
     }
 
     fn resolved_route_ext_ref(&self, index: usize) -> Option<std::sync::Arc<crate::plugins::runtime::PluginRuntime>> {

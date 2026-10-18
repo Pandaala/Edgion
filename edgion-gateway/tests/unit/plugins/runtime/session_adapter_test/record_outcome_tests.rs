@@ -50,6 +50,40 @@ async fn borrowed_path_params_preserve_capture_and_empty_cache() {
     assert_eq!(adapter.get_path_param("empty"), Some(String::new()));
 }
 
+#[tokio::test]
+async fn borrowed_protocol_metadata_preserves_sources_and_fallbacks() {
+    let mut session = test_session().await;
+    for is_grpc in [false, true] {
+        for explicit in [None, Some(""), Some("WebSocket"), Some("grpc-web")] {
+            let mut ctx = EdgionHttpContext::default();
+            ctx.request_info.is_grpc_request = is_grpc;
+            ctx.request_info.discover_protocol = explicit.map(str::to_owned);
+            let expected = explicit.unwrap_or(if is_grpc { "grpc" } else { "http" });
+            let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            let (actual, allocations) =
+                crate::test_allocation_counter::count_allocations(|| adapter.discover_protocol());
+            assert_eq!(actual, expected);
+            assert_eq!(allocations, 0);
+            assert_eq!(adapter.grpc_service(), None);
+            assert_eq!(adapter.grpc_method(), None);
+        }
+    }
+    for (service, method) in [("catalog.v1.Catalog", "GetItem"), ("", ""), ("é€", "é€")] {
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.set_grpc_method(service.to_owned(), method.to_owned());
+        let service_ptr = ctx.request_info.grpc_service().unwrap().as_ptr();
+        let method_ptr = ctx.request_info.grpc_method().unwrap().as_ptr();
+        let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        let ((actual_service, actual_method), allocations) =
+            crate::test_allocation_counter::count_allocations(|| (adapter.grpc_service(), adapter.grpc_method()));
+        assert_eq!(actual_service, Some(service));
+        assert_eq!(actual_method, Some(method));
+        assert_eq!(actual_service.unwrap().as_ptr(), service_ptr);
+        assert_eq!(actual_method.unwrap().as_ptr(), method_ptr);
+        assert_eq!(allocations, 0);
+    }
+}
+
 fn dsl_body_test_vm(source: &str) -> Vm {
     let script = resolve_script(Some(source), None, &ValidationLimits::default()).unwrap();
     Vm::new(script, VmLimits::default()).unwrap()
