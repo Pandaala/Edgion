@@ -3,6 +3,8 @@
 //! Implements the `type: CORS` HTTPRoute filter as defined in Gateway API v1.5.
 //! Handles both preflight (OPTIONS) and normal CORS requests.
 
+use std::borrow::Cow;
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;
@@ -13,11 +15,47 @@ use crate::plugins::runtime::traits::{PluginSession, PluginSessionHeaderExt, Req
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::HTTPCORSFilter;
 
-type CorsHeaderPairs = SmallVec<[(&'static str, String); 6]>;
+type CorsHeaderPairs<'a> = SmallVec<[(&'static str, Cow<'a, str>); 6]>;
+
+#[derive(Clone, Debug)]
+enum PreparedCorsHeader {
+    Omit,
+    Fixed(String),
+    Reflect,
+}
+
+impl PreparedCorsHeader {
+    fn new(values: Option<Vec<String>>, credentials: bool) -> Self {
+        match values {
+            Some(values) if !values.is_empty() => {
+                if credentials && values.iter().any(|value| value == "*") {
+                    Self::Reflect
+                } else {
+                    Self::Fixed(values.join(", "))
+                }
+            }
+            _ => Self::Omit,
+        }
+    }
+
+    fn resolve<'a>(&'a self, session: &dyn PluginSession, request_header: &str) -> Option<Cow<'a, str>> {
+        match self {
+            Self::Omit => None,
+            Self::Fixed(value) => Some(Cow::Borrowed(value)),
+            Self::Reflect => session.header_value(request_header).map(Cow::Owned),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct GapiCorsFilter {
-    config: HTTPCORSFilter,
+    allow_origins: Vec<String>,
+    credentials: bool,
+    has_wildcard_origin: bool,
+    allow_methods: PreparedCorsHeader,
+    allow_headers: PreparedCorsHeader,
+    expose_headers: Option<String>,
+    max_age: String,
 }
 
 impl GapiCorsFilter {
@@ -26,16 +64,25 @@ impl GapiCorsFilter {
         if let Err(errors) = config.validate() {
             return Err(format!("CORS filter validation failed: {}", errors.join("; ")));
         }
-        Ok(Self { config })
+        let credentials = config.allow_credentials.unwrap_or(false);
+        let allow_origins = config.allow_origins.unwrap_or_default();
+        let has_wildcard_origin = allow_origins.iter().any(|origin| origin == "*");
+        Ok(Self {
+            allow_origins,
+            credentials,
+            has_wildcard_origin,
+            allow_methods: PreparedCorsHeader::new(config.allow_methods, credentials),
+            allow_headers: PreparedCorsHeader::new(config.allow_headers, credentials),
+            expose_headers: config
+                .expose_headers
+                .filter(|values| !values.is_empty())
+                .map(|values| values.join(", ")),
+            max_age: config.max_age.to_string(),
+        })
     }
 
     fn is_origin_allowed(&self, origin: &str) -> bool {
-        let origins = match &self.config.allow_origins {
-            Some(o) if !o.is_empty() => o,
-            _ => return false,
-        };
-
-        for pattern in origins {
+        for pattern in &self.allow_origins {
             if pattern == "*" {
                 return true;
             }
@@ -89,81 +136,39 @@ impl GapiCorsFilter {
     /// Compute CORS response headers as key-value pairs.
     /// This allows callers to apply headers to either a ResponseHeader (preflight)
     /// or via session queue (simple requests).
-    fn build_cors_headers(&self, session: &mut dyn PluginSession, origin: &str, is_preflight: bool) -> CorsHeaderPairs {
+    fn build_cors_headers<'a>(
+        &'a self,
+        session: &mut dyn PluginSession,
+        origin: &'a str,
+        is_preflight: bool,
+    ) -> CorsHeaderPairs<'a> {
         let mut headers = CorsHeaderPairs::new();
-        let credentials = self.config.allow_credentials.unwrap_or(false);
-
-        // Access-Control-Allow-Origin
-        let acao = if credentials {
-            origin.to_string()
+        // Cookie/Authorization presence remains a live request decision.
+        let acao = if self.credentials
+            || !self.has_wildcard_origin
+            || session.header_str("cookie").is_some()
+            || session.header_str("authorization").is_some()
+        {
+            origin
         } else {
-            let has_wildcard = self
-                .config
-                .allow_origins
-                .as_ref()
-                .map(|o| o.iter().any(|v| v == "*"))
-                .unwrap_or(false);
-            if has_wildcard {
-                // When request carries credentials (Cookie/Authorization), browsers reject
-                // "Access-Control-Allow-Origin: *". Echo the origin instead.
-                let request_has_credentials =
-                    session.header_str("cookie").is_some() || session.header_str("authorization").is_some();
-                if request_has_credentials {
-                    origin.to_string()
-                } else {
-                    "*".to_string()
-                }
-            } else {
-                origin.to_string()
-            }
+            "*"
         };
-        headers.push(("Access-Control-Allow-Origin", acao));
-
-        // Access-Control-Allow-Credentials
-        if credentials {
-            headers.push(("Access-Control-Allow-Credentials", "true".to_string()));
+        headers.push(("Access-Control-Allow-Origin", Cow::Borrowed(acao)));
+        if self.credentials {
+            headers.push(("Access-Control-Allow-Credentials", Cow::Borrowed("true")));
         }
-
-        // Access-Control-Allow-Methods
-        if let Some(methods) = &self.config.allow_methods {
-            if !methods.is_empty() {
-                if credentials && methods.iter().any(|m| m == "*") {
-                    // Echo back the requested method (only if the header is present)
-                    if let Some(req_method) = session.header_value("access-control-request-method") {
-                        headers.push(("Access-Control-Allow-Methods", req_method));
-                    }
-                } else {
-                    headers.push(("Access-Control-Allow-Methods", methods.join(", ")));
-                }
-            }
+        if let Some(value) = self.allow_methods.resolve(session, "access-control-request-method") {
+            headers.push(("Access-Control-Allow-Methods", value));
         }
-
-        // Access-Control-Allow-Headers
-        if let Some(allow_headers) = &self.config.allow_headers {
-            if !allow_headers.is_empty() {
-                if credentials && allow_headers.iter().any(|h| h == "*") {
-                    // Echo back the requested headers (only if the header is present)
-                    if let Some(req_headers) = session.header_value("access-control-request-headers") {
-                        headers.push(("Access-Control-Allow-Headers", req_headers));
-                    }
-                } else {
-                    headers.push(("Access-Control-Allow-Headers", allow_headers.join(", ")));
-                }
-            }
+        if let Some(value) = self.allow_headers.resolve(session, "access-control-request-headers") {
+            headers.push(("Access-Control-Allow-Headers", value));
         }
-
-        // Access-Control-Expose-Headers
-        if let Some(expose) = &self.config.expose_headers {
-            if !expose.is_empty() {
-                headers.push(("Access-Control-Expose-Headers", expose.join(", ")));
-            }
+        if let Some(value) = &self.expose_headers {
+            headers.push(("Access-Control-Expose-Headers", Cow::Borrowed(value)));
         }
-
-        // Access-Control-Max-Age (preflight only)
         if is_preflight {
-            headers.push(("Access-Control-Max-Age", self.config.max_age.to_string()));
+            headers.push(("Access-Control-Max-Age", Cow::Borrowed(&self.max_age)));
         }
-
         headers
     }
 
@@ -174,7 +179,7 @@ impl GapiCorsFilter {
         let headers = self.build_cors_headers(session, origin, true);
         let mut resp = ResponseHeader::build(204, Some(headers.len() + 1)).ok()?;
         for (name, value) in &headers {
-            let _ = resp.insert_header(*name, value.as_str());
+            let _ = resp.insert_header(*name, value.as_ref());
         }
         let _ = resp.append_header("Vary", "Origin");
         Some(Box::new(resp))

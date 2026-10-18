@@ -1148,3 +1148,24 @@ Max-Age disabled during measurement. Formatting, workspace check/Clippy and seve
 repository guards passed; existing warnings remain outside changed code. No full
 integration suite or throughput benchmark ran. Final header insertion and other
 CORS work retain their existing ownership and costs.
+
+## Native CORS prepared response values
+
+Native Gateway API CORS consumes validated configuration into gateway-owned
+response values: fixed method/header/exposure lists and Max-Age are prepared
+once, with origin wildcard presence and reflection policy resolved at creation.
+Header-pair preparation borrows fixed text and the caller-owned origin; only
+requested-header reflections retain owned values before session mutation.
+Raw configuration is not duplicated. Canonical validation, origin matching,
+live Cookie/Authorization presence, header order, omission/empty behavior and
+native actual-response versus preflight output remain unchanged.
+
+Independent plan review passed. Final source review corrected a test fixture
+that incorrectly expected mixed wildcard lists to pass canonical validation;
+the test now asserts rejection. Runtime validation was unchanged. Gateway CORS
+tests passed 44, including warmed zero-allocation fixed six-header preparation
+and two allocations for two nonempty reflections. Formatting, workspace check,
+workspace Clippy and seven repository guards passed. Remaining Clippy warnings
+are outside changed files. Independent final source and record reviews passed. Coverage remains limited to native CORS header preparation,
+excluding origin acquisition and final header insertion; no full integration
+suite or throughput benchmark ran.
