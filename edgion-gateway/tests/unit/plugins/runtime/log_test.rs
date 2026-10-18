@@ -2,6 +2,60 @@ use super::*;
 use edgion_resources::sensitive::SENSITIVE_MODE;
 use std::sync::atomic::Ordering;
 
+#[test]
+fn unsigned_arguments_match_decimal_text_without_scratch_allocation() {
+    for value in [0, 200, u64::from(u16::MAX), u64::MAX] {
+        let expected = format!("status={value}");
+        let mut scratch: SmallVec<[u8; 128]> = SmallVec::new();
+        let (accepted, allocations) =
+            crate::test_allocation_counter::count_allocations(|| format_into(&mut scratch, "status={}", la![value]));
+        assert!(accepted);
+        assert_eq!(scratch.as_slice(), expected.as_bytes());
+        assert_eq!(allocations, 0);
+    }
+    let mut scratch: SmallVec<[u8; 128]> = SmallVec::new();
+    assert!(format_into(&mut scratch, "{}", la![u16::MAX]));
+    assert_eq!(scratch.as_slice(), b"65535");
+}
+
+#[test]
+fn unsigned_arguments_preserve_masking_and_entry_limits() {
+    assert_sensitive_test_in_subprocess("unsigned_arguments_preserve_masking_and_entry_limits", || {
+        for mode in [0, 1, 2] {
+            SENSITIVE_MODE.store(mode, Ordering::SeqCst);
+            let mut actual = PluginLog::new("unsigned");
+            let mut expected = PluginLog::new("unsigned");
+            assert!(actual.push_fmt("{} {}", la![200u16, sensitive("private")]));
+            assert!(expected.push_fmt("{} {}", la!["200", sensitive("private")]));
+            assert_eq!(
+                serde_json::to_value(&actual).unwrap(),
+                serde_json::to_value(&expected).unwrap()
+            );
+
+            let decimal = u64::MAX.to_string();
+            for size in [511, 512, 513] {
+                let template = format!("{}{{}}", "x".repeat(size - decimal.len()));
+                let mut actual = PluginLog::new("unsigned");
+                let mut expected = PluginLog::new("unsigned");
+                assert_eq!(actual.push_fmt(&template, la![u64::MAX]), size <= 512);
+                assert_eq!(expected.push_fmt(&template, la![decimal.as_str()]), size <= 512);
+                assert_eq!(
+                    serde_json::to_value(&actual).unwrap(),
+                    serde_json::to_value(&expected).unwrap()
+                );
+                assert_eq!(
+                    actual.push_fmt("later {}", la![0u64]),
+                    expected.push_fmt("later {}", la!["0"])
+                );
+                assert_eq!(
+                    serde_json::to_value(&actual).unwrap(),
+                    serde_json::to_value(&expected).unwrap()
+                );
+            }
+        }
+    });
+}
+
 fn assert_sensitive_test_in_subprocess(test_name: &str, assertion: impl FnOnce()) {
     const CHILD_ENV: &str = "EDGION_PLUGIN_LOG_SENSITIVE_CHILD";
     const TEST_MODULE: &str = "plugins::runtime::log::tests";

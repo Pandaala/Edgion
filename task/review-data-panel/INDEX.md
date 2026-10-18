@@ -1835,3 +1835,18 @@ The isolated large-ring fixtures measured zero tracker allocations through the
 first candidate and one for the full rejection walk. Formatting, workspace
 check/Clippy and seven repository guards passed, with existing warnings outside
 changed files. Independent final review passed.
+
+## ForwardAuth unsigned log arguments
+
+The canonical PluginLog formatter accepts non-sensitive u16/u64 diagnostics and
+renders decimal digits through a fixed stack buffer before the existing bounded
+append. ForwardAuth passes status codes directly, removing temporary numeric
+Strings without changing entry text, order, credential hiding or deny behavior.
+No arbitrary Display formatter or extra log entry is introduced. Independent
+plan review passed. Tests compare numeric/plain forms, integer extremes, scratch
+allocations, all sensitive modes and rendered size/drop boundaries.
+No full suite, live integration or throughput benchmark ran for this batch.
+Fresh PluginLog tests passed 31 cases and ForwardAuth tests passed 12. Numeric
+scratch fixtures measured zero allocations. Formatting, workspace check/Clippy
+and seven repository guards passed, with existing warnings outside changed
+files. Independent final review passed.

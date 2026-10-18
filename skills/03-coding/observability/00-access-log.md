@@ -425,6 +425,13 @@ plugin_log.push(&format!("Auth failed for user {}", name)); // PII into PluginLo
 
 ### Good PluginLog examples
 
+`push_fmt` accepts non-sensitive diagnostic `u16` and `u64` arguments through
+`la!`, such as `log.push_fmt("auth pass {}", la![status])`. They use bounded
+stack decimal formatting and the same entry-size/drop rules as plain text.
+Numeric identities or credentials are still sensitive: render those through
+the existing sensitive-text path. Integer support does not permit arbitrary
+`Display` values, dynamic error details, or additional request-level log entries.
+
 ```rust
 // KeyAuth — auth passed (group attribution always present after secret_groups pilot)
 log.push_fmt("OK group={} user {}", la!["partner-a", sensitive(&"jack")]);

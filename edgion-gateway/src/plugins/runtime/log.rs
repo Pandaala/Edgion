@@ -2,6 +2,7 @@ use crate::observe::logs::buffer::ULOG_MAX_BUFFER;
 use crate::observe::logs::{LogBuffer, ULogBuffer};
 use serde::Serialize;
 use smallvec::SmallVec;
+use std::io::{Cursor, Write};
 
 /// Default capacity for plugin name string.
 pub const NAME_CAPACITY: usize = 36;
@@ -9,15 +10,30 @@ pub const NAME_CAPACITY: usize = 36;
 /// A single argument to [`PluginLog::push_fmt`].
 ///
 /// - `Plain` — written as-is regardless of sensitive mode.
+/// - `Unsigned` — a non-sensitive diagnostic integer, formatted without a String.
 /// - `Sensitive` — passed through [`edgion_resources::sensitive::apply_sensitive`]; masked or wrapped
 ///   when the active mode is Replace or Wrap.
 ///
-/// Construct via `From<&str>` (plain) or [`sensitive()`] (sensitive).
+/// Construct via `From<&str>`, `From<u16>` or `From<u64>` for non-sensitive
+/// diagnostics, or [`sensitive()`] for sensitive text.
 /// Use the [`la!`] macro to build a `&[LogArg]` slice without explicit `.into()` calls.
 #[derive(Debug)]
 pub enum LogArg<'a> {
     Plain(&'a str),
+    Unsigned(u64),
     Sensitive(&'a str),
+}
+
+impl From<u64> for LogArg<'_> {
+    fn from(value: u64) -> Self {
+        Self::Unsigned(value)
+    }
+}
+
+impl From<u16> for LogArg<'_> {
+    fn from(value: u16) -> Self {
+        Self::Unsigned(u64::from(value))
+    }
 }
 
 impl<'a> From<&'a str> for LogArg<'a> {
@@ -41,7 +57,7 @@ pub fn sensitive(s: &str) -> LogArg<'_> {
 
 /// Build a `&[LogArg]` slice for [`PluginLog::push_fmt`].
 ///
-/// Plain `&str` values need no wrapper; only sensitive values use [`sensitive()`].
+/// Plain `&str`, `u16` and `u64` values need no wrapper; sensitive text uses [`sensitive()`].
 ///
 /// ```ignore
 /// log.push_fmt("key {} set by {}", la![key, sensitive(&user_input)]);
@@ -77,6 +93,19 @@ fn format_into<A: smallvec::Array<Item = u8>>(buf: &mut SmallVec<A>, fmt: &str, 
         if let Some(arg) = arg_iter.next() {
             let accepted = match arg {
                 LogArg::Plain(s) => append(buf, s),
+                LogArg::Unsigned(value) => {
+                    // Every decimal u64 fits in 20 ASCII bytes. Only the
+                    // primitive integer formatter runs here, never user Display.
+                    let mut number = Cursor::new([0u8; 20]);
+                    if write!(&mut number, "{value}").is_err() {
+                        return false;
+                    }
+                    let len = number.position() as usize;
+                    match std::str::from_utf8(&number.get_ref()[..len]) {
+                        Ok(text) => append(buf, text),
+                        Err(_) => false,
+                    }
+                }
                 LogArg::Sensitive(s) => {
                     edgion_resources::sensitive::apply_sensitive_bounded(s, ULOG_MAX_BUFFER - buf.len(), |w| {
                         buf.extend_from_slice(w.as_bytes());
@@ -359,7 +388,8 @@ impl PluginLog {
     /// Push a format-string log entry where only explicitly marked args are masked.
     ///
     /// The template string is never masked. Each `{}` placeholder is replaced by the
-    /// corresponding [`LogArg`]: `Plain` args are inserted verbatim; `Sensitive` args are
+    /// corresponding [`LogArg`]: `Plain` args are inserted verbatim, `Unsigned` args
+    /// use decimal digits, and `Sensitive` args are
     /// passed through the active masking mode (replace/wrap). Use the [`la!`] macro to
     /// build the args slice conveniently.
     ///

@@ -241,7 +241,7 @@ impl ForwardAuth {
             if self.decision.hide_credentials {
                 let _ = session.remove_request_header("authorization");
             }
-            plugin_log.push_fmt("auth pass {}", la![response.status.to_string().as_str()]);
+            plugin_log.push_fmt("auth pass {}", la![response.status]);
             return PluginRunningResult::GoodNext;
         }
 
@@ -259,8 +259,8 @@ impl ForwardAuth {
         plugin_log.push_fmt(
             "auth deny upstream_status={} client_status={} reason={}",
             la![
-                response.status.to_string().as_str(),
-                client_status.to_string().as_str(),
+                response.status,
+                client_status,
                 if outcome == SuccessOutcome::BodyFail {
                     "body_predicate_failed"
                 } else {
