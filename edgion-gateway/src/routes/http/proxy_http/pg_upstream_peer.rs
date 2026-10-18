@@ -1369,12 +1369,12 @@ async fn try_external_jump_peer(
         //   other variants are dispatched to sibling helpers
         unreachable!("caller must dispatch only on ctx.jump == Some(External)");
     };
-    let domain = external.domain.clone();
+    let domain = external.domain.as_str();
     let port = external.port;
     let use_tls = external.use_tls;
     let sni = external.sni.clone();
 
-    let addr = resolve_domain(&domain, port).await?;
+    let addr = resolve_domain(domain, port).await?;
 
     // Seed before validation so failure-path record_unsafe_resolved_upstream_attempt
     // has a backend_context to push onto. No K8s resource → rsc/service_key stay None.
