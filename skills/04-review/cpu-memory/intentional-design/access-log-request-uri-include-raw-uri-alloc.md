@@ -1,69 +1,62 @@
 ---
 name: access-log-request-uri-include-raw-uri-alloc
-description: Use when reviewing findings that flag the per-request String allocation in AccessLogEntry::from_context for the request_uri field (when AccessLogOptions::include_raw_uri is true, configured as includeRawUri) and propose precomputing entry_raw_uri in RequestInfo / borrowing it as Option<&'a str>.
+description: Preserve gated frozen URI projection and avoid an unconditional request cache; evaluate serialization alternatives using measured cost and canonical masking.
 knowledge_type: intentional-design
 ---
 
-> See also: [cpu-memory/SKILL.md](../SKILL.md) for the index, and the sibling
-> entry [access-log-json-serialization-per-request.md](../review-evidence/access-log-json-serialization-per-request.md)
-> that closes the same category for the entry-level `to_json()` allocation.
+# Access-log raw URI ownership and optimization boundary
 
-# AccessLogEntry::from_context Per-Request request_uri String Alloc (`AccessLogOptions::include_raw_uri`) is Not Worth Fixing
+## Current evidence
 
-**False-positive scenario**: `edgion-gateway/src/observe/access_log/entry.rs:75-81` —
-when `access_log_options.includeRawUri: true`, `AccessLogEntry::from_context`
-calls `ctx.request_uri()`, which delegates to `compose_uri()` in
-`edgion-gateway/src/ctx.rs:1088-1133` and always returns a freshly allocated `String`
-(`format!("{}?{}", path, q)` or `path.to_string()`). Every other field on
-`AccessLogEntry<'a>` is a `&'a` borrow, so reviewers see this as the lone
-heap-allocating field that "breaks the zero-copy invariant" and propose adding
-`RequestInfo::entry_raw_uri: Option<String>`, populating it once in
-`pg_request_filter`, switching `request_uri()` to `Option<&str>`, and changing
-`AccessLogEntry.request_uri` to `Option<&'a str>`.
+AccessLogEntry::from_context in edgion-gateway/src/observe/access_log/entry.rs
+populates request_uri only when includeRawUri is enabled and entry_raw_path is
+nonempty. EdgionHttpContext::request_uri delegates to compose_uri in ctx.rs,
+joining the frozen entry path and nonempty entry query into an owned String.
+It does not include scheme/authority or use the current rewritten URI. An absent
+or empty query adds no question mark.
 
-**Reality**:
+The field currently uses Option<String> and the canonical masked_opt serializer.
+Sensitive mode is applied when serializing, not when constructing the entry.
+AccessLogEntry::to_json produces a separate owned JSON string while the context
+is alive. Terminal logging sends that owned output to its sink; the debug-header
+filter also serializes before mutating the response. Debug Wrap mode suppresses
+the header before building a snapshot.
 
-1. **The dominant per-request allocation is the entry itself, not this field.**
-   Immediately after `from_context`, the access-log pipeline calls
-   `AccessLogEntry::to_json()` which `serde_json::to_string(self)`s the whole
-   entry into a fresh owned `String` of ~1–5 KB. That allocation is the
-   accepted channel-boundary contract per
-   [access-log-json-serialization-per-request.md](../review-evidence/access-log-json-serialization-per-request.md).
-   Eliminating one ~few-dozen-byte URI string in the shadow of a 1–5 KB
-   to_json() String is invisible in any profile.
+Most context projections borrow. They are not all borrowed: GeoSlotLog can own
+a formatted coordinate String, and terminal enrichment has its own ownership.
+The request_uri representation is current implementation, not a requirement
+that the JSON string field must be backed by its own intermediate allocation.
 
-2. **The proposed fix does not actually save an allocation.** Composing
-   `entry_raw_uri` eagerly in `pg_request_filter` still produces one owned
-   `String` per request when `includeRawUri=true` — just at a different
-   point in the lifecycle. Net per-request alloc count: unchanged. If the
-   precompute is made unconditional (to keep the field simple), it becomes
-   a regression for `includeRawUri=false` deployments.
+## Retained design boundary
 
-3. **The DSL/plugin path cannot benefit.** `request_uri()` has a second
-   caller at `edgion-gateway/src/plugins/runtime/session_adapter.rs:259-261`
-   exposing `fn get_request_uri(&self) -> String` to the plugin runtime
-   trait. The trait boundary owns the `String`, so even if `ctx.request_uri()`
-   were switched to `Option<&str>`, this site would still `to_string()` back
-   into an owned `String`. Only the access-log branch could borrow, and that
-   branch is already dwarfed by `to_json()` (point 1).
+The historical review rejected adding RequestInfo::entry_raw_uri merely to move
+the same composition into request entry. That remains a sound reason against
+this cache proposal: it need not reduce allocations, extends retained state,
+and an unconditional cache penalizes requests with includeRawUri disabled.
+The plugin get_request_uri API separately returns an owned String; changing a
+logging projection does not require changing that API.
 
-4. **Cost/risk of the change is not trivial.** Adding `entry_raw_uri` to
-   `RequestInfo` plus threading `'a` through `AccessLogEntry.request_uri`
-   touches: the `RequestInfo` struct definition, `pg_request_filter` entry
-   logic, `request_uri()` signature + all callers, `session_adapter` trait
-   impl, and the `AccessLogEntry` serialization (including the
-   `masked_opt::serialize` adapter currently keyed on `Option<String>`).
-   Mechanical, but medium blast radius for negligible measurable benefit.
+Keep serialization within the context lifetime and keep the final owned JSON
+output. Do not introduce a broad context cache, deferred context serialization,
+buffer pool or per-request instrumentation under this finding.
 
-**Verdict**: not a performance issue. Same category as
-[access-log-json-serialization-per-request.md](../review-evidence/access-log-json-serialization-per-request.md)
-and [oidc-jwt-claims-json-serialization-opt-in.md](../review-evidence/oidc-jwt-claims-json-serialization-opt-in.md):
-once the opt-in feature (`includeRawUri = true`) is enabled, an owned URI
-String is part of the feature contract; the marginal allocation is dominated
-by the unavoidable per-entry `to_json()` String. Any future finding that
-flags "AccessLogEntry per-request URI alloc / RequestInfo should cache
-entry_raw_uri / request_uri should return Option<&str>" is closed per this
-entry, unless it is proved that (a) profile measurement shows the URI alloc
-has measurable share on the request path, or (b) a larger access-log
-zero-copy refactor lands that also moves `to_json()` off the request task,
-making the URI borrow worth carrying through.
+## Corrected interpretation of the historical review
+
+The former page asserted typical JSON/URI sizes, dominant serialization cost and
+that the URI allocation was invisible in any profile, without measurement
+supporting those claims. Those statements do not establish current performance.
+The sibling access-log-json-serialization-per-request evidence page describes
+the final-output ownership rationale, but its empirical cost claims are not
+evidence that this intermediate URI copy is negligible.
+
+No fresh workload profile or throughput measurement was collected for this
+source audit. A narrower fragment projection could avoid intermediate assembly,
+but the current canonical apply_sensitive API requires contiguous text.
+Whether and how to extend that mechanism needs design and verification; this
+page does not authorize independent masking logic or promise zero allocations.
+
+Re-evaluate proposals against frozen URI bytes, JSON escaping, omission rules,
+serialization-time Off/Replace/Wrap behavior, failure fallback and final-output
+ownership. A measured, bounded serialization proposal must not be dismissed
+solely because the final JSON also allocates. The deferred task is
+task/review-data-panel/log-01-raw-uri-fragment-serialization.md.

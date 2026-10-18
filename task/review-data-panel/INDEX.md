@@ -42,6 +42,7 @@ destination.
 - [Redis compiled-policy validation ownership](redis-01-compiled-policy-validation.md)
 - [HMAC signed-header membership ownership](hmac-01-signed-header-membership.md)
 - [Preinitialized HMAC key state](hmac-02-preinitialized-mac-state.md)
+- [Raw URI fragment serialization](log-01-raw-uri-fragment-serialization.md)
 
 ## Completed implementation batch
 
@@ -1247,3 +1248,28 @@ passed; existing warnings are outside changed files. Independent source and fina
 reviews passed. These builder claims exclude response
 construction/logging and do not establish throughput gains or whole-callback
 allocation counts. No full integration suite ran.
+
+## Remaining native filter direct-path audit
+
+Inspected the native request/response header modifier direct loops and their
+shared HeaderModifierPlan: validation, deduplication and HeaderValue preparation
+remain cold work; request clones retain shared values for session ownership.
+ExtensionRef direct request, async response, sync response and body dispatch
+retain selected runtime handles across mutable session calls. Body dispatch
+resolves silently without per-chunk PluginLog creation; the empty async stage
+keeps its early gate. Name copies feed retained log entries, so this inspection
+does not establish that their ownership can be removed locally.
+
+DebugAccessLog uses the borrowed AccessLogEntry projection and owned JSON before
+response mutation, with early Wrap suppression. Its conditional frozen URI
+assembly remains an intermediate String. The new deferred task records a
+fragment-serialization alternative and canonical masking/measurement boundaries.
+The owning raw-URI knowledge page preserves the cache objection while removing
+unsupported universal performance claims; adjacent serialization cost claims
+are explicitly left for follow-up evidence review.
+
+Independent documentation plan and final record reviews passed. Agent-doc
+validation and diff checks passed. This audit covers direct filter orchestration and the
+identified projection chain, not complete nested plugin runtime, session
+mutation, serialization or logging coverage. No runtime changes, Rust tests or
+throughput measurements were made in this documentation batch.
