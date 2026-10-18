@@ -2265,3 +2265,18 @@ not a live network or whole-exchange allocation/throughput claim.
 Fresh verification passed all 119 shared outbound tests, formatting, workspace
 check/Clippy and seven repository guards. Remaining warnings are outside changed
 lines. Independent final review passed.
+
+## Outbound authority child Arc borrowing
+
+The outbound call renders a compiled authority by borrowing it from the effective
+policy already returned by the captured snapshot. This removes an extra child
+Arc clone/drop; the owned render result leaves the lookup closure. Policy and
+snapshot lifetime now includes synchronous rendering but ends before request
+execution or retry waits. Lookup generation, render count/order, destination
+pinning, rejection metric and AuthorityRejected behavior remain unchanged.
+Independent plan review passed. Existing outbound transport and authority tests
+cover absent policy, policy/trusted value changes and rejected labels. This is a
+reference-count reduction, not a heap-allocation or throughput claim.
+Fresh verification passed 119 shared outbound tests and 6 authority tests,
+formatting, workspace check/Clippy and seven repository guards. Remaining
+warnings are outside changed code. Independent final review passed.

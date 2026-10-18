@@ -322,15 +322,18 @@ async fn outbound_call_with_body_using<T: OutboundTransport>(
         get_backend_traffic_policy_store()
             .snapshot()
             .get_effective(&target)
-            .and_then(|policy| policy.upstream_authority.clone())
+            .and_then(|policy| {
+                policy
+                    .upstream_authority
+                    .as_ref()
+                    .map(|compiled| render_authority_in(compiled, context))
+            })
     }) {
-        Some(compiled) => match render_authority_in(&compiled, context) {
-            Ok(authority) => replace_url_host(&base, &authority),
-            Err(e) => {
-                crate::observe::metrics::record_authority_rejected(e.reason());
-                return Err(OutboundCallError::AuthorityRejected);
-            }
-        },
+        Some(Ok(authority)) => replace_url_host(&base, &authority),
+        Some(Err(e)) => {
+            crate::observe::metrics::record_authority_rejected(e.reason());
+            return Err(OutboundCallError::AuthorityRejected);
+        }
         None => base,
     };
 
