@@ -40,6 +40,7 @@ destination.
 - [JWT claim condition evaluation ownership](condition-01-jwt-claim-evaluation.md)
 - [GeoIP record decoding and projection](geoip-01-record-decoding.md)
 - [Redis compiled-policy validation ownership](redis-01-compiled-policy-validation.md)
+- [HMAC signed-header membership ownership](hmac-01-signed-header-membership.md)
 
 ## Completed implementation batch
 
@@ -1040,3 +1041,19 @@ coverage. Formatting, workspace check/Clippy and seven repository guards passed;
 existing warnings remain outside changed code. No full integration suite or
 throughput benchmark ran. This removes the intermediate query copy per target
 component, not signing-string allocation or all HMAC runtime costs.
+
+
+## HMAC signed-header membership audit
+
+Source inspection confirms separate parser duplicate-detection and verifier
+required-header membership tables. Replacing them entails list-size complexity
+or ordered-owner memory tradeoffs, recorded in the deferred task above. Existing
+cold preparation of enforced names, signature order and failure ordering remain
+required. No runtime behavior or input limits changed.
+
+The owning prebuilt-verifier knowledge was corrected: the current schema helper
+returns false for HMAC; runtime header/body predicates use compiled verifiers,
+and the removed verify_headers_config is not a fallback. Independent plan and
+final record reviews passed; agent-doc validation and diff checks passed. This
+documentation-only batch ran no Rust tests or performance benchmark and establishes
+no whole-authentication or allocation-free body-condition coverage.

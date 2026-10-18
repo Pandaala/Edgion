@@ -33,16 +33,17 @@ RequestRestriction and RequestAccessPolicy because its body-read failure policy 
 not synchronous condition semantics. D-27 continues to reject body-validating HMAC
 at entry level.
 
-`ConditionExt::evaluate` retains a defensive schema-level header fallback for tests
-and future internal callers. It calls `HmacVerifier::verify_headers_config`, which
-borrows the schema configuration and credential map; it must never construct a
-verifier or clone the map.
+The former schema-level fallback description is stale: `ConditionExt::evaluate`
+returns false for `Condition::HmacAuth`, and `verify_headers_config` no longer
+exists. Runtime HMAC evaluation goes through `CompiledCondition`, whose header
+and body variants retain the snapshot verifier. Do not restore per-request
+verifier construction or infer a runtime fallback from the schema-level helper.
 
 ## Review guard
 
 Before re-reporting, search all `HmacVerifier::new` call sites. They are valid only
-in runtime/plugin construction: compiled header conditions, the standalone HmacAuth
-plugin, and the two body-HMAC predicate builders. A constructor call from
+in runtime/plugin construction: the standalone HmacAuth plugin and shared
+CompiledCondition construction for header/body predicates. A constructor call from
 `evaluate`, `run_request`, or another per-request function is a regression.
 
 The regression test
