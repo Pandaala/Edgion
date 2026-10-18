@@ -2474,3 +2474,17 @@ Fresh verification passed all 60 AiGuard request tests, formatting, workspace
 check/Clippy and seven repository guards. Remaining warnings are outside changed
 code. Optional payloads and escaped strings may still allocate; no whole-call
 allocation or throughput improvement is claimed.
+
+## AiGuard evaluator semaphore borrowing
+
+The evaluator's locally awaited outbound call now borrows its snapshot semaphore
+permit instead of cloning an Arc into an owned permit. Queue waiting remains
+inside the same absolute timeout, and error mappings and release scope are
+unchanged. Independent plan and code reviews passed. Four actual-decide tests
+cover saturated-queue timeout, pending cancellation without another Arc owner,
+closed semaphore and acquired-permit release after early health rejection.
+All use nonempty spans and prevent network access. This removes an Arc
+increment/decrement pair, not a heap allocation or a measured throughput cost.
+Fresh verification passed all 64 AiGuard request tests, formatting, workspace
+check/Clippy and seven repository guards. Remaining warnings are outside changed
+code.

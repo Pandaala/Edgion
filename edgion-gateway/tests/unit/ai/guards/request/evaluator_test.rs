@@ -199,3 +199,75 @@ fn replacement_order_preserves_keys_text_and_budget_precedence() {
         assert_eq!(parse_decision(&body, 10), Err("evaluator replacement too large"));
     }
 }
+
+fn permit_test_evaluator(permits: usize) -> CompiledEvaluator {
+    let mut client = ManagedOutboundClient::test_with_static_target("http://localhost:1");
+    client.timeout = std::time::Duration::from_millis(10);
+    client.health.healthy.store(false, std::sync::atomic::Ordering::Relaxed);
+    client.passive_health_check = None;
+    CompiledEvaluator {
+        client: Arc::new(client),
+        permits: Arc::new(Semaphore::new(permits)),
+        max_request_bytes: 4096,
+        max_replacement_bytes: 4096,
+    }
+}
+
+fn permit_test_spans() -> [(GuardSpanKey, &'static str); 1] {
+    [(
+        GuardSpanKey {
+            message_index: 0,
+            part: GuardPart::Content,
+        },
+        "prompt",
+    )]
+}
+
+#[tokio::test]
+async fn permit_wait_counts_against_the_decision_deadline() {
+    let evaluator = permit_test_evaluator(0);
+    let session = crate::plugins::runtime::traits::session::MockPluginSession::new();
+    assert_eq!(
+        evaluator.decide(&session, &permit_test_spans()).await,
+        Err("evaluator timeout")
+    );
+    assert_eq!(evaluator.permits.available_permits(), 0);
+}
+
+#[tokio::test]
+async fn permit_wait_cancellation_borrows_the_snapshot_semaphore() {
+    let evaluator = permit_test_evaluator(0);
+    let session = crate::plugins::runtime::traits::session::MockPluginSession::new();
+    let spans = permit_test_spans();
+    let owners = Arc::strong_count(&evaluator.permits);
+    let mut decision = Box::pin(evaluator.decide(&session, &spans));
+    assert!(futures::poll!(&mut decision).is_pending());
+    assert_eq!(Arc::strong_count(&evaluator.permits), owners);
+    drop(decision);
+    evaluator.permits.add_permits(1);
+    let permit = evaluator.permits.try_acquire().unwrap();
+    drop(permit);
+    assert_eq!(evaluator.permits.available_permits(), 1);
+}
+
+#[tokio::test]
+async fn permit_closed_preserves_the_decision_error() {
+    let evaluator = permit_test_evaluator(1);
+    evaluator.permits.close();
+    let session = crate::plugins::runtime::traits::session::MockPluginSession::new();
+    assert_eq!(
+        evaluator.decide(&session, &permit_test_spans()).await,
+        Err("evaluator closed")
+    );
+}
+
+#[tokio::test]
+async fn permit_is_returned_after_health_gate_rejection() {
+    let evaluator = permit_test_evaluator(1);
+    let session = crate::plugins::runtime::traits::session::MockPluginSession::new();
+    assert_eq!(
+        evaluator.decide(&session, &permit_test_spans()).await,
+        Err("evaluator dependency")
+    );
+    assert_eq!(evaluator.permits.available_permits(), 1);
+}

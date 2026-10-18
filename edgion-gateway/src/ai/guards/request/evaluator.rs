@@ -166,10 +166,7 @@ impl CompiledEvaluator {
             // The permit is acquired inside the deadline, so queueing counts
             // against the same absolute budget as the exchange, and is
             // released by RAII if the future is dropped.
-            let _permit = Arc::clone(&self.permits)
-                .acquire_owned()
-                .await
-                .map_err(|_| "evaluator closed")?;
+            let _permit = self.permits.acquire().await.map_err(|_| "evaluator closed")?;
             outbound_call_with_body(
                 &self.client,
                 session,
