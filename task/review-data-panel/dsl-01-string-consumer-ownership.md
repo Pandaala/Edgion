@@ -40,6 +40,52 @@ is `log-01-raw-uri-fragment-serialization.md`.
 
 ## Decision and acceptance
 
+### Body literal pattern preparation follow-up
+
+Source reinspection at `e2cb52a8e` follows the Body consumers beyond the VM
+conversion boundary. `OpCode::Contains` copies a Body operand's Str pattern
+into BodyTextOperation; TextOperationScanner consumes that String into bytes
+without another payload copy, then builds a KMP failure Vec for each scanner.
+The ordinary Str branch already borrows its pattern and uses string search.
+Do not change that branch as a side effect of Body optimization.
+
+`BodyStorageView::replace_literal` rejects an empty search, captures the logical
+snapshot, returns early for equal operands, then copies `from` into the
+LiteralMatchScanner's Vec.
+The scanner also builds a KMP failure table. It needs owned Send + 'static
+state because scans may move into the bounded blocking pool. Borrowing from
+the waiting caller cannot satisfy that lifetime. Sharing the input Bytes could
+remove this second copy, but a small Bytes slice can retain a large backing
+allocation after cancellation while the worker exits. Current VM conversion
+owns a String, whereas the generic session/storage API accepts arbitrary Bytes;
+the safety argument must cover that boundary, not only today's VM caller.
+
+Static pattern preparation is a separate design choice from borrowing VM
+strings. BodyReplace currently evaluates object, search and replacement
+expressions in order and emits a generic opcode; even its compile-time literal
+empty-pattern check does not install a prepared matcher. A constant-pattern
+representation would need reviewed compiler/validator/runtime ownership and
+bounded prepared storage tied to the compiled generation. Dynamic operands must
+retain their current evaluation and failure behavior. Do not add a per-request
+or unbounded process-global matcher cache. Respect the runtime-independent DSL
+leaf boundary; Gateway scan owners cannot become leaf dependencies.
+
+For a chosen design, preserve lossy UTF-8 semantics for Body contains and raw
+byte, non-overlapping replacement semantics; empty/equal fast paths; match and
+segment limits; atomic generation-checked publication; cancellation cleanup;
+and scan reservation/refund ordering. Preparing a matcher must not imply that
+scanning is free or bypass maxBodyScanPasses. Compare repeated constant and
+dynamic patterns, large backings with small views, memory/disk scans and
+cancellation. Measure construction work and retained memory separately; no
+prepared-pattern or throughput improvement has been measured here.
+
+Additional original sources: `request_body/operation.rs`,
+`request_body/storage.rs` under `edgion-gateway/src/`,
+`edgion-dsl/src/compiler/expr.rs`, and the body-scan budget/ownership contract in
+`skills/01-architecture/02-gateway/dsl-engine-security-model.md`.
+
+### Existing decision scope
+
 Choose a bounded consumer group for measurement/design, or retain its current
 ownership. Whole-Value SSO migration is an independent, larger proposal.
 The historical SSO knowledge page contains unmeasured workload estimates;
@@ -64,3 +110,7 @@ claim follows from allocation counts alone. Use IMPL for any selected change.
 This source audit adds no benchmark, runtime test result or implementation
 acceptance. Library-version conclusions in the old SSO investigation were not
 rechecked and must not be treated as current dependency advice.
+
+The body-pattern follow-up passed formatting, workspace check/Clippy, agent-doc
+validation and diff whitespace checks. It changed documentation only and ran no
+new runtime tests or benchmarks; Clippy warnings remain outside this diff.
