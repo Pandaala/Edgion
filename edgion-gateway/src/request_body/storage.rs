@@ -536,6 +536,17 @@ struct BodyStorageViewInner {
     storage_operation_timeout: Duration,
 }
 
+impl BodyStorageViewInner {
+    fn snapshot(&self) -> Result<(Arc<BodySnapshot>, u64), BodyReadError> {
+        let mutation = self.mutation.read();
+        if let Some(snapshot) = mutation.snapshot.as_ref() {
+            return Ok((Arc::clone(snapshot), mutation.generation));
+        }
+        let initial = self.initial.get().ok_or(BodyReadError::Incomplete)?;
+        Ok((Arc::clone(&initial.snapshot), mutation.generation))
+    }
+}
+
 /// Shared request-body handle captured by request-stage plugins.
 ///
 /// Every read takes an immutable logical snapshot. A mutation publishes a new
@@ -557,12 +568,7 @@ impl BodyStorageView {
     }
 
     fn snapshot(&self) -> Result<(Arc<BodySnapshot>, u64), BodyReadError> {
-        let mutation = self.inner.mutation.read();
-        if let Some(snapshot) = mutation.snapshot.as_ref() {
-            return Ok((Arc::clone(snapshot), mutation.generation));
-        }
-        let initial = self.inner.initial.get().ok_or(BodyReadError::Incomplete)?;
-        Ok((Arc::clone(&initial.snapshot), mutation.generation))
+        self.inner.snapshot()
     }
 
     fn snapshot_metadata(&self) -> Result<(u64, u64), BodyReadError> {
@@ -1691,9 +1697,9 @@ impl RequestBodyBuffer for BodyStorage {
                 "request body replay started before capture completed",
             ));
         }
-        let view = BodyStorageView::new(Arc::clone(&self.view));
         self.replay_snapshot = Some(
-            view.snapshot()
+            self.view
+                .snapshot()
                 .map_err(|_| Self::replay_error("request body replay source is unavailable after finalization"))?
                 .0,
         );

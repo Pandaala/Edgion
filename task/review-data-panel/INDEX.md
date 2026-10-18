@@ -3207,3 +3207,17 @@ formatting, workspace check/Clippy and seven repository guards passed. Warnings
 remain outside changed code. This removes a duplicate Bytes clone or File Arc
 clone at successful completion; no payload-copy, byte-budget or measured
 throughput reduction is claimed.
+
+## Request-body rewind borrows the existing view owner
+
+The canonical private snapshot selector now belongs to BodyStorageViewInner;
+BodyStorageView delegates to it, and rewind calls it through its existing owner.
+This removes the temporary view's inner Arc clone/drop. Mutation-first selection,
+generation pairing under the read lock, the owned snapshot Arc, error precedence
+and cursor resets are unchanged. No lock, snapshot lifetime, body byte copy or
+allocation is removed, and no throughput improvement is measured.
+
+Independent plan and source reviews passed. All 69 storage tests passed,
+including snapshot isolation across later mutations, retry cursor resets and
+disk cancellation/failure coverage. Formatting, workspace check/Clippy and seven
+repository guards passed; warnings remain outside changed code.
