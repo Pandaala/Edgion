@@ -3079,6 +3079,24 @@ fail-closed admission chain; no baseline binary was rerun. Formatting, workspace
 check/Clippy and seven repository guards passed. Clippy warnings remain outside
 changed code. The known fixture failure is retained, not skipped or repaired here.
 
+## Request-body scalar snapshot metadata
+
+BodyStorageView::len and overwrite_body now read copied length/generation
+metadata instead of acquiring a temporary snapshot Arc. A private helper keeps
+mutation-first selection and initial-capture readiness under the existing read
+guard, releasing it before replacement construction or publication. Overwrite
+already discarded its old snapshot immediately; scan, reader and replay paths
+still acquire owned snapshots. Physical caps, freeze and generation-conflict
+checks retain their ordering.
+
+A regression covers incomplete capture without publication, initial and updated
+lengths, empty replacement and frozen rejection. Independent plan and source
+reviews passed. Fresh verification passed 68 storage tests and the separate
+late-capture/view-release freeze test, formatting, workspace check/Clippy and
+seven repository guards. Warnings remain outside changed code. Each successful
+metadata lookup avoids one snapshot Arc increment/decrement; no allocation,
+lock-removal or throughput improvement is claimed.
+
 ## Borrowed memory chunks in request-body scans
 
 scan_snapshot_owned now reuses the existing checked memory-segment projection

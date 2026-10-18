@@ -565,6 +565,15 @@ impl BodyStorageView {
         Ok((Arc::clone(&initial.snapshot), mutation.generation))
     }
 
+    fn snapshot_metadata(&self) -> Result<(u64, u64), BodyReadError> {
+        let mutation = self.inner.mutation.read();
+        if let Some(snapshot) = mutation.snapshot.as_ref() {
+            return Ok((snapshot.len, mutation.generation));
+        }
+        let initial = self.inner.initial.get().ok_or(BodyReadError::Incomplete)?;
+        Ok((initial.snapshot.len, mutation.generation))
+    }
+
     fn publish(&self, expected_generation: u64, snapshot: BodySnapshot) -> Result<u64, BodyOperationError> {
         self.publish_arc(expected_generation, Arc::new(snapshot))
     }
@@ -632,7 +641,7 @@ impl BodyStorageView {
     }
 
     pub fn len(&self) -> Result<u64, BodyReadError> {
-        self.snapshot().map(|(snapshot, _)| snapshot.len)
+        self.snapshot_metadata().map(|(len, _)| len)
     }
 
     pub fn is_empty(&self) -> Result<bool, BodyReadError> {
@@ -1062,7 +1071,7 @@ impl BodyStorageView {
     }
 
     pub fn overwrite_body(&self, body: Bytes) -> Result<(), BodyReadError> {
-        let (_, generation) = self.snapshot()?;
+        let (_, generation) = self.snapshot_metadata()?;
         let snapshot = BodySnapshot::from_inline(body).map_err(operation_to_body_error)?;
         self.publish(generation, snapshot)
             .map(|_| ())

@@ -1,6 +1,38 @@
 use super::*;
 
 #[tokio::test]
+async fn length_and_overwrite_require_complete_capture_and_follow_current_generation() {
+    let (mut storage, view) = BodyStorage::with_limits(32, 64);
+    assert_eq!(view.len(), Err(BodyReadError::Incomplete));
+    assert_eq!(view.is_empty(), Err(BodyReadError::Incomplete));
+    assert_eq!(
+        view.overwrite_body(Bytes::from_static(b"early")),
+        Err(BodyReadError::Incomplete)
+    );
+    assert_eq!(view.generation(), 0);
+    assert!(!view.is_modified());
+
+    capture(&mut storage, &[b"abc"]).await;
+    assert_eq!(view.len(), Ok(3));
+    assert_eq!(view.is_empty(), Ok(false));
+    view.overwrite_body(Bytes::from_static(b"longer")).unwrap();
+    assert_eq!(view.len(), Ok(6));
+    assert_eq!(view.generation(), 1);
+    view.overwrite_body(Bytes::new()).unwrap();
+    assert_eq!(view.len(), Ok(0));
+    assert_eq!(view.is_empty(), Ok(true));
+    assert_eq!(view.generation(), 2);
+
+    view.freeze_mutation();
+    assert_eq!(
+        view.overwrite_body(Bytes::from_static(b"frozen")),
+        Err(BodyReadError::NotBuffered)
+    );
+    assert_eq!(view.len(), Ok(0));
+    assert_eq!(view.generation(), 2);
+}
+
+#[tokio::test]
 async fn mirror_snapshot_read_output_holds_lane_until_last_clone() {
     let limiter = Arc::new(Semaphore::new(1));
     let worker_limiter = Arc::clone(&limiter);
