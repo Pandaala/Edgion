@@ -1006,3 +1006,98 @@ fn overlapping_ordered_merge_moves_text_without_allocating() {
         assert_eq!(text.as_ptr(), pointer);
     }
 }
+
+#[test]
+fn final_key_validation_matches_linear_reference_for_ordered_and_fallback_inputs() {
+    fn key(index: u32) -> GuardSpanKey {
+        GuardSpanKey {
+            message_index: index / 3,
+            part: match index % 3 {
+                0 => GuardPart::Content,
+                value => GuardPart::TextPart(value - 1),
+            },
+        }
+    }
+    fn reference(spans: &[GuardSpan], items: &[(GuardSpanKey, String)], cap: usize) -> Result<(), &'static str> {
+        if items.len() > spans.len() {
+            return Err("evaluator bad key");
+        }
+        for (index, (key, _)) in items.iter().enumerate() {
+            if !spans.iter().any(|span| span.key == *key) || items[..index].iter().any(|(previous, _)| previous == key)
+            {
+                return Err("evaluator bad key");
+            }
+        }
+        let mut total = 0usize;
+        for (_, text) in items {
+            total = total.checked_add(text.len()).ok_or("replacement bounds")?;
+            if total > cap {
+                return Err("replacement bounds");
+            }
+        }
+        Ok(())
+    }
+    for selected in [vec![], vec![1, 3, 5], vec![5, 1, 3], vec![1, 1, 3]] {
+        let spans: Vec<_> = selected
+            .into_iter()
+            .map(|index| GuardSpan {
+                key: key(index),
+                role: None,
+                context: String::new(),
+                current: String::new(),
+                token: 0..2,
+            })
+            .collect();
+        for replacements in [
+            vec![],
+            vec![1],
+            vec![3],
+            vec![5],
+            vec![0],
+            vec![2],
+            vec![6],
+            vec![1, 3],
+            vec![3, 1],
+            vec![1, 1],
+            vec![1, 3, 5],
+            vec![1, 3, 5, 6],
+        ] {
+            let items: Vec<_> = replacements.into_iter().map(|index| (key(index), "x".into())).collect();
+            for cap in [0, 1, 2, 3, 99] {
+                assert_eq!(
+                    validate_replacements(&spans, &items, cap),
+                    reference(&spans, &items, cap)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn ordered_final_validation_is_allocation_free_at_inclusive_budget() {
+    let spans: Vec<_> = (0..256)
+        .map(|message_index| GuardSpan {
+            key: GuardSpanKey {
+                message_index,
+                part: GuardPart::Content,
+            },
+            role: None,
+            context: String::new(),
+            current: String::new(),
+            token: 0..2,
+        })
+        .collect();
+    let items: Vec<_> = spans
+        .iter()
+        .step_by(3)
+        .map(|span| (span.key, "text".to_owned()))
+        .collect();
+    let cap = items.len() * 4;
+    for (limit, expected) in [(cap, Ok(())), (cap - 1, Err("replacement bounds"))] {
+        let (result, stats) =
+            crate::test_allocation_counter::count_allocation_stats(|| validate_replacements(&spans, &items, limit));
+        assert_eq!(result, expected);
+        assert_eq!(stats.calls, 0);
+        assert_eq!(stats.requested_bytes, 0);
+    }
+}

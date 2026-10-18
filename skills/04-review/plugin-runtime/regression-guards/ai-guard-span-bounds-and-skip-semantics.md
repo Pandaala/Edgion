@@ -85,8 +85,11 @@ This early bound does not prove final union membership, uniqueness or byte cost.
 
 `AiGuard::finish_decision` validates every final Replace decision before edit
 encoding/publication. `validate_replacements` first establishes selected-key
-membership and uniqueness, with a selected-count check before quadratic scans,
-then checks the surviving decoded-byte sum with checked arithmetic. Same-key
+membership and uniqueness, with a selected-count check before key comparisons.
+Strictly increasing spans and replacement keys use a linear membership scan;
+other input retains the original membership and duplicate scans so valid unordered
+replacements remain accepted. Only after all keys pass does validation check the
+surviving decoded-byte sum with checked arithmetic. Same-key
 external overrides replace the local charge; smaller overrides release budget.
 JSON quotes/escapes and unchanged spans are not charged. Invalid keys and budget
 failures use existing dependency failure handling, record the retry latch with

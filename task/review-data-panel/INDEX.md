@@ -2572,3 +2572,21 @@ zero allocation, retained local Vec storage and moved external String pointers.
 Fresh verification passed all 72 AiGuard request tests, formatting, workspace
 check/Clippy and seven repository guards. Remaining warnings are outside changed
 code. No all-input zero-allocation or end-to-end throughput result is claimed.
+
+## AiGuard ordered final key validation
+
+Final replacement validation now uses a linear membership scan when both selected
+spans and replacement keys are strictly increasing. These checks also establish
+uniqueness; unordered or duplicate inputs retain the original membership and
+prefix-duplicate logic, preserving valid unordered acceptance. Empty replacement
+lists return immediately as before. Count admission stays first, all key checks
+precede decoded-byte accounting, and publication remains unchanged. The owning
+budget knowledge page records both paths. Independent plan and corrected final
+code/knowledge reviews passed.
+Differential tests compare the original validator across empty, sorted, unsorted,
+duplicate and unknown keys, mixed content/text-part keys and multiple budgets.
+A 256-span sparse fixture checks inclusive byte bounds without allocation.
+Fresh final-source verification passed all 74 AiGuard request tests, formatting,
+workspace check/Clippy and seven repository guards. The introduced Clippy warning
+was corrected; remaining warnings are outside changed code. Ordered key work is
+linear, but no claim is made that every small input or full request is faster.

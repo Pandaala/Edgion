@@ -407,13 +407,29 @@ fn validate_replacements(
     items: &[(GuardSpanKey, String)],
     max_replacement_bytes: usize,
 ) -> Result<(), &'static str> {
-    // Establish the selected-span bound before quadratic key comparisons.
+    // Establish the selected-span bound before key comparisons.
     if items.len() > spans.len() {
         return Err("evaluator bad key");
     }
-    for (index, (key, _)) in items.iter().enumerate() {
-        if !spans.iter().any(|span| span.key == *key) || items[..index].iter().any(|(previous, _)| previous == key) {
-            return Err("evaluator bad key");
+    if items.is_empty() {
+        return Ok(());
+    }
+    if spans.windows(2).all(|pair| pair[0].key < pair[1].key) && items.windows(2).all(|pair| pair[0].0 < pair[1].0) {
+        let mut span_index = 0;
+        for (key, _) in items {
+            while spans.get(span_index).is_some_and(|span| span.key < *key) {
+                span_index += 1;
+            }
+            if spans.get(span_index).is_none_or(|span| span.key != *key) {
+                return Err("evaluator bad key");
+            }
+        }
+    } else {
+        for (index, (key, _)) in items.iter().enumerate() {
+            if !spans.iter().any(|span| span.key == *key) || items[..index].iter().any(|(previous, _)| previous == key)
+            {
+                return Err("evaluator bad key");
+            }
         }
     }
     let mut total = 0_usize;
