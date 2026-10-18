@@ -1533,3 +1533,23 @@ Fresh CSRF tests passed 17 and canonical Cookie parser tests passed four.
 Formatting, workspace check/Clippy and seven repository guards passed, with
 existing warnings outside changed files.
 Independent final review passed.
+
+## Fragmented CSRF signature input
+
+CSRF HMAC input is now fed as ordered literal/decimal/nonce fragments, removing
+the complete temporary signing String. Standard i64 formatting, HMAC setup,
+hex output, signature verification, lifetime and token wire shape remain.
+The timestamp text and final signature still allocate; extra update calls are
+not claimed to improve CPU or throughput.
+
+Independent plan review passed. Tests compare the previous composite-input
+implementation across integer/key/nonce boundaries and retain the known signature.
+A fixed-fixture allocation comparison includes complete signature generation
+on each side, with fixture construction excluded. No full suite, live integration
+or throughput benchmark was run.
+Fresh CSRF tests passed 19. For nonce lengths 64 and 4096, the original complete
+operation requested 186 and 4218 allocation bytes (three calls each); the new
+operation requested 83 bytes (two calls) for either fixture. These are test-build
+fixture results, not retained-memory or production-throughput measurements.
+Formatting, workspace check/Clippy and seven repository guards passed, with
+existing warnings outside changed files. Independent final review passed.

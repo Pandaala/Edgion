@@ -69,3 +69,43 @@ fn decode_rejects_invalid_base64_utf8_and_json_without_dynamic_errors() {
     assert!(CsrfToken::decode("/w==").is_err());
     assert!(CsrfToken::decode("bm90LWpzb24=").is_err());
 }
+
+fn composed_signature(random: &str, expires: i64, key: &str) -> String {
+    let mut mac = HmacSha256::new_from_slice(key.as_bytes()).unwrap();
+    let data = format!("expires:{},random:{}", expires, random);
+    mac.update(data.as_bytes());
+    hex::encode(mac.finalize().into_bytes())
+}
+
+#[test]
+fn signature_fragments_match_composed_input_across_byte_boundaries() {
+    for key in ["", KEY, "long-key-material-".repeat(16).as_str()] {
+        for expires in [i64::MIN, -1, 0, 100, 1_800_000_000, i64::MAX] {
+            for random in [
+                "",
+                "expires:-1,random:é€",
+                "00".repeat(32).as_str(),
+                "a".repeat(4096).as_str(),
+            ] {
+                assert_eq!(
+                    CsrfToken::gen_sign(random, expires, key),
+                    composed_signature(random, expires, key)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn signature_fragments_remove_nonce_sized_temporary_allocation() {
+    for size in [64, 4096] {
+        let random = "a".repeat(size);
+        let (expected, before) =
+            crate::test_allocation_counter::count_allocation_stats(|| composed_signature(&random, 1_800_000_000, KEY));
+        let (actual, after) =
+            crate::test_allocation_counter::count_allocation_stats(|| CsrfToken::gen_sign(&random, 1_800_000_000, KEY));
+        assert_eq!(actual, expected);
+        assert!(after.requested_bytes < before.requested_bytes);
+        println!("nonce bytes={size}: composed={before:?}, fragments={after:?}");
+    }
+}

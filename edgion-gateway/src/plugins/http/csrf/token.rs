@@ -46,8 +46,10 @@ impl CsrfToken {
     fn gen_sign(random: &str, expires: i64, key: &str) -> String {
         let mut mac = HmacSha256::new_from_slice(key.as_bytes())
             .expect("HMAC accepts any non-empty key per RFC 2104; key validated non-empty by config loader");
-        let data = format!("expires:{},random:{}", expires, random);
-        mac.update(data.as_bytes());
+        mac.update(b"expires:");
+        mac.update(expires.to_string().as_bytes());
+        mac.update(b",random:");
+        mac.update(random.as_bytes());
         hex::encode(mac.finalize().into_bytes())
     }
 
