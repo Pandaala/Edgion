@@ -41,6 +41,7 @@ destination.
 - [GeoIP record decoding and projection](geoip-01-record-decoding.md)
 - [Redis compiled-policy validation ownership](redis-01-compiled-policy-validation.md)
 - [HMAC signed-header membership ownership](hmac-01-signed-header-membership.md)
+- [Preinitialized HMAC key state](hmac-02-preinitialized-mac-state.md)
 
 ## Completed implementation batch
 
@@ -1093,3 +1094,19 @@ workspace check/Clippy and seven repository guards passed; existing warnings are
 outside changed code. No full integration suite or throughput benchmark ran.
 This removes encoded-comparison storage only, not the expected-header owner or
 all body-verification allocations.
+
+
+## HMAC key initialization audit
+
+The pinned HMAC implementation repeats key reduction and inner/outer pad-state
+initialization during signature verification, despite configuration/verifier
+construction already being cold. Immutable prepared-state cloning is a candidate,
+but retained sensitive state scales with credentials, allowed algorithms and
+verifier generations. The deferred task records CPU/memory/ownership alternatives
+and acceptance without changing runtime behavior or claiming a measured benefit.
+
+Independent plan and final record reviews passed. Agent-doc validation and diff
+checks passed; this documentation-only batch ran no Rust tests or benchmark.
+Current-time timestamp checks and owned expected body-digest text across await
+remain intentional request work; this audit does not establish full HMAC or
+whole-callback optimization coverage.
