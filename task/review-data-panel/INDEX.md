@@ -2921,3 +2921,21 @@ HeaderCertAuth and 14 mTLS callback tests; final-source extractor verification
 also passed. Formatting, workspace check/Clippy and seven repository guards
 passed with existing warnings outside changed code. No universal CPU, physical
 memory or live-handshake performance claim is made.
+
+## Defer generic EdgionTls lookup behind frontend mTLS selection
+
+The certificate-selection callback now performs its generic eligible EdgionTls
+lookup only after the Gateway frontend-mTLS branch returns. That branch uses its
+own exact-attachment lookup and never consumed the generic result. Both snapshot
+captures retain their original order and location; strict rejection, attachment
+identity, overlay conflicts, minimum TLS version and ordinary Layer 1/2 selection
+remain unchanged. The skipped lookup only reads pinned maps and may clone a
+winning Arc. Certificate/key/CA preparation and candidate sorting were also
+inspected and already occur during configuration publication.
+
+Independent plan and code reviews passed. Fresh verification passed 30 TLS store
+tests and the two targeted exact-overlay/published-regex callback regressions,
+formatting, workspace check/Clippy and seven repository guards. Existing warnings
+are outside changed code. Source control flow establishes the skipped work; no
+new test duplicating that control flow was added. No live-handshake suite or
+throughput benchmark was run, and callback-wide coverage remains incomplete.

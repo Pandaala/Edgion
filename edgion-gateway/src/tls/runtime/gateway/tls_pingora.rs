@@ -516,8 +516,6 @@ impl TlsCallback {
                 // logical attachment identifies that exact winning listener.
                 let et_matcher_snapshot = get_tls_cert_matcher().snapshot();
                 let gateway_snapshot = crate::runtime::matching::tls::get_gateway_tls_matcher().snapshot();
-                let et = et_matcher_snapshot
-                    .match_eligible_sni(&lk, sni, |attachment| gateway_snapshot.listener_is_eligible(attachment));
                 let gw = gateway_snapshot.match_sni(&lk, sni);
                 if let Some(gw) = gw
                     .as_ref()
@@ -555,6 +553,8 @@ impl TlsCallback {
                 }
 
                 // ── 2. Layer 1: EdgionTls ────────────────────────────────
+                let et = et_matcher_snapshot
+                    .match_eligible_sni(&lk, sni, |attachment| gateway_snapshot.listener_is_eligible(attachment));
                 if let Some(et) = et {
                     // Only Mutual / OptionalMutual actually drive mTLS verification.
                     // Terminate mode short-circuits in configure_mtls without setting
