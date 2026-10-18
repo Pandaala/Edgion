@@ -1,5 +1,6 @@
 //! Canonical, policy-neutral, bounded hold-and-release window for SSE bytes.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::mem::size_of;
 
@@ -373,16 +374,23 @@ impl RawWindow {
         }
     }
 
-    /// Materialize one admitted binary message, never an entire response.
-    pub(crate) fn binary_bytes(&self) -> Result<Vec<u8>, WindowError> {
+    /// Read one admitted binary message, borrowing contiguous storage.
+    /// Fragmented messages are materialized; this never aggregates a response.
+    pub(crate) fn binary_bytes(&self) -> Result<Cow<'_, [u8]>, WindowError> {
         self.require_collecting()?;
         self.admit(self.raw.len())?;
+        if self.raw.handle_count() <= 1 {
+            return self
+                .raw
+                .range(ByteRange::new(0, self.raw.len()))
+                .ok_or(WindowError::InvalidRange);
+        }
         let mut output = Vec::with_capacity(self.raw.len());
         self.raw
             .for_each_range(super::chain::ByteRange::new(0, self.raw.len()), |part| {
                 output.extend_from_slice(part)
             });
-        Ok(output)
+        Ok(Cow::Owned(output))
     }
 
     pub fn stats(&mut self) -> Result<WindowStats, WindowError> {

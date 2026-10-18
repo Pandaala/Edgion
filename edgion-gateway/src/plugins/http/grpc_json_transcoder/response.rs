@@ -192,12 +192,13 @@ impl GrpcResponseProcessor {
                 }
                 self.messages = self.messages.checked_add(1).ok_or(())?;
                 if self.plan.streaming() {
-                    let payload = self.window.binary_bytes().map_err(|_| ())?;
-                    let json = self
-                        .plan
-                        .binding
-                        .decode(&payload, self.plan.compiled.limits, Some(self.plan.compiled.format))
-                        .map_err(|_| ())?;
+                    let json = {
+                        let payload = self.window.binary_bytes().map_err(|_| ())?;
+                        self.plan
+                            .binding
+                            .decode(&payload, self.plan.compiled.limits, Some(self.plan.compiled.format))
+                            .map_err(|_| ())?
+                    };
                     let WindowOutput::Replace(json) = self
                         .window
                         .resolve(WindowDecision::Replace(Bytes::from(json)))

@@ -2372,3 +2372,20 @@ are not claimed.
 Fresh verification passed all 26 gRPC JSON transcoder tests, formatting,
 workspace check/Clippy and seven repository guards. Remaining warnings are
 outside changed code. Independent final review passed.
+
+## Contiguous binary window borrowing
+
+RawWindow::binary_bytes borrows an empty, single-slice or coalesced message via
+the existing SliceChain range view. An O(1) handle-count branch leaves fragmented
+messages on their original allocation and single copy pass. State checks and the
+full existing materialization admission remain before either path, preserving
+acceptance limits even when storage is borrowed. The sole streaming transcoder
+consumer releases the view after owned JSON decoding and before window resolution.
+Independent plan review passed, including the revision that avoids a fragmented
+range pre-scan. Tests cover contents, retained pointer identity, zero allocation
+for contiguous views, owned fragmented fallback and unchanged admission/state
+gates. This removes a contiguous message copy, not full-response buffering or all
+conversion allocations; no throughput claim is made.
+Fresh verification passed 80 SSE/window and 26 gRPC JSON transcoder tests,
+formatting, workspace check/Clippy and seven repository guards. Remaining
+warnings are outside changed code. Independent final review passed.

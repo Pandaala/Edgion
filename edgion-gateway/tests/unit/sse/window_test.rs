@@ -3,6 +3,72 @@
 use super::super::SseDecoder;
 use super::*;
 
+#[test]
+fn binary_message_borrows_contiguous_storage_and_copies_fragments() {
+    let empty = RawWindow::new();
+    assert!(matches!(empty.binary_bytes().unwrap(), Cow::Borrowed(bytes) if bytes.is_empty()));
+
+    let mut single = RawWindow::new();
+    single
+        .retain(WindowRecord::binary(Bytes::from_static(b"payload")))
+        .unwrap();
+    let mut pointer = std::ptr::null();
+    single
+        .raw
+        .for_each_range(ByteRange::new(0, 7), |part| pointer = part.as_ptr());
+    let (view, stats) = crate::test_allocation_counter::count_allocation_stats(|| single.binary_bytes());
+    let view = view.unwrap();
+    assert!(matches!(view, Cow::Borrowed(_)));
+    assert_eq!(view.as_ref(), b"payload");
+    assert_eq!(view.as_ptr(), pointer);
+    assert_eq!(stats.calls, 0);
+    assert_eq!(stats.requested_bytes, 0);
+
+    let mut fragmented = RawWindow::new();
+    for part in [b"pay".as_slice(), b"load".as_slice()] {
+        fragmented
+            .retain(WindowRecord::binary(Bytes::copy_from_slice(part)))
+            .unwrap();
+    }
+    assert!(matches!(fragmented.binary_bytes().unwrap(), Cow::Owned(bytes) if bytes == b"payload"));
+
+    let mut coalesced = RawWindow::new();
+    for _ in 0..=MAX_SLICE_HANDLES {
+        coalesced
+            .retain(WindowRecord::binary(Bytes::from_static(b"a")))
+            .unwrap();
+    }
+    assert_eq!(coalesced.raw.coalesce_count(), 1);
+    let (view, stats) = crate::test_allocation_counter::count_allocation_stats(|| coalesced.binary_bytes());
+    let view = view.unwrap();
+    assert!(matches!(view, Cow::Borrowed(_)));
+    assert_eq!(view.len(), MAX_SLICE_HANDLES + 1);
+    assert!(view.iter().all(|byte| *byte == b'a'));
+    assert_eq!(stats.calls, 0);
+    assert_eq!(stats.requested_bytes, 0);
+}
+
+#[test]
+fn binary_message_borrow_retains_admission_and_state_gates() {
+    let mut window = RawWindow::new();
+    window
+        .retain(WindowRecord::binary(Bytes::from_static(b"payload")))
+        .unwrap();
+    let admitted = window.resident().unwrap() + window.raw.len();
+    window.limits.combined = admitted - 1;
+    assert_eq!(
+        window.binary_bytes(),
+        Err(WindowError::Limit(WindowLimit::CombinedResidentBytes))
+    );
+    window.limits.combined = admitted;
+    assert_eq!(window.binary_bytes().unwrap().as_ref(), b"payload");
+    window.resolve(WindowDecision::Discard).unwrap();
+    assert_eq!(window.binary_bytes(), Err(WindowError::NotCollecting));
+    window.start_next().unwrap();
+    window.finish(WindowDecision::Discard).unwrap();
+    assert_eq!(window.binary_bytes(), Err(WindowError::Finished));
+}
+
 fn key(choice: u32, field: LogicalField) -> LogicalBucketKey {
     LogicalBucketKey {
         choice_index: choice,
