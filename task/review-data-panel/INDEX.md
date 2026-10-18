@@ -28,6 +28,7 @@ destination.
 
 ## Deferred decisions
 
+- [SSE dispatch metadata representation](body-05-sse-dispatch-metadata.md)
 - [Selective SSE observer input representation](body-04-selective-observer-input.md)
 - [Quota admission concurrency](quota-02-admission-concurrency.md)
 - [Quota worker future representation](quota-01-worker-future-representation.md)
@@ -4032,3 +4033,19 @@ Anthropic and 51 usage tests. Formatting, workspace check/Clippy, seven reposito
 guards and diff hygiene passed. Existing warnings remain outside changed code.
 No throughput benchmark was run; the allocation regression measures this local
 line-completion path only.
+
+
+## SSE dispatch metadata audit
+
+Inspected the line-table lifecycle from finish_line through parse_block and the
+RawWindow adapter. Dispatch reparses retained lines, while admission depends on
+line/data capacities and independent range/metadata budgets. Caching parsed state
+or replacing the line table therefore requires a capacity and acceptance review.
+The alternatives and preserved malformed timing, line_count and raw-byte contracts
+are recorded in [body-05](body-05-sse-dispatch-metadata.md). No runtime or tests
+changed; downstream selective-observer input remains the separate body-04 task.
+
+Fresh verification passed 130 network-free tests: 46 SSE module, 33 native
+Anthropic and 51 usage tests. Formatting, workspace check/Clippy, agent-document
+validation and diff hygiene passed. Existing warnings remain outside this
+documentation-only batch. No new-layout prototype or performance benchmark ran.
