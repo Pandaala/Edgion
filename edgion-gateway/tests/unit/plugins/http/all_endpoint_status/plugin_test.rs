@@ -460,3 +460,76 @@ fn missing_method_override_inherits_once_without_get_recovery() {
         assert!(plugin.selected_method(value).is_err());
     }
 }
+
+#[tokio::test]
+async fn json_response_transfers_owned_and_static_bytes_in_write_order() {
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use mockall::Sequence;
+
+    let plugin = AllEndpointStatus::new(&AllEndpointStatusConfig::default()).unwrap();
+    for fail_writes in [false, true] {
+        let owned = String::from(r#"{"value":"é"}"#);
+        let owned_ptr = owned.as_ptr() as usize;
+        let static_body = b"{}";
+        let cases = [
+            (Bytes::from(owned), owned_ptr, r#"{"value":"é"}"#.as_bytes()),
+            (
+                Bytes::from_static(static_body),
+                static_body.as_ptr() as usize,
+                static_body.as_slice(),
+            ),
+            (Bytes::new(), 0, b"".as_slice()),
+        ];
+        for (body, original_ptr, expected) in cases {
+            let mut session = MockPluginSession::new();
+            let mut sequence = Sequence::new();
+            session
+                .expect_write_response_header()
+                .withf(move |header, eos| {
+                    !*eos
+                        && header.status.as_u16() == 429
+                        && header.headers["content-length"] == expected.len().to_string()
+                        && header.headers["content-type"] == "application/json"
+                        && header.headers["connection"] == "close"
+                        && header.headers["cache-control"] == "no-store"
+                        && header.headers["retry-after"] == "2"
+                })
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(move |_, _| {
+                    if fail_writes {
+                        Err(std::io::Error::other("header write failed").into())
+                    } else {
+                        Ok(())
+                    }
+                });
+            session
+                .expect_write_response_body()
+                .withf(move |body, eos| {
+                    *eos && body.as_ref().is_some_and(|body| {
+                        body.as_ref() == expected && (expected.is_empty() || body.as_ptr() as usize == original_ptr)
+                    })
+                })
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(move |_, _| {
+                    if fail_writes {
+                        Err(std::io::Error::other("body write failed").into())
+                    } else {
+                        Ok(())
+                    }
+                });
+            session
+                .expect_shutdown()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|| {});
+            assert_eq!(
+                plugin
+                    .send_json_response_with_headers(&mut session, 429, body, &[("Retry-After", "2")])
+                    .await,
+                PluginRunningResult::ErrTerminateRequest
+            );
+        }
+    }
+}

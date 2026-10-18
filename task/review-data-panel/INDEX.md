@@ -1897,3 +1897,19 @@ not established by that serial pass. No production admission limits were changed
 Formatting, workspace check/Clippy and seven repository guards passed, with
 existing Clippy warnings outside the changed source. Independent final review
 passed, including the recorded parallel/serial verification limits.
+
+## AllEndpointStatus response ownership
+
+Private JSON response helpers now accept Bytes. Owned serialized/formatted bodies
+transfer their allocation to the existing writer; fixed responses use static
+bytes. Content-Length remains a byte count, and headers, write order, shutdown,
+ignored write errors and termination are unchanged. The endpoint-count log also
+uses the canonical integer formatter. Independent plan review passed. Focused
+mock coverage checks owned UTF-8, static and empty payloads, pointer preservation,
+headers and ordering on successful and failed writes. Probe collection, transport
+identity, fan-out and aggregation policy are outside this change. No throughput
+benchmark or deployed integration suite is claimed.
+Fresh final-source verification passed 23 AllEndpointStatus tests and 33
+PluginLog tests after correcting the new mock import. Formatting, workspace
+check/Clippy and seven repository guards passed; warnings are outside the
+changed source. Independent final code review passed.

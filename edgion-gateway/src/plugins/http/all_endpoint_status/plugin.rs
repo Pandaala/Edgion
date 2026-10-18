@@ -457,7 +457,7 @@ impl AllEndpointStatus {
         &self,
         session: &mut dyn PluginSession,
         status: u16,
-        body: &str,
+        body: Bytes,
     ) -> PluginRunningResult {
         self.send_json_response_with_headers(session, status, body, &[]).await
     }
@@ -467,7 +467,7 @@ impl AllEndpointStatus {
         &self,
         session: &mut dyn PluginSession,
         status: u16,
-        body: &str,
+        body: Bytes,
         extra_headers: &[(&str, &str)],
     ) -> PluginRunningResult {
         let Ok(mut resp) = ResponseHeader::build(status, None) else {
@@ -482,9 +482,7 @@ impl AllEndpointStatus {
         }
 
         let _ = session.write_response_header(Box::new(resp), false).await;
-        let _ = session
-            .write_response_body(Some(Bytes::from(body.to_string())), true)
-            .await;
+        let _ = session.write_response_body(Some(body), true).await;
         session.shutdown().await;
 
         PluginRunningResult::ErrTerminateRequest
@@ -768,7 +766,7 @@ impl RequestFilter for AllEndpointStatus {
                     .send_json_response_with_headers(
                         session,
                         429,
-                        &body,
+                        Bytes::from(body),
                         &[("Retry-After", &retry_after_s.to_string())],
                     )
                     .await;
@@ -783,7 +781,7 @@ impl RequestFilter for AllEndpointStatus {
                 .send_json_response(
                     session,
                     503,
-                    r#"{"error":"too many concurrent all-endpoint-status requests"}"#,
+                    Bytes::from_static(br#"{"error":"too many concurrent all-endpoint-status requests"}"#),
                 )
                 .await;
         };
@@ -797,7 +795,7 @@ impl RequestFilter for AllEndpointStatus {
             None => {
                 log.push_err("no route");
                 return self
-                    .send_json_response(session, 503, r#"{"error":"no route matched"}"#)
+                    .send_json_response(session, 503, Bytes::from_static(br#"{"error":"no route matched"}"#))
                     .await;
             }
         };
@@ -806,8 +804,8 @@ impl RequestFilter for AllEndpointStatus {
             Some(refs) if !refs.is_empty() => refs.clone(),
             _ => {
                 log.push("status served 0");
-                let empty = r#"{"summary":{"total_backends":0,"total_endpoints":0,"success_count":0,"failure_count":0,"truncated":false,"timeout_ms":0,"wall_timeout_ms":0,"total_latency_ms":0,"total_response_bytes":0,"wall_timeout_hit":false},"backends":[]}"#;
-                return self.send_json_response(session, 200, empty).await;
+                let empty = br#"{"summary":{"total_backends":0,"total_endpoints":0,"success_count":0,"failure_count":0,"truncated":false,"timeout_ms":0,"wall_timeout_ms":0,"total_latency_ms":0,"total_response_bytes":0,"wall_timeout_hit":false},"backends":[]}"#;
+                return self.send_json_response(session, 200, Bytes::from_static(empty)).await;
             }
         };
 
@@ -878,7 +876,7 @@ impl RequestFilter for AllEndpointStatus {
                 backends: all_backend_results,
             };
             let json_body = serde_json::to_string(&response).unwrap_or_default();
-            return self.send_json_response(session, 200, &json_body).await;
+            return self.send_json_response(session, 200, Bytes::from(json_body)).await;
         }
 
         // Resolve the inherited request method once, before any endpoint future.
@@ -931,13 +929,17 @@ impl RequestFilter for AllEndpointStatus {
         let Ok(json_body) = serde_json::to_string(&response) else {
             log.push_err("serialize fail");
             return self
-                .send_json_response(session, 500, r#"{"error":"internal serialization error"}"#)
+                .send_json_response(
+                    session,
+                    500,
+                    Bytes::from_static(br#"{"error":"internal serialization error"}"#),
+                )
                 .await;
         };
 
-        log.push_fmt("status served {}", la![total_endpoints.to_string().as_str()]);
+        log.push_fmt("status served {}", la![total_endpoints]);
 
-        self.send_json_response(session, 200, &json_body).await
+        self.send_json_response(session, 200, Bytes::from(json_body)).await
         // _global_permit is dropped here, releasing the concurrency slot
     }
 }
