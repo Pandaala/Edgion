@@ -34,6 +34,7 @@ destination.
 - [Backend TLS verification failures](verification-03-backend-tls-tests.md)
 - [Prebuilt read-only response-body dispatch](body-01-prebuild-readonly-dispatch.md)
 - [Direct TLS listener log serialization](tls-01-direct-listener-log-serialization.md)
+- [Pending response-header execution ownership](response-01-pending-header-ownership.md)
 
 ## Completed implementation batch
 
@@ -416,3 +417,21 @@ Independent plan and source reviews passed. All 23 response-filter tests and
 7 common parser tests passed. Formatting, workspace check/Clippy and seven
 repository guards passed; existing Clippy warnings are outside the changed
 lines. No full integration suite or throughput benchmark was run.
+
+## Response header ownership audit
+
+Inspected pending-header application/drain, direct stream-processor header
+callbacks, response-cache lifecycle capture/seal/delivery/finalization, and
+storage Pending creation plus publication gates. Stream-processor header calls
+already borrow installed owners directly. Cache capture serializes bounded
+metadata into an admitted pending entry; final header sealing validates its
+contract rather than replacing it with a borrowed live header. Publication
+retains origin/epoch checks and awaits terminal transport completion. These
+owners span callbacks or cache lifetime; no ownership change was selected.
+Deeper cache key, freshness, storage eviction and concrete processor internals
+remain open.
+
+Pending-header replay unconditionally clones before discovering protected,
+Remove or false-condition operations. Shared borrowed/owned execution and any
+name-preparation extension require the explicit design choice recorded above.
+This documentation-only batch does not change production behavior or tests.
