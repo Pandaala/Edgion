@@ -3394,3 +3394,20 @@ workspace check/Clippy, agent-doc validation and diff hygiene passed. Existing
 warnings remain outside changed files. This is scoped ownership/protocol source
 inspection and unit evidence, not fresh gRPC interoperability or complete
 transport dependency coverage.
+
+## ExtProc mutated trailer size validation
+
+Removed the duplicate size scan at the end of private apply_mutation. Its sole
+caller immediately invokes validate_trailer_map, whose first operation is the
+same checked_map_size, followed by forbidden-name and gRPC-status validation.
+There is no intervening mutation or await. Candidate ownership, representability
+checks and atomic publication remain unchanged. The gRPC classification getter
+now also runs for an oversized mutation; both production implementations only
+read context booleans and have no side effects.
+
+Strengthened the existing cap regression to cover mutated byte and field overflow
+under both fail-open and fail-close policies. Each case preserves the original
+map, returns the expected policy result, records bad-verdict and completes the
+processor. All 17 trailer tests passed, along with formatting, workspace check
+and Clippy; warnings remain outside changed code. This removes one repeated
+traversal on successful mutation, with no allocation or throughput claim.

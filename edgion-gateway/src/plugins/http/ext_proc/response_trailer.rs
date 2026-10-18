@@ -321,7 +321,6 @@ fn apply_mutation(
         }
         candidate.remove(name);
     }
-    checked_map_size(candidate)?;
     Ok(())
 }
 

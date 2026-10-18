@@ -499,24 +499,48 @@ async fn caps_are_inclusive_and_overflow_preserves_map() {
     }
     assert!(checked_map_size(&too_many).is_err());
 
-    let mutation = HeaderMutation {
-        set_headers: vec![option(
-            "x-large",
-            &vec![b'y'; TRAILER_BYTES_CAP],
-            HeaderAppendAction::OverwriteIfExistsOrAdd,
-        )],
-        remove_headers: Vec::new(),
-    };
-    let (mut processor, _) = processor(Ok(response(Some(mutation))), true, false);
-    let mut original_map = HeaderMap::new();
-    original_map.insert("x", HeaderValue::from_static("v"));
-    let expected = original_map.clone();
-    let mut session = session(false, true, true);
-    session.expect_record_outcome().times(0).return_const(());
-    processor
-        .run_upstream_response_trailer(Some(&mut original_map), &mut session, &mut PluginLog::new("ExtProc"))
-        .await;
-    assert_eq!(original_map, expected);
+    for field_overflow in [false, true] {
+        for fail_open in [false, true] {
+            let set_headers = if field_overflow {
+                (0..TRAILER_FIELD_CAP)
+                    .map(|index| option(&format!("x-{index}"), b"v", HeaderAppendAction::OverwriteIfExistsOrAdd))
+                    .collect()
+            } else {
+                vec![option(
+                    "x-large",
+                    &vec![b'y'; TRAILER_BYTES_CAP],
+                    HeaderAppendAction::OverwriteIfExistsOrAdd,
+                )]
+            };
+            let mutation = HeaderMutation {
+                set_headers,
+                remove_headers: Vec::new(),
+            };
+            let (mut processor, owner) = processor(Ok(response(Some(mutation))), fail_open, false);
+            let mut original_map = HeaderMap::new();
+            original_map.insert("x", HeaderValue::from_static("v"));
+            let expected = original_map.clone();
+            let mut session = session(false, true, true);
+            session.expect_record_outcome().times(0).return_const(());
+            let result = processor
+                .run_upstream_response_trailer(Some(&mut original_map), &mut session, &mut PluginLog::new("ExtProc"))
+                .await;
+            assert_eq!(original_map, expected);
+            assert_eq!(
+                result,
+                if fail_open {
+                    UpstreamTrailerResult::Continue
+                } else {
+                    UpstreamTrailerResult::FailClose
+                }
+            );
+            assert_eq!(
+                *owner.terminal.lock(),
+                Some((if fail_open { "fail-open" } else { "fail-close" }, "bad-verdict"))
+            );
+            assert!(processor.done);
+        }
+    }
 }
 
 #[tokio::test]
