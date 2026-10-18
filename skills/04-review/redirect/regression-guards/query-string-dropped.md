@@ -14,7 +14,7 @@ knowledge_type: regression-guards
 `RequestRedirectFilter::build_location`
 (`edgion-gateway/src/plugins/runtime/gateway_api_filters/request_redirect.rs`) now appends the
 original request query string (`?<query>`, when non-empty) to the assembled `Location` URL.
-`run_request` reads `session.get_query()` alongside `get_path()` and passes it into
+`run_request` reads `session.request_query()` alongside `get_path()` and passes it into
 `build_location`.
 
 Re-reports of the form "RequestRedirect drops the query string", "`build_location` only emits
@@ -30,7 +30,7 @@ received `Location: https://host/login`, silently discarding `returnTo=/dashboar
 corrupting application state (OAuth return-to, search/pagination params, tracking, etc.).
 
 This was an inconsistency, not just a defect: the two sibling redirect/rewrite paths already
-preserved the query — `URLRewriteFilter::rewrite_path` (`url_rewrite.rs`, `final_uri = path?query`)
+preserved the query — `URLRewriteFilter::rewritten_uri` (`url_rewrite.rs`, `final_uri = path?query`)
 and the route-level `EdgionHttpRedirectProxy` (`redirect_http.rs`, carries `path_and_query()`).
 Only the Gateway API `RequestRedirect` plugin path dropped it.
 
@@ -62,7 +62,7 @@ Re-open only if:
 ## Reference Cases
 
 - redirect-FB01 (review finding, Round B adjacent-scope scan; fixed 2026-05-22)
-- Sibling preservation: `URLRewriteFilter::rewrite_path` (`url_rewrite.rs:71-74`),
+- Sibling preservation: `URLRewriteFilter::rewritten_uri` (`url_rewrite.rs`),
   `EdgionHttpRedirectProxy::build_redirect_url_from_parts` (`redirect_http.rs`).
 - Same redirect-builder area as [redirect-F001](host-split-ipv6-literal.md)
   (IPv6 Host port-stripping).
@@ -72,3 +72,18 @@ Re-open only if:
   regression `redirect_only_preserves_query`
   (`edgion-tests/src/client/suites/http_route/filters/filter_conflict.rs`, route
   `filter-conflict.example.com/redirect-only`).
+
+## Borrowed current-query ownership
+
+Both native RequestRedirect and URLRewrite borrow the current raw URI query via
+request_query. The real adapter reads the same URI as get_query without its
+String copy; neither accessor uses the frozen entry query cache. Keep the query
+borrow local to constructing the owned Location or upstream URI before session
+mutation or await. Missing and empty queries still omit the question mark;
+percent escapes, plus signs, repeated keys and separators are copied verbatim.
+
+Callback tests reject use of the owned getter and check missing, empty and raw
+query cases. The real-adapter test current_raw_query_borrows_live_uri_without_copying
+checks pointer identity, zero accessor allocations and live URI changes against
+the independent frozen cache. This eliminates one nonempty query copy per
+transform, not allocations for the final URI/Location or response construction.

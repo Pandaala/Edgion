@@ -96,8 +96,8 @@ async fn assert_emitted_redirect(
     session.expect_downstream_is_tls().return_const(downstream_is_tls);
     session.expect_get_path().return_const("/search".to_string());
     session
-        .expect_get_query()
-        .return_const(Some("q=hello%20world&next=%2Fhome".to_string()));
+        .expect_request_query()
+        .return_const(Some("q=hello%20world&next=%2Fhome"));
 
     let mut ctx = EdgionHttpContext::new();
     ctx.request_info.listener_port = listener_port;
@@ -145,7 +145,7 @@ async fn prefix_redirect_without_matched_prefix_fails_closed() {
     setup_header_mocks(&mut session, &[("host", "example.com")]);
     session.expect_downstream_is_tls().return_const(Some(true));
     session.expect_get_path().return_const("/api/orders".to_string());
-    session.expect_get_query().return_const(None);
+    session.expect_request_query().return_const(None);
     let mut ctx = EdgionHttpContext::new();
     ctx.request_info.listener_port = 443;
     session.expect_ctx().return_const(ctx);
@@ -229,4 +229,40 @@ async fn explicit_scheme_takes_precedence_over_transport_tls_state() {
         "http://example.com/search?q=hello%20world&next=%2Fhome",
     )
     .await;
+}
+
+#[tokio::test]
+async fn redirect_borrows_raw_query_before_writing_owned_location() {
+    for (query, expected) in [
+        (None, "https://example.com/search"),
+        (Some(""), "https://example.com/search"),
+        (
+            Some("q=a+b&x=a%26b&x=&flag&next=%2f%3F"),
+            "https://example.com/search?q=a+b&x=a%26b&x=&flag&next=%2f%3F",
+        ),
+    ] {
+        let mut session = MockPluginSession::new();
+        setup_header_mocks(&mut session, &[("host", "example.com")]);
+        session.expect_downstream_is_tls().return_const(Some(true));
+        session.expect_get_path().return_const("/search".to_owned());
+        session.expect_get_query().never();
+        session.expect_request_query().times(1).return_const(query);
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_info.listener_port = 443;
+        session.expect_ctx().return_const(ctx);
+        session
+            .expect_write_response_header()
+            .times(1)
+            .returning(move |response, end| {
+                assert_eq!(response.status.as_u16(), 302);
+                assert!(end);
+                assert_eq!(response.headers.get("Location").unwrap(), expected);
+                Ok(())
+            });
+        let mut log = PluginLog::new("test");
+        assert_eq!(
+            filter(None, None).run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrTerminateRequest
+        );
+    }
 }

@@ -1188,3 +1188,22 @@ tests passed 45. Formatting, workspace check/Clippy and seven repository guards
 passed; Clippy warnings remain outside changed files. Independent final source and record reviews passed. This removes the request Origin copy
 without claiming zero allocations for the async callback or a measured
 throughput gain.
+
+## Borrowed native transform queries
+
+RequestRedirect and URLRewrite now borrow the current raw URI query through
+request_query instead of copying it through get_query. Both real adapter
+accessors read the same live URI; neither uses the frozen entry cache. Owned
+Location/upstream URI output is still completed before session mutation or
+await. Missing/empty query omission and all nonempty raw bytes remain unchanged.
+This removes one temporary nonempty query copy per transform; final-string
+construction and response ownership are outside this optimization.
+
+Independent plan review passed. New callback cases forbid the owned getter
+and cover missing/empty query, percent escapes, plus signs, duplicate parameters
+and separators. The existing real-adapter live-URI/pointer/allocation test is
+included in this batch's verification and passed. Native Gateway API filter
+tests passed 60. Formatting, workspace check/Clippy and seven repository guards
+passed; existing warnings remain outside changed files. Independent final source
+and record reviews passed. No full integration
+suite or throughput benchmark ran.

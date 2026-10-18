@@ -115,7 +115,7 @@ impl RequestFilter for RequestRedirectFilter {
         let location = {
             let original_host = session.header_str("host");
             let original_path = session.get_path();
-            let original_query = session.get_query();
+            let original_query = session.request_query();
             let ctx = session.ctx();
             let listener_port = ctx.request_info.listener_port;
             let matched_path = ctx
@@ -132,7 +132,7 @@ impl RequestFilter for RequestRedirectFilter {
                 original_scheme,
                 original_host,
                 original_path,
-                original_query.as_deref(),
+                original_query,
                 matched_path,
                 listener_port,
             )

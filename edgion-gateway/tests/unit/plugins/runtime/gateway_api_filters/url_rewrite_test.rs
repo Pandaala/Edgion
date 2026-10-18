@@ -15,8 +15,8 @@ async fn run_request_sets_exact_upstream_path_and_raw_query() {
     .unwrap();
     let mut session = MockPluginSession::new();
     session
-        .expect_get_query()
-        .return_const(Some("q=hello%20world&next=%2Forders%3Fstatus%3Dopen".to_string()));
+        .expect_request_query()
+        .return_const(Some("q=hello%20world&next=%2Forders%3Fstatus%3Dopen"));
     session.expect_set_upstream_uri().times(1).returning(|uri| {
         assert_eq!(uri, "/v2/orders?q=hello%20world&next=%2Forders%3Fstatus%3Dopen");
         Ok(())
@@ -41,7 +41,7 @@ async fn upstream_uri_setter_failure_fails_closed() {
     })
     .unwrap();
     let mut session = MockPluginSession::new();
-    session.expect_get_query().return_const(None);
+    session.expect_request_query().return_const(None);
     session
         .expect_set_upstream_uri()
         .times(1)
@@ -81,4 +81,38 @@ async fn prefix_rewrite_without_matched_prefix_fails_closed() {
             body: None
         }
     ));
+}
+
+#[tokio::test]
+async fn rewrite_borrows_raw_query_before_setting_owned_uri() {
+    for (query, expected) in [
+        (None, "/new"),
+        (Some(""), "/new"),
+        (
+            Some("q=a+b&x=a%26b&x=&flag&next=%2f%3F"),
+            "/new?q=a+b&x=a%26b&x=&flag&next=%2f%3F",
+        ),
+    ] {
+        let filter = URLRewriteFilter::try_new(&HTTPURLRewriteFilter {
+            hostname: None,
+            path: Some(HTTPPathModifier {
+                modifier_type: HTTPPathModifierType::ReplaceFullPath,
+                replace_full_path: Some("/new".into()),
+                replace_prefix_match: None,
+            }),
+        })
+        .unwrap();
+        let mut session = MockPluginSession::new();
+        session.expect_get_query().never();
+        session.expect_request_query().times(1).return_const(query);
+        session.expect_set_upstream_uri().times(1).returning(move |uri| {
+            assert_eq!(uri, expected);
+            Ok(())
+        });
+        let mut log = PluginLog::new("test");
+        assert_eq!(
+            filter.run_request(&mut session, &mut log).await,
+            PluginRunningResult::GoodNext
+        );
+    }
 }

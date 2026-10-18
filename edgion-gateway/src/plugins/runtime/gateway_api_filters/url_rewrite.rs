@@ -50,12 +50,12 @@ impl URLRewriteFilter {
             }
         };
 
-        let query = session.get_query();
+        let query = session.request_query();
         let mut final_uri = rewritten_path;
         if let Some(query) = query.filter(|query| !query.is_empty()) {
             final_uri.reserve(query.len() + 1);
             final_uri.push('?');
-            final_uri.push_str(&query);
+            final_uri.push_str(query);
         }
 
         Some(Ok(final_uri))
