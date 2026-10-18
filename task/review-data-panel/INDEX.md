@@ -2698,3 +2698,19 @@ passed 7 shared GraphQL tests, 38 response-cache tests, formatting, workspace
 check/Clippy and seven repository guards. An initial test mock type error was
 corrected before these successful runs; remaining warnings are outside changed
 code. No whole-request allocation or throughput improvement is claimed.
+
+## FormJsonTransform borrowed boolean text
+
+JSON-to-form pair encoding now borrows static true/false text instead of
+allocating a temporary String for each boolean. String values still transfer
+their ownership, numbers retain their original formatting, and unsupported shapes
+still reject. Component limits, checked pair counters, separator/encoding order,
+output caps, body publication and header-failure rollback remain unchanged.
+
+Independent plan and code reviews passed. Prepared-writer tests establish zero
+allocation for boolean pair encoding and count admission, including MAX_PAIRS
+and usize overflow behavior. Complete conversion checks exact 14-byte output and
+rejection at 13 bytes. Fresh verification passed 16 FormJsonTransform tests,
+1 CappedWriter test, formatting, workspace check/Clippy and seven repository
+guards. Remaining warnings are outside changed code. Parsing and output-buffer
+allocations remain; no full-transform zero-allocation or throughput claim is made.

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -308,9 +309,9 @@ fn write_json_pair(
     pair_count: &mut usize,
 ) -> Result<(), TransformFailure> {
     let value = match value {
-        Value::String(value) => value,
-        Value::Number(value) => value.to_string(),
-        Value::Bool(value) => value.to_string(),
+        Value::String(value) => Cow::Owned(value),
+        Value::Number(value) => Cow::Owned(value.to_string()),
+        Value::Bool(value) => Cow::Borrowed(if value { "true" } else { "false" }),
         Value::Null | Value::Array(_) | Value::Object(_) => return Err(TransformFailure::BadRequest),
     };
     if value.len() > MAX_VALUE_BYTES {

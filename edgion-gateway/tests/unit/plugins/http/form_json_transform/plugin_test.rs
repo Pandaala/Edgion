@@ -368,3 +368,43 @@ async fn oversized_rollback_failure_records_once_and_retains_selected_500() {
     )
     .await;
 }
+
+#[test]
+fn boolean_pairs_borrow_text_without_temporary_allocations() {
+    let mut writer = CappedWriter::new(14);
+    let mut count = 0;
+    let (result, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+        write_json_pair(&mut writer, "k", Value::Bool(true), &mut count)?;
+        write_json_pair(&mut writer, "k", Value::Bool(false), &mut count)
+    });
+    assert_eq!(result, Ok(()));
+    assert_eq!(stats.calls, 0);
+    assert_eq!(stats.requested_bytes, 0);
+    assert_eq!(count, 2);
+    assert_eq!(writer.into_inner(), b"k=true&k=false");
+    let input = br#"{"k":[true,false]}"#;
+    assert_eq!(json_to_form(input, 14).unwrap(), b"k=true&k=false");
+    assert_eq!(json_to_form(input, 13), Err(TransformFailure::TooLarge));
+}
+
+#[test]
+fn boolean_pair_admission_preserves_counter_and_output_boundaries() {
+    for initial in [MAX_PAIRS - 1, MAX_PAIRS, usize::MAX] {
+        let mut writer = CappedWriter::new(16);
+        let mut count = initial;
+        let (result, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+            write_json_pair(&mut writer, "k", Value::Bool(false), &mut count)
+        });
+        assert_eq!(stats.calls, 0);
+        assert_eq!(stats.requested_bytes, 0);
+        if initial == MAX_PAIRS - 1 {
+            assert_eq!(result, Ok(()));
+            assert_eq!(count, MAX_PAIRS);
+            assert_eq!(writer.into_inner(), b"&k=false");
+        } else {
+            assert_eq!(result, Err(TransformFailure::TooLarge));
+            assert_eq!(count, initial.saturating_add(1));
+            assert!(writer.into_inner().is_empty());
+        }
+    }
+}
