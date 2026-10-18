@@ -2507,7 +2507,7 @@ impl WafSessionCapability for PingoraSessionAdapter<'_> {
         Ok(())
     }
 
-    fn install_transaction(&mut self, owner: Arc<()>, transaction: edgion_waf::seclang::Transaction<'static>) -> bool {
+    fn install_transaction(&mut self, owner: &Arc<()>, transaction: edgion_waf::seclang::Transaction<'static>) -> bool {
         self.ctx
             .waf
             .as_deref_mut()

@@ -2601,8 +2601,8 @@ async fn waf_capability_rejected_install_keeps_resident_transaction() {
         WafLogMode::On,
     ))));
     let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
-    assert!(adapter.waf().install_transaction(Arc::clone(&owner), transaction(403)));
-    assert!(!adapter.waf().install_transaction(Arc::clone(&owner), transaction(409)));
+    assert!(adapter.waf().install_transaction(&owner, transaction(403)));
+    assert!(!adapter.waf().install_transaction(&owner, transaction(409)));
     assert!(adapter.waf().take_transaction(&Arc::new(())).is_none());
     let mut resident = adapter
         .waf()

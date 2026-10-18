@@ -176,7 +176,7 @@ fn streaming_waf_context(body_limit: u64) -> EdgionHttpContext {
         crate::ctx::WafLogMode::On,
     ))));
     let waf = ctx.waf.as_deref_mut().unwrap();
-    assert!(waf.install(Arc::clone(&owner), transaction));
+    assert!(waf.install(&owner, transaction));
     assert!(waf.enable_request_body_streaming(&owner, body_limit));
     ctx.activate_waf_request_body_streaming();
     ctx

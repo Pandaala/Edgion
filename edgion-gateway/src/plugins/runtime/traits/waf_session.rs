@@ -20,10 +20,11 @@ pub trait WafSessionCapability: Send + Sync {
     /// cached lengths. Admission outlives transaction take or removal.
     fn install_body_limit(&mut self, owner: &Arc<()>, limit: u64) -> Result<(), BodyReadError>;
 
+    /// Borrow the owner only for identity validation.
     /// Consume the offered transaction unconditionally. Success transfers it to
     /// the selected context. Rejection drops only this offer, preserves any
     /// resident transaction, and requires the caller's terminal failure path.
-    fn install_transaction(&mut self, owner: Arc<()>, transaction: Transaction<'static>) -> bool;
+    fn install_transaction(&mut self, owner: &Arc<()>, transaction: Transaction<'static>) -> bool;
 
     /// Transfer the matching owner's transaction to the callback temporarily.
     fn take_transaction(&mut self, owner: &Arc<()>) -> Option<Transaction<'static>>;

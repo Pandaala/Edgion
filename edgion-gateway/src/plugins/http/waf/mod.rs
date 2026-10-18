@@ -347,10 +347,7 @@ impl WafPlugin {
         transaction: Transaction<'static>,
         phase: WafLogPhase,
     ) -> PluginRunningResult {
-        if session
-            .waf()
-            .install_transaction(Arc::clone(&self.shared.owner), transaction)
-        {
+        if session.waf().install_transaction(&self.shared.owner, transaction) {
             PluginRunningResult::GoodNext
         } else {
             session

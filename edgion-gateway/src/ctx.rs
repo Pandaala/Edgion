@@ -177,8 +177,8 @@ impl WafRequestContext {
         WafPhaseClaim::Execute
     }
 
-    pub(crate) fn install(&mut self, owner: Arc<()>, transaction: edgion_waf::seclang::Transaction<'static>) -> bool {
-        if !Arc::ptr_eq(&self.owner, &owner) || self.transaction.is_some() {
+    pub(crate) fn install(&mut self, owner: &Arc<()>, transaction: edgion_waf::seclang::Transaction<'static>) -> bool {
+        if !Arc::ptr_eq(&self.owner, owner) || self.transaction.is_some() {
             return false;
         }
         self.transaction = Some(transaction);

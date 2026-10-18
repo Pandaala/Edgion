@@ -3286,3 +3286,23 @@ limits, cancellation, error priority, raw visibility and actual-EOF windows.
 Formatting, workspace check/Clippy and agent-doc validation also passed. Existing
 warnings remain outside this documentation-only change. This establishes adapter
 coverage, not complete WAF engine review, integration or throughput results.
+
+## Borrowed WAF installation identity
+
+WafPlugin::restore_transaction now borrows its owner token through the selected
+WAF capability and adapter into WafRequestContext::install. Installation only
+compares pointer identity; it does not retain the supplied token. SharedWaf and
+the selected context retain their existing owners throughout the synchronous
+call. Transaction transfer remains by value: rejected offers are destroyed,
+resident transactions survive, and successful installation refreshes accounting.
+Generation pinning, phase claims and fixed conflict responses are unchanged.
+
+This removes one owner Arc increment/decrement per restoration, not a payload
+copy or allocation. Response-header views remain borrowed until transaction-owned
+state is built; response completion still consumes the taken transaction. No
+response-body aggregation or changed WAF phase scheduling is introduced.
+
+Independent plan and source reviews passed. Fresh tests passed 50 WAF plugin
+cases, one capability borrow case, one real-adapter resident-preservation case
+and two native stream cases. Formatting, workspace check/Clippy and seven guards
+passed; warnings remain outside changed code. No throughput claim is made.
