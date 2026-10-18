@@ -504,7 +504,7 @@ async fn build_request_metadata(
     snapshot_body_declared(session, ctx);
 
     let req_header = session.req_header();
-    let raw_path = req_header.uri.path().to_string();
+    let raw_path = req_header.uri.path();
     let raw_query = req_header.uri.query().map(str::to_string);
     let path_norm_cfg = get_path_normalization_config();
 
@@ -589,7 +589,7 @@ async fn build_request_metadata(
     // Publish the bounded XFF snapshot after Pingora's protocol-level Host validation.
     ctx.request_info.x_forwarded_for = xff_snapshot.value;
 
-    if let Some(status) = request_metadata_validation_error(ctx, &raw_path, raw_query, path_norm_cfg, xff_too_long) {
+    if let Some(status) = request_metadata_validation_error(ctx, raw_path, raw_query, path_norm_cfg, xff_too_long) {
         ctx.record_error(status);
         end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
         return Ok(true); // Response sent
