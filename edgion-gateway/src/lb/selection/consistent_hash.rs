@@ -131,13 +131,15 @@ impl ConsistentHashRing {
 ///
 /// Backend indices are dense (`0..backends.len()`) and real deployments are
 /// O(10-100) backends, so a stack `u128` bitmask covers the common case with
-/// zero heap cost on the per-request hot path. Larger fleets fall back to a
-/// single `Vec<bool>` allocation (no rehashing), which still beats the old
-/// per-call `HashSet` that reallocated as it grew.
+/// zero heap cost on the per-request hot path. Larger fleets keep the first
+/// index inline and allocate a dense `Vec<bool>` only on the second distinct
+/// index. Healthy-primary selection therefore needs no tracker allocation.
 enum SeenSet {
     /// Bitmask for `backend_count <= 128`; bit `i` set means index `i` seen.
     Bits(u128),
-    /// One-shot dense bitset for `backend_count > 128`.
+    /// Delay the large tracker until more than one distinct backend is visited.
+    First { backend_count: usize, first: Option<usize> },
+    /// One-shot dense membership vector for `backend_count > 128`.
     Large(Vec<bool>),
 }
 
@@ -146,7 +148,10 @@ impl SeenSet {
         if backend_count <= 128 {
             SeenSet::Bits(0)
         } else {
-            SeenSet::Large(vec![false; backend_count])
+            SeenSet::First {
+                backend_count,
+                first: None,
+            }
         }
     }
 
@@ -162,6 +167,20 @@ impl SeenSet {
                 let newly = *bits & mask == 0;
                 *bits |= mask;
                 newly
+            }
+            SeenSet::First { backend_count, first } => {
+                let Some(previous) = *first else {
+                    *first = Some(idx);
+                    return true;
+                };
+                if previous == idx {
+                    return false;
+                }
+                let mut seen = vec![false; *backend_count];
+                seen[previous] = true;
+                seen[idx] = true;
+                *self = SeenSet::Large(seen);
+                true
             }
             SeenSet::Large(seen) => {
                 if seen[idx] {

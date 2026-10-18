@@ -1,19 +1,48 @@
 ---
 name: consistent-hash-ring-seenset-no-heap
-description: Use when reviewing ConsistentHashRing::select per-request HashSet allocation findings — select now uses a stack u128 bitmask / Vec<bool> SeenSet instead of HashSet::new() per call.
+description: Review consistent-hash visited-index ownership, inline first-candidate tracking and dense fallback allocation.
 knowledge_type: regression-guards
 ---
 
-# ConsistentHashRing::select Per-Request HashSet Allocation
+# Consistent-hash visited-index storage
 
-**Status / verdict**: fixed (lb-F003, 2026-05-24)
+## Current contract
 
-When reviewing findings of the form "`ConsistentHashRing::select` allocates a `HashSet` on every request / per-request heap allocation on the ConsistentHash LB hot path / `seen` set grows dynamically during the ring walk (lb-F003)": **fixed (lb-F003, 2026-05-24)**. `select` (`edgion-gateway/src/lb/selection/consistent_hash.rs`) now tracks visited backend indices with a private `SeenSet` enum — stack `u128` bitmask for `backend_count <= 128` (zero heap on the common O(10-100) path), single `Vec<bool>` fallback above that — instead of `HashSet::new()` per call. Backend indices are dense (`0..backends.len()`) so the bitmask shift is statically `< 128`. Behavior-preserving: `seen` is a pure dedup optimization, the selection result and termination are unchanged. Reached every ConsistentHash request via `ChCore::select` (`compiled_selector.rs`, `SELECT_MAX_ITERATIONS = 256`); the P2C sibling was already allocation-free. Unit regression `large_backend_count_uses_vec_seen_path`. Re-reports of the per-request HashSet allocation are not accepted; verify `select` uses `SeenSet` before re-reporting.
+`ConsistentHashRing::select` uses a private `SeenSet`, not a per-call HashSet.
+At most 128 backend slots use a stack u128 mask. Larger lists initially retain
+one index inline; duplicates of that index remain allocation-free. Visiting a
+second distinct index allocates one dense Vec<bool>, marks both indices, and
+transitions to ordinary vector membership checks. Vec<bool> is a dense vector,
+not a promise of bit-packed storage.
 
-## Historical resolution evidence: lb-F003
+This avoids tracker allocation for a healthy primary, zero selection budget or
+one rejected candidate without further attempts, even on large lists. Ring
+construction, caller-owned state and arbitrary health predicates are outside
+that allocation claim. Larger fallback walks still allocate once.
 
-`ConsistentHashRing::select` no longer allocates a `HashSet` per call to dedup visited backend indices. Replaced by a private `SeenSet` enum: stack `u128` bitmask for `backend_count <= 128` (zero heap on the common O(10-100) path), single `Vec<bool>` fallback for larger fleets. Backend indices are dense (`0..backends.len()`), so the bitmask shift is always `< 128` (statically safe). Behavior-preserving — `seen` is a pure dedup optimization, selection result and termination unchanged. Reached on every ConsistentHash-policy request via `ChCore::select` (`compiled_selector.rs`, `SELECT_MAX_ITERATIONS = 256`); the P2C sibling path was already allocation-free. Unit regression `large_backend_count_uses_vec_seen_path` (200 backends, exercises the `Large` branch + both insert arms). Re-reports of the per-request HashSet allocation are not accepted; verify `select` uses `SeenSet` before re-reporting.
+Indices remain original backend-list indices, including gaps from non-Inet
+entries. Size the vector from `backends.len()`, not the number of distinct ring
+addresses. The select loop, borrowed winner, health checks and distinct-backend
+budget remain unchanged. Preserve the separate
+[duplicate-node budget and termination contract](consistent-hash-duplicate-node-budget.md).
 
-## Resolution references
+## Evidence and limits
 
-- `lb-F003` — 2026-05-24.
+`seen_tracker_delays_large_allocation_and_preserves_membership` covers 128,
+129 and 200 slots, first insertion at the highest index, duplicates and
+promotion retaining both original entries. The large-ring regression checks
+zero tracker allocations for primary/zero-budget/one-attempt cases and one
+allocation while rejecting all 200 unique candidates exactly once. Existing
+weighted fallback, non-Inet, deterministic selection and borrowed-storage tests
+remain relevant. No throughput or fleet-size distribution is established.
+
+Re-evaluate when membership representation, index projection, health predicate
+calls, iteration budget or ring traversal changes. This record cannot suppress
+new allocation evidence at a different owner or on the dense fallback path.
+
+## Historical resolution
+
+lb-F003 (2026-05-24) replaced HashSet with the u128 mask and an eagerly allocated
+Vec<bool> above 128 slots. The subsequent lazy-first-index optimization removes
+that eager allocation until a second distinct candidate is visited. Historical
+results are not fresh verification of later changes.

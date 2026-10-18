@@ -1820,3 +1820,18 @@ No full suite, live integration or throughput benchmark ran for this batch.
 Fresh ProxyRewrite tests passed 21 cases. Formatting, workspace check/Clippy and
 seven repository guards passed, with existing warnings outside changed files.
 Independent final review passed.
+
+## Consistent-hash lazy large-fleet visited tracker
+
+Above 128 backend slots, SeenSet keeps the first index inline and allocates its
+existing dense vector only on a second distinct candidate. The selection loop,
+health-check order, distinct-backend budget and borrowed winner are unchanged.
+Independent plan review passed. Helper tests cover boundary counts, high indices
+and promotion membership. Large-ring tests isolate tracker allocation and verify
+all-unhealthy traversal checks every distinct backend once. No full suite,
+live integration or throughput benchmark ran for this batch.
+Fresh selection tests passed 40 cases and compiled-selector tests passed 8.
+The isolated large-ring fixtures measured zero tracker allocations through the
+first candidate and one for the full rejection walk. Formatting, workspace
+check/Clippy and seven repository guards passed, with existing warnings outside
+changed files. Independent final review passed.

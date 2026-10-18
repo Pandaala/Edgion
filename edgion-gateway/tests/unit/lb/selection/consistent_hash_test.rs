@@ -273,10 +273,8 @@ fn weight_increases_share_of_ring() {
 
 #[test]
 fn large_backend_count_uses_vec_seen_path() {
-    // >128 backends forces SeenSet::Large (the Vec<bool> fallback). Verify
-    // selection stays correct and deterministic on that branch, and that
-    // the all-unhealthy walk still terminates with None (exercising both
-    // the newly-inserted and already-seen arms of the Large bitset).
+    // >128 backends promotes to the dense vector after the second distinct
+    // candidate. Verify deterministic selection and all-unhealthy termination.
     let backends: Vec<Backend> = (1..=200).map(make_backend).collect();
     let ring = ConsistentHashRing::build(&backends);
 
@@ -291,6 +289,60 @@ fn large_backend_count_uses_vec_seen_path() {
         ring.select(key, 256, |_| false).is_none(),
         "all-unhealthy walk over a large fleet must terminate with None"
     );
+}
+
+#[test]
+fn seen_tracker_delays_large_allocation_and_preserves_membership() {
+    for count in [128, 129, 200] {
+        let mut seen = SeenSet::new(count);
+        let ((), calls) = crate::test_allocation_counter::count_allocations(|| {
+            assert!(seen.insert(count - 1));
+            assert!(!seen.insert(count - 1));
+        });
+        assert_eq!(calls, 0);
+        let ((), calls) = crate::test_allocation_counter::count_allocations(|| {
+            assert!(seen.insert(0));
+            assert!(!seen.insert(count - 1));
+            assert!(!seen.insert(0));
+            assert!(seen.insert(64));
+            assert!(!seen.insert(64));
+        });
+        assert_eq!(calls, usize::from(count > 128));
+    }
+}
+
+#[test]
+fn large_ring_allocates_tracker_only_after_first_distinct_candidate() {
+    let backends: Vec<_> = (1..=200).map(make_backend).collect();
+    let ring = ConsistentHashRing::build(&backends);
+    for (budget, healthy, expected_calls) in [(0, true, 0), (1, false, 1), (256, true, 1)] {
+        let calls = std::cell::Cell::new(0);
+        let (selected, allocations) = crate::test_allocation_counter::count_allocations(|| {
+            ring.select(b"lazy-seen", budget, |_| {
+                calls.set(calls.get() + 1);
+                healthy
+            })
+        });
+        assert_eq!(selected.is_some(), budget > 0 && healthy);
+        assert_eq!(calls.get(), expected_calls);
+        assert_eq!(allocations, 0);
+    }
+
+    let visited = std::cell::RefCell::new([false; 200]);
+    let (selected, allocations) = crate::test_allocation_counter::count_allocations(|| {
+        ring.select(b"lazy-seen", 256, |candidate| {
+            let index = backends
+                .iter()
+                .position(|backend| backend.addr == candidate.addr)
+                .unwrap();
+            assert!(!visited.borrow()[index]);
+            visited.borrow_mut()[index] = true;
+            false
+        })
+    });
+    assert!(selected.is_none());
+    assert_eq!(allocations, 1);
+    assert!(visited.into_inner().into_iter().all(|seen| seen));
 }
 
 #[test]
