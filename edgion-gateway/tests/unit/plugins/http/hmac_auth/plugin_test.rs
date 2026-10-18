@@ -848,3 +848,38 @@ fn algorithm_selection_does_not_allocate_lowercase_storage() {
         assert_eq!(stats.requested_bytes, 0);
     }
 }
+
+#[test]
+fn body_digest_comparison_uses_stack_storage_and_exact_canonical_encoding() {
+    for hash in [[0u8; 32], [255u8; 32], std::array::from_fn(|index| index as u8)] {
+        let canonical = STANDARD.encode(hash);
+        assert_eq!(canonical.len(), 44);
+        let mut changed = canonical.clone();
+        changed.replace_range(..1, if canonical.starts_with('A') { "B" } else { "A" });
+        let candidates = [
+            canonical.clone(),
+            changed,
+            canonical.trim_end_matches('=').to_string(),
+            format!("{canonical}="),
+            format!(" {canonical}"),
+            format!("{canonical}\n"),
+            String::new(),
+        ];
+        for expected in candidates {
+            let (matched, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+                HmacAuth::body_digest_matches(&hash, std::hint::black_box(&expected))
+            });
+            assert_eq!(matched, canonical == expected);
+            assert_eq!(stats.calls, 0);
+            assert_eq!(stats.requested_bytes, 0);
+        }
+    }
+    // Nonzero unused pad bits are not an alternate accepted spelling.
+    let mut noncanonical = STANDARD.encode([0u8; 32]);
+    noncanonical.replace_range(42..43, "B");
+    assert!(!HmacAuth::body_digest_matches(&[0u8; 32], &noncanonical));
+    let canonical = STANDARD.encode([0u8; 32]);
+    let header = format!(" SHA-256 = {canonical} \t");
+    let trimmed = HmacAuth::parse_body_digest_header(&header).unwrap();
+    assert!(HmacAuth::body_digest_matches(&[0u8; 32], trimmed));
+}

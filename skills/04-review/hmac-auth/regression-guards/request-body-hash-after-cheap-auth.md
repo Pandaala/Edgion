@@ -97,3 +97,26 @@ Re-open this decision only if:
 
 - `BODY-006` — 2026-07-27.
 - `ARCH-006` — cold logical-limit resolution and numeric runtime comparison.
+
+## Fixed-size digest comparison storage
+
+After `request_body_sha256` returns its fixed 32-byte digest, the HMAC verifier
+encodes it with the same padded STANDARD Base64 engine into a 44-byte stack
+buffer. It compares the encoded bytes exactly with the expected text, removing
+the temporary encoded String. It does not decode the client text or accept
+alternate padding/pad-bit spellings. The existing Digest parser still trims
+outer whitespace; interior whitespace and any remaining extra bytes mismatch.
+
+The expected header value remains owned across asynchronous body capture and
+hashing. Cheap authentication order, current body-version hashing, nonmaterializing
+storage reads and read-error/mismatch mapping are unchanged. Encoding failure is
+a defensive mismatch; the fixed input/output sizes satisfy the engine's buffer
+requirement without a fallible capacity calculation on request data.
+
+The pure comparison regression uses varied fixed hashes and an independently
+allocated STANDARD encoding as its reference. Selected match/mismatch cases
+allocate zero times, including empty/truncated/extra/whitespace values. Separate
+assertions preserve outer-header trimming and noncanonical pad-bit rejection.
+Existing signed-body success, tamper and body-read-failure tests remain required.
+This is comparison-storage evidence, not an allocation-free whole-body verifier
+or throughput claim.

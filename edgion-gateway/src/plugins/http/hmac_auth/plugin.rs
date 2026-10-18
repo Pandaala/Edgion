@@ -556,11 +556,18 @@ impl HmacAuth {
         expected: &str,
     ) -> Result<(), BodyDigestError> {
         let body_hash = session.request_body_sha256().await.map_err(BodyDigestError::Read)?;
-        let computed = STANDARD.encode(body_hash);
-        if computed != expected {
+        if !Self::body_digest_matches(&body_hash, expected) {
             return Err(BodyDigestError::Invalid("Body digest mismatch"));
         }
         Ok(())
+    }
+
+    fn body_digest_matches(body_hash: &[u8; 32], expected: &str) -> bool {
+        // A SHA-256 digest occupies exactly 44 bytes in padded standard Base64.
+        let mut encoded = [0u8; 44];
+        STANDARD
+            .encode_slice(body_hash, &mut encoded)
+            .is_ok_and(|len| encoded[..len] == *expected.as_bytes())
     }
 
     /// Pure `Digest` header check: `SHA-256=<base64(sha256(body))>`.

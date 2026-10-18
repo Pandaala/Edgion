@@ -1074,3 +1074,22 @@ measurement. Formatting, workspace check/Clippy and seven repository guards
 passed; existing warnings are outside changed code. No full integration suite or
 throughput benchmark ran. This removes algorithm-name normalization storage,
 not other Authorization parser allocations or authentication costs.
+
+## Stack storage for HMAC body-digest encoding
+
+After the canonical body SHA-256 read, HMAC encodes the fixed 32-byte digest into
+44 stack bytes instead of allocating an encoded String. Exact padded STANDARD
+Base64 text comparison is retained; client text is not decoded into a more
+permissive equivalence. Outer Digest-header trimming and owned expected text
+across asynchronous capture/hash remain unchanged, as do authentication order,
+body storage and read/mismatch failures.
+
+Independent plan and final source reviews passed. HMAC-filtered tests passed 53
+and shared conditions passed 67 (filters may overlap), including existing signed
+body match/tamper and read-failure cases. The comparison matrix uses independently
+encoded references and measures zero allocations for selected match/mismatch
+inputs; padding, pad bits and whitespace boundaries remain covered. Formatting,
+workspace check/Clippy and seven repository guards passed; existing warnings are
+outside changed code. No full integration suite or throughput benchmark ran.
+This removes encoded-comparison storage only, not the expected-header owner or
+all body-verification allocations.
