@@ -680,7 +680,7 @@ fn immediate_reply(
     log: &mut PluginLog,
     imm: ValidatedImmediateResponse,
 ) -> PluginRunningResult {
-    if let Some(headers) = imm.headers.as_ref() {
+    if let Some(headers) = imm.headers {
         mutation::queue_for_local_reply(session, headers, log);
     }
     log.push_fmt("ext_proc immediate {}", la![imm.status]);

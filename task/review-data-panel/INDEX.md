@@ -2442,3 +2442,19 @@ this is not an allocation-free callback or a throughput claim.
 Fresh verification passed all 17 response-trailer tests, formatting, workspace
 check/Clippy and seven repository guards. Remaining warnings are outside changed
 code. The owning header-fidelity knowledge page describes the narrowed clone scope.
+
+## ExtProc local-reply header name ownership
+
+Immediate-response conversion now consumes its owned HeaderMutation and moves
+accepted set/remove names into PendingHeaderOp. Both the request-stage local
+reply and streamed request-body terminal reply already own that mutation.
+Typed value decoding, empty-value handling, protected-header rejection, append
+conditions, set-before-remove order and log ordering remain unchanged. Independent
+plan and code/knowledge reviews passed. A regression verifies retained String
+storage for set/remove names and opaque value fidelity; fixture clones remain
+only where tests reuse one mutation across independent operations. This removes
+accepted-name copies, not value decoding or all conversion allocations.
+Fresh verification passed 18 mutation, 18 streamed and 5 immediate-reply tests,
+formatting, workspace check/Clippy and seven repository guards. Remaining warnings
+are outside changed code. The owning header-fidelity knowledge page records the
+new name transfer boundary. No throughput improvement is claimed.

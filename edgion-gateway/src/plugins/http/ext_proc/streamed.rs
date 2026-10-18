@@ -237,7 +237,7 @@ impl RequestBodyStreamHandler for ExtProcStreamedBodyHandler {
                 // semantics. Protected/pseudo headers are rejected here (with
                 // the same log lines as the mutation module) so the hook can
                 // apply the pairs verbatim.
-                let header_ops = imm.headers.as_ref().map_or_else(Vec::new, |mutation| {
+                let header_ops = imm.headers.map_or_else(Vec::new, |mutation| {
                     self.has_log |= mutation
                         .set_headers
                         .iter()

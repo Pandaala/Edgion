@@ -57,7 +57,9 @@ Invalid HTTP value bytes are skipped with a static PluginLog error, not repaired
 Protected pseudo/framing headers remain rejected. Repeated values retain their
 per-name order; a HeaderMap does not preserve global wire order across names.
 The live response-presence seam excludes queued operations when no response is
-bound. Local-reply conditions run against the fresh reply when applied.
+bound. Local-reply conditions run against the fresh reply when applied. Immediate-response
+local-reply conversion consumes its wire mutation and moves accepted header names
+into pending operations; byte validation and set-before-remove order are unchanged.
 
 String response writes without a bound response retain their prior successful
 no-op outcome for invalid values: parsing now drops them before queueing instead

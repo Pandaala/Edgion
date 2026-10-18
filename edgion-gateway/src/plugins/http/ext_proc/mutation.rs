@@ -200,7 +200,7 @@ pub fn apply_to_response(session: &mut dyn PluginSession, mutation: &HeaderMutat
 /// Translate an ExtProc mutation into generic operations for a fresh local
 /// reply. Conditions are deliberately evaluated when the fresh header exists,
 /// rather than against an upstream response that the local reply replaces.
-pub fn queue_for_local_reply(session: &mut dyn PluginSession, mutation: &HeaderMutation, log: &mut PluginLog) -> usize {
+pub fn queue_for_local_reply(session: &mut dyn PluginSession, mutation: HeaderMutation, log: &mut PluginLog) -> usize {
     let ops = local_reply_ops(mutation, log);
     let mut queued = 0;
     for op in ops {
@@ -216,42 +216,30 @@ pub fn queue_for_local_reply(session: &mut dyn PluginSession, mutation: &HeaderM
 /// Convert ExtProc wire mutations into runtime-owned local-reply operations.
 /// This is also used by streamed body handlers, which cannot hold a session
 /// borrow while awaiting the processor.
-pub fn local_reply_ops(mutation: &HeaderMutation, log: &mut PluginLog) -> Vec<PendingHeaderOp> {
+pub fn local_reply_ops(mutation: HeaderMutation, log: &mut PluginLog) -> Vec<PendingHeaderOp> {
     let mut ops = Vec::new();
-    for opt in &mutation.set_headers {
-        let Some(hv) = opt.header.as_ref() else { continue };
+    for mut opt in mutation.set_headers {
+        let Some(hv) = opt.header.take() else { continue };
         if reject_protected(&hv.key, log) {
             continue;
         }
-        let Some(value) = decoded_value(opt, hv, log) else {
+        let Some(value) = decoded_value(&opt, &hv, log) else {
             continue;
         };
         let action = HeaderAppendAction::try_from(opt.append_action).unwrap_or(HeaderAppendAction::AppendIfExistsOrAdd);
         let op = match action {
-            HeaderAppendAction::AppendIfExistsOrAdd => PendingHeaderOp::Append {
-                name: hv.key.clone(),
-                value,
-            },
-            HeaderAppendAction::OverwriteIfExistsOrAdd => PendingHeaderOp::Set {
-                name: hv.key.clone(),
-                value,
-            },
-            HeaderAppendAction::AddIfAbsent => PendingHeaderOp::AddIfAbsent {
-                name: hv.key.clone(),
-                value,
-            },
-            HeaderAppendAction::OverwriteIfExists => PendingHeaderOp::OverwriteIfExists {
-                name: hv.key.clone(),
-                value,
-            },
+            HeaderAppendAction::AppendIfExistsOrAdd => PendingHeaderOp::Append { name: hv.key, value },
+            HeaderAppendAction::OverwriteIfExistsOrAdd => PendingHeaderOp::Set { name: hv.key, value },
+            HeaderAppendAction::AddIfAbsent => PendingHeaderOp::AddIfAbsent { name: hv.key, value },
+            HeaderAppendAction::OverwriteIfExists => PendingHeaderOp::OverwriteIfExists { name: hv.key, value },
         };
         ops.push(op);
     }
-    for name in &mutation.remove_headers {
-        if reject_protected(name, log) {
+    for name in mutation.remove_headers {
+        if reject_protected(&name, log) {
             continue;
         }
-        ops.push(PendingHeaderOp::Remove { name: name.clone() });
+        ops.push(PendingHeaderOp::Remove { name });
     }
     ops
 }
