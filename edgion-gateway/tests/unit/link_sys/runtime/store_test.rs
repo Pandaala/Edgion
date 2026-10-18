@@ -981,7 +981,9 @@ async fn httpdns_secret_material_rotation_replaces_client_and_preserves_address_
     registry.apply(&data, &HashSet::new(), &data, true, false);
     let first = httpdns_handle(&registry);
     assert!(first.is_ready());
-    let fingerprint = edgion_common::dns::ResolverSpec::HttpDns(first.clone()).fingerprint();
+    let fingerprint = edgion_common::dns::ResolverSpec::HttpDns(first.clone())
+        .fingerprint()
+        .into_owned();
     let SystemConfig::HttpDns(config) = &mut resource.spec.config else {
         unreachable!()
     };

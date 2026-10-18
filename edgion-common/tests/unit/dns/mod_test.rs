@@ -40,7 +40,9 @@ fn httpdns_loopback_policy_changes_cache_fingerprint() {
         "preset": "aliyun", "connection": {"allowLoopback": false}
     }))
     .unwrap();
-    let before = ResolverSpec::HttpDns(prepare(config.clone())).fingerprint();
+    let before = ResolverSpec::HttpDns(prepare(config.clone()))
+        .fingerprint()
+        .into_owned();
     config.connection.as_mut().unwrap().allow_loopback = true;
     assert_ne!(before, ResolverSpec::HttpDns(prepare(config)).fingerprint());
 }
@@ -57,11 +59,13 @@ fn fingerprint_distinguishes_resolvers() {
     let dns_a = ResolverSpec::StandardDns {
         servers: vec!["1.1.1.1".to_string()],
     }
-    .fingerprint();
+    .fingerprint()
+    .into_owned();
     let dns_b = ResolverSpec::StandardDns {
         servers: vec!["8.8.8.8".to_string()],
     }
-    .fingerprint();
+    .fingerprint()
+    .into_owned();
     assert_ne!(system, dns_a);
     assert_ne!(dns_a, dns_b, "different server lists must fingerprint differently");
     // Same servers → same fingerprint (cache hit across requests).
@@ -108,7 +112,7 @@ fn httpdns_fingerprint_redacts_resolved_secret_material() {
             ..Default::default()
         }),
     };
-    let fp = ResolverSpec::HttpDns(prepare(cfg)).fingerprint();
+    let fp = ResolverSpec::HttpDns(prepare(cfg)).fingerprint().into_owned();
     assert!(
         !fp.contains(SENTINEL),
         "resolved secret material must not appear in the cache fingerprint: {fp}"
@@ -474,4 +478,25 @@ async fn tls_audit_occurs_only_during_preparation() {
             .is_err());
     }
     assert_eq!(count.load(Ordering::Relaxed), 1, "queries must not repeat TLS audit");
+}
+
+#[test]
+fn fingerprints_borrow_fixed_and_prepared_identity() {
+    assert!(matches!(ResolverSpec::System.fingerprint(), Cow::Borrowed("system")));
+    let prepared = prepare(prepared_config());
+    let spec = ResolverSpec::HttpDns(Arc::clone(&prepared));
+    let fingerprint = spec.fingerprint();
+    let Cow::Borrowed(value) = fingerprint else {
+        panic!("prepared address identity must be borrowed");
+    };
+    assert_eq!(value, prepared.address_fingerprint);
+    assert_eq!(value.as_ptr(), prepared.address_fingerprint.as_ptr());
+
+    for servers in [vec![], vec!["192.0.2.53".into(), "[2001:db8::53]:53".into()]] {
+        let expected = format!("std:{}", servers.join(","));
+        let spec = ResolverSpec::StandardDns { servers };
+        let fingerprint = spec.fingerprint();
+        assert!(matches!(fingerprint, Cow::Owned(_)));
+        assert_eq!(fingerprint, expected);
+    }
 }

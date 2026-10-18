@@ -4327,3 +4327,26 @@ tests. Gateway filters ran serially. No live transport or throughput benchmark
 ran; the previously recorded TLS admission fixture issue remains separate.
 Formatting, workspace check/Clippy, seven repository guards and diff hygiene
 passed. Existing warnings remain outside changed code.
+
+## Borrowed resolver address fingerprints
+
+ResolverSpec::fingerprint now returns Cow<str>: System borrows its fixed text,
+HTTPDNS borrows the prepared generation's redacted address identity, and standard
+DNS retains the exact owned formatting. Gateway's existing resolver owner keeps
+the borrowed value valid through DNS await and cache insertion. This removes
+one temporary String allocation for System and HTTPDNS without changing cache
+identity or the private Secret-sensitive preparation identity.
+
+The supporting Common change is limited to this method and its ownership tests.
+Existing tests that intentionally retain a temporary resolver's fingerprint now
+explicitly own that value; their assertions and fixtures are unchanged. A new
+regression checks borrowed variants and prepared-buffer identity, plus unchanged
+standard-DNS bytes. No cache API, client preparation, Secret-rotation, fallback,
+TTL or provider publication behavior changed. No throughput claim is made.
+
+Fresh verification passed 120 network-free tests: 43 Common DNS tests,
+73 Gateway discovery tests and four native DNS/cache/precedence/HTTPDNS rotation
+tests, all serially. The existing real localhost resolution test was excluded
+from this network-free run. Formatting, workspace check/Clippy, seven repository
+guards and diff hygiene passed. Existing warnings remain outside changed code.
+No live transport or throughput benchmark ran.

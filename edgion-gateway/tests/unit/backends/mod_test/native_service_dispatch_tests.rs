@@ -597,6 +597,7 @@ fn resolver_precedence_uses_captured_service_then_gateway_then_egc_and_system() 
             servers: vec![ip.to_owned()],
         }
         .fingerprint()
+        .into_owned()
     };
     assert_eq!(
         compute_external_name_resolver_with(dns_candidate(&annotations).as_ref(), &ctx, Some(&egc), absent)

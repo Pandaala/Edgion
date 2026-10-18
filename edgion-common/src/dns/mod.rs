@@ -10,6 +10,7 @@ pub mod resolver_select;
 pub mod standard;
 pub mod system;
 
+use std::borrow::Cow;
 use std::net::IpAddr;
 use std::sync::Arc;
 
@@ -225,11 +226,11 @@ impl ResolverSpec {
     /// HTTP DNS returns a precomputed admin-redacted address-cache identity.
     /// Secret bytes belong only to the private preparation identity; rotating
     /// them does not invalidate otherwise unchanged resolved backend addresses.
-    pub fn fingerprint(&self) -> String {
+    pub fn fingerprint(&self) -> Cow<'_, str> {
         match self {
-            ResolverSpec::System => "system".to_string(),
-            ResolverSpec::StandardDns { servers } => format!("std:{}", servers.join(",")),
-            ResolverSpec::HttpDns(prepared) => prepared.address_fingerprint.clone(),
+            ResolverSpec::System => Cow::Borrowed("system"),
+            ResolverSpec::StandardDns { servers } => Cow::Owned(format!("std:{}", servers.join(","))),
+            ResolverSpec::HttpDns(prepared) => Cow::Borrowed(&prepared.address_fingerprint),
         }
     }
 }
