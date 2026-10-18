@@ -357,7 +357,7 @@ impl ExtProc {
         }
         if let Some(headers) = common.header_mutation.as_ref() {
             let count = mutation::apply_to_request(session, headers, log);
-            log.push_fmt("req hdr mut {}", la![count.to_string().as_str()]);
+            log.push_fmt("req hdr mut {}", la![count]);
         }
         Ok(())
     }
@@ -572,7 +572,7 @@ impl ExtProc {
         }
         if let Some(mutation) = common.header_mutation.as_ref() {
             let count = mutation::apply_to_response(session, mutation, log);
-            log.push_fmt("resp hdr mut {}", la![count.to_string().as_str()]);
+            log.push_fmt("resp hdr mut {}", la![count]);
         }
         PluginRunningResult::GoodNext
     }
@@ -683,7 +683,7 @@ fn immediate_reply(
     if let Some(headers) = imm.headers.as_ref() {
         mutation::queue_for_local_reply(session, headers, log);
     }
-    log.push_fmt("ext_proc immediate {}", la![imm.status.to_string().as_str()]);
+    log.push_fmt("ext_proc immediate {}", la![imm.status]);
     if session.is_grpc_request() {
         if let Some(grpc_status) = imm.grpc_status {
             let message = imm.body.as_deref().and_then(|body| std::str::from_utf8(body).ok());

@@ -1866,3 +1866,16 @@ Fresh PluginLog tests passed 33 cases; rate-limit selections passed 127 with
 one existing ignored case. Numeric scratch fixtures measured zero allocations.
 Formatting, workspace check/Clippy and seven repository guards passed, with
 existing warnings outside changed files. Independent final review passed.
+
+## ExtProc typed integer log arguments
+
+Request and response header mutation counts and immediate-response HTTP status
+now use the canonical PluginLog integer arguments, removing their temporary
+Strings. Templates, counts, phase ordering, status validation, mutation behavior
+and failure policy are unchanged. Independent plan review passed. Existing
+formatter boundary/allocation tests and ExtProc tests provide scoped verification;
+this batch adds no log entries or body-phase logging. No throughput benchmark
+or deployed integration suite is claimed.
+Fresh verification passed 33 PluginLog tests and 140 ExtProc tests. Formatting,
+workspace check/Clippy and seven repository guards passed; Clippy warnings
+remain outside the changed source. Independent final review passed.
