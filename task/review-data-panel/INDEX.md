@@ -28,6 +28,7 @@ destination.
 
 ## Deferred decisions
 
+- [Selective SSE observer input representation](body-04-selective-observer-input.md)
 - [Quota admission concurrency](quota-02-admission-concurrency.md)
 - [Quota worker future representation](quota-01-worker-future-representation.md)
 - [Publication-time global/Gateway plugin lists](early-01-precompute-plugin-lists.md)
@@ -3989,3 +3990,20 @@ Fresh verification passed 104 network-free tests: 56 converter, 44 SSE module
 and 4 SliceChain tests. Formatting, workspace check/Clippy, seven repository
 guards and diff hygiene passed. Existing warnings remain outside changed code.
 No live provider or throughput benchmark was run.
+
+
+## Selective SSE observer input audit
+
+Native Anthropic and Responses currently materialize semantic event data before
+one selective-parser feed. Constructor inspection found lazy empty parser buffers;
+a cross-event parser pool is not justified by constructor allocation. Fragment
+feeding could remove some semantic merges, but it changes token buffering and
+segmentation-dependent work accounting. Net allocation and production-limit
+equivalence remain unproven. The bounded proposal and required differential tests
+are recorded in [body-04](body-04-selective-observer-input.md). No runtime or test
+code changed; converter and offset-based Chat parsing remain outside the proposal.
+
+Fresh verification passed 86 network-free tests: 33 native Anthropic, 2 Responses
+and 51 usage tests. Formatting, workspace check/Clippy, agent-document validation
+and diff hygiene passed. Existing warnings remain outside this documentation-only
+batch. No fragment-feeding prototype, allocation or CPU benchmark was run.
