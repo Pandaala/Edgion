@@ -46,6 +46,7 @@ destination.
 - [Raw URI fragment serialization](log-01-raw-uri-fragment-serialization.md)
 - [Wasm header snapshot and replay ownership](wasm-01-header-snapshot-ownership.md)
 - [DSL string consumer ownership](dsl-01-string-consumer-ownership.md)
+- [DSL outbound method normalization](dsl-02-http-method-normalization.md)
 - [ProxyRewrite staged template compilation](rewrite-01-staged-template-compilation.md)
 
 ## Completed implementation batch
@@ -2030,3 +2031,14 @@ review passed. No network-policy expansion or throughput benchmark is claimed.
 Fresh verification passed all 500 Gateway DSL tests, formatting, workspace
 check/Clippy and seven repository guards. Remaining warnings are outside the
 changed source. Independent final review passed.
+
+## DSL outbound method normalization audit
+
+The per-call uppercase String is a candidate allocation, but a pure ASCII
+replacement changes the Unicode input acceptance of the seven-method selector.
+A preserving fallback has unmeasured comparison costs. The linked decision task
+records alternatives and validation/error-order boundaries; runtime remains
+unchanged. Independent plan review passed.
+Formatting, workspace check/Clippy and agent-document validation passed.
+Independent final documentation review passed. No runtime test or benchmark
+was run for this documentation-only batch.
