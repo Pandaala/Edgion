@@ -569,15 +569,7 @@ impl RedisRateLimiter {
                 // Admission reads only KEYS[1]. Reusing it as KEYS[2] keeps the
                 // invocation valid in Redis Cluster without inventing a marker.
                 vec![quota_key.to_string(), quota_key.to_string()],
-                vec![
-                    "0".to_string(),
-                    limit.to_string(),
-                    "0".to_string(),
-                    "0".to_string(),
-                    "0".to_string(),
-                    "0".to_string(),
-                    "0".to_string(),
-                ],
+                vec![0, limit as i64, 0, 0, 0, 0, 0],
             )
             .await?;
         CumulativeQuotaResult::from_lua_result(&values, limit)
@@ -621,13 +613,13 @@ impl RedisRateLimiter {
                 &self.scripts.cumulative_quota,
                 vec![bucket_key.to_string(), marker_key.to_string()],
                 vec![
-                    mode.lua_code().to_string(),
-                    limit.to_string(),
-                    bucket_ttl_ms.to_string(),
-                    marker_ttl_ms.to_string(),
-                    revision.to_string(),
-                    cumulative_target.to_string(),
-                    i64::from(final_update).to_string(),
+                    mode.lua_code(),
+                    limit as i64,
+                    bucket_ttl_ms as i64,
+                    marker_ttl_ms as i64,
+                    revision as i64,
+                    cumulative_target as i64,
+                    i64::from(final_update),
                 ],
             )
             .await?;
@@ -672,11 +664,11 @@ impl RedisRateLimiter {
                 &self.scripts.credential_reservation,
                 vec![keys.bucket.clone(), keys.marker.clone()],
                 vec![
-                    operation.lua_code().to_string(),
-                    limits.rpm.unwrap_or(0).to_string(),
-                    limits.tpm.unwrap_or(0).to_string(),
-                    ttl_ms.to_string(),
-                    amount.to_string(),
+                    operation.lua_code(),
+                    limits.rpm.unwrap_or(0) as i64,
+                    limits.tpm.unwrap_or(0) as i64,
+                    ttl_ms as i64,
+                    amount as i64,
                 ],
             )
             .await?;

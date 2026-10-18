@@ -848,7 +848,7 @@ bucket calls avoid four, three and five temporary numeric Strings respectively.
 Validation still precedes conversion; rate/cost bounds fit i64, and timestamps
 retain the Lua exact-integer bound. Argument order, fixed-window key formatting,
 scripts, error text and exact NOSCRIPT-only retry remain unchanged. Quota and
-reservation callers retain their String arguments through the generic executor.
+reservation callers were outside that batch; their extension is recorded below.
 
 Inspection of the locked Fred 10.1.0 source confirmed that both RESP2 and RESP3
 command codecs encode integer arguments as decimal bulk/blob strings. Existing
@@ -3748,3 +3748,28 @@ Fresh verification passed 56 network-free tests: 27 quota and 29 shared Redis
 rate-limiter tests. Formatting, workspace check/Clippy, seven repository guards
 and diff hygiene passed. Existing warnings remain outside changed code.
 No live Redis test or throughput benchmark was run.
+
+
+## Redis quota and reservation integer arguments
+
+Cumulative quota admission/update and credential reservation now pass validated
+i64 arguments to the same generic script executor, extending the ordinary
+rate-limit argument optimization. This removes seven intermediate decimal Strings
+from each quota invocation and five from each credential-reservation invocation.
+Every u64 conversion follows its existing Lua exact-integer validation at
+2^53 - 1, including limits, TTLs, revision and cumulative/credential amounts.
+Absent optional credential limits remain zero; operation codes and final flags
+retain their existing signed integer values.
+
+Locked Fred 10.1.0 uses integer-as-bulk/blob encoding in both RESP command codecs;
+redis-protocol 6.0.0 writes the same decimal argument bytes as the previous string
+values. Lua bodies, keys, argument order, result parsing and exact NOSCRIPT-only
+fallback are unchanged. Container cloning and command buffers still allocate;
+this is not an allocation-free Redis operation or a throughput claim. Existing
+boundary, TTL, quota and reservation tests cover the retained policy checks.
+
+Fresh verification passed 80 network-free tests: 29 shared Redis core, 27 quota
+and 24 attempt runtime tests. Formatting, workspace check/Clippy, seven repository
+guards and diff hygiene passed. Existing warnings remain outside changed code.
+No live Redis, Cluster/failover or throughput test was run for this batch;
+historical live-test results above are not fresh verification of this change.
