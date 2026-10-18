@@ -188,7 +188,8 @@ impl WasmPlugin {
     }
 
     pub(super) fn properties(&self, session: &dyn PluginSession, phase: WasmPhase) -> HashMap<String, String> {
-        let mut p = HashMap::new();
+        // Five common properties plus the optional response status.
+        let mut p = HashMap::with_capacity(6);
         p.insert("request.path".to_string(), session.get_path().to_string());
         p.insert("request.method".to_string(), session.get_method().to_string());
         p.insert(

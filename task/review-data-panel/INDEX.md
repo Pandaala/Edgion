@@ -1322,3 +1322,18 @@ need measurement and do not inherit fixed-value preparation's zero-allocation
 result. Independent documentation plan and final reviews passed; agent-doc
 validation and diff checks passed. No Rust test or benchmark ran in this
 source-record batch.
+
+## Wasm callback property capacity
+
+`WasmPlugin::properties` reserves six entries for its five common properties and
+optional response status. This avoids intermediate table growth during snapshot
+construction without changing getter order, owned values, guest mutation budgets
+or callback-frame release. No cross-request capacity is retained and no throughput
+improvement is claimed. Independent plan review passed.
+
+The initial parallel plugin run passed 18 and failed 25, reporting preparation
+capacity exhaustion, load-path mock failures and a tick-callout timeout. The same
+43 tests passed with `--test-threads=1`; 42 host ABI tests also passed serially.
+Formatting, workspace check/Clippy and seven repository guards passed. Existing
+Clippy warnings remain outside the changed file. No full suite or benchmark ran.
+Independent final review passed.
