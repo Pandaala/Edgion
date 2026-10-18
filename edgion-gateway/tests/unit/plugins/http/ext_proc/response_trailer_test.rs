@@ -557,3 +557,53 @@ async fn unrepresentable_fail_open_keeps_map_for_later_companions() {
     );
     assert_eq!(trailers, original);
 }
+
+#[test]
+fn trailer_status_validation_preserves_cardinality_and_numeric_rules() {
+    for grpc in [false, true] {
+        for (values, valid) in [
+            (vec![], !grpc),
+            (vec![b"0".as_slice()], true),
+            (vec![b"16".as_slice()], true),
+            (vec![b"+0".as_slice()], true),
+            (vec![b"00".as_slice()], true),
+            (vec![b"17".as_slice()], false),
+            (vec![b"65536".as_slice()], false),
+            (vec![b"-1".as_slice()], false),
+            (vec![b" 0".as_slice()], false),
+            (vec![b"".as_slice()], false),
+            (vec![b"\xff".as_slice()], false),
+            (vec![b"0".as_slice(), b"0".as_slice()], false),
+            (vec![b"bad".as_slice(), b"0".as_slice()], false),
+            (vec![b"0".as_slice(), b"bad".as_slice()], false),
+        ] {
+            let mut map = HeaderMap::new();
+            for value in values {
+                map.append("grpc-status", HeaderValue::from_bytes(value).unwrap());
+            }
+            let (result, allocations) =
+                crate::test_allocation_counter::count_allocations(|| validate_trailer_map(&map, grpc));
+            assert_eq!(result.is_ok(), valid);
+            assert_eq!(allocations, 0);
+        }
+    }
+}
+
+#[test]
+fn trailer_status_validation_retains_whole_map_gates() {
+    let mut map = HeaderMap::new();
+    map.insert("grpc-status", HeaderValue::from_static("0"));
+    for index in 1..TRAILER_FIELD_CAP {
+        map.insert(
+            HeaderName::from_bytes(format!("x-{index}").as_bytes()).unwrap(),
+            HeaderValue::from_static("value"),
+        );
+    }
+    assert!(validate_trailer_map(&map, true).is_ok());
+    map.insert("x-over-cap", HeaderValue::from_static("value"));
+    assert!(validate_trailer_map(&map, true).is_err());
+    map.remove("x-over-cap");
+    map.remove("x-1");
+    map.insert("host", HeaderValue::from_static("example.test"));
+    assert!(validate_trailer_map(&map, true).is_err());
+}

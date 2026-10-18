@@ -1575,3 +1575,21 @@ integration or throughput benchmark ran.
 Fresh rerun passed all 47 JWT tests. Formatting, workspace check/Clippy and
 seven repository guards passed; existing warnings are outside changed files.
 Independent final review approved the corrected tests and limited claims.
+
+## ExtProc trailer status cardinality
+
+The response-trailer validator now inspects at most two grpc-status values
+instead of collecting them into a temporary Vec. Whole-map size and forbidden
+field checks still precede status handling; absent non-gRPC status, duplicate
+rejection and the existing u16 text/range rules remain. Protobuf ownership,
+atomic candidate replacement, failure policy and terminal handling are unchanged.
+
+Independent plan review passed. Pure tests cover both protocol modes, missing,
+valid, duplicate, opaque and numeric boundaries plus field-cap/forbidden gates;
+allocation instrumentation excludes fixture construction. Existing asynchronous
+ExtProc tests remain. No full suite, live wire integration or throughput benchmark
+ran for this batch.
+Fresh serial ExtProc selection passed 140 tests. The pure validator matrix
+measured zero allocations for its prepared maps; callback allocations remain.
+Formatting, workspace check/Clippy and seven repository guards passed, with
+existing warnings outside changed files. Independent final review passed.

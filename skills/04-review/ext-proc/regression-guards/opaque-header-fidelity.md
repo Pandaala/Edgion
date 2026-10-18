@@ -101,6 +101,22 @@ matrix or claim global ordering across different header names.
 Re-evaluate if projection encoding, header validity, session APIs, queue value
 ownership, deferred credential invalidation, or conditional mutation order changes.
 
+## Trailer status cardinality without collection
+
+The response-trailer validator checks `grpc-status` cardinality directly through
+its HeaderMap iterator. An absent value is allowed only for non-gRPC; a second
+value rejects before parsing. One value retains the existing text/u16/range
+checks, including accepted leading plus and zero padding. The whole-map byte and
+field caps and forbidden-name checks still run first. This does not relax the
+wire protocol or change the validator's established input acceptance.
+
+Pure validator tests cover absent/single/duplicate, invalid text and numeric
+boundaries in both modes, plus whole-map gates. Their allocation counter excludes
+fixture construction and confirms no allocation in these validator calls.
+Protobuf projection, candidate cloning, mutation and callback lifecycle retain
+their ownership; this is not an allocation-free trailer callback claim.
+Existing asynchronous tests retain atomic rejection and failure-policy coverage.
+
 ## Resolution references
 
 - D0152 / `preserve-ext-proc-opaque-header-fidelity`: confirmed correctness defect;

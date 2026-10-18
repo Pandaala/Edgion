@@ -248,14 +248,14 @@ fn validate_trailer_map(map: &HeaderMap, grpc: bool) -> Result<(), ()> {
             return Err(());
         }
     }
-    let statuses: Vec<_> = map.get_all("grpc-status").iter().collect();
-    if statuses.is_empty() {
+    let mut statuses = map.get_all("grpc-status").iter();
+    let Some(status) = statuses.next() else {
         return if grpc { Err(()) } else { Ok(()) };
-    }
-    if statuses.len() != 1 {
+    };
+    if statuses.next().is_some() {
         return Err(());
     }
-    let status = statuses[0].to_str().map_err(|_| ())?.parse::<u16>().map_err(|_| ())?;
+    let status = status.to_str().map_err(|_| ())?.parse::<u16>().map_err(|_| ())?;
     (status <= 16).then_some(()).ok_or(())
 }
 
