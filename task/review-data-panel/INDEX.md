@@ -38,6 +38,7 @@ destination.
 - [Pending response-header execution ownership](response-01-pending-header-ownership.md)
 - [Service selected-slot lookup cost](backend-01-selected-slot-lookup.md)
 - [JWT claim condition evaluation ownership](condition-01-jwt-claim-evaluation.md)
+- [GeoIP record decoding and projection](geoip-01-record-decoding.md)
 
 ## Completed implementation batch
 
@@ -755,3 +756,22 @@ ConfigData 22, IP references 7, ACL 4 and RealIp-filtered 32. Formatting, worksp
 check/Clippy and seven repository guards passed. An introduced Clippy suggestion
 was corrected; remaining warnings are outside the diff. No full integration suite
 or throughput benchmark ran.
+
+
+## GeoIP lookup and projection audit
+
+Inspected HTTP/stream fact-demand compilation, shared CIDR reference dispatch,
+lazy direct/remote slots, RealIp invalidation, provider lookup/failure mapping and
+MMDB projection. Facts and rule inputs already borrow where their owners permit;
+owned projected facts survive database reload and shared request-slot references.
+Access logs do not initialize slots. CIDR-only paths avoid database lookup.
+
+The complete City decode and first-subdivision projection expose a possible
+transient collection/decode optimization, deferred in the linked task because
+narrower decoding can change failure semantics. Borrowed strings and typed Names
+are not incorrectly counted as owned translation maps. Updater internals, full
+rule evaluation and malformed-record equivalence remain outside this audit.
+
+Independent plan and final source reviews passed. Agent-doc validation and diff
+whitespace checks passed. No Rust tests or benchmarks ran for this documentation
+batch; no runtime or dependency code changed.
