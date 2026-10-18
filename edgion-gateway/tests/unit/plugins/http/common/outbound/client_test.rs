@@ -1251,3 +1251,44 @@ fn classify_detail_preserves_json_content_type_recognition() {
     };
     assert_eq!(client.classify_detail(&response), SuccessOutcome::BodyFail);
 }
+
+#[test]
+fn classify_detail_without_body_predicates_uses_status_only() {
+    use edgion_resources::resources::common::success::SuccessOutcome;
+    use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
+
+    let mut client = ManagedOutboundClient::test_with_static_target("http://example.com");
+    for (spec, accepted, rejected) in [
+        (None, 204, 403),
+        (Some(SuccessSpec::default()), 200, 500),
+        (
+            Some(SuccessSpec {
+                status_codes: Some(vec![403]),
+                body: Vec::new(),
+            }),
+            403,
+            200,
+        ),
+    ] {
+        client.success = spec;
+        for content_type in [
+            None,
+            Some(b"text/plain".as_slice()),
+            Some(b"application/json"),
+            Some(b"\xff"),
+        ] {
+            let mut headers = HeaderMap::new();
+            if let Some(value) = content_type {
+                headers.insert(CONTENT_TYPE, HeaderValue::from_bytes(value).unwrap());
+            }
+            let mut response = super::super::call::OutboundResponse {
+                status: accepted,
+                headers,
+                body: bytes::Bytes::from_static(b"not JSON"),
+            };
+            assert_eq!(client.classify_detail(&response), SuccessOutcome::Success);
+            response.status = rejected;
+            assert_eq!(client.classify_detail(&response), SuccessOutcome::StatusFail);
+        }
+    }
+}

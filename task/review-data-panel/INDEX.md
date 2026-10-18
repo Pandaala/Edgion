@@ -2159,3 +2159,17 @@ Fresh verification passed 190 shared HTTP tests, 27 RequestMirror tests and 23
 AllEndpointStatus tests, formatting, workspace check/Clippy and seven repository
 guards. Remaining warnings are outside changed source. Independent final review
 passed.
+
+## Outbound status-only classification skips media-type work
+
+ManagedOutboundClient inspects Content-Type only when a nonempty body-predicate
+list is configured. The canonical resource-layer classifier already ignores the
+JSON flag for absent or body-free success policies; it still owns all status and
+body decisions. Existing JSON recognition remains unchanged when needed. Actual
+client tests cover absent/default/custom-status policies against missing, plain,
+JSON and invalid Content-Type values with malformed JSON bodies. Independent plan
+review passed. This skips irrelevant header lookup/validation/scanning, without
+claiming measured CPU or throughput gains or duplicating status logic.
+Fresh verification passed all 115 shared outbound tests, formatting, workspace
+check/Clippy and seven repository guards. Remaining warnings are outside changed
+source. Independent final review passed.

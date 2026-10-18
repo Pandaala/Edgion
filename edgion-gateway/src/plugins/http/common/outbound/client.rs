@@ -524,21 +524,22 @@ impl ManagedOutboundClient {
         &self,
         resp: &super::call::OutboundResponse,
     ) -> edgion_resources::resources::common::success::SuccessOutcome {
-        // Compare without allocating a lowercase copy. Preserve the existing
-        // application/json prefix and +json substring recognition.
-        let is_json = resp
-            .headers
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|ct| {
-                let bytes = ct.as_bytes();
-                bytes
-                    .get(..b"application/json".len())
-                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"application/json"))
-                    || bytes
-                        .windows(b"+json".len())
-                        .any(|part| part.eq_ignore_ascii_case(b"+json"))
-            });
+        // Only body predicates need media-type recognition. Compare without a
+        // lowercase copy, preserving the prefix and substring rules.
+        let is_json = self.success.as_ref().is_some_and(|spec| !spec.body.is_empty())
+            && resp
+                .headers
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|ct| {
+                    let bytes = ct.as_bytes();
+                    bytes
+                        .get(..b"application/json".len())
+                        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"application/json"))
+                        || bytes
+                            .windows(b"+json".len())
+                            .any(|part| part.eq_ignore_ascii_case(b"+json"))
+                });
         edgion_resources::resources::common::success::classify_detail(
             self.success.as_ref(),
             resp.status,
