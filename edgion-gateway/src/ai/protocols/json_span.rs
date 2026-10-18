@@ -10,6 +10,10 @@
 //! selects, so peak allocation follows the guard's own span bounds rather than
 //! the size of the request body.
 
+use std::borrow::Cow;
+
+use serde::Deserialize;
+
 pub(crate) const MAX_JSON_DEPTH: usize = 64;
 pub(crate) const MAX_JSON_NODES: usize = 16_384;
 
@@ -285,6 +289,17 @@ impl<'a> Parser<'a> {
 /// Decode one complete quoted JSON string token into its logical value.
 pub(crate) fn decode_json_string(token: &[u8]) -> Option<String> {
     serde_json::from_slice::<String>(token).ok()
+}
+
+#[derive(Deserialize)]
+#[serde(transparent)]
+struct BorrowedJsonString<'a>(#[serde(borrow)] Cow<'a, str>);
+
+/// Decode a complete quoted token, borrowing its text when no escapes occur.
+pub(crate) fn decode_json_string_borrowed(token: &[u8]) -> Option<Cow<'_, str>> {
+    serde_json::from_slice::<BorrowedJsonString<'_>>(token)
+        .ok()
+        .map(|value| value.0)
 }
 
 #[cfg(test)]

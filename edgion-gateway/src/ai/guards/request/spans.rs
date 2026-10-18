@@ -10,9 +10,13 @@
 //! and only selected tokens are materialized, so peak allocation follows the
 //! configured span bounds rather than the size of the request body.
 
+use std::borrow::Cow;
+
 use edgion_resources::resources::edgion_plugins::AiGuardRole;
 
-use crate::ai::protocols::json_span::{decode_json_string, Field, Node, Parser, StringToken};
+use crate::ai::protocols::json_span::{
+    decode_json_string, decode_json_string_borrowed, Field, Node, Parser, StringToken,
+};
 
 const MAX_RECOGNIZED_ROLE_BYTES: usize = 9;
 const TEXT_PART_TYPE_BYTES: usize = 4;
@@ -30,11 +34,11 @@ fn token_can_decode_within(token: &StringToken, limit: usize) -> bool {
     token.end.saturating_sub(token.start) <= max_encoded_json_string_token_bytes(limit)
 }
 
-fn decode_fixed_value(body: &[u8], token: &StringToken, max_recognized_bytes: usize) -> Option<String> {
+fn decode_fixed_value<'a>(body: &'a [u8], token: &StringToken, max_recognized_bytes: usize) -> Option<Cow<'a, str>> {
     if !token_can_decode_within(token, max_recognized_bytes) {
         return None;
     }
-    decode_json_string(&body[token.start..token.end])
+    decode_json_string_borrowed(&body[token.start..token.end])
 }
 
 /// Which text position inside a message a span came from.

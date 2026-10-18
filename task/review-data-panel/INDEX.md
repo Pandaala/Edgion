@@ -2610,3 +2610,22 @@ Fresh verification passed 75 AiGuard request tests, formatting, workspace
 check/Clippy and seven repository guards; remaining warnings are outside changed
 code. Ordered lookup costs O(n + m log n) instead of O(n*m), without a claim that
 every small input or full request is faster.
+
+## AiGuard borrowed fixed JSON vocabulary
+
+Request span selection now borrows unescaped role and part-type values through
+a shared serde-backed borrowed JSON string decoder. Escaped values remain owned;
+the original encoded-size precheck, unknown-role and skipped-part behavior remain
+unchanged. Selected content still uses the unchanged owned decoder, as do the
+parser and SSE consumers. No parser container or body-storage ownership changes.
+The owning span-bounds knowledge page records the boundary.
+
+Independent plan and code/knowledge reviews passed. New decoder differential
+cases preserve complete-token acceptance for whitespace, trailing garbage,
+wrong types, invalid UTF-8, control characters and escapes. Plain fixed values
+and generic unescaped strings verify source-pointer identity and zero allocation;
+escaped values verify owned results. Encoded admission edges retain their prior
+meaning. Fresh verification passed 76 AiGuard request tests, 5 JSON span tests,
+formatting, workspace check/Clippy and seven repository guards. Remaining warnings
+are outside changed code. This removes temporary plain role/type strings, not
+whole-parser allocations; no end-to-end throughput benchmark is claimed.

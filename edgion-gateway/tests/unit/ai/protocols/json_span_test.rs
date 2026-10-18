@@ -43,3 +43,55 @@ fn escaped_form_feed_preserves_decoding_and_offsets_in_both_modes() {
         assert_eq!(token.value, if eager { "left\x0cright" } else { "" });
     }
 }
+
+#[test]
+fn borrowed_string_decoder_preserves_owned_decoder_acceptance() {
+    let tokens: &[&[u8]] = &[
+        br#""""#,
+        br#""user""#,
+        "\"café €\"".as_bytes(),
+        br#""u\u0073er""#,
+        br#""quote\" slash\\ newline\n tab\t""#,
+        b" \r\n\t\"text\" \t",
+        br#""\uD800""#,
+        br#""\q""#,
+        b"\"raw\ncontrol\"",
+        b"\"\xff\"",
+        b"\"unfinished",
+        b"",
+        b"null",
+        b"123",
+        b"true",
+        b"[]",
+        b"{}",
+        b"\"text\" trailing",
+        b"\"a\" \"b\"",
+    ];
+    for token in tokens {
+        let expected = serde_json::from_slice::<String>(token).ok();
+        assert_eq!(
+            decode_json_string_borrowed(token).as_deref(),
+            expected.as_deref(),
+            "token={token:?}"
+        );
+        assert_eq!(decode_json_string(token), expected);
+    }
+}
+
+#[test]
+fn borrowed_string_decoder_allocates_only_for_escaped_text() {
+    for text in ["user", "", "café €"] {
+        let token = format!("\"{text}\"");
+        let (decoded, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+            decode_json_string_borrowed(token.as_bytes()).unwrap()
+        });
+        assert!(matches!(decoded, Cow::Borrowed(_)));
+        assert_eq!(decoded, text);
+        assert_eq!(decoded.as_ptr(), token.as_bytes()[1..].as_ptr());
+        assert_eq!(stats.calls, 0);
+        assert_eq!(stats.requested_bytes, 0);
+    }
+    let decoded = decode_json_string_borrowed(br#""t\u0065xt""#).unwrap();
+    assert!(matches!(decoded, Cow::Owned(_)));
+    assert_eq!(decoded, "text");
+}

@@ -28,6 +28,12 @@ a 64 KiB maximum) is wrong and inverts the intended behavior.
 
 ## Rationale and evidence
 
+Fixed `role` and part `type` decoding uses the shared JSON decoder's borrowed
+entry point after the existing encoded-token bound. Unescaped values borrow the
+request bytes; escaped values own their decoded text. Both paths retain serde's
+complete-token validation. Selected content remains owned, and the parser's
+existing owned decoder and SSE consumers are unchanged.
+
 - `edgion-gateway/src/ai/guards/request/spans.rs` — `select_spans`: `role`
   uses `string_token().ok_or(SpanError::Unparseable)` and returns `Unparseable`
   on `Field::Missing | Field::Ambiguous`; `content` returns `Unparseable` only on

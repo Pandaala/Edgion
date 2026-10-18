@@ -211,3 +211,48 @@ fn unknown_role_selects_without_a_role_scope() {
     let spans = select_spans(body, limits()).expect("selects");
     assert_eq!(spans[0].role, None);
 }
+
+#[test]
+fn fixed_values_borrow_plain_text_and_preserve_encoded_admission() {
+    for (text, limit) in [
+        ("user", MAX_RECOGNIZED_ROLE_BYTES),
+        ("function", MAX_RECOGNIZED_ROLE_BYTES),
+        ("text", TEXT_PART_TYPE_BYTES),
+    ] {
+        let body = format!("\"{text}\"");
+        let token = StringToken {
+            value: String::new(),
+            start: 0,
+            end: body.len(),
+        };
+        let (decoded, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+            decode_fixed_value(body.as_bytes(), &token, limit).unwrap()
+        });
+        assert!(matches!(decoded, Cow::Borrowed(_)));
+        assert_eq!(decoded, text);
+        assert_eq!(decoded.as_ptr(), body.as_bytes()[1..].as_ptr());
+        assert_eq!(stats.calls, 0);
+        assert_eq!(stats.requested_bytes, 0);
+    }
+    for limit in [MAX_RECOGNIZED_ROLE_BYTES, TEXT_PART_TYPE_BYTES] {
+        for length in [limit * 6, limit * 6 + 1] {
+            let body = format!("\"{}\"", "x".repeat(length));
+            let token = StringToken {
+                value: String::new(),
+                start: 0,
+                end: body.len(),
+            };
+            let decoded = decode_fixed_value(body.as_bytes(), &token, limit);
+            assert_eq!(decoded.is_some(), length == limit * 6);
+        }
+    }
+    let body = br#""\u0075ser""#;
+    let token = StringToken {
+        value: String::new(),
+        start: 0,
+        end: body.len(),
+    };
+    let decoded = decode_fixed_value(body, &token, MAX_RECOGNIZED_ROLE_BYTES).unwrap();
+    assert!(matches!(decoded, Cow::Owned(_)));
+    assert_eq!(parse_role(&decoded), Some(AiGuardRole::User));
+}
