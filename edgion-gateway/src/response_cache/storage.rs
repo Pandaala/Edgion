@@ -550,7 +550,7 @@ impl RequestState {
         if !super::policy::request_is_eligible(&session.req_header().headers) {
             return None;
         }
-        let policy = Arc::clone(self.intent.as_ref()?);
+        let policy = self.intent.as_ref()?;
         if !self.epoch.active.load(Ordering::Acquire) || self.origin_invalid {
             return None;
         }

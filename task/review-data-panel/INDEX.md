@@ -3056,3 +3056,23 @@ and seven repository guards. Warnings remain outside changed code. This batch
 removes one cell Arc increment/decrement after a successful Service lookup;
 the earlier endpoint Arc reduction is separate. No heap, throughput or lock
 removal claim is made.
+
+## Borrow the response-cache binding policy from request state
+
+Following terminal cache publication back to request binding, RequestState::bind
+now borrows its immutable intent instead of cloning its policy Arc. The owning
+state stays outside the context under an exclusive borrow throughout binding,
+including the GraphQL body scan await and subsequent Vary traversal. Disjoint
+field updates, cancellation cleanup, admission, key framing, epoch checks and
+leases remain unchanged. Nomination still retains an owned policy; route ownership
+still supports mutable context adapters. This removes one Arc increment/decrement
+when an unbound eligible request reaches its intent lookup, with no allocation or
+throughput claim.
+
+Independent plan and source reviews passed. Fresh verification passed 38 cache
+tests and 9 request-tail/runtime tests. One existing reload fixture test failed
+and reproduced alone: see [the deferred fixture issue](verification-01-cache-policy-fixture.md).
+Current source again confirms missing preparedAncestorAdmission and the unchanged
+fail-closed admission chain; no baseline binary was rerun. Formatting, workspace
+check/Clippy and seven repository guards passed. Clippy warnings remain outside
+changed code. The known fixture failure is retained, not skipped or repaired here.
