@@ -3411,3 +3411,23 @@ map, returns the expected policy result, records bad-verdict and completes the
 processor. All 17 trailer tests passed, along with formatting, workspace check
 and Clippy; warnings remain outside changed code. This removes one repeated
 traversal on successful mutation, with no allocation or throughput claim.
+
+## ExtProc request-header projection capacity
+
+Request-header projection now reserves its output vector once for every ordinary
+field line, the two mandatory pseudo-headers, and the optional authority field.
+HeaderMap.len includes repeated values. Method and URI accessors still run before
+the map accessor; pseudo-header order, first Host selection, ordinary Host
+projection, per-name duplicate order and raw value bytes remain unchanged.
+The three call sites in streamed/bodyless and buffered request exchanges retain
+their owned protobuf message across transport awaits.
+
+The change avoids output-vector growth; it does not remove the per-field name or
+byte copies or change protobuf representation. Existing projection tests cover
+pseudo-headers, duplicate and opaque values, empty maps and current URI/query
+semantics. No throughput measurement is claimed.
+
+Fresh verification passed all 18 ExtProc mutation tests, formatting, workspace
+check/Clippy and seven repository guards. Tests use mocks or in-process duplex
+sessions, with no live network exchange. Post-update agent-doc validation and
+diff hygiene passed; existing warnings remain outside changed code.

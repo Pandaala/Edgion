@@ -69,11 +69,14 @@ fn decoded_value(opt: &HeaderValueOption, hv: &HeaderValue, log: &mut PluginLog)
 /// headers (`:method`, `:path`, `:authority`).
 /// `:path` includes the current normalized path and raw current query string.
 pub fn collect_request_headers(session: &dyn PluginSession) -> HeaderMap {
-    let mut headers = Vec::new();
-    push_pseudo(&mut headers, ":method", session.get_method().to_string());
-    push_pseudo(&mut headers, ":path", session.get_uri());
+    let method = session.get_method().to_string();
+    let uri = session.get_uri();
     let request = session.request_header_map();
-    if let Some(authority) = request.get("host") {
+    let authority = request.get("host");
+    let mut headers = Vec::with_capacity(request.len() + 2 + usize::from(authority.is_some()));
+    push_pseudo(&mut headers, ":method", method);
+    push_pseudo(&mut headers, ":path", uri);
+    if let Some(authority) = authority {
         headers.push(raw_header(":authority".to_string(), authority.as_bytes().to_vec()));
     }
     for (name, value) in request {
