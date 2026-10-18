@@ -1959,3 +1959,17 @@ network or throughput claim is made.
 Fresh verification passed 23 AllEndpointStatus tests, formatting, workspace
 check/Clippy and seven repository guards. Remaining warnings are outside the
 changed source. Independent final review passed.
+
+## DSL decoder intermediate ownership
+
+Base64Decode, HexDecode and UrlDecode retain the lossy decoder Cow through the
+existing decoded-byte length check and construct the canonical Arc<str> directly
+from its text. This removes an intermediate String copy without changing decoded
+content, malformed-input fallback, form-style plus handling or limit errors.
+Byte-vector decoding, invalid-UTF-8 replacement storage and final Arc allocation
+remain; this is not allocation-free decoding or a Value representation change.
+Independent plan review passed. Existing DSL tests provide scoped regression
+evidence; no new network integration or throughput benchmark is claimed.
+Fresh verification passed all 500 Gateway DSL tests, formatting, workspace
+check/Clippy and seven repository guards. Remaining warnings are outside the
+changed source. Independent final review passed.

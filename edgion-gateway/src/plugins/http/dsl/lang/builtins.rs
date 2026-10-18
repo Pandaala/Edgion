@@ -999,9 +999,9 @@ impl Vm {
                 let s = state.pop()?.runtime_string()?;
                 match base64::engine::general_purpose::STANDARD.decode(s.as_bytes()) {
                     Ok(bytes) => {
-                        let decoded = String::from_utf8_lossy(&bytes).to_string();
+                        let decoded = String::from_utf8_lossy(&bytes);
                         check_string_len(&decoded, self.limits.max_string_len)?;
-                        Ok(Value::Str(decoded.into()))
+                        Ok(Value::Str(Arc::from(decoded.as_ref())))
                     }
                     Err(_) => Ok(Value::Nil),
                 }
@@ -1089,9 +1089,9 @@ impl Vm {
                     result.push(bytes[i]);
                     i += 1;
                 }
-                let decoded = String::from_utf8_lossy(&result).to_string();
+                let decoded = String::from_utf8_lossy(&result);
                 check_string_len(&decoded, self.limits.max_string_len)?;
-                Ok(Value::Str(decoded.into()))
+                Ok(Value::Str(Arc::from(decoded.as_ref())))
             }
             BuiltinId::Sha256 => {
                 use sha2::Digest;
@@ -1201,9 +1201,9 @@ impl Vm {
                 let s = state.pop()?.runtime_string()?;
                 match hex::decode(&s) {
                     Ok(bytes) => {
-                        let decoded = String::from_utf8_lossy(&bytes).to_string();
+                        let decoded = String::from_utf8_lossy(&bytes);
                         check_string_len(&decoded, self.limits.max_string_len)?;
-                        Ok(Value::Str(decoded.into()))
+                        Ok(Value::Str(Arc::from(decoded.as_ref())))
                     }
                     Err(_) => Ok(Value::Nil),
                 }
