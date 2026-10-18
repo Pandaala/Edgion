@@ -204,6 +204,10 @@ struct ValueWriter {
 }
 
 impl ValueWriter {
+    fn json(&mut self, value: &impl serde::Serialize) -> Result<(), ()> {
+        serde_json::to_writer(self, value).map_err(|_| ())
+    }
+
     fn append(&mut self, value: &[u8]) -> Result<(), ()> {
         let next = self.bytes.len().checked_add(value.len()).ok_or(())?;
         if next > self.limit {
@@ -221,7 +225,7 @@ impl ValueWriter {
                     if position != 0 {
                         self.append(b",")?;
                     }
-                    self.append(&serde_json::to_vec(key).map_err(|_| ())?)?;
+                    self.json(key)?;
                     self.append(b":")?;
                     let next = match (context, key.as_str()) {
                         (WriteContext::Root, "choices") => WriteContext::Choices,
@@ -247,7 +251,7 @@ impl ValueWriter {
                     };
                     if let (Some(bucket), Value::String(text)) = (semantic, child) {
                         let start = self.bytes.len();
-                        self.append(&serde_json::to_vec(text).map_err(|_| ())?)?;
+                        self.json(text)?;
                         let end = self.bytes.len();
                         self.fragments.push(SemanticFragment {
                             bucket,
@@ -284,8 +288,20 @@ impl ValueWriter {
                 }
                 self.append(b"]")
             }
-            _ => self.append(&serde_json::to_vec(value).map_err(|_| ())?),
+            _ => self.json(value),
         }
+    }
+}
+
+impl std::io::Write for ValueWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.append(bytes)
+            .map_err(|_| std::io::Error::other("canonical record limit exceeded"))?;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 

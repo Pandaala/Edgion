@@ -187,3 +187,70 @@ fn typed_controls_and_poison_preserve_distinct_semantic_and_accounting_contracts
     });
     assert_eq!(decoder.malformed_events(), 1);
 }
+
+#[test]
+fn canonical_writer_preserves_json_bytes_limits_and_semantic_ranges() {
+    let content = "quoted \"text\"\\line\n\té";
+    let reasoning = "same text";
+    let arguments = r#"{"city":"Montréal"}"#;
+    let value = serde_json::json!({
+        "choices": [{"index": 2, "delta": {
+            "content": content,
+            "reasoning_content": reasoning,
+            "tool_calls": [{"index": 3, "function": {"arguments": arguments}}]
+        }}],
+        "escaped\"key": [null, true, false, 42, -3, 1.25, "other"]
+    });
+    let expected = format!("data: {}\n\n", serde_json::to_string(&value).unwrap());
+    for limit in 0..expected.len() {
+        assert!(write_canonical_record(&value, limit).is_err(), "limit {limit}");
+    }
+    let (bytes, record) = write_canonical_record(&value, expected.len()).unwrap();
+    assert_eq!(bytes.as_ref(), expected.as_bytes());
+    assert_eq!(record.into_raw_slices().concat(), expected.as_bytes());
+
+    let mut writer = ValueWriter {
+        bytes: Vec::new(),
+        fragments: Vec::new(),
+        limit: expected.len(),
+    };
+    writer.append(b"data: ").unwrap();
+    writer.value(&value, WriteContext::Root).unwrap();
+    writer.append(b"\n\n").unwrap();
+    assert_eq!(writer.bytes, expected.as_bytes());
+    assert_eq!(writer.fragments.len(), 3);
+    for fragment in writer.fragments {
+        assert_eq!(fragment.bucket.choice_index, 2);
+        let expected_text = match fragment.bucket.field {
+            LogicalField::Content => content,
+            LogicalField::ReasoningContent => reasoning,
+            LogicalField::ToolArguments { tool_call_index } => {
+                assert_eq!(tool_call_index, 3);
+                arguments
+            }
+        };
+        let SemanticSource::JsonStringTokenRanges(ranges) = fragment.source else {
+            panic!("expected JSON token range");
+        };
+        assert_eq!(ranges.len(), 1);
+        let range = ranges[0];
+        let decoded: String = serde_json::from_slice(&writer.bytes[range.start..range.end]).unwrap();
+        assert_eq!(decoded, expected_text);
+    }
+}
+
+#[test]
+fn canonical_scalar_serialization_needs_no_temporary_buffer() {
+    let value = Value::String("é\"\\\n".repeat(256));
+    let expected = serde_json::to_vec(&value).unwrap();
+    let mut writer = ValueWriter {
+        bytes: Vec::with_capacity(expected.len()),
+        fragments: Vec::new(),
+        limit: expected.len(),
+    };
+    let (result, allocations) =
+        crate::test_allocation_counter::count_allocations(|| writer.value(&value, WriteContext::Other));
+    assert!(result.is_ok());
+    assert_eq!(writer.bytes, expected);
+    assert_eq!(allocations, 0);
+}

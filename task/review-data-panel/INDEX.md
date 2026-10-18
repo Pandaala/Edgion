@@ -3471,3 +3471,32 @@ this synthetic dependency witness is not fresh gateway interoperability evidence
 Fresh verification passed the dependency probe, 18 existing mutation tests,
 formatting, workspace check/Clippy, agent-doc validation and diff hygiene.
 Existing Clippy warnings remain outside this documentation-only change.
+
+## Canonical SSE leaf serialization
+
+The Anthropic streaming converter's canonical record writer now serializes JSON
+keys, semantic strings and other scalar values directly into its existing
+ValueWriter. An io::Write adapter delegates to the same checked append operation;
+there is no parallel serializer or output buffer. This removes each leaf's
+intermediate serde_json Vec while preserving formatting, inclusive byte limits,
+semantic token offsets and publication only after the complete record succeeds.
+Partial internal writes on failure are discarded with the local writer.
+
+Streaming writes may change the original output Vec's growth and backing
+capacity. Canonical batches check byte lengths and metadata, while RawWindow
+admission derives incoming resident charge from length and normalizes retained
+backing. The converter copies identical encoded bytes into its separate bounded
+output. These paths do not make admission depend on the original backing capacity;
+the unary conversion budget uses a separate serializer. This is not a claim of
+identical capacities, lower peak memory for every input or measured throughput.
+
+New tests compare full encoded bytes, reject every smaller output cap, accept
+the exact cap, and decode recorded content/reasoning/tool-argument token ranges
+including escapes and multibyte text. A preallocated scalar-output test isolates
+serialization and verifies zero temporary allocations, excluding fixture creation
+and destination growth.
+
+Fresh verification passed 11 canonical SSE tests and 26 Anthropic response tests,
+formatting, workspace check/Clippy and seven repository guards. Post-update
+agent-doc validation and diff hygiene passed. Existing warnings remain outside
+changed code. These are network-free unit checks, not a live provider benchmark.
