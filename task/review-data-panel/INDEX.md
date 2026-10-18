@@ -1169,3 +1169,22 @@ workspace Clippy and seven repository guards passed. Remaining Clippy warnings
 are outside changed files. Independent final source and record reviews passed. Coverage remains limited to native CORS header preparation,
 excluding origin acquisition and final header insertion; no full integration
 suite or throughput benchmark ran.
+
+## Borrowed native CORS request Origin
+
+Native CORS request processing now borrows Origin through the existing header
+accessor. Its preflight classification and local response preparation helpers
+take shared session references; the local ResponseHeader owns inserted values
+before asynchronous writes. The upstream-response callback retains owned Origin
+across response-header mutation. Reflection values still own their text.
+First-value selection and text filtering, matching, logs, dispatch, header
+ordering and write-error behavior are unchanged.
+
+Independent plan review passed. Callback coverage includes missing, empty,
+non-text and duplicate Origin values, denied/allowed matches, GET/OPTIONS and
+requested-method presence; it forbids owned header acquisition and checks local
+204, ACAO/Vary, log outcomes and header/body write order. Final Gateway CORS
+tests passed 45. Formatting, workspace check/Clippy and seven repository guards
+passed; Clippy warnings remain outside changed files. Independent final source and record reviews passed. This removes the request Origin copy
+without claiming zero allocations for the async callback or a measured
+throughput gain.

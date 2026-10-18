@@ -127,7 +127,7 @@ impl GapiCorsFilter {
         }
     }
 
-    fn is_preflight(&self, session: &mut dyn PluginSession) -> bool {
+    fn is_preflight(&self, session: &dyn PluginSession) -> bool {
         session.get_method() == "OPTIONS"
             && session.header_str("origin").is_some()
             && session.header_str("access-control-request-method").is_some()
@@ -138,7 +138,7 @@ impl GapiCorsFilter {
     /// or via session queue (simple requests).
     fn build_cors_headers<'a>(
         &'a self,
-        session: &mut dyn PluginSession,
+        session: &dyn PluginSession,
         origin: &'a str,
         is_preflight: bool,
     ) -> CorsHeaderPairs<'a> {
@@ -175,7 +175,7 @@ impl GapiCorsFilter {
     /// Build a 204 preflight response with CORS headers set directly on the ResponseHeader.
     /// Preflight terminates at the request stage and never reaches the upstream-response
     /// stage, so headers must be written onto a locally-built ResponseHeader here.
-    fn build_preflight_response(&self, session: &mut dyn PluginSession, origin: &str) -> Option<Box<ResponseHeader>> {
+    fn build_preflight_response(&self, session: &dyn PluginSession, origin: &str) -> Option<Box<ResponseHeader>> {
         let headers = self.build_cors_headers(session, origin, true);
         let mut resp = ResponseHeader::build(204, Some(headers.len() + 1)).ok()?;
         for (name, value) in &headers {
@@ -208,11 +208,11 @@ impl RequestFilter for GapiCorsFilter {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        let Some(origin) = session.header_value("origin") else {
+        let Some(origin) = session.header_str("origin") else {
             return PluginRunningResult::GoodNext;
         };
 
-        if !self.is_origin_allowed(&origin) {
+        if !self.is_origin_allowed(origin) {
             plugin_log.push("origin match:deny");
             // For preflight with non-matching origin, return 204 directly
             // to avoid forwarding a useless OPTIONS request to the backend.
@@ -232,7 +232,7 @@ impl RequestFilter for GapiCorsFilter {
             // Build preflight response with CORS headers set directly on ResponseHeader.
             // Preflight terminates the request, so the upstream-response stage never
             // runs for this request — headers must be written here, not deferred.
-            if let Some(resp) = self.build_preflight_response(session, &origin) {
+            if let Some(resp) = self.build_preflight_response(session, origin) {
                 let _ = session.write_response_header(resp, true).await;
                 let _ = session.write_response_body(Some(Bytes::new()), true).await;
             }

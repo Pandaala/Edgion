@@ -13,7 +13,7 @@ lists preserve order and the comma-space delimiter; missing or empty lists omit
 the header. Credentialed lists containing an exact wildcard reflect the
 corresponding request header, preserving missing versus empty values.
 
-Header pairs borrow fixed values and the caller-owned origin. Reflections own
+Header pairs borrow fixed values and the caller-provided origin. Reflections own
 their values before session mutation; the returned lifetime must not borrow the
 session. Cookie/Authorization presence remains a live decision for wildcard
 origins without configured credentials. Configured credentials always echo the
@@ -27,6 +27,16 @@ credential presence, reflection values and both response phases. Warmed
 header-pair construction allocates zero for fixed values and two for two
 nonempty reflected values. This excludes origin acquisition and final header
 insertion, and makes no end-to-end throughput claim.
+
+The request callback borrows the first Origin value when textual directly from the
+live request map. Missing or non-text first values remain absent, even if a later
+duplicate is valid. Matching and response preparation use shared session
+references; an owned local ResponseHeader is finished before asynchronous
+session writes begin. The upstream-response callback still owns its Origin
+while mutating session response headers. Reflection values retain ownership.
+Callback tests forbid the owned getter for Origin and cover allowed/denied,
+missing/empty/non-text/duplicate origins and actual/preflight dispatch.
+This removes the Origin copy, not every allocation in the async callback.
 
 Re-evaluate when adding configuration fields, changing canonical validation,
 reflection ownership, origin credential policy or header-pair capacity.

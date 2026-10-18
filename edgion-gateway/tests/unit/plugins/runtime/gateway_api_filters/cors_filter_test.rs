@@ -20,8 +20,8 @@ fn credentialed_expose_headers_validation_and_wire_values() {
             }
             let filter = result.unwrap();
             for preflight in [false, true] {
-                let mut session = MockPluginSession::new();
-                let headers = filter.build_cors_headers(&mut session, "https://app.example", preflight);
+                let session = MockPluginSession::new();
+                let headers = filter.build_cors_headers(&session, "https://app.example", preflight);
                 let exposed = headers
                     .iter()
                     .find(|(name, _)| *name == "Access-Control-Expose-Headers");
@@ -41,8 +41,8 @@ fn max_age_default_is_emitted_and_explicit_zero_is_rejected() {
     }))
     .expect("default maxAge CORS fixture must deserialize");
     let filter = GapiCorsFilter::try_new(config).expect("default maxAge must be valid");
-    let mut session = MockPluginSession::new();
-    let headers = filter.build_cors_headers(&mut session, "https://app.example", true);
+    let session = MockPluginSession::new();
+    let headers = filter.build_cors_headers(&session, "https://app.example", true);
     assert!(headers
         .iter()
         .any(|(name, value)| *name == "Access-Control-Max-Age" && value == "5"));
@@ -127,11 +127,11 @@ fn maximum_header_set_stays_inline_and_preserves_order() {
         max_age: 3600,
     })
     .expect("maximum-header CORS test configuration must be valid");
-    let mut session = MockPluginSession::new();
+    let session = MockPluginSession::new();
 
-    drop(filter.build_cors_headers(&mut session, "https://app.example", true));
+    drop(filter.build_cors_headers(&session, "https://app.example", true));
     let (headers, allocations) = crate::test_allocation_counter::count_allocations(|| {
-        filter.build_cors_headers(&mut session, "https://app.example", true)
+        filter.build_cors_headers(&session, "https://app.example", true)
     });
     assert_eq!(allocations, 0);
 
@@ -321,9 +321,9 @@ fn prepared_values_preserve_static_and_reflected_output() {
                             ));
                             requested.map(str::to_owned)
                         });
-                    drop(filter.build_cors_headers(&mut session, "https://app.example", preflight));
+                    drop(filter.build_cors_headers(&session, "https://app.example", preflight));
                     let (headers, allocations) = crate::test_allocation_counter::count_allocations(|| {
-                        filter.build_cors_headers(&mut session, "https://app.example", preflight)
+                        filter.build_cors_headers(&session, "https://app.example", preflight)
                     });
                     assert_eq!(
                         allocations,
@@ -385,7 +385,7 @@ fn wildcard_origin_uses_live_credential_presence() {
                 .times(if credentials == Some(true) { 0..=0 } else { 2..=4 })
                 .return_const(map);
             for preflight in [false, true] {
-                let headers = filter.build_cors_headers(&mut session, "https://app.example", preflight);
+                let headers = filter.build_cors_headers(&session, "https://app.example", preflight);
                 assert_eq!(
                     headers[0].1,
                     if credentials == Some(true) || request_credential.is_some() {
@@ -395,6 +395,94 @@ fn wildcard_origin_uses_live_credential_presence() {
                     }
                 );
                 assert!(headers.iter().all(|(_, value)| matches!(value, Cow::Borrowed(_))));
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn request_origin_is_borrowed_until_local_response_is_built() {
+    for origins in [
+        vec![],
+        vec![b"".as_slice()],
+        vec![b"https://app.example".as_slice()],
+        vec![b"https://denied.example".as_slice()],
+        vec![b"\xff".as_slice()],
+        vec![b"\xff".as_slice(), b"https://app.example".as_slice()],
+        vec![b"https://denied.example".as_slice(), b"https://app.example".as_slice()],
+        vec![b"https://app.example".as_slice(), b"https://denied.example".as_slice()],
+    ] {
+        for method in ["GET", "OPTIONS"] {
+            for requested_method in [None, Some(""), Some("POST")] {
+                let filter = GapiCorsFilter::try_new(HTTPCORSFilter {
+                    allow_origins: Some(vec!["https://app.example".into()]),
+                    allow_credentials: Some(true),
+                    allow_methods: Some(vec!["POST".into()]),
+                    allow_headers: None,
+                    expose_headers: None,
+                    max_age: 5,
+                })
+                .unwrap();
+                let mut map = http::HeaderMap::new();
+                for origin in &origins {
+                    map.append("origin", http::HeaderValue::from_bytes(origin).unwrap());
+                }
+                if let Some(value) = requested_method {
+                    map.insert(
+                        "access-control-request-method",
+                        http::HeaderValue::from_str(value).unwrap(),
+                    );
+                }
+                let first = map.get("origin").and_then(|value| value.to_str().ok());
+                let present = first.is_some();
+                let allowed = first == Some("https://app.example");
+                let preflight = present && method == "OPTIONS" && requested_method.is_some();
+                let mut session = MockPluginSession::new();
+                session.expect_request_header_map().return_const(map);
+                session.expect_header_value().never();
+                session.expect_get_method().return_const(method.to_owned());
+                let mut sequence = mockall::Sequence::new();
+                session
+                    .expect_write_response_header()
+                    .times(usize::from(preflight))
+                    .in_sequence(&mut sequence)
+                    .returning(move |response, end| {
+                        assert_eq!(response.status.as_u16(), 204);
+                        assert!(end);
+                        assert_eq!(
+                            response
+                                .headers
+                                .get("access-control-allow-origin")
+                                .map(|value| value.to_str().unwrap()),
+                            allowed.then_some("https://app.example")
+                        );
+                        assert_eq!(
+                            response.headers.get("vary").map(|value| value.to_str().unwrap()),
+                            allowed.then_some("Origin")
+                        );
+                        Ok(())
+                    });
+                session
+                    .expect_write_response_body()
+                    .times(usize::from(preflight))
+                    .in_sequence(&mut sequence)
+                    .returning(|body, end| {
+                        assert!(end);
+                        assert_eq!(body, Some(Bytes::new()));
+                        Ok(())
+                    });
+                let mut log = PluginLog::new("GapiCorsFilter");
+                let result = filter.run_request(&mut session, &mut log).await;
+                assert_eq!(log.contains("origin match:deny"), present && !allowed);
+                assert_eq!(log.contains("cors preflight deny"), preflight && !allowed);
+                assert_eq!(log.contains("cors actual"), present && allowed && !preflight);
+                if !present {
+                    assert!(!log.contains("cors"));
+                }
+                assert_eq!(matches!(result, PluginRunningResult::ErrTerminateRequest), preflight);
+                if !preflight {
+                    assert!(matches!(result, PluginRunningResult::GoodNext));
+                }
             }
         }
     }
