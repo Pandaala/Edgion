@@ -4149,3 +4149,26 @@ Fresh verification passed 139 network-free tests: 127 LB and 12 Service-selector
 tests. Formatting, workspace check/Clippy, agent-document validation and diff
 hygiene passed. Existing warnings remain outside this documentation-only batch.
 No generated-table prototype, assembly inspection or benchmark ran.
+
+
+## Borrowed Gateway backend TLS singleton
+
+The Gateway backend TLS store now lives directly in LazyLock and its accessor
+returns a static reference. All repository callers use borrowed store methods;
+none require ownership or reference-count identity of the singleton wrapper.
+This removes the wrapper allocation at initialization and one Arc increment/
+decrement pair per accessor call, including peer fallback lookup and endpoint
+probe freshness checks. No throughput improvement is claimed.
+
+The ArcSwap map and entry/raw/prepared identity Arcs remain unchanged. Captured
+certificate generations, same-data raw identity replacement, probe pointer
+freshness, publication/withdrawal, policy precedence and pool isolation keep
+their existing owners and behavior. Local independently constructed stores are
+unaffected. No compatibility alias or new lookup mechanism was introduced.
+
+Fresh verification passed 33 network-free tests: 3 store, 22 peer builder,
+4 endpoint-probe transport and 4 runtime handler tests. Peer tests ran serially
+because of the existing shared-fixture failures recorded in verification-03;
+this does not establish that the parallel fixture issue is fixed. Formatting,
+workspace check/Clippy, seven repository guards and diff hygiene passed. Existing
+warnings remain outside changed code. No live TLS rotation or benchmark ran.

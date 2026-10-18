@@ -12,11 +12,10 @@ use k8s_openapi::api::core::v1::Secret;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
-static GLOBAL_GATEWAY_BACKEND_TLS_STORE: LazyLock<Arc<GatewayBackendTlsStore>> =
-    LazyLock::new(|| Arc::new(GatewayBackendTlsStore::new()));
+static GLOBAL_GATEWAY_BACKEND_TLS_STORE: LazyLock<GatewayBackendTlsStore> = LazyLock::new(GatewayBackendTlsStore::new);
 
-pub fn get_global_gateway_backend_tls_store() -> Arc<GatewayBackendTlsStore> {
-    GLOBAL_GATEWAY_BACKEND_TLS_STORE.clone()
+pub fn get_global_gateway_backend_tls_store() -> &'static GatewayBackendTlsStore {
+    &GLOBAL_GATEWAY_BACKEND_TLS_STORE
 }
 
 pub(crate) struct GatewayBackendTlsEntry {
