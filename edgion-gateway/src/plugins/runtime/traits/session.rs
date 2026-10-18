@@ -217,6 +217,15 @@ pub trait PluginSession: Send + Sync {
         "HTTP/1.1".to_string()
     }
 
+    /// Borrow the canonical standard W3C trace ID, if initialized.
+    /// This is independent of current headers and custom correlation IDs.
+    #[allow(clippy::needless_lifetimes)]
+    fn get_request_id_ref<'s>(&'s self) -> Option<&'s str>;
+
+    /// Borrow the frozen normalized entry hostname; an empty snapshot is missing.
+    #[allow(clippy::needless_lifetimes)]
+    fn get_request_hostname<'s>(&'s self) -> Option<&'s str>;
+
     /// Get the bounded request identity used for SecLang UNIQUE_ID.
     fn get_request_id(&self) -> String {
         String::new()

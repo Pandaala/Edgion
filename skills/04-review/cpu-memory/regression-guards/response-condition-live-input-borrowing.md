@@ -10,8 +10,9 @@ knowledge_type: regression-guards
 
 `ConditionalUpstreamResponseBodyFilter` evaluates its compiled `skip` and `run`
 conditions for every response chunk. The shared condition evaluator borrows live
-`Header`, `Cookie`, `Path`, `RequestPath`, `Method`, `RemoteIp`, and `DirectPeerIp` values
-and `Ctx` values and mTLS certificate candidates for the duration of each predicate evaluation.
+`Header`, `Cookie`, `Path`, `RequestPath`, `Method`, `RemoteIp`, `DirectPeerIp`
+and `Ctx` values for one predicate evaluation. It also borrows the captured
+canonical `TraceId`, frozen normalized `Host` and mTLS certificate candidates.
 Query conditions borrow the decoded frozen entry-query cache for the same short
 evaluation; they do not read the live rewritten URI. `KeyExist`, `KeyMatch`,
 `SecretMatch`, and keyed `Probability` use that same accessor. It does not cache
@@ -62,7 +63,7 @@ throughput targets:
 | typed URI `MtlsMatch` with two stored SANs | 7 | 139 |
 
 The selected borrowed condition sources bypass their corresponding owned
-`key_get` allocation; Query and Ctx were added in subsequent bounded batches. JWT extraction now borrows context JSON, parses it with
+`key_get` allocation; Query, Ctx, TraceId and Host were added in subsequent bounded batches. JWT extraction now borrows context JSON, parses it with
 `serde_json`, and creates candidate strings. The historical table includes the
 source copy that the borrowed context boundary removes. The historical mTLS extraction cloned the
 certificate record and created candidate strings; ARCH-007 replaced that path
@@ -74,7 +75,7 @@ The other sources have different costs or lifetimes:
 
 | Source | Current per-evaluation work | Ownership and source boundary |
 |---|---|---|
-| `TraceId`, `Host` | Copies a string | No equivalent borrowed condition accessor; request ID rules can mutate the trace ID. |
+| `TraceId`, `Host` | Borrow captured request identity | The standard W3C ID survives default-header suppression; Host uses the frozen normalized entry value, not the live header. |
 | `Query` | Borrows one decoded value from the lazily initialized entry-query cache | `get_query_param_ref` ties the value to the session read; the owned getter still copies for consumers requiring ownership. |
 | `Ctx` | Borrows the current context value | The short session borrow ends before later plugins set or remove variables. |
 | `RemoteIpAndPath` | Formats a combined string | The resolved IP can change; the composite needs an owned representation today. |
@@ -206,3 +207,25 @@ owned key_get copy for a present nonempty value. JWT source tests cover malforme
 empty and claim-missing JWT preventing OIDC fallback, valid JWT precedence and
 removal revealing OIDC. Only the source text copy is removed: JWT parsing and
 candidate allocations still leave the recorded per-chunk allocation tension open.
+
+
+## Borrowed captured identity boundary
+
+TraceId conditions use get_request_id_ref, which borrows standard_trace_id from
+the request-owned W3C context. Host conditions use get_request_hostname, which
+borrows the same frozen normalized hostname as owned KeyGet and treats empty as
+missing. Existing owned callers still copy explicitly; no header reparsing or
+additional request state is introduced.
+
+The former statement that RequestId rules mutate the standard trace ID was stale:
+initialize is the current W3C state's sole assignment, and default-header patches
+or custom correlation rules retain it. This correction does not permit freezing
+other mutable condition sources or skipping per-evaluation source reads. Header
+rewrites also do not replace the captured normalized Host identity.
+
+A real-adapter test starts before initialization/capture, checks absence, then
+establishes both identities. After default-ID suppression and live Host/traceparent
+rewrites, borrowed pointers still alias the canonical owners. Each selected owned
+key_get allocates once; repeated compiled identity matches allocate zero times.
+Initialization, compilation and header rewriting are outside that measurement.
+This is source-copy removal evidence, not a throughput or whole-condition claim.

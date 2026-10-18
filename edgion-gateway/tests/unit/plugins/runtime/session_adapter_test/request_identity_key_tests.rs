@@ -10,11 +10,11 @@ fn direct_peer_ip_is_distinct_from_resolved_remote_ip() {
     ctx.request_info.remote_ip = "198.51.100.20".to_string();
 
     assert_eq!(
-        request_identity_key_core(&ctx, &KeyGet::DirectPeerIp).as_deref(),
+        request_identity_key_core(&ctx, &KeyGet::DirectPeerIp),
         Some("192.0.2.10")
     );
     assert_ne!(
-        request_identity_key_core(&ctx, &KeyGet::DirectPeerIp).as_deref(),
+        request_identity_key_core(&ctx, &KeyGet::DirectPeerIp),
         Some(ctx.request_info.remote_ip.as_str())
     );
 }
@@ -24,10 +24,7 @@ fn host_uses_the_frozen_normalized_hostname() {
     let mut ctx = EdgionHttpContext::default();
     ctx.request_info.hostname = NormalizedHostname::new(" API.Example.COM.:8443 ");
 
-    assert_eq!(
-        request_identity_key_core(&ctx, &KeyGet::Host).as_deref(),
-        Some("api.example.com")
-    );
+    assert_eq!(request_identity_key_core(&ctx, &KeyGet::Host), Some("api.example.com"));
 }
 
 #[test]

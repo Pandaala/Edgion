@@ -103,6 +103,12 @@ impl PluginSession for ResultSession {
     fn request_query(&self) -> Option<&str> {
         panic!("unexpected session operation")
     }
+    fn get_request_id_ref(&self) -> Option<&str> {
+        panic!("unexpected session operation")
+    }
+    fn get_request_hostname(&self) -> Option<&str> {
+        panic!("unexpected session operation")
+    }
     fn get_request_method(&self) -> Option<&str> {
         panic!("unexpected session operation")
     }

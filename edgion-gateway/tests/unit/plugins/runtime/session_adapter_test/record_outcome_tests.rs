@@ -2886,3 +2886,71 @@ async fn borrowed_jwt_source_keeps_live_missing_only_oidc_fallback() {
     adapter.remove_ctx_var("oidc_claims").unwrap();
     assert!(extract_jwt_claim_values(&adapter, "sub").is_empty());
 }
+
+#[tokio::test]
+async fn borrowed_identity_conditions_use_captured_values_without_copies() {
+    use crate::ctx::NormalizedHostname;
+    use crate::plugins::runtime::conditions::{CompiledPluginConditions, EvaluationResult};
+    use edgion_resources::resources::edgion_plugins::conditions::{
+        Condition, ConditionSet, KeyMatchCondition, MatchCore, PluginConditions,
+    };
+    const TRACE_ID: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
+    let mut session = test_session_raw(
+        "GET /entry HTTP/1.1\r\nHost: entry.example\r\ntraceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\r\n\r\n",
+    ).await;
+    let mut ctx = EdgionHttpContext::default();
+    {
+        let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        assert!(adapter.get_request_id_ref().is_none());
+        assert!(adapter.get_request_hostname().is_none());
+        assert!(adapter.key_get(&KeyGet::TraceId).is_none());
+        assert!(adapter.key_get(&KeyGet::Host).is_none());
+        assert!(adapter.get_request_id().is_empty());
+    }
+    ctx.request_info.hostname = NormalizedHostname::new(" ENTRY.Example.:8443 ");
+    ctx.request_info.trace_id.initialize(&session.req_header().headers);
+    ctx.request_info
+        .trace_id
+        .apply_default_patch(&edgion_resources::DefaultIdConfig {
+            enabled: Some(false),
+            ..Default::default()
+        });
+    let trace_ptr = ctx.request_info.trace_id.standard_trace_id().unwrap().as_ptr();
+    let host_ptr = ctx.request_info.hostname.as_str().as_ptr();
+    session
+        .req_header_mut()
+        .insert_header("Host", "changed.example")
+        .unwrap();
+    session
+        .req_header_mut()
+        .insert_header("traceparent", "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-00")
+        .unwrap();
+    let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+    assert_eq!(adapter.get_request_id_ref().unwrap().as_ptr(), trace_ptr);
+    assert_eq!(adapter.get_request_hostname().unwrap().as_ptr(), host_ptr);
+    assert_eq!(adapter.get_request_id(), TRACE_ID);
+    for (key, expected) in [(KeyGet::TraceId, TRACE_ID), (KeyGet::Host, "entry.example")] {
+        let mut condition = KeyMatchCondition {
+            key: key.clone(),
+            core: MatchCore {
+                values: Some(vec![expected.to_string()]),
+                ..Default::default()
+            },
+            negate: false,
+            descriptor: Box::from(""),
+        };
+        condition.compile().unwrap();
+        let conditions = CompiledPluginConditions::new(PluginConditions {
+            skip: None,
+            run: Some(ConditionSet::all_of(vec![Condition::KeyMatch(condition)])),
+        });
+        let (owned, calls) = crate::test_allocation_counter::count_allocations(|| adapter.key_get(&key));
+        assert_eq!(owned.as_deref(), Some(expected));
+        assert_eq!(calls, 1);
+        for _ in 0..2 {
+            let (result, calls) = crate::test_allocation_counter::count_allocations(|| conditions.evaluate(&adapter));
+            assert_eq!(result, EvaluationResult::Run);
+            assert_eq!(calls, 0);
+        }
+    }
+}

@@ -943,3 +943,28 @@ owned-value allocation with zero per compiled match across live mutations; JWT
 parsing/candidate allocation remains outside that zero-allocation claim. Formatting,
 workspace check/Clippy and seven repository guards passed; existing warnings are
 outside changed code. No full integration suite or throughput benchmark ran.
+
+
+## Borrowed captured identity condition inputs
+
+TraceId and Host conditions now borrow their existing request-owned values for
+one synchronous evaluation. TraceId reads the canonical standard W3C identity;
+Host reads the frozen normalized entry hostname. Missing initialization/capture
+remains absent. The private identity helper now returns a borrow, while owned
+KeyGet callers explicitly copy it. No current-header fallback or new cache exists.
+
+The audit also corrected stale condition knowledge: RequestId custom rules and
+default-header suppression do not mutate the current standard W3C ID. Live Host
+and traceparent header rewrites remain distinct from these captured identities.
+Only the required methods are added to the supporting ResultSession test adapter,
+with its existing unexpected-operation panic contract.
+
+Independent plan and final source reviews passed. The real-adapter identity
+allocation test passed, along with shared conditions (67), identity accessors (4),
+trace-ID lifecycle (29), request-ID-filtered tests (15) and the allocation source
+inventory (1); filters may overlap. Each selected owned read allocates once while
+repeated compiled matches allocate zero times. Formatting, workspace check/Clippy
+and seven repository guards passed. New needless-lifetime warnings were removed
+from concrete implementations while the trait retains Mockall's required explicit
+lifetime. Remaining warnings are outside changed code. No full integration suite
+or throughput benchmark ran.

@@ -880,6 +880,8 @@ impl ConditionExt for Condition {
 /// remain visible on the next chunk.
 fn condition_key_value<'a>(session: &'a dyn PluginSession, key: &KeyGet) -> Option<Cow<'a, str>> {
     match key {
+        KeyGet::TraceId => session.get_request_id_ref().map(Cow::Borrowed),
+        KeyGet::Host => session.get_request_hostname().map(Cow::Borrowed),
         KeyGet::Header { name } => session.header_str(name).map(Cow::Borrowed),
         KeyGet::Cookie { name } => cookie_value_ref(session.request_header_map(), name).map(Cow::Borrowed),
         KeyGet::Query { name } => session.get_query_param_ref(name).map(Cow::Borrowed),

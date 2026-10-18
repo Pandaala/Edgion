@@ -372,7 +372,7 @@ fn utf8_header_values(headers: &http::HeaderMap, name: &str) -> Option<Vec<Strin
 ///
 /// Callers must pass only the variants handled here. Keeping this independent
 /// from `Session` makes the trust-boundary distinction unit-testable.
-fn request_identity_key_core(ctx: &EdgionHttpContext, key: &KeyGet) -> Option<String> {
+fn request_identity_key_core<'ctx>(ctx: &'ctx EdgionHttpContext, key: &KeyGet) -> Option<&'ctx str> {
     let value = match key {
         KeyGet::DirectPeerIp => ctx.request_info.direct_peer_ip.as_str(),
         KeyGet::Host => ctx.request_info.hostname.as_str(),
@@ -381,7 +381,7 @@ fn request_identity_key_core(ctx: &EdgionHttpContext, key: &KeyGet) -> Option<St
     if value.is_empty() {
         None
     } else {
-        Some(value.to_string())
+        Some(value)
     }
 }
 
@@ -1114,13 +1114,16 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         .to_string()
     }
 
+    fn get_request_id_ref(&self) -> Option<&str> {
+        self.ctx.request_info.trace_id.standard_trace_id()
+    }
+
+    fn get_request_hostname(&self) -> Option<&str> {
+        request_identity_key_core(self.ctx, &KeyGet::Host)
+    }
+
     fn get_request_id(&self) -> String {
-        self.ctx
-            .request_info
-            .trace_id
-            .standard_trace_id()
-            .unwrap_or_default()
-            .to_owned()
+        self.get_request_id_ref().unwrap_or_default().to_owned()
     }
 
     fn get_ctx_var_ref<'s>(&'s self, key: &str) -> Option<&'s str> {
@@ -2181,7 +2184,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
 
     fn key_get(&self, key: &KeyGet) -> Option<String> {
         match key {
-            KeyGet::TraceId => self.ctx.request_info.trace_id.standard_trace_id().map(str::to_owned),
+            KeyGet::TraceId => self.get_request_id_ref().map(str::to_owned),
             KeyGet::RemoteIp => {
                 let ip = self.remote_ip();
                 if ip.is_empty() {
@@ -2190,7 +2193,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                     Some(ip.to_string())
                 }
             }
-            KeyGet::DirectPeerIp | KeyGet::Host => request_identity_key_core(self.ctx, key),
+            KeyGet::DirectPeerIp | KeyGet::Host => request_identity_key_core(self.ctx, key).map(str::to_owned),
             KeyGet::Header { name } => self.header_value(name),
             KeyGet::Cookie { name } => self.get_cookie(name),
             KeyGet::Query { name } => self.get_query_param(name),
