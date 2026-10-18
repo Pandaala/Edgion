@@ -2126,3 +2126,18 @@ or throughput improvement is claimed; the change removes redundant parsing work.
 Fresh verification passed all 25 response-filter tests, formatting, workspace
 check/Clippy and seven repository guards. Remaining warnings are outside changed
 source. Independent final review passed.
+
+## Outbound response JSON recognition without lowercase storage
+
+ManagedOutboundClient compares borrowed Content-Type bytes case-insensitively
+instead of allocating a lowercase String. The existing application/json prefix
+and +json substring rules remain deliberately unchanged, including matching in
+parameters and longer subtypes. First-field selection and non-text rejection
+remain unchanged. A real classify_detail test uses a configured body predicate
+to cover mixed case, suffixes, permissive matches, short/empty/missing/invalid
+values and repeated fields. Independent plan review passed. This removes the
+normalization allocation, not JSON body parsing or other outbound costs; no
+throughput benchmark is claimed.
+Fresh verification passed all 114 shared outbound tests, formatting, workspace
+check/Clippy and seven repository guards. Remaining warnings are outside changed
+source. Independent final review passed.

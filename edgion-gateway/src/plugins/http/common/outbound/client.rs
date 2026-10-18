@@ -524,14 +524,21 @@ impl ManagedOutboundClient {
         &self,
         resp: &super::call::OutboundResponse,
     ) -> edgion_resources::resources::common::success::SuccessOutcome {
-        // Media types are case-insensitive (RFC 7231 §3.1.1.5); lowercase before
-        // matching so e.g. "Application/JSON" is still recognized as JSON.
+        // Compare without allocating a lowercase copy. Preserve the existing
+        // application/json prefix and +json substring recognition.
         let is_json = resp
             .headers
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
-            .map(|ct| ct.to_ascii_lowercase())
-            .is_some_and(|ct| ct.starts_with("application/json") || ct.contains("+json"));
+            .is_some_and(|ct| {
+                let bytes = ct.as_bytes();
+                bytes
+                    .get(..b"application/json".len())
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"application/json"))
+                    || bytes
+                        .windows(b"+json".len())
+                        .any(|part| part.eq_ignore_ascii_case(b"+json"))
+            });
         edgion_resources::resources::common::success::classify_detail(
             self.success.as_ref(),
             resp.status,

@@ -1193,3 +1193,61 @@ fn owned_webhook_client(
     let defaults = GlobalOutboundTlsSnapshot::from_configs([]);
     ManagedOutboundClient::from_webhook(&binding, &defaults, "test/webhook")
 }
+
+#[test]
+fn classify_detail_preserves_json_content_type_recognition() {
+    use edgion_resources::resources::common::success::{BodyPredicate, PredicateOp, SuccessOutcome};
+    use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
+
+    let mut client = ManagedOutboundClient::test_with_static_target("http://example.com");
+    client.success = Some(SuccessSpec {
+        status_codes: None,
+        body: vec![BodyPredicate {
+            pointer: "/ok".into(),
+            op: PredicateOp::Exists(true),
+        }],
+    });
+    let cases: &[(Option<&[u8]>, bool)] = &[
+        (Some(b"application/json"), true),
+        (Some(b"Application/JSON; charset=utf-8"), true),
+        (Some(b"application/problem+JSON"), true),
+        (Some(b"application/json-extra"), true),
+        (Some(b"text/plain; note=+JSON"), true),
+        (Some(b"+JsOn"), true),
+        (Some(b"text/plain"), false),
+        (Some(b"json"), false),
+        (Some(b""), false),
+        (Some(b"\xff"), false),
+        (None, false),
+    ];
+    for &(content_type, is_json) in cases {
+        let mut headers = HeaderMap::new();
+        if let Some(value) = content_type {
+            headers.insert(CONTENT_TYPE, HeaderValue::from_bytes(value).unwrap());
+        }
+        let response = super::super::call::OutboundResponse {
+            status: 200,
+            headers,
+            body: bytes::Bytes::from_static(br#"{"ok":true}"#),
+        };
+        assert_eq!(
+            client.classify_detail(&response),
+            if is_json {
+                SuccessOutcome::Success
+            } else {
+                SuccessOutcome::BodyFail
+            },
+            "{content_type:?}"
+        );
+    }
+
+    let mut headers = HeaderMap::new();
+    headers.append(CONTENT_TYPE, HeaderValue::from_static("text/plain"));
+    headers.append(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    let response = super::super::call::OutboundResponse {
+        status: 200,
+        headers,
+        body: bytes::Bytes::from_static(br#"{"ok":true}"#),
+    };
+    assert_eq!(client.classify_detail(&response), SuccessOutcome::BodyFail);
+}
