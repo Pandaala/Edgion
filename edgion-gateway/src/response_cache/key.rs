@@ -207,14 +207,16 @@ fn header_digest(name: &str) -> [u8; 32] {
 }
 
 struct Exclusions<'a> {
-    connection: Vec<String>,
+    connection: [&'a str; 16],
+    connection_count: usize,
     trace: &'a RequestTraceId,
     testing: bool,
 }
 impl<'a> Exclusions<'a> {
     fn parse(headers: &'a HeaderMap, trace: &'a RequestTraceId, testing: bool) -> Option<Self> {
         let mut exclusions = Self {
-            connection: Vec::new(),
+            connection: [""; 16],
+            connection_count: 0,
             trace,
             testing,
         };
@@ -224,8 +226,8 @@ impl<'a> Exclusions<'a> {
                 return None;
             }
             let value = value.to_str().ok()?;
-            // Validate the bounded grammar before the canonical parser allocates
-            // its normalized list. Empty options and internal whitespace bypass.
+            // Validate the bounded grammar before indexing borrowed canonical tokens.
+            // Empty options and internal whitespace bypass.
             let mut options = 1;
             let mut token = false;
             let mut trailing_space = false;
@@ -257,7 +259,16 @@ impl<'a> Exclusions<'a> {
             if !token {
                 return None;
             }
-            exclusions.connection = crate::plugins::http::common::connection_listed_hop_by_hop(value);
+            for token in crate::plugins::http::common::http_client::connection_option_tokens(value) {
+                if exclusions.connection[..exclusions.connection_count]
+                    .iter()
+                    .any(|existing| existing.eq_ignore_ascii_case(token))
+                {
+                    continue;
+                }
+                *exclusions.connection.get_mut(exclusions.connection_count)? = token;
+                exclusions.connection_count += 1;
+            }
         }
         Some(exclusions)
     }
@@ -272,7 +283,9 @@ impl<'a> Exclusions<'a> {
                 .trace
                 .managed_header_names()
                 .any(|managed| managed.as_str() == name)
-            || self.connection.iter().any(|token| name.eq_ignore_ascii_case(token))
+            || self.connection[..self.connection_count]
+                .iter()
+                .any(|token| name.eq_ignore_ascii_case(token))
     }
 }
 pub(super) fn variation_is_representable(

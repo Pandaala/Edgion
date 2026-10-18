@@ -181,3 +181,40 @@ fn response_cache_vary_normalization_is_case_independent_bounded_and_exclusions_
         "access_log"
     ));
 }
+
+#[test]
+fn bounded_connection_index_borrows_all_slots_and_deduplicates_without_allocating() {
+    let trace = RequestTraceId::default();
+    let mut headers = HeaderMap::new();
+    let empty = digest(&headers, false).unwrap();
+    let names: Vec<_> = (0..16).map(|index| format!("x-hop-{index}")).collect();
+    headers.insert("connection", names.join(",").parse().unwrap());
+    for name in &names {
+        headers.insert(
+            HeaderName::from_bytes(name.as_bytes()).unwrap(),
+            "hidden".parse().unwrap(),
+        );
+    }
+    let ((key, representable), calls) = crate::test_allocation_counter::count_allocations(|| {
+        (
+            digest(&headers, false),
+            variation_is_representable(&headers, &trace, false, "X-HOP-15"),
+        )
+    });
+    assert_eq!(key, Some(empty));
+    assert!(!representable);
+    assert_eq!(calls, 0);
+
+    headers.insert("connection", " X-Hop-0, x-hop-0, X-HOP-0 ".parse().unwrap());
+    let (exclusions, calls) =
+        crate::test_allocation_counter::count_allocations(|| Exclusions::parse(&headers, &trace, false).unwrap());
+    assert_eq!(calls, 0);
+    assert_eq!(exclusions.connection_count, 1);
+    assert!(exclusions.contains("x-hop-0"));
+    assert!(!exclusions.contains("x-hop-1"));
+
+    headers.insert("connection", ["x-hop-0"; 17].join(",").parse().unwrap());
+    let (result, calls) = crate::test_allocation_counter::count_allocations(|| digest(&headers, false));
+    assert!(result.is_none(), "the grammar counts duplicates before deduplication");
+    assert_eq!(calls, 0);
+}

@@ -38,9 +38,11 @@ Current response headers, trace/CORS/dye onion and veto execute once on replay.
 Keys frame final method/path/query, validated Host/authority, effective normalized
 headers, raw POST bytes SHA/length, selected successful GraphQL query proof,
 runtime identities, publication epoch, Service/discovery and policy proofs.
-Connection nominations reuse the canonical parser and list after bounded grammar
-validation. Managed trace and integration-only access_log are excluded; arbitrary
-x-* headers remain material. Vary can refer only to represented fields.
+Connection nominations reuse the canonical token iterator after bounded grammar
+validation. A fixed borrowed index retains case-insensitive first-occurrence
+membership within each synchronous lookup. Managed trace and integration-only
+access_log are excluded; arbitrary x-* headers remain material. Vary can refer
+only to represented fields.
 Contextual upstream-authority templates bypass before lookup; eligible literal
 templates reuse canonical bounded rendering and actual consumed-result stamps.
 Actual discovery/TLS/traffic/authority reports must match the expected contract

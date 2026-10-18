@@ -710,3 +710,25 @@ Independent plan and final source reviews passed. All 37 cache module tests,
 formatting, workspace check/Clippy and seven repository guards passed. Existing
 Clippy warnings are outside changed lines. No full integration suite or throughput
 benchmark ran; the previously deferred request-tail fixture issue remains open.
+
+## Borrowed bounded Connection exclusion index
+
+Cache-key exclusions now retain at most 16 borrowed Connection tokens in a fixed
+stack array instead of allocating a Vec and lowercase Strings. The existing
+single-field, 512-byte and 16-option grammar gates still run before the canonical
+token iterator. First-occurrence case-insensitive deduplication and membership
+remain unchanged; duplicates still count against the raw grammar limit.
+
+The index lives only within a synchronous header-key or variation lookup. It does
+not cache across body scanning, header mutation or callbacks. Repeated exclusion
+construction remains a separate open optimization; the fixed index removes its
+heap-owned token representation, not all repeated work. Tests cover every slot,
+mixed-case duplicates and 17 duplicate options, with fixture construction outside
+allocation counters. The existing malformed-field and size-bound tests remain.
+No throughput improvement is inferred from allocation counts.
+
+Independent plan and final source reviews passed. All 38 cache module tests,
+formatting, workspace check/Clippy and seven repository guards passed. The new
+allocation assertions report zero calls for the measured paths. Existing Clippy
+warnings remain outside changed lines. No full integration suite or throughput
+benchmark ran; previously deferred verification issues remain open.
