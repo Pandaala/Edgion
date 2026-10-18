@@ -2233,3 +2233,19 @@ passed. No throughput benchmark is claimed.
 Fresh verification passed all 117 shared outbound tests, formatting, workspace
 check/Clippy and seven repository guards. Remaining warnings are outside changed
 source. Independent final review passed.
+
+## Outbound collected field ownership
+
+The private collected-field representation borrows names and literal values from
+compiled configuration. Origin values and template results remain owned, with
+all provenance flags unchanged. Query, Cookie and header consumers finish while
+the configuration borrow is valid and still produce owned request data. Presence
+policy, evaluation order, encoding and header overwrite behavior are unchanged.
+Independent plan review passed. A literal-only collector test preallocates its
+output Vec outside the measured region and verifies zero allocation calls/bytes,
+contents and sensitive flags. This isolates eliminated field copies; final
+request construction and dynamic rendering are not allocation-free, and no
+throughput benchmark is claimed.
+Fresh verification on final source passed all 118 shared outbound tests,
+formatting, workspace check/Clippy and seven repository guards. Remaining
+warnings are outside changed source. Independent final review passed.

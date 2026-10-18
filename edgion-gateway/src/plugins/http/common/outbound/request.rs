@@ -325,7 +325,7 @@ impl CompiledRequest {
         };
 
         // ── 3. Collect query args ─────────────────────────────────────────
-        let mut query_pairs: Vec<CollectedField> = Vec::new();
+        let mut query_pairs: Vec<CollectedField<'_>> = Vec::new();
         collect_list_fields(
             &self.args,
             context,
@@ -344,7 +344,7 @@ impl CompiledRequest {
         if !query_pairs.is_empty() {
             let mut qp = url.query_pairs_mut();
             for field in &query_pairs {
-                qp.append_pair(&field.name, &field.value);
+                qp.append_pair(field.name, &field.value);
             }
         }
 
@@ -364,7 +364,7 @@ impl CompiledRequest {
         *req.headers_mut() = self.collect_headers_in(context, resolved, diagnostics)?;
 
         // ── 8. Add cookies as a single Cookie header ──────────────────────
-        let mut cookie_pairs: Vec<CollectedField> = Vec::new();
+        let mut cookie_pairs: Vec<CollectedField<'_>> = Vec::new();
         collect_list_fields(
             &self.cookies,
             context,
@@ -379,7 +379,7 @@ impl CompiledRequest {
                 if index > 0 {
                     cookie_str.push_str("; ");
                 }
-                cookie_str.push_str(&field.name);
+                cookie_str.push_str(field.name);
                 cookie_str.push('=');
                 cookie_str.push_str(&field.value);
             }
@@ -490,7 +490,7 @@ impl CompiledRequest {
         // Apply explicit origin + custom fields (may override forward_all entries).
         // Propagate Required-field errors rather than swallowing them.
         // Pass resolved so that ${secretRef:...} templates in custom fields resolve.
-        let mut pairs: Vec<CollectedField> = Vec::new();
+        let mut pairs: Vec<CollectedField<'_>> = Vec::new();
         collect_list_fields(
             &self.headers,
             context,
@@ -589,9 +589,9 @@ fn evaluate_template(
 }
 
 /// No Debug implementation: values can contain credentials.
-struct CollectedField {
-    name: String,
-    value: String,
+struct CollectedField<'a> {
+    name: &'a str,
+    value: Cow<'a, str>,
     sensitive: bool,
 }
 
@@ -602,11 +602,11 @@ struct CollectedField {
 ///
 /// Note: this function does NOT process `forward_all`; that is handled by
 /// [`CompiledRequest::collect_headers`] before calling this helper.
-fn collect_list_fields(
-    fields: &CompiledListFields,
+fn collect_list_fields<'a>(
+    fields: &'a CompiledListFields,
     context: TemplateContext<'_>,
     kind: FieldKind,
-    output: &mut Vec<CollectedField>,
+    output: &mut Vec<CollectedField<'a>>,
     resolved: Option<&ResolvedSecrets>,
     diagnostics: &mut OutboundRequestDiagnostics,
 ) -> Result<(), String> {
@@ -622,8 +622,8 @@ fn collect_list_fields(
         );
         match value {
             Some(value) => output.push(CollectedField {
-                name: origin.name.clone(),
-                value,
+                name: &origin.name,
+                value: Cow::Owned(value),
                 sensitive: true,
             }),
             None => match origin.presence {
@@ -645,13 +645,14 @@ fn collect_list_fields(
     for custom in &fields.custom {
         let (value, sensitive) = match &custom.source {
             // Preserve the existing conservative classification of static credentials.
-            CompiledCustomFieldSource::Literal(v) => (v.clone(), true),
+            CompiledCustomFieldSource::Literal(v) => (Cow::Borrowed(v.as_str()), true),
             CompiledCustomFieldSource::Template(tpl) => {
-                render_outbound(tpl, context, resolved, EscapeMode::None)?.into_parts()
+                let (value, sensitive) = render_outbound(tpl, context, resolved, EscapeMode::None)?.into_parts();
+                (Cow::Owned(value), sensitive)
             }
         };
         output.push(CollectedField {
-            name: custom.name.clone(),
+            name: &custom.name,
             value,
             sensitive,
         });

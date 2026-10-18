@@ -1060,3 +1060,41 @@ fn build_request_preserves_cookie_assembly_and_invalid_value_policy() {
         }
     }
 }
+
+#[test]
+fn literal_field_collection_uses_preallocated_output_without_string_allocations() {
+    let fields = ListFields {
+        custom: vec![
+            CustomField {
+                name: "x-first".into(),
+                source: CustomSource::Value("first-value".into()),
+            },
+            CustomField {
+                name: "x-empty".into(),
+                source: CustomSource::Value(String::new()),
+            },
+        ],
+        ..Default::default()
+    };
+    let compiled = compile_list_fields(&fields).unwrap();
+    let session = MockPluginSession::new();
+    let mut output = Vec::with_capacity(2);
+    let mut diagnostics = OutboundRequestDiagnostics::default();
+    let (result, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+        collect_list_fields(
+            &compiled,
+            TemplateContext::Request(&session),
+            FieldKind::Header,
+            &mut output,
+            None,
+            &mut diagnostics,
+        )
+    });
+    result.unwrap();
+    assert_eq!(stats.calls, 0);
+    assert_eq!(stats.requested_bytes, 0);
+    assert_eq!(output.len(), 2);
+    assert_eq!((output[0].name, output[0].value.as_ref()), ("x-first", "first-value"));
+    assert_eq!((output[1].name, output[1].value.as_ref()), ("x-empty", ""));
+    assert!(output.iter().all(|field| field.sensitive));
+}
