@@ -1,6 +1,23 @@
 use super::*;
 
 #[test]
+fn static_target_borrows_stored_url_without_allocating() {
+    for url in ["", "https://upstream.example:8443/base", "http://[2001:db8::1]:8080"] {
+        let target = ResolvedTarget::Static(url.to_owned());
+        let ResolvedTarget::Static(stored) = &target else {
+            unreachable!();
+        };
+        let (picked, stats) = crate::test_allocation_counter::count_allocation_stats(|| target.pick_url());
+        let picked = picked.unwrap();
+        assert!(matches!(picked, Cow::Borrowed(_)));
+        assert_eq!(picked, url);
+        assert_eq!(picked.as_ptr(), stored.as_ptr());
+        assert_eq!(stats.calls, 0);
+        assert_eq!(stats.requested_bytes, 0);
+    }
+}
+
+#[test]
 fn rr_pick_rotates_canonical_service_endpoints_and_handles_empty() {
     let cursor = AtomicUsize::new(0);
     let eps = vec![

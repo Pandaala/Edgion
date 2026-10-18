@@ -354,7 +354,7 @@ fn pick_url_service_resolves_from_global_store() {
     get_roundrobin_store().update_data_only(add, HashMap::new(), &HashSet::new());
 
     // After seeding: pick_url resolves the ready endpoint.
-    assert_eq!(target.pick_url(), Some("http://10.0.0.1:8080".to_string()));
+    assert_eq!(target.pick_url().as_deref(), Some("http://10.0.0.1:8080"));
 
     // Cleanup: remove so we do not leave stale entries in the global store.
     let remove = HashSet::from([slice_key.to_string()]);

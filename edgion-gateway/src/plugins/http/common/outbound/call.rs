@@ -6,6 +6,7 @@
 //! completed response for **any** HTTP status code — success classification is
 //! left to the caller.
 
+use std::borrow::Cow;
 use std::sync::atomic::Ordering;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -329,7 +330,7 @@ async fn outbound_call_with_body_using<T: OutboundTransport>(
                     .map(|compiled| render_authority_in(compiled, context))
             })
     }) {
-        Some(Ok(authority)) => replace_url_host(&base, &authority),
+        Some(Ok(authority)) => Cow::Owned(replace_url_host(&base, &authority)),
         Some(Err(e)) => {
             crate::observe::metrics::record_authority_rejected(e.reason());
             return Err(OutboundCallError::AuthorityRejected);

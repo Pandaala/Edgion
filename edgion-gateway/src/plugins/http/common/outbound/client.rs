@@ -9,6 +9,7 @@
 //! - Provides [`ManagedOutboundClient::dial_url`] which applies the SSRF guard
 //!   before returning a base URL for the caller to use.
 
+use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -492,7 +493,7 @@ impl ManagedOutboundClient {
     ///
     /// A DNS hostname skips this guard by design (see [`extract_ip_literal`]); it is
     /// guarded at connect time by [`super::egress::EgressResolver`].
-    pub fn dial_url(&self) -> Result<String, ManagedOutboundDialError> {
+    pub fn dial_url(&self) -> Result<Cow<'_, str>, ManagedOutboundDialError> {
         let url = self
             .resolved_target
             .pick_url()
@@ -796,7 +797,7 @@ async fn run_active_health_check(
                 // render a label from, so it uses the static healthCheckHost.
                 // The lookup is refreshed every tick so policy hot reload takes
                 // effect without respawning this task.
-                let base = resolve_probe_base(base, service_key.as_deref());
+                let base = resolve_probe_base(base.into_owned(), service_key.as_deref());
                 match prepare_active_health_url(&base, active.path.as_deref(), egress_policy) {
                     Ok(check_url) => client
                         .get(check_url)

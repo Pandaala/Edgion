@@ -2281,3 +2281,18 @@ reference-count reduction, not a heap-allocation or throughput claim.
 Fresh verification passed 119 shared outbound tests and 6 authority tests,
 formatting, workspace check/Clippy and seven repository guards. Remaining
 warnings are outside changed code. Independent final review passed.
+
+## Outbound static base URL borrowing
+
+ResolvedTarget::pick_url and ManagedOutboundClient::dial_url carry a borrowed
+static base URL through request construction. Service targets retain fresh
+endpoint lookup, cursor advancement and owned formatted URLs; dynamic authority
+replacement still owns its result. Literal SSRF validation remains in the same
+place. The active-health caller explicitly takes ownership before its existing
+probe helper, preserving that path. Independent plan review passed. A scoped
+static-target test checks borrowed storage identity and zero allocation calls
+and requested bytes. Final request URLs remain owned, and validation may still
+allocate; no whole-call allocation or throughput claim is made.
+Fresh verification passed 120 shared outbound tests and 14 webhook runtime
+tests, formatting, workspace check/Clippy and seven repository guards.
+Remaining warnings are outside changed code. Independent final review passed.

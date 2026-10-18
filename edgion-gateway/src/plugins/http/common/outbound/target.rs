@@ -3,6 +3,7 @@
 //! [`ResolvedTarget`] is the canonical target representation for the shared
 //! outbound-call engine.
 
+use std::borrow::Cow;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -46,10 +47,11 @@ impl std::fmt::Debug for ResolvedTarget {
 
 impl ResolvedTarget {
     /// Pick the next base URL. Returns `None` when the Service target currently
-    /// has no ready backend.
-    pub fn pick_url(&self) -> Option<String> {
+    /// has no ready backend. Static targets borrow their stored URL; Service
+    /// targets own the URL formatted from the freshly selected endpoint.
+    pub fn pick_url(&self) -> Option<Cow<'_, str>> {
         match self {
-            Self::Static(url) => Some(url.clone()),
+            Self::Static(url) => Some(Cow::Borrowed(url)),
             Self::Service {
                 service_key,
                 port: service_port,
@@ -57,7 +59,7 @@ impl ResolvedTarget {
                 cursor,
             } => {
                 let eps = get_roundrobin_store().ready_endpoints_for_port(service_key, *service_port);
-                rr_pick(&eps, cursor, scheme)
+                rr_pick(&eps, cursor, scheme).map(Cow::Owned)
             }
         }
     }
