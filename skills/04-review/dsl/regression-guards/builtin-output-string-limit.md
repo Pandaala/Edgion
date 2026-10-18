@@ -71,7 +71,7 @@ exact/over-limit names and an oversized 257th name outside the retained prefix.
 This removes the intermediate full `Vec<String>` and its name copies; output
 list/Arc allocation remains.
 
-## Borrowed request-header scalars
+## Borrowed request scalars and metadata
 
 `req.host`, `req.content_type` and `req.scheme` use the existing `header_str`
 accessor and borrowed result helper. Scheme chooses the first text-eligible
@@ -83,6 +83,14 @@ malformed/overflow text returns nil; negative and leading-plus values remain
 accepted by this script-level read. It does not apply a string-output limit or
 add HTTP input validation. Tests cover selection/length boundaries and numeric
 first-value behavior. Final string results still own their Arc storage.
+
+Method, path, entry request path, direct-peer IP and resolved remote IP also pass
+their existing borrowed getter result to the same helper without a temporary
+String. Client-certificate CN and fingerprint borrow their fields; absent
+certificate/CN remains nil. These changes retain each getter's live/frozen and
+identity provenance, case and raw spelling. The metadata byte-limit table covers
+exact/rejected lengths and returned bytes for these properties, including
+multibyte CN, without claiming to eliminate final Arc allocation.
 
 ## Alternatives and limits
 

@@ -208,6 +208,11 @@ fn test_req_client_cert_cn_no_cert() {
 #[test]
 fn test_req_metadata_string_byte_limits() {
     for (property, value) in [
+        ("method", "MeThOd"),
+        ("path", "/live"),
+        ("request_path", "/%61dmin"),
+        ("direct_peer_ip", "192.0.2.1"),
+        ("remote_ip", "2001:db8::1"),
         ("protocol", "grpc-web"),
         ("grpc_service", "example.Service"),
         ("grpc_method", "SayHello"),
@@ -217,6 +222,24 @@ fn test_req_metadata_string_byte_limits() {
         for limit in [value.len(), value.len() - 1] {
             let mut session = MockPluginSession::new();
             match property {
+                "method" => {
+                    session.expect_get_method().times(1).return_const(value.to_string());
+                }
+                "path" => {
+                    session.expect_get_path().times(1).return_const(value.to_string());
+                }
+                "request_path" => {
+                    session
+                        .expect_get_request_path()
+                        .times(1)
+                        .return_const(value.to_string());
+                }
+                "direct_peer_ip" => {
+                    session.expect_direct_peer_ip().times(1).return_const(value.to_string());
+                }
+                "remote_ip" => {
+                    session.expect_remote_ip().times(1).return_const(value.to_string());
+                }
                 "protocol" => {
                     session
                         .expect_discover_protocol()
@@ -257,7 +280,7 @@ fn test_req_metadata_string_byte_limits() {
                         }))
                     });
                 }
-                _ => unreachable!("the table contains only the five string metadata getters"),
+                _ => unreachable!("the table contains only supported string metadata getters"),
             }
             let limits = VmLimits {
                 max_string_len: limit,

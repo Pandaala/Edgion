@@ -635,7 +635,7 @@ impl Vm {
                 let name = state.pop()?.runtime_string()?;
                 checked_value_opt_str(session.header_value(&name), self.limits.max_string_len)
             }
-            BuiltinId::ReqMethod => checked_value_str(session.get_method().to_string(), self.limits.max_string_len),
+            BuiltinId::ReqMethod => checked_value_opt_str_ref(Some(session.get_method()), self.limits.max_string_len),
             BuiltinId::ReqRequestMethod => match session.get_request_method() {
                 Some(method) => {
                     check_string_len(method, self.limits.max_string_len)?;
@@ -643,7 +643,7 @@ impl Vm {
                 }
                 None => Ok(Value::Nil),
             },
-            BuiltinId::ReqPath => checked_value_str(session.get_path().to_string(), self.limits.max_string_len),
+            BuiltinId::ReqPath => checked_value_opt_str_ref(Some(session.get_path()), self.limits.max_string_len),
             BuiltinId::ReqQuery => {
                 let name = state.pop()?.runtime_string()?;
                 checked_value_opt_str(session.get_query_param(&name), self.limits.max_string_len)
@@ -654,9 +654,9 @@ impl Vm {
                 checked_value_opt_str(session.get_cookie(&name), self.limits.max_string_len)
             }
             BuiltinId::ReqDirectPeerIp => {
-                checked_value_str(session.direct_peer_ip().to_string(), self.limits.max_string_len)
+                checked_value_opt_str_ref(Some(session.direct_peer_ip()), self.limits.max_string_len)
             }
-            BuiltinId::ReqRemoteIp => checked_value_str(session.remote_ip().to_string(), self.limits.max_string_len),
+            BuiltinId::ReqRemoteIp => checked_value_opt_str_ref(Some(session.remote_ip()), self.limits.max_string_len),
             BuiltinId::ReqPathParam => {
                 let name = state.pop()?.runtime_string()?;
                 checked_value_opt_str(session.get_path_param(&name), self.limits.max_string_len)
@@ -689,7 +689,7 @@ impl Vm {
             BuiltinId::ReqHost => checked_value_opt_str_ref(session.header_str("Host"), self.limits.max_string_len),
             BuiltinId::ReqUri => checked_value_str(session.get_uri(), self.limits.max_string_len),
             BuiltinId::ReqRequestPath => {
-                checked_value_str(session.get_request_path().to_string(), self.limits.max_string_len)
+                checked_value_opt_str_ref(Some(session.get_request_path()), self.limits.max_string_len)
             }
             BuiltinId::ReqRequestUri => checked_value_str(session.get_request_uri(), self.limits.max_string_len),
             BuiltinId::ReqContentType => {
@@ -784,12 +784,12 @@ impl Vm {
                 None => Ok(Value::Nil),
             },
             BuiltinId::ReqClientCertCn => {
-                let cn = session.client_cert_info().and_then(|c| c.cn.clone());
-                checked_value_opt_str(cn, self.limits.max_string_len)
+                let cn = session.client_cert_info().and_then(|c| c.cn.as_deref());
+                checked_value_opt_str_ref(cn, self.limits.max_string_len)
             }
             BuiltinId::ReqClientCertFingerprint => {
-                let fp = session.client_cert_info().map(|c| c.fingerprint.clone());
-                checked_value_opt_str(fp, self.limits.max_string_len)
+                let fp = session.client_cert_info().map(|c| c.fingerprint.as_str());
+                checked_value_opt_str_ref(fp, self.limits.max_string_len)
             }
 
             // ===== resp.* read (additional) =====

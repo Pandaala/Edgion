@@ -1402,3 +1402,18 @@ Independent plan review passed; 495 DSL tests passed serially. No full suite or
 throughput benchmark ran; final DSL string ownership remains unchanged.
 Formatting, workspace check/Clippy and seven repository guards passed, with
 existing warnings outside changed files. Independent final review passed.
+
+## Borrowed DSL request metadata
+
+Method, path, entry request path, direct-peer IP, resolved remote IP, certificate
+CN and fingerprint reuse the borrowed string-result helper. This removes five
+temporary to_string calls and two certificate-field clones, preserving the same
+getters, optional nil states, exact byte-limit errors and independent Arc output.
+Live/frozen request data and direct/resolved client identity remain distinct.
+
+The existing metadata boundary test now covers the five additional getters with
+mixed-case method, distinct raw path spellings and IPv4/IPv6 text. Certificate
+multibyte and absent-value coverage remains. Independent plan review passed and
+495 DSL tests passed serially. No full suite or throughput benchmark ran.
+Formatting, workspace check/Clippy and seven repository guards passed, with
+existing warnings outside changed files. Independent final review passed.
