@@ -23,7 +23,7 @@ destination.
 | Redirect HTTP | Direct callbacks and shared client-policy application inspected. Missing-host and listener-admission checks now share one normalized hostname. Raw Location authority, query-free log URL and session-owned keepalive remain unchanged. |
 | Connection filters and Stream plugins | Connection bridge, ordered runtime dispatch, connection-rate-limit callback, global IP profile selection, GeoIP callback and shared denial translation inspected. Static denial reasons now borrow literals. Deeper ACL/GeoIP matchers, local-gate/Redis implementations and publication construction remain open. |
 | TCP/TLS connection handling and relay | TCP, terminated TLS and passthrough TLS direct process/route/connect/log orchestration inspected, plus shared L4 relay. Existing snapshot/inspection-buffer release boundaries retained. Listener-log direct serialization deferred below. Deeper route selection, backend resolution and transport dependencies remain open. |
-| TLS handshake callbacks | Direct select/certificate/completion/free callbacks and certificate/mTLS/cipher application helpers inspected. Temporary SNI and early-abort metadata copies removed below. Compiled certificate ownership, expiry checks and ex-data handoff retained. Deeper matcher, verification callback and client-certificate extraction dependencies remain open. |
+| TLS handshake callbacks | Direct select/certificate/completion/free callbacks and certificate/mTLS/cipher application helpers inspected. Temporary SNI and early-abort metadata copies removed below. Compiled certificate ownership, expiry checks and ex-data handoff retained. Client-certificate extraction and leaf-only verification orchestration inspected below. Deeper matcher, allowlist evaluator and verification extraction cost remain open. |
 | UDP packet/session lifecycle | Direct packet, session admission, receiver, retirement, shutdown and log projection inspected. Selected route ownership and socket Arc transfer tightened below. Deeper backend selection, route publication and socket dependencies remain open. |
 
 ## Deferred decisions
@@ -229,3 +229,33 @@ Independent plan and final source reviews passed. All 15 gateway TLS runtime
 tests passed. Formatting, workspace check/Clippy and seven repository guards
 passed; Clippy warnings are outside the changed files. No full integration suite
 or throughput benchmark was run.
+
+## Client-certificate extraction
+
+Subject rendering now captures the first CN during its existing entry traversal,
+reusing that entry's UTF-8 conversion. The first-CN marker is independent of decode
+success: an unsupported first CN still produces no CN, even if a later CN is
+usable. Subject order, separators and invalid-entry placeholders remain unchanged.
+BMP OtherName decoding now consumes big-endian UTF-16 units directly, removing
+the intermediate u16 vector while retaining the odd-length rejection and existing
+UTF-16 semantics, including accepted surrogate pairs and embedded NULs.
+
+The canonical extractor serves both handshake metadata and HeaderCertAuth.
+Ordinary typed SAN enumeration and the separate OtherName DER pass retain their
+order and projections. The mTLS callback still evaluates allowlists only at leaf
+depth and retains its terminal-audit claim. Its eager full metadata extraction
+followed by typed SAN extraction remains a separate optimization investigation;
+this batch does not change authorization or failure diagnostics.
+
+New signed-certificate regressions cover duplicate CN order/selection and an
+unsupported GeneralString first CN followed by a valid CN. Subject/CN preserve
+BoringSSL OpensslString C-string truncation at NUL; OtherName BMP keeps embedded
+NULs. Direct BMP regressions cover the existing UTF-16 acceptance boundaries.
+These changes remove a subject traversal/repeated CN conversion and an intermediate
+BMP allocation; they are not measured throughput improvements.
+
+Independent plan and final source reviews passed. The final-source focused tests
+passed: certificate extraction 11, HeaderCertAuth 20 and mTLS callback 10.
+Formatting, workspace check/Clippy and seven repository guards passed; Clippy
+warnings are outside the changed files. No full integration suite or live mTLS
+handshake verification was run for this batch.

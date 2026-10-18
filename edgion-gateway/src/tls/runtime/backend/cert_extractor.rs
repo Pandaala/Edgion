@@ -22,6 +22,8 @@ pub(crate) fn extract_client_cert_info_from_cert(cert: &X509Ref) -> ClientCertIn
     // Extract subject DN.
     let mut subject = String::with_capacity(128);
     let mut first = true;
+    let mut cn = None;
+    let mut cn_seen = false;
     for entry in cert.subject_name().entries() {
         if !first {
             subject.push_str(", ");
@@ -32,17 +34,18 @@ pub(crate) fn extract_client_cert_info_from_cert(cert: &X509Ref) -> ClientCertIn
         subject.push_str(key);
         subject.push('=');
 
+        let is_first_cn = key == "CN" && !cn_seen;
+        cn_seen |= is_first_cn;
         match entry.data().as_utf8() {
-            Ok(s) => subject.push_str(&s),
+            Ok(s) => {
+                subject.push_str(&s);
+                if is_first_cn {
+                    cn = Some(s.to_string());
+                }
+            }
             Err(_) => subject.push('?'),
         }
     }
-
-    let cn = cert
-        .subject_name()
-        .entries()
-        .find(|entry| entry.object().nid().short_name().map(|s| s == "CN").unwrap_or(false))
-        .and_then(|entry| entry.data().as_utf8().map(|s| s.to_string()).ok());
 
     let sans = extract_sans(cert);
 
@@ -290,11 +293,10 @@ fn bmp_string(bytes: &[u8]) -> Option<String> {
     if !bytes.len().is_multiple_of(2) {
         return None;
     }
-    let units: Vec<u16> = bytes
+    let units = bytes
         .chunks_exact(2)
-        .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
-        .collect();
-    String::from_utf16(&units).ok()
+        .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]));
+    char::decode_utf16(units).collect::<Result<String, _>>().ok()
 }
 
 fn universal_string(bytes: &[u8]) -> Option<String> {

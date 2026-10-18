@@ -68,6 +68,63 @@ fn canonical_projection_does_not_invent_cn_or_san_from_subject() {
     assert!(info.cn.is_none());
 }
 
+fn cert_with_subject(name: &pingora_core::tls::x509::X509NameRef) -> X509 {
+    let template = canonical_client_cert();
+    let key = KeyPair::generate().unwrap();
+    let key = pingora_core::tls::pkey::PKey::private_key_from_der(&key.serialize_der()).unwrap();
+    let mut builder = X509::builder().unwrap();
+    builder.set_version(2).unwrap();
+    builder.set_serial_number(template.serial_number()).unwrap();
+    builder.set_not_before(template.not_before()).unwrap();
+    builder.set_not_after(template.not_after()).unwrap();
+    builder.set_subject_name(name).unwrap();
+    builder.set_issuer_name(name).unwrap();
+    builder.set_pubkey(&key).unwrap();
+    builder.sign(&key, MessageDigest::sha256()).unwrap();
+    builder.build()
+}
+
+#[test]
+fn subject_order_and_first_cn_survive_duplicate_common_names() {
+    use pingora_core::tls::nid::Nid;
+    let mut name = pingora_core::tls::x509::X509Name::builder().unwrap();
+    name.append_entry_by_nid(Nid::ORGANIZATIONNAME, "example").unwrap();
+    name.append_entry_by_nid(Nid::COMMONNAME, "first\0cn").unwrap();
+    name.append_entry_by_nid(Nid::ORGANIZATIONALUNITNAME, "clients")
+        .unwrap();
+    name.append_entry_by_nid(Nid::COMMONNAME, "second").unwrap();
+    let info = extract_client_cert_info_from_cert(&cert_with_subject(&name.build()));
+    // BoringSSL's OpensslString exposes a C string, preserving the existing
+    // subject/CN truncation at NUL (unlike the OtherName BMP projection).
+    assert_eq!(info.subject, "O=example, CN=first, OU=clients, CN=second");
+    assert_eq!(info.cn.as_deref(), Some("first"));
+}
+
+#[test]
+fn unsupported_first_cn_does_not_promote_later_common_name() {
+    use boring::asn1::Asn1Type;
+    use pingora_core::tls::nid::Nid;
+    let mut name = pingora_core::tls::x509::X509Name::builder().unwrap();
+    name.append_entry_by_nid_with_type(Nid::COMMONNAME, "unsupported", Asn1Type::GENERALSTRING)
+        .unwrap();
+    name.append_entry_by_nid(Nid::COMMONNAME, "second").unwrap();
+    let name = name.build();
+    assert!(name.entries().next().unwrap().data().as_utf8().is_err());
+    let info = extract_client_cert_info_from_cert(&cert_with_subject(&name));
+    assert_eq!(info.subject, "CN=?, CN=second");
+    assert!(info.cn.is_none());
+}
+
+#[test]
+fn bmp_decoding_preserves_utf16_boundaries() {
+    assert_eq!(super::bmp_string(&[]).as_deref(), Some(""));
+    assert_eq!(super::bmp_string(&[0, b'a', 0, 0, 0, 0xe9]).as_deref(), Some("a\0é"));
+    assert_eq!(super::bmp_string(&[0xd8, 0x34, 0xdd, 0x1e]).as_deref(), Some("𝄞"));
+    for invalid in [&[0][..], &[0xd8, 0x34], &[0xdd, 0x1e], &[0xdd, 0x1e, 0xd8, 0x34]] {
+        assert_eq!(super::bmp_string(invalid), None);
+    }
+}
+
 #[test]
 fn fingerprint_encoding_preserves_colon_separated_lower_hex() {
     assert_eq!(encode_fingerprint(&[]), "");
