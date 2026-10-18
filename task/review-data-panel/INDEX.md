@@ -47,6 +47,7 @@ destination.
 - [Wasm header snapshot and replay ownership](wasm-01-header-snapshot-ownership.md)
 - [DSL string consumer ownership](dsl-01-string-consumer-ownership.md)
 - [DSL outbound method normalization](dsl-02-http-method-normalization.md)
+- [Endpoint probe result address ownership](endpoint-01-result-address-ownership.md)
 - [ProxyRewrite staged template compilation](rewrite-01-staged-template-compilation.md)
 
 ## Completed implementation batch
@@ -2098,3 +2099,16 @@ admission/cancellation test coverage.
 Fresh verification passed 23 AllEndpointStatus tests, formatting, workspace
 check/Clippy and seven repository guards. Remaining warnings are outside changed
 source. Independent final review passed.
+
+## Endpoint result address ownership audit
+
+Pending probes currently discard eagerly copied addresses on wall timeout, then
+assembly copies their selected addresses again. Deferring the first copy until
+completion is borrow-safe but moves allocation inside the wall deadline and
+permit-holding interval. The linked decision task records this timing tradeoff
+and a possible post-fan-out assembly design. Runtime remains unchanged. This is
+source evidence, not a demonstrated timing regression or throughput measurement.
+Independent plan review passed.
+Formatting, workspace check/Clippy and agent-document validation passed.
+Independent final documentation review passed. No runtime test or benchmark was
+run for this documentation-only batch.
