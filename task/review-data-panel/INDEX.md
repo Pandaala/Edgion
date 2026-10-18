@@ -36,6 +36,7 @@ destination.
 - [ExtProc protobuf body representation](body-02-extproc-protobuf-body-storage.md)
 - [Direct TLS listener log serialization](tls-01-direct-listener-log-serialization.md)
 - [Pending response-header execution ownership](response-01-pending-header-ownership.md)
+- [ResponseRewrite rename value fidelity](response-02-rename-value-fidelity.md)
 - [Service selected-slot lookup cost](backend-01-selected-slot-lookup.md)
 - [JWT claim condition evaluation ownership](condition-01-jwt-claim-evaluation.md)
 - [GeoIP record decoding and projection](geoip-01-record-decoding.md)
@@ -1302,3 +1303,22 @@ and the real-adapter typed-value/pending-replay test passed. Formatting,
 workspace check/Clippy and seven repository guards passed, with existing warnings
 outside changed files. Independent source and final record reviews passed. Allocation claims concern value clones only, excluding names, response
 maps, queues and logs; no full integration suite or throughput benchmark ran.
+
+## Dynamic ResponseRewrite rename audit
+
+The remaining rename path copies the first text-eligible response value into
+String and reparses it for destination insertion. It skips a non-text first
+value rather than searching duplicates. Source inspection establishes that a
+sensitive textual HeaderValue loses its flag through the fresh string parse;
+no production secret exposure was reproduced. Typed cloning would reduce
+conversion work and preserve required metadata, while removing text eligibility
+would be a separate behavior expansion.
+
+The deferred task records the bounded typed/text-filtered option and explicit
+opaque/multivalue/atomic alternatives without approving runtime changes.
+Known sensitive metadata must be preserved in any implementation; the current
+loss is not accepted as an optional compatibility policy. Dynamic clone costs
+need measurement and do not inherit fixed-value preparation's zero-allocation
+result. Independent documentation plan and final reviews passed; agent-doc
+validation and diff checks passed. No Rust test or benchmark ran in this
+source-record batch.
