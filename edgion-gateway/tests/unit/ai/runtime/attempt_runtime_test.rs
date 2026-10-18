@@ -810,3 +810,48 @@ fn responses_health_verdict_requires_observed_model_completion_and_actual_eos() 
         assert!(!truncated.verdict_recorded);
     }
 }
+
+#[test]
+fn attempt_log_size_counts_wire_bytes_without_allocating() {
+    let entries = vec![GenAiAttempt {
+        number: 1,
+        backend: "namespace/quoted\"\\\né".to_string(),
+        provider: "openai",
+        credential: "primary".to_string(),
+        status: Some(429),
+        failure: Some(GenAiAttemptFailure::RetryableStatus),
+        retry_after_seconds: Some(3),
+        ttft_ms: None,
+        usage_source: GenAiAttemptUsageSource::Reported,
+        input_tokens: Some(2),
+        output_tokens: Some(1),
+        estimated_cost_usd: Some("0.00001".to_string()),
+    }];
+    let encoded = serde_json::to_vec(&entries).unwrap();
+    for remaining in 0..encoded.len() {
+        assert!(serde_json::to_writer(AttemptLogSize { remaining }, &entries).is_err());
+    }
+    let mut size = AttemptLogSize {
+        remaining: encoded.len(),
+    };
+    let (result, allocations) =
+        crate::test_allocation_counter::count_allocations(|| serde_json::to_writer(&mut size, &entries));
+    assert!(result.is_ok());
+    assert_eq!(size.remaining, 0);
+    assert_eq!(allocations, 0);
+    let (_, allocations) = crate::test_allocation_counter::count_allocations(|| serde_json::to_vec(&entries).unwrap());
+    assert!(allocations > 0);
+
+    let mut state = AiAttemptRuntimeState::default();
+    state.record_test_attempt(entries[0].clone(), AiProviderLabel::OpenAi);
+    // Bypass production field bounds to exercise the independent log byte cap.
+    let mut oversized = entries[0].clone();
+    oversized.backend = "a".repeat(MAX_AI_ATTEMPT_LOG_BYTES);
+    state.record_test_attempt(oversized, AiProviderLabel::OpenAi);
+    assert_eq!(state.attempts(), entries);
+    assert!(state.attempts_truncated());
+    assert_eq!(state.charged_request_tokens(), Ok(6));
+    let totals = state.metric_totals().unwrap();
+    assert_eq!(totals.len(), 1);
+    assert_eq!((totals[0].input_tokens, totals[0].output_tokens), (4, 2));
+}

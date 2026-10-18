@@ -3639,3 +3639,28 @@ Fresh verification passed 63 network-free tests: 13 accounting finalizer,
 23 attempt runtime and 27 quota tests. Formatting, workspace check/Clippy,
 seven repository guards and diff hygiene passed. Existing warnings remain
 outside changed code. No live Redis or provider benchmark was run.
+
+## Attempt log byte admission without a serialized buffer
+
+Attempt ledger admission now passes the same Serialize implementation to a
+private bounded counting writer instead of materializing a temporary JSON Vec
+only to inspect its length. The writer subtracts emitted bytes from the existing
+8 KiB allowance and rejects an excess write. Exact-cap output remains accepted;
+serialization failure or overflow retains the existing pop/truncated outcome.
+GenAiAttempt serialization has no side effects, so early excess rejection changes
+no published result. Usage, metric and adaptive updates remain before admission.
+
+The existing SSE and DSL counters are private and have different unbounded or
+saturating contracts; this owner-local size gate does not expose those internals
+or create another serializer. It retains no scratch buffer across attempts.
+Tests compare escaped/UTF-8 serialization length, reject every smaller allowance,
+accept the exact length with zero counting allocations, and verify the former
+Vec serialization allocates. An oversized synthetic ledger entry exercises the
+independent byte cap beyond normal field bounds: prior entries survive while
+charged and metric totals still include the omitted entry. This is a local
+allocation result, not a throughput benchmark or removal of the byte limit.
+
+Fresh verification passed 37 tests: 24 attempt runtime and 13 accounting finalizer
+tests. Formatting, workspace check/Clippy, seven repository guards and diff
+hygiene passed. Existing warnings remain outside changed code. No live transport,
+Redis or throughput benchmark was run.

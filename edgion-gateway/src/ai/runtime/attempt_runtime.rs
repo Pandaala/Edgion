@@ -32,6 +32,25 @@ pub const MAX_AI_ATTEMPT_LOG_BYTES: usize = 8 * 1024;
 const MAX_BACKEND_KEY_BYTES: usize = 63 + 1 + 253;
 const MAX_CREDENTIAL_ALIAS_BYTES: usize = 64;
 
+// Count the existing wire serialization without retaining an unused JSON body.
+struct AttemptLogSize {
+    remaining: usize,
+}
+
+impl std::io::Write for AttemptLogSize {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.remaining = self
+            .remaining
+            .checked_sub(bytes.len())
+            .ok_or(std::io::ErrorKind::WriteZero)?;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 pub struct AiAttemptAdmissionInput {
     pub namespace: String,
     pub backend_uid: String,
@@ -610,7 +629,10 @@ impl AiAttemptRuntimeState {
             return;
         }
         self.attempts.push(entry);
-        if serde_json::to_vec(&self.attempts).map_or(true, |serialized| serialized.len() > MAX_AI_ATTEMPT_LOG_BYTES) {
+        let size = AttemptLogSize {
+            remaining: MAX_AI_ATTEMPT_LOG_BYTES,
+        };
+        if serde_json::to_writer(size, &self.attempts).is_err() {
             self.attempts.pop();
             self.attempts_truncated = true;
         }
