@@ -1515,3 +1515,21 @@ on local borrowing. Historical proposal/spec paths are absent from this tree.
 No runtime change or measurement was made. Independent plan review passed.
 Independent final review, agent-doc validation and diff checks passed. Rust
 checks were not rerun for this documentation-only batch.
+
+## Borrowed CSRF Cookie verification input
+
+CSRF verification now borrows the canonical Cookie parser's selected value
+instead of copying through get_cookie. Current headers, safe methods, token
+comparison/decoding, signature/expiry and fixed denial/log outcomes remain.
+The owned getter already delegates to this parser; no alternate parser or cache
+was added. Decoding and cryptographic allocations remain.
+
+Existing fixtures now use actual Cookie fields. A new matrix covers field order,
+opaque-before/after-match behavior, case-sensitive keys, empty and duplicate
+matches, embedded equals and valid padded tokens while forbidding the owned
+getter. Independent plan review passed. No full suite, live integration or
+throughput measurement was requested or run for this batch.
+Fresh CSRF tests passed 17 and canonical Cookie parser tests passed four.
+Formatting, workspace check/Clippy and seven repository guards passed, with
+existing warnings outside changed files.
+Independent final review passed.

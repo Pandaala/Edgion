@@ -80,6 +80,22 @@ composition case. The referenced parent-task tree is absent from the current tre
 Re-evaluate if CSRF changes identity view, scoped ordering, token sources,
 late-mutation policy, or RestToGraphql admission/operation semantics.
 
+## Borrowed live Cookie reads
+
+CSRF token verification borrows the canonical `cookie_value_ref` result from
+live request headers. The production owned getter calls this same parser and
+copies the selected value; the plugin no longer needs that temporary copy.
+Header token precedence, safe-method handling, exact Cookie key case, first
+match (including empty), embedded equals and malformed-field ordering remain.
+An opaque field before a match prevents later recovery; an earlier match makes
+later opaque fields irrelevant. Signature/expiry checks and fixed denial/log
+messages are unchanged. Decoding and cryptographic work still allocate.
+
+Unit fixtures now use real HeaderMaps and forbid the owned Cookie getter.
+They cover padded valid tokens and multi-field credential boundaries. This does
+not revalidate the historical integration composition scenario above or claim
+allocation-free verification or throughput gains.
+
 ## Resolution references
 
 - T03-B (parent issue T03): documentation and composition-test gap; production

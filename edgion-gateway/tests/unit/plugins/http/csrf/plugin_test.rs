@@ -135,10 +135,7 @@ async fn test_missing_cookie_token() {
 
     mock_session.expect_get_method().return_const("POST".to_string());
     setup_header_mocks(&mut mock_session, &[("X-CSRF-Token", "some-token")]);
-    mock_session
-        .expect_get_cookie()
-        .with(mockall::predicate::eq("X-CSRF-Token"))
-        .returning(|_| None);
+    mock_session.expect_get_cookie().times(0);
 
     let result = csrf.run_request(&mut mock_session, &mut plugin_log).await;
 
@@ -160,11 +157,11 @@ async fn test_token_mismatch() {
     let mut plugin_log = PluginLog::new("Csrf");
 
     mock_session.expect_get_method().return_const("POST".to_string());
-    setup_header_mocks(&mut mock_session, &[("X-CSRF-Token", "token1")]);
-    mock_session
-        .expect_get_cookie()
-        .with(mockall::predicate::eq("X-CSRF-Token"))
-        .returning(|_| Some("token2".to_string()));
+    setup_header_mocks(
+        &mut mock_session,
+        &[("X-CSRF-Token", "token1"), ("Cookie", "X-CSRF-Token=token2")],
+    );
+    mock_session.expect_get_cookie().times(0);
 
     let result = csrf.run_request(&mut mock_session, &mut plugin_log).await;
 
@@ -183,11 +180,14 @@ async fn malformed_matching_token_preserves_the_signature_failure_response() {
     let csrf = Csrf::new(&create_csrf_config());
     let mut mock_session = MockPluginSession::new();
     mock_session.expect_get_method().return_const("POST".to_string());
-    setup_header_mocks(&mut mock_session, &[("X-CSRF-Token", "not-a-valid-csrf-token")]);
-    mock_session
-        .expect_get_cookie()
-        .with(mockall::predicate::eq("X-CSRF-Token"))
-        .returning(|_| Some("not-a-valid-csrf-token".to_string()));
+    setup_header_mocks(
+        &mut mock_session,
+        &[
+            ("X-CSRF-Token", "not-a-valid-csrf-token"),
+            ("Cookie", "X-CSRF-Token=not-a-valid-csrf-token"),
+        ],
+    );
+    mock_session.expect_get_cookie().times(0);
 
     let mut plugin_log = PluginLog::new("Csrf");
     assert_eq!(
@@ -211,12 +211,12 @@ async fn padded_real_token_uses_the_canonical_cookie_accessor() {
 
     let mut mock_session = MockPluginSession::new();
     mock_session.expect_get_method().return_const("POST".to_string());
-    setup_header_mocks(&mut mock_session, &[("x-csrf-token", token.as_str())]);
-    mock_session
-        .expect_get_cookie()
-        .with(mockall::predicate::eq("X-CSRF-Token"))
-        .times(1)
-        .return_once(move |_| Some(token));
+    let cookie = format!("X-CSRF-Token={token}");
+    setup_header_mocks(
+        &mut mock_session,
+        &[("x-csrf-token", token.as_str()), ("Cookie", cookie.as_str())],
+    );
+    mock_session.expect_get_cookie().times(0);
 
     let mut plugin_log = PluginLog::new("Csrf");
     assert_eq!(
@@ -224,4 +224,65 @@ async fn padded_real_token_uses_the_canonical_cookie_accessor() {
         PluginRunningResult::GoodNext
     );
     assert!(plugin_log.contains("OK"));
+}
+
+#[tokio::test]
+async fn borrowed_cookie_preserves_field_order_and_credential_boundaries() {
+    let csrf = Csrf::new(&create_csrf_config());
+    let token = CsrfToken::generate(&csrf.key).encode().unwrap();
+    let valid = format!("X-CSRF-Token={token}").into_bytes();
+    let missing = PluginRunningResult::ErrResponse {
+        status: 401,
+        body: Some(Bytes::from_static(br#"{"error_msg":"no csrf cookie"}"#)),
+    };
+    let mismatch = PluginRunningResult::ErrResponse {
+        status: 401,
+        body: Some(Bytes::from_static(br#"{"error_msg":"csrf token mismatch"}"#)),
+    };
+    for (fields, expected, message) in [
+        (
+            vec![b"other=value".to_vec(), valid.clone()],
+            PluginRunningResult::GoodNext,
+            "OK",
+        ),
+        (
+            vec![valid.clone(), b"opaque=\xff".to_vec()],
+            PluginRunningResult::GoodNext,
+            "OK",
+        ),
+        (
+            vec![b"opaque=\xff".to_vec(), valid.clone()],
+            missing.clone(),
+            "Deny missing token",
+        ),
+        (vec![b"x-csrf-token=wrong-case".to_vec()], missing, "Deny missing token"),
+        (
+            vec![b"X-CSRF-Token=".to_vec(), valid.clone()],
+            mismatch.clone(),
+            "Deny bad token",
+        ),
+        (
+            vec![b"X-CSRF-Token=first; X-CSRF-Token=second".to_vec(), valid.clone()],
+            mismatch,
+            "Deny bad token",
+        ),
+        (
+            vec![format!("other=a=b; X-CSRF-Token={token}; tail=x").into_bytes()],
+            PluginRunningResult::GoodNext,
+            "OK",
+        ),
+    ] {
+        let mut headers = http::HeaderMap::new();
+        headers.insert("x-csrf-token", http::HeaderValue::from_str(&token).unwrap());
+        for field in fields {
+            headers.append(http::header::COOKIE, http::HeaderValue::from_bytes(&field).unwrap());
+        }
+        let mut session = MockPluginSession::new();
+        session.expect_get_method().return_const("POST".to_string());
+        session.expect_get_cookie().times(0);
+        session.expect_request_header_map().return_const(headers);
+        let mut log = PluginLog::new("Csrf");
+        assert_eq!(csrf.run_request(&mut session, &mut log).await, expected);
+        assert!(log.contains(message));
+    }
 }
