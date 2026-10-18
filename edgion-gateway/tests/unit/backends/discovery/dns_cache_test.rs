@@ -362,3 +362,79 @@ fn concurrent_readers_and_invalidation_stay_consistent() {
     }
     assert_eq!(cache.len(), 0);
 }
+
+#[test]
+fn borrowed_query_preserves_owned_key_identity_and_hash() {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    #[derive(Hash)]
+    struct PreviousKey {
+        service_key: String,
+        external_name: String,
+        fingerprint: String,
+    }
+
+    fn hash(value: &impl Hash) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        value.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    let cases = [
+        ("", "", ""),
+        ("ab", "c", "system"),
+        ("a", "bc", "system"),
+        ("a", "b", "csystem"),
+        ("ns/service", "A.test", "system"),
+        ("ns/service", "a.test", "system"),
+        ("ns/service", "a.test", "std:192.0.2.53"),
+        ("ns/other", "a.test", "system"),
+        ("ns/é", "ñ.test", "π"),
+    ];
+    for (index, &(service_key, external_name, fingerprint)) in cases.iter().enumerate() {
+        let owned = DnsCacheKey::new(service_key, external_name, fingerprint);
+        let previous = PreviousKey {
+            service_key: service_key.to_string(),
+            external_name: external_name.to_string(),
+            fingerprint: fingerprint.to_string(),
+        };
+        assert_eq!(hash(&owned), hash(&previous));
+        for (other, &(service_key, external_name, fingerprint)) in cases.iter().enumerate() {
+            let query = DnsCacheQuery {
+                service_key: Cow::Borrowed(service_key),
+                external_name: Cow::Borrowed(external_name),
+                fingerprint: Cow::Borrowed(fingerprint),
+            };
+            let borrowed: &DnsCacheQuery<'_> = owned.borrow();
+            assert_eq!(borrowed == &query, index == other);
+            if index == other {
+                assert_eq!(hash(&query), hash(&previous));
+            }
+        }
+    }
+}
+
+#[test]
+fn lookup_allocates_only_the_owned_address_result() {
+    let cache = cache();
+    let now = Instant::now();
+    let addresses = vec![ip("192.0.2.4"), ip("2001:db8::4")];
+    cache.insert("ns/service", "a.test", "system", addresses.clone(), MIN1, now);
+    let (_, result_allocations) = crate::test_allocation_counter::count_allocations(|| addresses.clone());
+    let (hit, allocations) =
+        crate::test_allocation_counter::count_allocations(|| cache.get("ns/service", "a.test", "system", now));
+    assert_eq!(hit, Some(addresses));
+    assert_eq!(allocations, result_allocations);
+
+    for (service, host, resolver) in [
+        ("ns/other", "a.test", "system"),
+        ("ns/service", "other.test", "system"),
+        ("ns/service", "a.test", "std:192.0.2.53"),
+    ] {
+        let (miss, allocations) =
+            crate::test_allocation_counter::count_allocations(|| cache.get(service, host, resolver, now));
+        assert!(miss.is_none());
+        assert_eq!(allocations, 0);
+    }
+}

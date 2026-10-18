@@ -4303,3 +4303,27 @@ Formatting, workspace check/Clippy, seven repository guards and diff hygiene
 passed. Existing warnings remain outside changed code. The separately recorded
 TLS admission fixture failure remains outside this batch; no full backend suite,
 live transport or throughput benchmark ran.
+
+## Borrowed ExternalName DNS lookup identity
+
+DnsCache now uses a private Cow query representation shared with an owned
+entry-key wrapper. Borrowed Service, hostname and resolver-fingerprint components
+flow through the canonical ShardedLruCache Borrow interface without constructing
+three temporary Strings. Inserted keys still own all components. No shared cache
+API, dependency or resolver behavior changed.
+
+The new regression compares previous three-String hashes against owned and
+borrowed representations, including empty fields, case differences, component
+boundaries and permitted UTF-8. Allocation counting verifies misses allocate
+nothing inside DnsCache::get and hits allocate only the independent address
+result. Resolver fingerprint construction and address cloning remain separate
+costs. A local type-layout probe found both key representations occupy 72 bytes
+on the current target; this is not a portable layout guarantee or a throughput
+measurement. Canonical recency, shard routing, TTL and removal semantics remain.
+
+Fresh verification passed 225 network-free tests: 47 canonical-cache,
+73 discovery, 103 HTTP upstream-peer and two native DNS await/cache-boundary
+tests. Gateway filters ran serially. No live transport or throughput benchmark
+ran; the previously recorded TLS admission fixture issue remains separate.
+Formatting, workspace check/Clippy, seven repository guards and diff hygiene
+passed. Existing warnings remain outside changed code.

@@ -8,6 +8,7 @@
 //! self-resolved addresses are memoized for a short TTL by [`DnsCache`] so the
 //! hot path does not re-resolve on every request.
 
+use std::borrow::{Borrow, Cow};
 use std::collections::HashSet;
 use std::net::IpAddr;
 use std::sync::LazyLock;
@@ -100,10 +101,30 @@ pub fn decide_external_name_path(mode: DnsResolutionMode, slice_has_ready: bool)
 ///   [`edgion_common::dns::ResolverSpec::fingerprint`]), so a resolver change
 ///   invalidates rather than serving addresses resolved by another resolver.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct DnsCacheKey {
-    service_key: String,
-    external_name: String,
-    fingerprint: String,
+struct DnsCacheKey(DnsCacheQuery<'static>);
+
+/// Shared fieldwise identity for owned entries and allocation-free lookup keys.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct DnsCacheQuery<'a> {
+    service_key: Cow<'a, str>,
+    external_name: Cow<'a, str>,
+    fingerprint: Cow<'a, str>,
+}
+
+impl DnsCacheKey {
+    fn new(service_key: &str, external_name: &str, fingerprint: &str) -> Self {
+        Self(DnsCacheQuery {
+            service_key: Cow::Owned(service_key.to_string()),
+            external_name: Cow::Owned(external_name.to_string()),
+            fingerprint: Cow::Owned(fingerprint.to_string()),
+        })
+    }
+}
+
+impl<'a> Borrow<DnsCacheQuery<'a>> for DnsCacheKey {
+    fn borrow(&self) -> &DnsCacheQuery<'a> {
+        &self.0
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -209,10 +230,10 @@ impl DnsCache {
     /// only make a live entry read as a miss, never make an expired one read as a
     /// hit.
     pub fn get(&self, service_key: &str, external_name: &str, fingerprint: &str, now: Instant) -> Option<Vec<IpAddr>> {
-        let key = DnsCacheKey {
-            service_key: service_key.to_string(),
-            external_name: external_name.to_string(),
-            fingerprint: fingerprint.to_string(),
+        let key = DnsCacheQuery {
+            service_key: Cow::Borrowed(service_key),
+            external_name: Cow::Borrowed(external_name),
+            fingerprint: Cow::Borrowed(fingerprint),
         };
         let entry = self.entries.get(&key)?;
         if entry.expires_at > now {
@@ -246,11 +267,7 @@ impl DnsCache {
         let Some(expires_at) = now.checked_add(ttl) else {
             return;
         };
-        let key = DnsCacheKey {
-            service_key: service_key.to_string(),
-            external_name: external_name.to_string(),
-            fingerprint: fingerprint.to_string(),
-        };
+        let key = DnsCacheKey::new(service_key, external_name, fingerprint);
         self.entries.insert(key, DnsCacheEntry { addrs, expires_at }, Some(ttl));
     }
 
@@ -269,7 +286,7 @@ impl DnsCache {
             return;
         }
         for key in self.entries.get_keys() {
-            if service_keys.contains(&key.service_key) {
+            if service_keys.contains(key.0.service_key.as_ref()) {
                 self.entries.remove(&key);
             }
         }
