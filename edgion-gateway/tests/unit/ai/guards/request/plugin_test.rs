@@ -909,3 +909,100 @@ fn evaluator_count_is_inclusive_and_retains_final_union_validation() {
         Err("evaluator bad key")
     );
 }
+
+#[test]
+fn ordered_merge_matches_linear_reference_and_preserves_fallbacks() {
+    fn key(index: u32) -> GuardSpanKey {
+        GuardSpanKey {
+            message_index: index / 3,
+            part: match index % 3 {
+                0 => GuardPart::Content,
+                value => GuardPart::TextPart(value - 1),
+            },
+        }
+    }
+    fn reference(
+        mut local: Vec<(GuardSpanKey, String)>,
+        external: Vec<(GuardSpanKey, String)>,
+    ) -> GuardDecision<GuardSpanKey> {
+        for (key, text) in external {
+            if let Some(slot) = local.iter_mut().find(|(existing, _)| *existing == key) {
+                slot.1 = text;
+            } else {
+                local.push((key, text));
+            }
+        }
+        if local.is_empty() {
+            GuardDecision::Pass
+        } else {
+            local.sort_by_key(|(key, _)| *key);
+            GuardDecision::Replace(local)
+        }
+    }
+    for local_mask in 0..32u32 {
+        for external_mask in 0..32u32 {
+            let items = |mask: u32, prefix: &str| {
+                (0..5)
+                    .filter(|index| mask & (1 << index) != 0)
+                    .map(|index| (key(index), format!("{prefix}-{index}")))
+                    .collect::<Vec<_>>()
+            };
+            let local = items(local_mask, "local");
+            let external = items(external_mask, "external");
+            let expected = reference(local.clone(), external.clone());
+            assert_eq!(merge(GuardDecision::Replace(local), external), expected);
+        }
+    }
+    for (local_keys, external_keys) in [
+        (vec![0, 0, 1], vec![0, 2]),
+        (vec![2, 0, 1], vec![0, 2]),
+        (vec![0, 1], vec![2, 0, 2]),
+        (vec![0, 1], vec![0, 0, 2]),
+    ] {
+        let items = |keys: Vec<u32>, prefix: &str| {
+            keys.into_iter()
+                .enumerate()
+                .map(|(index, value)| (key(value), format!("{prefix}-{index}")))
+                .collect::<Vec<_>>()
+        };
+        let local = items(local_keys, "local");
+        let external = items(external_keys, "external");
+        let expected = reference(local.clone(), external.clone());
+        assert_eq!(merge(GuardDecision::Replace(local), external), expected);
+    }
+}
+
+#[test]
+fn overlapping_ordered_merge_moves_text_without_allocating() {
+    let items = |prefix: &str| {
+        (0..256)
+            .map(|message_index| {
+                (
+                    GuardSpanKey {
+                        message_index,
+                        part: GuardPart::Content,
+                    },
+                    format!("{prefix}-{message_index}"),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let local = items("local");
+    let external = items("external");
+    let local_pointer = local.as_ptr();
+    let text_pointers: Vec<_> = external.iter().map(|(_, text)| text.as_ptr()).collect();
+    let (result, stats) =
+        crate::test_allocation_counter::count_allocation_stats(|| merge(GuardDecision::Replace(local), external));
+    assert_eq!(stats.calls, 0);
+    assert_eq!(stats.requested_bytes, 0);
+    let GuardDecision::Replace(merged) = result else {
+        panic!("expected replacements");
+    };
+    assert_eq!(merged.as_ptr(), local_pointer);
+    assert_eq!(merged.len(), 256);
+    for (index, ((key, text), pointer)) in merged.iter().zip(text_pointers).enumerate() {
+        assert_eq!(key.message_index, index as u32);
+        assert_eq!(text, &format!("external-{index}"));
+        assert_eq!(text.as_ptr(), pointer);
+    }
+}

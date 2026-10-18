@@ -2553,3 +2553,22 @@ final union-count/byte checks. Fresh verification passed all 70 AiGuard request
 tests, formatting, workspace check/Clippy and seven repository guards. Remaining
 warnings are outside changed code. The owning budget knowledge page records this
 early necessary bound separately from final admission.
+
+## AiGuard ordered replacement merge
+
+For strictly ordered unique local and external keys, merge now finds overrides
+by binary search while local keys stay fixed, moves replacement Strings into
+those slots, compacts unmatched external entries in their existing Vec, then
+appends and sorts only when new keys remain. Both order guards protect the old
+fallback for arbitrary duplicate or unsorted helper inputs. No separate output
+Vec or lookup index is added; appending may still grow local capacity. Including
+guard scans, fully overlapping sets take O(n + m log(n + 1)) comparison work;
+the general ordered path additionally sorts the combined output rather than
+performing repeated linear insertion searches. Final admission and publication
+are unchanged. Independent plan and code reviews passed.
+Differential tests cover 1,024 subset pairs across content/text-part keys and
+explicit duplicate/unsorted fallbacks. A 256-item full-overlap regression verifies
+zero allocation, retained local Vec storage and moved external String pointers.
+Fresh verification passed all 72 AiGuard request tests, formatting, workspace
+check/Clippy and seven repository guards. Remaining warnings are outside changed
+code. No all-input zero-allocation or end-to-end throughput result is claimed.

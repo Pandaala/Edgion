@@ -467,17 +467,33 @@ fn merge_evaluator_replacements(
 
 /// Evaluator replacements override local ones for the same span key, so each
 /// key resolves to exactly one final value.
-fn merge(local: GuardDecision<GuardSpanKey>, external: Vec<(GuardSpanKey, String)>) -> GuardDecision<GuardSpanKey> {
+fn merge(local: GuardDecision<GuardSpanKey>, mut external: Vec<(GuardSpanKey, String)>) -> GuardDecision<GuardSpanKey> {
     let mut merged = match local {
         GuardDecision::Replace(items) => items,
         _ => Vec::new(),
     };
-    if merged.is_empty() && external.windows(2).all(|pair| pair[0].0 < pair[1].0) {
+    let external_ordered = external.windows(2).all(|pair| pair[0].0 < pair[1].0);
+    if merged.is_empty() && external_ordered {
         return if external.is_empty() {
             GuardDecision::Pass
         } else {
             GuardDecision::Replace(external)
         };
+    }
+    if external_ordered && merged.windows(2).all(|pair| pair[0].0 < pair[1].0) {
+        // Only text changes during this scan, preserving the local key order.
+        external.retain_mut(|(key, text)| match merged.binary_search_by_key(key, |(key, _)| *key) {
+            Ok(index) => {
+                merged[index].1 = std::mem::take(text);
+                false
+            }
+            Err(_) => true,
+        });
+        if !external.is_empty() {
+            merged.append(&mut external);
+            merged.sort_unstable_by_key(|(key, _)| *key);
+        }
+        return GuardDecision::Replace(merged);
     }
     for (key, text) in external {
         match merged.iter_mut().find(|(existing, _)| *existing == key) {
