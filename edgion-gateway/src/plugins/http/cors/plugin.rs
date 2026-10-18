@@ -117,10 +117,10 @@ impl Cors {
                 Cow::Borrowed(self.config.get_allow_methods()),
             ));
 
-            let requested_headers = session.header_value("access-control-request-headers");
             headers.push((
                 "Access-Control-Allow-Headers",
-                self.config.get_allow_headers(requested_headers),
+                self.config
+                    .get_allow_headers(|| session.header_value("access-control-request-headers")),
             ));
         }
 

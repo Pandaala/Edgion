@@ -399,3 +399,49 @@ fn timing_and_private_network_decisions_borrow_header_inputs() {
         }
     }
 }
+
+#[test]
+fn requested_headers_are_read_only_for_preflight_reflection() {
+    for configured in ["*", "X-One,X-Two", "**"] {
+        for requested in [None, Some(""), Some("X-Requested,X-Other")] {
+            for preflight in [false, true] {
+                let config = CorsConfig {
+                    allow_headers: configured.to_string(),
+                    allow_credentials: false,
+                    max_age: None,
+                    ..create_cors_config()
+                };
+                let cors = Cors::new(&config);
+                let reflects = preflight && configured == "**";
+                let mut session = MockPluginSession::new();
+                session.expect_request_header_map().return_const(http::HeaderMap::new());
+                session
+                    .expect_header_value()
+                    .times(if reflects { 2 } else { 0 })
+                    .returning(move |name| {
+                        assert_eq!(name, "access-control-request-headers");
+                        requested.map(str::to_owned)
+                    });
+                drop(cors.build_cors_header_pairs(&mut session, "https://example.com", preflight));
+                let (headers, calls) = crate::test_allocation_counter::count_allocations(|| {
+                    cors.build_cors_header_pairs(&mut session, "https://example.com", preflight)
+                });
+                let expected = preflight.then_some(if configured == "**" {
+                    requested.unwrap_or("*")
+                } else {
+                    configured
+                });
+                let actual = headers
+                    .iter()
+                    .find(|(name, _)| *name == "Access-Control-Allow-Headers")
+                    .map(|(_, value)| value.as_ref());
+                assert_eq!(actual, expected);
+                assert_eq!(
+                    calls,
+                    usize::from(reflects && requested.is_some_and(|value| !value.is_empty()))
+                );
+                assert!(!headers.spilled());
+            }
+        }
+    }
+}

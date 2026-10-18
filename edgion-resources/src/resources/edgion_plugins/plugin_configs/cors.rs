@@ -313,13 +313,13 @@ impl CorsConfig {
 
     /// Get the actual allow-headers value (may need dynamic reflection).
     ///
-    /// Only the `**` shorthand is request-dependent, so it takes ownership of
-    /// `requested_headers` and moves it into the result rather than copying it.
-    /// Every other configuration borrows the stored string.
-    pub fn get_allow_headers(&self, requested_headers: Option<String>) -> Cow<'_, str> {
+    /// Only the `**` shorthand calls `requested_headers`, moving its owned
+    /// result without copying it. Every other configuration borrows the stored
+    /// string without reading or materializing request headers.
+    pub fn get_allow_headers(&self, requested_headers: impl FnOnce() -> Option<String>) -> Cow<'_, str> {
         if self.allow_headers == "**" {
             // Dynamic reflection: return what client requested
-            match requested_headers {
+            match requested_headers() {
                 Some(requested) => Cow::Owned(requested),
                 None => Cow::Borrowed(FORCE_WILDCARD_HEADERS_FALLBACK),
             }

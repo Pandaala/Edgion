@@ -18,8 +18,9 @@ and the literal `true` flags. Request-dependent values own their bytes: the echo
 `Access-Control-Max-Age` is the one knowingly excluded case — see below.
 
 `CorsConfig::get_allow_methods` returns `&str`, `CorsConfig::get_allow_headers` returns
-`Cow<'_, str>` and takes `Option<String>` so the `**` reflection moves the request value
-instead of copying it, and `CorsConfig::get_expose_headers` already returned `&str`.
+`Cow<'_, str>` and takes an `FnOnce() -> Option<String>` producer. Only the
+`**` reflection calls it, moving the request value instead of copying it;
+`CorsConfig::get_expose_headers` already returned `&str`.
 
 `CorsConfig` carries **no** precomputed header cache fields. Its only `#[serde(skip)]` +
 `#[schemars(skip)]` runtime fields remain the origin matchers (`origins_cache`,
@@ -128,3 +129,20 @@ regression measures zero allocation for selected denied-origin and timing/flag
 decisions, and one for nonempty accepted or timing echoes. The full eight-header
 order/no-spill and existing plugin tests remain relevant; this is not a claim
 that all CORS requests or header insertion are allocation-free.
+
+
+## Lazy requested-header reflection
+
+The canonical `get_allow_headers` getter requests an owned value only for `**`.
+The Gateway supplies a closure over the existing owned header accessor, so fixed
+lists and `*` do not read or copy Access-Control-Request-Headers. No duplicate
+policy check or new runtime cache is needed. Reflected values still own their
+bytes before session mutation, with Some(empty) distinct from the missing-value
+fallback. Ordinary non-preflight responses continue to skip this getter entirely.
+
+The resources regression proves static branches never invoke the producer and
+reflection invokes it once, retaining the moved String's pointer. A warmed
+Gateway matrix checks missing/empty/nonempty values in preflight and actual
+responses: selected header-pair preparation allocates zero except for the one
+nonempty reflection copy. Max-Age is disabled in that measurement; final header
+insertion and other CORS work are not included in the allocation claim.

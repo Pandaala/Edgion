@@ -1129,3 +1129,22 @@ suppression; the focused plugin rerun passed 15 tests and formatting/workspace
 check/Clippy passed again. Seven repository guards and final document/diff checks
 passed. Remaining warnings are outside changed code. No full integration suite or
 throughput benchmark ran; header insertion and other CORS allocations remain.
+
+## Lazy CORS requested-header reflection
+
+The canonical CorsConfig getter now invokes an owned-value producer only for
+allow_headers **. Gateway preflight preparation supplies the existing header
+accessor lazily, avoiding discarded Access-Control-Request-Headers copies for
+fixed lists and *. Reflections still move an owned String, preserving empty
+versus missing fallback and lifetime before session mutation. Actual responses
+continue to skip the getter. The supporting resources scope is limited to the
+existing CorsConfig helper and its unit tests; no schema/cache fields changed.
+
+Independent plan and final source reviews passed. Resources CORS tests passed 35
+and Gateway CORS-filtered tests passed 42. Tests prove lazy/exactly-once invocation,
+moved-pointer identity and preflight/actual-response output parity. Selected
+header-pair preparation allocates zero except one nonempty reflection copy, with
+Max-Age disabled during measurement. Formatting, workspace check/Clippy and seven
+repository guards passed; existing warnings remain outside changed code. No full
+integration suite or throughput benchmark ran. Final header insertion and other
+CORS work retain their existing ownership and costs.

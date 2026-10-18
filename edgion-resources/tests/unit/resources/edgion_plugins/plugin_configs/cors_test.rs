@@ -125,7 +125,7 @@ fn test_headers_reflection() {
         allow_headers: "**".to_string(),
         ..Default::default()
     };
-    let headers = cors.get_allow_headers(Some("Content-Type,X-Custom".to_string()));
+    let headers = cors.get_allow_headers(|| Some("Content-Type,X-Custom".to_string()));
 
     assert_eq!(headers, "Content-Type,X-Custom");
 }
@@ -553,4 +553,35 @@ mod validation_trait_tests {
 
         assert_eq!(trait_msg, init_msg);
     }
+}
+
+#[test]
+fn allow_headers_materializes_only_dynamic_reflection() {
+    for configured in ["*", "X-One,X-Two"] {
+        let config = CorsConfig {
+            allow_headers: configured.to_string(),
+            ..Default::default()
+        };
+        let value = config.get_allow_headers(|| panic!("static headers must not read request values"));
+        assert_eq!(value, configured);
+        assert_eq!(value.as_ptr(), config.allow_headers.as_ptr());
+    }
+    let config = CorsConfig {
+        allow_headers: "**".to_string(),
+        ..Default::default()
+    };
+    for input in [String::new(), "X-One,X-Two".to_string()] {
+        let pointer = input.as_ptr();
+        let expected = input.clone();
+        let mut calls = 0;
+        let value = config.get_allow_headers(|| {
+            calls += 1;
+            Some(input)
+        });
+        assert_eq!(calls, 1);
+        assert!(matches!(value, Cow::Owned(_)));
+        assert_eq!(value, expected);
+        assert_eq!(value.as_ptr(), pointer);
+    }
+    assert_eq!(config.get_allow_headers(|| None), "*");
 }
