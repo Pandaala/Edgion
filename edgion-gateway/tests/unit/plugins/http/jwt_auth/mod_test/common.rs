@@ -122,8 +122,9 @@ pub(super) async fn run_and_assert_reject(auth: JwtAuth, token: &str) -> PluginL
     mock.expect_get_method().return_const("GET".to_string());
     let token_clone = token.to_string();
     setup_header_mocks(&mut mock, &[("authorization", &format!("Bearer {}", token_clone))]);
-    mock.expect_get_query_param().returning(|_| None);
-    mock.expect_get_cookie().returning(|_| None);
+    mock.expect_get_query_param().times(0);
+    mock.expect_get_query_param_ref().returning(|_| None);
+    mock.expect_get_cookie().times(0);
     mock.expect_write_response_header().returning(|_, _| Ok(()));
     mock.expect_write_response_body().returning(|_, _| Ok(()));
     mock.expect_shutdown().returning(|| {});

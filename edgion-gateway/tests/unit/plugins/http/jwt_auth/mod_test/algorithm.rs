@@ -19,8 +19,9 @@ async fn test_valid_hs256_token_succeeds() {
     mock.expect_get_method().return_const("GET".to_string());
     let token_clone = token.clone();
     setup_header_mocks(&mut mock, &[("authorization", &format!("Bearer {}", token_clone))]);
-    mock.expect_get_query_param().returning(|_| None);
-    mock.expect_get_cookie().returning(|_| None);
+    mock.expect_get_query_param().times(0);
+    mock.expect_get_query_param_ref().returning(|_| None);
+    mock.expect_get_cookie().times(0);
     mock.expect_set_request_header().returning(|_, _| Ok(()));
 
     let r = auth.run_request(&mut mock, &mut log).await;
@@ -43,8 +44,9 @@ async fn test_algorithm_mismatch_rejected() {
     mock.expect_get_method().return_const("GET".to_string());
     let token_clone = token.clone();
     setup_header_mocks(&mut mock, &[("authorization", &format!("Bearer {}", token_clone))]);
-    mock.expect_get_query_param().returning(|_| None);
-    mock.expect_get_cookie().returning(|_| None);
+    mock.expect_get_query_param().times(0);
+    mock.expect_get_query_param_ref().returning(|_| None);
+    mock.expect_get_cookie().times(0);
     mock.expect_write_response_header().returning(|_, _| Ok(()));
     mock.expect_write_response_body().returning(|_, _| Ok(()));
     mock.expect_shutdown().returning(|| {});
@@ -61,8 +63,9 @@ async fn test_invalid_token_returns_401() {
 
     mock.expect_get_method().return_const("GET".to_string());
     setup_header_mocks(&mut mock, &[("authorization", "Bearer invalid.token.here")]);
-    mock.expect_get_query_param().returning(|_| None);
-    mock.expect_get_cookie().returning(|_| None);
+    mock.expect_get_query_param().times(0);
+    mock.expect_get_query_param_ref().returning(|_| None);
+    mock.expect_get_cookie().times(0);
     mock.expect_write_response_header().returning(|_, _| Ok(()));
     mock.expect_write_response_body().returning(|_, _| Ok(()));
     mock.expect_shutdown().returning(|| {});

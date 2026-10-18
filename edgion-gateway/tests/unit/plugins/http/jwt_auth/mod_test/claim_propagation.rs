@@ -34,8 +34,9 @@ async fn test_claims_to_headers() {
     mock.expect_get_method().return_const("GET".to_string());
     let token_clone = token.clone();
     setup_header_mocks(&mut mock, &[("authorization", &format!("Bearer {}", token_clone))]);
-    mock.expect_get_query_param().returning(|_| None);
-    mock.expect_get_cookie().returning(|_| None);
+    mock.expect_get_query_param().times(0);
+    mock.expect_get_query_param_ref().returning(|_| None);
+    mock.expect_get_cookie().times(0);
 
     let headers_set: Arc<Mutex<StdHashMap<String, String>>> = Arc::new(Mutex::new(StdHashMap::new()));
     let headers_clone = headers_set.clone();
@@ -79,8 +80,9 @@ async fn test_store_claims_in_ctx() {
     mock.expect_get_method().return_const("GET".to_string());
     let token_clone = token.clone();
     setup_header_mocks(&mut mock, &[("authorization", &format!("Bearer {}", token_clone))]);
-    mock.expect_get_query_param().returning(|_| None);
-    mock.expect_get_cookie().returning(|_| None);
+    mock.expect_get_query_param().times(0);
+    mock.expect_get_query_param_ref().returning(|_| None);
+    mock.expect_get_cookie().times(0);
     mock.expect_set_request_header().returning(|_, _| Ok(()));
 
     let ctx_var_captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
@@ -119,8 +121,9 @@ async fn test_username_from_sub() {
     mock.expect_get_method().return_const("GET".to_string());
     let token_clone = token.clone();
     setup_header_mocks(&mut mock, &[("authorization", &format!("Bearer {}", token_clone))]);
-    mock.expect_get_query_param().returning(|_| None);
-    mock.expect_get_cookie().returning(|_| None);
+    mock.expect_get_query_param().times(0);
+    mock.expect_get_query_param_ref().returning(|_| None);
+    mock.expect_get_cookie().times(0);
     mock.expect_set_request_header().returning(|_, _| Ok(()));
 
     let r = auth.run_request(&mut mock, &mut log).await;
@@ -149,8 +152,9 @@ async fn test_username_missing_sub_uses_placeholder() {
     mock.expect_get_method().return_const("GET".to_string());
     let token_clone = token.clone();
     setup_header_mocks(&mut mock, &[("authorization", &format!("Bearer {}", token_clone))]);
-    mock.expect_get_query_param().returning(|_| None);
-    mock.expect_get_cookie().returning(|_| None);
+    mock.expect_get_query_param().times(0);
+    mock.expect_get_query_param_ref().returning(|_| None);
+    mock.expect_get_cookie().times(0);
     mock.expect_set_request_header().returning(|_, _| Ok(()));
 
     let r = auth.run_request(&mut mock, &mut log).await;

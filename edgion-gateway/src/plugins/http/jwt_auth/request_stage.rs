@@ -7,6 +7,7 @@ use crate::plugins::http::common::auth_common::{
     strip_cookie, strip_query_param,
 };
 use crate::plugins::runtime::log::{la, sensitive};
+use crate::plugins::runtime::session_adapter::cookie_value_ref;
 use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt};
 
 /// Maximum size for a single JWT claim header value propagated upstream (8KB).
@@ -24,7 +25,7 @@ pub(super) enum TokenSource {
 
 impl JwtAuth {
     /// Extract token from request (priority: Header > Query > Cookie).
-    pub(super) fn extract_token(&self, session: &dyn PluginSession) -> Option<(String, TokenSource)> {
+    pub(super) fn extract_token<'a>(&self, session: &'a dyn PluginSession) -> Option<(&'a str, TokenSource)> {
         if let Some(v) = session.header_str(&self.config.header) {
             let trimmed = v.trim();
             let token = if trimmed.len() >= 7 && trimmed.as_bytes()[..7].eq_ignore_ascii_case(b"bearer ") {
@@ -33,18 +34,18 @@ impl JwtAuth {
                 trimmed
             };
             if !token.is_empty() {
-                return Some((token.to_string(), TokenSource::Header));
+                return Some((token, TokenSource::Header));
             }
         }
         // RFC 6750 §2.3/§5.3: bearer tokens in URLs leak into logs/history; opt-in only.
         if self.config.allow_token_in_query {
-            if let Some(t) = session.get_query_param(&self.config.query) {
+            if let Some(t) = session.get_query_param_ref(&self.config.query) {
                 if !t.is_empty() {
                     return Some((t, TokenSource::Query));
                 }
             }
         }
-        if let Some(t) = session.get_cookie(&self.config.cookie) {
+        if let Some(t) = cookie_value_ref(session.request_header_map(), &self.config.cookie) {
             if !t.is_empty() {
                 return Some((t, TokenSource::Cookie));
             }

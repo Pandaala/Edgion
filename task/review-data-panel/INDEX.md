@@ -1553,3 +1553,25 @@ operation requested 83 bytes (two calls) for either fixture. These are test-buil
 fixture results, not retained-memory or production-throughput measurements.
 Formatting, workspace check/Clippy and seven repository guards passed, with
 existing warnings outside changed files. Independent final review passed.
+
+## Borrowed JWT credential extraction
+
+JWT extraction now borrows the selected Header, frozen decoded Query or canonical
+Cookie value through synchronous verification. Verification returns owned claims
+and issuer plus a store-bound group reference, so no session token borrow is
+needed during later mutation or failure awaits. Source priority, query opt-in,
+Bearer trimming, empty/opaque handling, anonymous policy and credential hiding
+remain. Parsing, verification and claims ownership still allocate.
+
+Independent plan review passed. Existing tests use borrowed query fixtures and
+real Cookie headers while forbidding owned getters. New extraction cases cover
+priority, duplicate/opaque fields, exact Cookie keys, empty/whitespace rules and
+query suppression. Pointer checks cover borrowed selected-value ownership only. An initial mocked
+allocation assertion observed one allocation and failed, while value/pointer
+assertions passed (46 tests passed, one failed). Its cause was not established;
+an independently reviewed amendment removed the unsupported zero-allocation
+assertion while retaining pointer, value and owned-getter prohibition checks. No full suite, live
+integration or throughput benchmark ran.
+Fresh rerun passed all 47 JWT tests. Formatting, workspace check/Clippy and
+seven repository guards passed; existing warnings are outside changed files.
+Independent final review approved the corrected tests and limited claims.

@@ -52,8 +52,9 @@ async fn missing_token_returns_exact_bare_bearer_challenge() {
     let mut log = PluginLog::new("JwtAuth");
     mock.expect_get_method().return_const("GET".to_string());
     setup_header_mocks(&mut mock, &[]);
-    mock.expect_get_query_param().returning(|_| None);
-    mock.expect_get_cookie().returning(|_| None);
+    mock.expect_get_query_param().times(0);
+    mock.expect_get_query_param_ref().returning(|_| None);
+    mock.expect_get_cookie().times(0);
     expect_auth_response(&mut mock, "Bearer realm=\"my-api\"");
 
     assert_eq!(
@@ -75,8 +76,9 @@ async fn invalid_token_returns_exact_invalid_token_challenge() {
     let mut log = PluginLog::new("JwtAuth");
     mock.expect_get_method().return_const("GET".to_string());
     setup_header_mocks(&mut mock, &[("authorization", "Bearer not-a-jwt")]);
-    mock.expect_get_query_param().returning(|_| None);
-    mock.expect_get_cookie().returning(|_| None);
+    mock.expect_get_query_param().times(0);
+    mock.expect_get_query_param_ref().returning(|_| None);
+    mock.expect_get_cookie().times(0);
     expect_auth_response(
         &mut mock,
         "Bearer realm=\"my-api\", error=\"invalid_token\", error_description=\"Unauthorized - Invalid or missing JWT\"",
@@ -100,8 +102,9 @@ async fn auth_failure_delay_is_exact_under_paused_time() {
     let mut mock = MockPluginSession::new();
     mock.expect_get_method().return_const("GET".to_string());
     setup_header_mocks(&mut mock, &[]);
-    mock.expect_get_query_param().returning(|_| None);
-    mock.expect_get_cookie().returning(|_| None);
+    mock.expect_get_query_param().times(0);
+    mock.expect_get_query_param_ref().returning(|_| None);
+    mock.expect_get_cookie().times(0);
     expect_auth_response(&mut mock, "Bearer realm=\"jwt\"");
 
     let start = Instant::now();

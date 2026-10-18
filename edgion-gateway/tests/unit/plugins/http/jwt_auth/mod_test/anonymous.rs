@@ -10,8 +10,9 @@ async fn test_no_token_returns_401() {
 
     mock.expect_get_method().return_const("GET".to_string());
     setup_header_mocks(&mut mock, &[]);
-    mock.expect_get_query_param().returning(|_| None);
-    mock.expect_get_cookie().returning(|_| None);
+    mock.expect_get_query_param().times(0);
+    mock.expect_get_query_param_ref().returning(|_| None);
+    mock.expect_get_cookie().times(0);
     mock.expect_write_response_header().returning(|_, _| Ok(()));
     mock.expect_write_response_body().returning(|_, _| Ok(()));
     mock.expect_shutdown().returning(|| {});
@@ -29,8 +30,9 @@ async fn test_no_token_with_anonymous() {
 
     mock.expect_get_method().return_const("GET".to_string());
     setup_header_mocks(&mut mock, &[]);
-    mock.expect_get_query_param().returning(|_| None);
-    mock.expect_get_cookie().returning(|_| None);
+    mock.expect_get_query_param().times(0);
+    mock.expect_get_query_param_ref().returning(|_| None);
+    mock.expect_get_cookie().times(0);
     mock.expect_set_request_header_value()
         .times(2)
         .returning(|name, value| {
@@ -59,8 +61,9 @@ async fn test_no_token_with_anonymous_allows_access() {
 
     mock.expect_get_method().return_const("GET".to_string());
     setup_header_mocks(&mut mock, &[]);
-    mock.expect_get_query_param().returning(|_| None);
-    mock.expect_get_cookie().returning(|_| None);
+    mock.expect_get_query_param().times(0);
+    mock.expect_get_query_param_ref().returning(|_| None);
+    mock.expect_get_cookie().times(0);
     mock.expect_set_request_header_value()
         .times(2)
         .returning(|name, value| {
@@ -89,8 +92,9 @@ async fn test_invalid_token_with_anonymous_must_reject() {
 
     mock.expect_get_method().return_const("GET".to_string());
     setup_header_mocks(&mut mock, &[("authorization", "Bearer invalid.token.here")]);
-    mock.expect_get_query_param().returning(|_| None);
-    mock.expect_get_cookie().returning(|_| None);
+    mock.expect_get_query_param().times(0);
+    mock.expect_get_query_param_ref().returning(|_| None);
+    mock.expect_get_cookie().times(0);
     mock.expect_write_response_header().returning(|_, _| Ok(()));
     mock.expect_write_response_body().returning(|_, _| Ok(()));
     mock.expect_shutdown().returning(|| {});

@@ -9,8 +9,9 @@ async fn run_and_assert_accept(auth: JwtAuth, token: &str) {
     mock.expect_get_method().return_const("GET".to_string());
     let token = token.to_string();
     setup_header_mocks(&mut mock, &[("authorization", &format!("Bearer {token}"))]);
-    mock.expect_get_query_param().returning(|_| None);
-    mock.expect_get_cookie().returning(|_| None);
+    mock.expect_get_query_param().times(0);
+    mock.expect_get_query_param_ref().returning(|_| None);
+    mock.expect_get_cookie().times(0);
     mock.expect_set_request_header().returning(|_, _| Ok(()));
 
     assert_eq!(
@@ -38,8 +39,9 @@ async fn test_issuer_validation_pass() {
     mock.expect_get_method().return_const("GET".to_string());
     let token_clone = token.clone();
     setup_header_mocks(&mut mock, &[("authorization", &format!("Bearer {}", token_clone))]);
-    mock.expect_get_query_param().returning(|_| None);
-    mock.expect_get_cookie().returning(|_| None);
+    mock.expect_get_query_param().times(0);
+    mock.expect_get_query_param_ref().returning(|_| None);
+    mock.expect_get_cookie().times(0);
     mock.expect_set_request_header().returning(|_, _| Ok(()));
 
     let r = auth.run_request(&mut mock, &mut log).await;
@@ -69,8 +71,9 @@ async fn test_issuer_validation_fail() {
     mock.expect_get_method().return_const("GET".to_string());
     let token_clone = token.clone();
     setup_header_mocks(&mut mock, &[("authorization", &format!("Bearer {}", token_clone))]);
-    mock.expect_get_query_param().returning(|_| None);
-    mock.expect_get_cookie().returning(|_| None);
+    mock.expect_get_query_param().times(0);
+    mock.expect_get_query_param_ref().returning(|_| None);
+    mock.expect_get_cookie().times(0);
     mock.expect_write_response_header().returning(|_, _| Ok(()));
     mock.expect_write_response_body().returning(|_, _| Ok(()));
     mock.expect_shutdown().returning(|| {});
@@ -105,8 +108,9 @@ async fn test_audience_validation_pass() {
     mock.expect_get_method().return_const("GET".to_string());
     let token_clone = token.clone();
     setup_header_mocks(&mut mock, &[("authorization", &format!("Bearer {}", token_clone))]);
-    mock.expect_get_query_param().returning(|_| None);
-    mock.expect_get_cookie().returning(|_| None);
+    mock.expect_get_query_param().times(0);
+    mock.expect_get_query_param_ref().returning(|_| None);
+    mock.expect_get_cookie().times(0);
     mock.expect_set_request_header().returning(|_, _| Ok(()));
 
     let r = auth.run_request(&mut mock, &mut log).await;
@@ -136,8 +140,9 @@ async fn test_audience_validation_fail() {
     mock.expect_get_method().return_const("GET".to_string());
     let token_clone = token.clone();
     setup_header_mocks(&mut mock, &[("authorization", &format!("Bearer {}", token_clone))]);
-    mock.expect_get_query_param().returning(|_| None);
-    mock.expect_get_cookie().returning(|_| None);
+    mock.expect_get_query_param().times(0);
+    mock.expect_get_query_param_ref().returning(|_| None);
+    mock.expect_get_cookie().times(0);
     mock.expect_write_response_header().returning(|_, _| Ok(()));
     mock.expect_write_response_body().returning(|_, _| Ok(()));
     mock.expect_shutdown().returning(|| {});
@@ -257,8 +262,9 @@ async fn test_maximum_expiration_pass() {
     mock.expect_get_method().return_const("GET".to_string());
     let token_clone = token.clone();
     setup_header_mocks(&mut mock, &[("authorization", &format!("Bearer {}", token_clone))]);
-    mock.expect_get_query_param().returning(|_| None);
-    mock.expect_get_cookie().returning(|_| None);
+    mock.expect_get_query_param().times(0);
+    mock.expect_get_query_param_ref().returning(|_| None);
+    mock.expect_get_cookie().times(0);
     mock.expect_set_request_header().returning(|_, _| Ok(()));
 
     let r = auth.run_request(&mut mock, &mut log).await;
@@ -287,8 +293,9 @@ async fn test_maximum_expiration_exceeded() {
     mock.expect_get_method().return_const("GET".to_string());
     let token_clone = token.clone();
     setup_header_mocks(&mut mock, &[("authorization", &format!("Bearer {}", token_clone))]);
-    mock.expect_get_query_param().returning(|_| None);
-    mock.expect_get_cookie().returning(|_| None);
+    mock.expect_get_query_param().times(0);
+    mock.expect_get_query_param_ref().returning(|_| None);
+    mock.expect_get_cookie().times(0);
     mock.expect_write_response_header().returning(|_, _| Ok(()));
     mock.expect_write_response_body().returning(|_, _| Ok(()));
     mock.expect_shutdown().returning(|| {});
