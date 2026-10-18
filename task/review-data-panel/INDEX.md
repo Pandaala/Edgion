@@ -4195,3 +4195,24 @@ filters ran serially; the known parallel peer fixture issue in verification-03
 remains open. Formatting, workspace check/Clippy, seven repository guards and
 diff hygiene passed. Existing warnings remain outside changed code. No live
 rotation or transport integration run was performed.
+
+
+## Borrowed BackendTrafficPolicy singleton
+
+The process-global BackendTrafficPolicyStore now lives directly in LazyLock and
+its getter returns a static reference. HTTP peer capture, AI policy capture, L4
+admission, response-cache evidence and plugin outbound consumers use borrowed
+store methods. The existing Deref-based ConfHandler implementation accepts the
+static reference without a new adapter or factory change.
+
+Only the singleton wrapper allocation and getter Arc reference-count operations
+are removed. The effective ArcSwap generation, retained policy snapshots, retry
+budgets, outlier and circuit-breaker handles remain owned as before. Publication
+still precedes derived background reconciliation; no live-policy reload replaces
+a captured request generation. No throughput improvement is claimed.
+
+Fresh verification passed 208 network-free tests: 64 backend-traffic policy,
+103 upstream peer, 21 AI proxy and 20 response-cache storage tests. Policy and
+peer filters ran serially. Formatting, workspace check/Clippy, seven repository
+guards and diff hygiene passed. Existing warnings remain outside changed code.
+No live transport or throughput benchmark ran.

@@ -23,12 +23,12 @@ use edgion_resources::resources::EdgionBackendTrafficPolicy;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
 
-static BACKEND_TRAFFIC_POLICY_STORE: LazyLock<Arc<BackendTrafficPolicyStore>> =
-    LazyLock::new(|| Arc::new(BackendTrafficPolicyStore::new()));
+static BACKEND_TRAFFIC_POLICY_STORE: LazyLock<BackendTrafficPolicyStore> =
+    LazyLock::new(BackendTrafficPolicyStore::new);
 
 /// Process-global singleton store.
-pub fn get_backend_traffic_policy_store() -> Arc<BackendTrafficPolicyStore> {
-    BACKEND_TRAFFIC_POLICY_STORE.clone()
+pub fn get_backend_traffic_policy_store() -> &'static BackendTrafficPolicyStore {
+    &BACKEND_TRAFFIC_POLICY_STORE
 }
 
 /// Store owning the synced policy cache and one typed immutable generation.
