@@ -3,6 +3,53 @@ use crate::plugins::http::dsl::lang::vm::{Vm, VmLimits};
 use crate::plugins::http::dsl::runtime::DslRuntime;
 use edgion_dsl::{error::RuntimeError, resolve_script, validator::ValidationLimits};
 
+#[tokio::test]
+async fn borrowed_path_params_preserve_capture_and_empty_cache() {
+    let mut session = test_session().await;
+    let mut ctx = EdgionHttpContext::default();
+    ctx.request_info.normalized_current_path = "/api/123".to_string();
+    let matched = serde_json::from_value(serde_json::json!({
+        "path": { "type": "Exact", "value": "/api/:uid" }
+    }))
+    .unwrap();
+    ctx.capture_matched_path_params(&matched);
+    let stored = ctx.cached_path_params().unwrap().get("uid").unwrap().as_ptr();
+    {
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        let (value, allocations) =
+            crate::test_allocation_counter::count_allocations(|| adapter.get_path_param_ref("uid"));
+        assert_eq!(value, Some("123"));
+        assert_eq!(value.unwrap().as_ptr(), stored);
+        assert_eq!(allocations, 0);
+        assert_eq!(adapter.get_path_param("uid").as_deref(), Some("123"));
+        adapter.set_upstream_uri("/api/999").unwrap();
+        assert_eq!(adapter.get_path_param_ref("uid"), Some("123"));
+        assert_eq!(adapter.get_path_param_ref("missing"), None);
+    }
+
+    let mut synthetic = EdgionHttpContext::default();
+    assert!(synthetic.cached_path_params().is_none());
+    assert_eq!(
+        PingoraSessionAdapter::new(&mut session, &mut synthetic).get_path_param_ref("missing"),
+        None
+    );
+    assert!(synthetic.cached_path_params().unwrap().is_empty());
+    synthetic.cache_path_params(std::collections::HashMap::from([(
+        "missing".to_string(),
+        "later".to_string(),
+    )]));
+    assert_eq!(
+        PingoraSessionAdapter::new(&mut session, &mut synthetic).get_path_param("missing"),
+        None
+    );
+
+    let mut empty_value = EdgionHttpContext::default();
+    empty_value.cache_path_params(std::collections::HashMap::from([("empty".to_string(), String::new())]));
+    let mut adapter = PingoraSessionAdapter::new(&mut session, &mut empty_value);
+    assert_eq!(adapter.get_path_param_ref("empty"), Some(""));
+    assert_eq!(adapter.get_path_param("empty"), Some(String::new()));
+}
+
 fn dsl_body_test_vm(source: &str) -> Vm {
     let script = resolve_script(Some(source), None, &ValidationLimits::default()).unwrap();
     Vm::new(script, VmLimits::default()).unwrap()

@@ -280,9 +280,14 @@ pub trait PluginSession: Send + Sync {
     /// For route pattern "/api/:uid/profile" and request path "/api/123/profile",
     /// `get_path_param("uid")` returns `Some("123")`.
     ///
-    /// This uses lazy extraction - parameters are only parsed on first call
-    /// and then cached for subsequent calls.
+    /// Production route matching freezes captures before plugins run. Synthetic
+    /// contexts that bypass that hook initialize the same cache on first read.
     fn get_path_param(&mut self, name: &str) -> Option<String>;
+
+    /// Borrow a frozen path capture, initializing the synthetic fallback cache
+    /// when necessary. The owned accessor uses the same lookup.
+    #[allow(clippy::needless_lifetimes)]
+    fn get_path_param_ref<'a>(&'a mut self, name: &str) -> Option<&'a str>;
 
     /// Read identity/metadata of the matched route for template variables
     /// `${matchedHttpRoute:<selector>}` / `${matchedGrpcRoute:<selector>}`.

@@ -1145,11 +1145,15 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn get_path_param(&mut self, name: &str) -> Option<String> {
+        self.get_path_param_ref(name).map(str::to_owned)
+    }
+
+    fn get_path_param_ref(&mut self, name: &str) -> Option<&str> {
         if self.ctx.cached_path_params().is_none() {
             let params = self.extract_path_params();
             self.ctx.cache_path_params(params);
         }
-        self.ctx.cached_path_params()?.get(name).cloned()
+        self.ctx.cached_path_params()?.get(name).map(String::as_str)
     }
 
     fn matched_route_meta(&self, proto: RouteProto, selector: &str) -> Option<String> {

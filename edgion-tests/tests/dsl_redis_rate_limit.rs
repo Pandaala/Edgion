@@ -130,6 +130,9 @@ impl PluginSession for ResultSession {
     fn get_path_param(&mut self, _name: &str) -> Option<String> {
         panic!("unexpected session operation")
     }
+    fn get_path_param_ref(&mut self, _name: &str) -> Option<&str> {
+        panic!("unexpected session operation")
+    }
     fn matched_route_meta(&self, _proto: RouteProto, _selector: &str) -> Option<String> {
         panic!("unexpected session operation")
     }

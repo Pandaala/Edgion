@@ -663,7 +663,7 @@ impl Vm {
             BuiltinId::ReqRemoteIp => checked_value_opt_str_ref(Some(session.remote_ip()), self.limits.max_string_len),
             BuiltinId::ReqPathParam => {
                 let name = state.pop()?.runtime_string()?;
-                checked_value_opt_str(session.get_path_param(&name), self.limits.max_string_len)
+                checked_value_opt_str_ref(session.get_path_param_ref(&name), self.limits.max_string_len)
             }
             BuiltinId::ReqHeaderNames => {
                 const MAX_HEADER_NAMES: usize = 256;

@@ -89,6 +89,15 @@ on a non-text field before a match remain unchanged. Both check result length
 before creating the independent DSL string. Initial query-cache parsing and
 final Arc allocation remain; neither is removed by avoiding the owned getter.
 
+`req.path_param(name)` borrows the frozen path-capture cache through
+`get_path_param_ref`. The owned getter delegates to the same initialization and
+lookup before copying, so other consumers retain their ownership contract.
+Production route matching captures before rewrites; synthetic contexts retain
+the original lazy fallback, including init-once empty results. Byte limits and
+nil/empty handling use the same result helper. A real-adapter test checks capture
+survival across URI rewrites and zero allocation for a prewarmed borrowed lookup;
+this does not measure initial extraction or the complete DSL builtin.
+
 `req.host`, `req.content_type` and `req.scheme` use the existing `header_str`
 accessor and borrowed result helper. Scheme chooses the first text-eligible
 X-Forwarded-Proto value, then X-Scheme, then the literal `http`, preserving case

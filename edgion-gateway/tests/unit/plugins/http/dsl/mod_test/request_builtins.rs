@@ -3,33 +3,44 @@
 use super::*;
 
 #[test]
-fn borrowed_decoded_query_preserves_nil_empty_and_byte_limits() {
-    for value in [None, Some(""), Some("é€")] {
-        let length = value.map_or(0, str::len);
-        for limit in [length, length.saturating_sub(1)] {
-            let mut session = MockPluginSession::new();
-            session.expect_get_query_param().times(0);
-            session
-                .expect_get_query_param_ref()
-                .withf(|name| name == "item")
-                .times(1)
-                .return_const(value);
-            let source = "let v = req.query(\"item\")\nif v == nil { req.set_header(\"X-Result\", \"missing\") } else { req.set_header(\"X-Result\", v) }";
-            let limits = VmLimits {
-                max_string_len: limit,
-                ..Default::default()
-            };
-            if length > limit {
-                assert!(
-                    matches!(run_expect_runtime_err_with_limits(source, session, limits), RuntimeError::StringTooLong { len, limit: actual } if len == length && actual == limit)
-                );
-            } else {
-                session
-                    .expect_set_request_header()
-                    .times(1)
-                    .withf(move |name, actual| name == "X-Result" && actual == value.unwrap_or("missing"))
-                    .returning(|_, _| Ok(()));
-                assert_eq!(run_with_limits(source, session, limits), good_next());
+fn borrowed_cached_values_preserve_nil_empty_and_byte_limits() {
+    for property in ["query", "path_param"] {
+        for value in [None, Some(""), Some("é€")] {
+            let length = value.map_or(0, str::len);
+            for limit in [length, length.saturating_sub(1)] {
+                let mut session = MockPluginSession::new();
+                session.expect_get_query_param().times(0);
+                session.expect_get_path_param().times(0);
+                if property == "query" {
+                    session
+                        .expect_get_query_param_ref()
+                        .withf(|name| name == "item")
+                        .times(1)
+                        .return_const(value);
+                } else {
+                    session
+                        .expect_get_path_param_ref()
+                        .withf(|name| name == "item")
+                        .times(1)
+                        .return_const(value);
+                }
+                let source = format!("let v = req.{property}(\"item\")\nif v == nil {{ req.set_header(\"X-Result\", \"missing\") }} else {{ req.set_header(\"X-Result\", v) }}");
+                let limits = VmLimits {
+                    max_string_len: limit,
+                    ..Default::default()
+                };
+                if length > limit {
+                    assert!(
+                        matches!(run_expect_runtime_err_with_limits(&source, session, limits), RuntimeError::StringTooLong { len, limit: actual } if len == length && actual == limit)
+                    );
+                } else {
+                    session
+                        .expect_set_request_header()
+                        .times(1)
+                        .withf(move |name, actual| name == "X-Result" && actual == value.unwrap_or("missing"))
+                        .returning(|_, _| Ok(()));
+                    assert_eq!(run_with_limits(&source, session, limits), good_next());
+                }
             }
         }
     }
@@ -549,9 +560,9 @@ fn req_request_uri_returns_entry_raw() {
 fn test_req_path_param_present() {
     let mut session = MockPluginSession::new();
     session
-        .expect_get_path_param()
+        .expect_get_path_param_ref()
         .withf(|k| k == "uid")
-        .returning(|_| Some("789".to_string()));
+        .return_const(Some("789"));
     session
         .expect_set_request_header()
         .withf(|h, v| h == "X-Uid" && v == "789")
@@ -568,9 +579,9 @@ fn test_req_path_param_present() {
 fn test_req_path_param_absent() {
     let mut session = MockPluginSession::new();
     session
-        .expect_get_path_param()
+        .expect_get_path_param_ref()
         .withf(|k| k == "missing")
-        .returning(|_| None);
+        .return_const(None);
     let result = run(
         "let u = req.path_param(\"missing\")\nif u != nil { req.set_header(\"X-Uid\", u) }",
         session,

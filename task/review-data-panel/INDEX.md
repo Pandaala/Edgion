@@ -1455,3 +1455,29 @@ depending on a getter removed from the hot path. Independent plan review passed;
 suite or throughput benchmark ran.
 Formatting, workspace check/Clippy and seven repository guards passed, with
 existing warnings outside changed files. Independent final review passed.
+
+## Borrowed DSL path parameters
+
+The session's new borrowed path-parameter getter owns the unchanged cache
+initialization/lookup logic; the owned getter delegates and copies its result.
+DSL borrows before byte validation and final Arc creation. Production captures
+remain frozen before plugins; synthetic fallback initializes empty results once.
+The trait documentation now distinguishes those paths accurately.
+
+The cache-backed DSL limit matrix covers path parameters, and a real-adapter
+test checks capture survival after URI rewrite, nil/empty parity, init-once empty
+fallback and zero allocations for a warmed borrowed lookup. Initial extraction
+and final VM ownership are outside that allocation claim. Independent plan review
+passed. Workspace checking identified one additional hand-written test adapter
+in `edgion-tests/tests/dsl_redis_rate_limit.rs`; an independently approved exact
+scope extension adds only the required panic stub, preserving its fail-on-use
+policy and leaving the ignored isolated-Redis scenario untouched.
+
+Fresh DSL tests passed 499, the new adapter test passed and ProxyRewrite tests
+passed 17. An initial context test filter selected zero tests; it was corrected
+to select the actual cached-query module. No live Redis test, full suite or
+throughput benchmark ran.
+All seven selected context-cache tests passed after that correction.
+Formatting, workspace check/Clippy and seven repository guards passed after the
+support stub was added, with existing warnings outside changed files.
+Independent final review passed.
