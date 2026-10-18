@@ -370,11 +370,15 @@ impl CompiledRequest {
             diagnostics,
         )?;
         if !cookie_pairs.is_empty() {
-            let cookie_str = cookie_pairs
-                .iter()
-                .map(|field| format!("{}={}", field.name, field.value))
-                .collect::<Vec<_>>()
-                .join("; ");
+            let mut cookie_str = String::new();
+            for (index, field) in cookie_pairs.iter().enumerate() {
+                if index > 0 {
+                    cookie_str.push_str("; ");
+                }
+                cookie_str.push_str(&field.name);
+                cookie_str.push('=');
+                cookie_str.push_str(&field.value);
+            }
             if let Ok(mut val) = reqwest::header::HeaderValue::from_str(&cookie_str) {
                 val.set_sensitive(true);
                 req.headers_mut().insert(reqwest::header::COOKIE, val);

@@ -997,3 +997,59 @@ fn build_request_preserves_url_concatenation_boundaries() {
         }
     }
 }
+
+#[test]
+fn build_request_preserves_cookie_assembly_and_invalid_value_policy() {
+    use edgion_resources::resources::common::outbound_request::{CustomField, CustomSource, MethodSpec, PathSpec};
+
+    type CookieCase<'a> = (&'a [(&'a str, &'a str)], Option<&'a str>);
+    let cases: &[CookieCase<'_>] = &[
+        (&[], None),
+        (&[("a", "")], Some("a=")),
+        (&[("a", "1"), ("a", "2"), ("b", "x=y; z")], Some("a=1; a=2; b=x=y; z")),
+        (&[("a", "bad\r\nvalue")], None),
+    ];
+    for &(pairs, expected) in cases {
+        for existing in [false, true] {
+            let mut spec = OutboundRequestSpec {
+                method: Some(MethodSpec { template: "GET".into() }),
+                path: Some(PathSpec {
+                    template: "/verify".into(),
+                    allow_override: false,
+                }),
+                ..Default::default()
+            };
+            if existing {
+                spec.headers.custom.push(CustomField {
+                    name: "cookie".into(),
+                    source: CustomSource::Value("existing=kept".into()),
+                });
+            }
+            spec.cookies.custom = pairs
+                .iter()
+                .map(|&(name, value)| CustomField {
+                    name: name.into(),
+                    source: CustomSource::Value(value.into()),
+                })
+                .collect();
+            let compiled = CompiledRequest::from_spec(&spec).unwrap();
+            let request = compiled
+                .build_request(
+                    &MockPluginSession::new(),
+                    None,
+                    "http://example.test",
+                    None,
+                    &mut Default::default(),
+                )
+                .unwrap();
+            let cookie = request.headers().get(reqwest::header::COOKIE);
+            assert_eq!(
+                cookie.map(|value| value.to_str().unwrap()),
+                expected.or(existing.then_some("existing=kept"))
+            );
+            if let Some(cookie) = cookie {
+                assert!(cookie.is_sensitive());
+            }
+        }
+    }
+}

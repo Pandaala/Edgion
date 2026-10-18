@@ -2188,3 +2188,19 @@ benchmark is claimed.
 Fresh verification passed all 116 shared outbound tests, formatting, workspace
 check/Clippy and seven repository guards. Remaining warnings are outside changed
 source. Independent final review passed.
+
+## Outbound Cookie assembly without per-field strings
+
+CompiledRequest appends collected cookie names, equals signs, values and ordered
+separators directly to the final String, removing per-field formatted Strings
+and their intermediate Vec. Collection order, duplicates, unescaped delimiter
+text, sensitivity and HeaderValue validation remain unchanged. Empty or invalid
+assembly leaves any earlier Cookie header intact; valid assembly replaces it.
+Actual builder tests check these cases with and without a pre-existing Cookie.
+Independent plan review passed. The final String can still grow and collected
+fields remain owned; no single-allocation or throughput claim is made.
+The first Clippy run identified a new test type-complexity warning; a local type
+alias removed it. Fresh verification on the corrected source passed all 117
+shared outbound tests, formatting and workspace check/Clippy; seven repository
+guards passed. Remaining warnings are outside changed source. Independent final
+review and the follow-up test-only correction review passed.
