@@ -131,14 +131,20 @@ fn test_json_get_array_index() {
 fn test_uuid_format() {
     let source = r#"
         let id = uuid()
-        if len(id) == 36 {
-            req.set_header("X-Has-UUID", "yes")
-        }
+        req.set_header("X-UUID", id)
     "#;
     let mut session = MockPluginSession::new();
     session
         .expect_set_request_header()
-        .withf(|n, v| n == "X-Has-UUID" && v == "yes")
+        .withf(|name, value| {
+            name == "X-UUID"
+                && value.len() == 36
+                && uuid::Uuid::parse_str(value).is_ok_and(|id| {
+                    id.get_version_num() == 4
+                        && id.get_variant() == uuid::Variant::RFC4122
+                        && id.hyphenated().to_string() == value
+                })
+        })
         .times(1)
         .returning(|_, _| Ok(()));
     let result = run_with_limits(

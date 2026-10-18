@@ -1189,8 +1189,10 @@ impl Vm {
                 checked_value_str(result, self.limits.max_string_len)
             }
             BuiltinId::Uuid => {
-                let id = uuid::Uuid::new_v4().to_string();
-                checked_value_str(id, self.limits.max_string_len)
+                let mut buffer = uuid::Uuid::encode_buffer();
+                let id: &str = uuid::Uuid::new_v4().hyphenated().encode_lower(&mut buffer);
+                check_string_len(id, self.limits.max_string_len)?;
+                Ok(Value::Str(Arc::from(id)))
             }
             BuiltinId::HexEncode => {
                 let s = state.pop()?.runtime_string()?;

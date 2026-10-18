@@ -2002,3 +2002,17 @@ benchmark is claimed.
 Fresh verification passed all 500 Gateway DSL tests, formatting, workspace
 check/Clippy and seven repository guards. Remaining warnings are outside the
 changed source. Independent final review passed.
+
+## DSL UUID stack encoding
+
+Uuid uses the locked uuid crate stack encoding buffer for the same lowercase
+hyphenated v4 representation, checks the existing byte-length limit, then
+constructs the canonical Arc<str>. Random generation still occurs before the
+limit check; only the intermediate String allocation/copy is removed. The
+existing UUID test now validates the returned identifier, v4/RFC variant and
+canonical 36-byte format at the exact limit; the 35-byte rejection test remains.
+Independent plan review passed. No RNG, public representation or failure-policy
+change is introduced, and no throughput benchmark is claimed.
+Fresh verification passed all 500 Gateway DSL tests, formatting, workspace
+check/Clippy and seven repository guards. Remaining warnings are outside the
+changed source. Independent final review passed.
