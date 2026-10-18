@@ -9,7 +9,7 @@ use edgion_resources::resources::http_route::{CookieLifetimeType, SessionPersist
 use pingora_proxy::Session;
 use sha2::{Digest, Sha256};
 
-use crate::plugins::runtime::session_adapter::cookie_value;
+use crate::plugins::runtime::session_adapter::cookie_value_ref;
 use crate::{EdgionHttpContext, SessionPersistenceState};
 
 pub(crate) struct StickyCandidate<'a> {
@@ -80,22 +80,18 @@ pub fn get_persistence_type(sp: &SessionPersistence) -> SessionPersistenceType {
 }
 
 /// Extract a session token from all Cookie fields using canonical first-match semantics.
-pub fn extract_token_from_cookie(session: &Session, cookie_name: &str) -> Option<String> {
-    cookie_value(&session.req_header().headers, cookie_name)
+pub fn extract_token_from_cookie<'a>(session: &'a Session, cookie_name: &str) -> Option<&'a str> {
+    cookie_value_ref(&session.req_header().headers, cookie_name)
 }
 
 /// Extract a session token from a custom header.
-pub fn extract_token_from_header(session: &Session, header_name: &str) -> Option<String> {
+pub fn extract_token_from_header<'a>(session: &'a Session, header_name: &str) -> Option<&'a str> {
     let req_header = session.req_header();
-    req_header
-        .headers
-        .get(header_name)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
+    req_header.headers.get(header_name).and_then(|v| v.to_str().ok())
 }
 
 /// Unified extraction: uses cookie or header based on the persistence type config.
-pub fn extract_session_token(session: &Session, sp: &SessionPersistence) -> Option<String> {
+pub fn extract_session_token<'a>(session: &'a Session, sp: &SessionPersistence) -> Option<&'a str> {
     let name = get_session_name(sp);
     match get_persistence_type(sp) {
         SessionPersistenceType::Cookie => extract_token_from_cookie(session, name),
@@ -115,12 +111,12 @@ pub fn extract_session_token(session: &Session, sp: &SessionPersistence) -> Opti
 /// - SP configured, token present → state = `Inactive` (a fallback later may flip it).
 /// - SP configured, no token → state = `InjectNew` (first request; the response injects one).
 #[inline]
-pub(crate) fn sp_extract_token(
-    session: &Session,
+pub(crate) fn sp_extract_token<'a>(
+    session: &'a Session,
     sp_state: &mut SessionPersistenceState,
     sp: Option<&SessionPersistence>,
     now: u64,
-) -> Option<String> {
+) -> Option<&'a str> {
     let sp = sp?;
     let raw = extract_session_token(session, sp);
     sp_apply_extracted_token(raw, sp_state, now)
@@ -136,22 +132,24 @@ pub(crate) fn sp_extract_token(
 /// - Present, live → `Inactive`, `Some(addrhash)` (expiry stripped; the affinity
 ///   map is keyed by the bare `addrhash`).
 /// - Malformed expiry → retain the whole token so affinity lookup misses and refreshes.
-fn sp_apply_extracted_token(raw: Option<String>, sp_state: &mut SessionPersistenceState, now: u64) -> Option<String> {
+fn sp_apply_extracted_token<'a>(
+    raw: Option<&'a str>,
+    sp_state: &mut SessionPersistenceState,
+    now: u64,
+) -> Option<&'a str> {
     match raw {
         None => {
             *sp_state = SessionPersistenceState::InjectNew;
             None
         }
-        Some(mut token) => {
-            let (hash, expiry) = parse_wire_token(&token);
+        Some(token) => {
+            let (hash, expiry) = parse_wire_token(token);
             if expiry.is_some_and(|e| now >= e) {
                 *sp_state = SessionPersistenceState::InjectNew;
                 None
             } else {
                 *sp_state = SessionPersistenceState::Inactive;
-                let hash_len = hash.len();
-                token.truncate(hash_len);
-                Some(token)
+                Some(hash)
             }
         }
     }

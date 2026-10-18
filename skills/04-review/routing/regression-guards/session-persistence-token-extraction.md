@@ -10,7 +10,7 @@ knowledge_type: regression-guards
 
 HTTP and gRPC session persistence share `sp_extract_token` in
 `edgion-gateway/src/routes/http/session_persistence.rs`. Cookie extraction uses
-the canonical `plugins::runtime::session_adapter::cookie_value` helper, which
+the canonical `plugins::runtime::session_adapter::cookie_value_ref` helper, which
 searches all Cookie fields in order and returns the first matching cookie.
 Malformed expiry suffixes remain part of the lookup token; they cannot be
 stripped to adopt an existing endpoint's bare hash.
@@ -24,7 +24,11 @@ another parser. `parse_wire_token` preserves the original token on numeric
 parse failure. Affinity maps contain generated hexadecimal hashes, so the
 retained dot and invalid suffix cause a miss and the existing resolver refreshes
 the session. Valid expiry still expires when `now >= expiry`; valid live expiry
-is removed with `String::truncate`, reusing the extraction buffer.
+is removed by returning the parsed hash slice. Extraction and lookup borrow
+the live request header storage through synchronous HTTP/gRPC affinity selection.
+The borrow ends before later mutable Session operations; no token is retained
+in the context. B0195 previously used `String::truncate` to reuse an owned
+extraction buffer; that allocation is now removed rather than moved elsewhere.
 
 ## Alternatives and limits
 
@@ -45,7 +49,11 @@ a resolved target. Backend selection, retries, and response injection are unchan
 Target unit tests exercise actual Pingora H1 request parsing over an in-memory
 duplex stream, later Cookie fields, duplicate precedence, malformed nonnumeric,
 empty, overflowing and extra-dot expiry suffixes, live/bare/expired tokens,
-the expiry equality boundary, and owned-buffer reuse. The existing rule-scoped
+the expiry equality boundary, and borrowed storage identity. A scoped test uses
+real H1 request parsing and checks zero allocation calls/bytes during Cookie and
+Header token extraction for absent, empty, bare, live, expired and malformed
+values. It does not claim that full backend selection allocates nothing.
+The existing rule-scoped
 lookup test also verifies a malformed token misses despite a known live hash.
 Canonical `cookie_value` tests cover malformed-field handling.
 

@@ -600,7 +600,7 @@ pub async fn select_http_backend(
             .iter()
             .filter(|backend| backend.ref_denied.is_none())
             .filter_map(sticky_candidate);
-        session_persistence::sp_resolve_typed_candidates(ctx, candidates, sp_token.as_deref())
+        session_persistence::sp_resolve_typed_candidates(ctx, candidates, sp_token)
     };
     let sticky_backend = sp_idx.and_then(|idx| {
         let cb = &route_unit.backends[idx];

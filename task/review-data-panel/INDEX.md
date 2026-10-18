@@ -2296,3 +2296,19 @@ allocate; no whole-call allocation or throughput claim is made.
 Fresh verification passed 120 shared outbound tests and 14 webhook runtime
 tests, formatting, workspace check/Clippy and seven repository guards.
 Remaining warnings are outside changed code. Independent final review passed.
+
+## Session persistence token borrowing
+
+HTTP and gRPC affinity selection borrow extracted Cookie/Header tokens from the
+live request headers through synchronous lookup. The canonical cookie parser and
+wire-token parser retain first-match, empty-value, malformed-expiry and expiry
+boundary semantics. Valid live tokens return a hash slice instead of allocating
+and truncating a String. No token borrow escapes into context or later mutable
+Session operations. Independent plan review passed. Real H1 extraction tests
+cover both sources, storage identity and zero scoped allocation calls/bytes;
+this is not a whole-selection allocation or throughput claim. The owning review
+knowledge distinguishes current borrowing from historical owned-buffer reuse.
+Fresh verification passed 23 session-persistence, 4 cookie-parser, 103 upstream
+peer and 1 gRPC integration-module tests, formatting, workspace check/Clippy and
+seven repository guards. Remaining warnings are outside changed code. Independent
+final review passed. These are in-process tests, not new live integration runs.

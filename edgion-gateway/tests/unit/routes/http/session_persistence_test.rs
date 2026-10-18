@@ -25,10 +25,7 @@ async fn extracts_session_cookie_from_later_field() {
         strict: None,
     };
     let mut state = SessionPersistenceState::InjectNew;
-    assert_eq!(
-        sp_extract_token(&session, &mut state, Some(&sp), 1000).as_deref(),
-        Some("abc123")
-    );
+    assert_eq!(sp_extract_token(&session, &mut state, Some(&sp), 1000), Some("abc123"));
     assert!(matches!(state, SessionPersistenceState::Inactive));
 }
 
@@ -38,10 +35,50 @@ async fn session_cookie_uses_first_match_within_and_across_fields() {
             b"GET / HTTP/1.1\r\nHost: test\r\nCookie: unrelated=first; affinity=first; affinity=second\r\nCookie: affinity=third\r\n\r\n",
         )
         .await;
-    assert_eq!(
-        extract_token_from_cookie(&session, "affinity").as_deref(),
-        Some("first")
-    );
+    assert_eq!(extract_token_from_cookie(&session, "affinity"), Some("first"));
+}
+
+#[tokio::test]
+async fn session_token_extraction_borrows_headers_without_allocating() {
+    for persistence_type in [SessionPersistenceType::Cookie, SessionPersistenceType::Header] {
+        for (wire, expected) in [
+            (None, None),
+            (Some(""), Some("")),
+            (Some("abc123"), Some("abc123")),
+            (Some("abc123.1060"), Some("abc123")),
+            (Some("abc123.1000"), None),
+            (Some("abc123.999"), None),
+            (Some("abc123.invalid"), Some("abc123.invalid")),
+        ] {
+            let header = wire.map_or_else(String::new, |wire| match persistence_type {
+                SessionPersistenceType::Cookie => format!("Cookie: other=first; affinity={wire}\r\n"),
+                SessionPersistenceType::Header => format!("affinity: {wire}\r\n"),
+            });
+            let request = format!("GET / HTTP/1.1\r\nHost: test\r\n{header}\r\n");
+            let session = session_with_request(request.as_bytes()).await;
+            let sp = SessionPersistence {
+                session_name: Some("affinity".into()),
+                persistence_type: Some(persistence_type.clone()),
+                absolute_timeout: None,
+                cookie_config: None,
+                strict: None,
+            };
+            let original = extract_session_token(&session, &sp);
+            let mut state = SessionPersistenceState::Inactive;
+            let (token, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+                sp_extract_token(&session, &mut state, Some(&sp), 1000)
+            });
+            assert_eq!(token, expected);
+            assert_eq!(stats.calls, 0);
+            assert_eq!(stats.requested_bytes, 0);
+            if let Some(token) = token {
+                assert_eq!(token.as_ptr(), original.unwrap().as_ptr());
+                assert!(matches!(state, SessionPersistenceState::Inactive));
+            } else {
+                assert!(matches!(state, SessionPersistenceState::InjectNew));
+            }
+        }
+    }
 }
 
 #[test]
@@ -144,9 +181,10 @@ fn test_sp_lookup_rule_scoped_across_services() {
     let hit = sp_lookup_rule_scoped(refs.iter().copied(), "rule-scope-test", &token_b);
     assert_eq!(hit, Some((1, b_addr)), "token bound to svc-b must resolve to index 1");
     let mut state = SessionPersistenceState::Inactive;
-    let malformed = sp_apply_extracted_token(Some(format!("{token_b}.invalid")), &mut state, 1000).unwrap();
+    let malformed_wire = format!("{token_b}.invalid");
+    let malformed = sp_apply_extracted_token(Some(&malformed_wire), &mut state, 1000).unwrap();
     assert_eq!(
-        sp_lookup_rule_scoped(refs.iter().copied(), "rule-scope-test", &malformed),
+        sp_lookup_rule_scoped(refs.iter().copied(), "rule-scope-test", malformed),
         None,
         "a malformed expiry must not adopt a known live endpoint"
     );
@@ -209,20 +247,17 @@ fn malformed_expiry_preserves_whole_lookup_token() {
     ] {
         let mut state = SessionPersistenceState::Inactive;
         assert_eq!(parse_wire_token(token), (token, None));
-        assert_eq!(
-            sp_apply_extracted_token(Some(token.to_string()), &mut state, 1000).as_deref(),
-            Some(token)
-        );
+        assert_eq!(sp_apply_extracted_token(Some(token), &mut state, 1000), Some(token));
     }
 }
 
 #[test]
-fn live_token_reuses_owned_buffer() {
+fn live_token_borrows_original_storage() {
     for wire in ["abc123", "abc123.1060"] {
         let token = wire.to_string();
         let buffer = token.as_ptr();
         let mut state = SessionPersistenceState::Inactive;
-        let extracted = sp_apply_extracted_token(Some(token), &mut state, 1000).unwrap();
+        let extracted = sp_apply_extracted_token(Some(&token), &mut state, 1000).unwrap();
         assert_eq!(extracted, "abc123");
         assert_eq!(extracted.as_ptr(), buffer);
     }
@@ -232,27 +267,27 @@ fn live_token_reuses_owned_buffer() {
 fn test_extract_token_expiry() {
     // Past expiry: now (1000) >= expiry (500) -> expired -> InjectNew, None.
     let mut st = SessionPersistenceState::Inactive;
-    let got = sp_apply_extracted_token(Some("aaaabbbbccccdddd.500".to_string()), &mut st, 1000);
+    let got = sp_apply_extracted_token(Some("aaaabbbbccccdddd.500"), &mut st, 1000);
     assert_eq!(got, None);
     assert!(matches!(st, SessionPersistenceState::InjectNew));
 
     let mut boundary_state = SessionPersistenceState::Inactive;
     assert_eq!(
-        sp_apply_extracted_token(Some("aaaabbbbccccdddd.1000".to_string()), &mut boundary_state, 1000),
+        sp_apply_extracted_token(Some("aaaabbbbccccdddd.1000"), &mut boundary_state, 1000),
         None
     );
     assert!(matches!(boundary_state, SessionPersistenceState::InjectNew));
 
     // Future expiry: live -> Inactive, returns bare addrhash (expiry stripped).
     let mut st2 = SessionPersistenceState::Inactive;
-    let got2 = sp_apply_extracted_token(Some("aaaabbbbccccdddd.5000".to_string()), &mut st2, 1000);
-    assert_eq!(got2.as_deref(), Some("aaaabbbbccccdddd"));
+    let got2 = sp_apply_extracted_token(Some("aaaabbbbccccdddd.5000"), &mut st2, 1000);
+    assert_eq!(got2, Some("aaaabbbbccccdddd"));
     assert!(matches!(st2, SessionPersistenceState::Inactive));
 
     // No expiry component: live forever -> Inactive, bare hash.
     let mut st3 = SessionPersistenceState::Inactive;
-    let got3 = sp_apply_extracted_token(Some("aaaabbbbccccdddd".to_string()), &mut st3, 1000);
-    assert_eq!(got3.as_deref(), Some("aaaabbbbccccdddd"));
+    let got3 = sp_apply_extracted_token(Some("aaaabbbbccccdddd"), &mut st3, 1000);
+    assert_eq!(got3, Some("aaaabbbbccccdddd"));
     assert!(matches!(st3, SessionPersistenceState::Inactive));
 
     // Absent token -> InjectNew, None.

@@ -100,7 +100,7 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
                     scope: None,
                 })
             }),
-        sp_token.as_deref(),
+        sp_token,
     );
     let sticky_backend = sp_idx.and_then(|idx| {
         let cb = &grpc_route_unit.backends[idx];
