@@ -777,3 +777,73 @@ fn evaluator_projection_scans_sorted_rule_output_without_copying_text() {
         assert!(apply_local(&[], &decision).is_empty());
     }
 }
+
+#[test]
+fn empty_local_merge_reuses_sorted_unique_external_storage() {
+    for local_kind in 0..3 {
+        for count in [0, 1, 256] {
+            let local = match local_kind {
+                0 => GuardDecision::Pass,
+                1 => GuardDecision::Reject,
+                _ => GuardDecision::Replace(Vec::new()),
+            };
+            let external: Vec<_> = (0..count)
+                .map(|index| {
+                    (
+                        GuardSpanKey {
+                            message_index: index,
+                            part: GuardPart::Content,
+                        },
+                        format!("external-{index}"),
+                    )
+                })
+                .collect();
+            let expected = external.clone();
+            let pointer = external.as_ptr();
+            let capacity = external.capacity();
+            let (result, stats) = crate::test_allocation_counter::count_allocation_stats(|| merge(local, external));
+            assert_eq!(stats.calls, 0);
+            assert_eq!(stats.requested_bytes, 0);
+            if count == 0 {
+                assert_eq!(result, GuardDecision::Pass);
+            } else {
+                let GuardDecision::Replace(items) = result else {
+                    panic!("expected external replacements");
+                };
+                assert_eq!(items, expected);
+                assert_eq!(items.as_ptr(), pointer);
+                assert_eq!(items.capacity(), capacity);
+            }
+        }
+    }
+}
+
+#[test]
+fn empty_local_merge_fallback_keeps_last_external_value() {
+    for (external, expected) in [
+        (
+            vec![(2, "old"), (0, "zero"), (2, "last"), (1, "one")],
+            vec![(0, "zero"), (1, "one"), (2, "last")],
+        ),
+        (vec![(0, "old"), (0, "last"), (1, "one")], vec![(0, "last"), (1, "one")]),
+    ] {
+        let items = |values: Vec<(u32, &str)>| {
+            values
+                .into_iter()
+                .map(|(index, text)| {
+                    (
+                        GuardSpanKey {
+                            message_index: index,
+                            part: GuardPart::Content,
+                        },
+                        text.to_owned(),
+                    )
+                })
+                .collect()
+        };
+        assert_eq!(
+            merge(GuardDecision::Pass, items(external)),
+            GuardDecision::Replace(items(expected))
+        );
+    }
+}

@@ -2517,3 +2517,20 @@ masks, Pass, empty replacement lists and empty span input.
 Fresh verification passed all 66 AiGuard request tests, formatting, workspace
 check/Clippy and seven repository guards. Remaining warnings are outside changed
 code. No end-to-end throughput benchmark is claimed.
+
+## AiGuard external-only replacement ownership
+
+When no local replacements exist and external keys are strictly increasing,
+merge returns the evaluator's existing Vec directly. It retains the old path for
+unsorted or duplicate external input, including last-value-wins behavior. Empty
+results still become Pass. The production parser constructs the external Vec
+with one slot per replacement; final key membership, uniqueness, decoded-byte
+budget and body publication checks remain unchanged. Independent plan and code
+reviews passed. Tests cover empty/single/256-item inputs across the helper's
+empty-local variants, pointer/capacity retention with zero allocation in the
+fast path, and unsorted/sorted-duplicate fallback results. This avoids rebuilding
+the external-only collection and its quadratic insertion searches; it does not
+optimize the general nonempty-local merge or claim throughput gains.
+Fresh verification passed all 68 AiGuard request tests, formatting, workspace
+check/Clippy and seven repository guards. Remaining warnings are outside changed
+code.

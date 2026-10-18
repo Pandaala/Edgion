@@ -455,6 +455,13 @@ fn merge(local: GuardDecision<GuardSpanKey>, external: Vec<(GuardSpanKey, String
         GuardDecision::Replace(items) => items,
         _ => Vec::new(),
     };
+    if merged.is_empty() && external.windows(2).all(|pair| pair[0].0 < pair[1].0) {
+        return if external.is_empty() {
+            GuardDecision::Pass
+        } else {
+            GuardDecision::Replace(external)
+        };
+    }
     for (key, text) in external {
         match merged.iter_mut().find(|(existing, _)| *existing == key) {
             Some(slot) => slot.1 = text,
