@@ -2488,3 +2488,15 @@ increment/decrement pair, not a heap allocation or a measured throughput cost.
 Fresh verification passed all 64 AiGuard request tests, formatting, workspace
 check/Clippy and seven repository guards. Remaining warnings are outside changed
 code.
+
+## AiGuard typed count logging
+
+Masked and flagged outcome logs now pass usize counts directly to the canonical
+PluginLog integer formatter instead of creating temporary decimal Strings.
+Templates, trigger branches, sensitivity, entry limits and final-decision timing
+are unchanged. Independent plan and corrected code reviews passed; final-source
+wiring tests check masked 2 and flagged 0/1/42, while existing formatter tests
+cover decimal equivalence, integer bounds, masking and capacity behavior.
+Fresh verification passed 65 AiGuard request and 33 PluginLog tests, formatting,
+workspace check/Clippy and seven repository guards. Remaining warnings are outside
+changed code. This removes temporary count Strings; no throughput gain is claimed.

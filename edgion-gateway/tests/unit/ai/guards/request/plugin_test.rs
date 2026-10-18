@@ -619,11 +619,12 @@ async fn an_admitted_composed_decision_publishes_one_generation_bound_batch() {
         GuardDecision::Replace(vec![(spans[0].key, "aaa".into())]),
         vec![(spans[0].key, "a".into()), (spans[1].key, "bbb".into())],
     );
+    let mut log = PluginLog::new("AiGuard");
     assert_eq!(
         guard
             .finish_decision(
                 &mut session,
-                &mut PluginLog::new("AiGuard"),
+                &mut log,
                 FinalDecision {
                     body: TWO_PROMPTS.as_bytes(),
                     spans: &spans,
@@ -635,6 +636,7 @@ async fn an_admitted_composed_decision_publishes_one_generation_bound_batch() {
             .await,
         PluginRunningResult::GoodNext
     );
+    assert!(log.contains("OK masked 2"));
     let settled: serde_json::Value = serde_json::from_slice(&view.read_all().await.unwrap()).unwrap();
     assert_eq!(settled["messages"][0]["content"], "a");
     assert_eq!(settled["messages"][1]["content"], "bbb");
@@ -680,5 +682,43 @@ async fn composed_publication_faults_remain_stricter_than_fail_open() {
             )
             .await;
         assert!(matches!(result, PluginRunningResult::ErrResponse { status: actual, .. } if actual == status));
+    }
+}
+
+#[tokio::test]
+async fn pass_decision_keeps_flag_count_log_text() {
+    let guard = guard(mask_rule(), "");
+    for flagged in [0usize, 1, 42] {
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(EdgionHttpContext::new());
+        session.expect_replace_request_body_spans().never();
+        let mut ai = crate::plugins::runtime::traits::ai_session::MockAiSessionCapability::new();
+        ai.expect_record_ai_guard_decision().times(1).returning(|_, _| ());
+        session
+            .expect_ai()
+            .return_var(Box::new(ai) as Box<dyn crate::plugins::runtime::traits::AiSessionCapability>);
+        let mut log = PluginLog::new("AiGuard");
+        assert_eq!(
+            guard
+                .finish_decision(
+                    &mut session,
+                    &mut log,
+                    FinalDecision {
+                        body: b"",
+                        spans: &[],
+                        generation: 0,
+                        decision: GuardDecision::Pass,
+                        flagged,
+                    }
+                )
+                .await,
+            PluginRunningResult::GoodNext
+        );
+        if flagged == 0 {
+            assert!(log.contains("OK"));
+            assert!(!log.contains("flagged"));
+        } else {
+            assert!(log.contains(&format!("OK flagged {flagged}")));
+        }
     }
 }

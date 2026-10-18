@@ -383,17 +383,11 @@ impl AiGuard {
                 self.refuse(session, body)
             }
             Outcome::Masked(count) => {
-                log.push_fmt(
-                    "OK masked {}",
-                    crate::plugins::runtime::log::la![count.to_string().as_str()],
-                );
+                log.push_fmt("OK masked {}", crate::plugins::runtime::log::la![count]);
                 PluginRunningResult::GoodNext
             }
             Outcome::Pass if flagged > 0 => {
-                log.push_fmt(
-                    "OK flagged {}",
-                    crate::plugins::runtime::log::la![flagged.to_string().as_str()],
-                );
+                log.push_fmt("OK flagged {}", crate::plugins::runtime::log::la![flagged]);
                 PluginRunningResult::GoodNext
             }
             Outcome::Pass => {
