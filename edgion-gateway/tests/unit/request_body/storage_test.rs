@@ -1,6 +1,27 @@
 use super::*;
 
 #[tokio::test]
+async fn append_and_prepend_reserve_the_same_segment_capacity() {
+    for memory_limit in [1, 64] {
+        let (mut appended, append_view) = BodyStorage::with_limits(memory_limit, 64);
+        let (mut prepended, prepend_view) = BodyStorage::with_limits(memory_limit, 64);
+        capture(&mut appended, &[b"body"]).await;
+        capture(&mut prepended, &[b"body"]).await;
+
+        let (append_result, append_allocations) =
+            crate::test_allocation_counter::count_allocation_stats(|| append_view.append(Bytes::from_static(b"tail")));
+        let (prepend_result, prepend_allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+            prepend_view.prepend(Bytes::from_static(b"tail"))
+        });
+        append_result.unwrap();
+        prepend_result.unwrap();
+        assert_eq!(append_allocations, prepend_allocations);
+        assert_eq!(replay_all(&mut appended, 2).await.as_ref(), b"bodytail");
+        assert_eq!(replay_all(&mut prepended, 2).await.as_ref(), b"tailbody");
+    }
+}
+
+#[tokio::test]
 async fn length_and_overwrite_require_complete_capture_and_follow_current_generation() {
     let (mut storage, view) = BodyStorage::with_limits(32, 64);
     assert_eq!(view.len(), Err(BodyReadError::Incomplete));

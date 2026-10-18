@@ -3235,3 +3235,23 @@ byte-content tests alone would not prove equivalent retirement timing.
 This documentation-only batch passed formatting, workspace check/Clippy,
 agent-doc validation and diff hygiene. Independent evidence review passed.
 No runtime tests or benchmarks were run; warnings remain outside changed files.
+
+## Request-body append segment capacity
+
+Append now reserves space for the existing segments plus its one new segment
+before cloning them, matching prepend's existing capacity discipline. The prior
+clone-then-push grew the temporary vector. Normalization still creates the final
+vector; the snapshot local remains alive through publication, preserving old
+snapshot retirement timing. Ordering, segment/physical caps, frozen-state and
+generation checks are unchanged.
+
+A synchronous allocation comparison with prepend covers captured disk and
+memory sources and checks both replay orders. Against unchanged production code,
+it failed in the first disk case: append requested four allocations (352 bytes)
+versus prepend's three (256 bytes); that baseline did not reach the memory case.
+Both cases pass after the change. These are allocator requests in the test,
+not resident memory or measured throughput.
+
+Independent plan and source reviews passed. All 70 storage tests, formatting,
+workspace check/Clippy and seven repository guards passed; warnings remain
+outside changed code.

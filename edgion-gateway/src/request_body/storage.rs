@@ -863,7 +863,8 @@ impl BodyStorageView {
                 limit: MAX_BODY_SEGMENTS,
             });
         }
-        let mut segments = snapshot.segments.clone();
+        let mut segments = Vec::with_capacity(snapshot.segments.len() + 1);
+        segments.extend(snapshot.segments.iter().cloned());
         segments.push(Segment::Inline(bytes));
         self.publish(generation, BodySnapshot::from_segments(segments)?)
             .map(|_| ())
