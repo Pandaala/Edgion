@@ -3970,3 +3970,22 @@ Fresh verification passed 118 distinct network-free tests: the SSE filter ran
 the first filter and is not counted twice. Formatting, workspace check/Clippy,
 seven repository guards and diff hygiene passed. Existing warnings remain
 outside changed code. No live provider or throughput benchmark was run.
+
+
+## Converter SSE name borrowing
+
+Chat-to-Anthropic process_sse_event now compares the SSE name with the parsed
+JSON type through canonical event_is. It no longer materializes a name spanning
+slices solely for this equality check. The guard stays after JSON/object/type
+validation and before known-event dispatch, preserving mismatch failures and
+unknown-event handling. Required type values remain valid UTF-8 strings.
+
+Existing converter regressions cover every byte split against complete output
+bytes, mismatched names, unknown events and malformed UTF-8. Shared SSE literal
+tests cover missing/empty, duplicate names and fragmented comparisons. No new
+parser, event classification or stream-state ownership was introduced.
+
+Fresh verification passed 104 network-free tests: 56 converter, 44 SSE module
+and 4 SliceChain tests. Formatting, workspace check/Clippy, seven repository
+guards and diff hygiene passed. Existing warnings remain outside changed code.
+No live provider or throughput benchmark was run.

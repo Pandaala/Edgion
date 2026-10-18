@@ -460,7 +460,7 @@ impl AnthropicResponseProcessor {
         let value: Value = serde_json::from_str(&data).map_err(|_| ())?;
         let object = value.as_object().ok_or(())?;
         let type_ = required_string(object, "type")?;
-        if event.event().as_deref() != Some(type_) {
+        if !event.event_is(type_) {
             return Err(());
         }
         if !is_known_event_type(type_) {
