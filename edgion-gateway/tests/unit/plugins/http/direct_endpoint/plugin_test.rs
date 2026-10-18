@@ -199,7 +199,7 @@ async fn direct_endpoint_records_success_outcome_with_addr() {
     session
         .expect_ctx()
         .return_const(ctx_with_backend_refs("unit-test-ns", vec![test_backend_ref("app-v1")]));
-    session.expect_key_get().return_const(Some("10.0.9.9:9191".to_string()));
+    set_endpoint_header(&mut session, Some(http::HeaderValue::from_static("10.0.9.9:9191")));
     session
         .expect_set_upstream_jump()
         .withf(|target| {
@@ -243,9 +243,7 @@ async fn rejected_jump_records_only_locked_log_and_no_dye() {
         "unit-test-rejected-ns",
         vec![test_backend_ref("app-rejected")],
     ));
-    session
-        .expect_key_get()
-        .return_const(Some("10.0.9.10:9192".to_string()));
+    set_endpoint_header(&mut session, Some(http::HeaderValue::from_static("10.0.9.10:9192")));
     session
         .expect_set_upstream_jump()
         .withf(|target| {
@@ -279,7 +277,7 @@ async fn direct_endpoint_records_reject_outcome_on_missing_value() {
 
     let mut session = MockPluginSession::new();
     session.expect_ctx().return_const(EdgionHttpContext::new());
-    session.expect_key_get().return_const(None::<String>);
+    set_endpoint_header(&mut session, None);
     session
         .expect_record_outcome()
         .withf(|o, v| *o == DyeOutcome::Reject && v == "on-missing")
@@ -314,9 +312,7 @@ async fn direct_endpoint_records_fallback_outcome_on_invalid_endpoint() {
     session
         .expect_ctx()
         .return_const(ctx_with_backend_refs("unit-test-ns", vec![test_backend_ref("app-v1")]));
-    session
-        .expect_key_get()
-        .return_const(Some("192.0.2.55:7777".to_string()));
+    set_endpoint_header(&mut session, Some(http::HeaderValue::from_static("192.0.2.55:7777")));
     session
         .expect_record_outcome()
         .withf(|o, v| *o == DyeOutcome::Fallback && v == "on-invalid")
@@ -354,7 +350,7 @@ async fn regex_miss_uses_missing_policy_and_fixed_body() {
             "unit-test-regex-miss-ns",
             vec![test_backend_ref("regex-miss-service")],
         ));
-        session.expect_key_get().return_const(Some("no-match".to_string()));
+        set_endpoint_header(&mut session, Some(http::HeaderValue::from_static("no-match")));
         let expected_outcome = if on_missing == UpstreamFallback::Reject {
             DyeOutcome::Reject
         } else {
@@ -380,9 +376,7 @@ async fn malformed_endpoint_rejects_with_fixed_invalid_body() {
         "unit-test-malformed-ns",
         vec![test_backend_ref("malformed-service")],
     ));
-    session
-        .expect_key_get()
-        .return_const(Some("[2001:db8::1]tail".to_string()));
+    set_endpoint_header(&mut session, Some(http::HeaderValue::from_static("[2001:db8::1]tail")));
     session
         .expect_record_outcome()
         .withf(|outcome, value| *outcome == DyeOutcome::Reject && value == "on-invalid")
@@ -409,9 +403,7 @@ async fn endpoint_outside_route_rejects_with_fixed_not_allowed_body() {
         "unit-test-not-allowed-ns",
         vec![test_backend_ref("not-allowed-service")],
     ));
-    session
-        .expect_key_get()
-        .return_const(Some("192.0.2.56:7778".to_string()));
+    set_endpoint_header(&mut session, Some(http::HeaderValue::from_static("192.0.2.56:7778")));
     session
         .expect_record_outcome()
         .withf(|outcome, value| *outcome == DyeOutcome::Reject && value == "on-invalid")
@@ -444,9 +436,10 @@ async fn unsafe_endpoint_in_route_rejects_with_fixed_not_allowed_body() {
         "unit-test-unsafe-ns",
         vec![test_backend_ref("unsafe-service")],
     ));
-    session
-        .expect_key_get()
-        .return_const(Some("169.254.169.254:9193".to_string()));
+    set_endpoint_header(
+        &mut session,
+        Some(http::HeaderValue::from_static("169.254.169.254:9193")),
+    );
     session
         .expect_record_outcome()
         .withf(|outcome, value| *outcome == DyeOutcome::Reject && value == "on-invalid")
@@ -503,4 +496,90 @@ fn parse_endpoint_rejects_invalid_bracket_suffixes() {
             "unexpectedly accepted {value}"
         );
     }
+}
+
+fn set_endpoint_header(session: &mut MockPluginSession, value: Option<http::HeaderValue>) {
+    let mut headers = http::HeaderMap::new();
+    if let Some(value) = value {
+        headers.insert("x-target-endpoint", value);
+    }
+    session.expect_request_header_map().return_const(headers);
+    session.expect_key_get().times(0);
+}
+
+#[tokio::test]
+async fn borrowed_empty_or_opaque_endpoint_preserves_missing_rejection() {
+    for value in [
+        http::HeaderValue::from_static(""),
+        http::HeaderValue::from_bytes(&[0xff]).unwrap(),
+    ] {
+        let plugin = DirectEndpoint::new(&DirectEndpointConfig {
+            on_missing: UpstreamFallback::Reject,
+            ..base_config()
+        });
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(EdgionHttpContext::new());
+        set_endpoint_header(&mut session, Some(value));
+        session
+            .expect_record_outcome()
+            .withf(|outcome, value| *outcome == DyeOutcome::Reject && value == "on-missing")
+            .times(1)
+            .return_const(());
+        assert_eq!(
+            plugin
+                .run_request(&mut session, &mut PluginLog::new("DirectEndpoint"))
+                .await,
+            PluginRunningResult::ErrResponse {
+                status: 400,
+                body: Some(MISSING_TARGET_ENDPOINT_BODY)
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn borrowed_regex_capture_selects_the_authorized_endpoint() {
+    insert_test_endpoint_slice(
+        "unit-test-capture-ns",
+        "capture-service",
+        "de-capture-slice",
+        "10.0.9.11",
+        9194,
+    );
+    let plugin = DirectEndpoint::new(&DirectEndpointConfig {
+        extract: Some(EndpointExtract {
+            regex: r"^target=(.+);end$".to_string(),
+            group: 1,
+        }),
+        ..base_config()
+    });
+    let mut session = MockPluginSession::new();
+    session.expect_ctx().return_const(ctx_with_backend_refs(
+        "unit-test-capture-ns",
+        vec![test_backend_ref("capture-service")],
+    ));
+    set_endpoint_header(
+        &mut session,
+        Some(http::HeaderValue::from_static("target=10.0.9.11:9194;end")),
+    );
+    session
+        .expect_set_upstream_jump()
+        .withf(|target| {
+            matches!(target, UpstreamJumpTarget::Direct(info)
+            if info.addr == "10.0.9.11:9194".parse().unwrap() && info.backend_ref_idx == 0
+                && info.tls_policy.is_absent() && info.app_protocol.as_deref() == Some("kubernetes.io/h2c"))
+        })
+        .times(1)
+        .return_const(SetJumpOutcome::Set);
+    session
+        .expect_record_outcome()
+        .withf(|outcome, value| *outcome == DyeOutcome::Success && value == "10.0.9.11:9194")
+        .times(1)
+        .return_const(());
+    assert_eq!(
+        plugin
+            .run_request(&mut session, &mut PluginLog::new("DirectEndpoint"))
+            .await,
+        PluginRunningResult::GoodNext
+    );
 }

@@ -7,6 +7,7 @@ use crate::backends::{
     validate_endpoint_in_route,
 };
 use crate::plugins::runtime::log::{la, sensitive};
+use crate::plugins::runtime::session_adapter::key_value;
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
 use crate::routes::http::match_unit::CompiledBackend;
 use crate::{DirectEndpointPreset, SetJumpOutcome, UpstreamJumpTarget};
@@ -31,15 +32,15 @@ impl DirectEndpoint {
     /// Resolve the override against one immutable discovery generation.
     fn resolve(
         &self,
-        raw_value: String,
+        raw_value: &str,
         backends: &[CompiledBackend],
         allow_loopback_upstream: bool,
     ) -> Result<DirectEndpointPreset, ResolutionError> {
         // 1. Apply regex extraction if configured
         let endpoint_str = if let Some(ref extract) = self.config.extract {
             if let Some(ref regex) = self.config.compiled_regex {
-                match regex.captures(&raw_value).and_then(|c| c.get(extract.group)) {
-                    Some(m) => m.as_str().to_string(),
+                match regex.captures(raw_value).and_then(|c| c.get(extract.group)) {
+                    Some(m) => m.as_str(),
                     None => return Err(ResolutionError::Missing),
                 }
             } else {
@@ -50,7 +51,7 @@ impl DirectEndpoint {
         };
 
         // 2. Parse IP (support "ip" or "ip:port" format)
-        let (target_ip, extracted_port) = parse_endpoint(&endpoint_str).map_err(|_| ResolutionError::Invalid)?;
+        let (target_ip, extracted_port) = parse_endpoint(endpoint_str).map_err(|_| ResolutionError::Invalid)?;
 
         // 3. Security: validate against route's backend_ref endpoints
         let discovery = get_service_discovery_coordinator().load_generation();
@@ -107,7 +108,7 @@ impl RequestFilter for DirectEndpoint {
         }
 
         // 1. Extract raw endpoint value via KeyGet
-        let raw_value = match session.key_get(&self.config.from) {
+        let raw_value = match key_value(session, &self.config.from) {
             Some(v) if !v.is_empty() => v,
             _ => match self.config.on_missing {
                 UpstreamFallback::Fallback => {
@@ -137,7 +138,7 @@ impl RequestFilter for DirectEndpoint {
         };
 
         // 3. Resolve endpoint info
-        match self.resolve(raw_value, backends, ctx.allow_loopback_upstream) {
+        match self.resolve(&raw_value, backends, ctx.allow_loopback_upstream) {
             Ok(info) => {
                 let addr = info.addr;
                 match session.set_upstream_jump(UpstreamJumpTarget::Direct(info)) {

@@ -1632,3 +1632,17 @@ Fresh serial selections passed all 23 RegionRoute and 67 condition tests.
 Formatting, workspace check/Clippy and seven repository guards passed; Clippy
 retains existing warnings outside the changed files. Independent final review
 passed.
+
+## Borrowed DirectEndpoint input and captures
+
+DirectEndpoint now uses canonical borrowed source reads and resolves an input
+slice. Regex captures no longer become temporary Strings before IP parsing.
+The returned numeric address and retained TLS policy remain owned for the jump;
+source fallback, policy errors, authorization and address safety are unchanged.
+Independent plan review passed. Existing tests now use real header maps and
+forbid owned reads; new tests cover empty/opaque input and successful extraction.
+No full suite, live integration or throughput benchmark ran for this batch.
+Fresh serial selections passed 18 DirectEndpoint-related tests (including backend
+authorization and retry peer cases) and 67 condition tests. Formatting, workspace
+check/Clippy and seven repository guards passed; existing Clippy warnings remain
+outside changed files. Independent final review passed.

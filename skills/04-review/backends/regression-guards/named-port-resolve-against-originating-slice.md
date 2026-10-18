@@ -120,3 +120,18 @@ and reload/rejection/recovery.
   originating-slice semantics preserved by the coordinator.
 - `backend-port-resolution-precompiled-fail-closed`: partial prior implementation,
   remaining DirectEndpoint authorization and endpoint-address boundary corrected in this task.
+
+## Borrowed DirectEndpoint input
+
+DirectEndpoint reads through the canonical session `key_value` helper and passes
+an input slice to synchronous resolution. Regex captures remain slices of that
+input rather than temporary Strings. Composite RemoteIpAndPath still uses the
+helper's owned fallback. The result owns its numeric address and retained policy,
+so no session borrow crosses jump or outcome mutation. Endpoint parsing, route
+permission, discovery generation, TLS policy and final address safety checks
+retain their order and semantics.
+
+Tests use real header maps and prohibit the owned getter, retain missing/invalid/
+unauthorized/unsafe and locked-jump checks, and cover empty/opaque input plus a
+successful regex capture. This removes temporary input copies, not all resolution
+allocations; no throughput improvement is asserted.
