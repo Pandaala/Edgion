@@ -157,6 +157,14 @@ pub fn is_hop_by_hop(name: &str) -> bool {
     edgion_resources::gwapi_types::is_http_hop_by_hop_header_name(name)
 }
 
+/// Borrow nonempty, trimmed Connection options without folding case or deduplicating.
+pub(crate) fn connection_option_tokens(connection_value: &str) -> impl Iterator<Item = &str> {
+    connection_value
+        .split(',')
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+}
+
 /// Parse the value of the request's `Connection:` header into a deduplicated
 /// list of lowercase connection-option names (RFC 9110 §7.6.1).
 ///
@@ -168,11 +176,7 @@ pub fn is_hop_by_hop(name: &str) -> bool {
 /// an empty list.
 pub fn connection_listed_hop_by_hop(connection_value: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    for token in connection_value.split(',') {
-        let t = token.trim();
-        if t.is_empty() {
-            continue;
-        }
+    for t in connection_option_tokens(connection_value) {
         if !out.iter().any(|s| s.eq_ignore_ascii_case(t)) {
             out.push(t.to_ascii_lowercase());
         }

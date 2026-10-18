@@ -12,7 +12,8 @@ use async_trait::async_trait;
 use bytes::BytesMut;
 use http::{HeaderName, HeaderValue};
 
-use crate::plugins::http::common::{connection_listed_hop_by_hop, is_hop_by_hop};
+use crate::plugins::http::common::http_client::connection_option_tokens;
+use crate::plugins::http::common::is_hop_by_hop;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{
@@ -102,7 +103,7 @@ impl RequestFilter for CredentialInjector {
         };
         if connection_values
             .iter()
-            .flat_map(|value| connection_listed_hop_by_hop(value))
+            .flat_map(|value| connection_option_tokens(value))
             .any(|name| name.eq_ignore_ascii_case(self.target.as_str()))
         {
             return Self::reject(log, "credential target is connection-scoped");

@@ -1,5 +1,5 @@
 use super::EdgionHttpProxy;
-use crate::plugins::http::common::connection_listed_hop_by_hop;
+use crate::plugins::http::common::http_client::connection_option_tokens;
 use crate::routes::grpc::format_grpc_timeout;
 use crate::{ctx::DeferredCredentialMutations, EdgionHttpContext};
 use pingora_http::RequestHeader;
@@ -103,10 +103,7 @@ fn validate_deferred_credential_connection(
     for request in [session_request, upstream_request] {
         for value in request.headers.get_all(http::header::CONNECTION) {
             let value = value.to_str().map_err(|_| ())?;
-            if connection_listed_hop_by_hop(value)
-                .iter()
-                .any(|name| mutations.contains_target(name))
-            {
+            if connection_option_tokens(value).any(|name| mutations.contains_target(name)) {
                 return Err(());
             }
         }

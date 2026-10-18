@@ -27,6 +27,36 @@ fn mutations() -> DeferredCredentialMutations {
 }
 
 #[test]
+fn connection_nomination_checks_borrow_tokens_without_allocating() {
+    let mutations = mutations();
+    let mut session_request = RequestHeader::build("GET", b"/", None).unwrap();
+    session_request
+        .append_header("connection", " , Keep-Alive, keep-alive, , X-Other, ")
+        .unwrap();
+    session_request.append_header("connection", "Upgrade").unwrap();
+    let mut attempt = RequestHeader::build("GET", b"/", None).unwrap();
+    attempt.insert_header("connection", "X-Other, x-other,,").unwrap();
+
+    for nominated in [false, true] {
+        if nominated {
+            attempt
+                .append_header("connection", " , x-PrOvIdEr-ToKeN, X-Provider-Token, ")
+                .unwrap();
+        }
+        let (result, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+            validate_deferred_credential_connection(
+                std::hint::black_box(&session_request),
+                std::hint::black_box(&attempt),
+                &mutations,
+            )
+        });
+        assert_eq!(result.is_err(), nominated);
+        assert_eq!(stats.calls, 0);
+        assert_eq!(stats.requested_bytes, 0);
+    }
+}
+
+#[test]
 fn rejects_target_nominated_by_a_late_connection_mutation() {
     let session_request = RequestHeader::build("GET", b"/", None).unwrap();
     let mut request = RequestHeader::build("GET", b"/", None).unwrap();
