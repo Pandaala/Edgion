@@ -350,8 +350,11 @@ fn generate(config: &RequestIdGenerator) -> Option<HeaderValue> {
             if !(8..=64).contains(&count) {
                 return None;
             }
-            let bytes: Vec<u8> = (0..count).map(|_| rng.random()).collect();
-            lower_hex(&bytes)
+            let mut bytes = [0u8; 64];
+            for byte in &mut bytes[..count] {
+                *byte = rng.random();
+            }
+            lower_hex(&bytes[..count])
         }
         RequestIdGeneratorKind::NanoId => {
             const ALPHABET: &[u8; 64] = b"_-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";

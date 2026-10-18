@@ -306,3 +306,27 @@ fn all_generators_have_expected_shapes() {
         assert_ne!(one, two);
     }
 }
+
+#[test]
+fn random_hex_runtime_bounds_and_prefix_are_preserved() {
+    for count in [0, 7, 65, usize::MAX] {
+        let config = RequestIdGenerator {
+            kind: RequestIdGeneratorKind::RandomHex,
+            bytes: Some(count),
+            ..Default::default()
+        };
+        assert!(generate(&config).is_none());
+    }
+    for count in [8, 16, 64] {
+        let config = RequestIdGenerator {
+            kind: RequestIdGeneratorKind::RandomHex,
+            prefix: "request-".into(),
+            bytes: Some(count),
+            ..Default::default()
+        };
+        let value = generate(&config).unwrap();
+        let suffix = value.to_str().unwrap().strip_prefix("request-").unwrap();
+        assert_eq!(suffix.len(), count * 2);
+        assert!(suffix.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')));
+    }
+}
