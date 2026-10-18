@@ -3079,6 +3079,26 @@ fail-closed admission chain; no baseline binary was rerun. Formatting, workspace
 check/Clippy and seven repository guards passed. Clippy warnings remain outside
 changed code. The known fixture failure is retained, not skipped or repaired here.
 
+## Request-body suffix updates for long decoded chunks
+
+TextOperationScanner::EndsWith now replaces its retained suffix directly when
+the current decoded chunk is at least as long as the pattern. Only the last
+pattern-length bytes matter; short chunks keep the original deque update loop.
+Byte slicing preserves comparisons even when the retained suffix begins inside
+a UTF-8 scalar. Empty-pattern Stop, complete lossy decoding, nonempty Continue,
+EOF processing and raw scan accounting are unchanged.
+
+Differential tests compare against String::from_utf8_lossy(...).ends_with(...)
+across every three-chunk split of empty, ASCII, multibyte and invalid UTF-8 input,
+plus a wrapped short-chunk tail followed by a long replacement chunk. Retained
+bytes remain bounded by pattern length; VecDeque capacity growth may differ
+within the same proportional bound. This removes unnecessary prefix deque
+updates, not decoding or storage reads, and claims no measured throughput gain.
+
+Independent plan and source reviews passed. Fresh verification passed 11 text
+operation and 68 storage tests, formatting, workspace check/Clippy and seven
+repository guards. Existing warnings are outside changed code.
+
 ## Request-body scalar snapshot metadata
 
 BodyStorageView::len and overwrite_body now read copied length/generation

@@ -219,6 +219,51 @@ fn predicate_patterns_retain_utf8_bytes_instead_of_expanded_chars() {
 }
 
 #[test]
+fn suffix_matches_lossy_text_across_all_three_chunk_splits() {
+    for raw in [
+        b"".as_slice(),
+        b"0123456789abcdefsuffix",
+        "a€b€".as_bytes(),
+        b"a\xffb\xe2\x82",
+    ] {
+        let text = String::from_utf8_lossy(raw);
+        for pattern in [
+            "",
+            "x",
+            "ix",
+            "suffix",
+            "€",
+            "b€",
+            "ab",
+            "longer-than-any-test-input-suffix",
+        ] {
+            let expected = BodyTextResult::Bool(text.ends_with(pattern));
+            for first in 0..=raw.len() {
+                for second in first..=raw.len() {
+                    assert_eq!(
+                        scan_text_operation(
+                            BodyTextOperation::EndsWith(pattern.to_owned()),
+                            &[&raw[..first], &raw[first..second], &raw[second..]],
+                        ),
+                        expected,
+                        "pattern={pattern:?}, splits={first},{second}"
+                    );
+                }
+            }
+        }
+    }
+
+    // Short chunks rotate the existing tail before a long chunk replaces it.
+    assert_eq!(
+        scan_text_operation(
+            BodyTextOperation::EndsWith("tail".to_owned()),
+            &[b"abcd", b"e", b"f", b"g", b"large-final-tail"],
+        ),
+        BodyTextResult::Bool(true)
+    );
+}
+
+#[test]
 fn known_empty_operations_resolve_without_building_scanner_state() {
     assert_eq!(
         empty_text_operation(BodyTextOperation::CharLen).unwrap(),
