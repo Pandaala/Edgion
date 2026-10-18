@@ -2055,3 +2055,16 @@ throughput claim is introduced.
 Fresh verification passed all 500 Gateway DSL tests, formatting, workspace
 check/Clippy and seven repository guards. Remaining warnings are outside the
 changed source. Independent final review passed.
+
+## Endpoint local-response static header names
+
+AllEndpointStatus's private JSON writer accepts static extra-header names and
+passes them directly to Pingora, removing the temporary owned name for Retry-After.
+All current callers use that literal or no extra headers. The locked Pingora
+conversion retains identical name bytes and validation through static Bytes;
+value ownership, header replacement, write order and ignored write errors remain
+unchanged. Existing writer coverage now also checks the exact HTTP/1 header line.
+Independent plan review passed. No live protocol or throughput claim is made.
+Fresh verification passed all 23 AllEndpointStatus tests, formatting, workspace
+check/Clippy and seven repository guards. Remaining warnings are outside changed
+source. Independent final review passed.

@@ -486,7 +486,11 @@ async fn json_response_transfers_owned_and_static_bytes_in_write_order() {
             session
                 .expect_write_response_header()
                 .withf(move |header, eos| {
+                    let mut wire = Vec::new();
+                    header.header_to_h1_wire(&mut wire);
+                    let retry_after = b"Retry-After: 2\r\n";
                     !*eos
+                        && wire.windows(retry_after.len()).any(|part| part == retry_after)
                         && header.status.as_u16() == 429
                         && header.headers["content-length"] == expected.len().to_string()
                         && header.headers["content-type"] == "application/json"

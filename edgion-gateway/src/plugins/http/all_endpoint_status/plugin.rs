@@ -468,7 +468,7 @@ impl AllEndpointStatus {
         session: &mut dyn PluginSession,
         status: u16,
         body: Bytes,
-        extra_headers: &[(&str, &str)],
+        extra_headers: &[(&'static str, &str)],
     ) -> PluginRunningResult {
         let Ok(mut resp) = ResponseHeader::build(status, None) else {
             return PluginRunningResult::ErrTerminateRequest;
@@ -478,7 +478,7 @@ impl AllEndpointStatus {
         let _ = resp.insert_header("Connection", "close");
         let _ = resp.insert_header("Cache-Control", "no-store");
         for (name, value) in extra_headers {
-            let _ = resp.insert_header(name.to_string(), value.to_string());
+            let _ = resp.insert_header(*name, value.to_string());
         }
 
         let _ = session.write_response_header(Box::new(resp), false).await;
