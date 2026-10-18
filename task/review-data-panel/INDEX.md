@@ -3573,3 +3573,23 @@ Fresh verification passed 29 Anthropic response and 12 canonical SSE tests,
 formatting, workspace check/Clippy and seven repository guards. Post-update
 agent-doc validation and diff hygiene passed. Existing warnings remain outside
 changed code. These are network-free unit checks, not a live provider run.
+
+## Anthropic original header validation reuse
+
+Response normalization now classifies the original status once and shares the
+result with unary header observation. A unary 200 no longer repeats the same
+encoding, media-type and Content-Length validation; unary non-200 responses skip
+success-header validation whose result could not affect their observation flags.
+The validator is read-only, and observe_header records invalid only for raw
+success. Error mappings, usage markers, Retry-After handling and normalization
+retain their existing outcomes. The early unavailable path is unchanged.
+
+UnaryHead::plan still independently validates final metadata after response
+plugins; its input can differ from the original provider header. No validation
+boundary, byte cap, body ownership or accounting policy was removed. This is a
+reduction in redundant validation work, not a measured throughput claim.
+
+Fresh verification passed all 56 chat-to-Anthropic unit tests, including response
+normalization and final-head revalidation. Formatting, workspace check/Clippy,
+seven repository guards and diff hygiene passed. Existing warnings remain outside
+changed code. No network test or live provider benchmark was run.

@@ -228,8 +228,15 @@ impl AnthropicResponseProcessor {
             return;
         }
         let original_status = response.status.as_u16();
+        let error = match original_status {
+            400 => Some(PROVIDER_INVALID_REQUEST),
+            413 => Some(REQUEST_TOO_LARGE),
+            429 => Some(RATE_LIMIT_EXCEEDED),
+            200 => self.validate_success_header(response).err(),
+            _ => Some(SERVICE_UNAVAILABLE),
+        };
         if let Some(owner) = self.unary.as_ref() {
-            owner.observe_header(original_status == 200, self.validate_success_header(response).is_ok());
+            owner.observe_header(original_status == 200, error.is_none());
             self.usage_shared.mark_json_started();
             if original_status != 200 {
                 self.usage_shared.mark_observation_unavailable();
@@ -244,14 +251,6 @@ impl AnthropicResponseProcessor {
                 .map(str::to_owned)
         } else {
             None
-        };
-
-        let error = match original_status {
-            400 => Some(PROVIDER_INVALID_REQUEST),
-            413 => Some(REQUEST_TOO_LARGE),
-            429 => Some(RATE_LIMIT_EXCEEDED),
-            200 => self.validate_success_header(response).err(),
-            _ => Some(SERVICE_UNAVAILABLE),
         };
 
         if self.unary.is_some() {
