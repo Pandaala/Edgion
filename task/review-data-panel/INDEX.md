@@ -45,6 +45,7 @@ destination.
 - [Preinitialized HMAC key state](hmac-02-preinitialized-mac-state.md)
 - [Raw URI fragment serialization](log-01-raw-uri-fragment-serialization.md)
 - [Wasm header snapshot and replay ownership](wasm-01-header-snapshot-ownership.md)
+- [DSL string consumer ownership](dsl-01-string-consumer-ownership.md)
 
 ## Completed implementation batch
 
@@ -1501,3 +1502,16 @@ change was needed for that failure. No full suite or throughput benchmark ran.
 The corrected full DSL selection passed 500 tests; the real-adapter test passed.
 Formatting, workspace check/Clippy and seven repository guards passed, with
 existing warnings outside changed files. Independent final review passed.
+
+## DSL string ownership evidence boundary
+
+Inspected remaining URI result construction and argument conversions. Read-only
+argument consumers, Body-owned Bytes transfers and composite URI results have
+different ownership constraints; their decision boundaries are recorded in the
+linked task. The SSO migration page now labels historical workload estimates and
+library observations, removes unsupported current dominance/net-regression
+conclusions, and no longer treats whole-representation deferral as a prohibition
+on local borrowing. Historical proposal/spec paths are absent from this tree.
+No runtime change or measurement was made. Independent plan review passed.
+Independent final review, agent-doc validation and diff checks passed. Rust
+checks were not rerun for this documentation-only batch.

@@ -1,21 +1,35 @@
 ---
 name: sso-migration-not-worth-it
-description: Use when evaluating proposals to migrate DSL Value::Str to a SSO or zero-copy string type; documents the full candidate evaluation and why the migration is deferred indefinitely.
+description: Use when evaluating proposals to migrate DSL Value::Str to a SSO or zero-copy string type; preserves historical candidate analysis and separates representation migration from localized borrowing.
 knowledge_type: intentional-design
 ---
 
 # DSL `Value::Str` SSO / try_unwrap migration — investigated and deferred
 
 **Date investigated**: 2026-05-15
-**Status**: Deferred indefinitely. Re-open only on the conditions listed at the end.
+**Status**: Whole-representation migration remains deferred. Localized consumer borrowing is assessed separately.
 **Triggering proposal**: `tasks/todo/dsl-value-str-arc-smartstring.md` (migrate `Value::Str(Arc<str>)` → `Value::Str(Arc<SmartString>)` for SSO + zero-copy `into_string`)
-**Design spec produced**: `docs/superpowers/specs/2026-05-15-dsl-value-immutable-string-design.md` (kept as historical record; **do not adopt as-is**)
+**Design spec produced**: `docs/superpowers/specs/2026-05-15-dsl-value-immutable-string-design.md` (historical path, absent from the current tree; **do not adopt as-is**)
 
-## TL;DR
+## Current scope and historical evidence
 
-Multiple candidate libraries (`smartstring`, `compact_str`, `ecow`, `kstring`) and one bespoke-type option (`Arc<Box<str>>`, custom `enum { Inline, Heap(Arc<Box<str>>) }`) were evaluated. `kstring` with `default-features = false, features = ["std", "arc", "max_inline"]` was selected and a full design spec written. **An independent subagent review then confirmed by reading kstring 2.0.2 source that the headline benefit — zero-copy `into_string()` for sole-owner heap values — does not exist** (`KString::into_string` always routes through `into_boxed_str` which `memcpy`s; the `ArcStr` backend exposes no consuming method). The only remaining realized benefit is SSO for short-string construction (≤22 B), saving ~5–15 heap allocations per HTTP request out of several hundred total — too small to justify a new dependency (MSRV 1.95.0 floor) + ~98-call-site diff + maintenance-mode dependency risk.
+Multiple candidate libraries (`smartstring`, `compact_str`, `ecow`, `kstring`) and one bespoke-type option (`Arc<Box<str>>`, custom `enum { Inline, Heap(Arc<Box<str>>) }`) were evaluated. `kstring` with `default-features = false, features = ["std", "arc", "max_inline"]` was selected and a full design spec written. **An independent subagent review then confirmed by reading kstring 2.0.2 source that the headline benefit — zero-copy `into_string()` for sole-owner heap values — does not exist** (`KString::into_string` always routes through `into_boxed_str` which `memcpy`s; the `ArcStr` backend exposes no consuming method).
 
-**Decision**: keep `Value::Str(Arc<str>)`. The `into_string()` "1 allocation always" cost noted in the original task file is real but unavoidable in the current Rust ecosystem without trading other costs. The behavior is correct; only performance is suboptimal in a way that has never been profiled as a bottleneck.
+The candidate-library observations below describe the May 2026 investigation;
+versions, maintenance, security status and toolchain requirements were not
+revalidated in this source audit. They are not current dependency advice.
+
+Keep the current `Value::Str(Arc<str>)` representation pending a separately
+reviewed migration. Current `Value::try_into_string` copies nonempty Str payloads
+into a String, but that does not establish that every caller needs owned text.
+Read-only consumer borrowing can avoid the conversion without changing Value's
+representation. No workload profile here establishes its throughput benefit or
+that DSL allocations are negligible. The historical allocation estimates below
+cannot establish either conclusion.
+
+The scoped follow-up is
+`task/review-data-panel/dsl-01-string-consumer-ownership.md`. It separates ordinary
+argument reads, asynchronous Body byte ownership, and composite URI results.
 
 ## When to apply this memo
 
@@ -27,7 +41,7 @@ When reviewing or seeing proposals of the form:
 - "`Value::List(Vec<Arc<str>>)` should use an SSO type"
 - "EdgionDSL string allocation is a hot path"
 
-→ stop and read this memo before re-investigating. The technical conclusions below are final unless one of the **Re-evaluation triggers** at the bottom fires.
+Read this historical analysis before repeating the library survey. Verify its premises against current code and the proposed consumer; it does not bar local borrow-based optimizations.
 
 ## Why each candidate was rejected
 
@@ -46,7 +60,7 @@ When reviewing or seeing proposals of the form:
 ### `EcoString` (no outer Arc; internalizes refcount)
 
 - 15-byte inline threshold (because `EcoString` is 16 bytes total, holding tag + inline data or pointer). Common HTTP middle-length tokens (`application/json` 16 B, `text/html`? 9 B inlines fine, `max-age=3600` 12 B inlines fine, but **`application/json` does not**) fall through to the heap path.
-- HTTP gateway value distribution makes the 15 B threshold the practical breaking point.
+- Whether this threshold matters depends on a measured value distribution; none is supplied here.
 
 ### `kstring::KString` with `arc` + `max_inline` (selected)
 
@@ -76,7 +90,10 @@ match self {
 
 `BoxedStr::from(&str)` is `<Box<str> as From<&str>>::from` — always allocates and copies. The `HeapStr` trait that `ArcStr` implements (`src/backend.rs`) **exposes only `as_str(&self) -> &str`** — no consuming method to extract the inner `Arc<str>` for `Arc::try_unwrap`. Even when the runtime is the sole owner of an `Owned` (heap) `KString`, `into_string()` performs exactly one allocation + memcpy, identical to today's `Arc<str>::to_string()` baseline.
 
-**Result**: the migration's headline benefit (zero-copy `into_string()`) is fictional. The remaining benefit is SSO during construction of short strings — an estimated 5–15 fewer heap allocations per request in a DSL-string-heavy workload, against a per-request total in the hundreds. Not justified by the cost (new dependency, MSRV 1.95.0 lift, ~98 call-site diff, two-commit churn).
+**Historical result**: the investigated kstring conversion did not deliver the
+proposed zero-copy extraction. The recorded 5–15 saved allocations, hundreds of
+gateway allocations, MSRV lift and roughly 98 changed call sites were estimates
+or proposal-specific observations, not current measured costs or acceptance gates.
 
 ## Alternatives that *could* deliver zero-copy `into_string` and why they were not pursued
 
@@ -85,12 +102,12 @@ match self {
 `Box<str>` is `Sized`, so `Arc::try_unwrap` works, and `String::from(Box<str>)` is zero-copy. Trivial diff (1 line type change + accessor adjustments). But:
 
 - Each string costs **2 heap allocations on construction** (Arc inner block, plus the `Box<str>`'s separately-allocated content), versus today's 1-allocation `Arc<str>` (fat-Arc).
-- The DSL VM constructs strings far more often than it calls `into_string()`; this trade is a net regression without profile data demonstrating the opposite.
+- The relative construction and conversion frequencies were not measured here; no net performance result follows from this representation accounting alone.
 - Could be revisited if profiling confirms `into_string()` is in the top allocation sites.
 
 ### Custom `enum { Inline([u8; 22], u8), Heap(Arc<Box<str>>) }`
 
-Hand-rolled type, ~80 lines of safe Rust, no new dependency, both SSO and zero-copy `into_string`. Real best-practice answer if migration were justified.
+Hand-rolled type, ~80 lines of safe Rust, no new dependency, both SSO and zero-copy `into_string`. This is a historical design candidate, not a selected implementation.
 
 - Long-term maintenance cost (we'd own correctness, benchmarking, fuzz coverage).
 - ~1–2 day implementation vs. the 2–3 hour scope originally budgeted.
@@ -98,7 +115,7 @@ Hand-rolled type, ~80 lines of safe Rust, no new dependency, both SSO and zero-c
 
 ## Allocation accounting summary (estimated)
 
-Per a typical EdgionDSL script handling one HTTP request:
+The following historical illustrative workload was not measured and is not established as typical. Counts assume the listed operations and sharing patterns; they are not an allocation inventory for current code:
 
 | Path                                    | Current `Arc<str>` | After kstring | After `Arc<Box<str>>` | After custom enum |
 |-----------------------------------------|---------------------|---------------|------------------------|--------------------|
@@ -109,7 +126,7 @@ Per a typical EdgionDSL script handling one HTTP request:
 | `Add` result × ~3                       | 3                   | 3             | 6                      | 3                  |
 | **Total DSL string allocs / request**   | **~38**             | **~23**       | **~56**                | **~13**            |
 
-Versus per-request total allocations in a Pingora gateway (~hundreds, from request parsing, upstream client, body buffers, etc.), the DSL string slice is a small minority. Optimizing it without profile evidence is speculative.
+No measured gateway-wide denominator accompanies this table. It cannot establish that DSL allocations are a small minority, or accept/reject a local optimization. Measure the actual candidate consumer separately from construction and final output ownership.
 
 ## Re-evaluation triggers (when to re-open)
 
@@ -121,20 +138,18 @@ Open a new task and revisit the analysis if **any** of the following is observed
 4. **`kstring` or `compact_str` or equivalent gains a true consuming `into_inner` method** on their internal Arc-backed storage, enabling zero-copy `into_string`.
 5. **The MSRV concern resolves naturally** (Edgion's stable Rust crosses 1.95+ and stays there) AND one of the above also fires.
 
-## Source references for fact-checking the above
+## Current source references and historical artifacts
 
-- `edgion-dsl/src/value.rs:13-26` — current `Value` enum with `Str(Arc<str>)` and `List(Vec<Arc<str>>)`.
-- `edgion-dsl/src/value.rs:74-89` — current `into_string` (always allocates `s.to_string()`).
-- `edgion-gateway/src/plugins/http/dsl/lang/vm.rs:179` — `const_str_cache: Vec<Option<Arc<str>>>` pre-conversion cache.
-- `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` — Vec<Arc<str>> construction sites: `:100`, `:218`, `:529`, `:558`; `Value::Str(Arc::from(...))` at `:358`, `:361`, `:523`, `:932`, `:947`.
-- `tasks/todo/dsl-value-str-arc-smartstring.md` — the original migration proposal (left in place; its conclusions are superseded by this memo).
-- `docs/superpowers/specs/2026-05-15-dsl-value-immutable-string-design.md` — the design spec we wrote and then chose not to adopt (kept as record of the analysis).
-- `kstring` 2.0.2 source — confirmed `into_string` non-zero-copy via `https://github.com/cobalt-org/kstring/blob/master/src/string.rs` and `src/backend.rs` (`HeapStr` trait has no consuming method).
+- `edgion-dsl/src/value.rs` — `Value::Str`, `try_into_string` and the distinct nil-friendly `try_as_str` coercion.
+- `edgion-gateway/src/plugins/http/dsl/lang/vm.rs` — `RuntimeString`, strict `expect_string`, constant string cache, and Body byte transfers.
+- `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` — argument conversion and checked owned/borrowed result helpers.
+- `tasks/todo/dsl-value-str-arc-smartstring.md` and `docs/superpowers/specs/2026-05-15-dsl-value-immutable-string-design.md` — historical proposal/spec paths, absent from the current tree.
+- The kstring 2.0.2 excerpts above are retained investigation evidence, not fresh verification of a current release.
 
-## What is NOT in scope of this deferral
+## Re-evaluation scope
 
-- No code changes were made. `Value::Str(Arc<str>)` continues to behave exactly as today.
-- No new dependency was added to `Cargo.toml`.
-- No follow-up tasks were created (per investigator's direction).
-
-Anyone reopening this should start by reading this memo end-to-end, then the design spec, then run the profile that establishes a re-evaluation trigger above before redoing the candidate-library survey.
+No runtime representation or dependency changed in this documentation correction.
+A future whole-representation proposal needs current source and measurements;
+the historical trigger examples are not prerequisites for inspecting localized
+borrow-based consumers. Reconstruct necessary design evidence from current
+sources rather than requiring unavailable historical task/spec files.
