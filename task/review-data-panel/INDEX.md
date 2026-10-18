@@ -2899,3 +2899,25 @@ Fresh verification passed 16 extractor, 20 HeaderCertAuth and 14 mTLS callback
 tests, formatting, workspace check/Clippy and seven repository guards. Remaining
 warnings are outside changed code. Output still allocates; no live-handshake,
 peak-memory or throughput result is claimed.
+
+## OtherName decimal output without temporary heap digits
+
+The admitted 64-byte INTEGER magnitude now writes decimal digits backward into a
+193-byte stack buffer, reserving room for a sign. The bound follows from
+256^64 < 1000^64; the existing private call chain is gated before conversion.
+The division and complement/carry algorithms are unchanged. One final String
+copies only the occupied ASCII slice, replacing the growing digit Vec, reversal
+and negative-value formatting copy. This adds bounded stack storage rather than
+retaining the digit Vec's spare capacity in typed SAN output.
+
+Independent plan and code reviews passed. Existing old-algorithm differential,
+i64-limit, BER-boundary and signed-certificate tests remain. New positive/negative
+power-of-ten boundaries verify digit widths. The strengthened allocation test
+checks one allocation and exactly output-length requested bytes for zero,
+positive and negative 64-byte fixtures. Its original baseline predates the prior
+working-buffer optimization, so comparative savings are cumulative, not solely
+attributed to this batch. Fresh verification passed 17 extractor, 20
+HeaderCertAuth and 14 mTLS callback tests; final-source extractor verification
+also passed. Formatting, workspace check/Clippy and seven repository guards
+passed with existing warnings outside changed code. No universal CPU, physical
+memory or live-handshake performance claim is made.

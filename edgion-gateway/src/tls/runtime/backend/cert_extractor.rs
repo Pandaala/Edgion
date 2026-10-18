@@ -253,7 +253,7 @@ fn signed_be_integer_to_decimal(bytes: &mut [u8]) -> String {
         return "0".to_string();
     }
     if bytes[0] & 0x80 == 0 {
-        return unsigned_be_to_decimal(bytes);
+        return magnitude_to_decimal(bytes, false);
     }
     for byte in bytes.iter_mut() {
         *byte = !*byte;
@@ -267,11 +267,14 @@ fn signed_be_integer_to_decimal(bytes: &mut [u8]) -> String {
             break;
         }
     }
-    format!("-{}", unsigned_be_to_decimal(bytes))
+    magnitude_to_decimal(bytes, true)
 }
 
-fn unsigned_be_to_decimal(current: &mut [u8]) -> String {
-    let mut digits = Vec::new();
+fn magnitude_to_decimal(current: &mut [u8], negative: bool) -> String {
+    // The guarded entry admits at most 64 bytes. Since 256 < 1000, three
+    // decimal digits per byte plus one sign byte conservatively bounds output.
+    let mut digits = [0u8; OTHER_NAME_INTEGER_MAX_BYTES * 3 + 1];
+    let mut start = digits.len();
     while current.iter().any(|&b| b != 0) {
         let mut remainder = 0u16;
         for byte in current.iter_mut() {
@@ -279,13 +282,20 @@ fn unsigned_be_to_decimal(current: &mut [u8]) -> String {
             *byte = (value / 10) as u8;
             remainder = value % 10;
         }
-        digits.push(b'0' + remainder as u8);
+        start -= 1;
+        digits[start] = b'0' + remainder as u8;
     }
-    if digits.is_empty() {
-        return "0".to_string();
+    if start == digits.len() {
+        start -= 1;
+        digits[start] = b'0';
     }
-    digits.reverse();
-    String::from_utf8(digits).expect("decimal digits are ASCII")
+    if negative {
+        start -= 1;
+        digits[start] = b'-';
+    }
+    std::str::from_utf8(&digits[start..])
+        .expect("decimal digits and minus sign are ASCII")
+        .to_owned()
 }
 
 fn bmp_string(bytes: &[u8]) -> Option<String> {

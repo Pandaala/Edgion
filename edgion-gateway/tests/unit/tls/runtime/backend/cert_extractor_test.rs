@@ -442,22 +442,19 @@ fn integer_stack_scratch_preserves_signed_decimal_conversion() {
 }
 
 #[test]
-fn integer_stack_scratch_removes_only_working_buffer_allocations() {
-    for (input, removed) in [([1u8; 64], 1), ([128u8; 64], 2)] {
+fn integer_conversion_allocates_only_final_decimal_text() {
+    for input in [[0u8; 64], [1u8; 64], [128u8; 64], [255u8; 64]] {
         let (old, old_stats) =
             crate::test_allocation_counter::count_allocation_stats(|| original_signed_be_integer_to_decimal(&input));
         let (new, new_stats) =
             crate::test_allocation_counter::count_allocation_stats(|| super::integer_to_decimal(&input).unwrap());
         assert_eq!(new, old);
-        assert_eq!(
-            new_stats.calls + removed,
-            old_stats.calls,
-            "old={old_stats:?}, new={new_stats:?}"
-        );
-        assert_eq!(
-            new_stats.requested_bytes + removed * input.len(),
-            old_stats.requested_bytes
-        );
+        assert_eq!(new_stats.calls, 1, "{new_stats:?}");
+        assert_eq!(new_stats.requested_bytes, new.len());
+        if input[0] != 0 {
+            assert!(new_stats.calls < old_stats.calls);
+            assert!(new_stats.requested_bytes < old_stats.requested_bytes);
+        }
     }
 }
 
@@ -475,4 +472,19 @@ fn negative_integer_other_names_preserve_display_and_typed_values() {
             PresentedSan::other_name("1.2.3.5", "-1")
         ]
     );
+}
+
+#[test]
+fn signed_integer_decimal_width_boundaries_are_exact() {
+    let mut power = 1i64;
+    for exponent in 0..=18 {
+        for magnitude in [power - 1, power, power + 1] {
+            for value in [magnitude, -magnitude] {
+                assert_eq!(super::integer_to_decimal(&value.to_be_bytes()), Some(value.to_string()));
+            }
+        }
+        if exponent < 18 {
+            power *= 10;
+        }
+    }
 }
