@@ -5,9 +5,11 @@
 //! reused across closely related plugins (e.g., the rate-limit family).
 
 use smallvec::SmallVec;
+use std::borrow::Cow;
 use std::fmt::Write as _;
 use std::time::Duration;
 
+use crate::plugins::runtime::session_adapter::key_value;
 use crate::plugins::runtime::{PluginLog, PluginSession};
 use edgion_resources::common::KeyGet;
 use edgion_resources::resources::edgion_plugins::OnKeyMiss;
@@ -47,7 +49,7 @@ pub enum RateLimitKey {
     Deny,
 }
 
-/// Resolve the rate-limit key from `keys` via `session.key_get`, composing the
+/// Resolve the rate-limit key from `keys`, borrowing multi-source values and composing the
 /// resolved parts with [`compose_rate_limit_key`].
 ///
 /// Shared by `RateLimitLocal`, `RateLimitRedis` and AI quota admission so the key-extraction
@@ -81,9 +83,9 @@ pub fn resolve_rate_limit_key(
             }
         }
         _ => {
-            let mut parts: SmallVec<[Option<String>; 2]> = SmallVec::with_capacity(keys.len());
+            let mut parts: SmallVec<[Option<Cow<'_, str>>; 2]> = SmallVec::with_capacity(keys.len());
             for key in keys {
-                parts.push(session.key_get(key));
+                parts.push(key_value(session, key));
             }
             if parts.iter().any(Option::is_some) {
                 return RateLimitKey::Resolved(compose_rate_limit_key(&parts));
@@ -132,9 +134,9 @@ pub fn resolve_rate_limit_key(
 /// every configured slot is represented (`-` when unresolved); the length
 /// prefix makes the byte span of each part unambiguous regardless of its
 /// content.
-fn compose_rate_limit_key(parts: &[Option<String>]) -> String {
+fn compose_rate_limit_key(parts: &[Option<Cow<'_, str>>]) -> String {
     if let [Some(only)] = parts {
-        return only.clone();
+        return only.clone().into_owned();
     }
 
     // Reserve up-front: each slot costs its value plus a short length prefix and

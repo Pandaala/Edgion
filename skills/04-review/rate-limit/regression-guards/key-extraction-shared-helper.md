@@ -71,9 +71,14 @@ gateway (no `Copy` derive added to the types layer).
 
 ## Temporary source-result storage
 
-The multi-source branch retains ordered owned results in a SmallVec with two
-inline slots. Two-source calls avoid a separate collection allocation; larger
-source lists spill to heap storage. The composed String and any owned KeyGet
-values remain allocated as before. Zero/single-source fast paths, missing-slot
-markers, byte-length prefixes and all-missing fallback retain their semantics.
-This does not establish a whole-call zero-allocation or throughput guarantee.
+The multi-source branch retains ordered `Cow<str>` results in a SmallVec with
+two inline slots, borrowing canonical session values through `key_value` and
+retaining owned composite-source fallback. Two-source calls avoid a separate
+collection allocation; larger source lists spill. Composition copies values
+only into the final owned String. Zero/single-source fast paths retain their
+ownership: a single source's owned getter result moves directly to the caller.
+Missing-slot markers, byte-length prefixes, present empty values and all-missing
+fallback retain their semantics. Tests cover delimiter/UTF-8 input, spill,
+composite ownership and Redis multi-quota preparation. Warmed two-header fixtures
+measure allocation separately from setup; this does not establish whole-callback
+zero allocation or a throughput guarantee.

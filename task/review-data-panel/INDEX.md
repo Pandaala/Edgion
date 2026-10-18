@@ -1664,3 +1664,26 @@ Fresh serial selections passed all 8 DynamicExternalUpstream-related tests and
 67 condition tests. Formatting, workspace check/Clippy and seven repository
 guards passed, with existing warnings outside changed files. Independent final
 review passed.
+
+## Borrowed multi-source rate-limit components
+
+Multi-source bucket composition now retains canonical `Cow<str>` reads in the
+existing two-slot SmallVec, avoiding owned copies of ordinary source values.
+Composite inputs retain owned fallback, and the final bucket String remains
+owned. Zero/single-source paths, exact slot encoding and capacity, missing-value
+policy, quota namespace and logging remain unchanged. Redis multi-quota tests
+now exercise actual headers for the multi-source path.
+
+Independent plan review passed. Targeted tests cover encoding, spill, empty and
+missing values, UTF-8 byte lengths, owned composites and warmed allocation probes.
+No full suite, live Redis integration or throughput benchmark ran for this batch.
+The initial helper test run passed 15 cases and failed the new composite fixture's
+incorrect expected byte length (11 instead of 12); the corrected source required
+a fresh rebuild because the first compile had already consumed the older test.
+Both warmed two-source allocation probes passed in that run.
+Fresh rerun passed all 16 helper tests. Rate-limit selection passed 127 with one
+existing ignored case; AI quota passed 27 and conditions passed 67. Selections
+overlap and are not a unique-test count. Warmed empty/nonempty two-header helper
+fixtures each measured one output allocation. Formatting, workspace check/Clippy
+and seven repository guards passed, with existing warnings outside changed files.
+Independent final review passed.

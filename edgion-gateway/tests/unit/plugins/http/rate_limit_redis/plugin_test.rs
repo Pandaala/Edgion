@@ -476,10 +476,14 @@ fn multi_quota_preparation_preserves_skips_partial_keys_and_stable_names() {
     config.quotas.push(second);
     let plugin = RateLimitRedis::new(&config, "default/multi/#0");
     let mut session = MockPluginSession::new();
-    session.expect_key_get().returning(|key| match key {
-        KeyGet::Header { name } if name == "X-User" => Some("user".into()),
-        _ => None,
-    });
+    session
+        .expect_key_get()
+        .withf(|key| matches!(key, KeyGet::Header { name } if name == "X-Tenant"))
+        .times(1)
+        .return_const(None::<String>);
+    let mut headers = http::HeaderMap::new();
+    headers.insert("x-user", http::HeaderValue::from_static("user"));
+    session.expect_request_header_map().return_const(headers);
     let mut log = PluginLog::new("RateLimitRedis");
     let jobs = plugin.prepare(&mut session, &mut log, None).ok().unwrap();
     assert_eq!(jobs.len(), 1);
