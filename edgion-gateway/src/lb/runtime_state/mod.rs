@@ -29,12 +29,12 @@ pub struct SpAffinitySnapshot {
     pub entries: Arc<std::collections::HashMap<String, std::net::SocketAddr>>,
 }
 
-fn build_sp_affinity_map(
-    backends: &[Arc<LbBackend>],
+fn build_sp_affinity_map<'a>(
+    backends: impl ExactSizeIterator<Item = &'a LbBackend>,
     scope: Option<&str>,
 ) -> Arc<std::collections::HashMap<String, std::net::SocketAddr>> {
     let mut map = std::collections::HashMap::with_capacity(backends.len().min(SP_AFFINITY_MAX_PER_SERVICE));
-    for b in backends.iter().take(SP_AFFINITY_MAX_PER_SERVICE) {
+    for b in backends.take(SP_AFFINITY_MAX_PER_SERVICE) {
         if let SocketAddr::Inet(addr) = b.addr {
             let addr_str = addr.to_string();
             // Threat model: this unkeyed hash of `IP:port` (no secret, no MAC)
@@ -124,12 +124,7 @@ fn try_publish_sp_snapshot(
         return None;
     }
     let resolved = available.resolve_section(section).ok()?;
-    let backends: Vec<Arc<LbBackend>> = resolved
-        .all_slots
-        .iter()
-        .map(|slot| Arc::clone(&slot.backend))
-        .collect();
-    let entries = build_sp_affinity_map(&backends, None);
+    let entries = build_sp_affinity_map(resolved.all_slots.iter().map(|slot| slot.backend.as_ref()), None);
     let after_generation = coordinator.load_generation();
     let after_active = cell.active.load_full();
     if !Arc::ptr_eq(&current_generation, &after_generation)
@@ -162,7 +157,10 @@ pub(crate) fn sp_affinity_get_or_build_scoped(
     // request-captured endpoint Arc instead; only ordinary Service affinity is
     // cached globally.
     match scope {
-        Some(scope) => build_sp_affinity_map(&backends_fn(), Some(scope)),
+        Some(scope) => {
+            let backends = backends_fn();
+            build_sp_affinity_map(backends.iter().map(Arc::as_ref), Some(scope))
+        }
         None => sp_affinity_get_or_build_key(service_key, section, backends_fn),
     }
 }

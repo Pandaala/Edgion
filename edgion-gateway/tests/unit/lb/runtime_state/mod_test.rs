@@ -31,7 +31,7 @@ fn sp_affinity_round_trip_ipv4_and_ipv6() {
     let v6: StdSocketAddr = "[::1]:30001".parse().unwrap();
     let svc = "ns/sp-round-trip";
     let backends = Arc::new(vec![backend(v4), backend(v6)]);
-    let map = build_sp_affinity_map(&backends, None);
+    let map = build_sp_affinity_map(backends.iter().map(Arc::as_ref), None);
     let lookup = |token: &str| map.get(token).copied();
 
     // Token format: backend cell address formatted with `SocketAddr::to_string()`.
@@ -327,4 +327,33 @@ fn sticky_token_from_another_section_is_a_miss() {
         metrics_map.get(&generate_session_token(&metrics_addr.to_string())),
         Some(&metrics_addr)
     );
+}
+
+#[test]
+fn affinity_builder_borrows_only_the_capped_input_prefix() {
+    let backends: Vec<_> = (0..=SP_AFFINITY_MAX_PER_SERVICE)
+        .map(|index| {
+            backend(StdSocketAddr::from((
+                [10, 2, (index / 256) as u8, (index % 256) as u8],
+                8080,
+            )))
+        })
+        .collect();
+    let visited = std::cell::Cell::new(0);
+    let entries = build_sp_affinity_map(
+        backends.iter().map(|backend| {
+            visited.set(visited.get() + 1);
+            assert_eq!(Arc::strong_count(backend), 1);
+            backend.as_ref()
+        }),
+        None,
+    );
+    assert_eq!(visited.get(), SP_AFFINITY_MAX_PER_SERVICE);
+    assert_eq!(entries.len(), SP_AFFINITY_MAX_PER_SERVICE);
+    for backend in &backends[..SP_AFFINITY_MAX_PER_SERVICE] {
+        let addr = backend.addr.as_inet().unwrap();
+        assert_eq!(entries.get(&generate_session_token(&addr.to_string())), Some(addr));
+    }
+    let excluded = backends[SP_AFFINITY_MAX_PER_SERVICE].addr.as_inet().unwrap();
+    assert!(!entries.contains_key(&generate_session_token(&excluded.to_string())));
 }

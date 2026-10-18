@@ -551,3 +551,29 @@ Independent plan and final source reviews passed. Selection tests (38), compiled
 selector tests (8) and backend selector tests (12) passed. Formatting, workspace
 check/Clippy and seven repository guards passed; Clippy warnings are outside the
 changed lines. No full integration suite or throughput benchmark was run.
+
+
+## Borrowed affinity-map build inputs
+
+The ordinary Service affinity-cache miss builder now projects borrowed backends
+directly from its captured section instead of cloning every backend Arc into a
+temporary Vec. The shared private builder takes an exact-size iterator, reserves
+the same capped map capacity and consumes only the first 1024 input positions
+before Inet filtering. Order, canonical address/token derivation and duplicate
+insertion behavior remain unchanged. Scoped views still own the closure's returned
+slice for synchronous construction and remain uncached.
+
+The existing miss lock, generation/membership checks before and after building,
+publication and cache-hit paths remain unchanged. A regression verifies prefix
+consumption, live reference counts during iteration, retained entries and omitted
+tail. Existing IPv4/IPv6, scope-isolation and stale-publication tests remain.
+Source inspection also traced token extraction/expiry and rule-wide sticky lookup;
+request-owned tokens and response cookie formatting remain unchanged. This removes
+the ordinary miss-path temporary vector and Arc work, not map/token allocations or
+all discovery work. No cache prebuilding or throughput claim is introduced.
+
+Independent plan and final source reviews passed. Runtime-state tests (7),
+session-persistence tests (22) and discovery-coordinator tests (41) passed.
+Formatting, workspace check/Clippy and seven repository guards passed; existing
+Clippy warnings are outside the changed lines. No full integration suite or
+throughput benchmark was run.
