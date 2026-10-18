@@ -408,3 +408,90 @@ fn boolean_pair_admission_preserves_counter_and_output_boundaries() {
         }
     }
 }
+
+fn original_form_to_json(input: &[u8], output_limit: usize) -> Result<Vec<u8>, TransformFailure> {
+    let mut values = BTreeMap::<String, Vec<String>>::new();
+    let mut pair_count = 0usize;
+    for segment in input.split(|byte| *byte == b'&').filter(|segment| !segment.is_empty()) {
+        pair_count = pair_count.checked_add(1).ok_or(TransformFailure::TooLarge)?;
+        if pair_count > MAX_PAIRS {
+            return Err(TransformFailure::TooLarge);
+        }
+        let split = segment.iter().position(|byte| *byte == b'=').unwrap_or(segment.len());
+        let key = decode_component(&segment[..split], MAX_KEY_BYTES)?;
+        let value_start = split.saturating_add(1).min(segment.len());
+        let value = decode_component(&segment[value_start..], MAX_VALUE_BYTES)?;
+        values.entry(key).or_default().push(value);
+    }
+    let object = values
+        .into_iter()
+        .map(|(key, mut values)| {
+            let value = if values.len() == 1 {
+                Value::String(values.pop().unwrap())
+            } else {
+                Value::Array(values.into_iter().map(Value::String).collect())
+            };
+            (key, value)
+        })
+        .collect::<serde_json::Map<String, Value>>();
+    serialize_json(&Value::Object(object), output_limit)
+}
+
+#[test]
+fn direct_form_group_serialization_matches_original_bytes_and_failures() {
+    let cases = [
+        Vec::new(),
+        b"&&&".to_vec(),
+        b"a=one".to_vec(),
+        b"z=0&a=1&a=2&a=3&z=4".to_vec(),
+        b"a=1&%61=2&=empty&bare&plus=%2b+%2B&quote=%22&slash=%5c&control=%00%0a&utf8=%c3%a9".to_vec(),
+        b"a=ok&b=%".to_vec(),
+        b"a=%ff".to_vec(),
+        b"a=\xff".to_vec(),
+        format!("{}=v", "k".repeat(MAX_KEY_BYTES + 1)).into_bytes(),
+        format!("k={}", "v".repeat(MAX_VALUE_BYTES + 1)).into_bytes(),
+        std::iter::repeat_n("k=v", MAX_PAIRS)
+            .collect::<Vec<_>>()
+            .join("&")
+            .into_bytes(),
+        std::iter::repeat_n("k=v", MAX_PAIRS + 1)
+            .collect::<Vec<_>>()
+            .join("&")
+            .into_bytes(),
+    ];
+    for input in cases {
+        let mut caps = vec![0, 1, 2, 15, 1024, 20000];
+        if let Ok(output) = original_form_to_json(&input, 20000) {
+            caps.extend([output.len(), output.len().saturating_sub(1)]);
+        }
+        for cap in caps {
+            assert_eq!(
+                form_to_json(&input, cap),
+                original_form_to_json(&input, cap),
+                "input={input:?}, cap={cap}"
+            );
+        }
+    }
+}
+
+#[test]
+fn distinct_form_keys_avoid_singleton_vectors_and_second_object() {
+    let input = (0..64)
+        .map(|index| format!("key{index}=value{index}"))
+        .collect::<Vec<_>>()
+        .join("&");
+    let (old, old_stats) =
+        crate::test_allocation_counter::count_allocation_stats(|| original_form_to_json(input.as_bytes(), 8192));
+    let (new, new_stats) =
+        crate::test_allocation_counter::count_allocation_stats(|| form_to_json(input.as_bytes(), 8192));
+    assert!(old.is_ok());
+    assert_eq!(new, old);
+    assert!(
+        new_stats.calls < old_stats.calls,
+        "old={old_stats:?}, new={new_stats:?}"
+    );
+    assert!(
+        new_stats.requested_bytes < old_stats.requested_bytes,
+        "old={old_stats:?}, new={new_stats:?}"
+    );
+}

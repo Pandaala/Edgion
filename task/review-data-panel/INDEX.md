@@ -2714,3 +2714,23 @@ rejection at 13 bytes. Fresh verification passed 16 FormJsonTransform tests,
 1 CappedWriter test, formatting, workspace check/Clippy and seven repository
 guards. Remaining warnings are outside changed code. Parsing and output-buffer
 allocations remain; no full-transform zero-allocation or throughput claim is made.
+
+## FormJsonTransform direct grouped serialization
+
+Form-to-JSON now groups decoded values as a private untagged Single/Multiple
+representation in the existing ordered map. A single value owns its String
+directly; the second occurrence moves it into a Vec and later occurrences append.
+The map serializes directly through the existing capped, panic-isolated writer,
+removing singleton Vecs and the second serde_json object/array construction.
+Key ordering, encounter order within repeated keys, scalar/array shape, decoding
+and count/error precedence, output bounds, publication and rollback are unchanged.
+
+Independent plan and code reviews passed. A retained original implementation in
+tests provides exact byte/error comparisons across empty/single/repeated keys,
+percent-equivalent names, escapes, controls, UTF-8, malformed components, cardinality
+and component limits, plus exact/insufficient output caps. A 64-distinct-key fixture
+verifies fewer allocation calls and cumulative requested bytes with identical
+output. Fresh verification passed 18 transformer tests, 1 CappedWriter test,
+formatting, workspace check/Clippy and seven repository guards. Remaining warnings
+are outside changed code. No peak-memory, all-input allocation or throughput
+improvement is claimed.

@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{btree_map::Entry, BTreeMap};
 use std::io::Write;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -11,7 +11,8 @@ use edgion_resources::resources::edgion_plugins::{
     ABSOLUTE_INSTANCE_MAX_BYTES, DEFAULT_INSTANCE_MAX_BYTES,
 };
 use edgion_resources::EdgionErrorCode;
-use serde_json::{Map, Value};
+use serde::Serialize;
+use serde_json::Value;
 
 use crate::plugins::http::common::{
     form_request_headers_are_supported, json_request_headers_are_supported, CappedWriter,
@@ -191,8 +192,15 @@ impl RequestFilter for FormJsonTransform {
     }
 }
 
+#[derive(Serialize)]
+#[serde(untagged)]
+enum FormValues {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
 fn form_to_json(input: &[u8], output_limit: usize) -> Result<Vec<u8>, TransformFailure> {
-    let mut values = BTreeMap::<String, Vec<String>>::new();
+    let mut values = BTreeMap::<String, FormValues>::new();
     let mut pair_count = 0usize;
     for segment in input.split(|byte| *byte == b'&').filter(|segment| !segment.is_empty()) {
         pair_count = pair_count.checked_add(1).ok_or(TransformFailure::TooLarge)?;
@@ -203,21 +211,23 @@ fn form_to_json(input: &[u8], output_limit: usize) -> Result<Vec<u8>, TransformF
         let key = decode_component(&segment[..split], MAX_KEY_BYTES)?;
         let value_start = split.saturating_add(1).min(segment.len());
         let value = decode_component(&segment[value_start..], MAX_VALUE_BYTES)?;
-        values.entry(key).or_default().push(value);
+        match values.entry(key) {
+            Entry::Vacant(entry) => {
+                entry.insert(FormValues::Single(value));
+            }
+            Entry::Occupied(mut entry) => {
+                let values = entry.get_mut();
+                match values {
+                    FormValues::Single(first) => {
+                        *values = FormValues::Multiple(vec![std::mem::take(first), value]);
+                    }
+                    FormValues::Multiple(values) => values.push(value),
+                }
+            }
+        }
     }
 
-    let object = values
-        .into_iter()
-        .map(|(key, mut values)| {
-            let value = if values.len() == 1 {
-                Value::String(values.pop().expect("one value"))
-            } else {
-                Value::Array(values.into_iter().map(Value::String).collect())
-            };
-            (key, value)
-        })
-        .collect::<Map<String, Value>>();
-    serialize_json(&Value::Object(object), output_limit)
+    serialize_json(&values, output_limit)
 }
 
 fn decode_component(input: &[u8], limit: usize) -> Result<String, TransformFailure> {
@@ -260,7 +270,7 @@ fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
-fn serialize_json(value: &Value, limit: usize) -> Result<Vec<u8>, TransformFailure> {
+fn serialize_json(value: &impl Serialize, limit: usize) -> Result<Vec<u8>, TransformFailure> {
     let mut writer = CappedWriter::new(limit);
     match catch_unwind(AssertUnwindSafe(|| serde_json::to_writer(&mut writer, value))) {
         Ok(Ok(())) => Ok(writer.into_inner()),
