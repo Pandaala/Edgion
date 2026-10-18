@@ -687,7 +687,8 @@ async fn reserve(
         .saturating_sub(elapsed)
         .saturating_add(SETTLEMENT_GRACE)
         .max(Duration::from_millis(1));
-    let request_id = uuid::Uuid::new_v4().simple().to_string();
+    let mut request_id_buffer = uuid::Uuid::encode_buffer();
+    let request_id = uuid::Uuid::new_v4().simple().encode_lower(&mut request_id_buffer);
     let keys = build_credential_reservation_keys(
         KEY_PREFIX,
         input.namespace.as_bytes(),

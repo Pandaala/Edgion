@@ -141,12 +141,13 @@ impl CompiledAiQuotaPlan {
             return self.redis_failure();
         }
 
-        let request_id = uuid::Uuid::new_v4().simple().to_string();
+        let mut request_id_buffer = uuid::Uuid::encode_buffer();
+        let request_id = uuid::Uuid::new_v4().simple().encode_lower(&mut request_id_buffer);
         let targets = build_targets(
             &self.entry_scope,
             &identity,
             logical_model,
-            &request_id,
+            request_id,
             &self.limits,
             maximum_request_duration,
             self.request_timeout,

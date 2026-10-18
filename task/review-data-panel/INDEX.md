@@ -3707,3 +3707,24 @@ Fresh verification passed 59 tests: 24 attempt runtime, 13 accounting finalizer
 and 22 adaptive routing tests. Formatting, workspace check/Clippy, seven
 repository guards and diff hygiene passed. Existing warnings remain outside
 changed code. No live provider/Redis test or throughput benchmark was run.
+
+## Quota internal UUID stack encoding
+
+Credential reservation and identity/model quota admission now encode their
+internal UUID into the uuid crate's stack buffer instead of constructing a
+temporary String. Locked uuid 1.24.0 Simple Display uses the same lowercase
+encoding, preserving the 32-byte unhyphenated representation. Random generation
+stays after Redis-client health checks; each invocation still generates one ID,
+shared by every target in that quota admission.
+
+Both canonical Redis key builders synchronously hash the ID and return owned
+key strings. The buffer is not retained by a lease or Redis future. Window IDs,
+cluster-slot hashing, request-marker isolation, TTLs, admission and failure
+policies are unchanged. This removes the intermediate formatting String in each
+path; key storage and RNG work remain. Existing quota, attempt and shared Redis
+core tests provide verification without duplicating the UUID library tests.
+
+Fresh verification passed 80 network-free tests: 24 attempt runtime, 27 quota
+and 29 shared Redis rate-limiter tests. Formatting, workspace check/Clippy,
+seven repository guards and diff hygiene passed. Existing warnings remain
+outside changed code. No live Redis run or throughput benchmark was performed.
