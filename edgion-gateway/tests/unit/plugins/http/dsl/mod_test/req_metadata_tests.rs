@@ -1,6 +1,34 @@
 //! Tests for request metadata builtins: protocol, grpc_service, grpc_method, content_length, client cert.
 
 use super::*;
+
+#[test]
+fn borrowed_content_length_preserves_signed_parse_and_first_value() {
+    for (first, expected) in [
+        (b"-1".as_slice(), "-1"),
+        (b"+1".as_slice(), "1"),
+        (b"9223372036854775807".as_slice(), "9223372036854775807"),
+        (b"\xff".as_slice(), "missing"),
+        (b"".as_slice(), "missing"),
+        (b" 1".as_slice(), "missing"),
+    ] {
+        let mut headers = http::HeaderMap::new();
+        headers.append("content-length", http::HeaderValue::from_bytes(first).unwrap());
+        headers.append("content-length", http::HeaderValue::from_static("2"));
+        let mut session = MockPluginSession::new();
+        session.expect_header_value().times(0);
+        session.expect_request_header_map().return_const(headers);
+        session
+            .expect_set_request_header()
+            .times(1)
+            .withf(move |name, value| name == "X-Result" && value == expected)
+            .returning(|_, _| Ok(()));
+        assert_eq!(run(
+            "let value = req.content_length\nif value == nil { req.set_header(\"X-Result\", \"missing\") } else { req.set_header(\"X-Result\", value) }",
+            session,
+        ), good_next());
+    }
+}
 use crate::ctx::ClientCertInfo;
 
 #[test]
@@ -83,10 +111,13 @@ fn test_req_content_length() {
         }
     "#;
     let mut session = MockPluginSession::new();
+    session.expect_header_value().times(0);
     session
-        .expect_header_value()
-        .withf(|n| n == "Content-Length")
-        .returning(|_| Some("2097152".to_string()));
+        .expect_request_header_map()
+        .return_const(http::HeaderMap::from_iter([(
+            http::header::HeaderName::from_bytes(b"Content-Length").unwrap(),
+            http::HeaderValue::from_static("2097152"),
+        )]));
     let result = run(source, session);
     assert_eq!(result, err_response_body(413, "too large"));
 }
@@ -99,10 +130,10 @@ fn test_req_content_length_missing() {
         }
     "#;
     let mut session = MockPluginSession::new();
+    session.expect_header_value().times(0);
     session
-        .expect_header_value()
-        .withf(|n| n == "Content-Length")
-        .returning(|_| None);
+        .expect_request_header_map()
+        .return_const(http::HeaderMap::from_iter([]));
     session
         .expect_set_request_header()
         .withf(|n, v| n == "X-Has-CL" && v == "no")
@@ -326,11 +357,13 @@ fn test_req_content_length_malformed_or_overflow_returns_nil() {
             }
         "#;
         let mut session = MockPluginSession::new();
+        session.expect_header_value().times(0);
         session
-            .expect_header_value()
-            .withf(|name| name == "Content-Length")
-            .times(1)
-            .returning(move |_| Some(header.to_string()));
+            .expect_request_header_map()
+            .return_const(http::HeaderMap::from_iter([(
+                http::header::CONTENT_LENGTH,
+                http::HeaderValue::from_static(header),
+            )]));
         session
             .expect_set_request_header()
             .withf(|name, value| name == "X-CL" && value == "invalid")
@@ -348,11 +381,13 @@ fn test_req_content_length_zero_returns_integer() {
         }
     "#;
     let mut session = MockPluginSession::new();
+    session.expect_header_value().times(0);
     session
-        .expect_header_value()
-        .withf(|name| name == "Content-Length")
-        .times(1)
-        .returning(|_| Some("0".to_string()));
+        .expect_request_header_map()
+        .return_const(http::HeaderMap::from_iter([(
+            http::header::HeaderName::from_bytes(b"Content-Length").unwrap(),
+            http::HeaderValue::from_static("0"),
+        )]));
     session
         .expect_set_request_header()
         .withf(|name, value| name == "X-CL" && value == "zero")

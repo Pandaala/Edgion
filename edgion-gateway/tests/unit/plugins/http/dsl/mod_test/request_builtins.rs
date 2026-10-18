@@ -3,6 +3,74 @@
 use super::*;
 
 #[test]
+fn borrowed_scheme_preserves_fallback_and_first_value() {
+    for (forwarded, alternate, expected) in [
+        (vec![], None, "http"),
+        (vec![], Some("HTTPS"), "HTTPS"),
+        (vec![b"".as_slice()], Some("https"), ""),
+        (vec![b"CuStOm".as_slice()], Some("https"), "CuStOm"),
+        (
+            vec![b"\xff".as_slice(), b"https".as_slice()],
+            Some("alternate"),
+            "alternate",
+        ),
+        (vec![b"\xff".as_slice()], None, "http"),
+        (vec![b"first".as_slice(), b"second".as_slice()], None, "first"),
+    ] {
+        let mut headers = http::HeaderMap::new();
+        for value in forwarded {
+            headers.append("x-forwarded-proto", http::HeaderValue::from_bytes(value).unwrap());
+        }
+        if let Some(value) = alternate {
+            headers.insert("x-scheme", http::HeaderValue::from_static(value));
+        }
+        let mut session = MockPluginSession::new();
+        session.expect_header_value().times(0);
+        session.expect_request_header_map().return_const(headers);
+        session
+            .expect_set_request_header()
+            .times(1)
+            .withf(move |name, value| name == "X-Result" && value == expected)
+            .returning(|_, _| Ok(()));
+        assert_eq!(run("req.set_header(\"X-Result\", req.scheme)", session), good_next());
+    }
+}
+
+#[test]
+fn borrowed_request_scalar_limits_follow_value_selection() {
+    for (expression, name) in [
+        ("req.host", "host"),
+        ("req.content_type", "content-type"),
+        ("req.scheme", "x-forwarded-proto"),
+    ] {
+        for limit in [3, 4] {
+            let mut headers = http::HeaderMap::new();
+            headers.insert(
+                http::HeaderName::from_static(name),
+                http::HeaderValue::from_static("abcd"),
+            );
+            headers.insert("x-scheme", http::HeaderValue::from_static("x"));
+            let mut session = MockPluginSession::new();
+            session.expect_header_value().times(0);
+            session.expect_request_header_map().return_const(headers);
+            let source = format!("let value = {expression}");
+            let limits = VmLimits {
+                max_string_len: limit,
+                ..Default::default()
+            };
+            if limit == 3 {
+                assert!(matches!(
+                    run_expect_runtime_err_with_limits(&source, session, limits),
+                    RuntimeError::StringTooLong { len: 4, limit: 3 }
+                ));
+            } else {
+                assert_eq!(run_with_limits(&source, session, limits), good_next());
+            }
+        }
+    }
+}
+
+#[test]
 fn test_req_header_present() {
     let mut session = MockPluginSession::new();
     session
@@ -144,10 +212,13 @@ fn test_req_remote_ip() {
 #[test]
 fn test_req_host() {
     let mut session = MockPluginSession::new();
+    session.expect_header_value().times(0);
     session
-        .expect_header_value()
-        .withf(|h| h == "Host")
-        .returning(|_| Some("example.com".to_string()));
+        .expect_request_header_map()
+        .return_const(http::HeaderMap::from_iter([(
+            http::header::HeaderName::from_bytes(b"Host").unwrap(),
+            http::HeaderValue::from_static("example.com"),
+        )]));
     session
         .expect_set_request_header()
         .withf(|h, v| h == "X-H" && v == "example.com")
@@ -160,10 +231,13 @@ fn test_req_host() {
 #[test]
 fn test_req_scheme() {
     let mut session = MockPluginSession::new();
+    session.expect_header_value().times(0);
     session
-        .expect_header_value()
-        .withf(|h| h == "X-Forwarded-Proto")
-        .returning(|_| Some("https".to_string()));
+        .expect_request_header_map()
+        .return_const(http::HeaderMap::from_iter([(
+            http::header::HeaderName::from_bytes(b"X-Forwarded-Proto").unwrap(),
+            http::HeaderValue::from_static("https"),
+        )]));
     session
         .expect_set_request_header()
         .withf(|h, v| h == "X-S" && v == "https")
@@ -189,10 +263,13 @@ fn test_req_uri() {
 #[test]
 fn test_req_content_type() {
     let mut session = MockPluginSession::new();
+    session.expect_header_value().times(0);
     session
-        .expect_header_value()
-        .withf(|h| h == "Content-Type")
-        .returning(|_| Some("application/json".to_string()));
+        .expect_request_header_map()
+        .return_const(http::HeaderMap::from_iter([(
+            http::header::HeaderName::from_bytes(b"Content-Type").unwrap(),
+            http::HeaderValue::from_static("application/json"),
+        )]));
     session
         .expect_set_request_header()
         .withf(|h, v| h == "X-CT" && v == "application/json")

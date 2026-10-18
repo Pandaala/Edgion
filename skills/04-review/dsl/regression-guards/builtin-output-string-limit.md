@@ -71,6 +71,19 @@ exact/over-limit names and an oversized 257th name outside the retained prefix.
 This removes the intermediate full `Vec<String>` and its name copies; output
 list/Arc allocation remains.
 
+## Borrowed request-header scalars
+
+`req.host`, `req.content_type` and `req.scheme` use the existing `header_str`
+accessor and borrowed result helper. Scheme chooses the first text-eligible
+X-Forwarded-Proto value, then X-Scheme, then the literal `http`, preserving case
+and empty text. A non-text first field value does not search later duplicates.
+Check the selected result's length without falling back on a length error.
+`req.content_length` parses the borrowed first text value as the same signed i64:
+malformed/overflow text returns nil; negative and leading-plus values remain
+accepted by this script-level read. It does not apply a string-output limit or
+add HTTP input validation. Tests cover selection/length boundaries and numeric
+first-value behavior. Final string results still own their Arc storage.
+
 ## Alternatives and limits
 
 Checking string constants when they are loaded is not equivalent: constants are

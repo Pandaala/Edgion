@@ -681,19 +681,19 @@ impl Vm {
             BuiltinId::ReqScheme => {
                 // Detect scheme from common proxy headers, fallback to "http"
                 let scheme = session
-                    .header_value("X-Forwarded-Proto")
-                    .or_else(|| session.header_value("X-Scheme"))
-                    .unwrap_or_else(|| "http".to_string());
-                checked_value_str(scheme, self.limits.max_string_len)
+                    .header_str("X-Forwarded-Proto")
+                    .or_else(|| session.header_str("X-Scheme"))
+                    .unwrap_or("http");
+                checked_value_opt_str_ref(Some(scheme), self.limits.max_string_len)
             }
-            BuiltinId::ReqHost => checked_value_opt_str(session.header_value("Host"), self.limits.max_string_len),
+            BuiltinId::ReqHost => checked_value_opt_str_ref(session.header_str("Host"), self.limits.max_string_len),
             BuiltinId::ReqUri => checked_value_str(session.get_uri(), self.limits.max_string_len),
             BuiltinId::ReqRequestPath => {
                 checked_value_str(session.get_request_path().to_string(), self.limits.max_string_len)
             }
             BuiltinId::ReqRequestUri => checked_value_str(session.get_request_uri(), self.limits.max_string_len),
             BuiltinId::ReqContentType => {
-                checked_value_opt_str(session.header_value("Content-Type"), self.limits.max_string_len)
+                checked_value_opt_str_ref(session.header_str("Content-Type"), self.limits.max_string_len)
             }
             BuiltinId::ReqHasHeader => {
                 let name = state.pop()?.runtime_string()?;
@@ -776,7 +776,7 @@ impl Vm {
             BuiltinId::ReqProtocol => checked_value_str(session.discover_protocol(), self.limits.max_string_len),
             BuiltinId::ReqGrpcService => checked_value_opt_str(session.grpc_service(), self.limits.max_string_len),
             BuiltinId::ReqGrpcMethod => checked_value_opt_str(session.grpc_method(), self.limits.max_string_len),
-            BuiltinId::ReqContentLength => match session.header_value("Content-Length") {
+            BuiltinId::ReqContentLength => match session.header_str("Content-Length") {
                 Some(v) => match v.parse::<i64>() {
                     Ok(n) => Ok(Value::Int(n)),
                     Err(_) => Ok(Value::Nil),

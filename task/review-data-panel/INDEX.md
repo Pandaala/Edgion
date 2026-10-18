@@ -1385,3 +1385,20 @@ so it is ignored beyond the cap. Independent plan review passed and 492 DSL
 tests passed serially. No full suite or throughput benchmark ran.
 Formatting, workspace check/Clippy and seven repository guards passed, with
 existing warnings outside changed files. Independent final review passed.
+
+## Borrowed DSL request-header scalars
+
+Host, content type, scheme and content length use the existing borrowed header
+accessor. String-producing branches validate the selected value before final
+Arc allocation. Scheme retains raw case, empty-value precedence and ordered
+fallback; length failure does not trigger fallback. Content length preserves
+signed i64 parsing, nil for malformed/overflow input, and first-value text
+eligibility without adding a string limit or HTTP validation.
+
+Seven existing mocks now use HeaderMaps and reject the owned getter. New cases
+exercise scheme fallback/duplicate/opaque/empty/case selection, exact/over-limit
+strings and signed/maximum/non-text content-length values with duplicates.
+Independent plan review passed; 495 DSL tests passed serially. No full suite or
+throughput benchmark ran; final DSL string ownership remains unchanged.
+Formatting, workspace check/Clippy and seven repository guards passed, with
+existing warnings outside changed files. Independent final review passed.
