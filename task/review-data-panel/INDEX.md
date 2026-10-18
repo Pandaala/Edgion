@@ -28,6 +28,7 @@ destination.
 
 ## Deferred decisions
 
+- [Precomputed fractional Peak-EWMA decay](lb-01-precomputed-ewma-decay.md)
 - [Incremental attempt-log size accounting](log-02-incremental-attempt-size.md)
 - [SSE dispatch metadata representation](body-05-sse-dispatch-metadata.md)
 - [Selective SSE observer input representation](body-04-selective-observer-input.md)
@@ -4132,3 +4133,19 @@ Fresh verification passed 38 network-free tests: 25 attempt runtime and 13 usage
 finalization tests. Formatting, workspace check/Clippy, agent-document validation
 and diff hygiene passed. Existing warnings remain outside this documentation-only
 batch. No incremental-counter prototype or benchmark ran.
+
+
+## Peak-EWMA fractional decay audit
+
+Followed Service selection through compiled EWMA/P2C and score reads, and response
+header sampling through the same canonical estimator. Fractional decay uses 625
+possible remainders with a 33-entry interpolated Q16 table. Exact compile-time
+precomputation could trade interpolation arithmetic for a larger read-only table;
+constant-division optimization and cache costs require measurement. The proposal
+and preserved estimator/CAS invariants are recorded in [lb-01](lb-01-precomputed-ewma-decay.md).
+No runtime or tests changed, and no policy constants were retuned.
+
+Fresh verification passed 139 network-free tests: 127 LB and 12 Service-selector
+tests. Formatting, workspace check/Clippy, agent-document validation and diff
+hygiene passed. Existing warnings remain outside this documentation-only batch.
+No generated-table prototype, assembly inspection or benchmark ran.
