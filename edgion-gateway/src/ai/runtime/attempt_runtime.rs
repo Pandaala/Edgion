@@ -273,7 +273,7 @@ pub struct AiAttemptTokenTotals {
 // while RAII probe and circuit-breaker leases still release on context drop.
 
 impl AiAttemptRuntimeState {
-    pub async fn admit(&mut self, input: AiAttemptAdmissionInput) -> AiAttemptAdmission {
+    pub async fn admit(&mut self, mut input: AiAttemptAdmissionInput) -> AiAttemptAdmission {
         if self.active.is_some() || self.accounting_overflow {
             return AiAttemptAdmission::DependencyDenied;
         }
@@ -284,15 +284,12 @@ impl AiAttemptRuntimeState {
             },
             None => None,
         };
-        let outlier = match input.outlier {
-            Some(ref handle) => match handle.admit() {
+        let outlier = match input.outlier.take() {
+            Some(handle) => match handle.admit() {
                 EjectionAdmission::Rejected => return AiAttemptAdmission::Skip,
-                EjectionAdmission::Closed => Some(OutlierLease {
-                    handle: handle.clone(),
-                    probe: None,
-                }),
+                EjectionAdmission::Closed => Some(OutlierLease { handle, probe: None }),
                 EjectionAdmission::Probe(probe) => Some(OutlierLease {
-                    handle: handle.clone(),
+                    handle,
                     probe: Some(probe),
                 }),
             },

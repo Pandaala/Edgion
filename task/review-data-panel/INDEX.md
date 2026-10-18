@@ -4069,3 +4069,22 @@ No throughput or CPU improvement is claimed.
 Fresh verification passed 65 network-free tests: 52 usage and 13 finalization
 tests. Formatting, workspace check/Clippy, seven repository guards and diff
 hygiene passed. Existing warnings remain outside changed code.
+
+
+## Owned credential outlier handle during admission
+
+AiAttemptRuntimeState::admit now takes the owned outlier handle from its input
+and moves it into the Closed/Probe lease. This removes cloning its two private
+Arcs and their corresponding decrements. The handle has no custom destructor
+or reference-count-dependent behavior; the same captured policy generation
+and state stay alive in the lease across reservation and runtime processing.
+
+reserve does not read the outlier input field. Admission guards, circuit-breaker
+acquisition, Redis failure policy and probe release on cancellation or early
+return keep their existing order. The independent plan review approved this
+ownership-only change. No allocation or throughput improvement is claimed.
+
+Fresh verification passed 143 network-free tests: 24 attempt runtime, 16 credential
+outlier and 103 HTTP upstream-peer tests. Formatting, workspace check/Clippy,
+seven repository guards and diff hygiene passed. Existing warnings remain outside
+changed code. No live Redis cancellation experiment or benchmark was run.
