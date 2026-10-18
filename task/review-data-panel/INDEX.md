@@ -1646,3 +1646,21 @@ Fresh serial selections passed 18 DirectEndpoint-related tests (including backen
 authorization and retry peer cases) and 67 condition tests. Formatting, workspace
 check/Clippy and seven repository guards passed; existing Clippy warnings remain
 outside changed files. Independent final review passed.
+
+## Borrowed DynamicExternalUpstream routing input
+
+DynamicExternalUpstream uses the canonical session `key_value` reader for its
+routing input. Regex captures and domain-map lookup consume borrowed strings;
+the selected target belongs to plugin configuration independently of that input.
+The jump still owns domain/SNI, and Host/outcome mutations retain their ordering
+and locked-jump behavior. Composite sources retain the helper's owned fallback.
+
+Independent plan review passed. Real header fixtures forbid owned reads and
+preserve successful plain/regex selection and jump/Host/outcome sequence tests.
+A failure matrix covers absent, empty, opaque, regex-missing and unmatched inputs
+under both reject and fallback policies. No full suite, live DNS integration or
+throughput benchmark ran; this is not callback-wide zero allocation.
+Fresh serial selections passed all 8 DynamicExternalUpstream-related tests and
+67 condition tests. Formatting, workspace check/Clippy and seven repository
+guards passed, with existing warnings outside changed files. Independent final
+review passed.

@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 
+use crate::plugins::runtime::session_adapter::key_value;
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
 use crate::{ExternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 use bytes::Bytes;
@@ -32,7 +33,7 @@ impl RequestFilter for DynamicExternalUpstream {
         }
 
         // 1. Extract raw routing key via KeyGet
-        let raw_value = match session.key_get(&self.config.from) {
+        let raw_value = match key_value(session, &self.config.from) {
             Some(v) if !v.is_empty() => v,
             _ => {
                 return match self.config.on_missing {
@@ -77,10 +78,10 @@ impl RequestFilter for DynamicExternalUpstream {
                     }
                 }
             } else {
-                raw_value.as_str()
+                raw_value.as_ref()
             }
         } else {
-            raw_value.as_str()
+            raw_value.as_ref()
         };
 
         // 3. Look up domain in domainMap

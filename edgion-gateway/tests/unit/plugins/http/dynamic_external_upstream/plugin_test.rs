@@ -61,7 +61,7 @@ async fn regex_capture_selects_matching_domain_without_copying_the_key() {
 
     let mut session = MockPluginSession::new();
     session.expect_ctx().return_const(EdgionHttpContext::new());
-    session.expect_key_get().return_const(Some("region=us".to_string()));
+    set_routing_header(&mut session, Some(http::HeaderValue::from_static("region=us")));
     session
         .expect_set_upstream_jump()
         .withf(|target| {
@@ -102,7 +102,7 @@ async fn deu_records_success_outcome_with_domain_port() {
 
     let mut session = MockPluginSession::new();
     session.expect_ctx().return_const(EdgionHttpContext::new());
-    session.expect_key_get().return_const(Some("us".to_string()));
+    set_routing_header(&mut session, Some(http::HeaderValue::from_static("us")));
     let mut sequence = Sequence::new();
     session
         .expect_set_upstream_jump()
@@ -148,7 +148,7 @@ async fn rejected_jump_has_no_host_or_dye_side_effects() {
 
     let mut session = MockPluginSession::new();
     session.expect_ctx().return_const(EdgionHttpContext::new());
-    session.expect_key_get().return_const(Some("us".to_string()));
+    set_routing_header(&mut session, Some(http::HeaderValue::from_static("us")));
     session
         .expect_set_upstream_jump()
         .withf(|target| matches!(target, UpstreamJumpTarget::External(jump) if jump.domain == "api-us.example.com"))
@@ -179,7 +179,7 @@ async fn deu_records_reject_outcome_on_missing_key() {
 
     let mut session = MockPluginSession::new();
     session.expect_ctx().return_const(EdgionHttpContext::new());
-    session.expect_key_get().return_const(None::<String>);
+    set_routing_header(&mut session, None);
     session
         .expect_record_outcome()
         .withf(|o, v| *o == DyeOutcome::Reject && v == "on-missing")
@@ -205,9 +205,7 @@ async fn deu_records_fallback_outcome_on_no_match() {
 
     let mut session = MockPluginSession::new();
     session.expect_ctx().return_const(EdgionHttpContext::new());
-    session
-        .expect_key_get()
-        .return_const(Some("unknown-region".to_string()));
+    set_routing_header(&mut session, Some(http::HeaderValue::from_static("unknown-region")));
     session
         .expect_record_outcome()
         .withf(|o, v| *o == DyeOutcome::Fallback && v == "on-no-match")
@@ -217,4 +215,87 @@ async fn deu_records_fallback_outcome_on_no_match() {
     let mut log = PluginLog::new("DynamicExternalUpstream");
     let result = plugin.run_request(&mut session, &mut log).await;
     assert_eq!(result, PluginRunningResult::GoodNext);
+}
+
+fn set_routing_header(session: &mut MockPluginSession, value: Option<http::HeaderValue>) {
+    let mut headers = http::HeaderMap::new();
+    if let Some(value) = value {
+        headers.insert("x-target-region", value);
+    }
+    session.expect_request_header_map().return_const(headers);
+    session.expect_key_get().times(0);
+}
+
+#[tokio::test]
+async fn borrowed_routing_input_preserves_failure_policies() {
+    for policy in [UpstreamFallback::Fallback, UpstreamFallback::Reject] {
+        for (value, extract, cause, body) in [
+            (None, false, "on-missing", "Missing routing key for external upstream"),
+            (
+                Some(http::HeaderValue::from_static("")),
+                false,
+                "on-missing",
+                "Missing routing key for external upstream",
+            ),
+            (
+                Some(http::HeaderValue::from_bytes(&[0xff]).unwrap()),
+                false,
+                "on-missing",
+                "Missing routing key for external upstream",
+            ),
+            (
+                Some(http::HeaderValue::from_static("no-capture")),
+                true,
+                "on-missing",
+                "Routing key regex extraction failed",
+            ),
+            (
+                Some(http::HeaderValue::from_static("unknown")),
+                false,
+                "on-no-match",
+                "No matching domain for routing key",
+            ),
+        ] {
+            let plugin = DynamicExternalUpstream::create(&DynamicExternalUpstreamConfig {
+                on_missing: policy,
+                on_no_match: policy,
+                extract: extract.then(|| ExtUpstreamExtract {
+                    regex: r"^region=(.+)$".to_string(),
+                    group: 1,
+                }),
+                ..base_config()
+            });
+            let mut session = MockPluginSession::new();
+            session.expect_ctx().return_const(EdgionHttpContext::new());
+            set_routing_header(&mut session, value);
+            let rejected = policy == UpstreamFallback::Reject;
+            session
+                .expect_record_outcome()
+                .withf(move |outcome, value| {
+                    *outcome
+                        == if rejected {
+                            DyeOutcome::Reject
+                        } else {
+                            DyeOutcome::Fallback
+                        }
+                        && value == cause
+                })
+                .times(1)
+                .return_const(());
+            let expected = if rejected {
+                PluginRunningResult::ErrResponse {
+                    status: 400,
+                    body: Some(Bytes::from_static(body.as_bytes())),
+                }
+            } else {
+                PluginRunningResult::GoodNext
+            };
+            assert_eq!(
+                plugin
+                    .run_request(&mut session, &mut PluginLog::new("DynamicExternalUpstream"))
+                    .await,
+                expected
+            );
+        }
+    }
 }
