@@ -16,7 +16,7 @@ destination.
 | `new_ctx`, `init_downstream_modules` | Direct bodies inspected: pinned config and parsed policy; no change selected. Context construction and module internals remain open. |
 | `early_request_filter` | Direct body and request-ID resolution inspected. Arc handles support mutable context dispatch; do not blindly replace with references. Publication-time list resolution deferred below. Trace-ID and preflight runtime internals remain open. |
 | `request_filter` | Temporary metadata path copy removed in `4a976e022`. XFF snapshot preserves bounded aggregate size and owned log state; RealIp extractor borrows tokens and traverses in reverse. TLS metadata copies feed request-owned state. Routing, plugin dispatch and deeper RealIp policy dependencies remain open. |
-| Upstream selection, connect, upstream request | `connected_to_upstream` direct body inspected: borrowed SAN digest, one timestamp, owned connection-establishment log. `upstream_request_filter` direct body and deferred credential nomination guard traced to shared Connection parser. Direct upstream deadline/backoff, concurrency admission and authority orchestration inspected; admission borrows its Service key below. Direct HTTP selection, sticky retry/fallback, timeout folding, policy capture, DirectEndpoint/ExternalJump and URI finalization inspected. ExternalJump borrows its domain below. Deeper LB/peer construction and framing/transcoder/credential consumers remain open. |
+| Upstream selection, connect, upstream request | `connected_to_upstream` direct body inspected: borrowed SAN digest, one timestamp, owned connection-establishment log. `upstream_request_filter` direct body and deferred credential nomination guard traced to shared Connection parser. Direct upstream deadline/backoff, concurrency admission and authority orchestration inspected; admission borrows its Service key below. Direct HTTP selection, sticky retry/fallback, timeout folding, policy capture, DirectEndpoint/ExternalJump and URI finalization inspected. ExternalJump borrows its domain below. Service peer dispatch and shared TLS metadata projection inspected below; deeper endpoint algorithms and framing/transcoder/credential consumers remain open. |
 | Request body, trailers and relay | Direct action/tee/trailer orchestration, mirror payload budget and observer dispatch inspected. Nullable-state fast path, moved handler vector, bounded independent mirror copy and terminal-only log drain retained. Concrete streamed-handler/WAF implementations and deeper storage/relay integration remain open. |
 | Response headers, hold/commit, body and trailers | Connection sanitizer inspected. Body/trailer orchestration, runtime dependency checks, processor driver and downstream cancellation wrapper inspected; prebuilt read-only runtime-chain candidate deferred. Concrete processors, conditions, hold/commit and remaining header chains remain open. |
 | Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering direct body inspected: exact gRPC denial is consumed, protocol-specific replies and final-status ownership retained. Deeper finalizers and retry consumers remain open. |
@@ -31,6 +31,7 @@ destination.
 - [Publication-time global/Gateway plugin lists](early-01-precompute-plugin-lists.md)
 - [Cache policy fixture verification failure](verification-01-cache-policy-fixture.md)
 - [Stream-suite parallel verification failure](verification-02-stream-parallel-failure.md)
+- [Backend TLS verification failures](verification-03-backend-tls-tests.md)
 - [Prebuilt read-only response-body dispatch](body-01-prebuild-readonly-dispatch.md)
 - [Direct TLS listener log serialization](tls-01-direct-listener-log-serialization.md)
 
@@ -336,3 +337,34 @@ Independent plan and final source reviews passed. All 103 upstream-peer tests
 and 14 network utility tests passed. Formatting, workspace check/Clippy and seven
 repository guards passed; Clippy warnings are outside the changed files.
 No full integration suite or performance benchmark was run.
+
+## Borrowed upstream TLS metadata projection
+
+The canonical `extract_tls_config` returns the policy hostname by reference.
+Ordinary Service, self-resolved ExternalName and DirectEndpoint metadata writes
+consume that reference synchronously. The AI path likewise borrows either the
+retained policy hostname or the selected endpoint SNI. Peer constructors still
+own their separate SNI String; `record_tls_to_upstream` owns the final log field
+and continues clearing it on plaintext attempts. Invalid-policy rejection,
+write order, CA/identity preparation, SAN hooks and pool keys are unchanged.
+
+A focused regression verifies effective-policy pointer identity, final log
+ownership after the lookup is dropped, and Absent/Invalid projection values plus
+TLS-to-plaintext clearing. This removes temporary metadata SNI copies; it does
+not eliminate peer/log ownership allocations or establish measured throughput.
+
+BackendSelector is generation-compiled; HTTP/gRPC selectors return a slot index.
+Smooth weighted round robin precomputes its sequence and advances an atomic
+cursor per selection. Service peer dispatch retains one selected generation and
+captures Service geometry for endpoint/DNS work. Gateway/gRPC handles support
+mutable context use; sticky selection retains the live backend owner used by
+connection accounting. No selector algorithm or publication boundary changed.
+
+Independent plan and final source reviews passed. Upstream-peer tests (103) and
+AI attempt tests (6), formatting, workspace check/Clippy and seven repository
+guards passed. Backend tests: parallel 334 passed/3 failed; serial 336 passed/1
+failed. The pre-change `7abcce8af` baseline ran serially with 335 passed and the
+same DNS admission-fixture failure. The two parallel-only failures remain
+unexplained; see the linked backend TLS verification task. Existing Clippy
+warnings remain outside the changed lines. No full integration suite or
+performance benchmark was run.

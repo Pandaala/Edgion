@@ -3,6 +3,48 @@ use k8s_openapi::api::core::v1::Secret;
 use std::net::IpAddr;
 use std::sync::Arc;
 
+#[test]
+fn tls_projection_borrows_policy_and_log_retains_its_own_sni() {
+    let policy: BackendTLSPolicy = serde_json::from_value(serde_json::json!({
+        "metadata":{"namespace":"default","name":"tls"},
+        "spec":{"targetRefs":[{"group":"","kind":"Service","name":"backend"}],
+        "validation":{"hostname":"backend.example","wellKnownCACertificates":"System"},
+        "useSystemCa":true}
+    }))
+    .unwrap();
+    let lookup = BackendTlsPolicyLookup::effective_from_policy(Arc::new(policy));
+    let (use_tls, sni) = extract_tls_config(&lookup);
+    assert!(use_tls);
+    assert_eq!(sni, "backend.example");
+    assert_eq!(
+        sni.as_ptr(),
+        lookup.effective().unwrap().policy.spec.validation.hostname.as_ptr()
+    );
+
+    let mut ctx = EdgionHttpContext::new();
+    ctx.init_backend_context(
+        crate::Rsc::new("Service", "default", "backend"),
+        "default/backend".to_string(),
+        crate::backends::ServiceBackendKind::Service,
+        Some(0),
+    );
+    ctx.push_upstream(None, None);
+    record_tls_to_upstream(&mut ctx, use_tls, sni);
+    drop(lookup);
+    assert_eq!(
+        ctx.get_current_upstream().unwrap().tls.as_ref().unwrap().sni.as_deref(),
+        Some("backend.example")
+    );
+
+    for lookup in [BackendTlsPolicyLookup::Absent, BackendTlsPolicyLookup::Invalid] {
+        record_tls_to_upstream(&mut ctx, true, "previous.example");
+        let (use_tls, sni) = extract_tls_config(&lookup);
+        assert_eq!((use_tls, sni), (false, ""));
+        record_tls_to_upstream(&mut ctx, use_tls, sni);
+        assert!(ctx.get_current_upstream().unwrap().tls.is_none());
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn endpoint_boundary_rejects_unix_even_with_loopback_override() {

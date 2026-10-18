@@ -319,7 +319,7 @@ where
     };
     // TLS absence remains plaintext, including Service port 443.
     let (use_tls, sni) = extract_tls_config(input.backend_tls_policy);
-    record_tls_to_upstream(ctx, use_tls, &sni);
+    record_tls_to_upstream(ctx, use_tls, sni);
     let mut peer = peer_from_backend_tls_lookup(addr, input.backend_tls_policy, gateway_key)?;
     apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);
     Ok(peer)
@@ -524,7 +524,7 @@ fn build_peer_from_lb_selection(
     // Write TLS metadata via the shared helper (writes unconditionally so a
     // TLS-then-plaintext fallback cannot leave stale metadata behind). Kept
     // outside the block above because the helper borrows `ctx` mutably.
-    record_tls_to_upstream(ctx, use_tls, &sni);
+    record_tls_to_upstream(ctx, use_tls, sni);
 
     let mut peer = peer_from_backend_tls_lookup(peer_addr, backend_tls_policy, gateway_key_ref)?;
     apply_backend_app_protocol(&mut peer, backend_app_protocol, ctx);

@@ -237,13 +237,13 @@ async fn try_ai_backend_peer(
     begin_ai_peer_attempt(ctx);
     let (use_tls, sni) = match &target.selected.backend_tls_policy {
         BackendTlsPolicyLookup::Effective(_) => extract_tls_config(&target.selected.backend_tls_policy),
-        BackendTlsPolicyLookup::Absent => (endpoint.use_tls, endpoint.sni.clone()),
+        BackendTlsPolicyLookup::Absent => (endpoint.use_tls, endpoint.sni.as_str()),
         BackendTlsPolicyLookup::Invalid => {
             ctx.record_error(edgion_resources::EdgionErrorCode::BackendTlsPolicyInvalid);
             return Err(AiPeerPredispatchFailure::Endpoint);
         }
     };
-    record_tls_to_upstream(ctx, use_tls, &sni);
+    record_tls_to_upstream(ctx, use_tls, sni);
     configure_peer_timeouts(edgion_http, &mut peer, ctx);
     backfill_upstream_addr(&peer, ctx);
     Ok(peer)

@@ -71,11 +71,11 @@ pub(crate) fn apply_backend_app_protocol(
 ///
 /// `Invalid` is rejected before this helper is called.
 #[inline]
-pub(crate) fn extract_tls_config(lookup: &BackendTlsPolicyLookup) -> (bool, String) {
+pub(crate) fn extract_tls_config(lookup: &BackendTlsPolicyLookup) -> (bool, &str) {
     match lookup {
-        BackendTlsPolicyLookup::Effective(effective) => (true, effective.policy.spec.validation.hostname.clone()),
-        BackendTlsPolicyLookup::Absent => (false, String::new()),
-        BackendTlsPolicyLookup::Invalid => (false, String::new()),
+        BackendTlsPolicyLookup::Effective(effective) => (true, effective.policy.spec.validation.hostname.as_str()),
+        BackendTlsPolicyLookup::Absent => (false, ""),
+        BackendTlsPolicyLookup::Invalid => (false, ""),
     }
 }
 

@@ -1343,7 +1343,7 @@ fn try_direct_endpoint_peer(
     apply_backend_app_protocol(&mut peer, app_protocol, ctx);
     let result = finish_static_peer(edgion_http, ctx, peer);
     let (use_tls, sni) = extract_tls_config(&policy);
-    crate::backends::peer_builder::record_tls_to_upstream(ctx, use_tls, &sni);
+    crate::backends::peer_builder::record_tls_to_upstream(ctx, use_tls, sni);
 
     // init_backend_context_if_needed left source as None (default path) — tag this
     // request as a DirectEndpoint bypass so access logs/metrics can distinguish it.
