@@ -541,7 +541,7 @@ impl RequestState {
     ) -> Option<()> {
         use super::key::{Builder, OriginStamp, TlsResult, WORK_LIMIT};
         use crate::backends::discovery::get_service_discovery_coordinator;
-        use crate::plugins::runtime::{PingoraSessionAdapter, PluginSession};
+        use crate::plugins::runtime::PingoraSessionAdapter;
         // C0 external fixtures construct a bound state directly. Production
         // intents reach this one tail binding only after successful plugins.
         if self.key_ready {
@@ -757,10 +757,13 @@ impl RequestState {
             }
             key.frame(name.as_bytes())?;
             self.header_certificate.as_mut()?.add(name)?;
-            let adapter = PingoraSessionAdapter::new(session, ctx);
-            let value = adapter.key_get(source);
+            let value = session
+                .req_header()
+                .headers
+                .get(name)
+                .and_then(|value| value.to_str().ok());
             key.number(u64::from(value.is_some()))?;
-            key.frame(value.as_deref().unwrap_or("").as_bytes())?;
+            key.frame(value.unwrap_or("").as_bytes())?;
         }
         self.key = key.finish();
         self.expected_origin = Some(OriginStamp {

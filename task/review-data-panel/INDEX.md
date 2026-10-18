@@ -662,3 +662,29 @@ constraint. This is not an accepted exception or complete condition/auth audit.
 Independent plan and final source reviews passed. Agent-doc validation and diff
 whitespace checks passed. This documentation-only batch ran no Rust tests or
 benchmarks.
+
+## Borrowed response-cache variation values
+
+RequestState::bind now borrows the request-header value for an already checked
+Header variation source, instead of copying it through the owned KeyGet adapter.
+HeaderMap::get and HeaderValue::to_str preserve first-value selection, case
+handling and invalid-text rejection. Presence framing still distinguishes an
+empty value from absence. Representability, certificate updates and hash framing
+stay in the same order; the borrow is consumed synchronously.
+
+Storage inspection retained preadmitted body/metadata capacity, reader-held arena
+leases, strict decode checks, identity-checked eviction and epoch-fenced terminal
+publication. These owners and locks protect distinct lifetime and consistency
+requirements. This removes a temporary value copy for configured variations;
+it is not a throughput result or complete cache key/freshness/storage audit.
+
+Formatting, workspace check/Clippy and seven repository guards passed; Clippy
+warnings remain outside the changed code. Cache module tests passed (36).
+Actual-tail cache tests passed nine cases and reproduced the already deferred
+policy admission fixture failure in verification-01, also in an isolated exact
+run. The fixture still omits preparedAncestorAdmission and uses empty configured
+variation; the changed projection is not executed in that case. Attribution is
+source-based, not a fresh baseline binary comparison. No full integration suite
+or throughput benchmark ran.
+Independent plan and final source reviews passed, including the unchanged
+fixture failure attribution.
