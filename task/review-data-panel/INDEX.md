@@ -3323,3 +3323,21 @@ survives until selection is dropped. Existing scope and empty-list cases remain.
 Independent plan and source reviews passed. All 11 resolver tests, formatting,
 workspace check/Clippy and seven guards passed; warnings remain outside changed
 code. No allocation or measured throughput reduction is claimed.
+
+## Single-pass WAF finding summary
+
+WafAccessLog::record_phase now counts loggable findings while building the bounded
+projection, removing its preceding count-only traversal. Counting still includes
+findings beyond the 16-entry access-log cap; nolog/noauditlog filtering, runtime
+omissions, ordering, first intervention and outcome precedence are unchanged.
+The phase slot is written after the synchronous loop under exclusive access;
+there are no callbacks or recoverable intermediate errors exposing that order.
+Existing allocation and canonical terminal-only serialization remain unchanged.
+
+The bounded-summary test now checks 21 total/evaluated findings versus 16 retained
+entries and five omissions, then verifies a repeated phase leaves the serialized
+summary unchanged. Mixed logging flags also assert the filtered phase count.
+Independent plan and source reviews passed. Eight WAF context and 50 WAF plugin
+tests passed, together with formatting, workspace check/Clippy and seven guards.
+Warnings remain outside changed code. This removes one traversal; no allocation
+or measured throughput reduction is claimed.

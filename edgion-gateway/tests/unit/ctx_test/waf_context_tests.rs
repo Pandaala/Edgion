@@ -126,8 +126,12 @@ fn access_summary_is_bounded_and_retains_intervention_outside_the_finding_cap() 
     assert_eq!(value["outcome"], "blocked");
     assert_eq!(value["findings"].as_array().unwrap().len(), MAX_WAF_ACCESS_LOG_FINDINGS);
     assert_eq!(value["findings_omitted"], 5);
+    assert_eq!(value["phases"]["request_headers"]["findings"], 21);
+    assert_eq!(value["phases"]["request_headers"]["evaluated_rules"], 21);
     assert_eq!(value["intervention"]["rule_id"], 999);
     assert_eq!(value["intervention"]["status"], 409);
+    access.record_phase(WafLogPhase::RequestHeaders, 99, &outcome);
+    assert_eq!(serde_json::to_value(&access).unwrap(), value);
     let json = value.to_string();
     assert!(!json.contains("audit-private-input"));
 }
@@ -149,6 +153,7 @@ fn nolog_finding_is_excluded_and_first_terminal_error_is_stable() {
     let value = serde_json::to_value(&access).unwrap();
     let findings = value["findings"].as_array().unwrap();
     assert_eq!(findings.len(), 1);
+    assert_eq!(value["phases"]["request_headers"]["findings"], 1);
     assert_eq!(findings[0]["rule_id"], 2);
     assert_eq!(value["terminal_error"]["phase"], "request_body");
     assert_eq!(value["terminal_error"]["code"], "body_limit");

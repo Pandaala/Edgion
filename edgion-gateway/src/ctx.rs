@@ -535,25 +535,14 @@ impl WafAccessLog {
         if self.phase_slot(phase).is_some() {
             return;
         }
-        let recordable = saturating_u64(
-            phase_outcome
-                .findings()
-                .iter()
-                .filter(|finding| finding.log() || finding.audit_log())
-                .count(),
-        );
+        let mut recordable = 0_u64;
         let runtime_omitted = saturating_u64(phase_outcome.omitted_loggable_findings());
-        *self.phase_slot(phase) = Some(WafPhaseLog {
-            execution_us,
-            evaluated_rules: saturating_u64(phase_outcome.evaluated_units()),
-            findings: recordable,
-            omitted_findings: runtime_omitted,
-        });
 
         for finding in phase_outcome.findings() {
             if !finding.log() && !finding.audit_log() {
                 continue;
             }
+            recordable = recordable.saturating_add(1);
             if self.findings.len() < MAX_WAF_ACCESS_LOG_FINDINGS {
                 self.findings.push(WafFindingLog {
                     phase,
@@ -564,6 +553,12 @@ impl WafAccessLog {
                 self.findings_omitted = self.findings_omitted.saturating_add(1);
             }
         }
+        *self.phase_slot(phase) = Some(WafPhaseLog {
+            execution_us,
+            evaluated_rules: saturating_u64(phase_outcome.evaluated_units()),
+            findings: recordable,
+            omitted_findings: runtime_omitted,
+        });
         self.findings_omitted = self.findings_omitted.saturating_add(runtime_omitted);
 
         if let Some(intervention) = phase_outcome.intervention() {
