@@ -113,8 +113,11 @@ wire protocol or change the validator's established input acceptance.
 Pure validator tests cover absent/single/duplicate, invalid text and numeric
 boundaries in both modes, plus whole-map gates. Their allocation counter excludes
 fixture construction and confirms no allocation in these validator calls.
-Protobuf projection, candidate cloning, mutation and callback lifecycle retain
-their ownership; this is not an allocation-free trailer callback claim.
+Protobuf projection, mutation and callback lifecycle retain their ownership.
+A matched trailer verdict without header mutations validates the original map
+and preserves its storage; a verdict with mutations still clones a candidate
+and commits it only after validation and transport representability checks.
+This is not an allocation-free trailer callback claim.
 Existing asynchronous tests retain atomic rejection and failure-policy coverage.
 
 ## Resolution references

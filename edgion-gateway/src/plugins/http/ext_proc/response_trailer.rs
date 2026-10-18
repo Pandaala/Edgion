@@ -167,13 +167,16 @@ impl UpstreamResponseTrailer for ExtProcResponseTrailer {
             return self.finish_failure(session, log, reason);
         };
 
-        let mut candidate = trailers.clone();
-        if let Some(mutation) = response.header_mutation.as_ref() {
+        let candidate = if let Some(mutation) = response.header_mutation.as_ref() {
+            let mut candidate = trailers.clone();
             if apply_mutation(&mut candidate, trailers, mutation, session).is_err() {
                 return self.finish_failure(session, log, "bad-verdict");
             }
-        }
-        if validate_trailer_map(&candidate, session.is_grpc_request()).is_err() {
+            Some(candidate)
+        } else {
+            None
+        };
+        if validate_trailer_map(candidate.as_ref().unwrap_or(trailers), session.is_grpc_request()).is_err() {
             return self.finish_failure(session, log, "bad-verdict");
         }
 
@@ -181,7 +184,9 @@ impl UpstreamResponseTrailer for ExtProcResponseTrailer {
             return self.finish_failure(session, log, "unrepresentable");
         }
 
-        *trailers = candidate;
+        if let Some(candidate) = candidate {
+            *trailers = candidate;
+        }
         self.done = true;
         self.owner.terminal("success", "response-trailers");
         UpstreamTrailerResult::Continue

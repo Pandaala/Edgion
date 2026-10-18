@@ -2427,3 +2427,18 @@ Fresh verification passed all 8 protocol tests, including 256 scrambled keys,
 field/tool ordering, exact-cap acceptance and duplicate/error precedence,
 formatting, workspace check/Clippy and seven repository guards. Remaining warnings
 are outside changed code.
+
+## ExtProc unchanged trailer map ownership
+
+A matched response-trailer verdict with no header mutation now validates the
+original HeaderMap instead of cloning and replacing it. Mutation-bearing verdicts
+retain the candidate clone and atomic commit, including explicit empty mutations.
+Validation, transport representability, failure policy and terminal ordering are
+unchanged. Independent plan and code/knowledge reviews passed. The Scripted
+callback regression checks original HeaderValue storage identity, duplicate
+opaque bytes, sensitivity metadata, final exchange and terminal success across
+HTTP/gRPC and both failure policies. Projection still owns protobuf values;
+this is not an allocation-free callback or a throughput claim.
+Fresh verification passed all 17 response-trailer tests, formatting, workspace
+check/Clippy and seven repository guards. Remaining warnings are outside changed
+code. The owning header-fidelity knowledge page describes the narrowed clone scope.
