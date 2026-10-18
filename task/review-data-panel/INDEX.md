@@ -1738,3 +1738,19 @@ Fresh Resources and Gateway selections each passed 9 tests. Formatting, workspac
 check/Clippy and seven repository guards passed, with existing warnings outside
 changed files. Independent final review passed. Owned plaintext pointer identity
 confirms transfer of that allocation; parsing and serialization costs remain.
+
+## Response Connection nomination inline storage
+
+The response sanitizer's owned nomination list now uses two inline SmallVec
+slots with unchanged heap fallback. All field validation still completes before
+mutation; token parsing, duplicate handling, invalid-ASCII skipping, opaque
+rejection, 101 preservation and Transfer-Encoding tracking remain unchanged.
+Independent plan review passed. Tests measure a prepared two-standard-name case
+and exercise three/eight-name spills with successful removal or atomic opaque
+failure. This adds inline stack storage and does not remove custom-name allocations.
+No full suite, live integration or throughput benchmark ran for this batch.
+Fresh response-filter tests passed 25 cases and shared parser tests passed 7.
+The prepared two-standard-name sanitizer fixture measured zero allocations;
+custom-name and larger-list behavior carries no such promise. Formatting,
+workspace check/Clippy and seven repository guards passed, with existing warnings
+outside changed files. Independent final review passed.

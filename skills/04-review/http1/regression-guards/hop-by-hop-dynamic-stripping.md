@@ -193,3 +193,15 @@ AllEndpointStatus still relays those headers are **not accepted**.
 - `B0061` main response boundary — 2026-09-20.
 - `unify-response-header-mutation-policy` — response-only `Proxy-Connection` cleanup;
   current verification is recorded in the shared policy page.
+
+## Response nomination temporary storage
+
+The response sanitizer retains up to two owned HeaderNames inline in a SmallVec;
+larger unique lists spill without a new limit. Token validation, case-insensitive
+deduplication and complete-field validation still precede every header mutation.
+This trades two inline slots of stack storage for removal of the collection
+allocation on small lists; custom header-name construction may still allocate.
+A prepared two-standard-name fixture checks zero sanitizer allocations, while
+three/eight-name cases verify spill removal and atomic rejection of a final
+opaque field. Existing repeated-name allocation parity, invalid ASCII, 101 and
+both-boundary tests remain. No general zero-allocation or throughput claim follows.

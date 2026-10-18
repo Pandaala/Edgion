@@ -634,3 +634,64 @@ fn final_unknown_length_selection_disables_negotiated_compression() {
 
     assert!(response.headers.get("content-encoding").is_none());
 }
+
+#[test]
+fn response_sanitizer_two_standard_names_need_no_collection_allocation() {
+    let mut response = response(None);
+    response
+        .append_header("connection", "content-length, content-type")
+        .unwrap();
+    response.insert_header("content-length", "10").unwrap();
+    response.insert_header("content-type", "text/plain").unwrap();
+    let (result, calls) = crate::test_allocation_counter::count_allocations(|| {
+        sanitize_forwarded_response_headers(std::hint::black_box(&mut response))
+    });
+    assert!(!result.unwrap());
+    assert_eq!(calls, 0);
+    for name in ["connection", "content-length", "content-type"] {
+        assert!(!response.headers.contains_key(name));
+    }
+}
+
+#[test]
+fn response_sanitizer_spilled_names_preserve_removal_and_atomic_failure() {
+    let names = [
+        "content-length",
+        "content-type",
+        "server",
+        "date",
+        "etag",
+        "last-modified",
+        "cache-control",
+        "expires",
+    ];
+    for count in [3, 8] {
+        for opaque in [false, true] {
+            let mut response = response(None);
+            for name in &names[..count] {
+                response.append_header("connection", *name).unwrap();
+                response.insert_header(*name, "present").unwrap();
+            }
+            response.append_header("connection", "CONTENT-LENGTH, Server").unwrap();
+            response.insert_header("x-retained", "retained").unwrap();
+            if opaque {
+                response
+                    .append_header("connection", http::HeaderValue::from_bytes(&[0xff]).unwrap())
+                    .unwrap();
+            }
+            let before = response.headers.clone();
+            let result = sanitize_forwarded_response_headers(&mut response);
+            if opaque {
+                assert!(matches!(result.unwrap_err().etype(), ErrorType::InvalidHTTPHeader));
+                assert_eq!(response.headers, before);
+            } else {
+                assert!(!result.unwrap());
+                for name in &names[..count] {
+                    assert!(!response.headers.contains_key(*name));
+                }
+                assert!(!response.headers.contains_key("connection"));
+                assert_eq!(response.headers["x-retained"], "retained");
+            }
+        }
+    }
+}

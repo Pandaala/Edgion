@@ -12,6 +12,7 @@ use http::HeaderName;
 use pingora_core::modules::http::compression::ResponseCompression;
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
+use smallvec::SmallVec;
 
 #[inline]
 fn is_connection_option_tchar(byte: u8) -> bool {
@@ -36,7 +37,7 @@ fn sanitize_forwarded_response_headers(response: &mut ResponseHeader) -> pingora
     }
 
     let had_transfer_encoding = response.headers.contains_key(http::header::TRANSFER_ENCODING);
-    let mut dynamic_names = Vec::<HeaderName>::new();
+    let mut dynamic_names = SmallVec::<[HeaderName; 2]>::new();
     let mut invalid_connection_value = false;
 
     for value in response.headers.get_all(http::header::CONNECTION) {
