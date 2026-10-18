@@ -425,7 +425,7 @@ plugin_log.push(&format!("Auth failed for user {}", name)); // PII into PluginLo
 
 ### Good PluginLog examples
 
-`push_fmt` accepts non-sensitive diagnostic `u16` and `u64` arguments through
+`push_fmt` accepts non-sensitive diagnostic `u16`, `u64`, `usize`, `i64` and `isize` arguments through
 `la!`, such as `log.push_fmt("auth pass {}", la![status])`. They use bounded
 stack decimal formatting and the same entry-size/drop rules as plain text.
 Numeric identities or credentials are still sensitive: render those through

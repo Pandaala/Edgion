@@ -401,13 +401,7 @@ impl RateLimitRedis {
             Ok(QuotaDecision::Allowed(selected)) => {
                 if let Some(checked) = selected {
                     self.add_headers(session, checked.result.remaining, checked.result.limit);
-                    log.push_fmt(
-                        "rl:ok,kl={},r={}",
-                        la![
-                            checked.original_len.to_string().as_str(),
-                            checked.result.remaining.to_string().as_str()
-                        ],
-                    );
+                    log.push_fmt("rl:ok,kl={},r={}", la![checked.original_len, checked.result.remaining]);
                 }
                 PluginRunningResult::GoodNext
             }
@@ -415,10 +409,7 @@ impl RateLimitRedis {
                 let retry_after = Duration::from_millis(checked.result.retry_ms.max(0) as u64);
                 log.push_fmt(
                     "rl:lim,kl={},rms={}",
-                    la![
-                        checked.original_len.to_string().as_str(),
-                        checked.result.retry_ms.to_string().as_str()
-                    ],
+                    la![checked.original_len, checked.result.retry_ms],
                 );
                 self.reject_request(session, retry_after, Some(&checked.result)).await
             }

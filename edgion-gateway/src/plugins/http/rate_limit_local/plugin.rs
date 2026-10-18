@@ -277,16 +277,13 @@ impl RequestFilter for RateLimitLocal {
         let kl = limit_key.len();
 
         if curr_count > rate_limit {
-            plugin_log.push_fmt("Deny rate limit kl={}", la![kl.to_string().as_str()]);
+            plugin_log.push_fmt("Deny rate limit kl={}", la![kl]);
             // Use interval as retry_after since the window resets after interval.
             return self.reject_request(session, interval).await;
         }
 
         self.add_headers(session, remaining, interval);
-        plugin_log.push_fmt(
-            "Allow kl={} r={}",
-            la![kl.to_string().as_str(), remaining.max(0).to_string().as_str()],
-        );
+        plugin_log.push_fmt("Allow kl={} r={}", la![kl, remaining.max(0)]);
         PluginRunningResult::GoodNext
     }
 }

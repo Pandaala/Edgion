@@ -1850,3 +1850,19 @@ Fresh PluginLog tests passed 31 cases and ForwardAuth tests passed 12. Numeric
 scratch fixtures measured zero allocations. Formatting, workspace check/Clippy
 and seven repository guards passed, with existing warnings outside changed
 files. Independent final review passed.
+
+## Rate-limit typed integer log arguments
+
+The canonical formatter adds signed integers and pointer-sized integer inputs.
+The same bounded stack decimal helper serves both signed and unsigned variants;
+there is no public arbitrary-Display input. Local and Redis quota logs pass
+existing numeric fields directly, retaining local nonnegative clamping and raw
+signed Redis values. Key material remains absent; templates, decisions and
+response behavior are unchanged. Independent plan review passed. New tests
+cover signed/pointer extrema, zero scratch allocations and masking/size/drop
+parity while retaining unsigned coverage. No full suite, live Redis integration
+or throughput benchmark ran for this batch.
+Fresh PluginLog tests passed 33 cases; rate-limit selections passed 127 with
+one existing ignored case. Numeric scratch fixtures measured zero allocations.
+Formatting, workspace check/Clippy and seven repository guards passed, with
+existing warnings outside changed files. Independent final review passed.
