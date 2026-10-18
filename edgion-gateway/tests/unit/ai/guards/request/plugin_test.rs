@@ -1101,3 +1101,104 @@ fn ordered_final_validation_is_allocation_free_at_inclusive_budget() {
         assert_eq!(stats.requested_bytes, 0);
     }
 }
+
+#[tokio::test]
+async fn final_encoding_preserves_linear_lookup_and_atomic_publication() {
+    let prompt = br#"{"messages":[{"role":"user","content":"first"},{"role":"assistant","content":[{"type":"text","text":"second"},{"type":"text","text":"third"}]},{"role":"user","content":"last"}]}"#;
+    let selected = select_spans(
+        prompt,
+        SpanLimits {
+            max_spans: 512,
+            max_span_bytes: 1024,
+            max_total_span_bytes: 4096,
+        },
+    )
+    .unwrap();
+    assert_eq!(selected.len(), 4);
+    let guard = guard(reject_rule(), "");
+    for span_order in 0..3 {
+        let mut spans = selected.clone();
+        if span_order == 1 {
+            spans.reverse();
+        } else if span_order == 2 {
+            // A later duplicate points elsewhere: only the first matching token
+            // may be edited, including when there are multiple replacements.
+            let mut duplicate = selected[0].clone();
+            duplicate.token = selected[3].token.clone();
+            spans.insert(1, duplicate);
+        }
+        for count in [0, 1, 3] {
+            for reverse_items in [false, true] {
+                let mut items: Vec<_> = selected
+                    .iter()
+                    .take(count)
+                    .enumerate()
+                    .map(|(index, span)| (span.key, format!("mask {index}: \"é\"\n")))
+                    .collect();
+                if reverse_items {
+                    items.reverse();
+                }
+                let mut expected_edits: Vec<_> = items
+                    .iter()
+                    .map(|(key, text)| {
+                        let span = spans.iter().find(|span| span.key == *key).unwrap();
+                        (span.token.clone(), Bytes::from(serde_json::to_string(text).unwrap()))
+                    })
+                    .collect();
+                expected_edits.sort_by_key(|(range, _)| range.start);
+                let mut expected_body = prompt.to_vec();
+                for (range, bytes) in expected_edits.iter().rev() {
+                    expected_body.splice(range.start as usize..range.end as usize, bytes.iter().copied());
+                }
+                let (mut storage, view) = BodyStorage::new(1024, 4096);
+                storage.write(&Bytes::from_static(prompt)).await.unwrap();
+                storage.finish().await.unwrap();
+                let generation = view.generation();
+                let settled_generation = generation + u64::from(count > 0);
+                let mut ctx = EdgionHttpContext::new();
+                ctx.request_body.install(Arc::clone(&view));
+                let mut session = MockPluginSession::new();
+                session.expect_ctx().return_const(ctx);
+                let publish_view = Arc::clone(&view);
+                session
+                    .expect_replace_request_body_spans()
+                    .times(1)
+                    .returning(move |expected, edits| {
+                        assert_eq!(expected, generation);
+                        assert_eq!(edits, expected_edits.as_slice());
+                        publish_view
+                            .replace_spans(expected, edits)
+                            .map_err(|_| BodyReadError::Incomplete)
+                    });
+                let mut ai = crate::plugins::runtime::traits::ai_session::MockAiSessionCapability::new();
+                ai.expect_record_ai_guard_decision()
+                    .times(1)
+                    .withf(move |_, settled| *settled == Some(settled_generation))
+                    .returning(|_, _| ());
+                session
+                    .expect_ai()
+                    .return_var(Box::new(ai) as Box<dyn crate::plugins::runtime::traits::AiSessionCapability>);
+                assert_eq!(
+                    guard
+                        .finish_decision(
+                            &mut session,
+                            &mut PluginLog::new("AiGuard"),
+                            FinalDecision {
+                                body: prompt,
+                                spans: &spans,
+                                generation,
+                                decision: GuardDecision::Replace(items),
+                                flagged: 0,
+                            }
+                        )
+                        .await,
+                    PluginRunningResult::GoodNext
+                );
+                let actual = view.read_all().await.unwrap();
+                assert_eq!(actual.as_ref(), expected_body.as_slice());
+                assert!(serde_json::from_slice::<serde_json::Value>(&actual).is_ok());
+                assert_eq!(view.generation(), settled_generation);
+            }
+        }
+    }
+}

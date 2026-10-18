@@ -330,8 +330,17 @@ impl AiGuard {
                     return self.dependency_failure(session, log, kind, body);
                 }
                 let mut edits: Vec<(std::ops::Range<u64>, Bytes)> = Vec::with_capacity(items.len());
+                let ordered_spans = items.len() > 1 && spans.windows(2).all(|pair| pair[0].key < pair[1].key);
                 for (key, text) in &items {
-                    let Some(span) = spans.iter().find(|span| span.key == *key) else {
+                    let span = if ordered_spans {
+                        spans
+                            .binary_search_by_key(key, |span| span.key)
+                            .ok()
+                            .map(|index| &spans[index])
+                    } else {
+                        spans.iter().find(|span| span.key == *key)
+                    };
+                    let Some(span) = span else {
                         // An evaluator naming a span that was never sent is a
                         // dependency protocol error, so it follows the failure
                         // policy rather than being reported as a gateway fault.

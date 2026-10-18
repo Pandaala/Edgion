@@ -97,7 +97,11 @@ no settled generation, and publish no masks. Both failure-policy modes retain
 the original body; fail-close renders the existing selected refusal dialect.
 
 Local Reject still suppresses evaluator egress. The evaluator projection keeps
-borrowing post-local-mask text. Success continues through one whole-token,
+borrowing post-local-mask text. After admission, encoding multiple replacements
+uses binary lookup only when span keys are strictly increasing. Unordered or
+duplicate span keys retain first-match linear lookup; zero or one replacement
+skips the ordering scan. Replacement order, JSON encoding and token-range sorting
+are unchanged. Success continues through one whole-token,
 generation-checked BodyStorage edit batch; generation and physical-body-cap
 faults retain their stricter fixed errors. No response-side storage, protocol,
 schema, metric, tracing or text-copy mechanism is added.

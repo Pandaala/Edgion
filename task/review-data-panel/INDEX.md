@@ -2590,3 +2590,23 @@ Fresh final-source verification passed all 74 AiGuard request tests, formatting,
 workspace check/Clippy and seven repository guards. The introduced Clippy warning
 was corrected; remaining warnings are outside changed code. Ordered key work is
 linear, but no claim is made that every small input or full request is faster.
+
+## AiGuard replacement encoding lookup
+
+After final key and byte admission, encoding multiple replacements now checks
+span-key order once and uses binary search for strictly increasing span keys.
+Unordered or duplicate span keys retain the original first-match lookup; empty
+and single-item decisions skip the ordering scan. No index allocation is added.
+JSON encoding, token-range sorting, overlap rejection, failure policy and the
+single generation-bound publication remain unchanged. The owning budget knowledge
+page records these lookup boundaries.
+
+A real BodyStorage test compares emitted edits and complete output against the
+original linear lookup across 18 combinations of span order, replacement order
+and replacement count, including mixed content/text-part keys and a later
+duplicate key pointing at a different token. Empty edits retain the generation;
+nonempty edits advance it once. Independent plan and code/knowledge reviews passed.
+Fresh verification passed 75 AiGuard request tests, formatting, workspace
+check/Clippy and seven repository guards; remaining warnings are outside changed
+code. Ordered lookup costs O(n + m log n) instead of O(n*m), without a claim that
+every small input or full request is faster.
