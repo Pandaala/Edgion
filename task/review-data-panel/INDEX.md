@@ -3020,3 +3020,23 @@ code. The tests retain scoring/non-scoring, idempotence, cancellation, generatio
 counter isolation and sampling coverage. No syntax-mirroring test was added;
 the removed reference-count work is evident in the branch, not an allocation or
 measured throughput improvement.
+
+## Borrow endpoint completion state from its retained runtime snapshot
+
+Response-header sampling already skips non-EWMA policies and reuses header_at;
+per-attempt outlier classification stays before retry returns. Following that
+path into the discovery coordinator found an unnecessary local endpoint Arc
+clone: with_current_endpoint_locked already owns the active snapshot containing
+that endpoint. It now borrows the entry through the existing completion lock,
+current-snapshot reload, exact membership/pointer checks and synchronous callback.
+The same helper serves health completion. Guard and snapshot release order,
+policy checks, retirement freezing and outlier percent arbitration are unchanged.
+The accepted residual locks and metrics costs remain outside this optimization.
+
+Independent plan and code reviews passed. Fresh verification passed 41 coordinator
+and 36 outlier-detection tests, formatting, workspace check/Clippy and seven
+repository guards. Coverage includes late completion rejection, policy replacement,
+retirement barriers, gauge settlement and percent-cap arbitration. Existing
+warnings are outside changed code. The benefit is one fewer Arc clone/drop after
+a successful endpoint lookup, not removed synchronization, heap allocation or
+measured throughput. No live traffic or benchmark was run.

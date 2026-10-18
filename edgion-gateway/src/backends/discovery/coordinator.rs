@@ -824,7 +824,7 @@ impl ServiceDiscoveryCoordinator {
         if active.membership_identity != Some(membership_identity) {
             return None;
         }
-        let state = active.entries.get(endpoint_identity)?.clone();
+        let state = active.entries.get(endpoint_identity)?;
         if state.identity.as_ref() != endpoint_identity {
             return None;
         }
@@ -834,7 +834,7 @@ impl ServiceDiscoveryCoordinator {
             return None;
         }
         let current_state = current.entries.get(endpoint_identity)?;
-        if !Arc::ptr_eq(current_state, &state) || current_state.identity.as_ref() != endpoint_identity {
+        if !Arc::ptr_eq(current_state, state) || current_state.identity.as_ref() != endpoint_identity {
             return None;
         }
         #[cfg(test)]
@@ -842,7 +842,7 @@ impl ServiceDiscoveryCoordinator {
             reached.wait();
             resume.wait();
         }
-        Some(apply(&state, &mut completion, current.entries.len()))
+        Some(apply(state, &mut completion, current.entries.len()))
     }
 
     pub fn replace_services(&self, data: &HashMap<String, Arc<Service>>) {
