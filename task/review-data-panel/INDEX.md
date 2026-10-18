@@ -3079,6 +3079,21 @@ fail-closed admission chain; no baseline binary was rerun. Formatting, workspace
 check/Clippy and seven repository guards passed. Clippy warnings remain outside
 changed code. The known fixture failure is retained, not skipped or repaired here.
 
+## Borrow the retained request-body replay snapshot
+
+BodyStorage::next_chunk now borrows its retained replay_snapshot instead of
+cloning its Arc on each call. The exclusive mutable storage borrow pins that
+owner through disk-read awaits; only disjoint failure state is updated. Disk
+jobs still own their File Arc and returned memory chunks remain owned Bytes.
+Rewind, consume, snapshot selection, EOF and error precedence are unchanged.
+This saves one Arc increment/decrement after a successful snapshot lookup,
+including EOF checks, without removing a lock or payload copy.
+
+Independent plan and source reviews passed. Fresh verification passed all 68
+storage tests, including cancellation/re-read, truncation, retry cursors and
+snapshot stability, plus formatting, workspace check/Clippy and seven repository
+guards. Warnings remain outside changed code. No throughput benchmark was run.
+
 ## Request-body suffix updates for long decoded chunks
 
 TextOperationScanner::EndsWith now replaces its retained suffix directly when

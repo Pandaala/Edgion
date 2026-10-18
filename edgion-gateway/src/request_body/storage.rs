@@ -1732,11 +1732,10 @@ impl RequestBodyBuffer for BodyStorage {
                 "request body storage is unusable after a file operation failure",
             ));
         }
-        let snapshot = Arc::clone(
-            self.replay_snapshot
-                .as_ref()
-                .ok_or_else(|| Self::replay_error("request body replay requires rewind"))?,
-        );
+        let snapshot = self
+            .replay_snapshot
+            .as_ref()
+            .ok_or_else(|| Self::replay_error("request body replay requires rewind"))?;
         if self.replay_cursor == snapshot.len {
             return Ok(None);
         }
