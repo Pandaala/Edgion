@@ -39,6 +39,7 @@ destination.
 - [Service selected-slot lookup cost](backend-01-selected-slot-lookup.md)
 - [JWT claim condition evaluation ownership](condition-01-jwt-claim-evaluation.md)
 - [GeoIP record decoding and projection](geoip-01-record-decoding.md)
+- [Redis compiled-policy validation ownership](redis-01-compiled-policy-validation.md)
 
 ## Completed implementation batch
 
@@ -848,3 +849,24 @@ script families, warm/cache-flush recovery, replacement clients and weighted
 concurrent debit. The instance was removed after verification. Formatting,
 workspace check/Clippy and seven repository guards passed; existing warnings are
 outside changed lines. No full integration suite or throughput benchmark ran.
+
+
+## Redis batch validation and result ownership audit
+
+Traced HTTP quota preparation and sequential core calls, Stream dimension policy
+construction, DSL resolved policy invocation, and core result merging. Results
+move through the merger without heap copies. HTTP preparation releases oversized
+key backing allocations before Redis awaits; single-source key resolution already
+moves its value and empty key lists retain global-bucket semantics. Multi-source
+key adapters and composition remain open for deeper inspection.
+
+Repeated numeric policy checks expose a preparation candidate, deferred in the
+linked task because the raw-entry and all-policy-before-debit boundaries must be
+preserved. Cold textual duration parsing already exists; the repeated work is
+bounded numeric validation/conversion. The task distinguishes a private per-call
+validated path from a shared immutable compiled policy owner, without accepting
+an unchecked public API or claiming measured CPU savings.
+
+Independent plan and final source reviews passed. Agent-doc validation and diff
+whitespace checks passed. No production changes, fresh Rust tests or benchmarks
+were part of this documentation batch.
