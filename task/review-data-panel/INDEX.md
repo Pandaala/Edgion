@@ -2985,3 +2985,21 @@ publication helpers or socket dependencies. No runtime behavior was changed.
 Fresh verification passed 12 Service selector tests, formatting, workspace
 check/Clippy and agent-doc consistency. Existing Clippy warnings are outside this
 record-only change. No UDP socket tests or throughput benchmark were run.
+
+## Read the selection decay clock only for EWMA
+
+Captured Service selection now reads now_units only for the EWMA policy.
+RoundRobin, ConsistentHash (including keyless RR fallback) and LeastConn ignore
+the timestamp argument and receive zero. The exhaustive policy match stays at
+the original pre-degrade position, preserving one fresh EWMA timestamp for all
+candidate comparisons. Published backend counters already initialize the
+monotonic epoch during construction. Snapshot capture, health/outlier filtering,
+degrade counters, selector order and error mapping remain unchanged. The owning
+algorithm document now states the policy-specific clock boundary.
+
+Independent plan and final source reviews passed. Fresh verification passed 12
+Service selector, eight compiled-selector and 21 EWMA score tests, formatting,
+workspace check/Clippy and seven repository guards. Existing warnings are outside
+changed code. The skipped clock read is established by source control flow;
+tests cover selection and estimator behavior, not a measured latency saving.
+No selector API, estimator arithmetic, cache or benchmark was added.

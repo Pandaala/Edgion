@@ -305,7 +305,11 @@ impl CapturedServiceSelection {
             _ => (None, false),
         };
 
-        let now = crate::lb::ewma::score::now_units();
+        // Only EWMA consumes the decay clock; other selectors ignore this argument.
+        let now = match kind {
+            PolicyKind::Ewma => crate::lb::ewma::score::now_units(),
+            PolicyKind::RoundRobin | PolicyKind::ConsistentHash | PolicyKind::LeastConn => 0,
+        };
         let result = if degrade_engaged(selector, active, degrade_policy.threshold(active)) {
             if let Some(counter) = &active.degrade_selections {
                 counter.record_selection();

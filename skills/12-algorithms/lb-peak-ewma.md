@@ -411,7 +411,10 @@ replaced estimator incremented only on the `LeastConn` branch.
 ### Clock — read fresh at selection, injectable in tests
 
 `CompiledSelector::select` takes `now_units: u32`; production callers in
-`backends/selector.rs` fill it with `crate::lb::ewma::score::now_units()`.
+`backends/selector.rs` fill it with `crate::lb::ewma::score::now_units()` for
+EWMA. RoundRobin, ConsistentHash and LeastConn ignore this argument and receive
+zero, avoiding an unused clock read. EWMA still reads fresh before the degrade
+decision and shares that one timestamp across its candidate comparisons.
 
 `upstream.start_time` is refreshed per attempt by `push_upstream`, so threading
 it would in fact be correct. Reading fresh was chosen for simplicity — it avoids
