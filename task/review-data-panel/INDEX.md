@@ -23,7 +23,7 @@ destination.
 | Redirect HTTP | Direct callbacks and shared client-policy application inspected. Missing-host and listener-admission checks now share one normalized hostname. Raw Location authority, query-free log URL and session-owned keepalive remain unchanged. |
 | Connection filters and Stream plugins | Connection bridge, ordered runtime dispatch, connection-rate-limit callback, global IP profile selection, GeoIP callback and shared denial translation inspected. Static denial reasons now borrow literals. Deeper ACL/GeoIP matchers, local-gate/Redis implementations and publication construction remain open. |
 | TCP/TLS connection handling and relay | TCP, terminated TLS and passthrough TLS direct process/route/connect/log orchestration inspected, plus shared L4 relay. Existing snapshot/inspection-buffer release boundaries retained. Listener-log direct serialization deferred below. Deeper route selection, backend resolution and transport dependencies remain open. |
-| TLS handshake callbacks | Direct select/certificate/completion/free callbacks and certificate/mTLS/cipher application helpers inspected. Temporary SNI and early-abort metadata copies removed below. Compiled certificate ownership, expiry checks and ex-data handoff retained. Client-certificate extraction and leaf-only verification orchestration inspected below. Deeper matcher, allowlist evaluator and verification extraction cost remain open. |
+| TLS handshake callbacks | Direct select/certificate/completion/free callbacks and certificate/mTLS/cipher application helpers inspected. Temporary SNI and early-abort metadata copies removed below. Compiled certificate ownership, expiry checks and ex-data handoff retained. Client-certificate extraction and leaf-only verification orchestration inspected below. Matcher snapshot selection and shared SAN/CN allowlist evaluation inspected below. Prepared SAN policy is deferred; deeper verification extraction and remaining matcher costs remain open. |
 | UDP packet/session lifecycle | Direct packet, session admission, receiver, retirement, shutdown and log projection inspected. Selected route ownership and socket Arc transfer tightened below. Deeper backend selection, route publication and socket dependencies remain open. |
 
 ## Deferred decisions
@@ -51,6 +51,7 @@ destination.
 - [Outbound Content-Length integer storage](outbound-01-content-length-integer-storage.md)
 - [ProxyRewrite staged template compilation](rewrite-01-staged-template-compilation.md)
 - [Repeated GraphQL frontend parsing](graphql-01-repeated-frontend-parsing.md)
+- [Prepared SAN allowlist policy](tls-01-prepared-san-policy.md)
 
 ## Completed implementation batch
 
