@@ -97,7 +97,11 @@ fn response_compression_level(
     had_transfer_encoding: bool,
     response: &ResponseHeader,
 ) -> u32 {
-    if !enabled || stream_kind == ResponseStreamKind::Sse {
+    if !enabled
+        || stream_kind == ResponseStreamKind::Sse
+        || had_transfer_encoding
+        || response.headers.contains_key(http::header::TRANSFER_ENCODING)
+    {
         return 0;
     }
 
@@ -109,9 +113,7 @@ fn response_compression_level(
         .is_some()
         && content_lengths.next().is_none();
 
-    let has_transfer_encoding = had_transfer_encoding || response.headers.contains_key(http::header::TRANSFER_ENCODING);
-
-    if has_one_valid_content_length && !has_transfer_encoding {
+    if has_one_valid_content_length {
         DEFAULT_COMPRESSION_LEVEL
     } else {
         0

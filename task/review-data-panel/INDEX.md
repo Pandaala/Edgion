@@ -2112,3 +2112,17 @@ Independent plan review passed.
 Formatting, workspace check/Clippy and agent-document validation passed.
 Independent final documentation review passed. No runtime test or benchmark was
 run for this documentation-only batch.
+
+## Response compression transfer-encoding short circuit
+
+Final response compression eligibility rejects remembered or still-present
+Transfer-Encoding before examining Content-Length. These immutable predicates
+already disqualify compression, so this skips unnecessary text validation and
+number parsing without changing accepted lengths, repeated-field handling,
+SSE/config policy, sanitization or module execution order. Independent plan
+review passed. Existing tests exercise both Transfer-Encoding sources and the
+length/config/SSE matrix, plus real compression-module selection. No allocation
+or throughput improvement is claimed; the change removes redundant parsing work.
+Fresh verification passed all 25 response-filter tests, formatting, workspace
+check/Clippy and seven repository guards. Remaining warnings are outside changed
+source. Independent final review passed.
