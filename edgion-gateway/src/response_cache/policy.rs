@@ -90,7 +90,11 @@ pub(super) fn public_max_age(value: &[u8]) -> Option<Duration> {
 }
 
 pub(super) fn supported_headers(response: &ResponseHeader) -> bool {
-    response.status.as_u16() == 200
+    supported_header_lifetime(response).is_some()
+}
+
+fn supported_header_lifetime(response: &ResponseHeader) -> Option<Duration> {
+    if !(response.status.as_u16() == 200
         && response.headers.len() <= MAX_FIELDS
         && [
             "set-cookie",
@@ -107,10 +111,11 @@ pub(super) fn supported_headers(response: &ResponseHeader) -> bool {
             .get("content-type")
             .is_none_or(|value| value.to_str().is_ok_and(|value| !is_sse_content_type(value)))
         && response_is_identity_encoded(&response.headers)
-        && super::key::VaryCertificate::parse(&response.headers).is_some()
-        && singleton(&response.headers, "cache-control")
-            .and_then(public_max_age)
-            .is_some()
+        && super::key::VaryCertificate::parse(&response.headers).is_some())
+    {
+        return None;
+    }
+    singleton(&response.headers, "cache-control").and_then(public_max_age)
 }
 
 impl Freshness {
@@ -121,10 +126,7 @@ impl Freshness {
         received_wall: SystemTime,
         max_ttl: Duration,
     ) -> Option<Self> {
-        if !supported_headers(response) {
-            return None;
-        }
-        let lifetime = public_max_age(singleton(&response.headers, "cache-control")?)?.min(max_ttl);
+        let lifetime = supported_header_lifetime(response)?.min(max_ttl);
         let date = httpdate::parse_http_date(std::str::from_utf8(singleton(&response.headers, "date")?).ok()?).ok()?;
         let age = if response.headers.contains_key("age") {
             decimal(singleton(&response.headers, "age")?)?

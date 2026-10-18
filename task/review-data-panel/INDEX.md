@@ -688,3 +688,25 @@ source-based, not a fresh baseline binary comparison. No full integration suite
 or throughput benchmark ran.
 Independent plan and final source reviews passed, including the unchanged
 fixture failure attribution.
+
+## Single-pass cache-control lifetime extraction
+
+Freshness construction now consumes the lifetime returned by the private supported
+header validator, avoiding a second singleton lookup and strict Cache-Control
+parse on the same immutable response. Boolean consumers still use the same
+validator. Status/count, forbidden fields, content type, encoding, Vary and
+Cache-Control checks retain their order. Date/Age validation, monotonic age and
+max-TTL clamping remain unchanged. Each capture/decode/seal/publication boundary
+still validates its own header; no parsed state is cached across mutations.
+
+The key/freshness audit also inspected bounded header sorting/framing, Connection
+exclusions, Vary certificates and origin stamps. Header values remain live request
+inputs, and freshness uses the origin timestamp rather than restarting on replay.
+Deeper publication dependencies and repeated exclusion construction remain open.
+This removes duplicate parsing work, without a measured allocation or throughput
+claim. A TTL boundary regression covers zero, lower, equal and higher caps.
+
+Independent plan and final source reviews passed. All 37 cache module tests,
+formatting, workspace check/Clippy and seven repository guards passed. Existing
+Clippy warnings are outside changed lines. No full integration suite or throughput
+benchmark ran; the previously deferred request-tail fixture issue remains open.

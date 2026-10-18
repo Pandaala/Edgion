@@ -83,3 +83,19 @@ fn malformed_repeated_and_private_headers_cannot_admit_a_writer() {
         .is_none());
     }
 }
+
+#[test]
+fn origin_lifetime_is_capped_without_reviving_zero_ttl() {
+    let now = Instant::now();
+    let wall = SystemTime::UNIX_EPOCH + Duration::from_secs(2_000_000_000);
+    let mut response = crate::response_cache::tests::response();
+    response.insert_header("date", httpdate::fmt_http_date(wall)).unwrap();
+    for (cap, expected) in [(0, 0), (10, 10), (60, 60), (120, 60)] {
+        let freshness = Freshness::from_headers(&response, now, now, wall, Duration::from_secs(cap)).unwrap();
+        assert_eq!(freshness.lifetime, Duration::from_secs(expected));
+        assert_eq!(
+            freshness.remaining(now),
+            (expected != 0).then(|| Duration::from_secs(expected))
+        );
+    }
+}
