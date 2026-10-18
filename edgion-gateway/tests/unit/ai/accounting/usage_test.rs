@@ -1361,3 +1361,53 @@ fn unchanged_reported_usage_avoids_publication_after_normalization() {
     assert_eq!(shared.reported_usage(), corrected);
     assert_eq!(allocations, 0);
 }
+
+#[test]
+fn cost_fraction_formatting_preserves_decimal_bytes_with_fewer_allocations() {
+    let pricing = edgion_resources::resources::edgion_backend::AiModelPricing {
+        input_per_million_usd: "0.000001".to_string(),
+        output_per_million_usd: "0".to_string(),
+        cache_read_input_per_million_usd: None,
+        cache_write_input_per_million_usd: None,
+    }
+    .parsed()
+    .unwrap();
+    let mut cases = vec![
+        0,
+        999_999_999_999,
+        1_000_000_000_000,
+        1_000_000_000_001,
+        1_234_567_890_120,
+        u64::MAX,
+    ];
+    cases.extend((0..12).map(|power| 10_u64.pow(power)));
+    for input_tokens in cases {
+        let usage = ReportedAiUsage {
+            input_tokens,
+            output_tokens: 0,
+            cache_read_input_tokens: 0,
+            cache_write_input_tokens: 0,
+        };
+        let whole = u128::from(input_tokens) / 1_000_000_000_000;
+        let fraction = u128::from(input_tokens) % 1_000_000_000_000;
+        let (expected, previous_allocations) = crate::test_allocation_counter::count_allocations(|| {
+            if fraction == 0 {
+                whole.to_string()
+            } else {
+                let fraction = format!("{fraction:012}");
+                format!("{whole}.{}", fraction.trim_end_matches('0'))
+            }
+        });
+        let (actual, allocations) =
+            crate::test_allocation_counter::count_allocations(|| estimated_cost_usd(pricing, usage));
+        assert_eq!(actual, expected, "input tokens: {input_tokens}");
+        if fraction == 0 {
+            assert_eq!(allocations, previous_allocations);
+        } else {
+            assert!(
+                allocations < previous_allocations,
+                "input tokens: {input_tokens}, {allocations} versus {previous_allocations}"
+            );
+        }
+    }
+}

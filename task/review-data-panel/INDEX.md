@@ -4049,3 +4049,23 @@ Fresh verification passed 130 network-free tests: 46 SSE module, 33 native
 Anthropic and 51 usage tests. Formatting, workspace check/Clippy, agent-document
 validation and diff hygiene passed. Existing warnings remain outside this
 documentation-only batch. No new-layout prototype or performance benchmark ran.
+
+
+## Fixed-point cost fraction formatting
+
+estimated_cost_usd now strips trailing decimal zeroes from the nonzero integer
+fraction while decreasing its padding width, then formats the result directly.
+This removes the intermediate twelve-digit fractional String. The loop has at
+most eleven iterations; leading zeroes, integer output and all pricing arithmetic
+remain unchanged. Both attempt and request finalization use this same function.
+
+A differential test compares exact bytes against the previous formatter across
+integer boundaries, all trailing-zero counts, irregular fractions and u64::MAX.
+Thread-local allocation measurements show fewer allocations for these nonzero
+fractions and unchanged allocation counts for integer results. Existing mixed-rate
+finalization tests retain coverage of ordinary, cached and output token pricing.
+No throughput or CPU improvement is claimed.
+
+Fresh verification passed 65 network-free tests: 52 usage and 13 finalization
+tests. Formatting, workspace check/Clippy, seven repository guards and diff
+hygiene passed. Existing warnings remain outside changed code.

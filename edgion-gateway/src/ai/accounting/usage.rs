@@ -644,8 +644,13 @@ pub fn estimated_cost_usd(pricing: ParsedAiModelPricing, usage: ReportedAiUsage)
     if fraction == 0 {
         return whole.to_string();
     }
-    let fraction = format!("{fraction:012}");
-    format!("{whole}.{}", fraction.trim_end_matches('0'))
+    let mut fraction = fraction;
+    let mut width = 12_usize;
+    while fraction.is_multiple_of(10) {
+        fraction /= 10;
+        width -= 1;
+    }
+    format!("{whole}.{fraction:0width$}")
 }
 
 /// Incremental UTF-8 character counter. A valid leading byte is counted
