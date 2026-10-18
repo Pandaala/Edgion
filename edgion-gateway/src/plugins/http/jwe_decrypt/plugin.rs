@@ -187,18 +187,18 @@ impl JweDecrypt {
         }
     }
 
-    fn extract_token(&self, session: &dyn PluginSession) -> Option<String> {
+    fn extract_token<'a>(&self, session: &'a dyn PluginSession) -> Option<&'a str> {
         let raw_value = session.header_str(&self.config.header)?;
         let trimmed = raw_value.trim();
 
         let token = if let Some(prefix) = &self.config.strip_prefix {
             if let Some(rest) = trimmed.strip_prefix(prefix) {
-                rest.trim().to_string()
+                rest.trim()
             } else {
-                trimmed.to_string()
+                trimmed
             }
         } else {
-            trimmed.to_string()
+            trimmed
         };
 
         if token.is_empty() {
@@ -272,16 +272,15 @@ impl JweDecrypt {
     }
 
     fn parse_compact_jwe<'a>(&self, token: &'a str) -> Result<ParsedJwe<'a>, JweFailure> {
-        let segments: Vec<&str> = token.split('.').collect();
-        if segments.len() != 5 {
+        let mut segments = token.split('.');
+        let protected_segment = segments.next().ok_or(JweFailure::InvalidFormat)?;
+        let encrypted_key_segment = segments.next().ok_or(JweFailure::InvalidFormat)?;
+        let iv_segment = segments.next().ok_or(JweFailure::InvalidFormat)?;
+        let ciphertext_segment = segments.next().ok_or(JweFailure::InvalidFormat)?;
+        let tag_segment = segments.next().ok_or(JweFailure::InvalidFormat)?;
+        if segments.next().is_some() {
             return Err(JweFailure::InvalidFormat);
         }
-
-        let protected_segment = segments[0];
-        let encrypted_key_segment = segments[1];
-        let iv_segment = segments[2];
-        let ciphertext_segment = segments[3];
-        let tag_segment = segments[4];
 
         if protected_segment.is_empty()
             || iv_segment.is_empty()
@@ -402,7 +401,7 @@ impl RequestFilter for JweDecrypt {
             }
         };
 
-        let plaintext = match self.decrypt_compact_jwe(&token, decryptor) {
+        let plaintext = match self.decrypt_compact_jwe(token, decryptor) {
             Ok(plaintext) => plaintext,
             Err(err) => return self.reject(session, plugin_log, err).await,
         };

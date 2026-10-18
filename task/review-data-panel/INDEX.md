@@ -2773,3 +2773,27 @@ verification passed 22 transformer tests, 1 CappedWriter test, formatting,
 workspace check/Clippy and seven repository guards. Remaining warnings are
 outside changed code. No alternate-feature build, peak-memory or throughput
 improvement is claimed.
+
+## JWE borrowed token and fixed segment views
+
+JweDecrypt now borrows the trimmed token from the selected request header until
+synchronous decryption returns owned plaintext. Optional prefix matching remains
+case-sensitive, with the same trim order, first-header selection and invalid-text
+handling. Compact parsing consumes exactly five split fields and rejects a sixth
+without collecting a segment Vec. Empty-field and encrypted-key checks, strict
+protected JSON, algorithms, original encoded AAD, key-failure precedence, payload
+publication and credential hiding remain unchanged.
+
+Independent plan and code reviews passed. New tests cover extraction text and
+source-pointer identity with zero allocations, empty/prefix/duplicate/non-text
+header cases, allocation-free structural rejection including a long dot sequence,
+and borrowed segment identity with a real AES-GCM roundtrip. Existing strict
+protected-header, raw-AAD and key-failure tests remain. Fresh verification passed
+18 JWE tests, four header-accessor tests, formatting, workspace check/Clippy and
+seven repository guards; remaining warnings are outside changed code. Header
+JSON decoding and decryption still allocate, and no throughput claim is made.
+
+Adjacent inspection found JsonSchemaValidation already retains its compiled
+validator and uses borrowed body parsing input with operation-specific failure
+policy. Canary retains borrowed profile selection and creates owned jump metadata
+for later phases. No ownership change was selected at those boundaries.

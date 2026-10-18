@@ -497,3 +497,94 @@ async fn compile_plugins_constructs_fail_closed_jwe_for_invalid_resolved_credent
     let invalid_length = config_with_key(b"too-short");
     assert_constructed(invalid_length, "err: key len err").await;
 }
+
+#[test]
+fn token_extraction_borrows_the_selected_header_without_allocation() {
+    for (prefix, raw, expected) in [
+        (Some("Bearer "), "  Bearer token.parts  ", Some("token.parts")),
+        (Some("Bearer "), "Bearer   token.parts \t", Some("token.parts")),
+        (Some("Bearer "), "bearer token.parts", Some("bearer token.parts")),
+        (Some("Bearer "), "Basic token.parts", Some("Basic token.parts")),
+        (Some("Bearer "), "Bearer ", Some("Bearer")),
+        (Some("Bearer"), "Bearer \t", None),
+        (Some(""), " token.parts ", Some("token.parts")),
+        (None, " Bearer token.parts ", Some("Bearer token.parts")),
+        (None, " \t ", None),
+        (None, "", None),
+    ] {
+        let mut config = config_with_key(&test_key());
+        config.strip_prefix = prefix.map(str::to_owned);
+        let plugin = JweDecrypt::new(&config, "default".to_owned());
+        let mut session = MockPluginSession::new();
+        setup_header_mocks(&mut session, &[("authorization", raw), ("authorization", "ignored")]);
+        let selected = session.header_str("authorization").unwrap();
+        let (token, stats) = crate::test_allocation_counter::count_allocation_stats(|| plugin.extract_token(&session));
+        assert_eq!(token, expected);
+        assert_eq!(stats.calls, 0, "{stats:?}");
+        if let Some(token) = token {
+            let offset = selected.find(token).unwrap();
+            assert_eq!(token.as_ptr(), selected[offset..].as_ptr());
+        }
+    }
+
+    let plugin = build_plugin(None);
+    for value in [None, Some(http::HeaderValue::from_bytes(b"\xff").unwrap())] {
+        let mut headers = http::HeaderMap::new();
+        if let Some(value) = value {
+            headers.append("authorization", value);
+            headers.append("authorization", http::HeaderValue::from_static("Bearer ignored"));
+        }
+        let mut session = MockPluginSession::new();
+        session.expect_request_header_map().return_const(headers);
+        assert_eq!(plugin.extract_token(&session), None);
+    }
+}
+
+#[test]
+fn compact_structure_rejection_needs_no_segment_vector() {
+    let plugin = build_plugin(None);
+    let mut inputs: Vec<String> = [
+        "",
+        "a",
+        "a.",
+        "a..",
+        "a..c",
+        "a..c.d",
+        "a..c.d.e.",
+        "a..c.d.e.f",
+        "..c.d.e",
+        "a.b.c.d.e",
+        "a...d.e",
+        "a..c..e",
+        "a..c.d.",
+        "....",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    inputs.push(".".repeat(8192));
+    for input in inputs {
+        let (result, stats) =
+            crate::test_allocation_counter::count_allocation_stats(|| plugin.parse_compact_jwe(&input));
+        assert!(matches!(result, Err(JweFailure::InvalidFormat)), "input={input:?}");
+        assert_eq!(stats.calls, 0, "input={input:?}, {stats:?}");
+    }
+}
+
+#[test]
+fn compact_segment_views_preserve_original_encoded_slices() {
+    let plugin = build_plugin(None);
+    let token = encrypt_compact_jwe_with_protected("payload", &test_key(), r#"{ "enc":"A256GCM", "alg":"dir" }"#, 4);
+    let original_segments: Vec<_> = token.split('.').collect();
+    let parsed = plugin.parse_compact_jwe(&token).unwrap();
+    for (actual, expected) in [
+        (parsed.protected_segment, original_segments[0]),
+        (parsed.iv_segment, original_segments[2]),
+        (parsed.ciphertext_segment, original_segments[3]),
+        (parsed.tag_segment, original_segments[4]),
+    ] {
+        assert_eq!(actual, expected);
+        assert_eq!(actual.as_ptr(), expected.as_ptr());
+    }
+    assert_eq!(decrypt_with_prepared(&plugin, &token).unwrap(), "payload");
+}
