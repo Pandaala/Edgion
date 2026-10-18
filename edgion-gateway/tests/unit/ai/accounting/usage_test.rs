@@ -1317,3 +1317,47 @@ async fn poisoned_chat_payload_keeps_accounting_with_or_without_guarding() {
         }
     }
 }
+
+#[test]
+fn unchanged_reported_usage_avoids_publication_after_normalization() {
+    let shared = AiUsageShared::default();
+    assert_eq!(shared.reported_usage(), None);
+    shared.observe_reported_usage(0, 0, 0, 0);
+    assert_eq!(
+        shared.reported_usage(),
+        Some(ReportedAiUsage {
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_input_tokens: 0,
+            cache_write_input_tokens: 0,
+        })
+    );
+    let (_, allocations) = crate::test_allocation_counter::count_allocations(|| {
+        shared.observe_reported_usage(0, 0, 0, 0);
+    });
+    assert_eq!(allocations, 0);
+
+    shared.observe_reported_usage(10, 7, 3, 1);
+    let expected = shared.reported_usage();
+    for (input, output, read, write) in [(10, 7, 3, 1), (9, 3, 1, 0)] {
+        let (_, allocations) = crate::test_allocation_counter::count_allocations(|| {
+            shared.observe_reported_usage(input, output, read, write);
+        });
+        assert_eq!(shared.reported_usage(), expected);
+        assert_eq!(allocations, 0);
+    }
+
+    shared.observe_reported_usage(10, 7, u64::MAX, 1);
+    let corrected = Some(ReportedAiUsage {
+        input_tokens: 10,
+        output_tokens: 7,
+        cache_read_input_tokens: 0,
+        cache_write_input_tokens: 0,
+    });
+    assert_eq!(shared.reported_usage(), corrected);
+    let (_, allocations) = crate::test_allocation_counter::count_allocations(|| {
+        shared.observe_reported_usage(10, 7, u64::MAX, 1);
+    });
+    assert_eq!(shared.reported_usage(), corrected);
+    assert_eq!(allocations, 0);
+}

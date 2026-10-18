@@ -618,12 +618,15 @@ impl AiUsageShared {
             // detail so cost cannot exceed the provider-reported input total.
             (0, 0)
         };
-        self.reported_usage.store(Some(Arc::new(ReportedAiUsage {
+        let next = ReportedAiUsage {
             input_tokens: input,
             output_tokens: output,
             cache_read_input_tokens: cache_read_input,
             cache_write_input_tokens: cache_write_input,
-        })));
+        };
+        if current != Some(next) {
+            self.reported_usage.store(Some(Arc::new(next)));
+        }
     }
 }
 

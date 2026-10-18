@@ -3919,3 +3919,26 @@ Fresh verification passed 87 network-free tests: 33 native Anthropic, 50 usage
 and 4 AI response tests. Formatting, workspace check/Clippy, seven repository
 guards and diff hygiene passed. Existing warnings remain outside changed code.
 No live provider or throughput benchmark was run.
+
+
+## Unchanged reported-usage publication
+
+observe_reported_usage now compares the fully normalized next value with the
+current optional snapshot and publishes a new Arc only when they differ. The
+private ArcSwap remains the sole immutable multi-field publication owner; readers
+receive copied values and no consumer depends on repeated store notifications
+or Arc identity. Production writers remain sequential response processors.
+
+High-water merging, checked optional-cache normalization and the observation-off
+gate retain their order. None still differs from an initial all-zero reported
+snapshot. Separate accounting_snapshot reads and quota notifications are unchanged.
+The new allocation regression covers repeated zero, identical and lower snapshots,
+then invalid merged cache detail clearing an existing valid detail and repeating
+that normalized result. Unchanged warmed observations allocate no new snapshot;
+changed observations still publish normally. No concurrency-policy or throughput
+improvement is claimed.
+
+Fresh verification passed 140 network-free tests: 51 usage, 33 native Anthropic
+and 56 Chat-to-Anthropic conversion tests. Formatting, workspace check/Clippy,
+seven repository guards and diff hygiene passed. Existing warnings remain
+outside changed code. No live provider or throughput benchmark was run.
