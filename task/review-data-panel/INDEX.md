@@ -28,6 +28,7 @@ destination.
 
 ## Deferred decisions
 
+- [Quota admission concurrency](quota-02-admission-concurrency.md)
 - [Quota worker future representation](quota-01-worker-future-representation.md)
 - [Publication-time global/Gateway plugin lists](early-01-precompute-plugin-lists.md)
 - [Cache policy fixture verification failure](verification-01-cache-policy-fixture.md)
@@ -3841,3 +3842,19 @@ Fresh verification passed 56 network-free tests: 27 quota and 29 shared Redis
 tests. Formatting, workspace check/Clippy, seven repository guards and diff
 hygiene passed. Existing warnings remain outside changed code. No live Redis
 or throughput benchmark was run for this batch.
+
+
+## Quota admission scheduling audit
+
+Inspected serial Redis admission, maximum-denial retry aggregation, immediate
+error exits and the enclosing admission/throttle budgets. Admission Lua reads
+without quota-key mutation, but parallelizing up to eight validated targets
+changes observation times, failure-path command issuance and deadline outcomes.
+Existing concurrent settlement does not establish admission equivalence. The
+tradeoff and required acceptance are recorded in
+[quota-02](quota-02-admission-concurrency.md); runtime and tests remain unchanged.
+
+Fresh verification passed 56 network-free tests: 27 quota and 29 shared Redis
+tests. Formatting, workspace check/Clippy, agent-document validation and diff
+hygiene passed. Existing warnings remain outside this documentation-only batch.
+No live Redis, concurrency benchmark or pool-pressure measurement was performed.
