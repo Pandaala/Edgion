@@ -2042,3 +2042,16 @@ unchanged. Independent plan review passed.
 Formatting, workspace check/Clippy and agent-document validation passed.
 Independent final documentation review passed. No runtime test or benchmark
 was run for this documentation-only batch.
+
+## DSL outbound header vector capacity
+
+Http.call reserves the temporary request-header vector from the existing Map's
+actual length before consuming its entries. Successful calls avoid vector growth;
+empty maps and absent headers retain zero capacity. Traversal, value conversion,
+Body framing checks and error order are unchanged. Rejected maps now reserve tuple
+storage earlier, proportional to their already-owned entries; payload copying is
+unchanged. Independent plan review passed. No new helper, network behavior or
+throughput claim is introduced.
+Fresh verification passed all 500 Gateway DSL tests, formatting, workspace
+check/Clippy and seven repository guards. Remaining warnings are outside the
+changed source. Independent final review passed.

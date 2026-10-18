@@ -1547,6 +1547,7 @@ impl Vm {
         if let Some(hv) = headers_val {
             match hv {
                 Value::Map(m) => {
+                    request_headers.reserve(m.len());
                     for (name, value) in *m {
                         if opaque_reader.is_some()
                             && (name.eq_ignore_ascii_case("content-length")
