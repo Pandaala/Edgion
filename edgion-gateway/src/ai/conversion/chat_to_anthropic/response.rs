@@ -235,14 +235,16 @@ impl AnthropicResponseProcessor {
                 self.usage_shared.mark_observation_unavailable();
             }
         }
-        let retry_after = response
-            .headers
-            .get("retry-after")
-            .and_then(|value| value.to_str().ok())
-            .filter(|value| {
-                (self.unary.is_none() || (original_status == 429 && value.len() <= 64)) && valid_retry_after(value)
-            })
-            .map(str::to_owned);
+        let retry_after = if original_status == 429 {
+            response
+                .headers
+                .get("retry-after")
+                .and_then(|value| value.to_str().ok())
+                .filter(|value| (self.unary.is_none() || value.len() <= 64) && valid_retry_after(value))
+                .map(str::to_owned)
+        } else {
+            None
+        };
 
         let error = match original_status {
             400 => Some(PROVIDER_INVALID_REQUEST),

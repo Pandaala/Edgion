@@ -1267,3 +1267,67 @@ fn fixed_error_bodies_preserve_wire_bytes_without_allocation() {
         assert_eq!(allocations, 0);
     }
 }
+
+#[test]
+fn retry_after_preserves_only_eligible_first_values_on_429() {
+    let cases = [
+        (b"12".to_vec(), true),
+        (b"Wed, 21 Oct 2015 07:28:00 GMT".to_vec(), true),
+        (b" \t12 ".to_vec(), true),
+        (vec![b'1'; 64], true),
+        (vec![b'1'; 65], true),
+        (b"invalid".to_vec(), false),
+        (Vec::new(), false),
+        (vec![0x80], false),
+    ];
+    for streaming in [false, true] {
+        for status in [200, 429, 503] {
+            for (value, valid) in &cases {
+                let (mut processor, _) = processor(streaming, false);
+                let mut response = header(
+                    status,
+                    if streaming {
+                        "text/event-stream"
+                    } else {
+                        "application/json"
+                    },
+                );
+                response
+                    .insert_header("retry-after", http::HeaderValue::from_bytes(value).unwrap())
+                    .unwrap();
+                processor.on_response_header(&mut response);
+                assert_eq!(response.status.as_u16(), status);
+                let expected =
+                    (status == 429 && *valid && (streaming || value.len() <= 64)).then_some(value.as_slice());
+                assert_eq!(
+                    response.headers.get("retry-after").map(http::HeaderValue::as_bytes),
+                    expected
+                );
+            }
+        }
+        let (mut processor, _) = processor(streaming, false);
+        let mut response = header(429, "application/json");
+        response.append_header("retry-after", "invalid").unwrap();
+        response.append_header("retry-after", "12").unwrap();
+        processor.on_response_header(&mut response);
+        assert!(!response.headers.contains_key("retry-after"));
+    }
+}
+
+#[test]
+fn non_429_retry_after_has_no_extra_normalization_allocation() {
+    for status in [200, 503] {
+        let mut counts = Vec::new();
+        for name in ["server", "retry-after"] {
+            let (mut processor, _) = processor(true, false);
+            let mut response = header(status, "text/event-stream");
+            response.insert_header(name, "12345678901234567890").unwrap();
+            let (_, allocations) = crate::test_allocation_counter::count_allocations(|| {
+                processor.on_response_header(&mut response);
+            });
+            assert!(!response.headers.contains_key("retry-after"));
+            counts.push(allocations);
+        }
+        assert_eq!(counts[0], counts[1], "status {status}");
+    }
+}

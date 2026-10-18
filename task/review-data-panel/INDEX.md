@@ -3550,3 +3550,26 @@ Fresh verification passed 63 tests: 27 Anthropic response, 12 canonical SSE and
 24 semantic response tests. Formatting, workspace check/Clippy, seven repository
 guards, post-update agent-doc validation and diff hygiene passed. Existing
 warnings remain outside changed code; no live provider benchmark was run.
+
+## Anthropic Retry-After snapshot gating
+
+Response normalization now extracts Retry-After only for an original 429, the
+only upstream status mapped to the fixed rate-limit response that reinserts it.
+This skips discarded parsing and String construction on streaming non-429
+responses. The 429 path retains first-value selection, text validation, original
+whitespace, unary's 64-byte cap and owned snapshot before provider headers clear.
+The early unavailable branch, unary header observation, status mapping and
+subsequent response normalization remain unchanged.
+
+New cases cover streaming and unary paths across 200/429/503 with numeric and
+date values, surrounding whitespace, 64/65-byte values, invalid/empty/opaque
+values and an invalid first duplicate. An equal-header-count allocation check
+compares ordinary discarded metadata with Retry-After for streaming 200 and 503;
+it verifies there is no additional normalization allocation for the unused field.
+Fixture creation is excluded; the whole normalization callback still allocates.
+No throughput improvement or change to Retry-After policy is claimed.
+
+Fresh verification passed 29 Anthropic response and 12 canonical SSE tests,
+formatting, workspace check/Clippy and seven repository guards. Post-update
+agent-doc validation and diff hygiene passed. Existing warnings remain outside
+changed code. These are network-free unit checks, not a live provider run.
