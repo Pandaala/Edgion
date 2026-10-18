@@ -219,17 +219,13 @@ impl ProxyRewrite {
     }
 
     /// Build final URI with original query string preserved
-    fn build_uri_with_query(&self, new_path: &str, original_query: Option<&str>) -> String {
-        match original_query {
-            Some(q) if !q.is_empty() => {
-                if new_path.contains('?') {
-                    format!("{}&{}", new_path, q)
-                } else {
-                    format!("{}?{}", new_path, q)
-                }
-            }
-            _ => new_path.to_string(),
+    fn build_uri_with_query(&self, mut new_path: String, original_query: Option<&str>) -> String {
+        if let Some(q) = original_query.filter(|q| !q.is_empty()) {
+            new_path.reserve(q.len() + 1);
+            new_path.push(if new_path.contains('?') { '&' } else { '?' });
+            new_path.push_str(q);
         }
+        new_path
     }
 
     /// Rewrite URI using simple template or regex
@@ -244,7 +240,7 @@ impl ProxyRewrite {
         // uri takes priority over regex_uri
         if let Some(ref new_uri) = self.config.uri {
             let resolved = self.resolve_variables(new_uri, original_path, session, captures, TemplateContext::Uri);
-            let final_uri = self.build_uri_with_query(&resolved, original_query);
+            let final_uri = self.build_uri_with_query(resolved, original_query);
 
             if let Err(_e) = session.set_upstream_uri(&final_uri) {
                 plugin_log.push_err("uri rewrite fail");
@@ -263,7 +259,7 @@ impl ProxyRewrite {
                     }
                 }
                 let result = self.resolve_variables(&result, original_path, session, None, TemplateContext::Uri);
-                let final_uri = self.build_uri_with_query(&result, original_query);
+                let final_uri = self.build_uri_with_query(result, original_query);
 
                 if let Err(_e) = session.set_upstream_uri(&final_uri) {
                     plugin_log.push_err("uri rewrite fail");

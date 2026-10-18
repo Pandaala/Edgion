@@ -314,6 +314,29 @@ fn test_url_encode() {
 }
 
 #[test]
+fn query_assembly_preserves_bytes_and_reuses_owned_path() {
+    let plugin = plugin(&ProxyRewriteConfig::default());
+    for (path, query, expected) in [
+        ("/new", None, "/new"),
+        ("/new?fixed=1", Some(""), "/new?fixed=1"),
+        ("/new", Some("x=a%20b&x=%26"), "/new?x=a%20b&x=%26"),
+        ("/new?fixed=1", Some("x=2"), "/new?fixed=1&x=2"),
+        ("/new?", Some("x=2"), "/new?&x=2"),
+        ("", Some("x=2"), "?x=2"),
+    ] {
+        let mut owned = String::with_capacity(128);
+        owned.push_str(path);
+        let pointer = owned.as_ptr();
+        let capacity = owned.capacity();
+        let result = plugin.build_uri_with_query(owned, query);
+        assert_eq!(result, expected);
+        assert_eq!(result.as_ptr(), pointer);
+        assert_eq!(result.capacity(), capacity);
+        assert_eq!(plugin.build_uri_with_query(path.to_owned(), query), expected);
+    }
+}
+
+#[test]
 fn dollar_restoration_transfers_plain_output_and_preserves_sentinels() {
     let mut plain = String::with_capacity(128);
     plain.push_str("/plain/$unknown/caf%C3%A9");

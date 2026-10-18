@@ -78,6 +78,13 @@ retain their existing behavior. The direct restoration test checks output and
 allocation identity, while the existing both-context and sink tests guard stage
 semantics. This does not remove all intermediate substitution allocations.
 
+Final URI query assembly also consumes the resolved path String. Absent or empty
+original queries return it unchanged; nonempty queries append the existing `?`
+or `&` separator and literal query bytes. Spare capacity is reused, otherwise
+the buffer may grow. Direct tests cover duplicate/encoded query fields, an
+existing query, a trailing question mark and empty paths without normalizing
+these inputs; both template and regex URI sinks retain their existing tests.
+
 ## Resolution references
 
 - `ARCH-037` — final-stage original-span replacement and escaped-dollar boundary.

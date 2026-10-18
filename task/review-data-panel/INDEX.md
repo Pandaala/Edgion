@@ -1780,3 +1780,16 @@ No full suite, live integration or throughput benchmark ran for this batch.
 Fresh ProxyRewrite tests passed 18 cases. Formatting, workspace check/Clippy and
 seven repository guards passed, with existing warnings outside changed files.
 Independent final review passed.
+
+## ProxyRewrite final URI query assembly
+
+Both URI rewrite branches move the resolved path into final query assembly.
+Absent/empty queries reuse it unchanged; nonempty queries append literal bytes
+with the existing separator rule. Available capacity is reused and growth
+remains possible. Independent plan review passed. Direct tests compare exact
+output with ordinary and preallocated strings, including encoded/duplicate
+fields, existing queries, trailing question marks and empty paths.
+No full suite, live integration or throughput benchmark ran for this batch.
+Fresh ProxyRewrite tests passed 19 cases. Formatting, workspace check/Clippy and
+seven repository guards passed, with existing warnings outside changed files.
+Independent final review passed.
