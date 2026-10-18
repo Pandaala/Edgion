@@ -44,8 +44,8 @@ use edgion_resources::resources::edgion_plugins::plugin_configs::BandwidthLimitC
 ///
 /// Controls downstream response bandwidth by introducing delays between body chunks.
 pub struct BandwidthLimit {
-    /// Rate limit in bytes per second
-    rate_bps: u64,
+    /// Parsed bytes per second, converted once for chunk-delay arithmetic.
+    rate_bps: f64,
 }
 
 impl BandwidthLimit {
@@ -62,7 +62,7 @@ impl BandwidthLimit {
     /// sentinel is only exercised by unit tests that build the plugin directly without
     /// going through the runtime validation gate.
     pub fn create(config: &BandwidthLimitConfig) -> Box<dyn UpstreamResponseBodyFilter> {
-        let rate_bps = config.parse_rate().unwrap_or(0);
+        let rate_bps = config.parse_rate().unwrap_or(0) as f64;
 
         Box::new(Self { rate_bps })
     }
@@ -79,14 +79,14 @@ impl UpstreamResponseBodyFilter for BandwidthLimit {
         _end_of_stream: bool,
         _session: &mut dyn PluginSession,
     ) -> Option<Duration> {
-        if self.rate_bps == 0 {
+        if self.rate_bps == 0.0 {
             return None;
         }
 
         if let Some(ref data) = body {
             let chunk_size = data.len();
             if chunk_size > 0 {
-                let delay_secs = chunk_size as f64 / self.rate_bps as f64;
+                let delay_secs = chunk_size as f64 / self.rate_bps;
                 return Some(Duration::from_secs_f64(delay_secs));
             }
         }

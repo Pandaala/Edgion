@@ -2342,3 +2342,18 @@ This is a rejected-input optimization, not a valid-traffic throughput claim.
 Fresh verification passed 26 response-filter tests, formatting, workspace
 check/Clippy and seven repository guards. Remaining warnings are outside changed
 code. Independent final review passed.
+
+## BandwidthLimit prepared arithmetic operand
+
+The concrete read-only body filter already parses its rate at construction and
+has no per-chunk state, allocation or logging. Its immutable denominator is now
+converted from the parsed u64 to f64 at construction as well, removing that
+repeated conversion from nonempty chunks. Division and Duration conversion remain
+unchanged; this does not replace division with reciprocal multiplication or alter
+per-response-stream scope. Independent plan review passed. A constructor/callback
+matrix compares the previous arithmetic for zero, small, power-of-two, precision
+boundary and maximum rates across empty/nonempty chunks and both EOS flags.
+No generated-code or throughput benchmark is claimed.
+Fresh verification passed 4 BandwidthLimit and 26 response-filter tests,
+formatting, workspace check/Clippy and seven repository guards. Remaining
+warnings are outside changed code. Independent final review passed.
