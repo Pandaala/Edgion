@@ -1082,6 +1082,57 @@ async fn multi_chunk_spill_materializes_directly_after_mutation() {
     assert!(!view.is_materialized());
 }
 
+#[test]
+fn memory_scan_borrows_chunks_without_promoting_unique_bytes() {
+    struct BorrowedScanner {
+        address: usize,
+        seen: usize,
+    }
+
+    impl RawBodyScanner for BorrowedScanner {
+        type Output = usize;
+
+        fn push(&mut self, chunk: &[u8]) -> Result<ScanControl, BodyOperationError> {
+            assert_eq!(chunk.as_ptr() as usize, self.address + self.seen);
+            assert!(!chunk.is_empty() && chunk.len() <= SCAN_CHUNK_SIZE);
+            assert!(chunk.iter().all(|byte| *byte == b'x'));
+            self.seen += chunk.len();
+            Ok(ScanControl::Continue)
+        }
+
+        fn finish(self) -> Result<usize, BodyOperationError> {
+            Ok(self.seen)
+        }
+    }
+
+    let len = SCAN_CHUNK_SIZE * 2 + 17;
+    for source_range in [false, true] {
+        let offset = if source_range { 19 } else { 0 };
+        // Unique boxed storage exposes the first Bytes::slice promotion cost.
+        let bytes = Bytes::from(vec![b'x'; offset + len].into_boxed_slice());
+        let address = bytes.as_ptr() as usize + offset;
+        let segment = if source_range {
+            Segment::SourceRange {
+                source: Arc::new(BodySource::Memory(bytes)),
+                offset: offset as u64,
+                len: len as u64,
+            }
+        } else {
+            Segment::Inline(bytes)
+        };
+        let snapshot = Arc::new(BodySnapshot::from_segments(vec![segment]).unwrap());
+        let scanner = BorrowedScanner { address, seen: 0 };
+        let (result, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+            scan_snapshot_owned(Arc::clone(&snapshot), scanner, len as u64, None)
+        });
+        let result = result.unwrap();
+        assert_eq!(result.bytes_scanned, len as u64);
+        assert_eq!(result.value, len);
+        assert_eq!(allocations.calls, 0);
+        assert_eq!(allocations.requested_bytes, 0);
+    }
+}
+
 struct SlowCountingScanner {
     chunks: Arc<std::sync::atomic::AtomicUsize>,
 }

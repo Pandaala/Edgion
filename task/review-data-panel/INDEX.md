@@ -3079,6 +3079,32 @@ fail-closed admission chain; no baseline binary was rerun. Formatting, workspace
 check/Clippy and seven repository guards passed. Clippy warnings remain outside
 changed code. The known fixture failure is retained, not skipped or repaired here.
 
+## Borrowed memory chunks in request-body scans
+
+scan_snapshot_owned now reuses the existing checked memory-segment projection
+and passes borrowed local slices to synchronous scanner callbacks. The owned
+immutable snapshot pins Inline and memory SourceRange bytes throughout scanning;
+owned reader/replay chunks and disk scratch are unchanged. Cancellation and
+budget checks, chunk accounting, Stop and finish order remain in place.
+
+Private production constructors establish valid ranges, checked slicing narrows
+them, and normalization only merges adjacent ranges of the same source. For
+these admitted snapshots behavior is unchanged. A fabricated invalid internal
+SourceRange can now fail full-range validation earlier than an early-stopping
+scanner; identical behavior for malformed private constructions is not claimed.
+
+The new regression checks content, backing addresses and zero scan allocations
+across multiple chunks for unique Inline bytes and a nonzero-offset SourceRange.
+Against the original production code it failed in the first Inline case with one
+allocation; that baseline execution did not reach the second case. Both cases
+pass after the change. This avoids temporary Bytes ownership and its possible
+first-share allocation, not payload copying that was already absent. No overall
+CPU or throughput gain is measured.
+
+Independent plan and source reviews passed. All 67 storage tests, formatting,
+workspace check/Clippy and seven repository guards passed; warnings remain
+outside changed code.
+
 ## Lazy scan ownership for cached request-body SHA-256
 
 BodyStorageView::sha256_scan now clones the scan snapshot only inside the

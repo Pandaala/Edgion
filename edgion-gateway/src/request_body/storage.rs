@@ -1297,11 +1297,21 @@ where
                     scanner.push(&disk_scratch)?
                 }
                 _ => {
-                    let chunk = read_segment_chunk(segment, local_offset, wanted)?;
+                    let memory = BodySnapshotReader::memory_segment(segment)
+                        .map_err(BodyOperationError::Body)?
+                        .ok_or(BodyOperationError::Body(BodyReadError::Incomplete))?;
+                    let start = usize::try_from(local_offset)
+                        .map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))?;
+                    let end = start
+                        .checked_add(wanted)
+                        .ok_or(BodyOperationError::Body(BodyReadError::Incomplete))?;
+                    let chunk = memory
+                        .get(start..end)
+                        .ok_or(BodyOperationError::Body(BodyReadError::Incomplete))?;
                     if chunk.is_empty() {
                         return Err(BodyOperationError::Body(BodyReadError::Incomplete));
                     }
-                    scanner.push(&chunk)?
+                    scanner.push(chunk)?
                 }
             };
             let chunk_len = wanted as u64;
