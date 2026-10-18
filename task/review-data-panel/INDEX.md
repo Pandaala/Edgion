@@ -1207,3 +1207,22 @@ tests passed 60. Formatting, workspace check/Clippy and seven repository guards
 passed; existing warnings remain outside changed files. Independent final source
 and record reviews passed. No full integration
 suite or throughput benchmark ran.
+
+## Native redirect Location assembly
+
+RequestRedirect now borrows original/full-replacement paths and writes scheme,
+host, optional decimal port, path and nonempty query into one preallocated
+Location String. Prefix replacement retains its canonical helper and owned
+result. The port allowance reserves six bytes for any u16 rather than claiming
+exact capacity. Host normalization, scheme/port selection, query bytes, path
+semantics and missing-prefix failure remain unchanged.
+
+Independent plan review passed. Pure-builder tests cover ordinary/IPv6/missing
+hosts, default and nondefault listener ports including 0 and 65535, path modes
+and absent/empty/raw queries. They measure one allocation for original/full paths,
+two with prefix replacement, and zero when prefix context is missing. These
+counts exclude callback/response-header/logging work. All 62 native Gateway API
+filter tests passed, along with formatting, workspace check/Clippy and seven
+repository guards. Existing Clippy warnings remain outside changed files.
+Independent final source and record reviews passed.
+No full integration suite or throughput benchmark ran.

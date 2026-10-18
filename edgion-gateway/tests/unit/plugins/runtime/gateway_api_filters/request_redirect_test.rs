@@ -266,3 +266,89 @@ async fn redirect_borrows_raw_query_before_writing_owned_location() {
         );
     }
 }
+
+#[test]
+fn location_builder_uses_one_output_allocation_plus_prefix_result() {
+    let paths = [
+        (None, "/users/alice/orders", 1),
+        (
+            Some(HTTPPathModifier {
+                modifier_type: HTTPPathModifierType::ReplaceFullPath,
+                replace_full_path: Some("/new".into()),
+                replace_prefix_match: None,
+            }),
+            "/new",
+            1,
+        ),
+        (
+            Some(HTTPPathModifier {
+                modifier_type: HTTPPathModifierType::ReplacePrefixMatch,
+                replace_full_path: None,
+                replace_prefix_match: Some("/v2/".into()),
+            }),
+            "/v2/orders",
+            2,
+        ),
+        (
+            Some(HTTPPathModifier {
+                modifier_type: HTTPPathModifierType::ReplacePrefixMatch,
+                replace_full_path: None,
+                replace_prefix_match: Some("".into()),
+            }),
+            "/orders",
+            2,
+        ),
+    ];
+    for (path, expected_path, expected_allocations) in paths {
+        let filter = RequestRedirectFilter::try_new(&HTTPRequestRedirectFilter {
+            scheme: None,
+            hostname: None,
+            path,
+            port: None,
+            status_code: None,
+        })
+        .unwrap();
+        for (host, expected_host) in [
+            (None, "localhost"),
+            (Some("example.com:8080"), "example.com"),
+            (Some("[2001:db8::1]:8080"), "[2001:db8::1]"),
+        ] {
+            for (port, port_suffix) in [(443, ""), (0, ":0"), (9, ":9"), (10, ":10"), (65535, ":65535")] {
+                for query in [None, Some(""), Some("x=a%26b&x=+&flag")] {
+                    let query_suffix = query
+                        .filter(|query| !query.is_empty())
+                        .map(|query| format!("?{query}"))
+                        .unwrap_or_default();
+                    let expected = format!("https://{expected_host}{port_suffix}{expected_path}{query_suffix}");
+                    let build =
+                        || filter.build_location("https", host, "/users/alice/orders", query, Some("/users/:id"), port);
+                    drop(build());
+                    let (actual, allocations) = crate::test_allocation_counter::count_allocations(build);
+                    assert_eq!(actual.as_deref(), Some(expected.as_str()));
+                    assert_eq!(allocations, expected_allocations);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn missing_prefix_context_does_not_allocate_location() {
+    let filter = RequestRedirectFilter::try_new(&HTTPRequestRedirectFilter {
+        scheme: None,
+        hostname: None,
+        path: Some(HTTPPathModifier {
+            modifier_type: HTTPPathModifierType::ReplacePrefixMatch,
+            replace_full_path: None,
+            replace_prefix_match: Some("/v2".into()),
+        }),
+        port: None,
+        status_code: None,
+    })
+    .unwrap();
+    let (location, allocations) = crate::test_allocation_counter::count_allocations(|| {
+        filter.build_location("https", Some("example.com"), "/users/alice", Some("x=1"), None, 8443)
+    });
+    assert_eq!(location, None);
+    assert_eq!(allocations, 0);
+}

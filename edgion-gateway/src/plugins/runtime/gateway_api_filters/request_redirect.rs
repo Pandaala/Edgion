@@ -2,6 +2,9 @@
 //!
 //! This filter redirects requests to another location.
 
+use std::borrow::Cow;
+use std::fmt::Write;
+
 use async_trait::async_trait;
 use pingora_http::ResponseHeader;
 
@@ -42,7 +45,7 @@ impl RequestRedirectFilter {
     /// - Any other port is always included
     ///
     /// The original query string is preserved (appended as `?<query>` when
-    /// non-empty), matching `URLRewriteFilter::rewrite_path` and the route-level
+    /// non-empty), matching `URLRewriteFilter::rewritten_uri` and the route-level
     /// HTTP→HTTPS redirect; the Gateway API redirect filter has no query modifier,
     /// so the client's query must survive the redirect.
     fn build_location(
@@ -75,27 +78,36 @@ impl RequestRedirectFilter {
             listener_port
         };
 
-        let port_str = if final_port == default_port_for_scheme(scheme) {
-            String::new()
-        } else {
-            format!(":{}", final_port)
-        };
-
-        // Handle path modification
+        let include_port = final_port != default_port_for_scheme(scheme);
         let path = match self.config.path() {
-            Some(PreparedPathModifier::ReplaceFullPath(replacement)) => replacement.clone(),
+            Some(PreparedPathModifier::ReplaceFullPath(replacement)) => Cow::Borrowed(replacement.as_str()),
             Some(PreparedPathModifier::ReplacePrefixMatch(replacement)) => {
-                replace_prefix_match(original_path, matched_path?, replacement)
+                Cow::Owned(replace_prefix_match(original_path, matched_path?, replacement))
             }
-            None => original_path.to_string(),
+            None => Cow::Borrowed(original_path),
         };
-
-        let location = format!("{}://{}{}{}", scheme, hostname, port_str, path);
-
-        match original_query {
-            Some(q) if !q.is_empty() => Some(format!("{}?{}", location, q)),
-            _ => Some(location),
+        let query = original_query.filter(|query| !query.is_empty());
+        // A colon and at most five decimal digits cover every u16 port.
+        let capacity = scheme.len()
+            + 3
+            + hostname.len()
+            + path.len()
+            + if include_port { 6 } else { 0 }
+            + query.map_or(0, |query| query.len() + 1);
+        let mut location = String::with_capacity(capacity);
+        location.push_str(scheme);
+        location.push_str("://");
+        location.push_str(hostname);
+        if include_port {
+            // Writing a u16 into a String is infallible.
+            let _ = write!(location, ":{final_port}");
         }
+        location.push_str(&path);
+        if let Some(query) = query {
+            location.push('?');
+            location.push_str(query);
+        }
+        Some(location)
     }
 }
 

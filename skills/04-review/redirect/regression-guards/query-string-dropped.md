@@ -87,3 +87,20 @@ query cases. The real-adapter test current_raw_query_borrows_live_uri_without_co
 checks pointer identity, zero accessor allocations and live URI changes against
 the independent frozen cache. This eliminates one nonempty query copy per
 transform, not allocations for the final URI/Location or response construction.
+
+## Native Location assembly
+
+RequestRedirect borrows the original or full-replacement path, retaining the
+canonical owned prefix-replacement result only when needed. It reserves one
+output String for scheme, authority, optional decimal port, path and nonempty
+query, then writes into that buffer. The port allowance is six bytes for a
+colon plus any u16, so small ports can leave spare capacity. This is sufficient
+capacity, not an exact retained-byte claim.
+
+Pure-builder allocation tests cover default/nondefault listener ports,
+IPv6/ordinary/missing hosts, query omission/raw preservation and path modes.
+Plain and full-replacement paths require one output allocation; prefix paths
+also retain the existing helper's one allocation. Missing prefix context returns
+None without constructing the output. These counts exclude response headers,
+logging and callback work, and establish no throughput result. Scheme selection,
+explicit port validation and shared host/path rules remain unchanged.
