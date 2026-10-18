@@ -17,6 +17,8 @@
 //! receives an `Option<&ResolvedSecrets>` map (keyed by `"ns/name:key"`) and
 //! passes it to the canonical template renderer with an explicit Secret capability.
 
+use std::borrow::Cow;
+
 use edgion_resources::resources::common::external_http::ResolvedSecrets;
 use edgion_resources::resources::common::outbound_request::{
     BodySpec, CustomSource, ListFields, OutboundRequestSpec, PresencePolicy,
@@ -293,31 +295,33 @@ impl CompiledRequest {
             Some(path_spec) => {
                 if path_spec.allow_override {
                     if let Some(ov) = path_override {
-                        ov.to_string()
+                        Cow::Borrowed(ov)
                     } else {
-                        evaluate_template(&path_spec.template, context, resolved)?
+                        Cow::Owned(evaluate_template(&path_spec.template, context, resolved)?)
                     }
                 } else {
-                    evaluate_template(&path_spec.template, context, resolved)?
+                    Cow::Owned(evaluate_template(&path_spec.template, context, resolved)?)
                 }
             }
             // No path spec: use the frozen entry-time path.
-            None => context
-                .request_session()
-                .map_err(|error| error.to_string())?
-                .get_request_path()
-                .to_string(),
+            None => Cow::Borrowed(
+                context
+                    .request_session()
+                    .map_err(|error| error.to_string())?
+                    .get_request_path(),
+            ),
         };
 
         // ── 2. Determine method ───────────────────────────────────────────
         let final_method = match &self.method {
-            Some(method_tpl) => evaluate_template(method_tpl, context, resolved)?,
-            None => context
-                .request_session()
-                .map_err(|error| error.to_string())?
-                .get_request_method()
-                .ok_or_else(|| "missing incoming request method".to_string())?
-                .to_string(),
+            Some(method_tpl) => Cow::Owned(evaluate_template(method_tpl, context, resolved)?),
+            None => Cow::Borrowed(
+                context
+                    .request_session()
+                    .map_err(|error| error.to_string())?
+                    .get_request_method()
+                    .ok_or_else(|| "missing incoming request method".to_string())?,
+            ),
         };
 
         // ── 3. Collect query args ─────────────────────────────────────────

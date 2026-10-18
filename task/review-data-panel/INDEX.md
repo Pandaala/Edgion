@@ -2204,3 +2204,18 @@ alias removed it. Fresh verification on the corrected source passed all 117
 shared outbound tests, formatting and workspace check/Clippy; seven repository
 guards passed. Remaining warnings are outside changed source. Independent final
 review and the follow-up test-only correction review passed.
+
+## Outbound path and method input borrowing
+
+CompiledRequest keeps rendered path/method results owned while borrowing explicit
+path overrides and frozen entry path/method values through local Cow values.
+The synchronous builder reads the same accessors in the same order, retaining
+trusted-context capability errors and the missing-entry-method error. Final URL
+and Method construction remain owned. Independent plan review passed. Existing
+actual-builder tests cover frozen versus current values, missing entry metadata,
+trusted capabilities and path overrides. This removes temporary copies only on
+the borrowed branches; template allocation and final request ownership remain,
+and no throughput benchmark is claimed.
+Fresh verification passed all 117 shared outbound tests, formatting, workspace
+check/Clippy and seven repository guards. Remaining warnings are outside changed
+source. Independent final review passed.
