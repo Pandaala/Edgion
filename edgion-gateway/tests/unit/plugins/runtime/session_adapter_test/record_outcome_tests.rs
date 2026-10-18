@@ -2995,3 +2995,28 @@ async fn composite_key_existence_avoids_value_construction() {
         }
     }
 }
+
+#[tokio::test]
+async fn composite_key_value_allocates_exact_output_once() {
+    let mut session = test_session().await;
+    let mut ctx = EdgionHttpContext::default();
+    let paths = [
+        String::new(),
+        "/api".to_string(),
+        "/café".to_string(),
+        format!("/{}", "x".repeat(8192)),
+    ];
+    for remote_ip in ["", "192.0.2.1", "2001:db8::1"] {
+        ctx.request_info.remote_ip = remote_ip.to_string();
+        for path in &paths {
+            ctx.request_info.normalized_current_path = path.clone();
+            let expected = (!remote_ip.is_empty()).then(|| format!("{remote_ip}:{path}"));
+            let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            let (value, stats) =
+                crate::test_allocation_counter::count_allocation_stats(|| adapter.key_get(&KeyGet::RemoteIpAndPath));
+            assert_eq!(value, expected);
+            assert_eq!(stats.calls, usize::from(value.is_some()));
+            assert_eq!(stats.requested_bytes, value.as_ref().map_or(0, String::len));
+        }
+    }
+}

@@ -987,3 +987,21 @@ Formatting, workspace check/Clippy and seven repository guards passed; existing
 warnings remain outside changed code. No full integration suite or throughput
 benchmark ran. Composite content consumers still allocate and remain open for
 further review; this does not establish allocation-free conditions in general.
+
+
+## Pre-sized owned composite keys
+
+The canonical RemoteIpAndPath accessor now reserves the exact output byte length
+and appends IP, colon and current normalized Path. Missing IP still returns None
+before reading Path; empty paths, IPv6 and UTF-8 retain identical bytes. Owned
+consumers, matching and keyed probability keep the same value contract.
+
+The real-adapter value/allocation matrix and existing composite-existence test
+passed (2 tests). The fixed source inventory passed (1), measuring a reduction
+from two allocations requesting 36 bytes to one requesting 19 bytes for its
+composite fixture. Shared conditions passed 67, HTTP common helpers passed 186,
+local/Redis rate limiters passed 28 and AI quota passed 27. Formatting, workspace
+check/Clippy and seven repository guards passed; warnings are outside changed
+code. Independent plan and final source reviews passed. No full integration suite
+or throughput benchmark ran. Composite values still require one owned allocation;
+this does not establish allocation-free conditions in general.

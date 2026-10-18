@@ -80,7 +80,7 @@ The other sources have different costs or lifetimes:
 | `TraceId`, `Host` | Borrow captured request identity | The standard W3C ID survives default-header suppression; Host uses the frozen normalized entry value, not the live header. |
 | `Query` | Borrows one decoded value from the lazily initialized entry-query cache | `get_query_param_ref` ties the value to the session read; the owned getter still copies for consumers requiring ownership. |
 | `Ctx` | Borrows the current context value | The short session borrow ends before later plugins set or remove variables. |
-| `RemoteIpAndPath` | KeyExist checks RemoteIp presence; value consumers still format the composite | A nonempty RemoteIp produces a value even with an empty Path; matching and hashing still need the composite contents. |
+| `RemoteIpAndPath` | KeyExist checks RemoteIp presence; value consumers construct one pre-sized owned composite | A nonempty RemoteIp produces a value even with an empty Path; matching and hashing still need the composite contents. |
 | `JwtClaimMatch` | Borrows context JSON, parses it, and creates scalar candidate strings | JWT/OIDC claim context may be changed by plugins; a cross-chunk parsed snapshot would need invalidation. |
 | `MtlsMatch` | Borrows `ClientCertInfo` and lazily selects string slices | The getter retains the existing certificate exposure gate; each synchronous evaluation owns only its short borrow. |
 | `TimeRange`, `Probability` | Reads current time or draws probability per evaluation; keyed probability reads its current key | Freezing the decision would change timing or sampling semantics. |
@@ -236,7 +236,7 @@ This is source-copy removal evidence, not a throughput or whole-condition claim.
 ## Composite-key existence
 
 KeyExist(RemoteIpAndPath) checks the current remote_ip borrow directly. The owned
-adapter returns None exactly when that string is empty; otherwise it formats
+adapter returns None exactly when that string is empty; otherwise it constructs
 ip:path even if the path is empty. Skipping value construction for presence does
 not skip a meaningful path-side effect: get_path reads the current normalized
 path from the request context. Negation still applies once after presence.
@@ -248,3 +248,21 @@ changing one context through absent, IPv4, IPv6 and absent-again inputs, each wi
 empty, ordinary and long paths. Results match owned KeyGet presence and predicate
 allocation counts remain zero. Composite content consumers and JWT parsing still
 allocate; no whole-condition-system compliance or throughput claim follows.
+
+
+## Composite-key owned construction
+
+The canonical owned accessor preallocates the total byte length of RemoteIp,
+one colon and the current normalized Path, then appends those borrowed slices.
+Empty RemoteIp still returns None before reading Path; a present IP and empty
+Path still yields ip:. IPv6 colons and UTF-8 bytes retain their original encoding.
+No owned API, matching, secret comparison or probability hashing changes.
+
+The real-adapter allocation regression covers absent, IPv4 and IPv6 inputs with
+empty, ordinary, UTF-8 and long paths. Every present result requests exactly its
+output length in one allocation; absent results allocate nothing. The historical
+source inventory above remains baseline evidence, not current composite cost.
+A fresh before/after run of its fixed fixture measured two allocations requesting
+36 bytes before this change and one requesting 19 bytes afterward.
+This removes formatter growth for this construction only, without a throughput
+or whole-condition allocation claim.

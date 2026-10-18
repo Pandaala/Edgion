@@ -2206,7 +2206,12 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                 if ip.is_empty() {
                     None
                 } else {
-                    Some(format!("{}:{}", ip, self.get_path()))
+                    let path = self.get_path();
+                    let mut value = String::with_capacity(ip.len() + 1 + path.len());
+                    value.push_str(ip);
+                    value.push(':');
+                    value.push_str(path);
+                    Some(value)
                 }
             }
         }
