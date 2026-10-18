@@ -302,6 +302,43 @@ fn response_sanitizer_rejects_non_text_connection_atomically() {
 }
 
 #[test]
+fn response_sanitizer_non_text_field_skips_later_nomination_allocations() {
+    let mut short = response(Some("128"));
+    short
+        .append_header("connection", http::HeaderValue::from_bytes(&[0xff]).unwrap())
+        .unwrap();
+    let mut extended = short.clone();
+    for name in [
+        "x-private-first",
+        "x-private-second",
+        "x-private-third",
+        "x-private-fourth",
+    ] {
+        extended.append_header("connection", name).unwrap();
+        extended.insert_header(name, "retained-on-failure").unwrap();
+    }
+    let short_before = short.headers.clone();
+    let extended_before = extended.headers.clone();
+    let (short_result, short_stats) =
+        crate::test_allocation_counter::count_allocation_stats(|| sanitize_forwarded_response_headers(&mut short));
+    let (extended_result, extended_stats) =
+        crate::test_allocation_counter::count_allocation_stats(|| sanitize_forwarded_response_headers(&mut extended));
+
+    assert!(matches!(
+        short_result.unwrap_err().etype(),
+        ErrorType::InvalidHTTPHeader
+    ));
+    assert!(matches!(
+        extended_result.unwrap_err().etype(),
+        ErrorType::InvalidHTTPHeader
+    ));
+    assert_eq!(short.headers, short_before);
+    assert_eq!(extended.headers, extended_before);
+    assert_eq!(extended_stats.calls, short_stats.calls);
+    assert_eq!(extended_stats.requested_bytes, short_stats.requested_bytes);
+}
+
+#[test]
 fn response_sanitizer_preserves_switching_protocols() {
     let mut response = ResponseHeader::build(101, None).unwrap();
     response.append_header("connection", "Upgrade, X-Handshake").unwrap();

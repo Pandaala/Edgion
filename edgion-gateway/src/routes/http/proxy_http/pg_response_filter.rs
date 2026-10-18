@@ -25,8 +25,8 @@ fn is_connection_option_tchar(byte: u8) -> bool {
 
 /// Remove connection-scoped metadata before forwarding a response header.
 ///
-/// Every repeated `Connection` field is inspected before the header map is
-/// mutated. This keeps an invalid field fail-closed and atomic while the
+/// All repeated `Connection` fields must validate before the header map is
+/// mutated. The first invalid field fails closed without mutation while the
 /// shared parser owns token splitting and HeaderName owns case normalization.
 /// A 101 response is an upgrade handshake and deliberately retains its
 /// connection metadata.
@@ -38,12 +38,13 @@ fn sanitize_forwarded_response_headers(response: &mut ResponseHeader) -> pingora
 
     let had_transfer_encoding = response.headers.contains_key(http::header::TRANSFER_ENCODING);
     let mut dynamic_names = SmallVec::<[HeaderName; 2]>::new();
-    let mut invalid_connection_value = false;
 
     for value in response.headers.get_all(http::header::CONNECTION) {
         let Ok(value) = value.to_str() else {
-            invalid_connection_value = true;
-            continue;
+            return Err(pingora_core::Error::explain(
+                pingora_core::ErrorType::InvalidHTTPHeader,
+                "invalid upstream Connection header",
+            ));
         };
         for option in connection_option_tokens(value) {
             if !option.bytes().all(is_connection_option_tchar) {
@@ -60,13 +61,6 @@ fn sanitize_forwarded_response_headers(response: &mut ResponseHeader) -> pingora
             };
             dynamic_names.push(name);
         }
-    }
-
-    if invalid_connection_value {
-        return Err(pingora_core::Error::explain(
-            pingora_core::ErrorType::InvalidHTTPHeader,
-            "invalid upstream Connection header",
-        ));
     }
 
     for name in &dynamic_names {

@@ -82,10 +82,12 @@ removing the nominated fields before forwarding.
     borrowed options case-insensitively before allocating retained `HeaderName`
     values; `HeaderName` normalizes their case. The retained list is removed
     only after all fields have been inspected.
-  - A non-text `Connection` value fails closed only after every repeated value
-    has been inspected, so the operation never leaves a partially sanitized
-    header map. Invalid ASCII nomination tokens are ignored while valid sibling
-    tokens are still honored.
+  - The first non-text `Connection` value fails closed without inspecting the
+    remaining suffix. No header mutation has happened, so the operation never
+    leaves a partially sanitized map. Successful mutation still requires all
+    repeated fields to validate. The former full scan after a definitive failure
+    was unnecessary for atomicity and could allocate unused nominations. Invalid
+    ASCII nomination tokens are ignored while valid sibling tokens are honored.
   - Interim 100/102/103 responses are sanitized before their early return. A
     101 upgrade response bypasses sanitization and keeps its handshake fields.
   - Ordinary final responses are sanitized before async response plugins and

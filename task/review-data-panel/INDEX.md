@@ -2326,3 +2326,19 @@ final header/Cookie construction still allocate; no throughput claim is made.
 Fresh verification passed 24 session-persistence and 11 upstream-response-filter
 tests, formatting, workspace check/Clippy and seven repository guards. Remaining
 warnings are outside changed code. Independent final review passed.
+
+## Response Connection rejection short-circuit
+
+The response sanitizer returns its existing fixed InvalidHTTPHeader error at the
+first non-text Connection field, avoiding unused name parsing and allocations in
+later fields. No header mutation occurs on failure; successful sanitization still
+validates every repeated field before removals. Invalid ASCII options, duplicate
+handling, 101 bypass and framing policy remain unchanged. Independent plan review
+passed. A prepared invalid-first fixture with and without later custom nominations
+checks equal error-path allocation calls/bytes and unchanged header maps. Existing
+invalid-middle and spilled-invalid-last cases remain. The owning knowledge page
+now distinguishes atomic mutation from unnecessarily exhausting a rejected input.
+This is a rejected-input optimization, not a valid-traffic throughput claim.
+Fresh verification passed 26 response-filter tests, formatting, workspace
+check/Clippy and seven repository guards. Remaining warnings are outside changed
+code. Independent final review passed.
