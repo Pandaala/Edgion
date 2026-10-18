@@ -2458,3 +2458,19 @@ Fresh verification passed 18 mutation, 18 streamed and 5 immediate-reply tests,
 formatting, workspace check/Clippy and seven repository guards. Remaining warnings
 are outside changed code. The owning header-fidelity knowledge page records the
 new name transfer boundary. No throughput improvement is claimed.
+
+## AiGuard evaluator decision parsing
+
+The request evaluator now borrows unescaped version/action tokens through serde
+Cow and sorts accepted replacement keys in place without stable-sort scratch.
+Escaped token decoding retains owned fallback. Strict request-shaped envelope
+fields, parsing/error precedence, duplicate rejection and replacement-byte caps
+are unchanged; returned replacement text remains owned. The request envelope
+stays separate from the response protocol to preserve its strict schema.
+Independent plan and code reviews passed. Tests cover plain pass/reject zero
+allocation, escaped actions and versions, malformed/error boundaries, 256 mixed
+request keys with exact text association, and duplicate/budget precedence.
+Fresh verification passed all 60 AiGuard request tests, formatting, workspace
+check/Clippy and seven repository guards. Remaining warnings are outside changed
+code. Optional payloads and escaped strings may still allocate; no whole-call
+allocation or throughput improvement is claimed.

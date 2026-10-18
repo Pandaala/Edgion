@@ -13,6 +13,7 @@
 //! combine with `deny_unknown_fields` — silently losing the strict parsing that
 //! is a security boundary.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -82,9 +83,11 @@ impl WirePart {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct DecisionEnvelope {
-    version: String,
-    action: String,
+struct DecisionEnvelope<'a> {
+    #[serde(borrow)]
+    version: Cow<'a, str>,
+    #[serde(borrow)]
+    action: Cow<'a, str>,
     #[serde(default)]
     replacements: Option<Vec<WireReplacement>>,
     #[serde(default)]
@@ -225,7 +228,7 @@ fn parse_decision(body: &[u8], max_replacement_bytes: usize) -> Result<GuardDeci
     if envelope.version != "v1" {
         return Err("evaluator bad version");
     }
-    match envelope.action.as_str() {
+    match envelope.action.as_ref() {
         "pass" if envelope.replacements.is_none() && envelope.code.is_none() && envelope.reason.is_none() => {
             Ok(GuardDecision::Pass)
         }
@@ -264,7 +267,7 @@ fn parse_decision(body: &[u8], max_replacement_bytes: usize) -> Result<GuardDeci
                 }
                 parsed.push((replacement.part.key(replacement.message_index), replacement.current));
             }
-            parsed.sort_by_key(|(key, _)| *key);
+            parsed.sort_unstable_by_key(|(key, _)| *key);
             if parsed.windows(2).any(|pair| pair[0].0 == pair[1].0) {
                 return Err("evaluator duplicate replacement");
             }
