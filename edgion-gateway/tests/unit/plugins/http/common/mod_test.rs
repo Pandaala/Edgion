@@ -139,3 +139,58 @@ fn compose_rate_limit_key_multi_source_is_length_prefixed() {
     let key = compose_rate_limit_key(&[Some("192.168.1.1".to_string()), Some("apikey123".to_string())]);
     assert_eq!(key, "11:192.168.1.1_9:apikey123");
 }
+
+#[test]
+fn resolve_rate_limit_key_two_empty_values_only_allocate_output() {
+    let mut session = MockPluginSession::new();
+    session.expect_key_get().times(4).returning(|_| Some(String::new()));
+    // Initialize mock dispatch bookkeeping outside the allocation measurement.
+    assert_eq!(session.key_get(&KeyGet::RemoteIp), Some(String::new()));
+    assert_eq!(session.key_get(&KeyGet::RemoteIp), Some(String::new()));
+    let mut log = PluginLog::new("RateLimitLocal");
+    let keys = [KeyGet::RemoteIp, KeyGet::RemoteIp];
+    let (out, calls) = crate::test_allocation_counter::count_allocations(|| {
+        resolve_rate_limit_key(&mut session, &keys, None, &OnKeyMiss::Deny, &mut log)
+    });
+    assert!(matches!(out, RateLimitKey::Resolved(key) if key == "0:_0:"));
+    assert_eq!(
+        calls, 1,
+        "two-source slots must not allocate separately from the output"
+    );
+}
+
+#[test]
+fn resolve_rate_limit_key_spilled_slots_preserve_order_and_empty_values() {
+    let mut session = MockPluginSession::new();
+    let keys: Vec<_> = (0..3)
+        .map(|index| KeyGet::Header {
+            name: format!("X-Key-{index}"),
+        })
+        .collect();
+    let mut sequence = mockall::Sequence::new();
+    for (key, value) in keys.iter().cloned().zip([Some(""), None, Some("é_:")]) {
+        session
+            .expect_key_get()
+            .withf(move |actual| actual == &key)
+            .times(1)
+            .in_sequence(&mut sequence)
+            .return_once(move |_| value.map(str::to_owned));
+    }
+    let mut log = PluginLog::new("RateLimitLocal");
+    let out = resolve_rate_limit_key(&mut session, &keys, Some("fallback"), &OnKeyMiss::Deny, &mut log);
+    assert!(matches!(out, RateLimitKey::Resolved(key) if key == "0:_-_4:é_:"));
+    assert!(!log.contains("key miss:default"));
+}
+
+#[test]
+fn resolve_rate_limit_key_all_missing_inline_and_spilled_slots_use_fallback() {
+    for count in [2, 3] {
+        let mut session = MockPluginSession::new();
+        session.expect_key_get().times(count).return_const(None);
+        let keys = vec![KeyGet::RemoteIp; count];
+        let mut log = PluginLog::new("RateLimitLocal");
+        let out = resolve_rate_limit_key(&mut session, &keys, Some("fallback"), &OnKeyMiss::Deny, &mut log);
+        assert!(matches!(out, RateLimitKey::Resolved(key) if key == "fallback"));
+        assert!(log.contains("key miss:default"));
+    }
+}

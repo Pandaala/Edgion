@@ -870,3 +870,27 @@ an unchecked public API or claiming measured CPU savings.
 Independent plan and final source reviews passed. Agent-doc validation and diff
 whitespace checks passed. No production changes, fresh Rust tests or benchmarks
 were part of this documentation batch.
+
+## Rate-limit two-source temporary storage
+
+The canonical identity helper serves Local, Redis and AI quota admission. Its
+multi-source branch now stores two owned optional values inline in SmallVec,
+removing the separate slot-vector allocation for exactly two configured sources.
+Larger lists still spill; source strings and the composed result retain their
+ownership. The zero/single-source fast paths remain unchanged. The small inline
+buffer increases local stack storage; no throughput improvement is claimed.
+
+Resolution still visits every source in configuration order before composition.
+Some(empty) remains present, missing slots keep their position, byte-length
+prefixes and output preallocation are unchanged, and all-missing inputs retain
+existing default/allow/deny semantics. No early truncation, source caching,
+namespace, logging or caller failure-policy change is introduced. The owning
+knowledge now includes the AI quota consumer and its own result mapping.
+
+Independent plan and final source reviews passed. Shared-helper tests passed 14,
+Local/Redis tests passed 28 and AI quota tests passed 27. The two-empty-source
+allocation test initializes mock dispatch before measurement and observes only
+one output allocation; ordered three-source spill and all-missing two/three-source
+fallback tests also pass. Formatting, workspace check/Clippy and seven repository
+guards passed; existing warnings remain outside changed code. No live Redis,
+full integration suite or throughput benchmark ran for this batch.

@@ -27,7 +27,8 @@ pub fn resolve_rate_limit_key(
 ) -> RateLimitKey
 ```
 
-Both plugins call it; the canonical key-miss-denial tag is `"Deny key miss"`
+Both plugins and AI quota admission (`ai/quota/runtime.rs`) call it; the canonical
+key-miss-denial tag is `"Deny key miss"`
 (distinct from a quota-exceeded denial). Re-reports of "key extraction is
 duplicated" or "`Deny` log tags diverge between the two plugins" are not accepted —
 verify the current call sites still route through `resolve_rate_limit_key` before
@@ -43,7 +44,9 @@ signature differs between the two plugins (`RateLimitRedis::reject_request` take
 an extra `Option<&RateLimitResult>`). A shared helper cannot produce that
 `PluginRunningResult`. The `RateLimitKey` enum keeps key resolution + log tagging
 in one place while leaving the `Allow → GoodNext` / `Deny → self.reject_request(..)`
-mapping caller-side, where the differing reject signatures live.
+mapping caller-side, where the differing reject signatures live. AI quota admission
+also maps `Allow` to `QuotaAdmission::Bypass` and `Deny` to `IdentityMissing`;
+it does not ask the helper to render an HTTP response.
 
 **2. `keys` is `&[KeyGet]`, not `&[String]`.**
 
@@ -65,3 +68,12 @@ gateway (no `Copy` derive added to the types layer).
 ## Resolution references
 
 - `plugins-http-F003` — 2026-05-26.
+
+## Temporary source-result storage
+
+The multi-source branch retains ordered owned results in a SmallVec with two
+inline slots. Two-source calls avoid a separate collection allocation; larger
+source lists spill to heap storage. The composed String and any owned KeyGet
+values remain allocated as before. Zero/single-source fast paths, missing-slot
+markers, byte-length prefixes and all-missing fallback retain their semantics.
+This does not establish a whole-call zero-allocation or throughput guarantee.

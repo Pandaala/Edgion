@@ -4,6 +4,7 @@
 //! to external services (e.g., ForwardAuth, OPA, Webhook), plus small helpers
 //! reused across closely related plugins (e.g., the rate-limit family).
 
+use smallvec::SmallVec;
 use std::fmt::Write as _;
 use std::time::Duration;
 
@@ -49,7 +50,7 @@ pub enum RateLimitKey {
 /// Resolve the rate-limit key from `keys` via `session.key_get`, composing the
 /// resolved parts with [`compose_rate_limit_key`].
 ///
-/// Shared by the `RateLimitLocal` and `RateLimitRedis` plugins so the key-extraction
+/// Shared by `RateLimitLocal`, `RateLimitRedis` and AI quota admission so the key-extraction
 /// policy (separator, default-key fallback, `OnKeyMiss` handling, and the
 /// PluginLog tags) lives in exactly one place. The PluginLog tags distinguish the
 /// three key-miss outcomes: `"key miss:default"` (rate-limited under the shared
@@ -80,7 +81,7 @@ pub fn resolve_rate_limit_key(
             }
         }
         _ => {
-            let mut parts: Vec<Option<String>> = Vec::with_capacity(keys.len());
+            let mut parts: SmallVec<[Option<String>; 2]> = SmallVec::with_capacity(keys.len());
             for key in keys {
                 parts.push(session.key_get(key));
             }
