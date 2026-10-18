@@ -19,7 +19,7 @@ destination.
 | Upstream selection, connect, upstream request | `connected_to_upstream` direct body inspected: borrowed SAN digest, one timestamp, owned connection-establishment log. `upstream_request_filter` direct body and deferred credential nomination guard traced to shared Connection parser. Upstream selection and deeper framing/transcoder/credential consumers remain open. |
 | Request body, trailers and relay | Direct action/tee/trailer orchestration, mirror payload budget and observer dispatch inspected. Nullable-state fast path, moved handler vector, bounded independent mirror copy and terminal-only log drain retained. Concrete streamed-handler/WAF implementations and deeper storage/relay integration remain open. |
 | Response headers, hold/commit, body and trailers | Connection sanitizer inspected. Body/trailer orchestration, runtime dependency checks, processor driver and downstream cancellation wrapper inspected; prebuilt read-only runtime-chain candidate deferred. Concrete processors, conditions, hold/commit and remaining header chains remain open. |
-| Errors, retries, logging and connection reuse | Pending. |
+| Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering, deeper finalizers and retry consumers remain open. |
 | Redirect HTTP, connection filters, TLS callbacks, TCP/TLS/UDP paths | Pending. |
 
 ## Deferred decisions
@@ -86,3 +86,22 @@ cancellation, throughput or whole-plugin coverage. Independent plan and final
 record reviews approved the documentation-only deferral. Formatting, workspace
 check/Clippy, agent-doc validation and diff-whitespace checks passed; Clippy
 retains warnings outside this documentation-only diff.
+
+## Access-log extension projection
+
+`logging()` collects declared extension values from request/response headers,
+entry-query cache, the canonical cookie parser, ctx variables and route metadata.
+Resolution now borrows these sources; insertion copies only the UTF-8-safe prefix
+within the existing value cap. Small owned strings still transfer their allocation,
+and owned oversized capacities are released even when their value is short.
+Field admission, tier overwrite order, masking and serde escaping are unchanged.
+The final extension block and async JSON payload still own their data.
+
+Independent plan and final code reviews passed. All 49 access-log tests and four
+canonical cookie-parser tests passed. Allocation guards verify a bounded prefix
+allocation and no value allocation for rejected fields; source-resolution tests
+verify borrowed header/cookie/initialized-query/ctx values. Formatting, workspace
+check, workspace Clippy and seven repository guards passed. Clippy warnings are
+outside the changed files. No full integration suite was run for this batch.
+The optimization removes temporary full-source copies; no throughput measurement
+or change to the logger channel/serialization policy is claimed.

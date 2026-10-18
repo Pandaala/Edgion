@@ -111,6 +111,96 @@ fn owned_insert_does_not_retain_oversized_capacity() {
 }
 
 #[test]
+fn borrowed_insert_allocates_only_the_bounded_prefix() {
+    let mut ext = LogExt::default();
+    ext.insert("k", "previous", false);
+    let value = "v".repeat(LOG_LABEL_MAX_VALUE_LEN * 128);
+
+    let (_, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+        ext.insert("k", value.as_str(), false);
+    });
+
+    assert_eq!(stats.calls, 1);
+    assert_eq!(stats.requested_bytes, LOG_LABEL_MAX_VALUE_LEN);
+    assert_eq!(ext.0[0].value, value[..LOG_LABEL_MAX_VALUE_LEN]);
+    for i in 1..LOG_LABEL_MAX_COUNT {
+        ext.insert(&format!("k{i}"), "v", false);
+    }
+    let (_, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+        ext.insert("overflow", value.as_str(), false);
+    });
+    assert_eq!(stats.calls, 0);
+}
+
+#[test]
+fn short_owned_insert_releases_oversized_capacity() {
+    let mut ext = LogExt::default();
+    let mut value = String::with_capacity(LOG_LABEL_MAX_VALUE_LEN * 16);
+    value.push_str("short");
+    ext.insert("k", value, false);
+    assert_eq!(ext.0[0].value, "short");
+    assert!(ext.0[0].value.capacity() <= LOG_LABEL_MAX_VALUE_LEN);
+}
+
+#[test]
+fn owned_truncation_preserves_the_exact_utf8_prefix() {
+    let mut ext = LogExt::default();
+    ext.insert("k", "€".repeat(LOG_LABEL_MAX_VALUE_LEN), false);
+    assert_eq!(ext.0[0].value, "€".repeat(LOG_LABEL_MAX_VALUE_LEN / 3));
+    assert!(ext.0[0].value.capacity() <= LOG_LABEL_MAX_VALUE_LEN);
+}
+
+#[tokio::test]
+async fn source_resolution_borrows_existing_values() {
+    use tokio::io::AsyncWriteExt;
+
+    let (mut client, server) = tokio::io::duplex(4096);
+    let mut session = Session::new_h1(Box::new(server));
+    client
+        .write_all(
+            b"GET /?name=live HTTP/1.1\r\nHost: test\r\nx-tenant: header-value\r\nCookie: name=cookie-value\r\n\r\n",
+        )
+        .await
+        .unwrap();
+    assert!(session.read_request().await.unwrap());
+    let mut ctx = EdgionHttpContext::new();
+    ctx.request_info.entry_raw_query = Some("name=entry%20value".into());
+    ctx.set_ctx_var("name".into(), "context-value".into());
+    let cases = [
+        (
+            LogExtSource::Header,
+            "x-tenant",
+            session.req_header().headers["x-tenant"].to_str().unwrap(),
+        ),
+        (
+            LogExtSource::Cookie,
+            "name",
+            crate::plugins::runtime::session_adapter::cookie_value_ref(&session.req_header().headers, "name").unwrap(),
+        ),
+        (
+            LogExtSource::Query,
+            "name",
+            ctx.cached_query().get("name").unwrap().as_str(),
+        ),
+        (LogExtSource::Ctx, "name", ctx.get_ctx_var("name").unwrap()),
+    ];
+    for (from, name, expected) in cases {
+        let field = AccessLogExternField {
+            key: "value".into(),
+            from,
+            name: name.into(),
+        };
+        let (value, stats) =
+            crate::test_allocation_counter::count_allocation_stats(|| resolve_field(&field, &session, &ctx));
+        let value = value.unwrap();
+        assert_eq!(value, expected);
+        assert_eq!(value.as_ptr(), expected.as_ptr());
+        assert_eq!(stats.calls, 0);
+    }
+    assert_eq!(ctx.cached_query()["name"], "entry value");
+}
+
+#[test]
 fn truncation_never_splits_a_utf8_char() {
     let mut ext = LogExt::default();
     // '€' is 3 bytes, so with an even cap (256) the boundary genuinely
@@ -119,6 +209,7 @@ fn truncation_never_splits_a_utf8_char() {
     // never exercise the truncation logic this test is named for.
     let long = "€".repeat(LOG_LABEL_MAX_VALUE_LEN);
     ext.insert("k", &long, false);
+    assert_eq!(ext.0[0].value, "€".repeat(LOG_LABEL_MAX_VALUE_LEN / 3));
     let json = json_of(&ext);
     assert!(serde_json::from_str::<serde_json::Value>(&json).is_ok());
 }

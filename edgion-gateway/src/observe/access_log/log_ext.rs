@@ -14,6 +14,7 @@
 use edgion_resources::resources::common::log_labels::{LOG_LABEL_MAX_COUNT, LOG_LABEL_MAX_VALUE_LEN};
 use edgion_resources::sensitive::apply_sensitive;
 use serde::{ser::SerializeMap, Serialize, Serializer};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
@@ -48,16 +49,15 @@ impl LogExt {
     /// UTF-8 char boundary. At the cap a *new* key is dropped, but an existing
     /// key still updates — otherwise a full map would silently ignore the route
     /// tier's override of a global field.
-    pub fn insert(&mut self, key: &str, value: impl Into<String>, sensitive: bool) {
+    pub fn insert<'a>(&mut self, key: &str, value: impl Into<Cow<'a, str>>, sensitive: bool) {
         let existing = self.0.iter().position(|field| field.key == key);
         if existing.is_none() && self.0.len() >= LOG_LABEL_MAX_COUNT {
             return;
         }
 
-        // Dynamic sources already resolve to `String`; accepting ownership
-        // avoids copying every projected value again on the request path.
-        let mut value = value.into();
-        truncate_on_char_boundary(&mut value, LOG_LABEL_MAX_VALUE_LEN);
+        // Borrow dynamic sources until the bounded prefix is selected; owned
+        // callers can still transfer an already suitably sized allocation.
+        let value = truncate_on_char_boundary(value.into(), LOG_LABEL_MAX_VALUE_LEN);
         if let Some(index) = existing {
             self.0[index].value = value;
             self.0[index].sensitive = sensitive;
@@ -82,21 +82,22 @@ impl LogExt {
 }
 
 /// Truncate to at most `max` bytes without splitting a UTF-8 char.
-fn truncate_on_char_boundary(value: &mut String, max: usize) {
-    if value.len() > max {
-        let mut end = max;
-        while end > 0 && !value.is_char_boundary(end) {
-            end -= 1;
-        }
-        value.truncate(end);
+fn truncate_on_char_boundary(value: Cow<'_, str>, max: usize) -> String {
+    let mut end = value.len().min(max);
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
     }
-
-    // `String::truncate` keeps the original allocation. Resolved values may
-    // come from attacker-controlled headers/query parameters, so retaining a
-    // large capacity in each of the bounded fields would undermine the value
-    // size cap until the access-log entry is serialized.
-    if value.capacity() > max {
-        *value = value.as_str().to_owned();
+    match value {
+        Cow::Borrowed(value) => value[..end].to_owned(),
+        Cow::Owned(mut value) => {
+            value.truncate(end);
+            // Truncation keeps the original allocation. Do not retain large
+            // capacities from attacker-controlled values until serialization.
+            if value.capacity() > max {
+                value = value.as_str().to_owned();
+            }
+            value
+        }
     }
 }
 
@@ -217,7 +218,11 @@ fn apply_declarations(
 /// Read one field's value from its source. `None` means "the source had no
 /// value" — the field is then absent from `ext`, which is distinct from a
 /// whitelist miss (present, masked).
-fn resolve_field(field: &AccessLogExternField, session: &Session, ctx: &EdgionHttpContext) -> Option<String> {
+fn resolve_field<'a>(
+    field: &AccessLogExternField,
+    session: &'a Session,
+    ctx: &'a EdgionHttpContext,
+) -> Option<&'a str> {
     // Route metadata, resolved once at route build (Step 3). `MatchInfo` (HTTP)
     // and `GrpcMatchInfo` (gRPC) are distinct types with identical fields, so
     // each side is picked explicitly. Absent on a 404, where neither unit exists.
@@ -248,23 +253,21 @@ fn resolve_field(field: &AccessLogExternField, session: &Session, ctx: &EdgionHt
             .req_header()
             .headers
             .get(&field.name)
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string()),
+            .and_then(|v| v.to_str().ok()),
         LogExtSource::RespHeader => session
             .response_written()
             .and_then(|h| h.headers.get(&field.name))
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string()),
+            .and_then(|v| v.to_str().ok()),
         // Entry-time raw query, NOT the rewritten URI — same init-once cache the
         // plugins and the `${query:...}` template already share, so the parse is
         // paid at most once per request.
-        LogExtSource::Query => ctx.cached_query().get(&field.name).cloned(),
+        LogExtSource::Query => ctx.cached_query().get(&field.name).map(String::as_str),
         LogExtSource::Cookie => {
-            crate::plugins::runtime::session_adapter::cookie_value(&session.req_header().headers, &field.name)
+            crate::plugins::runtime::session_adapter::cookie_value_ref(&session.req_header().headers, &field.name)
         }
-        LogExtSource::Ctx => ctx.get_ctx_var(&field.name).map(|s| s.to_string()),
-        LogExtSource::RouteLabel => labels_meta().and_then(|m| m.get(&field.name).cloned()),
-        LogExtSource::RouteAnnotation => annotations_meta().and_then(|m| m.get(&field.name).cloned()),
+        LogExtSource::Ctx => ctx.get_ctx_var(&field.name),
+        LogExtSource::RouteLabel => labels_meta().and_then(|m| m.get(&field.name).map(String::as_str)),
+        LogExtSource::RouteAnnotation => annotations_meta().and_then(|m| m.get(&field.name).map(String::as_str)),
     }
 }
 
