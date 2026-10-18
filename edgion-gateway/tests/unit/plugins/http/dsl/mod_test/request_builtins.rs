@@ -3,6 +3,63 @@
 use super::*;
 
 #[test]
+fn borrowed_dynamic_header_preserves_first_text_value() {
+    for (values, lookup, expected) in [
+        (vec![], "X-VaLuE", "missing"),
+        (vec![b"".as_slice()], "X-VaLuE", ""),
+        (vec![b"first".as_slice(), b"second".as_slice()], "X-VaLuE", "first"),
+        (vec![b"\xff".as_slice(), b"second".as_slice()], "X-VaLuE", "missing"),
+        (vec![b"first".as_slice()], "bad name", "missing"),
+    ] {
+        let mut headers = http::HeaderMap::new();
+        for value in values {
+            headers.append("x-value", http::HeaderValue::from_bytes(value).unwrap());
+        }
+        let mut session = MockPluginSession::new();
+        session.expect_header_value().times(0);
+        session.expect_request_header_map().times(1).return_const(headers);
+        session
+            .expect_set_request_header()
+            .times(1)
+            .withf(move |name, value| name == "X-Result" && value == expected)
+            .returning(|_, _| Ok(()));
+        assert_eq!(run(
+            &format!("let value = req.header(\"{lookup}\")\nif value == nil {{ req.set_header(\"X-Result\", \"missing\") }} else {{ req.set_header(\"X-Result\", value) }}"),
+            session,
+        ), good_next());
+    }
+}
+
+#[test]
+fn borrowed_raw_query_preserves_bytes_and_limits() {
+    for query in [None, Some(""), Some("a=%2F&a=2+3&&empty=")] {
+        let length = query.map_or(0, str::len);
+        for limit in [length, length.saturating_sub(1)] {
+            let mut session = MockPluginSession::new();
+            session.expect_get_query().times(0);
+            session.expect_request_query().times(1).return_const(query);
+            let limits = VmLimits {
+                max_string_len: limit,
+                ..Default::default()
+            };
+            let source = "let value = req.query_string\nif value == nil { req.set_header(\"X-Result\", \"missing\") } else { req.set_header(\"X-Result\", value) }";
+            if length > limit {
+                assert!(
+                    matches!(run_expect_runtime_err_with_limits(source, session, limits), RuntimeError::StringTooLong { len, limit: actual } if len == length && actual == limit)
+                );
+            } else {
+                session
+                    .expect_set_request_header()
+                    .times(1)
+                    .withf(move |name, value| name == "X-Result" && value == query.unwrap_or("missing"))
+                    .returning(|_, _| Ok(()));
+                assert_eq!(run_with_limits(source, session, limits), good_next());
+            }
+        }
+    }
+}
+
+#[test]
 fn borrowed_scheme_preserves_fallback_and_first_value() {
     for (forwarded, alternate, expected) in [
         (vec![], None, "http"),
@@ -40,6 +97,7 @@ fn borrowed_scheme_preserves_fallback_and_first_value() {
 fn borrowed_request_scalar_limits_follow_value_selection() {
     for (expression, name) in [
         ("req.host", "host"),
+        ("req.header(\"host\")", "host"),
         ("req.content_type", "content-type"),
         ("req.scheme", "x-forwarded-proto"),
     ] {
@@ -73,10 +131,13 @@ fn borrowed_request_scalar_limits_follow_value_selection() {
 #[test]
 fn test_req_header_present() {
     let mut session = MockPluginSession::new();
+    session.expect_header_value().times(0);
     session
-        .expect_header_value()
-        .withf(|h| h == "X-Foo")
-        .returning(|_| Some("bar".to_string()));
+        .expect_request_header_map()
+        .return_const(http::HeaderMap::from_iter([(
+            http::HeaderName::from_bytes(b"X-Foo").unwrap(),
+            http::HeaderValue::from_static("bar"),
+        )]));
     session
         .expect_set_request_header()
         .withf(|h, v| h == "X-Out" && v == "bar")
@@ -92,10 +153,10 @@ fn test_req_header_present() {
 #[test]
 fn test_req_header_absent() {
     let mut session = MockPluginSession::new();
+    session.expect_header_value().times(0);
     session
-        .expect_header_value()
-        .withf(|h| h == "X-Foo")
-        .returning(|_| None);
+        .expect_request_header_map()
+        .return_const(http::HeaderMap::from_iter([]));
     let result = run(
         "let v = req.header(\"X-Foo\")\nif v != nil { req.set_header(\"X-Out\", v) }",
         session,
@@ -151,7 +212,8 @@ fn test_req_query() {
 #[test]
 fn test_req_query_string() {
     let mut session = MockPluginSession::new();
-    session.expect_get_query().returning(|| Some("a=1&b=2".to_string()));
+    session.expect_get_query().times(0);
+    session.expect_request_query().return_const(Some("a=1&b=2"));
     session
         .expect_set_request_header()
         .withf(|h, v| h == "X-QS" && v == "a=1&b=2")

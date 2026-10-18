@@ -633,7 +633,7 @@ impl Vm {
             // ===== req.* read =====
             BuiltinId::ReqHeader => {
                 let name = state.pop()?.runtime_string()?;
-                checked_value_opt_str(session.header_value(&name), self.limits.max_string_len)
+                checked_value_opt_str_ref(session.header_str(&name), self.limits.max_string_len)
             }
             BuiltinId::ReqMethod => checked_value_opt_str_ref(Some(session.get_method()), self.limits.max_string_len),
             BuiltinId::ReqRequestMethod => match session.get_request_method() {
@@ -648,7 +648,7 @@ impl Vm {
                 let name = state.pop()?.runtime_string()?;
                 checked_value_opt_str(session.get_query_param(&name), self.limits.max_string_len)
             }
-            BuiltinId::ReqQueryString => checked_value_opt_str(session.get_query(), self.limits.max_string_len),
+            BuiltinId::ReqQueryString => checked_value_opt_str_ref(session.request_query(), self.limits.max_string_len),
             BuiltinId::ReqCookie => {
                 let name = state.pop()?.runtime_string()?;
                 checked_value_opt_str(session.get_cookie(&name), self.limits.max_string_len)

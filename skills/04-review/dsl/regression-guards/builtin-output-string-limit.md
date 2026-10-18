@@ -73,6 +73,14 @@ list/Arc allocation remains.
 
 ## Borrowed request scalars and metadata
 
+Dynamic `req.header(name)` uses the same first-value text accessor after the
+unchanged implicit name conversion. `req.query_string` borrows the current URI's
+raw query, matching `get_query` rather than decoded query parameters or entry-time
+metadata. Both use the borrowed result helper: nil and empty remain distinct,
+encoded bytes and duplicate query parameters remain unchanged, and length checks
+precede final Arc creation. Tests retain compiler evaluation-order and panic
+isolation checks while replacing owned getter mocks with the borrowed interfaces.
+
 `req.host`, `req.content_type` and `req.scheme` use the existing `header_str`
 accessor and borrowed result helper. Scheme chooses the first text-eligible
 X-Forwarded-Proto value, then X-Scheme, then the literal `http`, preserving case

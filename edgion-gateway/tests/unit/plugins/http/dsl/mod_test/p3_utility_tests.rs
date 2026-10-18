@@ -524,11 +524,14 @@ fn test_log_fmt_repeated_large_shared_value_remains_bounded() {
         for mode in [0, 1, 2] {
             SENSITIVE_MODE.store(mode, Ordering::SeqCst);
             let mut session = MockPluginSession::new();
+            session.expect_header_value().times(0);
             session
-                .expect_header_value()
-                .withf(|name| name == "X-Large")
+                .expect_request_header_map()
                 .times(1)
-                .returning(|_| Some("x".repeat(1024 * 1024)));
+                .return_const(http::HeaderMap::from_iter([(
+                    http::HeaderName::from_static("x-large"),
+                    http::HeaderValue::from_str(&"x".repeat(1024 * 1024)).unwrap(),
+                )]));
             let (result, log) = run_vm_policy_log(&vm, session, &DslErrorPolicy::Deny);
             assert_eq!(result, good_next());
             let json = serde_json::to_value(log).unwrap();

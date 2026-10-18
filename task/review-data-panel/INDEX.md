@@ -1417,3 +1417,23 @@ multibyte and absent-value coverage remains. Independent plan review passed and
 495 DSL tests passed serially. No full suite or throughput benchmark ran.
 Formatting, workspace check/Clippy and seven repository guards passed, with
 existing warnings outside changed files. Independent final review passed.
+
+## Borrowed DSL dynamic headers and raw query
+
+Dynamic `req.header(name)` and `req.query_string` use the existing borrowed
+interfaces and result helper. Dynamic name conversion, first-value text
+eligibility, nil/empty distinction, current raw query bytes and exact string
+limits remain unchanged; final DSL Arc values still own their contents.
+
+Header mocks were migrated across six test modules, including once-only ordered
+compiler inputs and the large-value bounded-log fixture. The initial panic-test
+migration raised inside a mock predicate, poisoning mockall's internal mutex
+and causing a second panic at destruction: 496 tests passed and one failed.
+The independently reviewed correction injects through the unchanged query getter
+instead, retaining exact invocation, fail-open outcome and fixed-log assertions.
+No runtime adjustment was made for the mock limitation. Fresh serial DSL tests
+passed 497, including dynamic-header first/opaque/invalid-name/limit cases and
+raw-query absent/empty/encoded/duplicate/limit cases. Formatting, workspace
+check/Clippy and seven guards passed, with existing warnings outside the diff.
+No full suite or throughput benchmark ran.
+Independent final review passed.

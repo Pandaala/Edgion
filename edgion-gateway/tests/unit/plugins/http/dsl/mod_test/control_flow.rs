@@ -221,13 +221,16 @@ fn compiler_temporaries_do_not_shadow_authored_bindings() {
 fn compiler_loop_inputs_keep_once_only_evaluation_order() {
     let mut session = MockPluginSession::new();
     let mut sequence = mockall::Sequence::new();
+    session.expect_header_value().times(0);
     for (header, value) in [("End", "3"), ("Start", "1"), ("Items", "a,b")] {
         session
-            .expect_header_value()
-            .withf(move |name| name == header)
+            .expect_request_header_map()
             .times(1)
             .in_sequence(&mut sequence)
-            .returning(move |_| Some(value.to_string()));
+            .return_const(http::HeaderMap::from_iter([(
+                http::HeaderName::from_bytes(header.as_bytes()).unwrap(),
+                http::HeaderValue::from_static(value),
+            )]));
     }
     let source = r#"
         let mut total = 0

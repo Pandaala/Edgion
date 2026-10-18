@@ -40,10 +40,13 @@ fn test_return_terminate_conditional() {
     "#;
     // Case 1: header present → terminate
     let mut session = MockPluginSession::new();
+    session.expect_header_value().times(0);
     session
-        .expect_header_value()
-        .withf(|n| n == "X-Attack")
-        .returning(|_| Some("true".to_string()));
+        .expect_request_header_map()
+        .return_const(http::HeaderMap::from_iter([(
+            http::HeaderName::from_bytes(b"X-Attack").unwrap(),
+            http::HeaderValue::from_static("true"),
+        )]));
     let result = run(source, session);
     assert_eq!(
         result,
@@ -55,10 +58,10 @@ fn test_return_terminate_conditional() {
 
     // Case 2: header absent → next
     let mut session = MockPluginSession::new();
+    session.expect_header_value().times(0);
     session
-        .expect_header_value()
-        .withf(|n| n == "X-Attack")
-        .returning(|_| None);
+        .expect_request_header_map()
+        .return_const(http::HeaderMap::from_iter([]));
     let result = run(source, session);
     assert_eq!(result, good_next());
 }

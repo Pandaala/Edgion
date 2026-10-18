@@ -116,10 +116,10 @@ let b = regex_find("bar-456", "\\d+")
 fn test_regex_find_nil_input_returns_nil() {
     let mut session = MockPluginSession::new();
     // req.header("Missing") returns None → nil; regex_find on nil must return nil, not match "nil"
+    session.expect_header_value().times(0);
     session
-        .expect_header_value()
-        .withf(|h| h == "Missing")
-        .returning(|_| None);
+        .expect_request_header_map()
+        .return_const(http::HeaderMap::from_iter([]));
     let result = run(
         r#"let v = regex_find(req.header("Missing"), "nil")
 if v != nil { req.set_header("X-Out", "matched") }"#,
@@ -212,10 +212,10 @@ fn test_regex_replace_zero_width_respects_utf8_boundaries() {
 #[test]
 fn test_regex_replace_nil_subject_returns_nil() {
     let mut session = MockPluginSession::new();
+    session.expect_header_value().times(0);
     session
-        .expect_header_value()
-        .withf(|h| h == "Missing")
-        .returning(|_| None);
+        .expect_request_header_map()
+        .return_const(http::HeaderMap::from_iter([]));
     session
         .expect_set_request_header()
         .withf(|h, v| h == "X-Out" && v == "nil-returned")
