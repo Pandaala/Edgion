@@ -28,6 +28,7 @@ destination.
 
 ## Deferred decisions
 
+- [ExternalName DNS address-result ownership](dns-01-address-result-ownership.md)
 - [Precomputed fractional Peak-EWMA decay](lb-01-precomputed-ewma-decay.md)
 - [Incremental attempt-log size accounting](log-02-incremental-attempt-size.md)
 - [SSE dispatch metadata representation](body-05-sse-dispatch-metadata.md)
@@ -4350,3 +4351,15 @@ tests, all serially. The existing real localhost resolution test was excluded
 from this network-free run. Formatting, workspace check/Clippy, seven repository
 guards and diff hygiene passed. Existing warnings remain outside changed code.
 No live transport or throughput benchmark ran.
+
+## DNS address-result ownership audit
+
+Traced cache-hit Vec cloning under the canonical shard mutex, miss insertion
+copying and post-lock first-safe-address selection. Shared Arc results and a
+scoped projection have different allocation, retention and contention costs;
+[dns-01](dns-01-address-result-ownership.md) records the alternatives and preserved
+identity, TTL, mode, SSRF and diagnostic contracts for user decision. Production
+code and tests are unchanged. Fresh verification passed 73 network-free tests:
+47 canonical-cache, 20 DNS-cache, four address-safety and two native DNS-boundary
+tests. Formatting, workspace check/Clippy and document/diff validation passed.
+No result-representation prototype or throughput benchmark ran.
