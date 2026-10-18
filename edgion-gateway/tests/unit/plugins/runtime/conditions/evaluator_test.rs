@@ -111,10 +111,9 @@ fn borrowed_cookie_condition_uses_live_canonical_parser_without_allocating() {
     let key = KeyGet::Cookie {
         name: "sid".to_string(),
     };
-    assert_eq!(condition_key_value(&session, &key).as_deref(), Some("abc"));
-    let (value, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
-        std::hint::black_box(condition_key_value(&session, &key))
-    });
+    assert_eq!(key_value(&session, &key).as_deref(), Some("abc"));
+    let (value, allocations) =
+        crate::test_allocation_counter::count_allocation_stats(|| std::hint::black_box(key_value(&session, &key)));
     assert_eq!(value.as_deref(), Some("abc"));
     assert_eq!(allocations.calls, 0);
 }
@@ -125,14 +124,8 @@ fn borrowed_ip_keys_keep_direct_and_resolved_identities_distinct() {
     session.expect_direct_peer_ip().return_const("10.0.0.1".to_string());
     session.expect_remote_ip().return_const("203.0.113.2".to_string());
     session.expect_key_get().never();
-    assert_eq!(
-        condition_key_value(&session, &KeyGet::DirectPeerIp).as_deref(),
-        Some("10.0.0.1")
-    );
-    assert_eq!(
-        condition_key_value(&session, &KeyGet::RemoteIp).as_deref(),
-        Some("203.0.113.2")
-    );
+    assert_eq!(key_value(&session, &KeyGet::DirectPeerIp).as_deref(), Some("10.0.0.1"));
+    assert_eq!(key_value(&session, &KeyGet::RemoteIp).as_deref(), Some("203.0.113.2"));
 }
 
 fn fixed_utc(value: &str) -> DateTime<Utc> {

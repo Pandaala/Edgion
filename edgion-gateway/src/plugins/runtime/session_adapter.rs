@@ -5,12 +5,14 @@ use http::Uri;
 use pingora_core::protocols::http::RequestBodyBuffer;
 use pingora_http::{RequestHeader, ResponseHeader};
 use pingora_proxy::Session;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::conditions::EvaluationResult;
 use super::dye_plan::{CompiledDyePlan, CompiledDyeRule};
 use super::log::{EdgionPluginsLogToken, PluginLog};
+use super::traits::header_ext::PluginSessionHeaderExt;
 use super::traits::session::{empty_response_header_map, RequestBodyInspectionCapture, RouteProto};
 use super::traits::{DyeOutcome, PluginSession, PluginSessionError, PluginSessionResult, WafSessionCapability};
 #[cfg(test)]
@@ -343,6 +345,27 @@ pub(crate) fn cookie_value_ref<'a>(headers: &'a http::HeaderMap, name: &str) -> 
         }
     }
     None
+}
+
+/// Read one KeyGet value, borrowing canonical session storage where available.
+/// Query uses the frozen entry cache; other selected sources retain their live
+/// reads. Sources without an equivalent borrow use the canonical owned getter.
+/// Callers retain their own source eligibility, ordering and empty-value policy.
+pub(crate) fn key_value<'a>(session: &'a dyn PluginSession, key: &KeyGet) -> Option<Cow<'a, str>> {
+    match key {
+        KeyGet::TraceId => session.get_request_id_ref().map(Cow::Borrowed),
+        KeyGet::Host => session.get_request_hostname().map(Cow::Borrowed),
+        KeyGet::Header { name } => session.header_str(name).map(Cow::Borrowed),
+        KeyGet::Cookie { name } => cookie_value_ref(session.request_header_map(), name).map(Cow::Borrowed),
+        KeyGet::Query { name } => session.get_query_param_ref(name).map(Cow::Borrowed),
+        KeyGet::Ctx { name } => session.get_ctx_var_ref(name).map(Cow::Borrowed),
+        KeyGet::Path => Some(Cow::Borrowed(session.get_path())),
+        KeyGet::RequestPath => Some(Cow::Borrowed(session.get_request_path())),
+        KeyGet::Method => Some(Cow::Borrowed(session.get_method())),
+        KeyGet::RemoteIp => (!session.remote_ip().is_empty()).then(|| Cow::Borrowed(session.remote_ip())),
+        KeyGet::DirectPeerIp => (!session.direct_peer_ip().is_empty()).then(|| Cow::Borrowed(session.direct_peer_ip())),
+        _ => session.key_get(key).map(Cow::Owned),
+    }
 }
 
 /// Read one cookie from a request's `Cookie` headers.

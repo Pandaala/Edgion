@@ -266,3 +266,13 @@ A fresh before/after run of its fixed fixture measured two allocations requestin
 36 bytes before this change and one requesting 19 bytes afterward.
 This removes formatter growth for this construction only, without a throughput
 or whole-condition allocation claim.
+
+## Shared borrowed KeyGet reads
+
+The former condition-local value accessor now lives at
+`runtime::session_adapter::key_value`. Its mapping and owned fallback are
+unchanged; conditions and KeyAuth share the same borrowed read mechanism.
+KeyAuth keeps its separate source whitelist and first-nonempty selection policy.
+This relocation adds no caching and preserves per-evaluation live reads and
+frozen decoded-query ownership. Existing condition tests and real-adapter
+query/context regressions remain the relevant behavior evidence.

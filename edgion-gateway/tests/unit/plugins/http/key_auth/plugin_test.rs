@@ -6,6 +6,15 @@ use mockall::Sequence;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+fn setup_key_headers(session: &mut MockPluginSession, key: Option<&str>) {
+    let mut headers = http::HeaderMap::new();
+    if let Some(key) = key {
+        headers.insert("x-api-key", http::HeaderValue::from_str(key).unwrap());
+    }
+    session.expect_request_header_map().return_const(headers);
+    session.expect_key_get().times(0);
+}
+
 fn create_test_config() -> KeyAuthConfig {
     KeyAuthConfig {
         key_sources: vec![
@@ -159,7 +168,8 @@ fn test_extract_key_none() {
     let auth = create_key_auth_with_keys();
     let mut mock_session = MockPluginSession::new();
 
-    mock_session.expect_key_get().returning(|_| None);
+    setup_key_headers(&mut mock_session, None);
+    mock_session.expect_get_query_param_ref().returning(|_| None);
 
     let result = auth.extract_key(&mock_session);
     assert!(result.is_none());
@@ -171,13 +181,10 @@ fn extraction_returns_the_configured_source_by_reference() {
     let query_reads = Arc::new(AtomicUsize::new(0));
     let query_reads_for_mock = Arc::clone(&query_reads);
     let mut session = MockPluginSession::new();
-    session.expect_key_get().returning(move |source| match source {
-        KeyGet::Header { .. } => Some("header-present".to_string()),
-        KeyGet::Query { .. } => {
-            query_reads_for_mock.fetch_add(1, Ordering::SeqCst);
-            Some("query-value".to_string())
-        }
-        _ => None,
+    setup_key_headers(&mut session, Some("header-present"));
+    session.expect_get_query_param_ref().returning(move |_| {
+        query_reads_for_mock.fetch_add(1, Ordering::SeqCst);
+        Some("query-value")
     });
 
     let (key, source) = auth.extract_key(&session).expect("header key should win");
@@ -269,7 +276,8 @@ async fn anonymous_path_uses_precomputed_username_forwarding_policy() {
 
     let mut sequence = Sequence::new();
     let mut session = MockPluginSession::new();
-    session.expect_key_get().returning(|_| None);
+    setup_key_headers(&mut session, None);
+    session.expect_get_query_param_ref().returning(|_| None);
     session
         .expect_set_request_header_value()
         .withf(|name, value| name == "X-Consumer-Username" && value == "guest" && value.is_sensitive())
@@ -312,10 +320,7 @@ async fn valid_key_forwards_metadata_then_hides_credential_and_masks_username() 
         let auth = KeyAuth::from_config(&config);
         let mut sequence = Sequence::new();
         let mut session = MockPluginSession::new();
-        session.expect_key_get().returning(|source| match source {
-            KeyGet::Header { .. } => Some("valid-api-key".to_string()),
-            _ => None,
-        });
+        setup_key_headers(&mut session, Some("valid-api-key"));
         session
             .expect_set_request_header_value()
             .withf(|name, value| name == "X-Consumer-Username" && value == "private-user" && value.is_sensitive())
@@ -349,7 +354,8 @@ async fn missing_key_returns_exact_response() {
 
     let auth = KeyAuth::from_config(&create_test_config());
     let mut session = MockPluginSession::new();
-    session.expect_key_get().returning(|_| None);
+    setup_key_headers(&mut session, None);
+    session.expect_get_query_param_ref().returning(|_| None);
     expect_auth_response(&mut session, BODY);
     let mut log = PluginLog::new(PLUGIN_NAME);
 
@@ -374,13 +380,10 @@ async fn present_invalid_key_does_not_use_fallback_or_anonymous_access() {
     let query_reads = Arc::new(AtomicUsize::new(0));
     let query_reads_for_mock = Arc::clone(&query_reads);
     let mut session = MockPluginSession::new();
-    session.expect_key_get().returning(move |source| match source {
-        KeyGet::Header { .. } => Some("header-invalid".to_string()),
-        KeyGet::Query { .. } => {
-            query_reads_for_mock.fetch_add(1, Ordering::SeqCst);
-            Some("query-valid".to_string())
-        }
-        _ => None,
+    setup_key_headers(&mut session, Some("header-invalid"));
+    session.expect_get_query_param_ref().returning(move |_| {
+        query_reads_for_mock.fetch_add(1, Ordering::SeqCst);
+        Some("query-valid")
     });
     expect_auth_response(&mut session, BODY);
     let mut log = PluginLog::new(PLUGIN_NAME);
@@ -393,4 +396,115 @@ async fn present_invalid_key_does_not_use_fallback_or_anonymous_access() {
     assert!(log.contains("Deny bad key"));
     let value: Value = serde_json::to_value(&log).unwrap();
     assert!(!value.to_string().contains("header-invalid"));
+}
+
+#[test]
+fn borrowed_key_sources_preserve_policy_and_empty_fallback() {
+    for (header, query, cookies, ctx, expected) in [
+        (
+            Some(b"header".as_slice()),
+            Some("query"),
+            vec![],
+            Some("ctx"),
+            Some(("header", 1)),
+        ),
+        (
+            Some(b"".as_slice()),
+            Some("query"),
+            vec![],
+            Some("ctx"),
+            Some(("query", 2)),
+        ),
+        (
+            Some(b"\xff".as_slice()),
+            Some("query"),
+            vec![],
+            Some("ctx"),
+            Some(("query", 2)),
+        ),
+        (None, Some(" "), vec![], None, Some((" ", 2))),
+        (
+            None,
+            Some(""),
+            vec![b"api_key=cookie=tail".as_slice()],
+            Some("ctx"),
+            Some(("cookie=tail", 3)),
+        ),
+        (
+            None,
+            None,
+            vec![b"api_key=; api_key=later".as_slice()],
+            Some("ctx"),
+            Some(("ctx", 4)),
+        ),
+        (
+            None,
+            None,
+            vec![b"API_KEY=wrong-case".as_slice()],
+            Some("ctx"),
+            Some(("ctx", 4)),
+        ),
+        (
+            None,
+            None,
+            vec![b"opaque=\xff".as_slice(), b"api_key=later".as_slice()],
+            Some("ctx"),
+            Some(("ctx", 4)),
+        ),
+        (
+            None,
+            None,
+            vec![b"api_key=first".as_slice(), b"opaque=\xff".as_slice()],
+            Some("ctx"),
+            Some(("first", 3)),
+        ),
+        (None, None, vec![], Some(""), None),
+    ] {
+        let mut auth = create_key_auth_with_keys();
+        // Preserve the runtime whitelist even if a synthetic config bypasses validation.
+        auth.key_sources = vec![
+            KeyGet::Path,
+            KeyGet::Header {
+                name: "X-API-Key".to_string(),
+            },
+            KeyGet::Query {
+                name: "api_key".to_string(),
+            },
+            KeyGet::Cookie {
+                name: "api_key".to_string(),
+            },
+            KeyGet::Ctx {
+                name: "api_key".to_string(),
+            },
+        ];
+        let mut headers = http::HeaderMap::new();
+        if let Some(value) = header {
+            headers.append("x-api-key", http::HeaderValue::from_bytes(value).unwrap());
+            headers.append("x-api-key", http::HeaderValue::from_static("ignored-duplicate"));
+        }
+        for cookie in cookies {
+            headers.append(http::header::COOKIE, http::HeaderValue::from_bytes(cookie).unwrap());
+        }
+        let mut session = MockPluginSession::new();
+        session.expect_key_get().times(0);
+        session.expect_get_path().times(0);
+        session.expect_request_header_map().return_const(headers);
+        session
+            .expect_get_query_param_ref()
+            .withf(|name| name == "api_key")
+            .return_const(query);
+        session
+            .expect_get_ctx_var_ref()
+            .withf(|name| name == "api_key")
+            .return_const(ctx);
+        match (auth.extract_key(&session), expected) {
+            (Some((key, source)), Some((expected, index))) => {
+                assert!(matches!(key, Cow::Borrowed(_)));
+                assert_eq!(key, expected);
+                assert!(std::ptr::eq(source, &auth.key_sources[index]));
+            }
+            (None, None) => {}
+            _ => panic!("unexpected credential source selection"),
+        }
+    }
 }

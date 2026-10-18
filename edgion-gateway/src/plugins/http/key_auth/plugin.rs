@@ -6,12 +6,14 @@
 use crate::plugins::http::common::auth_common::set_sensitive_request_header;
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use crate::plugins::http::common::auth_common::{
     apply_auth_failure_delay, send_gateway_auth_error_response, strip_cookie, strip_query_param,
 };
 use crate::plugins::runtime::log::{la, sensitive};
+use crate::plugins::runtime::session_adapter::key_value;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::common::KeyGet;
 use edgion_resources::filters::PluginRunningResult;
@@ -85,11 +87,11 @@ impl KeyAuth {
     ///
     /// Returns the first non-empty value found from the configured sources.
     /// Supports header, query, cookie, and ctx KeyGet sources.
-    fn extract_key(&self, session: &dyn PluginSession) -> Option<(String, &KeyGet)> {
+    fn extract_key<'s>(&self, session: &'s dyn PluginSession) -> Option<(Cow<'s, str>, &KeyGet)> {
         for source in &self.key_sources {
             match source {
                 KeyGet::Header { .. } | KeyGet::Query { .. } | KeyGet::Cookie { .. } | KeyGet::Ctx { .. } => {
-                    if let Some(value) = session.key_get(source) {
+                    if let Some(value) = key_value(session, source) {
                         if !value.is_empty() {
                             return Some((value, source));
                         }

@@ -1593,3 +1593,25 @@ Fresh serial ExtProc selection passed 140 tests. The pure validator matrix
 measured zero allocations for its prepared maps; callback allocations remain.
 Formatting, workspace check/Clippy and seven repository guards passed, with
 existing warnings outside changed files. Independent final review passed.
+
+## Shared borrowed KeyAuth inputs
+
+The condition evaluator's borrowed KeyGet mapping moved unchanged into the
+session adapter helper `key_value`; conditions and KeyAuth now share it.
+KeyAuth retains its four-source whitelist, first-nonempty policy, invalid-key
+rejection and config-owned source reference. The session value borrow ends after
+hash lookup, before metadata mutation, credential hiding or failure awaits.
+Other owned KeyGet consumers and RegionRoute selection are unchanged.
+
+Tests use actual header/Cookie maps and borrowed query/context values, forbid
+owned key_get and retain source identity, async metadata/hiding, denial and
+sensitive-log assertions. The condition accessor tests follow the relocated
+function. Knowledge now separates source-read reuse from selection-policy
+consolidation and corrects historical unsupported allocation/closure-cost claims.
+Independent plan review passed. No full suite, live integration or throughput
+benchmark ran for this batch.
+Fresh selections passed: 14 KeyAuth tests, 67 condition tests, two borrowed-query
+matches and one borrowed-context adapter test. Selections may overlap and are not
+a unique-test coverage count. Formatting, workspace check/Clippy and seven
+repository guards passed, with existing warnings outside changed files.
+Independent final review passed.

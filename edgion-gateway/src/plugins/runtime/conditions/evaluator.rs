@@ -8,8 +8,7 @@ use crate::plugins::http::hmac_auth::{HmacVerifier, HmacVerifyOutcome};
 use crate::plugins::runtime::body_gate::body_read_failure_result;
 use crate::plugins::runtime::conditions::extract::{extract_jwt_claim_values, extract_mtls_values};
 use crate::plugins::runtime::log::PluginLog;
-use crate::plugins::runtime::session_adapter::cookie_value_ref;
-use crate::plugins::runtime::traits::header_ext::PluginSessionHeaderExt;
+use crate::plugins::runtime::session_adapter::key_value;
 use crate::plugins::runtime::PluginSession;
 use chrono::{DateTime, Utc};
 use edgion_resources::common::KeyGet;
@@ -19,7 +18,6 @@ use edgion_resources::resources::edgion_plugins::conditions::{
     MatchCore, MtlsMatchCondition, PluginConditions, ProbabilityCondition, TimeRangeCondition,
 };
 use edgion_resources::resources::edgion_plugins::BodyRequirement;
-use std::borrow::Cow;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -873,34 +871,12 @@ impl ConditionExt for Condition {
     }
 }
 
-/// Borrow condition inputs for one evaluation. Query uses the frozen entry cache;
-/// other selected sources retain their live reads. Sources without an
-/// equivalent borrowed session accessor retain the canonical owned KeyGet path.
-/// No value survives the current predicate evaluation, so later plugin writes
-/// remain visible on the next chunk.
-fn condition_key_value<'a>(session: &'a dyn PluginSession, key: &KeyGet) -> Option<Cow<'a, str>> {
-    match key {
-        KeyGet::TraceId => session.get_request_id_ref().map(Cow::Borrowed),
-        KeyGet::Host => session.get_request_hostname().map(Cow::Borrowed),
-        KeyGet::Header { name } => session.header_str(name).map(Cow::Borrowed),
-        KeyGet::Cookie { name } => cookie_value_ref(session.request_header_map(), name).map(Cow::Borrowed),
-        KeyGet::Query { name } => session.get_query_param_ref(name).map(Cow::Borrowed),
-        KeyGet::Ctx { name } => session.get_ctx_var_ref(name).map(Cow::Borrowed),
-        KeyGet::Path => Some(Cow::Borrowed(session.get_path())),
-        KeyGet::RequestPath => Some(Cow::Borrowed(session.get_request_path())),
-        KeyGet::Method => Some(Cow::Borrowed(session.get_method())),
-        KeyGet::RemoteIp => (!session.remote_ip().is_empty()).then(|| Cow::Borrowed(session.remote_ip())),
-        KeyGet::DirectPeerIp => (!session.direct_peer_ip().is_empty()).then(|| Cow::Borrowed(session.direct_peer_ip())),
-        _ => session.key_get(key).map(Cow::Owned),
-    }
-}
-
 fn evaluate_secret_match(
     condition: &edgion_resources::resources::edgion_plugins::conditions::SecretMatchCondition,
     session: &dyn PluginSession,
 ) -> bool {
     use subtle::ConstantTimeEq;
-    let Some(actual) = condition_key_value(session, &condition.key) else {
+    let Some(actual) = key_value(session, &condition.key) else {
         return apply_negate(false, condition.negate);
     };
     let base = condition.resolved_values.as_ref().is_some_and(|expected| {
@@ -994,7 +970,7 @@ impl KeyExistConditionExt for KeyExistCondition {
         let exists = match &self.key {
             // The composite exists whenever RemoteIp does, including an empty path.
             KeyGet::RemoteIpAndPath => !session.remote_ip().is_empty(),
-            _ => condition_key_value(session, &self.key).is_some(),
+            _ => key_value(session, &self.key).is_some(),
         };
         apply_negate(exists, self.negate)
     }
@@ -1002,7 +978,7 @@ impl KeyExistConditionExt for KeyExistCondition {
 
 impl KeyMatchConditionExt for KeyMatchCondition {
     fn evaluate(&self, session: &dyn PluginSession, log: Option<&mut PluginLog>) -> bool {
-        let Some(value) = condition_key_value(session, &self.key) else {
+        let Some(value) = key_value(session, &self.key) else {
             return apply_negate(false, self.negate);
         };
         self.match_value(&value, log)
@@ -1037,7 +1013,7 @@ impl ProbabilityConditionExt for ProbabilityCondition {
         } else if ratio >= 1.0 {
             true
         } else if let Some(key) = &self.key {
-            if let Some(key_value) = condition_key_value(session, key) {
+            if let Some(key_value) = key_value(session, key) {
                 // Use hash for deterministic sampling
                 let mut hasher = DefaultHasher::new();
                 key_value.hash(&mut hasher);
