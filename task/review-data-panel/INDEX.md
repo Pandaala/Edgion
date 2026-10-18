@@ -3818,3 +3818,26 @@ Fresh verification passed 53 network-free tests: 24 attempt-runtime and 29 share
 Redis tests. Formatting, workspace check/Clippy, seven repository guards and diff
 hygiene passed. Existing warnings remain outside changed code. No live Redis
 cancellation, failover or throughput benchmark was run for this batch.
+
+
+## Quota target identity scratch reuse
+
+build_targets now clears and reuses one local byte buffer across quota limits
+instead of allocating a fresh identity buffer per limit. Capacity is requested
+lazily inside the iterator, so empty input does not allocate identity scratch.
+The same length-prefixed parts are appended in the same order, and the canonical
+shared key builder still produces independent owned bucket/marker strings.
+The buffer is released when synchronous target construction returns, before
+Redis admission awaits. Clock capture, deadlines, limits and target order remain
+unchanged. No hash/key format, shared key API or response-body ownership changed.
+
+The existing mixed-scope/reordering regression now compares each combined target
+with an independent single-target build, including both bucket and marker keys.
+Reversed IdentityModel/Identity ordering verifies that prior model bytes do not
+leak into the next identity. This reuses temporary capacity across limits; no
+fixed allocation count or measured throughput gain is claimed.
+
+Fresh verification passed 56 network-free tests: 27 quota and 29 shared Redis
+tests. Formatting, workspace check/Clippy, seven repository guards and diff
+hygiene passed. Existing warnings remain outside changed code. No live Redis
+or throughput benchmark was run for this batch.

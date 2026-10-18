@@ -368,6 +368,7 @@ fn build_targets(
         .saturating_add(RECONCILIATION_GRACE);
     let final_marker_ttl = request_timeout.saturating_add(RECONCILIATION_GRACE);
     let now_instant = Instant::now();
+    let mut quota_identity = Vec::new();
 
     limits
         .iter()
@@ -378,7 +379,8 @@ fn build_targets(
             let bucket_retention_deadline = now_instant
                 .checked_add(duration_from_millis_saturating(remaining_ms).saturating_add(RECONCILIATION_GRACE))
                 .unwrap_or(now_instant);
-            let mut quota_identity = Vec::with_capacity(entry_scope.len() + identity.len() + logical_model.len() + 32);
+            quota_identity.clear();
+            quota_identity.reserve(entry_scope.len() + identity.len() + logical_model.len() + 32);
             append_identity_part(&mut quota_identity, entry_scope.as_bytes());
             append_identity_part(&mut quota_identity, identity.as_bytes());
             append_identity_part(&mut quota_identity, &window_ms.to_be_bytes());

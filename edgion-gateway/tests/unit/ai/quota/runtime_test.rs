@@ -277,6 +277,20 @@ fn quota_policy_identity_is_stable_across_reorder_and_limit_changes() {
         Duration::from_millis(500),
         TEST_NOW_MS,
     );
+    for (limit, target) in [first.clone(), second.clone()].iter().zip(&original) {
+        let single = build_targets(
+            "scope",
+            "consumer",
+            "model-a",
+            "r1",
+            std::slice::from_ref(limit),
+            Duration::from_secs(300),
+            Duration::from_millis(500),
+            TEST_NOW_MS,
+        );
+        assert_eq!(target.bucket_key, single[0].bucket_key);
+        assert_eq!(target.request_key, single[0].request_key);
+    }
     let mut changed_limit = first.clone();
     changed_limit.tokens = 999;
     let reordered = build_targets(
@@ -293,6 +307,7 @@ fn quota_policy_identity_is_stable_across_reorder_and_limit_changes() {
     assert_eq!(original[0].bucket_key, reordered[1].bucket_key);
     assert_eq!(original[0].request_key, reordered[1].request_key);
     assert_eq!(original[1].bucket_key, reordered[0].bucket_key);
+    assert_eq!(original[1].request_key, reordered[0].request_key);
     assert_ne!(original[0].bucket_key, original[1].bucket_key);
 }
 
