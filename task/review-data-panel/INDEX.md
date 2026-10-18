@@ -4239,3 +4239,25 @@ selector, 127 LB, 103 HTTP upstream-peer and 2 ConfigClient tests. Discovery
 and peer filters ran serially. Formatting, workspace check/Clippy, seven
 repository guards and diff hygiene passed. Existing warnings remain outside
 changed code. No live transport or throughput benchmark ran.
+
+
+## Borrowed numeric endpoint facade
+
+The global RoundRobin EpSliceStore facade now lives directly in LazyLock and
+its getter returns a static reference. Outbound target resolution, pinned
+resolver calls and health-adjacent inventory use borrowed methods; no consumer
+needs an owned facade. This removes the outer singleton allocation and temporary
+Arc reference-count operations without changing the facade's coordinator Arc.
+
+Each lookup still loads its generation and returns owned sockets or backend
+handles. Service-port validation, actual serving ports, readiness order, fail-closed
+non-inet handling, resolver safety filtering and cursor behavior remain unchanged.
+Local generic constructors and default ownership remain unchanged. The Service
+facade getter has no current production consumer and was left outside this batch.
+No general allocation-free discovery or throughput claim is made.
+
+Fresh verification passed 45 network-free tests: 4 endpoint-facade, 4 pinned
+resolver, 2 outbound target, 13 DirectEndpoint and 22 session-persistence tests.
+Formatting, workspace check/Clippy, seven repository guards and diff hygiene
+passed. Existing warnings remain outside changed code. No live transport or
+throughput benchmark ran.

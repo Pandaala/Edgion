@@ -10,11 +10,11 @@ use std::sync::{Arc, LazyLock};
 use crate::backends::discovery::{get_service_discovery_coordinator, ServiceDiscoveryCoordinator, ServiceSectionKey};
 use crate::lb::LbBackend;
 
-static ROUNDROBIN_STORE: LazyLock<Arc<EpSliceStore<RoundRobin>>> =
-    LazyLock::new(|| Arc::new(EpSliceStore::new(Arc::clone(get_service_discovery_coordinator()))));
+static ROUNDROBIN_STORE: LazyLock<EpSliceStore<RoundRobin>> =
+    LazyLock::new(|| EpSliceStore::new(Arc::clone(get_service_discovery_coordinator())));
 
-pub fn get_roundrobin_store() -> Arc<EpSliceStore<RoundRobin>> {
-    ROUNDROBIN_STORE.clone()
+pub fn get_roundrobin_store() -> &'static EpSliceStore<RoundRobin> {
+    &ROUNDROBIN_STORE
 }
 
 /// Read-only compatibility facade over one joint Service selector generation.
