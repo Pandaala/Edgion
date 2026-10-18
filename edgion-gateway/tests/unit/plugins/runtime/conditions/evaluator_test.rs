@@ -1387,3 +1387,31 @@ fn actual_owner_mixed_ip_and_uninitialized_regex_leaves_compile_at_every_consume
     assert!(invalid.unresolved);
     assert_eq!(invalid.evaluate_sync(&session), MatchState::Unresolved);
 }
+
+#[test]
+fn borrowed_query_conditions_keep_present_empty_and_missing_distinct() {
+    let mut session = MockPluginSession::new();
+    session.expect_get_query_param_ref().returning(|name| match name {
+        "present" => Some("hello world"),
+        "empty" => Some(""),
+        _ => None,
+    });
+    session.expect_key_get().never();
+    for (name, expected) in [("present", true), ("empty", true), ("missing", false)] {
+        let condition = KeyExistCondition {
+            key: KeyGet::Query { name: name.to_string() },
+            negate: false,
+            descriptor: Box::from(""),
+        };
+        assert_eq!(condition.evaluate(&session), expected);
+    }
+    let condition = KeyMatchCondition {
+        key: KeyGet::Query {
+            name: "present".to_string(),
+        },
+        core: core_values(vec!["hello world"]),
+        negate: false,
+        descriptor: Box::from(""),
+    };
+    assert!(condition.evaluate(&session, None));
+}

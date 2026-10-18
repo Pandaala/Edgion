@@ -11,7 +11,9 @@ knowledge_type: regression-guards
 `ConditionalUpstreamResponseBodyFilter` evaluates its compiled `skip` and `run`
 conditions for every response chunk. The shared condition evaluator borrows live
 `Header`, `Cookie`, `Path`, `RequestPath`, `Method`, `RemoteIp`, and `DirectPeerIp` values
-and mTLS certificate candidates for the duration of each predicate evaluation. `KeyExist`, `KeyMatch`,
+and mTLS certificate candidates for the duration of each predicate evaluation.
+Query conditions borrow the decoded frozen entry-query cache for the same short
+evaluation; they do not read the live rewritten URI. `KeyExist`, `KeyMatch`,
 `SecretMatch`, and keyed `Probability` use that same accessor. It does not cache
 a predicate result or a request snapshot across chunks. The response-body
 filter still emits no per-chunk `PluginLog`.
@@ -67,12 +69,12 @@ with a borrowed certificate getter and lazy borrowed candidates. The test assert
 values, not these remaining allocation counts, so future improvements are
 free to reduce them.
 
-The remaining sources have different costs or lifetimes:
+The other sources have different costs or lifetimes:
 
-| Source | Current per-evaluation work | Why it remains live and owned |
+| Source | Current per-evaluation work | Ownership and source boundary |
 |---|---|---|
 | `TraceId`, `Host` | Copies a string | No equivalent borrowed condition accessor; request ID rules can mutate the trace ID. |
-| `Query` | Clones one value from the request's already parsed query cache | The entry query is frozen, but the current `PluginSession` getter returns an owned value. |
+| `Query` | Borrows one decoded value from the lazily initialized entry-query cache | `get_query_param_ref` ties the value to the session read; the owned getter still copies for consumers requiring ownership. |
 | `Ctx` | Clones a context value | Plugins may set or remove context variables. |
 | `RemoteIpAndPath` | Formats a combined string | The resolved IP can change; the composite needs an owned representation today. |
 | `JwtClaimMatch` | Clones context JSON, parses it, and creates scalar candidate strings | JWT/OIDC claim context may be changed by plugins; a cross-chunk parsed snapshot would need invalidation. |
@@ -82,9 +84,8 @@ The remaining sources have different costs or lifetimes:
 
 The selected input values may themselves change between chunks. The borrowing
 scope deliberately ends before the next filter runs, so later plugin mutations
-remain visible. Query inputs may support further optimization,
-but that requires a separately justified borrowed session boundary and a
-measured benefit. This page makes no claim that all response-body conditions
+remain visible. Query inputs now use an explicit borrowed session boundary. First access may
+still parse and allocate the frozen cache; repeated selected value reads borrow it. This page makes no claim that all response-body conditions
 are allocation-free.
 
 ## Alternatives and limits
@@ -168,3 +169,22 @@ integration or production throughput measurement is claimed.
 
 - `ARCH-007`: borrowed mTLS condition candidates, preserving live evaluation and
   explicit consumer ownership.
+
+
+## Borrowed decoded query boundary
+
+`PluginSession::get_query_param_ref` has an explicit self lifetime independent of
+its name argument. The production adapter reads the same canonical cached_query
+owner as before; get_query_param explicitly copies that borrow for owned callers.
+The shared condition accessor uses the borrowed method for Query, so KeyExist,
+KeyMatch, SecretMatch and keyed Probability retain their source and predicate
+semantics without a temporary selected-value String. No cache is initialized
+before the original read site, and no predicate result survives an evaluation.
+
+The real-adapter regression rewrites the live URI before and after first query
+access, checks plus/percent decoding, missing versus empty values, and verifies
+pointer identity with the frozen cache. After cache initialization it compares
+one owned key_get allocation with zero allocations for repeated compiled query
+matching. This is a fixed-fixture allocation result, not a cold-parse or throughput
+claim. The unresolved entry-capture lifecycle boundary described in URI
+normalization knowledge remains unchanged.

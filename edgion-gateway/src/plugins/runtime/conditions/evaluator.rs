@@ -873,7 +873,8 @@ impl ConditionExt for Condition {
     }
 }
 
-/// Borrow live condition inputs for one evaluation. Sources without an
+/// Borrow condition inputs for one evaluation. Query uses the frozen entry cache;
+/// other selected sources retain their live reads. Sources without an
 /// equivalent borrowed session accessor retain the canonical owned KeyGet path.
 /// No value survives the current predicate evaluation, so later plugin writes
 /// remain visible on the next chunk.
@@ -881,6 +882,7 @@ fn condition_key_value<'a>(session: &'a dyn PluginSession, key: &KeyGet) -> Opti
     match key {
         KeyGet::Header { name } => session.header_str(name).map(Cow::Borrowed),
         KeyGet::Cookie { name } => cookie_value_ref(session.request_header_map(), name).map(Cow::Borrowed),
+        KeyGet::Query { name } => session.get_query_param_ref(name).map(Cow::Borrowed),
         KeyGet::Path => Some(Cow::Borrowed(session.get_path())),
         KeyGet::RequestPath => Some(Cow::Borrowed(session.get_request_path())),
         KeyGet::Method => Some(Cow::Borrowed(session.get_method())),

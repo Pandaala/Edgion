@@ -2757,3 +2757,55 @@ async fn read_response_body_missing_entry_method_cannot_claim_live_head() {
         Err(BodyReadError::Unimplemented)
     ));
 }
+
+#[tokio::test]
+async fn borrowed_query_conditions_use_frozen_decoded_cache_without_value_copies() {
+    use crate::plugins::runtime::conditions::{CompiledPluginConditions, EvaluationResult};
+    use edgion_resources::resources::edgion_plugins::conditions::{
+        Condition, ConditionSet, KeyMatchCondition, MatchCore, PluginConditions,
+    };
+
+    let mut session =
+        test_session_raw("GET /entry?x=hello+world&empty=&encoded=foo%26bar HTTP/1.1\r\nHost: example.com\r\n\r\n")
+            .await;
+    let mut ctx = EdgionHttpContext::default();
+    ctx.request_info.entry_raw_query = Some("x=hello+world&empty=&encoded=foo%26bar".to_string());
+    session.req_header_mut().set_uri("/before?x=rewritten".parse().unwrap());
+    {
+        let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        assert_eq!(adapter.get_query_param_ref("x"), Some("hello world"));
+        assert_eq!(adapter.get_query_param_ref("empty"), Some(""));
+        assert_eq!(adapter.get_query_param_ref("encoded"), Some("foo&bar"));
+        assert_eq!(adapter.get_query_param_ref("missing"), None);
+        assert_eq!(adapter.get_query_param("empty"), Some(String::new()));
+        assert_eq!(adapter.get_query_param("missing"), None);
+    }
+    let stored = ctx.cached_query().get("x").unwrap().as_ptr();
+    let key = KeyGet::Query { name: "x".to_string() };
+    let mut condition = KeyMatchCondition {
+        key: key.clone(),
+        core: MatchCore {
+            values: Some(vec!["hello world".to_string()]),
+            ..Default::default()
+        },
+        negate: false,
+        descriptor: Box::from(""),
+    };
+    condition.compile().unwrap();
+    let conditions = CompiledPluginConditions::new(PluginConditions {
+        skip: None,
+        run: Some(ConditionSet::all_of(vec![Condition::KeyMatch(condition)])),
+    });
+    session.req_header_mut().set_uri("/after?x=changed".parse().unwrap());
+    let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+    assert_eq!(adapter.request_query(), Some("x=changed"));
+    assert_eq!(adapter.get_query_param_ref("x").unwrap().as_ptr(), stored);
+    let (owned, calls) = crate::test_allocation_counter::count_allocations(|| adapter.key_get(&key));
+    assert_eq!(owned.as_deref(), Some("hello world"));
+    assert_eq!(calls, 1);
+    for _ in 0..2 {
+        let (result, calls) = crate::test_allocation_counter::count_allocations(|| conditions.evaluate(&adapter));
+        assert_eq!(result, EvaluationResult::Run);
+        assert_eq!(calls, 0, "cached query conditions must borrow the stored value");
+    }
+}

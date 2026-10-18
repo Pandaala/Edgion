@@ -76,6 +76,9 @@ impl PluginSession for ResultSession {
     fn request_headers(&self) -> Vec<(String, String)> {
         panic!("unexpected session operation")
     }
+    fn get_query_param_ref<'a>(&'a self, _name: &str) -> Option<&'a str> {
+        panic!("unexpected session operation")
+    }
     fn get_query_param(&self, _name: &str) -> Option<String> {
         panic!("unexpected session operation")
     }

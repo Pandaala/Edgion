@@ -1054,12 +1054,16 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         utf8_header_values(&self.inner.req_header().headers, name)
     }
 
-    fn get_query_param(&self, name: &str) -> Option<String> {
+    fn get_query_param_ref<'s>(&'s self, name: &str) -> Option<&'s str> {
         // Decoded values (percent-decoded, '+' → ' ') shared with the route
         // matcher via EdgionHttpContext::cached_query. Parsed at most once
         // per request regardless of how many plugins call this method.
         // The context owns the frozen entry query, independent of live rewrites.
-        self.ctx.cached_query().get(name).cloned()
+        self.ctx.cached_query().get(name).map(String::as_str)
+    }
+
+    fn get_query_param(&self, name: &str) -> Option<String> {
+        self.get_query_param_ref(name).map(str::to_owned)
     }
 
     fn get_cookie(&self, name: &str) -> Option<String> {

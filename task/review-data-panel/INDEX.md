@@ -894,3 +894,30 @@ one output allocation; ordered three-source spill and all-missing two/three-sour
 fallback tests also pass. Formatting, workspace check/Clippy and seven repository
 guards passed; existing warnings remain outside changed code. No live Redis,
 full integration suite or throughput benchmark ran for this batch.
+
+## Borrowed decoded query condition inputs
+
+The KeyGet source audit found that Query conditions copied a selected decoded
+value on every evaluation, including response chunks. PluginSession now exposes
+a borrow tied to the current session read, and the production adapter obtains it
+from the existing canonical frozen entry-query cache. The owned query getter
+copies that same borrow for consumers requiring ownership. The condition accessor
+uses it synchronously; no predicate result or new request snapshot is cached.
+
+First access remains lazy and can allocate the parsed cache. Rewriting the live
+URI does not change frozen decoded values, and raw whole-query access stays live.
+Empty values remain present and missing names remain absent. No earlier query
+initialization or change to the existing pre-entry-capture boundary is introduced.
+Other owned KeyGet sources and multi-source rate-limit value copies remain open.
+
+Independent plan review, the exact supporting-file scope amendment and final
+source review passed. The only supporting test-crate edit adds the required
+method to ResultSession with its existing unexpected-operation panic contract;
+no integration scenario or assertion changes. Shared conditions passed 67 tests,
+query-cache tests passed 7, identity adapter tests passed 4 and the source
+allocation inventory passed 1. The two borrowed-query tests also passed (one
+is included in the condition group). The real adapter reports one owned value
+allocation versus zero for each repeated compiled match after cache initialization.
+Formatting, workspace check/Clippy and seven repository guards passed; existing
+warnings remain outside changed code. No live Redis, full integration suite or
+throughput benchmark ran for this batch.
