@@ -1945,3 +1945,17 @@ Fresh final-source verification passed all 23 AllEndpointStatus tests,
 formatting and workspace check/Clippy after resolving the introduced let-else
 lint. Seven repository guards passed; remaining warnings are outside the
 changed source. Independent final review, including the lint correction, passed.
+
+## AllEndpointStatus lossy text ownership
+
+Probe response decoding consumes the Cow returned by from_utf8_lossy through
+into_owned. Invalid UTF-8 now transfers the already allocated replacement String
+instead of copying it again; valid UTF-8 retains its existing single copy. Raw
+byte accounting precedes decoding, and truncation, streaming caps and replacement
+text are unchanged. Independent plan review passed. The existing raw-byte
+assembly test uses synthetic completed results, not this network decode branch;
+semantic equivalence follows the standard Cow ownership conversion. No live
+network or throughput claim is made.
+Fresh verification passed 23 AllEndpointStatus tests, formatting, workspace
+check/Clippy and seven repository guards. Remaining warnings are outside the
+changed source. Independent final review passed.

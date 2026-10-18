@@ -578,7 +578,7 @@ impl AllEndpointStatus {
 
                             let (body_bytes, truncated) = read_body_limited(resp, max_body).await;
                             let response_body_bytes = body_bytes.len();
-                            let body = String::from_utf8_lossy(&body_bytes).to_string();
+                            let body = String::from_utf8_lossy(&body_bytes).into_owned();
 
                             CompletedEndpointResult {
                                 ordinal,
