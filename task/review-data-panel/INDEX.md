@@ -2219,3 +2219,17 @@ and no throughput benchmark is claimed.
 Fresh verification passed all 117 shared outbound tests, formatting, workspace
 check/Clippy and seven repository guards. Remaining warnings are outside changed
 source. Independent final review passed.
+
+## Outbound form literal borrowing
+
+CompiledRequest borrows compiled literal form values while retaining owned
+rendered template values. The existing form serializer consumes the same text
+in the same order, preserving encoding, template errors and body framing. This
+removes the temporary nonempty literal String clone; final encoded body storage
+and template results remain owned. The existing real-builder form test now also
+checks reserved characters, allowed UTF-8 and empty literal values alongside the
+dynamic template, Content-Type and Content-Length. Independent plan review
+passed. No throughput benchmark is claimed.
+Fresh verification passed all 117 shared outbound tests, formatting, workspace
+check/Clippy and seven repository guards. Remaining warnings are outside changed
+source. Independent final review passed.

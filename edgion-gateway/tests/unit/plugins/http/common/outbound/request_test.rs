@@ -701,7 +701,11 @@ fn form_body_percent_encodes_values() {
             },
             CustomField {
                 name: "source".to_string(),
-                source: CustomSource::Value("edgion".to_string()),
+                source: CustomSource::Value("edgion &é".to_string()),
+            },
+            CustomField {
+                name: "empty".to_string(),
+                source: CustomSource::Value(String::new()),
             },
         ],
     });
@@ -717,7 +721,10 @@ fn form_body_percent_encodes_values() {
         .build_request(&session, None, "http://upstream.test", None, &mut Default::default())
         .unwrap();
 
-    assert_eq!(req_body_string(&req), "userId=a%26b%3Dc+d&source=edgion");
+    assert_eq!(
+        req_body_string(&req),
+        "userId=a%26b%3Dc+d&source=edgion+%26%C3%A9&empty="
+    );
     assert_eq!(
         req.headers().get("content-type").map(|v| v.to_str().unwrap()),
         Some("application/x-www-form-urlencoded")

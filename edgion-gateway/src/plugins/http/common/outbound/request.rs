@@ -408,8 +408,10 @@ impl CompiledRequest {
                     let mut ser = url::form_urlencoded::Serializer::new(String::new());
                     for f in fields {
                         let value = match &f.source {
-                            CompiledCustomFieldSource::Literal(v) => v.clone(),
-                            CompiledCustomFieldSource::Template(tpl) => evaluate_template(tpl, context, resolved)?,
+                            CompiledCustomFieldSource::Literal(v) => Cow::Borrowed(v.as_str()),
+                            CompiledCustomFieldSource::Template(tpl) => {
+                                Cow::Owned(evaluate_template(tpl, context, resolved)?)
+                            }
                         };
                         ser.append_pair(&f.name, &value);
                     }
