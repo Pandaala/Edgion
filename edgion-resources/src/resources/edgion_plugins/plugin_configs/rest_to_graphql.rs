@@ -234,6 +234,10 @@ fn check_value_bounds(value: &Value) -> Result<(), GraphqlError> {
     if profile.node_count > 4096 || profile.max_depth > 32 || profile.text_bytes > REST_GRAPHQL_MAX_VALUE_BYTES as u64 {
         return Err(GraphqlError::TooLarge);
     }
+    // Scalar roots cannot contain arrays; profiling above still enforces their bounds.
+    if !matches!(value, Value::Array(_) | Value::Object(_)) {
+        return Ok(());
+    }
     let mut stack = vec![value];
     while let Some(value) = stack.pop() {
         match value {

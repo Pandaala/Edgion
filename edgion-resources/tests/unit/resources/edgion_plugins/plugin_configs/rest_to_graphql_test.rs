@@ -112,3 +112,53 @@ fn entry_query_preflight_rejects_decoded_duplicates_encoding_and_pair_limits() {
     let query = (0..257).map(|n| format!("n{n}=1")).collect::<Vec<_>>().join("&");
     assert!(validate_rest_query(&query, 65536).is_err());
 }
+
+#[test]
+fn leaf_value_bounds_keep_profile_and_text_byte_limits() {
+    for value in [
+        Value::Null,
+        json!(false),
+        json!(true),
+        json!(i64::MIN),
+        json!(u64::MAX),
+        json!(1.25),
+        json!(""),
+        json!("x".repeat(REST_GRAPHQL_MAX_VALUE_BYTES)),
+        json!("é".repeat(REST_GRAPHQL_MAX_VALUE_BYTES / 2)),
+    ] {
+        assert_eq!(check_value_bounds(&value), Ok(()));
+    }
+    for text in [
+        "x".repeat(REST_GRAPHQL_MAX_VALUE_BYTES + 1),
+        "é".repeat(REST_GRAPHQL_MAX_VALUE_BYTES / 2 + 1),
+    ] {
+        assert_eq!(check_value_bounds(&Value::String(text)), Err(GraphqlError::TooLarge));
+    }
+}
+
+#[test]
+fn container_value_bounds_keep_nested_arrays_and_profile_error_precedence() {
+    assert_eq!(
+        check_value_bounds(&json!({"nested": {"items": vec![Value::Null; 32]}})),
+        Ok(())
+    );
+    assert_eq!(
+        check_value_bounds(&json!({"nested": {"items": vec![Value::Null; 33]}})),
+        Err(GraphqlError::TooLarge)
+    );
+    let nested = |depth: usize| (1..depth).fold(Value::Null, |child, _| Value::Array(vec![child]));
+    assert_eq!(check_value_bounds(&nested(32)), Ok(()));
+    assert_eq!(check_value_bounds(&nested(33)), Err(GraphqlError::TooLarge));
+    assert_eq!(check_value_bounds(&nested(65)), Err(GraphqlError::Invalid));
+    // Every array is within its length cap; aggregate node count is the rejection.
+    let row = Value::Array(vec![Value::Null; 32]);
+    let block = Value::Array(vec![row; 32]);
+    assert_eq!(check_value_bounds(&Value::Array(vec![block.clone(); 3])), Ok(()));
+    assert_eq!(
+        check_value_bounds(&Value::Array(vec![block; 4])),
+        Err(GraphqlError::TooLarge)
+    );
+    let many_nodes = Value::Array(vec![Value::Array(vec![Value::Null; 32]); 625]);
+    // Universal profiling rejects first, before the stricter adapter array cap.
+    assert_eq!(check_value_bounds(&many_nodes), Err(GraphqlError::Invalid));
+}

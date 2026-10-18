@@ -1704,3 +1704,20 @@ Fresh serial selections passed 15 CtxSet-related tests, 22 template tests and
 String allocation. Formatting, workspace check/Clippy and seven repository guards
 passed, with existing warnings outside changed files. Independent final review
 passed.
+
+## REST-to-GraphQL scalar bounds traversal
+
+Tracing Gateway construction into its canonical shared binding validator found
+an unnecessary array-check worklist for scalar roots. After unchanged universal
+profiling and adapter cap checks, scalar values now skip that second traversal.
+Containers retain nested array checks and existing error precedence. The bounded
+supporting Resources edit owns this runtime validation; no binding API, schema,
+body publication or separate Resources coverage claim is introduced.
+
+Independent plan review approved the exact four-file scope. Direct tests cover
+scalar text-byte limits, nested array length and profile depth/node boundaries.
+No full suite, live integration or throughput benchmark ran for this batch.
+Fresh Resources tests passed 7 cases; Gateway adapter tests passed 9. Formatting,
+workspace check/Clippy and seven repository guards passed, with existing warnings
+outside changed files. Independent final review passed. Temporary source-Value
+ownership in binding remains a separate open inspection boundary.

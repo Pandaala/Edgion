@@ -70,3 +70,16 @@ custom input validation, bound changes, body publication/framing and hot reload
 against fresh tests. The former implementation task is no longer present; use
 the linked architecture, sources and tests for current evidence. This page does
 not establish a successful live run.
+
+## Scalar-bound traversal ownership
+
+The shared binding validator always profiles input/output values and enforces
+node, depth and text-byte limits first. A scalar root then skips the separate
+array-length traversal: it cannot contain an array, so allocating that worklist
+would perform no useful check. Array/object roots still traverse every nested
+container and reject arrays longer than 32. Profiling failure remains Invalid;
+adapter-specific cap violations remain TooLarge, in the original order.
+Direct tests cover scalar byte limits, nested arrays and aggregate depth/node
+boundaries. Binding, JSON conversion and envelope/publication ownership are
+unchanged. Profiling itself still allocates; this is not allocation-free binding
+or a throughput claim.
