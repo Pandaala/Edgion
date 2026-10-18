@@ -1615,3 +1615,20 @@ matches and one borrowed-context adapter test. Selections may overlap and are no
 a unique-test coverage count. Formatting, workspace check/Clippy and seven
 repository guards passed, with existing warnings outside changed files.
 Independent final review passed.
+
+## Borrowed RegionRoute source values
+
+RegionRoute now shares canonical `key_value` reads while retaining its separate
+first-nonempty source policy. Borrowed strings support direct and configured map
+selection, bypass comparison, hash parsing/calculation and sensitive logging;
+RemoteIpAndPath keeps owned composition. Overlay, failover and route ordering
+remain unchanged.
+
+Independent plan review passed. Tests cover source priority/identity and ownership,
+direct/map/bypass routing, and hash passthrough/writeback. The first compile found
+a test-only import at the wrong re-export level; the import was corrected.
+No full suite, live integration or throughput benchmark ran for this batch.
+Fresh serial selections passed all 23 RegionRoute and 67 condition tests.
+Formatting, workspace check/Clippy and seven repository guards passed; Clippy
+retains existing warnings outside the changed files. Independent final review
+passed.

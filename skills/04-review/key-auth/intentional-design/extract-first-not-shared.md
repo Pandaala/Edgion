@@ -15,11 +15,12 @@ was bypassed. RegionRoute accepts all of its configured KeyGet variants. Do not
 remove the authentication whitelist merely to share a loop.
 
 This policy boundary does not require duplicated value parsing or owned strings.
-KeyAuth now uses `runtime::session_adapter::key_value`, the unchanged borrowed
+KeyAuth and RegionRoute use `runtime::session_adapter::key_value`, the unchanged borrowed
 source mapping formerly local to the condition evaluator. Conditions use that
 same helper. It borrows canonical session values where available and falls back
 to owned KeyGet for other sources; callers keep their own eligibility, order and
-empty-value policy. RegionRoute is outside this change.
+empty-value policy. RegionRoute retains owned fallback for RemoteIpAndPath; its
+other source values can remain borrowed through synchronous selection and hashing.
 
 ## Ownership and acceptance
 

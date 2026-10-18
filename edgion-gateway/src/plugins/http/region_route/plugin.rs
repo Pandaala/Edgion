@@ -19,13 +19,14 @@
 
 use edgion_resources::refs::config_data_fields::HttpConfigDataEntry;
 use edgion_resources::resources::edgion_plugins::EdgionPlugin;
-use std::{num::NonZeroU16, sync::Arc};
+use std::{borrow::Cow, num::NonZeroU16, sync::Arc};
 
 use async_trait::async_trait;
 
 use crate::observe::metrics::record_region_route_overlay_event;
 use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
 use crate::plugins::runtime::log::{la, sensitive};
+use crate::plugins::runtime::session_adapter::key_value;
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
 use crate::{ExternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::filters::PluginRunningResult;
@@ -187,13 +188,13 @@ impl RegionRoute {
     // ── Key extraction ────────────────────────────────────────────────────────
 
     /// Extract the first non-empty value from the given key sources.
-    fn extract_first<'s>(
+    fn extract_first<'s, 'v>(
         &self,
-        session: &mut dyn PluginSession,
+        session: &'v dyn PluginSession,
         sources: &'s [edgion_resources::common::KeyGet],
-    ) -> Option<(String, &'s edgion_resources::common::KeyGet)> {
+    ) -> Option<(Cow<'v, str>, &'s edgion_resources::common::KeyGet)> {
         for source in sources {
-            if let Some(v) = session.key_get(source) {
+            if let Some(v) = key_value(session, source) {
                 if !v.is_empty() {
                     return Some((v, source));
                 }
@@ -456,7 +457,7 @@ impl RequestFilter for RegionRoute {
                             .base
                             .route_by_key_conf_match
                             .as_ref()
-                            .map(|kmc| kmc.bypass_cluster_keys.contains(&value))
+                            .map(|kmc| kmc.bypass_cluster_keys.iter().any(|key| key == value.as_ref()))
                             .unwrap_or(false);
 
                         if !bypassed {
@@ -474,7 +475,7 @@ impl RequestFilter for RegionRoute {
                         }
                     };
 
-                    match effective_map.get(&value) {
+                    match effective_map.get(value.as_ref()) {
                         Some(region_name) => match Self::lookup_by_name(&effective_regions, region_name) {
                             Some((idx, region)) => {
                                 log.push_fmt(

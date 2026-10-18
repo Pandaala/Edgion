@@ -217,3 +217,18 @@ successful remote delivery. The original fixture, request/retry contract,
 one-hop behavior and loopback guard remain unchanged. Re-evaluate the assertions
 if canonical plugin message serialization, fixture identities/endpoints or the
 terminal diagnostic contract changes.
+
+## Borrowed selection inputs
+
+RegionRoute uses the canonical session adapter `key_value` within its own
+first-nonempty source loop. Header, query, cookie, context and other canonical
+session strings remain borrowed; RemoteIpAndPath retains owned composition.
+Source references belong to configuration independently of the session borrow.
+Exact bypass membership and map lookup consume string slices, and hashing and
+sensitive logging finish before session writes or route mutation.
+
+This changes input ownership only: rule/source order, empty-value skipping,
+configured map overrides, hash passthrough and writeback, effective overlay
+validation and one-hop failover remain unchanged. Focused tests cover source
+identity and borrowed/owned shape plus direct/map/bypass and hash request paths.
+No throughput or callback-wide zero-allocation claim follows.

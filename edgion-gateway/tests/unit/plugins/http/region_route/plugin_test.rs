@@ -629,3 +629,172 @@ fn wrong_overlay_type_preserves_the_complete_base_and_reports_fallback() {
     assert!(std::ptr::eq(&*regions, plugin.base.regions.as_slice()));
     assert!(log.render_for_test().contains("overlay_type_mismatch"));
 }
+
+#[test]
+fn extracted_route_values_preserve_source_order_and_ownership() {
+    let plugin = RegionRoute {
+        name: "RegionRoute".to_string(),
+        init_error: None,
+        base: Arc::new(RegionRouteConfig::default()),
+        override_key: None,
+    };
+    for source in [
+        KeyGet::Header {
+            name: "x-region".to_string(),
+        },
+        KeyGet::Query {
+            name: "region".to_string(),
+        },
+        KeyGet::Cookie {
+            name: "region".to_string(),
+        },
+        KeyGet::Ctx {
+            name: "region".to_string(),
+        },
+        KeyGet::Path,
+        KeyGet::RemoteIpAndPath,
+    ] {
+        let sources = [
+            KeyGet::Header {
+                name: "x-empty".to_string(),
+            },
+            source,
+            KeyGet::Method,
+        ];
+        let mut headers = http::HeaderMap::new();
+        headers.insert("x-empty", http::HeaderValue::from_static(""));
+        headers.insert("x-region", http::HeaderValue::from_static("selected"));
+        headers.insert(http::header::COOKIE, http::HeaderValue::from_static("region=selected"));
+        let mut session = MockPluginSession::new();
+        session.expect_request_header_map().return_const(headers);
+        session.expect_get_query_param_ref().return_const(Some("selected"));
+        session.expect_get_ctx_var_ref().return_const(Some("selected"));
+        session.expect_get_path().return_const("selected".to_string());
+        session.expect_get_method().times(0);
+        let composite = matches!(sources[1], KeyGet::RemoteIpAndPath);
+        if composite {
+            session
+                .expect_key_get()
+                .withf(|key| matches!(key, KeyGet::RemoteIpAndPath))
+                .times(1)
+                .return_const(Some("selected".to_string()));
+        } else {
+            session.expect_key_get().times(0);
+        }
+        let (value, selected) = plugin.extract_first(&session, &sources).unwrap();
+        assert_eq!(value, "selected");
+        assert_eq!(matches!(value, Cow::Owned(_)), composite);
+        assert!(std::ptr::eq(selected, &sources[1]));
+    }
+}
+
+#[tokio::test]
+async fn borrowed_direct_and_configured_map_routes_preserve_selection() {
+    use edgion_resources::resources::edgion_plugins::plugin_configs::RouteByKeyConfMatchMeta;
+    use std::collections::HashMap;
+    for mode in ["direct", "override", "bypass"] {
+        let selected = if mode == "override" { "other" } else { "local" };
+        let config = RegionRouteConfig {
+            my_region: selected.to_string(),
+            key_get: vec![KeyGet::Header {
+                name: "x-key".to_string(),
+            }],
+            route_rules: vec![if mode == "direct" {
+                RouteRule::RouteByDirectRegion {
+                    key_from: vec![KeyGet::Header {
+                        name: "x-region".to_string(),
+                    }],
+                }
+            } else {
+                RouteRule::RouteByKeyConfMatch {
+                    match_map: HashMap::from([("key".to_string(), "local".to_string())]),
+                }
+            }],
+            route_by_key_conf_match: Some(RouteByKeyConfMatchMeta {
+                match_map: HashMap::from([("key".to_string(), "other".to_string())]),
+                bypass_cluster_keys: if mode == "bypass" {
+                    vec!["key".to_string()]
+                } else {
+                    vec![]
+                },
+            }),
+            regions: vec![
+                make_region("local", 0, 499, "local:80"),
+                make_region("other", 500, 999, "other:80"),
+            ],
+            ..Default::default()
+        };
+        let plugin = RegionRoute::create(&config, "default");
+        let mut session = MockPluginSession::new();
+        setup_header_mocks(&mut session, &[("x-region", "local"), ("x-key", "key")]);
+        session.expect_key_get().times(0);
+        session
+            .expect_record_outcome()
+            .withf(move |outcome, name| *outcome == DyeOutcome::Success && name == selected)
+            .times(1)
+            .return_const(());
+        assert_eq!(
+            plugin
+                .run_request(&mut session, &mut PluginLog::new("RegionRoute"))
+                .await,
+            PluginRunningResult::GoodNext
+        );
+    }
+}
+
+#[tokio::test]
+async fn borrowed_hash_input_preserves_passthrough_and_writeback() {
+    for passthrough in [false, true] {
+        let config = RegionRouteConfig {
+            my_region: "local".to_string(),
+            key_get: vec![KeyGet::Header {
+                name: "x-key".to_string(),
+            }],
+            hash_key_get: Some(vec![KeyGet::Header {
+                name: "x-hash".to_string(),
+            }]),
+            hash_calc: Some(HashCalcConfig {
+                algorithm: HashAlgorithm::Crc32,
+                modulo: 1000,
+                write_back: vec![KeySet::Ctx {
+                    name: "route-hash".to_string(),
+                }],
+            }),
+            route_rules: vec![RouteRule::RouteByHashRange],
+            regions: vec![make_region("local", 0, 999, "local:80")],
+            ..Default::default()
+        };
+        let plugin = RegionRoute::create(&config, "default");
+        let mut session = MockPluginSession::new();
+        setup_header_mocks(
+            &mut session,
+            &[
+                ("x-key", "routing-key"),
+                ("x-hash", if passthrough { "5" } else { "invalid" }),
+            ],
+        );
+        session.expect_key_get().times(0);
+        if passthrough {
+            session.expect_key_set().times(0);
+        } else {
+            session
+                .expect_key_set()
+                .withf(|target, value| {
+                    matches!(target, KeySet::Ctx { name } if name == "route-hash") && value.as_deref() == Some("554")
+                })
+                .times(1)
+                .returning(|_, _| Ok(()));
+        }
+        session
+            .expect_record_outcome()
+            .withf(|outcome, name| *outcome == DyeOutcome::Success && name == "local")
+            .times(1)
+            .return_const(());
+        assert_eq!(
+            plugin
+                .run_request(&mut session, &mut PluginLog::new("RegionRoute"))
+                .await,
+            PluginRunningResult::GoodNext
+        );
+    }
+}
