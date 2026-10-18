@@ -186,3 +186,116 @@ fn terminal_audit_is_claimed_once_across_repeated_failures() {
     assert!(!claim_terminal_audit(&flag));
     assert!(!claim_terminal_audit(&flag));
 }
+
+fn allowlist_certificate(cn: Option<&str>) -> pingora_core::tls::x509::X509 {
+    use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
+    let key = KeyPair::generate().unwrap();
+    let mut params = CertificateParams::new(vec!["client.example".into()]).unwrap();
+    params.distinguished_name = DistinguishedName::new();
+    params.distinguished_name.push(DnType::OrganizationName, "example");
+    if let Some(cn) = cn {
+        params.distinguished_name.push(DnType::CommonName, cn);
+    }
+    params
+        .subject_alt_names
+        .push(SanType::URI("spiffe://example/client".try_into().unwrap()));
+    let cert = params.self_signed(&key).unwrap();
+    pingora_core::tls::x509::X509::from_der(cert.der()).unwrap()
+}
+
+fn allowlist_config(san: Option<&str>, cn: Option<&str>) -> ClientAuthConfig {
+    use edgion_resources::resources::edgion_tls::{AllowedSan, AllowedSanType};
+    let mut config: ClientAuthConfig = serde_json::from_value(serde_json::json!({})).unwrap();
+    config.allowed_sans = san.map(|value| vec![AllowedSan::exact(AllowedSanType::Dns, value)]);
+    config.allowed_cns = cn.map(|value| vec![value.to_string()]);
+    config
+}
+
+fn masked_fixture(value: &str) -> String {
+    edgion_resources::sensitive::apply_sensitive(value, str::to_string)
+}
+
+#[test]
+fn missing_certificate_rejects_even_without_nonempty_constraints() {
+    for mut config in [
+        allowlist_config(None, None),
+        allowlist_config(Some("client.example"), Some("client-cn")),
+    ] {
+        assert_eq!(
+            validate_certificate_whitelist(None, &config),
+            Err("mTLS no client certificate".into())
+        );
+        config.allowed_sans = Some(vec![]);
+        config.allowed_cns = Some(vec![]);
+        assert_eq!(
+            validate_certificate_whitelist(None, &config),
+            Err("mTLS no client certificate".into())
+        );
+    }
+}
+
+#[test]
+fn present_certificate_accepts_absent_empty_and_matching_constraints() {
+    let cert = allowlist_certificate(Some("client-cn"));
+    let mut empty = allowlist_config(None, None);
+    empty.allowed_sans = Some(vec![]);
+    empty.allowed_cns = Some(vec![]);
+    for config in [
+        allowlist_config(None, None),
+        empty,
+        allowlist_config(Some("client.example"), None),
+        allowlist_config(None, Some("client-cn")),
+        allowlist_config(Some("client.example"), Some("client-cn")),
+    ] {
+        assert_eq!(validate_certificate_whitelist(Some(&cert), &config), Ok(()));
+    }
+}
+
+#[test]
+fn san_failure_preserves_diagnostics_and_precedes_cn_failure() {
+    let cert = allowlist_certificate(Some("client-cn"));
+    let expected = format!(
+        "mTLS SAN whitelist failed: subject={}, sans={:?}",
+        masked_fixture("O=example, CN=client-cn"),
+        [
+            masked_fixture("client.example"),
+            masked_fixture("uri:spiffe://example/client")
+        ],
+    );
+    for cn in [None, Some("client-cn"), Some("other-cn")] {
+        let config = allowlist_config(Some("other.example"), cn);
+        assert_eq!(
+            validate_certificate_whitelist(Some(&cert), &config),
+            Err(expected.clone())
+        );
+    }
+    // A URI must not satisfy a DNS allowlist entry with the same text.
+    let config = allowlist_config(Some("spiffe://example/client"), None);
+    assert_eq!(validate_certificate_whitelist(Some(&cert), &config), Err(expected));
+}
+
+#[test]
+fn cn_failure_preserves_case_sensitive_matching_and_diagnostics() {
+    let cert = allowlist_certificate(Some("client-cn"));
+    let expected = format!(
+        "mTLS CN whitelist failed: subject={}, cn={:?}",
+        masked_fixture("O=example, CN=client-cn"),
+        Some(masked_fixture("client-cn")),
+    );
+    for san in [None, Some("client.example")] {
+        let config = allowlist_config(san, Some("CLIENT-CN"));
+        assert_eq!(
+            validate_certificate_whitelist(Some(&cert), &config),
+            Err(expected.clone())
+        );
+    }
+    let cert = allowlist_certificate(None);
+    let config = allowlist_config(None, Some("client-cn"));
+    assert_eq!(
+        validate_certificate_whitelist(Some(&cert), &config),
+        Err(format!(
+            "mTLS CN whitelist failed: subject={}, cn=None",
+            masked_fixture("O=example"),
+        ))
+    );
+}

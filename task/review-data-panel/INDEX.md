@@ -243,9 +243,9 @@ UTF-16 semantics, including accepted surrogate pairs and embedded NULs.
 The canonical extractor serves both handshake metadata and HeaderCertAuth.
 Ordinary typed SAN enumeration and the separate OtherName DER pass retain their
 order and projections. The mTLS callback still evaluates allowlists only at leaf
-depth and retains its terminal-audit claim. Its eager full metadata extraction
-followed by typed SAN extraction remains a separate optimization investigation;
-this batch does not change authorization or failure diagnostics.
+depth and retains its terminal-audit claim. Its formerly eager full metadata extraction before typed SAN validation is
+reduced in the following batch. CN validation still uses the full canonical
+projection; authorization and failure diagnostics remain unchanged.
 
 New signed-certificate regressions cover duplicate CN order/selection and an
 unsupported GeneralString first CN followed by a valid CN. Subject/CN preserve
@@ -259,3 +259,32 @@ passed: certificate extraction 11, HeaderCertAuth 20 and mTLS callback 10.
 Formatting, workspace check/Clippy and seven repository guards passed; Clippy
 warnings are outside the changed files. No full integration suite or live mTLS
 handshake verification was run for this batch.
+
+## mTLS allowlist projection timing
+
+The leaf allowlist callback now acquires the peer certificate once. Its private
+synchronous certificate helper always rejects a missing certificate first, even
+when constraints are absent or empty. Nonempty SAN constraints use the existing
+typed projection and matcher. Full subject/CN/display-SAN/fingerprint extraction
+runs only for a SAN rejection or a nonempty CN constraint; SAN-only success and
+unconstrained validation no longer create that unused metadata. Empty lists keep
+the canonical validators' unconditional acceptance for a present certificate.
+
+Failure branches retain the same canonical extractor, diagnostic formatting and
+sensitive-value wrappers. SAN rejection still precedes CN validation. The
+callback's leaf-depth classification, panic boundary, context ownership and
+terminal-audit claim are unchanged. The helper is an internal in-memory test seam,
+not a new certificate-validation API. No serving-identity cache or precompilation
+of peer identity was introduced.
+
+New signed-certificate tests exercise missing/present certificates, absent/empty
+constraints, SAN-only/CN-only/combined success, rejection precedence, exact
+case-sensitive CN failure, missing CN, typed URI-versus-DNS distinction and
+existing masked diagnostic formatting. This is removal of unused projection work,
+not measured throughput improvement or a live handshake proof.
+
+Focused tests passed: mTLS callback 14, mTLS validators 6, certificate extraction
+11 and HeaderCertAuth 20. Formatting, workspace check/Clippy and seven repository
+guards passed; Clippy warnings are outside the changed files. Independent plan
+and final source reviews passed. No full integration suite or throughput
+benchmark was run.

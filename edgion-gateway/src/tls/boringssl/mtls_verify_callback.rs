@@ -4,12 +4,13 @@
 //! the client cert chain against a configured SAN/CN whitelist.
 
 use crate::observe::logs::ssl_log::log_ssl;
-use crate::tls::runtime::backend::cert_extractor::{extract_client_cert_info, extract_presented_sans};
+use crate::tls::runtime::backend::cert_extractor::{extract_client_cert_info_from_cert, extract_presented_sans};
 use crate::tls::runtime::gateway::tls_pingora::peek_tls_conn_meta;
 use crate::tls::validation::mtls::{validate_cn_whitelist, validate_san_whitelist};
 use edgion_common::startup::catch_redacted_panic;
 use edgion_resources::resources::edgion_tls::{ClientAuthConfig, EdgionTls};
 use pingora_core::tls::ssl::SslRef;
+use pingora_core::tls::x509::X509Ref;
 use std::os::raw::{c_int, c_void};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
@@ -228,16 +229,21 @@ unsafe fn verify_callback_impl(preverify_ok: c_int, x509_ctx: *mut boring_sys::X
 }
 
 fn perform_whitelist_validation(ssl: &SslRef, client_auth: &ClientAuthConfig) -> Result<(), String> {
-    let Some(cert_info) = extract_client_cert_info(ssl) else {
+    let cert = ssl.peer_certificate();
+    validate_certificate_whitelist(cert.as_deref(), client_auth)
+}
+
+fn validate_certificate_whitelist(cert: Option<&X509Ref>, client_auth: &ClientAuthConfig) -> Result<(), String> {
+    let Some(cert) = cert else {
         return Err("mTLS no client certificate".to_string());
     };
 
-    if let Some(ref allowed_sans) = client_auth.allowed_sans {
-        let presented = ssl
-            .peer_certificate()
-            .map(|cert| extract_presented_sans(&cert))
-            .unwrap_or_default();
+    if let Some(allowed_sans) = client_auth.allowed_sans.as_ref().filter(|entries| !entries.is_empty()) {
+        let presented = extract_presented_sans(cert);
         if !validate_san_whitelist(&presented, allowed_sans) {
+            // Display fields and fingerprint are unnecessary for a SAN-only
+            // success; retain the canonical projection for failure diagnostics.
+            let cert_info = extract_client_cert_info_from_cert(cert);
             // Mirror the redaction ClientCertInfo gets via serde when normally
             // serialized — err_log embeds these as plain strings, so we have to
             // apply sensitive mode by hand here.
@@ -254,7 +260,8 @@ fn perform_whitelist_validation(ssl: &SslRef, client_auth: &ClientAuthConfig) ->
         }
     }
 
-    if let Some(ref allowed_cns) = client_auth.allowed_cns {
+    if let Some(allowed_cns) = client_auth.allowed_cns.as_ref().filter(|entries| !entries.is_empty()) {
+        let cert_info = extract_client_cert_info_from_cert(cert);
         if !validate_cn_whitelist(&cert_info, allowed_cns) {
             let subject = edgion_resources::sensitive::apply_sensitive(&cert_info.subject, |s| s.to_string());
             let cn = cert_info
