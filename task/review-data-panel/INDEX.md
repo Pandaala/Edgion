@@ -24,7 +24,7 @@ destination.
 | Connection filters and Stream plugins | Connection bridge, ordered runtime dispatch, connection-rate-limit callback, global IP profile selection, GeoIP callback and shared denial translation inspected. Static denial reasons now borrow literals. Deeper ACL/GeoIP matchers, local-gate/Redis implementations and publication construction remain open. |
 | TCP/TLS connection handling and relay | TCP, terminated TLS and passthrough TLS direct process/route/connect/log orchestration inspected, plus shared L4 relay. Existing snapshot/inspection-buffer release boundaries retained. Listener-log direct serialization deferred below. Deeper route selection, backend resolution and transport dependencies remain open. |
 | TLS handshake callbacks | Direct select/certificate/completion/free callbacks and certificate/mTLS/cipher application helpers inspected. Temporary SNI and early-abort metadata copies removed below. Compiled certificate ownership, expiry checks and ex-data handoff retained. Client-certificate extraction and leaf-only verification orchestration inspected below. Matcher snapshot selection and shared SAN/CN allowlist evaluation inspected below. Prepared SAN policy is deferred; deeper verification extraction and remaining matcher costs remain open. |
-| UDP packet/session lifecycle | Direct packet, session admission, receiver, retirement, shutdown and log projection inspected. Selected route ownership and socket Arc transfer tightened below. Deeper backend selection, route publication and socket dependencies remain open. |
+| UDP packet/session lifecycle | Direct packet, session admission, receiver, retirement, shutdown and log projection inspected. Selected route ownership and socket Arc transfer tightened below. New-session L4 policy/Service selection handoff and route table/unit ownership inspected; section borrowing candidate skipped below. Deeper selection algorithms, publication helpers and socket dependencies remain open. |
 
 ## Deferred decisions
 
@@ -2958,3 +2958,30 @@ two targeted overlay and 14 mTLS callback tests, formatting, workspace check/Cli
 and seven repository guards. Existing warnings remain outside changed code.
 The benefit is fewer Arc reference-count operations, not removed certificate
 copies or measured heap/latency savings. No live-handshake suite was run.
+
+## UDP selection follow-through and numeric section ownership
+
+Reinspection at `8fd46cd66` confirmed established UDP sessions bypass route,
+policy and endpoint selection. Their session Arc escapes the DashMap guard before
+send awaits; retirement still checks generation identity and activity under the
+existing lifecycle lock. New-session routing retains only its selected unit;
+the route table returns its first pre-sorted unit and the unit already owns
+cold-compiled backend and parent-reference state.
+
+The shared L4 policy gate preserves terminal denial before endpoint selection.
+`select_service_endpoint` reads its input section synchronously and retains the
+resolved section and discovery snapshots. A proposed borrowed section parameter
+was rejected as a performance batch after independent plan review: all five
+production callers currently supply Number(NonZeroU16), not Name(Arc<str>).
+The four L4 paths obtain it from the private CompiledServiceTarget constructor;
+RequestMirror's private target uses the same service_section_key_from_port helper.
+That helper constructs only Number. Consequently the existing input clones
+perform no heap allocation or Arc reference-count operation on these paths.
+No API rewrite or hypothetical named-port consumer was introduced. Revisit only
+if an actual owning input or production named-section consumer changes this proof.
+
+This is scoped source inspection, not closure of UDP's deeper selection algorithms,
+publication helpers or socket dependencies. No runtime behavior was changed.
+Fresh verification passed 12 Service selector tests, formatting, workspace
+check/Clippy and agent-doc consistency. Existing Clippy warnings are outside this
+record-only change. No UDP socket tests or throughput benchmark were run.
