@@ -588,3 +588,107 @@ fn compact_segment_views_preserve_original_encoded_slices() {
     }
     assert_eq!(decrypt_with_prepared(&plugin, &token).unwrap(), "payload");
 }
+
+fn original_decrypt_compact_jwe(plugin: &JweDecrypt, token: &str, cipher: &Aes256Gcm) -> Result<String, JweFailure> {
+    let parsed = plugin.parse_compact_jwe(token)?;
+
+    let iv = URL_SAFE_NO_PAD
+        .decode(parsed.iv_segment)
+        .map_err(|_| JweFailure::InvalidFormat)?;
+    let mut ciphertext = URL_SAFE_NO_PAD
+        .decode(parsed.ciphertext_segment)
+        .map_err(|_| JweFailure::InvalidFormat)?;
+    let tag_bytes = URL_SAFE_NO_PAD
+        .decode(parsed.tag_segment)
+        .map_err(|_| JweFailure::InvalidFormat)?;
+
+    // RFC 7518 A256GCM uses 96-bit IV and 128-bit tag.
+    if iv.len() != 12 || tag_bytes.len() != 16 {
+        return Err(JweFailure::InvalidFormat);
+    }
+
+    let nonce = Nonce::from_slice(&iv);
+    let tag = Tag::from_slice(&tag_bytes);
+
+    cipher
+        .decrypt_in_place_detached(nonce, parsed.protected_segment.as_bytes(), &mut ciphertext, tag)
+        .map_err(|_| JweFailure::DecryptFail)?;
+
+    String::from_utf8(ciphertext).map_err(|_| JweFailure::InvalidFormat)
+}
+
+#[test]
+fn fixed_iv_and_tag_decode_preserve_original_results() {
+    let plugin = build_plugin(None);
+    let cipher = Aes256Gcm::new_from_slice(&test_key()).unwrap();
+    let token = encrypt_compact_jwe("payload", &test_key(), "A256GCM");
+    let segments: Vec<_> = token.split('.').collect();
+    assert_eq!(segments[4].len(), 22);
+    let mut inputs = vec![token.clone()];
+    for field in [2, 4] {
+        let mut replacements = Vec::new();
+        for len in 0..=33 {
+            replacements.push(URL_SAFE_NO_PAD.encode(vec![7; len]));
+        }
+        replacements.extend([
+            "=".to_owned(),
+            "a".to_owned(),
+            "%%%".to_owned(),
+            format!("{}=", segments[field]),
+        ]);
+        for byte in 0u8..=127 {
+            let mut replacement = segments[field].as_bytes().to_vec();
+            *replacement.last_mut().unwrap() = byte;
+            replacements.push(String::from_utf8(replacement).unwrap());
+        }
+        for replacement in replacements {
+            let mut changed = segments.clone();
+            changed[field] = &replacement;
+            inputs.push(changed.join("."));
+        }
+    }
+    for (iv, ciphertext, tag) in [
+        (URL_SAFE_NO_PAD.encode([0; 13]), "%".to_owned(), "%".to_owned()),
+        (URL_SAFE_NO_PAD.encode([0; 11]), "%".to_owned(), "%".to_owned()),
+        (segments[2].to_owned(), "%".to_owned(), URL_SAFE_NO_PAD.encode([0; 17])),
+        (
+            segments[2].to_owned(),
+            URL_SAFE_NO_PAD.encode([0; 7]),
+            segments[4].to_owned(),
+        ),
+    ] {
+        inputs.push(format!("{}..{iv}.{ciphertext}.{tag}", segments[0]));
+    }
+    for input in inputs {
+        assert_eq!(
+            plugin.decrypt_compact_jwe(&input, &cipher),
+            original_decrypt_compact_jwe(&plugin, &input, &cipher),
+            "input={input:?}"
+        );
+    }
+}
+
+#[test]
+fn fixed_iv_and_tag_remove_two_decode_allocations() {
+    let plugin = build_plugin(None);
+    let cipher = Aes256Gcm::new_from_slice(&test_key()).unwrap();
+    for payload in ["payload", r#"{"sub":"alice","role":"reader"}"#] {
+        let token = encrypt_compact_jwe(payload, &test_key(), "A256GCM");
+        let (old, old_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+            original_decrypt_compact_jwe(&plugin, &token, &cipher)
+        });
+        let (new, new_stats) =
+            crate::test_allocation_counter::count_allocation_stats(|| plugin.decrypt_compact_jwe(&token, &cipher));
+        assert_eq!(new.as_deref(), Ok(payload));
+        assert_eq!(new, old);
+        assert_eq!(
+            new_stats.calls + 2,
+            old_stats.calls,
+            "old={old_stats:?}, new={new_stats:?}"
+        );
+        assert!(
+            new_stats.requested_bytes < old_stats.requested_bytes,
+            "old={old_stats:?}, new={new_stats:?}"
+        );
+    }
+}

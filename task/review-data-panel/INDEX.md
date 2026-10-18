@@ -2797,3 +2797,29 @@ Adjacent inspection found JsonSchemaValidation already retains its compiled
 validator and uses borrowed body parsing input with operation-specific failure
 policy. Canary retains borrowed profile selection and creates owned jump metadata
 for later phases. No ownership change was selected at those boundaries.
+
+## JWE fixed IV and authentication-tag decoding
+
+JweDecrypt decodes the 12-byte IV and 16-byte authentication tag into stack arrays
+using base64's checked decode_slice API. Returned lengths still enforce exact
+sizes before AES-GCM use; ciphertext retains its owned mutable buffer. Oversized
+fixed fields may now reject earlier, but every skipped decode/length failure
+has the same InvalidFormat result and no external side effect. Protected-header
+validation, original encoded AAD, key precedence and authentication failures are
+unchanged.
+
+Independent plan and code reviews passed. An original decrypt implementation
+provides differential results for valid tokens, decoded lengths 0..33, every
+ASCII last byte, padding, simultaneous malformed fields and corrupted ciphertext.
+Two successful fixtures assert identical plaintext, exactly two fewer allocation
+calls and fewer cumulative requested bytes. Fresh verification passed 20 JWE
+tests, formatting, workspace check/Clippy and seven repository guards. Warnings
+remain outside changed code. Header parsing and ciphertext still allocate; no
+whole-request zero-allocation or throughput improvement is claimed.
+
+Local/Redis rate-limit rejection header construction was also inspected. Their
+custom names are passed as owned Strings because the pinned Pingora
+IntoCaseHeaderName supports owned names or static str and retains original case.
+Directly borrowing those dynamic str values is not an available equivalent API;
+no mutation was selected there. Integer HeaderValue substitution also retains the
+storage tradeoff already recorded in the outbound Content-Length decision.

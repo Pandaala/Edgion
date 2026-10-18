@@ -339,18 +339,20 @@ impl JweDecrypt {
     fn decrypt_compact_jwe(&self, token: &str, cipher: &Aes256Gcm) -> Result<String, JweFailure> {
         let parsed = self.parse_compact_jwe(token)?;
 
-        let iv = URL_SAFE_NO_PAD
-            .decode(parsed.iv_segment)
+        let mut iv = [0u8; 12];
+        let iv_len = URL_SAFE_NO_PAD
+            .decode_slice(parsed.iv_segment, &mut iv)
             .map_err(|_| JweFailure::InvalidFormat)?;
         let mut ciphertext = URL_SAFE_NO_PAD
             .decode(parsed.ciphertext_segment)
             .map_err(|_| JweFailure::InvalidFormat)?;
-        let tag_bytes = URL_SAFE_NO_PAD
-            .decode(parsed.tag_segment)
+        let mut tag_bytes = [0u8; 16];
+        let tag_len = URL_SAFE_NO_PAD
+            .decode_slice(parsed.tag_segment, &mut tag_bytes)
             .map_err(|_| JweFailure::InvalidFormat)?;
 
         // RFC 7518 A256GCM uses 96-bit IV and 128-bit tag.
-        if iv.len() != 12 || tag_bytes.len() != 16 {
+        if iv_len != iv.len() || tag_len != tag_bytes.len() {
             return Err(JweFailure::InvalidFormat);
         }
 
