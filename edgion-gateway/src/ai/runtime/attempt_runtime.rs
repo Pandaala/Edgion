@@ -702,10 +702,9 @@ async fn reserve(
         rpm: limits.requests_per_minute,
         tpm: limits.tokens_per_minute,
     };
-    let core = Arc::clone(&input.limiter_core);
     let result = tokio::time::timeout(
         REDIS_OPERATION_TIMEOUT,
-        core.apply_credential_reservation(
+        input.limiter_core.apply_credential_reservation(
             &client,
             &keys,
             limits,
@@ -723,7 +722,7 @@ async fn reserve(
         CredentialReservationStatus::Reserved | CredentialReservationStatus::Duplicate => {
             Ok(Some(CredentialReservationLease {
                 client,
-                core,
+                core: Arc::clone(&input.limiter_core),
                 keys,
                 limits,
                 ttl,

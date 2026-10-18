@@ -3797,3 +3797,24 @@ Formatting, workspace check/Clippy, agent-document validation and diff hygiene
 passed. Existing warnings remain outside this documentation-only change.
 No production future-size, allocation, CPU or live Redis measurement was run;
 the representation tradeoff remains open.
+
+
+## Credential reservation limiter borrowing
+
+Credential admission now borrows the limiter owned by AiAttemptAdmissionInput
+through the existing Redis await. It clones the same Arc only when a Reserved
+or Duplicate result constructs a settlement lease. The input already remains
+alive across this operation, and RedisRateLimiter neither inspects reference
+counts nor owns a custom destructor. Rejected, failed, timed-out or cancelled
+operations no longer acquire and release the redundant limiter Arc. Successful
+leases retain the same ownership needed for later settlement.
+
+Client lookup, UUID/key generation, limits, TTL, timeout, Redis invocation and
+result mapping are unchanged. Cancellation still leaves uncertain remote charges
+to the existing conservative TTL policy. This is a reference-count optimization;
+no throughput, allocation or async-frame-size improvement was measured.
+
+Fresh verification passed 53 network-free tests: 24 attempt-runtime and 29 shared
+Redis tests. Formatting, workspace check/Clippy, seven repository guards and diff
+hygiene passed. Existing warnings remain outside changed code. No live Redis
+cancellation, failover or throughput benchmark was run for this batch.
