@@ -52,6 +52,7 @@ destination.
 - [ProxyRewrite staged template compilation](rewrite-01-staged-template-compilation.md)
 - [Repeated GraphQL frontend parsing](graphql-01-repeated-frontend-parsing.md)
 - [Prepared SAN allowlist policy](tls-01-prepared-san-policy.md)
+- [Response-cache arena initialization timing](cache-01-arena-initialization.md)
 
 ## Completed implementation batch
 
@@ -3076,3 +3077,18 @@ Current source again confirms missing preparedAncestorAdmission and the unchange
 fail-closed admission chain; no baseline binary was rerun. Formatting, workspace
 check/Clippy and seven repository guards passed. Clippy warnings remain outside
 changed code. The known fixture failure is retained, not skipped or repaired here.
+
+## Response-cache storage and freshness inspection
+
+Inspected capture admission, fixed-capacity body writes, entry decode, header
+contract checks, monotonic freshness, conditional eviction and reader leases.
+Repeated metadata and header validation enforce corruption and final transport
+contracts; no validation was removed. Canonical LRU ownership, epoch fencing
+and full-capacity accounting remain unchanged. Eager arena initialization is
+recorded as a separate decision above because avoiding writes to unused capacity
+changes initialized-length invariants and memory-touch timing. This read-only
+inspection does not establish measured throughput or complete canonical LRU
+algorithm coverage.
+
+This documentation-only batch passed formatting, workspace check/Clippy,
+agent-doc validation and diff whitespace checks. No tests or benchmarks were run.
