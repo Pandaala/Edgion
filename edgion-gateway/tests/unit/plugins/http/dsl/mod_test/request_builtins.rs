@@ -3,6 +3,69 @@
 use super::*;
 
 #[test]
+fn borrowed_decoded_query_preserves_nil_empty_and_byte_limits() {
+    for value in [None, Some(""), Some("é€")] {
+        let length = value.map_or(0, str::len);
+        for limit in [length, length.saturating_sub(1)] {
+            let mut session = MockPluginSession::new();
+            session.expect_get_query_param().times(0);
+            session
+                .expect_get_query_param_ref()
+                .withf(|name| name == "item")
+                .times(1)
+                .return_const(value);
+            let source = "let v = req.query(\"item\")\nif v == nil { req.set_header(\"X-Result\", \"missing\") } else { req.set_header(\"X-Result\", v) }";
+            let limits = VmLimits {
+                max_string_len: limit,
+                ..Default::default()
+            };
+            if length > limit {
+                assert!(
+                    matches!(run_expect_runtime_err_with_limits(source, session, limits), RuntimeError::StringTooLong { len, limit: actual } if len == length && actual == limit)
+                );
+            } else {
+                session
+                    .expect_set_request_header()
+                    .times(1)
+                    .withf(move |name, actual| name == "X-Result" && actual == value.unwrap_or("missing"))
+                    .returning(|_, _| Ok(()));
+                assert_eq!(run_with_limits(source, session, limits), good_next());
+            }
+        }
+    }
+}
+
+#[test]
+fn borrowed_cookie_preserves_field_order_and_parser_rules() {
+    for (fields, expected) in [
+        (vec![], "missing"),
+        (vec![b"item=".as_slice()], ""),
+        (vec![b" other=x; item=a=b ".as_slice()], "a=b"),
+        (vec![b"Item=wrong; item=first; item=second".as_slice()], "first"),
+        (vec![b"other=x".as_slice(), b"item=second".as_slice()], "second"),
+        (vec![b"\xff".as_slice(), b"item=second".as_slice()], "missing"),
+        (vec![b"item=first".as_slice(), b"\xff".as_slice()], "first"),
+    ] {
+        let mut headers = http::HeaderMap::new();
+        for field in fields {
+            headers.append(http::header::COOKIE, http::HeaderValue::from_bytes(field).unwrap());
+        }
+        let mut session = MockPluginSession::new();
+        session.expect_get_cookie().times(0);
+        session.expect_request_header_map().times(1).return_const(headers);
+        session
+            .expect_set_request_header()
+            .times(1)
+            .withf(move |name, value| name == "X-Result" && value == expected)
+            .returning(|_, _| Ok(()));
+        assert_eq!(run(
+            "let v = req.cookie(\"item\")\nif v == nil { req.set_header(\"X-Result\", \"missing\") } else { req.set_header(\"X-Result\", v) }",
+            session,
+        ), good_next());
+    }
+}
+
+#[test]
 fn borrowed_dynamic_header_preserves_first_text_value() {
     for (values, lookup, expected) in [
         (vec![], "X-VaLuE", "missing"),
@@ -98,6 +161,7 @@ fn borrowed_request_scalar_limits_follow_value_selection() {
     for (expression, name) in [
         ("req.host", "host"),
         ("req.header(\"host\")", "host"),
+        ("req.cookie(\"item\")", "cookie"),
         ("req.content_type", "content-type"),
         ("req.scheme", "x-forwarded-proto"),
     ] {
@@ -105,7 +169,7 @@ fn borrowed_request_scalar_limits_follow_value_selection() {
             let mut headers = http::HeaderMap::new();
             headers.insert(
                 http::HeaderName::from_static(name),
-                http::HeaderValue::from_static("abcd"),
+                http::HeaderValue::from_static(if name == "cookie" { "item=abcd" } else { "abcd" }),
             );
             headers.insert("x-scheme", http::HeaderValue::from_static("x"));
             let mut session = MockPluginSession::new();
@@ -193,10 +257,12 @@ fn test_req_path() {
 #[test]
 fn test_req_query() {
     let mut session = MockPluginSession::new();
+    session.expect_get_query_param().times(0);
     session
-        .expect_get_query_param()
-        .withf(|k| k == "page")
-        .returning(|_| Some("2".to_string()));
+        .expect_get_query_param_ref()
+        .withf(|name| name == "page")
+        .times(1)
+        .return_const(Some("2"));
     session
         .expect_set_request_header()
         .withf(|h, v| h == "X-Q" && v == "2")
@@ -229,10 +295,14 @@ fn test_req_query_string() {
 #[test]
 fn test_req_cookie() {
     let mut session = MockPluginSession::new();
+    session.expect_get_cookie().times(0);
     session
-        .expect_get_cookie()
-        .withf(|k| k == "session")
-        .returning(|_| Some("abc".to_string()));
+        .expect_request_header_map()
+        .times(1)
+        .return_const(http::HeaderMap::from_iter([(
+            http::header::COOKIE,
+            http::HeaderValue::from_static("session=abc"),
+        )]));
     session
         .expect_set_request_header()
         .withf(|h, v| h == "X-C" && v == "abc")

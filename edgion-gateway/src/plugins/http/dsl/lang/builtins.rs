@@ -14,6 +14,7 @@ use tokio::sync::Notify;
 
 use crate::link_sys::providers::redis::RedisLinkClient;
 use crate::link_sys::runtime::store::get_redis_client;
+use crate::plugins::runtime::session_adapter::cookie_value_ref;
 use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt};
 use crate::request_body::{BodyReadError, RequestBodySnapshotReader};
 use crate::util::http_body::stream_body_capped;
@@ -646,12 +647,15 @@ impl Vm {
             BuiltinId::ReqPath => checked_value_opt_str_ref(Some(session.get_path()), self.limits.max_string_len),
             BuiltinId::ReqQuery => {
                 let name = state.pop()?.runtime_string()?;
-                checked_value_opt_str(session.get_query_param(&name), self.limits.max_string_len)
+                checked_value_opt_str_ref(session.get_query_param_ref(&name), self.limits.max_string_len)
             }
             BuiltinId::ReqQueryString => checked_value_opt_str_ref(session.request_query(), self.limits.max_string_len),
             BuiltinId::ReqCookie => {
                 let name = state.pop()?.runtime_string()?;
-                checked_value_opt_str(session.get_cookie(&name), self.limits.max_string_len)
+                checked_value_opt_str_ref(
+                    cookie_value_ref(session.request_header_map(), &name),
+                    self.limits.max_string_len,
+                )
             }
             BuiltinId::ReqDirectPeerIp => {
                 checked_value_opt_str_ref(Some(session.direct_peer_ip()), self.limits.max_string_len)

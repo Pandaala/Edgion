@@ -190,13 +190,12 @@ fn test_policy_deny_with_records_fail_close() {
 
 #[test]
 fn test_policy_ignore_catches_vm_panic_and_records_fail_open() {
-    let vm = make_vm(r#"let value = req.query("X-Panic")"#);
+    let vm = make_vm("let value = req.uri");
     let mut session = MockPluginSession::new();
     session
-        .expect_get_query_param()
-        .withf(|name| name == "X-Panic")
+        .expect_get_uri()
         .times(1)
-        .returning(|_| panic!("injected query read panic"));
+        .returning(|| panic!("injected URI read panic"));
     session
         .expect_record_outcome()
         .withf(|outcome, value| matches!(outcome, DyeOutcome::FailOpen) && value == "script-error")

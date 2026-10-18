@@ -1437,3 +1437,21 @@ raw-query absent/empty/encoded/duplicate/limit cases. Formatting, workspace
 check/Clippy and seven guards passed, with existing warnings outside the diff.
 No full suite or throughput benchmark ran.
 Independent final review passed.
+
+## Borrowed DSL decoded query and cookies
+
+`req.query(name)` borrows the frozen decoded cache and `req.cookie(name)` uses
+the existing canonical borrowed Cookie parser. Neither changes argument
+conversion, nil/empty handling, byte-limit errors or independent Arc results.
+Cookie multi-field order, key case, embedded equals and malformed-before-match
+failure remain. Initial query-cache parsing and final VM allocation remain.
+
+Two getter fixtures now use borrowed data. Tests cover query nil/empty/multibyte
+byte boundaries and Cookie empty/duplicate/case/multiple-field/non-text ordering
+plus exact/over-limit values. Generic VM panic injection now uses the unchanged
+owned URI getter, retaining once-only, fail-open and log assertions without
+depending on a getter removed from the hot path. Independent plan review passed;
+499 DSL tests and the real-adapter frozen decoded-query test passed. No full
+suite or throughput benchmark ran.
+Formatting, workspace check/Clippy and seven repository guards passed, with
+existing warnings outside changed files. Independent final review passed.

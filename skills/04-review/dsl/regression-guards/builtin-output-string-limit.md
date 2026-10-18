@@ -81,6 +81,14 @@ encoded bytes and duplicate query parameters remain unchanged, and length checks
 precede final Arc creation. Tests retain compiler evaluation-order and panic
 isolation checks while replacing owned getter mocks with the borrowed interfaces.
 
+`req.query(name)` borrows the existing frozen decoded query cache via
+`get_query_param_ref`; it does not switch to the current raw URI. `req.cookie`
+reuses the canonical `cookie_value_ref` parser over live request headers. Cookie
+field order, case-sensitive keys, empty values, embedded equals and early failure
+on a non-text field before a match remain unchanged. Both check result length
+before creating the independent DSL string. Initial query-cache parsing and
+final Arc allocation remain; neither is removed by avoiding the owned getter.
+
 `req.host`, `req.content_type` and `req.scheme` use the existing `header_str`
 accessor and borrowed result helper. Scheme chooses the first text-eligible
 X-Forwarded-Proto value, then X-Scheme, then the literal `http`, preserving case
