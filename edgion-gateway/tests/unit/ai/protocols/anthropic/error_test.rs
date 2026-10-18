@@ -65,3 +65,17 @@ fn fixed_errors_preserve_wire_bytes_without_building_value_trees() {
         );
     }
 }
+
+#[test]
+fn quota_event_caches_keep_canonical_bytes_without_repeat_rendering() {
+    for (cached, error) in [
+        (&QUOTA_EXCEEDED_SSE_EVENT, AiProxyError::QuotaExceeded),
+        (&QUOTA_UNAVAILABLE_SSE_EVENT, AiProxyError::QuotaUnavailable),
+    ] {
+        let expected = event(error);
+        assert_eq!(LazyLock::force(cached), &expected);
+        let (warm, allocations) = crate::test_allocation_counter::count_allocations(|| LazyLock::force(cached));
+        assert_eq!(warm, &expected);
+        assert_eq!(allocations, 0);
+    }
+}

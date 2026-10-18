@@ -2,6 +2,7 @@
 use crate::ai::AiProxyError;
 use bytes::Bytes;
 use serde::Serialize;
+use std::sync::LazyLock;
 
 #[derive(Serialize)]
 struct ErrorEnvelope {
@@ -42,6 +43,10 @@ pub(crate) fn event(error: AiProxyError) -> Bytes {
     let (_, body) = render(error);
     Bytes::from(format!("\n\nevent: error\ndata: {body}\n\n"))
 }
+pub(crate) static QUOTA_EXCEEDED_SSE_EVENT: LazyLock<Bytes> = LazyLock::new(|| event(AiProxyError::QuotaExceeded));
+pub(crate) static QUOTA_UNAVAILABLE_SSE_EVENT: LazyLock<Bytes> =
+    LazyLock::new(|| event(AiProxyError::QuotaUnavailable));
+
 #[cfg(test)]
 #[path = "../../../../tests/unit/ai/protocols/anthropic/error_test.rs"]
 mod tests;

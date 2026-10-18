@@ -3898,3 +3898,24 @@ Fresh verification passed 42 network-free tests: 32 native Anthropic, 1 OpenAI
 error and 9 AI context tests. Formatting, workspace check/Clippy, seven repository
 guards and diff hygiene passed. Existing warnings remain outside changed code.
 No live provider or throughput benchmark was run.
+
+
+## Native quota SSE event reuse
+
+Native Messages quota termination now borrows one of two immutable LazyLock<Bytes>
+payloads, initialized by its existing canonical event renderer. This follows the
+OpenAI quota-event ownership pattern and avoids repeating fixed JSON serialization
+and event formatting after initialization. Only the quota-exceeded and quota-
+unavailable events are retained; no request data enters these bounded owners.
+
+EOS/Reject checks, event selection, unconditional SSE boundaries, diagnostics
+and terminal handling remain unchanged. terminate_ai_stream still clones Bytes
+into the bounded sink when injection is allowed. First initialization and sink
+ownership may allocate; this is not a zero-allocation termination claim.
+Tests compare both caches to canonical events and verify allocation-free warmed
+cache reads, alongside existing native Reject and shared framing regressions.
+
+Fresh verification passed 87 network-free tests: 33 native Anthropic, 50 usage
+and 4 AI response tests. Formatting, workspace check/Clippy, seven repository
+guards and diff hygiene passed. Existing warnings remain outside changed code.
+No live provider or throughput benchmark was run.

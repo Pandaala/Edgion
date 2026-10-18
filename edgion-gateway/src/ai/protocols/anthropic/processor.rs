@@ -3,7 +3,7 @@ use super::usage::{Components, Kind, Observation, Observer};
 use crate::ai::accounting::usage::terminate_ai_stream;
 use crate::ai::protocols::openai::json_usage::ResponseOutcome;
 use crate::ai::quota::QuotaAccumulator;
-use crate::ai::{AiProxyError, AiUsageShared};
+use crate::ai::AiUsageShared;
 use crate::ctx::ResponseStreamKind;
 use crate::plugins::runtime::traits::{ResponseStreamSession, StreamingResponseProcessor};
 use crate::sse::{SseBlockStatus, SseDecoder, SseRecordRef};
@@ -276,23 +276,25 @@ impl StreamingResponseProcessor for MessagesProcessor {
         if eos || !self.changes_body_length() {
             return;
         }
-        let (error, code) = if self.quota.as_ref().is_some_and(|q| q.over_limit()) {
-            (AiProxyError::QuotaExceeded, EdgionErrorCode::AiQuotaOverLimitTerminated)
+        let (event, code) = if self.quota.as_ref().is_some_and(|q| q.over_limit()) {
+            (
+                &*super::error::QUOTA_EXCEEDED_SSE_EVENT,
+                EdgionErrorCode::AiQuotaOverLimitTerminated,
+            )
         } else if self.shared.observation_unavailable() {
             (
-                AiProxyError::QuotaUnavailable,
+                &*super::error::QUOTA_UNAVAILABLE_SSE_EVENT,
                 EdgionErrorCode::AiSseDegradedQuotaTerminated,
             )
         } else {
             return;
         };
-        let event = super::error::event(error);
         terminate_ai_stream(
             &self.shared,
             sink,
             session,
             kind == ResponseStreamKind::Sse,
-            Some(&event),
+            Some(event),
             code,
         );
     }
