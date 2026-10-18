@@ -81,14 +81,19 @@ impl EdgionConfigDataSnapshot {
         key: &super::super::conditions::ip_refs::IpListReadKey,
     ) -> super::super::conditions::ip_refs::IpListAvailability {
         use super::super::conditions::ip_refs::IpListAvailability;
+        if self.ip_list_matcher(key).is_some() {
+            IpListAvailability::Available
+        } else {
+            IpListAvailability::Unavailable
+        }
+    }
+    fn ip_list_matcher(&self, key: &super::super::conditions::ip_refs::IpListReadKey) -> Option<&IpRadixMatcher> {
         use edgion_resources::resources::edgion_config_data::ConfigDataVisibility;
         use edgion_resources::resources::edgion_plugins::ip_reference_set::IpReadScope;
         if key.scope == IpReadScope::Denied {
-            return IpListAvailability::Unavailable;
+            return None;
         }
-        let Some((namespace, name)) = key.key.split_once('/') else {
-            return IpListAvailability::Unavailable;
-        };
+        let (namespace, name) = key.key.split_once('/')?;
         let readable = self.get_raw_by_key(&key.key).is_some_and(|data| {
             data.metadata.name.as_deref() == Some(name)
                 && data.metadata.namespace.as_deref() == Some(namespace)
@@ -100,10 +105,10 @@ impl EdgionConfigDataSnapshot {
                     _ => true,
                 }
         });
-        if readable && self.inner.indexes.ip_list.contains_key(&key.key) {
-            IpListAvailability::Available
+        if readable {
+            self.inner.indexes.ip_list.get(&key.key).map(Arc::as_ref)
         } else {
-            IpListAvailability::Unavailable
+            None
         }
     }
     pub(crate) fn ip_list_contains(
@@ -111,14 +116,7 @@ impl EdgionConfigDataSnapshot {
         key: &super::super::conditions::ip_refs::IpListReadKey,
         ip: std::net::IpAddr,
     ) -> Option<bool> {
-        if self.ip_list_availability(key) != super::super::conditions::ip_refs::IpListAvailability::Available {
-            return None;
-        }
-        self.inner
-            .indexes
-            .ip_list
-            .get(&key.key)
-            .map(|matcher| matcher.contains(&ip))
+        self.ip_list_matcher(key).map(|matcher| matcher.contains(&ip))
     }
     pub(crate) fn profile_index(
         &self,
@@ -153,11 +151,7 @@ impl EdgionConfigDataSnapshot {
     where
         'snapshot: 'keys,
     {
-        keys.iter().filter_map(move |key| {
-            (self.ip_list_availability(key) == super::super::conditions::ip_refs::IpListAvailability::Available)
-                .then(|| self.inner.indexes.ip_list.get(&key.key).map(Arc::as_ref))
-                .flatten()
-        })
+        keys.iter().filter_map(move |key| self.ip_list_matcher(key))
     }
 }
 

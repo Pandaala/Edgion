@@ -732,3 +732,26 @@ formatting, workspace check/Clippy and seven repository guards passed. The new
 allocation assertions report zero calls for the measured paths. Existing Clippy
 warnings remain outside changed lines. No full integration suite or throughput
 benchmark ran; previously deferred verification issues remain open.
+
+## Single borrowed IpList lookup after permission checks
+
+RealIp trust evaluation led to the shared ConfigData scalar readers. Successful
+membership and lazy ACL matcher iteration previously checked typed-index presence
+and then looked up the same key again in one immutable snapshot. A private
+snapshot helper now returns the borrowed matcher after the same denied-scope,
+key-shape, raw identity, enable, type and visibility gates. Availability remains
+presence-only; membership and iteration consume that same lookup result.
+
+Scalar plugin capabilities, dispatch-local snapshot capture, required-root checks,
+RealIp all-reference availability and per-hop trust ordering remain unchanged.
+No matcher or snapshot loan is exposed to plugins, no Arc clone or new cache is
+introduced, and lazy configured matcher order/group identity remain intact.
+This removes one typed-index lookup from each readable membership/iterator hit;
+it does not eliminate the separate availability preflight or prove throughput.
+RealIp string canonicalization and broader decision-time reuse remain open.
+
+Independent plan and final source reviews passed. Final-source tests passed:
+ConfigData 22, IP references 7, ACL 4 and RealIp-filtered 32. Formatting, workspace
+check/Clippy and seven repository guards passed. An introduced Clippy suggestion
+was corrected; remaining warnings are outside the diff. No full integration suite
+or throughput benchmark ran.
