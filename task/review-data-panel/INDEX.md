@@ -1929,3 +1929,19 @@ Fresh verification passed 23 AllEndpointStatus tests and 5 hop-by-hop
 selections. Formatting, workspace check/Clippy and seven repository guards
 passed, with existing warnings outside the changed source. Independent final
 review passed. No full suite, live probe or throughput benchmark ran.
+
+## AllEndpointStatus borrowed route inputs
+
+Request endpoint collection now borrows the context-owned route Arc, backend-ref
+slice and namespace. It avoids a redundant Arc increment, a deep clone of the
+backend-ref vector (including nested configuration), and a namespace String copy.
+Collection remains synchronous and produces owned results before fan-out. Denial
+checks, namespace fallback, port validation, snapshot capture, resolution order
+and endpoint caps are unchanged. Request snapshots and output ownership remain
+as before. Independent plan review passed. Existing collection/transport tests
+and borrow checking provide scoped evidence; no new live probe or benchmark
+is claimed.
+Fresh final-source verification passed all 23 AllEndpointStatus tests,
+formatting and workspace check/Clippy after resolving the introduced let-else
+lint. Seven repository guards passed; remaining warnings are outside the
+changed source. Independent final review, including the lint correction, passed.

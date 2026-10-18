@@ -789,18 +789,15 @@ impl RequestFilter for AllEndpointStatus {
 
         // 1. Get route_unit and backend_refs
         let ctx = session.ctx();
-        let route_unit = match ctx.route_unit.as_ref() {
-            Some(unit) => unit.clone(),
-            None => {
-                log.push_err("no route");
-                return self
-                    .send_json_response(session, 503, Bytes::from_static(br#"{"error":"no route matched"}"#))
-                    .await;
-            }
+        let Some(route_unit) = ctx.route_unit.as_ref() else {
+            log.push_err("no route");
+            return self
+                .send_json_response(session, 503, Bytes::from_static(br#"{"error":"no route matched"}"#))
+                .await;
         };
 
         let backend_refs = match route_unit.rule.backend_refs.as_ref() {
-            Some(refs) if !refs.is_empty() => refs.clone(),
+            Some(refs) if !refs.is_empty() => refs.as_slice(),
             _ => {
                 log.push("status served 0");
                 let empty = br#"{"summary":{"total_backends":0,"total_endpoints":0,"success_count":0,"failure_count":0,"truncated":false,"timeout_ms":0,"wall_timeout_ms":0,"total_latency_ms":0,"total_response_bytes":0,"wall_timeout_hit":false},"backends":[]}"#;
@@ -812,7 +809,7 @@ impl RequestFilter for AllEndpointStatus {
         let original_path = session.get_path().to_string();
         let original_query = session.get_query();
         let original_headers = session.request_headers();
-        let route_namespace = route_unit.matched_info.rsc.ns.clone();
+        let route_namespace = route_unit.matched_info.rsc.ns.as_str();
 
         // 2. Resolve all endpoints from all backends
         let effective_max = self.config.effective_max_endpoints(global_config.max_endpoints);
@@ -820,8 +817,8 @@ impl RequestFilter for AllEndpointStatus {
         let policies = get_global_backend_tls_policy_store().snapshot();
         let gateway_key = ctx.gateway_info.as_ref().map(|gateway| gateway.gateway_key());
         let collection = collect_route_endpoints_with(
-            &backend_refs,
-            &route_namespace,
+            backend_refs,
+            route_namespace,
             effective_max,
             ctx.allow_loopback_upstream,
             |name, namespace, port, allow_loopback| {
