@@ -39,7 +39,8 @@ design note before altering the observable contract.
 
 | Builtin | Input class | Returns | Test |
 |---|---|---|---|
-| `substr(s, i, j)` | `i` or `j` past `char_count` | `""` | `test_substr_oob_returns_empty` |
+| `substr(s, i, j)` | start at/past character count, or start after end | `""` | `test_substr`, `test_substr_oob_returns_empty` |
+| `substr(s, i, j)` | end past character count with a valid start | suffix from start to string end | `test_substr` |
 | `substr(s, i, j)` | `i` or `j` negative | clamped to 0 | `test_substr_negative_start_clamps_to_zero` |
 | `to_int(s)` | unparseable / empty / overflow | `nil` | `test_to_int_unparseable_returns_nil`, `_empty_string_returns_nil`, `_overflow_returns_nil` |
 | `base64_decode(s)` | non-base64 input | `nil` | `test_base64_decode_invalid_returns_nil` |

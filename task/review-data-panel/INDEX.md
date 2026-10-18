@@ -1973,3 +1973,18 @@ evidence; no new network integration or throughput benchmark is claimed.
 Fresh verification passed all 500 Gateway DSL tests, formatting, workspace
 check/Clippy and seven repository guards. Remaining warnings are outside the
 changed source. Independent final review passed.
+
+## DSL substring result ownership
+
+Substr constructs its Arc<str> directly from the validated source slice after
+the existing byte-length check, removing an intermediate String allocation/copy.
+The character-index scan, negative clamps, nil/type handling and empty cases
+are unchanged. Expanded existing utility coverage checks multi-byte boundaries,
+end-overflow suffixes, equal/reversed ranges and wholly out-of-range indices.
+Independent plan review passed. This retains an independent result Arc and
+claims no zero-copy substring storage or measured throughput improvement.
+The original error-contract table and test comment incorrectly grouped end
+overflow with empty results; both now distinguish end clamping from start
+overflow after independent scope review. Fresh verification passed all 500
+Gateway DSL tests, workspace check/Clippy and seven repository guards. Remaining
+warnings are outside changed source. Independent final review passed.

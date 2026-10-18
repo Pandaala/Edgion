@@ -429,11 +429,20 @@ fn test_to_lower() {
 
 #[test]
 fn test_substr() {
-    assert_sets_request_header(r#"req.set_header("X-Out", substr("hello", 1, 3))"#, "X-Out", "el");
+    for (source, expected) in [
+        (r#"req.set_header("X-Out", substr("hello", 1, 3))"#, "el"),
+        (r#"req.set_header("X-Out", substr("aéπz", 1, 3))"#, "éπ"),
+        (r#"req.set_header("X-Out", substr("aéπz", 2, 99))"#, "πz"),
+        (r#"req.set_header("X-Out", substr("aéπz", 2, 2))"#, ""),
+        (r#"req.set_header("X-Out", substr("aéπz", 3, 1))"#, ""),
+        (r#"req.set_header("X-Out", substr("aéπz", 99, 100))"#, ""),
+    ] {
+        assert_sets_request_header(source, "X-Out", expected);
+    }
 }
 
-// substr OOB clamp semantics — start/end beyond char_count yield "" rather than ApiError;
-// (*n).max(0) clamps negatives. Lock in current behavior so future refactors don't drift.
+// substr clamps an overflowing end to the string end; an overflowing start yields "".
+// Negative indices clamp to zero. Lock in current behavior so future refactors do not drift.
 #[test]
 fn test_substr_oob_returns_empty() {
     assert_sets_request_header(r#"req.set_header("X-Out", substr("abc", 10, 3))"#, "X-Out", "");

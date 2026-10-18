@@ -946,9 +946,9 @@ impl Vm {
                             }
                         }
                         if byte_start <= byte_end {
-                            let out = s[byte_start..byte_end].to_string();
-                            check_string_len(&out, self.limits.max_string_len)?;
-                            Ok(Value::Str(out.into()))
+                            let out = &s[byte_start..byte_end];
+                            check_string_len(out, self.limits.max_string_len)?;
+                            Ok(Value::Str(Arc::from(out)))
                         } else {
                             Ok(Value::Str(Arc::from("")))
                         }
