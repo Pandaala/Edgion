@@ -822,3 +822,29 @@ case ignored. The valid TTL pair allocation assertion reports zero calls and the
 unsafe-TTL message matches exactly. Formatting, workspace check/Clippy and seven
 repository guards passed; existing warnings are outside changed lines. No live
 Redis integration, full integration suite or throughput benchmark ran.
+
+## Redis rate-limit numeric arguments
+
+The three ordinary rate-limit algorithms now pass validated i64 arguments into
+the canonical private script executor. Sliding-window, fixed-window and token
+bucket calls avoid four, three and five temporary numeric Strings respectively.
+Validation still precedes conversion; rate/cost bounds fit i64, and timestamps
+retain the Lua exact-integer bound. Argument order, fixed-window key formatting,
+scripts, error text and exact NOSCRIPT-only retry remain unchanged. Quota and
+reservation callers retain their String arguments through the generic executor.
+
+Inspection of the locked Fred 10.1.0 source confirmed that both RESP2 and RESP3
+command codecs encode integer arguments as decimal bulk/blob strings. Existing
+fallback clones retain shared byte owners and containers, rather than copying
+all String contents again. Those containers and command encoding still allocate;
+this change makes no zero-allocation or throughput claim. Deeper client behavior
+and Cluster/failover behavior remain outside this bounded audit.
+
+Independent plan and final source reviews passed. Shared Redis-core tests passed
+29 cases; connection-rate-limit tests passed 30 with one existing measurement
+case ignored. The existing Redis script lifecycle integration test passed against
+an exclusively owned temporary Redis 7.4 standalone instance, covering all five
+script families, warm/cache-flush recovery, replacement clients and weighted
+concurrent debit. The instance was removed after verification. Formatting,
+workspace check/Clippy and seven repository guards passed; existing warnings are
+outside changed lines. No full integration suite or throughput benchmark ran.

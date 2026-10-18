@@ -529,15 +529,15 @@ impl RedisRateLimiter {
         }
     }
 
-    async fn eval_script(
+    async fn eval_script<T: Into<Value>>(
         &self,
         client: &RedisLinkClient,
         script: &ScriptDescriptor,
         keys: Vec<String>,
-        args: Vec<String>,
+        args: Vec<T>,
     ) -> anyhow::Result<Vec<i64>> {
         let keys = MultipleKeys::from(keys);
-        let args = Value::Array(args.into_iter().map(Value::from).collect());
+        let args = Value::Array(args.into_iter().map(Into::into).collect());
         match client
             .pool()
             .evalsha::<Vec<i64>, _, _, _>(script.sha1.as_str(), keys.clone(), args.clone())
@@ -699,15 +699,13 @@ impl RedisRateLimiter {
         cost: u32,
     ) -> anyhow::Result<RateLimitResult> {
         validate_rate_limit_execution(rate, window_ms, now_ms, cost)?;
+        // Validation bounds rate to 1,000,000 before the signed Redis argument cast.
+        let rate_arg = rate as i64;
+        let cost_arg = i64::from(cost);
         match algorithm {
             RateLimitAlgorithm::SlidingWindow => {
                 let key = build_redis_key(key_prefix, "sw", policy_idx, limit_key, "");
-                let args = vec![
-                    rate.to_string(),
-                    window_ms.to_string(),
-                    now_ms.to_string(),
-                    cost.to_string(),
-                ];
+                let args = vec![rate_arg, window_ms, now_ms, cost_arg];
                 let v = self
                     .eval_script(client, &self.scripts.sliding_window, vec![key], args)
                     .await?;
@@ -716,7 +714,7 @@ impl RedisRateLimiter {
             RateLimitAlgorithm::FixedWindow => {
                 let window_id = now_ms / window_ms;
                 let key = build_redis_key(key_prefix, "fw", policy_idx, limit_key, &window_id.to_string());
-                let args = vec![rate.to_string(), window_ms.to_string(), cost.to_string()];
+                let args = vec![rate_arg, window_ms, cost_arg];
                 let v = self
                     .eval_script(client, &self.scripts.fixed_window, vec![key], args)
                     .await?;
@@ -724,13 +722,7 @@ impl RedisRateLimiter {
             }
             RateLimitAlgorithm::TokenBucket => {
                 let key = build_redis_key(key_prefix, "tb", policy_idx, limit_key, "");
-                let args = vec![
-                    rate.to_string(),
-                    rate.to_string(),
-                    window_ms.to_string(),
-                    now_ms.to_string(),
-                    cost.to_string(),
-                ];
+                let args = vec![rate_arg, rate_arg, window_ms, now_ms, cost_arg];
                 let v = self
                     .eval_script(client, &self.scripts.token_bucket, vec![key], args)
                     .await?;
