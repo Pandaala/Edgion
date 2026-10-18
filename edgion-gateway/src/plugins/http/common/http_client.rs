@@ -197,8 +197,12 @@ pub fn is_hop_by_hop_or_listed(name: &str, dynamic_listed: &[String]) -> bool {
     if dynamic_listed.is_empty() {
         return false;
     }
-    let lower = name.to_ascii_lowercase();
-    dynamic_listed.iter().any(|s| s == &lower)
+    let lower = if name.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        std::borrow::Cow::Owned(name.to_ascii_lowercase())
+    } else {
+        std::borrow::Cow::Borrowed(name)
+    };
+    dynamic_listed.iter().any(|s| s == lower.as_ref())
 }
 
 #[cfg(test)]

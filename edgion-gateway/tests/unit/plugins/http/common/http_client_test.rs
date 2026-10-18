@@ -117,3 +117,19 @@ fn test_get_mirror_http_client_is_process_wide_and_dedicated() {
     assert!(std::ptr::eq(mirror1, mirror2));
     assert!(!std::ptr::eq(mirror1, get_http_client()));
 }
+
+#[test]
+fn lowercase_dynamic_header_checks_do_not_allocate() {
+    let listed = connection_listed_hop_by_hop("X-Token, X-é, X-É");
+    for (name, expected) in [("x-token", true), ("x-missing", false), ("x-é", true), ("x-É", true)] {
+        let (matched, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+            is_hop_by_hop_or_listed(std::hint::black_box(name), &listed)
+        });
+        assert_eq!(matched, expected);
+        assert_eq!(stats.calls, 0);
+        assert_eq!(stats.requested_bytes, 0);
+    }
+    assert!(is_hop_by_hop_or_listed("X-É", &listed));
+    assert!(!is_hop_by_hop_or_listed("x-É", &["x-é".to_string()]));
+    assert!(!is_hop_by_hop_or_listed("x-token", &["X-Token".to_string()]));
+}

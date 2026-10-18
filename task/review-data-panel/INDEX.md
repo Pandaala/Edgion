@@ -2141,3 +2141,21 @@ throughput benchmark is claimed.
 Fresh verification passed all 114 shared outbound tests, formatting, workspace
 check/Clippy and seven repository guards. Remaining warnings are outside changed
 source. Independent final review passed.
+
+## Borrowed lowercase dynamic header names
+
+The shared hop-by-hop classifier borrows names with no ASCII uppercase bytes
+instead of allocating an identical lowercase String. Mixed-case names retain the
+original conversion and exact comparison against the dynamic list, including
+noncanonical-list rejection and non-ASCII byte preservation. Static and empty-list
+short circuits remain. Canonical HeaderMap names benefit without a new parser or
+caller policy. Mixed-case inputs incur an additional uppercase scan; this is a
+scoped allocation improvement, not a universal CPU or throughput claim.
+Independent plan review passed. Allocation tests construct lists outside the
+measured region and check lowercase hit/miss and allowed UTF-8 names; semantic
+checks retain mixed-case and noncanonical-list behavior. Repeated Connection
+field handling remains outside this change.
+Fresh verification passed 190 shared HTTP tests, 27 RequestMirror tests and 23
+AllEndpointStatus tests, formatting, workspace check/Clippy and seven repository
+guards. Remaining warnings are outside changed source. Independent final review
+passed.
