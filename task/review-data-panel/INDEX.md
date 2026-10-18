@@ -22,7 +22,8 @@ destination.
 | Errors, retries, logging and connection reuse | Terminal logging direct body and extension projection inspected. Borrowed bounded projection implemented below. Connect/proxy retry direct bodies inspected; retained per-attempt errors and peer context remain owned. Terminal error rendering direct body inspected: exact gRPC denial is consumed, protocol-specific replies and final-status ownership retained. Deeper finalizers and retry consumers remain open. |
 | Redirect HTTP | Direct callbacks and shared client-policy application inspected. Missing-host and listener-admission checks now share one normalized hostname. Raw Location authority, query-free log URL and session-owned keepalive remain unchanged. |
 | Connection filters and Stream plugins | Connection bridge, ordered runtime dispatch, connection-rate-limit callback, global IP profile selection, GeoIP callback and shared denial translation inspected. Static denial reasons now borrow literals. Deeper ACL/GeoIP matchers, local-gate/Redis implementations and publication construction remain open. |
-| TLS callbacks, TCP/TLS/UDP paths | Stream-result consumers inspected: Stage 1 returns bool; TCP/UDP keep their bounded generic reason; TLS formats the existing detail. Remaining transport callbacks and protocol lifecycles are pending. |
+| TCP/TLS connection handling and relay | TCP, terminated TLS and passthrough TLS direct process/route/connect/log orchestration inspected, plus shared L4 relay. Existing snapshot/inspection-buffer release boundaries retained. Listener-log direct serialization deferred below. Deeper route selection, backend resolution and transport dependencies remain open. |
+| TLS handshake callbacks and UDP paths | Stream-result consumers inspected: Stage 1 returns bool; TCP/UDP keep their bounded generic reason; TLS formats the existing detail. TLS handshake callbacks and UDP packet/session lifecycle remain pending. |
 
 ## Deferred decisions
 
@@ -30,6 +31,7 @@ destination.
 - [Cache policy fixture verification failure](verification-01-cache-policy-fixture.md)
 - [Stream-suite parallel verification failure](verification-02-stream-parallel-failure.md)
 - [Prebuilt read-only response-body dispatch](body-01-prebuild-readonly-dispatch.md)
+- [Direct TLS listener log serialization](tls-01-direct-listener-log-serialization.md)
 
 ## Completed implementation batch
 
@@ -154,3 +156,26 @@ repository guards passed, with Clippy warnings outside the changed files.
 No full integration suite was run.
 The allocation claim concerns fixed reason strings only, not whole asynchronous
 plugin execution or dynamic policy/group reasons. No throughput claim is made.
+
+## TCP/TLS connection and relay review
+
+No production change selected in this batch. TCP retains its selected route unit
+rather than the whole route table across I/O, and owns its formatted upstream
+address in the log context.
+TLS drops the publication and executable plugin view after their required use;
+selected route/owner state remains available to connect retries. Passthrough
+forwards all consumed initial bytes, including trailing data, through an owning
+replay helper that releases the inspection buffer before the long-lived relay.
+The PP2 helper receives the bracketed socket-address string, not a reconstructed
+bare IPv6 address from log fields.
+
+The canonical relay owns two bounded 8 KiB buffers and preserves partial-write
+cursors, independent directional progress, downstream flush and a shared idle
+clock. Replacing it with a simple copy loop, shrinking buffers or removing flushes
+would need separate behavioral/performance evidence; none is proposed here.
+
+Fresh existing tests: TLS 85, TCP 27 and shared relay 21 passed. Formatting,
+workspace check/Clippy and agent-doc validation passed; Clippy warnings are
+outside this documentation-only change. No real-network or throughput validation
+is claimed. Independent plan review approved recording the listener-log candidate
+for user decision; independent final record review also passed.
