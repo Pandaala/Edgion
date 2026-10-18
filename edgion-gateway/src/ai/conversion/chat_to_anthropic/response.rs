@@ -40,38 +40,28 @@ const STREAM_ERROR: &[u8] = b"data: {\"error\":{\"message\":\"The AI backend str
 #[derive(Clone, Copy)]
 struct FixedError {
     status: u16,
-    message: &'static str,
-    type_: &'static str,
-    code: &'static str,
+    body: &'static [u8],
     record_translation_failure: bool,
 }
 
 const PROVIDER_INVALID_REQUEST: FixedError = FixedError {
     status: 400,
-    message: "The AI backend rejected the request.",
-    type_: "invalid_request_error",
-    code: "provider_invalid_request",
+    body: br#"{"error":{"code":"provider_invalid_request","message":"The AI backend rejected the request.","type":"invalid_request_error"}}"#,
     record_translation_failure: false,
 };
 const REQUEST_TOO_LARGE: FixedError = FixedError {
     status: 413,
-    message: "The request is too large.",
-    type_: "invalid_request_error",
-    code: "request_too_large",
+    body: br#"{"error":{"code":"request_too_large","message":"The request is too large.","type":"invalid_request_error"}}"#,
     record_translation_failure: false,
 };
 const RATE_LIMIT_EXCEEDED: FixedError = FixedError {
     status: 429,
-    message: "The AI backend rate limit was exceeded.",
-    type_: "rate_limit_error",
-    code: "rate_limit_exceeded",
+    body: br#"{"error":{"code":"rate_limit_exceeded","message":"The AI backend rate limit was exceeded.","type":"rate_limit_error"}}"#,
     record_translation_failure: false,
 };
 const SERVICE_UNAVAILABLE: FixedError = FixedError {
     status: 503,
-    message: "The AI backend is temporarily unavailable.",
-    type_: "api_error",
-    code: "service_unavailable",
+    body: br#"{"error":{"code":"service_unavailable","message":"The AI backend is temporarily unavailable.","type":"api_error"}}"#,
     record_translation_failure: false,
 };
 const TRANSLATION_UNAVAILABLE: FixedError = FixedError {
@@ -80,16 +70,12 @@ const TRANSLATION_UNAVAILABLE: FixedError = FixedError {
 };
 const RESPONSE_TOO_LARGE: FixedError = FixedError {
     status: 503,
-    message: "The AI backend response is too large.",
-    type_: "api_error",
-    code: "response_too_large",
+    body: br#"{"error":{"code":"response_too_large","message":"The AI backend response is too large.","type":"api_error"}}"#,
     record_translation_failure: true,
 };
 const RESPONSE_TRANSLATION_FAILED: FixedError = FixedError {
     status: 200,
-    message: "The AI backend response could not be processed.",
-    type_: "api_error",
-    code: "response_translation_failed",
+    body: br#"{"error":{"code":"response_translation_failed","message":"The AI backend response could not be processed.","type":"api_error"}}"#,
     record_translation_failure: true,
 };
 
@@ -325,7 +311,7 @@ impl AnthropicResponseProcessor {
 
     fn process_fixed(&mut self, chunk: &mut Option<Bytes>, session: &mut dyn ResponseStreamSession, error: FixedError) {
         if !self.fixed_emitted {
-            *chunk = Some(Bytes::from(render_fixed_error(error)));
+            *chunk = Some(render_fixed_error(error));
             self.fixed_emitted = true;
             if error.record_translation_failure {
                 self.record_translation_failure(session);
@@ -426,7 +412,7 @@ impl AnthropicResponseProcessor {
         self.sealed = true;
         self.non_streaming_input = Vec::new();
         self.record_translation_failure(session);
-        *chunk = Some(Bytes::from(render_fixed_error(error)));
+        *chunk = Some(render_fixed_error(error));
     }
 
     fn process_streaming(
@@ -1173,11 +1159,8 @@ impl Write for LimitedWriter {
     }
 }
 
-fn render_fixed_error(error: FixedError) -> Vec<u8> {
-    serde_json::to_vec(&json!({
-        "error":{"message":error.message,"type":error.type_,"code":error.code}
-    }))
-    .unwrap_or_else(|_| b"{\"error\":{\"message\":\"The request could not be processed.\",\"type\":\"api_error\",\"code\":\"internal_error\"}}".to_vec())
+fn render_fixed_error(error: FixedError) -> Bytes {
+    Bytes::from_static(error.body)
 }
 
 fn clear_provider_headers(response: &mut ResponseHeader) {

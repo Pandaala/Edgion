@@ -3524,3 +3524,29 @@ Fresh verification passed 112 tests: 12 canonical SSE, 24 semantic response,
 50 usage and 26 Anthropic response tests. Formatting, workspace check/Clippy,
 seven repository guards, post-update agent-doc validation and diff hygiene passed.
 Existing warnings remain outside changed code. No live transport benchmark ran.
+
+## Anthropic fixed error body preparation
+
+The response converter's closed FixedError set now stores six pre-serialized JSON
+bodies as static bytes. The service-unavailable body is still shared by the
+translation-unavailable variant with its distinct diagnostic flag. Both existing
+rendering callers create Bytes from the static body instead of building an owned
+JSON tree, serializing a Vec and transferring it. Status selection, single
+emission, sealing, error recording and provider-detail suppression are unchanged.
+
+The literals preserve the old compact code/message/type field order. The removed
+serialization fallback cannot be reached by the former fixed string-only values;
+there is no runtime serialization left in this renderer. Successful unary output
+still uses its separate reservation-bearing owner. Other OpenAI error rendering
+and the SSE terminal error literal remain unchanged.
+
+A seven-variant regression compares exact bytes against the former JSON-building
+expression, verifies status and diagnostic flags, and measures zero allocations
+for rendering alone. Expected-body construction is outside the measurement.
+This is fixed-body preparation evidence, not a throughput or whole-callback
+allocation claim.
+
+Fresh verification passed 63 tests: 27 Anthropic response, 12 canonical SSE and
+24 semantic response tests. Formatting, workspace check/Clippy, seven repository
+guards, post-update agent-doc validation and diff hygiene passed. Existing
+warnings remain outside changed code; no live provider benchmark was run.

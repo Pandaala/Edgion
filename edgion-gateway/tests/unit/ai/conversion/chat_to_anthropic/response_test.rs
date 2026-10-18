@@ -1194,3 +1194,76 @@ fn concurrent_adversarial_documents_and_slow_output_owners_stay_reserved() {
         readmitted.push(replacement);
     }
 }
+
+#[test]
+fn fixed_error_bodies_preserve_wire_bytes_without_allocation() {
+    let cases = [
+        (
+            PROVIDER_INVALID_REQUEST,
+            400,
+            false,
+            "The AI backend rejected the request.",
+            "invalid_request_error",
+            "provider_invalid_request",
+        ),
+        (
+            REQUEST_TOO_LARGE,
+            413,
+            false,
+            "The request is too large.",
+            "invalid_request_error",
+            "request_too_large",
+        ),
+        (
+            RATE_LIMIT_EXCEEDED,
+            429,
+            false,
+            "The AI backend rate limit was exceeded.",
+            "rate_limit_error",
+            "rate_limit_exceeded",
+        ),
+        (
+            SERVICE_UNAVAILABLE,
+            503,
+            false,
+            "The AI backend is temporarily unavailable.",
+            "api_error",
+            "service_unavailable",
+        ),
+        (
+            TRANSLATION_UNAVAILABLE,
+            503,
+            true,
+            "The AI backend is temporarily unavailable.",
+            "api_error",
+            "service_unavailable",
+        ),
+        (
+            RESPONSE_TOO_LARGE,
+            503,
+            true,
+            "The AI backend response is too large.",
+            "api_error",
+            "response_too_large",
+        ),
+        (
+            RESPONSE_TRANSLATION_FAILED,
+            200,
+            true,
+            "The AI backend response could not be processed.",
+            "api_error",
+            "response_translation_failed",
+        ),
+    ];
+    for (error, status, records_failure, message, type_, code) in cases {
+        let expected = serde_json::to_vec(&json!({
+            "error": {"message": message, "type": type_, "code": code}
+        }))
+        .unwrap();
+        let (body, allocations) = crate::test_allocation_counter::count_allocations(|| render_fixed_error(error));
+        assert_eq!(body.as_ref(), expected);
+        assert_eq!(error.status, status);
+        assert_eq!(error.record_translation_failure, records_failure);
+        assert_eq!(allocations, 0);
+    }
+}
