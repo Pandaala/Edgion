@@ -13,11 +13,10 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
 
-static GLOBAL_BACKEND_TLS_POLICY_STORE: LazyLock<Arc<BackendTLSPolicyStore>> =
-    LazyLock::new(|| Arc::new(BackendTLSPolicyStore::new()));
+static GLOBAL_BACKEND_TLS_POLICY_STORE: LazyLock<BackendTLSPolicyStore> = LazyLock::new(BackendTLSPolicyStore::new);
 
-pub fn get_global_backend_tls_policy_store() -> Arc<BackendTLSPolicyStore> {
-    GLOBAL_BACKEND_TLS_POLICY_STORE.clone()
+pub fn get_global_backend_tls_policy_store() -> &'static BackendTLSPolicyStore {
+    &GLOBAL_BACKEND_TLS_POLICY_STORE
 }
 
 pub(crate) const BACKEND_TLS_PROFILE_DOMAIN: &[u8] = b"edgion/backend-tls-profile/v1\0";

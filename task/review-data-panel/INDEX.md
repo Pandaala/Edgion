@@ -4172,3 +4172,26 @@ because of the existing shared-fixture failures recorded in verification-03;
 this does not establish that the parallel fixture issue is fixed. Formatting,
 workspace check/Clippy, seven repository guards and diff hygiene passed. Existing
 warnings remain outside changed code. No live TLS rotation or benchmark ran.
+
+
+## Borrowed BackendTLSPolicy singleton
+
+BackendTLSPolicyStore now lives directly in LazyLock and its getter returns a
+static reference. The existing generic Deref-based ConfHandler implementation
+also accepts that reference, so ConfigClient handler construction needs no new
+adapter or owned Arc. All other repository consumers call borrowed store methods.
+The static lifetime already prevented last-owner destruction in the former Arc
+representation; no destructor or reference-count-sensitive behavior is involved.
+
+This removes the singleton wrapper allocation and temporary getter reference-count
+operations on Service/L4 policy lookup, DirectEndpoint and endpoint-probe paths.
+Immutable policy snapshots, prepared native TLS values, effective-policy Arcs,
+publication generations and captured pool isolation remain unchanged. No heap
+saving is claimed for snapshot capture and no throughput benchmark was run.
+
+Fresh verification passed 72 network-free tests: 33 policy store/handler, 22 peer
+builder, 4 endpoint-probe transport and 13 DirectEndpoint tests. Policy and peer
+filters ran serially; the known parallel peer fixture issue in verification-03
+remains open. Formatting, workspace check/Clippy, seven repository guards and
+diff hygiene passed. Existing warnings remain outside changed code. No live
+rotation or transport integration run was performed.
