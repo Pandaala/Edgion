@@ -3858,3 +3858,23 @@ Fresh verification passed 56 network-free tests: 27 quota and 29 shared Redis
 tests. Formatting, workspace check/Clippy, agent-document validation and diff
 hygiene passed. Existing warnings remain outside this documentation-only batch.
 No live Redis, concurrency benchmark or pool-pressure measurement was performed.
+
+
+## Provider cooldown Retry-After borrowing
+
+The raw 429 cooldown hook now borrows the bounded Retry-After value from the
+upstream response instead of creating a temporary String. Attempt/outlier
+handling synchronously parses it into Duration and stores only numeric cooldown
+state. The borrow ends before the original header is removed and any accepted
+normalized delta-seconds value is inserted.
+
+The 64-byte bound, text validation, SystemTime sample, provider-reset fallback
+evaluation, cooldown precedence and header mutation order remain unchanged.
+This removes the temporary copy for eligible nonempty values; normalized output
+and other downstream work can still allocate. No throughput improvement or
+allocation-free cooldown path is claimed.
+
+Fresh verification passed 44 network-free tests: 4 AI response, 24 attempt runtime
+and 16 credential outlier tests. Formatting, workspace check/Clippy, seven
+repository guards and diff hygiene passed. Existing warnings remain outside
+changed code. No end-to-end provider or throughput benchmark was run.
