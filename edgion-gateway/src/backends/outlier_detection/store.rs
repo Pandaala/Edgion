@@ -8,10 +8,10 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 
-static OD_STORE: LazyLock<Arc<OutlierDetectionStore>> = LazyLock::new(|| Arc::new(OutlierDetectionStore::new()));
+static OD_STORE: LazyLock<OutlierDetectionStore> = LazyLock::new(OutlierDetectionStore::new);
 
-pub fn get_outlier_detection_store() -> Arc<OutlierDetectionStore> {
-    OD_STORE.clone()
+pub fn get_outlier_detection_store() -> &'static OutlierDetectionStore {
+    &OD_STORE
 }
 
 #[derive(Clone, Debug)]

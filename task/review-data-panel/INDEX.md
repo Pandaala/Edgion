@@ -4261,3 +4261,23 @@ resolver, 2 outbound target, 13 DirectEndpoint and 22 session-persistence tests.
 Formatting, workspace check/Clippy, seven repository guards and diff hygiene
 passed. Existing warnings remain outside changed code. No live transport or
 throughput benchmark ran.
+
+## Borrowed outlier-detection singleton
+
+The global OutlierDetectionStore now lives directly in LazyLock and its getter
+returns a static reference. HTTP response, connect-failure and proxy-error
+callbacks, backend completion-token capture and TCP/TLS connection paths borrow
+the same store. The static reference also spans existing L4 awaits. No consumer
+requires an owned outer store handle.
+
+This removes the outer singleton allocation and getter Arc reference-count
+operations. Internal Service and endpoint Arcs, policy tokens, generation checks,
+retirement, cooldown recovery, ejection arbitration and per-attempt classification
+remain unchanged. The accepted completion-lock and metric-label costs remain;
+this is not a lock-free completion or throughput claim.
+
+Fresh verification passed 244 network-free tests: 36 outlier-detection,
+41 discovery-coordinator, 64 backend-traffic policy and 103 HTTP upstream-peer
+tests, all with serial test execution. Formatting, workspace check/Clippy,
+seven repository guards and diff hygiene passed. Existing warnings remain
+outside changed code. No live transport or throughput benchmark ran.
