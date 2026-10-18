@@ -77,7 +77,7 @@ fn distribution_uniform_for_equal_weights() {
     let mut counts: HashMap<PSocketAddr, usize> = HashMap::new();
     for _ in 0..n {
         let picked = selector.select(8, |_| true).expect("healthy backend");
-        *counts.entry(picked.addr).or_default() += 1;
+        *counts.entry(picked.addr.clone()).or_default() += 1;
     }
     assert_eq!(counts.len(), n as usize, "each backend must be picked once");
     for (_, c) in counts {
@@ -99,7 +99,7 @@ fn distribution_respects_weights() {
     let mut counts: HashMap<PSocketAddr, usize> = HashMap::new();
     for _ in 0..total {
         let picked = selector.select(8, |_| true).expect("healthy backend");
-        *counts.entry(picked.addr).or_default() += 1;
+        *counts.entry(picked.addr.clone()).or_default() += 1;
     }
     // The selector sorts by addr; addresses 10.0.0.1/2/3 keep order.
     assert_eq!(counts.get(&backends[0].addr).copied().unwrap_or(0), 1);
@@ -116,7 +116,7 @@ fn zero_weight_treated_as_one() {
     let mut seen: HashMap<PSocketAddr, usize> = HashMap::new();
     for _ in 0..4 {
         let picked = selector.select(8, |_| true).expect("healthy backend");
-        *seen.entry(picked.addr).or_default() += 1;
+        *seen.entry(picked.addr.clone()).or_default() += 1;
     }
     assert_eq!(seen.len(), 2, "both zero-weight backends must rotate in");
 }
@@ -220,7 +220,7 @@ fn common_factor_weights_are_reduced() {
     let mut counts: HashMap<PSocketAddr, usize> = HashMap::new();
     for _ in 0..2 {
         let picked = selector.select(8, |_| true).expect("healthy backend");
-        *counts.entry(picked.addr).or_default() += 1;
+        *counts.entry(picked.addr.clone()).or_default() += 1;
     }
     assert_eq!(
         counts.len(),
@@ -250,4 +250,14 @@ fn backends_accessor_returns_sorted_unique_list() {
     for w in stored.windows(2) {
         assert!(w[0].addr <= w[1].addr, "backends must be sorted by addr");
     }
+}
+
+#[test]
+fn primary_and_fallback_borrow_selector_storage() {
+    let selector = RoundRobinSelector::build(&[make_backend_weighted(1, 3), make_backend(2)]);
+    let primary = selector.select(2, |_| true).unwrap();
+    assert!(std::ptr::eq(primary, &selector.backends[0]));
+    // The next weighted pick is still index zero, so rejecting it exercises fallback.
+    let fallback = selector.select(2, |candidate| candidate.addr != primary.addr).unwrap();
+    assert!(std::ptr::eq(fallback, &selector.backends[1]));
 }

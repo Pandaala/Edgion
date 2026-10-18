@@ -105,9 +105,9 @@ impl RoundRobinSelector {
         }
     }
 
-    /// Select the next healthy backend. Returns `None` if all backends are
+    /// Borrow the next healthy backend from this selector. Returns `None` if all backends are
     /// rejected after `max_iterations` attempts.
-    pub fn select(&self, max_iterations: usize, health_filter: impl Fn(&Backend) -> bool) -> Option<Backend> {
+    pub fn select(&self, max_iterations: usize, health_filter: impl Fn(&Backend) -> bool) -> Option<&Backend> {
         if self.weighted.is_empty() {
             return None;
         }
@@ -119,7 +119,7 @@ impl RoundRobinSelector {
         // First try: weighted pick
         let idx = self.weighted[start % wlen] as usize;
         if health_filter(&self.backends[idx]) {
-            return Some(self.backends[idx].clone());
+            return Some(&self.backends[idx]);
         }
 
         // Fallback: walk unique backends starting from the actual weighted pick.
@@ -127,7 +127,7 @@ impl RoundRobinSelector {
         for step in 1..max_iterations.min(blen) {
             let i = (offset + step) % blen;
             if health_filter(&self.backends[i]) {
-                return Some(self.backends[i].clone());
+                return Some(&self.backends[i]);
             }
         }
 

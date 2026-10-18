@@ -529,3 +529,25 @@ This evidence does not complete deeper discovery or endpoint runtime review.
 Independent plan and final source reviews passed. Agent-doc validation and diff
 whitespace checks passed. This documentation-only batch ran no Rust tests or
 benchmarks; earlier test results are not fresh verification of this proposal.
+
+
+## Borrowed RR and consistent-hash intermediate winners
+
+RoundRobinSelector and ConsistentHashRing now return a Backend borrowed from
+their own immutable storage. RrCore and ChCore use that reference for the same
+address-map resolution and retain the final owned Arc<LbBackend>. This removes
+one intermediate Backend clone on successful selection without changing health
+predicate calls, weighted ordering, ring traversal, distinct-candidate budgets,
+empty-key RR fallback, atomic cursor behavior or final generation ownership.
+
+New primary/fallback tests verify pointer identity with selector-owned storage.
+Existing distribution tests explicitly copy addresses when they need owned map
+keys or comparison values. The removed clone includes Backend's address and
+Extensions cloning; the amount of work depends on their contents. This is not
+an allocation-free selection or throughput claim: CH's large SeenSet remains.
+The separate selected-slot lookup proposal stays deferred.
+
+Independent plan and final source reviews passed. Selection tests (38), compiled
+selector tests (8) and backend selector tests (12) passed. Formatting, workspace
+check/Clippy and seven repository guards passed; Clippy warnings are outside the
+changed lines. No full integration suite or throughput benchmark was run.

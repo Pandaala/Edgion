@@ -41,7 +41,7 @@ fn different_keys_can_pick_different_backends() {
     for i in 0..32u32 {
         let key = format!("key-{}", i);
         let picked = ring.select(key.as_bytes(), 16, |_| true).expect("healthy");
-        seen.insert(picked.addr);
+        seen.insert(picked.addr.clone());
     }
     assert!(
         seen.len() >= 2,
@@ -55,7 +55,7 @@ fn unhealthy_primary_falls_back_to_next_on_ring() {
     let backends: Vec<Backend> = (1..=4).map(make_backend).collect();
     let ring = ConsistentHashRing::build(&backends);
     let key = b"hot-key";
-    let primary = ring.select(key, 32, |_| true).expect("healthy backend").addr;
+    let primary = ring.select(key, 32, |_| true).expect("healthy backend").addr.clone();
     // Mark the primary unhealthy; ring walk should return some other backend.
     let fallback = ring
         .select(key, 32, |b| b.addr != primary)
@@ -138,8 +138,8 @@ fn adding_backend_keeps_majority_of_keys_stable() {
     let total = 200usize;
     for i in 0..total {
         let key = format!("k-{i}");
-        let a = ring_before.select(key.as_bytes(), 16, |_| true).unwrap().addr;
-        let b = ring_after.select(key.as_bytes(), 16, |_| true).unwrap().addr;
+        let a = ring_before.select(key.as_bytes(), 16, |_| true).unwrap().addr.clone();
+        let b = ring_after.select(key.as_bytes(), 16, |_| true).unwrap().addr.clone();
         if a != b {
             moved += 1;
         }
@@ -172,8 +172,8 @@ fn removing_backend_only_redistributes_its_keys() {
     let total = 200usize;
     for i in 0..total {
         let key = format!("k-{i}");
-        let a = ring_before.select(key.as_bytes(), 16, |_| true).unwrap().addr;
-        let b = ring_after.select(key.as_bytes(), 16, |_| true).unwrap().addr;
+        let a = ring_before.select(key.as_bytes(), 16, |_| true).unwrap().addr.clone();
+        let b = ring_after.select(key.as_bytes(), 16, |_| true).unwrap().addr.clone();
         if a != removed_addr {
             assert_eq!(
                 a, b,
@@ -291,4 +291,26 @@ fn large_backend_count_uses_vec_seen_path() {
         ring.select(key, 256, |_| false).is_none(),
         "all-unhealthy walk over a large fleet must terminate with None"
     );
+}
+
+#[test]
+fn primary_and_fallback_borrow_ring_storage() {
+    let ring = ConsistentHashRing::build(&[make_backend(1), make_backend(2)]);
+    let primary = ring.select(b"borrowed-owner", 2, |_| true).unwrap();
+    let primary_slot = ring
+        .backends
+        .iter()
+        .find(|backend| backend.addr == primary.addr)
+        .unwrap();
+    assert!(std::ptr::eq(primary, primary_slot));
+    let fallback = ring
+        .select(b"borrowed-owner", 2, |candidate| candidate.addr != primary.addr)
+        .unwrap();
+    let fallback_slot = ring
+        .backends
+        .iter()
+        .find(|backend| backend.addr == fallback.addr)
+        .unwrap();
+    assert_ne!(primary.addr, fallback.addr);
+    assert!(std::ptr::eq(fallback, fallback_slot));
 }

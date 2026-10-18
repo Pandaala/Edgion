@@ -100,7 +100,7 @@ impl RrCore {
             .select(SELECT_MAX_ITERATIONS, |b| {
                 backend_passes_health(b, addr_map, &health_filter)
             })
-            .and_then(|b| resolve_backend(&b, addr_map).cloned())
+            .and_then(|b| resolve_backend(b, addr_map).cloned())
     }
 }
 
@@ -139,7 +139,7 @@ impl ChCore {
             .select(hash_key, SELECT_MAX_ITERATIONS, |b| {
                 backend_passes_health(b, addr_map, &health_filter)
             })
-            .and_then(|b| resolve_backend(&b, addr_map).cloned())
+            .and_then(|b| resolve_backend(b, addr_map).cloned())
     }
 }
 

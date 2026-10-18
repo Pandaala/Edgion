@@ -68,13 +68,13 @@ impl ConsistentHashRing {
         }
     }
 
-    /// Select a backend for the given hash key, walking the ring on rejection.
+    /// Borrow a backend from this ring for the given hash key, walking on rejection.
     pub fn select(
         &self,
         hash_key: &[u8],
         max_iterations: usize,
         health_filter: impl Fn(&Backend) -> bool,
-    ) -> Option<Backend> {
+    ) -> Option<&Backend> {
         if self.backends.is_empty() {
             return None;
         }
@@ -109,7 +109,7 @@ impl ConsistentHashRing {
 
                 let backend = &self.backends[backend_idx];
                 if health_filter(backend) {
-                    return Some(backend.clone());
+                    return Some(backend);
                 }
 
                 // All distinct backends have been evaluated and none is healthy.
