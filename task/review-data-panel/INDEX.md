@@ -968,3 +968,22 @@ and seven repository guards passed. New needless-lifetime warnings were removed
 from concrete implementations while the trait retains Mockall's required explicit
 lifetime. Remaining warnings are outside changed code. No full integration suite
 or throughput benchmark ran.
+
+
+## Composite-key presence without construction
+
+KeyExist(RemoteIpAndPath) now checks the current RemoteIp's nonemptiness without
+formatting ip:path. The existing owned accessor returns a value for any nonempty
+RemoteIp, including an empty Path; path reads have no side effects. Negation stays
+outside the presence decision and compiled conditions continue to read each time.
+Actual value matching, secret comparison and keyed probability still use the
+unchanged composite string. Their encoding/hash behavior is outside this change.
+
+Independent plan and final source reviews passed. The real-adapter test passed
+across live RemoteIp transitions, empty/ordinary/long paths and both negation
+settings, with zero allocations per existence evaluation. Shared conditions
+passed 67 tests, RequestRestriction passed 18 and RequestAccessPolicy passed 18.
+Formatting, workspace check/Clippy and seven repository guards passed; existing
+warnings remain outside changed code. No full integration suite or throughput
+benchmark ran. Composite content consumers still allocate and remain open for
+further review; this does not establish allocation-free conditions in general.

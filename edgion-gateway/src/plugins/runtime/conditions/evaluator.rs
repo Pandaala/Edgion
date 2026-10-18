@@ -991,7 +991,12 @@ fn match_core(core: &MatchCore, value: &str, log: Option<&mut PluginLog>) -> boo
 
 impl KeyExistConditionExt for KeyExistCondition {
     fn evaluate(&self, session: &dyn PluginSession) -> bool {
-        apply_negate(condition_key_value(session, &self.key).is_some(), self.negate)
+        let exists = match &self.key {
+            // The composite exists whenever RemoteIp does, including an empty path.
+            KeyGet::RemoteIpAndPath => !session.remote_ip().is_empty(),
+            _ => condition_key_value(session, &self.key).is_some(),
+        };
+        apply_negate(exists, self.negate)
     }
 }
 

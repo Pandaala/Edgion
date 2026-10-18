@@ -2954,3 +2954,44 @@ async fn borrowed_identity_conditions_use_captured_values_without_copies() {
         }
     }
 }
+
+#[tokio::test]
+async fn composite_key_existence_avoids_value_construction() {
+    use crate::plugins::runtime::conditions::{CompiledPluginConditions, EvaluationResult};
+    use edgion_resources::resources::edgion_plugins::conditions::{
+        Condition, ConditionSet, KeyExistCondition, PluginConditions,
+    };
+    let conditions = [false, true].map(|negate| {
+        CompiledPluginConditions::new(PluginConditions {
+            skip: None,
+            run: Some(ConditionSet::all_of(vec![Condition::KeyExist(KeyExistCondition {
+                key: KeyGet::RemoteIpAndPath,
+                negate,
+                descriptor: Box::from(""),
+            })])),
+        })
+    });
+    let mut session = test_session().await;
+    let mut ctx = EdgionHttpContext::default();
+    let paths = [String::new(), "/api".to_string(), format!("/{}", "x".repeat(8192))];
+    for remote_ip in ["", "192.0.2.1", "2001:db8::1", ""] {
+        ctx.request_info.remote_ip = remote_ip.to_string();
+        for path in &paths {
+            ctx.request_info.normalized_current_path = path.clone();
+            let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            let exists = adapter.key_get(&KeyGet::RemoteIpAndPath).is_some();
+            assert_eq!(exists, !remote_ip.is_empty());
+            for (condition, negate) in conditions.iter().zip([false, true]) {
+                let (result, calls) =
+                    crate::test_allocation_counter::count_allocations(|| condition.evaluate(&adapter));
+                let expected = if exists != negate {
+                    EvaluationResult::Run
+                } else {
+                    EvaluationResult::Skip
+                };
+                assert_eq!(result, expected);
+                assert_eq!(calls, 0, "existence must not construct the composite value");
+            }
+        }
+    }
+}

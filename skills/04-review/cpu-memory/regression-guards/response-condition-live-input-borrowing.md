@@ -15,7 +15,9 @@ and `Ctx` values for one predicate evaluation. It also borrows the captured
 canonical `TraceId`, frozen normalized `Host` and mTLS certificate candidates.
 Query conditions borrow the decoded frozen entry-query cache for the same short
 evaluation; they do not read the live rewritten URI. `KeyExist`, `KeyMatch`,
-`SecretMatch`, and keyed `Probability` use that same accessor. It does not cache
+`SecretMatch`, and keyed `Probability` use that value accessor. KeyExist uses a
+direct presence check for RemoteIpAndPath, whose existence depends only on a
+nonempty RemoteIp. It does not cache
 a predicate result or a request snapshot across chunks. The response-body
 filter still emits no per-chunk `PluginLog`.
 
@@ -78,7 +80,7 @@ The other sources have different costs or lifetimes:
 | `TraceId`, `Host` | Borrow captured request identity | The standard W3C ID survives default-header suppression; Host uses the frozen normalized entry value, not the live header. |
 | `Query` | Borrows one decoded value from the lazily initialized entry-query cache | `get_query_param_ref` ties the value to the session read; the owned getter still copies for consumers requiring ownership. |
 | `Ctx` | Borrows the current context value | The short session borrow ends before later plugins set or remove variables. |
-| `RemoteIpAndPath` | Formats a combined string | The resolved IP can change; the composite needs an owned representation today. |
+| `RemoteIpAndPath` | KeyExist checks RemoteIp presence; value consumers still format the composite | A nonempty RemoteIp produces a value even with an empty Path; matching and hashing still need the composite contents. |
 | `JwtClaimMatch` | Borrows context JSON, parses it, and creates scalar candidate strings | JWT/OIDC claim context may be changed by plugins; a cross-chunk parsed snapshot would need invalidation. |
 | `MtlsMatch` | Borrows `ClientCertInfo` and lazily selects string slices | The getter retains the existing certificate exposure gate; each synchronous evaluation owns only its short borrow. |
 | `TimeRange`, `Probability` | Reads current time or draws probability per evaluation; keyed probability reads its current key | Freezing the decision would change timing or sampling semantics. |
@@ -229,3 +231,20 @@ rewrites, borrowed pointers still alias the canonical owners. Each selected owne
 key_get allocates once; repeated compiled identity matches allocate zero times.
 Initialization, compilation and header rewriting are outside that measurement.
 This is source-copy removal evidence, not a throughput or whole-condition claim.
+
+
+## Composite-key existence
+
+KeyExist(RemoteIpAndPath) checks the current remote_ip borrow directly. The owned
+adapter returns None exactly when that string is empty; otherwise it formats
+ip:path even if the path is empty. Skipping value construction for presence does
+not skip a meaningful path-side effect: get_path reads the current normalized
+path from the request context. Negation still applies once after presence.
+KeyMatch, SecretMatch and keyed Probability retain the unchanged value accessor;
+this does not change composite encoding, matching or deterministic hash buckets.
+
+The real-adapter regression reuses compiled normal/negated conditions while
+changing one context through absent, IPv4, IPv6 and absent-again inputs, each with
+empty, ordinary and long paths. Results match owned KeyGet presence and predicate
+allocation counts remain zero. Composite content consumers and JWT parsing still
+allocate; no whole-condition-system compliance or throughput claim follows.
