@@ -83,3 +83,18 @@ Direct tests cover scalar byte limits, nested arrays and aggregate depth/node
 boundaries. Binding, JSON conversion and envelope/publication ownership are
 unchanged. Profiling itself still allocates; this is not allocation-free binding
 or a throughput claim.
+
+## Binding input ownership
+
+The Gateway passes existing KeyGet-owned strings as owned JSON values into the
+shared binder, while native body-pointer values remain borrowed. `bind` accepts
+`Cow<Value>` and profiles the input before any clone or conversion. Plain text
+can move into the final variable without duplicating its String allocation;
+borrowed body values clone only after profiling. JSON/numeric/list conversion,
+final value bounds and type validation retain their existing order and errors.
+Header duplicate/opaque/byte preflight and final envelope validation remain.
+
+Tests compare owned and borrowed inputs across types and caps, check the moved
+text allocation identity, and verify native body input remains independent of
+the bound result. Input acquisition, parsing, final variable ownership and output
+serialization still allocate; no whole-binding allocation-free claim follows.

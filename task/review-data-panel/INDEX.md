@@ -1721,3 +1721,20 @@ Fresh Resources tests passed 7 cases; Gateway adapter tests passed 9. Formatting
 workspace check/Clippy and seven repository guards passed, with existing warnings
 outside changed files. Independent final review passed. Temporary source-Value
 ownership in binding remains a separate open inspection boundary.
+
+## REST-to-GraphQL owned binding input transfer
+
+The Gateway transfers its existing owned KeyGet String into the canonical shared
+binder through `Cow<Value>`; native body pointers remain borrowed. Profiling still
+precedes clone/conversion, and plain text now moves into the final variable rather
+than being copied again. JSON conversion, final bounds/type checks, header
+preflight and envelope/publication ownership are unchanged. The supporting
+Resources API and all actual call sites changed within the reviewed five-file scope.
+
+Independent plan review passed. Tests compare owned/borrowed results and errors,
+byte-cap behavior, owned String allocation identity and native body independence.
+No full suite, live integration or throughput benchmark ran for this batch.
+Fresh Resources and Gateway selections each passed 9 tests. Formatting, workspace
+check/Clippy and seven repository guards passed, with existing warnings outside
+changed files. Independent final review passed. Owned plaintext pointer identity
+confirms transfer of that allocation; parsing and serialization costs remain.

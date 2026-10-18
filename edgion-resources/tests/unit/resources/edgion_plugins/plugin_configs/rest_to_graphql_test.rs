@@ -63,16 +63,25 @@ fn missing_null_defaults_and_text_coercion_retain_distinct_semantics() {
     .compile()
     .unwrap();
     assert_eq!(compiled.bind(0, None).unwrap(), None);
-    assert!(compiled.bind(0, Some(&json!("null"))).is_err());
-    assert_eq!(compiled.bind(0, Some(&json!("10"))).unwrap(), Some(json!(10)));
+    assert!(compiled.bind(0, Some(Cow::Borrowed(&json!("null")))).is_err());
+    assert_eq!(
+        compiled.bind(0, Some(Cow::Borrowed(&json!("10")))).unwrap(),
+        Some(json!(10))
+    );
     for value in ["01", "2147483648", "10.0", "\"10\"", "false", ""] {
-        assert!(compiled.bind(0, Some(&json!(value))).is_err());
+        assert!(compiled.bind(0, Some(Cow::Borrowed(&json!(value)))).is_err());
     }
     assert_eq!(compiled.bind(1, None).unwrap(), None);
-    assert_eq!(compiled.bind(1, Some(&json!("42"))).unwrap(), Some(json!("42")));
-    assert_eq!(compiled.bind(2, Some(&json!("true"))).unwrap(), Some(json!(true)));
+    assert_eq!(
+        compiled.bind(1, Some(Cow::Borrowed(&json!("42")))).unwrap(),
+        Some(json!("42"))
+    );
+    assert_eq!(
+        compiled.bind(2, Some(Cow::Borrowed(&json!("true")))).unwrap(),
+        Some(json!(true))
+    );
     assert!(compiled.bind(2, None).is_err());
-    assert!(compiled.bind(2, Some(&json!("1"))).is_err());
+    assert!(compiled.bind(2, Some(Cow::Borrowed(&json!("1")))).is_err());
 }
 
 #[test]
@@ -86,18 +95,28 @@ fn native_pointer_values_and_explicit_json_lists_are_typed_and_bounded() {
     .unwrap();
     let body = json!({"a/b":{"~input":{"name":"safe"}}});
     assert_eq!(
-        compiled.bind(0, compiled.body_value(0, &body)).unwrap(),
+        compiled
+            .bind(0, compiled.body_value(0, &body).map(Cow::Borrowed))
+            .unwrap(),
         Some(json!({"name":"safe"}))
     );
-    assert!(compiled.bind(0, Some(&Value::Null)).is_err());
-    assert_eq!(compiled.bind(1, Some(&json!("[1,2]"))).unwrap(), Some(json!([1, 2])));
+    assert!(compiled.bind(0, Some(Cow::Borrowed(&Value::Null))).is_err());
+    assert_eq!(
+        compiled.bind(1, Some(Cow::Borrowed(&json!("[1,2]")))).unwrap(),
+        Some(json!([1, 2]))
+    );
     for value in ["[1,null]", "[1,\"2\"]", "1", "null"] {
-        assert!(compiled.bind(1, Some(&json!(value))).is_err());
+        assert!(compiled.bind(1, Some(Cow::Borrowed(&json!(value)))).is_err());
     }
     assert!(compiled
-        .bind(1, Some(&json!(serde_json::to_string(&vec![1; 33]).unwrap())))
+        .bind(
+            1,
+            Some(Cow::Borrowed(&json!(serde_json::to_string(&vec![1; 33]).unwrap())))
+        )
         .is_err());
-    assert!(compiled.bind(0, Some(&json!("x".repeat(16 * 1024 + 1)))).is_err());
+    assert!(compiled
+        .bind(0, Some(Cow::Borrowed(&json!("x".repeat(16 * 1024 + 1)))))
+        .is_err());
 }
 
 #[test]
@@ -161,4 +180,63 @@ fn container_value_bounds_keep_nested_arrays_and_profile_error_precedence() {
     let many_nodes = Value::Array(vec![Value::Array(vec![Value::Null; 32]); 625]);
     // Universal profiling rejects first, before the stricter adapter array cap.
     assert_eq!(check_value_bounds(&many_nodes), Err(GraphqlError::Invalid));
+}
+
+#[test]
+fn owned_and_borrowed_binding_inputs_keep_results_and_errors() {
+    let compiled = config(json!({
+        "query": "query($id:ID,$items:[Int!]!,$input:CustomInput){read(id:$id,items:$items,input:$input)}",
+        "variables": [
+            {"name":"id","from":{"type":"ctx","name":"id"}},
+            {"name":"items","from":{"type":"ctx","name":"items"},"format":"json"},
+            {"name":"input","bodyPointer":"/input"}
+        ]
+    }))
+    .compile()
+    .unwrap();
+    for index in 0..3 {
+        for value in [
+            Value::Null,
+            json!(false),
+            json!(42),
+            json!(""),
+            json!("hello"),
+            json!("[1,2]"),
+            json!("[1,null]"),
+            json!("null"),
+            json!({"field":[1,2]}),
+            json!("x".repeat(REST_GRAPHQL_MAX_VALUE_BYTES)),
+            json!("x".repeat(REST_GRAPHQL_MAX_VALUE_BYTES + 1)),
+        ] {
+            assert_eq!(
+                compiled.bind(index, Some(Cow::Owned(value.clone()))),
+                compiled.bind(index, Some(Cow::Borrowed(&value)))
+            );
+        }
+    }
+}
+
+#[test]
+fn owned_text_binding_moves_storage_and_body_binding_keeps_original() {
+    let compiled = config(json!({
+        "query":"query($id:ID,$input:CustomInput){read(id:$id,input:$input)}",
+        "variables":[{"name":"id","from":{"type":"ctx","name":"id"}},{"name":"input","bodyPointer":"/input"}]
+    }))
+    .compile()
+    .unwrap();
+    let text = "stable-owned-text".to_owned();
+    let pointer = text.as_ptr();
+    let output = compiled
+        .bind(0, Some(Cow::Owned(Value::String(text))))
+        .unwrap()
+        .unwrap();
+    assert_eq!(output.as_str(), Some("stable-owned-text"));
+    assert_eq!(output.as_str().unwrap().as_ptr(), pointer);
+
+    let body = json!({"input":{"field":"preserved"}});
+    let selected = compiled.body_value(1, &body).unwrap();
+    let mut output = compiled.bind(1, Some(Cow::Borrowed(selected))).unwrap().unwrap();
+    assert_eq!(&output, selected);
+    output.as_object_mut().unwrap().clear();
+    assert_eq!(body, json!({"input":{"field":"preserved"}}));
 }

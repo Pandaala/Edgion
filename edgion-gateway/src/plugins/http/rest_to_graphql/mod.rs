@@ -18,6 +18,7 @@ use edgion_resources::resources::edgion_plugins::BodyRequirement;
 use edgion_resources::EdgionErrorCode;
 use serde::Serialize;
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 
 pub struct RestToGraphql {
     compiled: CompiledRestToGraphql,
@@ -35,7 +36,6 @@ impl RestToGraphql {
     fn construct(&self, session: &dyn PluginSession, body: Option<&Value>) -> Result<Bytes, GraphqlError> {
         let mut variables = Map::new();
         for (index, binding) in self.compiled.bindings().enumerate() {
-            let local;
             let value = if let Some(source) = &binding.from {
                 if let KeyGet::Header { name } = source {
                     let mut values = session.request_header_map().get_all(name).iter();
@@ -48,10 +48,10 @@ impl RestToGraphql {
                         }
                     }
                 }
-                local = session.key_get(source).map(Value::String);
-                local.as_ref()
+                session.key_get(source).map(Value::String).map(Cow::Owned)
             } else {
                 body.and_then(|body| self.compiled.body_value(index, body))
+                    .map(Cow::Borrowed)
             };
             if let Some(value) = self.compiled.bind(index, value)? {
                 variables.insert(binding.name.clone(), value);

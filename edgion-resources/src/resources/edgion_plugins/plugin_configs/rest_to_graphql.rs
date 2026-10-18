@@ -10,6 +10,7 @@ use jsonptr::PointerBuf;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::borrow::Cow;
 use std::collections::HashSet;
 
 pub const REST_GRAPHQL_MAX_VALUE_BYTES: usize = 16 * 1024;
@@ -164,7 +165,7 @@ impl CompiledRestToGraphql {
         self.bindings.get(index)?.pointer.as_ref()?.resolve(body).ok()
     }
 
-    pub fn bind(&self, index: usize, value: Option<&Value>) -> Result<Option<Value>, GraphqlError> {
+    pub fn bind(&self, index: usize, value: Option<Cow<'_, Value>>) -> Result<Option<Value>, GraphqlError> {
         let binding = self.bindings.get(index).ok_or(GraphqlError::Invalid)?;
         let Some(value) = value else {
             return if binding.ty.required() && !binding.has_default {
@@ -173,7 +174,7 @@ impl CompiledRestToGraphql {
                 Ok(None)
             };
         };
-        check_value_bounds(value)?;
+        check_value_bounds(&value)?;
         let value = if binding.source.from.is_some() {
             let text = value.as_str().ok_or(GraphqlError::Invalid)?;
             if text.len() > REST_GRAPHQL_MAX_VALUE_BYTES {
@@ -187,10 +188,10 @@ impl CompiledRestToGraphql {
                     .map_err(|_| GraphqlError::Invalid)?
                     .into_value()
             } else {
-                Value::String(text.to_owned())
+                value.into_owned()
             }
         } else {
-            value.clone()
+            value.into_owned()
         };
         check_value_bounds(&value)?;
         check_type(&binding.ty, &value, 0)?;
