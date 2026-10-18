@@ -424,17 +424,23 @@ fn validate_replacements(
 }
 
 /// Borrow the post-local-mask text of every span for the evaluator.
+/// The sole caller supplies spans sorted by select_spans and replacements sorted
+/// by CompiledRules::evaluate, so one forward cursor resolves every lookup.
 fn apply_local<'a>(spans: &'a [GuardSpan], decision: &'a GuardDecision<GuardSpanKey>) -> Vec<(GuardSpanKey, &'a str)> {
     let replaced = match decision {
         GuardDecision::Replace(items) => items.as_slice(),
         _ => &[],
     };
+    let mut replacement_index = 0;
     spans
         .iter()
         .map(|span| {
+            while replaced.get(replacement_index).is_some_and(|(key, _)| *key < span.key) {
+                replacement_index += 1;
+            }
             let text = replaced
-                .iter()
-                .find(|(key, _)| *key == span.key)
+                .get(replacement_index)
+                .filter(|(key, _)| *key == span.key)
                 .map(|(_, text)| text.as_str())
                 .unwrap_or(span.current.as_str());
             (span.key, text)

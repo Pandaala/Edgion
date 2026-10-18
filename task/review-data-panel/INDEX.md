@@ -2500,3 +2500,20 @@ cover decimal equivalence, integer bounds, masking and capacity behavior.
 Fresh verification passed 65 AiGuard request and 33 PluginLog tests, formatting,
 workspace check/Clippy and seven repository guards. Remaining warnings are outside
 changed code. This removes temporary count Strings; no throughput gain is claimed.
+
+## AiGuard ordered evaluator projection
+
+The private post-local-mask projection now advances one replacement cursor instead
+of restarting a linear search for every span. Its sole production caller receives
+spans sorted by select_spans and replacements sorted by CompiledRules::evaluate,
+before external decisions are merged. The helper documents this precondition.
+Lookup work is O(spans + replacements) instead of worst-case quadratic; output
+order, first-equal selection and borrowed text ownership remain unchanged without
+an additional index or string copy. Final validation and publication are untouched.
+Independent plan and code reviews passed. The regression drives the real rule
+producer with reversed inputs, then compares a 256-span projection against the
+previous linear reference and exact text pointers, including sparse first/last
+masks, Pass, empty replacement lists and empty span input.
+Fresh verification passed all 66 AiGuard request tests, formatting, workspace
+check/Clippy and seven repository guards. Remaining warnings are outside changed
+code. No end-to-end throughput benchmark is claimed.

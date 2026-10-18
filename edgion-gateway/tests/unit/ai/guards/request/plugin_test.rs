@@ -722,3 +722,58 @@ async fn pass_decision_keeps_flag_count_log_text() {
         }
     }
 }
+
+#[test]
+fn evaluator_projection_scans_sorted_rule_output_without_copying_text() {
+    let guard = guard(mask_rule(), "");
+    let spans: Vec<_> = (0..256u32)
+        .map(|index| GuardSpan {
+            key: GuardSpanKey {
+                message_index: index / 4,
+                part: match index % 4 {
+                    0 => GuardPart::Content,
+                    value => GuardPart::TextPart(value - 1),
+                },
+            },
+            role: None,
+            context: String::new(),
+            current: if index % 3 == 0 { "secret" } else { "public" }.into(),
+            token: u64::from(index) * 10..u64::from(index) * 10 + 8,
+        })
+        .collect();
+    let rule_spans: Vec<_> = spans
+        .iter()
+        .rev()
+        .map(|span| RuleSpan {
+            key: span.key,
+            role: span.role,
+            current: &span.current,
+        })
+        .collect();
+    let outcome = guard.rules.evaluate(&rule_spans, 4096).unwrap();
+    let GuardDecision::Replace(items) = &outcome.decision else {
+        panic!("expected masked rule output");
+    };
+    assert_eq!(items.len(), 86);
+    assert!(items.windows(2).all(|pair| pair[0].0 < pair[1].0));
+    for decision in [
+        outcome.decision,
+        GuardDecision::Pass,
+        GuardDecision::Replace(Vec::new()),
+    ] {
+        let items = replacement_items(&decision);
+        let projected = apply_local(&spans, &decision);
+        assert_eq!(projected.len(), spans.len());
+        for (span, (key, text)) in spans.iter().zip(projected) {
+            let expected = items
+                .iter()
+                .find(|(key, _)| *key == span.key)
+                .map(|(_, text)| text.as_str())
+                .unwrap_or(&span.current);
+            assert_eq!(key, span.key);
+            assert_eq!(text, expected);
+            assert_eq!(text.as_ptr(), expected.as_ptr());
+        }
+        assert!(apply_local(&[], &decision).is_empty());
+    }
+}
