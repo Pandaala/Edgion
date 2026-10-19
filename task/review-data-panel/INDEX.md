@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Dynamic fallback metric label capacity](metrics-01-fallback-label-capacity.md)
+
 - [Boundary-local response-cache Vary validation reuse](cache-03-boundary-local-vary-validation.md)
 
 - [Terminal gRPC message header storage](grpc-07-terminal-message-header-storage.md)
@@ -6444,3 +6446,15 @@ handle/fallback parity and logging tests were sufficient for the mechanical
 lifetime change. Fresh verification passed 36 metrics and ten logging tests
 (46 total), formatting, workspace check/Clippy and seven guards. Existing unrelated
 warnings remain. No full test suite, live integration or benchmark ran.
+
+## Dynamic fallback metric capacity audit
+
+Traced terminal fallback label construction through the locked metrics Vec/Key/Cow
+ownership path. Fixed reservations exceed default emitted label counts, but the
+ordinary prepared-handle path bypasses these builders. Deferred sizing and cold
+preparation alternatives in metrics-01 pending workload, allocation and CPU evidence;
+no runtime behavior changed. Independent plan review approved two documents.
+
+Fresh baseline verification passed 36 metrics and ten logging tests (46 total),
+formatting check, workspace check/Clippy and agent-doc validation. Existing unrelated
+warnings remain; no full test suite, live integration or benchmark ran.
