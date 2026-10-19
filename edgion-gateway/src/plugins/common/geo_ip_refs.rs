@@ -12,6 +12,7 @@ type RuleGrid = Vec<Vec<Option<Arc<BoundIpPredicate>>>>;
 pub(crate) struct CompiledGeoIpRefs {
     deny: RuleGrid,
     allow: RuleGrid,
+    has_refs: bool,
 }
 impl CompiledGeoIpRefs {
     fn empty(config: &GeoIpLocationConfig) -> Self {
@@ -24,6 +25,7 @@ impl CompiledGeoIpRefs {
         Self {
             deny: grid(&config.deny_rule_groups),
             allow: grid(&config.allow_rule_groups),
+            has_refs: false,
         }
     }
     pub(crate) fn from_http(
@@ -43,6 +45,8 @@ impl CompiledGeoIpRefs {
                 }
             }
         }
+        let has_refs = result.predicates().next().is_some();
+        result.has_refs = has_refs;
         Ok(result)
     }
     pub(crate) fn from_stream(entry: BoundGeoIpEntry<'_>) -> Result<Self, ReferenceError> {
@@ -55,13 +59,15 @@ impl CompiledGeoIpRefs {
             let predicate = compile_geo_leaf(leaf)?;
             (if deny { &mut result.deny } else { &mut result.allow })[group][rule] = Some(predicate);
         }
+        let has_refs = result.predicates().next().is_some();
+        result.has_refs = has_refs;
         Ok(result)
     }
     fn predicates(&self) -> impl Iterator<Item = &Arc<BoundIpPredicate>> {
         self.deny.iter().chain(&self.allow).flatten().flatten()
     }
     pub(crate) fn has_refs(&self) -> bool {
-        self.predicates().next().is_some()
+        self.has_refs
     }
     pub(crate) fn available(&self, session: &dyn PluginSession) -> bool {
         self.predicates().all(|predicate| predicate.available(session))

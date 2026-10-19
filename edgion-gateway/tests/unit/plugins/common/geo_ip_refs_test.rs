@@ -230,3 +230,45 @@ fn geo_cross_namespace_proofs_check_current_visibility_and_disabled_validation_k
         );
     }
 }
+
+#[test]
+fn reference_demand_is_prepared_by_both_owner_constructors() {
+    use edgion_resources::refs::ip_list_fields::PreparedIpListReferences;
+
+    let dimension = json!({"source":"DirectPeerIp","key":"country","values":["US"]});
+    let cidr = json!({"source":"DirectPeerIp","key":"cidr","ipRefs":[{"name":"clients"}]});
+    for (deny, allow, expected) in [
+        (json!([{"rules":[dimension.clone()]}]), json!([]), false),
+        (json!([{"rules":[dimension.clone(), cidr.clone()]}]), json!([]), true),
+        (json!([{"rules":[dimension]}]), json!([{"rules":[cidr]}]), true),
+    ] {
+        let config = json!({"failOpen":false,"denyRuleGroups":deny,"allowRuleGroups":allow});
+        let http_owner = serde_json::from_value(json!({
+            "metadata":{"name":"geo","namespace":"default"},
+            "spec":{"requestPlugins":[{"type":"GeoIpLocation","config":config}]}
+        }))
+        .unwrap();
+        let http = compiled(&http_owner);
+        assert_eq!(http.has_refs(), expected);
+        assert_eq!(http.has_refs(), http.predicates().next().is_some());
+
+        let stream_owner = serde_json::from_value(json!({
+            "metadata":{"name":"geo","namespace":"default"},
+            "spec":{"plugins":[{"type":"GeoIpLocation","config":config}]}
+        }))
+        .unwrap();
+        let prepared = PreparedIpListReferences::from_stream_plugins(&stream_owner);
+        let binding = prepared.bind_stream_plugins(&stream_owner).unwrap();
+        let stream = CompiledGeoIpRefs::from_stream(binding.geo_entry(0).unwrap()).unwrap();
+        assert_eq!(stream.has_refs(), expected);
+        assert_eq!(stream.has_refs(), stream.predicates().next().is_some());
+    }
+
+    // HTTP permits parse-only configuration; Stream admission rejects it.
+    let parse_only = serde_json::from_value(json!({
+        "metadata":{"name":"geo","namespace":"default"},
+        "spec":{"requestPlugins":[{"type":"GeoIpLocation","config":{}}]}
+    }))
+    .unwrap();
+    assert!(!compiled(&parse_only).has_refs());
+}

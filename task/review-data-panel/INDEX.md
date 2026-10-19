@@ -7103,3 +7103,23 @@ fresh verification passed 42 tests: 16 GCIR, 4 shared ACL and 22 ConfigData.
 The existing successful-switch test also checks selected ACL pointer identity.
 Formatting, workspace check/Clippy and seven guards passed with existing
 unrelated warnings. No full suite or live integration ran.
+
+## Prepare GeoIP reference-presence demand once
+
+CompiledGeoIpRefs now records whether its immutable rule grid contains any
+bound CIDR predicate after successful HTTP or Stream construction. has_refs
+reads that boolean instead of traversing the same fixed grid on every request
+or connection. Both constructors compute the exact prior predicate-presence
+expression after binding finishes. The grid has no postconstruction mutator.
+This adds a per-instance scalar; it does not cache live reference availability.
+Required-reference preflight, permission gates, single-generation capture and
+membership retain their existing traversal and failure behavior.
+
+Independent plan review passed. The actual-owner constructor matrix covers
+geographic-only, late deny CIDR, allow CIDR and HTTP parse-only configurations.
+Baseline shared-reference tests passed (5); final verification passed 35 tests:
+6 shared GeoIP references, 22 HTTP/Stream GeoIP and 7 IP-reference tests.
+A temporary iterator lifetime compile error and a missing required failOpen
+field in the new fixture were corrected before these final results. Formatting,
+workspace check/Clippy and seven guards passed with existing unrelated warnings.
+No full suite, live integration or throughput measurement ran.
