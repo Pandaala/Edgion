@@ -435,9 +435,9 @@ impl LoadBalancerConfig {
             LoadBalancerType::ConsistentHash => {
                 let ch = self.consistent_hash.as_ref()?;
                 let on = match ch.hash_on {
-                    HashOn::Header => ConsistentHashOn::Header(ch.key.clone().unwrap_or_default()),
-                    HashOn::Cookie => ConsistentHashOn::Cookie(ch.key.clone().unwrap_or_default()),
-                    HashOn::QueryParam => ConsistentHashOn::Arg(ch.key.clone().unwrap_or_default()),
+                    HashOn::Header => ConsistentHashOn::Header(ch.key.as_deref().unwrap_or_default().into()),
+                    HashOn::Cookie => ConsistentHashOn::Cookie(ch.key.as_deref().unwrap_or_default().into()),
+                    HashOn::QueryParam => ConsistentHashOn::Arg(ch.key.as_deref().unwrap_or_default().into()),
                     HashOn::SourceIp => ConsistentHashOn::SourceIp,
                 };
                 Some(ParsedLBPolicy::ConsistentHash(on))

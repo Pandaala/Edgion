@@ -126,7 +126,7 @@ pub(super) fn named_captured_policy() -> Arc<crate::backends::policy::backend_tr
         resolved_target_class: ResolvedPolicyTargetClass::Service,
         winning_policy_key: "default/captured".to_owned(),
         load_balancer: Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Header(
-            "x-routing-key".to_owned(),
+            "x-routing-key".into(),
         ))),
         degrade_threshold_override: None,
         upstream_authority: None,

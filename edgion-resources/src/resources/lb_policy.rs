@@ -18,16 +18,17 @@
 //! these back from a wire format).
 
 use serde::Serialize;
+use std::sync::Arc;
 
 /// Hash source type for consistent hash LB policy
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum ConsistentHashOn {
     /// Hash based on request header
-    Header(String),
+    Header(Arc<str>),
     /// Hash based on cookie
-    Cookie(String),
+    Cookie(Arc<str>),
     /// Hash based on query argument
-    Arg(String),
+    Arg(Arc<str>),
     /// Hash based on the (RealIp-normalized) client source IP. No value name.
     SourceIp,
 }

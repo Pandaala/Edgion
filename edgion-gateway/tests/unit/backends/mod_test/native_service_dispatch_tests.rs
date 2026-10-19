@@ -579,13 +579,13 @@ async fn peer_construction_transfers_captured_lb_policy_into_attempt() {
     for test_metrics in [false, true] {
         for policy in [
             Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Header(
-                "x-routing-key".to_owned(),
+                "x-routing-key".into(),
             ))),
             Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Cookie(
-                "routing-cookie".to_owned(),
+                "routing-cookie".into(),
             ))),
             Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Arg(
-                "routing-query".to_owned(),
+                "routing-query".into(),
             ))),
             Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::SourceIp)),
             Some(ParsedLBPolicy::LeastConn),

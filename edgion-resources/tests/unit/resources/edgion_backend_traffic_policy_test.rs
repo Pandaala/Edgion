@@ -544,3 +544,40 @@ fn malformed_target_name_is_invalid_without_changing_service_and_ai_bounds() {
         .iter()
         .any(|error| error.contains("duplicate")));
 }
+
+#[test]
+fn named_hash_policy_clones_share_keys_and_preserve_serialization() {
+    use std::sync::Arc;
+    for (hash_on, variant) in [
+        (HashOn::Header, "Header"),
+        (HashOn::Cookie, "Cookie"),
+        (HashOn::QueryParam, "Arg"),
+    ] {
+        for key in [None, Some(""), Some("X-Routing-Key"), Some("café")] {
+            let config = LoadBalancerConfig {
+                degrade_threshold: None,
+                r#type: LoadBalancerType::ConsistentHash,
+                consistent_hash: Some(ConsistentHashConfig {
+                    hash_on: hash_on.clone(),
+                    key: key.map(str::to_owned),
+                }),
+            };
+            let original = config.to_parsed().unwrap();
+            let cloned = original.clone();
+            let key_of = |policy: &ParsedLBPolicy| match policy {
+                ParsedLBPolicy::ConsistentHash(
+                    ConsistentHashOn::Header(key) | ConsistentHashOn::Cookie(key) | ConsistentHashOn::Arg(key),
+                ) => Arc::clone(key),
+                _ => panic!("expected a named hash policy"),
+            };
+            assert!(Arc::ptr_eq(&key_of(&original), &key_of(&cloned)));
+            drop(config);
+            drop(original);
+            assert_eq!(key_of(&cloned).as_ref(), key.unwrap_or_default());
+            assert_eq!(
+                serde_json::to_value(&cloned).unwrap(),
+                serde_json::json!({"ConsistentHash": { (variant): key.unwrap_or_default() }})
+            );
+        }
+    }
+}

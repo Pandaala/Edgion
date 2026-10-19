@@ -129,7 +129,7 @@ pub(crate) fn extract_hash_key<'a>(
     match hash_on {
         ConsistentHashOn::Header(header_name) => req_header
             .headers
-            .get(header_name.as_str())
+            .get(header_name.as_ref())
             .and_then(|v| v.to_str().ok())
             .map(str::as_bytes)
             .unwrap_or_default(),
@@ -140,7 +140,7 @@ pub(crate) fn extract_hash_key<'a>(
             .and_then(|cookies| {
                 cookies.split(';').map(|s| s.trim()).find_map(|cookie| {
                     let (name, value) = cookie.split_once('=')?;
-                    if name == cookie_name {
+                    if name == cookie_name.as_ref() {
                         Some(value.as_bytes())
                     } else {
                         None
@@ -159,8 +159,8 @@ pub(crate) fn extract_hash_key<'a>(
                     // matching an arg_name of `session id` / `foo bar`). The value
                     // is intentionally left raw — decoding it would change the hash
                     // key of existing deployments.
-                    let matched =
-                        name == arg_name || (name.contains(['%', '+']) && uri_utils::url_decode(name) == *arg_name);
+                    let matched = name == arg_name.as_ref()
+                        || (name.contains(['%', '+']) && uri_utils::url_decode(name) == arg_name.as_ref());
                     matched.then_some(value.as_bytes())
                 })
             })

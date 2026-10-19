@@ -7284,3 +7284,31 @@ and cancellation make an automatic rewrite inappropriate. The decision and
 required evidence are recorded in
 [stream-01-synchronous-plugin-dispatch.md](stream-01-synchronous-plugin-dispatch.md).
 No runtime or test code changed in this documentation batch.
+
+## Share immutable named load-balancing hash keys
+
+The captured per-attempt LB policy and live policy getter clone ParsedLBPolicy.
+Header, cookie and query names previously deep-copied a String on each clone.
+Their runtime-only payloads now use Arc<str>, constructed from the same original
+bytes by LoadBalancerConfig::to_parsed. Selector lookup remains borrowed string
+lookup with identical case, decoding and missing-key behavior. SourceIp and
+non-hash policies remain scalar. Resources explicitly enables serde rc support;
+the enum's serialized shape stays unchanged and no resource schema field changed.
+
+Cold Arc storage and atomic clone/drop replace repeated nonempty String allocation
+and copying. Empty keys can now cost cold Arc storage where an empty String did
+not; no measured throughput improvement is claimed. Sharing retains only the key,
+not a policy generation or configuration owner. Request policy capture, retries,
+live getters and selected-backend ownership retain their existing boundaries.
+Independent plan review approved this scope. The added resource test checks all
+three named modes, missing/empty/mixed-case/multibyte keys, shared clone identity,
+owner release and exact serialized values. Existing gateway policy-transfer and
+captured-input tests retain their original lifetime and ownership assertions.
+
+Baseline resource policy tests passed 18; final verification passed 19 resource
+policy tests, 12 Gateway selector tests, five captured-input tests and one policy
+transfer test (37 total). An initial new-test initializer omitted degrade_threshold;
+adding None corrected the compile error before these successful results. Formatting,
+workspace check/Clippy and seven guards passed with existing unrelated warnings.
+No full suite, live traffic or throughput benchmark ran. The known unrelated
+native TLS and context-layout baseline failures were not included in this scope.
