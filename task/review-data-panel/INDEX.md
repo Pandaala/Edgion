@@ -5446,3 +5446,21 @@ response-chain coverage remain open. This documentation-only batch passed
 independent plan review and fresh serial tests: 50 Gateway WAF, four leaf response
 and 33 Resources WAF tests. Formatting and workspace check/Clippy passed with
 existing unrelated warnings. No live transport or performance benchmark ran.
+
+## Wasm failure-cause borrowing
+
+The shared Wasm failure-policy path borrows causes that contain no spaces instead
+of allocating an unchanged replacement String. Causes containing spaces retain
+the original space-to-hyphen replacement and gain a preliminary scan. Metrics
+and PluginLog still receive the original reason; dye receives the same normalized
+text before the same fail-open continuation or fixed fail-close response.
+The borrow ends during synchronous outcome recording. Metric, log and downstream
+outcome storage may still allocate; this is not a whole-path allocation claim.
+
+Independent plan review approved the three-file scope. A semantic regression
+passed on the original implementation for all 13 current plugin/attached reasons
+in both failure modes, checking outcome, exact log and response body. The updated
+test additionally checks original pointer reuse at the outcome call for spaceless
+reasons. Fresh serial verification passed all 264 Gateway Wasm tests. Formatting,
+workspace check/Clippy and seven repository guards passed; existing unrelated
+Clippy warnings remain. No live transport or throughput benchmark ran.

@@ -5,6 +5,7 @@
 
 use bytes::Bytes;
 use edgion_resources::response_header_policy::is_protected_response_header;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
@@ -170,7 +171,11 @@ impl WasmPlugin {
         log: &mut PluginLog,
         reason: &str,
     ) -> PluginRunningResult {
-        let cause = reason.replace(' ', "-");
+        let cause = if reason.contains(' ') {
+            Cow::Owned(reason.replace(' ', "-"))
+        } else {
+            Cow::Borrowed(reason)
+        };
         if self.runtime.config().fail_open {
             record_wasm_fail_mode(&self.metrics_label, reason, "open");
             log.push_fmt("wasm {}:fail-open", la![reason]);

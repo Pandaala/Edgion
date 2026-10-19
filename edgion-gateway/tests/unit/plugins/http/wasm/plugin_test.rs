@@ -299,6 +299,60 @@ async fn trap_fail_closed_returns_500() {
 }
 
 #[tokio::test]
+async fn failure_causes_preserve_normalization_and_both_policies() {
+    let file = write_temp_wasm(GUEST_TRAP);
+    for fail_open in [false, true] {
+        let plugin = actual_plugin(&config_for(file.path(), fail_open));
+        for reason in [
+            "trap",
+            "binding",
+            "callout",
+            "callout requires pause",
+            "no-resume",
+            "body read",
+            "body mutation",
+            "load",
+            "acquire",
+            "not loaded",
+            "response pause unsupported",
+            "response installation",
+            "trailer installation",
+        ] {
+            let expected_cause = reason.replace(' ', "-");
+            let mut session = MockPluginSession::new();
+            session
+                .expect_record_outcome()
+                .times(1)
+                .returning(move |outcome, cause| {
+                    let expected = if fail_open {
+                        DyeOutcome::FailOpen
+                    } else {
+                        DyeOutcome::FailClose
+                    };
+                    assert_eq!(outcome, expected);
+                    assert_eq!(cause, expected_cause);
+                    if !reason.contains(' ') {
+                        assert_eq!(cause.as_ptr(), reason.as_ptr());
+                    }
+                });
+            let mut log = PluginLog::new("Wasm");
+            let result = plugin.fail_mode(&mut session, &mut log, reason);
+            let mode = if fail_open { "open" } else { "close" };
+            assert_eq!(log.render_for_test(), format!("wasm {reason}:fail-{mode}"));
+            if fail_open {
+                assert_eq!(result, PluginRunningResult::GoodNext);
+            } else {
+                assert!(matches!(
+                    result,
+                    PluginRunningResult::ErrResponse { status: 500, body: Some(body) }
+                        if body.as_ref() == b"wasm plugin error"
+                ));
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn trap_fail_open_continues() {
     let f = write_temp_wasm(GUEST_TRAP);
     let plugin = actual_request(&config_for(f.path(), true)).unwrap();
