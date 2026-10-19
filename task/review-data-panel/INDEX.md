@@ -6333,3 +6333,23 @@ passed seven cache-key, 21 storage, seven lifecycle and four policy tests (39
 total), formatting check, workspace check/Clippy and agent-doc validation.
 Existing unrelated warnings and verification-01's broader admission fixture
 remain outside this change. No benchmark or live integration ran.
+
+## Reuse cache-key header value lookup
+
+Builder::headers now retains one borrowed GetAll result per included header name
+for both value counting and ordered framing. In locked http 1.5.0, get_all resolves
+the map index while its iterators reuse that index. This removes a duplicate
+source-level lookup without changing the value-count prefix, insertion order,
+sorted names, certificate construction, exclusions or material-limit failures.
+Both old and new paths allocate no value collection; no throughput or allocation
+reduction is claimed.
+
+Independent plan review approved two files. All seven existing cache-key tests
+passed before editing; they cover repeated-value order, distinct length framing,
+excluded fields, material/header limits and zero-allocation construction. No new
+test-only abstraction was introduced for this mechanical reuse.
+
+Fresh verification passed seven cache-key, 21 storage and seven lifecycle tests
+(35 total), formatting, workspace check/Clippy and seven guards. Existing unrelated
+warnings remain. No full test suite, live integration or throughput benchmark ran;
+verification-01's broader cache admission fixture remains outside this change.

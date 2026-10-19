@@ -352,8 +352,9 @@ impl Builder {
         for name in names[..count].iter().flatten() {
             certificate.add(name.as_str())?;
             self.frame(name.as_str().as_bytes())?;
-            self.number(headers.get_all(*name).iter().count() as u64)?;
-            for value in headers.get_all(*name) {
+            let values = headers.get_all(*name);
+            self.number(values.iter().count() as u64)?;
+            for value in values {
                 self.frame(value.as_bytes())?;
             }
         }
