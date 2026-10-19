@@ -2930,6 +2930,17 @@ impl EdgionHttpContext {
     }
 
     #[inline]
+    pub(crate) fn response_body_processor_driver(
+        &self,
+    ) -> Option<std::sync::Arc<crate::response::driver::ResponseProcessorDriver>> {
+        self.response_processing()?
+            .processor_driver
+            .as_ref()
+            .filter(|driver| driver.has_body_processors())
+            .cloned()
+    }
+
+    #[inline]
     pub(crate) fn reserve_response_framing(&mut self) {
         let state = self.ensure_response_processing();
         state.framing_reservations = state.framing_reservations.saturating_add(1);

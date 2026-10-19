@@ -221,12 +221,9 @@ pub(crate) async fn run_stream_processors_event(
         sink.terminate();
         return Ok(());
     }
-    let Some(driver) = ctx.response_processor_driver() else {
+    let Some(driver) = ctx.response_body_processor_driver() else {
         return Ok(());
     };
-    if !driver.has_body_processors() {
-        return Ok(());
-    }
     let stream_kind = ctx.response_stream_kind;
     let Some(lease) = driver.body_lease().await else {
         *body = None;

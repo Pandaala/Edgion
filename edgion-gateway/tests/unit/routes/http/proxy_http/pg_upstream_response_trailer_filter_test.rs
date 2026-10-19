@@ -123,6 +123,38 @@ async fn real_trailers_run_serially_and_only_once() {
             Arc::new(AtomicBool::new(false)),
         ));
     }
+    ctx.freeze_response_processor_driver();
+    assert!(ctx.response_processor_driver().is_some());
+    assert!(ctx.response_body_processor_driver().is_none());
+    for (mut body, event) in [
+        (
+            Some(bytes::Bytes::from_static(b"unchanged")),
+            crate::plugins::runtime::traits::StreamingResponseEvent::Data { end_of_stream: false },
+        ),
+        (
+            None,
+            crate::plugins::runtime::traits::StreamingResponseEvent::TerminalBeforeTrailers,
+        ),
+    ] {
+        let expected = body.clone();
+        let mut sink = pingora_proxy::ResponseBodySink::new();
+        super::super::pg_upstream_response_body_filter::run_stream_processors_event(
+            &mut session,
+            &mut ctx,
+            &mut body,
+            event,
+            &mut sink,
+        )
+        .await
+        .unwrap();
+        assert_eq!(body, expected);
+        assert!(!sink.is_terminated());
+        assert_eq!(
+            ctx.response_terminal_state,
+            crate::response::terminal::ResponseTerminalState::Open
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
     assert!(ctx.mark_upstream_before_trailers());
     let mut trailers = HeaderMap::new();
 

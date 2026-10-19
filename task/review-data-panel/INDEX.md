@@ -7547,3 +7547,25 @@ Fresh verification passed seven AI attempt and 37 outer callback tests (44 total
 formatting, workspace check/Clippy and seven guards, with existing unrelated
 warnings. This removes source-level unused getter/clock work; no allocation or
 throughput improvement is claimed. No full suite or live benchmark ran.
+
+## Borrow body-driver presence before sharing ownership
+
+The writable response-body callback now uses a body-specific context accessor
+that checks the driver's existing immutable has_body flag through a borrowed Arc
+before cloning it. Trailer-only drivers skip an Arc increment/decrement per body
+event. Present body processors retain the same owned handle across execution.
+The generic accessor remains unchanged for trailers, logging and cleanup.
+
+Independent plan review passed. Frozen-state, oversized guarded chunks and stale
+canonical-batch checks retain their order before the accessor. The old empty-body
+branch already returned before the mutex lease and cancellation watcher, so this
+change removes no synchronization boundary. It does not implement body-06's
+separate terminal-finalizer lock-elision proposal.
+
+The existing real trailer ordering test now first drives nonempty Data and
+TerminalBeforeTrailers through the production body dispatcher, checking unchanged
+bytes, an unterminated sink, open terminal state and zero companion calls. It
+then verifies ordered, exactly-once trailer execution. Fresh verification passed
+31 body, 11 trailer, three driver and six cancellation tests (51 total), formatting,
+workspace check/Clippy and seven guards with existing unrelated warnings.
+No full suite, real-network transport run or throughput benchmark ran.
