@@ -17,8 +17,12 @@ setter. The local plaintext remains available for optional claims projection and
 
 The callback order is forward-header insertion, claims projection, context
 storage, credential removal, then the success log. A failed forward insertion
-terminates before later consumers. Claims may overwrite the forwarded header;
-reading the header back later is therefore not an equivalent plaintext owner.
+terminates before later consumers. JweDecryptConfig reserves forwardHeader in
+compile_claim_header_projection, rejecting payload destinations that collide
+ignoring ASCII case. The same plugin's claim projection therefore cannot overwrite
+its forwarded header. A header-readback alternative still needs an explicit
+lifetime design: borrowing text from the session conflicts with mutable claims
+and context writes. It must also preserve non-ASCII UTF-8 access as discussed below.
 
 Locked http 1.5.0 transfers an owned String through Bytes in
 `TryFrom<String> for HeaderValue`. However, base64 0.22.1 `Engine::decode`
@@ -48,9 +52,10 @@ adding a second validation pass also has a cost to assess.
 - Preserve forwarding bytes, UTF-8/control validation, failure precedence,
   authentication delay, fixed error responses and PluginLog outcomes.
 - Preserve forward-header, claims, context and credential-removal ordering;
-  cover colliding header names, projection overwrite, setter failure, and
-  original payload availability after a mutation. Do not move context writes
-  before a failed forward-header insertion.
+  preserve forwardHeader reservation and rejection of case-variant projection
+  collisions. Cover setter failure, replacement of pre-existing destination
+  values and original payload availability throughout later consumers. Do not
+  move context writes before a failed forward-header insertion.
 - Keep sensitive-header marking in the canonical shared auth mechanism and
   retain the typed session setter's sealed-RPC and deferred-credential rules.
 - Preserve projection budgets and token-size limits, ignored invalid JSON,
@@ -61,6 +66,6 @@ adding a second validation pass also has a cost to assess.
   required checks before any runtime change.
 
 The existing JWE success-order test is useful baseline evidence, but does not
-cover every collision, option combination or allocation tradeoff above. The
+cover every option combination, setter failure or allocation tradeoff above. The
 preceding runtime batch passed 21 JWE tests; this documentation task claims no
 new runtime test execution or measured performance benefit.
