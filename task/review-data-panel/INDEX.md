@@ -5164,3 +5164,27 @@ Fresh serial verification passed all 143 ExtProc tests. Formatting, workspace
 check/Clippy and seven repository guards passed; existing unrelated warnings
 remain outside the diff. No live DNS/TLS integration or allocation/throughput
 benchmark ran; lazy channel-construction tests are not handshake evidence.
+
+## ForwardAuth prepared client-header selection
+
+ForwardAuth construction now prepares case-insensitive client-header selection
+once, retaining the first original spelling and config order. A temporary cold
+HashSet of ASCII-lowercased names is dropped after preparation. Denial responses
+iterate that list instead of repeatedly scanning each configured prefix. The
+private response writer receives only the auth HeaderMap and uses its owner's
+prepared list; source configuration and success-side upstreamHeaders are unchanged.
+
+Dynamic response protection and Connection nominations remain per-response checks.
+Repeated source field lines, first-value replacement then append, invalid-text
+filtering, content type, body ownership and failures retain their existing behavior.
+Baseline-first denial tests now include nonadjacent mixed-case names and duplicate
+protected/nominated names; helpers exercise the production initialization path.
+A constructor regression verifies first spelling/order, config immutability and
+unchanged upstream-header duplicates. This removes repeated name-selection work,
+not header copying or all denial-path allocations; no throughput gain is measured.
+
+Fresh serial verification passed 13 Gateway ForwardAuth tests and 13 Resources
+ForwardAuth tests. Formatting, workspace check/Clippy and seven repository guards
+passed. Existing unrelated Clippy warnings remain outside this diff. The expanded
+12-test denial baseline passed before the production change; no network or
+allocation/throughput benchmark ran.

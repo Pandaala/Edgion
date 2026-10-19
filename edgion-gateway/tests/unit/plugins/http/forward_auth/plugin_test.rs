@@ -13,23 +13,23 @@ use reqwest::header::{HeaderMap, HeaderValue};
 
 fn make_forward_auth(decision: ForwardAuthDecision) -> ForwardAuth {
     let client = ManagedOutboundClient::test_with_static_target("http://example.com");
-    ForwardAuth {
-        client: Arc::new(client),
-        status_on_error: 503,
+    let mut config = ForwardAuthConfig {
         decision,
-        forward_body: false,
-    }
+        ..ForwardAuthConfig::default()
+    };
+    config.conn.status_on_error = 503;
+    ForwardAuth::from_client(&config, client)
 }
 
 fn make_forward_auth_with_success(decision: ForwardAuthDecision, success: SuccessSpec) -> ForwardAuth {
     let mut client = ManagedOutboundClient::test_with_static_target("http://example.com");
     client.success = Some(success);
-    ForwardAuth {
-        client: Arc::new(client),
-        status_on_error: 503,
+    let mut config = ForwardAuthConfig {
         decision,
-        forward_body: false,
-    }
+        ..ForwardAuthConfig::default()
+    };
+    config.conn.status_on_error = 503;
+    ForwardAuth::from_client(&config, client)
 }
 
 fn make_request_session() -> MockPluginSession {
@@ -157,6 +157,8 @@ async fn denial_does_not_copy_framing_or_any_connection_nominated_field() {
                 "X-Second".into(),
                 "Content-Type".into(),
                 "WWW-Authenticate".into(),
+                "content-LENGTH".into(),
+                "x-FIRST".into(),
             ],
             ..ForwardAuthDecision::default()
         });
@@ -220,8 +222,8 @@ async fn deny_copies_client_headers_and_shortcircuits() {
         client_headers: vec![
             "x-auth-reason".to_string(),
             "WWW-Authenticate".to_string(),
-            "www-authenticate".to_string(),
             "Set-Cookie".to_string(),
+            "www-authenticate".to_string(),
             "set-cookie".to_string(),
         ],
         ..ForwardAuthDecision::default()
@@ -545,4 +547,28 @@ fn route_forward_auth_constructor_preserves_intrinsic_validation_and_body_retry_
             assert_eq!(plugin.client.retry.as_ref().unwrap().retry_on_timeout, Some(true));
         }
     }
+}
+
+#[test]
+fn client_header_preparation_preserves_first_spelling_and_other_decision_fields() {
+    let config = ForwardAuthConfig {
+        decision: ForwardAuthDecision {
+            client_headers: vec!["X-First".into(), "X-Second".into(), "x-FIRST".into(), "x-second".into()],
+            upstream_headers: vec!["X-User".into(), "x-user".into()],
+            ..ForwardAuthDecision::default()
+        },
+        ..ForwardAuthConfig::default()
+    };
+    let original = serde_json::to_value(&config).unwrap();
+    let client = ManagedOutboundClient::test_with_static_target("http://example.com");
+    let prepared = ForwardAuth::from_client(&config, client);
+    assert_eq!(prepared.decision.client_headers, ["X-First", "X-Second"]);
+    assert_eq!(prepared.decision.upstream_headers, config.decision.upstream_headers);
+    let mut expected = config.decision.clone();
+    expected.client_headers = vec!["X-First".into(), "X-Second".into()];
+    assert_eq!(
+        serde_json::to_value(&prepared.decision).unwrap(),
+        serde_json::to_value(expected).unwrap()
+    );
+    assert_eq!(serde_json::to_value(&config).unwrap(), original);
 }

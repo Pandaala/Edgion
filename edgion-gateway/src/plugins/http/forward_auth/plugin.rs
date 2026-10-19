@@ -61,6 +61,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::plugins::http::common::auth_common::apply_auth_failure_delay;
@@ -126,10 +127,15 @@ impl ForwardAuth {
     }
 
     fn from_client(config: &ForwardAuthConfig, client: ManagedOutboundClient) -> Self {
+        let mut decision = config.decision.clone();
+        let mut seen = HashSet::new();
+        decision
+            .client_headers
+            .retain(|name| seen.insert(name.to_ascii_lowercase()));
         ForwardAuth {
             client: Arc::new(client),
             status_on_error: config.conn.status_on_error,
-            decision: config.decision.clone(),
+            decision,
             forward_body: config.forward_body,
         }
     }
@@ -145,7 +151,7 @@ impl ForwardAuth {
         status: u16,
         body: Bytes,
         content_type: Option<&str>,
-        forwarded_headers: Option<(&reqwest::header::HeaderMap, &[String])>,
+        forwarded_headers: Option<&reqwest::header::HeaderMap>,
     ) -> PluginRunningResult {
         let Ok(mut resp) = ResponseHeader::build(status, None) else {
             return PluginRunningResult::ErrTerminateRequest;
@@ -156,7 +162,7 @@ impl ForwardAuth {
         // received field unsafe; the bounded denial body can still be relayed.
         let mut nominated = Vec::new();
         let mut invalid_connection = false;
-        if let Some((headers, _)) = forwarded_headers {
+        if let Some(headers) = forwarded_headers {
             for value in headers.get_all(http::header::CONNECTION) {
                 match value.to_str() {
                     Ok(value) => nominated.extend(connection_listed_hop_by_hop(value)),
@@ -180,18 +186,11 @@ impl ForwardAuth {
         // Add configured client_headers from the auth service response in
         // config order. The first retained value replaces any existing field,
         // and later values remain separate response field lines.
-        if let Some((auth_headers, client_headers)) = forwarded_headers {
-            for (index, name) in client_headers.iter().enumerate() {
+        if let Some(auth_headers) = forwarded_headers {
+            for name in &self.decision.client_headers {
                 if !can_copy(name) {
                     continue;
                 }
-                if client_headers[..index]
-                    .iter()
-                    .any(|prior| prior.eq_ignore_ascii_case(name))
-                {
-                    continue;
-                }
-
                 let mut inserted = false;
                 for value in auth_headers
                     .get_all(name.as_str())
@@ -275,15 +274,8 @@ impl ForwardAuth {
         let content_type = headers
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok());
-        self.send_error_response(
-            session,
-            plugin_log,
-            client_status,
-            body,
-            content_type,
-            Some((&headers, &self.decision.client_headers)),
-        )
-        .await
+        self.send_error_response(session, plugin_log, client_status, body, content_type, Some(&headers))
+            .await
     }
 }
 

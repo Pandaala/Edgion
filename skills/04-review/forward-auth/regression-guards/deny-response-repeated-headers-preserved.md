@@ -18,7 +18,10 @@ bounded denial body is still relayed. The first retained value uses
 use `append_header` so repeatable fields remain separate and ordered.
 
 Case-equivalent duplicate names in `decision.clientHeaders` select the source
-field only once. Duplicate source values are not deduplicated: distinct
+field only once. Plugin construction prepares this stable selection, preserving
+the first spelling and order while leaving the source config and upstream header
+selection unchanged. Protected fields and received Connection nominations remain
+response-time checks. Duplicate source values are not deduplicated: distinct
 `WWW-Authenticate` challenges and `Set-Cookie` field lines carry independent
 semantics and must reach the client unchanged rather than being comma-joined.
 
