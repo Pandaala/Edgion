@@ -36,6 +36,13 @@ it does not claim to recover that missing document's contents.
   `20_EdgionPlugins_default_canary-kill-switch-strip.yaml` and its client scenario
   require the active entry to retain anti-spoof stripping while selection pauses.
 
+Compiled dye rules prepare outcome membership as a private bit mask using an
+exhaustive mapping of the five outcome variants. The renderer checks membership
+before conditions in the same request-then-response order. Empty, duplicate and
+reordered subscription lists preserve their previous Boolean membership semantics;
+the source configuration and schema validation are unchanged. A new outcome must
+extend the exhaustive mapping as well as the existing capability/producer guards.
+
 ## Alternatives and limits
 
 Capabilities describe statically supported producer paths, not arbitrary script,

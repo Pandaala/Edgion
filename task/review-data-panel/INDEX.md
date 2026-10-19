@@ -5275,3 +5275,25 @@ Fresh serial verification passed 23 template and 122 shared outbound tests.
 Formatting, workspace check/Clippy, agent-doc validation and diff checks passed;
 existing unrelated Clippy warnings remain. The isolated capacity probe is not
 a full-template allocation, live network or throughput benchmark.
+
+## Dye outcome membership preparation
+
+Compiled dye rules replace their cloned outcome Vec with a private u8 mask built
+once through an exhaustive five-variant mapping. Both real-adapter rendering loops
+use that prepared membership before their unchanged conditions. This removes a
+linear membership scan per visited rule and the compiled subscription Vec storage;
+no measured throughput gain is claimed. Rule/direction order, template rendering,
+anti-spoof stripping, success/failure header operations and queue timing remain
+unchanged. Source configuration, validation and capabilities are untouched.
+
+A baseline-first regression compares every one of 32 subsets and reversed/duplicate
+lists against source Vec membership for all five outcomes, including the empty set.
+The default-plan assertion and OIDC refresh-timeout producer assertion now use the
+compiled predicate. No other runtime consumers of the old list were found.
+
+Fresh serial verification passed 23 Gateway dye tests, 176 full Session adapter
+tests, the focused OIDC refresh-timeout case, and 29 Resources dye tests. These
+selections overlap and are not a unique aggregate count. The old-plan baseline
+passed five plan tests. Formatting, workspace check/Clippy and seven repository
+guards passed. Existing unrelated Clippy warnings remain; no live network or
+throughput benchmark ran.

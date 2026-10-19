@@ -2424,7 +2424,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         // borrow-checker fight between the immutable rule reference and the
         // `&mut self` header write below.
         for rule in &plan.request {
-            if !rule.on.contains(&outcome) {
+            if !rule.matches_outcome(outcome) {
                 continue;
             }
             if let Some(conds) = &rule.conditions {
@@ -2436,7 +2436,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             let _ = self.set_request_header(&rule.name, &v);
         }
         for rule in &plan.response {
-            if !rule.on.contains(&outcome) {
+            if !rule.matches_outcome(outcome) {
                 continue;
             }
             if let Some(conds) = &rule.conditions {

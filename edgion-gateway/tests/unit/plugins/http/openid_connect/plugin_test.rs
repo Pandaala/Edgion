@@ -1629,7 +1629,7 @@ async fn session_refresh_timeout_dye_reaches_jwks_without_bearer_jwks_or_nonce()
                             "jwks-unreachable"
                         }
                     );
-                    assert!(plan.response[0].on.contains(&outcome));
+                    assert!(plan.response[0].matches_outcome(outcome));
                     records.lock().push(outcome);
                 });
             let handle = tokio::spawn(async move {

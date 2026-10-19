@@ -24,13 +24,27 @@ use super::conditions::CompiledPluginConditions;
 /// value), and an optional render gate (never gates the anti-spoof strip).
 pub struct CompiledDyeRule {
     pub name: String,
-    pub on: Vec<DyeOutcome>,
+    on_mask: u8,
     /// Compiled operator value template; None => recorded value.
     pub value: Option<CompiledTemplate>,
     pub(crate) conditions: Option<CompiledPluginConditions>,
 }
 
 impl CompiledDyeRule {
+    fn outcome_bit(outcome: DyeOutcome) -> u8 {
+        match outcome {
+            DyeOutcome::Success => 1 << 0,
+            DyeOutcome::Fallback => 1 << 1,
+            DyeOutcome::Reject => 1 << 2,
+            DyeOutcome::FailOpen => 1 << 3,
+            DyeOutcome::FailClose => 1 << 4,
+        }
+    }
+
+    pub(crate) fn matches_outcome(&self, outcome: DyeOutcome) -> bool {
+        self.on_mask & Self::outcome_bit(outcome) != 0
+    }
+
     fn compile(
         rule: &DyeRule,
         ip: Option<&super::conditions::ip_refs::IpConditionCompiler<'_>>,
@@ -44,7 +58,10 @@ impl CompiledDyeRule {
         };
         Ok(Self {
             name: rule.name.clone(),
-            on: rule.on.clone(),
+            on_mask: rule
+                .on
+                .iter()
+                .fold(0, |mask, &outcome| mask | Self::outcome_bit(outcome)),
             value,
             conditions: rule
                 .conditions

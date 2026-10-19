@@ -160,7 +160,8 @@ fn compile_plan_leaves_omitted_value_as_recorded_value() {
     let plan = CompiledDyePlan::compile(&suite, "canary").unwrap();
     assert_eq!(plan.response.len(), 1);
     assert!(plan.response[0].value.is_none());
-    assert_eq!(plan.response[0].on, vec![DyeOutcome::Success]);
+    assert!(plan.response[0].matches_outcome(DyeOutcome::Success));
+    assert!(!plan.response[0].matches_outcome(DyeOutcome::FailClose));
 }
 
 #[test]
@@ -171,4 +172,38 @@ fn compile_plan_carries_rule_conditions() {
         .unwrap();
     let plan = CompiledDyePlan::compile(&suite, "canary").unwrap();
     assert!(plan.response[0].conditions.is_some());
+}
+
+#[test]
+fn compiled_outcome_membership_matches_every_subset_and_duplicate_order() {
+    let outcomes = [
+        DyeOutcome::Success,
+        DyeOutcome::Fallback,
+        DyeOutcome::Reject,
+        DyeOutcome::FailOpen,
+        DyeOutcome::FailClose,
+    ];
+    for bits in 0..(1usize << outcomes.len()) {
+        let selected: Vec<_> = outcomes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, outcome)| (bits & (1 << i) != 0).then_some(*outcome))
+            .collect();
+        let mut repeated = selected.clone();
+        repeated.reverse();
+        repeated.extend_from_slice(&selected);
+        for on in [selected, repeated] {
+            let rule = DyeRule {
+                name: "x-dye".into(),
+                on: on.clone(),
+                value: None,
+                conditions: None,
+            };
+            let compiled = CompiledDyeRule::compile(&rule, None).unwrap();
+            for outcome in outcomes {
+                assert_eq!(compiled.matches_outcome(outcome), on.contains(&outcome));
+            }
+            assert_eq!(rule.on, on);
+        }
+    }
 }
