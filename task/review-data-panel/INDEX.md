@@ -7456,3 +7456,26 @@ condition tests and 34 RealIp tests (121 total). Formatting, workspace check/Cli
 and seven guards passed with existing unrelated warnings. No full suite, live
 traffic or throughput benchmark ran. The deferred shared session address
 projection remains separate; this change adds no cached request identity.
+
+## Prepare RequestAccessPolicy URL host demand
+
+RuntimeUrlIndex records whether any final compiled candidate has a nonempty
+hosts set. Pure path profiles now skip the unused Host read and normalization;
+demanding profiles keep the same pre-condition snapshot and NormalizedHostname
+rules. Imported candidate sets remain authoritative over authored fallback
+fields. A nonempty set containing the normalized empty string still requires a
+Host read. Supplemental conditions retain their independent header reads, and
+path matching is unchanged even when no candidate restricts hosts.
+
+Independent plan review passed. Added cases cover hostless hit/miss, a hostless
+candidate before a restricted candidate, imported-candidate precedence, mixed
+case/port/trailing-dot normalization, mismatch/missing Host and the empty-string
+set boundary. A separate condition test requires exactly its own Host-map read
+without a redundant outer read. One cold index boolean and possible padding
+replace unused per-request normalization; no shared cache or context field is
+introduced and no throughput improvement is claimed.
+
+Baseline RAP tests passed 19. Final verification passed 21 RAP tests and 68
+shared condition tests (89 total). Formatting, workspace check/Clippy and seven
+guards passed with existing unrelated warnings. No full suite or live traffic
+benchmark ran.

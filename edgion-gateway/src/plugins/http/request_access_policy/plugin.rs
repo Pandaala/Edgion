@@ -70,6 +70,7 @@ struct PathBucket {
 
 struct RuntimeUrlIndex {
     candidates: Vec<RuntimeUrlCandidate>,
+    needs_host: bool,
     path_buckets: Vec<PathBucket>,
     path_tree: Option<PathRadixTree>,
     regex_paths: Vec<(usize, Regex)>,
@@ -149,8 +150,10 @@ impl RuntimeUrlIndex {
                     .map_err(|error| format!("cannot freeze path matcher: {error}"))
             })
             .transpose()?;
+        let needs_host = runtime_candidates.iter().any(|candidate| !candidate.hosts.is_empty());
         Ok(Self {
             candidates: runtime_candidates,
+            needs_host,
             path_buckets,
             path_tree,
             regex_paths,
@@ -330,7 +333,7 @@ impl RuntimeProfile {
         } else {
             self.url_index.lookup(session.get_path())
         };
-        let host = if self.url_index.candidates.is_empty() {
+        let host = if !self.url_index.needs_host {
             NormalizedHostname::new("")
         } else {
             NormalizedHostname::new(session.header_str("host").unwrap_or_default())

@@ -890,3 +890,87 @@ async fn profile_reads_only_primary_ip_sources_once_before_url_fallback() {
         }
     }
 }
+
+#[tokio::test]
+async fn profile_host_demand_uses_imported_candidates_and_preserves_path_checks() {
+    use serde_json::json;
+    for (hosts, header, expected) in [
+        (vec![], Some("Ignored.Example:443"), true),
+        (vec![], None, true),
+        (vec!["example.test"], Some("Example.Test.:443"), true),
+        (vec!["example.test"], Some("other.test"), false),
+        (vec!["example.test"], None, false),
+        (vec![""], Some("other.test"), false),
+        (vec![""], None, true),
+    ] {
+        let mut config: RequestAccessProfile = serde_json::from_value(json!({"requiredRuleGroups": [{
+            "name": "urls", "anyOfRules": [{"name": "imported", "type": "url", "config": {
+                "hosts": ["authored-decoy.test"], "paths": [{"type": "Exact", "value": "/decoy"}]
+            }}]
+        }]}))
+        .unwrap();
+        let RequestAccessRuleType::Url(url) = &mut config.required_rule_groups[0].any_of_rules[0].rule else {
+            unreachable!()
+        };
+        url.resolved_candidates = Some(
+            serde_json::from_value(json!([
+                {"name": "hostless-first", "hosts": [], "paths": [{"type": "Exact", "value": "/other"}]},
+                {"name": "selected", "hosts": hosts, "paths": [{"type": "Exact", "value": "/allowed"}]}
+            ]))
+            .unwrap(),
+        );
+        let profile = RuntimeProfile::new(&config, None, None).unwrap();
+        for (path, allowed) in [("/allowed", expected), ("/missing", false)] {
+            let mut session = MockPluginSession::new();
+            session.expect_get_path().times(1).return_const(path.to_string());
+            let mut headers = http::HeaderMap::new();
+            if let Some(value) = header {
+                headers.insert("host", http::HeaderValue::from_str(value).unwrap());
+            }
+            session
+                .expect_request_header_map()
+                .times(usize::from(!hosts.is_empty()))
+                .return_const(headers);
+            let mut log = PluginLog::new("RequestAccessPolicy");
+            assert_eq!(
+                matches!(profile.allows(&mut session, &mut log).await, PolicyMatch::Matched),
+                allowed
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn hostless_url_keeps_supplemental_host_condition_reads() {
+    use edgion_resources::resources::edgion_plugins::conditions::KeyExistCondition;
+    use serde_json::json;
+    let mut config: RequestAccessProfile = serde_json::from_value(json!({"requiredRuleGroups": [{
+        "name": "url", "anyOfRules": [{"name": "path", "type": "url", "config": {
+            "paths": [{"type": "Exact", "value": "/allowed"}]
+        }}]
+    }]}))
+    .unwrap();
+    let RequestAccessRuleType::Url(url) = &mut config.required_rule_groups[0].any_of_rules[0].rule else {
+        unreachable!()
+    };
+    url.conditions = Some(ConditionSet::all_of(vec![Condition::KeyExist(KeyExistCondition {
+        key: edgion_resources::common::KeyGet::Header { name: "host".into() },
+        negate: false,
+        descriptor: Box::from(""),
+    })]));
+    let profile = RuntimeProfile::new(&config, None, None).unwrap();
+    for present in [false, true] {
+        let mut session = MockPluginSession::new();
+        session.expect_get_path().times(1).return_const("/allowed".to_string());
+        let mut headers = http::HeaderMap::new();
+        if present {
+            headers.insert("host", http::HeaderValue::from_static("example.test"));
+        }
+        session.expect_request_header_map().times(1).return_const(headers);
+        let mut log = PluginLog::new("RequestAccessPolicy");
+        assert_eq!(
+            matches!(profile.allows(&mut session, &mut log).await, PolicyMatch::Matched),
+            present
+        );
+    }
+}
