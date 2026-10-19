@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Prepared gRPC wire-admission schema](grpc-03-prepared-wire-schema.md)
+
 - [gRPC integer normalization storage](grpc-02-integer-normalization-storage.md)
 
 - [gRPC query preflight decoding](grpc-01-query-preflight-decoding.md)
@@ -5035,3 +5037,22 @@ Fresh serial verification passed 59 tests: 33 Resources transcoding and 26 Gatew
 transcoder tests. Formatting, workspace check/Clippy and seven repository guards
 passed; existing unrelated warnings remain outside the diff. No real-socket
 integration or performance benchmark ran.
+
+
+## gRPC wire-admission schema audit
+
+Traced unary and streaming response payloads through canonical wire admission,
+reflection and borrowed ProtoJson serialization. The dependency already indexes
+field numbers with BTreeMap; per-tag shape extraction still constructs Arc-backed
+handles and derives kind/list metadata. A prepared schema graph could reduce that
+work but duplicates cold state and requires bounded recursive/shared graph ownership.
+
+[grpc-03](grpc-03-prepared-wire-schema.md) records that tradeoff, sparse-tag handling,
+runtime unknown-field semantics, stricter descriptor mode and exact budget/order
+acceptance. No replacement walker or cache was implemented. The existing recursive
+serializer already borrows values and forwards collect_str without an extra JSON tree.
+
+Fresh serial baseline verification passed 59 tests: 33 Resources transcoding and
+26 Gateway transcoder tests. Formatting check, workspace check/Clippy and agent-doc
+and diff checks passed; existing warnings remain outside this documentation batch.
+No performance benchmark ran; these results do not validate a proposed schema graph.
