@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Empty-role terminal finalizer locks](body-06-empty-terminal-role-locks.md)
+
 - [Response-cache Age header construction](cache-02-age-header-construction.md)
 
 - [CtxSet regex replacement result storage](ctx-01-regex-replacement-storage.md)
@@ -5540,3 +5542,21 @@ against unchanged production. Fresh serial verification passed all 27 Gateway
 transcoder tests and nine pg_logging tests. No live integration benchmark ran.
 Formatting, workspace check/Clippy and seven repository guards passed; existing
 unrelated Clippy warnings remain.
+
+## Terminal processor role and guardrail summary audit
+
+Logging can enter semantic/trailer finalizers on a nonempty driver lacking that
+particular role. These methods still acquire the shared processor mutex. Body-06
+records potential presence gating, the removed synchronization boundary and the
+membership invariant requiring review; no runtime fast path was introduced.
+Current consumers inspected do not change role membership, although lease APIs
+expose mutable containers. No reachable race or measured net benefit is claimed.
+
+GuardrailSummary contains only counters and static string references. Its clone
+is not a heap-payload copy; published summaries remain first-wins through OnceLock
+and emission remains once-only through the atomic gate. No speculative borrowing
+change was selected there. Independent plan review approved this docs-only scope.
+Fresh serial verification passed 72 tests: three response-driver, 34 AI HTTP and
+35 semantic-guard tests. Formatting, workspace check/Clippy and agent-doc checks
+passed with existing unrelated Clippy warnings. These tests do not prove the
+proposed lock elision safe; no new concurrency probe or live transport test ran.
