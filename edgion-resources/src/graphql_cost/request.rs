@@ -77,7 +77,7 @@ impl Evaluation<'_> {
             self.work.step()?;
             match selection {
                 cst::Selection::Field(f) => {
-                    let n = name(f.name())?;
+                    let n = f.name().ok_or(GraphqlError::Invalid)?.text();
                     if n == "__typename" {
                         if f.arguments().is_some() || f.selection_set().is_some() {
                             return Err(GraphqlError::Invalid);
@@ -87,11 +87,14 @@ impl Evaluation<'_> {
                     if n.starts_with("__") {
                         return Err(GraphqlError::Invalid);
                     }
-                    let field = source.fields.get(&n).ok_or(GraphqlError::Invalid)?;
+                    let field = source.fields.get(n.as_str()).ok_or(GraphqlError::Invalid)?;
                     if let Some(args) = f.arguments() {
                         for arg in args.arguments() {
                             self.work.step()?;
-                            if !field.args.contains_key(&name(arg.name())?) {
+                            if !field
+                                .args
+                                .contains_key(arg.name().ok_or(GraphqlError::Invalid)?.text().as_str())
+                            {
                                 return Err(GraphqlError::Invalid);
                             }
                         }
@@ -112,7 +115,12 @@ impl Evaluation<'_> {
                     self.validate_set(&f.selection_set().ok_or(GraphqlError::Invalid)?, &target, recursion + 1)?;
                 }
                 cst::Selection::FragmentSpread(s) => {
-                    let f = &self.fragments[&name(s.fragment_name().and_then(|n| n.name()))?];
+                    let n = s
+                        .fragment_name()
+                        .and_then(|n| n.name())
+                        .ok_or(GraphqlError::Invalid)?
+                        .text();
+                    let f = &self.fragments[n.as_str()];
                     let target = name(f.type_condition().and_then(|t| t.named_type()).and_then(|t| t.name()))?;
                     self.condition(ty, "", &target)?;
                 }
@@ -218,8 +226,12 @@ impl Evaluation<'_> {
                 }
                 cst::Selection::FragmentSpread(s) => {
                     directives(s.directives(), &mut self.work)?;
-                    let n = name(s.fragment_name().and_then(|n| n.name()))?;
-                    let f = self.fragments.get(&n).ok_or(GraphqlError::Invalid)?;
+                    let n = s
+                        .fragment_name()
+                        .and_then(|n| n.name())
+                        .ok_or(GraphqlError::Invalid)?
+                        .text();
+                    let f = self.fragments.get(n.as_str()).ok_or(GraphqlError::Invalid)?;
                     let ty = name(f.type_condition().and_then(|t| t.named_type()).and_then(|t| t.name()))?;
                     if self.condition(static_ty, object, &ty)? {
                         self.object_set(
@@ -250,20 +262,20 @@ impl Evaluation<'_> {
             return Err(GraphqlError::Invalid);
         }
         directives(field.directives(), &mut self.work)?;
-        let n = name(field.name())?;
+        let n = field.name().ok_or(GraphqlError::Invalid)?.text();
         if n == "__typename" {
             if field.selection_set().is_some() || field.arguments().is_some() {
                 return Err(GraphqlError::Invalid);
             }
             return Ok(1);
         }
-        if n.starts_with("__") || !self.model.schema.types[static_ty].fields.contains_key(&n) {
+        if n.starts_with("__") || !self.model.schema.types[static_ty].fields.contains_key(n.as_str()) {
             return Err(GraphqlError::Invalid);
         }
-        let declared = &self.model.schema.types[static_ty].fields[&n];
+        let declared = &self.model.schema.types[static_ty].fields[n.as_str()];
         let actual = self.model.schema.types[object]
             .fields
-            .get(&n)
+            .get(n.as_str())
             .ok_or(GraphqlError::Invalid)?;
         let mut args = HashMap::new();
         if let Some(arguments) = field.arguments() {
@@ -292,7 +304,7 @@ impl Evaluation<'_> {
             concrete
                 .interfaces
                 .iter()
-                .map(|interface| self.model.schema.types[interface].fields.get(&n)),
+                .map(|interface| self.model.schema.types[interface].fields.get(n.as_str())),
         ) {
             // Missing interface fields and unconfigured candidates still consume work.
             self.work.step()?;
@@ -324,7 +336,7 @@ impl Evaluation<'_> {
         if depth == 1 {
             for (index, (root_type, field_name)) in self.model.root_fields.iter().enumerate() {
                 self.work.step()?;
-                if root_type == object && field_name == &n {
+                if root_type == object && field_name.as_str() == n.as_str() {
                     self.root_costs[index] = self.add(self.root_costs[index], charge)?;
                 }
             }
@@ -337,8 +349,8 @@ impl Evaluation<'_> {
                 i32::try_from(i).map_err(|_| GraphqlError::Invalid)?,
             )?)),
             cst::Value::Variable(v) => {
-                let n = name(v.name())?;
-                let definition = self.vars.get(&n).ok_or(GraphqlError::Invalid)?;
+                let n = v.name().ok_or(GraphqlError::Invalid)?.text();
+                let definition = self.vars.get(n.as_str()).ok_or(GraphqlError::Invalid)?;
                 let ty = TypeRef::parse(definition.ty().ok_or(GraphqlError::Invalid)?)?;
                 if !ty.scalar_int() {
                     return Err(GraphqlError::Invalid);
@@ -351,7 +363,7 @@ impl Evaluation<'_> {
                     }
                     _ => return Err(GraphqlError::Invalid),
                 };
-                if let Some(value) = self.values.and_then(|values| values.get(&n)) {
+                if let Some(value) = self.values.and_then(|values| values.get(n.as_str())) {
                     return json_int(value).map(Some);
                 }
                 if let Some(default) = default {

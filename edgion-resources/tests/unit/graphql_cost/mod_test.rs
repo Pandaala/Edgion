@@ -660,3 +660,37 @@ fn inline_fragment_type_context_preserves_cost_and_exact_work() {
         );
     }
 }
+
+#[test]
+fn lookup_names_preserve_case_variables_fragments_and_root_charges() {
+    let m = model(
+        "type Query { users(first:Int=3):User } type User { name:String }",
+        &[("Query.users", 2, &["first"], 4)],
+    )
+    .with_root_fields(["Query.users"])
+    .unwrap();
+    let query =
+        "query Q($count:Int=5){alias:users(first:$count){name} ...F} fragment F on Query{users(first:$count){name}}";
+    for (variables, total) in [
+        (serde_json::json!({"count":2}), 9),
+        (serde_json::json!({}), 15),
+        (serde_json::json!({"Count":2}), 15),
+    ] {
+        let body = serde_json::json!({"query":query,"variables":variables}).to_string();
+        let parsed =
+            crate::graphql_request::ParsedGraphqlRequest::parse_post(body.as_bytes(), MAX_ENVELOPE_BYTES).unwrap();
+        let report = m.estimate_quotas(parsed).unwrap();
+        assert_eq!(report.total, total);
+        assert_eq!(report.roots[0], total - 1);
+        assert!(report.roots[1..].iter().all(|cost| *cost == 0));
+    }
+    for invalid in [
+        query.replace("alias:users", "alias:Users"),
+        query.replace("first:", "First:"),
+        query.replace("...F", "...f"),
+        query.replace("first:$count", "first:$Count"),
+        query.replace("{name}", "{Name}"),
+    ] {
+        assert_eq!(estimate(&m, &invalid), Err(GraphqlError::Invalid), "{invalid}");
+    }
+}

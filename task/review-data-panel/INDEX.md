@@ -4628,3 +4628,30 @@ evaluation tests. Formatting, workspace check/Clippy, seven repository guards
 and diff hygiene passed; existing warnings remain outside the diff. The claim
 is removal of two owned-name copy sites, not allocation-free validation or measured
 throughput. No live transport, Redis or performance benchmark ran.
+
+## GraphQL cost lookup token text
+
+The shared cost visitor now uses Apollo TokenText for six transient name sites:
+static field and argument checks, static and evaluated fragment-spread lookup,
+evaluated field lookup and multiplier-variable lookup. These names only feed
+comparisons and borrowed string-key lookups; the prior helper extracted the same
+token text and then allocated a String. Owned argument-map keys, type-context
+names, the general name helper and schema representation remain unchanged.
+The supporting cross-crate scope is graphql_cost/request.rs and its existing
+cost-model test module.
+
+Lookup counts and indexing versus checked-get behavior are retained, along with
+short-circuit order, candidate order, Work, recursion, static/runtime type context
+and root accounting. No token escapes the synchronous evaluation owner; Gateway
+admission, BodyStorage and Redis permit-release boundaries are unchanged.
+A new baseline-first regression verifies aliases, reused fragments, supplied and
+default variable values, case-sensitive field/argument/fragment/variable names,
+explicit total costs nine/fifteen and their root charges. Existing covariance,
+rule-binding and exact Work-boundary regressions also pass.
+
+Fresh serial verification passed 57 tests: 25 Resources cost-model, 16 frontend,
+four Gateway guard, five rate-limit and seven shared evaluation tests. Formatting,
+workspace check/Clippy, seven repository guards and diff hygiene passed; existing
+warnings remain outside the diff. This removes six temporary String conversion
+sites, not all evaluation allocations. No live transport, Redis, allocation or
+throughput benchmark ran.
