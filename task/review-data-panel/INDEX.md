@@ -6987,3 +6987,26 @@ runtime or test changes. The separate SSE and native Responses policies remain
 unchanged. Fresh baseline checks passed 52 usage and 13 finalization tests,
 formatting, workspace check/Clippy and document consistency; existing warnings
 are unrelated. Baseline tests do not prove candidate equivalence.
+
+## Transfer the finalized AI attempt ledger into its summary
+
+Terminal AI accounting now takes the completed attempt Vec into GenAiSummary
+instead of deep-cloning its entries. Runtime finalization still consumes the
+active attempt and drains pending settlements first. The transfer and summary
+publication contain no await; the existing summary sentinel prevents a repeated
+transfer. Subsequent metrics and quota settlement use independent cumulative
+fields, which remain intact, including unknown/overflow and truncation state.
+The terminal callback does not resume attempt dispatch afterward.
+
+The retained Vec remains bounded by the existing eight-entry ledger policy;
+its capacity already stayed alive in the runtime until context destruction.
+The transfer removes the additional Vec/entry-string copies without adding a
+new owner or claiming measured throughput. The expanded retry-metrics test
+checks exact entries, nonempty buffer identity, empty source ledger, preserved
+charges/totals and repeated-finalization summary/metric stability.
+
+Independent plan review passed. Baseline finalizer tests passed (13); final
+verification passed 84 tests: 13 finalizer, 25 attempt-runtime, 35 dispatch and
+11 terminal-logging tests. Formatting, workspace check/Clippy and seven guards
+passed with existing unrelated warnings. No full suite or live Redis/provider
+integration ran.

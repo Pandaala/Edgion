@@ -73,7 +73,7 @@ fn finalize_ai_usage_with_metrics_enabled(ctx: &mut EdgionHttpContext, metrics_e
         estimated_cost_usd: usage.and_then(|usage| ai.pricing.map(|pricing| estimated_cost_usd(pricing, usage))),
         quota_status: ai.quota_status,
         ttft_ms,
-        attempts: state.attempt_runtime.attempts().to_vec(),
+        attempts: state.attempt_runtime.take_finalized_attempts(),
         attempts_truncated: state.attempt_runtime.attempts_truncated(),
     };
     state.summary = Some(summary);

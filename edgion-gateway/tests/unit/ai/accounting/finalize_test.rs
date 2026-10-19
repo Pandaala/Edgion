@@ -225,8 +225,8 @@ async fn finalize_is_idempotent_and_emits_metrics_once() {
     assert!(samples.iter().any(|line| line.ends_with(" 7")));
 }
 
-#[test]
-fn retry_metrics_sum_all_attempts_and_emit_once() {
+#[tokio::test]
+async fn retry_metrics_sum_all_attempts_and_emit_once() {
     let recorder = PrometheusBuilder::new().build_recorder();
     let handle = recorder.handle();
     let mut ctx = ai_context(AiProviderLabel::OpenAi, "gpt-declared", false);
@@ -252,10 +252,42 @@ fn retry_metrics_sum_all_attempts_and_emit_once() {
         );
     }
 
+    ctx.ensure_ai_state().attempt_runtime.finalize(None).await;
+    let runtime = &ctx.ai_state().unwrap().attempt_runtime;
+    let expected = runtime.attempts().to_vec();
+    let ledger_ptr = runtime.attempts().as_ptr();
+    let metric_totals = runtime.metric_totals().unwrap().to_vec();
+    let truncated = runtime.attempts_truncated();
+    assert_eq!(runtime.charged_request_tokens(), Ok(19));
+
     metrics::with_local_recorder(&recorder, || {
         finalize_ai_usage_with_metrics_enabled(&mut ctx, true);
+    });
+    let state = ctx.ai_state().unwrap();
+    let summary = state.summary.as_ref().unwrap();
+    assert_eq!(summary.attempts, expected);
+    assert_eq!(summary.attempts.as_ptr(), ledger_ptr);
+    assert_eq!(summary.attempts_truncated, truncated);
+    assert!(state.attempt_runtime.attempts().is_empty());
+    assert_eq!(state.attempt_runtime.charged_request_tokens(), Ok(19));
+    let first = summary.clone();
+
+    ctx.ensure_ai_state().attempt_runtime.finalize(None).await;
+    metrics::with_local_recorder(&recorder, || {
         finalize_ai_usage_with_metrics_enabled(&mut ctx, true);
     });
+    let state = ctx.ai_state().unwrap();
+    assert_eq!(state.summary.as_ref(), Some(&first));
+    assert_eq!(state.summary.as_ref().unwrap().attempts.as_ptr(), ledger_ptr);
+    assert_eq!(state.attempt_runtime.charged_request_tokens(), Ok(19));
+    let after_totals = state.attempt_runtime.metric_totals().unwrap();
+    assert_eq!(after_totals.len(), metric_totals.len());
+    for (before, after) in metric_totals.iter().zip(after_totals) {
+        assert_eq!(before.provider, after.provider);
+        assert_eq!(before.usage_source, after.usage_source);
+        assert_eq!(before.input_tokens, after.input_tokens);
+        assert_eq!(before.output_tokens, after.output_tokens);
+    }
 
     let rendered = handle.render();
     let samples: Vec<&str> = rendered

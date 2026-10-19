@@ -367,6 +367,12 @@ impl AiAttemptRuntimeState {
         &self.attempts
     }
 
+    /// Transfer the completed ledger into the terminal summary after finalize.
+    /// Cumulative accounting and truncation state remain available for settlement.
+    pub(crate) fn take_finalized_attempts(&mut self) -> Vec<GenAiAttempt> {
+        std::mem::take(&mut self.attempts)
+    }
+
     pub fn attempts_truncated(&self) -> bool {
         self.attempts_truncated
     }
