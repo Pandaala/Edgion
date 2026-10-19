@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Query and Cookie stripping survivor storage](auth-01-strip-survivor-storage.md)
+
 - [Prepared session-affinity token hash](lb-03-prepared-session-token-hash.md)
 
 - [Rejected circuit-breaker permit owner copy](lb-02-rejected-permit-owner-copy.md)
@@ -6100,3 +6102,17 @@ Fresh serial verification passed 32 shared-auth, 14 KeyAuth, 47 JwtAuth, 19
 BasicAuth, 56 HMAC-filtered and four OIDC cookie-strip tests (172 total), formatting,
 workspace check/Clippy and seven guards. Existing unrelated warnings remain.
 No live integration suite was run.
+
+## Query and Cookie survivor-storage audit
+
+The shared stripping helpers still collect borrowed survivor slices before joining
+output. Removing their Vec storage trades against repeated parsing or String
+growth/retained capacity; Cookie output capacity also controls the pinned bytes
+conversion's metadata allocation. Query no-match delayed materialization remains
+a separately evaluable candidate. Recorded these choices and exact semantic and
+measurement boundaries in auth-01-strip-survivor-storage.md; no runtime changed.
+
+Independent plan review approved two documents. Fresh baseline checks passed 32
+shared-auth, 14 KeyAuth, 47 JwtAuth and four OIDC cookie-strip tests (97 total),
+formatting check, workspace check/Clippy and agent-doc validation. Existing
+unrelated warnings remain; no alternative implementation was benchmarked.
