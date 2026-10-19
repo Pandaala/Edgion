@@ -208,3 +208,52 @@ fn raw_scalar_strings_validate_surrogates_without_changing_lexemes() {
         "𝄞"
     );
 }
+
+#[test]
+fn raw_key_admission_moves_owned_keys_and_preserves_rejections() {
+    let input = "nested-member".to_owned();
+    let original_buffer = input.as_ptr();
+    let mut work = ValueWorkBudget::default();
+    let mut state = RawState {
+        policy: ParseState::default(),
+        work: &mut work,
+        error: None,
+    };
+    let mut keys = HashSet::new();
+    state.admit_key(&mut keys, Cow::Owned(input)).unwrap();
+    assert_eq!(keys.get("nested-member").unwrap().as_ptr(), original_buffer);
+
+    for owned in [false, true] {
+        let mut work = ValueWorkBudget::default();
+        let mut state = RawState {
+            policy: ParseState::default(),
+            work: &mut work,
+            error: None,
+        };
+        let mut keys = HashSet::new();
+        let key = || {
+            if owned {
+                Cow::Owned("member".to_owned())
+            } else {
+                Cow::Borrowed("member")
+            }
+        };
+        state.admit_key(&mut keys, key()).unwrap();
+        assert!(matches!(
+            state.admit_key(&mut keys, key()),
+            Err(JsonError::Strict(StrictJsonError::DuplicateKey))
+        ));
+        assert_eq!(keys.len(), 1);
+
+        let mut exhausted = ValueWorkBudget::exhausted();
+        let mut state = RawState {
+            policy: ParseState::default(),
+            work: &mut exhausted,
+            error: None,
+        };
+        let mut keys = HashSet::new();
+        assert!(matches!(state.admit_key(&mut keys, key()), Err(JsonError::Work(_))));
+        assert!(keys.is_empty());
+        assert_eq!(keys.capacity(), 0);
+    }
+}

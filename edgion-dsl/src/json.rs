@@ -3,6 +3,7 @@
 use serde::de::{DeserializeSeed, Error as _, MapAccess, SeqAccess, Visitor};
 use serde::Deserializer;
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fmt;
 
@@ -305,7 +306,7 @@ impl RawState<'_> {
         self.error = Some(error);
         E::custom("bounded JSON operation failed")
     }
-    fn admit_key(&mut self, keys: &mut HashSet<String>, key: &str) -> Result<(), JsonError> {
+    fn admit_key(&mut self, keys: &mut HashSet<String>, key: Cow<'_, str>) -> Result<(), JsonError> {
         self.charge(128 + (key.len() as u64).saturating_mul(2))?;
         if keys.len() == keys.capacity() {
             let target = keys.capacity().saturating_mul(2).max(4);
@@ -317,7 +318,7 @@ impl RawState<'_> {
             keys.try_reserve(1).map_err(|_| JsonError::Allocation)?;
         }
         self.policy
-            .admit_key(keys.insert(key.to_owned()))
+            .admit_key(keys.insert(key.into_owned()))
             .map_err(JsonError::Strict)
     }
 }
@@ -357,12 +358,20 @@ impl<'de> Visitor<'de> for RawVisitor<'_, '_> {
         let mut keys = HashSet::new();
         let mut members = Vec::new();
         while let Some(key) = map.next_key_seed(KeySeed(self.state))? {
-            self.state
-                .admit_key(&mut keys, &key)
-                .map_err(|error| self.state.serde_error(error))?;
+            let retained_key = if self.retain {
+                self.state
+                    .admit_key(&mut keys, Cow::Borrowed(&key))
+                    .map_err(|error| self.state.serde_error(error))?;
+                Some(key)
+            } else {
+                self.state
+                    .admit_key(&mut keys, Cow::Owned(key))
+                    .map_err(|error| self.state.serde_error(error))?;
+                None
+            };
             let value: &'de RawValue = map.next_value()?;
             raw_node(value, self.depth + 1, false, self.state).map_err(|error| self.state.serde_error(error))?;
-            if self.retain {
+            if let Some(key) = retained_key {
                 reserve_vec(&mut members, self.state.work).map_err(|error| self.state.serde_error(error))?;
                 members.push((key, value));
             }

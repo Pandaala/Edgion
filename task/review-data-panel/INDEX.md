@@ -7661,3 +7661,26 @@ without claiming a fixed heap-allocation saving. All 23 AllEndpointStatus tests
 passed before and after, including the real Service-section/serving-port path.
 Formatting, workspace check/Clippy and seven guards passed with existing unrelated
 warnings. No full suite, live probe or throughput benchmark ran.
+
+## Move non-retained raw JSON keys into duplicate detection
+
+Gateway DSL JSON calls reach the canonical edgion-dsl raw parser. Its key visitor
+already owns each decoded String; non-retained nested objects now move that String
+into their duplicate-detection HashSet instead of copying it and discarding the
+original. Retained top-level members still keep their original key and a separate
+set owner. Cow distinguishes these cases only during admission; no persistent
+representation changes.
+
+The frozen supporting scope is edgion-dsl/src/json.rs and its mounted json_test.rs.
+All conservative work charges, set reservation, insertion/duplicate rejection,
+value traversal and member reservation keep their existing order. DOM parsing,
+raw lexemes, limits and Gateway body ownership remain unchanged. Independent plan
+review passed. The focused regression checks owned buffer transfer and both
+ownership modes' duplicate rejection and exhausted-budget rejection before set allocation.
+Existing nested escaped-key, reconstruction and boundary tests remain.
+
+Baseline DSL JSON tests passed seven; final verification passed eight DSL JSON,
+seven Gateway JSON builtin and 11 JSON Schema plugin tests (26 total), formatting,
+workspace check/Clippy and seven guards with existing unrelated warnings.
+This removes the redundant nested-key copy; no whole-path allocation count,
+throughput benchmark, full suite or live integration result is claimed.
