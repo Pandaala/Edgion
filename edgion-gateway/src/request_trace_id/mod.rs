@@ -369,7 +369,12 @@ fn generate(config: &RequestIdGenerator) -> Option<HeaderValue> {
             lower_hex(&Md5::digest(seed))
         }
     };
-    let value = HeaderValue::try_from(format!("{}{}", config.prefix, suffix)).ok()?;
+    let generated = if config.prefix.is_empty() {
+        suffix
+    } else {
+        format!("{}{}", config.prefix, suffix)
+    };
+    let value = HeaderValue::try_from(generated).ok()?;
     valid_value(&value).then_some(value)
 }
 

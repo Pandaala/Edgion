@@ -299,11 +299,27 @@ fn all_generators_have_expected_shapes() {
         ("nanoId", 21),
         ("md5", 32),
     ] {
-        let config: RequestIdGenerator = serde_json::from_value(serde_json::json!({"type":kind})).unwrap();
-        let one = generate(&config).unwrap();
-        let two = generate(&config).unwrap();
-        assert_eq!(one.as_bytes().len(), length);
-        assert_ne!(one, two);
+        for prefix in ["", "request-"] {
+            let config: RequestIdGenerator =
+                serde_json::from_value(serde_json::json!({"type":kind, "prefix":prefix})).unwrap();
+            let one = generate(&config).unwrap();
+            let two = generate(&config).unwrap();
+            assert_ne!(one, two);
+            for value in [one, two] {
+                let suffix = value.to_str().unwrap().strip_prefix(prefix).unwrap();
+                assert_eq!(suffix.len(), length);
+                match kind {
+                    "uuidV4" | "uuidV7" => {
+                        let id = uuid::Uuid::parse_str(suffix).unwrap();
+                        assert_eq!(id.get_version_num(), if kind == "uuidV4" { 4 } else { 7 });
+                    }
+                    "nanoId" => assert!(suffix
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))),
+                    _ => assert!(suffix.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))),
+                }
+            }
+        }
     }
 }
 

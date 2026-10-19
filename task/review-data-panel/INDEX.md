@@ -7607,3 +7607,18 @@ Baseline body-gate tests passed 31; final verification passed 31 body-gate and
 68 shared-condition tests (99 total), formatting, workspace check/Clippy and
 seven guards with existing unrelated warnings. No full suite, live traffic or
 allocation benchmark ran; no request-throughput improvement is claimed.
+
+## Move generated RequestId strings with empty prefixes
+
+RequestId generation now moves its owned suffix directly into HeaderValue when
+its prefix is empty, avoiding the redundant formatted String construction.
+Nonempty prefixes retain the existing concatenation. Random draws, generator
+bounds, header validation and the final value check remain unchanged; request
+identity ownership, suppression and access-log masking are unaffected.
+
+Independent plan review passed. The existing five-generator shape regression
+now covers empty and nonempty prefixes, suffix lengths, UUID versions and the
+hex/NanoId alphabets. Fresh verification passed 29 request-trace-ID, 15 RequestId
+and 17 early-request-filter tests (61 total), formatting, workspace check/Clippy
+and seven guards with existing unrelated warnings. No full suite or allocation/
+throughput benchmark ran; no fixed allocation count or capacity saving is claimed.
