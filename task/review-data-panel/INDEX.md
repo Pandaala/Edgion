@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [RegionRoute prepared lookup indexes](region-01-prepared-lookup-indexes.md)
+
 - [Precomputed backend TLS pool-identity composition](tls-02-precomputed-pool-composition.md)
 - [ExternalName DNS address-result ownership](dns-01-address-result-ownership.md)
 - [Precomputed fractional Peak-EWMA decay](lb-01-precomputed-ewma-decay.md)
@@ -4454,3 +4456,16 @@ Fresh serial verification passed 134 tests: 17 key-accessor, 27 resource-conditi
 seven repository guards and diff hygiene passed; existing warnings remain outside
 the diff. The claim is removal of temporary String allocation for fixed labels;
 no live transport or throughput benchmark ran.
+
+## RegionRoute lookup-index audit
+
+Traced direct/map/hash selection and one-hop failover through the existing linear
+name/range scans. Validation sorts a temporary range vector and retains only a
+compact maximum-bound proof; authored tables remain unsorted. Independent sorted
+indexes could reduce scans, but introduce retained-generation and publication
+costs. [region-01](region-01-prepared-lookup-indexes.md) records the alternatives
+and same-generation ownership, fallback, ordering and measurement acceptance for
+user decision. Production code and tests are unchanged. Fresh serial verification
+passed 61 network-free tests: 23 Gateway RegionRoute, 22 ConfigData and 16 resource
+region tests. Formatting, workspace check/Clippy and document/diff validation
+passed. No index prototype, live transport or throughput benchmark ran.
