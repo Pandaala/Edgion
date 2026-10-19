@@ -6939,3 +6939,20 @@ snapshots can reuse the map; old states freeze on retirement. Do not cache healt
 booleans or remove accepted cooldown/recovery synchronization. Fresh baseline
 verification passed 97 selector, compiled-selector, coordinator and outlier tests.
 No benchmark establishes a benefit for the proposed representation.
+
+## Borrow the captured retry budget for synchronous gates
+
+retry_budget_for now returns a reference to the request-captured budget Arc
+instead of cloning it. The attempt denominator and three ordinary retry gates
+consume it synchronously, with no later use across context mutation. Service/AI
+policy selection, pinned absence, epoch sampling, accounting and denial responses
+remain unchanged. Only the test retaining its first budget across a mutable
+attempt transition explicitly clones an owner; generation identity assertions
+remain intact. The removed work is an Arc increment/decrement per successful
+lookup, not a heap-allocation or measured throughput claim.
+
+Independent plan review passed. Fresh verification passed upstream-peer (104),
+connect-failure (9), proxy-error (11), upstream-response (11), and retry-budget
+(28) test selections; these filters overlap. Formatting, workspace check/Clippy
+and seven guards passed with existing unrelated warnings. No full test suite or
+live network benchmark ran.

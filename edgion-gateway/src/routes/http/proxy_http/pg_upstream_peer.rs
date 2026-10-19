@@ -1159,10 +1159,8 @@ pub fn begin_upstream_attempt(ctx: &mut EdgionHttpContext) {
 /// Shared by the denominator hook and the three retry gates (`pg_fail_to_connect`,
 /// `pg_error_while_proxy` Case 1.5, and `pg_upstream_response_filter`).
 #[inline]
-pub(super) fn retry_budget_for(ctx: &EdgionHttpContext) -> Option<std::sync::Arc<RetryBudget>> {
-    selected_effective_policy(ctx)
-        .and_then(|policy| policy.retry_budget.as_ref())
-        .map(std::sync::Arc::clone)
+pub(super) fn retry_budget_for(ctx: &EdgionHttpContext) -> Option<&Arc<RetryBudget>> {
+    selected_effective_policy(ctx).and_then(|policy| policy.retry_budget.as_ref())
 }
 
 fn selected_service_target(ctx: &EdgionHttpContext) -> Option<&CompiledServiceTarget> {

@@ -1579,7 +1579,7 @@ fn service_retry_budget_for_uses_captured_arc_after_store_reload() {
         ),
     )]));
     let after_reload = super::retry_budget_for(&ctx).expect("same captured budget");
-    assert!(Arc::ptr_eq(&first, &after_reload));
+    assert!(Arc::ptr_eq(first, after_reload));
     let live = store
         .snapshot()
         .get_effective(
@@ -1589,7 +1589,7 @@ fn service_retry_budget_for_uses_captured_arc_after_store_reload() {
         )
         .and_then(|p| p.retry_budget.clone())
         .expect("reloaded budget");
-    assert!(!Arc::ptr_eq(&first, &live));
+    assert!(!Arc::ptr_eq(first, &live));
     store.full_set_policies(std::collections::HashMap::new());
 }
 
@@ -1627,7 +1627,7 @@ fn service_retry_preserves_missing_policy_after_reload() {
 
     let later = capture_service_ctx("empty-cap/svc");
     let captured = super::retry_budget_for(&later).expect("new request captures the new policy");
-    assert!(Arc::ptr_eq(&captured, &live));
+    assert!(Arc::ptr_eq(captured, &live));
     assert!(captured.try_retry(), "new request funds its captured budget");
     store.full_set_policies(std::collections::HashMap::new());
 }
@@ -1653,7 +1653,7 @@ fn service_try_retry_uses_same_captured_budget_arc() {
         ),
     )]));
     let mut ctx = capture_service_ctx("try-retry/svc");
-    let first = super::retry_budget_for(&ctx).expect("captured budget");
+    let first = Arc::clone(super::retry_budget_for(&ctx).expect("captured budget"));
     store.full_set_policies(std::collections::HashMap::from([(
         "try-retry/p1".to_string(),
         service_policy_fields(
@@ -1677,7 +1677,7 @@ fn service_try_retry_uses_same_captured_budget_arc() {
     super::begin_upstream_attempt(&mut ctx);
     let on_retry = super::retry_budget_for(&ctx).expect("retry still uses capture");
     assert!(
-        Arc::ptr_eq(&first, &on_retry),
+        Arc::ptr_eq(&first, on_retry),
         "fail-to-connect retry_budget_for must keep the first-attempt Arc"
     );
     assert!(
@@ -1686,8 +1686,8 @@ fn service_try_retry_uses_same_captured_budget_arc() {
     );
     let later = capture_service_ctx("try-retry/svc");
     let later_budget = super::retry_budget_for(&later).unwrap();
-    assert!(Arc::ptr_eq(&live, &later_budget));
-    assert!(!Arc::ptr_eq(&first, &later_budget));
+    assert!(Arc::ptr_eq(&live, later_budget));
+    assert!(!Arc::ptr_eq(&first, later_budget));
     assert!(later_budget.try_retry(), "a new request counts into the new generation");
     store.full_set_policies(std::collections::HashMap::new());
 }
