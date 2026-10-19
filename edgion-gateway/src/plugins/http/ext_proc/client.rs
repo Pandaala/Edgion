@@ -577,8 +577,9 @@ fn build_plain_connector(
     Future = impl std::future::Future<Output = Result<PlainTransport, std::io::Error>> + Send,
 > + Clone
        + Send {
+    let host = Arc::new(host);
     tower::service_fn(move |_uri: Uri| {
-        let host = host.clone();
+        let host = Arc::clone(&host);
         let resolver = Arc::clone(&resolver);
         async move { connect_admitted(&resolver, &host, port).await.map(TokioIo::new) }
     })
@@ -599,13 +600,14 @@ fn build_tls_connector(
 > + Clone
        + Send {
     let tls_connector = TlsConnector::from(Arc::new(client_config));
+    let host = Arc::new(host);
 
     tower::service_fn(move |_uri: Uri| {
         let tls = tls_connector.clone();
-        let host = host.clone();
+        let host = Arc::clone(&host);
         let resolver = Arc::clone(&resolver);
         async move {
-            let server_name: ServerName<'static> = ServerName::try_from(host.clone())
+            let server_name: ServerName<'static> = ServerName::try_from(host.as_ref().clone())
                 .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid ext_proc DNS name"))?;
             let tcp = connect_admitted(&resolver, &host, port).await?;
             let tls_stream = tls.connect(server_name, tcp).await?;

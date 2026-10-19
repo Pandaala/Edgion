@@ -5144,3 +5144,23 @@ check/Clippy and seven repository guards passed; existing unrelated warnings
 remain outside the diff. Existing constructor/identity/admission tests and the
 static lifetime check cover this local ownership change. No live TLS handshake,
 allocation benchmark or throughput measurement ran.
+
+## ExtProc dial host sharing
+
+Plain and TLS connector construction now moves the existing host String into one
+Arc<String>. Service clones and newly created dial futures clone that shared handle
+rather than copy host text. The original String capacity stays owned until the last
+connector/future releases it. This adds one cold Arc allocation and atomic handle
+operations; it is not a claim that every traffic pattern allocates less overall.
+
+TLS still copies the host once into its independent owned ServerName inside the
+polled future, preserving validation/error timing before connect_admitted. The
+canonical resolver receives the same borrowed host bytes and performs its existing
+DNS and egress checks for each dial. Port, address fallback, timeouts, TLS policy,
+cache identity and cancellation ownership are unchanged. No process-wide cache,
+prepared name parser or additional configuration state was introduced.
+
+Fresh serial verification passed all 143 ExtProc tests. Formatting, workspace
+check/Clippy and seven repository guards passed; existing unrelated warnings
+remain outside the diff. No live DNS/TLS integration or allocation/throughput
+benchmark ran; lazy channel-construction tests are not handshake evidence.
