@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [JWE plaintext forwarding ownership](jwe-01-plaintext-header-ownership.md)
+
 - [LDAP bind DN template preparation](ldap-01-bind-dn-template-preparation.md)
 
 - [Generation-owned OIDC decoding keys](oidc-06-prepared-jwks-keys.md)
