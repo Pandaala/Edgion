@@ -8289,3 +8289,20 @@ workspace check/Clippy and seven repository guards with existing unrelated
 Clippy warnings. This eliminates a second payload copy for owned renderings;
 Bytes metadata allocation can still depend on retained capacity. No universal
 allocation-count or measured throughput claim is made. No full suite ran.
+
+## Borrow fixed endpoint probe error text
+
+AllEndpointStatus's private Serialize-only EndpointResult now holds an optional
+static error string. failed_endpoint already receives static classified errors;
+wall-timeout assembly also uses a fixed literal. Both now retain those references
+instead of allocating copied Strings. Success still serializes a null error;
+classification text, raw-byte totals, timeout scheduling and probe ordering are
+unchanged. Transport policy, TLS, address safety and dependency-error redaction
+retain their existing implementations.
+
+The assembly regression checks serialized success/timeout errors, and a focused
+failed-result test checks fixed text, null status/body and omitted headers.
+Fresh verification passed all 24 AllEndpointStatus tests, formatting, workspace
+check/Clippy and seven repository guards with existing unrelated Clippy warnings.
+This removes copied error-text buffers only; response JSON and other endpoint
+fields still allocate. No live probe integration or throughput benchmark ran.

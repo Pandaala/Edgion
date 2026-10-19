@@ -214,7 +214,7 @@ struct EndpointResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     headers: Option<HashMap<String, String>>,
     /// Error message (null if successful)
-    error: Option<String>,
+    error: Option<&'static str>,
 }
 
 struct CompletedEndpointResult {
@@ -625,7 +625,7 @@ fn failed_endpoint(ordinal: usize, address: String, start: Instant, error: &'sta
             body: None,
             body_truncated: false,
             headers: None,
-            error: Some(error.to_owned()),
+            error: Some(error),
         },
     }
 }
@@ -728,7 +728,7 @@ fn assemble_endpoint_results(
                     body: None,
                     body_truncated: false,
                     headers: None,
-                    error: Some("wall timeout exceeded".to_string()),
+                    error: Some("wall timeout exceeded"),
                 });
             }
         }

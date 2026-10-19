@@ -410,11 +410,28 @@ fn ordinal_assembly_preserves_duplicates_statuses_and_raw_body_bytes() {
     );
     assert_eq!(backends[0].endpoints.len(), 2);
     assert_eq!(backends[0].endpoints[0].status, Some(204));
-    assert_eq!(backends[0].endpoints[1].error.as_deref(), Some("wall timeout exceeded"));
+    assert_eq!(backends[0].endpoints[1].error, Some("wall timeout exceeded"));
     assert_eq!(backends[1].endpoints.len(), 2);
     assert_eq!(backends[1].endpoints[0].status, Some(399));
     assert_eq!(backends[1].endpoints[1].status, Some(503));
     assert_ne!(backends[1].endpoints[1].body.as_deref().unwrap().len(), 2);
+    let json = serde_json::to_value(&backends).unwrap();
+    assert_eq!(json[0]["endpoints"][0]["error"], serde_json::Value::Null);
+    assert_eq!(json[0]["endpoints"][1]["error"], "wall timeout exceeded");
+}
+
+#[test]
+fn failed_probe_serialization_keeps_fixed_error_and_null_fields() {
+    let completed = failed_endpoint(3, "127.0.0.1:8080".to_owned(), Instant::now(), "connection failed");
+    assert_eq!(completed.ordinal, 3);
+    assert_eq!(completed.response_body_bytes, 0);
+    let json = serde_json::to_value(&completed.result).unwrap();
+    assert_eq!(json["address"], "127.0.0.1:8080");
+    assert_eq!(json["error"], "connection failed");
+    assert_eq!(json["status"], serde_json::Value::Null);
+    assert_eq!(json["body"], serde_json::Value::Null);
+    assert_eq!(json["body_truncated"], false);
+    assert!(json.get("headers").is_none());
 }
 
 #[test]
