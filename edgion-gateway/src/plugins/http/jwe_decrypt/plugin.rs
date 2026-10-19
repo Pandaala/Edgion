@@ -10,6 +10,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use serde::de::{self, IgnoredAny, MapAccess, Visitor};
 use serde::Deserialize;
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fmt;
 
@@ -85,6 +86,9 @@ struct ProtectedHeader {
 
 struct ProtectedHeaderVisitor;
 
+#[derive(Deserialize)]
+struct ProtectedHeaderName<'a>(#[serde(borrow)] Cow<'a, str>);
+
 enum ProtectedHeaderField {
     Alg,
     Enc,
@@ -110,8 +114,8 @@ impl<'de> Visitor<'de> for ProtectedHeaderVisitor {
         let mut has_zip = false;
         let mut has_crit = false;
 
-        while let Some(field) = map.next_key::<String>()? {
-            let field_kind = match field.as_str() {
+        while let Some(ProtectedHeaderName(field)) = map.next_key::<ProtectedHeaderName<'de>>()? {
+            let field_kind = match field.as_ref() {
                 "alg" => ProtectedHeaderField::Alg,
                 "enc" => ProtectedHeaderField::Enc,
                 "zip" => ProtectedHeaderField::Zip,

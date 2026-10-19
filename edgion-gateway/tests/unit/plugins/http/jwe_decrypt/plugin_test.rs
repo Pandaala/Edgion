@@ -275,6 +275,10 @@ fn duplicate_protected_header_members_are_rejected() {
         r#"{"alg":"dir","alg":"dir","enc":"A256GCM"}"#,
         r#"{"alg":"dir","enc":"A256GCM","enc":"A256GCM"}"#,
         r#"{"alg":"dir","enc":"A256GCM","x-private":1,"x-private":2}"#,
+        r#"{"alg":"dir","\u0061lg":"dir","enc":"A256GCM"}"#,
+        r#"{"\u0061lg":"dir","alg":"dir","enc":"A256GCM"}"#,
+        r#"{"alg":"dir","enc":"A256GCM","x-private":1,"x\u002dprivate":2}"#,
+        r#"{"alg":"dir","enc":"A256GCM","x\u002dprivate":1,"x-private":2}"#,
     ];
 
     for (index, protected) in cases.into_iter().enumerate() {
@@ -284,6 +288,23 @@ fn duplicate_protected_header_members_are_rejected() {
             Err(JweFailure::InvalidFormat),
             "duplicate protected header member was accepted: {protected}"
         );
+    }
+}
+
+#[test]
+fn escaped_protected_header_names_keep_raw_aad_and_decoded_semantics() {
+    let plugin = build_plugin(None);
+    let plaintext = r#"{"sub":"alice"}"#;
+    for (index, protected) in [
+        r#"{"\u0061lg":"dir","\u0065nc":"A256GCM","x\u002dprivate":1}"#,
+        r#"{"alg":"dir","enc":"A256GCM","x\u002dprivate":1,"y-private":2}"#,
+        r#"{"alg":"dir","enc":"A256GCM","x\u0022name":"ignored"}"#,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let token = encrypt_compact_jwe_with_protected(plaintext, &test_key(), protected, index as u8 + 50);
+        assert_eq!(decrypt_with_prepared(&plugin, &token).unwrap(), plaintext);
     }
 }
 

@@ -8234,3 +8234,20 @@ formatting, workspace check/Clippy and seven repository guards with existing
 unrelated warnings. The change avoids a duplicate leading-whitespace scan; it
 removes no allocation and claims no measured throughput gain. No full suite or
 network integration test ran.
+
+## Borrow JWE protected-header member names
+
+ProtectedHeaderVisitor now deserializes member names through a private
+Serde borrowing Cow wrapper. Unescaped names borrow the decoded protected-header
+buffer; escaped names retain owned decoded text. The parser-local HashSet still
+rejects every duplicate decoded name, including unknown members and mixed
+escaped/unescaped spellings. Value parsing, failure order, algorithm checks and
+the original encoded protected segment used as AES-GCM AAD are unchanged.
+
+Existing duplicate tests now cover both mixed-spelling orders for known and
+unknown members. A successful-decryption test covers escaped known names and
+unknown names with escapes, retaining raw AAD semantics. Fresh verification
+passed all 21 JWE tests, formatting, workspace check/Clippy and seven repository
+guards with existing unrelated Clippy warnings. The change removes per-name
+String allocations for unescaped names; the HashSet and escaped-name allocations
+remain. No full suite or throughput benchmark ran.
