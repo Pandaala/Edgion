@@ -7049,3 +7049,23 @@ existing identity spy now checks context SNI pointer identity and retention in
 both modes; PP2 exact-byte, skip and failure tests retain their assertions with
 context-owned input. Formatting, workspace check/Clippy and seven guards passed
 with existing unrelated warnings. No full suite or live integration ran.
+
+## Borrow the PP2 authority payload until header encoding
+
+The PP2 builder now stores TLV values as Cow byte slices. Authority borrows
+its caller's hostname instead of allocating an intermediate byte Vec; generic
+add_tlv still takes ownership of its supplied Vec without copying. The sole
+production caller builds the final independently owned header before socket
+writes, so this removes one intermediate nonempty-authority allocation/copy.
+The TLV collection and final output allocations remain. Address-family mapping,
+TLV order, empty-authority encoding, existing length casts and write/flush
+failure accounting are unchanged. No new size policy or throughput claim is
+introduced. This supersedes the prior checkpoint's temporary owned-authority
+buffer description; its final-header ownership boundary still holds.
+
+Independent plan review passed. Baseline encoder verification passed 7 tests;
+fresh verification passed 8 encoder and 85 TLS tests. Tests check nonstatic
+borrow identity, transferred generic TLV ownership, repeated-build equality,
+output survival after hostname/builder destruction and empty authority bytes.
+Formatting, workspace check/Clippy and seven guards passed with existing
+unrelated warnings. No full suite or live integration ran.

@@ -4,6 +4,7 @@
 //! connection metadata (source/destination addresses) and TLV extensions.
 //! See: <https://www.haproxy.org/download/2.2/doc/proxy-protocol.txt>
 
+use std::borrow::Cow;
 use std::net::{IpAddr, SocketAddr};
 
 /// PP2 12-byte signature that starts every v2 header
@@ -22,14 +23,17 @@ pub const PP2_TYPE_ALPN: u8 = 0x01;
 pub const PP2_TYPE_AUTHORITY: u8 = 0x02;
 
 /// A single Type-Length-Value entry
-pub struct Tlv {
+pub struct Tlv<'a> {
     pub tlv_type: u8,
-    pub value: Vec<u8>,
+    pub value: Cow<'a, [u8]>,
 }
 
-impl Tlv {
+impl Tlv<'_> {
     pub fn new(tlv_type: u8, value: Vec<u8>) -> Self {
-        Self { tlv_type, value }
+        Self {
+            tlv_type,
+            value: Cow::Owned(value),
+        }
     }
 
     fn encoded_len(&self) -> usize {
@@ -46,13 +50,13 @@ impl Tlv {
 }
 
 /// Builder for Proxy Protocol v2 headers
-pub struct ProxyProtocolV2Builder {
+pub struct ProxyProtocolV2Builder<'a> {
     src: SocketAddr,
     dst: SocketAddr,
-    tlvs: Vec<Tlv>,
+    tlvs: Vec<Tlv<'a>>,
 }
 
-impl ProxyProtocolV2Builder {
+impl<'a> ProxyProtocolV2Builder<'a> {
     pub fn new(src: SocketAddr, dst: SocketAddr) -> Self {
         Self {
             src,
@@ -67,8 +71,14 @@ impl ProxyProtocolV2Builder {
     }
 
     /// Convenience: add PP2_TYPE_AUTHORITY TLV containing the SNI hostname
-    pub fn add_authority(&mut self, hostname: &str) -> &mut Self {
-        self.add_tlv(PP2_TYPE_AUTHORITY, hostname.as_bytes().to_vec())
+    /// The hostname remains borrowed until the builder's last use; `build`
+    /// returns an independently owned header.
+    pub fn add_authority(&mut self, hostname: &'a str) -> &mut Self {
+        self.tlvs.push(Tlv {
+            tlv_type: PP2_TYPE_AUTHORITY,
+            value: Cow::Borrowed(hostname.as_bytes()),
+        });
+        self
     }
 
     fn encode_address_block(&self, buf: &mut Vec<u8>) {

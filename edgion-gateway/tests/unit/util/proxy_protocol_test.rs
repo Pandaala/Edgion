@@ -75,10 +75,13 @@ fn test_authority_tlv() {
     let src = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(10, 0, 1, 5), 52341));
     let dst = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(10, 244, 1, 23), 8443));
 
-    let hostname = "FFJEK0X-443.sandbox.com";
+    let hostname = "FFJEK0X-443.sandbox.com".to_string();
     let mut builder = ProxyProtocolV2Builder::new(src, dst);
-    builder.add_authority(hostname);
+    builder.add_authority(&hostname);
+    assert!(matches!(builder.tlvs[0].value, Cow::Borrowed(_)));
+    assert_eq!(builder.tlvs[0].value.as_ptr(), hostname.as_ptr());
     let header = builder.build();
+    assert_eq!(builder.build(), header);
 
     // 16 header + 12 addr + 3 tlv-header + 23 hostname = 54
     let expected_len = 16 + 12 + 3 + hostname.len();
@@ -97,6 +100,9 @@ fn test_authority_tlv() {
         &header[tlv_offset + 3..tlv_offset + 3 + hostname.len()],
         hostname.as_bytes()
     );
+    drop(builder);
+    drop(hostname);
+    assert_eq!(&header[tlv_offset + 3..], b"FFJEK0X-443.sandbox.com");
 }
 
 #[test]
@@ -108,7 +114,11 @@ fn test_multiple_tlvs() {
     let alpn = b"h2";
     let mut builder = ProxyProtocolV2Builder::new(src, dst);
     builder.add_authority(hostname);
-    builder.add_tlv(PP2_TYPE_ALPN, alpn.to_vec());
+    let owned_alpn = alpn.to_vec();
+    let alpn_ptr = owned_alpn.as_ptr();
+    builder.add_tlv(PP2_TYPE_ALPN, owned_alpn);
+    assert!(matches!(builder.tlvs[1].value, Cow::Owned(_)));
+    assert_eq!(builder.tlvs[1].value.as_ptr(), alpn_ptr);
     let header = builder.build();
 
     let expected_len = 16 + 12 + (3 + hostname.len()) + (3 + alpn.len());
@@ -184,4 +194,16 @@ fn test_known_pp2_header_bytes() {
     ];
 
     assert_eq!(header, expected);
+}
+
+#[test]
+fn empty_authority_preserves_zero_length_tlv() {
+    let src = "127.0.0.1:1000".parse().unwrap();
+    let dst = "127.0.0.1:2000".parse().unwrap();
+    let mut builder = ProxyProtocolV2Builder::new(src, dst);
+    builder.add_authority("");
+    let header = builder.build();
+    assert_eq!(header.len(), 31);
+    assert_eq!(&header[14..16], &15u16.to_be_bytes());
+    assert_eq!(&header[28..], &[PP2_TYPE_AUTHORITY, 0, 0]);
 }
