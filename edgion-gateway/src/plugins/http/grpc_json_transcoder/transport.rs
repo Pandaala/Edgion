@@ -52,6 +52,13 @@ struct TerminalOutcome {
     status: Option<u8>,
     logged: bool,
 }
+impl TerminalOutcome {
+    fn interrupt_pending(&mut self) {
+        if self.kind == Outcome::Pending {
+            self.kind = Outcome::Interrupted;
+        }
+    }
+}
 
 /// Request-owned upstream RPC intent. This never changes downstream protocol flags.
 pub struct GrpcTranscodingPlan {
@@ -111,10 +118,7 @@ impl GrpcTranscodingPlan {
         self.outcome.lock().status.get_or_insert(status);
     }
     pub(crate) fn interrupted(&self) {
-        let mut outcome = self.outcome.lock();
-        if outcome.kind == Outcome::Pending {
-            outcome.kind = Outcome::Interrupted;
-        }
+        self.outcome.lock().interrupt_pending();
     }
     pub(crate) fn response_valid(&self) -> bool {
         if self.conflict.load(Ordering::Acquire) {
@@ -128,8 +132,8 @@ impl GrpcTranscodingPlan {
         !self.invalid_response.load(Ordering::Acquire)
     }
     pub(crate) fn finalize_log(&self, ctx: &mut EdgionHttpContext) {
-        self.interrupted();
         let mut outcome = self.outcome.lock();
+        outcome.interrupt_pending();
         if outcome.logged {
             return;
         }

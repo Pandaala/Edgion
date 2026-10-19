@@ -24,6 +24,67 @@ fn context() -> EdgionHttpContext {
     ctx
 }
 #[test]
+fn terminal_logging_preserves_outcomes_status_and_idempotence() {
+    for (initial, expected, line) in [
+        (Outcome::Pending, Outcome::Interrupted, "err: exchange interrupted"),
+        (Outcome::Success, Outcome::Success, "exchange completed"),
+        (Outcome::RpcStatus, Outcome::RpcStatus, "err: upstream status failed"),
+        (
+            Outcome::MissingStatus,
+            Outcome::MissingStatus,
+            "err: terminal status invalid",
+        ),
+        (
+            Outcome::InvalidFraming,
+            Outcome::InvalidFraming,
+            "err: response framing invalid",
+        ),
+        (
+            Outcome::InvalidMedia,
+            Outcome::InvalidMedia,
+            "err: response media invalid",
+        ),
+        (Outcome::Expired, Outcome::Expired, "err: exchange deadline expired"),
+        (
+            Outcome::OutputLimit,
+            Outcome::OutputLimit,
+            "err: output budget exhausted",
+        ),
+        (Outcome::Interrupted, Outcome::Interrupted, "err: exchange interrupted"),
+        (
+            Outcome::OwnerConflict,
+            Outcome::OwnerConflict,
+            "err: conversion owner conflict",
+        ),
+    ] {
+        for already_logged in [false, true] {
+            let mut ctx = context();
+            let plan = ctx.grpc_transcoding.as_ref().unwrap().clone();
+            plan.record(initial);
+            plan.record_status(7);
+            plan.record_status(13);
+            plan.outcome.lock().logged = already_logged;
+            ctx.stage_logs_mut().push(crate::plugins::runtime::log::StageLogs {
+                stage: "request",
+                filters: vec![crate::plugins::runtime::PluginLog::new("GrpcJsonTranscoder")],
+                edgion_plugins: vec![],
+            });
+            plan.finalize_log(&mut ctx);
+            plan.finalize_log(&mut ctx);
+            let outcome = plan.outcome.lock();
+            assert_eq!(outcome.kind, expected);
+            assert_eq!(outcome.status, Some(7));
+            assert!(outcome.logged);
+            assert_eq!(ctx.request_info.grpc_status(), (!already_logged).then_some(7));
+            assert_eq!(
+                ctx.stage_logs_mut()[0].filters[0].render_for_test(),
+                if already_logged { "" } else { line }
+            );
+        }
+    }
+}
+
+#[test]
 fn mandatory_h2_preserves_tls_domains_and_separates_ordinary_connections() {
     let ordinary = HttpPeer::new("127.0.0.1:443", true, "backend.example".into());
     let mut first = ordinary.clone();

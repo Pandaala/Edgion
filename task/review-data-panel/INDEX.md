@@ -5519,3 +5519,24 @@ Independent plan review passed. Fresh serial response_cache tests produced
 verification-01-cache-policy-fixture.md. The separate lifecycle selection passed
 all seven tests (overlapping the broad selection). Formatting and workspace
 check/Clippy passed with existing unrelated warnings. No live integration ran.
+
+## Transcoder terminal outcome lock
+
+GrpcTranscodingPlan::finalize_log now normalizes Pending to Interrupted and
+publishes the existing terminal log under one outcome lock. The shared private
+transition also serves response cleanup. Normalization still precedes the logged
+gate, and the guard still spans status publication and log traversal. First
+validated status, decisive failures and repeated-finalization behavior remain.
+
+The sole production caller in pg_logging awaits finalize_ordinary_incomplete
+before terminal logging. Response settlement and cleanup share the driver mutex,
+and cleanup marks the processor finished. This lifecycle makes the removed
+inter-lock window unnecessary; arbitrary concurrent call traces are not claimed
+equivalent. No body owner, deadline, log contents or observability surface changes.
+The benefit is one fewer mutex acquisition, without a measured throughput claim.
+
+Independent plan review passed. The new outcome/status/idempotence matrix passed
+against unchanged production. Fresh serial verification passed all 27 Gateway
+transcoder tests and nine pg_logging tests. No live integration benchmark ran.
+Formatting, workspace check/Clippy and seven repository guards passed; existing
+unrelated Clippy warnings remain.
