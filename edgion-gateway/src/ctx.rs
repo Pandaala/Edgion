@@ -1358,7 +1358,7 @@ pub struct UpstreamInfo {
     pub start_time: Instant,
     /// Error messages collected during upstream attempts
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub err: Vec<String>,
+    pub err: Vec<std::borrow::Cow<'static, str>>,
     /// Canonical backend address used by the LB selection algorithm, before
     /// any target-port rewrite. Runtime-state accounting must use this key
     /// so that selection reads and request-completion writes are consistent.
@@ -1405,7 +1405,7 @@ impl UpstreamInfo {
     #[inline]
     pub fn set_response_body_size(&mut self, size: usize) {
         if self.response_body_size.is_some_and(|previous| previous != size) {
-            self.err.push("response_body_size already set".to_string());
+            self.err.push("response_body_size already set".into());
         }
         self.response_body_size = Some(size);
     }

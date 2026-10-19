@@ -43,4 +43,22 @@ fn changed_response_body_size_keeps_double_set_diagnostic() {
 
     assert_eq!(upstream.response_body_size, Some(23));
     assert_eq!(upstream.err, ["response_body_size already set"]);
+    assert!(matches!(upstream.err[0], std::borrow::Cow::Borrowed(_)));
+}
+
+#[test]
+fn attempt_error_storage_preserves_serialization_and_owned_lifetime() {
+    use std::borrow::Cow;
+    let mut upstream = upstream_info();
+    assert!(serde_json::to_value(&upstream).unwrap().get("err").is_none());
+    upstream.err.push("ConnectError".into());
+    let dynamic = String::from("dns resolution failed: test failure");
+    let original_ptr = dynamic.as_ptr();
+    upstream.err.push(dynamic.into());
+    assert!(matches!(upstream.err[0], Cow::Borrowed("ConnectError")));
+    assert!(matches!(&upstream.err[1], Cow::Owned(value) if value.as_ptr() == original_ptr));
+    assert_eq!(
+        serde_json::to_value(&upstream).unwrap()["err"],
+        serde_json::json!(["ConnectError", "dns resolution failed: test failure"])
+    );
 }

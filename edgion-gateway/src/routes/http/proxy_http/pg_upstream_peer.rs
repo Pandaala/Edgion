@@ -1521,7 +1521,7 @@ fn record_unsafe_resolved_upstream_attempt(
             EdgionErrorCode::BackendAddrLinkLocalNotAllowed => "unsafe link-local upstream",
             _ => UNSAFE_UPSTREAM_ADDRESS_LOG,
         };
-        upstream.err.push(reason.to_string());
+        upstream.err.push(reason.into());
     }
 }
 

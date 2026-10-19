@@ -91,7 +91,7 @@ pub fn fail_to_connect(
         // Record the failure reason for every attempt, timeouts included: a
         // silent 504 connect-timeout entry is indistinguishable from a per-try
         // timeout entry (also 504) when aggregating retries by reason.
-        upstream.err.push(e.etype().as_str().to_string());
+        upstream.err.push(e.etype().as_str().into());
         upstream.et = Some(
             Instant::now()
                 .saturating_duration_since(upstream.start_time)

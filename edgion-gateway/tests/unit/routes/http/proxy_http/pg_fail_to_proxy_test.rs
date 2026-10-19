@@ -404,7 +404,7 @@ fn terminal_upstream_io_timeout_diagnostic_requires_matching_deadline_source() {
 fn terminal_upstream_io_timeout_append_is_exactly_deduplicated() {
     let read_timeout = Error::new_up(ErrorType::ReadTimedout);
     let write_timeout = Error::new_up(ErrorType::WriteTimedout);
-    let mut errors = vec!["EarlierFailure".to_string(), "ReadTimedoutDetail".to_string()];
+    let mut errors = vec!["EarlierFailure".into(), "ReadTimedoutDetail".into()];
 
     append_proxy_error_to_upstream(&mut errors, &read_timeout, 504);
     assert_eq!(errors, ["EarlierFailure", "ReadTimedoutDetail", "ReadTimedout"]);
@@ -478,4 +478,25 @@ fn early_upstream_candidate_does_not_hide_downstream_close() {
 
     ctx.finalize_downstream_status(None);
     assert_eq!(ctx.request_info.status(), 499);
+}
+
+#[test]
+fn fixed_attempt_errors_borrow_without_allocating_and_deduplicate_owned_timeouts() {
+    use std::borrow::Cow;
+    let timeout = Error::new_up(ErrorType::ReadTimedout);
+    let connect = Error::new_up(ErrorType::ConnectError);
+    let mut errors = Vec::with_capacity(4);
+    errors.push(Cow::Owned("ReadTimedout".to_owned()));
+    let (_, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+        append_proxy_error_to_upstream(&mut errors, &timeout, 504);
+        append_proxy_error_to_upstream(&mut errors, &connect, 502);
+        append_proxy_error_to_upstream(&mut errors, &connect, 502);
+    });
+    assert_eq!(allocations.calls, 0);
+    assert_eq!(allocations.requested_bytes, 0);
+    assert_eq!(errors, ["ReadTimedout", "ConnectError", "ConnectError"]);
+    assert!(matches!(errors[0], Cow::Owned(_)));
+    assert!(errors[1..]
+        .iter()
+        .all(|error| matches!(error, Cow::Borrowed("ConnectError"))));
 }

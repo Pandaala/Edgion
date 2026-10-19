@@ -30,7 +30,7 @@ fn ctx_with_attempt() -> EdgionHttpContext {
             wpt: None,
             response_body_size: Some(0),
             start_time: Instant::now(),
-            err: vec!["ConnectError".to_string()],
+            err: vec!["ConnectError".into()],
             lb_backend_addr: None,
             lb_backend: None,
             lb_outlier_completion: None,

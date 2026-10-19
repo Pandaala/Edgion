@@ -238,7 +238,7 @@ pub fn upstream_response_filter(
                             // count retries by reason instead of inferring this
                             // case from the entry's status code.
                             if let Some(upstream) = ctx.get_current_upstream_mut() {
-                                upstream.err.push("RetryOnStatus".to_string());
+                                upstream.err.push("RetryOnStatus".into());
                             }
                             return Err(pingora_core::Error::explain(
                                 pingora_core::ErrorType::HTTPStatus(status_code),

@@ -375,10 +375,10 @@ pub(crate) fn on_transport_failure(
                 match failure_class {
                     AiProxyFailureClass::BackendRequestTimeout => {
                         upstream.status = Some(504);
-                        upstream.err.push("AiBackendRequestTimeoutRetry".to_string());
+                        upstream.err.push("AiBackendRequestTimeoutRetry".into());
                     }
                     AiProxyFailureClass::AmbiguousUpstream => {
-                        upstream.err.push("AiAmbiguousUpstreamRetry".to_string());
+                        upstream.err.push("AiAmbiguousUpstreamRetry".into());
                     }
                 }
             }
@@ -445,7 +445,7 @@ pub(crate) fn on_raw_response(
             }
             ctx.retry_on_status = true;
             if let Some(upstream) = ctx.get_current_upstream_mut() {
-                upstream.err.push("AiRetryOnStatus".to_string());
+                upstream.err.push("AiRetryOnStatus".into());
             }
             return Err(pingora_core::Error::explain(
                 pingora_core::ErrorType::HTTPStatus(status_code),

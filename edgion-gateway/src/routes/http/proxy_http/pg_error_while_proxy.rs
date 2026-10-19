@@ -189,7 +189,7 @@ fn decide_retry(
             // the cancellation from the request-level diagnostics.
             if let Some(upstream) = ctx.get_current_upstream_mut() {
                 upstream.status = Some(504);
-                upstream.err.push(e.etype().as_str().to_string());
+                upstream.err.push(e.etype().as_str().into());
                 upstream.et = Some(
                     std::time::Instant::now()
                         .saturating_duration_since(upstream.start_time)
@@ -267,7 +267,7 @@ fn decide_retry(
     // an unexplained second attempt.
     if was_undecided && e.retry() {
         if let Some(upstream) = ctx.get_current_upstream_mut() {
-            upstream.err.push("ConnectionReuseRetry".to_string());
+            upstream.err.push("ConnectionReuseRetry".into());
         }
     }
 

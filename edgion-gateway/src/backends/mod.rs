@@ -293,7 +293,7 @@ where
     .map_err(|error| {
         if let Some(upstream) = ctx.get_current_upstream_mut() {
             upstream.port = Some(port);
-            upstream.err.push(format!("dns resolution failed: {error}"));
+            upstream.err.push(format!("dns resolution failed: {error}").into());
         }
         EdgionErrorCode::BackendDnsResolutionFailed
     })?;
@@ -531,11 +531,11 @@ fn record_unsafe_upstream_attempt(ctx: &mut EdgionHttpContext, addr: &SocketAddr
     if let Some(upstream) = ctx.get_current_upstream_mut() {
         upstream.ip = ip;
         upstream.port = port;
-        upstream.err.push(reason.to_string());
+        upstream.err.push(reason.into());
     } else {
         ctx.push_upstream(ip, port);
         if let Some(upstream) = ctx.get_current_upstream_mut() {
-            upstream.err.push(reason.to_string());
+            upstream.err.push(reason.into());
         }
     }
 }

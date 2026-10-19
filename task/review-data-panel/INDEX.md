@@ -7312,3 +7312,28 @@ adding None corrected the compile error before these successful results. Formatt
 workspace check/Clippy and seven guards passed with existing unrelated warnings.
 No full suite, live traffic or throughput benchmark ran. The known unrelated
 native TLS and context-layout baseline failures were not included in this scope.
+
+## Borrow fixed upstream attempt error reasons
+
+UpstreamInfo.err now stores Cow<'static, str>. Fixed connection error types,
+ordinary/AI retry markers, body-size diagnostics and unsafe-address reasons
+borrow their existing static strings; the formatted DNS failure still moves its
+owned String into the attempt. The locked Pingora ErrorType::as_str contract
+returns a static string, including custom error kinds. No new diagnostic, log,
+metric or deduplication policy was introduced. Append order, exclusions and the
+terminal upstream-timeout-only exact deduplication rule remain unchanged.
+
+Independent plan review passed. Added tests prove mixed borrowed/owned serde
+values, empty err omission, ownership transfer without a dynamic-string copy,
+borrowed body-size diagnostics, exact deduplication against an existing owned
+timeout and continued duplicate ordinary errors. With the Error objects and
+Vec capacity prepared outside the measured closure, fixed-error append performs
+zero allocations. This does not claim an allocation-free error callback: vector
+growth, dynamic messages and Pingora error context retain their existing costs.
+
+Baseline fail-to-connect/proxy tests passed 25. Final targeted verification passed
+73 tests across failure callbacks, upstream response handling, AI attempts,
+UpstreamInfo and unsafe-address scenarios. Formatting, workspace check/Clippy
+and all seven guards passed with existing unrelated warnings. No full suite,
+live traffic or throughput benchmark ran; the known unrelated context-layout
+baseline test was outside this targeted scope.

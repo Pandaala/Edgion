@@ -63,7 +63,7 @@ fn should_append_proxy_error_to_upstream(e: &Error, code: u16) -> bool {
 }
 
 #[inline]
-fn append_proxy_error_to_upstream(errors: &mut Vec<String>, e: &Error, code: u16) {
+fn append_proxy_error_to_upstream(errors: &mut Vec<std::borrow::Cow<'static, str>>, e: &Error, code: u16) {
     if !should_append_proxy_error_to_upstream(e, code) {
         return;
     }
@@ -72,7 +72,7 @@ fn append_proxy_error_to_upstream(errors: &mut Vec<String>, e: &Error, code: u16
     if is_terminal_upstream_io_timeout(e) && errors.iter().any(|existing| existing == kind) {
         return;
     }
-    errors.push(kind.to_string());
+    errors.push(kind.into());
 }
 
 #[inline]
