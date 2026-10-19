@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [RegionRoute prepared endpoint projection](region-02-prepared-endpoint-projection.md)
+
 - [Lazy HMAC missing-header diagnostics](hmac-04-lazy-missing-header-diagnostic.md)
 
 - [JSON Patch execution ownership](rewrite-02-json-patch-execution-ownership.md)
