@@ -7501,3 +7501,15 @@ claim a smaller overall enum layout or establish throughput improvement.
 Baseline RAP tests passed 21; final verification passed 22 RAP and 68 shared
 condition tests (90 total). Formatting, workspace check/Clippy and seven guards
 passed with existing unrelated warnings. No full suite or live benchmark ran.
+
+## Defer RAP URL match-result storage
+
+[rap-01-url-match-storage.md](rap-01-url-match-storage.md) records the per-evaluation
+dense candidate result vector and its lifetime across supplemental-condition
+awaits. Inline, packed and sparse alternatives need measurement of CPU work,
+retained storage and concurrent future sizes. The task preserves policy ordering
+and the existing path snapshot, and distinguishes per-reference limits from
+aggregate profile size. Radix scratch and completed cold candidate ranges are
+separate costs. No runtime code changed. Formatting, workspace check/Clippy and
+documentation validation passed with existing unrelated warnings; no runtime
+tests or benchmarks ran for this documentation-only decision record.
