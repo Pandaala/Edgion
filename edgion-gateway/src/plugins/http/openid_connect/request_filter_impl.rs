@@ -75,12 +75,16 @@ impl RequestFilter for OpenidConnect {
                         .resolve_access_token_from_session(&session_cookie)
                         .await
                         .unwrap_or_default();
-                    let refresh_lock_key = Self::refresh_lock_key(&raw_session_cookie_value);
+                    let mut refresh_lock_key = None;
 
                     let cache_miss_refresh_attempted = token.is_empty() && session_cookie.refresh_token.is_some();
                     if cache_miss_refresh_attempted {
                         match self
-                            .try_refresh_session_token_singleflight(&refresh_lock_key, &mut session_cookie)
+                            .try_refresh_session_token_singleflight(
+                                refresh_lock_key
+                                    .get_or_insert_with(|| Self::refresh_lock_key(&raw_session_cookie_value)),
+                                &mut session_cookie,
+                            )
                             .await
                         {
                             Ok(new_token) => {
@@ -96,7 +100,11 @@ impl RequestFilter for OpenidConnect {
 
                     if !cache_miss_refresh_attempted && self.should_preemptive_refresh(&token, &session_cookie) {
                         match self
-                            .try_refresh_session_token_singleflight(&refresh_lock_key, &mut session_cookie)
+                            .try_refresh_session_token_singleflight(
+                                refresh_lock_key
+                                    .get_or_insert_with(|| Self::refresh_lock_key(&raw_session_cookie_value)),
+                                &mut session_cookie,
+                            )
                             .await
                         {
                             Ok(new_token) => {
@@ -134,7 +142,12 @@ impl RequestFilter for OpenidConnect {
 
                                 if can_refresh_on_expired {
                                     match self
-                                        .try_refresh_session_token_singleflight(&refresh_lock_key, &mut session_cookie)
+                                        .try_refresh_session_token_singleflight(
+                                            refresh_lock_key.get_or_insert_with(|| {
+                                                Self::refresh_lock_key(&raw_session_cookie_value)
+                                            }),
+                                            &mut session_cookie,
+                                        )
                                         .await
                                     {
                                         Ok(new_token) => match self.verify_token(session, &new_token).await {

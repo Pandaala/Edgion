@@ -8074,3 +8074,21 @@ OIDC tests with 16 existing ignores, formatting, workspace check/Clippy and seve
 repository guards with existing unrelated warnings. No full suite or throughput
 benchmark ran. JWKS/discovery snapshot Arcs remain necessary for caller ownership
 outside provider state locks and were not replaced by borrowed cache references.
+
+## Compute OIDC refresh coordination keys only when needed
+
+Session authentication now starts with an empty request-local optional refresh
+key. Cache-miss, preemptive and expired-token refresh branches initialize that
+same slot on first use and reuse it thereafter. The digest still uses the
+original encrypted cookie text, never a refreshed payload. Requests taking no
+refresh branch avoid SHA-256 over the cookie and the Base64 output allocation.
+Refresh predicates, timeout creation, flight/result-cache identity, cookie writes,
+stale-token fallback and diagnostics remain unchanged. No shared cache or new
+coordination mechanism was introduced.
+
+Fresh verification passed 153 OIDC tests with 16 existing ignores, formatting,
+workspace check/Clippy and seven repository guards with existing unrelated
+warnings. Existing request tests seed results and occupy flights using the raw
+cookie digest, alongside the stable-key and timeout regressions. Lazy computation
+and reuse at all three sites are established by source dataflow, not a new
+counter or an Option-internals test. No full suite or throughput benchmark ran.
