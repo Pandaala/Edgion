@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Prepared session-affinity token hash](lb-03-prepared-session-token-hash.md)
+
 - [Rejected circuit-breaker permit owner copy](lb-02-rejected-permit-owner-copy.md)
 
 - [gRPC timeout header storage](grpc-06-timeout-header-storage.md)
@@ -5962,3 +5964,19 @@ repository guards with existing unrelated warnings. The measured zero-allocation
 claim covers String-to-HeaderValue conversion only; header-map work and the full
 callback were not allocation-profiled. No throughput or live integration claim
 is made.
+
+## Stable session-token hash preparation audit
+
+Response issuance and lazy affinity-map construction share canonical address
+formatting and truncated SHA-256 derivation. Ordinary Service candidates use the
+unscoped form; optional scoped views retain bounded uncached construction.
+Only new/refreshed response tokens incur issuance work, so preparing immutable
+endpoint hashes trades that cost against resident metadata and publication CPU.
+Recorded the representation/value decision in lb-03-prepared-session-token-hash.md.
+Expiry remains issuance-time state; no runtime or hashing contract was changed.
+
+Independent plan review approved the two-document scope. Fresh baseline checks
+passed 24 session-persistence, seven LB runtime-state and four direct response
+filter tests, formatting check, workspace check/Clippy and agent-doc validation.
+Existing unrelated warnings remain. Future metadata layout and saturated or
+ordinary throughput benefits have not been measured.
