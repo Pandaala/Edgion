@@ -67,7 +67,9 @@ async fn block_policy_denies_connection_bypass_policy_skips() {
     let rsc = crate::Rsc::new("TLSRoute", "default", "test-route");
     let ctx = make_ctx(&rsc);
     match runtime.run(&ctx).await {
-        StreamPluginResult::Deny(reason) => assert!(reason.contains("plugin disabled by policy")),
+        StreamPluginResult::Deny(Cow::Owned(reason)) => {
+            assert_eq!(reason, "plugin disabled by policy: tls-route/IpRestriction")
+        }
         other => panic!("expected Deny, got {other:?}"),
     }
 
@@ -154,6 +156,10 @@ async fn unsupported_direct_tls_route_entries_deny_before_disable_and_policy_che
     .unwrap();
     let rsc = crate::Rsc::new("TLSRoute", "default", "test");
     let ctx = make_ctx(&rsc);
+    assert!(matches!(
+        TlsRoutePluginRuntime::unsupported_source().run(&ctx).await,
+        StreamPluginResult::Deny(Cow::Borrowed("unsupported stream plugin type"))
+    ));
     for enabled in [true, false] {
         let entry: TlsRoutePluginEntry = serde_json::from_value(serde_json::json!({
             "type":"FuturePlugin", "enable":enabled, "config":{}
@@ -161,7 +167,10 @@ async fn unsupported_direct_tls_route_entries_deny_before_disable_and_policy_che
         .unwrap();
         let mut cache = vec![None];
         let runtime = TlsRoutePluginRuntime::from_cached_entries(&[entry], "default", Some(&policy), &mut cache);
-        assert!(matches!(runtime.run(&ctx).await, StreamPluginResult::Deny(_)));
+        assert!(matches!(
+            runtime.run(&ctx).await,
+            StreamPluginResult::Deny(Cow::Borrowed("unsupported TLS route plugin type"))
+        ));
         assert!(cache[0].is_none());
     }
 }
@@ -186,4 +195,23 @@ impl TlsRoutePluginRuntime {
         let binding = prepared.bind_stream_plugins(&owner).unwrap();
         Self::from_owner_cached(&binding, policy, cache)
     }
+}
+
+#[tokio::test]
+async fn invalid_configuration_denies_with_borrowed_reason() {
+    let entry = TlsRoutePluginEntry {
+        enable: true,
+        plugin: TlsRouteStreamPlugin::IpRestriction(Box::new(IpRestrictionConfig {
+            status: 100,
+            ..Default::default()
+        })),
+    };
+    let mut cache = vec![None];
+    let runtime = TlsRoutePluginRuntime::from_cached_entries(&[entry], "default", None, &mut cache);
+    let rsc = crate::Rsc::new("TLSRoute", "default", "invalid-config");
+    assert!(matches!(
+        runtime.run(&make_ctx(&rsc)).await,
+        StreamPluginResult::Deny(Cow::Borrowed("invalid owning IP reference"))
+    ));
+    assert!(cache[0].is_none());
 }

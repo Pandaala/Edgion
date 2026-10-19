@@ -174,7 +174,9 @@ async fn block_policy_denies_connection_bypass_policy_skips() {
     let runtime = policy_runtime(&[blocked], "default/test-esp", PolicyActionKind::Block);
     let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 8080, StreamLayer::Stage1);
     match runtime.run(&ctx).await {
-        StreamPluginResult::Deny(reason) => assert!(reason.contains("plugin disabled by policy")),
+        StreamPluginResult::Deny(Cow::Owned(reason)) => {
+            assert_eq!(reason, "plugin disabled by policy: stream/ConnectionRateLimit")
+        }
         other => panic!("expected Deny, got {other:?}"),
     }
 
@@ -298,8 +300,7 @@ async fn invalid_geoip_config_installs_an_always_deny_gate() {
     let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 8080, StreamLayer::Stage1);
     assert!(matches!(
         runtime.run(&ctx).await,
-        StreamPluginResult::Deny(reason)
-            if reason == "invalid stream/GeoIpLocation configuration"
+        StreamPluginResult::Deny(Cow::Borrowed("invalid stream/GeoIpLocation configuration"))
     ));
 }
 
@@ -322,8 +323,7 @@ async fn invalid_geoip_config_cannot_be_undone_and_policy_block_stays_first() {
     let runtime = StreamPluginRuntime::from_stream_plugins(&geo_entries(), "default", "default/test-esp");
     assert!(matches!(
         runtime.run(&ctx).await,
-        StreamPluginResult::Deny(reason)
-            if reason == "invalid stream/GeoIpLocation configuration"
+        StreamPluginResult::Deny(Cow::Borrowed("invalid stream/GeoIpLocation configuration"))
     ));
 
     let blocked = StreamPluginEntry {
@@ -363,6 +363,10 @@ async fn unsupported_direct_stream_entries_deny_before_disable_and_policy_checks
     .compile()
     .unwrap();
     let ctx = StreamContext::new("127.0.0.1".parse().unwrap(), 443, StreamLayer::Stage1);
+    assert!(matches!(
+        StreamPluginRuntime::unsupported_source().run(&ctx).await,
+        StreamPluginResult::Deny(Cow::Borrowed("unsupported stream plugin type"))
+    ));
     for enabled in [true, false] {
         let entry: StreamPluginEntry = serde_json::from_value(serde_json::json!({
             "type":"FuturePlugin", "enable":enabled, "config":{}
@@ -371,7 +375,10 @@ async fn unsupported_direct_stream_entries_deny_before_disable_and_policy_checks
         let mut cache = vec![None];
         let runtime =
             StreamPluginRuntime::from_cached_entries(&[entry], "default", "default/unknown", Some(&policy), &mut cache);
-        assert!(matches!(runtime.run(&ctx).await, StreamPluginResult::Deny(_)));
+        assert!(matches!(
+            runtime.run(&ctx).await,
+            StreamPluginResult::Deny(Cow::Borrowed("unsupported stream plugin type"))
+        ));
         assert!(cache[0].is_none());
     }
 }
@@ -461,13 +468,15 @@ async fn active_redis_owner_gate_precedes_allow_failure_policy_and_cached_execut
             let mut empty = vec![None];
             let runtime = actual_redis_runtime(&invalid, None, &mut empty);
             assert!(empty[0].is_none());
-            assert!(
-                matches!(runtime.run(&context).await,StreamPluginResult::Deny(reason) if reason == "invalid owning LinkSys reference")
-            );
+            assert!(matches!(
+                runtime.run(&context).await,
+                StreamPluginResult::Deny(Cow::Borrowed("invalid owning LinkSys reference"))
+            ));
             let runtime = actual_redis_runtime(&invalid, None, &mut cache);
-            assert!(
-                matches!(runtime.run(&context).await,StreamPluginResult::Deny(reason) if reason == "invalid owning LinkSys reference")
-            );
+            assert!(matches!(
+                runtime.run(&context).await,
+                StreamPluginResult::Deny(Cow::Borrowed("invalid owning LinkSys reference"))
+            ));
             assert_eq!(
                 calls.load(std::sync::atomic::Ordering::SeqCst),
                 1,

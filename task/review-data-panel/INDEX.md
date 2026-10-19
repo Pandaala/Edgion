@@ -7010,3 +7010,21 @@ verification passed 84 tests: 13 finalizer, 25 attempt-runtime, 35 dispatch and
 11 terminal-logging tests. Formatting, workspace check/Clippy and seven guards
 passed with existing unrelated warnings. No full suite or live Redis/provider
 integration ran.
+
+## Borrow fixed Stream and TLS fail-closed reasons
+
+The always-deny Stream and TLS route gates now store the canonical
+Cow<'static, str> reason instead of String. Fixed invalid/unsupported reasons
+remain borrowed when returned by each callback, removing their per-denial
+String allocation and copy. Formatted policy reasons remain owned and cloned.
+Exact messages, policy precedence, unsupported-before-disable handling, cache
+invalidation and publication ordering are unchanged. Downstream log ownership
+may still require a copy; this is not an end-to-end zero-allocation claim.
+
+Tests assert borrowed fixed reasons, owned policy reasons, both unsupported
+source gates, direct unsupported entries and TLS invalid-configuration denial.
+Independent plan review passed. Baseline runtime tests passed (15 Stream and
+7 TLS); fresh final verification passed 48 tests: 15 Stream runtime, 8 TLS
+runtime and 25 HTTP/Stream plugin-generation tests. Formatting, workspace
+check/Clippy and seven guards passed with existing unrelated warnings. No full
+suite or live integration ran.

@@ -7,6 +7,7 @@ use edgion_resources::refs::ReferenceError;
 use edgion_resources::resources::edgion_plugins::PluginValidation;
 use edgion_resources::resources::edgion_stream_plugins::TlsRouteStreamPlugin;
 use edgion_resources::resources::plugin_policy::{CompiledPluginPolicy, PluginFamily};
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use super::ip_restriction::TlsRouteIpRestriction;
@@ -39,7 +40,7 @@ impl TlsRoutePluginRuntime {
     pub(crate) fn unsupported_source() -> Self {
         Self {
             plugins: vec![Arc::new(FailClosedTlsRoutePlugin {
-                reason: "unsupported stream plugin type".to_string(),
+                reason: "unsupported stream plugin type".into(),
             })],
         }
     }
@@ -60,12 +61,12 @@ impl TlsRoutePluginRuntime {
         // front of `plugins` after the loop so it dominates the chain
         // regardless of the restricted entry's original position (mirrors the
         // HTTP "gate first" semantics).
-        let mut policy_block_reason: Option<String> = None;
-        let mut invalid_config_reason: Option<String> = None;
+        let mut policy_block_reason: Option<Cow<'static, str>> = None;
+        let mut invalid_config_reason: Option<Cow<'static, str>> = None;
 
         for (index, entry) in entries.iter().enumerate() {
             if matches!(entry.plugin, TlsRouteStreamPlugin::Unsupported) {
-                invalid_config_reason.get_or_insert_with(|| "unsupported TLS route plugin type".to_string());
+                invalid_config_reason.get_or_insert_with(|| "unsupported TLS route plugin type".into());
                 continue;
             }
             if !entry.is_enabled() {
@@ -79,7 +80,7 @@ impl TlsRoutePluginRuntime {
                 Some(edgion_resources::resources::plugin_policy::PluginPolicyAction::Block { .. }) => {
                     if policy_block_reason.is_none() {
                         policy_block_reason =
-                            Some(format!("plugin disabled by policy: tls-route/{}", entry.type_name()));
+                            Some(format!("plugin disabled by policy: tls-route/{}", entry.type_name()).into());
                     }
                     continue;
                 }
@@ -98,13 +99,13 @@ impl TlsRoutePluginRuntime {
             });
             if !valid {
                 cache[index] = None;
-                invalid_config_reason.get_or_insert_with(|| "invalid owning IP reference".to_string());
+                invalid_config_reason.get_or_insert_with(|| "invalid owning IP reference".into());
                 continue;
             }
 
             let plugin = cache[index].get_or_insert_with(|| match &entry.plugin {
                 TlsRouteStreamPlugin::Unsupported => Arc::new(FailClosedTlsRoutePlugin {
-                    reason: "unsupported TLS route plugin type".to_string(),
+                    reason: "unsupported TLS route plugin type".into(),
                 }),
                 TlsRouteStreamPlugin::IpRestriction(_) => match binding
                     .tls_entry(index)
@@ -150,13 +151,13 @@ impl TlsRoutePluginRuntime {
 
 /// Always-deny gate for policy blocks and unsupported source configurations.
 struct FailClosedTlsRoutePlugin {
-    reason: String,
+    reason: Cow<'static, str>,
 }
 
 #[async_trait::async_trait]
 impl TlsRoutePlugin for FailClosedTlsRoutePlugin {
     async fn on_tls_route(&self, _ctx: &TlsRouteContext<'_>) -> StreamPluginResult {
-        StreamPluginResult::Deny(self.reason.clone().into())
+        StreamPluginResult::Deny(self.reason.clone())
     }
 }
 

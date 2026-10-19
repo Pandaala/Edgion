@@ -11,6 +11,7 @@ use edgion_resources::resources::edgion_stream_plugins::{
     ConnectionRateLimitConfig, EdgionStreamPlugin, StreamPluginEntry,
 };
 use edgion_resources::resources::plugin_policy::{CompiledPluginPolicy, PluginFamily};
+use std::borrow::Cow;
 use std::sync::Arc;
 
 pub(super) type StreamEntryOutcome = Result<Arc<dyn StreamPlugin>, &'static str>;
@@ -46,7 +47,7 @@ impl StreamPluginRuntime {
     pub(crate) fn unsupported_source() -> Self {
         Self {
             plugins: vec![Arc::new(FailClosedStreamPlugin {
-                reason: "unsupported stream plugin type".to_string(),
+                reason: "unsupported stream plugin type".into(),
             })],
         }
     }
@@ -65,12 +66,12 @@ impl StreamPluginRuntime {
         // front of `plugins` after the loop so it dominates the chain
         // regardless of the restricted entry's original position (mirrors the
         // HTTP "gate first" semantics).
-        let mut policy_block_reason: Option<String> = None;
-        let mut invalid_config_reason: Option<String> = None;
+        let mut policy_block_reason: Option<Cow<'static, str>> = None;
+        let mut invalid_config_reason: Option<Cow<'static, str>> = None;
 
         for (index, entry) in entries.iter().enumerate() {
             if matches!(entry.plugin, EdgionStreamPlugin::Unsupported) {
-                invalid_config_reason.get_or_insert_with(|| "unsupported stream plugin type".to_string());
+                invalid_config_reason.get_or_insert_with(|| "unsupported stream plugin type".into());
                 continue;
             }
             if !entry.is_enabled() {
@@ -83,7 +84,8 @@ impl StreamPluginRuntime {
             match action {
                 Some(edgion_resources::resources::plugin_policy::PluginPolicyAction::Block { .. }) => {
                     if policy_block_reason.is_none() {
-                        policy_block_reason = Some(format!("plugin disabled by policy: stream/{}", entry.type_name()));
+                        policy_block_reason =
+                            Some(format!("plugin disabled by policy: stream/{}", entry.type_name()).into());
                     }
                     continue;
                 }
@@ -97,13 +99,13 @@ impl StreamPluginRuntime {
                 .map(|field| field.configuration())
                 .transpose()
             else {
-                invalid_config_reason.get_or_insert_with(|| "invalid owning LinkSys reference".to_string());
+                invalid_config_reason.get_or_insert_with(|| "invalid owning LinkSys reference".into());
                 continue;
             };
 
             if let Some(field) = binding.global_entry(index).and_then(|entry| entry.selector()) {
                 if field.validate_owner().is_err() {
-                    invalid_config_reason.get_or_insert_with(|| "invalid owning ConfigData reference".to_string());
+                    invalid_config_reason.get_or_insert_with(|| "invalid owning ConfigData reference".into());
                     continue;
                 }
                 if !matches!(field.runtime_key(), Ok(Some(_))) {
@@ -145,7 +147,7 @@ impl StreamPluginRuntime {
                     }
                     _ => "invalid owning IP reference",
                 };
-                invalid_config_reason.get_or_insert_with(|| reason.to_string());
+                invalid_config_reason.get_or_insert_with(|| reason.into());
                 continue;
             }
             if let Some(geo) = binding.geo_entry(index) {
@@ -155,8 +157,7 @@ impl StreamPluginRuntime {
                         .all(|leaf| leaf.validate_owner().is_ok() && leaf.read_scopes().is_ok());
                 if !valid {
                     cache[index] = None;
-                    invalid_config_reason
-                        .get_or_insert_with(|| "invalid stream/GeoIpLocation configuration".to_string());
+                    invalid_config_reason.get_or_insert_with(|| "invalid stream/GeoIpLocation configuration".into());
                     continue;
                 }
             }
@@ -176,7 +177,7 @@ impl StreamPluginRuntime {
             match outcome {
                 Ok(plugin) => plugins.push(Arc::clone(plugin)),
                 Err(reason) => {
-                    invalid_config_reason.get_or_insert_with(|| (*reason).to_owned());
+                    invalid_config_reason.get_or_insert_with(|| (*reason).into());
                 }
             }
         }
@@ -251,7 +252,7 @@ impl StreamPluginRuntime {
 
 /// Always-deny gate for policy blocks and invalid published configurations.
 struct FailClosedStreamPlugin {
-    reason: String,
+    reason: Cow<'static, str>,
 }
 
 #[async_trait::async_trait]
@@ -261,7 +262,7 @@ impl StreamPlugin for FailClosedStreamPlugin {
     }
 
     async fn on_connection(&self, _ctx: &StreamContext) -> StreamPluginResult {
-        StreamPluginResult::Deny(self.reason.clone().into())
+        StreamPluginResult::Deny(self.reason.clone())
     }
 }
 
