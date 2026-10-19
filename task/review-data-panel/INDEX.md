@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Response-cache Age header construction](cache-02-age-header-construction.md)
+
 - [CtxSet regex replacement result storage](ctx-01-regex-replacement-storage.md)
 
 - [Template JSON escape run batching](template-01-json-run-batching.md)
@@ -5500,3 +5502,20 @@ a real ResponseHeader, empty bodies and non-UTF-8 bodies. Fresh serial verificat
 passed all 264 Gateway Wasm tests. Formatting, workspace check/Clippy and seven
 repository guards passed; existing unrelated Clippy warnings remain. No live
 transport or throughput benchmark ran.
+
+## Response-cache terminal ownership and Age construction
+
+Rechecked logging-to-cache finalization: pending publication moves out before
+awaited finish_body so cancellation releases the writer even if the context
+survives. Publication retains its epoch/freshness fence. No ownership change was
+selected. Replay Age construction transfers its decimal String into HeaderValue;
+direct u64 insertion has different allocation behavior in locked http 1.5.0 and
+bytes 1.12.1. The short-age probe observed 1 allocation versus 2, with equal bytes
+and sensitivity; cache-02 records the decision and measurement limits. No runtime
+code changed and no throughput improvement is established.
+
+Independent plan review passed. Fresh serial response_cache tests produced
+55 passes and one existing backend-policy admission fixture failure, matching
+verification-01-cache-policy-fixture.md. The separate lifecycle selection passed
+all seven tests (overlapping the broad selection). Formatting and workspace
+check/Clippy passed with existing unrelated warnings. No live integration ran.
