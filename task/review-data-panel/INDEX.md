@@ -7479,3 +7479,25 @@ Baseline RAP tests passed 19. Final verification passed 21 RAP tests and 68
 shared condition tests (89 total). Formatting, workspace check/Clippy and seven
 guards passed with existing unrelated warnings. No full suite or live traffic
 benchmark ran.
+
+## Retain RequestAccessPolicy candidate segments as ranges
+
+Each RuntimeRule::Url now stores its contiguous candidate Range instead of
+collecting that range into Vec<usize>. Compilation appends exactly one inline
+candidate or the resolved imported candidates, so the stored start/end preserves
+the existing sequence, including empty imports. Request evaluation clones the
+range cursor and visits the same candidate indices in order. Short-circuiting,
+conditions, terminal outcomes and actual candidate ownership remain unchanged.
+
+Independent plan review verified the single append-only constructor and all
+consumers. A new behavioral regression combines an empty import, a multi-candidate
+import and consecutive inline rules across two required groups: the common path
+passes while paths satisfying only one group fail. Existing imported ownership,
+condition ordering and profile selection tests remain intact.
+
+This removes nonempty per-rule cold index-vector allocation/storage and request
+index-array reads. It does not remove the request-local matched_urls vector,
+claim a smaller overall enum layout or establish throughput improvement.
+Baseline RAP tests passed 21; final verification passed 22 RAP and 68 shared
+condition tests (90 total). Formatting, workspace check/Clippy and seven guards
+passed with existing unrelated warnings. No full suite or live benchmark ran.

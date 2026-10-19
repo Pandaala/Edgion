@@ -974,3 +974,46 @@ async fn hostless_url_keeps_supplemental_host_condition_reads() {
         );
     }
 }
+
+#[tokio::test]
+async fn consecutive_url_rules_keep_imported_candidate_ownership_across_groups() {
+    use serde_json::json;
+    let mut config: RequestAccessProfile = serde_json::from_value(json!({"requiredRuleGroups": [
+        {"name": "first", "anyOfRules": [
+            {"name": "empty-import", "type": "url", "config": {"paths": [{"type": "Exact", "value": "/second"}]}},
+            {"name": "multi-import", "type": "url", "config": {"paths": [{"type": "Exact", "value": "/second"}]}}
+        ]},
+        {"name": "second", "anyOfRules": [
+            {"name": "common", "type": "url", "config": {"paths": [{"type": "Exact", "value": "/both"}]}},
+            {"name": "second-only", "type": "url", "config": {"paths": [{"type": "Exact", "value": "/second"}]}}
+        ]}
+    ]}))
+    .unwrap();
+    for (rule, candidates) in config.required_rule_groups[0].any_of_rules.iter_mut().zip([
+        json!([]),
+        json!([
+            {"name": "first-only", "paths": [{"type": "Exact", "value": "/first"}]},
+            {"name": "common", "paths": [{"type": "Exact", "value": "/both"}]}
+        ]),
+    ]) {
+        let RequestAccessRuleType::Url(url) = &mut rule.rule else {
+            unreachable!()
+        };
+        url.resolved_candidates = Some(serde_json::from_value(candidates).unwrap());
+    }
+    let profile = RuntimeProfile::new(&config, None, None).unwrap();
+    for (path, allowed) in [
+        ("/both", true),
+        ("/first", false),
+        ("/second", false),
+        ("/missing", false),
+    ] {
+        let mut session = MockPluginSession::new();
+        session.expect_get_path().times(1).return_const(path.to_string());
+        let mut log = PluginLog::new("RequestAccessPolicy");
+        assert_eq!(
+            matches!(profile.allows(&mut session, &mut log).await, PolicyMatch::Matched),
+            allowed
+        );
+    }
+}

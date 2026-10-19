@@ -195,7 +195,7 @@ enum RuntimeRule {
         ips: RuntimeIpSet,
         conditions: Option<CompiledConditionSet>,
     },
-    Url(Vec<usize>),
+    Url(std::ops::Range<usize>),
 }
 
 impl RuntimeRule {
@@ -226,11 +226,11 @@ impl RuntimeRule {
                 }
             }
             Self::Url(indices) => {
-                for index in indices {
-                    if !matched_urls.get(*index).copied().unwrap_or(false) {
+                for index in indices.clone() {
+                    if !matched_urls.get(index).copied().unwrap_or(false) {
                         continue;
                     }
-                    let candidate = &url_index.candidates[*index];
+                    let candidate = &url_index.candidates[index];
                     if !candidate.hosts.is_empty() && !candidate.hosts.contains(host.as_str()) {
                         continue;
                     }
@@ -296,7 +296,7 @@ impl RuntimeProfile {
                                 config.conditions.as_ref(),
                             ));
                         }
-                        RuntimeRule::Url((start..url_candidates.len()).collect())
+                        RuntimeRule::Url(start..url_candidates.len())
                     }
                 });
             }
