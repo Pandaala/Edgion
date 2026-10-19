@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [gRPC query preflight decoding](grpc-01-query-preflight-decoding.md)
+
 - [JSON value profiling worklist representation](json-01-profile-worklist-representation.md)
 
 - [Prepared GraphQL type-condition lookup](graphql-02-prepared-type-conditions.md)
@@ -4927,3 +4929,25 @@ Fresh serial verification passed 56 tests: 30 Resources transcoding and 26 Gatew
 transcoder tests. Formatting, workspace check/Clippy and seven repository guards
 passed; existing warnings remain outside the diff. No real-socket integration or
 performance benchmark ran.
+
+
+## gRPC query preflight decoding audit
+
+Traced query binding from the aggregate encoded-byte cap through path capture,
+strict whole-query preflight and per-component form decoding. Queries without
+percent signs already borrow during preflight; escaped queries materialize a
+strict decoded String that is discarded before the form parser decodes again.
+The dependency form parser is permissive, so removing preflight would change
+malformed and ignored-unknown acceptance. Raw separators and encoded plus prevent
+splitting/re-decoding the preflight output as an equivalent shortcut.
+
+[grpc-01](grpc-01-query-preflight-decoding.md) records validation-only, ASCII-fast-path
+and strict-component alternatives, their validation-order/ownership constraints and
+CPU/temporary-buffer measurement requirements. It also preserves the existing
+64-accumulated-selector rule rather than inventing a raw-pair cap. No runtime code,
+replacement parser or benchmark was added.
+
+Fresh serial baseline verification passed 56 tests: 30 Resources transcoding and
+26 Gateway transcoder tests. Formatting check, workspace check/Clippy and
+agent-doc/diff checks passed; existing warnings remain outside this documentation
+batch. These checks do not establish performance or equivalence of the proposals.
