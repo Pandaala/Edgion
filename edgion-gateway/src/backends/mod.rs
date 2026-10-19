@@ -492,9 +492,9 @@ fn build_peer_from_lb_selection(
         .is_some_and(|info| info.metrics_test_type.is_some())
         && matches!(&lb_policy, Some(ParsedLBPolicy::ConsistentHash(_)))
     {
-        let remote_ip = ctx.request_info.remote_ip.clone();
+        let remote_ip = ctx.request_info.remote_ip.as_str();
         let query = ctx.query(session.req_header());
-        let hash_key_bytes = extract_hash_key(session, &lb_policy, &remote_ip, query);
+        let hash_key_bytes = extract_hash_key(session, &lb_policy, remote_ip, query);
         ctx.hash_key = std::str::from_utf8(hash_key_bytes).ok().map(str::to_owned);
     }
 

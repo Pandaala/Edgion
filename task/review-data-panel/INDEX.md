@@ -5853,3 +5853,25 @@ and unchanged persistence state. The existing sticky regression also passed on
 unchanged production. Formatting, workspace check/Clippy and seven repository
 guards passed with existing unrelated warnings. No whole-request allocation
 count, throughput benchmark or live integration run is claimed.
+
+## Borrow RemoteIp while preparing test hash metadata
+
+The opt-in test-metrics ConsistentHash branch in build_peer_from_lb_selection
+now borrows RemoteIp while extracting the hash key. It no longer makes a
+nonempty temporary String copy before constructing the retained owned hash_key.
+The retained metadata copy, metrics gate, hash bytes, UTF-8 handling, TLS writes
+and upstream policy transfer are unchanged. This benefit applies only when that
+test-metrics branch executes; ordinary disabled traffic already skips it.
+
+Independent plan review approved the three-file scope. The existing peer matrix
+now runs all seven policies with test metrics both disabled and enabled. It
+checks the IPv6 SourceIp hash, empty missing named keys, absent non-ConsistentHash
+metadata, unchanged source buffer and existing peer/policy ownership assertions.
+The expanded matrix passed before and after the production change. Buffer identity
+checks establish preserved ownership; removal of the temporary clone is established
+by the source diff, not by an allocation-counter or throughput measurement.
+
+Fresh serial verification passed 117 tests: the matrix, 12 selector and 104
+upstream-peer tests. Formatting, workspace check/Clippy and seven repository
+guards passed with existing unrelated warnings. No live integration test or
+whole-request performance claim is included.

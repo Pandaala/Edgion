@@ -566,6 +566,7 @@ async fn sticky_validation_uses_captured_section_and_self_dns_ignores_stale_targ
 
 #[tokio::test]
 async fn peer_construction_transfers_captured_lb_policy_into_attempt() {
+    use crate::observe::metrics::TestType;
     use edgion_resources::resources::lb_policy::ConsistentHashOn;
     use pingora_core::upstreams::peer::Peer;
 
@@ -575,64 +576,90 @@ async fn peer_construction_transfers_captured_lb_policy_into_attempt() {
     let captured = capture(&coordinator, &selected);
     let session = session().await;
     let mut transferred = Vec::new();
-    for policy in [
-        Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Header(
-            "x-routing-key".to_owned(),
-        ))),
-        Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Cookie(
-            "routing-cookie".to_owned(),
-        ))),
-        Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Arg(
-            "routing-query".to_owned(),
-        ))),
-        Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::SourceIp)),
-        Some(ParsedLBPolicy::LeastConn),
-        Some(ParsedLBPolicy::Ewma),
-        None,
-    ] {
-        let expected = serde_json::to_value(&policy).unwrap();
-        let original_ptr = match &policy {
-            Some(ParsedLBPolicy::ConsistentHash(
-                ConsistentHashOn::Header(name) | ConsistentHashOn::Cookie(name) | ConsistentHashOn::Arg(name),
-            )) => Some(name.as_ptr()),
-            _ => None,
-        };
-        let endpoint = captured
-            .select(&None, ServiceDegradePolicy::Live, None, "", None)
-            .unwrap();
-        let backend = Arc::clone(&endpoint.backend);
-        let mut ctx = context("default/backend");
-        let peer = build_peer_from_lb_selection(
-            &mut ctx,
-            &session,
-            "default/backend",
-            policy,
-            &BackendTlsPolicyLookup::Absent,
-            endpoint,
+    for test_metrics in [false, true] {
+        for policy in [
+            Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Header(
+                "x-routing-key".to_owned(),
+            ))),
+            Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Cookie(
+                "routing-cookie".to_owned(),
+            ))),
+            Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Arg(
+                "routing-query".to_owned(),
+            ))),
+            Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::SourceIp)),
+            Some(ParsedLBPolicy::LeastConn),
+            Some(ParsedLBPolicy::Ewma),
             None,
-        )
-        .unwrap();
-        assert_eq!(
-            peer.address().as_inet().copied(),
-            Some("192.0.2.8:8080".parse().unwrap())
-        );
-        assert!(!peer.is_tls());
-        let upstream = ctx.get_current_upstream().unwrap();
-        assert_eq!(serde_json::to_value(&upstream.lb_policy).unwrap(), expected);
-        assert_eq!(upstream.service_key.as_deref(), Some("default/backend"));
-        assert!(Arc::ptr_eq(upstream.lb_backend.as_ref().unwrap(), &backend));
-        assert_eq!(upstream.lb_backend_addr.as_ref(), Some(&backend.addr));
-        assert!(upstream.tls.is_none());
-        if let Some(original_ptr) = original_ptr {
-            let Some(ParsedLBPolicy::ConsistentHash(
-                ConsistentHashOn::Header(retained)
-                | ConsistentHashOn::Cookie(retained)
-                | ConsistentHashOn::Arg(retained),
-            )) = &upstream.lb_policy
-            else {
-                panic!("named policy must remain present");
+        ] {
+            let expected = serde_json::to_value(&policy).unwrap();
+            let expected_hash = if test_metrics {
+                match &policy {
+                    Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::SourceIp)) => Some("2001:db8::42"),
+                    Some(ParsedLBPolicy::ConsistentHash(_)) => Some(""),
+                    _ => None,
+                }
+            } else {
+                None
             };
-            transferred.push(original_ptr == retained.as_ptr());
+            let original_ptr = match &policy {
+                Some(ParsedLBPolicy::ConsistentHash(
+                    ConsistentHashOn::Header(name) | ConsistentHashOn::Cookie(name) | ConsistentHashOn::Arg(name),
+                )) => Some(name.as_ptr()),
+                _ => None,
+            };
+            let endpoint = captured
+                .select(&None, ServiceDegradePolicy::Live, None, "", None)
+                .unwrap();
+            let backend = Arc::clone(&endpoint.backend);
+            let mut ctx = context("default/backend");
+            ctx.request_info.remote_ip = "2001:db8::42".to_owned();
+            let remote_ip_ptr = ctx.request_info.remote_ip.as_ptr();
+            ctx.gateway_info = Some(Arc::new(GatewayInfo::new(
+                None,
+                "gateway".to_owned(),
+                None,
+                None,
+                test_metrics.then_some(TestType::Lb),
+                None,
+                Vec::new(),
+                None,
+            )));
+            let peer = build_peer_from_lb_selection(
+                &mut ctx,
+                &session,
+                "default/backend",
+                policy,
+                &BackendTlsPolicyLookup::Absent,
+                endpoint,
+                None,
+            )
+            .unwrap();
+            assert_eq!(
+                peer.address().as_inet().copied(),
+                Some("192.0.2.8:8080".parse().unwrap())
+            );
+            assert!(!peer.is_tls());
+            assert_eq!(ctx.hash_key.as_deref(), expected_hash);
+            assert_eq!(ctx.request_info.remote_ip, "2001:db8::42");
+            assert_eq!(ctx.request_info.remote_ip.as_ptr(), remote_ip_ptr);
+            let upstream = ctx.get_current_upstream().unwrap();
+            assert_eq!(serde_json::to_value(&upstream.lb_policy).unwrap(), expected);
+            assert_eq!(upstream.service_key.as_deref(), Some("default/backend"));
+            assert!(Arc::ptr_eq(upstream.lb_backend.as_ref().unwrap(), &backend));
+            assert_eq!(upstream.lb_backend_addr.as_ref(), Some(&backend.addr));
+            assert!(upstream.tls.is_none());
+            if let Some(original_ptr) = original_ptr {
+                let Some(ParsedLBPolicy::ConsistentHash(
+                    ConsistentHashOn::Header(retained)
+                    | ConsistentHashOn::Cookie(retained)
+                    | ConsistentHashOn::Arg(retained),
+                )) = &upstream.lb_policy
+                else {
+                    panic!("named policy must remain present");
+                };
+                transferred.push(original_ptr == retained.as_ptr());
+            }
         }
     }
     assert!(
