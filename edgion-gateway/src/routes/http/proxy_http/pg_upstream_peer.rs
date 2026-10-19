@@ -1372,7 +1372,7 @@ async fn try_external_jump_peer(
     let domain = external.domain.as_str();
     let port = external.port;
     let use_tls = external.use_tls;
-    let sni = external.sni.clone();
+    let sni = &external.sni;
 
     let addr = resolve_domain(domain, port).await?;
 
@@ -1401,7 +1401,7 @@ async fn try_external_jump_peer(
         ));
     }
 
-    let peer = Box::new(HttpPeer::new(addr, use_tls, sni));
+    let peer = Box::new(HttpPeer::new(addr, use_tls, sni.clone()));
     finish_static_peer(edgion_http, ctx, peer)
 }
 

@@ -5727,3 +5727,24 @@ Independent plan review required this evidence before approving the revised
 two-document deferral. Fresh serial baseline tests passed 30 cases: 15 upstream
 request-filter and 15 timeout tests. Formatting check, workspace check/Clippy and
 agent-doc validation passed with existing unrelated warnings. No wire suite ran.
+
+## ExternalJump SNI copy deferral
+
+External peer construction now borrows its request-owned preset SNI through
+resolution and address validation, cloning only when constructing the HttpPeer.
+The nonempty SNI no longer has an extra owned copy while DNS is pending, and
+resolution failure or unsafe-address rejection avoids that copy entirely.
+Successful peer construction still makes one owned SNI copy; no throughput or
+successful-path allocation-count improvement is claimed.
+
+The preset remains in ctx.jump, backend-context seeding touches a separate field,
+and rejection branches return before later SNI use. DNS selection, SSRF checks,
+failure attribution, source tagging, timeout application and peer ownership keep
+their ordering. Cancellation drops a borrow instead of a temporary plain String.
+
+Independent plan review approved the two-file scope. All 104 upstream-peer tests
+passed before and after modification; fresh serial network-helper verification
+passed 14 tests (118 total after modification). Formatting, workspace check/Clippy
+and seven repository guards passed with existing unrelated warnings. Existing
+resolver tests include IP literals, localhost and an empty host; no external DNS
+integration, live upstream transport or performance benchmark ran.
