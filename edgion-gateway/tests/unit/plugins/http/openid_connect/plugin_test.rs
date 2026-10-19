@@ -1198,6 +1198,69 @@ fn test_signed_cookie_roundtrip() {
 }
 
 #[tokio::test]
+async fn persisted_session_cookie_preserves_fields_and_source() {
+    let mut cfg = base_config();
+    cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+
+    for (index, token) in ["access-token", "", " \t"].into_iter().enumerate() {
+        for generated_ref in [false, true] {
+            let now = OpenidConnect::now_unix_secs();
+            let payload = OidcSessionCookie {
+                session_ref: if generated_ref {
+                    String::new()
+                } else {
+                    format!("session-{index}")
+                },
+                access_token: token.to_string(),
+                created_at: now,
+                expires_at: Some(now + 60),
+                id_token: Some("id-token".to_string()),
+                refresh_token: Some("refresh-token".to_string()),
+            };
+            let source = serde_json::to_value(&payload).unwrap();
+            let captured = Arc::new(Mutex::new(None::<String>));
+            let output = captured.clone();
+            let mut session = MockPluginSession::new();
+            session
+                .expect_append_response_header()
+                .times(1)
+                .returning(move |name, value| {
+                    assert_eq!(name, "Set-Cookie");
+                    *output.lock() = Some(value.to_string());
+                    Ok(())
+                });
+            plugin.maybe_set_session_cookie_header(&mut session, &payload).await;
+            assert_eq!(serde_json::to_value(&payload).unwrap(), source);
+
+            let header = captured.lock().take().expect("session cookie");
+            let encoded = header
+                .strip_prefix("edgion_oidc_session=")
+                .unwrap()
+                .split(';')
+                .next()
+                .unwrap();
+            let decoded: OidcSessionCookie =
+                OpenidConnect::decode_signed_cookie_payload(encoded, plugin.session_cipher().unwrap()).unwrap();
+            assert!(!decoded.session_ref.is_empty());
+            if !generated_ref {
+                assert_eq!(decoded.session_ref, payload.session_ref);
+            }
+            let cached = plugin.get_cached_access_token(&decoded.session_ref).await;
+            let mut expected = source;
+            expected["session_ref"] = json!(decoded.session_ref);
+            if token.trim().is_empty() {
+                assert_eq!(cached, None);
+            } else {
+                assert_eq!(cached.as_deref(), Some(token));
+                expected.as_object_mut().unwrap().remove("access_token");
+            }
+            assert_eq!(serde_json::to_value(&decoded).unwrap(), expected);
+        }
+    }
+}
+
+#[tokio::test]
 async fn test_maybe_set_session_cookie_header_strips_access_token_and_caches_it() {
     let mut cfg = base_config();
     cfg.bearer_only = false;

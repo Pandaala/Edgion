@@ -82,18 +82,29 @@ impl OpenidConnect {
         session: &mut dyn PluginSession,
         payload: &OidcSessionCookie,
     ) {
-        let mut persisted_payload = payload.clone();
+        let cache_token = !payload.access_token.trim().is_empty();
+        let mut persisted_payload = OidcSessionCookie {
+            session_ref: payload.session_ref.clone(),
+            access_token: if cache_token {
+                String::new()
+            } else {
+                payload.access_token.clone()
+            },
+            created_at: payload.created_at,
+            expires_at: payload.expires_at,
+            id_token: payload.id_token.clone(),
+            refresh_token: payload.refresh_token.clone(),
+        };
         if persisted_payload.session_ref.is_empty() {
             persisted_payload.session_ref = Self::generate_session_ref();
         }
-        if !persisted_payload.access_token.trim().is_empty() {
+        if cache_token {
             self.cache_access_token(
                 &persisted_payload.session_ref,
-                &persisted_payload.access_token,
+                &payload.access_token,
                 persisted_payload.expires_at,
             )
             .await;
-            persisted_payload.access_token.clear();
         }
 
         let Some(cipher) = self.session_cipher() else {

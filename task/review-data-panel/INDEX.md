@@ -8092,3 +8092,21 @@ warnings. Existing request tests seed results and occupy flights using the raw
 cookie digest, alongside the stable-key and timeout regressions. Lazy computation
 and reuse at all three sites are established by source dataflow, not a new
 counter or an Option-internals test. No full suite or throughput benchmark ran.
+
+## Avoid copying the token cleared from persisted OIDC sessions
+
+Session-cookie publication now explicitly copies the six-field payload projection.
+For a nonblank access token, the persisted projection starts with an empty token
+and caches the original source bytes, avoiding the copy that was immediately
+cleared. Empty and whitespace-only tokens preserve their previous representation
+and skip cache insertion. Session-reference generation, remaining fields, TTL,
+cache-before-cipher/size-check ordering and response append behavior are unchanged.
+The input payload is not mutated; other field and cache-owned copies remain.
+
+A six-case roundtrip matrix covers normal/empty/whitespace tokens with existing
+or generated references, source immutability, all persisted fields and exact cache
+contents. The original persistence test remains. Fresh verification passed 154
+OIDC tests with 16 existing ignores, formatting, workspace check/Clippy and seven
+repository guards with existing unrelated warnings. This removes one temporary
+nonblank access-token buffer, not encryption or serialized-cookie storage. No
+full suite or throughput benchmark ran.
