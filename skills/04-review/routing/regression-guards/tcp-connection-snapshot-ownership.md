@@ -18,6 +18,11 @@ The upstream address String is moved into `TcpContext.upstream_addr` before
 address validation and borrowed for `BasicPeer` construction. Unsafe-address
 failures retain the same diagnostic address and bounded denial reason. No
 additional copy of the formatted address is needed for peer construction.
+The source socket address is borrowed from the retained backend for formatting
+and synchronous safety validation, rather than cloning its enum. The borrow
+ends before connection I/O; backend ownership for outlier completion is unchanged.
+Internet socket-address cloning was a value copy, so this is not a heap-allocation
+or measured throughput claim.
 
 ## Rationale and evidence
 
@@ -46,7 +51,7 @@ Clean EOF preserves success; idle closure reports `IdleTimeout`.
 
 ## Verification and re-evaluation
 
-Inline tests in `edgion-gateway/src/routes/tcp/edgion_tcp.rs` exercise the actual
+Tests in `edgion-gateway/tests/unit/routes/tcp/edgion_tcp_test.rs` exercise the actual
 selection helper with Weak references: old-table and unselected-unit release,
 selected-unit survival, and new-generation selection after a swap. Ordinary
 in-memory duplex streams exercise `TcpDuplexHooks` through the production relay

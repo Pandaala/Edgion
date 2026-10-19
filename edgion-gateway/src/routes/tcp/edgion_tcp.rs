@@ -233,12 +233,12 @@ impl EdgionTcpProxy {
         let backend = endpoint.backend;
 
         // 6. Build upstream address
-        let upstream_addr = backend.inner().addr.clone();
+        let upstream_addr = &backend.inner().addr;
         let upstream_addr_str = upstream_addr.to_string();
         let outlier_store = crate::backends::get_outlier_detection_store();
         let outlier_token = outlier_store.capture_completion_token(backend.as_ref());
         let upstream_addr_str = ctx.upstream_addr.insert(upstream_addr_str);
-        if validate_endpoint_backend_addr(&upstream_addr, gateway_config.allow_loopback_upstream).is_err() {
+        if validate_endpoint_backend_addr(upstream_addr, gateway_config.allow_loopback_upstream).is_err() {
             ctx.status = TcpStatus::UnsafeUpstreamAddress;
             // Mirror the TLS/UDP fail-close access-log fields: surface the
             // shared SSRF-guard literal into `deny_reason` so operator log

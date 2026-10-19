@@ -6597,3 +6597,20 @@ extractor, 20 HeaderCertAuth and 14 mTLS callback tests (52 total). Formatting,
 workspace check/Clippy and seven guards passed. Updated the owning SAN knowledge;
 existing unrelated warnings remain. No full suite, live integration or benchmark
 ran.
+
+## TCP selected-backend address borrow
+
+TCP connection setup now borrows the selected backend's socket address for
+formatting and synchronous endpoint safety validation, matching the existing TLS
+paths. The formatted address still moves into the context before validation and
+feeds BasicPeer through the same string API. Token capture, denial diagnostics,
+connect options and backend ownership across outlier completion are unchanged.
+This removes an address-enum clone; Internet address cloning was a value copy,
+so no heap-allocation or measured throughput improvement is claimed.
+
+Independent plan review approved three files. Existing tests cover selected-route
+lifetime, admission, relay accounting and logs; no redundant test was added.
+Baseline and final verification each passed 27 TCP, 21 shared relay and four TCP
+log tests (52 total). Formatting, workspace check/Clippy and seven guards passed.
+Updated the owning snapshot knowledge and its stale test-file location. Existing
+unrelated warnings remain; no full suite, live integration or benchmark ran.
