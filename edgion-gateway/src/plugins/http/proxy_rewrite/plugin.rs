@@ -141,11 +141,9 @@ impl ProxyRewrite {
         captures: Option<&regex::Captures>,
         context: TemplateContext,
     ) -> String {
-        let mut result = template.to_string();
-
         // 1. Replace $uri (not encoded - it's already a valid path).
         //    Escape $ in the injected path so later steps cannot treat it as a variable.
-        result = result.replace("$uri", &Self::escape_dollar(Cow::Borrowed(original_path)));
+        let mut result = template.replace("$uri", &Self::escape_dollar(Cow::Borrowed(original_path)));
 
         // 2. Replace $arg_<name> — always URL-encoded.
         //    `get_query_param_ref` returns the percent-decoded value, but `$arg_<name>`

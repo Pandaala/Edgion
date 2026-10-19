@@ -5366,3 +5366,18 @@ Fresh serial verification passed 12 Gateway CtxSet and 34 Resources CtxSet tests
 Formatting, workspace check/Clippy, agent-doc validation and diff checks passed.
 Existing unrelated Clippy warnings remain. No live network or throughput benchmark
 ran; the storage probe is separate from the regression tests.
+
+## ProxyRewrite initial template copy
+
+The URI/header variable resolver now calls its first `str::replace` directly on
+the borrowed template. Previously it copied the template into a temporary String
+only to call that same replacement and discard the copy. Receiver bytes, pattern,
+escaped replacement and the newly constructed result remain identical. This
+removes the initial temporary text copy for nonempty templates without transferring
+input capacity into the result. Later argument, numeric-capture, named-path and
+dollar-restoration stages retain their order and existing boundaries.
+
+Independent plan review approved the two-file scope. The existing 21 ProxyRewrite
+tests passed both before and after the change. Formatting, workspace check/Clippy
+and seven repository guards passed; existing unrelated Clippy warnings remain.
+No live integration, whole-path allocation or throughput measurement ran.
