@@ -19,7 +19,14 @@ pub fn set_sensitive_request_header(
     name: &str,
     value: &str,
 ) -> crate::plugins::runtime::PluginSessionResult<()> {
-    let mut value = http::HeaderValue::from_str(value)?;
+    set_sensitive_request_header_value(session, name, http::HeaderValue::from_str(value)?)
+}
+
+fn set_sensitive_request_header_value(
+    session: &mut dyn PluginSession,
+    name: &str,
+    mut value: http::HeaderValue,
+) -> crate::plugins::runtime::PluginSessionResult<()> {
     value.set_sensitive(true);
     session.set_request_header_value(name, value)
 }
@@ -107,7 +114,9 @@ pub fn strip_cookies(session: &mut dyn PluginSession, names: &[&str]) {
             let _ = session.remove_request_header("Cookie");
         }
         CookieStripPlan::Replace(value) => {
-            let _ = set_sensitive_request_header(session, "Cookie", &value);
+            if let Ok(value) = http::HeaderValue::try_from(value) {
+                let _ = set_sensitive_request_header_value(session, "Cookie", value);
+            }
         }
     }
 }

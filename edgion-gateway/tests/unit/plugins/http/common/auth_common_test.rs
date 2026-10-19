@@ -546,3 +546,62 @@ fn plain_query_key_comparison_does_not_allocate_key_sized_storage() {
     let long = measure("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_long_key=1");
     assert_eq!(short, long, "plain key length must not change temporary allocation");
 }
+
+#[test]
+fn cookie_strip_output_supports_owned_header_conversion() {
+    let long = format!("keep={}", "x".repeat(4096));
+    for lines in [
+        vec!["api_key=secret; keep=1"],
+        vec!["a=1; api_key=secret", "b=2; flag"],
+        vec!["keep=café; api_key=secret"],
+        vec!["keep=a\tb; api_key=secret"],
+        vec!["keep=a\rb; api_key=secret"],
+        vec!["keep=a\nb; api_key=secret"],
+        vec!["keep=a\0b; api_key=secret"],
+        vec!["keep=a\u{7f}b; api_key=secret"],
+        vec![long.as_str()],
+    ] {
+        let CookieStripPlan::Replace(value) = plan(&lines, &["api_key"]) else {
+            panic!("fixture must retain a cookie");
+        };
+        assert_eq!(value.capacity(), value.len());
+        let input_ptr = value.as_ptr();
+        let borrowed = http::HeaderValue::from_str(&value);
+        let (owned, stats) =
+            crate::test_allocation_counter::count_allocation_stats(|| http::HeaderValue::try_from(value));
+        assert_eq!(owned.is_ok(), borrowed.is_ok());
+        if let (Ok(owned), Ok(borrowed)) = (owned, borrowed) {
+            assert_eq!(owned, borrowed);
+            assert_eq!(owned.as_bytes().as_ptr(), input_ptr);
+        }
+        assert_eq!(stats.calls, 0);
+        assert_eq!(stats.requested_bytes, 0);
+    }
+}
+
+#[test]
+fn sensitive_typed_header_write_preserves_storage_and_setter_result() {
+    for fail_setter in [false, true] {
+        let value = http::HeaderValue::try_from("keep=private-cookie".to_owned()).unwrap();
+        let input_ptr = value.as_bytes().as_ptr() as usize;
+        let mut session = MockPluginSession::new();
+        session
+            .expect_set_request_header_value()
+            .withf(move |name, value| {
+                name == "Cookie"
+                    && value == "keep=private-cookie"
+                    && value.is_sensitive()
+                    && value.as_bytes().as_ptr() as usize == input_ptr
+            })
+            .times(1)
+            .returning(move |_, _| {
+                if fail_setter {
+                    Err(std::io::Error::other("header update rejected").into())
+                } else {
+                    Ok(())
+                }
+            });
+        let result = super::set_sensitive_request_header_value(&mut session, "Cookie", value);
+        assert_eq!(result.is_err(), fail_setter);
+    }
+}

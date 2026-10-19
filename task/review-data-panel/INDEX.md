@@ -6077,3 +6077,26 @@ whole-helper zero allocation or measured throughput evidence.
 Fresh verification passed 30 shared-auth, 14 KeyAuth, 47 JwtAuth, two adapter strip
 and one live-query ownership tests (94 total), formatting, workspace check/Clippy
 and seven guards. Existing unrelated warnings remain; no integration suite ran.
+
+## Transfer the merged request Cookie into its sensitive header
+
+The shared Cookie stripper now moves its merged String into HeaderValue rather
+than copying it through from_str. A private typed writer owns sensitivity marking
+and session dispatch; the existing public string writer delegates to it without
+changing caller signatures. Conversion failure and setter failure remain ignored
+by cookie stripping, and absent/remove/replace planning is unchanged. KeyAuth,
+JwtAuth and OIDC all consume this shared path.
+
+Independent plan review approved four files. Before the source change, the new
+nine-case conversion matrix and existing shared-auth suite passed (31 tests).
+The matrix verifies exact capacity, original buffer identity and zero allocation
+calls/requested bytes during owned conversion, plus borrowed/owned validation
+parity for UTF-8, tabs and internal invalid controls. A new typed-writer test
+checks sensitivity, pointer identity and setter error propagation. The claim is
+limited to removing the merged-cookie payload copy, not whole-callback allocation
+or throughput. Header-map insertion and cookie planning still have their own costs.
+
+Fresh serial verification passed 32 shared-auth, 14 KeyAuth, 47 JwtAuth, 19
+BasicAuth, 56 HMAC-filtered and four OIDC cookie-strip tests (172 total), formatting,
+workspace check/Clippy and seven guards. Existing unrelated warnings remain.
+No live integration suite was run.

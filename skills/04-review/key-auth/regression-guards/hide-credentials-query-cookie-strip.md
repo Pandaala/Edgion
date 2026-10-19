@@ -115,3 +115,22 @@ Re-open only if:
 ## Resolution references
 
 - `fr-auth2-02` — 2026-05-30 (fixed; retargeted 2026-08-23).
+
+## Transfer the merged Cookie buffer
+
+The shared Cookie-strip path converts its owned merged String directly into
+HeaderValue, then passes that value through the private typed sensitive-header
+writer. The public string-based auth writer delegates to the same sensitivity
+boundary, so every write still marks the value sensitive before the session
+setter. All other auth callers retain their existing borrowed-string interface.
+Invalid header values and setter errors remain ignored by Cookie stripping;
+replacement/removal ordering and multi-line merging remain unchanged.
+
+The pinned http 1.5.0 owned conversion uses the same validation as from_str and
+transfers the buffer through bytes 1.12.1. The plan/conversion matrix checks the
+join result has capacity equal to length, valid bytes retain their original
+pointer, and conversion allocates zero calls/requested bytes. It also compares
+owned/borrowed validation for UTF-8, tabs and internal invalid controls. A typed
+writer test preserves pointer identity, sensitivity and setter error propagation.
+This removes the merged-cookie payload copy; planning, header-map mutation and
+the whole auth callback are not claimed to allocate zero times.
