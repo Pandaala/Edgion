@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Prepared authentication challenge generation](auth-02-prepared-challenge-generation.md)
+
 - [Query and Cookie stripping survivor storage](auth-01-strip-survivor-storage.md)
 
 - [Prepared session-affinity token hash](lb-03-prepared-session-token-hash.md)
@@ -6163,3 +6165,18 @@ Fresh verification passed 36 shared-auth, 14 KeyAuth, 47 JwtAuth, 19 BasicAuth,
 formatting, workspace check/Clippy and seven guards. Existing unrelated warnings
 remain. The one-allocation claim covers payload construction only; no complete
 response allocation or throughput claim and no live integration run is made.
+
+## Prepared authentication challenge audit
+
+Realm validation/escaping and challenge construction still run on failure replies.
+Preparing stable state could reduce that work but requires a canonical runtime
+owner, explicit direct-constructor failure behavior and generation-lifetime costs.
+Dynamic Bearer descriptions remain request-bound. Recorded the decision and
+measurement/acceptance boundaries in auth-02-prepared-challenge-generation.md.
+This is separate from the completed exact-capacity ownership changes.
+
+Independent plan review approved two documents. Fresh baseline checks passed 36
+shared-auth, 14 KeyAuth, 47 JwtAuth, 19 BasicAuth and 56 HMAC-filtered tests (172
+total), formatting check, workspace check/Clippy and agent-doc validation. Existing
+unrelated warnings remain; no prepared implementation or performance result is
+claimed, and no runtime code changed.
