@@ -228,7 +228,13 @@ include!("../../../tests/support/routes/http/session_persistence_test/230_functi
 /// it is. `<addrhash>` remains the affinity-map key.
 pub fn build_wire_token(addrhash: String, now: u64, ttl_secs: Option<u64>) -> String {
     match ttl_secs {
-        Some(ttl) => format!("{addrhash}.{}", now.saturating_add(ttl)),
+        Some(ttl) => {
+            let expiry = now.saturating_add(ttl);
+            let digits = expiry.checked_ilog10().unwrap_or(0) as usize + 1;
+            let mut token = String::with_capacity(addrhash.len() + 1 + digits);
+            let _ = write!(token, "{addrhash}.{expiry}");
+            token
+        }
         None => addrhash,
     }
 }

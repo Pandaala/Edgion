@@ -251,6 +251,53 @@ fn bare_wire_token_reuses_generated_hash_without_allocating() {
 }
 
 #[test]
+fn expiring_wire_token_preserves_bytes_with_exact_capacity() {
+    let mut times = vec![(0_u64, 0_u64), (u64::MAX - 1, 60), (u64::MAX, u64::MAX)];
+    for power in 0..=19 {
+        let value = 10_u64.pow(power);
+        times.extend([(value - 1, 0), (value, 0), (value + 1, 0)]);
+    }
+    let mut measurements = Vec::new();
+    for hash in [String::new(), "0123456789abcdef".to_owned(), "a".repeat(256)] {
+        for &(now, ttl) in &times {
+            let expected = format!("{hash}.{}", now.saturating_add(ttl));
+            let input = hash.clone();
+            let (actual, construction) =
+                crate::test_allocation_counter::count_allocation_stats(|| build_wire_token(input, now, Some(ttl)));
+            assert_eq!(actual, expected);
+            let length = actual.len();
+            let capacity = actual.capacity();
+            let original = actual.as_ptr();
+            let (header, conversion) =
+                crate::test_allocation_counter::count_allocation_stats(|| http::HeaderValue::try_from(actual).unwrap());
+            assert_eq!(header.as_bytes(), expected.as_bytes());
+            assert_eq!(header.as_bytes().as_ptr(), original);
+            measurements.push((length, capacity, construction, conversion));
+        }
+    }
+    for (length, capacity, construction, conversion) in measurements {
+        assert_eq!(capacity, length);
+        assert_eq!(construction.calls, 1);
+        assert_eq!(construction.requested_bytes, length);
+        assert_eq!(conversion.calls, 0);
+        assert_eq!(conversion.requested_bytes, 0);
+    }
+}
+
+#[test]
+fn generated_bare_wire_token_moves_into_header_without_allocating() {
+    let token = build_wire_token(generate_session_token("10.0.0.1:8080"), 1000, None);
+    let expected = token.clone();
+    let original = token.as_ptr();
+    let (header, stats) =
+        crate::test_allocation_counter::count_allocation_stats(|| http::HeaderValue::try_from(token).unwrap());
+    assert_eq!(header.as_bytes(), expected.as_bytes());
+    assert_eq!(header.as_bytes().as_ptr(), original);
+    assert_eq!(stats.calls, 0);
+    assert_eq!(stats.requested_bytes, 0);
+}
+
+#[test]
 fn test_parse_wire_token() {
     assert_eq!(parse_wire_token("abc123"), ("abc123", None));
     assert_eq!(parse_wire_token("abc123.1060"), ("abc123", Some(1060)));

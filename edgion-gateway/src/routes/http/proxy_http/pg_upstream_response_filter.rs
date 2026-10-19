@@ -329,7 +329,7 @@ pub fn upstream_response_filter(
                             }
                             SessionPersistenceType::Header => {
                                 let header_name = session_persistence::get_session_name(sp).to_owned();
-                                let _ = upstream_response.append_header(header_name, &token);
+                                let _ = upstream_response.append_header(header_name, token);
                             }
                         }
                     }

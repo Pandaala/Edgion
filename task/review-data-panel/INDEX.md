@@ -6682,3 +6682,30 @@ on the atomic implementation, then passed after the ownership change: 59 UDP
 and four UDP log tests in each run (63 total). Formatting, workspace check/Clippy
 and seven guards passed. Existing unrelated warnings remain; no full suite,
 live integration or benchmark ran.
+
+## Exact-capacity sticky Header token transfer
+
+Expiring wire tokens now reserve the exact hash, separator and decimal-expiry
+length before using the existing formatter. Saturating expiry arithmetic is
+unchanged; no-lifetime tokens still return their original hash buffer. The
+response Header branch consumes the finished token. On the pinned http/bytes
+versions, the generated bare hash and exact-capacity expiring token transfer into
+HeaderValue without a payload copy or Shared metadata allocation. Header-map
+work is outside this allocation claim. Cookie formatting, clock sampling,
+retry placement, validation, append errors and sticky-state transitions remain
+unchanged.
+
+Independent plan review approved four files. Existing baseline tests passed
+24 session-persistence and four response-issuance/helper tests. The new matrix
+completed all 189 byte comparisons on the original implementation before its
+capacity assertion failed (8 reserved bytes for a two-byte result). It covers
+empty/ordinary/long hashes, decimal boundaries and saturating expiry. A separate
+test covers generated bare-token transfer; existing conversion tests cover
+owned/borrowed validation equivalence.
+
+Final verification passed 26 session-persistence and four response-filter tests
+(30 total), including actual HTTP/gRPC issuance. All 189 cases reserve one exact
+buffer and convert it without another allocation, retaining byte identity and
+buffer address. Formatting, workspace check/Clippy and seven guards passed with
+existing unrelated warnings. No full suite, live integration or throughput
+benchmark ran.
