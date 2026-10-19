@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [gRPC timeout header storage](grpc-06-timeout-header-storage.md)
+
 - [Transcoder terminal logging owner borrow](grpc-05-terminal-log-owner-borrow.md)
 
 - [gRPC-Web trailer frame buffer ownership](grpc-web-01-trailer-frame-buffer.md)
@@ -5710,3 +5712,18 @@ Independent plan review approved the two-document scope. Fresh serial baseline
 verification passed 36 tests: 27 transcoder and nine logging tests. Formatting
 check, workspace check/Clippy and agent-doc validation passed with existing
 unrelated warnings. No candidate implementation or performance measurement ran.
+
+## gRPC timeout header storage audit
+
+A proposed String move at upstream header insertion preserves bytes but has an
+input-dependent storage tradeoff. A temporary probe using the actual formatter
+and locked http/bytes versions confirmed pointer reuse; spare-capacity outputs
+allocate 24 bytes of shared metadata during conversion, versus copying 2–9 bytes
+for the sampled borrowed inputs. Exact-capacity samples avoid that allocation.
+Grpc-06 records the measurements and broader evaluation requirements. No runtime
+change or unconditional allocation/throughput improvement is claimed.
+
+Independent plan review required this evidence before approving the revised
+two-document deferral. Fresh serial baseline tests passed 30 cases: 15 upstream
+request-filter and 15 timeout tests. Formatting check, workspace check/Clippy and
+agent-doc validation passed with existing unrelated warnings. No wire suite ran.
