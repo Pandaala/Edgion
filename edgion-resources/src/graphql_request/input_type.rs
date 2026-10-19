@@ -9,6 +9,20 @@ pub(crate) struct TypeRef {
     pub nulls: Vec<bool>,
 }
 impl TypeRef {
+    /// Inspect the scalar Int requirement without constructing owned type wrappers.
+    pub fn scalar_int_requirement(ty: cst::Type) -> Result<bool, GraphqlError> {
+        let (named, required) = match ty {
+            cst::Type::NamedType(named) => (named, false),
+            cst::Type::NonNullType(non_null) => (non_null.named_type().ok_or(GraphqlError::Invalid)?, true),
+            cst::Type::ListType(_) => return Err(GraphqlError::Invalid),
+        };
+        if named.name().ok_or(GraphqlError::Invalid)?.text() == "Int" {
+            Ok(required)
+        } else {
+            Err(GraphqlError::Invalid)
+        }
+    }
+
     pub fn parse(ty: cst::Type) -> Result<Self, GraphqlError> {
         fn walk(ty: cst::Type, nulls: &mut Vec<bool>) -> Result<String, GraphqlError> {
             if nulls.len() >= 64 {
@@ -44,3 +58,7 @@ impl TypeRef {
         self.nulls[0]
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/graphql_request/input_type_test.rs"]
+mod tests;

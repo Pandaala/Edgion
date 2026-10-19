@@ -4655,3 +4655,32 @@ workspace check/Clippy, seven repository guards and diff hygiene passed; existin
 warnings remain outside the diff. This removes six temporary String conversion
 sites, not all evaluation allocations. No live transport, Redis, allocation or
 throughput benchmark ran.
+
+## GraphQL multiplier scalar type projection
+
+Variable multipliers previously built a full owned TypeRef, then consumed only
+its scalar-Int predicate and required bit. A dedicated query on the canonical
+TypeRef owner now returns that bit directly for Int/Int! and rejects other named
+or list types. The cost visitor calls it at the original evaluation point; general
+schema/REST type parsing retains its owned representation. The exact supporting
+cross-crate scope is graphql_request/input_type.rs, graphql_cost/request.rs and
+their unit tests. No eager variable validation, retained cache or plugin-local
+type parser is introduced.
+
+The projection avoids constructing the transient name String and wrapper Vec.
+Default validation still precedes supplied-value lookup, absent nullable values
+still reach existing fallback, and unused incompatible variables are unchanged.
+Work, recursion, numeric bounds, admission and request-body ownership are retained.
+A baseline-first runtime matrix covers nullable/required Int, case-sensitive
+non-Int names, list combinations, missing/supplied/default values and unused
+variables. Its invalid-default fixture was corrected to use valid JSON before
+the final baseline run. A new mounted type-owner test compares the projection
+with parse/scalar_int/required across seven names and nullable/non-null nested
+list combinations through eight layers.
+
+Fresh serial verification passed 59 tests: 26 Resources cost-model, 17 frontend,
+four Gateway guard, five rate-limit and seven shared evaluation tests. Formatting,
+workspace check/Clippy, seven repository guards and diff hygiene passed; existing
+warnings remain outside the diff. This eliminates the temporary owned type
+representation on the multiplier path; no live Redis, allocation or throughput
+benchmark ran.

@@ -351,10 +351,7 @@ impl Evaluation<'_> {
             cst::Value::Variable(v) => {
                 let n = v.name().ok_or(GraphqlError::Invalid)?.text();
                 let definition = self.vars.get(n.as_str()).ok_or(GraphqlError::Invalid)?;
-                let ty = TypeRef::parse(definition.ty().ok_or(GraphqlError::Invalid)?)?;
-                if !ty.scalar_int() {
-                    return Err(GraphqlError::Invalid);
-                }
+                let required = TypeRef::scalar_int_requirement(definition.ty().ok_or(GraphqlError::Invalid)?)?;
                 let default = definition.default_value().and_then(|v| v.value());
                 let default = match default {
                     None => None,
@@ -369,7 +366,7 @@ impl Evaluation<'_> {
                 if let Some(default) = default {
                     return Ok(Some(default));
                 }
-                if ty.required() {
+                if required {
                     return Err(GraphqlError::Invalid);
                 }
                 Ok(None)

@@ -694,3 +694,52 @@ fn lookup_names_preserve_case_variables_fragments_and_root_charges() {
         assert_eq!(estimate(&m, &invalid), Err(GraphqlError::Invalid), "{invalid}");
     }
 }
+
+#[test]
+fn multiplier_type_projection_preserves_defaults_and_unused_variables() {
+    let m = model(
+        "type Query { list(n:Int=4):[Leaf] } type Leaf { name:String }",
+        &[("Query.list", 1, &["n"], 100)],
+    );
+    for ty in [
+        "Int",
+        "Int!",
+        "int",
+        "String",
+        "String!",
+        "[Int]",
+        "[Int!]",
+        "[Int]!",
+        "[[Int!]!]!",
+    ] {
+        for default in ["", "=3"] {
+            for supplied in [false, true] {
+                let query = format!("query($n:{ty}{default}){{list(n:$n){{name}}}}");
+                let variables = if supplied {
+                    serde_json::json!({"n":2})
+                } else {
+                    serde_json::json!({})
+                };
+                let body = serde_json::json!({"query":query,"variables":variables}).to_string();
+                let expected = match (ty, default, supplied) {
+                    ("Int" | "Int!", _, true) => Ok(4),
+                    ("Int" | "Int!", "=3", false) => Ok(5),
+                    ("Int", "", false) => Ok(6),
+                    _ => Err(GraphqlError::Invalid),
+                };
+                assert_eq!(m.estimate_post(body.as_bytes(), MAX_ENVELOPE_BYTES), expected, "{body}");
+            }
+        }
+        let query = format!("query($unused:{ty}){{list{{name}}}}");
+        assert_eq!(estimate(&m, &query), Ok(6), "{query}");
+    }
+    let body = serde_json::json!({
+        "query": r#"query($n:Int="bad"){list(n:$n){name}}"#,
+        "variables": {"n":2}
+    })
+    .to_string();
+    assert_eq!(
+        m.estimate_post(body.as_bytes(), MAX_ENVELOPE_BYTES),
+        Err(GraphqlError::Invalid)
+    );
+}
