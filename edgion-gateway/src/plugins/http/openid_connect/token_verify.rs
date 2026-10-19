@@ -147,7 +147,7 @@ impl OpenidConnect {
         }
 
         let token_data = decode::<Claims>(token, &decoding_key, &validation).map_err(map_jwt_decode_error_typed)?;
-        let claims = token_data.claims.to_value();
+        let claims = token_data.claims.into_value();
 
         if validate_scopes {
             self.validate_required_scopes(&claims)?;

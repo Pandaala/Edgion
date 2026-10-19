@@ -339,18 +339,18 @@ pub struct Claims {
 }
 
 impl Claims {
-    /// Convert typed claims into a unified JSON object view.
-    pub fn to_value(&self) -> serde_json::Value {
+    /// Move typed claims into a unified JSON object.
+    pub fn into_value(self) -> serde_json::Value {
         let mut out = serde_json::Map::new();
 
-        if let Some(v) = &self.iss {
-            out.insert("iss".to_string(), serde_json::Value::String(v.clone()));
+        if let Some(v) = self.iss {
+            out.insert("iss".to_string(), serde_json::Value::String(v));
         }
-        if let Some(v) = &self.sub {
-            out.insert("sub".to_string(), serde_json::Value::String(v.clone()));
+        if let Some(v) = self.sub {
+            out.insert("sub".to_string(), serde_json::Value::String(v));
         }
-        if let Some(v) = &self.aud {
-            out.insert("aud".to_string(), v.clone());
+        if let Some(v) = self.aud {
+            out.insert("aud".to_string(), v);
         }
         if let Some(v) = self.exp {
             out.insert(
@@ -371,10 +371,10 @@ impl Claims {
             );
         }
 
-        if let serde_json::Value::Object(extra) = &self.extra {
+        if let serde_json::Value::Object(extra) = self.extra {
             for (k, v) in extra {
-                if !out.contains_key(k) {
-                    out.insert(k.clone(), v.clone());
+                if !out.contains_key(&k) {
+                    out.insert(k, v);
                 }
             }
         }

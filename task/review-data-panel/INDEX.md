@@ -7880,3 +7880,23 @@ caps. Fresh verification passed 36 shared-auth, 47 JWT, 150 OIDC and 20 JWE test
 16 OIDC tests retained their existing ignored status. Formatting, workspace
 check/Clippy and seven repository guards passed with existing unrelated warnings.
 No full suite or throughput benchmark ran.
+
+## Move OIDC typed claims into their JSON result
+
+The only production consumer of Claims conversion, OIDC JWT verification, now
+consumes the decoded Claims through into_value. Issuer, subject, audience and
+custom-field keys/subtrees move into the same freshly built JSON map instead of
+being cloned before their source owner is dropped. Standard-field insertion
+order and precedence remain unchanged: present fields win even for a null
+audience, absent fields permit extra fallback, and non-object extra is ignored.
+JWT validation, required-scope checks and later ctx/header publication keep their
+existing ordering and owners. No schema or serialization contract changed.
+
+Focused regressions cover all six standard-field collisions, missing-field
+fallback, non-object extras and pointer identity for nonempty issuer/subject,
+audience and nested extra strings. The existing standard-fields test retains its
+identity. Fresh verification passed 38 shared-auth, 150 OIDC, 47 JWT and 20 JWE
+tests; 16 OIDC tests retained their existing ignored status. Formatting,
+workspace check/Clippy and seven repository guards passed with existing unrelated
+warnings. This removes payload/subtree copies, not the output map or standard-key
+allocations. No full suite or throughput benchmark ran.

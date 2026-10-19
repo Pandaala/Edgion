@@ -314,7 +314,7 @@ fn test_claims_to_value_includes_standard_fields() {
         extra: json!({"email": "u1@example.com"}),
     };
 
-    let value = claims.to_value();
+    let value = claims.into_value();
     assert_eq!(
         value.get("iss").and_then(|v| v.as_str()),
         Some("https://issuer.example.com")
@@ -735,4 +735,72 @@ async fn auth_error_response_stops_at_the_first_write_failure() {
             }
         );
     }
+}
+
+#[test]
+fn consumed_claims_preserve_standard_precedence_and_extra_fallback() {
+    let extra = json!({
+        "iss": "extra-issuer", "sub": "extra-subject", "aud": ["extra-audience"],
+        "exp": 1, "iat": 2, "nbf": 3, "custom": {"roles": ["reader"]}
+    });
+    let claims = Claims {
+        iss: Some("standard-issuer".to_owned()),
+        sub: Some("standard-subject".to_owned()),
+        aud: Some(serde_json::Value::Null),
+        exp: Some(10),
+        iat: Some(20),
+        nbf: Some(30),
+        extra: extra.clone(),
+    };
+    assert_eq!(
+        claims.into_value(),
+        json!({
+            "iss": "standard-issuer", "sub": "standard-subject", "aud": null,
+            "exp": 10, "iat": 20, "nbf": 30, "custom": {"roles": ["reader"]}
+        })
+    );
+    assert_eq!(
+        Claims {
+            extra: extra.clone(),
+            ..Default::default()
+        }
+        .into_value(),
+        extra
+    );
+    for extra in [
+        json!(null),
+        json!(false),
+        json!(7),
+        json!("ignored"),
+        json!(["ignored"]),
+    ] {
+        assert_eq!(
+            Claims {
+                extra,
+                ..Default::default()
+            }
+            .into_value(),
+            json!({})
+        );
+    }
+}
+
+#[test]
+fn consumed_claims_reuse_owned_string_buffers() {
+    let claims = Claims {
+        iss: Some("https://issuer.example".to_owned()),
+        sub: Some("nonempty-subject".to_owned()),
+        aud: Some(json!(["nonempty-audience"])),
+        extra: json!({"custom": {"roles": ["nonempty-role"]}}),
+        ..Default::default()
+    };
+    let issuer = claims.iss.as_ref().unwrap().as_ptr();
+    let subject = claims.sub.as_ref().unwrap().as_ptr();
+    let audience = claims.aud.as_ref().unwrap()[0].as_str().unwrap().as_ptr();
+    let role = claims.extra["custom"]["roles"][0].as_str().unwrap().as_ptr();
+    let value = claims.into_value();
+    assert_eq!(value["iss"].as_str().unwrap().as_ptr(), issuer);
+    assert_eq!(value["sub"].as_str().unwrap().as_ptr(), subject);
+    assert_eq!(value["aud"][0].as_str().unwrap().as_ptr(), audience);
+    assert_eq!(value["custom"]["roles"][0].as_str().unwrap().as_ptr(), role);
 }
