@@ -82,6 +82,8 @@ destination.
 
 - [Zstd exclusive encoder access](compression-03-zstd-exclusive-encoder-access.md)
 
+- [Request dye name ownership](dye-01-request-name-ownership.md)
+
 - [Elasticsearch header reuse across flush and retries](log-04-es-index-header-reuse.md)
 
 - [Generation-owned OTLP SDK logger reuse](log-03-otlp-logger-generation-cache.md)
