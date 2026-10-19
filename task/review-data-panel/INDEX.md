@@ -7958,3 +7958,20 @@ ID-token hint, clearing cookies and continued logout after revocation failure.
 No new mirror test, full suite or throughput benchmark was run. The scoped
 benefit is one avoided nonempty session-reference allocation/copy per logout
 with a decoded session cookie.
+
+## Borrow the OIDC logout endpoint from discovery
+
+Logout redirect construction now retains the cached discovery Arc snapshot and
+borrows its end_session_endpoint for URL parsing, removing the temporary endpoint
+String clone. The provider releases its read guard before returning the snapshot;
+there is no later await in this builder. Missing/empty endpoints and parse errors
+still return the same fallback. Query append order and final URL serialization
+remain unchanged. The parsed Url retains its own storage.
+
+Fresh verification passed 151 OIDC tests with 16 existing ignores, formatting,
+workspace check/Clippy and seven repository guards with existing unrelated
+warnings. Existing logout coverage exercises no-session fallback, post-logout
+redirect construction and ID-token hints. No new mirror test, full suite or
+throughput benchmark ran. Moving the final Url serialization was not included:
+the spare-capacity ownership tradeoff already identified in outbound-02 also
+requires assessment for these redirect outputs.
