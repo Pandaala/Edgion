@@ -325,7 +325,7 @@ pub fn upstream_response_filter(
                                 // skills/04-review/routing/intentional-design/local-reply-drops-sticky-set-cookie.md
                                 let cookie_value =
                                     session_persistence::build_set_cookie_value(sp, &token, is_tls, ttl_secs);
-                                let _ = upstream_response.append_header("Set-Cookie", &cookie_value);
+                                let _ = upstream_response.append_header("Set-Cookie", cookie_value);
                             }
                             SessionPersistenceType::Header => {
                                 let header_name = session_persistence::get_session_name(sp).to_owned();

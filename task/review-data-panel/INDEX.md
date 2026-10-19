@@ -5936,3 +5936,29 @@ Fresh serial verification passed 23 session-persistence tests and four direct
 upstream-response-filter tests, including captured-lifetime response issuance.
 Formatting, workspace check/Clippy and seven repository guards passed with existing
 unrelated warnings. No throughput benchmark or live integration run was performed.
+
+## Transfer the exact-capacity sticky cookie into HeaderValue
+
+The response Cookie branch now moves its completed String into append_header
+instead of borrowing it for another payload copy. The pinned Pingora append API
+uses TryInto<HeaderValue>; http 1.5.0 copies borrowed Strings but transfers owned
+Strings into bytes 1.12.1. Because the cookie builder now has capacity equal to
+length, that conversion takes the boxed-slice path without Shared metadata
+allocation. The ordinary session Header token branch is unchanged: its capacity
+has not been given the same guarantee.
+
+Independent plan review approved three files. The existing 6,048-case cookie
+matrix now also checks capacity equality, original buffer identity, identical
+header bytes and zero conversion allocation calls/requested bytes. A separate
+matrix compares owned and borrowed conversion for ordinary, tab, permitted UTF-8
+and invalid control-character values. The actual HTTP/gRPC response-issuance
+regression passed before and after this change. Token/expiry sampling, header
+append order, ignored append errors, sticky state consumption and local-reply
+replacement behavior are unchanged.
+
+Fresh serial verification passed 24 session-persistence and four direct
+upstream-response-filter tests, formatting, workspace check/Clippy and seven
+repository guards with existing unrelated warnings. The measured zero-allocation
+claim covers String-to-HeaderValue conversion only; header-map work and the full
+callback were not allocation-profiled. No throughput or live integration claim
+is made.

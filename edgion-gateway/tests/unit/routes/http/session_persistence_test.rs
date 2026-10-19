@@ -559,6 +559,15 @@ fn cookie_builder_preserves_bytes_with_one_exact_allocation() {
                         });
                         assert_eq!(actual, expected);
                         allocations.push((stats.calls, stats.requested_bytes, actual.len()));
+                        assert_eq!(actual.capacity(), actual.len());
+                        let original = actual.as_ptr();
+                        let (header, conversion) = crate::test_allocation_counter::count_allocation_stats(|| {
+                            http::HeaderValue::try_from(actual).unwrap()
+                        });
+                        assert_eq!(header.as_bytes(), expected.as_bytes());
+                        assert_eq!(header.as_bytes().as_ptr(), original);
+                        assert_eq!(conversion.calls, 0);
+                        assert_eq!(conversion.requested_bytes, 0);
                     }
                 }
             }
@@ -567,5 +576,34 @@ fn cookie_builder_preserves_bytes_with_one_exact_allocation() {
     for (calls, bytes, length) in allocations {
         assert_eq!(calls, 1, "cookie construction must not grow its buffer");
         assert_eq!(bytes, length, "reserve only the final cookie byte length");
+    }
+}
+
+#[test]
+fn cookie_header_owned_conversion_preserves_validation() {
+    let sp = SessionPersistence {
+        session_name: None,
+        absolute_timeout: None,
+        persistence_type: None,
+        cookie_config: None,
+        strict: None,
+    };
+    for token in [
+        "plain",
+        "with\ttab",
+        "café",
+        "bad\rvalue",
+        "bad\nvalue",
+        "bad\0value",
+        "bad\u{7f}value",
+    ] {
+        let cookie = build_set_cookie_value(&sp, token, false, None);
+        let borrowed = http::HeaderValue::try_from(&cookie);
+        let owned = http::HeaderValue::try_from(cookie);
+        match (borrowed, owned) {
+            (Ok(borrowed), Ok(owned)) => assert_eq!(borrowed.as_bytes(), owned.as_bytes()),
+            (Err(_), Err(_)) => assert!(token.contains(['\r', '\n', '\0', '\u{7f}'])),
+            _ => panic!("owned and borrowed cookie conversion must agree"),
+        }
     }
 }
