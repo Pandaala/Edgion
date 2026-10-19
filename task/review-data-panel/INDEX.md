@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [CtxSet regex replacement result storage](ctx-01-regex-replacement-storage.md)
+
 - [Template JSON escape run batching](template-01-json-run-batching.md)
 
 - [Outbound URL serialization ownership](outbound-02-url-serialization-storage.md)
@@ -5346,3 +5348,21 @@ Fresh serial verification passed 132 tests: 28 Resources conditions, 68 Gateway
 conditions, 18 RequestRestriction and 18 RequestAccessPolicy. Formatting, workspace
 check/Clippy and seven repository guards passed. Existing unrelated Clippy warnings
 remain; no live network integration or end-to-end throughput benchmark ran.
+
+## CtxSet regex replacement ownership inspection
+
+Rechecked shared condition async dispatch: direct futures immediately return for
+synchronous predicates, with no per-atom boxed-future allocation at those sites.
+Then traced CtxSet replacement output through mapping and the canonical context
+setter. Moving replace_all's owned Cow could eliminate a copy, but locked regex
+1.13.1 initially reserves the input length. A 65,536-byte-to-one-byte replacement
+probe retained capacity 65,536 when moved versus 1 when copied, with equal text.
+The buffer only crosses synchronous mapping/set work; the current setter copies
+into independent context storage. Higher peak memory, long-lived context growth
+and throughput gains are not established. The tradeoff is deferred in ctx-01;
+no production behavior changed.
+
+Fresh serial verification passed 12 Gateway CtxSet and 34 Resources CtxSet tests.
+Formatting, workspace check/Clippy, agent-doc validation and diff checks passed.
+Existing unrelated Clippy warnings remain. No live network or throughput benchmark
+ran; the storage probe is separate from the regression tests.
