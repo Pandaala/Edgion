@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [OIDC required-scope membership storage](oidc-03-required-scope-membership.md)
+
 - [OIDC cookie Base64 output construction](oidc-02-cookie-base64-output.md)
 
 - [Shared OIDC claims serialization](oidc-01-shared-claims-serialization.md)
