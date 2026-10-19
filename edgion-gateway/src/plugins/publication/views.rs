@@ -5,6 +5,7 @@ use crate::routes::http::routes_mgr::{DomainRouteRules, HttpPortRouteManager};
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Weak};
 
+use edgion_resources::resources::edgion_plugins::AccessLogExternField;
 use edgion_resources::{EdgionGatewayConfig, EdgionPlugins, EdgionStreamPlugins, HTTPRoute, ListenerKey};
 
 use crate::plugins::http::CompiledPlugins;
@@ -188,8 +189,12 @@ impl PluginScope {
         self.http.get(key).map(|compiled| Arc::clone(&compiled.plugin_runtime))
     }
 
-    pub fn http(&self, key: &str) -> Option<Arc<CompiledPlugins>> {
-        self.http.get(key).cloned()
+    /// Borrow log declarations from this captured generation.
+    pub fn http_log_fields(&self, key: &str) -> &[AccessLogExternField] {
+        self.http
+            .get(key)
+            .map(|compiled| compiled.spec.access_log_extern_fields())
+            .unwrap_or_default()
     }
 
     pub fn stream(&self, key: &str) -> Option<Arc<CompiledStreamPlugins>> {

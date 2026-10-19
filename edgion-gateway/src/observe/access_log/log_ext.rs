@@ -168,9 +168,7 @@ static DEFAULT_UNMASKED: LazyLock<UnmaskedKeys> = LazyLock::new(UnmaskedKeys::de
 pub fn collect(session: &Session, ctx: &EdgionHttpContext) -> LogExt {
     let mut ext = LogExt::default();
 
-    // Borrow the store rather than cloning its `Arc` (an atomic RMW pair) — every
-    // request reaches this point, and the common case is the fast path just below,
-    // which must cost a single lock-free snapshot load and nothing more.
+    // Borrow the request's captured scope without changing its Arc reference count.
     let Some(owner) = ctx.plugin_scope() else {
         return ext;
     };
@@ -216,7 +214,7 @@ pub fn collect(session: &Session, ctx: &EdgionHttpContext) -> LogExt {
     ext
 }
 
-/// Read one `EdgionPlugins`' declarations from the live store and apply them.
+/// Read one `EdgionPlugins`' declarations from the captured scope and apply them.
 /// A dangling ref is silently skipped: this is the data-plane path, where
 /// `tracing` is forbidden.
 fn apply_declarations(
@@ -227,12 +225,10 @@ fn apply_declarations(
     ctx: &EdgionHttpContext,
     ext: &mut LogExt,
 ) {
-    if let Some(compiled) = store.http(key) {
-        for field in compiled.spec.access_log_extern_fields() {
-            if let Some(value) = resolve_field(field, session, ctx) {
-                let sensitive = should_mask(whitelist, field.from, &field.name);
-                ext.insert(&field.key, value, sensitive);
-            }
+    for field in store.http_log_fields(key) {
+        if let Some(value) = resolve_field(field, session, ctx) {
+            let sensitive = should_mask(whitelist, field.from, &field.name);
+            ext.insert(&field.key, value, sensitive);
         }
     }
 }

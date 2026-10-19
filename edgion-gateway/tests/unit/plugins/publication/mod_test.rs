@@ -16,6 +16,12 @@ use crate::plugins::runtime::traits::session::MockPluginSession;
 use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
 use crate::plugins::runtime::{PluginLog, RequestFilter};
 
+impl PluginScope {
+    pub(crate) fn http(&self, key: &str) -> Option<Arc<CompiledPlugins>> {
+        self.http.get(key).cloned()
+    }
+}
+
 fn plugin(program: &str, valid: bool) -> Arc<EdgionPlugins> {
     let mut spec = json!({"requestPlugins": [
         {"type": "RateLimitLocal", "config": {"rate": 100}},

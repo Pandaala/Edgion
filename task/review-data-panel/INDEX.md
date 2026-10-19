@@ -7228,3 +7228,23 @@ verification-04 tracks it without changing the assertion. Later assertions in
 that test were not reached. Formatting, workspace check/Clippy and seven guards
 passed with existing unrelated warnings. No full suite, live integration or
 throughput measurement ran.
+
+## Borrow captured access-log declarations
+
+Terminal access-log extension collection now reads the canonical declaration
+slice directly from its captured PluginScope. It no longer clones a complete
+CompiledPlugins Arc for each referenced declaration source. The immutable scope
+owns the borrowed slice throughout synchronous field resolution. Missing and
+empty declarations remain empty; source resolution, tier order, overwrite rules,
+field/value bounds, masking and serde escaping are unchanged. Complete-resource
+lookup is now only a unit-test helper in the existing publication test module.
+
+Independent plan review passed, including the helper relocation after the layout
+guard rejected a test-only method in production source. Baseline log-extension
+verification passed 25 tests; final verification passed 105 tests across log
+extensions, publication, early request and runtime resolution. The extended
+fixture checks nonempty slice identity, missing references, new-snapshot deletion
+and old-snapshot collection, retaining valid/invalid route-reference assertions.
+Final formatting, workspace check/Clippy and all seven guards passed with existing
+unrelated warnings. No full suite, live integration or throughput measurement ran;
+the unrelated layout failure tracked in verification-04 was not rerun here.

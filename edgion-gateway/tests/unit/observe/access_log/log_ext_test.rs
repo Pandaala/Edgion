@@ -385,6 +385,23 @@ async fn invalid_route_reference_cannot_consume_same_name_log_declaration() {
     let owner = publisher.snapshot().gateway("default/gateway").unwrap();
     assert!(owner.scope.http("default/decoy").is_some());
     assert!(owner.scope.global_keys.is_empty() && owner.http_keys.is_empty());
+    let fields = owner.scope.http_log_fields("default/decoy");
+    assert_eq!(fields.len(), 1);
+    assert_eq!(
+        fields.as_ptr(),
+        owner
+            .scope
+            .http("default/decoy")
+            .unwrap()
+            .spec
+            .access_log_extern_fields()
+            .as_ptr()
+    );
+    assert!(owner.scope.http_log_fields("default/missing").is_empty());
+    publisher.replace_http_plugins(HashMap::new());
+    let next_owner = publisher.snapshot().gateway("default/gateway").unwrap();
+    assert!(next_owner.scope.http_log_fields("default/decoy").is_empty());
+    assert_eq!(fields[0].key, "tenant");
     let (mut client, server) = tokio::io::duplex(4096);
     let mut session = Session::new_h1(Box::new(server));
     client
