@@ -7419,3 +7419,16 @@ retained the same known response-cache ancestor-policy fixture failure recorded
 in verification-01-cache-policy-fixture.md. Formatting, workspace check/Clippy
 and seven guards passed with existing unrelated warnings. No full suite, live
 traffic or throughput benchmark ran.
+
+## Defer shared HTTP session address projection
+
+[ip-01-session-address-projection.md](ip-01-session-address-projection.md) records
+repeated string-to-IP parsing across ACL, IP conditions and RequestAccessPolicy.
+A shared typed or lazy projection requires an enforceable mutation boundary and
+request-memory measurements, including requests with no IP consumers. Bare-IP
+ACL grammar must remain distinct from GeoIP's socket-address acceptance, and
+RemoteIp updates must preserve trust snapshots and remote GeoIP invalidation.
+This is separate from the completed local typed RealIp result optimization.
+No runtime code changed. Formatting, workspace check/Clippy and documentation
+validation passed with existing unrelated warnings. No runtime tests or benchmark
+were added or run for this documentation-only decision record.
