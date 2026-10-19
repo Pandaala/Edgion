@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Elasticsearch header reuse across flush and retries](log-04-es-index-header-reuse.md)
+
 - [Generation-owned OTLP SDK logger reuse](log-03-otlp-logger-generation-cache.md)
 
 - [Empty-role terminal finalizer locks](body-06-empty-terminal-role-locks.md)
@@ -5625,3 +5627,18 @@ Fresh serial verification passed 69 tests: 61 Elasticsearch and eight access-
 logger tests. Formatting, workspace check/Clippy and seven repository guards
 passed with existing unrelated warnings. No live Elasticsearch delivery or
 throughput benchmark ran.
+
+## Elasticsearch repeated header lifetime audit
+
+The flush overhead calculation and every retry body construction still serialize
+the same once-generated index. Log-04 records flush-level reuse as a potential
+CPU/allocation saving, together with its longer encoded-header lifetime across
+awaits. Dropping the raw generated name is an alternative; escaping expansion
+and actual capacity must be included. No dedicated index-length cap was found
+in provider schema/validation, and the transmitted-body cap does not bound the
+initial header construction. All-oversized batches have no send await.
+
+No runtime change was selected. Independent plan review approved the two-file
+documentation scope. Fresh serial verification passed all 61 Elasticsearch tests.
+Formatting, workspace check/Clippy and agent-doc validation passed with existing
+unrelated warnings. No lifetime probe, live delivery or throughput benchmark ran.
