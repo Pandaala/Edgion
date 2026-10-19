@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [gRPC single-record callback output](grpc-04-single-record-output.md)
+
 - [Prepared gRPC wire-admission schema](grpc-03-prepared-wire-schema.md)
 
 - [gRPC integer normalization storage](grpc-02-integer-normalization-storage.md)
@@ -5056,3 +5058,23 @@ Fresh serial baseline verification passed 59 tests: 33 Resources transcoding and
 26 Gateway transcoder tests. Formatting check, workspace check/Clippy and agent-doc
 and diff checks passed; existing warnings remain outside this documentation batch.
 No performance benchmark ran; these results do not validate a proposed schema graph.
+
+
+## gRPC callback output ownership audit
+
+Traced streaming feed through message decode, RawWindow replacement normalization,
+callback aggregation and capacity-charged output ownership. Lazy callback writers
+already avoid empty/incomplete work, but one completed record still uses the extra
+aggregate writer. [grpc-04](grpc-04-single-record-output.md) records a possible
+first-record handoff and its fallback, capacity and generation-lifecycle tradeoffs.
+RawWindow may copy replacements; Bytes-to-Vec transfer is not assumed allocation-free.
+
+Terminal static bytes still need the output owner that pins admission. Content-Length
+formatting was also inspected: the locked header API accepts owned strings, so a
+numeric HeaderValue substitution is not treated as an established allocation removal.
+No output-owner API, writer policy or runtime behavior changed in this audit.
+
+Fresh serial baseline verification passed 59 tests: 33 Resources transcoding and
+26 Gateway transcoder tests. Formatting check, workspace check/Clippy and agent-doc
+and diff checks passed; existing warnings remain outside this documentation batch.
+No allocation or throughput benchmark ran.
