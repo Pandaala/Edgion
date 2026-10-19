@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Bounded endpoint probe projection](endpoint-02-bounded-endpoint-projection.md)
+
 - [Single-line tracestate ownership](trace-01-single-line-tracestate-ownership.md)
 
 - [Plugin execution state layout baseline failure](verification-04-plugin-state-layout.md)
