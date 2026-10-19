@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Prepared GraphQL type-condition lookup](graphql-02-prepared-type-conditions.md)
+
 - [DynamicInternalUpstream input ownership](routing-01-dynamic-internal-input-ownership.md)
 
 - [RegionRoute prepared lookup indexes](region-01-prepared-lookup-indexes.md)
@@ -4709,3 +4711,20 @@ null arguments retain rejection. Fresh serial verification passed 60 tests:
 seven shared evaluation tests. Formatting, workspace check/Clippy, seven repository
 guards and diff hygiene passed; existing warnings remain outside the diff.
 No live transport, Redis, allocation or throughput benchmark ran.
+
+## GraphQL type-condition precomputation audit
+
+Traced static overlap and per-object applicability in the shared cost visitor.
+Repeated immutable pair scans charge every target visit and source comparison;
+interface possibility order depends on schema HashMap traversal. A faster lookup
+must preserve the carried Work acceptance boundary and vector order, while any
+prepared index adds bounded compilation and retained-generation costs.
+[graphql-02](graphql-02-prepared-type-conditions.md) records measurement-first,
+indexed and pair-table alternatives, exact accounting requirements and same-model
+ownership for user decision. No runtime or test code changed.
+
+Fresh serial baseline verification passed 60 tests: 27 Resources cost-model,
+17 frontend, four Gateway guard, five rate-limit and seven shared evaluation tests.
+Formatting, workspace check/Clippy and document/diff validation passed; existing
+warnings remain outside the scope. These checks do not establish index performance
+or memory benefit. No prototype, live Redis or benchmark ran.
