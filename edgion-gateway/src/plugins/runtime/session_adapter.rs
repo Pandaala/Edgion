@@ -362,8 +362,14 @@ pub(crate) fn key_value<'a>(session: &'a dyn PluginSession, key: &KeyGet) -> Opt
         KeyGet::Path => Some(Cow::Borrowed(session.get_path())),
         KeyGet::RequestPath => Some(Cow::Borrowed(session.get_request_path())),
         KeyGet::Method => Some(Cow::Borrowed(session.get_method())),
-        KeyGet::RemoteIp => (!session.remote_ip().is_empty()).then(|| Cow::Borrowed(session.remote_ip())),
-        KeyGet::DirectPeerIp => (!session.direct_peer_ip().is_empty()).then(|| Cow::Borrowed(session.direct_peer_ip())),
+        KeyGet::RemoteIp => {
+            let value = session.remote_ip();
+            (!value.is_empty()).then_some(Cow::Borrowed(value))
+        }
+        KeyGet::DirectPeerIp => {
+            let value = session.direct_peer_ip();
+            (!value.is_empty()).then_some(Cow::Borrowed(value))
+        }
         _ => session.key_get(key).map(Cow::Owned),
     }
 }

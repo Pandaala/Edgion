@@ -7569,3 +7569,21 @@ then verifies ordered, exactly-once trailer execution. Fresh verification passed
 31 body, 11 trailer, three driver and six cancellation tests (51 total), formatting,
 workspace check/Clippy and seven guards with existing unrelated warnings.
 No full suite, real-network transport run or throughput benchmark ran.
+
+## Read each borrowed IP key once
+
+The shared key_value RemoteIp and DirectPeerIp branches now bind their respective
+session getter once before checking emptiness and returning Cow::Borrowed.
+Nonempty inputs previously invoked the same getter twice. Production getters
+borrow RequestInfo fields directly; each evaluation still reads live state with
+no cache, parsing, normalization or identity substitution. Empty strings remain
+None, and the two IP sources remain independent.
+
+Independent plan review passed. The existing distinct-identity regression now
+covers empty inputs, distinct IPv4/IPv6 inputs and independently empty sources,
+requiring exactly one getter call per key and borrowed nonempty results.
+Baseline and final shared condition tests passed 68; final RealIp tests passed
+34 (102 final tests). Formatting, workspace check/Clippy and seven guards passed
+with existing unrelated warnings. This removes repeated getter calls; no
+allocation or throughput improvement is claimed. No full suite or live traffic
+benchmark ran.

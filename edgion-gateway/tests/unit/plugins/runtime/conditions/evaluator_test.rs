@@ -120,12 +120,28 @@ fn borrowed_cookie_condition_uses_live_canonical_parser_without_allocating() {
 
 #[test]
 fn borrowed_ip_keys_keep_direct_and_resolved_identities_distinct() {
-    let mut session = MockPluginSession::new();
-    session.expect_direct_peer_ip().return_const("10.0.0.1".to_string());
-    session.expect_remote_ip().return_const("203.0.113.2".to_string());
-    session.expect_key_get().never();
-    assert_eq!(key_value(&session, &KeyGet::DirectPeerIp).as_deref(), Some("10.0.0.1"));
-    assert_eq!(key_value(&session, &KeyGet::RemoteIp).as_deref(), Some("203.0.113.2"));
+    for (direct, remote) in [
+        ("", ""),
+        ("10.0.0.1", "203.0.113.2"),
+        ("2001:db8::1", "2001:db8::2"),
+        ("", "203.0.113.2"),
+        ("2001:db8::1", ""),
+    ] {
+        let mut session = MockPluginSession::new();
+        session
+            .expect_direct_peer_ip()
+            .times(1)
+            .return_const(direct.to_string());
+        session.expect_remote_ip().times(1).return_const(remote.to_string());
+        session.expect_key_get().never();
+        for (key, expected) in [(KeyGet::DirectPeerIp, direct), (KeyGet::RemoteIp, remote)] {
+            let value = key_value(&session, &key);
+            assert_eq!(value.as_deref(), (!expected.is_empty()).then_some(expected));
+            if !expected.is_empty() {
+                assert!(matches!(value, Some(std::borrow::Cow::Borrowed(_))));
+            }
+        }
+    }
 }
 
 fn fixed_utc(value: &str) -> DateTime<Utc> {
