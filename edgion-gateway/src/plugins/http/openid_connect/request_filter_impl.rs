@@ -19,10 +19,10 @@ impl RequestFilter for OpenidConnect {
                 }
             };
             let id_token_hint = session_cookie.as_mut().and_then(|v| v.id_token.take());
-            let session_ref = session_cookie.as_ref().map(|v| v.session_ref.clone());
-            self.maybe_revoke_tokens_on_logout(session_cookie, plugin_log).await;
-            if let Some(session_ref) = session_ref.as_deref() {
-                self.remove_cached_access_token(session_ref).await;
+            self.maybe_revoke_tokens_on_logout(session_cookie.as_ref(), plugin_log)
+                .await;
+            if let Some(session_ref) = session_cookie.map(|v| v.session_ref) {
+                self.remove_cached_access_token(&session_ref).await;
             }
             let logout_redirect_target = self
                 .build_logout_redirect_target(fallback_redirect_target, post_logout_redirect_uri, id_token_hint)

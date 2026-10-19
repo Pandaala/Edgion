@@ -230,7 +230,7 @@ impl OpenidConnect {
 
     pub(super) async fn maybe_revoke_tokens_on_logout(
         &self,
-        session_cookie: Option<OidcSessionCookie>,
+        session_cookie: Option<&OidcSessionCookie>,
         plugin_log: &mut PluginLog,
     ) {
         if !self.config.revoke_tokens_on_logout {

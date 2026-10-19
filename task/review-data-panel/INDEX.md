@@ -7938,3 +7938,21 @@ workspace check/Clippy and seven repository guards. Existing unrelated Clippy
 warnings remain. Serialization equivalence follows from unchanged tuple order
 and serde's String/str serialize_str implementations; no new mirror test or
 network fixture was added. No full suite or throughput benchmark ran.
+
+## Move the OIDC logout session reference after revocation
+
+Logout's read-only revocation helper now borrows its session cookie. After it
+returns, the sole caller consumes the cookie and moves session_ref into cache
+removal instead of cloning that String before revocation. ID-token hint removal,
+refresh/access-token revocation, best-effort failure handling, cache eviction and
+redirect ordering are unchanged. Other cookie fields are dropped before cache
+removal; the change does not claim earlier token release than the old owned
+helper, and does not retain the cookie across redirect construction.
+
+Fresh verification passed 151 OIDC tests with 16 existing ignores, formatting,
+workspace check/Clippy and seven repository guards with existing unrelated
+warnings. The existing logout regression checks cache eviction at response write,
+ID-token hint, clearing cookies and continued logout after revocation failure.
+No new mirror test, full suite or throughput benchmark was run. The scoped
+benefit is one avoided nonempty session-reference allocation/copy per logout
+with a decoded session cookie.
