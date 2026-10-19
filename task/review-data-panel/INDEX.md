@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Server header replacement without prior removal](response-04-server-header-replacement.md)
+
 - [Prepared authentication challenge generation](auth-02-prepared-challenge-generation.md)
 
 - [Query and Cookie stripping survivor storage](auth-01-strip-survivor-storage.md)
@@ -6180,3 +6182,23 @@ shared-auth, 14 KeyAuth, 47 JwtAuth, 19 BasicAuth and 56 HMAC-filtered tests (17
 total), formatting check, workspace check/Clippy and agent-doc validation. Existing
 unrelated warnings remain; no prepared implementation or performance result is
 claimed, and no runtime code changed.
+
+## Server header replacement audit
+
+The prepared Server/HSTS helper removes then inserts each field. Direct insertion
+replaces the same values and casing in the pinned fork, but a fresh standalone
+probe found equal HeaderMaps with different H1 field ordering. Deferred the
+observable change and unmeasured performance value in response-04; runtime code
+remains unchanged. The helper also serves local/error and AI responses, so future
+acceptance must preserve listener options and provider-reset ordering.
+
+Rechecked numeric cache-header construction against the locked http artifact:
+short numeric HeaderValue construction requests two allocations / 44 bytes,
+while the current owned String path requests one exact-length allocation. This
+confirms existing cache-02 evidence; no duplicate task or numeric rewrite was added.
+
+Independent plan review approved two documents. Fresh baseline checks passed
+26 response-filter and 11 upstream-response-filter tests (37 total), formatting
+check, workspace check/Clippy and agent-doc validation. Existing unrelated
+warnings remain. No runtime alternative, live integration or throughput benchmark
+was run; the serialization probe demonstrates the disputed observable difference.
