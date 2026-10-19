@@ -327,3 +327,47 @@ async fn original_post_can_publish_mutation_when_live_method_would_be_get() {
         PluginRunningResult::GoodNext
     );
 }
+
+#[test]
+fn variable_serialization_preserves_bytes_omissions_and_exact_cap() {
+    #[derive(Serialize)]
+    struct OwnedEnvelope<'a> {
+        query: &'a str,
+        #[serde(rename = "operationName", skip_serializing_if = "Option::is_none")]
+        operation_name: Option<&'a str>,
+        variables: serde_json::Map<String, Value>,
+    }
+    let query = "query Read($z:Int!,$a:Input,$nil:String,$missing:String,$fallback:Int=7){read(z:$z,a:$a,nil:$nil,missing:$missing,fallback:$fallback)}";
+    let body = json!({"z":3,"a":{"text":"quote\" and slash\\","items":[true,2]},"nil":null});
+    let session = MockPluginSession::new();
+    for operation_name in [None, Some("Read")] {
+        let mut filter = adapter(json!({
+            "query":query,"operationName":operation_name,
+            "variables":[
+                {"name":"z","bodyPointer":"/z"},
+                {"name":"missing","bodyPointer":"/absent"},
+                {"name":"nil","bodyPointer":"/nil"},
+                {"name":"fallback","bodyPointer":"/absent"},
+                {"name":"a","bodyPointer":"/a"}
+            ]
+        }));
+        let variables = [
+            ("z".to_owned(), body["z"].clone()),
+            ("nil".to_owned(), Value::Null),
+            ("a".to_owned(), body["a"].clone()),
+        ]
+        .into_iter()
+        .collect();
+        let expected = serde_json::to_vec(&OwnedEnvelope {
+            query,
+            operation_name,
+            variables,
+        })
+        .unwrap();
+        assert_eq!(filter.construct(&session, Some(&body)).unwrap().as_ref(), expected);
+        filter.envelope_limit = expected.len();
+        assert_eq!(filter.construct(&session, Some(&body)).unwrap().as_ref(), expected);
+        filter.envelope_limit -= 1;
+        assert_eq!(filter.construct(&session, Some(&body)), Err(GraphqlError::TooLarge));
+    }
+}

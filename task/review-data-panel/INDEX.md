@@ -4806,3 +4806,28 @@ four Gateway guard, five rate-limit, seven shared evaluation, four router and on
 safelist tests. Formatting, workspace check/Clippy and seven repository guards
 passed; existing unrelated warnings remain outside the diff. No live transport,
 Redis integration or performance benchmark ran.
+
+## REST-to-GraphQL borrowed variable names
+
+The adapter's synchronous construct method now accumulates owned bound values in
+a BTreeMap with keys borrowed from its immutable compiled bindings. The previous
+serde_json::Map cloned each present variable name before immediately serializing
+the envelope. Values, binding evaluation order, omissions, header preflight,
+CappedWriter and complete final-envelope validation remain unchanged; no borrowed
+key escapes serialization or reaches publication.
+
+The current Gateway serde_json feature graph has no preserve_order feature, and
+its Map uses BTreeMap internally. String and borrowed str keys retain the same
+lexical ordering and JSON serialization. Re-evaluate byte-order expectations if
+that dependency feature changes; this batch adds no alternate feature mode.
+A baseline-first regression uses an independent owned-map envelope oracle for
+both selector presence states, nonlexical binding order, absent nullable/defaulted
+values, explicit null, nested values/escaping and exact/one-short output caps.
+The benefit is removal of one variable-name String copy per inserted binding,
+not allocation-free binding/serialization or measured latency/heap/RSS gains.
+
+Fresh serial verification passed 81 tests: ten Gateway REST adapter, seven shared
+GraphQL evaluation, four guard, five rate-limit, nine Resources REST configuration,
+19 frontend and 27 cost-model tests. Formatting, workspace check/Clippy and seven
+repository guards passed; existing unrelated warnings remain outside the diff.
+No live integration or performance benchmark ran.

@@ -17,8 +17,9 @@ use edgion_resources::plugin_configs::{
 use edgion_resources::resources::edgion_plugins::BodyRequirement;
 use edgion_resources::EdgionErrorCode;
 use serde::Serialize;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 
 pub struct RestToGraphql {
     compiled: CompiledRestToGraphql,
@@ -34,7 +35,7 @@ impl RestToGraphql {
     }
 
     fn construct(&self, session: &dyn PluginSession, body: Option<&Value>) -> Result<Bytes, GraphqlError> {
-        let mut variables = Map::new();
+        let mut variables = BTreeMap::new();
         for (index, binding) in self.compiled.bindings().enumerate() {
             let value = if let Some(source) = &binding.from {
                 if let KeyGet::Header { name } = source {
@@ -54,7 +55,7 @@ impl RestToGraphql {
                     .map(Cow::Borrowed)
             };
             if let Some(value) = self.compiled.bind(index, value)? {
-                variables.insert(binding.name.clone(), value);
+                variables.insert(binding.name.as_str(), value);
             }
         }
         #[derive(Serialize)]
@@ -62,7 +63,7 @@ impl RestToGraphql {
             query: &'a str,
             #[serde(rename = "operationName", skip_serializing_if = "Option::is_none")]
             operation_name: Option<&'a str>,
-            variables: Map<String, Value>,
+            variables: BTreeMap<&'a str, Value>,
         }
         let mut writer = CappedWriter::new(self.envelope_limit);
         let result = serde_json::to_writer(
