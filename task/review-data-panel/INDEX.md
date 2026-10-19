@@ -7513,3 +7513,16 @@ aggregate profile size. Radix scratch and completed cold candidate ranges are
 separate costs. No runtime code changed. Formatting, workspace check/Clippy and
 documentation validation passed with existing unrelated warnings; no runtime
 tests or benchmarks ran for this documentation-only decision record.
+
+## Defer Guardrail held replacement-header representation
+
+[guardrail-01-held-replacement-header-storage.md](guardrail-01-held-replacement-header-storage.md)
+records the ready 403 template prepared at the final post-onion Hold boundary and
+cloned on policy rejection. A smaller frozen projection might defer construction,
+but must preserve security fields, RequestId echo/suppression, first publication,
+terminal ownership and failure timing. Re-reading later mutable state is not an
+equivalent optimization. This differs from ordinary pending-header queue replay.
+The preceding read-only callback audit passed eight response-head tests and seven
+content-type tests. This documentation batch changed no runtime code; formatting,
+workspace check/Clippy and documentation validation passed with existing unrelated
+warnings. No new runtime tests or benchmark ran for this decision record.
