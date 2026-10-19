@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Validation-only raw JSON traversal](json-02-validation-only-raw-json.md)
+
 - [Bounded endpoint probe projection](endpoint-02-bounded-endpoint-projection.md)
 
 - [Single-line tracestate ownership](trace-01-single-line-tracestate-ownership.md)
