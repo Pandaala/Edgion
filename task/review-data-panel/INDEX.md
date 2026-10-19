@@ -5122,3 +5122,25 @@ Fresh serial verification passed 152 tests: 143 ExtProc and nine terminal loggin
 tests. Formatting, workspace check/Clippy and seven repository guards passed;
 existing unrelated warnings remain outside the diff. No live integration,
 contention benchmark or performance measurement ran.
+
+## ExtProc TLS server-name ownership
+
+The TLS dial connector now uses the owned ServerName returned by TryFrom<String>
+directly, with an explicit static lifetime annotation. Locked rustls-pki-types
+1.15.1 already consumes the supplied String; its former trailing to_owned cloned
+that owned DNS string again. Removing it avoids one DNS-name string clone per
+successful name conversion. IP server names only copied their address value in
+that operation, so no IP string-allocation saving is claimed.
+
+The separate host clone feeding name conversion remains because the async dial
+also borrows its host for canonical egress resolution. Name parsing, original
+case, invalid-name errors and their placement before connect_admitted are unchanged.
+SNI, CA/mTLS, hostname/SAN capability rejection and target-runtime identity retain
+their owners. This is the permitted backend-independent outbound rustls client,
+not Gateway TLS-backend expansion. No new cache or parser was introduced.
+
+Fresh serial verification passed all 143 ExtProc tests. Formatting, workspace
+check/Clippy and seven repository guards passed; existing unrelated warnings
+remain outside the diff. Existing constructor/identity/admission tests and the
+static lifetime check cover this local ownership change. No live TLS handshake,
+allocation benchmark or throughput measurement ran.

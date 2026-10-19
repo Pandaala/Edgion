@@ -605,9 +605,8 @@ fn build_tls_connector(
         let host = host.clone();
         let resolver = Arc::clone(&resolver);
         async move {
-            let server_name = ServerName::try_from(host.clone())
-                .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid ext_proc DNS name"))?
-                .to_owned();
+            let server_name: ServerName<'static> = ServerName::try_from(host.clone())
+                .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid ext_proc DNS name"))?;
             let tcp = connect_admitted(&resolver, &host, port).await?;
             let tls_stream = tls.connect(server_name, tcp).await?;
             Ok::<_, std::io::Error>(TokioIo::new(tls_stream))
