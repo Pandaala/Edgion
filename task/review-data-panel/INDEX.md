@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Listener specificity lookup indexing](routing-02-listener-specificity-index.md)
+
 - [ClientHello inspection buffer capacity](tls-04-clienthello-buffer-capacity.md)
 
 - [Structured L4 peer-address handoff](l4-01-structured-peer-address.md)
@@ -6648,3 +6650,19 @@ Independent plan review approved two documents. Fresh baseline verification
 passed 85 TLS tests, formatting check, workspace check/Clippy and agent-doc
 validation. Existing unrelated warnings remain; no full suite, live socket
 integration or benchmark ran.
+
+## Listener specificity lookup audit
+
+TLS candidate publication already prepares attachment indices and ordering;
+its hot hostname predicate performs direct comparison, not compilation. Traced
+the remaining specificity scan to shared route admission and Gateway-local
+SNIHost isolation. Recorded indexing/query-reuse alternatives in routing-02,
+including distinct scopes, unavailable-owner authority, exact/wildcard behavior
+and immutable publication ownership. No runtime change was selected.
+
+Independent plan review approved two documents. Fresh baseline passed 23 route
+matching, 19 listener-store and 85 TLS tests. Request-filter tests passed 44 and
+failed the known response-cache admission fixture recorded in verification-01;
+that group is not reported as passing. Formatting check, workspace check/Clippy
+and agent-doc validation passed. Existing warnings remain; no full suite, live
+conformance or benchmark ran.
