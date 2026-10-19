@@ -76,6 +76,8 @@ destination.
 
 - [Compression algorithm preference storage](compression-01-accept-encoding-storage.md)
 
+- [Empty gzip output buffer retention](compression-02-empty-output-buffer-retention.md)
+
 - [Elasticsearch header reuse across flush and retries](log-04-es-index-header-reuse.md)
 
 - [Generation-owned OTLP SDK logger reuse](log-03-otlp-logger-generation-cache.md)
@@ -7165,3 +7167,18 @@ invalid other input and different hosts. Baseline context tests passed (3);
 fresh verification passed 59 tests: 4 GeoIP context, 23 HTTP/Stream GeoIP and
 32 RealIp-filtered tests. Formatting, workspace check/Clippy and seven guards
 passed with existing unrelated warnings. No full suite or live integration ran.
+
+## Empty gzip output buffer retention audit
+
+Traced the downstream compression module into the pinned fork's gzip encoder.
+Its unconditional output-Vec transfer resets capacity even on empty output;
+bytes 1.12.1 retains spare capacity in the returned Bytes instead of dropping it
+as the fork comment suggests. Compression-02 defers retaining empty buffers:
+potential allocation savings need comparison with longer capacity residency,
+actual empty-output frequency and caller lifetimes. No runtime or dependency
+changes were made, and this does not close the remaining compression audit.
+
+Independent plan review passed. Existing response-filter verification passed
+26 tests; formatting, workspace check/Clippy and agent-doc consistency passed
+with existing unrelated warnings. No allocator benchmark, external fork suite,
+full workspace test suite or live integration ran.
