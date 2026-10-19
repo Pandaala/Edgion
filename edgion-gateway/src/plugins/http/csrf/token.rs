@@ -3,6 +3,7 @@ use hmac::{Hmac, Mac};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+use std::io::Write as _;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 type HmacSha256 = Hmac<Sha256>;
@@ -51,7 +52,12 @@ impl CsrfToken {
         let mut mac = HmacSha256::new_from_slice(key.as_bytes())
             .expect("HMAC accepts any non-empty key per RFC 2104; key validated non-empty by config loader");
         mac.update(b"expires:");
-        mac.update(expires.to_string().as_bytes());
+        // Signed i64 decimal text is at most 20 bytes, including the sign of i64::MIN.
+        let mut timestamp = [0u8; 20];
+        let mut remaining = &mut timestamp[..];
+        write!(&mut remaining, "{expires}").expect("signed i64 decimal text fits in 20 bytes");
+        let written = 20 - remaining.len();
+        mac.update(&timestamp[..written]);
         mac.update(b",random:");
         mac.update(random.as_bytes());
         mac.finalize().into_bytes().into()

@@ -7337,3 +7337,24 @@ UpstreamInfo and unsafe-address scenarios. Formatting, workspace check/Clippy
 and all seven guards passed with existing unrelated warnings. No full suite,
 live traffic or throughput benchmark ran; the known unrelated context-layout
 baseline test was outside this targeted scope.
+
+## Format CSRF signing timestamps in bounded stack storage
+
+CsrfToken::signature_bytes now formats the existing signed i64 timestamp with
+standard Display into a 20-byte stack buffer through std::io::Write. The longest
+representation is i64::MIN, including its sign; only the written prefix enters
+HMAC. This removes expires.to_string without a new formatter, dependency or
+cached cryptographic state. Delimiters, nonce bytes, key handling, clock/lifetime
+checks, token JSON/Base64 and exact signature comparison remain unchanged.
+
+Independent plan review passed. Existing signed-boundary/nonce/key parity and
+wire-shape fixtures are retained. The added digest-only allocation assertion
+constructs its fixture and expected signature outside the measured closure and
+checks boundary/current timestamps with a long nonce. The owning signature-input
+knowledge now distinguishes stack timestamp formatting from still-owned issuance
+and encoding output. No throughput or cryptographic timing claim is made.
+
+Baseline CSRF verification passed 19 tests; final verification passed all 20,
+including zero digest allocations at every tested timestamp boundary. Formatting,
+workspace check/Clippy and seven guards passed with existing unrelated warnings.
+No full suite, live integration or throughput benchmark ran.

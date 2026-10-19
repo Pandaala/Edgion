@@ -120,3 +120,17 @@ fn signature_fragments_remove_nonce_sized_temporary_allocation() {
         println!("nonce bytes={size}: composed={before:?}, fragments={after:?}");
     }
 }
+
+#[test]
+fn signature_digest_formats_all_timestamp_boundaries_without_allocation() {
+    let random = "a".repeat(4096);
+    for expires in [i64::MIN, -1, 0, 1, 1_800_000_000, i64::MAX] {
+        let expected = composed_signature(&random, expires, KEY);
+        let (digest, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+            CsrfToken::signature_bytes(&random, expires, KEY)
+        });
+        assert_eq!(hex::encode(digest), expected);
+        assert_eq!(allocations.calls, 0);
+        assert_eq!(allocations.requested_bytes, 0);
+    }
+}

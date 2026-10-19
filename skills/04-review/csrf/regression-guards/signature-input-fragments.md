@@ -11,7 +11,9 @@ knowledge_type: regression-guards
 `CsrfToken::signature_bytes` feeds HMAC-SHA256 the existing message as ordered fragments:
 `expires:`, standard signed i64 decimal text, `,random:`, and the nonce's exact
 UTF-8 bytes. It does not assemble a second copy of the nonce into a signing
-String. The integer text remains owned. Issuance uses `gen_sign` to encode the
+String. Standard signed decimal formatting writes the integer into a 20-byte
+stack buffer through std::io::Write on a mutable slice; only the written prefix
+enters HMAC. Even i64::MIN fits exactly, including its sign. Issuance uses `gen_sign` to encode the
 32-byte digest as an owned lowercase hex signature. Verification encodes that
 same digest into a fixed 64-byte stack buffer, removing its temporary hex String.
 
@@ -35,7 +37,12 @@ The allocation comparison constructs its fixtures outside the measured closures
 and includes complete signature generation on both sides; only lower requested
 allocation bytes for the selected nonce lengths are asserted.
 
-This removes the composite signing buffer, not all cryptographic allocations.
+A digest-only allocation test also covers i64::MIN, negative one, zero, one,
+an ordinary epoch and i64::MAX with a long nonce. Its fixture and expected
+signature are constructed outside the measured closure; the digest operation
+allocates zero bytes. This is not a claim about token generation/encoding.
+
+This removes the composite signing buffer and timestamp String, not all issuance allocations.
 Multiple HMAC update calls replace one update; the allocation measurement does
 not establish a CPU or throughput improvement. Key preparation, cryptographic
 comparison, token encoding/decoding, randomness, expiration and logs are unchanged.
