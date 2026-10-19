@@ -74,6 +74,7 @@ fn shared_fragment_graphs_preserve_frontend_work() {
         ("query Q {...A ...A} fragment A on Query {...B} fragment B on Query {x}", 2, 12),
         ("query Q {...A ...A} fragment A on Query {...B ...C} fragment B on Query {...D} fragment C on Query {...D} fragment D on Query {x}", 4, 22),
         ("query Q {x} fragment Unused on Query {y}", 1, 5),
+        ("query Q {...MixedCase ...MixedCase} fragment MixedCase on Query {...lower} fragment lower on Query {x}", 2, 12),
     ] {
         let parsed = post(query, None).unwrap();
         assert_eq!(parsed.operation_name(), Some("Q"));
@@ -90,6 +91,9 @@ fn fragment_graph_validation_includes_unused_and_unselected_definitions() {
         "query Q {x} fragment A on Query {...Missing}",
         "query Q {x} fragment A on Query {y} fragment A on Query {z}",
         "query Q {x} query Other {...Missing}",
+        "query Q {...mixedCase} fragment MixedCase on Query {x}",
+        "query Q {x} query Other {...mixedCase} fragment MixedCase on Query {x}",
+        "query Q {x} fragment Unused on Query {...mixedCase} fragment MixedCase on Query {x}",
         "query Q {x} query Other {...A} fragment A on Query {...A}",
     ] {
         assert_eq!(post(query, Some("Q")).unwrap_err(), GraphqlError::Invalid, "{query}");

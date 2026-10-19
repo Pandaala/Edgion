@@ -4783,3 +4783,26 @@ Fresh serial verification passed 62 tests: 27 Resources cost-model, 19 frontend,
 four Gateway guard, five rate-limit and seven shared evaluation tests. Formatting,
 workspace check/Clippy and seven repository guards passed; existing unrelated
 warnings remain outside the diff. No live transport or Redis integration ran.
+
+## GraphQL graph spread lookup text
+
+The canonical frontend graph walk now passes a local Apollo TokenText borrow to
+graph_fragment instead of constructing a temporary String for each spread lookup,
+including references to already visited fragments. Cycle-state keys still borrow
+from the immutable fragment-definition map; definition/variable ownership and
+argument/operation duplicate-detection sets are unchanged. This supersedes the
+remaining spread-input String observation in the earlier graph-state-key audit.
+
+The baseline-first regression extends existing shared/diamond graph Work checks
+with mixed-case fragment names and case-mismatched references in selected,
+unselected and unused definitions. Directive validation remains before name
+extraction, and graph Work/depth checks, missing-reference/cycle rejection and
+whole-document validation retain their original order. No request cache or
+retained CST state is added. The benefit is removal of one source-level String
+copy site, without measured throughput, heap or RSS claims.
+
+Fresh serial verification passed 67 tests: 19 Resources frontend, 27 cost-model,
+four Gateway guard, five rate-limit, seven shared evaluation, four router and one
+safelist tests. Formatting, workspace check/Clippy and seven repository guards
+passed; existing unrelated warnings remain outside the diff. No live transport,
+Redis integration or performance benchmark ran.

@@ -180,13 +180,12 @@ fn graph_set<'a>(
         match selection {
             cst::Selection::FragmentSpread(s) => {
                 directives(s.directives(), work)?;
-                graph_fragment(
-                    &name(s.fragment_name().and_then(|n| n.name()))?,
-                    fragments,
-                    states,
-                    work,
-                    depth + 1,
-                )?;
+                let n = s
+                    .fragment_name()
+                    .and_then(|n| n.name())
+                    .ok_or(GraphqlError::Invalid)?
+                    .text();
+                graph_fragment(&n, fragments, states, work, depth + 1)?;
             }
             cst::Selection::InlineFragment(f) => {
                 directives(f.directives(), work)?;
