@@ -1,7 +1,7 @@
 //! JWT/JWKS helpers for the gateway OpenID Connect plugin.
 
 use super::error::{AuthFailure, OidcVerifyError};
-use jsonwebtoken::jwk::{AlgorithmParameters, EllipticCurve, Jwk, JwkSet};
+use jsonwebtoken::jwk::{AlgorithmParameters, EllipticCurve, Jwk, JwkSet, KeyAlgorithm};
 use jsonwebtoken::{Algorithm, Header};
 use std::str::FromStr;
 
@@ -77,11 +77,21 @@ pub fn validate_token_alg(
 
 pub fn jwk_matches_alg(jwk: &Jwk, alg: Algorithm) -> bool {
     if let Some(key_alg) = jwk.common.key_algorithm {
-        let key_alg_str = key_alg.to_string();
-        let Ok(key_alg_as_alg) = Algorithm::from_str(&key_alg_str) else {
-            return false;
+        let expected = match alg {
+            Algorithm::HS256 => KeyAlgorithm::HS256,
+            Algorithm::HS384 => KeyAlgorithm::HS384,
+            Algorithm::HS512 => KeyAlgorithm::HS512,
+            Algorithm::ES256 => KeyAlgorithm::ES256,
+            Algorithm::ES384 => KeyAlgorithm::ES384,
+            Algorithm::RS256 => KeyAlgorithm::RS256,
+            Algorithm::RS384 => KeyAlgorithm::RS384,
+            Algorithm::RS512 => KeyAlgorithm::RS512,
+            Algorithm::PS256 => KeyAlgorithm::PS256,
+            Algorithm::PS384 => KeyAlgorithm::PS384,
+            Algorithm::PS512 => KeyAlgorithm::PS512,
+            Algorithm::EdDSA => KeyAlgorithm::EdDSA,
         };
-        if key_alg_as_alg != alg {
+        if key_alg != expected {
             return false;
         }
     }

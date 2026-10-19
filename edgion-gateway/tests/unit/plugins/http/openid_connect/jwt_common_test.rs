@@ -116,3 +116,65 @@ fn signing_policy_rejects_invalid_configuration_without_error_payloads() {
         );
     }
 }
+
+#[test]
+fn jwk_algorithm_metadata_matches_locked_conversion_for_all_variants() {
+    use jsonwebtoken::jwk::KeyAlgorithm;
+    use serde_json::json;
+    use std::str::FromStr;
+
+    let algorithms = [
+        Algorithm::HS256,
+        Algorithm::HS384,
+        Algorithm::HS512,
+        Algorithm::ES256,
+        Algorithm::ES384,
+        Algorithm::RS256,
+        Algorithm::RS384,
+        Algorithm::RS512,
+        Algorithm::PS256,
+        Algorithm::PS384,
+        Algorithm::PS512,
+        Algorithm::EdDSA,
+    ];
+    let key_algorithms = [
+        KeyAlgorithm::HS256,
+        KeyAlgorithm::HS384,
+        KeyAlgorithm::HS512,
+        KeyAlgorithm::ES256,
+        KeyAlgorithm::ES384,
+        KeyAlgorithm::RS256,
+        KeyAlgorithm::RS384,
+        KeyAlgorithm::RS512,
+        KeyAlgorithm::PS256,
+        KeyAlgorithm::PS384,
+        KeyAlgorithm::PS512,
+        KeyAlgorithm::EdDSA,
+        KeyAlgorithm::RSA1_5,
+        KeyAlgorithm::RSA_OAEP,
+        KeyAlgorithm::RSA_OAEP_256,
+    ];
+    for fixture in [
+        json!({"kty": "RSA", "n": "AQ", "e": "AQ"}),
+        json!({"kty": "EC", "crv": "P-256", "x": "AQ", "y": "AQ"}),
+        json!({"kty": "EC", "crv": "P-384", "x": "AQ", "y": "AQ"}),
+        json!({"kty": "oct", "k": "AQ"}),
+        json!({"kty": "OKP", "crv": "Ed25519", "x": "AQ"}),
+    ] {
+        let mut jwk: Jwk = serde_json::from_value(fixture).unwrap();
+        for algorithm in algorithms {
+            jwk.common.key_algorithm = None;
+            let family_matches = jwk_matches_alg(&jwk, algorithm);
+            for key_algorithm in key_algorithms {
+                jwk.common.key_algorithm = Some(key_algorithm);
+                // Differential oracle: the locked dependency's former text conversion.
+                let metadata_matches = Algorithm::from_str(&key_algorithm.to_string()) == Ok(algorithm);
+                assert_eq!(
+                    jwk_matches_alg(&jwk, algorithm),
+                    family_matches && metadata_matches,
+                    "key algorithm {key_algorithm:?}, token algorithm {algorithm:?}"
+                );
+            }
+        }
+    }
+}

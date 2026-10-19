@@ -8181,3 +8181,21 @@ tests with 16 existing ignores, formatting, workspace check/Clippy and seven
 repository guards with existing unrelated warnings. This removes redundant
 HashSet/String construction, not all validation allocations. No full suite or
 throughput benchmark ran.
+
+## Compare OIDC JWK algorithm metadata without text conversion
+
+jwk_matches_alg now compares KeyAlgorithm directly with an exhaustive mapping
+from the token Algorithm. It no longer allocates a temporary String and parses
+it back to an Algorithm for each candidate with algorithm metadata. All twelve
+signature variants preserve their correspondence; the three encryption-only
+KeyAlgorithm variants remain rejected. Absent metadata, key-family and curve
+checks, kid lookup order and forced-refresh behavior are unchanged.
+
+A differential test covers all fifteen metadata variants against twelve token
+algorithms across RSA, P-256, P-384, octet and Ed25519 fixtures (900 comparisons).
+Its oracle retains the former locked jsonwebtoken 9.3.1 text conversion alongside
+the metadata-absent family result. Existing curve and selection tests remain.
+Fresh verification passed 159 OIDC tests with 16 existing ignores, formatting,
+workspace check/Clippy and seven repository guards with existing unrelated
+warnings. This removes metadata conversion work, not DecodingKey construction
+or cryptographic verification. No full suite or throughput benchmark ran.
