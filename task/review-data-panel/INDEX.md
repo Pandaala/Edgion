@@ -7369,3 +7369,26 @@ validation, direct-versus-queued invalid-value handling and token redaction.
 No runtime code changed. Formatting, workspace check/Clippy and documentation
 validation passed; existing unrelated Clippy warnings remain. No new runtime
 test or throughput benchmark ran for this documentation-only decision record.
+
+## Reuse canonical transport identity without global RealIp policy
+
+Request metadata now copies the transport extractor's already canonical address
+straight into remote_ip when no global RealIp policy is configured. Previously
+that branch cloned the same address and parsed/formatted it again. The extractor
+uses the canonical IP helper for Inet peers and the current caller supplies an
+empty missing-address fallback; no intervening code mutates downstream_peer_ip.
+The policy-enabled branch retains its snapshot, header selection, resolution and
+canonicalization. Direct peer, effective PROXY peer, XFF and later plugin identity
+changes keep their existing ownership and trust boundaries.
+
+Independent plan review approved the data-flow proof and existing test coverage.
+This removes one redundant parse/format and temporary String allocation on the
+valid Inet/no-policy path; it does not remove the independently owned identity
+fields or claim an allocation-free metadata callback or measured throughput.
+
+Before and after the change, all 45 other request-filter tests passed and the
+same response-cache reload test failed with backend policy ancestor limit, as
+already tracked in verification-01-cache-policy-fixture.md. Final transport
+identity tests passed four and RealIp tests passed 32. Formatting, workspace
+check/Clippy and seven guards passed with existing unrelated warnings. No full
+suite or live traffic test ran; the pre-existing cache fixture remains deferred.

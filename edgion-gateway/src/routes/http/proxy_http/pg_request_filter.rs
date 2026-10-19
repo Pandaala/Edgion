@@ -545,7 +545,7 @@ async fn build_request_metadata(
     let xff_snapshot = snapshot_x_forwarded_for(req_header, xff_limit);
     let xff_too_long = xff_snapshot.too_long;
 
-    let resolved = if let Some(policy) = &ctx.egc.real_ip_policy {
+    ctx.request_info.remote_ip = if let Some(policy) = &ctx.egc.real_ip_policy {
         let view = crate::plugins::runtime::edgion_config_data::capture_global_edgion_config_data_snapshot();
         let header = if policy.real_ip_header().eq_ignore_ascii_case("x-forwarded-for") {
             xff_snapshot.value.as_deref()
@@ -555,13 +555,14 @@ async fn build_request_metadata(
                 .get(policy.real_ip_header())
                 .and_then(|value| value.to_str().ok())
         };
-        policy
+        let resolved = policy
             .resolve_in(&view, &ctx.request_info.downstream_peer_ip, header)
-            .remote_ip
+            .remote_ip;
+        crate::ctx::canonicalize_ip_str(&resolved).unwrap_or(resolved)
     } else {
+        // Transport extraction above already canonicalized this address (or returned empty).
         ctx.request_info.downstream_peer_ip.clone()
     };
-    ctx.request_info.remote_ip = crate::ctx::canonicalize_ip_str(&resolved).unwrap_or(resolved);
 
     // Extract hostname from URI (HTTP/2), Host header (HTTP/1.1), or :authority (HTTP/2 fallback).
     // NormalizedHostname::new() applies trim, port-strip, FQDN-dot-strip, and lowercase once.
