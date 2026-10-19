@@ -6393,3 +6393,18 @@ verification passed 36 outlier-detection and 41 coordinator tests (77 total),
 including concurrent percent caps and retirement checks, plus formatting,
 workspace check/Clippy and seven guards. Existing unrelated warnings remain.
 No full test suite, live integration or contention benchmark ran.
+
+## Transfer the published outlier state handle
+
+The successful failure-completion branch now moves its last local endpoint Arc
+into set_outlier_ejected_for instead of cloning it. The runtime stores that same
+state before publishing the deadline and ejected flag; the identity map retains
+its owner. Completion locking, recovery, retirement and gauge ordering are unchanged.
+This removes one Arc increment/decrement on successful publication, with no heap
+allocation or throughput claim.
+
+Independent plan review approved two files. Existing lifecycle and concurrency
+regressions were sufficient for this last-use transfer. Fresh verification passed
+36 outlier-detection and 41 coordinator tests (77 total), formatting, workspace
+check/Clippy and seven guards. Existing unrelated warnings remain. No full test
+suite, live integration or benchmark ran.

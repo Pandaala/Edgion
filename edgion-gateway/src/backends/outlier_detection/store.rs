@@ -202,7 +202,7 @@ impl OutlierDetectionStore {
                 };
                 if transition == FailureTransition::Opened {
                     if let Some(remaining) = endpoint.legacy_ejection_remaining() {
-                        runtime.set_outlier_ejected_for(remaining, Arc::clone(&endpoint));
+                        runtime.set_outlier_ejected_for(remaining, endpoint);
                         runtime.set_gauge_accounted(true);
                         crate::observe::metrics::record_cb_ejection(service_key, class.metric_label());
                     }
