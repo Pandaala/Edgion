@@ -6559,3 +6559,23 @@ Independent plan review approved two documents. Fresh baseline verification
 passed 20 HeaderCertAuth tests, formatting check, workspace check/Clippy and
 agent-doc validation. Existing unrelated warnings remain; no full test suite,
 live TLS integration or benchmark ran.
+
+## Borrowed OtherName text through SAN projection
+
+The shared OtherName decoder now returns Cow text: BER string variants borrow
+input, boolean/NULL borrow static text, and existing numeric/OID/BMP/Universal
+conversions remain owned. The display projection formats directly from that
+value, removing its previous intermediate text/boolean String. Typed projection
+still owns every returned value and moves owned conversions. NULL previously
+allocated no heap storage, and OID formatting remains owned. Exact byte/NUL,
+wrapper/type, integer-bound, duplicate-order and separate DER-pass semantics are
+unchanged. This is not a measured throughput improvement.
+
+Independent plan review approved four files. Existing baseline tests passed
+17 extractor, 20 HeaderCertAuth and 14 mTLS callback cases. A new UTF8String
+input-pointer regression covers an embedded NUL; signed-certificate tests retain
+independent expectations for both projections. Fresh verification passed 18
+extractor, 20 HeaderCertAuth and 14 mTLS callback tests (52 total), formatting,
+workspace check/Clippy and seven guards. Updated owning SAN projection knowledge.
+Existing unrelated warnings remain; no full suite, live TLS integration or
+benchmark ran.

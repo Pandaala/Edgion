@@ -49,8 +49,12 @@ owned results: display extraction must not populate a discarded `PresentedSan`
 vector, and typed extraction must not populate discarded prefixed strings.
 Borrowed DNS/email/URI values are consumed synchronously. IP addresses remain
 typed until projection: display formats the prefixed address directly, while
-typed output owns its canonical address String. Decoded OtherName OID/value
-temporaries move into typed output. The BER
+typed output owns its canonical address String. OtherName text values borrow
+their BER input through synchronous projection; boolean and NULL values borrow
+static text. Numeric, OID, BMP and Universal conversions retain owned results.
+Display projection avoids the former temporary text/boolean String, while typed
+projection owns borrowed values and moves already-owned conversions. NULL did
+not allocate before this change. Decoded OtherName OIDs remain owned. The BER
 decoder remains shared. This changes ownership cost without changing trust policy
 or merging the ordinary BoringSSL and OtherName DER passes.
 
@@ -62,6 +66,8 @@ SANs. OtherNames remain appended after ordinary entries even when interleaved in
 certificate DER. Decoder regressions retain complete-input, wrapper and scalar
 boundaries. These tests cover extraction contracts; they are not performance
 measurements or a live TLS handshake/integration probe.
+An input-pointer regression verifies borrowing for UTF8String with an embedded
+NUL. Final projected values remain owned independently of the local DER buffer.
 
 
 ## Live probe evidence boundary (ARCH-352)

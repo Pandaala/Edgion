@@ -7,6 +7,7 @@ use crate::ctx::ClientCertInfo;
 use edgion_common::allowed_san::PresentedSan;
 use pingora_core::tls::ssl::SslRef;
 use pingora_core::tls::x509::X509Ref;
+use std::borrow::Cow;
 use std::net::{IpAddr, Ipv6Addr};
 
 /// Extract client certificate information from SSL connection
@@ -90,7 +91,7 @@ enum ClassifiedSan<'a> {
     Ip(IpAddr),
     Email(&'a str),
     Uri(&'a str),
-    OtherName { oid: String, value: String },
+    OtherName { oid: String, value: Cow<'a, str> },
 }
 
 impl ClassifiedSan<'_> {
@@ -110,7 +111,7 @@ impl ClassifiedSan<'_> {
             Self::Ip(value) => PresentedSan::ip(value.to_string()),
             Self::Email(value) => PresentedSan::email(value),
             Self::Uri(value) => PresentedSan::uri(value),
-            Self::OtherName { oid, value } => PresentedSan::other_name(oid, value),
+            Self::OtherName { oid, value } => PresentedSan::other_name(oid, value.into_owned()),
         }
     }
 }
@@ -176,7 +177,7 @@ fn extract_other_names<T>(cert: &X509Ref, output: &mut Vec<T>, project: &mut imp
 }
 
 /// Decode an OtherName payload. Incomplete or non-BER encodings are skipped.
-fn decode_other_name_value(bytes: &[u8]) -> Option<String> {
+fn decode_other_name_value(bytes: &[u8]) -> Option<Cow<'_, str>> {
     let (rest, object) = x509_parser::der_parser::ber::parse_ber(bytes).ok()?;
     if !rest.is_empty() {
         return None;
@@ -186,7 +187,7 @@ fn decode_other_name_value(bytes: &[u8]) -> Option<String> {
 
 /// `x509-parser` leaves OtherName.value as `[0] EXPLICIT ANY`. Generic `parse_ber`
 /// stores that wrapper as a context-specific Unknown; unwrap it once.
-fn stringify_other_name_object(object: &x509_parser::der_parser::ber::BerObject<'_>) -> Option<String> {
+fn stringify_other_name_object<'a>(object: &x509_parser::der_parser::ber::BerObject<'a>) -> Option<Cow<'a, str>> {
     use x509_parser::der_parser::ber::{BerObjectContent, Class};
 
     if object.header.class() != Class::ContextSpecific || object.header.tag().0 != 0 || !object.header.constructed() {
@@ -210,15 +211,15 @@ fn stringify_other_name_object(object: &x509_parser::der_parser::ber::BerObject<
     }
 }
 
-fn ber_object_to_san_string(object: &x509_parser::der_parser::ber::BerObject<'_>) -> Option<String> {
+fn ber_object_to_san_string<'a>(object: &x509_parser::der_parser::ber::BerObject<'a>) -> Option<Cow<'a, str>> {
     use x509_parser::der_parser::ber::BerObjectContent;
 
     match &object.content {
-        BerObjectContent::Boolean(value) => Some(if *value { "true" } else { "false" }.to_string()),
-        BerObjectContent::Integer(raw) => integer_to_decimal(raw),
-        BerObjectContent::Enum(value) => Some(value.to_string()),
-        BerObjectContent::OID(oid) => Some(oid.to_string()),
-        BerObjectContent::Null => Some(String::new()),
+        BerObjectContent::Boolean(value) => Some(Cow::Borrowed(if *value { "true" } else { "false" })),
+        BerObjectContent::Integer(raw) => integer_to_decimal(raw).map(Cow::Owned),
+        BerObjectContent::Enum(value) => Some(Cow::Owned(value.to_string())),
+        BerObjectContent::OID(oid) => Some(Cow::Owned(oid.to_string())),
+        BerObjectContent::Null => Some(Cow::Borrowed("")),
         BerObjectContent::UTF8String(value)
         | BerObjectContent::IA5String(value)
         | BerObjectContent::PrintableString(value)
@@ -228,9 +229,9 @@ fn ber_object_to_san_string(object: &x509_parser::der_parser::ber::BerObject<'_>
         | BerObjectContent::VideotexString(value)
         | BerObjectContent::GraphicString(value)
         | BerObjectContent::GeneralString(value)
-        | BerObjectContent::ObjectDescriptor(value) => Some((*value).to_string()),
-        BerObjectContent::BmpString(value) => bmp_string(value),
-        BerObjectContent::UniversalString(value) => universal_string(value),
+        | BerObjectContent::ObjectDescriptor(value) => Some(Cow::Borrowed(value)),
+        BerObjectContent::BmpString(value) => bmp_string(value).map(Cow::Owned),
+        BerObjectContent::UniversalString(value) => universal_string(value).map(Cow::Owned),
         _ => None,
     }
 }

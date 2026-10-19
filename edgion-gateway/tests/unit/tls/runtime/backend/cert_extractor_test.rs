@@ -303,7 +303,8 @@ fn other_name_utf8_string_decodes_for_matching() {
         Some("18446744073709551616")
     );
     let bmp_embedded_nul = [0x1e, 0x06, 0x00, b'a', 0x00, 0x00, 0x00, b'b'];
-    let decoded = super::decode_other_name_value(&other_name_explicit(&bmp_embedded_nul)).expect("BMPString");
+    let encoded = other_name_explicit(&bmp_embedded_nul);
+    let decoded = super::decode_other_name_value(&encoded).expect("BMPString");
     assert_eq!(decoded, "a\u{0}b");
     assert_ne!(decoded, "a");
 }
@@ -487,4 +488,13 @@ fn signed_integer_decimal_width_boundaries_are_exact() {
             power *= 10;
         }
     }
+}
+
+#[test]
+fn other_name_text_borrows_input_until_projection() {
+    let encoded = other_name_explicit(&[0x0c, 0x03, b'a', 0, b'b']);
+    let decoded = super::decode_other_name_value(&encoded).expect("UTF8String");
+    assert_eq!(decoded, "a\0b");
+    assert!(matches!(decoded, std::borrow::Cow::Borrowed(_)));
+    assert_eq!(decoded.as_ptr(), encoded[4..].as_ptr());
 }
