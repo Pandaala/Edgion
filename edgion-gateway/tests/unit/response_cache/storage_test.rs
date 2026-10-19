@@ -832,3 +832,137 @@ fn pretransport_plugin_header_mutation_discards_fill_and_expired_origin_stays_un
         "fresh transport Date cannot rescue stale origin admission"
     );
 }
+
+#[test]
+fn contract_scans_preserve_first_fields_and_reject_every_malformed_suffix() {
+    fn encode(records: &[(Vec<u8>, Vec<u8>)]) -> Vec<u8> {
+        let mut encoded = Vec::new();
+        for (name, value) in records {
+            encoded.extend_from_slice(&(name.len() as u16).to_be_bytes());
+            encoded.extend_from_slice(&(value.len() as u32).to_be_bytes());
+            encoded.extend_from_slice(name);
+            encoded.extend_from_slice(value);
+        }
+        encoded
+    }
+    fn reference(entry: &Entry, header: &ResponseHeader, names: &[&str]) -> bool {
+        fields(&entry.metadata).all(|field| field.is_ok())
+            && policy::supported_headers(header)
+            && names.iter().all(|name| {
+                let mut actual = header.headers.get_all(*name).iter();
+                let first = actual.next().map(|value| value.as_bytes());
+                actual.next().is_none()
+                    && first
+                        == fields(&entry.metadata)
+                            .filter_map(Result::ok)
+                            .find(|(key, _)| key.eq_ignore_ascii_case(name.as_bytes()))
+                            .map(|(_, value)| value)
+            })
+    }
+    fn final_reference(entry: &Entry, header: &ResponseHeader) -> bool {
+        let mut dates = header.headers.get_all("date").iter();
+        let valid_date = dates.next().is_some_and(|date| {
+            date.to_str()
+                .ok()
+                .and_then(|date| httpdate::parse_http_date(date).ok())
+                .is_some()
+        }) && dates.next().is_none();
+        valid_date && reference(entry, header, &["cache-control", "age"])
+    }
+
+    let (_, _, mut state) = fixture(1024);
+    let original = response();
+    state.capture(&original, Instant::now());
+    let entry = &mut state.pending.as_mut().unwrap().entry;
+    let records: Vec<_> = fields(&entry.metadata)
+        .map(|field| {
+            let (name, value) = field.unwrap();
+            (name.to_vec(), value.to_vec())
+        })
+        .collect();
+    let mut variants = vec![encode(&records), Vec::new()];
+    let mut reversed = records.clone();
+    reversed.reverse();
+    variants.push(encode(&reversed));
+    let upper: Vec<_> = records
+        .iter()
+        .map(|(name, value)| (name.to_ascii_uppercase(), value.clone()))
+        .collect();
+    variants.push(encode(&upper));
+    for name in ["cache-control", "date", "age"] {
+        for value in [b"".as_slice(), b"different"] {
+            for first in [false, true] {
+                let mut changed = records.clone();
+                changed.insert(
+                    if first { 0 } else { changed.len() },
+                    (name.as_bytes().to_vec(), value.to_vec()),
+                );
+                variants.push(encode(&changed));
+            }
+        }
+        variants.push(encode(
+            &records
+                .iter()
+                .filter(|(key, _)| key != name.as_bytes())
+                .cloned()
+                .collect::<Vec<_>>(),
+        ));
+    }
+    for prefix in 1..entry.metadata.len() {
+        variants.push(entry.metadata[..prefix].to_vec());
+    }
+    let mut complete_records = records.clone();
+    complete_records.push((b"age".to_vec(), b"0".to_vec()));
+    let complete = encode(&complete_records);
+    variants.push(complete.clone());
+    for prefix in [&entry.metadata, &complete] {
+        for tail in [vec![0], vec![0, 1, 255, 255, 255, 255, b'x'], vec![0, 0, 0, 0, 0, 0]] {
+            let mut changed = prefix.clone();
+            changed.extend_from_slice(&tail);
+            variants.push(changed);
+        }
+    }
+
+    let mut headers = vec![original.clone()];
+    for name in ["cache-control", "date", "age"] {
+        let mut missing = original.clone();
+        missing.remove_header(name);
+        headers.push(missing);
+        for value in ["", "different", "0"] {
+            let mut changed = original.clone();
+            changed.insert_header(name, value).unwrap();
+            headers.push(changed.clone());
+            changed.append_header(name, value).unwrap();
+            headers.push(changed);
+        }
+    }
+    let mut forbidden = original.clone();
+    forbidden.insert_header("set-cookie", "x=y").unwrap();
+    headers.push(forbidden);
+    let mut other_status = original.clone();
+    other_status.set_status(403).unwrap();
+    headers.push(other_status);
+    let mut transported = original.clone();
+    transported
+        .insert_header("date", "Sun, 06 Nov 1994 08:49:37 GMT")
+        .unwrap();
+    headers.push(transported);
+
+    for (metadata_index, metadata) in variants.into_iter().enumerate() {
+        entry.metadata = metadata;
+        for (header_index, header) in headers.iter().enumerate() {
+            let expected = (
+                reference(entry, header, &["cache-control", "date", "age"]),
+                final_reference(entry, header),
+            );
+            let (actual, allocations) = crate::test_allocation_counter::count_allocations(|| {
+                (
+                    entry.matches_contract(header),
+                    entry.matches_final_transport_contract(header),
+                )
+            });
+            assert_eq!(actual, expected, "metadata {metadata_index}, header {header_index}");
+            assert_eq!(allocations, 0, "contract validation must remain allocation-free");
+        }
+    }
+}

@@ -31,7 +31,11 @@ The index is canonical ShardedLru. Admission precedes owned metadata/header/body
 allocations. Decoded hit headers remain charged until context teardown because
 Session may retain response_written. Bytes::from_owner keeps arena/control leases
 alive through retained slices after eviction/replacement. Strict metadata decode
-consumes every record; corruption evicts only the matching current identity and
+consumes every record; the seal/replay/publication contract checks gather first
+case-insensitive field values into fixed borrowed slots in one complete metadata
+pass. Finding all contract fields never permits skipping a malformed suffix.
+Absent and empty values remain distinct; final transport still permits only its
+separately validated singleton Date replacement. Corruption evicts only the matching current identity and
 falls through before final headers. Postheader failures never fall back to origin.
 Current response headers, trace/CORS/dye onion and veto execute once on replay.
 

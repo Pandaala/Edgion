@@ -338,20 +338,32 @@ impl Entry {
         Some(header)
     }
 
-    pub(super) fn matches_contract(&self, header: &ResponseHeader) -> bool {
-        fields(&self.metadata).all(|field| field.is_ok())
-            && policy::supported_headers(header)
-            && ["cache-control", "date", "age"].iter().all(|name| {
-                let mut actual = header.headers.get_all(*name).iter();
+    fn matches_header_fields<const N: usize>(&self, header: &ResponseHeader, names: [&str; N]) -> bool {
+        let mut stored = [None; N];
+        // Keep the first matching value, but validate framing through the end
+        // even after every requested field has been found.
+        for field in fields(&self.metadata) {
+            let Ok((key, value)) = field else {
+                return false;
+            };
+            for (name, slot) in names.iter().zip(stored.iter_mut()) {
+                if slot.is_none() && key.eq_ignore_ascii_case(name.as_bytes()) {
+                    *slot = Some(value);
+                }
+            }
+        }
+        policy::supported_headers(header)
+            && names.into_iter().zip(stored).all(|(name, expected)| {
+                let mut actual = header.headers.get_all(name).iter();
                 let first = actual.next().map(|value| value.as_bytes());
-                actual.next().is_none()
-                    && first
-                        == fields(&self.metadata)
-                            .filter_map(Result::ok)
-                            .find(|(key, _)| key.eq_ignore_ascii_case(name.as_bytes()))
-                            .map(|(_, v)| v)
+                actual.next().is_none() && first == expected
             })
     }
+
+    pub(super) fn matches_contract(&self, header: &ResponseHeader) -> bool {
+        self.matches_header_fields(header, ["cache-control", "date", "age"])
+    }
+
     fn matches_final_transport_contract(&self, header: &ResponseHeader) -> bool {
         let mut dates = header.headers.get_all("date").iter();
         let valid_date = dates.next().is_some_and(|date| {
@@ -360,19 +372,7 @@ impl Entry {
                 .and_then(|date| httpdate::parse_http_date(date).ok())
                 .is_some()
         }) && dates.next().is_none();
-        valid_date
-            && fields(&self.metadata).all(|field| field.is_ok())
-            && policy::supported_headers(header)
-            && ["cache-control", "age"].iter().all(|name| {
-                let mut actual = header.headers.get_all(*name).iter();
-                let first = actual.next().map(|value| value.as_bytes());
-                actual.next().is_none()
-                    && first
-                        == fields(&self.metadata)
-                            .filter_map(Result::ok)
-                            .find(|(key, _)| key.eq_ignore_ascii_case(name.as_bytes()))
-                            .map(|(_, value)| value)
-            })
+        valid_date && self.matches_header_fields(header, ["cache-control", "age"])
     }
 }
 

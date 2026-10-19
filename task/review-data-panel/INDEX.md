@@ -6268,3 +6268,29 @@ passed 15 server error-response, 16 fail-to-proxy and 178 session-adapter tests
 Existing unrelated warnings remain; no live integration or alternative encoder
 benchmark ran. Probe totals include encoding and conversion, unlike grpc-06's
 conversion-only evidence.
+
+## Single-pass response-cache contract metadata validation
+
+The stored-header contract checks now collect the first case-insensitive matches
+for their fixed field sets during one complete metadata framing pass. This
+replaces a full validity scan followed by two or three separate field lookups.
+Fixed borrowed slots add no heap storage. Final transport still validates its
+singleton Date first; supported-header policy, missing/empty distinctions,
+malformed-tail rejection, freshness, leases and publication order are unchanged.
+
+Independent plan review approved four files. The initial differential matrix against the
+original repeated-scan algorithm passed on the old implementation before editing.
+It covers reordered/mixed-case/missing/duplicate fields, empty values, all metadata
+prefix truncations, malformed tails, changed/duplicate/forbidden response headers,
+and the final-transport Date allowance, with zero allocation assertions. A
+standalone optimized probe sampled three, 16 and 64 fields with early/late contract
+fields and supported reduced local parser work; it is not a request-throughput
+benchmark or an unconditional CPU claim for all metadata shapes.
+
+Final review added explicit malformed suffixes after all three contract fields
+are present, retaining the same old-algorithm oracle and zero-allocation checks.
+
+Fresh final verification passed 21 cache-storage and seven cache-lifecycle tests
+(28 total), formatting, workspace check/Clippy and seven guards. Existing unrelated
+warnings remain. The broader cache policy-fixture issue recorded in verification-01
+was not changed or claimed resolved; no live integration or full test suite ran.
