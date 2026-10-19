@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Lazy dye outcome value formatting](dye-02-lazy-outcome-value-formatting.md)
+
 - [Endpoint probe forwarded-header preparation](endpoint-04-forwarded-header-preparation.md)
 
 - [Endpoint probe response text ownership](endpoint-03-response-text-buffer-ownership.md)
