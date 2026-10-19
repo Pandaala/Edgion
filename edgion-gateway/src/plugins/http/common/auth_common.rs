@@ -32,8 +32,8 @@ pub fn set_sensitive_request_header(
 ///
 /// The parameter name is compared against the percent-decoded key so the match
 /// mirrors how `KeyGet::Query` (`get_query_param`) extracted it. The
-/// `url_decode` call is load-bearing, not a redundant allocation: simplifying it
-/// to a raw string compare would silently stop hiding a credential sent as
+/// `url_decode` remains load-bearing for names containing `%` or `+`: comparing
+/// those names raw would silently stop hiding a credential sent as
 /// `api%5Fkey=...`. [`strip_cookie`] deliberately compares raw keys instead —
 /// each helper matches the extractor it undoes.
 pub fn strip_query_param(session: &mut dyn PluginSession, name: &str) {
@@ -48,7 +48,11 @@ pub fn strip_query_param(session: &mut dyn PluginSession, name: &str) {
                 return false;
             }
             let raw_key = pair.split('=').next().unwrap_or("");
-            let keep = url_decode(raw_key) != name;
+            let keep = if raw_key.contains(['%', '+']) {
+                url_decode(raw_key) != name
+            } else {
+                raw_key != name
+            };
             removed |= !keep;
             keep
         })

@@ -499,6 +499,12 @@ fn query_credential_strip_preserves_live_raw_query_boundaries() {
         ),
         (Some("api+key=secret&keep=1"), "api key", Some("keep=1")),
         (Some("=secret&&keep=1"), "", Some("keep=1")),
+        (Some("api%5Fkey=secret&keep=1"), "api%5Fkey", None),
+        (Some("api+key=secret&keep=1"), "api+key", None),
+        (Some("api%2Bkey=secret&keep=1"), "api+key", Some("keep=1")),
+        (Some("bad%+x=secret&keep=1"), "bad%+x", Some("keep=1")),
+        (Some("caf%E9=secret&keep=1"), "café", Some("keep=1")),
+        (Some("café=secret&keep=1"), "café", Some("keep=1")),
     ] {
         for fail_setter in [false, true] {
             let mut session = MockPluginSession::new();
@@ -522,4 +528,21 @@ fn query_credential_strip_preserves_live_raw_query_boundaries() {
             strip_query_param(&mut session, name);
         }
     }
+}
+
+#[test]
+fn plain_query_key_comparison_does_not_allocate_key_sized_storage() {
+    fn measure(query: &'static str) -> (usize, usize) {
+        let mut session = MockPluginSession::new();
+        session.expect_get_query().times(0);
+        session.expect_request_query().times(1).return_const(Some(query));
+        session.expect_set_request_query().times(0);
+        let (_, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+            strip_query_param(&mut session, "absent");
+        });
+        (stats.calls, stats.requested_bytes)
+    }
+    let short = measure("x=1");
+    let long = measure("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_long_key=1");
+    assert_eq!(short, long, "plain key length must not change temporary allocation");
 }

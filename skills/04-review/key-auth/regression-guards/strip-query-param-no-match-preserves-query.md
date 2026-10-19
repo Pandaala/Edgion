@@ -72,6 +72,20 @@ queries, unmatched separators, encoded/duplicate keys, raw surviving bytes and
 setter failures. Real-adapter regressions preserve absolute request targets and
 HTTP/2 authority; the live-query accessor regression checks pointer identity,
 zero read allocations and parity with the owned getter across URI changes.
-Only the whole-query copy is removed. Key decoding, the temporary slice Vec and
-the joined replacement still allocate; no whole-helper zero-allocation or
+The whole-query copy is removed. Encoded-key decoding, the temporary slice Vec
+and the joined replacement still allocate; no whole-helper zero-allocation or
 throughput claim follows.
+
+## Plain parameter-name comparison
+
+Names without `%` or `+` compare directly because the canonical decoder preserves
+all their UTF-8 scalars unchanged. Names containing either marker still pass
+through `url_decode`, even when their raw spelling equals the configured name.
+This preserves plus-to-space conversion, percent tokens, malformed-token handling
+and invalid UTF-8 run fallback. No second decoding implementation is introduced.
+
+The shared helper matrix covers literal configured marker names, encoded plus,
+malformed tokens and permitted non-ASCII names. A short/long unmatched plain-name
+allocation comparison verifies that name length no longer creates temporary
+key-sized storage. Session-mock and survivor-vector work remains in that measurement;
+it is not a zero-allocation or throughput claim for the whole helper.

@@ -6057,3 +6057,23 @@ forbids the owned getter. Fresh verification passed 29 shared-auth, 14 KeyAuth,
 Formatting, workspace check/Clippy and seven guards passed with existing unrelated
 warnings. The two owning query-stripping knowledge pages now describe the borrowed
 accessor. No integration suite was run.
+
+## Compare plain query credential names without decoding storage
+
+The shared credential-strip filter now compares names without percent or plus
+markers directly. The canonical decoder is identity on these strings; marked
+names still decode unconditionally, including when raw text equals configuration.
+No secondary decoder or backend selector raw-equality rule was introduced.
+Surviving query bytes, duplicate removal, no-match behavior and error policy stay
+unchanged. Encoded names, survivor storage and rewritten output can still allocate.
+
+Independent plan review approved four files. The expanded 30-case semantic matrix
+passed on original production. The new short/long plain-name allocation comparison
+then failed as intended: original totals were 3 calls/136 bytes versus 7 calls/376
+bytes, including common mock/container work. After the change those totals are
+identical; no key-sized temporary storage remains for plain names. This is not
+whole-helper zero allocation or measured throughput evidence.
+
+Fresh verification passed 30 shared-auth, 14 KeyAuth, 47 JwtAuth, two adapter strip
+and one live-query ownership tests (94 total), formatting, workspace check/Clippy
+and seven guards. Existing unrelated warnings remain; no integration suite ran.
