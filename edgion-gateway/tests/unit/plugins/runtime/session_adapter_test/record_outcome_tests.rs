@@ -2310,7 +2310,7 @@ async fn terminate_for(request: &str, upstream_status: u16) -> (bool, EdgionHttp
     let terminate = {
         let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response_header);
         let mut log = PluginLog::with_alias("dsl", None);
-        check_response_stage_terminate(&result, &mut log, &mut adapter)
+        check_response_stage_terminate(result, &mut log, &mut adapter)
     };
     (terminate, ctx)
 }
@@ -2374,15 +2374,17 @@ async fn response_stage_grpc_error_arms_the_abort_with_the_exact_status() {
     ctx.pre_plugin_response_status = Some(200);
     ctx.select_final_downstream_status(200);
     let mut response_header = ResponseHeader::build(200, None).unwrap();
+    let message = "quota exceeded".to_string();
+    let message_pointer = message.as_ptr();
     let result = PluginRunningResult::ErrGrpcError {
         grpc_status: 8,
-        message: Some("quota exceeded".to_string()),
+        message: Some(message),
     };
 
     let terminate = {
         let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response_header);
         let mut log = PluginLog::with_alias("dsl", None);
-        check_response_stage_terminate(&result, &mut log, &mut adapter)
+        check_response_stage_terminate(result, &mut log, &mut adapter)
     };
 
     assert!(terminate);
@@ -2393,6 +2395,17 @@ async fn response_stage_grpc_error_arms_the_abort_with_the_exact_status() {
             message: Some("quota exceeded".to_string()),
         })
     );
+    let Some(ResponseStageDenial::Grpc {
+        message: Some(message), ..
+    }) = ctx.response_denial()
+    else {
+        panic!("expected retained gRPC denial message");
+    };
+    assert_eq!(
+        message.as_ptr(),
+        message_pointer,
+        "the owned message must transfer without copying"
+    );
     assert_eq!(ctx.request_info.grpc_status(), Some(8));
     assert_eq!(
         ctx.final_downstream_status(),
@@ -2402,6 +2415,38 @@ async fn response_stage_grpc_error_arms_the_abort_with_the_exact_status() {
     assert!(ctx
         .diagnostics
         .contains_error(EdgionErrorCode::PluginResponseDenyAborted));
+}
+
+#[tokio::test]
+async fn response_stage_owned_http_body_transfers_without_sharing() {
+    use crate::plugins::runtime::plugin_runtime::check_response_stage_terminate;
+
+    let mut session = test_session_raw("GET /x HTTP/1.1\r\nHost: test\r\n\r\n").await;
+    let mut ctx = EdgionHttpContext::default();
+    let mut response_header = ResponseHeader::build(200, None).unwrap();
+    let body = Bytes::from(vec![0, 255, b'x', b'\n'].into_boxed_slice());
+    assert!(body.is_unique());
+    let pointer = body.as_ptr();
+    let result = PluginRunningResult::ErrResponse {
+        status: 403,
+        body: Some(body),
+    };
+    let terminate = {
+        let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response_header);
+        let mut log = PluginLog::with_alias("test", None);
+        check_response_stage_terminate(result, &mut log, &mut adapter)
+    };
+    assert!(terminate);
+    assert_eq!(ctx.response_denial(), None);
+    let (header, body) = ctx.take_pending_response_local_reply().unwrap();
+    assert_eq!(header.status.as_u16(), 403);
+    assert_eq!(header.headers["content-length"], "4");
+    assert_eq!(&body[..], &[0, 255, b'x', b'\n']);
+    assert_eq!(body.as_ptr(), pointer);
+    assert!(
+        body.is_unique(),
+        "the consumed result must not leave a redundant body owner"
+    );
 }
 
 /// The broadest leak of the three: a naked `ErrTerminateRequest` needs NO
@@ -2423,7 +2468,7 @@ async fn response_stage_naked_terminate_arms_the_abort() {
     let mut log = PluginLog::with_alias("dsl", None);
     let terminate = {
         let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response_header);
-        check_response_stage_terminate(&result, &mut log, &mut adapter)
+        check_response_stage_terminate(result, &mut log, &mut adapter)
     };
 
     assert!(terminate);

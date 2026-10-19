@@ -53,6 +53,22 @@ Fix suggestions of the form "narrowing the refusal predicate is enough" and
 "the runners already call `set_terminate`" are **both not accepted** — each
 alone leaves a live bypass (Core Rationale 1 and 2).
 
+## Result ownership at the response-stage handoff
+
+Both synchronous and asynchronous runners consume their final
+`PluginRunningResult` through `check_response_stage_terminate`. Its HTTP Bytes
+body moves into the existing local-reply builder; its optional gRPC String moves
+into the exact-status denial carrier. Callers do not retain the result afterward.
+This avoids a redundant Bytes clone and a gRPC message copy without changing the
+refusal predicates, diagnostic messages, status mapping or terminal writer.
+
+The real-adapter tests `response_stage_owned_http_body_transfers_without_sharing`
+and `response_stage_grpc_error_arms_the_abort_with_the_exact_status` pin buffer
+identity and accepted-body unique ownership alongside bytes, framing and status.
+Moving a String retains its original capacity until denial delivery; this is not
+a claim of lower retained memory for every producer. Refused/bodyless payloads
+may be released earlier within the same synchronous helper, with no await added.
+
 ## Core Rationale
 
 **1. The request's `Upgrade` header is intent, not state**

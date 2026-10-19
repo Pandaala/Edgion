@@ -3366,7 +3366,7 @@ impl PluginRuntime {
         if !self.ip_dependencies_available(&mut session_adapter) {
             let mut log = PluginLog::new("IpList");
             check_response_stage_terminate(
-                &PluginRunningResult::ErrResponse {
+                PluginRunningResult::ErrResponse {
                     status: 500,
                     body: None,
                 },
@@ -3401,7 +3401,7 @@ impl PluginRuntime {
                 plugin_log.time_cost = Some(elapsed_micros(start));
             }
 
-            let should_terminate = check_response_stage_terminate(&result, &mut plugin_log, &mut session_adapter);
+            let should_terminate = check_response_stage_terminate(result, &mut plugin_log, &mut session_adapter);
             if !suppress_log {
                 if filter_logs.is_empty() {
                     filter_logs.reserve(self.upstream_response_plugins.len());
@@ -3495,7 +3495,7 @@ impl PluginRuntime {
         if !self.ip_dependencies_available(&mut session_adapter) {
             let mut log = PluginLog::new("IpList");
             check_response_stage_terminate(
-                &PluginRunningResult::ErrResponse {
+                PluginRunningResult::ErrResponse {
                     status: 500,
                     body: None,
                 },
@@ -3532,7 +3532,7 @@ impl PluginRuntime {
                 plugin_log.time_cost = Some(elapsed_micros(start));
             }
 
-            let should_terminate = check_response_stage_terminate(&result, &mut plugin_log, &mut session_adapter);
+            let should_terminate = check_response_stage_terminate(result, &mut plugin_log, &mut session_adapter);
             if !suppress_log {
                 if filter_logs.is_empty() {
                     filter_logs.reserve(self.upstream_response_async_plugins.len());
@@ -3566,7 +3566,7 @@ impl PluginRuntime {
 // `pub(crate)` for the regression tests in `session_adapter`, which owns the
 // only real `pingora_proxy::Session` fixture in the crate.
 pub(crate) fn check_response_stage_terminate(
-    result: &PluginRunningResult,
+    result: PluginRunningResult,
     plugin_log: &mut PluginLog,
     adapter: &mut PingoraSessionAdapter<'_>,
 ) -> bool {
@@ -3583,7 +3583,7 @@ pub(crate) fn check_response_stage_terminate(
             true
         }
         PluginRunningResult::ErrResponse { status, body } => {
-            if adapter.apply_response_local_reply(*status, body.clone()) {
+            if adapter.apply_response_local_reply(status, body) {
                 plugin_log.push_fmt("replace response {}", la![status.to_string().as_str()]);
             } else {
                 // Refused (gRPC route, real 101 / established CONNECT tunnel,
@@ -3597,7 +3597,7 @@ pub(crate) fn check_response_stage_terminate(
                 if adapter.is_grpc_request() {
                     adapter.note_response_local_reply_unsupported();
                 }
-                adapter.set_response_denied(*status);
+                adapter.set_response_denied(status);
             }
             true
         }
@@ -3608,7 +3608,7 @@ pub(crate) fn check_response_stage_terminate(
             // this result), so without arming the abort the denial is a log line
             // and the upstream response is forwarded.
             plugin_log.push_fmt("deny grpc {}", la![grpc_status.to_string().as_str()]);
-            adapter.set_response_denied_grpc(*grpc_status, message.clone());
+            adapter.set_response_denied_grpc(grpc_status, message);
             true
         }
         PluginRunningResult::Nothing | PluginRunningResult::GoodNext => false,

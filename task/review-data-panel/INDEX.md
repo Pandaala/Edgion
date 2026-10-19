@@ -6202,3 +6202,25 @@ Independent plan review approved two documents. Fresh baseline checks passed
 check, workspace check/Clippy and agent-doc validation. Existing unrelated
 warnings remain. No runtime alternative, live integration or throughput benchmark
 was run; the serialization probe demonstrates the disputed observable difference.
+
+## Consume response-stage plugin results
+
+The shared response-stage termination helper now consumes the otherwise-unused
+plugin result. HTTP Bytes bodies move into the local-reply owner and optional
+gRPC messages move into the exact-status denial owner, avoiding a redundant
+body clone and message copy. Both response runners and their dependency-denial
+calls use this handoff. Refusal predicates, logs, status updates and writer order
+remain unchanged. A moved String keeps its original capacity until delivery;
+there is no blanket retained-memory or throughput claim.
+
+Independent plan review approved four files. Ten existing response-stage tests
+passed before changes. New real-adapter ownership assertions failed against the
+old helper at the expected two points: the gRPC message pointer changed and the
+accepted HTTP body retained a redundant owner. Existing byte/status assertions
+passed before those failures. The owning response-stage denial knowledge records
+the transfer boundary and its limits.
+
+Fresh verification passed 178 session-adapter, 123 plugin-runtime-filtered,
+26 response-filter, 11 upstream-response-filter and 16 fail-to-proxy tests (354
+total), formatting, workspace check/Clippy and seven guards. Existing unrelated
+warnings remain. No full workspace test or live integration suite was run.
