@@ -8125,3 +8125,19 @@ absolute, case-sensitive and slash-prefix rules. Fresh verification passed 155
 OIDC tests with 16 existing ignores, formatting, workspace check/Clippy and seven
 repository guards with existing unrelated warnings. This removes temporary target
 copies, not the final redirect String. No full suite or throughput benchmark ran.
+
+## Use fixed OIDC authorization random input arrays
+
+Authorization state, optional nonce and optional PKCE verifier generation now use
+const-sized 24/64-byte arrays instead of transient Vec buffers. All three call
+sites retain their byte counts, RNG call order, ThreadRng fill_bytes operation and
+URL-safe unpadded Base64 encoding. The encoded String remains owned. This removes
+one input-buffer heap allocation per generated value, at the cost of small bounded
+stack buffers and two generic instantiations; no measured speedup is claimed.
+
+A protocol test constructs an authorization redirect and decrypts its state cookie,
+checking query/cookie state and nonce identity, decoded byte counts, encoded lengths
+and alphabet, original URL and the S256 challenge of the stored verifier. Existing
+tests remain. Fresh verification passed 156 OIDC tests with 16 existing ignores,
+formatting, workspace check/Clippy and seven repository guards with existing
+unrelated warnings. No full suite or throughput benchmark ran.

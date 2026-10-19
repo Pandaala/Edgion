@@ -4,8 +4,8 @@ use edgion_common::secret::get_secret;
 use edgion_resources::resources::gateway::SecretObjectReference;
 
 impl OpenidConnect {
-    pub(super) fn random_urlsafe(bytes_len: usize) -> String {
-        let mut bytes = vec![0u8; bytes_len];
+    pub(super) fn random_urlsafe<const N: usize>() -> String {
+        let mut bytes = [0u8; N];
         rand::rng().fill_bytes(&mut bytes);
         URL_SAFE_NO_PAD.encode(bytes)
     }

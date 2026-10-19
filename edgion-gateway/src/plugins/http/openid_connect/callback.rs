@@ -136,20 +136,20 @@ impl OpenidConnect {
         })?;
 
         let redirect_uri = self.resolve_redirect_uri(session)?;
-        let state = Self::random_urlsafe(24);
+        let state = Self::random_urlsafe::<24>();
         let mut code_verifier: Option<String> = None;
         let mut code_challenge: Option<String> = None;
         let mut nonce: Option<String> = None;
 
         if self.config.use_pkce {
-            let verifier = Self::random_urlsafe(64);
+            let verifier = Self::random_urlsafe::<64>();
             let digest = Sha256::digest(verifier.as_bytes());
             let challenge = URL_SAFE_NO_PAD.encode(digest);
             code_verifier = Some(verifier);
             code_challenge = Some(challenge);
         }
         if self.config.use_nonce {
-            nonce = Some(Self::random_urlsafe(24));
+            nonce = Some(Self::random_urlsafe::<24>());
         }
 
         {

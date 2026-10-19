@@ -776,6 +776,59 @@ async fn test_unauth_action_auth_without_token_redirects_to_idp() {
     assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
 }
 
+#[test]
+fn authorization_redirect_preserves_random_lengths_and_pkce_binding() {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+
+    let mut cfg = base_config();
+    cfg.use_nonce = true;
+    cfg.use_pkce = true;
+    cfg.redirect_uri = Some("https://app.example/callback".to_string());
+    cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    let discovery = DiscoveryDocument {
+        issuer: "https://idp.example.com".to_string(),
+        jwks_uri: "https://idp.example.com/jwks".to_string(),
+        authorization_endpoint: Some("https://idp.example.com/authorize".to_string()),
+        token_endpoint: None,
+        introspection_endpoint: None,
+        userinfo_endpoint: None,
+        end_session_endpoint: None,
+        revocation_endpoint: None,
+    };
+    let mut session = MockPluginSession::new();
+    session.expect_get_path().return_const("/orders".to_string());
+    session.expect_get_query().return_const(Some("x=1".to_string()));
+    let (redirect, cookie) = plugin.build_authorization_redirect(&session, &discovery).unwrap();
+    let url = url::Url::parse(&redirect).unwrap();
+    let query: HashMap<_, _> = url.query_pairs().collect();
+    let encoded = cookie.split_once('=').unwrap().1.split(';').next().unwrap();
+    let payload: super::AuthorizationStateCookie =
+        OpenidConnect::decode_signed_cookie_payload(encoded, plugin.session_cipher().unwrap()).unwrap();
+    assert_eq!(payload.original_url, "/orders?x=1");
+    assert_eq!(query["state"], payload.state);
+    assert_eq!(query["nonce"], payload.nonce.as_deref().unwrap());
+    let verifier = payload.code_verifier.as_deref().unwrap();
+    for (value, bytes, chars) in [
+        (payload.state.as_str(), 24, 32),
+        (payload.nonce.as_deref().unwrap(), 24, 32),
+        (verifier, 64, 86),
+    ] {
+        assert_eq!(value.len(), chars);
+        assert!(value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
+        assert_eq!(URL_SAFE_NO_PAD.decode(value).unwrap().len(), bytes);
+    }
+    assert_eq!(query["code_challenge_method"], "S256");
+    assert_eq!(
+        query["code_challenge"],
+        URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
+    );
+}
+
 #[tokio::test]
 async fn test_unauth_action_auth_with_nonce_redirects_with_nonce_param() {
     let mut cfg = base_config();
