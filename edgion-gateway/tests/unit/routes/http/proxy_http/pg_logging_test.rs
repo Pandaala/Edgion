@@ -379,3 +379,124 @@ fn test_metric_json_preserves_fields_and_escaping() {
     set_type(&mut ctx, Some(TestType::Latency));
     assert_eq!(build_test_data(&ctx, None), "");
 }
+
+struct TerminalLogSender {
+    healthy: bool,
+    entries: Arc<parking_lot::Mutex<Vec<String>>>,
+}
+
+#[async_trait::async_trait]
+impl crate::link_sys::DataSender<String> for TerminalLogSender {
+    async fn init(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn healthy(&self) -> bool {
+        self.healthy
+    }
+
+    async fn send(&self, data: String) -> anyhow::Result<()> {
+        self.entries.lock().push(data);
+        Ok(())
+    }
+
+    fn name(&self) -> &str {
+        "terminal-log-test"
+    }
+}
+
+#[test]
+fn terminal_logging_preserves_cleanup_and_test_store_for_disabled_sinks() {
+    const TEST: &str = "terminal_logging_preserves_cleanup_and_test_store_for_disabled_sinks";
+    crate::test_subprocess::assert_in_subprocess(
+        "routes::http::proxy_http::pg_logging::tests",
+        TEST,
+        "EDGION_TERMINAL_DISABLED_LOG_TEST_CHILD",
+        TEST,
+        || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    use tokio::io::AsyncWriteExt;
+                    for test_mode in [false, true] {
+                        edgion_common::test_mode::init_integration_testing_mode(test_mode);
+                        for sender_health in [None, Some(false), Some(true)] {
+                            for header in [None, Some("test_store"), Some("other"), Some("TEST_STORE")] {
+                                let (mut client, server) = tokio::io::duplex(4096);
+                                let mut session = Session::new_h1(Box::new(server));
+                                client
+                                    .write_all(b"GET /audit HTTP/1.1\r\nHost: test\r\n\r\n")
+                                    .await
+                                    .unwrap();
+                                session.read_request().await.unwrap();
+                                if let Some(header) = header {
+                                    session.req_header_mut().insert_header("access_log", header).unwrap();
+                                }
+                                let entries = Arc::new(parking_lot::Mutex::new(Vec::new()));
+                                let mut logger = crate::observe::AccessLogger::new();
+                                if let Some(healthy) = sender_health {
+                                    logger.register(Box::new(TerminalLogSender {
+                                        healthy,
+                                        entries: Arc::clone(&entries),
+                                    }));
+                                }
+                                let proxy = EdgionHttpProxy {
+                                    listener_port: 0,
+                                    is_https_listener: false,
+                                    listener_key: edgion_resources::ListenerKey("unit-terminal-log".into()),
+                                    server_header_opts: Default::default(),
+                                    access_logger: Arc::new(logger),
+                                    egc: crate::config::bind_gateway_config(None),
+                                    enable_http2: false,
+                                    preflight_handler: super::super::PreflightHandler,
+                                    http_route_manager: Arc::new(
+                                        crate::routes::http::routes_mgr::HttpPortRouteManager::new(),
+                                    ),
+                                    grpc_route_manager: Arc::new(crate::routes::grpc::GrpcPortRouteManager::new()),
+                                };
+                                let mut ctx = EdgionHttpContext::default();
+                                ctx.request_info.trace_id.initialize(&session.req_header().headers);
+                                let trace_id = ctx.request_info.trace_id.standard_trace_id().unwrap().to_owned();
+                                let backend = make_backend([127, 0, 0, 1], 30001);
+                                setup_committed_attempt(
+                                    &mut ctx,
+                                    Arc::clone(&backend),
+                                    edgion_resources::resources::lb_policy::ParsedLBPolicy::LeastConn,
+                                    Instant::now(),
+                                );
+                                let owner = attached_owner();
+                                assert!(ctx.install_attached_ext_proc(
+                                    "terminal/audit".into(),
+                                    Arc::clone(&owner),
+                                    false
+                                ));
+                                ctx.set_mirror_state(crate::ctx::MirrorState::Abandoned);
+                                global_metrics().ctx_created();
+                                logging(&proxy, &mut session, None, &mut ctx).await;
+                                assert_eq!(backend.conn(), 0);
+                                assert!(!ctx.has_mirror_state());
+                                assert!(matches!(
+                                    ctx.response_terminal_state,
+                                    ResponseTerminalState::Closed { .. }
+                                ));
+                                assert_eq!(owner.test_state(), ("cancelled", "logging-fallback", true));
+                                let sent = entries.lock();
+                                assert_eq!(sent.len(), usize::from(sender_health == Some(true)));
+                                let stored = crate::observe::access_log_store::get_access_log_store().get(&trace_id);
+                                assert_eq!(stored.is_some(), test_mode && header == Some("test_store"));
+                                if let Some(stored) = stored {
+                                    let json: serde_json::Value = serde_json::from_str(&stored).unwrap();
+                                    assert_eq!(json["request_info"]["trace_id"], trace_id);
+                                    if let Some(sent) = sent.first() {
+                                        assert_eq!(&stored, sent);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+        },
+    );
+}

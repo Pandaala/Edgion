@@ -6818,3 +6818,23 @@ Independent plan review passed. Fresh baseline and final verification each
 passed 63 access-log tests and seven LB-attempt tests (70 total). Formatting,
 workspace check/Clippy and seven guards passed with existing unrelated
 warnings. No full suite, live connection test or throughput benchmark ran.
+
+## Disabled terminal access-log projection
+
+The terminal logging callback now skips entry/extension projection, metadata
+construction and JSON serialization only when the configured logger has zero
+senders and the integration-test store does not request the entry. All existing
+Wasm, cache, transcoder, AI, LB, metrics, response-terminal, ExtProc and WAF
+finalizers still execute before the gate. Mirror cleanup executes on both paths,
+and the active-context release guard remains alive until callback exit.
+Nonempty unhealthy loggers retain dispatch/drop accounting. The test-store path
+retains its exact header match and existing serialized output/clone behavior.
+
+Independent plan review passed. A subprocess-isolated, in-memory Session test
+passed on the original implementation and after the change across 24 combinations
+of test mode, zero/healthy/unhealthy senders and absent/exact/wrong/case-varied
+store headers. It verifies LB balance, ExtProc terminalization, response closure,
+mirror cleanup and test-store/sender JSON equality. Final focused verification
+passed 11 logging, 63 access-log, seven LB-attempt and seven cache-lifecycle tests
+(88 total). Formatting, workspace check/Clippy and seven guards passed
+with existing unrelated warnings. No full suite, live network or benchmark ran.

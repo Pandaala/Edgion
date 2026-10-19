@@ -78,6 +78,22 @@ pub async fn logging(
     crate::ai::http::finalize_guardrail_log(ctx);
 
     ctx.finalize_waf_for_logging();
+    let should_store = edgion_common::test_mode::is_integration_testing_mode()
+        && session
+            .req_header()
+            .headers
+            .get("access_log")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v == "test_store");
+    if edgion_http.access_logger.sender_count() == 0 && !should_store {
+        // All terminal work above is required even when no log will be consumed.
+        // Preserve the same defensive mirror cleanup as the sending path.
+        if let Some(mirror_state) = ctx.take_mirror_state() {
+            drop(mirror_state);
+        }
+        return;
+    }
+
     let mut entry = AccessLogEntry::from_context(ctx);
     entry.waf = ctx.waf_access_log();
     // Resolve operator-declared `ext` fields here rather than in a request-stage
@@ -98,22 +114,7 @@ pub async fn logging(
     let entry_json = entry.to_json();
 
     // Clone only when integration testing needs the log stored; production path is zero-copy.
-    let entry_json_for_store = if edgion_common::test_mode::is_integration_testing_mode() {
-        let should_store = session
-            .req_header()
-            .headers
-            .get("access_log")
-            .and_then(|v| v.to_str().ok())
-            .map(|v| v == "test_store")
-            .unwrap_or(false);
-        if should_store {
-            Some(entry_json.clone())
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    let entry_json_for_store = should_store.then(|| entry_json.clone());
 
     edgion_http.access_logger.send_with_meta(entry_json, &meta).await;
 
