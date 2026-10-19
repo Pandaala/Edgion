@@ -32,6 +32,17 @@ fn verify_at_rejects_nonpositive_lifetimes_future_tokens_and_extreme_timestamps(
 #[test]
 fn verify_at_rejects_an_invalid_signature() {
     let mut token = signed_token(100);
+    let signature = token.sign.clone();
+    for invalid in [
+        signature[..63].to_string(),
+        format!("{signature}0"),
+        signature.to_ascii_uppercase(),
+        "z".repeat(64),
+    ] {
+        token.sign = invalid;
+        assert!(!token.verify_at(KEY, 10, 100));
+    }
+    token.sign = signature;
     token.sign.replace_range(..1, "f");
     assert!(!token.verify_at(KEY, 10, 100));
 }

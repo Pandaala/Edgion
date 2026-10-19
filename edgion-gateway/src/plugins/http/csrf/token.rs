@@ -44,13 +44,17 @@ impl CsrfToken {
     }
 
     fn gen_sign(random: &str, expires: i64, key: &str) -> String {
+        hex::encode(Self::signature_bytes(random, expires, key))
+    }
+
+    fn signature_bytes(random: &str, expires: i64, key: &str) -> [u8; 32] {
         let mut mac = HmacSha256::new_from_slice(key.as_bytes())
             .expect("HMAC accepts any non-empty key per RFC 2104; key validated non-empty by config loader");
         mac.update(b"expires:");
         mac.update(expires.to_string().as_bytes());
         mac.update(b",random:");
         mac.update(random.as_bytes());
-        hex::encode(mac.finalize().into_bytes())
+        mac.finalize().into_bytes().into()
     }
 
     /// Encode token to base64 string
@@ -90,9 +94,14 @@ impl CsrfToken {
         }
 
         // Verify signature (constant-time comparison to prevent timing attacks)
-        let expected_sign = Self::gen_sign(&self.random, self.expires, key);
+        let mut expected_sign = [0u8; 64];
+        hex::encode_to_slice(
+            Self::signature_bytes(&self.random, self.expires, key),
+            &mut expected_sign,
+        )
+        .expect("32-byte SHA-256 digest encodes to exactly 64 hex bytes");
         let a = self.sign.as_bytes();
-        let b = expected_sign.as_bytes();
+        let b = &expected_sign;
         if a.len() != b.len() || a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) != 0 {
             return false;
         }

@@ -6508,3 +6508,21 @@ passed 46 resource and 17 Gateway rate_limit_local-filtered tests (63 total),
 including dynamic Cluster count changes, formatting, workspace check/Clippy and
 seven guards. Existing unrelated warnings remain. No full test suite, live
 integration or benchmark ran.
+
+## CSRF expected-signature buffer ownership
+
+CSRF verification now hex-encodes its expected SHA-256 digest into a fixed
+64-byte stack buffer instead of a temporary String. Issuance retains its owned
+lowercase hex signature through the same extracted digest helper. HMAC input
+fragments, timestamp formatting, age gates, exact ASCII length/XOR comparison,
+key handling and token wire shape remain unchanged. The fixed encoding assertion
+follows the locked hex 0.4.3 exact-length contract. This removes one source-visible
+hex String construction from verification; timestamp allocation remains, and no
+stronger timing or measured CPU/throughput claim is made.
+
+Independent plan review approved four files. Short, long, uppercase and non-hex
+signature rejection cases passed on the original implementation before editing
+production code. Fresh verification passed all 19 CSRF tests, including known
+signature and fragment parity cases, formatting, workspace check/Clippy and seven
+guards. Existing unrelated warnings remain. No full test suite, live integration
+or benchmark ran. Updated the owning signature-input knowledge page.
