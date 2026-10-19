@@ -6741,3 +6741,27 @@ Independent plan review approved two documents. Fresh baseline passed 143
 ExtProc and ten terminal-logging tests (153 total), formatting check, workspace
 check/Clippy and agent-doc validation. Existing unrelated warnings remain; no
 full suite, live integration or benchmark ran.
+
+## Reuse bounded access-log extension values on override
+
+Borrowed LogExt overrides now reuse the existing String only when the selected
+UTF-8 prefix fits its capacity. A larger prefix receives an exact new allocation,
+so geometric growth cannot exceed the established retained-capacity bound.
+Owned inputs retain their move/oversized-capacity-release path. Key order, field
+count gates, source resolution, sensitive flags and serialization are unchanged.
+The shared prefix helper keeps one UTF-8 truncation algorithm.
+
+Independent plan review approved three files. The baseline passed 19 LogExt
+tests. The new full-map sequence compared all fields, bounded UTF-8 prefixes and
+both sensitive-flag transitions before failing on the original implementation's
+buffer replacement. It covers empty values and long/short/long transitions;
+another test retains owned overwrite transfer and oversized-capacity release.
+Reused short values retain the earlier bounded capacity, at most 256 bytes per
+field; this removes fitting-override allocations without claiming every case
+uses less retained memory or copies fewer bytes.
+
+Final verification passed 21 LogExt and ten terminal-logging tests (31 total).
+After simplifying a test iterator in response to Clippy, the 21 affected tests,
+formatting and workspace check/Clippy passed again. Seven repository guards
+passed; only existing unrelated warnings remain. No full suite, live integration
+or throughput benchmark ran.

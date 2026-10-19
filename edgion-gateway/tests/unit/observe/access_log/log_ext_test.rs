@@ -86,6 +86,76 @@ fn value_is_truncated_to_the_cap() {
 }
 
 #[test]
+fn borrowed_overwrites_reuse_bounded_capacity_without_changing_fields() {
+    let replacements = [
+        "short".to_owned(),
+        String::new(),
+        "é".repeat(200),
+        "€".repeat(200),
+        "x".repeat(256),
+        "last".to_owned(),
+    ];
+    let mut measurements = Vec::new();
+    for initial in [String::new(), "old".to_owned(), "a".repeat(256)] {
+        let mut ext = LogExt::default();
+        ext.insert("target", initial, false);
+        for index in 1..LOG_LABEL_MAX_COUNT {
+            ext.insert(&format!("k{index}"), "retained", false);
+        }
+        for (index, replacement) in replacements.iter().enumerate() {
+            let end = replacement
+                .char_indices()
+                .map(|(index, _)| index)
+                .chain(std::iter::once(replacement.len()))
+                .rfind(|&index| index <= LOG_LABEL_MAX_VALUE_LEN)
+                .unwrap();
+            let expected = &replacement[..end];
+            let capacity = ext.0[0].value.capacity();
+            let original = ext.0[0].value.as_ptr();
+            let sensitive = index % 2 == 0;
+            let (_, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+                ext.insert("target", replacement.as_str(), sensitive);
+            });
+            assert_eq!(ext.len(), LOG_LABEL_MAX_COUNT);
+            assert_eq!(ext.0[0].key, "target");
+            assert_eq!(ext.0[0].value, expected);
+            assert_eq!(ext.0[0].sensitive, sensitive);
+            assert!(ext.0[0].value.capacity() <= LOG_LABEL_MAX_VALUE_LEN);
+            for field in &ext.0[1..] {
+                assert_eq!(field.value, "retained");
+            }
+            measurements.push((expected.len(), capacity, original, ext.0[0].value.as_ptr(), stats));
+        }
+    }
+    for (length, capacity, original, actual, stats) in measurements {
+        if length <= capacity {
+            assert_eq!(stats.calls, 0);
+            assert_eq!(actual, original);
+        } else {
+            assert_eq!(stats.calls, 1);
+            assert_eq!(stats.requested_bytes, length);
+        }
+    }
+}
+
+#[test]
+fn owned_overwrite_still_transfers_or_bounds_the_input_buffer() {
+    let mut ext = LogExt::default();
+    ext.insert("target", "original", false);
+    let value = "owned".to_owned();
+    let original = value.as_ptr();
+    ext.insert("target", value, true);
+    assert_eq!(ext.0[0].value.as_ptr(), original);
+    assert!(ext.0[0].sensitive);
+    let mut oversized = String::with_capacity(LOG_LABEL_MAX_VALUE_LEN * 16);
+    oversized.push_str("small");
+    ext.insert("target", oversized, false);
+    assert_eq!(ext.0[0].value, "small");
+    assert!(ext.0[0].value.capacity() <= LOG_LABEL_MAX_VALUE_LEN);
+    assert!(!ext.0[0].sensitive);
+}
+
+#[test]
 fn owned_insert_reuses_the_resolved_value_allocation() {
     let mut ext = LogExt::default();
     let value = String::from("resolved");

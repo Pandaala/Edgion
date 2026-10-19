@@ -57,12 +57,28 @@ impl LogExt {
 
         // Borrow dynamic sources until the bounded prefix is selected; owned
         // callers can still transfer an already suitably sized allocation.
-        let value = truncate_on_char_boundary(value.into(), LOG_LABEL_MAX_VALUE_LEN);
+        let value = value.into();
         if let Some(index) = existing {
-            self.0[index].value = value;
-            self.0[index].sensitive = sensitive;
+            let field = &mut self.0[index];
+            match value {
+                Cow::Borrowed(value) => {
+                    let prefix = bounded_prefix(value, LOG_LABEL_MAX_VALUE_LEN);
+                    if prefix.len() <= field.value.capacity() {
+                        field.value.clear();
+                        field.value.push_str(prefix);
+                    } else {
+                        // Avoid geometric growth beyond the retained-capacity bound.
+                        field.value = prefix.to_owned();
+                    }
+                }
+                Cow::Owned(value) => {
+                    field.value = truncate_on_char_boundary(Cow::Owned(value), LOG_LABEL_MAX_VALUE_LEN);
+                }
+            }
+            field.sensitive = sensitive;
             return;
         }
+        let value = truncate_on_char_boundary(value, LOG_LABEL_MAX_VALUE_LEN);
         self.0.push(LogExtField {
             key: key.to_string(),
             value,
@@ -81,12 +97,18 @@ impl LogExt {
     }
 }
 
-/// Truncate to at most `max` bytes without splitting a UTF-8 char.
-fn truncate_on_char_boundary(value: Cow<'_, str>, max: usize) -> String {
+/// Select at most `max` bytes without splitting a UTF-8 char.
+fn bounded_prefix(value: &str, max: usize) -> &str {
     let mut end = value.len().min(max);
     while end > 0 && !value.is_char_boundary(end) {
         end -= 1;
     }
+    &value[..end]
+}
+
+/// Truncate to at most `max` bytes without retaining an oversized allocation.
+fn truncate_on_char_boundary(value: Cow<'_, str>, max: usize) -> String {
+    let end = bounded_prefix(&value, max).len();
     match value {
         Cow::Borrowed(value) => value[..end].to_owned(),
         Cow::Owned(mut value) => {
