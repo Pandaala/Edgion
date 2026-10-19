@@ -368,14 +368,23 @@ impl AttachedExtProc {
     }
 
     pub(crate) fn take_summary_line(&self) -> Option<String> {
-        let mut summary = self.summary.lock();
-        if summary.emitted {
-            return None;
-        }
-        summary.emitted = true;
+        let (phases, input_bytes, output_bytes, outcome, reason) = {
+            let mut summary = self.summary.lock();
+            if summary.emitted {
+                return None;
+            }
+            summary.emitted = true;
+            (
+                summary.phases,
+                summary.input_bytes,
+                summary.output_bytes,
+                summary.outcome,
+                summary.reason,
+            )
+        };
         Some(format!(
             "ext_proc attached phases={} input_bytes={} output_bytes={} outcome={} reason={}",
-            summary.phases, summary.input_bytes, summary.output_bytes, summary.outcome, summary.reason
+            phases, input_bytes, output_bytes, outcome, reason
         ))
     }
 }

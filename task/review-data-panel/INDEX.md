@@ -6408,3 +6408,21 @@ regressions were sufficient for this last-use transfer. Fresh verification passe
 36 outlier-detection and 41 coordinator tests (77 total), formatting, workspace
 check/Clippy and seven guards. Existing unrelated warnings remain. No full test
 suite, live integration or benchmark ran.
+
+## Format ExtProc terminal summaries outside the lock
+
+AttachedExtProc::take_summary_line now checks/sets emitted and copies its five
+scalar/static-text fields under the summary mutex, then formats the same line
+after releasing the guard. The snapshot and single-claim linearization remain
+one critical section. Later summary updates cannot affect the claimed output.
+State terminalization, owner cleanup and canonical access-log placement are
+unchanged. This shortens the allocation-containing critical section; it does not
+remove an allocation or claim measured contention/throughput gains or identical
+thread scheduling.
+
+Independent plan review approved three files. The existing terminalization table
+was strengthened to compare exact summary text and repeated-claim refusal, and
+passed against the original implementation before the production edit. Fresh
+verification passed 143 ExtProc and ten terminal-logging tests (153 total),
+formatting, workspace check/Clippy and seven guards. Existing unrelated warnings
+remain. No full test suite, live interoperability or benchmark ran.

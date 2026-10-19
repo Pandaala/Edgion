@@ -482,7 +482,17 @@ async fn logging_terminalization_preserves_settled_summaries_and_emission() {
                         }
                     );
                 }
-                assert_eq!(owner.take_summary_line().is_some(), !emitted);
+                let expected = (!emitted).then(|| {
+                    let (outcome, reason) = if outcome == "pending" {
+                        ("cancelled", "logging-fallback")
+                    } else {
+                        (outcome, "prior-reason")
+                    };
+                    format!(
+                        "ext_proc attached phases=3 input_bytes=17 output_bytes=29 outcome={outcome} reason={reason}"
+                    )
+                });
+                assert_eq!(owner.take_summary_line(), expected);
                 assert!(owner.take_summary_line().is_none());
             }
         }
