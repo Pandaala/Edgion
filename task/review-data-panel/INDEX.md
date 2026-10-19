@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [JSON value profiling worklist representation](json-01-profile-worklist-representation.md)
+
 - [Prepared GraphQL type-condition lookup](graphql-02-prepared-type-conditions.md)
 
 - [DynamicInternalUpstream input ownership](routing-01-dynamic-internal-input-ownership.md)
@@ -4859,3 +4861,26 @@ configuration, 21 rewrite configuration and 28 gRPC codec tests; nine Gateway
 schema, 21 rewrite, ten REST adapter, 26 transcoder and 23 form transformer tests.
 Formatting, workspace check/Clippy and seven repository guards passed, with existing
 warnings outside the diff. No full integration or performance benchmark ran.
+
+
+## JSON value profiling worklist audit
+
+Traced the shared profiler through REST input/output binding, ProxyRewrite copy,
+patch-value and post-operation checks, and gRPC merged request encoding. Scalar
+roots still allocate the initial traversal Vec. Eager child population and LIFO
+visits make temporary storage shape-dependent; object key counting happens before
+child traversal, and depth rejection precedes node rejection. Existing caller
+bounds prevent treating this observation as proof of unbounded gateway allocation.
+
+[json-01](json-01-profile-worklist-representation.md) records root-outside-Vec,
+inline storage and iterator-frame alternatives with their allocation/stack/order
+tradeoffs, required simultaneous-limit error oracles and measurement acceptance.
+No runtime change, replacement algorithm or benchmark was made. Strict parser
+accounting remains separate from already-parsed value profiling.
+
+Fresh serial baseline verification passed 172 existing tests: 25 Resources
+schema/profile, nine REST configuration, 21 rewrite configuration, 28 gRPC codec;
+nine Gateway schema, 21 rewrite, ten REST adapter, 26 transcoder and 23 form.
+Formatting check, workspace check/Clippy and documentation/diff checks passed;
+existing warnings remain outside this documentation-only batch. These results
+validate the current baseline, not any proposed traversal representation.
