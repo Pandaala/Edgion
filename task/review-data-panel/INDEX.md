@@ -6426,3 +6426,21 @@ passed against the original implementation before the production edit. Fresh
 verification passed 143 ExtProc and ten terminal-logging tests (153 total),
 formatting, workspace check/Clippy and seven guards. Existing unrelated warnings
 remain. No full test suite, live interoperability or benchmark ran.
+
+## Static status labels in terminal metric fallback
+
+The dynamic backend-request counter and request-duration helpers now retain the
+static lifetime of status_group and build the status label with
+Label::from_static_parts. The sole production caller already receives static
+status text; repository test callers use literals. Locked metrics 0.24.6 stores
+these static strings directly. Each enabled status label avoids its former
+String construction, up to two on a fallback request when the histogram and both
+status labels are enabled. Other labels and label-vector allocations remain.
+Dynamic metric ownership/expiry, config gates, label values/order and the route
+handle fast path are unchanged; no measured throughput claim is made.
+
+Independent plan review approved two files. Existing emitted-label, status-group,
+handle/fallback parity and logging tests were sufficient for the mechanical
+lifetime change. Fresh verification passed 36 metrics and ten logging tests
+(46 total), formatting, workspace check/Clippy and seven guards. Existing unrelated
+warnings remain. No full test suite, live integration or benchmark ran.

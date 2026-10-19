@@ -529,7 +529,7 @@ pub fn record_backend_request(
     backend_ns: &str,
     backend_name: &str,
     protocol: &str,
-    status: &str,
+    status: &'static str,
     test_key: &str,
     test_data: &str,
 ) {
@@ -553,7 +553,7 @@ pub fn record_backend_request(
         labels.push(Label::new("protocol", protocol.to_string()));
     }
     if cfg.status {
-        labels.push(Label::new("status", status.to_string()));
+        labels.push(Label::from_static_parts("status", status));
     }
     if !test_key.is_empty() {
         labels.push(Label::new("test_key", test_key.to_string()));
@@ -652,7 +652,7 @@ pub fn record_request_duration(
     backend_namespace: &str,
     backend_name: &str,
     protocol: &str,
-    status: &str,
+    status: &'static str,
     duration_ms: f64,
 ) {
     if !cfg.enabled {
@@ -686,7 +686,7 @@ pub fn record_request_duration(
         label_vec.push(Label::new("protocol", protocol.to_string()));
     }
     if labels.status {
-        label_vec.push(Label::new("status", status.to_string()));
+        label_vec.push(Label::from_static_parts("status", status));
     }
 
     dynamic_histogram!(names::GATEWAY_REQUEST_DURATION_MS, label_vec).record(duration_ms);
