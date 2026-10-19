@@ -322,3 +322,60 @@ fn cleanup_idempotent_on_double_call() {
     lb_runtime_cleanup(&mut ctx);
     assert_eq!(a.conn(), 1, "second cleanup must not decrement again");
 }
+
+#[test]
+fn test_metric_json_preserves_fields_and_escaping() {
+    fn set_type(ctx: &mut EdgionHttpContext, test_type: Option<TestType>) {
+        ctx.gateway_info = Some(Arc::new(GatewayInfo::new(
+            None,
+            "gateway".to_owned(),
+            None,
+            None,
+            test_type,
+            None,
+            Vec::new(),
+            None,
+        )));
+    }
+    let mut ctx = EdgionHttpContext::new();
+    assert_eq!(build_test_data(&ctx, None), "");
+    set_type(&mut ctx, Some(TestType::Lb));
+    assert_eq!(build_test_data(&ctx, None), "");
+    ctx.backend_context = Some(BackendContext {
+        source: None,
+        rsc: None,
+        service_key: None,
+        service_kind: None,
+        upstreams: Vec::new(),
+        current_upstream_id: None,
+        backend_ref_idx: None,
+        effective_policy_captured: false,
+        effective_policy: None,
+    });
+    ctx.push_upstream(Some("2001:db8::42".to_owned()), Some(8080));
+    ctx.hash_key = Some("route\"\\\nkey".to_owned());
+    assert_eq!(
+        build_test_data(&ctx, None),
+        r#"{"ip":"2001:db8::42","port":8080,"hash_key":"route\"\\\nkey"}"#
+    );
+    assert_eq!(ctx.hash_key.as_deref(), Some("route\"\\\nkey"));
+    ctx.hash_key = Some(String::new());
+    ctx.get_current_upstream_mut().unwrap().ip = Some(String::new());
+    ctx.get_current_upstream_mut().unwrap().port = None;
+    assert_eq!(build_test_data(&ctx, None), r#"{"ip":"","hash_key":""}"#);
+    for test_type in [None, Some(TestType::None)] {
+        set_type(&mut ctx, test_type);
+        assert_eq!(build_test_data(&ctx, None), "");
+    }
+    set_type(&mut ctx, Some(TestType::Retry));
+    ctx.try_cnt = 3;
+    assert_eq!(build_test_data(&ctx, None), r#"{"try_count":3}"#);
+    let error = PingoraError::new(pingora_core::ErrorType::InternalError);
+    let expected = format!(
+        "{{\"try_count\":3,\"error\":{}}}",
+        serde_json::to_string(&error.to_string()).unwrap()
+    );
+    assert_eq!(build_test_data(&ctx, Some(&error)), expected);
+    set_type(&mut ctx, Some(TestType::Latency));
+    assert_eq!(build_test_data(&ctx, None), "");
+}

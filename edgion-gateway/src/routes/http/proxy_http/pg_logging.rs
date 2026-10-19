@@ -340,10 +340,10 @@ fn build_test_data(ctx: &EdgionHttpContext, error: Option<&PingoraError>) -> Str
         TestType::Lb => {
             // LB test: collect backend IP, port from UpstreamInfo (saved by push_upstream)
             if let Some(upstream) = ctx.get_current_upstream() {
-                test_data.ip = upstream.ip.clone();
+                test_data.ip = upstream.ip.as_deref();
                 test_data.port = upstream.port;
             }
-            test_data.hash_key = ctx.hash_key.clone();
+            test_data.hash_key = ctx.hash_key.as_deref();
         }
         TestType::Retry => {
             // Retry test: collect try count and error

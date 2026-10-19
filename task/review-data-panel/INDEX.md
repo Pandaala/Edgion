@@ -5875,3 +5875,24 @@ Fresh serial verification passed 117 tests: the matrix, 12 selector and 104
 upstream-peer tests. Formatting, workspace check/Clippy and seven repository
 guards passed with existing unrelated warnings. No live integration test or
 whole-request performance claim is included.
+
+## Borrow LB test metric strings during JSON serialization
+
+Logging's TestData now borrows the current upstream IP and request hash key
+until synchronous JSON serialization completes. Its sole production constructor
+uses as_deref instead of cloning those optional Strings. The output JSON remains
+owned, and Retry error formatting retains its owned String. Field order,
+skip_serializing_if behavior, empty-data output, latency sampling and the
+integration-testing-mode gate are unchanged. The integration harness has its
+own deserialization type and does not consume this borrowed projection.
+
+The source change removes up to two nonempty temporary payload copies in enabled
+LB test metrics. It does not change ordinary production-mode metrics or claim
+whole-request zero allocation or measured throughput improvement.
+
+Independent plan review approved the four-file scope. The new exact JSON
+regression passed before and after implementation, covering populated IPv6 and
+escaped keys, empty versus absent fields, disabled modes, Retry count/error and
+missing latency. Fresh serial verification passed ten logging and three metrics
+tests. Formatting, workspace check/Clippy and seven repository guards passed
+with existing unrelated warnings. No live integration or performance benchmark ran.

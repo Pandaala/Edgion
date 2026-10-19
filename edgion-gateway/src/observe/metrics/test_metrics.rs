@@ -50,12 +50,13 @@ impl TestType {
 ///
 /// Serialized to JSON as the `test_data` label in metrics.
 /// Fields are optional and only serialized when present.
+/// Request strings are borrowed until synchronous JSON serialization completes.
 #[derive(Debug, Clone, Default, Serialize)]
-pub struct TestData {
+pub struct TestData<'a> {
     // ========== LB test fields ==========
     /// Backend IP address
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ip: Option<String>,
+    pub ip: Option<&'a str>,
 
     /// Backend port
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -63,7 +64,7 @@ pub struct TestData {
 
     /// Consistent hash key (e.g., header value, cookie value)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub hash_key: Option<String>,
+    pub hash_key: Option<&'a str>,
 
     // ========== Retry test fields ==========
     /// Retry attempt count
@@ -80,7 +81,7 @@ pub struct TestData {
     pub latency_ms: Option<u64>,
 }
 
-impl TestData {
+impl TestData<'_> {
     /// Create empty TestData
     pub fn new() -> Self {
         Self::default()
