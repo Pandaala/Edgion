@@ -45,7 +45,7 @@ security feature.
 
 **2. Stripping must not override the path-forwarding decision.**
 
-- Query: split the live query (`session.get_query()`) on `&`, drop the pair
+- Query: split the live query (`session.request_query()`) on `&`, drop the pair
   whose percent-decoded key matches `name` (mirrors `get_query_param`'s
   decoded-key extraction), then write only the query back via the dedicated
   `PluginSession::set_request_query` (empty string = remove query). Surviving

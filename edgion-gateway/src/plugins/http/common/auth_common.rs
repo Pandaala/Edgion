@@ -37,7 +37,7 @@ pub fn set_sensitive_request_header(
 /// `api%5Fkey=...`. [`strip_cookie`] deliberately compares raw keys instead —
 /// each helper matches the extractor it undoes.
 pub fn strip_query_param(session: &mut dyn PluginSession, name: &str) {
-    let Some(query) = session.get_query() else {
+    let Some(query) = session.request_query() else {
         return;
     };
     let mut removed = false;

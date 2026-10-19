@@ -20,7 +20,7 @@ contains the credential key, the request target remains byte-identical.
 **1. Extraction and stripping can observe different query snapshots**
 
 Auth extraction reads the frozen entry query through `get_query_param`, while
-credential stripping reads the live query through `get_query`. An earlier
+credential stripping reads the live query through `request_query`. An earlier
 request plugin can therefore remove or rewrite the credential parameter before
 the auth plugin reaches its hide-credentials step.
 
@@ -57,3 +57,21 @@ query representation.
 ## Resolution references
 
 - `change-fix-07` — 2026-08-02.
+
+## Borrow the live query while planning replacement
+
+The shared helper borrows the current raw query through `request_query` instead
+of cloning it through `get_query`. The real adapter reads the same live URI for
+both accessors. Surviving slices are joined into an owned replacement before the
+mutable setter runs, so no borrow crosses mutation. Frozen entry extraction,
+percent-decoded key matching, matched empty-pair removal and ignored setter errors
+retain their existing behavior.
+
+The helper regression matrix forbids the owned accessor and covers absent/empty
+queries, unmatched separators, encoded/duplicate keys, raw surviving bytes and
+setter failures. Real-adapter regressions preserve absolute request targets and
+HTTP/2 authority; the live-query accessor regression checks pointer identity,
+zero read allocations and parity with the owned getter across URI changes.
+Only the whole-query copy is removed. Key decoding, the temporary slice Vec and
+the joined replacement still allocate; no whole-helper zero-allocation or
+throughput claim follows.

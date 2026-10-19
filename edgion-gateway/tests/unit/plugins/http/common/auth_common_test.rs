@@ -325,8 +325,8 @@ fn test_claims_to_value_includes_standard_fields() {
 fn strip_query_param_removes_named_keeps_others() {
     let mut session = MockPluginSession::new();
     session
-        .expect_get_query()
-        .return_const(Some("api_key=secret&foo=bar".to_string()));
+        .expect_request_query()
+        .return_const(Some("api_key=secret&foo=bar"));
     session
         .expect_set_request_query()
         .withf(|query| query == "foo=bar")
@@ -339,9 +339,7 @@ fn strip_query_param_removes_named_keeps_others() {
 #[test]
 fn strip_query_param_only_param_clears_query() {
     let mut session = MockPluginSession::new();
-    session
-        .expect_get_query()
-        .return_const(Some("api_key=secret".to_string()));
+    session.expect_request_query().return_const(Some("api_key=secret"));
     session
         .expect_set_request_query()
         .withf(|query| query.is_empty())
@@ -354,7 +352,7 @@ fn strip_query_param_only_param_clears_query() {
 #[test]
 fn strip_query_param_without_match_leaves_query_untouched() {
     let mut session = MockPluginSession::new();
-    session.expect_get_query().return_const(Some("a=1&&b=2&".to_string()));
+    session.expect_request_query().return_const(Some("a=1&&b=2&"));
     session.expect_set_request_query().times(0);
 
     strip_query_param(&mut session, "api_key");
@@ -479,4 +477,49 @@ fn plan_cookie_strip_with_no_names_keeps_everything() {
         plan(&["a=1; b=2"], &[]),
         CookieStripPlan::Replace("a=1; b=2".to_string())
     );
+}
+
+#[test]
+fn query_credential_strip_preserves_live_raw_query_boundaries() {
+    for (query, name, expected) in [
+        (None, "api_key", None),
+        (Some(""), "api_key", None),
+        (Some("&&a=1&&b=2&"), "api_key", None),
+        (
+            Some("api%5Fkey=secret&x=a%26b&api_key=again&&flag&x=+&"),
+            "api_key",
+            Some("x=a%26b&flag&x=+"),
+        ),
+        (Some("api_key=one&api_key=two"), "api_key", Some("")),
+        (Some("api_key&keep==value"), "api_key", Some("keep==value")),
+        (
+            Some("bad%ZZ=one&api_key=secret&%61=two"),
+            "api_key",
+            Some("bad%ZZ=one&%61=two"),
+        ),
+        (Some("api+key=secret&keep=1"), "api key", Some("keep=1")),
+        (Some("=secret&&keep=1"), "", Some("keep=1")),
+    ] {
+        for fail_setter in [false, true] {
+            let mut session = MockPluginSession::new();
+            session.expect_get_query().times(0);
+            session.expect_request_query().times(1).return_const(query);
+            if let Some(expected) = expected {
+                session
+                    .expect_set_request_query()
+                    .withf(move |actual| actual == expected)
+                    .times(1)
+                    .returning(move |_| {
+                        if fail_setter {
+                            Err(std::io::Error::other("query update rejected").into())
+                        } else {
+                            Ok(())
+                        }
+                    });
+            } else {
+                session.expect_set_request_query().times(0);
+            }
+            strip_query_param(&mut session, name);
+        }
+    }
 }

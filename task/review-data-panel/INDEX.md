@@ -6039,3 +6039,21 @@ Independent plan review approved two documentation files. Fresh baseline checks
 passed 56 HMAC-filtered and 68 condition-system tests (overlapping filters),
 formatting check, workspace check/Clippy and agent-doc validation. Existing
 unrelated warnings remain. No throughput measurement or integration run is claimed.
+
+## Borrow the live query during credential stripping
+
+The shared KeyAuth/JwtAuth strip_query_param helper now uses request_query to
+borrow the same current URI previously copied by get_query. Its joined replacement
+is owned before mutation. Decoded-key matching, no-match no-write behavior, raw
+surviving pairs, matched empty-pair filtering and ignored setter failures remain
+unchanged. Frozen credential extraction and upstream path selection are unaffected.
+Only the whole-query input copy is removed; decoding and output construction still
+allocate, and no throughput improvement is claimed.
+
+Independent plan review approved five files. The new 18-case boundary/error matrix
+passed against original production before the accessor switch; the final version
+forbids the owned getter. Fresh verification passed 29 shared-auth, 14 KeyAuth,
+47 JwtAuth, two real-adapter stripping and one live-query ownership test (93 total).
+Formatting, workspace check/Clippy and seven guards passed with existing unrelated
+warnings. The two owning query-stripping knowledge pages now describe the borrowed
+accessor. No integration suite was run.
