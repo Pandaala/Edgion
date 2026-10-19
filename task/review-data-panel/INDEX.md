@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [OIDC introspection claims ownership](oidc-05-introspection-claims-ownership.md)
+
 - [OIDC cookie attribute preparation](oidc-04-cookie-attribute-formatting.md)
 
 - [OIDC required-scope membership storage](oidc-03-required-scope-membership.md)
