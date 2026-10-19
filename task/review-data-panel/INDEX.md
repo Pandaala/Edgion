@@ -7760,3 +7760,18 @@ workspace check/Clippy and seven repository guards with existing unrelated
 warnings. The removed allocation is the temporary wire-span Vec; final request
 bytes and the earlier post-mask projection remain owned. No full suite or
 throughput benchmark ran.
+
+## Pin BasicAuth user generations only after a hit
+
+BasicAuth now performs its username lookup through the plugin-owned immutable
+map before cloning that map's Arc. An unknown user avoids the immediately
+released Arc increment/decrement; a known user still pins exactly the same
+generation for spawn_blocking verification. The fast-miss policy, password
+verification, failure delay, anonymous behavior and masked/group log contracts
+remain unchanged. No heap allocation reduction, constant-time property or
+throughput improvement is claimed.
+
+Existing known/unknown dispatch and pinned-generation regressions cover the
+control-flow and lifetime boundary. Fresh verification passed 20 BasicAuth and
+36 shared-auth tests, formatting, workspace check/Clippy and seven repository
+guards with existing unrelated warnings. No full suite or benchmark ran.

@@ -104,8 +104,9 @@ impl BasicAuth {
     }
 
     fn pin_known_user_generation(&self, username: &str) -> Option<Arc<PreparedUserMap>> {
-        let users = Arc::clone(&self.user_passwords);
-        users.contains_key(username).then_some(users)
+        self.user_passwords
+            .contains_key(username)
+            .then(|| Arc::clone(&self.user_passwords))
     }
 
     fn verify_pinned_user(users: Arc<PreparedUserMap>, username: String, password: String) -> Option<(String, String)> {
