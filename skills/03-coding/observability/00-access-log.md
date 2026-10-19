@@ -428,8 +428,11 @@ plugin_log.push(&format!("Auth failed for user {}", name)); // PII into PluginLo
 `push_fmt` accepts non-sensitive diagnostic `u16`, `u64`, `usize`, `i64` and `isize` arguments through
 `la!`, such as `log.push_fmt("auth pass {}", la![status])`. They use bounded
 stack decimal formatting and the same entry-size/drop rules as plain text.
-Numeric identities or credentials are still sensitive: render those through
-the existing sensitive-text path. Integer support does not permit arbitrary
+Numeric identities or credentials remain subject to the existing logging and
+masking restrictions. For an already-permitted sensitive unsigned integer, use
+`sensitive_u64(value)`: it formats decimal digits on the stack and passes them
+through the same bounded sensitive-text masking function as `sensitive(text)`.
+Integer support does not permit arbitrary
 `Display` values, dynamic error details, or additional request-level log entries.
 
 ```rust

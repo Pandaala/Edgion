@@ -25,7 +25,7 @@ use async_trait::async_trait;
 
 use crate::observe::metrics::record_region_route_overlay_event;
 use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
-use crate::plugins::runtime::log::{la, sensitive};
+use crate::plugins::runtime::log::{la, sensitive, sensitive_u64};
 use crate::plugins::runtime::session_adapter::key_value;
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
 use crate::{ExternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
@@ -285,7 +285,7 @@ impl RegionRoute {
             la![
                 sensitive(&region.name),
                 sensitive(host),
-                sensitive(&port.to_string()),
+                sensitive_u64(u64::from(port)),
                 sensitive(&sni)
             ],
         );
@@ -337,7 +337,7 @@ impl RegionRoute {
                     if v < modulo.get() {
                         log.push_fmt(
                             "hash_pass={} src={}",
-                            la![sensitive(&v.to_string()), sensitive(&src.as_log_str())],
+                            la![sensitive_u64(u64::from(v)), sensitive(&src.as_log_str())],
                         );
                         return Self::lookup_by_hash(regions, v);
                     }
@@ -368,7 +368,7 @@ impl RegionRoute {
             la![
                 sensitive(&key),
                 sensitive(&src.as_log_str()),
-                sensitive(&hash_val.to_string())
+                sensitive_u64(u64::from(hash_val))
             ],
         );
 
@@ -387,7 +387,7 @@ impl RegionRoute {
 
         let result = Self::lookup_by_hash(regions, hash_val);
         if result.is_none() {
-            log.push_fmt("hash_val={} no_range, pass", la![sensitive(&hash_val.to_string())]);
+            log.push_fmt("hash_val={} no_range, pass", la![sensitive_u64(u64::from(hash_val))]);
         }
         result
     }

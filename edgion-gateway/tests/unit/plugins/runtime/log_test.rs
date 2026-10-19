@@ -3,6 +3,58 @@ use edgion_resources::sensitive::SENSITIVE_MODE;
 use std::sync::atomic::Ordering;
 
 #[test]
+fn sensitive_unsigned_arguments_preserve_masking_limits_and_allocations() {
+    assert_sensitive_test_in_subprocess(
+        "sensitive_unsigned_arguments_preserve_masking_limits_and_allocations",
+        || {
+            for mode in [0, 1, 2] {
+                SENSITIVE_MODE.store(mode, Ordering::SeqCst);
+                for value in [0, 9, 10, 99, 100, u64::from(u16::MAX), u64::MAX] {
+                    let decimal = value.to_string();
+                    let rendered = match mode {
+                        0 => decimal.clone(),
+                        1 => "***".to_owned(),
+                        _ => format!("<E>{decimal}</E>"),
+                    };
+                    // Warm the canonical masking state and Wrap buffer before counting.
+                    let mut expected: SmallVec<[u8; 128]> = SmallVec::new();
+                    assert!(format_into(&mut expected, "value={}", la![sensitive(&decimal)]));
+                    let mut actual: SmallVec<[u8; 128]> = SmallVec::new();
+                    let (accepted, allocations) = crate::test_allocation_counter::count_allocations(|| {
+                        format_into(&mut actual, "value={}", la![sensitive_u64(value)])
+                    });
+                    assert!(accepted);
+                    assert_eq!(actual, expected);
+                    assert_eq!(allocations, 0);
+                    assert_eq!(actual.as_slice(), format!("value={rendered}").as_bytes());
+
+                    for size in [127, 128, 129, 511, 512, 513] {
+                        let template = format!("{}{{}}", "x".repeat(size - rendered.len()));
+                        let mut actual = PluginLog::new("sensitive-number");
+                        let mut expected = PluginLog::new("sensitive-number");
+                        assert_eq!(actual.push_fmt(&template, la![sensitive_u64(value)]), size <= 512);
+                        assert_eq!(expected.push_fmt(&template, la![sensitive(&decimal)]), size <= 512);
+                        assert_eq!(
+                            serde_json::to_value(&actual).unwrap(),
+                            serde_json::to_value(&expected).unwrap()
+                        );
+                        assert_eq!(actual.log_full, if size > 512 { Some(true) } else { None });
+                        assert_eq!(
+                            actual.push_fmt("later {}", la![sensitive_u64(0)]),
+                            expected.push_fmt("later {}", la![sensitive("0")])
+                        );
+                        assert_eq!(
+                            serde_json::to_value(&actual).unwrap(),
+                            serde_json::to_value(&expected).unwrap()
+                        );
+                    }
+                }
+            }
+        },
+    );
+}
+
+#[test]
 fn unsigned_arguments_match_decimal_text_without_scratch_allocation() {
     for value in [0, 200, u64::from(u16::MAX), u64::MAX] {
         let expected = format!("status={value}");

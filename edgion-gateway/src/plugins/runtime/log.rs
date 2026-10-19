@@ -11,11 +11,13 @@ pub const NAME_CAPACITY: usize = 36;
 ///
 /// - `Plain` — written as-is regardless of sensitive mode.
 /// - `Unsigned` / `Signed` — non-sensitive diagnostic integers, formatted without a String.
+/// - `SensitiveUnsigned` — decimal digits passed through the same masking as sensitive text.
 /// - `Sensitive` — passed through [`edgion_resources::sensitive::apply_sensitive`]; masked or wrapped
 ///   when the active mode is Replace or Wrap.
 ///
 /// Construct from `&str`, `u16`, `u64`, `usize`, `i64` or `isize` for
-/// non-sensitive diagnostics, or use [`sensitive()`] for sensitive text.
+/// non-sensitive diagnostics, [`sensitive()`] for sensitive text, or
+/// [`sensitive_u64()`] for a sensitive unsigned integer.
 /// Use the [`la!`] macro to build a `&[LogArg]` slice without explicit `.into()` calls.
 #[derive(Debug)]
 pub enum LogArg<'a> {
@@ -23,6 +25,7 @@ pub enum LogArg<'a> {
     Unsigned(u64),
     Signed(i64),
     Sensitive(&'a str),
+    SensitiveUnsigned(u64),
 }
 
 impl From<u64> for LogArg<'_> {
@@ -74,6 +77,12 @@ pub fn sensitive(s: &str) -> LogArg<'_> {
     LogArg::Sensitive(s)
 }
 
+/// Format an unsigned integer without a temporary String, preserving sensitive-text masking.
+#[inline]
+pub fn sensitive_u64(value: u64) -> LogArg<'static> {
+    LogArg::SensitiveUnsigned(value)
+}
+
 /// Build a `&[LogArg]` slice for [`PluginLog::push_fmt`].
 ///
 /// Supported plain strings and integers need no wrapper; sensitive text uses [`sensitive()`].
@@ -102,7 +111,18 @@ fn format_into<A: smallvec::Array<Item = u8>>(buf: &mut SmallVec<A>, fmt: &str, 
         true
     }
 
-    fn append_number<A: smallvec::Array<Item = u8>>(buf: &mut SmallVec<A>, value: std::fmt::Arguments<'_>) -> bool {
+    fn append_sensitive<A: smallvec::Array<Item = u8>>(buf: &mut SmallVec<A>, value: &str) -> bool {
+        edgion_resources::sensitive::apply_sensitive_bounded(value, ULOG_MAX_BUFFER - buf.len(), |masked| {
+            buf.extend_from_slice(masked.as_bytes());
+        })
+        .is_some()
+    }
+
+    fn append_number<A: smallvec::Array<Item = u8>>(
+        buf: &mut SmallVec<A>,
+        value: std::fmt::Arguments<'_>,
+        is_sensitive: bool,
+    ) -> bool {
         // Decimal u64 and i64 (including the sign) fit in 20 ASCII bytes.
         // Only the typed primitive integer branches below call this helper.
         let mut number = Cursor::new([0u8; 20]);
@@ -111,6 +131,7 @@ fn format_into<A: smallvec::Array<Item = u8>>(buf: &mut SmallVec<A>, fmt: &str, 
         }
         let len = number.position() as usize;
         match std::str::from_utf8(&number.get_ref()[..len]) {
+            Ok(text) if is_sensitive => append_sensitive(buf, text),
             Ok(text) => append(buf, text),
             Err(_) => false,
         }
@@ -126,14 +147,10 @@ fn format_into<A: smallvec::Array<Item = u8>>(buf: &mut SmallVec<A>, fmt: &str, 
         if let Some(arg) = arg_iter.next() {
             let accepted = match arg {
                 LogArg::Plain(s) => append(buf, s),
-                LogArg::Unsigned(value) => append_number(buf, format_args!("{value}")),
-                LogArg::Signed(value) => append_number(buf, format_args!("{value}")),
-                LogArg::Sensitive(s) => {
-                    edgion_resources::sensitive::apply_sensitive_bounded(s, ULOG_MAX_BUFFER - buf.len(), |w| {
-                        buf.extend_from_slice(w.as_bytes());
-                    })
-                    .is_some()
-                }
+                LogArg::Unsigned(value) => append_number(buf, format_args!("{value}"), false),
+                LogArg::Signed(value) => append_number(buf, format_args!("{value}"), false),
+                LogArg::Sensitive(s) => append_sensitive(buf, s),
+                LogArg::SensitiveUnsigned(value) => append_number(buf, format_args!("{value}"), true),
             };
             if !accepted {
                 return false;
@@ -411,7 +428,7 @@ impl PluginLog {
     ///
     /// The template string is never masked. Each `{}` placeholder is replaced by the
     /// corresponding [`LogArg`]: `Plain` args are inserted verbatim, integer args
-    /// use decimal digits, and `Sensitive` args are
+    /// use decimal digits, and `Sensitive` / `SensitiveUnsigned` args are
     /// passed through the active masking mode (replace/wrap). Use the [`la!`] macro to
     /// build the args slice conveniently.
     ///

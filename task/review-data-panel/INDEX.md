@@ -4416,3 +4416,22 @@ Fresh serial verification passed 96 network-free tests: 22 configuration-data,
 generation tests. Formatting, workspace check/Clippy, seven repository guards and
 diff hygiene passed. Existing warnings remain outside changed code. No live
 transport or throughput benchmark ran.
+
+## RegionRoute sensitive integer log arguments
+
+Four RegionRoute log sites now pass ports and hash values to the canonical
+PluginLog sensitive unsigned-integer formatter. Decimal conversion uses the
+existing bounded stack buffer, then the same sensitive-text masking function.
+The temporary decimal Strings are removed; masking, field order, entry limits
+and rejection remain unchanged. Request writeback Strings, source descriptors,
+selected endpoint/SNI ownership and routing behavior retain their existing paths.
+The access-log canon documents the explicit helper without expanding permission
+to log identities, credentials, arbitrary Display values or additional events.
+
+Regression coverage compares numeric and prior sensitive-text forms across
+Off/Replace/Wrap, decimal boundaries through u64::MAX, rendered lengths around
+128 and 512 bytes, rejection followed by another entry, JSON and log_full.
+Warmed inline scratch formatting allocates zero. Fresh serial verification
+passed 57 tests: 34 canonical PluginLog and 23 RegionRoute tests. Formatting,
+workspace check/Clippy, seven repository guards and diff hygiene passed; existing
+warnings remain outside the diff. No live transport or throughput benchmark ran.
