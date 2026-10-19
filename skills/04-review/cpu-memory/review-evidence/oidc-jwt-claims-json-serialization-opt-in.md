@@ -1,28 +1,47 @@
 ---
 name: oidc-jwt-claims-json-serialization-opt-in
-description: Use when reviewing findings that criticize OIDC or JWT claims serde_json::to_string per authenticated request as hot-path overhead; all switches default to false.
+description: Distinguish intentional opt-in OIDC/JWT claims JSON publication from the deferred duplicate OIDC serialization optimization.
 knowledge_type: review-evidence
 ---
 
-> See also: [cpu-memory/SKILL.md](../SKILL.md) for the index.
+# OIDC / JWT claims JSON publication is opt-in
 
-# OIDC / JWT Claims JSON Serialization is the Opt-In Feature Itself
+## Current scope
 
-**False-positive scenario**: criticizing `openid_connect/userinfo.rs:60-74` and `jwt_auth/verify.rs:172-176` for doing `serde_json::to_string(claims)` per authenticated request; suggesting "lazy serialization" or "documentation warning that it is enabled by default".
+OIDC set_userinfo_header and store_claims_in_ctx and JWT store_claims_in_ctx
+all default to false in their resource configuration Default implementations.
+When enabled, publishing JSON is the requested feature. An upstream header must
+exist before forwarding, and PluginSession::set_ctx_var accepts text; the real
+PingoraSessionAdapter copies that text into request-owned context. Deferring all
+serialization until an unspecified future read would change these interfaces
+and semantics. Default-off does not prove the enabled path is efficient.
 
-**Reality**:
+Current sources are `edgion-resources/src/resources/edgion_plugins/plugin_configs/`
+(openid_connect.rs and jwt_auth.rs), Gateway openid_connect/userinfo.rs,
+jwt_auth/plugin.rs and plugins/runtime/session_adapter.rs.
 
-The three relevant switches all default to `false`:
-- `set_userinfo_header` → `openid_connect.rs:340` = `false`
-- OIDC `store_claims_in_ctx` → `openid_connect.rs:343` = `false`
-- JWT `store_claims_in_ctx` → `jwt_auth.rs:187` = `false`
+## Narrow optimization and historical assessment
 
-"Users very easily turn it on by default" does not hold. Once a switch is on, serialization is the feature itself:
+OpenidConnect::apply_upstream_headers serializes the same claims twice when
+set_userinfo_header and store_claims_in_ctx are enabled and userinfo_json is None.
+The first result supplies fallback X-Userinfo; the second supplies oidc_claims.
+Supplied userinfo is a separate document and cannot substitute for claims.
 
-- The `X-Userinfo` header must be written before forwarding to upstream; downstream has no trigger point for "lazification".
-- The `set_ctx_var(name, value)` signature is `&str`; the ctx-var model stores owned String. To do "serialize on read", the ctx var must be changed to a typed `Value`, affecting the entire plugin runtime ctx interface.
-- Claims are typically < 1KB; `serde_json::to_string` is microsecond-level; not in the same order of magnitude as network/route-matching cost on the request path.
+The earlier assessment rejected sharing that result because it expected little
+benefit relative to review cost. Its typical-size and microsecond-cost statements
+had no recorded benchmark or workload evidence. Preserve this as a historical
+value judgment, not a measured result or a blanket reason to close new findings.
+A reuse design must preserve independent output behavior and assess retention
+across the intervening Authorization write. Final header/context copies remain.
 
-The only visible micro-optimization: when `set_userinfo_header && userinfo_json.is_none() && store_claims_in_ctx` are simultaneously true, lines 60 and 71 of `userinfo.rs` would serialize twice — could reuse the same String. But the trigger condition is narrow; saves one microsecond-level alloc; the change benefit does not outweigh review/regression cost.
+The user's decision is tracked in
+[shared OIDC claims serialization](../../../../task/review-data-panel/oidc-01-shared-claims-serialization.md).
+No runtime change or performance measurement accompanies that deferral.
 
-**Verdict**: inherent cost of the opt-in feature; not a performance issue. Any "OIDC/JWT hot-path claims JSON serialization" finding is closed per this entry, unless it is proved that the default is changed to `true` or claims size is ≥ tens of KB.
+## Re-evaluation
+
+Recheck defaults, actual call paths, ownership and serialization count when the
+configuration, context API or publication sequence changes. Review large claims
+and frequently enabled output combinations using measured evidence. Opt-in JSON
+publication remains intended behavior; redundant producer work is a separate
+optimization question. Do not use this page to suppress a demonstrated defect.

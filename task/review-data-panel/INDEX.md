@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Shared OIDC claims serialization](oidc-01-shared-claims-serialization.md)
+
 - [Borrowed Connection inspection for credential injection](credential-01-connection-inspection-interface.md)
 
 - [Selective request-guard refusal facts](ai-guard-01-refusal-facts-parser.md)
