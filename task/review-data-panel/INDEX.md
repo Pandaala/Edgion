@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Terminal gRPC message header storage](grpc-07-terminal-message-header-storage.md)
+
 - [Server header replacement without prior removal](response-04-server-header-replacement.md)
 
 - [Prepared authentication challenge generation](auth-02-prepared-challenge-generation.md)
@@ -6249,3 +6251,20 @@ Fresh verification passed 15 server error-response, 16 fail-to-proxy and 178
 session-adapter tests (209 total), formatting, workspace check/Clippy and seven
 guards. Existing unrelated warnings remain. No live integration or throughput
 benchmark was run; the byte-level cases use the existing in-process bridge fixture.
+
+## Terminal gRPC message storage audit
+
+The gRPC-Web message writer copies its encoded String through parsing, while
+native gRPC already transfers it. Unlike decimal status strings, the canonical
+encoder can retain spare capacity. Fresh complete-construction probes show a
+workload-dependent tradeoff: direct transfer helps exact-capacity messages but
+can retain spare capacity and request Shared metadata for short/escaped messages.
+Deferred this decision and shared-encoder alternatives in grpc-07; no runtime
+code changed and no throughput or actual retained-heap reduction is claimed.
+
+Independent plan review approved two documents. Fresh baseline verification
+passed 15 server error-response, 16 fail-to-proxy and 178 session-adapter tests
+(209 total), formatting check, workspace check/Clippy and agent-doc validation.
+Existing unrelated warnings remain; no live integration or alternative encoder
+benchmark ran. Probe totals include encoding and conversion, unlike grpc-06's
+conversion-only evidence.
