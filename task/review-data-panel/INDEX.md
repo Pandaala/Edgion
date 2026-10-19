@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [ClientHello inspection buffer capacity](tls-04-clienthello-buffer-capacity.md)
+
 - [Structured L4 peer-address handoff](l4-01-structured-peer-address.md)
 
 - [HeaderCertAuth CA public-key preparation](tls-03-header-ca-public-key-preparation.md)
@@ -6632,3 +6634,17 @@ Independent plan review approved two documents. Fresh baseline verification
 passed 27 TCP, 85 TLS and 21 shared-relay tests (133 total), formatting check,
 workspace check/Clippy and agent-doc validation. Existing unrelated warnings
 remain; no full suite, live transport integration or benchmark ran.
+
+## ClientHello setup-buffer capacity audit
+
+Revalidated SNI record/container gates and consume-and-replay ownership. The
+fixed 16,384-byte initialized buffer retains capacity after truncation through
+setup, then drops before relay as designed. Recorded small-buffer growth and
+post-inspection compaction alternatives in tls-04, with read-batching, deadline,
+trailing-data and allocator tradeoffs. No runtime change or whole-connection
+retention claim is made.
+
+Independent plan review approved two documents. Fresh baseline verification
+passed 85 TLS tests, formatting check, workspace check/Clippy and agent-doc
+validation. Existing unrelated warnings remain; no full suite, live socket
+integration or benchmark ran.
