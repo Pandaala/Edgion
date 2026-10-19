@@ -4994,3 +4994,23 @@ Fresh serial baseline verification passed 58 tests: 32 Resources transcoding and
 26 Gateway transcoder tests. Formatting check, workspace check/Clippy and agent-doc
 and diff checks passed; existing warnings remain outside this documentation batch.
 No allocation or throughput benchmark ran; tests do not prove proposed reuse safe.
+
+## gRPC non-null retention lookup
+
+Ordinary-message normalization now retains non-null fields immediately during
+its null-removal pass. The preceding full name/alias validation and following
+field normalization remain unchanged. Null values still resolve their descriptor
+and use the same list/map and Value/NullValue sentinel rules. This removes one
+redundant descriptor lookup and handle construction for each non-null field in
+this pass; it does not introduce a prepared schema cache or merge validation passes.
+
+A baseline-first regression verifies unknown non-null fields and mixed null/non-null
+alias duplicates fail before any null removal or integer rewriting. A valid mixed
+object still retains text, removes an ordinary null and canonicalizes its integer.
+Existing collection sentinel, nested validation and wire regressions remain intact.
+No allocation-count, throughput or memory-budget improvement is claimed.
+
+Fresh serial verification passed 59 tests: 33 Resources transcoding and 26 Gateway
+transcoder tests. Formatting, workspace check/Clippy and seven repository guards
+passed; existing unrelated warnings remain outside the diff. No real-socket
+integration or performance benchmark ran.

@@ -207,3 +207,32 @@ fn ordinary_value_suffix_cannot_bypass_admission_or_field_normalization() {
             .is_err());
     }
 }
+
+#[test]
+fn field_name_validation_precedes_null_removal_and_value_normalization() {
+    let pool = prost_reflect::DescriptorPool::decode(
+        include_bytes!("../../../../edgion-tests/proto/grpc_json_transcoding/test.pb").as_slice(),
+    )
+    .unwrap();
+    let desc = pool.get_message_by_name("test.Complex").unwrap();
+    let limits = TranscodingLimits {
+        request: 1024 * 1024,
+        response: 512 * 1024,
+        json: 1024 * 1024,
+        depth: 32,
+        nodes: 16384,
+    };
+    for mut value in [
+        serde_json::json!({"id":"1e2", "nested":null, "unknown":"text"}),
+        serde_json::json!({"displayName":null, "display_name":"text", "id":"1e2"}),
+        serde_json::json!({"displayName":"text", "display_name":null, "id":"1e2"}),
+        serde_json::json!({"displayName":"first", "display_name":"second", "nested":null}),
+    ] {
+        let original = value.clone();
+        assert_eq!(normalize(&desc, &mut value, limits), Err(Error::Invalid));
+        assert_eq!(value, original);
+    }
+    let mut value = serde_json::json!({"display_name":"text", "id":"1e2", "nested":null});
+    assert_eq!(normalize(&desc, &mut value, limits), Ok(()));
+    assert_eq!(value, serde_json::json!({"display_name":"text", "id":"100"}));
+}

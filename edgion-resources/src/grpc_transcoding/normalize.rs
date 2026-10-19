@@ -61,11 +61,14 @@ fn message(desc: &MessageDescriptor, value: &mut Value, depth: usize, budget: &m
         }
     }
     object.retain(|name, value| {
+        if !value.is_null() {
+            return true;
+        }
         let field = desc
             .get_field_by_json_name(name)
             .or_else(|| desc.get_field_by_name(name))
             .expect("validated field");
-        !value.is_null() || (!field.is_list() && !field.is_map() && sentinel(&field.kind()))
+        !field.is_list() && !field.is_map() && sentinel(&field.kind())
     });
     for (name, value) in object {
         let field = desc
