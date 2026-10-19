@@ -284,9 +284,11 @@ impl Evaluation<'_> {
                 if args.len() >= MAX_TOKENS {
                     return Err(GraphqlError::Invalid);
                 }
-                let key = name(arg.name())?;
-                if !actual.args.contains_key(&key)
-                    || args.insert(key, arg.value().ok_or(GraphqlError::Invalid)?).is_some()
+                let name = arg.name().ok_or(GraphqlError::Invalid)?.text();
+                let (key, _) = actual.args.get_key_value(name.as_str()).ok_or(GraphqlError::Invalid)?;
+                if args
+                    .insert(key.as_str(), arg.value().ok_or(GraphqlError::Invalid)?)
+                    .is_some()
                 {
                     return Err(GraphqlError::Invalid);
                 }
@@ -317,7 +319,11 @@ impl Evaluation<'_> {
                 let mut factor = 1u32;
                 for argument in &rule.multipliers {
                     self.work.step()?;
-                    let supplied = args.get(argument).map(|v| self.multiplier(v)).transpose()?.flatten();
+                    let supplied = args
+                        .get(argument.as_str())
+                        .map(|v| self.multiplier(v))
+                        .transpose()?
+                        .flatten();
                     let value = match supplied {
                         Some(value) => value,
                         None => match actual.args[argument].default {

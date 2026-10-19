@@ -743,3 +743,38 @@ fn multiplier_type_projection_preserves_defaults_and_unused_variables() {
         Err(GraphqlError::Invalid)
     );
 }
+
+#[test]
+fn argument_keys_preserve_multipliers_defaults_and_exact_work() {
+    let m = model(
+        "type Query { item(a:Int=2,b:Int=3):Leaf } type Leaf { value:Int }",
+        &[("Query.item", 1, &["a", "b"], 100)],
+    )
+    .with_root_fields(["Query.item"])
+    .unwrap();
+    for (query, cost, steps) in [
+        ("{item(a:4,b:5){value}}", 22, 15),
+        ("{item(b:5,a:4){value}}", 22, 15),
+        ("{item(a:4){value}}", 14, 13),
+        ("{item{value}}", 8, 11),
+        ("query($n:Int=4){alias:item(a:$n){value}}", 14, 13),
+    ] {
+        let report = estimate_with_remaining_work(&m, query, steps).unwrap();
+        assert_eq!(report.total, cost, "{query}");
+        assert_eq!(report.roots[0], cost - 1, "{query}");
+        assert!(report.roots[1..].iter().all(|cost| *cost == 0));
+        assert_eq!(
+            estimate_with_remaining_work(&m, query, steps - 1),
+            Err(GraphqlError::Invalid),
+            "{query}"
+        );
+    }
+    for query in [
+        "{item(a:2,a:3){value}}",
+        "{item(A:2){value}}",
+        "{item(unknown:2){value}}",
+        "{item(a:null){value}}",
+    ] {
+        assert_eq!(estimate(&m, query), Err(GraphqlError::Invalid), "{query}");
+    }
+}

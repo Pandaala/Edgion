@@ -4684,3 +4684,28 @@ workspace check/Clippy, seven repository guards and diff hygiene passed; existin
 warnings remain outside the diff. This eliminates the temporary owned type
 representation on the multiplier path; no live Redis, allocation or throughput
 benchmark ran.
+
+## Borrowed GraphQL cost argument keys
+
+The cost visitor's temporary supplied-argument map now borrows canonical names
+from the current immutable concrete field's schema argument map. One
+get_key_value replaces the existing contains_key lookup, preserving unknown-name
+rejection before value extraction. CST values remain owned by the temporary map;
+case-sensitive duplicate insertion and multiplier lookup retain their original
+semantics. The supporting cross-crate scope is graphql_cost/request.rs and its
+existing cost-model test module.
+
+No schema or request owner is retained beyond evaluation. The change removes one
+temporary name String per recognized argument while retaining the argument map,
+value handles, length guard, Work steps, concrete defaults, interface candidate
+order, recursive child evaluation and root accounting. It introduces no request
+cache or cross-request state.
+
+A baseline-first regression checks reversed arguments, two/one/no supplied values,
+variable defaults, explicit total/root charges, and exact remaining Work thresholds
+15/13/11 with rejection one step below. Duplicate, unknown, case-mismatched and
+null arguments retain rejection. Fresh serial verification passed 60 tests:
+27 Resources cost-model, 17 frontend, four Gateway guard, five rate-limit and
+seven shared evaluation tests. Formatting, workspace check/Clippy, seven repository
+guards and diff hygiene passed; existing warnings remain outside the diff.
+No live transport, Redis, allocation or throughput benchmark ran.
