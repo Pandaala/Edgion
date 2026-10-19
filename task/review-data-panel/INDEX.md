@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Gateway-owned CORS Max-Age preparation](cors-01-derived-max-age-preparation.md)
+
 - [Dynamic fallback metric label capacity](metrics-01-fallback-label-capacity.md)
 
 - [Boundary-local response-cache Vary validation reuse](cache-03-boundary-local-vary-validation.md)
@@ -6458,3 +6460,18 @@ no runtime behavior changed. Independent plan review approved two documents.
 Fresh baseline verification passed 36 metrics and ten logging tests (46 total),
 formatting check, workspace check/Clippy and agent-doc validation. Existing unrelated
 warnings remain; no full test suite, live integration or benchmark ran.
+
+## Terminal classification and derived CORS value audit
+
+Terminal ErrorSource classification copies only a payload-free enum; connection
+reuse persists Box<()>, which needs no heap storage. Neither site warrants an
+allocation-removal refactor. WAF terminal finalization updates scalar outcome and
+borrows its retained access-log projection.
+
+Traced EdgionPlugins CORS Max-Age formatting and revalidated the prior accepted
+preflight-only cost. Recorded a narrower Gateway-owned preparation alternative
+in cors-01 for user decision; no runtime or existing knowledge verdict changed.
+Independent plan review approved two documents. Fresh baseline verification passed
+45 Gateway CORS-filtered tests, formatting check, workspace check/Clippy and
+agent-doc validation. Existing unrelated warnings remain; no full test suite,
+live integration or benchmark ran.
