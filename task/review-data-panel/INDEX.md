@@ -4534,3 +4534,24 @@ writer tests. Formatting, workspace check/Clippy, seven repository guards and
 document/diff validation passed; existing warnings remain outside the diff.
 The claim is fewer writer calls for plain runs, not lower CPU cost on every input
 or measured throughput. No live transport or performance benchmark ran.
+
+## Bare request media-type validation
+
+The shared JSON and form header validators now recognize their exact bare media
+types with borrowed, ASCII-case-insensitive comparisons after the existing unique
+text-header gate. Every accepted fast path still checks identity encoding.
+Parameterized, suffixed, malformed and other media values retain the original
+MIME parser and policy. No header cache, body owner or caller policy changed.
+
+The pinned mime 0.3.17 parser allocates a lowercase owned string for these bare
+types. Differential tests compare both validators with the original parser across
+case, whitespace, parameters, suffixes, duplicates, missing/non-text headers and
+encoding gates. Allocation tests with prebuilt headers verify positive allocation
+for the original parser and zero for the new bare-type checks.
+
+Fresh serial verification passed 102 tests: seven shared media, nine JSON schema,
+23 form transform, 21 request rewrite, 26 gRPC transcoder, nine REST-to-GraphQL and
+seven shared GraphQL tests. Formatting, workspace check/Clippy and seven repository
+guards passed; existing warnings remain outside the diff. The claim is removal
+of MIME allocation for the two exact bare types, not measured throughput. No live
+transport or performance benchmark ran.

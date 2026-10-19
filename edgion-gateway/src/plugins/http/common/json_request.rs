@@ -14,7 +14,11 @@ pub fn json_request_headers_are_supported(headers: &HeaderMap) -> bool {
         return false;
     };
 
-    let Ok(content_type) = content_type.trim().parse::<mime::Mime>() else {
+    let content_type = content_type.trim();
+    if content_type.eq_ignore_ascii_case("application/json") {
+        return supported_identity_encoding(headers);
+    }
+    let Ok(content_type) = content_type.parse::<mime::Mime>() else {
         return false;
     };
     let subtype = content_type.subtype();
@@ -47,7 +51,11 @@ pub fn form_request_headers_are_supported(headers: &HeaderMap) -> bool {
         return false;
     };
 
-    let Ok(content_type) = content_type.trim().parse::<mime::Mime>() else {
+    let content_type = content_type.trim();
+    if content_type.eq_ignore_ascii_case("application/x-www-form-urlencoded") {
+        return supported_identity_encoding(headers);
+    }
+    let Ok(content_type) = content_type.parse::<mime::Mime>() else {
         return false;
     };
     if content_type.type_() != mime::APPLICATION || content_type.subtype().as_str() != "x-www-form-urlencoded" {
