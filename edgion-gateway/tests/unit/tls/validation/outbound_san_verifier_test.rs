@@ -153,6 +153,33 @@ impl std::fmt::Display for OpaqueError {
 impl std::error::Error for OpaqueError {}
 
 #[test]
+fn typed_reason_recovery_borrows_without_allocating() {
+    let mut measurements = Vec::new();
+    for wrapper in 0..3 {
+        let reason = "certificate hostname SAN mismatch".to_owned();
+        let original = reason.as_ptr();
+        let typed = SanMismatchError { reason };
+        let error: Box<dyn std::error::Error> = match wrapper {
+            0 => Box::new(typed),
+            1 => Box::new(RustlsError::InvalidCertificate(CertificateError::Other(OtherError(
+                Arc::new(typed),
+            )))),
+            _ => Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, typed)),
+        };
+        let (recovered, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+            outbound_san_mismatch_reason(error.as_ref()).unwrap()
+        });
+        assert_eq!(recovered, "certificate hostname SAN mismatch");
+        measurements.push((stats.calls, stats.requested_bytes, recovered.as_ptr() == original));
+    }
+    for (calls, bytes, same_buffer) in measurements {
+        assert_eq!(calls, 0);
+        assert_eq!(bytes, 0);
+        assert!(same_buffer);
+    }
+}
+
+#[test]
 fn detector_matches_bare_typed_error() {
     let err = SanMismatchError {
         reason: "declared [idp.example.com], actual [other.example.com]".to_string(),
@@ -194,7 +221,9 @@ fn detector_bounds_nested_io_error_wrappers() {
 #[test]
 fn detector_falls_back_to_display_substring() {
     let err = OpaqueError("connect error: SAN mismatch: fallback reason".to_string());
-    assert_eq!(outbound_san_mismatch_reason(&err).as_deref(), Some("fallback reason"));
+    let recovered = outbound_san_mismatch_reason(&err).unwrap();
+    assert_eq!(recovered, "fallback reason");
+    assert!(matches!(recovered, Cow::Owned(_)));
 }
 
 #[test]

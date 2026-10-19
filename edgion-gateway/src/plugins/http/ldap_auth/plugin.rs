@@ -74,7 +74,7 @@ enum LdapAuthError {
 /// can appear; `simple_bind` cannot raise one.
 fn map_ldap_connect_error(err: &ldap3::LdapError) -> LdapAuthError {
     match outbound_san_mismatch_reason(err) {
-        Some(reason) => LdapAuthError::TlsSanMismatch(reason),
+        Some(reason) => LdapAuthError::TlsSanMismatch(reason.into_owned()),
         None => LdapAuthError::ConnectionFailed,
     }
 }

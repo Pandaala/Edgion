@@ -6765,3 +6765,23 @@ After simplifying a test iterator in response to Clippy, the 21 affected tests,
 formatting and workspace check/Clippy passed again. Seven repository guards
 passed; only existing unrelated warnings remain. No full suite, live integration
 or throughput benchmark ran.
+
+## Borrow typed outbound SAN mismatch reasons
+
+The canonical outbound SAN detector now returns Cow text: typed matches borrow
+from the retained error, while the Display fallback retains owned storage. The
+full typed-first traversal, one depth budget and io-inner replacement semantics
+remain unchanged. OIDC's classification-only consumer avoids the reason clone;
+LDAP converts to owned text at its existing stored-error boundary. This affects
+backend-independent outbound clients, not the unsupported Gateway rustls backend.
+No diagnostic text, metric ownership or sensitive-data policy changed.
+
+Independent plan review approved four files. The 11 verifier baseline tests
+passed. The added direct/rustls/io-wrapper matrix compared reason bytes before
+failing on the original implementation's one allocation; final recovery uses
+zero allocations and the original buffer. The fallback is explicitly checked
+as owned. Final verification passed 12 verifier, 28 LDAP and eight OIDC dependency
+error tests (48 total). An initial OIDC error-module filter selected zero tests;
+the actual dependency_error_tests selection was then run and passed.
+Formatting, workspace check/Clippy and seven guards passed with existing
+unrelated warnings. No full suite, live handshake or throughput benchmark ran.

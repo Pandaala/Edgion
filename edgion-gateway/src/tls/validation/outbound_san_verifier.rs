@@ -13,6 +13,7 @@
 //! `verify_server_cert` is called once per TLS handshake.  `x509-parser` is
 //! invoked only on the single end-entity certificate, never on intermediates.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use edgion_resources::resources::backend_tls_policy::SubjectAltName;
@@ -132,13 +133,12 @@ impl std::error::Error for SanMismatchError {}
 /// Trying every node's typed check before any node's fallback check
 /// guarantees a clean match always wins over a contaminated one.
 ///
-/// Returns an owned `String` because the fallback arm recovers the reason from a
-/// `Display` rendering, which is a temporary nothing can borrow from. This is a
-/// cold error path.
-pub fn outbound_san_mismatch_reason(err: &(dyn std::error::Error + 'static)) -> Option<String> {
+/// Borrows a typed reason from the error. The fallback owns its reason because
+/// it recovers text from a temporary `Display` rendering.
+pub fn outbound_san_mismatch_reason<'a>(err: &'a (dyn std::error::Error + 'static)) -> Option<Cow<'a, str>> {
     match walk_typed_chain(err, MAX_CHAIN_DEPTH) {
-        Ok(Some(reason)) => Some(reason),
-        Ok(None) => walk_chain(err, probe_fallback),
+        Ok(Some(reason)) => Some(Cow::Borrowed(reason)),
+        Ok(None) => walk_chain(err, probe_fallback).map(Cow::Owned),
         Err(DepthLimitReached) => None,
     }
 }
@@ -149,10 +149,10 @@ struct DepthLimitReached;
 /// caller's depth budget. `io::Error::source()` skips the wrapped error itself,
 /// so its inner chain replaces the ordinary source hop instead of adding a
 /// second traversal path.
-fn walk_typed_chain(
-    err: &(dyn std::error::Error + 'static),
+fn walk_typed_chain<'a>(
+    err: &'a (dyn std::error::Error + 'static),
     remaining: usize,
-) -> Result<Option<String>, DepthLimitReached> {
+) -> Result<Option<&'a str>, DepthLimitReached> {
     if remaining == 0 {
         return Err(DepthLimitReached);
     }
@@ -199,16 +199,16 @@ fn walk_chain(
 
 /// Typed-only checks. Never falls back to a `Display` rendering -- see
 /// `outbound_san_mismatch_reason` for why that must stay a separate, later pass.
-fn probe_typed(node: &(dyn std::error::Error + 'static)) -> Option<String> {
+fn probe_typed<'a>(node: &'a (dyn std::error::Error + 'static)) -> Option<&'a str> {
     // 1. The typed error itself.
     if let Some(san) = node.downcast_ref::<SanMismatchError>() {
-        return Some(san.reason.clone());
+        return Some(&san.reason);
     }
 
     // 2. Still inside the rustls error that the verifier returned.
     if let Some(RustlsError::InvalidCertificate(CertificateError::Other(other))) = node.downcast_ref::<RustlsError>() {
         if let Some(san) = other.0.downcast_ref::<SanMismatchError>() {
-            return Some(san.reason.clone());
+            return Some(&san.reason);
         }
     }
 
