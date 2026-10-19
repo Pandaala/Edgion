@@ -137,10 +137,10 @@ pub(crate) fn directives(source: Option<cst::Directives>, work: &mut Work) -> Re
     }
     Ok(())
 }
-fn graph_fragment(
+fn graph_fragment<'a>(
     n: &str,
-    fragments: &HashMap<String, cst::FragmentDefinition>,
-    states: &mut HashMap<String, u8>,
+    fragments: &'a HashMap<String, cst::FragmentDefinition>,
+    states: &mut HashMap<&'a str, u8>,
     work: &mut Work,
     depth: usize,
 ) -> Result<(), GraphqlError> {
@@ -153,8 +153,8 @@ fn graph_fragment(
         Some(2) => return Ok(()),
         _ => {}
     }
-    let fragment = fragments.get(n).ok_or(GraphqlError::Invalid)?;
-    states.insert(n.to_string(), 1);
+    let (key, fragment) = fragments.get_key_value(n).ok_or(GraphqlError::Invalid)?;
+    states.insert(key.as_str(), 1);
     graph_set(
         &fragment.selection_set().ok_or(GraphqlError::Invalid)?,
         fragments,
@@ -162,13 +162,13 @@ fn graph_fragment(
         work,
         depth + 1,
     )?;
-    states.insert(n.to_string(), 2);
+    states.insert(key.as_str(), 2);
     Ok(())
 }
-fn graph_set(
+fn graph_set<'a>(
     set: &cst::SelectionSet,
-    fragments: &HashMap<String, cst::FragmentDefinition>,
-    states: &mut HashMap<String, u8>,
+    fragments: &'a HashMap<String, cst::FragmentDefinition>,
+    states: &mut HashMap<&'a str, u8>,
     work: &mut Work,
     depth: usize,
 ) -> Result<(), GraphqlError> {

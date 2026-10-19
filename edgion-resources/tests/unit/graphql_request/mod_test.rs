@@ -67,3 +67,31 @@ fn strict_envelopes_and_hard_caps_apply_without_sdl() {
     assert!(post(&format!("{{{}x{}}}", "x{".repeat(65), "}".repeat(65)), None).is_err());
     assert!(post(&format!("{{{}}}", "x ".repeat(4097)), None).is_err());
 }
+
+#[test]
+fn shared_fragment_graphs_preserve_frontend_work() {
+    for (query, count, steps) in [
+        ("query Q {...A ...A} fragment A on Query {...B} fragment B on Query {x}", 2, 12),
+        ("query Q {...A ...A} fragment A on Query {...B ...C} fragment B on Query {...D} fragment C on Query {...D} fragment D on Query {x}", 4, 22),
+        ("query Q {x} fragment Unused on Query {y}", 1, 5),
+    ] {
+        let parsed = post(query, None).unwrap();
+        assert_eq!(parsed.operation_name(), Some("Q"));
+        assert_eq!(parsed.fragments.len(), count);
+        assert_eq!(parsed.work.0, steps, "{query}");
+    }
+}
+
+#[test]
+fn fragment_graph_validation_includes_unused_and_unselected_definitions() {
+    for query in [
+        "query Q {x} fragment A on Query {...A}",
+        "query Q {x} fragment A on Query {...B} fragment B on Query {...A}",
+        "query Q {x} fragment A on Query {...Missing}",
+        "query Q {x} fragment A on Query {y} fragment A on Query {z}",
+        "query Q {x} query Other {...Missing}",
+        "query Q {x} query Other {...A} fragment A on Query {...A}",
+    ] {
+        assert_eq!(post(query, Some("Q")).unwrap_err(), GraphqlError::Invalid, "{query}");
+    }
+}

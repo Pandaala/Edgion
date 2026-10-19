@@ -4577,3 +4577,29 @@ Formatting, workspace check/Clippy, seven repository guards and diff hygiene
 passed; existing warnings remain outside the diff. This removes two allocation
 sites for untyped-fragment visits, not all name allocations or repeated frontend
 parsing. No allocation benchmark, live Redis or throughput test ran.
+
+## Borrowed GraphQL fragment graph-state keys
+
+The canonical frontend's temporary cycle-detection state map now borrows keys
+from the immutable fragment-definition map. graph_fragment obtains the canonical
+key through get_key_value only after the existing Work, depth and state checks;
+active/completed marks reuse that key. This removes both temporary name copies
+for each first-visited successfully completed fragment. Short-lived spread-name
+strings remain lookup inputs only, and all state-map borrows end before the
+fragment owner moves into ParsedGraphqlRequest.
+
+The supporting cross-crate scope is graphql_request/selection.rs and its existing
+frontend test module. Fragment ownership, graph iteration, recursion and Work
+charges, cycle/missing-name rejection and selected-operation semantics remain
+unchanged. No retained AST cache, second body owner or admission change is added.
+New regressions first passed against the original implementation and then the
+borrowed implementation: repeated/diamond graphs retain exact Work counts 12/22,
+an unused valid fragment retains count five, and unused/unselected cycles,
+missing references and duplicate fragment names still reject.
+
+Fresh serial verification passed 60 tests: 15 Resources frontend, 24 cost-model,
+four Gateway guard, five rate-limit, one safelist, four router and seven shared
+evaluation tests. Formatting, workspace check/Clippy, seven repository guards
+and diff hygiene passed; existing warnings remain outside the diff. The benefit
+is removal of the graph-state name allocations, not all frontend allocations
+or measured throughput. No live transport, Redis or performance benchmark ran.
