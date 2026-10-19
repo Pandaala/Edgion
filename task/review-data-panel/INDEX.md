@@ -5014,3 +5014,24 @@ Fresh serial verification passed 59 tests: 33 Resources transcoding and 26 Gatew
 transcoder tests. Formatting, workspace check/Clippy and seven repository guards
 passed; existing unrelated warnings remain outside the diff. No real-socket
 integration or performance benchmark ran.
+
+## gRPC codec descriptor handoff
+
+Request encoding now borrows one method input descriptor for normalization and
+moves that same handle into DynamicMessage deserialization. Response decoding
+likewise borrows one output descriptor for wire admission and moves it into
+DynamicMessage decoding. Descriptor acquisition remains after the existing
+profile or response-byte checks, and admission still precedes reflection.
+
+The locked prost-reflect implementation builds these handles from a pool Arc and
+an index. Each path reaching reflection avoids one redundant descriptor handle
+clone/drop; this is not a descriptor-data copy, heap-allocation or throughput
+claim. The binding already pins the pool across the request serialization interval.
+JSON-tree release, capped writers, panic containment, output envelopes and memory
+reservations remain unchanged. Existing ownership, malformed-input/wire, limits,
+WKT and round-trip regressions cover this local handoff without new mirrored tests.
+
+Fresh serial verification passed 59 tests: 33 Resources transcoding and 26 Gateway
+transcoder tests. Formatting, workspace check/Clippy and seven repository guards
+passed; existing unrelated warnings remain outside the diff. No real-socket
+integration or performance benchmark ran.

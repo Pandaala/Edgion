@@ -62,14 +62,15 @@ impl BoundRequest {
         {
             return Err(TranscodingError::Invalid);
         }
-        super::normalize::normalize(&binding.method.input(), &mut value, limits)?;
+        let request_descriptor = binding.method.input();
+        super::normalize::normalize(&request_descriptor, &mut value, limits)?;
         let mut writer = CappedWriter::new(super::MAX_JSON_BYTES);
         serde_json::to_writer(&mut writer, &value).map_err(|_| TranscodingError::Invalid)?;
         drop(value);
         let input = writer.into_bytes();
         let mut de = serde_json::Deserializer::from_slice(&input);
         let message =
-            DynamicMessage::deserialize(binding.method.input(), &mut de).map_err(|_| TranscodingError::Invalid)?;
+            DynamicMessage::deserialize(request_descriptor, &mut de).map_err(|_| TranscodingError::Invalid)?;
         de.end().map_err(|_| TranscodingError::Invalid)?;
         let len = message.encoded_len();
         if len > limits.request {
@@ -104,8 +105,9 @@ impl CompiledBinding {
         if bytes.len() > limits.response {
             return Err(TranscodingError::Invalid);
         }
-        wire::preflight(&self.method.output(), bytes, limits)?;
-        let message = DynamicMessage::decode(self.method.output(), bytes).map_err(|_| TranscodingError::Invalid)?;
+        let response_descriptor = self.method.output();
+        wire::preflight(&response_descriptor, bytes, limits)?;
+        let message = DynamicMessage::decode(response_descriptor, bytes).map_err(|_| TranscodingError::Invalid)?;
         let mut writer = CappedWriter::new(limits.json);
         let (prefix, suffix): (&[u8], &[u8]) = match format {
             None => (b"", b""),
