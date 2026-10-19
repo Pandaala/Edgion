@@ -1,6 +1,52 @@
 use super::*;
 use crate::plugins::runtime::traits::session::MockPluginSession;
 
+#[test]
+fn content_filter_refusal_preserves_framing_escaping_and_model_bound() {
+    for model in [
+        String::new(),
+        "plain-model".to_owned(),
+        "quote\"\\\n\r\t".to_owned(),
+        "café-π".to_owned(),
+        "é".repeat(128),
+        "π".repeat(129),
+    ] {
+        let expected_model: String = model.chars().take(128).collect();
+        for streaming in [false, true] {
+            let (content_type, body) = content_filter_refusal(&model, streaming);
+            let json = if streaming {
+                assert_eq!(content_type, "text/event-stream");
+                let events: Vec<_> = body.split("\n\n").collect();
+                assert_eq!(events.len(), 3);
+                assert_eq!(events[1], "data: [DONE]");
+                assert_eq!(events[2], "");
+                events[0].strip_prefix("data: ").unwrap()
+            } else {
+                assert_eq!(content_type, "application/json");
+                body.as_str()
+            };
+            let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
+            let created = parsed["created"].as_i64().expect("integer timestamp");
+            assert_eq!(parsed["model"], expected_model);
+            let encoded_model = serde_json::to_string(&expected_model).unwrap();
+            let (object, payload) = if streaming {
+                ("chat.completion.chunk", "delta")
+            } else {
+                ("chat.completion", "message")
+            };
+            let expected_json = format!(
+                "{{\"id\":\"chatcmpl-guard\",\"object\":\"{object}\",\"created\":{created},\"model\":{encoded_model},\"choices\":[{{\"index\":0,\"{payload}\":{{\"role\":\"assistant\",\"content\":\"\"}},\"finish_reason\":\"content_filter\"}}]}}"
+            );
+            let expected = if streaming {
+                format!("data: {expected_json}\n\ndata: [DONE]\n\n")
+            } else {
+                expected_json
+            };
+            assert_eq!(body, expected);
+        }
+    }
+}
+
 fn render(error: AiProxyError) -> (u16, serde_json::Value) {
     let mut session = MockPluginSession::new();
     session

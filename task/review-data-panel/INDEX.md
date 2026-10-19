@@ -7707,3 +7707,18 @@ seven Gateway JSON builtin and 11 JSON Schema plugin tests (27 total), formattin
 workspace check/Clippy and seven guards with existing unrelated warnings.
 No whole-path allocation count, throughput benchmark, full suite or live
 integration result is claimed.
+
+## Direct formatting of request-side streaming refusals
+
+AiGuard's content-filter reply now formats the SSE prefix, completion JSON and
+DONE suffix directly into the final String. The intermediate complete JSON
+String and its copy into the SSE envelope are removed. Timestamp acquisition,
+128-Unicode-scalar model truncation, canonical JSON string escaping/fallback,
+field order and the non-streaming branch remain unchanged. This is a bounded
+request-stage local reply, not an upstream response aggregation change.
+
+The new matrix checks exact wire bytes and two-event framing for empty/plain,
+escaped/control and permitted multibyte model names, including 128/129-scalar
+boundaries. Fresh targeted tests passed two error-renderer and 79 request-guard
+cases. Formatting, workspace check/Clippy and seven repository guards passed;
+existing unrelated warnings remain. No throughput benchmark or full suite ran.

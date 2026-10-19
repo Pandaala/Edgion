@@ -175,10 +175,12 @@ pub fn content_filter_refusal(model: &str, streaming: bool) -> (&'static str, St
     };
     let model = serde_json::to_string(truncated).unwrap_or_else(|_| "\"\"".to_string());
     if streaming {
-        let chunk = format!(
-            "{{\"id\":\"chatcmpl-guard\",\"object\":\"chat.completion.chunk\",\"created\":{created},\"model\":{model},\"choices\":[{{\"index\":0,\"delta\":{{\"role\":\"assistant\",\"content\":\"\"}},\"finish_reason\":\"content_filter\"}}]}}"
-        );
-        ("text/event-stream", format!("data: {chunk}\n\ndata: [DONE]\n\n"))
+        (
+            "text/event-stream",
+            format!(
+                "data: {{\"id\":\"chatcmpl-guard\",\"object\":\"chat.completion.chunk\",\"created\":{created},\"model\":{model},\"choices\":[{{\"index\":0,\"delta\":{{\"role\":\"assistant\",\"content\":\"\"}},\"finish_reason\":\"content_filter\"}}]}}\n\ndata: [DONE]\n\n"
+            ),
+        )
     } else {
         (
             "application/json",
