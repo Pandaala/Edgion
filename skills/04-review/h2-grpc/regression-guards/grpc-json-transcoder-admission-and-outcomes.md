@@ -182,6 +182,15 @@ and response peaks are alternatives, not concurrent full trees):
   no JSON tree and forwards collect_str to the capped streaming formatter.
 - The remaining 2 MiB covers bounded binding selectors, JSON parsing scratch,
   metadata (header template <=8 KiB/64 fields), driver state, and allocator slack.
+  String-producing path/query bindings transfer already-owned decoded buffers
+  rather than copy their text; borrowed inputs still become owned. Include retained
+  decoder spare capacity and temporary decoding overlap in this allowance, not
+  just decoded lengths. The public combined encoded path/query cap is 65,536 bytes;
+  path captures are disjoint and query components occupy nonoverlapping segments.
+  Path decoding reserves encoded segment length, while query percent decoding may
+  retain Vec growth capacity from push/extend. No equal-capacity or exact-size
+  assumption is made. Re-evaluate this ownership allowance if input caps, decoder
+  growth behavior, capture overlap or retained binding lifetimes change.
 
 Structural limits alone are not a text/heap bound: fixed input/text/wire limits
 remain independent. Request schema admission and response wire admission both run

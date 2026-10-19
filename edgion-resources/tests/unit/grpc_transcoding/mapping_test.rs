@@ -71,3 +71,129 @@ fn field_resolution_preserves_aliases_depth_and_descriptor_ownership() {
     assert_eq!(resolved.iter().map(FieldDescriptor::number).collect::<Vec<_>>(), [5, 6]);
     assert_eq!(resolved[1].full_name(), "test.Complex.display_name");
 }
+
+#[test]
+fn scalar_binding_preserves_owned_and_borrowed_values_and_errors() {
+    let pool = prost_reflect::DescriptorPool::decode(
+        include_bytes!("../../../../edgion-tests/proto/grpc_json_transcoding/test.pb").as_slice(),
+    )
+    .unwrap();
+    for (message, field, text, expected) in [
+        (
+            "test.Complex",
+            "display_name",
+            "hello world&é",
+            Some(Json::String("hello world&é".into())),
+        ),
+        ("test.Complex", "data", "YWJj", Some(Json::String("YWJj".into()))),
+        ("test.Complex", "nested", "{}", None),
+        (
+            "test.NumericFields",
+            "null_value",
+            "NULL_VALUE",
+            Some(Json::String("NULL_VALUE".into())),
+        ),
+        (
+            "test.NumericFields",
+            "signed",
+            "+0007",
+            Some(Json::String("+0007".into())),
+        ),
+        (
+            "test.NumericFields",
+            "signed_fixed",
+            "-9223372036854775808",
+            Some(Json::String("-9223372036854775808".into())),
+        ),
+        (
+            "test.NumericFields",
+            "signed_zigzag",
+            "9223372036854775807",
+            Some(Json::String("9223372036854775807".into())),
+        ),
+        (
+            "test.NumericFields",
+            "unsigned",
+            "18446744073709551615",
+            Some(Json::String("18446744073709551615".into())),
+        ),
+        (
+            "test.NumericFields",
+            "unsigned_fixed",
+            "+0007",
+            Some(Json::String("+0007".into())),
+        ),
+        (
+            "test.NumericFields",
+            "int32_number",
+            "-2147483648",
+            Some(Json::from(i32::MIN)),
+        ),
+        ("test.NumericFields", "sint32_number", "7", Some(Json::from(7))),
+        ("test.NumericFields", "sfixed32_number", "7", Some(Json::from(7))),
+        (
+            "test.NumericFields",
+            "uint32_number",
+            "4294967295",
+            Some(Json::from(u32::MAX)),
+        ),
+        ("test.NumericFields", "fixed32_number", "7", Some(Json::from(7))),
+        ("test.NumericFields", "float_number", "1.25", Some(Json::from(1.25))),
+        ("test.NumericFields", "double_number", "-2.5", Some(Json::from(-2.5))),
+        ("google.protobuf.BoolValue", "value", "true", Some(Json::Bool(true))),
+        ("google.protobuf.BoolValue", "value", "false", Some(Json::Bool(false))),
+        ("google.protobuf.BoolValue", "value", "True", None),
+        ("test.NumericFields", "signed", "9223372036854775808", None),
+        ("test.NumericFields", "unsigned", "-1", None),
+        ("test.NumericFields", "int32_number", "2147483648", None),
+        ("test.NumericFields", "uint32_number", "-1", None),
+        ("test.NumericFields", "float_number", "NaN", None),
+        ("test.NumericFields", "double_number", "Infinity", None),
+        ("test.NumericFields", "signed", "1e2", None),
+    ] {
+        let descriptor = pool
+            .get_message_by_name(message)
+            .unwrap()
+            .get_field_by_name(field)
+            .unwrap();
+        for input in [Cow::Borrowed(text), Cow::Owned(text.to_owned())] {
+            assert_eq!(
+                scalar(&descriptor, input),
+                expected.clone().ok_or(TranscodingError::Invalid),
+                "{message}.{field}: {text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn owned_scalar_text_moves_decoder_allocation() {
+    let pool = prost_reflect::DescriptorPool::decode(
+        include_bytes!("../../../../edgion-tests/proto/grpc_json_transcoding/test.pb").as_slice(),
+    )
+    .unwrap();
+    for (message, field, encoded, expected) in [
+        ("test.Complex", "display_name", "hello%20world", "hello world"),
+        ("test.Complex", "data", "%59WJj", "YWJj"),
+        ("test.NumericFields", "signed", "%2B0007", "+0007"),
+        ("test.NumericFields", "unsigned", "%31", "1"),
+        ("test.NumericFields", "null_value", "%4EULL_VALUE", "NULL_VALUE"),
+    ] {
+        let descriptor = pool
+            .get_message_by_name(message)
+            .unwrap()
+            .get_field_by_name(field)
+            .unwrap();
+        let Cow::Owned(input) = decode_path(encoded, false).unwrap() else {
+            panic!("escaped input must be owned")
+        };
+        let pointer = input.as_ptr();
+        let capacity = input.capacity();
+        let Json::String(output) = scalar(&descriptor, Cow::Owned(input)).unwrap() else {
+            panic!("expected string")
+        };
+        assert_eq!(output, expected);
+        assert_eq!(output.as_ptr(), pointer);
+        assert_eq!(output.capacity(), capacity);
+    }
+}

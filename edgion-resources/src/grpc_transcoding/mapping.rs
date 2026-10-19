@@ -138,7 +138,7 @@ impl CompiledBinding {
             )?;
             fields.push((
                 selector.clone(),
-                scalar(selector.last().ok_or(TranscodingError::Invalid)?, &value)?,
+                scalar(selector.last().ok_or(TranscodingError::Invalid)?, value)?,
             ));
         }
         if let Some(query) = query {
@@ -160,7 +160,7 @@ impl CompiledBinding {
                 return Err(TranscodingError::Invalid);
             }
             let field = selector.last().ok_or(TranscodingError::Invalid)?;
-            let val = scalar(field, &value)?;
+            let val = scalar(field, value)?;
             if field.is_list() {
                 if let Some((_, Json::Array(values))) = fields.iter_mut().find(|(f, _)| f == &selector) {
                     values.push(val);
@@ -263,10 +263,10 @@ fn resolve_field(input: &MessageDescriptor, name: &str) -> Result<Vec<FieldDescr
 fn overlaps(a: &[FieldDescriptor], b: &[FieldDescriptor]) -> bool {
     a.iter().zip(b).all(|(x, y)| x == y)
 }
-fn scalar(field: &FieldDescriptor, value: &str) -> Result<Json, TranscodingError> {
+fn scalar(field: &FieldDescriptor, value: Cow<'_, str>) -> Result<Json, TranscodingError> {
     Ok(match field.kind() {
         Kind::Message(_) => return Err(TranscodingError::Invalid),
-        Kind::Bool => match value {
+        Kind::Bool => match value.as_ref() {
             "true" => Json::Bool(true),
             "false" => Json::Bool(false),
             _ => return Err(TranscodingError::Invalid),
@@ -277,11 +277,11 @@ fn scalar(field: &FieldDescriptor, value: &str) -> Result<Json, TranscodingError
         Kind::Uint32 | Kind::Fixed32 => Json::from(value.parse::<u32>().map_err(|_| TranscodingError::Invalid)?),
         Kind::Int64 | Kind::Sint64 | Kind::Sfixed64 => {
             value.parse::<i64>().map_err(|_| TranscodingError::Invalid)?;
-            Json::String(value.into())
+            Json::String(value.into_owned())
         }
         Kind::Uint64 | Kind::Fixed64 => {
             value.parse::<u64>().map_err(|_| TranscodingError::Invalid)?;
-            Json::String(value.into())
+            Json::String(value.into_owned())
         }
         Kind::Float | Kind::Double => {
             let n = value.parse::<f64>().map_err(|_| TranscodingError::Invalid)?;
@@ -290,7 +290,7 @@ fn scalar(field: &FieldDescriptor, value: &str) -> Result<Json, TranscodingError
             }
             Json::from(n)
         }
-        Kind::Enum(_) | Kind::String | Kind::Bytes => Json::String(value.into()),
+        Kind::Enum(_) | Kind::String | Kind::Bytes => Json::String(value.into_owned()),
     })
 }
 fn path_pattern(pattern: &str) -> Result<String, String> {

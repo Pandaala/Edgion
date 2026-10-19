@@ -4951,3 +4951,25 @@ Fresh serial baseline verification passed 56 tests: 30 Resources transcoding and
 26 Gateway transcoder tests. Formatting check, workspace check/Clippy and
 agent-doc/diff checks passed; existing warnings remain outside this documentation
 batch. These checks do not establish performance or equivalence of the proposals.
+
+## gRPC decoded scalar ownership transfer
+
+Path and form-query binding now pass their decoded Cow<str> into scalar conversion.
+String, bytes, enum and validated 64-bit integer text move an existing owned
+String into the bound JSON value; borrowed text still receives an owned copy.
+Numeric parsing, error ordering and original integer spelling are preserved.
+BoundRequest retains independent ownership after input buffers leave scope.
+
+The baseline-first scalar regression covers borrowed and owned forms across all
+scalar families, integer boundaries and malformed values. A separate escaped-path
+regression verifies pointer and capacity identity for the moved string-producing
+families. This establishes buffer transfer, not measured throughput or RSS gains.
+Decoder spare capacity remains retained; the owning conversion memory ledger now
+explicitly accounts for it under the unchanged encoded input cap and existing
+selector/scratch allowance. No exact-capacity equivalence is claimed. Strict query
+preflight remains unchanged; grpc-01 still requires a separate decision.
+
+Fresh serial verification passed 58 tests: 32 Resources transcoding and 26 Gateway
+transcoder tests. Formatting, workspace check/Clippy and seven repository guards
+passed; existing unrelated warnings remain outside the diff. No real-socket
+integration or performance benchmark ran.
