@@ -4603,3 +4603,28 @@ evaluation tests. Formatting, workspace check/Clippy, seven repository guards
 and diff hygiene passed; existing warnings remain outside the diff. The benefit
 is removal of the graph-state name allocations, not all frontend allocations
 or measured throughput. No live transport, Redis or performance benchmark ran.
+
+## GraphQL directive comparisons without owned name copies
+
+Shared frontend/cost directive validation now compares Apollo TokenText directly
+for directive names and the if argument instead of converting that same token
+text into a temporary String. The pinned Apollo 0.8.6 implementation keeps a
+GreenToken handle; the original name helper used the same text extraction before
+to_string. The general owned-name helper and all other consumers remain unchanged.
+The supporting cross-crate scope is graphql_request/selection.rs and its existing
+frontend test module. No token survives validation, and Work, short-circuit/error
+order, parser ownership, admission and directive acceptance are unchanged.
+
+A direct directive regression first passed against the original implementation,
+then against the optimized version. It covers absent directives, skip/include,
+boolean/variable values, repeated directives, case sensitivity, unknown names,
+missing arguments, invalid values and duplicate if arguments. Repeated directives
+remain accepted; duplicate arguments reject. Exact Work counts and success at the
+remaining budget boundary, with failure one step short, are asserted.
+
+Fresh serial verification passed 61 tests: 16 Resources frontend, 24 cost-model,
+four Gateway guard, five rate-limit, one safelist, four router and seven shared
+evaluation tests. Formatting, workspace check/Clippy, seven repository guards
+and diff hygiene passed; existing warnings remain outside the diff. The claim
+is removal of two owned-name copy sites, not allocation-free validation or measured
+throughput. No live transport, Redis or performance benchmark ran.

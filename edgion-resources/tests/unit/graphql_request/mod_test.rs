@@ -95,3 +95,59 @@ fn fragment_graph_validation_includes_unused_and_unselected_definitions() {
         assert_eq!(post(query, Some("Q")).unwrap_err(), GraphqlError::Invalid, "{query}");
     }
 }
+
+#[test]
+fn directive_names_preserve_acceptance_and_exact_work() {
+    for (suffix, accepted, steps) in [
+        ("", true, 0),
+        ("@skip(if:true)", true, 2),
+        ("@include(if:false)", true, 2),
+        ("@skip(if:$flag)", true, 2),
+        ("@skip(if:true) @include(if:false)", true, 4),
+        ("@skip(if:true) @skip(if:false)", true, 4),
+        ("@Skip(if:true)", false, 1),
+        ("@unknown(if:true)", false, 1),
+        ("@skip", false, 1),
+        ("@skip(IF:true)", false, 2),
+        ("@skip(other:true)", false, 2),
+        ("@skip(if:null)", false, 2),
+        ("@skip(if:1)", false, 2),
+        ("@skip(if:true,if:false)", false, 3),
+        ("@skip(if:true) @unknown(if:false)", false, 3),
+    ] {
+        let document = parse_document(&format!("{{x {suffix}}}")).unwrap();
+        let operation = document
+            .definitions()
+            .find_map(|definition| match definition {
+                cst::Definition::OperationDefinition(operation) => Some(operation),
+                _ => None,
+            })
+            .unwrap();
+        let field = operation
+            .selection_set()
+            .unwrap()
+            .selections()
+            .find_map(|selection| match selection {
+                cst::Selection::Field(field) => Some(field),
+                _ => None,
+            })
+            .unwrap();
+        let expected = if accepted { Ok(()) } else { Err(GraphqlError::Invalid) };
+        let mut work = Work::default();
+        assert_eq!(directives(field.directives(), &mut work), expected, "{suffix}");
+        assert_eq!(work.0, steps, "{suffix}");
+        if accepted {
+            let mut exact = Work(MAX_WORK - steps);
+            assert_eq!(directives(field.directives(), &mut exact), Ok(()), "{suffix}");
+            assert_eq!(exact.0, MAX_WORK);
+            if steps > 0 {
+                let mut short = Work(MAX_WORK - steps + 1);
+                assert_eq!(
+                    directives(field.directives(), &mut short),
+                    Err(GraphqlError::Invalid),
+                    "{suffix}"
+                );
+            }
+        }
+    }
+}

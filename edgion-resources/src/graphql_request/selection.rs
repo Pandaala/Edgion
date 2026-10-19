@@ -115,7 +115,7 @@ pub(crate) fn directives(source: Option<cst::Directives>, work: &mut Work) -> Re
     if let Some(source) = source {
         for directive in source.directives() {
             work.step()?;
-            let n = name(directive.name())?;
+            let n = directive.name().ok_or(GraphqlError::Invalid)?.text();
             if !matches!(n.as_str(), "skip" | "include") {
                 return Err(GraphqlError::Invalid);
             }
@@ -124,7 +124,7 @@ pub(crate) fn directives(source: Option<cst::Directives>, work: &mut Work) -> Re
             for arg in args.arguments() {
                 work.step()?;
                 count += 1;
-                if name(arg.name())? != "if"
+                if arg.name().ok_or(GraphqlError::Invalid)?.text() != "if"
                     || !matches!(arg.value(), Some(cst::Value::BooleanValue(_) | cst::Value::Variable(_)))
                 {
                     return Err(GraphqlError::Invalid);
