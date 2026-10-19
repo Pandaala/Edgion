@@ -682,3 +682,67 @@ fn json_object_iteration_avoids_temporary_member_vector() {
         "old={old_stats:?}, new={new_stats:?}"
     );
 }
+
+fn original_write_form_component(writer: &mut CappedWriter, input: &[u8]) -> Result<(), TransformFailure> {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for byte in input {
+        match *byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' => {
+                writer.write_all(&[*byte]).map_err(writer_failure)?;
+            }
+            b' ' => writer.write_all(b"+").map_err(writer_failure)?,
+            byte => writer
+                .write_all(&[b'%', HEX[(byte >> 4) as usize], HEX[(byte & 0x0f) as usize]])
+                .map_err(writer_failure)?,
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn form_encoding_runs_preserve_bytes_and_output_refusal() {
+    let mut cases = vec![
+        Vec::new(),
+        b"plain-._*AZaz09".to_vec(),
+        b"ab cd~ef+gh%ij&kl=mn/".to_vec(),
+        "café €".as_bytes().to_vec(),
+        b"x".repeat(MAX_VALUE_BYTES),
+    ];
+    cases.extend((0..=u8::MAX).map(|byte| vec![byte]));
+    for input in cases {
+        let mut oracle = CappedWriter::new(usize::MAX);
+        original_write_form_component(&mut oracle, &input).unwrap();
+        let encoded = oracle.into_inner();
+        for prefix in [b"".as_slice(), b"prior="] {
+            let required = prefix.len() + encoded.len();
+            let mut limits = vec![
+                prefix.len(),
+                required.saturating_sub(1).max(prefix.len()),
+                required,
+                required + 1,
+                usize::MAX,
+            ];
+            if input.len() < 100 {
+                limits.extend(prefix.len()..=required + 1);
+            }
+            for limit in limits {
+                let mut expected = CappedWriter::new(limit);
+                let mut actual = CappedWriter::new(limit);
+                expected.write_all(prefix).unwrap();
+                actual.write_all(prefix).unwrap();
+                let old = original_write_form_component(&mut expected, &input);
+                let new = write_form_component(&mut actual, &input);
+                assert_eq!(new, old, "input={input:?}, limit={limit}");
+                assert_eq!(new.is_ok(), limit >= required);
+                assert_eq!(actual.overflowed(), expected.overflowed());
+                if new.is_ok() {
+                    assert_eq!(actual.into_inner(), expected.into_inner());
+                } else {
+                    // Conversion discards either failed buffer; neither may exceed its cap.
+                    assert!(actual.into_inner().len() <= limit);
+                    assert!(expected.into_inner().len() <= limit);
+                }
+            }
+        }
+    }
+}

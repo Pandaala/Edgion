@@ -18,6 +18,11 @@ impl CappedWriter {
         }
     }
 
+    /// Bytes still permitted by the output limit, independent of Vec capacity.
+    pub(crate) fn remaining_limit(&self) -> usize {
+        self.limit - self.bytes.len()
+    }
+
     pub fn overflowed(&self) -> bool {
         self.overflowed
     }

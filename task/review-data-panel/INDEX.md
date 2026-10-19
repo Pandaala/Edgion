@@ -4510,3 +4510,27 @@ Production code and tests are unchanged. Fresh serial verification passed 83 tes
 10 plugin, six resource configuration and 67 shared condition tests. Formatting,
 workspace check/Clippy and document/diff validation passed. No prototype, live
 transport or throughput benchmark ran.
+
+## Form encoding of contiguous plain bytes
+
+FormJsonTransform's JSON-to-form encoder writes contiguous safe ASCII runs as
+borrowed slices instead of issuing one capped write for every plain byte. Spaces
+still encode as plus and other bytes as atomic uppercase percent triplets. The
+canonical CappedWriter exposes its remaining output budget so run discovery scans
+at most that budget plus one byte before refusing an oversized run. No alternate
+writer, temporary encoding buffer or request-body owner was introduced.
+
+Successful bytes and output refusal boundaries remain unchanged. A failed bulk
+write can leave a shorter private partial buffer than byte-at-a-time writing;
+write_json_pair propagates failure and json_to_form drops that writer, so those
+bytes never reach request publication. Pair/error ordering, body diagnostics,
+physical caps and header-failure rollback retain their existing paths.
+
+An independent original byte encoder verifies all 256 byte values, mixed escapes,
+permitted UTF-8, long plain inputs, prefilled writers and exact/insufficient caps.
+Budget tests cover zero/exact/usize::MAX, unchanged budget after refusal and later
+fitting writes. Fresh serial verification passed 25 tests: 23 transformer and two
+writer tests. Formatting, workspace check/Clippy, seven repository guards and
+document/diff validation passed; existing warnings remain outside the diff.
+The claim is fewer writer calls for plain runs, not lower CPU cost on every input
+or measured throughput. No live transport or performance benchmark ran.

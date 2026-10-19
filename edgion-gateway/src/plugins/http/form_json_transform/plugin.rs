@@ -354,18 +354,28 @@ fn write_json_pair(
     write_form_component(writer, value.as_bytes())
 }
 
-fn write_form_component(writer: &mut CappedWriter, input: &[u8]) -> Result<(), TransformFailure> {
+fn write_form_component(writer: &mut CappedWriter, mut input: &[u8]) -> Result<(), TransformFailure> {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    for byte in input {
-        match *byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' => {
-                writer.write_all(&[*byte]).map_err(writer_failure)?;
-            }
+    while !input.is_empty() {
+        // Stop at the first over-budget byte rather than scanning a long run
+        // that cannot fit. A failed write's private prefix is never published.
+        let scan_len = input.len().min(writer.remaining_limit().saturating_add(1));
+        let plain_len = input[..scan_len]
+            .iter()
+            .position(|byte| !matches!(*byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_'))
+            .unwrap_or(scan_len);
+        if plain_len != 0 {
+            writer.write_all(&input[..plain_len]).map_err(writer_failure)?;
+            input = &input[plain_len..];
+            continue;
+        }
+        match input[0] {
             b' ' => writer.write_all(b"+").map_err(writer_failure)?,
             byte => writer
                 .write_all(&[b'%', HEX[(byte >> 4) as usize], HEX[(byte & 0x0f) as usize]])
                 .map_err(writer_failure)?,
         }
+        input = &input[1..];
     }
     Ok(())
 }
