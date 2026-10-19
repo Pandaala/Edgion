@@ -8368,3 +8368,22 @@ Gateway CORS-filtered tests, formatting, workspace check/Clippy and seven
 repository guards with existing unrelated Clippy warnings. This removes the
 temporary star String only; final header insertion still copies bytes. No full
 suite or throughput benchmark ran.
+
+## Keep fault-injection delays in millisecond form until sleep
+
+FaultInjection's private delay kind and sampler now retain the original u64
+millisecond values. Runtime logging passes the sampled integer to the canonical
+PluginLog formatter, then constructs the same Duration at the sleep sink. This
+removes the temporary decimal String and Duration-to-millisecond round trip;
+it introduces no integer narrowing or shared log-argument layout change.
+Fixed/range selection, equal-bound RNG bypass, inclusive sampling, independent
+delay/abort dice order and log/sleep/abort ordering remain unchanged.
+
+Existing sampling tests retain their assertions in millisecond units. New tests
+cover private zero/u64 extremes without RNG use or long sleeps and the actual
+zero-delay log/continue path. The schema's 30,000 ms admission cap is unchanged;
+private u64::MAX coverage does not imply an admitted configuration. Baseline
+verification passed seven fault-injection tests; final verification passed nine
+fault-injection and 34 shared PluginLog tests, formatting, workspace check/Clippy
+and seven repository guards with existing unrelated Clippy warnings. No timer
+latency guarantee, full suite or throughput benchmark is claimed.

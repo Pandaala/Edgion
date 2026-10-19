@@ -108,22 +108,22 @@ fn decide_distribution_matches_ratio() {
 fn sample_delay_range_inclusive_bounds() {
     let mut rng = StdRng::seed_from_u64(7);
     let kind = DelayKind::Range {
-        min: Duration::from_millis(100),
-        max: Duration::from_millis(200),
+        min_ms: 100,
+        max_ms: 200,
     };
     for _ in 0..1000 {
         let d = sample_delay(&mut rng, &kind);
-        assert!(d >= Duration::from_millis(100));
-        assert!(d <= Duration::from_millis(200));
+        assert!(d >= 100);
+        assert!(d <= 200);
     }
 }
 
 #[test]
 fn sample_delay_fixed_constant() {
     let mut rng = StdRng::seed_from_u64(7);
-    let kind = DelayKind::Fixed(Duration::from_millis(300));
+    let kind = DelayKind::Fixed(300);
     for _ in 0..50 {
-        assert_eq!(sample_delay(&mut rng, &kind), Duration::from_millis(300));
+        assert_eq!(sample_delay(&mut rng, &kind), 300);
     }
 }
 
@@ -183,5 +183,40 @@ async fn abort_sets_content_type_then_appends_duplicate_headers_in_order() {
     assert_eq!(
         serde_json::to_value(&log).unwrap()["log"],
         serde_json::json!(["fault abort=503"])
+    );
+}
+
+#[test]
+fn delay_millisecond_representation_preserves_extremes_without_sampling() {
+    // Private representation bounds, not admitted configurations or actual sleeps.
+    for ms in [0, 300, u64::MAX] {
+        let mut rng = PanicRng;
+        for kind in [DelayKind::Fixed(ms), DelayKind::Range { min_ms: ms, max_ms: ms }] {
+            let sampled = sample_delay(&mut rng, &kind);
+            assert_eq!(u128::from(sampled), Duration::from_millis(ms).as_millis());
+        }
+    }
+}
+
+#[tokio::test]
+async fn zero_delay_preserves_log_and_continues() {
+    let plugin = FaultInjection {
+        compiled: Compiled {
+            delay: Some(CompiledDelay {
+                ratio: 1.0,
+                kind: DelayKind::Fixed(0),
+            }),
+            abort: None,
+        },
+    };
+    let mut session = MockPluginSession::new();
+    let mut log = PluginLog::new("FaultInjection");
+    assert_eq!(
+        plugin.run_request(&mut session, &mut log).await,
+        PluginRunningResult::GoodNext
+    );
+    assert_eq!(
+        serde_json::to_value(&log).unwrap()["log"],
+        serde_json::json!(["fault delay=0ms"])
     );
 }

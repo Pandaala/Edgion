@@ -19,9 +19,10 @@ struct CompiledDelay {
     kind: DelayKind,
 }
 
+/// Delay bounds in milliseconds, matching the configuration and log units.
 enum DelayKind {
-    Fixed(Duration),
-    Range { min: Duration, max: Duration },
+    Fixed(u64),
+    Range { min_ms: u64, max_ms: u64 },
 }
 
 struct CompiledAbort {
@@ -42,13 +43,13 @@ impl FaultInjection {
     pub fn new(config: &FaultInjectionConfig) -> Self {
         let delay = config.delay.as_ref().map(|d| {
             let kind = if let Some(fixed) = d.fixed_ms {
-                DelayKind::Fixed(Duration::from_millis(fixed))
+                DelayKind::Fixed(fixed)
             } else {
                 let min = d.min_ms.expect("validated: min_ms set when fixed_ms not set");
                 let max = d.max_ms.expect("validated: max_ms set when min_ms set");
                 DelayKind::Range {
-                    min: Duration::from_millis(min),
-                    max: Duration::from_millis(max),
+                    min_ms: min,
+                    max_ms: max,
                 }
             };
             CompiledDelay { ratio: d.ratio, kind }
@@ -82,14 +83,15 @@ fn decide<R: Rng + ?Sized>(rng: &mut R, ratio: f64) -> bool {
     }
 }
 
-fn sample_delay<R: Rng>(rng: &mut R, kind: &DelayKind) -> Duration {
+fn sample_delay<R: Rng>(rng: &mut R, kind: &DelayKind) -> u64 {
     match kind {
         DelayKind::Fixed(d) => *d,
-        DelayKind::Range { min, max } => {
-            let lo = min.as_millis() as u64;
-            let hi = max.as_millis() as u64;
-            let pick = if lo == hi { lo } else { rng.random_range(lo..=hi) };
-            Duration::from_millis(pick)
+        DelayKind::Range { min_ms, max_ms } => {
+            if min_ms == max_ms {
+                *min_ms
+            } else {
+                rng.random_range(*min_ms..=*max_ms)
+            }
         }
     }
 }
@@ -104,10 +106,10 @@ impl RequestFilter for FaultInjection {
         use crate::plugins::runtime::log::la;
 
         // Scope the RNG to a block so ThreadRng (!Send) is dropped before any await.
-        let (delay_dur, abort_hit) = {
+        let (delay_ms, abort_hit) = {
             let mut rng = rand::rng();
             // Independent dice for delay and abort.
-            let delay_dur = self.compiled.delay.as_ref().and_then(|d| {
+            let delay_ms = self.compiled.delay.as_ref().and_then(|d| {
                 if decide(&mut rng, d.ratio) {
                     Some(sample_delay(&mut rng, &d.kind))
                 } else {
@@ -115,17 +117,16 @@ impl RequestFilter for FaultInjection {
                 }
             });
             let abort_hit = self.compiled.abort.as_ref().filter(|a| decide(&mut rng, a.ratio));
-            (delay_dur, abort_hit)
+            (delay_ms, abort_hit)
         };
 
-        if delay_dur.is_none() && abort_hit.is_none() {
+        if delay_ms.is_none() && abort_hit.is_none() {
             return PluginRunningResult::GoodNext;
         }
 
-        if let Some(dur) = delay_dur {
-            let ms = dur.as_millis().to_string();
-            plugin_log.push_fmt("fault delay={}ms", la![ms.as_str()]);
-            tokio::time::sleep(dur).await;
+        if let Some(ms) = delay_ms {
+            plugin_log.push_fmt("fault delay={}ms", la![ms]);
+            tokio::time::sleep(Duration::from_millis(ms)).await;
         }
 
         if let Some(a) = abort_hit {
