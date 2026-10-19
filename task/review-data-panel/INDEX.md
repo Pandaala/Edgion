@@ -8391,3 +8391,27 @@ verification passed seven fault-injection tests; final verification passed nine
 fault-injection and 34 shared PluginLog tests, formatting, workspace check/Clippy
 and seven repository guards with existing unrelated Clippy warnings. No timer
 latency guarantee, full suite or throughput benchmark is claimed.
+
+## Transfer selected webhook JSON strings
+
+Webhook response extraction now traverses its disposable parsed JSON tree mutably
+and takes a selected String instead of cloning it. Index/key decisions, null and
+composite handling, malformed-input failure and response bytes are unchanged.
+Only the local parsed tree is modified; outbound limits and final context-setter
+ownership remain unchanged. The locked serde_json string visitor creates owned
+text from the parsed string slice, which can move directly to the existing result.
+
+Differential tests compare the prior copied selection across numeric/empty path
+segments, arrays, strings, null, scalars, composites and malformed inputs. A warmed
+thread-local measurement observes one fewer allocation for a nonempty string
+selection; JSON parsing and other result paths still allocate. No throughput or
+whole-extractor allocation-free claim is made.
+
+Baseline verification passed 45 provider tests. The first final parallel run had
+46 passes and one existing TLS audit-count failure in
+candidate_comparison_does_not_parse_material_or_emit_tls_audit (zero versus one).
+That preparation path does not call response extraction; its parallel failure
+mechanism was not established. The unchanged-source serial rerun passed all 47
+provider tests, followed by four WebhookKeyGet tests. Formatting, workspace
+check/Clippy and seven repository guards passed with existing unrelated Clippy
+warnings. No live webhook or full suite ran.

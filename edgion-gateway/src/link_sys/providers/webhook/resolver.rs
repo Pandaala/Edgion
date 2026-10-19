@@ -8,6 +8,7 @@ use crate::plugins::http::common::outbound::call::{outbound_call, OutboundCallEr
 use crate::plugins::http::common::outbound::request::OutboundRequestDiagnostics;
 use crate::plugins::runtime::PluginSession;
 use edgion_resources::common::WebhookExtract;
+use std::mem::take;
 
 use super::manager::get_webhook_global_max;
 
@@ -103,18 +104,18 @@ fn extract_value_from_response(result: &OutboundResponse, extract: &WebhookExtra
 
         WebhookExtract::Body { path } => {
             let body = std::str::from_utf8(&result.body).ok()?;
-            let json: serde_json::Value = serde_json::from_str(body).ok()?;
+            let mut json: serde_json::Value = serde_json::from_str(body).ok()?;
             // Dot-path traversal: "data.user_id" → json["data"]["user_id"]
-            let mut current = &json;
+            let mut current = &mut json;
             for segment in path.split('.') {
                 if let Ok(index) = segment.parse::<usize>() {
-                    current = current.get(index)?;
+                    current = current.get_mut(index)?;
                 } else {
-                    current = current.get(segment)?;
+                    current = current.get_mut(segment)?;
                 }
             }
             match current {
-                serde_json::Value::String(s) => Some(s.clone()),
+                serde_json::Value::String(s) => Some(take(s)),
                 serde_json::Value::Null => None,
                 other => Some(other.to_string()),
             }

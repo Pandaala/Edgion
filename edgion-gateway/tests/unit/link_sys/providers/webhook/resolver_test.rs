@@ -1,5 +1,6 @@
 use super::*;
 use bytes::Bytes;
+use std::str;
 
 // Verifies the resolve_webhook_key signature accepts the new fields.
 // Uses a wrapper async fn to avoid async fn pointer lifetime variance issues.
@@ -135,4 +136,83 @@ async fn webhook_non_success_records_status_error_and_returns_none() {
         None
     };
     assert!(result.is_none(), "non-success status must return None");
+}
+
+fn copied_json_selection(body: &[u8], path: &str) -> Option<String> {
+    let text = str::from_utf8(body).ok()?;
+    let json: serde_json::Value = serde_json::from_str(text).ok()?;
+    let mut selected = &json;
+    for segment in path.split('.') {
+        selected = if let Ok(index) = segment.parse::<usize>() {
+            selected.get(index)?
+        } else {
+            selected.get(segment)?
+        };
+    }
+    match selected {
+        serde_json::Value::String(value) => Some(value.clone()),
+        serde_json::Value::Null => None,
+        other => Some(other.to_string()),
+    }
+}
+
+#[test]
+fn json_selection_transfer_matches_copied_selection() {
+    let body = br#"{"data":[{"value":"escaped\ntext","empty":"","nil":null,"number":42,"flag":true,"object":{"a":1},"array":[1,2]}],"0":"numeric-key","":{"":"empty-key"}}"#;
+    for path in [
+        "data.0.value",
+        "data.00.value",
+        "data.+0.value",
+        "data.0.empty",
+        "data.0.nil",
+        "data.0.number",
+        "data.0.flag",
+        "data.0.object",
+        "data.0.array",
+        "data.1.value",
+        "data.0.missing",
+        "data.0.value.child",
+        "0",
+        "",
+        ".",
+        "data.-1",
+        "data.999999999999999999999999999999999999999",
+    ] {
+        let result = make_result(200, reqwest::header::HeaderMap::new(), body);
+        let extract = WebhookExtract::Body { path: path.to_owned() };
+        assert_eq!(
+            extract_value_from_response(&result, &extract),
+            copied_json_selection(body, path),
+            "{path}"
+        );
+        assert_eq!(result.body.as_ref(), body);
+    }
+    for body in [b"{".as_slice(), b"\xff", b"null", b"[]"] {
+        let result = make_result(200, reqwest::header::HeaderMap::new(), body);
+        let extract = WebhookExtract::Body {
+            path: "data".to_owned(),
+        };
+        assert_eq!(
+            extract_value_from_response(&result, &extract),
+            copied_json_selection(body, "data")
+        );
+    }
+}
+
+#[test]
+fn json_string_selection_avoids_one_copy_allocation() {
+    use crate::test_allocation_counter::count_allocations;
+
+    let body = br#"{"data":{"value":"selected nonempty text"}}"#;
+    let result = make_result(200, reqwest::header::HeaderMap::new(), body);
+    let path = "data.value";
+    let extract = WebhookExtract::Body { path: path.to_owned() };
+    assert_eq!(
+        extract_value_from_response(&result, &extract),
+        copied_json_selection(body, path)
+    );
+    let (copied, copied_allocations) = count_allocations(|| copied_json_selection(body, path));
+    let (moved, moved_allocations) = count_allocations(|| extract_value_from_response(&result, &extract));
+    assert_eq!(moved, copied);
+    assert_eq!(copied_allocations, moved_allocations + 1);
 }
