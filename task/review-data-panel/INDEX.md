@@ -6491,3 +6491,20 @@ Independent plan review approved two documents. Fresh baseline verification pass
 17 Gateway rate_limit_local-filtered tests, formatting check, workspace check/Clippy
 and agent-doc validation. Existing unrelated warnings remain. No runtime change,
 full test suite, live integration or benchmark ran.
+
+## Instance-scoped local rate threshold lookup
+
+The shared get_effective_rate entry now returns the configured rate directly for
+Instance scope. Gateway request admission and quota-header callers no longer
+perform an unused global instance-count atomic load in that scope. Cluster still
+reads the live count and delegates to the existing pure formula; no threshold
+cache, schema field, validation change or estimator timing change was introduced.
+The supporting resource-crate edit is limited to this Gateway-consumed entry and
+its existing unit test. No measured CPU or throughput improvement is claimed.
+
+Independent plan review approved three files. The public-entry assertion passed
+against the original implementation before the production edit. Fresh verification
+passed 46 resource and 17 Gateway rate_limit_local-filtered tests (63 total),
+including dynamic Cluster count changes, formatting, workspace check/Clippy and
+seven guards. Existing unrelated warnings remain. No full test suite, live
+integration or benchmark ran.

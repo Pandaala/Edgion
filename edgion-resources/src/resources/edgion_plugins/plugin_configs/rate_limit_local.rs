@@ -482,7 +482,10 @@ impl RateLimitLocalConfig {
     ///
     /// In Instance scope, returns the configured rate as-is.
     pub fn get_effective_rate(&self) -> isize {
-        self.effective_rate_for_instances(get_gateway_instance_count())
+        match self.scope {
+            RateLimitLocalScope::Instance => self.rate,
+            RateLimitLocalScope::Cluster => self.effective_rate_for_instances(get_gateway_instance_count()),
+        }
     }
 
     /// Compute the effective rate for a given number of gateway instances.

@@ -373,6 +373,7 @@ fn test_effective_rate_instance_scope() {
     };
     // Instance scope: always returns configured rate, skewTolerance ignored
     assert_eq!(config.effective_rate_for_instances(4), 100);
+    assert_eq!(config.get_effective_rate(), 100);
 }
 
 #[test]
