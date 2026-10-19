@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [OIDC cookie Base64 output construction](oidc-02-cookie-base64-output.md)
+
 - [Shared OIDC claims serialization](oidc-01-shared-claims-serialization.md)
 
 - [Borrowed Connection inspection for credential injection](credential-01-connection-inspection-interface.md)
