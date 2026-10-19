@@ -95,6 +95,7 @@ destination.
 - [Redis compiled-policy validation ownership](redis-01-compiled-policy-validation.md)
 - [HMAC signed-header membership ownership](hmac-01-signed-header-membership.md)
 - [Preinitialized HMAC key state](hmac-02-preinitialized-mac-state.md)
+- [Incremental HMAC signing input](hmac-03-incremental-signing-input.md)
 - [Raw URI fragment serialization](log-01-raw-uri-fragment-serialization.md)
 - [Wasm header snapshot and replay ownership](wasm-01-header-snapshot-ownership.md)
 - [DSL string consumer ownership](dsl-01-string-consumer-ownership.md)
@@ -6024,3 +6025,17 @@ Fresh serial verification passed 56 HMAC-filtered and 68 condition-system tests
 (the filters overlap), formatting, workspace check/Clippy and seven repository
 guards. Existing unrelated Clippy warnings remain. The owning HMAC wire-contract
 knowledge records the iterator boundary. No integration suite was run.
+
+## HMAC signing-buffer audit
+
+The current verifier constructs the complete canonical message before initializing
+its MAC. Fragment updates could remove that temporary copy, but variable header
+counts and late missing-header rejection create an unmeasured allocation/CPU
+tradeoff. Recorded the decision, canonical byte/error boundaries and measurement
+criteria in hmac-03-incremental-signing-input.md. Existing CSRF fixed-fragment
+precedent does not establish this path's CPU cost; no runtime change was made.
+
+Independent plan review approved two documentation files. Fresh baseline checks
+passed 56 HMAC-filtered and 68 condition-system tests (overlapping filters),
+formatting check, workspace check/Clippy and agent-doc validation. Existing
+unrelated warnings remain. No throughput measurement or integration run is claimed.
