@@ -390,9 +390,9 @@ impl LdapAuth {
         let decoded = String::from_utf8(decoded).ok()?;
         let colon = decoded.find(':')?;
         let raw_username = &decoded[..colon];
-        let trimmed_username = raw_username.trim();
-        let username_start = raw_username.len() - raw_username.trim_start().len();
-        let username_end = username_start + trimmed_username.len();
+        let leading_trimmed = raw_username.trim_start();
+        let username_start = raw_username.len() - leading_trimmed.len();
+        let username_end = username_start + leading_trimmed.trim_end().len();
         let password = colon + 1..decoded.len();
 
         if username_start == username_end || password.is_empty() {

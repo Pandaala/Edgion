@@ -54,15 +54,22 @@ fn test_parse_authorization_value_invalid() {
 #[test]
 fn decoded_credentials_use_one_byte_safe_utf8_backing_buffer() {
     let auth = ldap_auth_default();
-    let payload = "  José :pä:ss ";
-    let header = format!("LdAp {}", general_purpose::STANDARD.encode(payload));
-    let credentials = auth.parse_authorization_value(&header).expect("credentials must parse");
+    for raw_username in ["José", "  José", "José  ", "\t José \n", "\u{00A0}José\u{2003}"] {
+        let payload = format!("{raw_username}: pä:ss ");
+        let header = format!("LdAp {}", general_purpose::STANDARD.encode(&payload));
+        let credentials = auth.parse_authorization_value(&header).expect("credentials must parse");
 
-    assert_eq!(credentials.username(), "José");
-    assert_eq!(credentials.password(), "pä:ss ");
-    let backing = credentials.decoded.as_bytes().as_ptr_range();
-    assert!(backing.contains(&credentials.username().as_ptr()));
-    assert!(backing.contains(&credentials.password().as_ptr()));
+        assert_eq!(credentials.username(), "José");
+        assert_eq!(credentials.password(), " pä:ss ");
+        assert_eq!(credentials.decoded, payload);
+        let backing = credentials.decoded.as_bytes().as_ptr_range();
+        assert!(backing.contains(&credentials.username().as_ptr()));
+        assert!(backing.contains(&credentials.password().as_ptr()));
+    }
+    for payload in [":password", " \t\u{00A0}\u{2003}:password", "José:"] {
+        let header = format!("ldap {}", general_purpose::STANDARD.encode(payload));
+        assert!(auth.parse_authorization_value(&header).is_none());
+    }
 }
 
 #[test]

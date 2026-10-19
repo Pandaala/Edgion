@@ -8215,3 +8215,20 @@ Existing success/oversize tests remain without new implementation-mirroring test
 Fresh verification passed 159 OIDC tests with 16 existing ignores, formatting,
 workspace check/Clippy and seven repository guards with existing unrelated
 warnings. No full suite or throughput benchmark ran.
+
+## Avoid rescanning LDAP username leading whitespace
+
+LDAP authorization parsing now computes trim_start once, uses its byte offset,
+and applies trim_end to that remaining slice. Previously trim scanned both ends
+and trim_start scanned the leading whitespace again for the offset. The decoded
+String owner, UTF-8 slice ranges, empty-username/password rejection, first-colon
+split and untrimmed password are unchanged. Header priority, DN escaping, per-bind
+connections, deadlines and authentication outcomes keep their existing behavior.
+
+The existing backing-buffer test retains its identity and now covers leading,
+trailing, ASCII and permitted Unicode whitespace, UTF-8 usernames, all-whitespace
+rejection and password spaces/colons. Fresh verification passed all 28 LDAP tests,
+formatting, workspace check/Clippy and seven repository guards with existing
+unrelated warnings. The change avoids a duplicate leading-whitespace scan; it
+removes no allocation and claims no measured throughput gain. No full suite or
+network integration test ran.
