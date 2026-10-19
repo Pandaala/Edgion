@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [gRPC integer normalization storage](grpc-02-integer-normalization-storage.md)
+
 - [gRPC query preflight decoding](grpc-01-query-preflight-decoding.md)
 
 - [JSON value profiling worklist representation](json-01-profile-worklist-representation.md)
@@ -4973,3 +4975,22 @@ Fresh serial verification passed 58 tests: 32 Resources transcoding and 26 Gatew
 transcoder tests. Formatting, workspace check/Clippy and seven repository guards
 passed; existing unrelated warnings remain outside the diff. No real-socket
 integration or performance benchmark ran.
+
+
+## gRPC integer normalization storage audit
+
+Traced RequestFilter conversion through binding/body merge, JSON profiling, exact
+integer normalization, capped serialization and tree release before reflection.
+Every accepted integer currently receives a fresh canonical decimal String,
+including already canonical text. Reusing the old allocation can avoid formatting
+storage but also retain oversized buffers after long zero/exponent inputs collapse.
+Canonical-only reuse still needs a capacity policy for decoder/parser spare space.
+
+[grpc-02](grpc-02-integer-normalization-storage.md) records alternatives and their
+required semantic, capacity and peak-overlap evidence. No implementation or new
+threshold is selected, and no breach of the current memory ledger is claimed.
+
+Fresh serial baseline verification passed 58 tests: 32 Resources transcoding and
+26 Gateway transcoder tests. Formatting check, workspace check/Clippy and agent-doc
+and diff checks passed; existing warnings remain outside this documentation batch.
+No allocation or throughput benchmark ran; tests do not prove proposed reuse safe.
