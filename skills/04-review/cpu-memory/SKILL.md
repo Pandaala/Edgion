@@ -73,7 +73,7 @@ before applying a decision to current code.
 - [Small-Object Clones on Resource Reconcile / Config Sync Paths Are Not Issues](review-evidence/small-object-clones-reconcile-config-sync.md)
 - [`status_diff::conditions_equal` O(n²) Linear Scan on Bounded Condition Arrays is Not an Issue](review-evidence/status-diff-conditions-equal-on2-bounded.md)
 - [Watcher Vec Lazy Cleanup is Sufficient](review-evidence/watcher-vec-lazy-cleanup.md)
-- [Webhook Read-Then-Truncate Has a 16KB Hard Cap](review-evidence/webhook-read-then-truncate-16kb-cap.md)
+- [Webhook response buffering: streaming-cap evidence](review-evidence/webhook-read-then-truncate-16kb-cap.md)
 - [Workqueue Delay Heap Without Explicit Size Cap is Not an Issue](review-evidence/workqueue-delay-heap-no-size-cap.md)
 
 ## Superseded decisions
