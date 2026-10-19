@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Local limiter initialization and window ownership](rate-limit-01-local-estimator-initialization.md)
+
 - [Gateway-owned CORS Max-Age preparation](cors-01-derived-max-age-preparation.md)
 
 - [Dynamic fallback metric label capacity](metrics-01-fallback-label-capacity.md)
@@ -6475,3 +6477,17 @@ Independent plan review approved two documents. Fresh baseline verification pass
 45 Gateway CORS-filtered tests, formatting check, workspace check/Clippy and
 agent-doc validation. Existing unrelated warnings remain; no full test suite,
 live integration or benchmark ran.
+
+## Local limiter initialization audit
+
+Traced request-key resolution through OnceLock<Rate> and pinned Pingora estimator
+construction/reset. Cold initialization is required by design rules, but directly
+moving construction also moves the window clock and can change admission.
+Recorded the unresolved timing/memory design in rate-limit-01; current lazy code
+is not declared an accepted exception. Redis quota preparation remains sequential,
+and dynamic rejection-header name ownership matches the prior pinned-API audit.
+
+Independent plan review approved two documents. Fresh baseline verification passed
+17 Gateway rate_limit_local-filtered tests, formatting check, workspace check/Clippy
+and agent-doc validation. Existing unrelated warnings remain. No runtime change,
+full test suite, live integration or benchmark ran.
