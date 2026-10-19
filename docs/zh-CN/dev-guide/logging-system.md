@@ -259,17 +259,17 @@ log_ssl(&entry);  // 同步调用，永不阻塞
 ```rust
 static TCP_LOGGER: OnceLock<Arc<AccessLogger>> = OnceLock::new();
 
-pub struct TcpLogEntry {
+pub struct TcpLogEntry<'a> {
     pub ts: i64,
     pub listener_port: u16,
-    pub direct_peer_ip: String,
+    pub direct_peer_ip: &'a str,
     pub direct_peer_port: u16,
-    pub remote_ip: String,
-    pub upstream_addr: Option<String>,
+    pub remote_ip: &'a str,
+    pub upstream_addr: Option<&'a str>,
     pub duration_ms: u64,
     pub bytes_sent: u64,
     pub bytes_received: u64,
-    pub status: String,
+    pub status: &'static str,
     pub connection_established: bool,
     // Bounded fail-close / policy-deny reason; present only on denied connections.
     pub deny_reason: Option<&'static str>,

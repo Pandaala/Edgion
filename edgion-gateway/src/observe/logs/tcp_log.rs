@@ -11,41 +11,41 @@ use crate::routes::tcp::edgion_tcp::TcpContext;
 static TCP_LOGGER: OnceLock<Arc<AccessLogger>> = OnceLock::new();
 
 #[derive(Serialize)]
-pub struct TcpLogEntry {
+pub struct TcpLogEntry<'a> {
     pub ts: i64,
     pub listener_port: u16,
     #[serde(serialize_with = "edgion_resources::sensitive::masked::serialize")]
-    pub direct_peer_ip: String,
+    pub direct_peer_ip: &'a str,
     pub direct_peer_port: u16,
     #[serde(serialize_with = "edgion_resources::sensitive::masked::serialize")]
-    pub remote_ip: String,
+    pub remote_ip: &'a str,
     pub remote_port: u16,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub upstream_addr: Option<String>,
+    pub upstream_addr: Option<&'a str>,
     pub duration_ms: u64,
     pub bytes_sent: u64,
     pub bytes_received: u64,
-    pub status: String,
+    pub status: &'static str,
     pub connection_established: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deny_reason: Option<&'static str>,
 }
 
-impl TcpLogEntry {
-    pub fn from_context(ctx: &TcpContext) -> Self {
+impl<'a> TcpLogEntry<'a> {
+    pub fn from_context(ctx: &'a TcpContext) -> Self {
         let duration_ms = std::time::Instant::now()
             .saturating_duration_since(ctx.start_time)
             .as_millis() as u64;
-        let status = ctx.status.as_str().to_owned();
+        let status = ctx.status.as_str();
 
         Self {
             ts: chrono::Utc::now().timestamp_millis(),
             listener_port: ctx.listener_port,
-            direct_peer_ip: ctx.direct_peer_ip.clone(),
+            direct_peer_ip: &ctx.direct_peer_ip,
             direct_peer_port: ctx.direct_peer_port,
-            remote_ip: ctx.remote_ip.clone(),
+            remote_ip: &ctx.remote_ip,
             remote_port: ctx.remote_port,
-            upstream_addr: ctx.upstream_addr.clone(),
+            upstream_addr: ctx.upstream_addr.as_deref(),
             duration_ms,
             bytes_sent: ctx.bytes_sent,
             bytes_received: ctx.bytes_received,
@@ -72,7 +72,7 @@ pub async fn init_tcp_logger(config: &edgion_resources::LogConfig) -> Result<()>
     Ok(())
 }
 
-pub async fn log_tcp(entry: &TcpLogEntry) {
+pub async fn log_tcp(entry: &TcpLogEntry<'_>) {
     if let Some(logger) = TCP_LOGGER.get() {
         let _ = logger.send(entry.to_json()).await;
     }

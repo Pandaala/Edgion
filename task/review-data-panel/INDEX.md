@@ -6838,3 +6838,22 @@ mirror cleanup and test-store/sender JSON equality. Final focused verification
 passed 11 logging, 63 access-log, seven LB-attempt and seven cache-lifecycle tests
 (88 total). Formatting, workspace check/Clippy and seven guards passed
 with existing unrelated warnings. No full suite, live network or benchmark ran.
+
+## Borrowed TCP log projection
+
+TcpLogEntry now borrows both peer address strings and the optional upstream
+address from TcpContext, and retains TcpStatus's static label directly. Its sole
+production caller keeps the context alive; synchronous JSON serialization still
+produces the owned String consumed by the asynchronous logger. Masking, field
+names, omissions, timestamp/duration sampling, fallback and sender behavior are
+unchanged. Updated both developer-guide snippets and corrected the owning review
+page's stale claim that the entry itself crossed an asynchronous channel.
+
+Independent plan review approved the six-file scope. The new JSON-equivalence
+fixture passed its content comparison on the original implementation before the
+zero-allocation assertion failed with three allocations for an absent upstream.
+The final test covers absent/present upstream addresses and pointer identity;
+projection now allocates zero times. JSON/redaction may still allocate. Fresh
+verification passed five TCP-log, 27 TCP-route and eight logger tests (40 total),
+formatting, workspace check/Clippy and seven guards. Existing unrelated
+warnings remain. No full suite, live connection or throughput benchmark ran.
