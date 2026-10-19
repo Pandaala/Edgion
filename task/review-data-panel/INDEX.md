@@ -7273,3 +7273,14 @@ Its missing-reference helper case does not bypass production invalid-config
 rejection, which remains covered separately. Formatting, workspace check/Clippy
 and seven guards passed with existing unrelated warnings. No live Redis exchange,
 full suite, allocation benchmark or throughput measurement ran.
+
+## Stream and TLSRoute dispatch representation
+
+The connection and TLSRoute runtime audit traced ordered dynamic plugin calls
+through async-trait 0.1.92. Several callbacks execute without await but still use
+its boxed-future representation. This establishes a profiling candidate, not a
+measured allocation or throughput gain. Interface complexity, evaluation timing
+and cancellation make an automatic rewrite inappropriate. The decision and
+required evidence are recorded in
+[stream-01-synchronous-plugin-dispatch.md](stream-01-synchronous-plugin-dispatch.md).
+No runtime or test code changed in this documentation batch.
