@@ -14,7 +14,7 @@ Access-Control-Allow-Origin value choice to a separate, independently
 unit-tested helper:
 
 ```rust
-fn select_acao_value(&self, origin: &str) -> String;
+fn select_acao_value(&self, origin: &str) -> Cow<'static, str>;
 ```
 
 `select_acao_value` returns the literal `"*"` only when `allow_origins == "*"`;
@@ -44,7 +44,7 @@ When a review reports patterns like:
 
 Verify before closing such a re-report:
 
-- `select_acao_value(&self, origin: &str) -> String` exists and is called
+- `select_acao_value(&self, origin: &str) -> Cow<'static, str>` exists and is called
   only from `get_validated_origin`.
 - `get_validated_origin` still calls `self.config.is_origin_allowed(origin)`
   directly (no `Cors::is_origin_allowed` wrapper).
@@ -67,10 +67,12 @@ Verify before closing such a re-report:
 
 ## Borrowed validation input
 
-The selector now accepts a borrowed origin and owns only its selected output.
+The selector accepts a borrowed origin, borrows the static star for the standard
+wildcard, and owns an echoed origin.
 `get_validated_origin` reads the canonical borrowed header accessor and checks
 allowance before copying. Denied, absent and non-text origins produce no source
-copy; a nonempty accepted echo or selected star has one owned output. That output
-still survives subsequent session mutation and asynchronous preflight handling.
+copy; a nonempty accepted echo has one owned output, while the selected star
+needs no allocation. Both outputs survive subsequent session mutation and
+asynchronous preflight handling without borrowing the session.
 This updates the helper's ownership signature, not the allow/deny split or wire
 selection rule above.

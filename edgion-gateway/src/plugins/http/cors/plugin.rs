@@ -70,18 +70,18 @@ impl Cors {
     /// (force-wildcard `"**"`, single origin, list, or regex match) the request
     /// origin is echoed back. Separated from the allow/deny decision so the value
     /// choice can be unit-tested on its own.
-    fn select_acao_value(&self, origin: &str) -> String {
+    fn select_acao_value(&self, origin: &str) -> Cow<'static, str> {
         if self.config.allow_origins == "*" {
-            "*".to_string()
+            Cow::Borrowed("*")
         } else {
-            origin.to_owned()
+            Cow::Owned(origin.to_owned())
         }
     }
 
     /// Get the validated origin (returns Some(value) if allowed, None if rejected).
     /// Orchestrates the allow/deny check (`CorsConfig::is_origin_allowed`) and the
     /// ACAO value selection ([`Cors::select_acao_value`]).
-    fn get_validated_origin(&self, session: &mut dyn PluginSession) -> Option<String> {
+    fn get_validated_origin(&self, session: &mut dyn PluginSession) -> Option<Cow<'static, str>> {
         let origin = session.header_str("origin")?;
 
         if !self.config.is_origin_allowed(origin) {

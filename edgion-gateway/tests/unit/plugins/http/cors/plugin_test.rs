@@ -95,7 +95,10 @@ fn test_select_acao_value_standard_wildcard_returns_star() {
     config.allow_origins = "*".to_string();
     let cors = Cors::new(&config);
 
-    assert_eq!(cors.select_acao_value("https://any.example.com"), "*");
+    assert!(matches!(
+        cors.select_acao_value("https://any.example.com"),
+        Cow::Borrowed("*")
+    ));
 }
 
 #[test]
@@ -352,7 +355,7 @@ fn origin_selection_copies_only_the_selected_accepted_value() {
         let (actual, calls) =
             crate::test_allocation_counter::count_allocations(|| cors.get_validated_origin(&mut session));
         assert_eq!(actual.as_deref(), expected);
-        assert_eq!(calls, usize::from(expected.is_some()));
+        assert_eq!(calls, usize::from(expected.is_some_and(|value| value != "*")));
     }
 }
 

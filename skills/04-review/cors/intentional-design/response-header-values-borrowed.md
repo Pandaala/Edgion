@@ -118,15 +118,18 @@ APIs gain a zero-copy header-value path.
 
 Origin validation, timing-origin selection and private-network flag comparison
 read `header_str`, preserving the owned accessor's live first-header/text-filtering
-semantics. Validation copies only the accepted selected ACAO value. Timing copies
+semantics. Validation borrows the static star for an accepted standard wildcard
+and copies only an accepted echoed ACAO value. Timing copies
 only an allowed echoed origin; disabled, denied and star results need no source
 copy. The exact lowercase private-network value true is still required.
 
-Accepted ACAO output and echoed Timing output remain owned before mutating or
-awaiting the session. This changes no matcher initialization, native Gateway API
+Echoed ACAO output and echoed Timing output remain owned before mutating or
+awaiting the session; the static ACAO star needs no session loan or owned buffer.
+This changes no matcher initialization, native Gateway API
 CORS path, preflight-only emission, reflection or Max-Age behavior. A warmed mock
-regression measures zero allocation for selected denied-origin and timing/flag
-decisions, and one for nonempty accepted or timing echoes. The full eight-header
+regression measures zero allocation for selected denied-origin, accepted standard
+wildcard and timing/flag decisions, and one for nonempty accepted or timing echoes.
+Final header insertion still copies bytes. The full eight-header
 order/no-spill and existing plugin tests remain relevant; this is not a claim
 that all CORS requests or header insertion are allocation-free.
 

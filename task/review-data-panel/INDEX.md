@@ -8348,3 +8348,21 @@ failure and bounded template strings. Fresh verification passed all 23
 ProxyRewrite tests, formatting, workspace check/Clippy and seven repository
 guards with existing unrelated Clippy warnings. Profiler traversal and mutable
 patch operations still allocate; no full suite or throughput benchmark ran.
+
+## Borrow the standard CORS allow-origin wildcard
+
+Cors's selected ACAO output now uses Cow with a static lifetime: the standard
+wildcard borrows the literal star, while accepted echoed origins retain their
+owned String before session mutation or asynchronous preflight handling. Header
+selection, validation, emission order and final insertion remain unchanged.
+The separate Max-Age preparation decision in cors-01 remains open.
+
+The existing warmed allocation matrix now verifies zero temporary allocations
+for an accepted standard wildcard and retains one for nonempty echoes; rejected,
+missing and non-text origin cases are unchanged. The selector test also checks
+the borrowed variant. Both owning knowledge pages reflect the new return type.
+Baseline verification passed 16 plugin tests; final verification passed all 45
+Gateway CORS-filtered tests, formatting, workspace check/Clippy and seven
+repository guards with existing unrelated Clippy warnings. This removes the
+temporary star String only; final header insertion still copies bytes. No full
+suite or throughput benchmark ran.
