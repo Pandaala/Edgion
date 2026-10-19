@@ -251,7 +251,9 @@ fn percent_arbitration_runs_only_for_ejection_candidates() {
     let service = Arc::clone(store.services.get("default/svc1").unwrap().value());
 
     store.record_failure("default/svc1", 0, FailureClass::Gateway);
+    let endpoint = store.endpoint("default/svc1", 0);
     store.record_failure("default/svc1", 0, FailureClass::Gateway);
+    assert!(Arc::ptr_eq(&endpoint, &store.endpoint("default/svc1", 0)));
     assert_eq!(service.percent_arbitrations.load(Ordering::Relaxed), 0);
 
     store.record_failure("default/svc1", 0, FailureClass::Gateway);

@@ -45,3 +45,17 @@ membership and capture real policy tokens; they implement no second algorithm.
 Historical zero-count tests now verify empty-membership rejection and the
 coordinator-owned count. The shared passive kernel and AI consumer stay unchanged.
 No throughput or allocation improvement is claimed without measurement.
+
+## Existing identity lookup
+
+Failure completion first reads the existing identity entry with a borrowed key.
+The read guard is released before a missing entry falls back to the original
+atomic entry insertion, and before any endpoint accounting or percent scan.
+Both paths remain inside coordinator membership/policy validation and its endpoint
+completion lock, preserving retirement ordering and one state per identity.
+The threshold regression also checks that repeated failures reuse the same state.
+
+A hit avoids an exclusive shard lookup and an EndpointRuntimeIdentity clone
+(including an Arc handle, not a new heap allocation). A miss adds one read lookup.
+This does not remove the accepted completion/recovery/arbitration locks or claim
+measured throughput improvement.

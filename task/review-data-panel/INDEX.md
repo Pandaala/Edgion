@@ -6372,3 +6372,24 @@ Fresh verification passed seven cache-key, 21 storage and seven lifecycle tests
 (35 total), formatting, workspace check/Clippy and seven guards. Existing unrelated
 warnings remain. No full test suite or live integration ran; verification-01's
 broader cache admission fixture remains outside this change.
+
+## Existing outlier failure-state lookup
+
+Traced fail_to_connect and error_while_proxy into identity-bound failure
+completion. Existing endpoint state now uses a borrowed DashMap get before the
+original atomic entry insertion fallback. The read guard ends before fallback
+and before state accounting or percent arbitration. Both paths remain inside
+the coordinator's membership/policy validation and endpoint completion lock;
+retirement ordering, gauges and threshold-generation revalidation are unchanged.
+
+A hit avoids an exclusive shard lookup and an owned identity clone, including
+its Service-key Arc increment/decrement. That clone did not allocate a new heap
+buffer. A miss adds one read lookup; no throughput improvement is claimed.
+Accepted recovery and arbitration locking remains unchanged.
+
+Independent plan review approved four files. The existing threshold regression
+now also verifies state pointer identity across repeated failures. Fresh serial
+verification passed 36 outlier-detection and 41 coordinator tests (77 total),
+including concurrent percent caps and retirement checks, plus formatting,
+workspace check/Clippy and seven guards. Existing unrelated warnings remain.
+No full test suite, live integration or contention benchmark ran.

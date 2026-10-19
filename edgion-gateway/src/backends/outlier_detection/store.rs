@@ -165,12 +165,18 @@ impl OutlierDetectionStore {
                 // Register only after the Coordinator has established that this
                 // exact identity is still active. A late completion must not
                 // recreate retired outlier state after activation revoked it.
-                let endpoint = Arc::clone(
-                    svc.identity_endpoints
-                        .entry(identity.as_ref().clone())
-                        .or_insert_with(|| PassiveEjectionState::new(Some(svc.config.clone())))
-                        .value(),
-                );
+                let existing = svc
+                    .identity_endpoints
+                    .get(identity.as_ref())
+                    .map(|entry| Arc::clone(entry.value()));
+                let endpoint = existing.unwrap_or_else(|| {
+                    Arc::clone(
+                        svc.identity_endpoints
+                            .entry(identity.as_ref().clone())
+                            .or_insert_with(|| PassiveEjectionState::new(Some(svc.config.clone())))
+                            .value(),
+                    )
+                });
                 if endpoint.expire_legacy_ejection() {
                     runtime.clear_outlier_ejected();
                 }
