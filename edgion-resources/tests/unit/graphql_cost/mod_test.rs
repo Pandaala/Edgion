@@ -637,7 +637,7 @@ fn populated_out_of_range_rule_index_rejects_instead_of_default_charging() {
 }
 
 #[test]
-fn inline_fragment_type_context_preserves_cost_and_exact_work() {
+fn fragment_type_context_preserves_cost_and_exact_work() {
     let m = model("type Query { x:Int }", &[])
         .with_root_fields(["Query.x"])
         .unwrap();
@@ -648,6 +648,10 @@ fn inline_fragment_type_context_preserves_cost_and_exact_work() {
         ("{...{...{x}}}", 17),
         ("{... on Query{...{x}}}", 17),
         ("{...{... on Query{x}}}", 17),
+        ("{...F} fragment F on Query{x}", 11),
+        ("{...F} fragment F on Query{...G} fragment G on Query{x}", 17),
+        ("{... on Query{...F}} fragment F on Query{x}", 17),
+        ("{...F} fragment F on Query{...{x}}", 17),
     ] {
         let report = estimate_with_remaining_work(&m, query, steps).unwrap();
         assert_eq!(report.total, 2, "{query}");
@@ -655,6 +659,21 @@ fn inline_fragment_type_context_preserves_cost_and_exact_work() {
         assert!(report.roots[1..].iter().all(|cost| *cost == 0));
         assert_eq!(
             estimate_with_remaining_work(&m, query, steps - 1),
+            Err(GraphqlError::Invalid),
+            "{query}"
+        );
+    }
+    for query in [
+        "{... on Missing{x}}",
+        "{... on query{x}}",
+        "{... on Int{x}}",
+        "{...F} fragment F on Missing{x}",
+        "{...F} fragment F on query{x}",
+        "{...F} fragment F on Int{x}",
+        "{x} fragment Unused on Missing{x}",
+    ] {
+        assert_eq!(
+            estimate_with_remaining_work(&m, query, 100),
             Err(GraphqlError::Invalid),
             "{query}"
         );

@@ -4760,3 +4760,26 @@ workspace check/Clippy, seven repository guards and diff hygiene passed; existin
 warnings remain outside the diff. Final JSON ownership still allocates as needed,
 and the additional bounded precheck is not claimed to reduce CPU on every escaped
 input. No live transport, allocation or throughput benchmark ran.
+
+## GraphQL fragment type text borrowing
+
+The shared cost visitor now retains local Apollo TokenText owners for declared
+fragment types instead of copying their bytes into temporary Strings at five
+source sites. Optional inline type conditions borrow their text through
+Option::as_deref; absent conditions retain the current static context. A present
+condition with a missing name still rejects before fallback. No CST owner escapes
+evaluation and no cache or prepared type-condition index is introduced.
+
+The baseline-first fragment regression covers named chains, mixed typed/untyped
+inline and named fragments, exact remaining Work thresholds 5/11/17 and rejection
+one step below, total/root charges, unknown/scalar/case-mismatched types and an
+invalid unused fragment. Existing covariance tests retain the independent static
+validity and runtime applicability contract. Traversal order, directive checks,
+recursion, condition scans and quota accounting are unchanged. This removes the
+five explicit String conversion sites; no latency, allocation-count or RSS
+benchmark claim follows.
+
+Fresh serial verification passed 62 tests: 27 Resources cost-model, 19 frontend,
+four Gateway guard, five rate-limit and seven shared evaluation tests. Formatting,
+workspace check/Clippy and seven repository guards passed; existing unrelated
+warnings remain outside the diff. No live transport or Redis integration ran.

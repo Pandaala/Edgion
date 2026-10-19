@@ -1,9 +1,8 @@
 use super::schema::{DefaultValue, TypeRef};
 use super::{CompiledGraphqlCost, GraphqlError, GraphqlQuotaCosts, MAX_RECURSION, MAX_ROOT_QUOTAS};
-use crate::graphql_request::{directives, name, GraphqlOperationType, ParsedGraphqlRequest, Work, MAX_TOKENS};
+use crate::graphql_request::{directives, GraphqlOperationType, ParsedGraphqlRequest, Work, MAX_TOKENS};
 use apollo_parser::cst;
 use serde_json::{Map, Value};
-use std::borrow::Cow;
 use std::collections::HashMap;
 
 impl CompiledGraphqlCost {
@@ -35,7 +34,12 @@ impl CompiledGraphqlCost {
         };
         evaluation.validate_set(&operation.selection_set().ok_or(GraphqlError::Invalid)?, root, 0)?;
         for f in fragments.values() {
-            let ty = name(f.type_condition().and_then(|t| t.named_type()).and_then(|t| t.name()))?;
+            let ty = f
+                .type_condition()
+                .and_then(|t| t.named_type())
+                .and_then(|t| t.name())
+                .ok_or(GraphqlError::Invalid)?
+                .text();
             evaluation.validate_set(&f.selection_set().ok_or(GraphqlError::Invalid)?, &ty, 0)?;
         }
         let cost = evaluation.set(
@@ -108,11 +112,17 @@ impl Evaluation<'_> {
                 }
                 cst::Selection::InlineFragment(f) => {
                     let target = match f.type_condition() {
-                        Some(t) => Cow::Owned(name(t.named_type().and_then(|t| t.name()))?),
-                        None => Cow::Borrowed(ty),
+                        Some(t) => Some(
+                            t.named_type()
+                                .and_then(|t| t.name())
+                                .ok_or(GraphqlError::Invalid)?
+                                .text(),
+                        ),
+                        None => None,
                     };
-                    self.condition(ty, "", &target)?;
-                    self.validate_set(&f.selection_set().ok_or(GraphqlError::Invalid)?, &target, recursion + 1)?;
+                    let target = target.as_deref().unwrap_or(ty);
+                    self.condition(ty, "", target)?;
+                    self.validate_set(&f.selection_set().ok_or(GraphqlError::Invalid)?, target, recursion + 1)?;
                 }
                 cst::Selection::FragmentSpread(s) => {
                     let n = s
@@ -121,7 +131,12 @@ impl Evaluation<'_> {
                         .ok_or(GraphqlError::Invalid)?
                         .text();
                     let f = &self.fragments[n.as_str()];
-                    let target = name(f.type_condition().and_then(|t| t.named_type()).and_then(|t| t.name()))?;
+                    let target = f
+                        .type_condition()
+                        .and_then(|t| t.named_type())
+                        .and_then(|t| t.name())
+                        .ok_or(GraphqlError::Invalid)?
+                        .text();
                     self.condition(ty, "", &target)?;
                 }
             }
@@ -209,13 +224,19 @@ impl Evaluation<'_> {
                 cst::Selection::InlineFragment(f) => {
                     directives(f.directives(), &mut self.work)?;
                     let ty = match f.type_condition() {
-                        Some(t) => Cow::Owned(name(t.named_type().and_then(|t| t.name()))?),
-                        None => Cow::Borrowed(static_ty),
+                        Some(t) => Some(
+                            t.named_type()
+                                .and_then(|t| t.name())
+                                .ok_or(GraphqlError::Invalid)?
+                                .text(),
+                        ),
+                        None => None,
                     };
-                    if self.condition(static_ty, object, &ty)? {
+                    let ty = ty.as_deref().unwrap_or(static_ty);
+                    if self.condition(static_ty, object, ty)? {
                         self.object_set(
                             &f.selection_set().ok_or(GraphqlError::Invalid)?,
-                            &ty,
+                            ty,
                             object,
                             depth,
                             recursion + 1,
@@ -232,7 +253,12 @@ impl Evaluation<'_> {
                         .ok_or(GraphqlError::Invalid)?
                         .text();
                     let f = self.fragments.get(n.as_str()).ok_or(GraphqlError::Invalid)?;
-                    let ty = name(f.type_condition().and_then(|t| t.named_type()).and_then(|t| t.name()))?;
+                    let ty = f
+                        .type_condition()
+                        .and_then(|t| t.named_type())
+                        .and_then(|t| t.name())
+                        .ok_or(GraphqlError::Invalid)?
+                        .text();
                     if self.condition(static_ty, object, &ty)? {
                         self.object_set(
                             &f.selection_set().ok_or(GraphqlError::Invalid)?,
