@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [HeaderCertAuth connection projection ownership](tls-04-header-cert-connection-projection.md)
+
 - [JWE plaintext forwarding ownership](jwe-01-plaintext-header-ownership.md)
 
 - [LDAP bind DN template preparation](ldap-01-bind-dn-template-preparation.md)
