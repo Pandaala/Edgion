@@ -8006,3 +8006,18 @@ Fresh verification passed 151 OIDC tests with 16 existing ignores, formatting,
 workspace check/Clippy and seven repository guards with existing unrelated
 warnings. Existing redirect/logout tests retain their cookie and response checks.
 No collection-shape-only test, full suite or throughput benchmark was added/run.
+
+## Borrow the OIDC ID-token audience slice
+
+Nonce validation now passes slice::from_ref over the immutable generation's
+client_id to the existing JWT verifier instead of cloning that String into a
+single-element Vec. The audience override contains the same value, with the same
+JWT, expiration, scope and nonce validation order. The existing self borrow
+already covers the awaited verifier. Validation::set_audience still constructs
+its owned audience set; this removes only the caller's temporary Vec and string.
+
+Fresh verification passed 151 OIDC tests with 16 existing ignores, formatting,
+workspace check/Clippy and seven repository guards with existing unrelated
+warnings. The existing signed-token regression covers client-ID audience override,
+wrong audience, nonce mismatch and old-generation policy retention. No new
+mirror test, full suite or throughput benchmark ran.

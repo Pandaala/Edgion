@@ -251,9 +251,9 @@ impl OpenidConnect {
         id_token: &str,
         expected_nonce: &str,
     ) -> VerifyResult<()> {
-        let id_token_audience = vec![self.config.client_id.clone()];
+        let id_token_audience = std::slice::from_ref(&self.config.client_id);
         let claims = self
-            .verify_jwt_token_internal(session, id_token, false, Some(&id_token_audience), true)
+            .verify_jwt_token_internal(session, id_token, false, Some(id_token_audience), true)
             .await?;
         let actual_nonce = claims.get("nonce").and_then(|v| v.as_str());
         if actual_nonce != Some(expected_nonce) {
