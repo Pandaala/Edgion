@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Selective request-guard refusal facts](ai-guard-01-refusal-facts-parser.md)
+
 - [Validation-only raw JSON traversal](json-02-validation-only-raw-json.md)
 
 - [Bounded endpoint probe projection](endpoint-02-bounded-endpoint-projection.md)
