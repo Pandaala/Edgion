@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Structured L4 peer-address handoff](l4-01-structured-peer-address.md)
+
 - [HeaderCertAuth CA public-key preparation](tls-03-header-ca-public-key-preparation.md)
 
 - [Local limiter initialization and window ownership](rate-limit-01-local-estimator-initialization.md)
@@ -6614,3 +6616,19 @@ Baseline and final verification each passed 27 TCP, 21 shared relay and four TCP
 log tests (52 total). Formatting, workspace check/Clippy and seven guards passed.
 Updated the owning snapshot knowledge and its stale test-file location. Existing
 unrelated warnings remain; no full suite, live integration or benchmark ran.
+
+## L4 address round-trip audit
+
+Traced TCP and both TLS paths through address rendering, prevalidation logging,
+BasicPeer construction, redacted connect errors and conditional PP2 emission.
+Recorded the shared structured-address alternative in l4-01. The pinned fork's
+structured constructor is private, and direct address copying would retain IPv6
+flowinfo currently removed by text normalization. A local std probe confirmed
+that representation difference, without claiming a production endpoint defect.
+Prevalidation non-Internet diagnostics and full IPv6 PP2 authorities remain
+explicit acceptance boundaries. No runtime or fork code changed.
+
+Independent plan review approved two documents. Fresh baseline verification
+passed 27 TCP, 85 TLS and 21 shared-relay tests (133 total), formatting check,
+workspace check/Clippy and agent-doc validation. Existing unrelated warnings
+remain; no full suite, live transport integration or benchmark ran.
