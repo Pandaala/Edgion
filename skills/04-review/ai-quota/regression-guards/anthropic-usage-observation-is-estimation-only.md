@@ -42,7 +42,8 @@ shared admission/output ownership; fresh workspace/shared-topology verification
 and final independent Astra code/evidence review passed. The historical task
 attribution includes the unrelated global WAF documentation exception. Its path
 was `tasks/todo/ai-gateway-product-completion/03-bounded-anthropic-json-conversion.md`;
-the task file and its implementation artifacts remain available in the queue. The converter-only exception in
+the task file is absent from the current tree, so its historical evidence is not
+available here for independent inspection. The converter-only exception in
 [AGENTS.md](../../../../AGENTS.md#http-body-handling-invariants) authorizes no second
 usage-only response copy. Document validation, actual source EOS and client
 outcome remain distinct: Released does not synthesize source EOS or delivery success.

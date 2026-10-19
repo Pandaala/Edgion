@@ -147,7 +147,6 @@ async fn write_proxy_error_reply(
         .ai_state()
         .and_then(|state| state.unary_owner.as_ref())
         .filter(|owner| ctx.response_denial().is_none() && (owner.raw_success() || unary_transport_error(error, code)))
-        .cloned()
     {
         let reply = owner.error_reply(code, ctx);
         match reply {

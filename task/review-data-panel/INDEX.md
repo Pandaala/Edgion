@@ -5676,3 +5676,21 @@ verification passed 30 tests: two module-registration, 17 early-request and 11
 upstream-trailer tests. Formatting, workspace check/Clippy and agent-doc validation
 passed with existing unrelated warnings. No fork mutation, dependency update,
 allocation probe or live gRPC-Web transport run occurred in this batch.
+
+## Unary proxy-error owner borrow
+
+The selected unary branch in `write_proxy_error_reply` now borrows the existing
+`UnaryHead` handle instead of cloning its Arc. `error_reply` synchronously returns
+owned headers and bytes before mutable final-response claiming and the session
+write. Claiming changes only terminal bookkeeping; the context retains the owner
+and reservation throughout the write and cancellation. No owner strong-count or
+uniqueness-dependent consumer was found. This removes one Arc increment/decrement
+on the selected error branch; no allocation or throughput improvement is claimed.
+
+Independent plan review approved the three-file scope, including correction of a
+stale Task 03 availability sentence in the related usage knowledge page. The
+historical task is absent; its old acceptance is not fresh verification.
+All 16 failure-reply tests passed before and after the change. Fresh serial
+verification also passed 56 Chat-to-Anthropic converter tests (72 total after the
+change). Formatting, workspace check/Clippy and seven repository guards passed
+with existing unrelated warnings. No live provider or throughput benchmark ran.
