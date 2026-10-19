@@ -6857,3 +6857,18 @@ projection now allocates zero times. JSON/redaction may still allocate. Fresh
 verification passed five TCP-log, 27 TCP-route and eight logger tests (40 total),
 formatting, workspace check/Clippy and seven guards. Existing unrelated
 warnings remain. No full suite, live connection or throughput benchmark ran.
+
+## Disabled TLS listener log projection
+
+Both TLS termination and passthrough disconnect paths now consult the listener
+logger's existing sender count before building its JSON Value tree and output
+String. The captured logging-enable gate, end-time assignment and awaited global
+TLS log remain ahead of this condition. Nonempty unhealthy listener loggers
+retain dispatch and drop accounting; active listener output and masking are
+unchanged. The separate tls-01 direct-serialization decision remains deferred.
+
+Independent plan review passed. Fresh baseline passed 85 TLS-route tests; final
+verification passed those 85 tests plus eight logger tests (93 total), including
+existing isolated Off/Replace/Wrap masking checks. Formatting, workspace
+check/Clippy and six specialized guards passed with existing unrelated warnings.
+No full suite, live TLS connection or allocation/throughput benchmark ran.

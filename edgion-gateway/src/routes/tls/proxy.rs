@@ -469,7 +469,9 @@ impl EdgionTlsTcpProxy {
         log_tls(ctx).await;
 
         // Also emit to the per-listener access logger
-        self.access_logger.send(Self::listener_log_entry(ctx).to_string()).await;
+        if self.access_logger.sender_count() != 0 {
+            self.access_logger.send(Self::listener_log_entry(ctx).to_string()).await;
+        }
     }
 
     fn listener_log_entry(ctx: &TlsContext) -> serde_json::Value {
