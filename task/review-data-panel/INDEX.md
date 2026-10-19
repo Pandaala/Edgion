@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [HeaderCertAuth CA public-key preparation](tls-03-header-ca-public-key-preparation.md)
+
 - [Local limiter initialization and window ownership](rate-limit-01-local-estimator-initialization.md)
 
 - [Gateway-owned CORS Max-Age preparation](cors-01-derived-max-age-preparation.md)
@@ -6543,3 +6545,17 @@ precedence, trailing DER and CA selection. All 20 HeaderCertAuth tests passed
 before and after the edit. Formatting, workspace check/Clippy and seven guards
 passed; existing unrelated warnings remain. Updated the owning Base64 leaf
 ownership knowledge. No full test suite, live TLS integration or benchmark ran.
+
+## Header CA public-key preparation audit
+
+Confirmed issuer-matched requests reparse the complete retained CA certificate.
+The borrowed SPKI owner prevents a direct cold parsed-object move. A local locked
+parser probe demonstrated that its raw slice need not contain the complete
+accepted TLV, so copying and reparsing raw is not automatically equivalent.
+Recorded ownership alternatives and acceptance in tls-03; the probe is not a
+signed-certificate regression or trust-bypass claim. No runtime code changed.
+
+Independent plan review approved two documents. Fresh baseline verification
+passed 20 HeaderCertAuth tests, formatting check, workspace check/Clippy and
+agent-doc validation. Existing unrelated warnings remain; no full test suite,
+live TLS integration or benchmark ran.
