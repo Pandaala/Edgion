@@ -79,7 +79,7 @@ impl RequestFilter for GraphqlOperationRouter {
         };
         let (target, is_default) = target;
         let namespace = target.namespace.as_deref().unwrap_or(&route.matched_info.rsc.ns);
-        if let Err(error) = RouteRules::find_backend_by_name(&route, &target.name, Some(namespace)) {
+        if let Err(error) = RouteRules::validate_backend_by_name(&route, &target.name, Some(namespace)) {
             let status = if matches!(error, EdError::RefDenied { .. }) {
                 session.record_error(EdgionErrorCode::RefDenied);
                 log.push_err("backend ref denied");

@@ -483,7 +483,9 @@ rechecks both the published generation and membership before installing its snap
   captured TLS policy and appProtocol, or `Err(reason)`.
 - Used by `DirectEndpoint`, which selects a backend by endpoint address. Name-addressed jumps
   (`DynamicInternalUpstream`, `Canary`) do NOT use this function — they resolve through
-  `RouteRules::find_backend_by_name`, the single name matcher; see
+  one shared name matcher through `RouteRules::validate_backend_by_name` for plugin
+  admission and `find_backend_by_name` for owned selection. Validation does not
+  acquire a generation Arc; both paths retain denial and slot-validity checks. See
   [`skills/04-review/routing/regression-guards/denied-named-jump-fails-closed.md`](../../04-review/routing/regression-guards/denied-named-jump-fails-closed.md).
 
 ## Directory layout

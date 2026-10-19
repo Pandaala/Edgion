@@ -11,6 +11,7 @@ use crate::backends::ServiceBackendKind;
 use crate::ctx::BackendSource;
 use crate::plugins::PluginRuntime;
 use crate::routes::http::match_unit::{HttpRouteRuleUnit, MatchSpecificity};
+use crate::routes::http::routes_mgr::RouteRules;
 use crate::{BackendContext, BackendTlsInfo, DirectEndpointPreset, EdgionHttpContext, UpstreamInfo};
 use crate::{PeerTimeoutSource, SessionPersistenceState};
 use edgion_resources::resources::common::RefDenied;
@@ -2235,6 +2236,64 @@ fn internal_jump(name: &str) -> crate::UpstreamJumpTarget {
         backend_ref_name: name.to_string(),
         backend_ref_namespace: None,
     })
+}
+
+#[test]
+fn named_backend_validation_preserves_selection_admission() {
+    fn outcome(result: Result<(), EdError>) -> &'static str {
+        match result {
+            Ok(()) => "allowed",
+            Err(EdError::BackendNotFound()) => "missing",
+            Err(EdError::RefDenied { .. }) => "denied",
+            Err(error) => panic!("unexpected named lookup error: {error:?}"),
+        }
+    }
+    fn check(unit: &Arc<HttpRouteRuleUnit>, name: &str, namespace: Option<&str>, expected: &str) {
+        assert_eq!(
+            outcome(RouteRules::validate_backend_by_name(unit, name, namespace)),
+            expected
+        );
+        assert_eq!(
+            outcome(RouteRules::find_backend_by_name(unit, name, namespace).map(|_| ())),
+            expected
+        );
+    }
+    let hidden = HTTPBackendRef {
+        weight: Some(0),
+        ..jump_backend_ref("hidden")
+    };
+    let unit = jump_route_unit(vec![jump_backend_ref("app"), hidden]);
+    check(&unit, "app", None, "allowed");
+    check(&unit, "hidden", None, "allowed");
+    check(&unit, "app", Some("test-ns"), "allowed");
+    check(&unit, "app", Some("other"), "missing");
+    check(&unit, "absent", None, "missing");
+    check(&jump_route_unit(Vec::new()), "app", None, "missing");
+
+    let invalid = HTTPBackendRef {
+        group: Some("invalid.example".into()),
+        ..jump_backend_ref("app")
+    };
+    check(&jump_route_unit(vec![invalid]), "app", None, "missing");
+    let mut denied = jump_backend_ref("app");
+    denied.namespace = Some("other".into());
+    denied.ref_denied = Some(RefDenied {
+        target_namespace: "other".into(),
+        target_name: "app".into(),
+        reason: Some("NoMatchingReferenceGrant".into()),
+    });
+    let unit = jump_route_unit(vec![denied.clone(), jump_backend_ref("app")]);
+    check(&unit, "app", None, "denied");
+    check(&unit, "app", Some("other"), "denied");
+    check(&unit, "app", Some("test-ns"), "allowed");
+
+    // Reordering compiled rows deliberately violates their original slot indexes.
+    // A denied row still reports denial before the slot-consistency failure.
+    let mut unit = jump_route_unit(vec![jump_backend_ref("legal"), denied]);
+    let backends = &mut Arc::get_mut(&mut unit).unwrap().backends;
+    Arc::make_mut(backends).swap(0, 1);
+    check(&unit, "legal", None, "missing");
+    check(&unit, "app", None, "denied");
 }
 
 /// A denied named target must surface the typed `RefDenied` error instead

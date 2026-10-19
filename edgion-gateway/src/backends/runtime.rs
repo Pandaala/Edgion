@@ -234,8 +234,12 @@ pub struct LogicalBackendHandle {
 }
 
 impl LogicalBackendHandle {
+    pub(crate) fn is_valid_slot(generation: &[CompiledBackend], index: usize) -> bool {
+        generation.get(index).is_some_and(|compiled| compiled.slot() == index)
+    }
+
     pub(crate) fn new(generation: Arc<[CompiledBackend]>, index: usize) -> Option<Self> {
-        if generation.get(index).is_some_and(|compiled| compiled.slot() == index) {
+        if Self::is_valid_slot(&generation, index) {
             Some(Self { generation, index })
         } else {
             None

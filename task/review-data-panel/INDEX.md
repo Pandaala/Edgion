@@ -4469,3 +4469,29 @@ user decision. Production code and tests are unchanged. Fresh serial verificatio
 passed 61 network-free tests: 23 Gateway RegionRoute, 22 ConfigData and 16 resource
 region tests. Formatting, workspace check/Clippy and document/diff validation
 passed. No index prototype, live transport or throughput benchmark ran.
+
+## Borrowed named-backend admission
+
+Canary, DynamicInternalUpstream and GraphqlOperationRouter now validate named
+targets without constructing a temporary LogicalBackendHandle. Validation and
+owned upstream selection share one private name/index matcher. The original
+constructor slot/index predicate is shared with that matcher; denial still wins
+before slot inconsistency, and the owned constructor retains its defensive check.
+The actual upstream selection continues to pin its compiled generation.
+
+Service classification, optional namespace matching, first-match denial shadowing,
+weight-zero selection, plugin-specific onInvalid/logging behavior and jump-lock
+ordering are unchanged. No schema scan or second matcher was introduced. This
+removes temporary generation Arc reference-count operations, not a heap allocation.
+The architecture and named-jump review canon describe both entry points and their
+single matching implementation.
+
+New regressions assert explicit outcomes for both APIs across allowed/hidden,
+missing/empty, namespace, non-Service, denied-first duplicate and deliberately
+misordered compiled slots, including denial before slot failure. The first test
+compile exposed a missing test-only import, which was fixed. Fresh serial
+verification then passed 147 tests: 15 Canary, 10 DynamicInternalUpstream, four
+GraphQL router, 104 upstream-peer and 14 backend-runtime tests. Formatting,
+workspace check/Clippy, seven repository guards and document/diff validation
+passed; existing warnings remain outside the diff. No live transport or throughput
+benchmark ran.

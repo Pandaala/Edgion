@@ -143,7 +143,7 @@ impl RequestFilter for Canary {
             }
         };
 
-        if RouteRules::find_backend_by_name(route_unit, &target.name, target.namespace.as_deref()).is_err() {
+        if RouteRules::validate_backend_by_name(route_unit, &target.name, target.namespace.as_deref()).is_err() {
             log.push_err("backend ref not found");
             return match self.config.on_invalid {
                 UpstreamFallback::Reject => {

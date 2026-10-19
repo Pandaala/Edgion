@@ -92,10 +92,9 @@ impl RouteRules {
 
     /// Find a specific backend_ref by name from the route rule's backend_refs.
     ///
-    /// The single name matcher for named jumps: `DynamicInternalUpstream` and
-    /// `Canary` call it to validate a resolved target before publishing a jump,
-    /// and `pick_backend_ref` calls it to consume that jump instead of weighted
-    /// selection. Do not add a second name matcher beside it.
+    /// Shares one name matcher with `validate_backend_by_name`, which plugins
+    /// use before publishing a jump. This owned form pins the generation when
+    /// `pick_backend_ref` consumes the jump instead of weighted selection.
     ///
     /// Security: this is the enforcement point for the Controller's
     /// ReferenceGrant decision on a named target — a matching backend_ref
@@ -111,6 +110,25 @@ impl RouteRules {
         target_name: &str,
         target_namespace: Option<&str>,
     ) -> Result<LogicalBackendHandle, EdError> {
+        let index = Self::find_backend_index_by_name(unit, target_name, target_namespace)?;
+        LogicalBackendHandle::new(Arc::clone(&unit.backends), index).ok_or_else(EdError::BackendNotFound)
+    }
+
+    /// Validate a named jump without acquiring an owned backend generation.
+    pub fn validate_backend_by_name(
+        unit: &HttpRouteRuleUnit,
+        target_name: &str,
+        target_namespace: Option<&str>,
+    ) -> Result<(), EdError> {
+        Self::find_backend_index_by_name(unit, target_name, target_namespace).map(|_| ())
+    }
+
+    /// Canonical named-target matching and admission for validation and selection.
+    fn find_backend_index_by_name(
+        unit: &HttpRouteRuleUnit,
+        target_name: &str,
+        target_namespace: Option<&str>,
+    ) -> Result<usize, EdError> {
         if unit.backends.is_empty() {
             return Err(EdError::BackendNotFound());
         }
@@ -132,7 +150,9 @@ impl RouteRules {
                 return Err(err);
             }
 
-            return LogicalBackendHandle::new(Arc::clone(&unit.backends), index).ok_or_else(EdError::BackendNotFound);
+            return LogicalBackendHandle::is_valid_slot(&unit.backends, index)
+                .then_some(index)
+                .ok_or_else(EdError::BackendNotFound);
         }
 
         Err(EdError::BackendNotFound())

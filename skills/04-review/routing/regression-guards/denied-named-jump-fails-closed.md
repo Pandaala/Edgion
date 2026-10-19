@@ -11,8 +11,12 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
-An HTTP named jump resolves through exactly one matcher, `RouteRules::find_backend_by_name`,
-and only its `EdError::BackendNotFound()` outcome may fall through to weighted selection.
+An HTTP named jump resolves through exactly one private matcher,
+`RouteRules::find_backend_index_by_name`. `validate_backend_by_name` exposes its
+admission outcome to plugins without owning a generation; `find_backend_by_name`
+materializes the selected owned handle. Both preserve the constructor's slot/index
+validity check after the reference-denial check. Only `EdError::BackendNotFound()`
+may fall through to weighted selection.
 `RefDenied` — and any other typed error — propagates to the caller, which records
 `EdgionErrorCode::RefDenied` and ends the request. A plugin that publishes a named jump
 validates its resolved target through the same matcher against the route's *compiled*

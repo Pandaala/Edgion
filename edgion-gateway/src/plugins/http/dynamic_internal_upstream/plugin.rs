@@ -125,11 +125,11 @@ impl RequestFilter for DynamicInternalUpstream {
             }
         };
 
-        // `find_backend_by_name` is the single backend matcher: it honours the
+        // `validate_backend_by_name` uses the single backend matcher: it honours the
         // Controller's `ref_denied` decision, so a denied cross-namespace
         // target follows `on_invalid` here instead of being published as a
         // jump the upstream selector would have to reject later.
-        if let Err(err) = RouteRules::find_backend_by_name(route_unit, target_name, target_namespace) {
+        if let Err(err) = RouteRules::validate_backend_by_name(route_unit, target_name, target_namespace) {
             // Both causes take `on_invalid`, but they are diagnosed apart: a
             // shared "not found" line sends an operator debugging a missing
             // ReferenceGrant hunting for a Service that exists.
