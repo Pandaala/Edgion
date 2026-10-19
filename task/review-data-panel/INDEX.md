@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Boundary-local response-cache Vary validation reuse](cache-03-boundary-local-vary-validation.md)
+
 - [Terminal gRPC message header storage](grpc-07-terminal-message-header-storage.md)
 
 - [Server header replacement without prior removal](response-04-server-header-replacement.md)
@@ -6316,3 +6318,18 @@ cache-lifecycle tests (35 total), formatting, workspace check/Clippy and seven
 guards. Existing unrelated warnings remain. The broader cache policy-fixture
 failure in verification-01 remains outside this change; no full test suite,
 live integration or throughput benchmark was run.
+
+## Response-cache Vary validation reuse audit
+
+Traced duplicate canonical Vary parsing within successful capture, decode,
+replay-charge, seal and publication checks. Each boundary still needs fresh
+validation; only same-header work within one call is a reuse candidate. The
+parser already uses bounded fixed storage, so benefit would be CPU work avoided,
+not heap allocation removal. Deferred the API/ownership tradeoff and workload
+measurement requirements in cache-03; no runtime code changed.
+
+Independent plan review approved two documents. Fresh baseline verification
+passed seven cache-key, 21 storage, seven lifecycle and four policy tests (39
+total), formatting check, workspace check/Clippy and agent-doc validation.
+Existing unrelated warnings and verification-01's broader admission fixture
+remain outside this change. No benchmark or live integration ran.
