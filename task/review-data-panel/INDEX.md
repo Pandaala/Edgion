@@ -8141,3 +8141,20 @@ and alphabet, original URL and the S256 challenge of the stored verifier. Existi
 tests remain. Fresh verification passed 156 OIDC tests with 16 existing ignores,
 formatting, workspace check/Clippy and seven repository guards with existing
 unrelated warnings. No full suite or throughput benchmark ran.
+
+## Decode OIDC cookie nonces into a fixed array
+
+Cookie decoding now uses the safe Base64 decode_slice API with a 12-byte nonce
+array and checks its returned length. Valid nonce text reaches the same ciphertext
+and AEAD stages; short, oversized or malformed nonce text still returns the fixed
+MalformedCookie classification. Decoder details remain private. This removes the
+nonce Vec allocation and bounds nonce output storage without changing ciphertext
+storage, cookie encryption, JSON decoding or error projection.
+
+Locked base64 0.22.1 uses the same internal decoder for both APIs; canonical
+16-character nonce text fits the array exactly. Tests cover decoded lengths
+0/1/11/12/13/64, padding, alphabet and trailing-bit failures, invalid ciphertext,
+and a real encrypted cookie with a changed nonce returning InvalidCookieSignature.
+Existing roundtrips remain. Fresh verification passed 157 OIDC tests with 16
+existing ignores, formatting, workspace check/Clippy and seven repository guards
+with existing unrelated warnings. No full suite or throughput benchmark ran.

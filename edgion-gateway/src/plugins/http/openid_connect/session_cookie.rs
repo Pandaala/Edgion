@@ -98,10 +98,11 @@ impl OpenidConnect {
         let (nonce_b64, encrypted_b64) = value
             .split_once('.')
             .ok_or(OidcVerifyError::Auth(AuthFailure::MalformedCookie))?;
-        let nonce = URL_SAFE_NO_PAD
-            .decode(nonce_b64)
+        let mut nonce = [0u8; 12];
+        let nonce_len = URL_SAFE_NO_PAD
+            .decode_slice(nonce_b64, &mut nonce)
             .map_err(|_| OidcVerifyError::Auth(AuthFailure::MalformedCookie))?;
-        if nonce.len() != 12 {
+        if nonce_len != nonce.len() {
             return Err(OidcVerifyError::Auth(AuthFailure::MalformedCookie));
         }
         let encrypted = URL_SAFE_NO_PAD

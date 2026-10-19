@@ -1277,6 +1277,47 @@ fn test_signed_cookie_roundtrip() {
     assert_eq!(decoded.original_url, "/orders");
 }
 
+#[test]
+fn cookie_nonce_decoding_preserves_length_and_error_boundaries() {
+    use super::{AuthFailure, OidcVerifyError};
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+
+    let mut cfg = base_config();
+    cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    let cipher = plugin.session_cipher().unwrap();
+    let decode = |cookie: &str| OpenidConnect::decode_signed_cookie_payload::<serde_json::Value>(cookie, cipher);
+    let malformed = OidcVerifyError::Auth(AuthFailure::MalformedCookie);
+    let invalid_signature = OidcVerifyError::Auth(AuthFailure::InvalidCookieSignature);
+    for len in [0, 1, 11, 12, 13, 64] {
+        let nonce = URL_SAFE_NO_PAD.encode(vec![0u8; len]);
+        assert_eq!(
+            decode(&format!("{nonce}.")),
+            Err(if len == 12 { invalid_signature } else { malformed }),
+            "nonce length {len}"
+        );
+    }
+    for nonce in [
+        "A",
+        "AA=",
+        "AB",
+        "AAAAAAAAAAAAAAAA=",
+        "AAAAAAAAAAAAAAA%",
+        "AAAAAAAAAAAAAAA\n",
+    ] {
+        assert_eq!(decode(&format!("{nonce}.")), Err(malformed));
+    }
+    assert_eq!(decode("AAAAAAAAAAAAAAAA.%"), Err(malformed));
+
+    let original = OpenidConnect::encode_signed_cookie_payload(&json!({"state": "original"}), cipher).unwrap();
+    let (nonce, ciphertext) = original.split_once('.').unwrap();
+    let mut changed_nonce = URL_SAFE_NO_PAD.decode(nonce).unwrap();
+    changed_nonce[0] ^= 1;
+    let tampered = format!("{}.{}", URL_SAFE_NO_PAD.encode(changed_nonce), ciphertext);
+    assert_eq!(decode(&tampered), Err(invalid_signature));
+}
+
 #[tokio::test]
 async fn persisted_session_cookie_preserves_fields_and_source() {
     let mut cfg = base_config();
