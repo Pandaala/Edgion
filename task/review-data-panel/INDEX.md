@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [OIDC cookie attribute preparation](oidc-04-cookie-attribute-formatting.md)
+
 - [OIDC required-scope membership storage](oidc-03-required-scope-membership.md)
 
 - [OIDC cookie Base64 output construction](oidc-02-cookie-base64-output.md)
