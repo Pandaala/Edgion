@@ -622,6 +622,33 @@ fn path_redirect_uris_use_http_on_a_plaintext_listener() {
 }
 
 #[test]
+fn logout_redirect_target_borrows_configured_text_and_preserves_prefix_rules() {
+    let mut plugin = OpenidConnect::new(&base_config(), "default".to_string());
+    for (configured, expected) in [
+        (None, "/"),
+        (Some(""), "/"),
+        (Some("/after"), "/after"),
+        (Some("http://app.example/after"), "http://app.example/after"),
+        (Some("https://app.example/after"), "https://app.example/after"),
+        (Some("HTTPS://app.example/after"), "/"),
+        (Some("relative"), "/"),
+        (Some("//app.example/after"), "//app.example/after"),
+        (Some(r"/\app.example/after"), r"/\app.example/after"),
+    ] {
+        // Exercise the helper's defensive branches without changing admission.
+        plugin.config.post_logout_redirect_uri = configured.map(str::to_owned);
+        let target = plugin.logout_redirect_target();
+        assert_eq!(target, expected);
+        if configured == Some(expected) {
+            assert_eq!(
+                target.as_ptr(),
+                plugin.config.post_logout_redirect_uri.as_ref().unwrap().as_ptr()
+            );
+        }
+    }
+}
+
+#[test]
 fn sanitize_redirect_target_rejects_cross_origin_forms() {
     let normalized = normalize_path("/%5Cevil.example/path", &PathNormalizationConfig::default())
         .expect("encoded backslash path must normalize");

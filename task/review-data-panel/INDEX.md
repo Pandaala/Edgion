@@ -8110,3 +8110,18 @@ OIDC tests with 16 existing ignores, formatting, workspace check/Clippy and seve
 repository guards with existing unrelated warnings. This removes one temporary
 nonblank access-token buffer, not encryption or serialized-cookie storage. No
 full suite or throughput benchmark ran.
+
+## Borrow the OIDC logout fallback target
+
+Logout target selection now borrows immutable configured text or the static root
+path. Building an IdP logout URL copies the fallback only when discovery has no
+usable endpoint or endpoint parsing fails. Path-form post-logout URI expansion
+formats the borrowed target directly; absolute URI results retain their owned
+output. Prefix acceptance, Host/TLS derivation, query order, revocation, cookies
+and response ownership remain unchanged. No lock is held by the borrowed target.
+
+A focused test covers configured-pointer identity and the existing empty, relative,
+absolute, case-sensitive and slash-prefix rules. Fresh verification passed 155
+OIDC tests with 16 existing ignores, formatting, workspace check/Clippy and seven
+repository guards with existing unrelated warnings. This removes temporary target
+copies, not the final redirect String. No full suite or throughput benchmark ran.

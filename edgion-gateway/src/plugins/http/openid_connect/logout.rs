@@ -9,23 +9,21 @@ impl OpenidConnect {
         }
     }
 
-    pub(super) fn logout_redirect_target(&self) -> String {
+    pub(super) fn logout_redirect_target(&self) -> &str {
         match self.config.post_logout_redirect_uri.as_deref() {
-            Some(v) if !v.is_empty() => {
-                if v.starts_with('/') || v.starts_with("http://") || v.starts_with("https://") {
-                    v.to_string()
-                } else {
-                    "/".to_string()
-                }
+            Some(v)
+                if !v.is_empty() && (v.starts_with('/') || v.starts_with("http://") || v.starts_with("https://")) =>
+            {
+                v
             }
-            _ => "/".to_string(),
+            _ => "/",
         }
     }
 
     pub(super) fn resolve_post_logout_redirect_uri_for_idp(&self, session: &dyn PluginSession) -> Option<String> {
         let target = self.logout_redirect_target();
         if target.starts_with("https://") || target.starts_with("http://") {
-            return Some(target);
+            return Some(target.to_owned());
         }
         if !target.starts_with('/') {
             return None;
@@ -37,7 +35,7 @@ impl OpenidConnect {
 
     pub(super) async fn build_logout_redirect_target(
         &self,
-        fallback_target: String,
+        fallback_target: &str,
         post_logout_redirect_uri: Option<String>,
         id_token_hint: Option<String>,
     ) -> String {
@@ -47,11 +45,11 @@ impl OpenidConnect {
             .and_then(|d| d.end_session_endpoint.as_deref())
             .filter(|v| !v.is_empty());
         let Some(end_session_endpoint) = end_session_endpoint else {
-            return fallback_target;
+            return fallback_target.to_owned();
         };
 
         let Ok(mut end_session_url) = Url::parse(end_session_endpoint) else {
-            return fallback_target;
+            return fallback_target.to_owned();
         };
         if let Some(post_logout_redirect_uri) = post_logout_redirect_uri {
             end_session_url
