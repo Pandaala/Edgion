@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Endpoint probe response text ownership](endpoint-03-response-text-buffer-ownership.md)
+
 - [Claim projection path preparation](auth-03-claim-path-preparation.md)
 
 - [HeaderCertAuth connection projection ownership](tls-04-header-cert-connection-projection.md)
