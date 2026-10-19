@@ -594,7 +594,7 @@ impl<'a> PingoraSessionAdapter<'a> {
         if self.ctx.request_body.has_cached_body() {
             return Ok(());
         }
-        if self.ctx.request_info.discover_protocol.as_deref() == Some("websocket")
+        if self.ctx.request_info.discover_protocol == Some("websocket")
             || self.inner.req_header().method == http::Method::CONNECT
         {
             self.ctx.record_error(EdgionErrorCode::BodyRefusedWebsocket);
@@ -908,7 +908,7 @@ pub(crate) fn request_admission(ctx: &EdgionHttpContext, past_request_stage: boo
 
     // 3. Declared a body AND claims WebSocket — an anomalous shape no
     //    legitimate client produces.
-    if ctx.request_info.discover_protocol.as_deref() == Some("websocket") {
+    if ctx.request_info.discover_protocol == Some("websocket") {
         return RequestAdmission::Refuse(EdgionErrorCode::BodyRefusedWebsocket);
     }
 
@@ -1718,10 +1718,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             && self.ctx.route_unit.is_some()
             && !self.ctx.request_info.is_grpc_request
             && !self.ctx.is_grpc_route_matched
-            && !matches!(
-                self.ctx.request_info.discover_protocol.as_deref(),
-                Some("grpc-web" | "websocket")
-            )
+            && !matches!(self.ctx.request_info.discover_protocol, Some("grpc-web" | "websocket"))
             && self.ctx.grpc_transcoding.is_none()
             && !self.ctx.has_request_body_stream_handlers()
             && self.ctx.ai_state().is_none()
@@ -1836,7 +1833,6 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx
             .request_info
             .discover_protocol
-            .as_deref()
             .unwrap_or(if self.ctx.request_info.is_grpc_request {
                 "grpc"
             } else {

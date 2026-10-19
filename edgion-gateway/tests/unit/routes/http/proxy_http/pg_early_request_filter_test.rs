@@ -116,7 +116,7 @@ async fn raw_grpc_web_classification_survives_module_rewrite() {
     let mut ctx = EdgionHttpContext::default();
 
     classify_and_initialize_grpc_web(&mut session, &mut ctx);
-    assert_eq!(ctx.request_info.discover_protocol.as_deref(), Some("grpc-web"));
+    assert_eq!(ctx.request_info.discover_protocol, Some("grpc-web"));
     assert_eq!(
         **session
             .downstream_modules_ctx
@@ -139,10 +139,10 @@ async fn raw_grpc_web_classification_survives_module_rewrite() {
     );
     super::super::pg_request_filter::detect_request_protocol(session.req_header(), &mut ctx);
 
-    assert_eq!(ctx.request_info.discover_protocol.as_deref(), Some("grpc-web"));
+    assert_eq!(ctx.request_info.discover_protocol, Some("grpc-web"));
     assert!(ctx.request_info.is_grpc_request);
     assert!(!super::super::pg_request_filter::native_grpc_requires_frontend_http2(
-        ctx.request_info.discover_protocol.as_deref(),
+        ctx.request_info.discover_protocol,
         false,
     ));
 }
@@ -156,7 +156,7 @@ async fn websocket_precedence_keeps_grpc_web_bridge_disabled() {
     let mut ctx = EdgionHttpContext::default();
 
     classify_and_initialize_grpc_web(&mut session, &mut ctx);
-    assert_eq!(ctx.request_info.discover_protocol.as_deref(), Some("websocket"));
+    assert_eq!(ctx.request_info.discover_protocol, Some("websocket"));
     assert_eq!(
         **session
             .downstream_modules_ctx
@@ -171,7 +171,7 @@ async fn websocket_precedence_keeps_grpc_web_bridge_disabled() {
         "application/grpc-web+proto"
     );
     assert!(!super::super::pg_request_filter::native_grpc_requires_frontend_http2(
-        ctx.request_info.discover_protocol.as_deref(),
+        ctx.request_info.discover_protocol,
         false,
     ));
 }
@@ -186,7 +186,7 @@ async fn native_grpc_stays_inert_and_requires_frontend_http2() {
 
     classify_and_initialize_grpc_web(&mut session, &mut ctx);
 
-    assert_eq!(ctx.request_info.discover_protocol.as_deref(), Some("grpc"));
+    assert_eq!(ctx.request_info.discover_protocol, Some("grpc"));
     assert_eq!(
         **session
             .downstream_modules_ctx
@@ -195,7 +195,7 @@ async fn native_grpc_stays_inert_and_requires_frontend_http2() {
         GrpcWebCtx::Disabled
     );
     assert!(super::super::pg_request_filter::native_grpc_requires_frontend_http2(
-        ctx.request_info.discover_protocol.as_deref(),
+        ctx.request_info.discover_protocol,
         false,
     ));
 }

@@ -2150,7 +2150,7 @@ fn direct_endpoint_app_protocol_is_pinned_across_retry_peer_builds() {
         assert_eq!(backend.upstreams.len(), 2);
         assert!(backend.upstreams.iter().all(|attempt| attempt.tls.is_none()));
         assert_eq!(
-            ctx.request_info.discover_protocol.as_deref(),
+            ctx.request_info.discover_protocol,
             expects_websocket.then_some("websocket")
         );
         let retained = match ctx.jump.as_deref().unwrap() {

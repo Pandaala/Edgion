@@ -20,7 +20,6 @@ use std::sync::Arc;
 pub fn is_grpc_protocol(ctx: &EdgionHttpContext) -> bool {
     ctx.request_info
         .discover_protocol
-        .as_ref()
         .map(|p| p == "grpc" || p == "grpc-web")
         .unwrap_or(false)
 }

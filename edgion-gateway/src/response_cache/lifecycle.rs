@@ -33,10 +33,7 @@ fn compatible(ctx: &EdgionHttpContext) -> bool {
         && !ctx.response_stage_settled()
         && !ctx.request_info.is_grpc_request
         && !ctx.is_grpc_route_matched
-        && !matches!(
-            ctx.request_info.discover_protocol.as_deref(),
-            Some("grpc-web" | "websocket")
-        )
+        && !matches!(ctx.request_info.discover_protocol, Some("grpc-web" | "websocket"))
         && ctx.grpc_transcoding.is_none()
         && ctx.ai_state().is_none()
         && !ctx.has_request_body_stream_handlers()

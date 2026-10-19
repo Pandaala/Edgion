@@ -57,7 +57,7 @@ async fn borrowed_protocol_metadata_preserves_sources_and_fallbacks() {
         for explicit in [None, Some(""), Some("WebSocket"), Some("grpc-web")] {
             let mut ctx = EdgionHttpContext::default();
             ctx.request_info.is_grpc_request = is_grpc;
-            ctx.request_info.discover_protocol = explicit.map(str::to_owned);
+            ctx.request_info.discover_protocol = explicit;
             let expected = explicit.unwrap_or(if is_grpc { "grpc" } else { "http" });
             let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
             let (actual, allocations) =

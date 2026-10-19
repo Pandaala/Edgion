@@ -78,10 +78,7 @@ pub(crate) fn unsupported_protocol(session: &dyn PluginSession) -> bool {
     let ctx = session.ctx();
     ctx.request_info.is_grpc_request
         || ctx.is_grpc_route_matched
-        || matches!(
-            ctx.request_info.discover_protocol.as_deref(),
-            Some("grpc-web" | "websocket")
-        )
+        || matches!(ctx.request_info.discover_protocol, Some("grpc-web" | "websocket"))
         || ctx.has_request_body_stream_handlers()
         || ctx.grpc_transcoding.is_some()
         || session.request_header_map().contains_key(http::header::UPGRADE)

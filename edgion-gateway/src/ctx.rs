@@ -1062,9 +1062,9 @@ pub struct RequestInfo {
         serialize_with = "edgion_resources::sensitive::masked_opt::serialize"
     )]
     pub x_forwarded_for: Option<String>,
-    /// Auto-discovered protocol (e.g., "grpc", "grpc-web", "websocket")
+    /// Auto-discovered protocol, borrowing a fixed "grpc", "grpc-web", or "websocket" label.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub discover_protocol: Option<String>,
+    pub discover_protocol: Option<&'static str>,
     /// Whether the request is a gRPC or gRPC-Web request
     #[serde(skip)]
     pub is_grpc_request: bool,

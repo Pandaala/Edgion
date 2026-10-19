@@ -273,7 +273,7 @@ async fn actual_entry_native_grpc_frontend_gate_and_unmatched_status_12() {
             run_entry(&fixture, &mut session, &mut ctx).await,
             expected_status.is_some()
         );
-        assert_eq!(ctx.request_info.discover_protocol.as_deref(), Some("grpc"));
+        assert_eq!(ctx.request_info.discover_protocol, Some("grpc"));
         assert_eq!(ctx.diagnostics.contains_error(EdgionErrorCode::Http2Required), !http2);
         if let Some(status) = expected_status {
             assert_eq!(ctx.request_info.grpc_status(), Some(status));
@@ -313,7 +313,7 @@ async fn actual_entry_grpc_web_keeps_http_fallback_after_module_rewrite() {
         let (mut session, _client) = session("application/grpc-web+proto").await;
         let mut ctx = fixture.context();
         assert!(!run_entry(&fixture, &mut session, &mut ctx).await);
-        assert_eq!(ctx.request_info.discover_protocol.as_deref(), Some("grpc-web"));
+        assert_eq!(ctx.request_info.discover_protocol, Some("grpc-web"));
         assert_eq!(
             session.req_header().headers.get("content-type").unwrap(),
             "application/grpc+proto"

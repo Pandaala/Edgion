@@ -631,10 +631,10 @@ fn resolve_cap_never_treats_none_as_unbounded() {
 }
 
 /// Build a request-stage ctx with the given snapshot + protocol facts.
-fn admission_ctx(declared: Option<bool>, proto: Option<&str>, grpc: bool) -> EdgionHttpContext {
+fn admission_ctx(declared: Option<bool>, proto: Option<&'static str>, grpc: bool) -> EdgionHttpContext {
     let mut ctx = EdgionHttpContext::new();
     ctx.request_info.body_declared = declared;
-    ctx.request_info.discover_protocol = proto.map(str::to_string);
+    ctx.request_info.discover_protocol = proto;
     ctx.request_info.is_grpc_request = grpc;
     ctx
 }
@@ -746,7 +746,7 @@ fn response_admission_upgrade_request_answered_200_buffers() {
     // The request's protocol label is irrelevant to whether the RESPONSE body
     // is bufferable. Only a real 101 is a tunnel.
     let mut ctx = EdgionHttpContext::new();
-    ctx.request_info.discover_protocol = Some("websocket".to_string());
+    ctx.request_info.discover_protocol = Some("websocket");
     assert_eq!(
         response_admission(&ctx, Some(200), false, false),
         RequestAdmission::Buffer

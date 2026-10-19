@@ -140,7 +140,7 @@ pub(crate) fn apply_client_policy(
 #[inline]
 fn classify_and_initialize_grpc_web(session: &mut Session, ctx: &mut EdgionHttpContext) {
     super::pg_request_filter::detect_request_protocol(session.req_header(), ctx);
-    if ctx.request_info.discover_protocol.as_deref() == Some("grpc-web") {
+    if ctx.request_info.discover_protocol == Some("grpc-web") {
         if let Some(bridge) = session.downstream_modules_ctx.get_mut::<GrpcWebBridge>() {
             bridge.init();
         }

@@ -7182,3 +7182,23 @@ Independent plan review passed. Existing response-filter verification passed
 26 tests; formatting, workspace check/Clippy and agent-doc consistency passed
 with existing unrelated warnings. No allocator benchmark, external fork suite,
 full workspace test suite or live integration ran.
+
+## Borrow fixed discovered-protocol labels
+
+RequestInfo.discover_protocol now stores an optional static string reference.
+The only production writers assign the fixed grpc, grpc-web and websocket labels,
+so protocol detection and backend WebSocket supplementation no longer allocate
+an owned String for this field. Consumers read the same strings directly;
+RequestInfo serialization still emits a string or omits the absent field.
+Existing classification short circuits, WebSocket precedence, gRPC flags,
+backend/transcoder guards, body admission, cache eligibility and connection-log
+timing remain unchanged. This is an internal Rust field-type change, with no
+new dynamic-label compatibility layer or protocol policy.
+
+Independent plan review passed. Baseline detector tests passed (3); final
+verification passed 253 tests across detector, early request, session adapter,
+peer builder, request entry, gRPC integration, GraphQL and DSL metadata filters.
+New tests measure zero allocations for classification and backend label filling,
+check existing-label preservation and verify serialized labels/None omission.
+Formatting, workspace check/Clippy and seven guards passed with existing unrelated
+warnings. No full suite, live integration or end-to-end throughput measurement ran.

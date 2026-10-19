@@ -60,7 +60,7 @@ pub(crate) fn apply_backend_app_protocol(
             }
             peer.options.set_http_version(1, 1);
             if ctx.request_info.discover_protocol.is_none() {
-                ctx.request_info.discover_protocol = Some("websocket".to_string());
+                ctx.request_info.discover_protocol = Some("websocket");
             }
         }
         None => {}

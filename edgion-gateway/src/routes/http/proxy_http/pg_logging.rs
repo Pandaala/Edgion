@@ -213,7 +213,7 @@ fn try_record_via_handles(ctx: &EdgionHttpContext, duration_ms: f64) -> bool {
         return false;
     };
 
-    let protocol = ctx.request_info.discover_protocol.as_deref().unwrap_or("http");
+    let protocol = ctx.request_info.discover_protocol.unwrap_or("http");
     let Some(p_idx) = protocol_to_idx(protocol) else {
         return false;
     };
@@ -261,7 +261,7 @@ fn record_request_metrics_fallback(ctx: &EdgionHttpContext, error: Option<&Pingo
         .map(|rsc| (rsc.ns.as_str(), rsc.name.as_str()))
         .unwrap_or(("unknown", "unknown"));
 
-    let protocol = ctx.request_info.discover_protocol.as_deref().unwrap_or("http");
+    let protocol = ctx.request_info.discover_protocol.unwrap_or("http");
 
     let (test_key, test_data) = if edgion_common::test_mode::is_integration_testing_mode() {
         let key = ctx

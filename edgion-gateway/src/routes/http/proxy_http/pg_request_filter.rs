@@ -184,8 +184,7 @@ pub async fn request_filter(
     }
 
     if ctx.request_info.is_grpc_request {
-        if native_grpc_requires_frontend_http2(ctx.request_info.discover_protocol.as_deref(), edgion_http.enable_http2)
-        {
+        if native_grpc_requires_frontend_http2(ctx.request_info.discover_protocol, edgion_http.enable_http2) {
             ctx.record_error(EdgionErrorCode::Http2Required);
             end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
             return Ok(true);
@@ -198,9 +197,7 @@ pub async fn request_filter(
         // per Gateway API spec. Only fall through to HTTP routes when no GRPCRoutes
         // are configured (user may be routing gRPC via HTTPRoute).
         // Scoped to pure gRPC only — gRPC-web may be routed via HTTPRoute.
-        if !ctx.is_grpc_route_matched
-            && grpc_routes.has_routes()
-            && ctx.request_info.discover_protocol.as_deref() == Some("grpc")
+        if !ctx.is_grpc_route_matched && grpc_routes.has_routes() && ctx.request_info.discover_protocol == Some("grpc")
         {
             ctx.record_error(EdgionErrorCode::RouteNotFound);
             end_response_grpc_unimplemented(session, ctx, &edgion_http.server_header_opts).await?;
@@ -657,7 +654,7 @@ pub(super) fn detect_request_protocol(req_header: &RequestHeader, ctx: &mut Edgi
     if let Some(upgrade) = req_header.headers.get("upgrade") {
         if let Ok(upgrade_str) = upgrade.to_str() {
             if upgrade_str.eq_ignore_ascii_case("websocket") {
-                ctx.request_info.discover_protocol = Some("websocket".to_string());
+                ctx.request_info.discover_protocol = Some("websocket");
             }
         }
     }
@@ -667,10 +664,10 @@ pub(super) fn detect_request_protocol(req_header: &RequestHeader, ctx: &mut Edgi
         if let Some(ct) = req_header.headers.get("content-type") {
             if let Ok(ct_str) = ct.to_str() {
                 if super::is_grpc_web_content_type(ct_str) {
-                    ctx.request_info.discover_protocol = Some("grpc-web".to_string());
+                    ctx.request_info.discover_protocol = Some("grpc-web");
                     ctx.request_info.is_grpc_request = true;
                 } else if super::is_grpc_content_type(ct_str) {
-                    ctx.request_info.discover_protocol = Some("grpc".to_string());
+                    ctx.request_info.discover_protocol = Some("grpc");
                     ctx.request_info.is_grpc_request = true;
                 }
             }

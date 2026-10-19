@@ -4,6 +4,21 @@ use std::net::IpAddr;
 use std::sync::Arc;
 
 #[test]
+fn backend_websocket_label_is_allocation_free_and_preserves_existing_classification() {
+    for existing in [None, Some("grpc"), Some("grpc-web"), Some("websocket")] {
+        let mut peer = Box::new(HttpPeer::new("127.0.0.1:8080", false, String::new()));
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.discover_protocol = existing;
+        let (_, allocations) = crate::test_allocation_counter::count_allocations(|| {
+            apply_backend_app_protocol(&mut peer, Some(BackendAppProtocol::WebSocket), &mut ctx);
+        });
+        assert_eq!(allocations, 0);
+        assert_eq!(ctx.request_info.discover_protocol, existing.or(Some("websocket")));
+        assert!(!ctx.request_info.is_grpc_request);
+    }
+}
+
+#[test]
 fn tls_projection_borrows_policy_and_log_retains_its_own_sni() {
     let policy: BackendTLSPolicy = serde_json::from_value(serde_json::json!({
         "metadata":{"namespace":"default","name":"tls"},
