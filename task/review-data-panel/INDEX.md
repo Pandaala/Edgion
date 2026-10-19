@@ -7797,3 +7797,22 @@ check/Clippy and seven repository guards with existing unrelated warnings.
 This removes repeated validation and value payload copies; it does not eliminate
 header-name work or promise zero allocations, lower total resident memory or
 measured throughput. No full suite or benchmark ran.
+
+## Borrow HMAC usernames until header verification succeeds
+
+HMAC's parsed username now retains the quoted-value Cow through synchronous
+header verification. Unescaped usernames borrow the Authorization input;
+escaped usernames retain the existing decoded String. Only the successful
+Verified outcome takes ownership before asynchronous body capture or session
+mutation. Credential lookup still hashes the same str bytes, and parameter,
+algorithm, date, signature and signed-digest checks keep their error order.
+This removes an unescaped username copy on synchronous rejection paths without
+changing the owned success result or its masked logging.
+
+Existing tests now check the parsed username's borrowed pointer or escaped
+ownership and consume successful results after dropping the session. Parser
+validation and debug-redaction test identities remain intact. The owning wire
+contract knowledge now describes the actual ownership boundary. Fresh runs
+passed 56 HMAC-filtered, 68 condition-system and 36 shared-auth tests (filters
+overlap), formatting, workspace check/Clippy and seven repository guards with
+existing unrelated warnings. No full suite or throughput benchmark ran.

@@ -7,13 +7,13 @@ use mockall::Sequence;
 #[test]
 fn credential_debug_omits_identity_and_signature() {
     let params = HmacAuthParams {
-        username: "private-identity".to_string(),
+        username: Cow::Borrowed("private-identity"),
         algorithm: HmacAlgorithm::HmacSha256,
         headers: vec!["private-header".to_string()],
         signature: b"private-signature".to_vec(),
     };
     let outcome = HmacVerifyOutcome::Verified {
-        username: params.username.clone(),
+        username: params.username.clone().into_owned(),
     };
     for value in [&params as &dyn std::fmt::Debug, &outcome] {
         assert!(!format!("{value:?}").contains("private-"));
@@ -540,6 +540,7 @@ async fn verify_headers_agrees_with_verify_on_header_only_request() {
     let mut session = signed_session(&["@request-target", "date"], None, b"");
     let header_outcome = plugin.verifier.verify_headers(&session);
     let verify_outcome = plugin.verifier.verify(&mut session).await;
+    drop(session);
     match (header_outcome, verify_outcome) {
         (HmacVerifyOutcome::Verified { username: headers }, HmacVerifyOutcome::Verified { username: verify }) => {
             assert_eq!(headers, verify);
@@ -782,20 +783,26 @@ fn quoted_values_borrow_unescaped_input_and_preserve_escape_rules() {
 
 #[test]
 fn authorization_parser_keeps_owned_results_and_validation_order() {
-    let params = {
-        let header = String::from(
-            r#" HMAC USERNAME="ali\ce", algorithm="hmac-sha256", headers="Date X-Mode", signature="YQ==", extra="a,b\"c" "#,
-        );
-        HmacAuth::parse_authorization(&header).unwrap()
-    };
+    let header = String::from(
+        r#" HMAC USERNAME="ali\ce", algorithm="hmac-sha256", headers="Date X-Mode", signature="YQ==", extra="a,b\"c" "#,
+    );
+    let params = HmacAuth::parse_authorization(&header).unwrap();
+    assert!(matches!(params.username, Cow::Owned(_)));
     assert_eq!(params.username, "alice");
     assert_eq!(params.algorithm, HmacAlgorithm::HmacSha256);
     assert_eq!(params.headers, ["date", "x-mode"]);
     assert_eq!(params.signature, b"a");
+    let escaped_username = params.username.into_owned();
+    drop(header);
+    assert_eq!(escaped_username, "alice");
     let plain = String::from(r#"hmac username="alice", algorithm="hmac-sha256", headers="date", signature="YQ==""#);
-    let owned = HmacAuth::parse_authorization(&plain).unwrap();
+    let borrowed = HmacAuth::parse_authorization(&plain).unwrap();
+    assert!(matches!(borrowed.username, Cow::Borrowed(_)));
+    let start = plain.find("alice").unwrap();
+    assert_eq!(borrowed.username.as_ptr(), plain[start..].as_ptr());
+    let owned_username = borrowed.username.into_owned();
     drop(plain);
-    assert_eq!(owned.username, "alice");
+    assert_eq!(owned_username, "alice");
     for (suffix, expected) in [
         (", extra=unquoted", "HMAC parameter value must be quoted"),
         (", USERNAME=unquoted", "Invalid HMAC authorization format"),
@@ -919,7 +926,8 @@ fn authorization_parameter_keys_keep_ascii_only_case_folding() {
             "Invalid HMAC authorization format"
         );
     }
-    let params = HmacAuth::parse_authorization(&format!(r#"{base}, Éxtra="one", éxtra="two""#)).unwrap();
+    let header = format!(r#"{base}, Éxtra="one", éxtra="two""#);
+    let params = HmacAuth::parse_authorization(&header).unwrap();
     assert_eq!(params.username, "alice");
     assert_eq!(params.signature, b"a");
 }

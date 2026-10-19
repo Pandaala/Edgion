@@ -57,9 +57,12 @@ Re-open this decision only if:
 
 `parse_quoted_value` borrows the trimmed quoted interior when it contains no
 backslash. Values requiring unescaping retain the original character decoder and
-owned output. The local parameter map holds those borrows only during synchronous
-parsing; the returned username, signed-header names and decoded signature remain
-owned before verification or asynchronous body capture begins.
+owned output. The parsed username retains that Cow through synchronous header
+verification. Only a successful header-verification outcome takes ownership,
+before asynchronous body capture or session mutation. Signed-header names and
+the decoded signature remain owned parser outputs. This avoids copying an
+unescaped username on synchronous rejection paths; escaped usernames still need
+the decoder's owned output.
 
 This changes temporary ownership only. Outer quote checks, permissive inner quote
 handling, arbitrary escaped characters, trailing-backslash rejection, lowercase
@@ -71,10 +74,11 @@ Unknown parameters are still accepted after validating their quoted values;
 duplicate keys still fail before parsing the duplicate value. This is not a new
 wire format or a relaxation of authentication, timestamp or body-order checks.
 
-Unit regressions verify zero allocations and source-pointer identity for unescaped
-quoted interiors, escaped and malformed cases, owned results after source release,
-and duplicate/unknown-parameter error precedence. Other parser structures and final
-results still allocate; no whole-parser allocation or throughput claim follows.
+Unit regressions verify zero allocations for unescaped quoted interiors, source
+pointer identity for borrowed parsed usernames, escaped and malformed cases,
+owned verified results after session release, and duplicate/unknown-parameter
+error precedence. Other parser structures and final results still allocate; no
+whole-parser allocation or throughput claim follows.
 
 ## Borrowed current query in signing targets
 

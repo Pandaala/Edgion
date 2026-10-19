@@ -39,14 +39,14 @@ type HmacSha384 = Hmac<Sha384>;
 type HmacSha512 = Hmac<Sha512>;
 
 /// Parsed HMAC authorization parameters.
-struct HmacAuthParams {
-    username: String,
+struct HmacAuthParams<'a> {
+    username: Cow<'a, str>,
     algorithm: HmacAlgorithm,
     headers: Vec<String>,
     signature: Vec<u8>,
 }
 
-impl std::fmt::Debug for HmacAuthParams {
+impl std::fmt::Debug for HmacAuthParams<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HmacAuthParams").finish_non_exhaustive()
     }
@@ -185,7 +185,7 @@ impl HmacVerifier {
         if !algorithms.contains(&params.algorithm) {
             return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::AlgorithmNotAllowed);
         }
-        let Some(credential) = credentials.get(&params.username) else {
+        let Some(credential) = credentials.get(params.username.as_ref()) else {
             return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::UnknownCredential);
         };
         let Some(signed_date) = params
@@ -222,7 +222,7 @@ impl HmacVerifier {
             return HmacVerifyOutcome::NoMatch(HmacVerifyFailure::DigestNotSigned);
         }
         HmacVerifyOutcome::Verified {
-            username: params.username,
+            username: params.username.into_owned(),
         }
     }
 
@@ -356,7 +356,7 @@ impl HmacAuth {
     }
 
     /// Parse Authorization header into HMAC parameters.
-    fn parse_authorization(auth_header: &str) -> Result<HmacAuthParams, &'static str> {
+    fn parse_authorization(auth_header: &str) -> Result<HmacAuthParams<'_>, &'static str> {
         let trimmed = auth_header.trim();
         let (scheme, params_str) = trimmed.split_once(' ').ok_or("Invalid HMAC authorization format")?;
         if !scheme.eq_ignore_ascii_case("hmac") {
@@ -414,7 +414,7 @@ impl HmacAuth {
             .map_err(|_| "Invalid HMAC authorization format")?;
 
         Ok(HmacAuthParams {
-            username: username.into_owned(),
+            username,
             algorithm,
             headers,
             signature,
