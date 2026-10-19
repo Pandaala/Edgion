@@ -462,13 +462,17 @@ pub fn copy_raw(source: &str, work: &mut ValueWorkBudget) -> Result<Arc<str>, Js
     Ok(Arc::from(source))
 }
 
+#[derive(serde::Deserialize)]
+#[serde(transparent)]
+struct DecodedString<'a>(#[serde(borrow)] Cow<'a, str>);
+
 pub fn decode_string(source: &str, work: &mut ValueWorkBudget) -> Result<Option<Arc<str>>, JsonError> {
     if !source.starts_with('"') {
         return Ok(None);
     }
     reserve_parse(source, work)?;
-    let text: String = serde_json::from_str(source).map_err(|_| JsonError::InvalidOperation)?;
-    copy_raw(&text, work).map(Some)
+    let text: DecodedString<'_> = serde_json::from_str(source).map_err(|_| JsonError::InvalidOperation)?;
+    copy_raw(&text.0, work).map(Some)
 }
 
 struct JsonWriter<'w> {

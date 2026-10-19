@@ -7684,3 +7684,24 @@ seven Gateway JSON builtin and 11 JSON Schema plugin tests (26 total), formattin
 workspace check/Clippy and seven guards with existing unrelated warnings.
 This removes the redundant nested-key copy; no whole-path allocation count,
 throughput benchmark, full suite or live integration result is claimed.
+
+## Borrow plain decoded DSL JSON strings before Arc publication
+
+Gateway json.get_string reaches edgion-dsl::json::decode_string. A private
+serde-transparent Cow string wrapper now borrows unescaped input through decoding,
+then copies into the same final owned Arc. Escaped values still use serde-owned
+decoded text. This removes the intermediate String for plain input without a new
+JSON parser or ownership crossing into the caller's source lifetime.
+
+The frozen supporting scope is edgion-dsl/src/json.rs and its mounted json_test.rs.
+Initial quote gating, pre-parse work charge, complete-input validation, final
+copy charge and error mapping remain unchanged. Independent plan review passed.
+Tests compare against the previous String decoding for ordinary/escaped text,
+whitespace, trailing garbage, malformed strings and surrogate cases, verify plain
+source borrowing, and check exhaustion before parsing and at the Arc-copy budget.
+
+Baseline DSL JSON tests passed eight; final verification passed nine DSL JSON,
+seven Gateway JSON builtin and 11 JSON Schema plugin tests (27 total), formatting,
+workspace check/Clippy and seven guards with existing unrelated warnings.
+No whole-path allocation count, throughput benchmark, full suite or live
+integration result is claimed.

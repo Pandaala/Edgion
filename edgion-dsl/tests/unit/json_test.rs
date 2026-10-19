@@ -257,3 +257,69 @@ fn raw_key_admission_moves_owned_keys_and_preserves_rejections() {
         assert_eq!(keys.capacity(), 0);
     }
 }
+
+#[test]
+fn decoded_strings_borrow_plain_text_and_preserve_validation_and_work() {
+    for source in [r#""plain""#, r#""café""#] {
+        let decoded: DecodedString<'_> = serde_json::from_str(source).unwrap();
+        let Cow::Borrowed(text) = decoded.0 else {
+            panic!("plain JSON strings must borrow their source");
+        };
+        assert_eq!(text.as_ptr(), source[1..].as_ptr());
+    }
+    let escaped: DecodedString<'_> = serde_json::from_str(r#""line\nend""#).unwrap();
+    assert!(matches!(escaped.0, Cow::Owned(_)));
+
+    for source in [
+        r#""""#,
+        r#""plain""#,
+        r#""café""#,
+        r#""line\nend\t\"\\""#,
+        r#""\u0061""#,
+        r#""\uD834\uDD1E""#,
+        r#""\uD800""#,
+        r#""\uDC00""#,
+        "\"plain\" \t",
+        "\"plain\" tail",
+        "\"bad\ntext\"",
+        "\"unterminated",
+        "null",
+        "123",
+        " \"plain\"",
+        "",
+    ] {
+        let result = decode_string(source, &mut ValueWorkBudget::default());
+        if !source.starts_with('"') {
+            assert!(result.unwrap().is_none(), "{source:?}");
+        } else {
+            match serde_json::from_str::<String>(source) {
+                Ok(expected) => assert_eq!(result.unwrap().unwrap().as_ref(), expected, "{source:?}"),
+                Err(_) => assert!(matches!(result, Err(JsonError::InvalidOperation)), "{source:?}"),
+            }
+        }
+    }
+
+    let source = r#""plain""#;
+    assert!(matches!(
+        decode_string(source, &mut ValueWorkBudget::exhausted()),
+        Err(JsonError::Work(_))
+    ));
+    assert!(decode_string("null", &mut ValueWorkBudget::exhausted())
+        .unwrap()
+        .is_none());
+    let parse_charge = source.len() as u64 * 8;
+    let copy_charge = "plain".len() as u64 * 2;
+    for (remaining, succeeds) in [
+        (parse_charge + copy_charge - 1, false),
+        (parse_charge + copy_charge, true),
+    ] {
+        let mut work = ValueWorkBudget::default();
+        work.charge(crate::value::MAX_VALUE_WORK_UNITS - remaining).unwrap();
+        let result = decode_string(source, &mut work);
+        if succeeds {
+            assert_eq!(result.unwrap().unwrap().as_ref(), "plain");
+        } else {
+            assert!(matches!(result, Err(JsonError::Work(_))));
+        }
+    }
+}
