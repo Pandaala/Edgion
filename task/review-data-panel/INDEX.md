@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Prepared Service endpoint eligibility lookup](backend-02-runtime-eligibility-lookup.md)
+
 - [Backend SAN inspection without full display projection](tls-05-backend-san-inspection.md)
 
 - [Attached ExtProc summary rendering](log-05-attached-summary-rendering.md)
@@ -6921,3 +6923,19 @@ case-insensitive credential-header checks after update and deletion. Formatting,
 workspace check/Clippy and seven guards passed with existing unrelated warnings.
 This removes duplicate storage and cloning; no unconditional heap-allocation,
 context-size or throughput claim is made. No full suite or live network test ran.
+
+
+## Service candidate runtime eligibility lookup audit
+
+Traced upstream Service selection through compiled RR/ConsistentHash and P2C
+predicates into runtime health/outlier reads. Endpoint identities are already
+prepared, but candidate predicates still query the captured endpoint map; degrade
+counting and selection can repeat that lookup. A prepared binding requires a
+separate lifetime/publication design and measured value, so backend-02 records it
+for user decision. Existing selected-slot lookup remains a separate candidate.
+
+No runtime code changed. Membership activation creates fresh states; policy-only
+snapshots can reuse the map; old states freeze on retirement. Do not cache health
+booleans or remove accepted cooldown/recovery synchronization. Fresh baseline
+verification passed 97 selector, compiled-selector, coordinator and outlier tests.
+No benchmark establishes a benefit for the proposed representation.
