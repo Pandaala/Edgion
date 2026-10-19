@@ -91,7 +91,10 @@ enum ClassifiedSan<'a> {
     Ip(IpAddr),
     Email(&'a str),
     Uri(&'a str),
-    OtherName { oid: String, value: Cow<'a, str> },
+    OtherName {
+        oid: &'a x509_parser::der_parser::Oid<'a>,
+        value: Cow<'a, str>,
+    },
 }
 
 impl ClassifiedSan<'_> {
@@ -111,7 +114,7 @@ impl ClassifiedSan<'_> {
             Self::Ip(value) => PresentedSan::ip(value.to_string()),
             Self::Email(value) => PresentedSan::email(value),
             Self::Uri(value) => PresentedSan::uri(value),
-            Self::OtherName { oid, value } => PresentedSan::other_name(oid, value.into_owned()),
+            Self::OtherName { oid, value } => PresentedSan::other_name(oid.to_string(), value.into_owned()),
         }
     }
 }
@@ -168,10 +171,7 @@ fn extract_other_names<T>(cert: &X509Ref, output: &mut Vec<T>, project: &mut imp
             let Some(decoded) = decode_other_name_value(value) else {
                 continue;
             };
-            output.push(project(ClassifiedSan::OtherName {
-                oid: oid.to_string(),
-                value: decoded,
-            }));
+            output.push(project(ClassifiedSan::OtherName { oid, value: decoded }));
         }
     }
 }

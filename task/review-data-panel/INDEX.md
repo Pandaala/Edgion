@@ -6579,3 +6579,21 @@ extractor, 20 HeaderCertAuth and 14 mTLS callback tests (52 total), formatting,
 workspace check/Clippy and seven guards. Updated owning SAN projection knowledge.
 Existing unrelated warnings remain; no full suite, live TLS integration or
 benchmark ran.
+
+## Borrowed OtherName OID through SAN projection
+
+OtherName classification now borrows its parsed OID until synchronous projection.
+Display formats it directly into the prefixed result, avoiding the previous outer
+OID to_string temporary. Typed projection still formats and owns the OID exactly
+as before. Both paths retain the same dependency Display behavior, including its
+internal to_id_string allocations in asn1-rs 0.7.2. No allocation-free or measured
+throughput claim is made. Neither parsed objects nor local DER backing escape;
+formatting, SAN order, values and trust decisions remain unchanged.
+
+Independent plan review approved three files. Existing signed mixed-SAN tests
+cover multiple OIDs, duplicates and independent display/typed expectations, so
+no redundant test was added. Baseline and final verification each passed 18
+extractor, 20 HeaderCertAuth and 14 mTLS callback tests (52 total). Formatting,
+workspace check/Clippy and seven guards passed. Updated the owning SAN knowledge;
+existing unrelated warnings remain. No full suite, live integration or benchmark
+ran.

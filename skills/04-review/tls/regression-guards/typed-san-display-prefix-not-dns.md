@@ -54,7 +54,10 @@ their BER input through synchronous projection; boolean and NULL values borrow
 static text. Numeric, OID, BMP and Universal conversions retain owned results.
 Display projection avoids the former temporary text/boolean String, while typed
 projection owns borrowed values and moves already-owned conversions. NULL did
-not allocate before this change. Decoded OtherName OIDs remain owned. The BER
+not allocate before this change. OtherName OIDs borrow the parsed object through
+synchronous projection. Display formats that OID directly; typed output owns its
+formatted OID. This removes the display path's outer temporary OID String, while
+asn1-rs 0.7.2 Display still allocates internally through to_id_string. The BER
 decoder remains shared. This changes ownership cost without changing trust policy
 or merging the ordinary BoringSSL and OtherName DER passes.
 
