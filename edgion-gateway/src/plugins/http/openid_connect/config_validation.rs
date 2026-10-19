@@ -51,17 +51,18 @@ impl OpenidConnect {
     }
 
     pub(super) fn is_reserved_authorization_param(key: &str) -> bool {
-        matches!(
-            key.to_ascii_lowercase().as_str(),
-            "response_type"
-                | "client_id"
-                | "redirect_uri"
-                | "scope"
-                | "state"
-                | "nonce"
-                | "code_challenge"
-                | "code_challenge_method"
-        )
+        [
+            "response_type",
+            "client_id",
+            "redirect_uri",
+            "scope",
+            "state",
+            "nonce",
+            "code_challenge",
+            "code_challenge_method",
+        ]
+        .into_iter()
+        .any(|reserved| key.eq_ignore_ascii_case(reserved))
     }
 
     pub(super) fn validate_required_scopes(&self, claims: &Value) -> VerifyResult<()> {

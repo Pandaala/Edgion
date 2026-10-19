@@ -8038,3 +8038,20 @@ tests with 16 existing ignores, formatting, workspace check/Clippy and seven
 repository guards with existing unrelated warnings. The scoped benefit is
 removing intermediate host and scheme String allocations for path-form URI
 composition. No full suite or throughput benchmark ran.
+
+## Compare OIDC reserved authorization names without lowercase allocation
+
+The Gateway's defensive authorization-parameter predicate now compares the same
+eight literal names with eq_ignore_ascii_case rather than allocating a lowercase
+String first. ASCII case handling, no-trim behavior, reserved-name membership and
+callback parameter iteration/encoding order remain unchanged. Resource admission
+still rejects reserved names through its existing cold validation. This change
+removes the runtime temporary allocation for nonempty keys; it does not claim a
+measured CPU or throughput improvement for the bounded comparison sequence.
+
+Focused tests cover every name in lower/upper and single-letter mixed case,
+whitespace, prefixes/suffixes, empty text, non-ASCII and separator boundaries.
+Existing authorization-parameter response tests remain. Fresh verification passed
+153 OIDC tests with 16 existing ignores, formatting, workspace check/Clippy and
+seven repository guards with existing unrelated warnings. No full suite or
+throughput benchmark ran.

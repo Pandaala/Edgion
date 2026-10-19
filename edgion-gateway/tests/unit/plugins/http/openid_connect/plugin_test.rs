@@ -795,6 +795,44 @@ async fn test_unauth_action_auth_with_nonce_redirects_with_nonce_param() {
     assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
 }
 
+#[test]
+fn reserved_authorization_parameters_match_ascii_case_only() {
+    for name in [
+        "response_type",
+        "client_id",
+        "redirect_uri",
+        "scope",
+        "state",
+        "nonce",
+        "code_challenge",
+        "code_challenge_method",
+    ] {
+        assert!(OpenidConnect::is_reserved_authorization_param(name));
+        assert!(OpenidConnect::is_reserved_authorization_param(
+            &name.to_ascii_uppercase()
+        ));
+        for (index, byte) in name.bytes().enumerate() {
+            if byte.is_ascii_lowercase() {
+                let mut mixed = name.as_bytes().to_vec();
+                mixed[index] = byte.to_ascii_uppercase();
+                let mixed = String::from_utf8(mixed).expect("ASCII parameter");
+                assert!(OpenidConnect::is_reserved_authorization_param(&mixed));
+            }
+        }
+        for candidate in [
+            format!(" {name}"),
+            format!("{name} "),
+            format!("{name}x"),
+            format!("x{name}"),
+        ] {
+            assert!(!OpenidConnect::is_reserved_authorization_param(&candidate));
+        }
+    }
+    for name in ["", "prompt", "login_hint", "scopé", "π", "code-challenge", "nonce\0"] {
+        assert!(!OpenidConnect::is_reserved_authorization_param(name));
+    }
+}
+
 #[tokio::test]
 async fn test_authorization_params_appends_non_reserved_params() {
     let mut cfg = base_config();
