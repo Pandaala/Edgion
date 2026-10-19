@@ -3310,3 +3310,52 @@ async fn prepared_signing_policy_retains_old_generation_and_id_token_audience_no
         .is_err());
     assert!(old.verify_jwt_token(&mut session, &id_token).await.is_err());
 }
+
+#[tokio::test]
+async fn introspection_endpoint_presence_precedes_cache_and_url_admission_follows_it() {
+    const DENIED: &str = "http://169.254.169.254/introspect";
+    for (configured, discovered, available) in [
+        (None, None, false),
+        (Some(""), Some(""), false),
+        (Some(""), None, false),
+        (None, Some(""), false),
+        (Some(DENIED), None, true),
+        (None, Some(DENIED), true),
+        (Some(""), Some(DENIED), true),
+        (Some(DENIED), Some(""), true),
+        (Some(DENIED), Some("https://other.example/introspect"), true),
+    ] {
+        let mut cfg = base_config();
+        cfg.introspection_cache_ttl = 60;
+        let mut plugin = OpenidConnect::new(&cfg, "default".to_owned());
+        // Exercise runtime selection independently of resource admission.
+        plugin.config.introspection_endpoint = configured.map(str::to_owned);
+        plugin
+            .jwks_provider
+            .seed_discovery(DiscoveryDocument {
+                issuer: "https://issuer.example.com".to_owned(),
+                jwks_uri: "https://issuer.example.com/jwks".to_owned(),
+                authorization_endpoint: None,
+                token_endpoint: None,
+                introspection_endpoint: discovered.map(str::to_owned),
+                userinfo_endpoint: None,
+                end_session_endpoint: None,
+                revocation_endpoint: None,
+            })
+            .await;
+        let claims = json!({
+            "active": true, "iss": "https://issuer.example.com",
+            "exp": OpenidConnect::now_unix_secs() + 120
+        });
+        plugin.cache_introspection_claims("cached-token", &claims).await;
+        let mut session = MockPluginSession::new();
+        let result = plugin
+            .verify_token_via_introspection(&mut session, "cached-token")
+            .await;
+        if available {
+            assert_eq!(result.unwrap(), claims);
+        } else {
+            assert_eq!(result.unwrap_err().log_tag(), "introspect endpoint missing");
+        }
+    }
+}

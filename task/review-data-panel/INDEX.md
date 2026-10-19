@@ -7900,3 +7900,22 @@ tests; 16 OIDC tests retained their existing ignored status. Formatting,
 workspace check/Clippy and seven repository guards passed with existing unrelated
 warnings. This removes payload/subtree copies, not the output map or standard-key
 allocations. No full suite or throughput benchmark ran.
+
+## Borrow the selected OIDC introspection endpoint
+
+Introspection endpoint selection now borrows from immutable plugin configuration
+or the local discovery Arc snapshot instead of cloning a String before cache
+lookup. The nonempty configured endpoint still takes precedence over discovery.
+Discovery fetch and missing-endpoint rejection remain before cache lookup;
+cached claims still undergo claim/scope validation, while URL admission and
+request construction remain on cache miss. Borrowing the owned snapshot retains
+no discovery lock across the await. Reqwest still owns its parsed request URL.
+
+A network-free cached-call matrix covers absent/empty endpoint combinations,
+discovery fallback availability and missing-endpoint-before-cache versus
+URL-admission-after-cache behavior. When both endpoints are nonempty, selection
+precedence is established by source review; a cache hit does not consume the URL
+and cannot distinguish the selected destination. Fresh verification passed
+151 OIDC tests with 16 existing ignores, formatting, workspace check/Clippy and
+seven repository guards with existing unrelated warnings. No full suite or
+throughput benchmark ran.

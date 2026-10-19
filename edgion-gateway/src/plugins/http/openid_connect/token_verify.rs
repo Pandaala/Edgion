@@ -14,9 +14,9 @@ impl OpenidConnect {
         let endpoint = self
             .config
             .introspection_endpoint
-            .clone()
+            .as_deref()
             .filter(|v| !v.is_empty())
-            .or_else(|| discovery.introspection_endpoint.clone().filter(|v| !v.is_empty()))
+            .or_else(|| discovery.introspection_endpoint.as_deref().filter(|v| !v.is_empty()))
             .ok_or(OidcVerifyError::dependency(
                 OidcOperation::Introspection,
                 OidcDependencyFailure::MissingEndpoint,
@@ -28,10 +28,10 @@ impl OpenidConnect {
             return Ok(cached_claims);
         }
 
-        Self::admit_idp_url(&endpoint, OidcOperation::Introspection)?;
+        Self::admit_idp_url(endpoint, OidcOperation::Introspection)?;
         let client = self.http_client();
         let base_request = client
-            .post(&endpoint)
+            .post(endpoint)
             .timeout(Duration::from_secs(self.config.timeout))
             .header("Accept", "application/json");
 
