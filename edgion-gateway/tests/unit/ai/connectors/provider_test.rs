@@ -204,7 +204,7 @@ async fn native_profile_and_final_remote_ip_collisions_fail_before_materializati
     ] {
         let mut session = native_session().await;
         let mut ctx = EdgionHttpContext::new();
-        ctx.remote_ip_header = http::HeaderName::from_static(name);
+        Arc::make_mut(&mut ctx.egc).remote_ip_header = http::HeaderName::from_static(name);
         let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
         assert_eq!(
             validate_native_headers(&adapter),

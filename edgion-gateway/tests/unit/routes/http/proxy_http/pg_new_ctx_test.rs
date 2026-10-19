@@ -145,3 +145,72 @@ fn request_context_pins_preflight_policy_from_one_snapshot_generation() {
 
     handler.full_set(&HashMap::new());
 }
+
+#[tokio::test]
+async fn remote_ip_consumers_pin_header_across_update_and_delete() {
+    use super::super::pg_upstream_request_filter::upstream_request_filter;
+    use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
+    use crate::plugins::runtime::traits::session::PluginSession;
+    use tokio::io::AsyncWriteExt;
+
+    let (proxy, first, second, defaults) = {
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        let handler = crate::config::edgion_gateway::create_edgion_gateway_config_handler();
+        let make_config = |header: &str| {
+            let mut config = EdgionGatewayConfig::new("remote-ip-generation", Default::default());
+            config.spec.forwarded_headers.remote_ip_header = header.to_string();
+            Arc::new(config)
+        };
+        handler.full_set(&HashMap::from([(
+            "remote-ip-generation".into(),
+            make_config("X-Initial-Remote-IP"),
+        )]));
+        let proxy = proxy(Some("remote-ip-generation"));
+        let first = new_ctx(&proxy);
+        handler.partial_update(
+            HashMap::new(),
+            HashMap::from([("remote-ip-generation".into(), make_config("X-Updated-Remote-IP"))]),
+            HashSet::new(),
+        );
+        let second = new_ctx(&proxy);
+        handler.partial_update(
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::from(["remote-ip-generation".into()]),
+        );
+        let defaults = new_ctx(&proxy);
+        handler.full_set(&HashMap::new());
+        (proxy, first, second, defaults)
+    };
+
+    // Exercise all generations only after publication and deletion have completed.
+    for (mut ctx, expected) in [
+        (first, "x-initial-remote-ip"),
+        (second, "x-updated-remote-ip"),
+        (defaults, "x-real-ip"),
+    ] {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let mut session = pingora_proxy::Session::new_h1(Box::new(server));
+        client.write_all(b"GET / HTTP/1.1\r\nHost: test\r\n\r\n").await.unwrap();
+        assert!(session.read_request().await.unwrap());
+        ctx.request_info.remote_ip = "192.0.2.10".into();
+        ctx.request_info.downstream_peer_ip = "192.0.2.20".into();
+        {
+            let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            assert!(adapter.is_remote_ip_header(&expected.to_ascii_uppercase()));
+            for name in ["x-initial-remote-ip", "x-updated-remote-ip", "x-real-ip"] {
+                assert_eq!(adapter.is_remote_ip_header(name), name == expected);
+            }
+        }
+        let mut upstream = pingora_http::RequestHeader::build("GET", b"/", None).unwrap();
+        upstream.insert_header(expected, "spoofed").unwrap();
+        upstream_request_filter(&proxy, &mut session, &mut upstream, &mut ctx)
+            .await
+            .unwrap();
+        assert_eq!(upstream.headers.get(expected).unwrap(), "192.0.2.10");
+        assert_eq!(upstream.headers.get("x-forwarded-for").unwrap(), "192.0.2.20");
+        for name in ["x-initial-remote-ip", "x-updated-remote-ip", "x-real-ip"] {
+            assert_eq!(upstream.headers.contains_key(name), name == expected);
+        }
+    }
+}

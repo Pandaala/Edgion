@@ -9,9 +9,10 @@ description: Pingora ProxyHttp lifecycle callbacks — 8-phase processing chain,
 
 Before Phase 1, `new_ctx` loads one immutable `EdgionGatewayConfig` generation
 from the listener's prebound `GatewayConfigHandle`, without a resource-table lookup. It copies
-the resolved request-body limits, upstream RemoteIp header, and global preflight
-mode/status into the request context. Those
-values come from one publication generation and remain pinned for the request;
+the resolved request-body limits and global preflight mode/status into the request
+context. Consumers borrow the validated upstream RemoteIp header from the
+request-pinned immutable configuration snapshot. These values come from one
+publication generation and remain pinned for the request;
 an EGC hot update affects only contexts created afterward and does not require
 rebuilding the listener.
 

@@ -6903,3 +6903,21 @@ Independent plan review passed. Fresh verification passed 13 redirect, 27 mirror
 and eight logger tests (48 total), formatting, workspace check/Clippy and six
 specialized guards, with existing unrelated warnings. No new full suite, live
 network integration or allocation/throughput benchmark ran.
+
+## Request-pinned RemoteIp header ownership
+
+Removed the duplicated HeaderName from EdgionHttpContext and its new_ctx clone.
+Forwarding, credential collision checks and response-cache key framing now borrow
+that name from the same immutable configuration Arc already pinned by the request.
+The upstream HeaderMap still receives its required owned key. Publication,
+validation, fallback, cache-key bytes and header precedence remain unchanged.
+The lifecycle documentation now describes this ownership accurately.
+
+Independent plan review passed, including the narrow lifecycle-document update.
+Fresh final verification passed 109 targeted tests: new_ctx (3), upstream request
+filter (15), AI provider (4), response cache (40), credential injector (7), and
+Gateway config (40). The new generation test exercises real upstream output and
+case-insensitive credential-header checks after update and deletion. Formatting,
+workspace check/Clippy and seven guards passed with existing unrelated warnings.
+This removes duplicate storage and cloning; no unconditional heap-allocation,
+context-size or throughput claim is made. No full suite or live network test ran.

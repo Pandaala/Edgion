@@ -2210,11 +2210,6 @@ pub struct EdgionHttpContext {
     /// Ordinary HTTP entity admission, resolved before ordinary request plugins.
     pub(crate) enforce_request_body_limit: bool,
 
-    /// Validated upstream header carrying the final RemoteIp. Captured from the
-    /// immutable EGC runtime snapshot when this request context is created, so
-    /// an in-flight request is unaffected by a later config update.
-    pub remote_ip_header: http::HeaderName,
-
     /// Resolved global preflight policy captured from the same immutable EGC
     /// snapshot as the request-body and forwarded-identity policies.
     pub(crate) preflight_policy: ResolvedPreflightPolicy,
@@ -3316,7 +3311,6 @@ impl EdgionHttpContext {
             session_persistence: None,
             allow_loopback_upstream: false,
             request_body_config: crate::request_body::ResolvedRequestBodyConfig::default(),
-            remote_ip_header: http::HeaderName::from_static("x-real-ip"),
             preflight_policy: ResolvedPreflightPolicy::default(),
             request_body: RequestBodyState::default(),
             waf_prefix_inspected: false,

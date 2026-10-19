@@ -1451,7 +1451,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn is_remote_ip_header(&self, name: &str) -> bool {
-        self.ctx.remote_ip_header.as_str().eq_ignore_ascii_case(name)
+        self.ctx.egc.remote_ip_header.as_str().eq_ignore_ascii_case(name)
     }
 
     fn defer_credential_header(

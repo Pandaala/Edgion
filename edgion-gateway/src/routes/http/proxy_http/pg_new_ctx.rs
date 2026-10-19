@@ -9,7 +9,6 @@ pub fn new_ctx(edgion_http: &EdgionHttpProxy) -> EdgionHttpContext {
     ctx.request_info.listener_port = edgion_http.listener_port;
     ctx.allow_loopback_upstream = ctx.egc.allow_loopback_upstream;
     ctx.request_body_config = ctx.egc.request_body;
-    ctx.remote_ip_header = ctx.egc.remote_ip_header.clone();
     ctx.preflight_policy = ctx.egc.preflight_policy;
     global_metrics().ctx_created();
     ctx

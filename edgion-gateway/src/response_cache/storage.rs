@@ -687,7 +687,7 @@ impl RequestState {
         key.frame(ctx.request_info.remote_ip.as_bytes())?;
         key.frame(ctx.request_info.downstream_peer_ip.as_bytes())?;
         key.frame(ctx.request_info.x_forwarded_for.as_deref().unwrap_or("").as_bytes())?;
-        key.frame(ctx.remote_ip_header.as_str().as_bytes())?;
+        key.frame(ctx.egc.remote_ip_header.as_str().as_bytes())?;
         let header_certificate = key.headers(
             &header.headers,
             &ctx.request_info.trace_id,
