@@ -5078,3 +5078,26 @@ Fresh serial baseline verification passed 59 tests: 33 Resources transcoding and
 26 Gateway transcoder tests. Formatting check, workspace check/Clippy and agent-doc
 and diff checks passed; existing warnings remain outside this documentation batch.
 No allocation or throughput benchmark ran.
+
+## ExtProc explicit empty trailer mutation ownership
+
+The response-trailer callback now treats a HeaderMutation whose set_headers and
+remove_headers lists are both empty like an absent mutation for candidate storage.
+It validates the original map without cloning/replacing it. Every nonempty list
+still uses the existing atomic candidate path, even if its operations later skip
+or make no effective change. Final map validation, representability, failure policy,
+phase matching and terminal sequencing remain unchanged.
+
+This extends the earlier unchanged-trailer-map optimization, superseding only its
+explicit-empty-mutation exclusion. The owning header-fidelity knowledge now states
+the current scope. Baseline-first callback cases cover absent/empty forms across
+HTTP/gRPC and both failure policies, preserving repeated opaque values, sensitivity,
+projection and outcomes. The optimized forms both retain original HeaderValue
+storage. Unrepresentable trailers still follow both configured failure policies.
+This removes the empty-mutation candidate map clone, not protobuf projection or
+all callback allocations; no throughput improvement is claimed.
+
+Fresh serial verification passed 153 tests: 142 ExtProc and 11 upstream response
+trailer-driver tests. Formatting, workspace check/Clippy and seven repository
+guards passed; existing unrelated warnings remain outside the diff. No live
+ExtProc interoperability or performance benchmark ran.

@@ -277,47 +277,54 @@ async fn real_trailers_preserve_duplicates_and_exchange_last() {
 async fn no_mutation_preserves_trailer_storage_and_sensitive_opaque_values() {
     for grpc in [false, true] {
         for fail_open in [false, true] {
-            let (mut processor, owner) = processor(Ok(response(None)), fail_open, false);
-            let mut trailers = HeaderMap::new();
-            let mut opaque = HeaderValue::from_bytes(b"opaque-\x80").unwrap();
-            opaque.set_sensitive(true);
-            trailers.append("x-value", opaque);
-            trailers.append("x-value", HeaderValue::from_static("second"));
-            if grpc {
-                trailers.insert("grpc-status", HeaderValue::from_static("0"));
+            for empty_mutation in [false, true] {
+                let (mut processor, owner) = processor(
+                    Ok(response(empty_mutation.then(HeaderMutation::default))),
+                    fail_open,
+                    false,
+                );
+                let mut trailers = HeaderMap::new();
+                let mut opaque = HeaderValue::from_bytes(b"opaque-\x80").unwrap();
+                opaque.set_sensitive(true);
+                trailers.append("x-value", opaque);
+                trailers.append("x-value", HeaderValue::from_static("second"));
+                if grpc {
+                    trailers.insert("grpc-status", HeaderValue::from_static("0"));
+                }
+                let original = trailers.clone();
+                let original_value = std::ptr::from_ref(trailers.get("x-value").unwrap());
+                let mut session = session(grpc, true, true);
+                session.expect_record_outcome().times(0).return_const(());
+                let mut log = PluginLog::new("ExtProc");
+                assert_eq!(
+                    processor
+                        .run_upstream_response_trailer(Some(&mut trailers), &mut session, &mut log)
+                        .await,
+                    UpstreamTrailerResult::Continue
+                );
+                assert_eq!(trailers, original);
+                assert_eq!(std::ptr::from_ref(trailers.get("x-value").unwrap()), original_value);
+                assert!(trailers.get("x-value").unwrap().is_sensitive());
+                assert!(processor.done);
+                assert_eq!(*owner.terminal.lock(), Some(("success", "response-trailers")));
+                let requests = owner.requests.lock();
+                assert_eq!(requests.len(), 1);
+                assert!(requests[0].1);
+                let Some(processing_request::Request::ResponseTrailers(request)) = requests[0].0.request.as_ref()
+                else {
+                    panic!("expected response trailer request");
+                };
+                let values: Vec<_> = request
+                    .trailers
+                    .as_ref()
+                    .unwrap()
+                    .headers
+                    .iter()
+                    .filter(|header| header.key == "x-value")
+                    .map(|header| header.raw_value.as_slice())
+                    .collect();
+                assert_eq!(values, [b"opaque-\x80".as_slice(), b"second".as_slice()]);
             }
-            let original = trailers.clone();
-            let original_value = std::ptr::from_ref(trailers.get("x-value").unwrap());
-            let mut session = session(grpc, true, true);
-            session.expect_record_outcome().times(0).return_const(());
-            let mut log = PluginLog::new("ExtProc");
-            assert_eq!(
-                processor
-                    .run_upstream_response_trailer(Some(&mut trailers), &mut session, &mut log)
-                    .await,
-                UpstreamTrailerResult::Continue
-            );
-            assert_eq!(trailers, original);
-            assert_eq!(std::ptr::from_ref(trailers.get("x-value").unwrap()), original_value);
-            assert!(trailers.get("x-value").unwrap().is_sensitive());
-            assert!(processor.done);
-            assert_eq!(*owner.terminal.lock(), Some(("success", "response-trailers")));
-            let requests = owner.requests.lock();
-            assert_eq!(requests.len(), 1);
-            assert!(requests[0].1);
-            let Some(processing_request::Request::ResponseTrailers(request)) = requests[0].0.request.as_ref() else {
-                panic!("expected response trailer request");
-            };
-            let values: Vec<_> = request
-                .trailers
-                .as_ref()
-                .unwrap()
-                .headers
-                .iter()
-                .filter(|header| header.key == "x-value")
-                .map(|header| header.raw_value.as_slice())
-                .collect();
-            assert_eq!(values, [b"opaque-\x80".as_slice(), b"second".as_slice()]);
         }
     }
 }
@@ -615,20 +622,36 @@ async fn disabled_immediate_and_prior_terminal_are_noop() {
 
 #[tokio::test]
 async fn unrepresentable_fail_open_keeps_map_for_later_companions() {
-    let (mut processor, _) = processor(Ok(response(None)), true, false);
-    let mut trailers = HeaderMap::new();
-    trailers.insert("x-value", HeaderValue::from_static("kept"));
-    let original = trailers.clone();
-    let mut session = session(false, false, true);
-    session.expect_record_outcome().times(0).return_const(());
-    let mut log = PluginLog::new("ExtProc");
-    assert_eq!(
-        processor
-            .run_upstream_response_trailer(Some(&mut trailers), &mut session, &mut log)
-            .await,
-        UpstreamTrailerResult::Continue
-    );
-    assert_eq!(trailers, original);
+    for empty_mutation in [false, true] {
+        for fail_open in [false, true] {
+            let (mut processor, owner) = processor(
+                Ok(response(empty_mutation.then(HeaderMutation::default))),
+                fail_open,
+                false,
+            );
+            let mut trailers = HeaderMap::new();
+            trailers.insert("x-value", HeaderValue::from_static("kept"));
+            let original = trailers.clone();
+            let mut session = session(false, false, true);
+            session.expect_record_outcome().times(0).return_const(());
+            let mut log = PluginLog::new("ExtProc");
+            assert_eq!(
+                processor
+                    .run_upstream_response_trailer(Some(&mut trailers), &mut session, &mut log)
+                    .await,
+                if fail_open {
+                    UpstreamTrailerResult::Continue
+                } else {
+                    UpstreamTrailerResult::FailClose
+                }
+            );
+            assert_eq!(trailers, original);
+            assert_eq!(
+                *owner.terminal.lock(),
+                Some((if fail_open { "fail-open" } else { "fail-close" }, "unrepresentable"))
+            );
+        }
+    }
 }
 
 #[test]

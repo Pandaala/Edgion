@@ -167,7 +167,11 @@ impl UpstreamResponseTrailer for ExtProcResponseTrailer {
             return self.finish_failure(session, log, reason);
         };
 
-        let candidate = if let Some(mutation) = response.header_mutation.as_ref() {
+        let candidate = if let Some(mutation) = response
+            .header_mutation
+            .as_ref()
+            .filter(|mutation| !mutation.set_headers.is_empty() || !mutation.remove_headers.is_empty())
+        {
             let mut candidate = trailers.clone();
             if apply_mutation(&mut candidate, trailers, mutation, session).is_err() {
                 return self.finish_failure(session, log, "bad-verdict");

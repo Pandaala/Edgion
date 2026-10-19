@@ -118,9 +118,11 @@ Pure validator tests cover absent/single/duplicate, invalid text and numeric
 boundaries in both modes, plus whole-map gates. Their allocation counter excludes
 fixture construction and confirms no allocation in these validator calls.
 Protobuf projection, mutation and callback lifecycle retain their ownership.
-A matched trailer verdict without header mutations validates the original map
-and preserves its storage; a verdict with mutations still clones a candidate
-and commits it only after validation and transport representability checks.
+A matched trailer verdict with no HeaderMutation, or with both operation lists
+empty, validates the original map and preserves its storage. A nonempty operation
+list still clones a candidate and commits it only after validation and transport
+representability checks, even if its operations ultimately change nothing.
+Explicit empty mutations retain the same final validation and terminal ordering.
 This is not an allocation-free trailer callback claim.
 Existing asynchronous tests retain atomic rejection and failure-policy coverage.
 
