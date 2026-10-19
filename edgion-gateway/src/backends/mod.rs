@@ -203,7 +203,7 @@ where
                 ctx,
                 session,
                 input.service.key(),
-                &input.lb_policy,
+                input.lb_policy,
                 input.backend_tls_policy,
                 endpoint,
                 gateway_key_ref,
@@ -473,7 +473,7 @@ fn build_peer_from_lb_selection(
     ctx: &mut EdgionHttpContext,
     session: &Session,
     service_key: &str,
-    lb_policy: &Option<ParsedLBPolicy>,
+    lb_policy: Option<ParsedLBPolicy>,
     backend_tls_policy: &BackendTlsPolicyLookup,
     endpoint: ResolvedServiceEndpoint,
     gateway_key_ref: Option<&str>,
@@ -488,17 +488,16 @@ fn build_peer_from_lb_selection(
     }
 
     let (use_tls, sni) = extract_tls_config(backend_tls_policy);
-    let lb_policy_clone = lb_policy.clone();
 
     if ctx
         .gateway_info
         .as_deref()
         .is_some_and(|info| info.metrics_test_type.is_some())
-        && matches!(lb_policy, Some(ParsedLBPolicy::ConsistentHash(_)))
+        && matches!(&lb_policy, Some(ParsedLBPolicy::ConsistentHash(_)))
     {
         let remote_ip = ctx.request_info.remote_ip.clone();
         let query = ctx.query(session.req_header());
-        let hash_key_bytes = extract_hash_key(session, lb_policy, &remote_ip, query);
+        let hash_key_bytes = extract_hash_key(session, &lb_policy, &remote_ip, query);
         ctx.hash_key = std::str::from_utf8(hash_key_bytes).ok().map(str::to_owned);
     }
 
@@ -507,7 +506,7 @@ fn build_peer_from_lb_selection(
         upstream.lb_backend_addr = Some(lb_addr);
         upstream.lb_backend = Some(backend);
         upstream.service_key = Some(service_key.to_string());
-        upstream.lb_policy = lb_policy_clone;
+        upstream.lb_policy = lb_policy;
     }
     // Write TLS metadata via the shared helper (writes unconditionally so a
     // TLS-then-plaintext fallback cannot leave stale metadata behind). Kept

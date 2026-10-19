@@ -549,6 +549,83 @@ async fn sticky_validation_uses_captured_section_and_self_dns_ignores_stale_targ
     assert!(!dnsctx.session_persistence().unwrap().sticky_consumed);
 }
 
+#[tokio::test]
+async fn peer_construction_transfers_captured_lb_policy_into_attempt() {
+    use edgion_resources::resources::lb_policy::ConsistentHashOn;
+    use pingora_core::upstreams::peer::Peer;
+
+    let coordinator = ServiceDiscoveryCoordinator::new();
+    publish(&coordinator, service(None, None, None, 80), Some(true));
+    let selected = selected(None, 80, BackendTlsPolicyLookup::Absent);
+    let captured = capture(&coordinator, &selected);
+    let session = session().await;
+    let mut transferred = Vec::new();
+    for policy in [
+        Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Header(
+            "x-routing-key".to_owned(),
+        ))),
+        Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Cookie(
+            "routing-cookie".to_owned(),
+        ))),
+        Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Arg(
+            "routing-query".to_owned(),
+        ))),
+        Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::SourceIp)),
+        Some(ParsedLBPolicy::LeastConn),
+        Some(ParsedLBPolicy::Ewma),
+        None,
+    ] {
+        let expected = serde_json::to_value(&policy).unwrap();
+        let original_ptr = match &policy {
+            Some(ParsedLBPolicy::ConsistentHash(
+                ConsistentHashOn::Header(name) | ConsistentHashOn::Cookie(name) | ConsistentHashOn::Arg(name),
+            )) => Some(name.as_ptr()),
+            _ => None,
+        };
+        let endpoint = captured
+            .select(&None, ServiceDegradePolicy::Live, None, "", None)
+            .unwrap();
+        let backend = Arc::clone(&endpoint.backend);
+        let mut ctx = context("default/backend");
+        let peer = build_peer_from_lb_selection(
+            &mut ctx,
+            &session,
+            "default/backend",
+            policy,
+            &BackendTlsPolicyLookup::Absent,
+            endpoint,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            peer.address().as_inet().copied(),
+            Some("192.0.2.8:8080".parse().unwrap())
+        );
+        assert!(!peer.is_tls());
+        let upstream = ctx.get_current_upstream().unwrap();
+        assert_eq!(serde_json::to_value(&upstream.lb_policy).unwrap(), expected);
+        assert_eq!(upstream.service_key.as_deref(), Some("default/backend"));
+        assert!(Arc::ptr_eq(upstream.lb_backend.as_ref().unwrap(), &backend));
+        assert_eq!(upstream.lb_backend_addr.as_ref(), Some(&backend.addr));
+        assert!(upstream.tls.is_none());
+        if let Some(original_ptr) = original_ptr {
+            let Some(ParsedLBPolicy::ConsistentHash(
+                ConsistentHashOn::Header(retained)
+                | ConsistentHashOn::Cookie(retained)
+                | ConsistentHashOn::Arg(retained),
+            )) = &upstream.lb_policy
+            else {
+                panic!("named policy must remain present");
+            };
+            transferred.push(original_ptr == retained.as_ptr());
+        }
+    }
+    assert!(
+        transferred.into_iter().all(|same| same),
+        "named policy buffers must transfer without cloning"
+    );
+}
+
 #[test]
 fn ordinary_capture_and_selection_add_no_hot_allocations() {
     let coordinator = ServiceDiscoveryCoordinator::new();

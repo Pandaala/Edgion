@@ -5778,3 +5778,26 @@ and architecture-document updates. Fresh serial verification passed 180 tests:
 13 DirectEndpoint plugin tests. Formatting, workspace check/Clippy and seven
 repository guards passed with existing unrelated warnings. No full integration
 suite, live DNS/provider transport or performance benchmark ran.
+
+## Move selected Service LB policy into attempt metadata
+
+EndpointSlice peer construction now consumes the already-owned ServicePeerInput
+LB policy and moves it into UpstreamInfo. The initial captured-policy copy remains;
+the helper no longer clones that value a second time. Named ConsistentHash policies
+therefore retain their existing header/cookie/query-name buffer in the attempt.
+Scalar policies and absent policy retain their values. Selection, test-mode hash
+extraction, address rejection, outlier ownership, TLS metadata and peer creation
+keep their ordering; the external-DNS path is unchanged.
+
+The new network-free duplex regression checks seven policy cases against existing
+serialization and peer/upstream metadata before checking buffer identity for the
+three nonempty named policies. On unchanged production all semantic assertions
+passed and the final transfer assertion failed. After the move the full matrix
+passes. No throughput or whole-request allocation-count measurement is claimed.
+
+Independent plan review approved the three-file scope. Fresh serial verification
+passed 12 tests: the new matrix, four selected-input tests and seven LB attempt
+accounting tests. Formatting, workspace check/Clippy and seven repository guards
+passed with existing unrelated warnings after correcting a new test-only lint.
+The known native DNS/TLS fixture issue remains in verification-03; this batch did
+not rerun or claim the full native-dispatch suite or live integration coverage.
