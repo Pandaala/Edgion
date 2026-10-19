@@ -5401,3 +5401,23 @@ ResponseRewrite tests. Coverage includes both protected sides, mixed case,
 Proxy-Connection, pseudo-headers and caller-configuration mutation. Formatting,
 workspace check/Clippy and seven repository guards passed; existing unrelated
 Clippy warnings remain. No live integration or throughput benchmark ran.
+
+## WAF response status formatting
+
+Traced the Gateway WAF response-header callback through publish_response_head to
+the leaf transaction's ResponseState::build. Status bytes now use the existing
+stack-backed decimal_bytes helper before the same fallible owned_copy. This
+removes an intermediate String; final transaction ownership, retained-byte
+accounting, status/header validation and entry-reservation order remain unchanged.
+The Gateway remains the anchor; the leaf source and unit-test file are the exact
+supporting edit scope. The borrowed response-header projection vector remains:
+the current owner validates count and all headers before constructing entries,
+then traverses them again. No iterator/API redesign is part of this batch.
+
+Independent plan review approved the three-file scope. A new test passed against
+the original implementation for all 900 accepted statuses, final collection bytes
+and accounting, and invalid-status precedence over malformed headers. Fresh final
+verification passed four leaf response tests and 50 Gateway WAF tests. Formatting,
+workspace check/Clippy and seven repository guards passed; existing unrelated
+Clippy warnings remain. No live integration, throughput or whole-path allocation
+measurement ran.

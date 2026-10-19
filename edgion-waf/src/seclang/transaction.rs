@@ -5423,10 +5423,11 @@ impl ResponseState {
         entries
             .try_reserve_exact(response.headers.len().saturating_add(1))
             .map_err(|_| RuntimeError::Allocation)?;
+        let (status_digits, status_start) = decimal_bytes(usize::from(response.status));
         entries.push(ResponseEntry {
             collection: CollectionKind::ResponseStatus,
             name: None,
-            value: owned_copy(response.status.to_string().as_bytes())?,
+            value: owned_copy(&status_digits[status_start..])?,
         });
         for header in response.headers {
             entries.push(ResponseEntry {

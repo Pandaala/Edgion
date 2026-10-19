@@ -2441,6 +2441,28 @@ fn response_headers_windows_and_logging_advance_without_body_aggregation() {
 }
 
 #[test]
+fn response_status_bytes_and_accounting_cover_the_accepted_range() {
+    for status in 100..=999 {
+        let response = ResponseState::build(ResponseHead::new(status, &[]), RuntimeLimits::default()).unwrap();
+        assert_eq!(response.entries.len(), 1);
+        let entry = &response.entries[0];
+        assert_eq!(entry.collection, CollectionKind::ResponseStatus);
+        assert!(entry.name.is_none());
+        assert_eq!(entry.value, status.to_string().as_bytes());
+        assert_eq!(response.total_retained_bytes(), size_of::<ResponseEntry>() + 3);
+        assert!(response.window.is_none());
+    }
+
+    let invalid_headers = [ResponseHeader::new(b"", b"\n")];
+    for status in [0, 99, 1000, u16::MAX] {
+        assert!(matches!(
+            ResponseState::build(ResponseHead::new(status, &invalid_headers), RuntimeLimits::default()),
+            Err(RuntimeError::InvalidResponseStatus { status: actual }) if actual == status
+        ));
+    }
+}
+
+#[test]
 fn response_limits_are_content_free_and_window_failure_does_not_retain_bytes() {
     let generation = generation("");
     let mut transaction = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
