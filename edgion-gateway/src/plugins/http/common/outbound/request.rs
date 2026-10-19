@@ -604,7 +604,7 @@ struct CollectedField<'a> {
 /// [`CompiledRequest::collect_headers`] before calling this helper.
 fn collect_list_fields<'a>(
     fields: &'a CompiledListFields,
-    context: TemplateContext<'_>,
+    context: TemplateContext<'a>,
     kind: FieldKind,
     output: &mut Vec<CollectedField<'a>>,
     resolved: Option<&ResolvedSecrets>,
@@ -623,7 +623,7 @@ fn collect_list_fields<'a>(
         match value {
             Some(value) => output.push(CollectedField {
                 name: &origin.name,
-                value: Cow::Owned(value),
+                value,
                 sensitive: true,
             }),
             None => match origin.presence {
@@ -662,11 +662,11 @@ fn collect_list_fields<'a>(
 }
 
 /// Extract a single named field from the session based on field kind.
-fn get_session_field(session: &dyn PluginSession, kind: &FieldKind, name: &str) -> Option<String> {
+fn get_session_field<'a>(session: &'a dyn PluginSession, kind: &FieldKind, name: &str) -> Option<Cow<'a, str>> {
     match kind {
-        FieldKind::Header => session.header_value(name),
-        FieldKind::Query => session.get_query_param(name),
-        FieldKind::Cookie => session.get_cookie(name),
+        FieldKind::Header => session.header_str(name).map(Cow::Borrowed),
+        FieldKind::Query => session.get_query_param_ref(name).map(Cow::Borrowed),
+        FieldKind::Cookie => session.get_cookie(name).map(Cow::Owned),
     }
 }
 

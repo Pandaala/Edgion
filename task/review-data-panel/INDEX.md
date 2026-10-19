@@ -5206,3 +5206,28 @@ Fresh serial verification passed all 120 shared outbound tests. Formatting,
 workspace check/Clippy, agent-doc validation and diff whitespace checks passed.
 Existing unrelated Clippy warnings remain. The local storage probe is separate
 from those regression tests; no live DNS/TLS or throughput benchmark ran.
+
+## Outbound origin Header and Query borrowing
+
+The shared request field collector now borrows live first-value Header text and
+frozen decoded Query text through canonical session accessors. The prior owned
+accessors copied those same values. Collection and final request assembly are
+synchronous; Cookie and template values remain owned. Presence order, bounded
+warnings, sensitive flags, invalid Header text filtering and output encoding stay
+unchanged. Coherent fixtures preserve explicit Expect forwarding without making
+owned and borrowed views disagree. The expanded 121-test baseline passed before
+the source change; added ownership assertions check actual collector pointers and
+retain owned Cookie extraction. No end-to-end allocation or throughput claim.
+
+A separate documentation discrepancy remains unresolved: the origin/template
+comparison in skills/01-architecture/03-controller-gateway-link/webhook.md describes
+origin Header reads as frozen and immune to earlier rewrites, while both the old
+header_value implementation and this borrowed path read the live map. The owning
+borrowed-header guard also describes live access. Reconcile the intended contract
+and that architecture wording separately; this optimization neither changes
+header timing nor establishes that the frozen-header description is satisfied.
+
+Fresh serial verification passed 122 shared outbound tests, 13 ForwardAuth tests
+and 45 Webhook provider tests. Formatting, workspace check/Clippy and seven
+repository guards passed. Existing unrelated Clippy warnings remain outside the
+diff; no live network integration or throughput benchmark ran.

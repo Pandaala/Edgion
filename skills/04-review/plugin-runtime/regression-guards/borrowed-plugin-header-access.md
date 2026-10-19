@@ -58,6 +58,13 @@ This follows the repository rule that data-plane performance outranks mock
 convenience. It also preserves the WAF limits and the canonical access-log owner;
 the header bridge emits no tracing or header contents.
 
+Shared outbound origin-field collection borrows Header text through `header_str`
+and decoded Query text through `get_query_param_ref` until synchronous request
+assembly finishes. Header selection remains first-value with `to_str` filtering;
+all origin fields remain sensitive. Cookie extraction and rendered templates keep
+owned results, and the final outgoing request owns its values independently.
+This removes intermediate text copies, not final URL/header storage.
+
 ## Alternatives and limits
 
 Owned accessors remain available when data must outlive the synchronous plugin

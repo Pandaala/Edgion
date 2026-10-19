@@ -518,7 +518,8 @@ async fn status_retry_does_not_stream_oversized_error_body() {
             presence: PresencePolicy::WarnIfMissing,
         });
     let mut session = session("GET", "/retry-big");
-    session.expect_header_value().times(1).return_const(None::<String>);
+    session.expect_header_value().return_const(None::<String>);
+    session.expect_request_header_map().return_const(http::HeaderMap::new());
     let first_body_stream_called = Arc::new(AtomicBool::new(false));
     let transport = FakeTransport::for_route(
         reqwest::Method::GET,

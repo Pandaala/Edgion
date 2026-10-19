@@ -68,6 +68,9 @@ fn presence_policies_cover_missing_and_present_fields() {
                         .expect_get_query_param()
                         .returning(move |_| present.then(|| "private-value".into()));
                     session
+                        .expect_get_query_param_ref()
+                        .returning(move |_| present.then_some("private-value"));
+                    session
                         .expect_get_cookie()
                         .returning(move |_| present.then(|| "private-value".into()));
                     let mut diagnostics = OutboundRequestDiagnostics::default();
@@ -120,6 +123,7 @@ fn missing_warning_is_bounded_and_survives_later_required_failure() {
     let mut session = MockPluginSession::new();
     setup_header_mocks(&mut session, &[]);
     session.expect_get_query_param().return_const(None::<String>);
+    session.expect_get_query_param_ref().returning(|_| None);
     session.expect_get_cookie().return_const(None::<String>);
     let mut diagnostics = OutboundRequestDiagnostics::default();
     assert!(compiled
@@ -335,10 +339,7 @@ fn rendered_credentials_origin_headers_and_cookies_are_sensitive() {
     };
     let compiled = CompiledRequest::from_spec(&spec).unwrap();
     let mut session = MockPluginSession::new();
-    session
-        .expect_header_value()
-        .withf(|name| name == "x-identity")
-        .return_const(Some("private-user".to_owned()));
+    setup_header_mocks(&mut session, &[("x-identity", "private-user")]);
     let resolved = ResolvedSecrets(std::collections::BTreeMap::from([(
         "default/auth:token".into(),
         "private-token".into(),
@@ -610,20 +611,9 @@ fn explicitly_listed_origin_expect_is_still_forwarded() {
     let compiled = CompiledRequest::from_spec(&spec).unwrap();
 
     let mut session = MockPluginSession::new();
-    // Deliberately NOT `setup_header_mocks`: this test needs the two lookup
-    // paths to disagree so the assertion can tell which branch produced the
-    // entry. The forward_all sweep reads the borrowed map; the explicitly
-    // listed origin field renders through `header_value`.
-    let mut map = http::HeaderMap::new();
-    map.append(
-        http::HeaderName::from_static("expect"),
-        http::HeaderValue::from_static("100-continue-from-sweep"),
-    );
-    session.expect_request_header_map().return_const(map);
-    session.expect_header_value().returning(|name| {
-        name.eq_ignore_ascii_case("expect")
-            .then(|| "100-continue-via-origin".to_string())
-    });
+    // Both access tiers describe the same live request. The sweep excludes
+    // Expect, so its presence in the result proves explicit origin forwarding.
+    setup_header_mocks(&mut session, &[("expect", "100-continue-via-origin")]);
 
     let result = compiled
         .collect_headers(&session, None, &mut Default::default())
@@ -1097,4 +1087,78 @@ fn literal_field_collection_uses_preallocated_output_without_string_allocations(
     assert_eq!((output[0].name, output[0].value.as_ref()), ("x-first", "first-value"));
     assert_eq!((output[1].name, output[1].value.as_ref()), ("x-empty", ""));
     assert!(output.iter().all(|field| field.sensitive));
+}
+
+#[test]
+fn origin_field_text_selection_preserves_first_value_and_decoded_query() {
+    let mut session = MockPluginSession::new();
+    let mut headers = http::HeaderMap::new();
+    headers.append("x-repeat", http::HeaderValue::from_static("first"));
+    headers.append("x-repeat", http::HeaderValue::from_static("second"));
+    headers.insert("x-opaque", http::HeaderValue::from_bytes(&[0xff]).unwrap());
+    let owned_headers = headers.clone();
+    session
+        .expect_header_value()
+        .returning(move |name| owned_headers.get(name).and_then(|v| v.to_str().ok()).map(str::to_owned));
+    session.expect_request_header_map().return_const(headers);
+    session
+        .expect_get_query_param()
+        .returning(|name| (name == "q").then(|| "hello world&é".to_owned()));
+    session
+        .expect_get_query_param_ref()
+        .returning(|name| (name == "q").then_some("hello world&é"));
+    assert_eq!(
+        get_session_field(&session, &FieldKind::Header, "X-Repeat").as_deref(),
+        Some("first")
+    );
+    assert!(get_session_field(&session, &FieldKind::Header, "x-opaque").is_none());
+    assert!(get_session_field(&session, &FieldKind::Header, "x-absent").is_none());
+    assert_eq!(
+        get_session_field(&session, &FieldKind::Query, "q").as_deref(),
+        Some("hello world&é")
+    );
+    assert!(get_session_field(&session, &FieldKind::Query, "missing").is_none());
+}
+
+#[test]
+fn origin_header_and_query_values_borrow_session_storage() {
+    let mut session = MockPluginSession::new();
+    setup_header_mocks(&mut session, &[("x-source", "private-value")]);
+    session
+        .expect_get_query_param_ref()
+        .returning(|_| Some("decoded query"));
+    session.expect_get_cookie().returning(|_| Some("cookie-value".into()));
+    for kind in [FieldKind::Header, FieldKind::Query] {
+        let fields = CompiledListFields {
+            forward_all: false,
+            origin: vec![CompiledOriginField {
+                name: "x-source".into(),
+                presence: PresencePolicy::Required,
+            }],
+            custom: vec![],
+        };
+        let expected = match kind {
+            FieldKind::Header => session.header_str("x-source").unwrap(),
+            FieldKind::Query => session.get_query_param_ref("x-source").unwrap(),
+            FieldKind::Cookie => unreachable!(),
+        };
+        let mut output = Vec::new();
+        collect_list_fields(
+            &fields,
+            TemplateContext::Request(&session),
+            kind,
+            &mut output,
+            None,
+            &mut Default::default(),
+        )
+        .unwrap();
+        assert_eq!(output.len(), 1);
+        assert!(matches!(output[0].value, Cow::Borrowed(_)));
+        assert_eq!(output[0].value.as_ptr(), expected.as_ptr());
+        assert_eq!(output[0].value, expected);
+        assert!(output[0].sensitive);
+    }
+    assert!(
+        matches!(get_session_field(&session, &FieldKind::Cookie, "session"), Some(Cow::Owned(value)) if value == "cookie-value")
+    );
 }
