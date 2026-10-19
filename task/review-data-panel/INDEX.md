@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [CtxSet extraction and trim projection ownership](ctx-02-extract-trim-projection.md)
+
 - [RegionRoute prepared endpoint projection](region-02-prepared-endpoint-projection.md)
 
 - [Lazy HMAC missing-header diagnostics](hmac-04-lazy-missing-header-diagnostic.md)
