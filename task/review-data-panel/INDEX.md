@@ -7642,3 +7642,20 @@ Formatting, workspace check/Clippy and seven guards passed with existing unrelat
 warnings. This removes no-match text copies but retains prior String capacity;
 no retained-memory, total-allocation or throughput improvement is claimed.
 No full suite, live integration or benchmark ran.
+
+## Borrow published probe backends during endpoint projection
+
+AllEndpointStatus's synchronous resolved_endpoint_from_backend helper now borrows
+the published Backend instead of receiving a clone from each ready Service slot.
+It only reads the address for canonical safety validation and formatting. The
+returned address/name remain owned, and the same transport Arc is transferred.
+Discovery and policy generations, serving ports, unsafe counts, selection order
+and fan-out timing remain unchanged; endpoint-01's address-lifetime decision is
+still deferred.
+
+Independent plan review passed. The current discovery constructor publishes Inet
+addresses with empty Extensions, so this removes an unnecessary Backend clone
+without claiming a fixed heap-allocation saving. All 23 AllEndpointStatus tests
+passed before and after, including the real Service-section/serving-port path.
+Formatting, workspace check/Clippy and seven guards passed with existing unrelated
+warnings. No full suite, live probe or throughput benchmark ran.

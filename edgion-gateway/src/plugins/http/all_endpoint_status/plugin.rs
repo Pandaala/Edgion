@@ -295,7 +295,7 @@ impl EndpointCollection {
 }
 
 fn resolved_endpoint_from_backend(
-    backend: pingora_load_balancing::Backend,
+    backend: &pingora_load_balancing::Backend,
     backend_name: &str,
     transport: Arc<ProbeTransport>,
     allow_loopback_upstream: bool,
@@ -344,7 +344,7 @@ fn resolve_endpoints(
         .iter()
         .filter_map(|slot| {
             match resolved_endpoint_from_backend(
-                slot.backend.inner.clone(),
+                &slot.backend.inner,
                 backend_name,
                 Arc::clone(&transport),
                 allow_loopback_upstream,
