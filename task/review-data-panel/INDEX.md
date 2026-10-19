@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Plugin execution state layout baseline failure](verification-04-plugin-state-layout.md)
+
 - [Shared relay idle-reset coalescing](relay-01-idle-reset-coalescing.md)
 
 - [ASCII character-count fast path](usage-01-ascii-character-count.md)
@@ -7202,3 +7204,27 @@ New tests measure zero allocations for classification and backend label filling,
 check existing-label preservation and verify serialized labels/None omission.
 Formatting, workspace check/Clippy and seven guards passed with existing unrelated
 warnings. No full suite, live integration or end-to-end throughput measurement ran.
+
+## Project scoped HTTP runtimes without a temporary resource owner
+
+PluginScope now exposes a direct HTTP runtime projection. Global/Gateway and
+route ExtensionRef resolution, plus the pinned backend-reference resolver, clone
+only the selected runtime Arc instead of first cloning and discarding its outer
+CompiledPlugins Arc. The immutable scope still owns the compiled resource during
+the lookup. Complete-resource access remains available for access-log declarations.
+Reference ordering, duplicate/missing slots, scope capture, denial runtimes and
+backend hit/miss caching remain unchanged. No prepared-list cache was introduced;
+early-01 remains deferred.
+
+Independent plan review passed after correcting the initial accessor inventory:
+access-log declarations still require the complete resource, and backend reference
+projection was added to the explicit scope. Baseline resolver tests passed (11).
+Final targeted verification passed 90 tests across resolver, publication, early
+request, plugin request state and backend-reference pinning, explicitly excluding
+one layout assertion. A new Weak-owner test verifies runtime pointer identity and
+survival without retaining the compiled wrapper. The layout assertion failed with
+184 versus 176 bytes both on the implementation and exact unmodified 25e0fefda;
+verification-04 tracks it without changing the assertion. Later assertions in
+that test were not reached. Formatting, workspace check/Clippy and seven guards
+passed with existing unrelated warnings. No full suite, live integration or
+throughput measurement ran.

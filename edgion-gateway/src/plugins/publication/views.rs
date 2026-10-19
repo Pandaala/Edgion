@@ -8,6 +8,7 @@ use std::sync::{Arc, LazyLock, Weak};
 use edgion_resources::{EdgionGatewayConfig, EdgionPlugins, EdgionStreamPlugins, HTTPRoute, ListenerKey};
 
 use crate::plugins::http::CompiledPlugins;
+use crate::plugins::runtime::PluginRuntime;
 use crate::plugins::stream::CompiledStreamPlugins;
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
 
@@ -182,6 +183,11 @@ pub(crate) struct PluginScope {
 }
 
 impl PluginScope {
+    /// Retain the runtime directly without a temporary compiled-resource owner.
+    pub fn http_runtime(&self, key: &str) -> Option<Arc<PluginRuntime>> {
+        self.http.get(key).map(|compiled| Arc::clone(&compiled.plugin_runtime))
+    }
+
     pub fn http(&self, key: &str) -> Option<Arc<CompiledPlugins>> {
         self.http.get(key).cloned()
     }

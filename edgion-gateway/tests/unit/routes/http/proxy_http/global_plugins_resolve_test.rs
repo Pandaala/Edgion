@@ -123,6 +123,27 @@ fn pref(name: &str, ns: Option<&str>) -> PluginReference {
 }
 
 #[test]
+fn runtime_projection_outlives_scope_without_retaining_compiled_resource() {
+    let store = PluginStore::new();
+    install_plugins(&store, vec![("ns1", "p1")]);
+    let scope = store.scope();
+    let compiled = scope.http("ns1/p1").unwrap();
+    let runtime = scope.http_runtime("ns1/p1").unwrap();
+    assert!(Arc::ptr_eq(&runtime, &compiled.plugin_runtime));
+    assert!(scope.http_runtime("ns1/missing").is_none());
+    let compiled_weak = Arc::downgrade(&compiled);
+    let runtime_weak = Arc::downgrade(&runtime);
+    drop(compiled);
+    drop(scope);
+    drop(store);
+    assert!(compiled_weak.upgrade().is_none());
+    assert_eq!(runtime.request_plugins_count(), 1);
+    assert!(runtime_weak.upgrade().is_some());
+    drop(runtime);
+    assert!(runtime_weak.upgrade().is_none());
+}
+
+#[test]
 fn resolve_global_plugins_empty_when_none() {
     let store = PluginStore::new();
     let resolved = resolve_global_plugins(&store.scope());

@@ -2652,12 +2652,7 @@ impl EdgionHttpContext {
 
     pub(crate) fn resolve_pinned_backend_ext_ref(&mut self, key: &str) -> Option<Arc<PluginRuntime>> {
         let scope = self.plugin_scope().cloned();
-        self.pinned_backend_ext_ref(key, || {
-            scope?
-                .scope
-                .http(key)
-                .map(|compiled| Arc::clone(&compiled.plugin_runtime))
-        })
+        self.pinned_backend_ext_ref(key, || scope?.scope.http_runtime(key))
     }
 
     pub(crate) fn pinned_backend_ext_ref(
