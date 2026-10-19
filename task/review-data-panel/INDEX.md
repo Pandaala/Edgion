@@ -8201,3 +8201,17 @@ Fresh verification passed 159 OIDC tests with 16 existing ignores, formatting,
 workspace check/Clippy and seven repository guards with existing unrelated
 warnings. This removes metadata conversion work, not DecodingKey construction
 or cryptographic verification. No full suite or throughput benchmark ran.
+
+## Avoid formatting discarded OIDC cookie-limit errors
+
+The private ensure_session_cookie_size_limit helper now returns a unit error
+instead of formatting the rejected length and limit into a String. Both production
+callers only inspect is_err(): callback still sends its fixed 500 response, and
+session publication still returns without appending the cookie. The byte-length
+comparison, threshold, cache/encoding order and all successful paths are unchanged.
+This removes a temporary formatting allocation only on oversized cookies.
+
+Existing success/oversize tests remain without new implementation-mirroring tests.
+Fresh verification passed 159 OIDC tests with 16 existing ignores, formatting,
+workspace check/Clippy and seven repository guards with existing unrelated
+warnings. No full suite or throughput benchmark ran.

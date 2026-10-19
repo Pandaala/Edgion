@@ -182,14 +182,10 @@ impl OpenidConnect {
         Ok(Some((payload, cookie_value)))
     }
 
-    pub(super) fn ensure_session_cookie_size_limit(&self, cookie_header_value: &str) -> Result<(), String> {
+    pub(super) fn ensure_session_cookie_size_limit(&self, cookie_header_value: &str) -> Result<(), ()> {
         let max = self.config.max_session_cookie_bytes as usize;
         if cookie_header_value.len() > max {
-            return Err(format!(
-                "Session cookie exceeds maxSessionCookieBytes: {} > {}",
-                cookie_header_value.len(),
-                max
-            ));
+            return Err(());
         }
         Ok(())
     }
