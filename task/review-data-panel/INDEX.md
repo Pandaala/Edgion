@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [LDAP bind DN template preparation](ldap-01-bind-dn-template-preparation.md)
+
 - [Generation-owned OIDC decoding keys](oidc-06-prepared-jwks-keys.md)
 
 - [OIDC introspection claims ownership](oidc-05-introspection-claims-ownership.md)
