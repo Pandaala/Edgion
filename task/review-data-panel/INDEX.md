@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Claim projection path preparation](auth-03-claim-path-preparation.md)
+
 - [HeaderCertAuth connection projection ownership](tls-04-header-cert-connection-projection.md)
 
 - [JWE plaintext forwarding ownership](jwe-01-plaintext-header-ownership.md)
