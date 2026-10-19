@@ -133,13 +133,11 @@ impl BodyGatedRequestFilter {
         }
     }
 
-    pub fn new(inner: Box<dyn RequestFilter>, requirement: BodyRequirement) -> Self {
+    pub fn new(inner: Box<dyn RequestFilter>, mut requirement: BodyRequirement) -> Self {
+        let conditions = requirement.conditions.take().map(CompiledPluginConditions::new);
         Self {
             inner,
-            policy: BodyGatePolicy::new(
-                requirement.clone(),
-                requirement.conditions.map(CompiledPluginConditions::new),
-            ),
+            policy: BodyGatePolicy::new(requirement, conditions),
         }
     }
 }
@@ -211,13 +209,11 @@ impl BodyGatedUpstreamResponse {
         }
     }
 
-    pub fn new(inner: Box<dyn UpstreamResponse>, requirement: BodyRequirement) -> Self {
+    pub fn new(inner: Box<dyn UpstreamResponse>, mut requirement: BodyRequirement) -> Self {
+        let conditions = requirement.conditions.take().map(CompiledPluginConditions::new);
         Self {
             inner,
-            policy: BodyGatePolicy::new(
-                requirement.clone(),
-                requirement.conditions.map(CompiledPluginConditions::new),
-            ),
+            policy: BodyGatePolicy::new(requirement, conditions),
         }
     }
 }

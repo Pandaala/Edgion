@@ -7587,3 +7587,21 @@ Baseline and final shared condition tests passed 68; final RealIp tests passed
 with existing unrelated warnings. This removes repeated getter calls; no
 allocation or throughput improvement is claimed. No full suite or live traffic
 benchmark ran.
+
+## Move body-gate constructor requirements
+
+BodyGatedRequestFilter::new and BodyGatedUpstreamResponse::new now take the
+secondary conditions out of their owned BodyRequirement before compiling them,
+then move the remaining requirement into BodyGatePolicy. This avoids cloning
+and discarding the max-size string and complete condition tree during cold
+construction. Compilation still precedes logical-limit parsing; the policy only
+retains the parsed limit, failure mode and compiled conditions. The existing
+with_conditions path and request-time body processing are unchanged.
+
+Independent plan review passed. The cached-policy regression now uses both real
+constructors and verifies 64 MiB, FailOpen, and POST Run / GET Skip decisions.
+Existing secondary-regex, body-limit, capture and failure-policy tests remain.
+Baseline body-gate tests passed 31; final verification passed 31 body-gate and
+68 shared-condition tests (99 total), formatting, workspace check/Clippy and
+seven guards with existing unrelated warnings. No full suite, live traffic or
+allocation benchmark ran; no request-throughput improvement is claimed.

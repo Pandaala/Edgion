@@ -65,17 +65,24 @@ fn runtime_policy_caches_resolved_fields_at_construction() {
         on_read_failure: BodyReadFailureMode::FailOpen,
     };
 
-    let policy = BodyGatePolicy::new(
-        requirement.clone(),
-        requirement
-            .conditions
-            .filter(|conditions| !conditions.is_empty())
-            .map(CompiledPluginConditions::new),
+    let request = BodyGatedRequestFilter::new(Box::new(CountingFilter::new()), requirement.clone());
+    let response = BodyGatedUpstreamResponse::new(
+        Box::new(CountingResponse {
+            name: "CountingResp".to_string(),
+        }),
+        requirement,
     );
 
-    assert_eq!(policy.logical_limit_bytes, Some(64 * 1024 * 1024));
-    assert_eq!(policy.on_read_failure, BodyReadFailureMode::FailOpen);
-    assert!(policy.conditions.is_some());
+    for policy in [&request.policy, &response.policy] {
+        assert_eq!(policy.logical_limit_bytes, Some(64 * 1024 * 1024));
+        assert_eq!(policy.on_read_failure, BodyReadFailureMode::FailOpen);
+        let conditions = policy.conditions.as_ref().unwrap();
+        for (method, expected) in [("POST", EvaluationResult::Run), ("GET", EvaluationResult::Skip)] {
+            let mut session = base_session();
+            setup_condition_input_mocks(&mut session, &[(KeyGet::Method, method)]);
+            assert_eq!(conditions.evaluate(&session), expected);
+        }
+    }
 }
 
 #[test]
