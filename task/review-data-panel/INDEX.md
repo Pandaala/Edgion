@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Backend SAN inspection without full display projection](tls-05-backend-san-inspection.md)
+
 - [Attached ExtProc summary rendering](log-05-attached-summary-rendering.md)
 
 - [Typed gRPC terminal status evidence](grpc-08-typed-terminal-status-evidence.md)
@@ -6785,3 +6787,19 @@ error tests (48 total). An initial OIDC error-module filter selected zero tests;
 the actual dependency_error_tests selection was then run and passed.
 Formatting, workspace check/Clippy and seven guards passed with existing
 unrelated warnings. No full suite, live handshake or throughput benchmark ran.
+
+## Backend SAN projection audit
+
+Traced the prepared BoringSSL hook and backend-independent outbound verifier
+through their SAN projections into the canonical matcher. Matching itself is
+already allocation-free; full display vectors and the native path's OtherName
+pass remain possible savings. Recorded tls-05 for the extraction boundary,
+including display-prefix semantics, policy-major reason selection, parser/panic
+failure ownership and preservation of full client certificate projections.
+No runtime change was selected.
+
+Independent plan review approved two documents. Fresh baseline passed two
+prepared-backend, ten backend-SAN, 18 certificate-extractor and 12 outbound
+verifier tests (42 total), formatting check, workspace check/Clippy and agent-doc
+validation. Existing unrelated warnings remain; no full suite, live TLS
+integration or benchmark ran.
