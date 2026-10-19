@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Outbound URL serialization ownership](outbound-02-url-serialization-storage.md)
+
 - [gRPC single-record callback output](grpc-04-single-record-output.md)
 
 - [Prepared gRPC wire-admission schema](grpc-03-prepared-wire-schema.md)
@@ -5188,3 +5190,19 @@ ForwardAuth tests. Formatting, workspace check/Clippy and seven repository guard
 passed. Existing unrelated Clippy warnings remain outside this diff. The expanded
 12-test denial baseline passed before the production change; no network or
 allocation/throughput benchmark ran.
+
+## Outbound URL serialization ownership inspection
+
+Traced dynamic Service authority replacement from shared outbound request dispatch
+through replace_url_host and final request URL construction, including the shared
+active-health caller. Consuming the parsed Url would avoid its successful text
+copy but transfer its spare String capacity. A locked url 2.5.8 probe found equal
+bytes with copied/moved capacities of 20/54 and 45/84 for two host replacements.
+These requested capacities do not establish physical heap usage or async retention.
+The tradeoff and acceptance boundaries are deferred in outbound-02; no runtime,
+resolver, authority policy or URL assembly behavior changed.
+
+Fresh serial verification passed all 120 shared outbound tests. Formatting,
+workspace check/Clippy, agent-doc validation and diff whitespace checks passed.
+Existing unrelated Clippy warnings remain. The local storage probe is separate
+from those regression tests; no live DNS/TLS or throughput benchmark ran.
