@@ -303,7 +303,7 @@ impl KafkaLinkClient {
         if self.retired.load(Ordering::Relaxed) {
             anyhow::bail!("Kafka [{}] retired", self.name);
         }
-        let client = self.inner_client.load_full();
+        let mut client = self.inner_client.load_full();
         if client.is_none() {
             anyhow::bail!("Kafka [{}] not initialized", self.name);
         }
@@ -321,6 +321,36 @@ impl KafkaLinkClient {
             ),
         })?;
 
+        let sender = self.topic_sender(topic, &mut client)?;
+
+        let record = QueuedRecord { data, reservation };
+
+        match sender.try_send(record) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Closed(_record)) => {
+                // The producer receiver closed (PartitionClient init failure, or a
+                // KAFKA_PRODUCE_TIMEOUT wedge). Evict only after task completion so
+                // shutdown retains a handle for any task still finishing.
+                // The next produce can respawn on the current inner_client.
+                self.topics.remove_if(topic, |_, entry| {
+                    entry.sender.is_closed() && entry.producer_handle.is_finished()
+                });
+                anyhow::bail!("Kafka [{}] topic {}: producer task closed", self.name, topic)
+            }
+            Err(mpsc::error::TrySendError::Full(_record)) => {
+                anyhow::bail!("Kafka [{}] topic {}: per-topic channel is full", self.name, topic)
+            }
+        }
+    }
+
+    fn topic_sender(
+        &self,
+        topic: &str,
+        client: &mut Option<Arc<rskafka::client::Client>>,
+    ) -> Result<mpsc::Sender<QueuedRecord>> {
+        if let Some(sender) = self.topics.get(topic).map(|entry| entry.sender.clone()) {
+            return Ok(sender);
+        }
         let sender = match self.topics.entry(topic.to_string()) {
             dashmap::mapref::entry::Entry::Occupied(entry) => entry.get().sender.clone(),
             dashmap::mapref::entry::Entry::Vacant(entry) => {
@@ -341,6 +371,7 @@ impl KafkaLinkClient {
                 let name = self.name.clone();
                 let healthy = Arc::clone(&self.healthy);
                 let last_flip_log_ms = Arc::clone(&self.last_flip_log_ms);
+                let client = client.take();
                 let producer_handle = tokio::spawn(async move {
                     Self::run_producer_task(client, topic_owned, rx, linger_ms, name, healthy, last_flip_log_ms).await;
                 });
@@ -352,25 +383,7 @@ impl KafkaLinkClient {
                 tx
             }
         };
-
-        let record = QueuedRecord { data, reservation };
-
-        match sender.try_send(record) {
-            Ok(()) => Ok(()),
-            Err(mpsc::error::TrySendError::Closed(_record)) => {
-                // The producer receiver closed (PartitionClient init failure, or a
-                // KAFKA_PRODUCE_TIMEOUT wedge). Evict only after task completion so
-                // shutdown retains a handle for any task still finishing.
-                // The next produce can respawn on the current inner_client.
-                self.topics.remove_if(topic, |_, entry| {
-                    entry.sender.is_closed() && entry.producer_handle.is_finished()
-                });
-                anyhow::bail!("Kafka [{}] topic {}: producer task closed", self.name, topic)
-            }
-            Err(mpsc::error::TrySendError::Full(_record)) => {
-                anyhow::bail!("Kafka [{}] topic {}: per-topic channel is full", self.name, topic)
-            }
-        }
+        Ok(sender)
     }
 
     async fn run_producer_task(

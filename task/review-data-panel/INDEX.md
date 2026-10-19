@@ -5579,3 +5579,27 @@ selected. Independent plan review passed. Fresh serial verification passed 27
 tests: 19 OTLP provider and eight access-logger tests. Formatting, workspace
 check/Clippy and agent-doc validation passed with existing unrelated warnings.
 No live OTLP transport test or concurrent shutdown experiment ran in this batch.
+
+## Kafka existing-topic sender lookup
+
+The access-log Kafka path now looks up an existing topic with a borrowed name
+and shared DashMap guard before falling back to the original entry path. A hit
+clones the same channel sender without constructing a temporary topic String
+or taking a shard write lock. The read guard is released before returning the
+sender; a miss rechecks through entry, preserving concurrent creation dedup.
+Misses now pay an additional read lookup; no net throughput claim is made.
+
+Private topic_sender extraction preserves the caller's initialized-client
+snapshot through enqueue on hits, and takes it only for a newly spawned producer.
+Queue reservation still precedes lookup; topic admission, retirement recheck,
+task ownership, full/closed errors and completion-gated eviction remain unchanged.
+Independent plan review passed. The new network-free helper regression checks
+channel identity, open/closed state, one topic slot and shutdown release. With
+the extracted original entry path it failed only at the zero-allocation assertion
+(observed one allocation). With borrowed lookup both measured hit calls allocate
+zero; this is not a whole-send or broker-delivery claim.
+
+Fresh serial verification passed 38 tests: 30 Kafka provider and eight access-
+logger tests. No live Kafka broker, integration or throughput benchmark ran.
+Formatting, workspace check/Clippy and seven repository guards passed with
+existing unrelated Clippy warnings.

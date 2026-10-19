@@ -350,3 +350,42 @@ fn constructor_preserves_first_error_order_for_invalid_scalar_fields() {
     }
     assert!(KafkaLinkClient::from_link_sys(Arc::new(owner)).is_ok());
 }
+
+#[tokio::test]
+async fn existing_topic_sender_borrows_key_and_preserves_channel() {
+    let config: KafkaClientConfig = serde_json::from_value(serde_json::json!({
+        "brokers": ["broker.example:9092"]
+    }))
+    .unwrap();
+    let client = from_test_config("default/kafka-hit", &config, &CredentialState::NotRequired).unwrap();
+    let (sender, receiver) = mpsc::channel(1);
+    let producer_handle = tokio::spawn(std::future::pending::<()>());
+    let reservation = client.topic_budget.try_reserve().unwrap();
+    client.topics.insert(
+        "existing-log-topic".into(),
+        TopicEntry {
+            sender: sender.clone(),
+            producer_handle,
+            _reservation: reservation,
+        },
+    );
+    let mut snapshot = None;
+    let (result, open_allocations) =
+        crate::test_allocation_counter::count_allocations(|| client.topic_sender("existing-log-topic", &mut snapshot));
+    let open = result.unwrap();
+    assert!(open.same_channel(&sender));
+    assert!(!open.is_closed());
+    drop(receiver);
+    let (result, closed_allocations) =
+        crate::test_allocation_counter::count_allocations(|| client.topic_sender("existing-log-topic", &mut snapshot));
+    let closed = result.unwrap();
+    assert!(closed.same_channel(&sender));
+    assert!(closed.is_closed());
+    assert_eq!(client.topics.len(), 1);
+    assert_eq!(client.topic_budget.topics.load(Ordering::Acquire), 1);
+    client.shutdown().await.unwrap();
+    assert!(client.topics.is_empty());
+    assert_eq!(client.topic_budget.topics.load(Ordering::Acquire), 0);
+    assert_eq!(open_allocations, 0);
+    assert_eq!(closed_allocations, 0);
+}
