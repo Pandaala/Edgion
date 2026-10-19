@@ -331,3 +331,97 @@ async fn unavailable_ref_precedes_mmdb_fail_open_and_direct_invocation_returns_4
     ));
     assert_eq!(log.render_for_test(), "err: refs:unavailable fail-closed");
 }
+
+#[tokio::test]
+async fn parsed_addresses_are_requested_only_by_cidr_rules() {
+    for (direct_cidr, remote_cidr, allow_side, address, expected_allow) in [
+        (false, false, false, "8.8.8.8", true),
+        (true, false, false, "8.8.8.8", true),
+        (false, true, false, "8.8.8.8", true),
+        (true, true, false, "8.8.8.8", true),
+        (true, true, true, "10.1.2.3", true),
+        (true, true, true, "", false),
+        (true, true, true, "invalid-ip", false),
+    ] {
+        let mut config = GeoIpLocationConfig {
+            fail_open: Some(false),
+            default_action: DefaultAction::Allow,
+            ..Default::default()
+        };
+        let mut cidrs = Vec::new();
+        for (source, needs_ip) in [
+            (GeoRuleSource::DirectPeerIp, direct_cidr),
+            (GeoRuleSource::RemoteIp, remote_cidr),
+        ] {
+            // Unresolved geographic dimensions do not match, regardless of IP.
+            config.deny_rule_groups.push(GeoRuleGroup {
+                rules: vec![rule(source, GeoRuleKey::Country, &["RU"])],
+                invalid_input: false,
+                name: None,
+            });
+            if needs_ip {
+                cidrs.push(GeoRuleGroup {
+                    rules: vec![rule(source, GeoRuleKey::Cidr, &["10.0.0.0/8"])],
+                    invalid_input: false,
+                    name: None,
+                });
+            }
+        }
+        if allow_side {
+            config.allow_rule_groups = cidrs;
+        } else {
+            config.deny_rule_groups.extend(cidrs);
+        }
+        let plugin = create_plugin(&config);
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_info.direct_peer_ip = address.into();
+        ctx.request_info.remote_ip = address.into();
+        let geo = crate::ctx::RequestGeoInfo::default();
+        geo.direct_peer.set(GeoLookup::NotFound).unwrap();
+        geo.remote.set(GeoLookup::NotFound).unwrap();
+        ctx.request_info.geo.set(Box::new(geo)).unwrap();
+
+        let store = crate::plugins::runtime::edgion_config_data::EdgionConfigDataStore::new();
+        edgion_common::conf_sync::traits::ConfHandler::full_set(&store, &geo_data());
+        let view = std::sync::Arc::new(store.capture_snapshot());
+        let available = view.clone();
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(ctx);
+        session.expect_ensure_config_data_view().return_const(());
+        session
+            .expect_ip_list_availability()
+            .returning(move |key| available.ip_list_availability(key));
+        session
+            .expect_ip_list_contains()
+            .returning(move |key, ip| view.ip_list_contains(key, ip));
+        session
+            .expect_direct_peer_ip()
+            .times(usize::from(direct_cidr))
+            .return_const(address.to_string());
+        session
+            .expect_remote_ip()
+            .times(usize::from(remote_cidr))
+            .return_const(address.to_string());
+        session
+            .expect_set_response_header()
+            .times(usize::from(!expected_allow))
+            .returning(|name, value| {
+                assert_eq!((name, value), ("content-type", "application/json"));
+                Ok(())
+            });
+        let mut log = PluginLog::new("GeoIpLocation");
+        let result = plugin.run_request(&mut session, &mut log).await;
+        assert_eq!(
+            result,
+            if expected_allow {
+                PluginRunningResult::GoodNext
+            } else {
+                PluginRunningResult::ErrResponse {
+                    status: 403,
+                    body: Some(DENY_BODY),
+                }
+            }
+        );
+        assert_eq!(log.render_for_test(), if expected_allow { "allow" } else { "deny" });
+    }
+}

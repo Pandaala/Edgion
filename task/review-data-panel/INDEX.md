@@ -7123,3 +7123,25 @@ A temporary iterator lifetime compile error and a missing required failOpen
 field in the new fixture were corrected before these final results. Formatting,
 workspace check/Clippy and seven guards passed with existing unrelated warnings.
 No full suite, live integration or throughput measurement ran.
+
+## Prepare HTTP GeoIP CIDR address demand
+
+HTTP GeoIpLocation now computes direct/remote parsed-address demand from CIDR
+rules in both deny and allow groups during construction. Geographic dimensions
+consume GeoDimFacts only, so rule-context construction skips IP parsing for
+sources without CIDR rules. The immutable key/source scan happens after canonical
+validation; sanitization does not change either field. Fact-demand compilation,
+parse-only log filling, required-reference preflight, snapshot capture and
+lookup-failure precedence remain unchanged. There is no request-address cache.
+GeoIP fact resolution may still parse addresses independently; this removes only
+unused rule-context parsing and makes no throughput claim.
+
+Independent plan review passed. Baseline HTTP GeoIP verification passed 11 tests;
+fresh final verification passed 43 tests: 23 HTTP/Stream GeoIP, 6 shared GeoIP
+references and 14 resource GeoRule tests. The new matrix uses existing request
+fact slots and asserts IP-getter counts for dimension-only, direct/remote/both
+CIDR demand, mixed rules, both policy sides and empty/malformed CIDR addresses,
+alongside exact result/log assertions. A fixture-only unsupported Default use
+was corrected before final verification. Formatting, workspace check/Clippy and
+seven guards passed with existing unrelated warnings. No full suite or live
+integration ran.

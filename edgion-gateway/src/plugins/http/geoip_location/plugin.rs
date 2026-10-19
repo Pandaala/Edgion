@@ -27,7 +27,7 @@ use crate::plugins::runtime::conditions::ip_refs::IpConditionCompiler;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::plugin_configs::{
-    GeoDecision, GeoDimFacts, GeoIpLocationConfig, GeoRuleContext, GeoRuleSource,
+    GeoDecision, GeoDimFacts, GeoIpLocationConfig, GeoRuleContext, GeoRuleKey, GeoRuleSource,
 };
 
 const PLUGIN_NAME: &str = "GeoIpLocation";
@@ -74,8 +74,8 @@ fn dim_facts(info: &GeoInfo) -> GeoDimFacts<'_> {
 pub struct GeoIpLocation {
     config: GeoIpLocationConfig,
     refs: CompiledGeoIpRefs,
-    /// Any configured rule references `RemoteIp` (any key, including `Cidr`)
-    /// — the remote address itself is needed. Always true in parse-only mode.
+    /// CIDR rules require parsed addresses; geographic dimensions use facts only.
+    needs_direct_ip: bool,
     needs_remote_ip: bool,
     /// Some configured `DirectPeerIp` rule needs resolved geo dimensions (a
     /// key other than `Cidr`) — worth resolving `ctx.direct_peer_geo()` and
@@ -103,13 +103,27 @@ impl GeoIpLocation {
         CompiledGeoIpRefs::sanitize(&mut config);
 
         let parse_only = config.is_parse_only();
-        let needs_remote_ip = parse_only || config.source_is_used(GeoRuleSource::RemoteIp);
+        let needs_cidr_ip = |source| {
+            config
+                .deny_rule_groups
+                .iter()
+                .chain(&config.allow_rule_groups)
+                .any(|group| {
+                    group
+                        .rules
+                        .iter()
+                        .any(|rule| rule.source == source && rule.key == GeoRuleKey::Cidr)
+                })
+        };
+        let needs_direct_ip = needs_cidr_ip(GeoRuleSource::DirectPeerIp);
+        let needs_remote_ip = needs_cidr_ip(GeoRuleSource::RemoteIp);
         let needs_direct_facts = parse_only || config.source_needs_geo_facts(GeoRuleSource::DirectPeerIp);
         let needs_remote_facts = parse_only || config.source_needs_geo_facts(GeoRuleSource::RemoteIp);
 
         Ok(Box::new(GeoIpLocation {
             config,
             refs,
+            needs_direct_ip,
             needs_remote_ip,
             needs_direct_facts,
             needs_remote_facts,
@@ -190,7 +204,11 @@ impl RequestFilter for GeoIpLocation {
                 RuntimeDecision::DatabaseUnavailable
             } else {
                 let ctx = GeoRuleContext {
-                    direct_peer_ip: Self::parse_ip(session.direct_peer_ip()),
+                    direct_peer_ip: if self.needs_direct_ip {
+                        Self::parse_ip(session.direct_peer_ip())
+                    } else {
+                        None
+                    },
                     direct_peer: direct_facts,
                     remote_ip: if self.needs_remote_ip {
                         Self::parse_ip(session.remote_ip())
