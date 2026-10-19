@@ -6956,3 +6956,18 @@ connect-failure (9), proxy-error (11), upstream-response (11), and retry-budget
 (28) test selections; these filters overlap. Formatting, workspace check/Clippy
 and seven guards passed with existing unrelated warnings. No full test suite or
 live network benchmark ran.
+
+## Move final AI usage owner into the response wrapper
+
+AI attempt preparation now moves its local usage Arc into AiAttemptResponseProcessor
+at the final use instead of cloning it and dropping the local owner on return.
+The earlier request-context and concrete-processor owners are unchanged, as are
+EOS, quota, unary admission and commit sequencing. No callback or await occurs
+between this ownership transfer and returning the prepared attempt. The benefit
+is one fewer Arc increment/decrement, not a heap or throughput claim.
+
+Independent plan review passed. Baseline dispatch verification passed 35 tests;
+fresh final verification passed 112 tests: 35 dispatch, 25 attempt-runtime and
+52 usage-accounting tests. Formatting, workspace check/Clippy and seven guards
+passed with existing unrelated warnings. No full suite or live provider/Redis
+integration test ran.

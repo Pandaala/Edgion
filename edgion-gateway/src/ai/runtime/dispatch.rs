@@ -628,7 +628,7 @@ fn prepare_ready_attempt(
     }
     let response_processor: Box<dyn StreamingResponseProcessor> = Box::new(AiAttemptResponseProcessor {
         processors: response_processors,
-        usage: Arc::clone(&usage),
+        usage,
         eos: Arc::clone(&eos),
     });
 
