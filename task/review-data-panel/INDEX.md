@@ -5914,3 +5914,25 @@ Fresh serial baseline verification passed five permit and 104 upstream-peer
 tests, formatting check, workspace check/Clippy and agent-doc validation with
 existing unrelated warnings. This does not verify a future borrowed API or
 claim saturated-load throughput improvement.
+
+## Exact capacity for session-persistence cookies
+
+build_set_cookie_value now reserves the final output byte length once before
+writing the existing cookie format. Optional Max-Age is still emitted only for
+Permanent lifetime with a captured TTL; its decimal length includes zero and all
+u64 boundaries. The existing formatter renders the number. Attribute order,
+Secure gating, generated token, clock sampling, response injection and borrowed
+header append are unchanged. This does not precompute expiry or alter sticky state.
+
+Independent plan review approved three files. A differential matrix exercises
+6,048 name/token/lifetime/TLS/TTL combinations, including absent and empty names,
+long inputs, all powers-of-ten boundaries, zero and u64::MAX. All output comparisons
+passed on original production before the allocation assertion failed with three
+calls versus one in its first case. After the change, every matrix case uses one
+allocation call requesting exactly its final output byte length. This measures
+only cookie construction, not the subsequent header conversion or whole request.
+
+Fresh serial verification passed 23 session-persistence tests and four direct
+upstream-response-filter tests, including captured-lifetime response issuance.
+Formatting, workspace check/Clippy and seven repository guards passed with existing
+unrelated warnings. No throughput benchmark or live integration run was performed.

@@ -507,3 +507,65 @@ fn typed_sticky_lookup_skips_invalid_denied_slots_without_allocating() {
         assert_eq!(allocations.requested_bytes, 0);
     }
 }
+
+#[test]
+fn cookie_builder_preserves_bytes_with_one_exact_allocation() {
+    fn previous(sp: &SessionPersistence, token: &str, tls: bool, ttl: Option<u64>) -> String {
+        let mut cookie = format!("{}={}; Path=/", get_session_name(sp), token);
+        if sp.cookie_config.as_ref().and_then(|c| c.lifetime_type.as_ref()) == Some(&CookieLifetimeType::Permanent) {
+            if let Some(secs) = ttl {
+                let _ = write!(cookie, "; Max-Age={secs}");
+            }
+        }
+        cookie.push_str("; HttpOnly; SameSite=Lax");
+        if tls {
+            cookie.push_str("; Secure");
+        }
+        cookie
+    }
+    let mut ttls = vec![None, Some(0), Some(u64::MAX)];
+    for power in 0..=19 {
+        let value = 10_u64.pow(power);
+        ttls.extend([Some(value - 1), Some(value), Some(value + 1)]);
+    }
+    let names = [
+        None,
+        Some(String::new()),
+        Some("affinity".to_owned()),
+        Some("n".repeat(256)),
+    ];
+    let tokens = [String::new(), "abcd1234.1060".to_owned(), "t".repeat(256)];
+    let mut allocations = Vec::new();
+    for name in names {
+        for lifetime in [
+            None,
+            Some(None),
+            Some(Some(CookieLifetimeType::Session)),
+            Some(Some(CookieLifetimeType::Permanent)),
+        ] {
+            let sp = SessionPersistence {
+                session_name: name.clone(),
+                absolute_timeout: None,
+                persistence_type: None,
+                cookie_config: lifetime.map(|lifetime_type| CookieConfig { lifetime_type }),
+                strict: None,
+            };
+            for token in &tokens {
+                for tls in [false, true] {
+                    for ttl in &ttls {
+                        let expected = previous(&sp, token, tls, *ttl);
+                        let (actual, stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+                            build_set_cookie_value(&sp, token, tls, *ttl)
+                        });
+                        assert_eq!(actual, expected);
+                        allocations.push((stats.calls, stats.requested_bytes, actual.len()));
+                    }
+                }
+            }
+        }
+    }
+    for (calls, bytes, length) in allocations {
+        assert_eq!(calls, 1, "cookie construction must not grow its buffer");
+        assert_eq!(bytes, length, "reserve only the final cookie byte length");
+    }
+}

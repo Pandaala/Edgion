@@ -254,8 +254,6 @@ fn parse_wire_token(token: &str) -> (&str, Option<u64>) {
 /// token's expiry was derived from (single source of truth — no re-parse).
 pub fn build_set_cookie_value(sp: &SessionPersistence, token: &str, is_tls: bool, ttl_secs: Option<u64>) -> String {
     let name = get_session_name(sp);
-    let mut cookie = format!("{}={}; Path=/", name, token);
-
     let is_permanent = sp
         .cookie_config
         .as_ref()
@@ -263,16 +261,20 @@ pub fn build_set_cookie_value(sp: &SessionPersistence, token: &str, is_tls: bool
         .map(|lt| *lt == CookieLifetimeType::Permanent)
         .unwrap_or(false);
 
-    if is_permanent {
-        if let Some(secs) = ttl_secs {
-            let _ = write!(cookie, "; Max-Age={secs}");
-        }
+    let max_age = if is_permanent { ttl_secs } else { None };
+    let max_age_len = max_age.map_or(0, |secs| {
+        "; Max-Age=".len() + secs.checked_ilog10().unwrap_or(0) as usize + 1
+    });
+    let suffix = "; HttpOnly; SameSite=Lax";
+    let secure = if is_tls { "; Secure" } else { "" };
+    let capacity = name.len() + 1 + token.len() + "; Path=/".len() + max_age_len + suffix.len() + secure.len();
+    let mut cookie = String::with_capacity(capacity);
+    let _ = write!(cookie, "{name}={token}; Path=/");
+    if let Some(secs) = max_age {
+        let _ = write!(cookie, "; Max-Age={secs}");
     }
-
-    cookie.push_str("; HttpOnly; SameSite=Lax");
-    if is_tls {
-        cookie.push_str("; Secure");
-    }
+    cookie.push_str(suffix);
+    cookie.push_str(secure);
     cookie
 }
 
