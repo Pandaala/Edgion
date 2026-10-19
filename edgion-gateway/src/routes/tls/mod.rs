@@ -188,7 +188,6 @@ pub(super) async fn run_tls_route_plugins(
     store_key: Option<&str>,
     resource: Option<&CompiledStreamPlugins>,
     ctx: &mut TlsContext,
-    sni: &str,
     listener_port: u16,
     mode: TlsRouteMode,
 ) -> bool {
@@ -256,7 +255,7 @@ pub(super) async fn run_tls_route_plugins(
                 direct_peer_ip,
                 remote_ip,
                 listener_port,
-                sni,
+                sni: ctx.sni.as_deref().unwrap_or_default(),
                 tls_id,
                 rsc,
                 is_mtls,

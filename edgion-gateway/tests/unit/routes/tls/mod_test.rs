@@ -220,15 +220,8 @@ fn stage2_entry(deny: bool) -> TlsRoutePluginEntry {
 async fn assert_dispatch(resource: Option<&CompiledStreamPlugins>, allowed: bool, error: Option<&str>) {
     for mode in [TlsRouteMode::Terminated, TlsRouteMode::Passthrough] {
         let mut ctx = TlsContext::new(443, "127.0.0.1".into(), 50000, "203.0.113.7".into(), 50000);
-        let actual = run_tls_route_plugins(
-            Some("tls-stage-contract/policy"),
-            resource,
-            &mut ctx,
-            "example.com",
-            443,
-            mode,
-        )
-        .await;
+        ctx.sni = Some("example.com".into());
+        let actual = run_tls_route_plugins(Some("tls-stage-contract/policy"), resource, &mut ctx, 443, mode).await;
         assert_eq!(actual, allowed, "unexpected result: {:?}", ctx.err_log);
         if let Some(error) = error {
             assert!(ctx.err_log.as_deref().unwrap_or_default().contains(error));
@@ -339,6 +332,7 @@ struct ObservedTlsRouteContext {
     remote_ip: IpAddr,
     listener_port: u16,
     sni: String,
+    sni_ptr: usize,
     tls_id: Option<String>,
     rsc_ptr: usize,
     rsc_kind: String,
@@ -359,6 +353,7 @@ impl TlsRoutePlugin for SpyDenyTlsRoutePlugin {
             remote_ip: ctx.remote_ip,
             listener_port: ctx.listener_port,
             sni: ctx.sni.to_string(),
+            sni_ptr: ctx.sni.as_ptr() as usize,
             tls_id: ctx.tls_id.map(str::to_string),
             rsc_ptr: std::ptr::from_ref(ctx.rsc) as usize,
             rsc_kind: ctx.rsc.kind.clone(),
@@ -405,17 +400,9 @@ async fn tls_route_modes_isolate_negotiated_identity() {
             sv: 42,
         });
         let expected_rsc_ptr = std::ptr::from_ref(&ctx.matched.as_ref().unwrap().rsc) as usize;
-        let sni = ctx.sni.clone().unwrap();
+        let expected_sni_ptr = ctx.sni.as_ref().unwrap().as_ptr() as usize;
 
-        let allowed = run_tls_route_plugins(
-            Some("default/identity-spy"),
-            Some(&resource),
-            &mut ctx,
-            &sni,
-            9443,
-            mode,
-        )
-        .await;
+        let allowed = run_tls_route_plugins(Some("default/identity-spy"), Some(&resource), &mut ctx, 9443, mode).await;
 
         assert!(!allowed, "the deterministic spy denial must be terminal");
         assert_eq!(ctx.err_log.as_deref(), Some("tls route plugin denied: test denial"));
@@ -426,6 +413,7 @@ async fn tls_route_modes_isolate_negotiated_identity() {
                 remote_ip: "198.51.100.20".parse().unwrap(),
                 listener_port: 9443,
                 sni: "route.example.com".into(),
+                sni_ptr: expected_sni_ptr,
                 tls_id: expected_tls_id.map(str::to_string),
                 rsc_ptr: expected_rsc_ptr,
                 rsc_kind: "TLSRoute".into(),
@@ -443,6 +431,7 @@ async fn tls_route_modes_isolate_negotiated_identity() {
         assert_eq!(ctx.remote_ip, "198.51.100.20");
         assert_eq!(ctx.remote_port, 42000);
         assert_eq!(ctx.sni.as_deref(), Some("route.example.com"));
+        assert_eq!(ctx.sni.as_ref().unwrap().as_ptr() as usize, expected_sni_ptr);
         let matched = ctx.matched.as_ref().unwrap();
         assert_eq!(std::ptr::from_ref(&matched.rsc) as usize, expected_rsc_ptr);
         assert_eq!(matched.rsc.kind, "TLSRoute");
@@ -461,7 +450,8 @@ async fn both_tls_modes_reject_invalid_canonical_addresses() {
             ("127.0.0.1", "unknown", "remote IP"),
         ] {
             let mut ctx = TlsContext::new(443, direct.into(), 50000, remote.into(), 50000);
-            assert!(!run_tls_route_plugins(Some("default/anything"), None, &mut ctx, "example.com", 443, mode).await);
+            ctx.sni = Some("example.com".into());
+            assert!(!run_tls_route_plugins(Some("default/anything"), None, &mut ctx, 443, mode).await);
             assert!(ctx.err_log.as_deref().unwrap().contains(error));
             assert!(ctx.err_log.as_deref().unwrap().contains("fail-close"));
         }
@@ -475,16 +465,9 @@ async fn fail_close_when_store_key_not_in_store() {
     let key = "default/__fail_close_missing__".to_string();
 
     let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000, "127.0.0.1".to_string(), 50000);
+    ctx.sni = Some("example.com".into());
 
-    let allowed = run_tls_route_plugins(
-        Some(key.as_str()),
-        None,
-        &mut ctx,
-        "example.com",
-        443,
-        TlsRouteMode::Passthrough,
-    )
-    .await;
+    let allowed = run_tls_route_plugins(Some(key.as_str()), None, &mut ctx, 443, TlsRouteMode::Passthrough).await;
     assert!(!allowed, "missing ESP must fail-close");
     let err = ctx.err_log.as_deref().unwrap_or("");
     assert!(
@@ -501,7 +484,8 @@ async fn fail_close_when_store_key_not_in_store() {
 async fn admit_when_store_key_is_none() {
     // No ESP attached to the rule — intentional pass-through, must allow.
     let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000, "127.0.0.1".to_string(), 50000);
-    let allowed = run_tls_route_plugins(None, None, &mut ctx, "example.com", 443, TlsRouteMode::Passthrough).await;
+    ctx.sni = Some("example.com".into());
+    let allowed = run_tls_route_plugins(None, None, &mut ctx, 443, TlsRouteMode::Passthrough).await;
     assert!(allowed, "rule with no store_key must pass through");
     assert!(ctx.err_log.is_none());
 }
@@ -513,15 +497,8 @@ async fn reject_when_direct_peer_ip_unparseable() {
     // Without a parseable client IP we cannot evaluate an IP-allowlist
     // policy, so the connection must be rejected (fail-close).
     let mut ctx = TlsContext::new(443, "unknown".to_string(), 0, "unknown".to_string(), 0);
-    let allowed = run_tls_route_plugins(
-        Some("default/anything"),
-        None,
-        &mut ctx,
-        "example.com",
-        443,
-        TlsRouteMode::Passthrough,
-    )
-    .await;
+    ctx.sni = Some("example.com".into());
+    let allowed = run_tls_route_plugins(Some("default/anything"), None, &mut ctx, 443, TlsRouteMode::Passthrough).await;
     assert!(!allowed, "unparseable DirectPeerIp must fail-close");
     let err = ctx.err_log.as_deref().unwrap_or("");
     assert!(

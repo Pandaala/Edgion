@@ -130,6 +130,7 @@ fn metadata_install_preserves_fields_and_leaves_source_unchanged() {
 
 fn pp2_context(remote_ip: &str) -> TlsContext {
     let mut ctx = TlsContext::new(8443, "192.0.2.1".into(), 4321, remote_ip.into(), 12345);
+    ctx.sni = Some("example.com".into());
     ctx.upstream_info.push(TlsUpstreamInfo {
         addr: None,
         port: None,
@@ -184,8 +185,9 @@ async fn proxy_protocol_v2_emits_exact_ipv6_header_and_marks_success() {
     let destination: std::net::Ipv6Addr = "2001:db8::20".parse().unwrap();
     let mut writer = Pp2Writer::default();
     let mut ctx = pp2_context(&source.to_string());
+    ctx.sni = Some(sni.into());
 
-    assert!(send_proxy_protocol_v2(Some(2), &mut ctx, sni, "[2001:db8::20]:8443", &mut writer,).await);
+    assert!(send_proxy_protocol_v2(Some(2), &mut ctx, "[2001:db8::20]:8443", &mut writer,).await);
 
     let mut expected = Vec::new();
     expected.extend_from_slice(&crate::util::proxy_protocol::PP2_SIGNATURE);
@@ -212,7 +214,7 @@ async fn proxy_protocol_v2_skips_disabled_or_unparseable_source() {
     for version in [None, Some(1)] {
         let mut writer = Pp2Writer::default();
         let mut ctx = pp2_context("192.0.2.10");
-        assert!(send_proxy_protocol_v2(version, &mut ctx, "example.com", "192.0.2.20:443", &mut writer).await);
+        assert!(send_proxy_protocol_v2(version, &mut ctx, "192.0.2.20:443", &mut writer).await);
         assert!(writer.bytes.is_empty());
         assert_eq!(writer.flushes, 0);
         assert!(!ctx.upstream_info[0].proxy_protocol_sent);
@@ -223,7 +225,7 @@ async fn proxy_protocol_v2_skips_disabled_or_unparseable_source() {
 
     let mut writer = Pp2Writer::default();
     let mut ctx = pp2_context("unknown");
-    assert!(send_proxy_protocol_v2(Some(2), &mut ctx, "example.com", "192.0.2.20:443", &mut writer).await);
+    assert!(send_proxy_protocol_v2(Some(2), &mut ctx, "192.0.2.20:443", &mut writer).await);
     assert!(writer.bytes.is_empty());
     assert_eq!(writer.flushes, 0);
     assert!(!ctx.upstream_info[0].proxy_protocol_sent);
@@ -236,7 +238,7 @@ async fn proxy_protocol_v2_skips_disabled_or_unparseable_source() {
 async fn proxy_protocol_v2_preserves_unspecified_destination_fallback() {
     let mut writer = Pp2Writer::default();
     let mut ctx = pp2_context("192.0.2.10");
-    assert!(send_proxy_protocol_v2(Some(2), &mut ctx, "example.com", "invalid", &mut writer).await);
+    assert!(send_proxy_protocol_v2(Some(2), &mut ctx, "invalid", &mut writer).await);
     assert_eq!(writer.bytes[13], 0x11);
     assert_eq!(&writer.bytes[20..24], &[0, 0, 0, 0]);
     assert_eq!(&writer.bytes[26..28], &[0, 0]);
@@ -250,7 +252,7 @@ async fn proxy_protocol_v2_failures_do_not_mark_or_account_success() {
         ..Default::default()
     };
     let mut ctx = pp2_context("192.0.2.10");
-    assert!(!send_proxy_protocol_v2(Some(2), &mut ctx, "example.com", "192.0.2.20:443", &mut writer).await);
+    assert!(!send_proxy_protocol_v2(Some(2), &mut ctx, "192.0.2.20:443", &mut writer).await);
     assert_eq!(writer.bytes.len(), 4);
     assert_eq!(writer.flushes, 0);
     assert!(!ctx.upstream_info[0].proxy_protocol_sent);
@@ -263,7 +265,7 @@ async fn proxy_protocol_v2_failures_do_not_mark_or_account_success() {
         ..Default::default()
     };
     let mut ctx = pp2_context("192.0.2.10");
-    assert!(!send_proxy_protocol_v2(Some(2), &mut ctx, "example.com", "192.0.2.20:443", &mut writer).await);
+    assert!(!send_proxy_protocol_v2(Some(2), &mut ctx, "192.0.2.20:443", &mut writer).await);
     assert!(!writer.bytes.is_empty());
     assert_eq!(writer.flushes, 1);
     assert!(!ctx.upstream_info[0].proxy_protocol_sent);

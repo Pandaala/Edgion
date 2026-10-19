@@ -140,7 +140,6 @@ impl TlsContext {
 pub(super) async fn send_proxy_protocol_v2<W: AsyncWrite + Unpin>(
     proxy_protocol_version: Option<u8>,
     ctx: &mut TlsContext,
-    sni: &str,
     upstream_addr_str: &str,
     upstream: &mut W,
 ) -> bool {
@@ -156,7 +155,7 @@ pub(super) async fn send_proxy_protocol_v2<W: AsyncWrite + Unpin>(
         .parse()
         .unwrap_or_else(|_| std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0));
     let mut builder = ProxyProtocolV2Builder::new(src_addr, dst_addr);
-    builder.add_authority(sni);
+    builder.add_authority(ctx.sni.as_deref().unwrap_or_default());
     let pp2_header = builder.build();
 
     if let Err(e) = upstream.write_all(&pp2_header).await {
@@ -225,17 +224,13 @@ impl ServerApp for EdgionTlsTcpProxy {
             ctx.sni = Self::extract_sni(&mut downstream);
         }
 
-        let sni = match ctx.sni.as_deref() {
-            Some(sni) => sni.to_string(),
-            None => {
-                ctx.err_log = Some("no SNI".to_string());
-                self.log_disconnect(&mut ctx, gateway_config.tls_proxy_log_record).await;
-                return None;
-            }
-        };
+        if ctx.sni.is_none() {
+            ctx.err_log = Some("no SNI".to_string());
+            self.log_disconnect(&mut ctx, gateway_config.tls_proxy_log_record).await;
+            return None;
+        }
 
-        self.handle_connection(downstream, &mut ctx, &sni, &gateway_config)
-            .await;
+        self.handle_connection(downstream, &mut ctx, &gateway_config).await;
         self.log_disconnect(&mut ctx, gateway_config.tls_proxy_log_record).await;
 
         None
@@ -261,13 +256,16 @@ impl EdgionTlsTcpProxy {
         &self,
         downstream: Stream,
         ctx: &mut TlsContext,
-        sni: &str,
         gateway_config: &ResolvedGatewayConfig,
     ) {
         // 1. Match TLSRoute unit by SNI from the per-listener route table.
         let publication = global_publisher().snapshot();
-        let Some(selected) = super::select_tls_route(&self.tls_route_manager, &publication, &self.listener_key, sni)
-        else {
+        let Some(selected) = super::select_tls_route(
+            &self.tls_route_manager,
+            &publication,
+            &self.listener_key,
+            ctx.sni.as_deref().unwrap_or_default(),
+        ) else {
             ctx.err_log = Some("no match".to_string());
             return;
         };
@@ -304,7 +302,6 @@ impl EdgionTlsTcpProxy {
             unit.stream_plugin_store_key(),
             resource.as_deref(),
             ctx,
-            sni,
             self.listener_port,
             super::TlsRouteMode::Terminated,
         )
@@ -431,7 +428,6 @@ impl EdgionTlsTcpProxy {
         if !send_proxy_protocol_v2(
             unit.proxy_protocol_version(),
             ctx,
-            sni,
             &upstream_addr_str,
             &mut upstream_stream,
         )

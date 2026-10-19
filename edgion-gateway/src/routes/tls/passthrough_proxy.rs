@@ -104,14 +104,14 @@ impl ServerApp for EdgionTlsPassthroughProxy {
             self.log_disconnect(&mut ctx, gateway_config.tls_proxy_log_record).await;
             return None;
         };
-        ctx.sni = Some(sni.clone());
+        ctx.sni = Some(sni);
 
         // 3. Handle connection: route match → connect upstream → relay.
         //    Forward every byte we drained from downstream — not just the
         //    ClientHello record — so any trailing 0-RTT EarlyData reaches
         //    the backend.
         peek_buf.truncate(filled);
-        self.handle_connection(downstream, &mut ctx, &sni, peek_buf, &gateway_config)
+        self.handle_connection(downstream, &mut ctx, peek_buf, &gateway_config)
             .await;
         self.log_disconnect(&mut ctx, gateway_config.tls_proxy_log_record).await;
 
@@ -181,14 +181,17 @@ impl EdgionTlsPassthroughProxy {
         &self,
         downstream: Stream,
         ctx: &mut TlsContext,
-        sni: &str,
         initial_bytes: Vec<u8>,
         gateway_config: &ResolvedGatewayConfig,
     ) {
         // 1. Match TLSRoute unit by SNI
         let publication = global_publisher().snapshot();
-        let Some(selected) = super::select_tls_route(&self.tls_route_manager, &publication, &self.listener_key, sni)
-        else {
+        let Some(selected) = super::select_tls_route(
+            &self.tls_route_manager,
+            &publication,
+            &self.listener_key,
+            ctx.sni.as_deref().unwrap_or_default(),
+        ) else {
             ctx.err_log = Some("no match".to_string());
             return;
         };
@@ -224,7 +227,6 @@ impl EdgionTlsPassthroughProxy {
             unit.stream_plugin_store_key(),
             resource.as_deref(),
             ctx,
-            sni,
             self.listener_port,
             super::TlsRouteMode::Passthrough,
         )
@@ -347,7 +349,6 @@ impl EdgionTlsPassthroughProxy {
         if !send_proxy_protocol_v2(
             unit.proxy_protocol_version(),
             ctx,
-            sni,
             &upstream_addr_str,
             &mut upstream_stream,
         )

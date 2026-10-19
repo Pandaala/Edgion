@@ -7028,3 +7028,24 @@ Independent plan review passed. Baseline runtime tests passed (15 Stream and
 runtime and 25 HTTP/Stream plugin-generation tests. Formatting, workspace
 check/Clippy and seven guards passed with existing unrelated warnings. No full
 suite or live integration ran.
+
+## Borrow connection-owned SNI across TLS routing and setup
+
+Terminated TLS no longer clones the context SNI into a second connection-local
+String; passthrough moves the parser result into that context instead of cloning
+it. Route matching, Stage-2 plugin dispatch and the shared PP2 helper borrow the
+same context owner. Their redundant SNI parameters are removed. Entry-point
+missing-SNI rejection remains in place, and no later connection phase mutates
+SNI. No take/restore, cancellation cleanup, new normalization or cache is needed.
+The existing PP2 builder owns its authority/header bytes before socket writes;
+plugin borrowing ends before mutable connection-log updates. ClientHello
+read/replay bounds, TLS identity isolation and log ownership remain unchanged.
+This removes one redundant SNI allocation/copy per connection reaching the
+handler in either mode, without a throughput claim.
+
+Independent plan review passed. Baseline TLS verification passed 85 tests;
+fresh verification passed the same 85 TLS tests plus 8 TLS runtime tests. The
+existing identity spy now checks context SNI pointer identity and retention in
+both modes; PP2 exact-byte, skip and failure tests retain their assertions with
+context-owned input. Formatting, workspace check/Clippy and seven guards passed
+with existing unrelated warnings. No full suite or live integration ran.
