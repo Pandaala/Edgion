@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
+use crate::backends::peer_builder::{parse_backend_app_protocol, BackendAppProtocol};
 use crate::lb::compiled_selector::CompiledSelectors;
 use crate::lb::{BackendRuntimeCounters, EndpointRuntimeIdentity, EndpointRuntimeScope, LbBackend};
 
@@ -112,6 +113,7 @@ pub struct ResolvedBackendSlot {
 
 pub struct ResolvedServiceSection {
     pub identity: ServicePortIdentity,
+    pub(crate) prepared_app_protocol: Option<BackendAppProtocol>,
     pub all_slots: Arc<[Arc<ResolvedBackendSlot>]>,
     pub ready_slots: Arc<[Arc<ResolvedBackendSlot>]>,
     pub selectors: CompiledSelectors,
@@ -1811,6 +1813,11 @@ fn materialize_section(
         .into();
     Some(ResolvedServiceSection {
         identity: section.identity.clone(),
+        prepared_app_protocol: section
+            .identity
+            .app_protocol
+            .as_deref()
+            .and_then(parse_backend_app_protocol),
         direct_endpoint_ports: compile_direct_endpoint_ports(&all_slots),
         all_slots,
         ready_slots,

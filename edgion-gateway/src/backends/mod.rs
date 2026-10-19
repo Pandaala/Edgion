@@ -54,8 +54,7 @@ use edgion_resources::resources::lb_policy::ParsedLBPolicy;
 use edgion_resources::EdgionErrorCode;
 use peer_builder::first_safe_inet_addr;
 use peer_builder::{
-    apply_backend_app_protocol, extract_tls_config, parse_backend_app_protocol, peer_from_backend_tls_lookup,
-    record_tls_to_upstream,
+    apply_backend_app_protocol, extract_tls_config, peer_from_backend_tls_lookup, record_tls_to_upstream,
 };
 use pingora_core::prelude::HttpPeer;
 use pingora_core::protocols::l4::socket::SocketAddr;
@@ -283,12 +282,7 @@ where
 {
     let hostname = external_name(captured)?;
     let port = captured.section().identity.number.get();
-    let backend_app_protocol = captured
-        .section()
-        .identity
-        .app_protocol
-        .as_deref()
-        .and_then(parse_backend_app_protocol);
+    let backend_app_protocol = captured.section().prepared_app_protocol;
     let ips = resolve_external_ips_with(
         hostname,
         dns.spec,
@@ -485,12 +479,7 @@ fn build_peer_from_lb_selection(
     gateway_key_ref: Option<&str>,
 ) -> Result<Box<HttpPeer>, EdgionErrorCode> {
     let backend = endpoint.backend;
-    let backend_app_protocol = endpoint
-        .section
-        .identity
-        .app_protocol
-        .as_deref()
-        .and_then(parse_backend_app_protocol);
+    let backend_app_protocol = endpoint.section.prepared_app_protocol;
     let lb_addr = backend.addr.clone();
     let peer_addr = lb_addr.clone();
     if let Err(status) = validate_endpoint_backend_addr(&peer_addr, ctx.allow_loopback_upstream) {

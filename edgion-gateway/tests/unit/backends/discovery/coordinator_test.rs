@@ -440,21 +440,53 @@ fn canonical_aliases_merge_equivalent_origins_and_missing_is_typed_invalid() {
 
 #[test]
 fn published_app_protocol_comes_from_service_port() {
+    use crate::backends::peer_builder::BackendAppProtocol::{H2c, WebSocket};
+
     let coordinator = ServiceDiscoveryCoordinator::new();
-    let mut annotated = (*service(Some("service-uid"), IntOrString::String("web".to_string()))).clone();
-    annotated.spec.as_mut().unwrap().ports.as_mut().unwrap()[0].app_protocol = Some("kubernetes.io/h2c".to_string());
-    coordinator.replace_services(&HashMap::from([("default/backend".to_string(), Arc::new(annotated))]));
-    coordinator.replace_endpoint_slices(&HashMap::from([(
-        "default/backend-a".to_string(),
-        slice("backend-a", Some("slice-a"), true),
-    )]));
-    let section = coordinator
-        .load_generation()
-        .available("default/backend")
-        .unwrap()
-        .resolve_section(&ServiceSectionKey::Number(NonZeroU16::new(80).unwrap()))
-        .unwrap();
-    assert_eq!(section.identity.app_protocol.as_deref(), Some("kubernetes.io/h2c"));
+    let mut retained = Vec::new();
+    for (raw, expected) in [
+        (Some("kubernetes.io/h2c"), Some(H2c)),
+        (Some("h2c"), Some(H2c)),
+        (Some("KUBERNETES.IO/H2C"), Some(H2c)),
+        (Some("ws"), Some(WebSocket)),
+        (Some("wss"), Some(WebSocket)),
+        (Some("kubernetes.io/ws"), Some(WebSocket)),
+        (Some("kubernetes.io/wss"), Some(WebSocket)),
+        (Some("WsS"), Some(WebSocket)),
+        (Some("unknown"), None),
+        (Some("another-unknown"), None),
+        (Some(" h2c"), None),
+        (Some(""), None),
+        (None, None),
+    ] {
+        let mut annotated = (*service(Some("service-uid"), IntOrString::String("web".to_string()))).clone();
+        annotated.spec.as_mut().unwrap().ports.as_mut().unwrap()[0].app_protocol = raw.map(str::to_owned);
+        coordinator.replace_services(&HashMap::from([("default/backend".to_string(), Arc::new(annotated))]));
+        coordinator.replace_endpoint_slices(&HashMap::from([(
+            "default/backend-a".to_string(),
+            slice("backend-a", Some("slice-a"), true),
+        )]));
+        let generation = coordinator.load_generation();
+        let source = generation.available("default/backend").unwrap();
+        let section = source
+            .resolve_section(&ServiceSectionKey::Number(NonZeroU16::new(80).unwrap()))
+            .unwrap();
+        let normalized = raw.filter(|value| !value.is_empty());
+        assert_eq!(section.identity.app_protocol.as_deref(), normalized);
+        assert_eq!(section.prepared_app_protocol, expected);
+        if let Some((old, old_raw, _)) = retained.last() {
+            let old: &Arc<ResolvedServiceSection> = old;
+            if *old_raw != normalized {
+                assert_ne!(old.identity, section.identity);
+                assert_ne!(old.all_slots[0].proof, section.all_slots[0].proof);
+            }
+        }
+        retained.push((section.clone(), normalized, expected));
+        for (old, old_raw, old_expected) in &retained {
+            assert_eq!(old.identity.app_protocol.as_deref(), *old_raw);
+            assert_eq!(old.prepared_app_protocol, *old_expected);
+        }
+    }
 }
 
 #[test]

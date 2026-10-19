@@ -68,8 +68,11 @@ live endpoint/section failures retain TCP/UDP failure and TLS retry behavior.
 L4 selectors borrow original slots and retain live degradation without capturing
 BackendTLSPolicy or backend traffic policy. No selector may pick
 the Service's first port, a leftover slice port or another section. The selected slot already carries `serving_port` on `backend.addr`; there is
-no request-path port rewriter. `appProtocol` is published on `ServicePortIdentity` and read from
-the proven section, not a live ServiceStore scan. Health probes use
+no request-path port rewriter. Raw `appProtocol` remains on `ServicePortIdentity`
+for identity, equality and proof semantics. Section materialization prepares its
+canonical protocol enum once; ordinary Service and ExternalName peer construction
+read that enum from the proven section. DirectEndpoint copies it into its retry
+preset. No request-path parsing or live ServiceStore scan is needed. Health probes use
 `AvailableServiceProjection::canonical_probe_backends()` (union of Resolved `all_slots`,
 deduped by runtime identity). Session persistence is keyed per section.
 
@@ -480,7 +483,7 @@ rechecks both the published generation and membership before installing its snap
   Target authority comes from each slot's permitted compiled Service target;
   there is no detached raw-reference or route-namespace input.
 - Returns: `ValidatedDirectEndpoint` with the original backend slot, proven address,
-  captured TLS policy and appProtocol, or `Err(reason)`.
+  captured TLS policy and prepared appProtocol enum, or `Err(reason)`.
 - Used by `DirectEndpoint`, which selects a backend by endpoint address. Name-addressed jumps
   (`DynamicInternalUpstream`, `Canary`) do NOT use this function — they resolve through
   one shared name matcher through `RouteRules::validate_backend_by_name` for plugin

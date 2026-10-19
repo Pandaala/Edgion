@@ -1,4 +1,5 @@
 use crate::ai::context::AiHttpState;
+use crate::backends::peer_builder::BackendAppProtocol;
 use crate::backends::{SelectedHttpBackend, ServiceBackendKind};
 use crate::lb::backend::LbBackend;
 use crate::observe::logs::LogBuffer;
@@ -1584,7 +1585,7 @@ pub struct DirectEndpointPreset {
     /// Used to pre-select the correct backend_ref for logging and metrics
     pub backend_ref_idx: usize,
     /// Application protocol captured from the same proven Service section.
-    pub app_protocol: Option<Arc<str>>,
+    pub(crate) app_protocol: Option<BackendAppProtocol>,
 }
 
 /// Mutually-exclusive upstream-jump slot — exactly one variant lives per request.

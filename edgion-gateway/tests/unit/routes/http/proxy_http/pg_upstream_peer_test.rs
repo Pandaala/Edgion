@@ -2123,12 +2123,12 @@ fn direct_endpoint_app_protocol_is_pinned_across_retry_peer_builds() {
         let proxy = direct_peer_proxy();
         let mut ctx = EdgionHttpContext::new();
         ctx.route_unit = Some(jump_route_unit(vec![jump_backend_ref("direct-app-protocol-pinned")]));
-        let published = app_protocol.map(Arc::<str>::from);
+        let published = app_protocol.and_then(crate::backends::peer_builder::parse_backend_app_protocol);
         ctx.jump = Some(Box::new(crate::UpstreamJumpTarget::Direct(DirectEndpointPreset {
             addr: "10.0.0.1:8080".parse().unwrap(),
             tls_policy: crate::backends::BackendTlsPolicyLookup::Absent,
             backend_ref_idx: 0,
-            app_protocol: published.clone(),
+            app_protocol: published,
         })));
 
         for expected_attempt in 1..=2 {
@@ -2154,14 +2154,10 @@ fn direct_endpoint_app_protocol_is_pinned_across_retry_peer_builds() {
             expects_websocket.then_some("websocket")
         );
         let retained = match ctx.jump.as_deref().unwrap() {
-            crate::UpstreamJumpTarget::Direct(preset) => preset.app_protocol.as_ref(),
+            crate::UpstreamJumpTarget::Direct(preset) => preset.app_protocol,
             _ => unreachable!("test installs a direct endpoint preset"),
         };
-        match (published.as_ref(), retained) {
-            (Some(expected), Some(actual)) => assert!(Arc::ptr_eq(expected, actual)),
-            (None, None) => {}
-            _ => panic!("retry must retain the captured appProtocol"),
-        }
+        assert_eq!(published, retained, "retry must retain the captured appProtocol");
     }
 }
 

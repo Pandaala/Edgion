@@ -1,5 +1,6 @@
 use super::*;
 use crate::backends::get_roundrobin_store;
+use crate::backends::peer_builder::BackendAppProtocol;
 use crate::plugins::runtime::traits::session::MockPluginSession;
 use crate::routes::http::match_unit::{HttpRouteRuleUnit, MatchSpecificity};
 use crate::{EdgionHttpContext, MatchInfo, Rsc};
@@ -209,7 +210,7 @@ async fn direct_endpoint_records_success_outcome_with_addr() {
                     if info.addr == "10.0.9.9:9191".parse().unwrap()
                         && info.tls_policy.is_absent()
                         && info.backend_ref_idx == 0
-                        && info.app_protocol.as_deref() == Some("kubernetes.io/h2c")
+                        && info.app_protocol == Some(BackendAppProtocol::H2c)
             )
         })
         .times(1)
@@ -567,7 +568,7 @@ async fn borrowed_regex_capture_selects_the_authorized_endpoint() {
         .withf(|target| {
             matches!(target, UpstreamJumpTarget::Direct(info)
             if info.addr == "10.0.9.11:9194".parse().unwrap() && info.backend_ref_idx == 0
-                && info.tls_policy.is_absent() && info.app_protocol.as_deref() == Some("kubernetes.io/h2c"))
+                && info.tls_policy.is_absent() && info.app_protocol == Some(BackendAppProtocol::H2c))
         })
         .times(1)
         .return_const(SetJumpOutcome::Set);

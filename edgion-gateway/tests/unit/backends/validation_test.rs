@@ -121,18 +121,14 @@ fn direct_authorization_is_allocation_free_and_section_scoped() {
     let endpoint = result.unwrap();
     assert_eq!(endpoint.addr.port(), 8443);
     assert_eq!(endpoint.backend_ref_idx, 3);
-    assert_eq!(endpoint.app_protocol.as_deref(), Some("kubernetes.io/h2c"));
+    assert_eq!(endpoint.app_protocol, Some(BackendAppProtocol::H2c));
     let published = discovery
         .available("default/app")
         .unwrap()
         .resolve_section(&ServiceSectionKey::Number(std::num::NonZeroU16::new(443).unwrap()))
         .unwrap()
-        .identity
-        .app_protocol
-        .as_ref()
-        .unwrap()
-        .clone();
-    assert!(Arc::ptr_eq(endpoint.app_protocol.as_ref().unwrap(), &published));
+        .prepared_app_protocol;
+    assert_eq!(endpoint.app_protocol, published);
     assert_eq!(
         endpoint.tls_policy.effective().unwrap().policy.spec.validation.hostname,
         "backend.example.com"
@@ -143,16 +139,16 @@ fn direct_authorization_is_allocation_free_and_section_scoped() {
         assert!(validate_endpoint_in_route(ip, Some(port), &backends, &discovery, &policies, true).is_err());
     }
     let explicit = validate_endpoint_in_route(ip, Some(8443), &backends, &discovery, &policies, true).unwrap();
-    assert_eq!(explicit.app_protocol.as_deref(), Some("kubernetes.io/h2c"));
+    assert_eq!(explicit.app_protocol, Some(BackendAppProtocol::H2c));
 
     let adjacent = [backend(Some(444))];
     let inferred_adjacent = validate_endpoint_in_route(ip, None, &adjacent, &discovery, &policies, false).unwrap();
     assert_eq!(inferred_adjacent.addr.port(), 9000);
-    assert_eq!(inferred_adjacent.app_protocol.as_deref(), Some("kubernetes.io/wss"));
+    assert_eq!(inferred_adjacent.app_protocol, Some(BackendAppProtocol::WebSocket));
     let explicit_adjacent =
         validate_endpoint_in_route(ip, Some(9000), &adjacent, &discovery, &policies, false).unwrap();
     assert_eq!(explicit_adjacent.addr.port(), 9000);
-    assert_eq!(explicit_adjacent.app_protocol.as_deref(), Some("kubernetes.io/wss"));
+    assert_eq!(explicit_adjacent.app_protocol, Some(BackendAppProtocol::WebSocket));
 }
 
 #[test]

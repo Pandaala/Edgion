@@ -1,6 +1,6 @@
 use super::EdgionHttpProxy;
 use crate::ai::http::attempt;
-use crate::backends::peer_builder::{apply_backend_app_protocol, extract_tls_config, parse_backend_app_protocol};
+use crate::backends::peer_builder::{apply_backend_app_protocol, extract_tls_config};
 use crate::backends::policy::backend_traffic::authority::{render_authority, AuthorityError};
 use crate::backends::policy::backend_traffic::store::get_backend_traffic_policy_store;
 use crate::backends::policy::backend_traffic::RetryBudget;
@@ -1339,7 +1339,7 @@ fn try_direct_endpoint_peer(
             ));
         }
     };
-    let app_protocol = direct.app_protocol.as_deref().and_then(parse_backend_app_protocol);
+    let app_protocol = direct.app_protocol;
     apply_backend_app_protocol(&mut peer, app_protocol, ctx);
     let result = finish_static_peer(edgion_http, ctx, peer);
     let (use_tls, sni) = extract_tls_config(&policy);

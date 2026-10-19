@@ -3,7 +3,7 @@ use super::*;
 #[test]
 #[cfg(target_pointer_width = "64")]
 fn jump_target_uses_one_pointer_in_the_base_context() {
-    assert_eq!(std::mem::size_of::<UpstreamJumpTarget>(), 80);
+    assert_eq!(std::mem::size_of::<UpstreamJumpTarget>(), 72);
     assert_eq!(std::mem::size_of::<Option<Box<UpstreamJumpTarget>>>(), 8);
 }
 
@@ -40,15 +40,12 @@ fn sample_direct() -> DirectEndpointPreset {
 
 #[test]
 fn direct_preset_clone_retains_published_app_protocol() {
-    let app_protocol: Arc<str> = Arc::from("kubernetes.io/h2c");
+    let app_protocol = BackendAppProtocol::H2c;
     let mut preset = sample_direct();
-    preset.app_protocol = Some(app_protocol.clone());
+    preset.app_protocol = Some(app_protocol);
 
     let cloned = preset.clone();
-    assert!(Arc::ptr_eq(
-        preset.app_protocol.as_ref().unwrap(),
-        cloned.app_protocol.as_ref().unwrap()
-    ));
+    assert_eq!(preset.app_protocol, cloned.app_protocol);
 }
 
 #[test]
@@ -77,6 +74,8 @@ fn first_external_write_returns_set() {
 
 #[test]
 fn first_direct_write_keeps_backend_selection_empty() {
+    // Exclude process-global initialization from the jump-storage measurement.
+    drop(fresh_ctx());
     let ((ctx, outcome), allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
         let mut ctx = fresh_ctx();
         let outcome = ctx.try_set_jump(UpstreamJumpTarget::Direct(sample_direct()));

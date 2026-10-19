@@ -5748,3 +5748,33 @@ passed 14 tests (118 total after modification). Formatting, workspace check/Clip
 and seven repository guards passed with existing unrelated warnings. Existing
 resolver tests include IP literals, localhost and an empty host; no external DNS
 integration, live upstream transport or performance benchmark ran.
+
+## Prepared Service application protocol
+
+Runtime Service section materialization now resolves the canonical appProtocol
+enum once. Ordinary LB and ExternalName peer construction read that prepared
+value; DirectEndpoint validation copies it into the retry preset instead of
+cloning a raw protocol Arc. The parser and execution-time ALPN/WebSocket behavior
+are unchanged. Raw ServicePortIdentity values remain intact for equality, proof
+and existing response-cache key semantics, including distinct unknown strings.
+No live store read or new request state is introduced; the immutable section
+carries a small derived enum. On the tested 64-bit target, UpstreamJumpTarget
+shrinks from 80 to 72 bytes while its boxed base-context slot remains eight bytes.
+No throughput result or overall heap-reduction claim is made.
+
+The publication regression now covers all six aliases, mixed case, absent/empty
+and unknown values, raw identity/proof distinctions and retained old sections
+across replacement. Existing DirectEndpoint assertions now compare the prepared
+enum while retaining address, TLS, protocol, retry and allocation guarantees.
+A baseline allocation assertion included first-use context initialization (six
+calls versus one); warming and dropping one context before measurement passed
+all seven jump tests on unchanged production code. Its measured context/jump
+construction and exact allocation assertions remain. The representation change
+then required the exact jump layout assertion to change from 80 to 72 bytes.
+
+Independent plan review approved the implementation and narrow additional test
+and architecture-document updates. Fresh serial verification passed 180 tests:
+41 discovery, three validation, seven jump, 104 upstream-peer, 12 selector and
+13 DirectEndpoint plugin tests. Formatting, workspace check/Clippy and seven
+repository guards passed with existing unrelated warnings. No full integration
+suite, live DNS/provider transport or performance benchmark ran.

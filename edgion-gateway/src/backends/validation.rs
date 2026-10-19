@@ -1,7 +1,7 @@
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
 
 use crate::backends::discovery::ServiceSelectorGeneration;
+use crate::backends::peer_builder::BackendAppProtocol;
 use crate::backends::policy::backend_tls::BackendTLSPolicySnapshot;
 use crate::backends::BackendTlsPolicyLookup;
 use crate::routes::http::match_unit::CompiledBackend;
@@ -11,7 +11,7 @@ pub struct ValidatedDirectEndpoint {
     pub backend_ref_idx: usize,
     pub addr: SocketAddr,
     pub tls_policy: BackendTlsPolicyLookup,
-    pub app_protocol: Option<Arc<str>>,
+    pub(crate) app_protocol: Option<BackendAppProtocol>,
 }
 
 /// Prove the requested socket against one captured discovery generation.
@@ -50,7 +50,7 @@ pub fn validate_endpoint_in_route(
             backend_ref_idx: backend.slot(),
             addr,
             tls_policy,
-            app_protocol: section.identity.app_protocol.clone(),
+            app_protocol: section.prepared_app_protocol,
         });
     }
     Err(EdgionErrorCode::BackendPortResolutionFailed)
