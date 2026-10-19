@@ -7526,3 +7526,22 @@ The preceding read-only callback audit passed eight response-head tests and seve
 content-type tests. This documentation batch changed no runtime code; formatting,
 workspace check/Clippy and documentation validation passed with existing unrelated
 warnings. No new runtime tests or benchmark ran for this decision record.
+
+## Skip unused AI retry gates for excluded transport errors
+
+on_transport_failure now returns unclassified errors immediately after the
+existing status-retry acknowledgment branch. Downstream/control-flow errors and
+timeouts outside the backend-request class no longer read retry opt-in or evaluate
+unused deadline/write-state gates. Recognized failure handling keeps its order;
+the original error and retry decision remain untouched for excluded classes.
+
+Independent plan review passed. A new production-adapter regression covers six
+excluded error/source/timeout combinations with both relay states and incoming
+retry decisions under an expired gRPC deadline. It checks error identity/text,
+retry preservation, scheduler progress, attempt ledger and diagnostics. Existing
+status-retry acknowledgment and recognized failure tests remain intact.
+
+Fresh verification passed seven AI attempt and 37 outer callback tests (44 total),
+formatting, workspace check/Clippy and seven guards, with existing unrelated
+warnings. This removes source-level unused getter/clock work; no allocation or
+throughput improvement is claimed. No full suite or live benchmark ran.

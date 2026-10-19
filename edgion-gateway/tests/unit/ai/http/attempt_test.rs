@@ -434,6 +434,47 @@ fn raw_status_budget_denial_returns_503_and_preserves_dispatch_count() {
 }
 
 #[test]
+fn excluded_transport_errors_preserve_error_and_dispatch_state() {
+    for relay_allowed in [false, true] {
+        for retry in [false, true] {
+            for (kind, downstream, timeout_source) in [
+                (ErrorType::HTTPStatus(503), false, None),
+                (ErrorType::ReadError, true, None),
+                (ErrorType::InternalError, false, None),
+                (ErrorType::ReadTimedout, false, Some(PeerTimeoutSource::RequestDeadline)),
+                (ErrorType::WriteTimedout, false, Some(PeerTimeoutSource::GrpcDeadline)),
+                (ErrorType::ReadTimedout, false, None),
+            ] {
+                let mut ctx = ready_context(1);
+                crate::ai::runtime::dispatch::mark_ai_dispatch_started(&mut ctx).unwrap();
+                ctx.peer_timeout_source = timeout_source;
+                ctx.request_info
+                    .set_grpc_client_deadline(Instant::now() - Duration::from_secs(1));
+                let next = scheduler(&ctx).next_step();
+                let mut error = if downstream {
+                    Error::new_down(kind)
+                } else {
+                    Error::new_up(kind)
+                };
+                error.set_retry(retry);
+                let original = std::ptr::from_ref(error.as_ref());
+                let original_text = error.to_string();
+                let error = on_transport_failure(&mut ctx, transport(relay_allowed), error);
+                assert_eq!(std::ptr::from_ref(error.as_ref()), original);
+                assert_eq!(error.to_string(), original_text);
+                assert_eq!(error.retry(), retry);
+                assert_eq!(scheduler(&ctx).next_step(), next);
+                assert_eq!(scheduler(&ctx).dispatch_count(), 1);
+                assert!(scheduler(&ctx).failures().is_empty());
+                assert!(ctx.ai_state().unwrap().attempt_runtime.attempts().is_empty());
+                assert!(ctx.diagnostics.is_empty());
+                assert!(!ctx.retry_on_status);
+            }
+        }
+    }
+}
+
+#[test]
 fn absent_ai_connect_cleanup_keeps_ordinary_context_allocation_free() {
     let mut ctx = EdgionHttpContext::new();
     let mut error = Error::new_up(ErrorType::ConnectError);

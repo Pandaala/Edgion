@@ -343,16 +343,15 @@ pub(crate) fn on_transport_failure(
         return e;
     }
 
-    let failure_class = classify_ai_proxy_failure(e.etype(), e.esource(), ctx.peer_timeout_source);
+    let Some(failure_class) = classify_ai_proxy_failure(e.etype(), e.esource(), ctx.peer_timeout_source) else {
+        return e;
+    };
     let retry_allow_non_idempotent = ctx.retry_allow_non_idempotent();
     let common_retry_gates = transport.relay_allows_retry
         && !ctx.request_timeout_exceeded()
         && !ctx.grpc_deadline_exceeded()
         && !ctx.response_write_started()
         && !transport.final_response_written;
-    let Some(failure_class) = failure_class else {
-        return e;
-    };
     let wants_retry = ai_failure_wants_retry(failure_class, ctx.retry_configured(), retry_allow_non_idempotent);
     let gates_allow_retry = common_retry_gates
         && (failure_class == AiProxyFailureClass::BackendRequestTimeout || retry_allow_non_idempotent);
