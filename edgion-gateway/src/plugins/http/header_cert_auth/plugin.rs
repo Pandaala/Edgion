@@ -10,6 +10,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use percent_encoding::percent_decode_str;
 use pingora_core::tls::x509::X509;
+use std::borrow::Cow;
 use x509_parser::parse_x509_certificate;
 use x509_parser::pem::Pem;
 
@@ -223,8 +224,12 @@ impl HeaderCertAuth {
         let raw_value = header_value.trim();
         let cert = match self.config.certificate_header_format {
             CertHeaderFormat::Base64Encoded => {
-                let body: String = raw_value.chars().filter(|ch| !ch.is_ascii_whitespace()).collect();
-                let leaf_der = STANDARD.decode(body).map_err(|_| "invalid-base64-cert")?;
+                let body: Cow<'_, str> = if raw_value.bytes().any(|byte| byte.is_ascii_whitespace()) {
+                    Cow::Owned(raw_value.chars().filter(|ch| !ch.is_ascii_whitespace()).collect())
+                } else {
+                    Cow::Borrowed(raw_value)
+                };
+                let leaf_der = STANDARD.decode(body.as_bytes()).map_err(|_| "invalid-base64-cert")?;
                 self.verify_leaf_der(&leaf_der)?;
                 X509::from_der(&leaf_der).map_err(|_| "invalid-cert-pem")?
             }

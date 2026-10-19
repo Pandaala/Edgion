@@ -6526,3 +6526,20 @@ production code. Fresh verification passed all 19 CSRF tests, including known
 signature and fragment parity cases, formatting, workspace check/Clippy and seven
 guards. Existing unrelated warnings remain. No full test suite, live integration
 or benchmark ran. Updated the owning signature-input knowledge page.
+
+## Borrowed Base64 certificate normalization input
+
+HeaderCertAuth now borrows the trimmed Base64 certificate header when it has no
+ASCII whitespace. Whitespace-bearing input retains the existing character filter
+and owned normalization buffer. The detection scan and original filter recognize
+the same ASCII set, preserving strict decoder bytes and all later error ordering,
+DER verification and canonical identity extraction. URL and Connection modes are
+unchanged. The common path avoids a complete temporary input copy; whitespace
+input adds a scan to its first whitespace. No throughput claim is made.
+
+Independent plan review approved three files. Existing tests already cover clean
+and internally spaced/tabbed certificate headers, strict decoding, failure
+precedence, trailing DER and CA selection. All 20 HeaderCertAuth tests passed
+before and after the edit. Formatting, workspace check/Clippy and seven guards
+passed; existing unrelated warnings remain. Updated the owning Base64 leaf
+ownership knowledge. No full test suite, live TLS integration or benchmark ran.

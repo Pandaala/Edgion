@@ -15,6 +15,13 @@ and second leaf DER decode. This is structural evidence of removed work, without
 measured allocation, memory, latency or throughput claims. The canonical
 extractor's own SAN/OtherName DER work is separate.
 
+The Base64 normalization input borrows the trimmed header when it contains no
+ASCII whitespace. Otherwise it retains the existing character filter and owned
+String. The byte scan detects exactly the ASCII characters removed by that
+filter, preserving decoder input even for non-ASCII text. The no-whitespace path
+avoids the temporary full-input copy; the whitespace path adds a scan through
+the first whitespace. This is not a measured throughput improvement.
+
 Both formats share the same private borrowed-DER validity, issuer-Name and
 ordered direct signature verification loop. URL retains its percent-decoded PEM,
 first eligible nonempty `CERTIFICATE` selection in `verify_against_ca`, and
