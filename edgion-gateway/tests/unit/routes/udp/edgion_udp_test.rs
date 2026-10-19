@@ -112,12 +112,12 @@ fn make_test_session(proxy: &EdgionUdpProxy, last_activity: Instant) -> Arc<Clie
         lifecycle: Mutex::new(SessionLifecycle {
             last_activity,
             retired: false,
+            packets_sent: 0,
+            packets_received: 0,
+            bytes_sent: 0,
+            bytes_received: 0,
         }),
         session_start: last_activity,
-        packets_sent: AtomicU64::new(0),
-        packets_received: AtomicU64::new(0),
-        bytes_sent: AtomicU64::new(0),
-        bytes_received: AtomicU64::new(0),
     })
 }
 
@@ -288,12 +288,12 @@ async fn test_serve_exits_on_cancel() {
             lifecycle: Mutex::new(SessionLifecycle {
                 last_activity: Instant::now(),
                 retired: false,
+                packets_sent: 5,
+                packets_received: 3,
+                bytes_sent: 500,
+                bytes_received: 300,
             }),
             session_start: Instant::now(),
-            packets_sent: AtomicU64::new(5),
-            packets_received: AtomicU64::new(3),
-            bytes_sent: AtomicU64::new(500),
-            bytes_received: AtomicU64::new(300),
         }),
     );
 
@@ -397,12 +397,12 @@ async fn test_cleanup_expired_sessions() {
         lifecycle: Mutex::new(SessionLifecycle {
             last_activity: expired_time,
             retired: false,
+            packets_sent: 5,
+            packets_received: 3,
+            bytes_sent: 500,
+            bytes_received: 300,
         }),
         session_start: expired_time,
-        packets_sent: AtomicU64::new(5),
-        packets_received: AtomicU64::new(3),
-        bytes_sent: AtomicU64::new(500),
-        bytes_received: AtomicU64::new(300),
     });
 
     let direct_peer_addr: std::net::SocketAddr = "192.168.1.1:12345".parse().unwrap();
@@ -442,12 +442,12 @@ async fn test_cleanup_keeps_active_sessions() {
         lifecycle: Mutex::new(SessionLifecycle {
             last_activity: Instant::now(),
             retired: false,
+            packets_sent: 0,
+            packets_received: 0,
+            bytes_sent: 0,
+            bytes_received: 0,
         }),
         session_start: Instant::now(),
-        packets_sent: AtomicU64::new(0),
-        packets_received: AtomicU64::new(0),
-        bytes_sent: AtomicU64::new(0),
-        bytes_received: AtomicU64::new(0),
     });
 
     let direct_peer_addr: std::net::SocketAddr = "192.168.1.2:12346".parse().unwrap();
@@ -475,7 +475,7 @@ async fn expiry_candidate_refreshed_before_retirement_stays_active() {
     ));
     assert_eq!(proxy.session_count(), 1);
     assert!(!session.lifecycle.lock().retired);
-    assert_eq!(session.packets_sent.load(Ordering::Relaxed), 1);
+    assert_eq!(session.lifecycle.lock().packets_sent, 1);
 }
 
 #[tokio::test]
@@ -634,4 +634,35 @@ async fn policy_ancestor_refusal_preserves_selected_weight_and_skips_resolution(
     assert!(result.is_ok());
     assert_eq!(calls.get(), 1);
     store.replace_all(std::collections::HashMap::new());
+}
+
+#[tokio::test]
+async fn session_accounting_wraps_and_freezes_after_retirement() {
+    let proxy = make_test_proxy(19991).await;
+    let peer: SocketAddr = "192.0.2.10:12345".parse().unwrap();
+    let session = make_test_session(&proxy, Instant::now());
+    {
+        let mut lifecycle = session.lifecycle.lock();
+        lifecycle.packets_sent = u64::MAX;
+        lifecycle.packets_received = u64::MAX;
+        lifecycle.bytes_sent = u64::MAX;
+        lifecycle.bytes_received = u64::MAX;
+    }
+    proxy.client_sessions.insert(peer, session.clone());
+
+    EdgionUdpProxy::record_upstream_send_result(Ok(3), &session, proxy.listener_port, peer).await;
+    EdgionUdpProxy::record_downstream_send_result(Ok(5), &session, proxy.listener_port, peer).await;
+    assert!(EdgionUdpProxy::retire_session(
+        &proxy.client_sessions,
+        peer,
+        &session,
+        None
+    ));
+    let activity = session.lifecycle.lock().last_activity;
+    EdgionUdpProxy::record_upstream_send_result(Ok(7), &session, proxy.listener_port, peer).await;
+    EdgionUdpProxy::record_downstream_send_result(Ok(9), &session, proxy.listener_port, peer).await;
+    assert_eq!(session.lifecycle.lock().last_activity, activity);
+    let log = EdgionUdpProxy::session_log_entry(proxy.listener_port, peer, &session);
+    assert_eq!((log.packets_sent, log.packets_received), (0, 0));
+    assert_eq!((log.bytes_sent, log.bytes_received), (2, 4));
 }

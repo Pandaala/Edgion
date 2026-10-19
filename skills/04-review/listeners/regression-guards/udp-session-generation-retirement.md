@@ -34,7 +34,11 @@ reproduced network exploit or measured unbounded growth.
 
 The current implementation in
 `edgion-gateway/src/routes/udp/edgion_udp.rs` uses `SessionLifecycle` for
-`last_activity` and `retired`, and `retire_session` checks the map value by
+`last_activity`, `retired`, and the four packet/byte counters. Successful sends
+update counters with wrapping arithmetic under the existing lifecycle lock,
+preserving the former atomic-counter overflow behavior. Terminal logging takes
+a short counter snapshot under that lock and releases it before formatting or
+awaiting the logger. `retire_session` checks the map value by
 `Arc::ptr_eq` before marking it retired and removing it. Logging starts only
 after removal; the retired session is dropped before the logging await so the
 logger cannot prolong its resource ownership. The receiver checks its own
@@ -55,14 +59,24 @@ changed.
 
 ## Verification and re-evaluation
 
-The inline UDP tests cover refreshed expiry candidates, old-generation
+The tests in `edgion-gateway/tests/unit/routes/udp/edgion_udp_test.rs`
+cover refreshed expiry candidates, old-generation
 retirement after same-key recreation, old receiver exit despite a replacement,
 permit lifetime, and a receiver already waiting when error or cancellation
 arrives. `cargo test -p edgion-gateway --lib
-routes::udp::edgion_udp::tests::` passed: 20 tests, 0 failures. This is
+routes::udp::edgion_udp::tests::` originally passed: 20 tests, 0 failures. This is
 local lifecycle coverage without UDP datagram traffic.
 
-Re-evaluate if the session map changes key or ownership model, a second receiver
+The counter-ownership follow-up passed 59 UDP tests and four UDP log tests
+both before and after the production change. Its added regression exercises
+wrapping in both directions and proves late successful results leave retired
+counters and activity unchanged. Workspace check/Clippy, formatting and the
+repository guards passed. No live wire test or throughput benchmark ran for
+this follow-up; it removes two atomic read-modify-write operations per accounted
+successful datagram while retaining the existing mutex.
+
+Re-evaluate if counter readers are added before retirement or producer completion,
+the session map changes key or ownership model, a second receiver
 is introduced, the UDP timeout becomes configurable, or terminal logging or
 permit ownership moves to another task.
 

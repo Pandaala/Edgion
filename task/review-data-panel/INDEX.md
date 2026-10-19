@@ -6666,3 +6666,19 @@ failed the known response-cache admission fixture recorded in verification-01;
 that group is not reported as passing. Formatting check, workspace check/Clippy
 and agent-doc validation passed. Existing warnings remain; no full suite, live
 conformance or benchmark ran.
+
+## UDP counters under the lifecycle lock
+
+Moved the four session counters into the lifecycle state already locked by every
+successful send result. Wrapping addition preserves atomic-counter overflow
+semantics, and retirement still freezes accounting and activity together.
+Terminal log construction snapshots counters under a short lock released before
+formatting or awaiting. Normal shutdown still joins producers before logging.
+This removes two atomic read-modify-write operations per accounted successful
+datagram; no measured throughput improvement is claimed.
+
+Independent plan review approved four files. The added regression first passed
+on the atomic implementation, then passed after the ownership change: 59 UDP
+and four UDP log tests in each run (63 total). Formatting, workspace check/Clippy
+and seven guards passed. Existing unrelated warnings remain; no full suite,
+live integration or benchmark ran.

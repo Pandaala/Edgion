@@ -4,7 +4,6 @@ use dashmap::{mapref::entry::Entry, DashMap};
 use parking_lot::Mutex;
 use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
 use std::future::Future;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
@@ -124,15 +123,15 @@ struct ClientSession {
     upstream_addr: std::net::SocketAddr,
     lifecycle: Mutex<SessionLifecycle>,
     session_start: Instant,
-    packets_sent: AtomicU64,
-    packets_received: AtomicU64,
-    bytes_sent: AtomicU64,
-    bytes_received: AtomicU64,
 }
 
 struct SessionLifecycle {
     last_activity: Instant,
     retired: bool,
+    packets_sent: u64,
+    packets_received: u64,
+    bytes_sent: u64,
+    bytes_received: u64,
 }
 
 trait UpstreamDatagramReceiver: Send + Sync {
@@ -464,12 +463,12 @@ impl EdgionUdpProxy {
             lifecycle: Mutex::new(SessionLifecycle {
                 last_activity: Instant::now(),
                 retired: false,
+                packets_sent: 0,
+                packets_received: 0,
+                bytes_sent: 0,
+                bytes_received: 0,
             }),
             session_start: Instant::now(),
-            packets_sent: AtomicU64::new(0),
-            packets_received: AtomicU64::new(0),
-            bytes_sent: AtomicU64::new(0),
-            bytes_received: AtomicU64::new(0),
         });
 
         let session = match self.client_sessions.entry(direct_peer_addr) {
@@ -571,8 +570,8 @@ impl EdgionUdpProxy {
             Ok(bytes_sent) => {
                 let mut lifecycle = session.lifecycle.lock();
                 if !lifecycle.retired {
-                    session.packets_sent.fetch_add(1, Ordering::Relaxed);
-                    session.bytes_sent.fetch_add(bytes_sent as u64, Ordering::Relaxed);
+                    lifecycle.packets_sent = lifecycle.packets_sent.wrapping_add(1);
+                    lifecycle.bytes_sent = lifecycle.bytes_sent.wrapping_add(bytes_sent as u64);
                     lifecycle.last_activity = Instant::now();
                 }
             }
@@ -598,8 +597,8 @@ impl EdgionUdpProxy {
             Ok(bytes_sent) => {
                 let mut lifecycle = session.lifecycle.lock();
                 if !lifecycle.retired {
-                    session.packets_received.fetch_add(1, Ordering::Relaxed);
-                    session.bytes_received.fetch_add(bytes_sent as u64, Ordering::Relaxed);
+                    lifecycle.packets_received = lifecycle.packets_received.wrapping_add(1);
+                    lifecycle.bytes_received = lifecycle.bytes_received.wrapping_add(bytes_sent as u64);
                     lifecycle.last_activity = Instant::now();
                 }
             }
@@ -686,6 +685,15 @@ impl EdgionUdpProxy {
         direct_peer_addr: std::net::SocketAddr,
         session: &ClientSession,
     ) -> UdpLogEntry {
+        let (packets_sent, packets_received, bytes_sent, bytes_received) = {
+            let lifecycle = session.lifecycle.lock();
+            (
+                lifecycle.packets_sent,
+                lifecycle.packets_received,
+                lifecycle.bytes_sent,
+                lifecycle.bytes_received,
+            )
+        };
         UdpLogEntry::new(
             listener_port,
             crate::ctx::canonicalize_ip(direct_peer_addr.ip()),
@@ -693,12 +701,7 @@ impl EdgionUdpProxy {
             Some(session.upstream_addr.to_string()),
             session.session_start,
         )
-        .with_stats(
-            session.packets_sent.load(Ordering::Relaxed),
-            session.packets_received.load(Ordering::Relaxed),
-            session.bytes_sent.load(Ordering::Relaxed),
-            session.bytes_received.load(Ordering::Relaxed),
-        )
+        .with_stats(packets_sent, packets_received, bytes_sent, bytes_received)
     }
 
     /// Visible for testing: current session count.
