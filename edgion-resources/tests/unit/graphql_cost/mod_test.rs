@@ -635,3 +635,28 @@ fn populated_out_of_range_rule_index_rejects_instead_of_default_charging() {
         assert_eq!(estimate(&m, "{x}"), Err(GraphqlError::Invalid));
     }
 }
+
+#[test]
+fn inline_fragment_type_context_preserves_cost_and_exact_work() {
+    let m = model("type Query { x:Int }", &[])
+        .with_root_fields(["Query.x"])
+        .unwrap();
+    for (query, steps) in [
+        ("{x}", 5),
+        ("{...{x}}", 11),
+        ("{... on Query{x}}", 11),
+        ("{...{...{x}}}", 17),
+        ("{... on Query{...{x}}}", 17),
+        ("{...{... on Query{x}}}", 17),
+    ] {
+        let report = estimate_with_remaining_work(&m, query, steps).unwrap();
+        assert_eq!(report.total, 2, "{query}");
+        assert_eq!(report.roots[0], 1, "{query}");
+        assert!(report.roots[1..].iter().all(|cost| *cost == 0));
+        assert_eq!(
+            estimate_with_remaining_work(&m, query, steps - 1),
+            Err(GraphqlError::Invalid),
+            "{query}"
+        );
+    }
+}

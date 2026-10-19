@@ -3,6 +3,7 @@ use super::{CompiledGraphqlCost, GraphqlError, GraphqlQuotaCosts, MAX_RECURSION,
 use crate::graphql_request::{directives, name, GraphqlOperationType, ParsedGraphqlRequest, Work, MAX_TOKENS};
 use apollo_parser::cst;
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 impl CompiledGraphqlCost {
@@ -104,8 +105,8 @@ impl Evaluation<'_> {
                 }
                 cst::Selection::InlineFragment(f) => {
                     let target = match f.type_condition() {
-                        Some(t) => name(t.named_type().and_then(|t| t.name()))?,
-                        None => ty.to_string(),
+                        Some(t) => Cow::Owned(name(t.named_type().and_then(|t| t.name()))?),
+                        None => Cow::Borrowed(ty),
                     };
                     self.condition(ty, "", &target)?;
                     self.validate_set(&f.selection_set().ok_or(GraphqlError::Invalid)?, &target, recursion + 1)?;
@@ -200,8 +201,8 @@ impl Evaluation<'_> {
                 cst::Selection::InlineFragment(f) => {
                     directives(f.directives(), &mut self.work)?;
                     let ty = match f.type_condition() {
-                        Some(t) => name(t.named_type().and_then(|t| t.name()))?,
-                        None => static_ty.to_string(),
+                        Some(t) => Cow::Owned(name(t.named_type().and_then(|t| t.name()))?),
+                        None => Cow::Borrowed(static_ty),
                     };
                     if self.condition(static_ty, object, &ty)? {
                         self.object_set(

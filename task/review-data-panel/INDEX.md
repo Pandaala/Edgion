@@ -4555,3 +4555,25 @@ seven shared GraphQL tests. Formatting, workspace check/Clippy and seven reposit
 guards passed; existing warnings remain outside the diff. The claim is removal
 of MIME allocation for the two exact bare types, not measured throughput. No live
 transport or performance benchmark ran.
+
+## Borrowed GraphQL inline-fragment type context
+
+Traced Gateway GraphqlGuard/GraphqlRateLimit evaluation into the shared Resources
+cost visitor. Untyped inline fragments now borrow their current static type name
+in both static validation and concrete-object evaluation instead of allocating a
+temporary String. Typed fragments retain their existing owned name extraction.
+The exact supporting cross-crate scope is graphql_cost/request.rs and its existing
+cost-model test module. No schema representation, parser ownership, admission,
+Work charge, directive, recursion or error ordering changed.
+
+A new regression first passed against the original implementation, then against
+the borrowed implementation. Plain, typed, untyped and mixed nested fragments
+retain total cost two and root charge one; exact remaining Work thresholds are
+five, eleven and seventeen, with rejection one step below each. Existing tests
+also cover covariance, abstract types, malformed fragments and bounded traversal.
+Fresh serial verification passed 53 tests: 24 cost-model, 13 GraphQL frontend,
+four Gateway guard, five Gateway rate-limit and seven shared evaluation tests.
+Formatting, workspace check/Clippy, seven repository guards and diff hygiene
+passed; existing warnings remain outside the diff. This removes two allocation
+sites for untyped-fragment visits, not all name allocations or repeated frontend
+parsing. No allocation benchmark, live Redis or throughput test ran.
