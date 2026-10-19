@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Rejected circuit-breaker permit owner copy](lb-02-rejected-permit-owner-copy.md)
+
 - [gRPC timeout header storage](grpc-06-timeout-header-storage.md)
 
 - [Transcoder terminal logging owner borrow](grpc-05-terminal-log-owner-borrow.md)
@@ -5896,3 +5898,19 @@ escaped keys, empty versus absent fields, disabled modes, Retry count/error and
 missing latency. Fresh serial verification passed ten logging and three metrics
 tests. Formatting, workspace check/Clippy and seven repository guards passed
 with existing unrelated warnings. No live integration or performance benchmark ran.
+
+## Rejected circuit-breaker admission owner audit
+
+Rechecked upstream_peer admission through CbPermit and the endpoint atomic
+counter. Success retains the copied backend Arc in the RAII permit; rejection
+drops it. Borrowing until admission succeeds could remove one reference-count
+pair only on rejection, with no payload allocation saving. The current whole-
+context accessor and release-before-acquire ordering need a reviewed borrow
+arrangement. This is distinct from the earlier Service-key String optimization.
+
+Recorded the value/API choice in lb-02-rejected-permit-owner-copy.md; no runtime
+change was made. Independent plan review approved the two-document scope.
+Fresh serial baseline verification passed five permit and 104 upstream-peer
+tests, formatting check, workspace check/Clippy and agent-doc validation with
+existing unrelated warnings. This does not verify a future borrowed API or
+claim saturated-load throughput improvement.
