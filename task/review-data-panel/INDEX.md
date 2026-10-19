@@ -4396,3 +4396,23 @@ Fresh verification passed 72 network-free tests: 22 adaptive telemetry,
 workspace check/Clippy, seven repository guards and diff hygiene passed.
 Existing warnings remain outside changed code. No live transport or throughput
 benchmark ran.
+
+## Borrowed EdgionConfigData store accessor
+
+Canary and RegionRoute now borrow the process-global EdgionConfigDataStore
+instead of cloning an outer Arc solely to call borrowed methods. The direct
+LazyLock retains process lifetime, and the existing ConfHandler Deref blanket
+supports the factory's boxed static reference. One test call drops its redundant
+reference/dereference; its fixture and assertions are unchanged.
+
+Owned snapshot handles, retained resource Arcs, compiled IP matchers and paired
+region-table proofs remain unchanged. Partial publication, generation consistency,
+fallback and configuration validation retain their existing owners and behavior.
+This removes redundant outer reference-count operations without establishing a
+throughput improvement.
+
+Fresh serial verification passed 96 network-free tests: 22 configuration-data,
+15 Canary, 23 RegionRoute, 11 stream GeoIP, 17 HTTP generation and eight stream
+generation tests. Formatting, workspace check/Clippy, seven repository guards and
+diff hygiene passed. Existing warnings remain outside changed code. No live
+transport or throughput benchmark ran.

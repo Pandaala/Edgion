@@ -20,11 +20,10 @@ use edgion_algo::matcher::radix_ip::IpRadixMatcher;
 use edgion_common::conf_sync::traits::ConfHandler;
 use edgion_resources::resources::edgion_config_data::{ConfigEntry, EdgionConfigData, RegionTableValidation};
 
-static GLOBAL_EDGION_CONFIG_DATA_STORE: LazyLock<Arc<EdgionConfigDataStore>> =
-    LazyLock::new(|| Arc::new(EdgionConfigDataStore::new()));
+static GLOBAL_EDGION_CONFIG_DATA_STORE: LazyLock<EdgionConfigDataStore> = LazyLock::new(EdgionConfigDataStore::new);
 
-pub fn get_global_edgion_config_data_store() -> Arc<EdgionConfigDataStore> {
-    GLOBAL_EDGION_CONFIG_DATA_STORE.clone()
+pub fn get_global_edgion_config_data_store() -> &'static EdgionConfigDataStore {
+    &GLOBAL_EDGION_CONFIG_DATA_STORE
 }
 
 pub(crate) fn capture_global_edgion_config_data_snapshot() -> EdgionConfigDataSnapshot {

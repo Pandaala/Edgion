@@ -323,7 +323,7 @@ fn create_plugin(config: &GeoIpLocationConfig) -> Result<GeoIpLocationStreamPlug
     let binding = prepared.bind_stream_plugins(&owner).unwrap();
     let plugin = GeoIpLocationStreamPlugin::from_bound(binding.geo_entry(0).unwrap())?;
     edgion_common::conf_sync::traits::ConfHandler::partial_update(
-        &*crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store(),
+        crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store(),
         geo_data(),
         Default::default(),
         Default::default(),
