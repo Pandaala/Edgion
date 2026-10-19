@@ -241,7 +241,7 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
         ctx.redirect_url = self.build_redirect_url_from_parts(&ctx.host, &ctx.path);
 
         let mut resp = ResponseHeader::build(StatusCode::MOVED_PERMANENTLY, Some(3))?;
-        resp.insert_header("Location", &redirect_url)?;
+        resp.insert_header("Location", redirect_url)?;
         resp.insert_header("Content-Length", "0")?;
 
         // Send response and signal early return (true = don't continue to upstream)

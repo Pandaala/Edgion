@@ -6872,3 +6872,19 @@ verification passed those 85 tests plus eight logger tests (93 total), including
 existing isolated Off/Replace/Wrap masking checks. Formatting, workspace
 check/Clippy and six specialized guards passed with existing unrelated warnings.
 No full suite, live TLS connection or allocation/throughput benchmark ran.
+
+## Redirect listener Location ownership transfer
+
+The dedicated HTTP-to-HTTPS redirect callback now moves its completed Location
+String into Pingora's header insertion instead of passing a borrowed String.
+Pinned http 1.5 validates both forms identically, but the owned conversion feeds
+Bytes directly and avoids copying the payload. The local String had no later
+consumer. Query/percent encoding, raw authority and IPv6 handling, port choice,
+header order and the separate query-free log URL remain unchanged.
+
+Bytes may allocate shared metadata and retain spare String capacity; this is
+not a zero-allocation header or throughput claim. Independent plan review passed.
+Fresh baseline and final verification each passed 13 redirect tests, including
+in-memory wire and connection-reuse cases. Formatting, workspace check/Clippy
+and six specialized guards passed with existing unrelated warnings. No full
+suite, external-network integration or allocation/throughput benchmark ran.
