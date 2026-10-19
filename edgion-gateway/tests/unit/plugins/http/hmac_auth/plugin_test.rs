@@ -883,3 +883,43 @@ fn body_digest_comparison_uses_stack_storage_and_exact_canonical_encoding() {
     let trimmed = HmacAuth::parse_body_digest_header(&header).unwrap();
     assert!(HmacAuth::body_digest_matches(&[0u8; 32], trimmed));
 }
+
+#[test]
+fn lowercase_authorization_parameter_keys_avoid_temporary_copies() {
+    let lower = r#"hmac username="alice", algorithm="hmac-sha256", headers="date", signature="YQ==""#;
+    let upper = r#"hmac USERNAME="alice", ALGORITHM="hmac-sha256", HEADERS="date", SIGNATURE="YQ==""#;
+    HmacAuth::parse_authorization(lower).unwrap();
+    HmacAuth::parse_authorization(upper).unwrap();
+    let (lower_params, lower_stats) =
+        crate::test_allocation_counter::count_allocation_stats(|| HmacAuth::parse_authorization(lower).unwrap());
+    let (upper_params, upper_stats) =
+        crate::test_allocation_counter::count_allocation_stats(|| HmacAuth::parse_authorization(upper).unwrap());
+    assert_eq!(lower_params.username, upper_params.username);
+    assert_eq!(lower_params.algorithm, upper_params.algorithm);
+    assert_eq!(lower_params.headers, upper_params.headers);
+    assert_eq!(lower_params.signature, upper_params.signature);
+    assert_eq!(lower_stats.calls + 4, upper_stats.calls);
+    let key_bytes = ["username", "algorithm", "headers", "signature"]
+        .iter()
+        .map(|key| key.len())
+        .sum::<usize>();
+    assert_eq!(lower_stats.requested_bytes + key_bytes, upper_stats.requested_bytes);
+}
+
+#[test]
+fn authorization_parameter_keys_keep_ascii_only_case_folding() {
+    let base = r#"hmac username="alice", algorithm="hmac-sha256", headers="date", signature="YQ==""#;
+    for suffix in [
+        r#", éxtra="ok", éXTRA=unquoted"#,
+        r#", EXTRA="ok", extra=unquoted"#,
+        r#", ="empty""#,
+    ] {
+        assert_eq!(
+            HmacAuth::parse_authorization(&format!("{base}{suffix}")).unwrap_err(),
+            "Invalid HMAC authorization format"
+        );
+    }
+    let params = HmacAuth::parse_authorization(&format!(r#"{base}, Éxtra="one", éxtra="two""#)).unwrap();
+    assert_eq!(params.username, "alice");
+    assert_eq!(params.signature, b"a");
+}

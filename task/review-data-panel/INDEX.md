@@ -5980,3 +5980,26 @@ passed 24 session-persistence, seven LB runtime-state and four direct response
 filter tests, formatting check, workspace check/Clippy and agent-doc validation.
 Existing unrelated warnings remain. Future metadata layout and saturated or
 ordinary throughput benefits have not been measured.
+
+## Borrow already-normalized HMAC parameter keys
+
+The synchronous Authorization parser now stores Cow keys in its temporary map.
+Trimmed keys without ASCII uppercase bytes borrow the input; keys needing ASCII
+folding retain the existing owned lowercase conversion. Hash/equality/remove use
+the same str content. Empty-key rejection, duplicate-before-value error ordering,
+unknown quoted-value validation and final owned authentication outputs are unchanged.
+No borrow reaches authentication side effects or asynchronous body capture.
+
+Independent plan review approved four files, including the owning wire-contract
+knowledge page. A valid four-parameter lowercase/uppercase comparison passed all
+semantic assertions on original production, then failed its expected allocation
+delta: both originally allocated 12 times. After the change the lowercase form
+requires four fewer allocation calls and 33 fewer requested bytes than its
+otherwise identical uppercase form. Case-folding regressions retain mixed-ASCII
+non-ASCII duplicate rejection and distinct uppercase/lowercase accented bytes.
+Uppercase keys still allocate and perform a preliminary ASCII scan; no measured
+throughput benefit or whole-parser zero-allocation claim is made.
+
+Fresh serial verification passed 55 HMAC-filtered and 68 condition-system tests
+(the filters overlap), formatting, workspace check/Clippy and seven repository
+guards with existing unrelated warnings. No live integration suite was run.

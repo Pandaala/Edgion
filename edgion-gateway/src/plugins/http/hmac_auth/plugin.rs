@@ -376,17 +376,22 @@ impl HmacAuth {
             return Err("Invalid HMAC authorization format");
         }
 
-        let mut params: HashMap<String, Cow<'_, str>> = HashMap::new();
+        let mut params: HashMap<Cow<'_, str>, Cow<'_, str>> = HashMap::new();
         for part in Self::split_auth_params(params_str) {
             if part.is_empty() {
                 continue;
             }
             let (key, value_raw) = part.split_once('=').ok_or("Invalid HMAC authorization format")?;
-            let key = key.trim().to_ascii_lowercase();
+            let key = key.trim();
+            let key = if key.bytes().any(|byte| byte.is_ascii_uppercase()) {
+                Cow::Owned(key.to_ascii_lowercase())
+            } else {
+                Cow::Borrowed(key)
+            };
             if key.is_empty() {
                 return Err("Invalid HMAC authorization format");
             }
-            if params.contains_key(&key) {
+            if params.contains_key(key.as_ref()) {
                 return Err("Invalid HMAC authorization format");
             }
             let value = Self::parse_quoted_value(value_raw)?;

@@ -64,6 +64,9 @@ owned before verification or asynchronous body capture begins.
 This changes temporary ownership only. Outer quote checks, permissive inner quote
 handling, arbitrary escaped characters, trailing-backslash rejection, lowercase
 parameter keys and signed-header duplicate rejection retain their current behavior.
+Parameter keys without ASCII uppercase bytes also borrow their trimmed input;
+keys requiring ASCII folding retain owned lowercase storage. The map hashes and
+compares the resulting str values identically, including non-ASCII bytes.
 Unknown parameters are still accepted after validating their quoted values;
 duplicate keys still fail before parsing the duplicate value. This is not a new
 wire format or a relaxation of authentication, timestamp or body-order checks.
