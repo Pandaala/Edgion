@@ -28,6 +28,7 @@ destination.
 
 ## Deferred decisions
 
+- [Precomputed backend TLS pool-identity composition](tls-02-precomputed-pool-composition.md)
 - [ExternalName DNS address-result ownership](dns-01-address-result-ownership.md)
 - [Precomputed fractional Peak-EWMA decay](lb-01-precomputed-ewma-decay.md)
 - [Incremental attempt-log size accounting](log-02-incremental-attempt-size.md)
@@ -4363,3 +4364,16 @@ code and tests are unchanged. Fresh verification passed 73 network-free tests:
 47 canonical-cache, 20 DNS-cache, four address-safety and two native DNS-boundary
 tests. Formatting, workspace check/Clippy and document/diff validation passed.
 No result-representation prototype or throughput benchmark ran.
+
+## Backend TLS pool-composition audit
+
+Peer construction retains necessary native certificate/CA/hook ownership and
+already-prepared policy/Gateway fingerprints. Only selected Gateway fallback
+identity adds a fixed 102-byte SHA-256 composition per peer; the no-fallback path
+reads the prepared policy group key. [tls-02](tls-02-precomputed-pool-composition.md)
+records prefix-state and complete-combination precomputation tradeoffs, including
+live Gateway rotation beside captured policy generations. Production code and
+tests are unchanged. Fresh serial verification passed 58 network-free tests:
+22 peer-builder, 33 policy and three Gateway TLS store tests. Formatting,
+workspace check/Clippy and document/diff validation passed. No prototype,
+throughput benchmark or live TLS/pool verification ran.
