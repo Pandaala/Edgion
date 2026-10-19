@@ -15,18 +15,18 @@ impl OpenidConnect {
     /// Deployments terminating TLS in front of the gateway must configure an
     /// absolute URL instead. `https` stays the fallback when the connection state
     /// is unavailable.
-    pub(super) fn request_scheme(session: &dyn PluginSession) -> String {
+    pub(super) fn request_scheme(session: &dyn PluginSession) -> &'static str {
         match session.downstream_is_tls() {
-            Some(false) => "http".to_string(),
-            _ => "https".to_string(),
+            Some(false) => "http",
+            _ => "https",
         }
     }
 
-    pub(super) fn request_host(session: &dyn PluginSession) -> Option<String> {
+    pub(super) fn request_host(session: &dyn PluginSession) -> Option<&str> {
         if let Some(v) = session.header_str("host") {
             let host = Self::trim_forwarded_header(v);
             if !host.is_empty() {
-                return Some(host.to_string());
+                return Some(host);
             }
         }
         None

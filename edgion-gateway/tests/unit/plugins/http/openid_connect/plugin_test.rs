@@ -505,6 +505,33 @@ fn select_jwk_kid_algorithm_mismatch_does_not_scan_later_duplicate_kid() {
 }
 
 #[test]
+fn request_host_borrows_trimmed_first_host_value() {
+    use crate::plugins::runtime::PluginSessionHeaderExt;
+
+    for (raw, expected) in [
+        (Some("  api.example.com , ignored.example"), Some("api.example.com")),
+        (Some("api.example.com"), Some("api.example.com")),
+        (Some(""), None),
+        (Some(" \t"), None),
+        (Some(",ignored.example"), None),
+        (None, None),
+    ] {
+        let mut session = MockPluginSession::new();
+        if let Some(raw) = raw {
+            setup_header_mocks(&mut session, &[("host", raw)]);
+        } else {
+            setup_header_mocks(&mut session, &[]);
+        }
+        let host = OpenidConnect::request_host(&session);
+        assert_eq!(host, expected);
+        if let Some(host) = host {
+            let raw = session.header_str("host").expect("host header");
+            assert_eq!(host.as_ptr(), raw.trim_start().as_ptr());
+        }
+    }
+}
+
+#[test]
 fn path_redirect_uris_ignore_x_forwarded_host() {
     let mut cfg = base_config();
     cfg.redirect_uri = Some("/oidc/callback".to_string());

@@ -8021,3 +8021,20 @@ workspace check/Clippy and seven repository guards with existing unrelated
 warnings. The existing signed-token regression covers client-ID audience override,
 wrong audience, nonce mismatch and old-generation policy retention. No new
 mirror test, full suite or throughput benchmark ran.
+
+## Borrow OIDC redirect host and scheme components
+
+Path-form callback and post-logout URI construction now uses a static scheme
+and a Host slice borrowed from the request HeaderMap. The two synchronous
+consumers still format their final owned URI. TLS false selects http; TLS true
+or unknown selects https. Host keeps first-comma selection, trimming and nonempty
+validation, while forwarded Host/proto remain untrusted. No URL validation,
+missing-host outcome, final allocation or configuration behavior changed.
+
+A focused regression covers borrowed Host identity, trimmed first values,
+empty/whitespace/absent Host and an empty first comma component. Existing
+forwarded-header and TLS-state tests remain. Fresh verification passed 152 OIDC
+tests with 16 existing ignores, formatting, workspace check/Clippy and seven
+repository guards with existing unrelated warnings. The scoped benefit is
+removing intermediate host and scheme String allocations for path-form URI
+composition. No full suite or throughput benchmark ran.
