@@ -170,6 +170,11 @@ async fn selector_switches_active_profile() {
     );
     let config = two_profile_config(ns, "sel-open");
     let plugin = from_owner(&fixture_owner(&config, ns)).expect("valid config");
+    let view = capture_global_edgion_config_data_snapshot();
+    let selected = plugin
+        .resolve_active_acl_from_snapshot(&view, plugin.active_profile_ref_key.as_deref().unwrap())
+        .unwrap();
+    assert!(std::ptr::eq(selected, plugin.profiles["open"].as_ref()));
     // Selector switches active profile to "open" → 8.8.8.8 is allowed.
     let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080, StreamLayer::Stage1);
     assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Allow));

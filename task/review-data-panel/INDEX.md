@@ -7085,3 +7085,21 @@ path, so repeated resets are not necessarily repeated wheel registration.
 Runtime and tests remain unchanged. Fresh baseline verification passed 21 relay
 tests, formatting, workspace check/Clippy and document consistency with existing
 unrelated warnings. No candidate benchmark or live integration ran.
+
+## Borrow the selected GCIR ACL after one profile lookup
+
+GlobalConnectionIpRestriction's Selector resolver now returns the borrowed
+compiled ACL instead of returning its name after contains_key validation.
+A valid Selector override therefore performs one profile-map lookup instead
+of contains_key followed by get. Base fallback stays lazy; missing, disabled,
+null, unknown-profile and wrong-type Selector branches retain their diagnostics.
+Missing compiled profiles still fail closed. Selection and membership continue
+to use one captured ConfigData generation, with no new cache, Arc clone or
+matcher projection. This is a lookup reduction, not an allocation or throughput
+claim, and is separate from the existing precomputed reference-key mechanism.
+
+Independent plan review passed. Baseline GCIR verification passed 16 tests;
+fresh verification passed 42 tests: 16 GCIR, 4 shared ACL and 22 ConfigData.
+The existing successful-switch test also checks selected ACL pointer identity.
+Formatting, workspace check/Clippy and seven guards passed with existing
+unrelated warnings. No full suite or live integration ran.

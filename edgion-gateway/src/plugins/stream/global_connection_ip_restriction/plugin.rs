@@ -51,49 +51,44 @@ impl GlobalConnectionIpRestrictionPlugin {
             active_profile_ref_key,
         })
     }
-    /// Resolve the effective active-profile **name** for this connection.
+    /// Borrow the effective compiled ACL for this connection.
     ///
-    /// A selector can only choose another git-owned profile, so this returns just the profile
-    /// name — no rule-data clone on the hot path. Every error / `active: null` / disabled path
-    /// returns the base default (`active_profile`), i.e. fail-to-base. The caller indexes
-    /// `self.profiles` with the returned name (matchers already compiled at construction).
-    fn resolve_active_profile_from_snapshot<'a>(
+    /// Selectors can only choose a configured profile. Errors, a null selection
+    /// and disabled selectors fall back to the base profile without cloning it.
+    fn resolve_active_acl_from_snapshot<'a>(
         &'a self,
-        snapshot: &'a EdgionConfigDataSnapshot,
+        snapshot: &EdgionConfigDataSnapshot,
         selector_key: &str,
-    ) -> &'a str {
+    ) -> Option<&'a CompiledIpAcl> {
         let raw_ed = snapshot.get_raw_by_key(selector_key);
 
         // Envelope kill-switch: spec.enable=false means the operator disabled this
         // EdgionConfigData entirely. Ignore the selector; use base.
         if raw_ed.map(|ed| !ed.spec.enable).unwrap_or(false) {
             record_conn_ip_restriction_event("overlay_disabled");
-            return self.active_profile.as_str();
+            return self.profiles.get(&self.active_profile).map(Arc::as_ref);
         }
 
         match raw_ed.map(|ed| &ed.spec.data) {
             None => {
                 // activeProfileRef set but EdgionConfigData not found in the store.
                 record_conn_ip_restriction_event("overlay_missing");
-                self.active_profile.as_str()
             }
             Some(ConfigEntry::Selector(sel)) => match sel.active.as_deref() {
                 // `active: null` / absent → deliberate no-op (use base).
-                None => self.active_profile.as_str(),
-                // Valid switch among the git-owned profiles.
-                Some(name) if self.profiles.contains_key(name) => name,
-                // Selector names a profile that does not exist in the git-owned profiles.
-                Some(_) => {
-                    record_conn_ip_restriction_event("overlay_invalid");
-                    self.active_profile.as_str()
-                }
+                None => {}
+                Some(name) => match self.profiles.get(name) {
+                    Some(plan) => return Some(plan.as_ref()),
+                    // Selector names a profile that does not exist in the configured profiles.
+                    None => record_conn_ip_restriction_event("overlay_invalid"),
+                },
             },
             Some(_) => {
                 // EdgionConfigData found but it is not a Selector variant.
                 record_conn_ip_restriction_event("overlay_type_mismatch");
-                self.active_profile.as_str()
             }
         }
+        self.profiles.get(&self.active_profile).map(Arc::as_ref)
     }
 }
 #[async_trait]
@@ -107,12 +102,11 @@ impl StreamPlugin for GlobalConnectionIpRestrictionPlugin {
         }
         // Profile selection and all list reads use this one owned generation.
         let view = capture_global_edgion_config_data_snapshot();
-        let active = self
-            .active_profile_ref_key
-            .as_deref()
-            .map(|key| self.resolve_active_profile_from_snapshot(&view, key))
-            .unwrap_or(self.active_profile.as_str());
-        let Some(plan) = self.profiles.get(active) else {
+        let plan = match self.active_profile_ref_key.as_deref() {
+            Some(key) => self.resolve_active_acl_from_snapshot(&view, key),
+            None => self.profiles.get(&self.active_profile).map(Arc::as_ref),
+        };
+        let Some(plan) = plan else {
             record_conn_ip_restriction_event("fail_closed_profile_missing");
             return StreamPluginResult::Deny("ip:deny:profile-missing".into());
         };
