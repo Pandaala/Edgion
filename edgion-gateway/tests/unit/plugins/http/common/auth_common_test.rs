@@ -662,3 +662,74 @@ fn auth_challenge_plain_fields_need_one_exact_output_allocation() {
         assert_eq!(stats.requested_bytes, challenge.len());
     }
 }
+
+#[test]
+fn auth_error_body_preserves_bytes_with_one_exact_allocation() {
+    let long = "x".repeat(4096);
+    let mut unexpected_allocation = None;
+    for status in [0u16, 1, 9, 10, 99, 1000, 9999, 10000, u16::MAX]
+        .into_iter()
+        .chain(100..=999)
+    {
+        for body in ["", "Denied", "a\"b\\c", "a\r\n\tb\0", "café €", long.as_str()] {
+            let expected = format!("{status} {body}");
+            let (actual, stats) =
+                crate::test_allocation_counter::count_allocation_stats(|| super::build_auth_error_body(status, body));
+            assert_eq!(actual.as_ref(), expected.as_bytes());
+            if stats.calls != 1 || stats.requested_bytes != actual.len() {
+                unexpected_allocation.get_or_insert((
+                    status,
+                    body.len(),
+                    stats.calls,
+                    stats.requested_bytes,
+                    actual.len(),
+                ));
+            }
+        }
+    }
+    assert_eq!(
+        unexpected_allocation, None,
+        "body construction must allocate exactly the output bytes once"
+    );
+}
+
+#[tokio::test]
+async fn auth_error_response_stops_at_the_first_write_failure() {
+    for fail_header in [false, true] {
+        let mut session = MockPluginSession::new();
+        let mut sequence = Sequence::new();
+        session
+            .expect_write_response_header()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(move |_, _| {
+                if fail_header {
+                    Err(std::io::Error::other("header rejected").into())
+                } else {
+                    Ok(())
+                }
+            });
+        if fail_header {
+            session.expect_write_response_body().times(0);
+        } else {
+            session
+                .expect_write_response_body()
+                .withf(|body, eos| *eos && body.as_deref() == Some(b"401 Denied".as_slice()))
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|_, _| Err(std::io::Error::other("body rejected").into()));
+        }
+        session.expect_shutdown().times(0);
+        let error = send_gateway_auth_error_response(&mut session, 401, "Bearer", "edgion", None, "Denied")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            if fail_header {
+                "header rejected"
+            } else {
+                "body rejected"
+            }
+        );
+    }
+}

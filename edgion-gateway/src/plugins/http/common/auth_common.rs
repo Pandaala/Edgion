@@ -200,10 +200,17 @@ pub async fn send_gateway_auth_error_response(
 
     session.write_response_header(Box::new(resp), false).await?;
     session
-        .write_response_body(Some(Bytes::from(format!("{} {}", status, body))), true)
+        .write_response_body(Some(build_auth_error_body(status, body)), true)
         .await?;
     session.shutdown().await;
     Ok(())
+}
+
+fn build_auth_error_body(status: u16, body: &str) -> Bytes {
+    let status_width = status.checked_ilog10().unwrap_or(0) as usize + 1;
+    let mut output = String::with_capacity(status_width + 1 + body.len());
+    let _ = write!(output, "{status} {body}");
+    Bytes::from(output)
 }
 
 /// Assemble a challenge from an already escaped realm and the existing error fields.

@@ -6139,3 +6139,27 @@ Fresh verification passed 34 shared-auth, 14 KeyAuth, 47 JwtAuth, 19 BasicAuth,
 formatting, workspace check/Clippy and seven guards. Existing unrelated warnings
 remain. The owning security realm knowledge records this ownership boundary;
 no live integration suite was run.
+
+## Exact-capacity authentication error body
+
+The canonical auth-error sender now builds its unchanged decimal-status, space
+and raw-body payload with exact String capacity before transferring it to Bytes.
+The builder uses standard primitive formatting and decimal width, not a new
+integer encoder. Construction remains after successful response-header writing;
+body EOS, error propagation and shutdown placement are unchanged. The non-auth
+plain-error helper and challenge construction are unaffected.
+
+Independent plan review approved three files. Against the original format-based
+body builder, all 5,454 semantic comparisons passed before the final allocation
+assertion failed. The optimized complete Bytes construction allocates once and
+requests exactly its output length across every fixture, including all three-digit
+status values, other u16 decimal-width boundaries, raw controls, UTF-8 and long
+bodies. Wider private-helper inputs do not expand accepted HTTP status codes.
+Separate header/body write-failure cases passed before and after the change,
+confirming no subsequent body or shutdown call after the relevant failure.
+
+Fresh verification passed 36 shared-auth, 14 KeyAuth, 47 JwtAuth, 19 BasicAuth,
+56 HMAC-filtered, 20 JweDecrypt and one LDAP unauthorized-outcome test (193 total),
+formatting, workspace check/Clippy and seven guards. Existing unrelated warnings
+remain. The one-allocation claim covers payload construction only; no complete
+response allocation or throughput claim and no live integration run is made.
