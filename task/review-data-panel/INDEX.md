@@ -28,6 +28,8 @@ destination.
 
 ## Deferred decisions
 
+- [Single-line tracestate ownership](trace-01-single-line-tracestate-ownership.md)
+
 - [Plugin execution state layout baseline failure](verification-04-plugin-state-layout.md)
 
 - [Shared relay idle-reset coalescing](relay-01-idle-reset-coalescing.md)
